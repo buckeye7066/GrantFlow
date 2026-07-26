@@ -4216,6 +4216,200 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
  * exhausted = terminal) so a row whose real page genuinely cannot be found
  * stops consuming search budget.
  */
+/**
+ * SOURCE-LEVEL SAME-DOMAIN SELF-REPAIR (2026-07-26, owner: "give Sam the
+ * ability to make these repairs autonomously" — the safe half).
+ *
+ * A registry SOURCE is code (sourceRegistry.js), so when its page moves the
+ * fleet fails every crawl until a human edits the registry. This net closes
+ * the SAME-DOMAIN half autonomously: for each source the shared detector says
+ * failed EVERY recent queried run (findPersistentlyFailingSources — the same
+ * query Sam's crawler.sourcePersistentFailure check reads, so finding and
+ * actor cannot drift), probe the curated URL and:
+ *
+ *   - the HOST ITSELF redirects to a new location on the SAME registrable
+ *     domain → write a runtime prefix override (system_kv, applied by the
+ *     discovery fetcher wrapper) — deterministic, the org told us where it
+ *     moved;
+ *   - the page is dead but a DOMAIN-PINNED search (hits filtered to the
+ *     curated registrable domain — the trust anchor, so a lookalike can never
+ *     qualify) finds a live page → same-domain override;
+ *   - anything CROSS-domain → a PROPOSAL in the same kv for the owner report,
+ *     never an autonomous write (writeSourceUrlOverride throws on it anyway —
+ *     the guard is in the store, not in caller discipline).
+ *
+ * Overrides are revertible (delete the kv entry), visible (Sam's check names
+ * them), and self-judging: a source still failing WITH an override is
+ * surfaced as needing registry work. Bounded per boot; per-source attempt
+ * state (3 tries, 7d cooldown) so an unrepairable source stops spending
+ * search budget.
+ */
+const SOURCE_URL_REPAIR_STATE_KEY = 'source_url_self_repair_state'
+
+export async function enforceSourceUrlSelfRepair(db, deps = {}) {
+  return runInvariant('source_url_self_repair', async () => {
+    const disabled = _parseBoolEnv(process.env.ENFORCE_SOURCE_URL_SELF_REPAIR) === false
+    const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.SOURCE_URL_REPAIR_BOOT_LIMIT ?? '3', 10) || 3)
+    const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.SOURCE_URL_REPAIR_TIME_BUDGET_MS ?? '20000', 10) || 20000)
+    const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.SOURCE_URL_REPAIR_MAX_ATTEMPTS ?? '3', 10) || 3)
+    const COOLDOWN_MS = Math.max(0, Number.parseInt(deps.cooldownMs ?? process.env.SOURCE_URL_REPAIR_COOLDOWN_MS ?? String(7 * 24 * 60 * 60 * 1000), 10) || 0)
+    const STREAK = Math.max(2, Number.parseInt(deps.streak ?? process.env.CRAWLER_SOURCE_FAILURE_STREAK ?? '5', 10) || 5)
+
+    const { findPersistentlyFailingSources } = deps.detectorImpl
+      ? { findPersistentlyFailingSources: deps.detectorImpl }
+      : await import('../services/sources/sourceFailureDetector.js')
+    const failing = await findPersistentlyFailingSources(db, { streak: STREAK })
+    if (!Array.isArray(failing) || failing.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+    if (disabled) return { scanned: failing.length, repaired: 0, enforced: false }
+
+    const overridesMod = deps.overridesImpl ?? await import('../services/sources/sourceUrlOverrides.js')
+    const { loadSourceUrlOverrides, writeSourceUrlOverride, writeSourceUrlProposal, isSameRegistrableDomain, registrableDomain } = overridesMod
+    const getSourceImpl = deps.getSourceImpl ?? (await import('../crawler-os/sourceRegistry.js')).getSource
+    const checkUrlImpl = deps.checkUrlImpl ?? (await import('../services/linkVerificationService.js')).checkUrl
+    const searchWebImpl = deps.searchWebImpl ?? (await import('../services/shared/webSearchEngine.js')).searchWeb
+
+    const existingOverrides = await loadSourceUrlOverrides(db)
+    const overriddenIds = new Set(existingOverrides.map((o) => o.source_id))
+
+    let state = { entries: {} }
+    try {
+      const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(SOURCE_URL_REPAIR_STATE_KEY)
+      const parsed = row?.value ? JSON.parse(row.value) : null
+      if (parsed && typeof parsed.entries === 'object' && parsed.entries) state = parsed
+    } catch { /* fresh state */ }
+
+    const nowMs = Date.now()
+    const startedAt = nowMs
+    let scanned = 0
+    let repaired = 0
+    let proposed = 0
+    let aliveNoRepair = 0
+    let notFound = 0
+    let outage = 0
+    let skippedCooldown = 0
+
+    for (const src of failing.slice(0, LIMIT)) {
+      if (Date.now() - startedAt > TIME_BUDGET_MS) break
+      const entry = state.entries[src.source_id] ?? { attempts: 0, last_at: null, exhausted: false }
+      // An already-overridden source still failing is a HUMAN item (Sam's
+      // check says so) — churning a second override would just thrash.
+      if (overriddenIds.has(src.source_id)) { skippedCooldown++; continue }
+      if (entry.exhausted) { skippedCooldown++; continue }
+      if (entry.last_at && COOLDOWN_MS > 0 && nowMs - Date.parse(entry.last_at) < COOLDOWN_MS) { skippedCooldown++; continue }
+      const source = getSourceImpl(src.source_id)
+      const curated = typeof source?.base_url === 'string' ? source.base_url.trim() : ''
+      if (!curated) { skippedCooldown++; continue }
+      scanned++
+      const spendAttempt = () => {
+        entry.attempts += 1
+        entry.last_at = new Date(nowMs).toISOString()
+        if (entry.attempts >= MAX_ATTEMPTS) entry.exhausted = true
+        state.entries[src.source_id] = entry
+      }
+      try {
+        // 1. The host's own answer: a redirect off the curated prefix is the
+        //    most trustworthy repair evidence that exists.
+        const probe = await checkUrlImpl(curated, { timeoutMs: 8000 })
+        const finalUrl = typeof probe?.finalUrl === 'string' ? probe.finalUrl : null
+        if (probe && (probe.status === 'ok' || probe.status === 'redirect')) {
+          if (finalUrl && finalUrl !== curated && !isSearchEngineUrl(finalUrl)) {
+            spendAttempt()
+            if (isSameRegistrableDomain(curated, finalUrl)) {
+              await writeSourceUrlOverride(db, {
+                source_id: src.source_id, from_prefix: curated, to_prefix: finalUrl,
+                evidence: { kind: 'host_redirect', probed_at: new Date(nowMs).toISOString(), last_error: src.last_error ?? null },
+              })
+              repaired++
+            } else {
+              await writeSourceUrlProposal(db, {
+                source_id: src.source_id, from_prefix: curated, to_prefix: finalUrl,
+                evidence: { kind: 'host_redirect', probed_at: new Date(nowMs).toISOString(), last_error: src.last_error ?? null },
+              })
+              proposed++
+            }
+          } else {
+            // Alive at the curated URL: the failure is content/auth-level —
+            // not a URL problem this net can fix. Spend an attempt so a
+            // permanently-unrepairable source converges to exhausted.
+            spendAttempt()
+            aliveNoRepair++
+          }
+          continue
+        }
+        // 2. Dead page: DOMAIN-PINNED search. Hits are filtered to the curated
+        //    registrable domain BEFORE probing, so a lookalike can never win
+        //    an override; the best OFF-domain hit (if its title carries the
+        //    source's name tokens) becomes a proposal.
+        const query = `"${source.name ?? src.source_label ?? src.source_id}"`
+        let hits = []
+        try {
+          const raw = await searchWebImpl(query, { count: 6, timeoutMs: 10000 })
+          hits = Array.isArray(raw) ? raw : []
+        } catch {
+          outage++
+          continue // provider failure: spend nothing
+        }
+        if (hits.length === 0) { outage++; continue }
+        spendAttempt()
+        const anchor = registrableDomain(new URL(curated).hostname)
+        const nameTokens = significantTitleTokens(source.name ?? src.source_label ?? '')
+        const mentionsName = (h) => {
+          if (nameTokens.length === 0) return false
+          const text = `${h?.title ?? ''} ${h?.url ?? ''}`.toLowerCase()
+          const present = nameTokens.filter((t) => text.includes(t))
+          return present.length / nameTokens.length >= 0.5
+        }
+        const usable = hits.filter((h) => typeof h?.url === 'string' && /^https?:\/\//i.test(h.url) && !isSearchEngineUrl(h.url))
+        const sameDomain = usable.filter((h) => { try { return registrableDomain(new URL(h.url).hostname) === anchor } catch { return false } })
+        let done = false
+        for (const hit of sameDomain.slice(0, 2)) {
+          const p = await checkUrlImpl(hit.url, { timeoutMs: 8000 })
+          if (p && (p.status === 'ok' || p.status === 'redirect')) {
+            const target = p.finalUrl || hit.url
+            if (isSameRegistrableDomain(curated, target)) {
+              await writeSourceUrlOverride(db, {
+                source_id: src.source_id, from_prefix: curated, to_prefix: target,
+                evidence: { kind: 'domain_pinned_search', probed_at: new Date(nowMs).toISOString(), hit_title: hit.title ?? null },
+              })
+              repaired++
+              done = true
+              break
+            }
+          }
+        }
+        if (done) continue
+        const offDomain = usable.find((h) => mentionsName(h) && (() => { try { return registrableDomain(new URL(h.url).hostname) !== anchor } catch { return false } })())
+        if (offDomain) {
+          await writeSourceUrlProposal(db, {
+            source_id: src.source_id, from_prefix: curated, to_prefix: offDomain.url,
+            evidence: { kind: 'cross_domain_search_hit', hit_title: offDomain.title ?? null, probed_at: new Date(nowMs).toISOString() },
+          })
+          proposed++
+        } else {
+          notFound++
+        }
+      } catch (err) {
+        log.warn('source_url_self_repair: source failed (non-fatal)', { source: src.source_id, error: String(err?.message || err) })
+      }
+    }
+
+    try {
+      const value = JSON.stringify({ updated_at: new Date(nowMs).toISOString(), entries: state.entries })
+      const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, new Date(nowMs).toISOString(), SOURCE_URL_REPAIR_STATE_KEY)
+      if (!changesOf(res)) {
+        await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(SOURCE_URL_REPAIR_STATE_KEY, value, new Date(nowMs).toISOString())
+      }
+    } catch (err) {
+      log.warn('source_url_self_repair: state persist failed (non-fatal)', { error: String(err?.message || err) })
+    }
+
+    if (repaired > 0 || proposed > 0) {
+      log.info('source self-repair: same-domain overrides applied / cross-domain proposals filed', { repaired, proposed })
+    }
+    return { scanned, repaired, proposed, aliveNoRepair, notFound, outage, skippedCooldown, enforced: true }
+  })
+}
+
 const DEAD_URL_REPAIR_STATE_KEY = 'dead_url_repair_state'
 const DEAD_URL_REASON_PREDICATE = (alias) =>
   `(COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'fetch_failed:404%'
@@ -5171,6 +5365,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // opportunity_kind classification first, so the enrichment sweeps and the
   // amount-answer census stop treating a pointer page as a missing award.
   steps.push(await enforceLocatorKindClassification(db))
+  // SOURCE-level same-domain self-repair first (the registry is code, so a
+  // moved source page is otherwise unrepairable at runtime): a persistently-
+  // failing source gets a same-registrable-domain override the discovery
+  // fetcher applies; cross-domain moves become owner proposals.
+  steps.push(await enforceSourceUrlSelfRepair(db))
   // Dead-URL repair BEFORE amount acquisition: a row whose domain no longer
   // resolves / permanently 404s gets its REAL page found (search → plausibility
   // → liveness) and its enrich state reset, so the sweeps just below read the
@@ -5301,6 +5500,8 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.outage !== undefined ? { outage: s.outage } : {}),
       ...(s.refused !== undefined ? { refused: s.refused } : {}),
       ...(s.skippedCooldown !== undefined ? { skippedCooldown: s.skippedCooldown } : {}),
+      ...(s.proposed !== undefined ? { proposed: s.proposed } : {}),
+      ...(s.aliveNoRepair !== undefined ? { aliveNoRepair: s.aliveNoRepair } : {}),
     })),
   })
 
@@ -5357,6 +5558,7 @@ export const __testables = {
   enforceAmountEnrichment,
   enforceGrantDirectAmountEnrichment,
   enforceDeadUrlRepair,
+  enforceSourceUrlSelfRepair,
   enforceLiveCrawlVerifiedAtHonesty,
   VERIFIED_AT_HONESTY_BOOT_LIMIT_DEFAULT,
   resolveIndividualAmountCeiling,

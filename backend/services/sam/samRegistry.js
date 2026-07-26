@@ -2493,39 +2493,59 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     async run({ db }) {
       if (!db?.prepare) return { ok: true, summary: 'source persistence: db unavailable' }
       const STREAK = Math.max(2, Number.parseInt(process.env.CRAWLER_SOURCE_FAILURE_STREAK || '5', 10) || 5)
-      let rows
+      // One query, two consumers: the same detector feeds the self-repair
+      // sweep (enforceSourceUrlSelfRepair), so finding and actor cannot drift.
+      let failing = []
       try {
-        rows = await db
-          .prepare(
-            `WITH recent AS (
-               SELECT source_id, source_label, failed, error,
-                      ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY created_at DESC) AS rn
-                 FROM crawler_source_runs
-                WHERE queried
-             )
-             SELECT source_id, MAX(source_label) AS source_label,
-                    COUNT(*) AS sampled,
-                    MAX(CASE WHEN rn = 1 THEN error END) AS last_error
-               FROM recent
-              WHERE rn <= ${STREAK}
-              GROUP BY source_id
-             HAVING COUNT(*) >= ${STREAK}
-                AND SUM(CASE WHEN failed THEN 1 ELSE 0 END) = COUNT(*)`,
-          )
-          .all()
+        const { findPersistentlyFailingSources } = await import('../sources/sourceFailureDetector.js')
+        failing = await findPersistentlyFailingSources(db, { streak: STREAK })
       } catch (err) {
-        return { ok: true, summary: `crawler_source_runs not queryable yet (${err?.message || 'unknown'})` }
+        return { ok: true, summary: `source failure detector unavailable (${err?.message || 'unknown'})` }
       }
-      const failing = Array.isArray(rows) ? rows : []
-      if (failing.length === 0) {
+      // Repair context: overrides Sam already applied autonomously (same
+      // registrable domain) and cross-domain PROPOSALS awaiting the owner.
+      let repairs = { overrides: {}, proposals: {} }
+      try {
+        const row = await db.prepare("SELECT value FROM system_kv WHERE key = 'source_url_overrides'").get()
+        const parsed = row?.value ? JSON.parse(row.value) : null
+        if (parsed && typeof parsed === 'object') {
+          repairs.overrides = parsed.overrides && typeof parsed.overrides === 'object' ? parsed.overrides : {}
+          repairs.proposals = parsed.proposals && typeof parsed.proposals === 'object' ? parsed.proposals : {}
+        }
+      } catch { /* no repair store yet */ }
+      const proposalIds = Object.keys(repairs.proposals)
+      if (failing.length === 0 && proposalIds.length === 0) {
         return { ok: true, summary: `No source has failed ${STREAK} consecutive queried runs.` }
       }
-      const names = failing.slice(0, 5).map((r) => `${r.source_id}${r.last_error ? ` (${String(r.last_error).slice(0, 60)})` : ''}`).join('; ')
+      const names = failing.slice(0, 5).map((r) => {
+        const state = repairs.overrides[r.source_id]
+          ? ' [same-domain override applied — still failing, needs registry work]'
+          : repairs.proposals[r.source_id]
+            ? ' [CROSS-DOMAIN move found — proposal awaiting your approval]'
+            : ''
+        return `${r.source_id}${r.last_error ? ` (${String(r.last_error).slice(0, 60)})` : ''}${state}`
+      }).join('; ')
+      const proposalNote = proposalIds.length
+        ? ` Cross-domain repair proposal(s): ${proposalIds.slice(0, 3).map((id) => `${id} → ${repairs.proposals[id]?.to_prefix}`).join('; ')}.`
+        : ''
+      if (failing.length === 0) {
+        return {
+          ok: false,
+          summary: `Source self-repair has ${proposalIds.length} cross-domain proposal(s) awaiting your approval:${proposalNote}`,
+          evidence: { proposals: repairs.proposals },
+          recommended_fix: 'A persistently-failing source\'s page moved to a DIFFERENT registrable domain. That re-points the crawl fleet\'s trust anchor, so it is never applied autonomously — verify the proposed URL is the same organization, then update the registry entry (sourceRegistry.js) or ask for the update.',
+          confidence: 0.85,
+        }
+      }
       return {
         ok: false,
-        summary: `${failing.length} source(s) failed EVERY one of their last ${STREAK} queried runs: ${names}.`,
-        evidence: { streak: STREAK, sources: failing.map((r) => ({ source_id: r.source_id, label: r.source_label, last_error: r.last_error })) },
-        recommended_fix: 'This is a per-source outage/rot signal, not fleet noise. For each named source: probe its registry URL (sourceRegistry.js) — a moved/dead endpoint needs the registry entry updated; an auth error needs its API key re-issued; then verify with a single-source re-crawl (runProfileDiscoveryLive onlySourceIds / the admin stale-source re-crawl action) or `npm run crawler:doctor`. Row-level URL rot inside the catalog is already self-repaired by the dead_url_repair boot net — this finding is specifically the SOURCE (registry) level that net cannot touch because the registry is code.',
+        summary: `${failing.length} source(s) failed EVERY one of their last ${STREAK} queried runs: ${names}.${proposalNote}`,
+        evidence: {
+          streak: STREAK,
+          sources: failing.map((r) => ({ source_id: r.source_id, label: r.source_label, last_error: r.last_error, override: repairs.overrides[r.source_id] ?? null, proposal: repairs.proposals[r.source_id] ?? null })),
+          proposals: repairs.proposals,
+        },
+        recommended_fix: 'This is a per-source outage/rot signal, not fleet noise. The enforceSourceUrlSelfRepair boot net already probes each named source and APPLIES same-registrable-domain URL repairs autonomously (runtime override, no code change); a source still failing after an override, or carrying a cross-domain proposal, needs you: verify the proposal/registry URL (sourceRegistry.js), or re-issue the API key for auth errors, then confirm with a single-source re-crawl or `npm run crawler:doctor`. Row-level URL rot inside the catalog is separately self-repaired by the dead_url_repair boot net.',
         confidence: 0.85,
       }
     },
@@ -2604,6 +2624,12 @@ export const SAFE_FIX_REGISTRY = Object.freeze([
     label: 'Recover stale crawler queue jobs',
     risk_level: 'safe',
     description: 'Runs the SAME idempotent stale-job recovery the admin queue endpoint uses (crawlerConcurrencyGuard.cleanupStaleCrawlers + cleanupStaleQueuedJobs): marks dead running jobs failed/partial and expires ancient queued jobs. Deterministic, DB-only, never touches files; a second run recovers 0.',
+  },
+  {
+    id: 'crawler.source-url-same-domain-repair',
+    label: 'Apply a same-domain URL repair to a persistently-failing source',
+    risk_level: 'safe',
+    description: 'Runs the SAME bounded probe the enforceSourceUrlSelfRepair boot net uses on a source whose last N queried runs all failed: probe the curated URL, and when the host itself redirects — or a domain-pinned search finds the moved page — ON THE SAME REGISTRABLE DOMAIN, write a runtime prefix override (system_kv source_url_overrides; DB-only, no code change, revertible by deleting the entry). The write choke point (writeSourceUrlOverride) THROWS on any cross-domain target: those become owner proposals in the daily report, never autonomous writes — a source domain is the trust anchor the whole crawl fleet inherits.',
   },
 ])
 

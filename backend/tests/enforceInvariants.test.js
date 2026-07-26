@@ -50,6 +50,7 @@ import {
   enforceAmountEnrichment,
   enforceGrantDirectAmountEnrichment,
   enforceDeadUrlRepair,
+  enforceSourceUrlSelfRepair,
   enforceLocatorKindClassification,
   partitionSystemicStableFailures,
   AMOUNT_ENRICH_FAILURE_LOG_KEY,
@@ -994,7 +995,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    expect(summary.ran).toBe(31)
+    expect(summary.ran).toBe(32)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1008,8 +1009,9 @@ describe('enforceInvariants — runner', () => {
       // Positive locator/benefit kind classification (sam.gov /fal/ listings,
       // ssa.gov benefit sections) BEFORE amount acquisition.
       'locator_kind_classification',
-      // Dead-URL repair BEFORE amount acquisition so a repaired row is read
-      // by the sweeps in this same boot.
+      // Source-level same-domain self-repair, then row-level dead-URL repair,
+      // both BEFORE amount acquisition so repairs are read this same boot.
+      'source_url_self_repair',
       'dead_url_repair',
       'amount_enrichment',
       'grant_amount_backfill',
@@ -3116,6 +3118,130 @@ describe('enforceAmountEnrichment — systemic-burn guard (the 2026-07-22 mass b
     // ...unless that host proved alive this run.
     const alive = partitionSystemicStableFailures(uniform, new Set(['a.gov']), 4)
     expect(alive.systemic).toHaveLength(0)
+  })
+})
+
+describe('enforceSourceUrlSelfRepair', () => {
+  function makeDb() {
+    const db = new Database(':memory:')
+    db.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+    return db
+  }
+  const FAILING = [{ source_id: 'tn_state_portal', source_label: 'TN One DHS', last_error: '404' }]
+  const SRC = { id: 'tn_state_portal', name: 'Tennessee One DHS Portal', base_url: 'https://www.tn.gov/humanservices/old-portal.html' }
+  const overridesOf = (db) => {
+    const row = db.prepare(`SELECT value FROM system_kv WHERE key = 'source_url_overrides'`).get()
+    return row ? JSON.parse(row.value) : { overrides: {}, proposals: {} }
+  }
+  const makeDbRef = {}
+  const base = (deps) => enforceSourceUrlSelfRepair(makeDbRef.db, deps)
+
+  it('a host redirect ON the same registrable domain becomes an autonomous override', async () => {
+    const db = (makeDbRef.db = makeDb())
+    const res = await base({
+      detectorImpl: async () => FAILING,
+      getSourceImpl: () => SRC,
+      checkUrlImpl: async () => ({ status: 'redirect', finalUrl: 'https://www.tn.gov/humanservices/new-portal/' }),
+      searchWebImpl: async () => { throw new Error('must not search when the host answered') },
+    })
+    expect(res.repaired).toBe(1)
+    const s = overridesOf(db)
+    expect(s.overrides.tn_state_portal.to_prefix).toBe('https://www.tn.gov/humanservices/new-portal/')
+    expect(s.overrides.tn_state_portal.evidence.kind).toBe('host_redirect')
+  })
+
+  it('a CROSS-domain redirect becomes a PROPOSAL, never an override', async () => {
+    const db = (makeDbRef.db = makeDb())
+    const res = await base({
+      detectorImpl: async () => FAILING,
+      getSourceImpl: () => SRC,
+      checkUrlImpl: async () => ({ status: 'redirect', finalUrl: 'https://www.newstateportal.org/' }),
+      searchWebImpl: async () => [],
+    })
+    expect(res.proposed).toBe(1)
+    expect(res.repaired).toBe(0)
+    const s = overridesOf(db)
+    expect(s.overrides.tn_state_portal).toBeUndefined()
+    expect(s.proposals.tn_state_portal.to_prefix).toBe('https://www.newstateportal.org/')
+  })
+
+  it('a dead page repaired by DOMAIN-PINNED search: off-domain hits can never win the override', async () => {
+    const db = (makeDbRef.db = makeDb())
+    const probes = []
+    const res = await base({
+      detectorImpl: async () => FAILING,
+      getSourceImpl: () => SRC,
+      checkUrlImpl: async (url) => {
+        probes.push(url)
+        if (url === SRC.base_url) return { status: 'broken', finalUrl: null }
+        return { status: 'ok', finalUrl: url }
+      },
+      searchWebImpl: async () => [
+        { url: 'https://lookalike-dhs.com/tennessee', title: 'Tennessee One DHS Portal' }, // plausible lookalike
+        { url: 'https://www.tn.gov/humanservices/one-dhs/', title: 'One DHS | TN.gov' },
+      ],
+    })
+    expect(res.repaired).toBe(1)
+    const s = overridesOf(db)
+    expect(s.overrides.tn_state_portal.to_prefix).toBe('https://www.tn.gov/humanservices/one-dhs/')
+    expect(s.overrides.tn_state_portal.evidence.kind).toBe('domain_pinned_search')
+    expect(probes, 'the lookalike is filtered BEFORE any probe').not.toContain('https://lookalike-dhs.com/tennessee')
+  })
+
+  it('search-provider outage spends no attempt; alive-at-curated-URL spends one (converges to exhausted)', async () => {
+    const db = (makeDbRef.db = makeDb())
+    await base({
+      detectorImpl: async () => FAILING,
+      getSourceImpl: () => SRC,
+      checkUrlImpl: async () => ({ status: 'broken', finalUrl: null }),
+      searchWebImpl: async () => { throw new Error('provider down') },
+    })
+    const afterOutage = db.prepare(`SELECT value FROM system_kv WHERE key = 'source_url_self_repair_state'`).get()
+    expect(Object.keys(JSON.parse(afterOutage?.value ?? '{"entries":{}}').entries)).toHaveLength(0)
+    const r2 = await base({
+      detectorImpl: async () => FAILING,
+      getSourceImpl: () => SRC,
+      checkUrlImpl: async () => ({ status: 'ok', finalUrl: SRC.base_url }),
+      searchWebImpl: async () => [],
+      maxAttempts: 1,
+    })
+    expect(r2.aliveNoRepair).toBe(1)
+    const st = JSON.parse(db.prepare(`SELECT value FROM system_kv WHERE key = 'source_url_self_repair_state'`).get().value)
+    expect(st.entries.tn_state_portal.exhausted).toBe(true)
+  })
+
+  it('an already-overridden source is never churned, and count-only mode never writes', async () => {
+    const db = (makeDbRef.db = makeDb())
+    db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+      'source_url_overrides',
+      JSON.stringify({ overrides: { tn_state_portal: { from_prefix: SRC.base_url, to_prefix: 'https://www.tn.gov/x/' } } }),
+      new Date().toISOString(),
+    )
+    const r = await base({
+      detectorImpl: async () => FAILING,
+      getSourceImpl: () => SRC,
+      checkUrlImpl: async () => { throw new Error('must not probe an overridden source') },
+      searchWebImpl: async () => [],
+    })
+    expect(r.repaired).toBe(0)
+    expect(r.skippedCooldown).toBe(1)
+
+    const db2 = (makeDbRef.db = makeDb())
+    const prev = process.env.ENFORCE_SOURCE_URL_SELF_REPAIR
+    process.env.ENFORCE_SOURCE_URL_SELF_REPAIR = '0'
+    try {
+      const rc = await base({
+        detectorImpl: async () => FAILING,
+        getSourceImpl: () => SRC,
+        checkUrlImpl: async () => { throw new Error('count-only must not probe') },
+        searchWebImpl: async () => [],
+      })
+      expect(rc.enforced).toBe(false)
+      expect(overridesOf(db2).overrides.tn_state_portal).toBeUndefined()
+    } finally {
+      if (prev === undefined) delete process.env.ENFORCE_SOURCE_URL_SELF_REPAIR
+      else process.env.ENFORCE_SOURCE_URL_SELF_REPAIR = prev
+    }
   })
 })
 

@@ -516,7 +516,18 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   const effMatchProfiles = Array.isArray(matchProfiles) && matchProfiles.length > 0 ? matchProfiles : [thesis];
   const crossProfile = effMatchProfiles.length > 1;
   const store = createMemoryStore();
-  const liveFetcher = fetcher ?? makeProductionFetcher();
+  // SAME-DOMAIN source URL overrides (the autonomous half of source repair):
+  // any URL an adapter builds under a repaired prefix is transparently fetched
+  // from its same-registrable-domain replacement. Best-effort — no overrides
+  // (or any load failure) means crawls run exactly as curated. A caller-
+  // supplied fetcher (tests, single-source probes) is wrapped too, so a repair
+  // is never silently bypassed by one entry point.
+  let liveFetcher = fetcher ?? makeProductionFetcher();
+  try {
+    const { loadSourceUrlOverrides, makeOverrideRewritingFetcher } = await import('./sources/sourceUrlOverrides.js');
+    const urlOverrides = await loadSourceUrlOverrides(db);
+    if (urlOverrides.length > 0) liveFetcher = makeOverrideRewritingFetcher(liveFetcher, urlOverrides);
+  } catch { /* overrides are an enhancement, never a crawl blocker */ }
   const onlySources = Array.isArray(onlySourceIds) && onlySourceIds.length > 0 ? onlySourceIds : null;
   const run = await runDiscovery(
     { store, fetcher: liveFetcher },
