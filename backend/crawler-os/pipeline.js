@@ -135,6 +135,12 @@ export async function runDiscovery(deps, opts = {}) {
 
     let sawFetchError = false;
     let sawParseError = false;
+    // Adapter-declared benign-failure REASON (a truthy string from
+    // benignFetchFailure, e.g. 'api_outage:…'): when the whole request set is
+    // benign-skipped, the source finishes EMPTY with this reason instead of
+    // the generic 'no_candidates_stored' — the dashboards keep the outage
+    // visible without any failed/FETCH_ERROR mark nobody can act on.
+    let benignReason = null;
     for (const req of requests) {
       if (req.query) sr.queries.push(req.query);
       let resp;
@@ -148,8 +154,12 @@ export async function runDiscovery(deps, opts = {}) {
         // non-ok status (ProPublica's search 404s on page overrun). The adapter
         // can declare that specific shape honest — a clean empty page, not a
         // FETCH_ERROR and not a rejection. Everything else stays a real failure.
-        if (typeof adapter.benignFetchFailure === 'function' && adapter.benignFetchFailure(resp, req)) {
-          continue;
+        if (typeof adapter.benignFetchFailure === 'function') {
+          const benign = adapter.benignFetchFailure(resp, req);
+          if (benign) {
+            if (typeof benign === 'string' && !benignReason) benignReason = benign;
+            continue;
+          }
         }
         sawFetchError = true;
         recordRejection(store, runId, { source_id: sourceId, reason: 'fetch_failed', detail: resp.reason ?? resp.error ?? `status:${resp.status}`, url: req.url });
@@ -247,7 +257,7 @@ export async function runDiscovery(deps, opts = {}) {
       : (sawParseError ? CRAWLER_OUTCOME.PARSE_ERROR : sawFetchError ? CRAWLER_OUTCOME.FETCH_ERROR : CRAWLER_OUTCOME.EMPTY);
     const reason = foundForProfile > 0 ? null
       : (sawParseError ? 'parse_error'
-        : (sr.deduped > 0 ? 'all_candidates_deduped' : 'no_candidates_stored'));
+        : (sr.deduped > 0 ? 'all_candidates_deduped' : (benignReason ?? 'no_candidates_stored')));
     finishSource(store, runId, sr, outcome, reason, clock, sourceSummaries);
   }
 

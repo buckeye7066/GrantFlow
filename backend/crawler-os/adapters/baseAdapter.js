@@ -23,7 +23,7 @@
  * @param {string[]} [cfg.requiredEnv]
  * @param {(thesis:object, source:object, env:object)=>Array<{url:string, init?:object, parseCfg?:object}>} cfg.buildRequests
  * @param {(raw:object, ctx:{thesis:object, source:object})=>object|null} cfg.mapCandidate
- * @param {(resp:object, req:object)=>boolean} [cfg.benignFetchFailure] declare a
+ * @param {(resp:object, req:object)=>boolean|string} [cfg.benignFetchFailure] declare a
  *   specific non-ok response as an honest END OF DATA (e.g. ProPublica 404s on
  *   page overrun) so the pipeline treats it as a clean empty page, never a
  *   FETCH_ERROR. Optional; default = every failure is a real failure.

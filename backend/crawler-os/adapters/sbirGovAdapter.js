@@ -89,6 +89,25 @@ export function createSbirGovAdapter() {
         parseCfg: sbirGovParseCfg(),
       }));
     },
+    // The SBIR Public API's own outage banner — {"Code":"TooManyRequestsError",
+    // "Message":"The SBIR Public API is not available at this time."} served
+    // for EVERY request (observed service-wide 2026-07-06 → 2026-07-26) — is
+    // the service ANSWERING "I am off", not us failing to reach it. Declaring
+    // it benign (with an honest reason string the pipeline records) keeps the
+    // source out of failed/FETCH_ERROR — the per-source failure detector and
+    // Amy's source_fetch_failed stop paging the owner about a government
+    // outage nobody can act on — while the dashboards still show the skip
+    // reason, and the first real response parses normally again. A real 5xx,
+    // network error, or any other body stays a genuine FETCH_ERROR.
+    benignFetchFailure(resp = {}) {
+      if (typeof resp.body !== 'string' || !resp.body.trim()) return false;
+      try {
+        const parsed = JSON.parse(resp.body);
+        const msg = String(parsed?.Message ?? parsed?.message ?? '');
+        if (/public api is not available/i.test(msg)) return 'api_outage:sbir_public_api_unavailable';
+      } catch { /* not the banner */ }
+      return false;
+    },
     mapCandidate(raw, { source } = {}) {
       if (!raw || (!raw.title && !raw.external_id)) return null;
       const infoUrl = typeof raw.info_url === 'string' && raw.info_url.trim() ? raw.info_url.trim() : null;

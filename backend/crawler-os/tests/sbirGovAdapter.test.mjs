@@ -96,3 +96,21 @@ test('planner selects sbir_gov ONLY for research orgs (research_only gate)', () 
   const decision = pantry.source_decisions.find((d) => d.source_id === 'sbir_gov');
   assert.ok(decision.reasons.includes('research_org_only'), 'exclusion is explainable');
 });
+
+test('the SBIR API outage banner is a BENIGN skip with an honest reason — a real 5xx stays a failure', () => {
+  // The API answers EVERY request with this banner during its service-wide
+  // outage (observed 2026-07-06 → 2026-07-26). "The service says it is off"
+  // is a definite external state, not our fetch failing — reporting it as
+  // FETCH_ERROR paged the owner nightly (per-source failure detector + Amy's
+  // source_fetch_failed) about a government outage nobody can act on.
+  const adapter = createSbirGovAdapter();
+  const banner = JSON.stringify({ Code: 'TooManyRequestsError', Message: 'The SBIR Public API is not available at this time.' });
+  assert.equal(
+    adapter.benignFetchFailure({ ok: false, status: 429, body: banner }),
+    'api_outage:sbir_public_api_unavailable',
+  );
+  // Anything else stays a genuine failure: a bare 500, an empty body, a WAF page.
+  assert.equal(adapter.benignFetchFailure({ ok: false, status: 500, body: 'Internal Server Error' }), false);
+  assert.equal(adapter.benignFetchFailure({ ok: false, status: 429, body: '' }), false);
+  assert.equal(adapter.benignFetchFailure({ ok: false, status: 403, body: '<html>blocked</html>' }), false);
+});

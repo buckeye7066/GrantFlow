@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, STATE_GOV_PATH_RULES, LOCATOR_URL_LIKE_PREFILTERS } from '../services/sources/locatorUrlKind.js'
+import { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, STATE_GOV_PATH_RULES, ORG_PATH_RULES, LOCATOR_URL_LIKE_PREFILTERS } from '../services/sources/locatorUrlKind.js'
 
 describe('classifyLocatorKindFromUrl — fix-cycle-1 shapes', () => {
   it('classifies sam.gov /fal/ assistance listings as DIRECTORY', () => {
@@ -112,6 +112,49 @@ describe('classifyLocatorKindFromUrl — fix-cycle-4 STATE-GOV path rules (prod 
       }
       for (const p of rule.directoryPages) {
         expect(classifyLocatorKindFromUrl(`https://www.${rule.host}/${p}.html`)).toMatchObject({ kind: 'directory' })
+      }
+    }
+  })
+})
+
+describe('classifyLocatorKindFromUrl — fix-cycle-5 ORG/aggregator shapes (prod census 2026-07-26)', () => {
+  it('SEO listicle aggregators are whole-host DIRECTORIES (pages ABOUT programs, never an award)', () => {
+    expect(classifyLocatorKindFromUrl('https://grantsfordisabled.org/grants-for-disabled-people-in-tennessee/'))
+      .toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://disabilityincomespecialists.com/disability/maximizing-disability-income-east-cleveland-tn/'))
+      .toMatchObject({ kind: 'directory' })
+  })
+
+  it('Salvation Army services are BENEFIT sitewide (assistance varies by need, never a fixed award)', () => {
+    expect(classifyLocatorKindFromUrl('https://www.salvationarmyusa.org/usn/provide-emergency-assistance/'))
+      .toMatchObject({ kind: 'benefit' })
+  })
+
+  it('aggregator browse TREES and resource/catalog pages via ORG_PATH_RULES', () => {
+    expect(classifyLocatorKindFromUrl('https://scholarshipowl.com/scholarships/type/housing-scholarships'))
+      .toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://www.ed.gov/grants-and-programs')).toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://www.aha.org/workforce-strategies')).toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://www.nsc.org/safety-training/first-aid')).toMatchObject({ kind: 'directory' })
+  })
+
+  it('org path rules claim only their shapes — the rest of each host keeps its ordinary read', () => {
+    expect(classifyLocatorKindFromUrl('https://scholarshipowl.com/about')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.ed.gov/grants-and-programs/grant-x/award.html')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.aha.org/education-events')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.nsc.org/nsc-membership')).toBeNull()
+  })
+
+  it('every ORG_PATH_RULES entry derives prefilters and classifies (registry totality)', () => {
+    for (const rule of ORG_PATH_RULES) {
+      for (const p of [...(rule.benefitPrefixes ?? []), ...(rule.directoryPages ?? []), ...(rule.directoryPrefixes ?? [])]) {
+        expect(LOCATOR_URL_LIKE_PREFILTERS, `missing prefilter for ${rule.host}/${p}`).toContain(`%${rule.host}/${p}%`)
+      }
+      for (const p of rule.directoryPrefixes ?? []) {
+        expect(classifyLocatorKindFromUrl(`https://www.${rule.host}/${p}/deep/page`)).toMatchObject({ kind: 'directory' })
+      }
+      for (const p of rule.directoryPages ?? []) {
+        expect(classifyLocatorKindFromUrl(`https://www.${rule.host}/${p}`)).toMatchObject({ kind: 'directory' })
       }
     }
   })

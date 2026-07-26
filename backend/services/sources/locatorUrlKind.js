@@ -85,11 +85,19 @@ const BENEFIT_HOSTS = Object.freeze([
   'fabenefits.dhs.tn.gov', // TN Family Assistance (SNAP/TANF) portal
   'tnreconnect.gov', // TN Reconnect: last-dollar adult tuition grant — award = the applicant's gap, varies by design
   'benefits.va.gov', // VA benefits portal: every page is a veteran benefit program (award varies by eligibility)
+  'salvationarmyusa.org', // Salvation Army: service/assistance programs sitewide (emergency assistance class) — help varies by need, never a fixed per-award figure
 ])
 
 const DIRECTORY_HOSTS = Object.freeze([
   'tn211.org', // 2-1-1 service directory
   'benefitscheckup.org', // NCOA benefit-finder directory
+  // SEO listicle aggregators (fix-cycle-5, prod census 2026-07-26): every page
+  // is a compilation ABOUT other funders' programs — a pointer by construction,
+  // never an award of its own. Reading one can only ever yield another
+  // program's figure, which is exactly the misattribution the amount doctrine
+  // forbids.
+  'grantsfordisabled.org',
+  'disabilityincomespecialists.com',
 ])
 
 const RE_BENEFIT_HOST = new RegExp(
@@ -135,24 +143,59 @@ export const STATE_GOV_PATH_RULES = Object.freeze([
   },
 ])
 
+/**
+ * ORG/RESOURCE-PAGE path rules (fix-cycle-5, prod census 2026-07-26): the same
+ * registry shape for NON-state hosts that mix real awards with pointer pages,
+ * so a host-wide claim would over-claim. Same semantics as the state rules,
+ * plus directoryPrefixes — SUBTREE directory claims for browse/catalog trees
+ * (an aggregator's category tree or a training-catalog section has no
+ * per-award figure anywhere under it, by construction).
+ */
+export const ORG_PATH_RULES = Object.freeze([
+  {
+    host: 'scholarshipowl.com',
+    // Aggregator browse tree (JS shell to any fetcher; a pointer regardless).
+    directoryPrefixes: Object.freeze(['scholarships']),
+  },
+  {
+    host: 'ed.gov',
+    // The Department of Education's grant-programs INDEX page.
+    directoryPages: Object.freeze(['grants-and-programs']),
+  },
+  {
+    host: 'aha.org',
+    // AHA workforce-strategies resource hub — reports and pointers, no awards.
+    directoryPages: Object.freeze(['workforce-strategies']),
+  },
+  {
+    host: 'nsc.org',
+    // NSC training catalog subtree — courses/products, never an award.
+    directoryPrefixes: Object.freeze(['safety-training']),
+  },
+])
+
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-const STATE_GOV_MATCHERS = STATE_GOV_PATH_RULES.map(({ host, benefitPrefixes = [], directoryPages = [] }) => {
+const buildPathMatchers = (rules) => rules.map(({ host, benefitPrefixes = [], directoryPages = [], directoryPrefixes = [] }) => {
   const h = escapeRe(host)
+  // Subtree: prefix then a boundary ([/.?#] or end) — '.html' roots match,
+  // 'tenncareX' cannot.
+  const subtree = (paths) =>
+    new RegExp(`^https?:\\/\\/(?:www\\.)?${h}\\/(?:${paths.map(escapeRe).join('|')})(?:[/.?#]|$)`, 'i')
   return {
     host,
-    // Subtree: prefix then a boundary ([/.?#] or end) — '.html' roots match,
-    // 'tenncareX' cannot.
-    benefit: benefitPrefixes.length
-      ? new RegExp(`^https?:\\/\\/(?:www\\.)?${h}\\/(?:${benefitPrefixes.map(escapeRe).join('|')})(?:[/.?#]|$)`, 'i')
-      : null,
+    benefit: benefitPrefixes.length ? subtree(benefitPrefixes) : null,
     // Exact page: optional '.html', optional trailing '/', then END (or query/
     // fragment) — '/didd/for-consumers/…' makes no claim.
     directory: directoryPages.length
       ? new RegExp(`^https?:\\/\\/(?:www\\.)?${h}\\/(?:${directoryPages.map(escapeRe).join('|')})(?:\\.html)?\\/?(?:[?#]|$)`, 'i')
       : null,
+    directorySubtree: directoryPrefixes.length ? subtree(directoryPrefixes) : null,
   }
 })
+
+const STATE_GOV_MATCHERS = buildPathMatchers(STATE_GOV_PATH_RULES)
+const ORG_PATH_MATCHERS = buildPathMatchers(ORG_PATH_RULES)
 
 /**
  * ProPublica Nonprofit Explorer organization profile — a 990/funder registry
@@ -216,6 +259,14 @@ export function classifyLocatorKindFromUrl(url) {
       return { kind: 'directory', reason: `state_dept_or_portal_page:${m.host}` }
     }
   }
+  for (const m of ORG_PATH_MATCHERS) {
+    if (m.benefit && m.benefit.test(u)) {
+      return { kind: 'benefit', reason: `org_benefit_program_path:${m.host}` }
+    }
+    if ((m.directory && m.directory.test(u)) || (m.directorySubtree && m.directorySubtree.test(u))) {
+      return { kind: 'directory', reason: `org_resource_page:${m.host}` }
+    }
+  }
   if (RE_PROPUBLICA_ORG.test(u)) {
     return { kind: 'directory', reason: 'propublica_nonprofit_profile' }
   }
@@ -262,13 +313,15 @@ export const LOCATOR_URL_LIKE_PREFILTERS = Object.freeze([
   ...DIRECTORY_HOSTS.map((h) => `%${h}/%`),
   '%projects.propublica.org/nonprofits/organizations/%',
   '%scholarships.com/financial-aid/college-scholarships/%',
-  // One prefilter per state-gov path rule — derived from the registry so a new
-  // state entry can never be silently orphaned from the sweeps' candidate scans
-  // (the fix-cycle-3 gate finding, kept true by the registry-derivation test).
-  ...STATE_GOV_PATH_RULES.flatMap((r) => [
-    ...r.benefitPrefixes.map((p) => `%${r.host}/${p}%`),
-    ...r.directoryPages.map((p) => `%${r.host}/${p}%`),
+  // One prefilter per path rule (state-gov AND org registries) — derived from
+  // the registries so a new entry can never be silently orphaned from the
+  // sweeps' candidate scans (the fix-cycle-3 gate finding, kept true by the
+  // registry-derivation test).
+  ...[...STATE_GOV_PATH_RULES, ...ORG_PATH_RULES].flatMap((r) => [
+    ...(r.benefitPrefixes ?? []).map((p) => `%${r.host}/${p}%`),
+    ...(r.directoryPages ?? []).map((p) => `%${r.host}/${p}%`),
+    ...(r.directoryPrefixes ?? []).map((p) => `%${r.host}/${p}%`),
   ]),
 ])
 
-export default { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS, STATE_GOV_PATH_RULES }
+export default { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS, STATE_GOV_PATH_RULES, ORG_PATH_RULES }
