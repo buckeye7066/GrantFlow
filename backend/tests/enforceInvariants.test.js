@@ -3188,6 +3188,22 @@ describe('enforceSourceUrlSelfRepair', () => {
     expect(probes, 'the lookalike is filtered BEFORE any probe').not.toContain('https://lookalike-dhs.com/tennessee')
   })
 
+  it('a trailing-slash-only redirect is NOT a move — aliveNoRepair, no degenerate override', async () => {
+    // Prod caught this on the lane's FIRST boot: sbir.gov redirected to
+    // sbir.gov/ and the sweep minted a no-op override that would have
+    // double-slashed every deeper URL and parked the source as "overridden".
+    const db = (makeDbRef.db = makeDb())
+    const res = await base({
+      detectorImpl: async () => FAILING,
+      getSourceImpl: () => ({ ...SRC, base_url: 'https://www.sbir.gov' }),
+      checkUrlImpl: async () => ({ status: 'redirect', finalUrl: 'https://www.sbir.gov/' }),
+      searchWebImpl: async () => [],
+    })
+    expect(res.repaired).toBe(0)
+    expect(res.aliveNoRepair).toBe(1)
+    expect(overridesOf(db).overrides?.tn_state_portal).toBeUndefined()
+  })
+
   it('search-provider outage spends no attempt; alive-at-curated-URL spends one (converges to exhausted)', async () => {
     const db = (makeDbRef.db = makeDb())
     await base({

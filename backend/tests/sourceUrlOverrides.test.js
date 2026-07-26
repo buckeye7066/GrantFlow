@@ -122,4 +122,26 @@ describe('prefix rewrite + fetcher wrapper', () => {
     const inner = { fetch: async () => ({}) }
     expect(makeOverrideRewritingFetcher(inner, [])).toBe(inner)
   })
+
+  it('PREFIX-BOUNDARY: a repair for one page never hijacks its siblings', () => {
+    const o = [{ source_id: 's', from_prefix: 'https://a.gov/old', to_prefix: 'https://a.gov/new' }]
+    expect(applyOverridesToUrl('https://a.gov/old-page', o).applied, "'old' must not claim 'old-page'").toBeNull()
+    expect(applyOverridesToUrl('https://a.gov/old/deep', o).url).toBe('https://a.gov/new/deep')
+    expect(applyOverridesToUrl('https://a.gov/old?p=1', o).url).toBe('https://a.gov/new?p=1')
+  })
+
+  it('never stitches a double slash (the sbir.gov trailing-slash class, prod 2026-07-26)', () => {
+    const o = [{ source_id: 's', from_prefix: 'https://a.gov/x', to_prefix: 'https://a.gov/y/' }]
+    expect(applyOverridesToUrl('https://a.gov/x/topics', o).url).toBe('https://a.gov/y/topics')
+  })
+
+  it('a degenerate trailing-slash-only override is dropped at load (no-op repairs never apply)', async () => {
+    const db = makeDb()
+    db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+      SOURCE_URL_OVERRIDES_KEY,
+      JSON.stringify({ overrides: { sbir_gov: { from_prefix: 'https://www.sbir.gov', to_prefix: 'https://www.sbir.gov/' } } }),
+      new Date().toISOString(),
+    )
+    expect(await loadSourceUrlOverrides(db)).toHaveLength(0)
+  })
 })

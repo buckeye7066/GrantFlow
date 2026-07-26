@@ -4263,7 +4263,7 @@ export async function enforceSourceUrlSelfRepair(db, deps = {}) {
     if (disabled) return { scanned: failing.length, repaired: 0, enforced: false }
 
     const overridesMod = deps.overridesImpl ?? await import('../services/sources/sourceUrlOverrides.js')
-    const { loadSourceUrlOverrides, writeSourceUrlOverride, writeSourceUrlProposal, isSameRegistrableDomain, registrableDomain } = overridesMod
+    const { loadSourceUrlOverrides, writeSourceUrlOverride, writeSourceUrlProposal, isSameRegistrableDomain, registrableDomain, isTrivialUrlChange } = overridesMod
     const getSourceImpl = deps.getSourceImpl ?? (await import('../crawler-os/sourceRegistry.js')).getSource
     const checkUrlImpl = deps.checkUrlImpl ?? (await import('../services/linkVerificationService.js')).checkUrl
     const searchWebImpl = deps.searchWebImpl ?? (await import('../services/shared/webSearchEngine.js')).searchWeb
@@ -4312,7 +4312,10 @@ export async function enforceSourceUrlSelfRepair(db, deps = {}) {
         const probe = await checkUrlImpl(curated, { timeoutMs: 8000 })
         const finalUrl = typeof probe?.finalUrl === 'string' ? probe.finalUrl : null
         if (probe && (probe.status === 'ok' || probe.status === 'redirect')) {
-          if (finalUrl && finalUrl !== curated && !isSearchEngineUrl(finalUrl)) {
+          // A trailing-slash-only "redirect" is not a move (prod, first boot:
+          // sbir.gov → sbir.gov/) — it lands in aliveNoRepair below so the
+          // source converges to exhausted instead of gaining a no-op override.
+          if (finalUrl && !isTrivialUrlChange(curated, finalUrl) && !isSearchEngineUrl(finalUrl)) {
             spendAttempt()
             if (isSameRegistrableDomain(curated, finalUrl)) {
               await writeSourceUrlOverride(db, {

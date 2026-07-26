@@ -73,6 +73,12 @@ export function isSameRegistrableDomain(fromUrl, toUrl) {
   }
 }
 
+/** Trailing-slash-insensitive URL equality — a slash-only "move" is a no-op. */
+export function isTrivialUrlChange(fromUrl, toUrl) {
+  const norm = (u) => String(u ?? '').trim().replace(/\/+$/, '')
+  return norm(fromUrl) === norm(toUrl)
+}
+
 /** Normalize a stored override entry; null when malformed or trust-violating. */
 function sanitizeOverride(sourceId, entry) {
   const from = typeof entry?.from_prefix === 'string' ? entry.from_prefix.trim() : ''
@@ -82,6 +88,11 @@ function sanitizeOverride(sourceId, entry) {
   // Apply-time re-assertion of the write-time guard: a hand-edited or
   // corrupted kv entry crossing domains is IGNORED, never applied.
   if (!isSameRegistrableDomain(from, to)) return null
+  // A degenerate entry (differs only by trailing slash — prod caught sbir.gov
+  // → sbir.gov/ on the lane's first boot) is a no-op that would double-slash
+  // deeper URLs when stitched; drop it so the source re-enters the repair
+  // candidate set and converges through aliveNoRepair → exhausted instead.
+  if (isTrivialUrlChange(from, to)) return null
   return { source_id: String(sourceId), from_prefix: from, to_prefix: to }
 }
 
@@ -177,9 +188,16 @@ export function applyOverridesToUrl(url, overrides) {
   const u = typeof url === 'string' ? url : ''
   if (!u || !Array.isArray(overrides) || overrides.length === 0) return { url: u, applied: null }
   for (const o of overrides) {
-    if (u.startsWith(o.from_prefix)) {
-      return { url: o.to_prefix + u.slice(o.from_prefix.length), applied: o }
-    }
+    if (!u.startsWith(o.from_prefix)) continue
+    let tail = u.slice(o.from_prefix.length)
+    // PREFIX-BOUNDARY: '…/old' must not claim '…/old-page' — a match is only
+    // real when the tail begins at a URL boundary (or the prefix itself ends
+    // with one). Without this, a repair for one page hijacks its siblings.
+    if (!o.from_prefix.endsWith('/') && tail && !/^[/?#]/.test(tail)) continue
+    // Seam hygiene: never stitch a double slash (prod caught the class via
+    // the sbir.gov trailing-slash redirect on the lane's first boot).
+    if (o.to_prefix.endsWith('/') && tail.startsWith('/')) tail = tail.slice(1)
+    return { url: o.to_prefix + tail, applied: o }
   }
   return { url: u, applied: null }
 }
