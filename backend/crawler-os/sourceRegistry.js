@@ -33,14 +33,21 @@ import { mergeSourceCoverage } from './coverageOverrides.js';
  *  - priority_score   planner tie-breaker
  */
 // ── State benefits portals (state_programs lane) ────────────────────────────
-// One official state-government benefits/assistance portal per state that has
-// no bespoke state-programs source elsewhere in this registry (TN/KY/WV/OR/PA/
-// OH/WA have dedicated rows). Every URL was verified live on 2026-07-12
-// (curl -L → 200 on the state's own domain; NH EASY answers 403 to non-browser
-// clients — the DIRECTORY kind honestly survives fetch failures as
-// link_unverified). Closes the fleet-wide "No {ST}-specific state-programs
-// source exists in the source registry" coverage gap for every US state, DC,
-// and Puerto Rico.
+// One official state-government HOUSEHOLD benefits/assistance portal per state.
+// Originally (2026-07-12) states with "a dedicated row elsewhere" were skipped —
+// but a dedicated row is not a household portal: TN's was a disability waiver
+// (tn_ecf_choices), WV's was business funding, PA's was campaign finance, OR's
+// was likewise non-household, so a PA/WV/OR family selecting on housing/food
+// got NOTHING from its state lane (the 2026-07-25 "geographically out of
+// scope ×5 profiles" fleet gap). TN/WV/PA/OR portals added 2026-07-26 (URLs
+// verified live, curl -L → 200 with a browser UA; base_url is the final
+// post-redirect URL); only KY/OH/WA keep bespoke household-portal rows.
+// Guard: "every state serves individual/family household needs" totality test
+// in coverageEvidenceService.test.js. Other URLs verified live 2026-07-12
+// (NH EASY answers 403 to non-browser clients — the DIRECTORY kind honestly
+// survives fetch failures as link_unverified). Closes the fleet-wide "No
+// {ST}-specific state-programs source exists" coverage gap for every US state,
+// DC, and Puerto Rico.
 // Row shape: [state, portal name, verified URL, sponsor, summary]
 const STATE_BENEFITS_PORTALS = Object.freeze([
   ['AL', 'MyDHR — Alabama benefits portal', 'https://mydhr.alabama.gov', 'Alabama Department of Human Resources', 'Official Alabama portal to apply for and manage SNAP food assistance, TANF cash assistance, and child care assistance.'],
@@ -78,13 +85,17 @@ const STATE_BENEFITS_PORTALS = Object.freeze([
   ['NC', 'ePASS North Carolina', 'https://epass.nc.gov', 'North Carolina Department of Health and Human Services', 'Official North Carolina portal to apply for Food and Nutrition Services, Medicaid, energy, and child care assistance.'],
   ['ND', 'North Dakota Apply for Help', 'https://applyforhelp.nd.gov', 'North Dakota Health and Human Services', 'Official North Dakota hub to apply for SNAP, TANF, child care assistance, energy assistance, and health coverage.'],
   ['OK', 'OKDHS Live!', 'https://www.okdhslive.org', 'Oklahoma Human Services', 'Official Oklahoma portal to apply for SNAP food benefits, child care subsidy, and TANF and manage existing benefits.'],
+  ['OR', 'Oregon ONE Eligibility', 'https://one.oregon.gov', 'Oregon Department of Human Services', 'Official Oregon ONE portal to apply for SNAP food benefits, cash assistance (TANF), child care assistance (ERDC), and Oregon Health Plan coverage.'],
+  ['PA', 'COMPASS Pennsylvania', 'https://www.compass.dhs.pa.gov/home/', 'Pennsylvania Department of Human Services', 'Official Pennsylvania COMPASS portal to apply for SNAP, cash assistance, Medical Assistance, LIHEAP heating assistance, and child care works.'],
   ['RI', 'HealthyRhode', 'https://healthyrhode.ri.gov', 'Rhode Island Executive Office of Health and Human Services', 'Official Rhode Island portal for health coverage, SNAP, cash assistance, and child care assistance applications.'],
   ['SC', 'SC DSS Benefits Portal', 'https://benefitsportal.dss.sc.gov', 'South Carolina Department of Social Services', 'Official South Carolina portal to apply for SNAP and TANF benefits and manage existing DSS cases.'],
   ['SD', 'South Dakota Department of Social Services', 'https://dss.sd.gov', 'South Dakota Department of Social Services', 'Official South Dakota DSS hub for SNAP, TANF, child care assistance, energy assistance, and Medicaid programs.'],
+  ['TN', 'Tennessee One DHS', 'https://onedhs.tn.gov/csp', 'Tennessee Department of Human Services', 'Official Tennessee One DHS portal to apply for SNAP food assistance, Families First (TANF) cash assistance, and child care payment assistance.'],
   ['TX', 'Your Texas Benefits', 'https://www.yourtexasbenefits.com', 'Texas Health and Human Services Commission', 'Official Texas portal to apply for SNAP food benefits, TANF cash help, Medicaid/CHIP, and other support programs.'],
   ['UT', 'Utah DWS public assistance', 'https://jobs.utah.gov/assistance/', 'Utah Department of Workforce Services', 'Official Utah hub for SNAP, financial assistance, child care assistance, and unemployment services (myCase).'],
   ['VT', 'Vermont DCF Economic Services benefits', 'https://dcf.vermont.gov/benefits', 'Vermont Department for Children and Families', 'Official Vermont hub for 3SquaresVT (SNAP), Reach Up cash assistance, fuel assistance, and child care financial assistance.'],
   ['VA', 'CommonHelp Virginia', 'https://commonhelp.virginia.gov', 'Virginia Department of Social Services', 'Official Virginia portal to apply for SNAP, TANF, Medicaid/FAMIS, child care, and energy assistance.'],
+  ['WV', 'WV PATH', 'https://www.wvpath.wv.gov', 'West Virginia Department of Human Services', 'Official West Virginia PATH portal to apply for SNAP, WV WORKS cash assistance, Medicaid, child care assistance, and LIEAP energy assistance.'],
   ['WI', 'ACCESS Wisconsin', 'https://access.wisconsin.gov', 'Wisconsin Department of Health Services', 'Official Wisconsin portal to apply for FoodShare, BadgerCare Plus health coverage, child care, and other benefits.'],
   ['WY', 'Wyoming Department of Family Services', 'https://dfs.wyo.gov', 'Wyoming Department of Family Services', 'Official Wyoming DFS hub for SNAP, POWER cash assistance, child care subsidy, and energy assistance (LIEAP).'],
   ['PR', 'Departamento de la Familia de Puerto Rico', 'https://www.familia.pr.gov', 'Departamento de la Familia (ADSEF)', 'Official Puerto Rico family-services hub covering the Nutrition Assistance Program (PAN), TANF, and social services.'],
@@ -1743,7 +1754,10 @@ export const SOURCES = Object.freeze([
     // 2026-07-16 carried the condition "diabetic", not "diabetes"). Token
     // matching does not stem, so the curated vocabulary must carry both forms
     // or a genuinely covered condition mints a false wishlist entry.
-    keywords: ['hypertension', 'high blood pressure', 'heart disease', 'diabetes', 'diabetic', 'medication assistance', 'copay assistance', 'chronic condition'],
+    // 'obesity'/'bariatric' added 2026-07-26: NeedyMeds' diagnosis directory
+    // includes obesity/weight-management programs, and the prod scoreboard
+    // carried an unfillable "no lane exists for obesity" wishlist entry.
+    keywords: ['hypertension', 'high blood pressure', 'heart disease', 'diabetes', 'diabetic', 'obesity', 'bariatric', 'medication assistance', 'copay assistance', 'chronic condition'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['medical'],
@@ -1842,6 +1856,161 @@ export const SOURCES = Object.freeze([
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
+  },
+  // ── Adapter-wishlist lanes (2026-07-26). Coverage-gap scoreboard entries the
+  //    nightly report kept asking the owner to hand-adjudicate: "visual
+  //    impairment" / "retina detachment (left eye)" (no vision lane existed),
+  //    "anoxic brain injury" (no brain-injury lane), and "medical debt" (a real,
+  //    fillable assistance class — hospital charity care). URLs verified live
+  //    2026-07-26 (curl -L → 200 with a browser UA; base_url is the final
+  //    post-redirect URL).
+  {
+    source_id: 'vision_aware_resources',
+    name: 'VisionAware (APH ConnectCenter) — blindness & low-vision resources',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://aphconnectcenter.org/visionaware/',
+    sponsor_name: 'American Printing House for the Blind (APH ConnectCenter)',
+    resource_title: 'VisionAware — resources for adults living with vision loss',
+    resource_summary: 'National resource hub for adults who are blind or have low vision: independent-living skills, assistive-technology guidance, and directories of local vision-rehabilitation services and support programs. A directory, not a direct award.',
+    // 'visual impairment' is BOTH the free-text form real profiles carry and the
+    // canonical flag profileHelpers mints (`visual_impairment` — underscores are
+    // normalized before matching); 'retina'/'retinal' cover diagnosis phrasings
+    // like "retina detachment (left eye)" (laterality words are generic-filtered).
+    keywords: ['blind', 'blindness', 'visual impairment', 'visually impaired', 'low vision', 'vision loss', 'legally blind', 'macular degeneration', 'retina', 'retinal', 'retinopathy', 'glaucoma'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['vision_support', 'disability', 'medical'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    // Covers ACQUIRED brain injury broadly — anoxic/hypoxic injuries are NOT
+    // TBIs, so a TBI-only source would leave "anoxic brain injury" uncovered.
+    source_id: 'biausa_brain_injury_resources',
+    name: 'Brain Injury Association of America — help & resources',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://biausa.org/',
+    sponsor_name: 'Brain Injury Association of America',
+    resource_title: 'BIAA National Brain Injury Information Center & state affiliates',
+    resource_summary: 'National information and resource network for people living with traumatic or acquired (including anoxic/hypoxic) brain injury and their caregivers: the National Brain Injury Information Center, state affiliate programs, and support-service directories. A directory, not a direct award.',
+    // 'tbi survivor' is load-bearing for the CANONICAL FLAG `tbi`: coverage terms
+    // under 4 chars are filtered, so a bare 'tbi' keyword can never match — but
+    // the REVERSE direction (condition ⊂ keyword) matches the 'tbi' token inside
+    // the multi-word phrase.
+    keywords: ['brain injury', 'traumatic brain injury', 'acquired brain injury', 'anoxic brain injury', 'anoxic', 'hypoxic', 'head injury', 'tbi survivor', 'concussion', 'post-concussion'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['brain_injury_support', 'disability', 'medical', 'caregiving'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    // "medical debt" reached the disease-lane wishlist because it lives in a
+    // diagnosis field on a real profile; the honest coverage answer is not a
+    // disease lane but a real, fillable assistance class: hospital
+    // financial-assistance (charity care) applications, which nonprofit
+    // hospitals are required to offer. Dollar For screens eligibility and
+    // helps patients prepare and file.
+    source_id: 'dollar_for_charity_care',
+    name: 'Dollar For — hospital charity care (medical debt) assistance',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://dollarfor.org/',
+    sponsor_name: 'Dollar For',
+    resource_title: 'Dollar For — get hospital bills forgiven through charity care',
+    resource_summary: 'National nonprofit that helps patients erase or reduce hospital bills through the hospital\'s own financial-assistance (charity care) policy: eligibility screening plus hands-on help preparing and filing the application. Not a loan; no fee.',
+    keywords: ['medical debt', 'medical bills', 'hospital bills', 'hospital bill', 'hospital debt', 'charity care', 'financial assistance policy', 'bill forgiveness'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['medical_bills', 'medical'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  // ── Canonical-flag totality lanes (2026-07-26). Every HEALTH_DIAGNOSIS_FLAGS
+  //    token (profileHelpers) must be covered by a disease_specific source or it
+  //    mints the same unfillable "no lane exists" wishlist noise the moment any
+  //    profile carries it — hiv / amputee / rare_disease / terminal had no lane
+  //    (guard: coverageEvidenceService.test.js flag-coverage totality). URLs
+  //    verified live 2026-07-26 (curl -L → 200 with a browser UA).
+  {
+    // NOTE: ryanwhite.hrsa.gov itself WAFs non-browser fetchers (403); the care
+    // locator is the patient-facing surface and answers 200.
+    source_id: 'findhivcare_ryan_white',
+    name: 'HRSA Find HIV Care (Ryan White program locator)',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://findhivcare.hrsa.gov/',
+    sponsor_name: 'Health Resources and Services Administration',
+    resource_title: 'Find Ryan White HIV/AIDS Program medical care & support services',
+    resource_summary: 'Official HRSA locator for Ryan White HIV/AIDS Program providers: HIV medical care, medications (ADAP), and support services for people with HIV who are uninsured or underinsured. A benefits/services lane, not a grant.',
+    // Coverage terms under 4 chars are filtered, so bare 'hiv' can never match;
+    // the multi-word phrases cover the canonical `hiv` flag via the reverse
+    // (condition ⊂ keyword) direction, and 'aids' covers free-text forms.
+    keywords: ['hiv care', 'hiv positive', 'hiv treatment', 'living with hiv', 'aids', 'ryan white', 'antiretroviral'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['medical', 'medication'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    source_id: 'amputee_coalition_resources',
+    name: 'Amputee Coalition — limb loss resources & support',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://amputee-coalition.org/',
+    sponsor_name: 'Amputee Coalition',
+    resource_title: 'Amputee Coalition limb loss & limb difference resources',
+    resource_summary: 'National nonprofit for people with limb loss or limb difference: peer support, resource navigation, and guidance on prosthetic coverage and assistance programs. A directory, not a direct award.',
+    keywords: ['amputee', 'amputation', 'limb loss', 'limb difference', 'prosthetic', 'prosthetics', 'prosthesis'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['disability', 'medical', 'equipment'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    source_id: 'nord_rare_disease_assistance',
+    name: 'NORD — rare disease patient assistance programs',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://rarediseases.org/patient-assistance-programs/',
+    sponsor_name: 'National Organization for Rare Disorders',
+    resource_title: 'NORD patient assistance programs (rare diseases)',
+    resource_summary: 'NORD patient-assistance programs for people with rare diseases: medication and treatment cost help, travel and lodging assistance for care, and disease-specific funds. Program availability varies, so this is surfaced for review rather than promised as an award.',
+    keywords: ['rare disease', 'rare disorder', 'orphan disease', 'orphan drug', 'undiagnosed disease'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['medical', 'medication', 'medical_bills'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    // Covers the canonical `terminal` flag via the reverse direction of
+    // 'terminal illness' / 'terminal diagnosis' (see the tbi note above).
+    source_id: 'caringinfo_serious_illness',
+    name: 'CaringInfo (NHPCO) — serious & terminal illness care resources',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://www.caringinfo.org/',
+    sponsor_name: 'National Hospice and Palliative Care Organization',
+    resource_title: 'CaringInfo — hospice, palliative & end-of-life care resources',
+    resource_summary: 'Consumer resource from NHPCO for people with serious or terminal illness and their caregivers: understanding and finding hospice and palliative care, paying for care (Medicare/Medicaid hospice benefits), and advance-care planning. A directory, not a direct award.',
+    keywords: ['terminal illness', 'terminal diagnosis', 'hospice', 'palliative care', 'end of life care', 'life limiting illness'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['medical', 'caregiving'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
   },
   // ── Benchmark-gap lanes (2026-07-13). Structural gaps surfaced by the
   //    12-persona stress cohort: kinship/grandfamily caregivers, heirs'-property

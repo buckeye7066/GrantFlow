@@ -193,6 +193,23 @@ export const LANE_OF_SOURCE = Object.freeze({
   hlaa_financial_assistance: 'disease_specific',
   at3_state_at_programs: 'disease_specific',
   asaa_cpap_assistance: 'disease_specific',
+  // Adapter-wishlist lanes (2026-07-26): vision loss, acquired brain injury,
+  // medical debt / hospital charity care. dollar_for_charity_care sits in this
+  // lane deliberately — the disease-lane loop only consults disease_specific
+  // sources, and "medical debt" arrives as a health CONDITION on real profiles
+  // (a diagnosis-field entry), so its covering source must live here (the
+  // needymeds_diagnosis_assistance precedent: diagnosis-agnostic, same lane).
+  vision_aware_resources: 'disease_specific',
+  biausa_brain_injury_resources: 'disease_specific',
+  dollar_for_charity_care: 'disease_specific',
+  // Canonical-flag totality lanes (2026-07-26): hiv, amputee, rare_disease,
+  // terminal — every HEALTH_DIAGNOSIS_FLAGS token must have a covering lane
+  // (guard: "every canonical diagnosis flag has a covering source" below in
+  // coverageEvidenceService.test.js).
+  findhivcare_ryan_white: 'disease_specific',
+  amputee_coalition_resources: 'disease_specific',
+  nord_rare_disease_assistance: 'disease_specific',
+  caringinfo_serious_illness: 'disease_specific',
   // ── 211 / local safety net ──
   community_211: 'local_211',
   united_way_211: 'local_211',
@@ -514,10 +531,46 @@ export async function loadConditionCoverageOverlay(db) {
  * The real fix is provenance: only `signals.health_conditions` reaches the
  * disease-lane loop now. This stays as a cheap belt-and-braces for legacy callers.
  */
-const NON_DISEASE_HEALTH_SIGNALS = new Set([
+export const NON_DISEASE_HEALTH_SIGNALS = new Set([
   'high_support_needs', 'disability', 'chronic_illness', 'mental_health', 'recovery',
   'mobility_needs', 'dme', 'physical',
 ]);
+
+/**
+ * dominantExclusionReason — the reason a lane with zero selected sources gets
+ * blamed on, picked from its excluded sources' reason codes.
+ *
+ * Only IN-GEOGRAPHIC-SCOPE exclusions can explain a profile's lane: a state
+ * lane always carries ~50 OTHER states' sources whose geography votes
+ * numerically drown the in-state story (the 2026-07-25 "geographically out of
+ * scope ×5 profiles" class — a profile whose own state's sources were skipped
+ * for by-design reasons still read as a GEOGRAPHY gap, which no owner action
+ * could ever fix). So sources carrying a geography exclusion are dropped from
+ * the vote when ANY in-scope exclusion exists. When NO source is in geographic
+ * scope at all (unparseable state like "USA", or a place genuinely uncovered),
+ * the geographic statement IS the honest one and is kept.
+ *
+ * Reasons arrive in BOTH forms (planner codes and humanized text) — always
+ * normalized via rawReasonCode before comparing (the 2026-07-12 class).
+ *
+ * @param {Array<{reasons?: string[]}>} excludedSources
+ * @returns {string} dominant raw reason code
+ */
+export function dominantExclusionReason(excludedSources) {
+  const all = Array.isArray(excludedSources) ? excludedSources : [];
+  const inScope = all.filter(
+    (s) => !(s.reasons || []).some((r) => rawReasonCode(r) === 'geography_out_of_scope'),
+  );
+  const voting = inScope.length > 0 ? inScope : all;
+  const counts = new Map();
+  for (const s of voting) {
+    for (const r of s.reasons || []) {
+      const code = rawReasonCode(r);
+      counts.set(code, (counts.get(code) || 0) + 1);
+    }
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'not applicable to this profile';
+}
 
 /**
  * buildCoverageEvidence — the per-profile Coverage & Evidence aggregation.
@@ -629,14 +682,7 @@ export async function buildCoverageEvidence(db, profileId) {
       // normalize to the raw code before counting/branching — comparing the
       // display text is how the 2026-07-12 "school portals = 81% fleet gap"
       // regression slipped past the not_applicable fix below.
-      const reasonCounts = new Map();
-      for (const s of bucket.excluded_sources) {
-        for (const r of s.reasons || []) {
-          const code = rawReasonCode(r);
-          reasonCounts.set(code, (reasonCounts.get(code) || 0) + 1);
-        }
-      }
-      const topReason = [...reasonCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'not applicable to this profile';
+      const topReason = dominantExclusionReason(bucket.excluded_sources);
       // A lane whose sources are excluded because they DON'T SERVE this
       // applicant type / need is working AS DESIGNED (a nonprofit not getting
       // FAFSA portals is correct eligibility gating, not missing coverage) —

@@ -149,6 +149,17 @@ const FACTORIES = Object.freeze({
   hlaa_financial_assistance: officialDirectory('hlaa_financial_assistance'),
   at3_state_at_programs: officialDirectory('at3_state_at_programs'),
   asaa_cpap_assistance: officialDirectory('asaa_cpap_assistance'),
+  // --- Adapter-wishlist lanes (2026-07-26): vision loss, acquired brain
+  //     injury, medical debt / hospital charity care.
+  vision_aware_resources: officialDirectory('vision_aware_resources'),
+  biausa_brain_injury_resources: officialDirectory('biausa_brain_injury_resources'),
+  dollar_for_charity_care: officialDirectory('dollar_for_charity_care'),
+  // --- Canonical-flag totality lanes (2026-07-26): hiv, amputee, rare_disease,
+  //     terminal — every HEALTH_DIAGNOSIS_FLAGS token must have a covering lane.
+  findhivcare_ryan_white: officialDirectory('findhivcare_ryan_white'),
+  amputee_coalition_resources: officialDirectory('amputee_coalition_resources'),
+  nord_rare_disease_assistance: officialDirectory('nord_rare_disease_assistance'),
+  caringinfo_serious_illness: officialDirectory('caringinfo_serious_illness'),
   // --- Benchmark-gap lanes (2026-07-13): kinship/grandfamily caregivers,
   //     heirs'-property / beginning farmers, homeschool families.
   acl_family_caregiver_support: officialDirectory('acl_family_caregiver_support'),

@@ -870,7 +870,7 @@ function normalizeString(value) {
  * source lane could plausibly be built for each, so "no lane exists for X" is a
  * fair finding.
  */
-const HEALTH_DIAGNOSIS_FLAGS = new Set([
+export const HEALTH_DIAGNOSIS_FLAGS = new Set([
   'dialysis', 'transplant', 'hiv', 'tbi', 'amputee', 'neurodivergent',
   'mental_health', 'rare_disease', 'visual_impairment', 'hearing_impairment',
   'cancer', 'recovery', 'terminal',

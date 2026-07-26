@@ -33,6 +33,10 @@ fixed coordinator endpoints (`/api/eva/ingest`, `/api/eva/heartbeat`).
 - For web journeys: `npm i playwright && npx playwright install chromium` inside
   `tools/eva-edge-runner/` (Playwright is an *optional* dependency — without it,
   web journeys report `blocked` naming the missing dep rather than crashing).
+- If the shared `%LOCALAPPDATA%\ms-playwright` store throws "Unable to update
+  lock within the stale threshold" (AV interference on the `__dirlock`), point
+  EVA at its own store: set `PLAYWRIGHT_BROWSERS_PATH` (user scope, so the
+  scheduled task inherits it) and re-run the install.
 
 ## Configuration (environment only — never in source)
 

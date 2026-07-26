@@ -26,7 +26,10 @@ import {
   extractMatchEvidence,
   buildCoverageEvidence,
   conditionCoveredBySource,
+  NON_DISEASE_HEALTH_SIGNALS,
+  dominantExclusionReason,
 } from '../services/coverageEvidenceService.js'
+import { HEALTH_DIAGNOSIS_FLAGS } from '../services/profileHelpers.js'
 import { sourceIds, allSources } from '../crawler-os/sourceRegistry.js'
 
 const LANE_IDS = new Set(LANES.map((l) => l.lane))
@@ -509,6 +512,68 @@ describe('by-design lane exclusions stay out of gaps (reason-form independent)',
     const stateGaps = result.gaps.filter((g) => g.lane === 'state_programs')
     expect(stateGaps.length).toBeGreaterThan(0)
   })
+
+  it('dominantExclusionReason: 51 geography votes never outvote one in-scope reason', async () => {
+    const { HUMAN_REASON } = await import('../crawler-os/crawlerPlanExplainer.js')
+    // The Caleb Hart shape (WV individual, housing/food, pre-2026-07-26
+    // registry): the profile's OWN state's source is skipped on need, every
+    // other state's portal is skipped on geography — and counting all votes
+    // made geography "win" 51:1, producing a gap no owner action could fix.
+    const excluded = [
+      { source_id: 'own_state_source', reasons: ['need_category_not_covered'] },
+      ...Array.from({ length: 51 }, (_, i) => ({ source_id: `other_state_${i}`, reasons: ['geography_out_of_scope'] })),
+    ]
+    expect(dominantExclusionReason(excluded)).toBe('need_category_not_covered')
+    // Reason-form independent (the 2026-07-12 humanized-text class):
+    const humanized = excluded.map((s) => ({ ...s, reasons: s.reasons.map((r) => HUMAN_REASON[r] || r) }))
+    expect(dominantExclusionReason(humanized)).toBe('need_category_not_covered')
+    // A source excluded by need AND geography is another state's source — it
+    // must not smuggle its need vote into the in-scope count.
+    const mixed = [
+      { source_id: 'own_state_source', reasons: ['applicant_type_not_served'] },
+      ...Array.from({ length: 5 }, (_, i) => ({ source_id: `o_${i}`, reasons: ['need_category_not_covered', 'geography_out_of_scope'] })),
+    ]
+    expect(dominantExclusionReason(mixed)).toBe('applicant_type_not_served')
+    // When EVERY exclusion is geographic (junk state, uncovered territory),
+    // the geographic verdict is the honest one and is kept.
+    expect(dominantExclusionReason(excluded.slice(1))).toBe('geography_out_of_scope')
+    expect(dominantExclusionReason([])).toBe('not applicable to this profile')
+  })
+
+  it('geography votes never drown the in-state reason (the 2026-07-25 "out of scope ×5" class)', async () => {
+    // A nonprofit in a COVERED state: its own state's household portal is
+    // skipped as applicant_type_not_served (by design — a church is not a SNAP
+    // applicant), but ~50 OTHER states' sources are skipped on geography, and
+    // counting all exclusions let geography outvote the in-state story. The
+    // owner's nightly report then carried "None of the 55 known state programs
+    // sources apply — geographically out of scope" for a profile whose state
+    // was fully covered — a gap no owner action could ever fix.
+    const id = 'oh-church-1'
+    insertProfile(db, { id, displayName: 'Vermilion Church', primaryType: 'nonprofit', state: 'OH' })
+    insertSection(db, id, 'organization_details', { organization_type: 'nonprofit' })
+    insertSection(db, id, 'basic_information', { city: 'Vermilion', state: 'OH', zip: '44089' })
+    const result = await buildCoverageEvidence(db, id)
+
+    const stateLane = result.lanes.find((l) => l.lane === 'state_programs')
+    expect(stateLane.status).toBe('not_applicable')
+    const geoGap = result.gaps.find(
+      (g) => g.lane === 'state_programs' && /geographically out of scope/i.test(String(g.statement)),
+    )
+    expect(geoGap, 'in-state by-design exclusions must decide the lane, not other states\' geography').toBeUndefined()
+  })
+
+  it('an unparseable state still surfaces the geographic state-lane gap (the fallback is kept)', async () => {
+    // "Anytown, USA 12345" (a real prod template profile): NO source is in
+    // geographic scope, so the geographic statement is the honest one — the
+    // in-scope-exclusions rule must not suppress it.
+    const id = 'junk-state-1'
+    insertProfile(db, { id, displayName: 'Melissa Justus', primaryType: 'individual', state: 'USA' })
+    insertSection(db, id, 'basic_information', { address: { street: '123 Main St', city: 'Anytown', state: 'USA', zip_code: '12345' } })
+    insertSection(db, id, 'narrative', { primary_goal: 'help paying for housing' })
+    const result = await buildCoverageEvidence(db, id)
+    const stateGaps = result.gaps.filter((g) => g.lane === 'state_programs')
+    expect(stateGaps.length, 'a profile with no usable state must still show a state-lane gap').toBeGreaterThan(0)
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -540,6 +605,28 @@ describe('state_programs lane totality', () => {
         return Array.isArray(states) && states.map((x) => String(x).toUpperCase()).includes(state)
       })
       expect(covered, `no state_programs source covers ${state} — add its official portal to STATE_BENEFITS_PORTALS in sourceRegistry.js`).toBe(true)
+    }
+  })
+
+  it('every state serves individual/family HOUSEHOLD needs (portal-grade totality)', () => {
+    // "Some source covers the state" is NOT parity: TN/WV/PA/OR each "had a
+    // dedicated row" (a disability waiver, business funding, campaign finance)
+    // while a family there selecting on housing/food got NOTHING — the
+    // 2026-07-25 "geographically out of scope ×5 profiles" fleet gap. The unit
+    // of coverage is the HOUSEHOLD, so every state must carry at least one
+    // individual/family source over core household needs.
+    const HOUSEHOLD_NEEDS = new Set(['housing', 'food', 'medical', 'energy', 'childcare'])
+    const registry = allSources()
+    for (const state of US_STATES_DC_PR) {
+      const served = registry.some((s) => {
+        if (laneForSource(s.source_id, s) !== 'state_programs') return false
+        const states = s.geography?.states
+        if (!Array.isArray(states) || !states.map((x) => String(x).toUpperCase()).includes(state)) return false
+        const types = s.applicant_types || []
+        if (!types.includes('individual') && !types.includes('family')) return false
+        return (s.need_categories || []).some((n) => HOUSEHOLD_NEEDS.has(n))
+      })
+      expect(served, `${state} has no individual/family household-needs state source — add its benefits portal to STATE_BENEFITS_PORTALS`).toBe(true)
     }
   })
 
@@ -603,6 +690,13 @@ describe('conditionCoveredBySource — the coverage floor', () => {
     ['spinal cord injury', 'reeve_foundation_paralysis'],
     ['complex ptsd', 'samhsa_findtreatment'],
     ['obstructive sleep apnea', 'asaa_cpap_assistance'],
+    // Adapter-wishlist lanes (2026-07-26) — the exact strings the nightly report
+    // asked the owner to hand-adjudicate, verbatim from the 2026-07-24 scoreboard.
+    ['visual impairment', 'vision_aware_resources'],
+    ['retina detachment (left eye)', 'vision_aware_resources'],
+    ['anoxic brain injury', 'biausa_brain_injury_resources'],
+    ['medical debt', 'dollar_for_charity_care'],
+    ['obesity', 'needymeds_diagnosis_assistance'],
   ])('keeps covering %s (via %s)', (condition, expectedSource) => {
     expect(coveredBy(condition).map((s) => s.source_id)).toContain(expectedSource)
   })
@@ -671,10 +765,18 @@ describe('conditionCoveredBySource — the coverage floor', () => {
     expect(coveredBy('ptsd').map((s) => s.source_id)).toContain('samhsa_findtreatment')
   })
 
-  it('still reports an honestly uncovered flag as a gap (no vision lane exists)', () => {
-    // The underscore fix must not paper over a REAL gap: nothing in the registry
-    // serves vision, so visual_impairment stays a true structural finding.
-    expect(coveredBy('visual_impairment')).toHaveLength(0)
+  it('EVERY canonical diagnosis flag has a covering source (flag totality)', () => {
+    // A HEALTH_DIAGNOSIS_FLAGS token with no covering disease_specific source
+    // mints an UNFILLABLE "no source lane exists" wishlist entry the moment any
+    // profile carries the flag — hiv/amputee/rare_disease/terminal/tbi all sat
+    // in that state until 2026-07-26 (visual_impairment was the one the nightly
+    // report actually caught). NON_DISEASE_HEALTH_SIGNALS members are exempt:
+    // the disease-lane loop skips them by design (they are support levels, not
+    // diagnoses a lane could name).
+    for (const flag of HEALTH_DIAGNOSIS_FLAGS) {
+      if (NON_DISEASE_HEALTH_SIGNALS.has(flag)) continue
+      expect(coveredBy(flag).length, `canonical flag "${flag}" has NO covering disease lane`).toBeGreaterThan(0)
+    }
   })
 
   it('matches on whole tokens only — `renal` must not hit inside `adrenal`', () => {
@@ -684,7 +786,12 @@ describe('conditionCoveredBySource — the coverage floor', () => {
   })
 
   it('leaves a genuinely uncovered diagnosis honestly uncovered', () => {
-    for (const c of ['cipn', 'epilepsy', 'obesity', 'retina detachment (left eye)']) {
+    // 'retina detachment (left eye)' and 'obesity' moved OUT of this list
+    // 2026-07-26: the vision lane / NeedyMeds diagnosis vocabulary cover them
+    // now. 'clawing effect in hands' is symptom prose in a diagnosis field —
+    // no curated lane can honestly name it, so it stays a true gap for the
+    // wishlist consumer's web search to converge on.
+    for (const c of ['cipn', 'epilepsy', 'clawing effect in hands']) {
       expect(coveredBy(c), `${c} should still be an honest gap`).toHaveLength(0)
     }
   })

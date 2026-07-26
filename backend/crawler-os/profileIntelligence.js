@@ -108,6 +108,10 @@ const NEED_KEYWORDS = {
   survivor_benefits: ['survivor benefits', 'surviving spouse', 'widow benefits', 'widower benefits', 'death benefit'],
   cancer_support: ['cancer', 'oncology', 'chemotherapy', 'breast cancer', 'stage 4', 'metastatic'],
   dementia_support: ['dementia', 'alzheimers', 'alzheimer', 'memory care'],
+  // Vision / brain-injury lanes (2026-07-26 adapter wishlist): whole-word
+  // matched, so 'retina'/'anoxic' are precise; 'tbi' matches only as a token.
+  vision_support: ['blind', 'blindness', 'visual impairment', 'visually impaired', 'low vision', 'vision loss', 'legally blind', 'macular degeneration', 'retina', 'retinal', 'retinopathy', 'glaucoma'],
+  brain_injury_support: ['brain injury', 'traumatic brain injury', 'acquired brain injury', 'anoxic brain injury', 'anoxic', 'hypoxic', 'tbi', 'concussion', 'post-concussion'],
   black_lung_benefits: ['black lung', 'coal miner widow', 'coal miner survivor', 'miner survivor', 'coal miner benefits'],
   animal_welfare: ['animal shelter', 'animal rescue', 'animal welfare', 'humane society', 'spay', 'neuter', 'veterinary assistance'],
   domestic_violence: ['domestic violence', 'family violence', 'dv shelter', 'victim services', 'vawa', 'survivor advocacy'],
@@ -776,6 +780,8 @@ const NEED_IMPLICATIONS = Object.freeze({
   reentry: ['employment', 'workforce', 'housing', 'mental_health'],
   cancer_support: ['medical'],
   dementia_support: ['medical', 'caregiving'],
+  vision_support: ['medical', 'disability'],
+  brain_injury_support: ['medical', 'disability', 'caregiving'],
   black_lung_benefits: ['medical', 'survivor_benefits'],
   veteran_startup: ['startup'],
   military_startup: ['startup'],
