@@ -692,7 +692,11 @@ export async function persistRun(db, memStore, run, opts = {}) {
   const pipelinePruned = await prunePipelineRejects(db, memStore, idRemap);
   const hamiltonCleaned = await cleanupHamiltonRejects(db, memStore, idRemap);
 
-  return { opportunities, matches, sources: sourceRows.length, rejected: run?.rejected ?? 0, pipelinePruned, hamiltonCleaned };
+  // idRemap (os run id -> live canonical id) rides along so the service layer
+  // can read the LIVE rows this run's recommendations landed on — the live row
+  // is where nightly amount enrichment / kind classification recorded answers
+  // this crawl's own extraction cannot see (a memory-store run starts blank).
+  return { opportunities, matches, sources: sourceRows.length, rejected: run?.rejected ?? 0, pipelinePruned, hamiltonCleaned, idRemap };
 }
 
 export default { profileContextToThesisInput, persistRun };

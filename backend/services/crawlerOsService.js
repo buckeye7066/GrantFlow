@@ -399,6 +399,96 @@ function skippedDiscoveryResult(profileId, reason) {
   };
 }
 
+/**
+ * overlayLiveAmountKnowledge — fill a run's recommendations with what the LIVE
+ * catalog row already KNOWS about amounts and kind.
+ *
+ * WHY (Amy flywheel `amount_recall_miss` ×31, 2026-07-26). Every discovery run
+ * starts from a blank memory store, so a recommendation carries only what THIS
+ * crawl's extraction saw. But the run's rows are persisted onto live
+ * `funding_opportunities` rows by canonical identity — rows where the nightly
+ * amount sweeps (adapter/page-read, `enforceAmountEnrichment`) and the locator
+ * kind classification may have ALREADY recorded the answer. Ignoring that
+ * knowledge made Amy's evaluator count a miss on an amount GrantFlow already
+ * knows and displays (the finding's own claim — "pipeline value will display
+ * ~$0" — reads the LIVE row, which has the figure), and let a catalog row
+ * classified DIRECTORY/BENEFIT re-enter the denominator as grant-shaped
+ * because the fresh extraction carried no kind. The flywheel's two honesty
+ * exclusions existed but could not fire on deduped rows.
+ *
+ * FILL-GAPS ONLY — the mirror of the never-wipe rule (#950): a live answer
+ * fills a rec's SILENCE; it never overwrites a fact this crawl extracted.
+ * The one deliberate exception mirrors the kind tug-of-war doctrine
+ * (locatorUrlKind.js): a live 'directory'/'benefit' classification is a
+ * curated/structural judgment and outranks a generic machine stamp, exactly
+ * as `fundingOpportunityConflictExpr` refuses to downgrade it on write.
+ *
+ * Mutates recs in place (the run object is the single source consumers read);
+ * returns { checked, enriched } for run telemetry. Best-effort: any read
+ * failure leaves every rec exactly as extracted.
+ */
+export async function overlayLiveAmountKnowledge(db, recommendations, idRemap) {
+  const recs = Array.isArray(recommendations) ? recommendations : [];
+  if (recs.length === 0) return { checked: 0, enriched: 0 };
+  const liveIdOf = (osId) => (idRemap instanceof Map ? (idRemap.get(osId) ?? osId) : osId);
+  const liveIds = [...new Set(recs.map((r) => liveIdOf(r?.opportunity_id)).filter(Boolean))];
+  if (liveIds.length === 0) return { checked: 0, enriched: 0 };
+  let rows = [];
+  try {
+    const placeholders = liveIds.map(() => '?').join(', ');
+    // TRAP (#946/#954 schema-drift class): select only columns BOTH dialects
+    // have — never fo.url here.
+    rows = await db
+      .prepare(
+        `SELECT id, amount_min, amount_max, amount_status, opportunity_kind
+           FROM funding_opportunities
+          WHERE id IN (${placeholders})`,
+      )
+      .all(...liveIds);
+  } catch {
+    return { checked: recs.length, enriched: 0 };
+  }
+  const byId = new Map((rows ?? []).map((r) => [r.id, r]));
+  let enriched = 0;
+  for (const rec of recs) {
+    const live = byId.get(liveIdOf(rec?.opportunity_id));
+    if (!live) continue;
+    let touched = false;
+    // Amounts: a known live figure fills a rec that carries none (Postgres
+    // NUMERIC arrives as a string — normalize to Number for consumers).
+    if (!(Number(rec.amount_min) > 0) && Number(live.amount_min) > 0) {
+      rec.amount_min = Number(live.amount_min);
+      touched = true;
+    }
+    if (!(Number(rec.amount_max) > 0) && Number(live.amount_max) > 0) {
+      rec.amount_max = Number(live.amount_max);
+      touched = true;
+    }
+    // Status: a real live answer ('none_published'/'varies'/…) replaces only
+    // SILENCE (null/'not_listed'). Silence never replaces anything.
+    const recStatus = String(rec.amount_status ?? '').toLowerCase();
+    const liveStatus = String(live.amount_status ?? '').toLowerCase();
+    if ((recStatus === '' || recStatus === 'not_listed') && liveStatus && liveStatus !== 'not_listed') {
+      rec.amount_status = live.amount_status;
+      touched = true;
+    }
+    // Kind: canonical directory/benefit wins (tug-of-war rule); otherwise the
+    // live kind only fills a rec with no kind at all.
+    const liveKind = String(live.opportunity_kind ?? '').toLowerCase();
+    if (liveKind === 'directory' || liveKind === 'benefit') {
+      if (String(rec.kind ?? '').toLowerCase() !== liveKind) {
+        rec.kind = live.opportunity_kind;
+        touched = true;
+      }
+    } else if ((rec.kind === null || rec.kind === undefined) && live.opportunity_kind) {
+      rec.kind = live.opportunity_kind;
+      touched = true;
+    }
+    if (touched) enriched += 1;
+  }
+  return { checked: recs.length, enriched };
+}
+
 export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
   const ctx = await loadProfileContext(db, profileId);
@@ -536,6 +626,18 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     };
   }
   const persisted = await persistRun(db, store, run, crossProfile ? { primaryProfileId: thesis.profile_id } : {});
+
+  // Read BACK what the live rows already know (amounts learned by the nightly
+  // enrichment sweeps, directory/benefit kind classifications) into this run's
+  // recommendations — see overlayLiveAmountKnowledge. Runs AFTER persistRun so
+  // the id remap (os id -> live canonical id) exists and the conflict-expression
+  // never-wipe guards have already reconciled the row. Consumers downstream of
+  // this seam (Amy's flywheel evaluator, coverage scoreboard, Anya handoff) all
+  // read run.recommendations, so the overlay happens exactly once, here.
+  // Best-effort: a failure leaves the recs as extracted and never fails a crawl.
+  try {
+    run.amount_overlay = await overlayLiveAmountKnowledge(db, run.recommendations, persisted?.idRemap);
+  } catch { /* observability-only; never fails a crawl */ }
 
   // Now that the live result is persisted, settle the bounded Phase-1d target
   // verification (started before the lane returned, so it ran CONCURRENTLY with
