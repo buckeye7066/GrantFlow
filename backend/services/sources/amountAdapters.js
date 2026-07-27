@@ -28,6 +28,7 @@
 import { enrichAmountViaGrantsGovApi, isGrantsGovRow } from './grantsGovAmountAdapter.js'
 import { enrichAmountViaSamFal, isSamFalRow } from './samFalAmountAdapter.js'
 import { enrichAmountViaFederalRegister, isFederalRegisterRow } from './federalRegisterAmountAdapter.js'
+import { enrichAmountViaListingPage, isListingPageRow } from './listingPageAmountAdapter.js'
 
 /**
  * The registry.
@@ -57,6 +58,11 @@ export const AMOUNT_ADAPTERS = Object.freeze([
     id: 'federal_register',
     matches: isFederalRegisterRow,
     enrich: enrichAmountViaFederalRegister,
+  }),
+  Object.freeze({
+    id: 'listing_page',
+    matches: isListingPageRow,
+    enrich: enrichAmountViaListingPage,
   }),
 ])
 
