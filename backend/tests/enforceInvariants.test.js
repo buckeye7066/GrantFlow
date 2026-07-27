@@ -1772,8 +1772,8 @@ describe('enforceHamiltonStopRecheck', () => {
   function insertOpp(db, opp = {}) {
     const o = { ...TSAA_OPP, ...opp }
     db.prepare(
-      'INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url, deadline_type, record_origin) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).run(o.id, o.title, o.sponsor, o.application_url, o.source_url, o.deadline_type, o.record_origin)
+      'INSERT INTO funding_opportunities (id, title, sponsor, description, application_url, source_url, deadline_type, record_origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(o.id, o.title, o.sponsor, o.description ?? null, o.application_url, o.source_url, o.deadline_type, o.record_origin)
     return o
   }
 
@@ -1819,10 +1819,32 @@ describe('enforceHamiltonStopRecheck', () => {
     expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('cancelled')
   })
 
-  it('leaves an honest stop untouched (no match row yet — may clear on a future crawl)', async () => {
+  it('clears a stop via the LIVE engine when the snapshot row was reconciled away (the TSAA class)', async () => {
+    // NO stored match row at all — the crawler reconcile wiped it — but the
+    // live engine endorses the pair, so the stop resolves and the task runs.
     const db = await makeDb()
-    insertOpp(db)
+    insertOpp(db, {
+      description: 'Grant assistance for Tennessee students with financial need attending eligible colleges.',
+    })
+    db.prepare("UPDATE profiles SET display_name = 'Robert Michael White' WHERE id = 'p-rob'").run()
+    db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p-rob', 'basic_information', JSON.stringify({ first_name: 'Robert', state: 'TN', profile_category: 'student' }))
     const task = await makeStoppedTask(db, { oppId: 'opp-tsaa' })
+
+    const res = await __testables.enforceHamiltonStopRecheck(db)
+    expect(res.itemsResolved).toBe(1)
+    expect(await unresolved(db, task.id)).toEqual([])
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('ready')
+  })
+
+  it('leaves an honest stop untouched when the live engine REJECTS the pair', async () => {
+    const db = await makeDb()
+    insertOpp(db, {
+      id: 'opp-vetlirn',
+      title: 'Vet-LIRN Capacity-Building Project and Equipment Grants (U18)',
+      description: 'Cooperative agreement to expand veterinary diagnostic laboratory capacity.',
+    })
+    const task = await makeStoppedTask(db, { oppId: 'opp-vetlirn' })
 
     const res = await __testables.enforceHamiltonStopRecheck(db)
     expect(res.itemsResolved).toBe(0)

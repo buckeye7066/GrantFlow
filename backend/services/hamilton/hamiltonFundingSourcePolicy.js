@@ -99,6 +99,46 @@ function requiresProfileMatch(subject) {
   return PROFILE_MATCH_REQUIRED_ORIGINS.has(origin)
 }
 
+/**
+ * LIVE canonical engine verdict for a (profile, subject) pair — the fallback
+ * when no STORED match row exists (the TSAA class, 2026-07-27).
+ *
+ * The match store is a ROLLING SNAPSHOT: crawlerOsPersistence's reconcile
+ * DELETEs a profile's crawler-os/xmatch rows on every discovery run and
+ * re-inserts only what THAT run re-found (deliberate — "reconcile, don't
+ * accumulate"). Tasks and grants are DURABLE. So any long-lived task
+ * eventually points at a pair whose match row a reconcile wiped (crawls are
+ * budget-bounded and never guaranteed to re-find everything), and requiring a
+ * stored row here turned "the crawl didn't happen to re-surface it" into a
+ * permanent missing_profile_crawler_match stop — prod carried 29 such stops,
+ * including TSAA for a Tennessee student whose own store held 125 live rows.
+ *
+ * The requirement's PURPOSE is engine endorsement, and matchEngine is the
+ * sole decision authority — a LIVE computeMatchDecision is fresher evidence
+ * than any snapshot row (the funding-sources route recomputes live on every
+ * read for the same reason). Dynamic imports keep this module light for its
+ * crawler-persistence importer and avoid load-time cycles. Returns null when
+ * the live compute is unavailable, in which case the caller keeps the
+ * conservative stop.
+ */
+async function computeLiveEngineDecision(db, profileId, subject) {
+  try {
+    const [{ loadProfileContext }, { buildProfileFacets }, { computeMatchDecision }] = await Promise.all([
+      import('../profileHelpers.js'),
+      import('../profile/profileTaxonomy.js'),
+      import('../matchEngine.js'),
+    ])
+    const ctx = buildProfileFacets(await loadProfileContext(db, profileId))
+    const rawProfile = ctx?.profile ?? ctx
+    return computeMatchDecision(rawProfile, subject, {
+      profileSections: ctx?.sections ?? null,
+      signals: ctx?.signals ?? null,
+    })
+  } catch {
+    return null
+  }
+}
+
 export async function assessHamiltonFundingSource(db, { profileId, opportunity = null, grant = null } = {}) {
   const policyOpportunity = await loadOpportunityForPolicy(db, profileId, opportunity, grant)
   const subject = policyOpportunity || grant
@@ -151,6 +191,41 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     }
   }
   if (!match && profileId && opportunityId && requiresProfileMatch(subject)) {
+    // No stored row ≠ no endorsement — the store is a rolling snapshot (see
+    // computeLiveEngineDecision). Ask the engine LIVE before stopping.
+    const live = await computeLiveEngineDecision(db, profileId, subject)
+    const liveDecision = asLower(live?.decision)
+    if (liveDecision === 'accept' || liveDecision === 'review') {
+      return {
+        ok: true,
+        reasons: [],
+        warnings: ['live_engine_endorsed'],
+        trust,
+        match: {
+          live: true,
+          match_decision: liveDecision,
+          match_score: Number.isFinite(Number(live?.score)) ? Number(live.score) : null,
+          match_explanation: live?.explanation ?? null,
+          matcher_version: 'live-recheck',
+        },
+        opportunityId,
+        grantId: grant?.id || null,
+      }
+    }
+    if (liveDecision === 'reject') {
+      const reasons = ['profile_match_rejected']
+      if (live?.explanation) reasons.push(String(live.explanation).slice(0, 180))
+      return {
+        ok: false,
+        code: 'funding_source_profile_rejected',
+        reasons,
+        trust,
+        match: { live: true, match_decision: 'reject', match_explanation: live?.explanation ?? null },
+        message: buildPolicyMessage(reasons),
+      }
+    }
+    // Live compute unavailable (profile failed to load, engine error) — keep
+    // the conservative stop rather than inventing an endorsement.
     const reasons = ['missing_profile_crawler_match']
     return {
       ok: false,
