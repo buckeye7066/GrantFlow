@@ -144,6 +144,22 @@ describe('normalizeOpportunity TITLE-scoped tells', () => {
     expect(normalizeOpportunity(PRA_NOTICE_OPP).isProceduralNotice).toBe(true)
   })
 
+  it('flags recission / waiver-record / guideline-modification notices (live prod titles, 2026-07-27)', () => {
+    const titles = [
+      'Notice of Recission of Funding Opportunity for the Rural Community Development Program',
+      'Notice of Rescission of Funding Opportunity Announcement',
+      'Notice of Regulatory Waiver Requests Granted for the Fourth Quarter of Calendar Year 2025',
+      'Modification of Living Organ Donation Reimbursement Program Eligibility Guidelines',
+    ]
+    for (const title of titles) {
+      expect(normalizeOpportunity({ id: 't', title }).isProceduralNotice, title).toBe(true)
+    }
+    // A real program whose title merely contains "modification" stays live.
+    expect(
+      normalizeOpportunity({ id: 'h', title: 'Home Modification Assistance Grants for Seniors' }).isProceduralNotice,
+    ).toBe(false)
+  })
+
   it('does NOT flag a legitimate nonprofit capacity grant (org-eligibility prose stays safe)', () => {
     const norm = normalizeOpportunity(LEGIT_ORG_GRANT)
     expect(norm.titleIsResearchProgram).toBe(false)

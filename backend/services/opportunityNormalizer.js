@@ -130,7 +130,7 @@ const RE_TITLE_SMALL_BUSINESS_RESEARCH = /\bsmall business\b|\bsbir\b|\bsttr\b/i
 // (crawler-os is deliberately self-contained) and a test asserts the two stay
 // identical, so ingest and match-time judgments can never disagree.
 export const RE_PROCEDURAL_NOTICE_TITLE =
-  /\b(?:30|60)[- ]day notice\b|\bnotice of proposed information collection\b|\bproposed information collection\b|\bpaperwork reduction act\b|\brequest for (?:comments?|information)\b|\bnotice of a federal advisory\b/i
+  /\b(?:30|60)[- ]day notice\b|\bnotice of proposed information collection\b|\bproposed information collection\b|\bpaperwork reduction act\b|\brequest for (?:comments?|information)\b|\bnotice of a federal advisory\b|\bnotice of re[sc]+ission\b|\bregulatory waiver requests?\b|\bmodification of .{0,80}(?:eligibility|guidelines)\b/i
 
 // ---------------------------------------------------------------------------
 // Senior/aging service programs (Area Agencies on Aging, eldercare locators,
