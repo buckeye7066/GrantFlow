@@ -45,6 +45,7 @@ import http from 'node:http'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
+import { findValidSession, getSessionStorageState } from './hamiltonCredentialSessionService.js'
 
 const log = createLogger('service:hamiltonCloudLogin')
 
@@ -149,29 +150,80 @@ function buildSelfHostedLiveUrl({ liveSessionId, portalHost, origin }) {
 }
 
 /**
+ * Load the profile's EXISTING valid saved session for this portal so the live
+ * co-browse context can be seeded with it.
+ *
+ * THE BUG THIS FIXES (the "side-by-side open takes the portal offline" report):
+ * every watched open / side-by-side co-browse launched a COLD context — no
+ * storageState — even when Hamilton already held a valid captured session for
+ * the portal. Two failures followed:
+ *   1. The portal rendered SIGNED OUT in the side-by-side window (reads as
+ *      "opening the portal with Hamilton logged me out / went offline").
+ *   2. Clicking "Done — I've finished logging in" captured that signed-out
+ *      cookie jar (real portals always set tracker/CSRF cookies, so the
+ *      empty_session guard passes) and importSession OVERWROTE the existing
+ *      valid row in place — destroying the agent's working session. The next
+ *      keepalive probe / automation run then hit the login wall,
+ *      markSessionExpired fired, and the tile flipped to "Can't auto-merge —
+ *      open side-by-side login": Hamilton went offline for that portal
+ *      REPRODUCIBLY, caused by the very flow meant to keep it fresh.
+ *
+ * Seeding the context with the saved storageState fixes the lifecycle at the
+ * root: the co-browse lands signed in (same REALISTIC_PORTAL_UA fingerprint the
+ * capture and keepalive flows use, so WAF-bound cookies stay valid), and "Done"
+ * re-captures a refreshed superset of the same session — the keepalive
+ * "refresh, never replace" semantic — instead of a logged-out jar.
+ *
+ * Best-effort: any failure (no db, schema missing, decrypt failure) returns
+ * null and the login start proceeds unseeded, exactly as before.
+ */
+async function loadSeedSession(db, { profileId, portalHost }) {
+  if (!db || !profileId || !portalHost) return null
+  try {
+    const session = await findValidSession(db, { profileId, portalHost })
+    if (!session) return null
+    const storageState = await getSessionStorageState(db, session.id)
+    if (!storageState) return null
+    return { storageState, sessionId: session.id }
+  } catch (err) {
+    log.warn('cloud login session seed lookup failed', { portalHost, error: err?.message })
+    return null
+  }
+}
+
+/**
  * Start an interactive cloud login. Returns { ok, liveSessionId, liveUrl } on
  * success, or { ok:false, reason } when not configured / unsupported.
  *
  * `origin` (optional) is the public origin of the calling request so the
  * self_hosted liveUrl can be absolute; if omitted a relative URL is returned.
+ * `db` (optional but passed by the route) lets the self_hosted live context be
+ * seeded with the profile's existing valid saved session for the portal — see
+ * loadSeedSession above for why omitting this destroyed working sessions.
+ * `launchBrowser` is a test-only injectable launcher (same convention as
+ * runSessionKeepAliveSweep): async ({ storageState }) => { browser, engine } —
+ * it must return a browser whose newContext receives the same options the real
+ * launcher's would.
  */
-export async function startCloudLogin({ userId, profileId, portalHost, loginUrl, label, captureRequestId = null, origin = null } = {}) {
+export async function startCloudLogin({ userId, profileId, portalHost, loginUrl, label, captureRequestId = null, origin = null, db = null, launchBrowser = null } = {}) {
   if (!isCloudLoginConfigured()) return { ok: false, reason: 'not_configured' }
   sweepExpired()
   const target = loginUrl || (portalHost ? `https://${portalHost}/` : null)
   if (!profileId || !portalHost || !target) return { ok: false, reason: 'missing_params' }
 
-  let chromium
-  try {
-    ({ chromium } = await import('playwright'))
-  } catch {
-    return { ok: false, reason: 'playwright_unavailable' }
+  let chromium = null
+  if (!launchBrowser) {
+    try {
+      ({ chromium } = await import('playwright'))
+    } catch {
+      return { ok: false, reason: 'playwright_unavailable' }
+    }
   }
 
   const provider = cloudLoginProvider()
   let browser
   try {
-    if (provider === 'cdp') {
+    if (provider === 'cdp' && chromium) {
       // Hosted interactive Chrome (Browserless / Browserbase).
       browser = await chromium.connectOverCDP(cdpEndpoint())
       const context = browser.contexts()[0] || (await browser.newContext())
@@ -196,16 +248,30 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     // the page to the user's browser ourselves (SSE screencast + POST input), so
     // we don't need a remote-debugging port, a devtools front-end, or a public
     // devtools base. CDP Page.startScreencast works in both engines.
-    const launched = await launchPortalBrowser(chromium)
-    browser = launched.browser
-    log.info('cloud login browser launched', { engine: launched.engine, portalHost })
+    //
+    // Seed the context with the profile's existing valid saved session (if any)
+    // so a watched open lands SIGNED IN and "Done" refreshes — never replaces —
+    // the captured session. See loadSeedSession for the offline-portal bug this
+    // fixes; a missing/undecryptable seed degrades to the old cold start.
+    const seed = await loadSeedSession(db, { profileId, portalHost })
+    const launched = launchBrowser
+      ? await launchBrowser({ storageState: seed?.storageState || null })
+      : await launchPortalBrowser(chromium)
+    browser = launched.browser ?? launched
+    log.info('cloud login browser launched', {
+      engine: launched.engine || 'injected', portalHost, seeded: Boolean(seed),
+    })
     // A realistic UA + locale further reduces "this is a bot" blank-page blocks
     // on hardened portals. The user still drives the page; we only soften the
-    // automation fingerprint so the login page actually renders.
+    // automation fingerprint so the login page actually renders. The UA MUST
+    // stay REALISTIC_PORTAL_UA — Akamai-class WAFs bind captured cookies to the
+    // fingerprint, so a seeded session presented under a different UA silently
+    // reads as signed out (see browserLaunch.js / hamiltonSessionKeepAlive.js).
     const context = await browser.newContext({
       viewport: { width: 1280, height: 900 },
       userAgent: REALISTIC_PORTAL_UA,
       locale: 'en-US',
+      ...(seed?.storageState ? { storageState: seed.storageState } : {}),
     })
     const page = await context.newPage()
     const nav = await navigateOrFail(page, target)
@@ -216,7 +282,11 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     }
     const liveSessionId = makeLiveSessionId()
     const liveUrl = buildSelfHostedLiveUrl({ liveSessionId, portalHost, origin })
-    return finalizeStart({ browser, server: null, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl, liveSessionId })
+    return finalizeStart({
+      browser, server: null, context, page, userId, profileId, portalHost, target,
+      label, captureRequestId, liveUrl, liveSessionId,
+      seededFromSessionId: seed?.sessionId || null,
+    })
   } catch (err) {
     await closeQuietly({ browser })
     log.error('cloud login start failed', { error: err?.message, provider })
@@ -251,7 +321,7 @@ function makeLiveSessionId() {
   return `cl_${Date.now().toString(36)}_${Math.floor(performance.now()).toString(36)}`
 }
 
-function finalizeStart({ browser, server, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl, liveSessionId }) {
+function finalizeStart({ browser, server, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl, liveSessionId, seededFromSessionId = null }) {
   const id = liveSessionId || makeLiveSessionId()
   sessions.set(id, {
     browser, server, context, page,
@@ -259,11 +329,20 @@ function finalizeStart({ browser, server, context, page, userId, profileId, port
     inputCdp: null,
     keyframeTimer: null,
     lastFrameMeta: null,
-    meta: { userId, profileId: String(profileId), portalHost, loginUrl: target, label, captureRequestId },
+    meta: {
+      userId, profileId: String(profileId), portalHost, loginUrl: target, label, captureRequestId,
+      // The saved-session row this live context was seeded from (null = cold
+      // start). Recorded so complete/diagnostics can tell a REFRESH capture
+      // (seeded, signed-in jar) from a fresh first capture.
+      seededFromSessionId: seededFromSessionId || null,
+    },
     createdAt: Date.now(),
   })
-  log.info('cloud login session started', { liveSessionId: id, profileId: String(profileId), portalHost, provider: cloudLoginProvider() })
-  return { ok: true, liveSessionId: id, liveUrl, portalHost, expires_in_ms: SESSION_TTL_MS }
+  log.info('cloud login session started', {
+    liveSessionId: id, profileId: String(profileId), portalHost,
+    provider: cloudLoginProvider(), seeded: Boolean(seededFromSessionId),
+  })
+  return { ok: true, liveSessionId: id, liveUrl, portalHost, expires_in_ms: SESSION_TTL_MS, seeded: Boolean(seededFromSessionId) }
 }
 
 export function getCloudLoginMeta(liveSessionId) {
