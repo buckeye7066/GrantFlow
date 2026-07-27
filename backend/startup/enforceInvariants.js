@@ -1760,6 +1760,82 @@ function preflightLabelToFieldKey(label) {
   return m ? m[1].trim().replace(/\s+/g, '_') : null
 }
 
+/**
+ * INVARIANT: A TASK-FLAGGED PROFILE FIELD THE PROFILE CAN NOW ANSWER IS
+ * RESOLVED EVERYWHERE (the Anastasia first-name class, owner report
+ * 2026-07-27).
+ *
+ * Hamilton flags missing fields PER TASK (application_missing_info), but the
+ * fix is PROFILE-WIDE: the owner adds first_name once. Prod carried 30+
+ * unresolved "Profile is missing first name" rows across Anastasia's portal
+ * tasks while basic_information.first_name = "Anastasia" sat right there —
+ * the reconcile existed but ran only after DOCUMENT PARSES, and the task
+ * self-heal above only re-queues status='blocked' tasks without resolving
+ * the flag rows on waiting/review tasks, so every portal kept announcing the
+ * same already-answered ask forever.
+ *
+ * Per-call gates: PUT /api/profiles/:id and PUT /:id/sections/:sectionKey
+ * call reconcileProfileFieldsToTasks after every save. This sweep is the net
+ * for every OTHER write path (interview answers, Anya enrichment, imports,
+ * direct SQL) — same store function, no drift: values come from
+ * profile_sections + the profiles row + name parts derived from
+ * display_name via the canonical parseFullName.
+ *
+ * OVERRIDE: ENFORCE_STALE_MISSING_FIELDS=0 for count-only; bound
+ * STALE_MISSING_FIELD_PROFILE_LIMIT (default 50 profiles per boot).
+ */
+export async function enforceStaleMissingFieldResolution(db) {
+  return runInvariant('stale_missing_field_resolution', async () => {
+    try {
+      await db.prepare('SELECT task_id FROM application_missing_info LIMIT 1').get()
+    } catch {
+      return { repaired: 0, skipped: 'schema' }
+    }
+    const enforce = process.env.ENFORCE_STALE_MISSING_FIELDS !== '0'
+    const limRaw = Number.parseInt(process.env.STALE_MISSING_FIELD_PROFILE_LIMIT || '', 10)
+    const limit = Number.isFinite(limRaw) && limRaw > 0 ? limRaw : 50
+
+    // Profiles with any unresolved FIELD flag on a live task. `IS NOT TRUE`
+    // is deliberate: resolved is INTEGER on SQLite and BOOLEAN on Postgres.
+    const rows = await db.prepare(`
+      SELECT DISTINCT at.profile_id AS pid
+        FROM application_missing_info mi
+        JOIN application_tasks at ON at.id = mi.task_id
+       WHERE mi.resolved IS NOT TRUE
+         AND mi.kind = 'field'
+         AND at.profile_id IS NOT NULL
+         AND at.status NOT IN ('submitted', 'failed', 'cancelled', 'completed')
+       LIMIT ${limit}
+    `).all()
+    const profiles = (rows || []).map((r) => r.pid).filter(Boolean)
+    if (profiles.length === 0) return { repaired: 0, scannedProfiles: 0 }
+    if (!enforce) return { repaired: 0, scannedProfiles: profiles.length, enforced: false }
+
+    let reconcileProfileFieldsToTasks
+    try {
+      ;({ reconcileProfileFieldsToTasks } = await import('../services/hamilton/applicationTaskStore.js'))
+    } catch {
+      return { repaired: 0, skipped: 'store_unavailable' }
+    }
+
+    let fieldsResolved = 0
+    let tasksResumed = 0
+    for (const pid of profiles) {
+      try {
+        const r = await reconcileProfileFieldsToTasks(db, { profileId: pid, resolvedBy: 'boot_reconcile' })
+        fieldsResolved += r.fieldsResolved
+        tasksResumed += r.tasksResumed
+      } catch { /* one bad profile must not abort the sweep */ }
+    }
+    if (fieldsResolved > 0) {
+      log.info('resolved stale task-flagged fields the profile already answers', {
+        scannedProfiles: profiles.length, fieldsResolved, tasksResumed,
+      })
+    }
+    return { repaired: fieldsResolved, tasksResumed, scannedProfiles: profiles.length, enforced: true }
+  })
+}
+
 export async function enforceHamiltonTaskSelfHeal(db) {
   return runInvariant('hamilton_task_self_heal', async () => {
     // application_tasks may not exist on a minimal/test DB — degrade silently.
@@ -5437,6 +5513,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // field preflight blocker no longer reproduces, and collapse already-stacked
   // duplicate OPEN hard-stops (keep oldest, resolve extras as 'duplicate').
   steps.push(await enforceHamiltonTaskSelfHeal(db))
+  // AFTER the task self-heal so a just-requeued task's remaining flags are
+  // reconciled in the same boot (and a fully-answered one can resume).
+  steps.push(await enforceStaleMissingFieldResolution(db))
   // URL-hygiene net: a search-engine RESULTS url is never a portal/application
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
@@ -5574,6 +5653,7 @@ export const __testables = {
   parseIncomeValue,
   STUDENT_AID_DEMOTE_SCORE,
   enforceHamiltonTaskSelfHeal,
+  enforceStaleMissingFieldResolution,
   resolveSelfHealRequeueCap,
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
   enforceAdminReinterviewSuppression,

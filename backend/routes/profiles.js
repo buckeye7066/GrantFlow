@@ -20,6 +20,7 @@ import { isMissingSchoolBridgeTable } from '../utils/schoolBridgeErrors.js'
 import { createLogger } from '../utils/logger.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { applicationStatusToStage } from '../../shared/pipelineStages.js'
+import { reconcileProfileFieldsToTasks } from '../services/hamilton/applicationTaskStore.js'
 import {
   listProfileEmails,
   addProfileEmails,
@@ -2318,6 +2319,12 @@ router.put('/:id', async (req, res) => {
     }
   }
 
+  // Same "add it once, it clears everywhere" gate as the section-save route:
+  // a display_name / flat-field update can answer task-flagged fields too.
+  try {
+    await reconcileProfileFieldsToTasks(req.db, { profileId: String(id) })
+  } catch { /* task reconciliation must never fail a profile save */ }
+
   const updated = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   res.json(mapProfile(updated))
 })
@@ -3291,6 +3298,15 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   } catch {
     // Best-effort only; profile section save must not fail if profile_emails schema isn't ready.
   }
+
+  // "Add it once, it clears everywhere": any Hamilton-flagged field this save
+  // just answered is resolved across ALL of this profile's portal tasks, and
+  // resumable tasks with nothing left outstanding are re-queued (the
+  // Anastasia first-name class — 30+ tasks each kept a stale flag after the
+  // profile gained the name). Best-effort; never blocks the save.
+  try {
+    await reconcileProfileFieldsToTasks(req.db, { profileId: String(id) })
+  } catch { /* task reconciliation must never fail a profile save */ }
 
   const section = await req.db
     .prepare(

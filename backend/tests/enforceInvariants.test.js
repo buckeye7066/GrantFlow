@@ -1072,7 +1072,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    expect(summary.ran).toBe(32)
+    expect(summary.ran).toBe(33)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1102,6 +1102,9 @@ describe('enforceInvariants — runner', () => {
       'profile_income_reconciliation',
       'individual_org_section_conflict',
       'hamilton_task_self_heal',
+      // AFTER self-heal: a just-requeued task's remaining flags reconcile the
+      // same boot (the Anastasia stale first-name class).
+      'stale_missing_field_resolution',
       'no_search_engine_application_targets',
       'live_crawl_verified_at_honesty',
       'application_url_rescue',
@@ -1593,6 +1596,128 @@ describe('enforceHamiltonTaskSelfHeal', () => {
 // INVARIANT: a search-engine RESULTS url is never a portal/application target
 // (URL hygiene — the "Hamilton retried login against google.com/search" bug).
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: a task-flagged profile field the profile can now answer is
+// resolved EVERYWHERE (the Anastasia first-name class, 2026-07-27): prod held
+// 30+ unresolved "Profile is missing first name" rows across portal tasks
+// while basic_information.first_name sat filled — flags are per-task, the fix
+// is profile-wide, and only the document-parse path ever reconciled them.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforceStaleMissingFieldResolution', () => {
+  let taskStore
+
+  async function makeDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+    `)
+    taskStore = await import('../services/hamilton/applicationTaskStore.js')
+    taskStore._resetSchemaCache()
+    await taskStore.ensureApplicationTaskSchema(raw)
+    return raw
+  }
+
+  async function makeTaskWithFlag(db, {
+    profileId = 'p-ana', grantId = crypto.randomUUID(), status = 'waiting_for_review',
+    missing = [{ kind: 'field', key: 'first_name', label: 'Profile is missing first name' }],
+  } = {}) {
+    const task = await taskStore.ensureApplicationTask(db, {
+      profileId, grantId, automationType: 'portal', initialStatus: 'queued',
+    })
+    await taskStore.updateApplicationTask(db, task.id, { status })
+    await taskStore.setMissingInfo(db, task.id, missing)
+    return task
+  }
+
+  async function unresolvedKeys(db, taskId) {
+    const rows = await taskStore.listMissingInfo(db, taskId, { includeResolved: false })
+    return rows.map((r) => r.key).sort()
+  }
+
+  beforeEach(() => { delete process.env.ENFORCE_STALE_MISSING_FIELDS })
+  afterEach(() => { delete process.env.ENFORCE_STALE_MISSING_FIELDS })
+
+  it('resolves the SAME stale flag across many portal tasks once the profile has the field', async () => {
+    const db = await makeDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia Nicole White')
+    db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p-ana', 'basic_information', JSON.stringify({ first_name: 'Anastasia', last_name: 'White' }))
+
+    // Three portals, three tasks, each with its own stale first/last-name flag
+    // — including a waiting_for_review task the blocked-task self-heal never
+    // touches.
+    const t1 = await makeTaskWithFlag(db, { status: 'waiting_for_review' })
+    const t2 = await makeTaskWithFlag(db, {
+      status: 'blocked',
+      missing: [{ kind: 'field', key: 'last_name', label: 'Profile is missing last name' }],
+    })
+    const t3 = await makeTaskWithFlag(db, { status: 'waiting_for_missing_info' })
+
+    const res = await __testables.enforceStaleMissingFieldResolution(db)
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBe(3)
+    expect(await unresolvedKeys(db, t1.id)).toEqual([])
+    expect(await unresolvedKeys(db, t2.id)).toEqual([])
+    expect(await unresolvedKeys(db, t3.id)).toEqual([])
+    // The fully-answered resumable task is re-queued for Hamilton.
+    expect((await taskStore.getApplicationTask(db, t3.id)).status).toBe('ready')
+  })
+
+  it('derives first/last name from display_name when sections never stored parts', async () => {
+    const db = await makeDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia Nicole White')
+
+    const t = await makeTaskWithFlag(db, {
+      missing: [
+        { kind: 'field', key: 'first_name', label: 'Profile is missing first name' },
+        { kind: 'field', key: 'last_name', label: 'Profile is missing last name' },
+      ],
+    })
+    const res = await __testables.enforceStaleMissingFieldResolution(db)
+    expect(res.repaired).toBe(2)
+    expect(await unresolvedKeys(db, t.id)).toEqual([])
+  })
+
+  it('a field the profile still does NOT have stays flagged (never fabricates)', async () => {
+    const db = await makeDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia White')
+    const t = await makeTaskWithFlag(db, {
+      missing: [
+        { kind: 'field', key: 'first_name', label: 'Profile is missing first name' },
+        { kind: 'field', key: 'social_security_number', label: 'Profile is missing SSN' },
+      ],
+    })
+    const res = await __testables.enforceStaleMissingFieldResolution(db)
+    expect(res.repaired).toBe(1)
+    expect(await unresolvedKeys(db, t.id)).toEqual(['social_security_number'])
+    // Not fully answered → never resumed.
+    expect((await taskStore.getApplicationTask(db, t.id)).status).toBe('waiting_for_review')
+  })
+
+  it('ENFORCE_STALE_MISSING_FIELDS=0 counts but never writes', async () => {
+    const db = await makeDb()
+    process.env.ENFORCE_STALE_MISSING_FIELDS = '0'
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia White')
+    const t = await makeTaskWithFlag(db, {})
+
+    const res = await __testables.enforceStaleMissingFieldResolution(db)
+    expect(res.repaired).toBe(0)
+    expect(res.scannedProfiles).toBe(1)
+    expect(await unresolvedKeys(db, t.id)).toEqual(['first_name'])
+  })
+
+  it('ignores flags on terminal tasks (submitted history is not rewritten)', async () => {
+    const db = await makeDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia White')
+    const t = await makeTaskWithFlag(db, { status: 'submitted' })
+
+    const res = await __testables.enforceStaleMissingFieldResolution(db)
+    expect(res.repaired).toBe(0)
+    expect(await unresolvedKeys(db, t.id)).toEqual(['first_name'])
+  })
+})
+
 describe('enforceNoSearchEngineApplicationTargets', () => {
   const SEARCH_URL = 'https://www.google.com/search?q=Middle+Tennessee+State+University+financial+aid+office'
   const REAL_URL = 'https://www.mtsu.edu/financial-aid/'

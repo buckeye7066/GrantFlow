@@ -17,6 +17,7 @@
 
 import crypto from 'crypto'
 import { withProfileScope } from '../../middleware/profileContext.js'
+import { parseFullName } from '../../../shared/nameParsing.js'
 
 export const TASK_STATUSES = Object.freeze([
   // Legacy task statuses (per-grant Hamilton flow).
@@ -752,18 +753,38 @@ function flattenProfileSectionValues(sectionRows) {
   return map
 }
 
+// Statuses whose missing-info rows are DEAD — the task's run is over, so a
+// stale "missing first name" row on it can't spam the needs list (the summary
+// treats these as terminal too) and re-writing history on them adds nothing.
+const FIELD_RECONCILE_SKIP_STATUSES = Object.freeze([
+  ...TASK_TERMINAL_STATUSES, 'completed',
+])
+
 /**
- * After a document is parsed into a profile (profile_sections updated), re-check
- * that profile's waiting tasks: any field Hamilton flagged that the parsed
- * document just populated is resolved, and a task with nothing left outstanding
- * is re-queued — so "parse the doc → Hamilton knows what to place where →
- * Hamilton continues" happens automatically. The extracted value already lives
- * in profile_sections (where Hamilton's autofill reads), so resolving the
- * flagged item + resuming is all that's needed. Best-effort.
+ * THE "add it once, it clears everywhere" rule for profile fields.
+ *
+ * Whenever the profile gains information — a section edit, an interview
+ * answer, a parsed document, a boot sweep — every task-flagged FIELD the
+ * profile can now answer is resolved across ALL of that profile's live tasks,
+ * and any resumable task with nothing left outstanding is re-queued. Without
+ * this, 30+ portal tasks each kept their own stale "Profile is missing first
+ * name" row after the name was added (the Anastasia class, owner report
+ * 2026-07-27): the flags were per-task, the fix was profile-wide, and nothing
+ * connected the two outside the document-parse path.
+ *
+ * Values come from profile_sections (leaf + dotted keys), the profiles row's
+ * own scalar columns, and — because portals ask for name PARTS while many
+ * profiles carry one display_name — first/middle/last derived via the
+ * canonical parseFullName (persons only; an org-looking name derives nothing).
+ * Best-effort throughout; safe to call on every profile write.
  *
  * @returns {Promise<{tasksResumed:number, fieldsResolved:number, resumedTaskIds:string[]}>}
  */
-export async function reconcileProfileAfterParse(db, { profileId } = {}) {
+export async function reconcileProfileFieldsToTasks(db, {
+  profileId,
+  resolvedBy = 'profile_update',
+  resumeMessage = 'The profile now has everything this task was waiting on — task re-queued; Hamilton will resume automatically.',
+} = {}) {
   const out = { tasksResumed: 0, fieldsResolved: 0, resumedTaskIds: [] }
   if (!db || !profileId) return out
   await ensureApplicationTaskSchema(db)
@@ -771,16 +792,40 @@ export async function reconcileProfileAfterParse(db, { profileId } = {}) {
   let sections = []
   try {
     sections = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(String(profileId))
-  } catch { return out }
+  } catch { sections = [] }
   const values = flattenProfileSectionValues(sections)
+
+  // The profiles row itself (display_name and friends) — sections don't hold
+  // everything, and older profiles carry the name ONLY here.
+  try {
+    const prow = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(String(profileId))
+    for (const [k, v] of Object.entries(prow || {})) {
+      if (v === null || v === undefined || typeof v === 'object') continue
+      const s = String(v).trim()
+      if (!s) continue
+      const leaf = String(k).toLowerCase()
+      if (!values[leaf]) values[leaf] = s
+    }
+  } catch { /* profiles table shape varies on minimal DBs */ }
+
+  // Portals flag name PARTS; profiles often carry one full/display name.
+  const fullName = values.full_name || values.display_name || values.name || ''
+  if (fullName && (!values.first_name || !values.last_name)) {
+    const parts = parseFullName(fullName)
+    if (!parts.is_org) {
+      if (parts.first_name && !values.first_name) values.first_name = parts.first_name
+      if (parts.middle_name && !values.middle_name) values.middle_name = parts.middle_name
+      if (parts.last_name && !values.last_name) values.last_name = parts.last_name
+    }
+  }
   if (Object.keys(values).length === 0) return out
 
-  const placeholders = RESUMABLE_AFTER_INFO_STATUSES.map(() => '?').join(',')
+  const skip = FIELD_RECONCILE_SKIP_STATUSES.map(() => '?').join(',')
   let tasks = []
   try {
     tasks = await db.prepare(
-      `SELECT id FROM application_tasks WHERE profile_id = ? AND status IN (${placeholders})`,
-    ).all(String(profileId), ...RESUMABLE_AFTER_INFO_STATUSES)
+      `SELECT id FROM application_tasks WHERE profile_id = ? AND status NOT IN (${skip})`,
+    ).all(String(profileId), ...FIELD_RECONCILE_SKIP_STATUSES)
     if (!Array.isArray(tasks)) tasks = []
   } catch { return out }
 
@@ -793,7 +838,7 @@ export async function reconcileProfileAfterParse(db, { profileId } = {}) {
       const leaf = key.split('.').pop()
       const value = (values[key] && values[key].trim()) ? values[key] : (leaf && values[leaf] && values[leaf].trim() ? values[leaf] : null)
       if (value) {
-        const ok = await resolveMissingInfoItem(db, t.id, { kind: 'field', key: item.key, value, resolvedBy: 'document_parse' })
+        const ok = await resolveMissingInfoItem(db, t.id, { kind: 'field', key: item.key, value, resolvedBy })
         if (ok) { resolvedHere += 1; out.fieldsResolved += 1 }
       }
     }
@@ -808,13 +853,31 @@ export async function reconcileProfileAfterParse(db, { profileId } = {}) {
         eventType: 'unblocked',
         status: 'ready',
         step: 'auto_resume',
-        message: 'Hamilton parsed your uploaded document and filled the flagged detail(s) — task re-queued; she will resume automatically.',
+        message: resumeMessage,
         actorRole: 'agent',
-        details: { auto_resumed: true, via: 'document_parse', fields_resolved: resolvedHere },
+        details: { auto_resumed: true, via: resolvedBy, fields_resolved: resolvedHere },
       })
     }
   }
   return out
+}
+
+/**
+ * After a document is parsed into a profile (profile_sections updated), re-check
+ * that profile's waiting tasks: any field Hamilton flagged that the parsed
+ * document just populated is resolved, and a task with nothing left outstanding
+ * is re-queued — so "parse the doc → Hamilton knows what to place where →
+ * Hamilton continues" happens automatically. Thin wrapper over the canonical
+ * reconcileProfileFieldsToTasks (one resolution rule, no drift).
+ *
+ * @returns {Promise<{tasksResumed:number, fieldsResolved:number, resumedTaskIds:string[]}>}
+ */
+export async function reconcileProfileAfterParse(db, { profileId } = {}) {
+  return reconcileProfileFieldsToTasks(db, {
+    profileId,
+    resolvedBy: 'document_parse',
+    resumeMessage: 'Hamilton parsed your uploaded document and filled the flagged detail(s) — task re-queued; she will resume automatically.',
+  })
 }
 
 export async function cancelApplicationTask(db, taskId, { actorUserId = null, actorRole = null, reason = null } = {}) {
