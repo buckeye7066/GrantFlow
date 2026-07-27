@@ -78,6 +78,30 @@ describe('buildWebQueries', () => {
     expect(qs.some((q) => /Middle Tennessee State University foundation scholarships/i.test(q))).toBe(true)
   })
 
+  it('learned-gap queries survive a QUERY-RICH profile (forced FIRST, never sliced off the end)', () => {
+    // A committed-student thesis with school + field + county + nearby town +
+    // needs builds 15+ CORE queries on its own; `.slice(0, max)` truncates from
+    // the END, which used to silently drop the learned-gap steering appended
+    // there — the closed loop never closed (institution_recall_miss ×12 trace,
+    // 2026-07-27). The gap queries must now lead the list.
+    const thesis = {
+      applicant_types: ['student'], is_student: true,
+      needs: ['education', 'tuition assistance'],
+      schools: ['Cleveland State Community College'],
+      field_of_study: 'Computer Science',
+      location: {
+        city: 'Cleveland', state: 'TN', county: 'Bradley County',
+        nearby_cities: [{ city: 'Athens', state: 'TN' }],
+      },
+      learned_gaps: { classes: ['institution_gap'], missing_schools: ['Lee University'] },
+    }
+    const qs = buildWebQueries(thesis, { year: 2026, max: 14 })
+    expect(qs[0]).toMatch(/^Lee University scholarships$/i)
+    expect(qs.some((q) => /Lee University foundation scholarships/i.test(q))).toBe(true)
+    // The thesis's own school queries still run.
+    expect(qs.some((q) => /Cleveland State Community College scholarships/i.test(q))).toBe(true)
+  })
+
   it('targets a LEARNED low_results gap with broader national fallbacks', () => {
     const thesis = {
       applicant_types: ['individual'], needs: ['disability'], location: { state: 'TN' },

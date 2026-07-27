@@ -151,8 +151,10 @@ describe('searchWeb (SearXNG primary + provider chain)', () => {
     process.env.SEARXNG_URL = 'https://searx.example.com'
     process.env.BRAVE_SEARCH_API_KEY = 'test-key'
     _resetWebSearchEngineForTests()
+    // The result names BOTH distinctive query terms (Bradley + County) so the
+    // degenerate-SERP gate reads it as on-topic — the healthy-primary case.
     searxngSearchFn.mockResolvedValue([
-      { url: 'https://county.gov/scholarship', title: 'County Scholarship', snippet: 'apply' },
+      { url: 'https://county.gov/scholarship', title: 'Bradley County Scholarship', snippet: 'apply' },
       { url: 'https://facebook.com/x', title: 'social', snippet: '' }, // filtered
     ])
 
@@ -186,5 +188,188 @@ describe('searchWeb (SearXNG primary + provider chain)', () => {
     expect(results).toHaveLength(1)
     expect(results[0].url).toBe('https://bradleyfoundation.org/grants')
     expect(makeBraveMock).not.toHaveBeenCalled() // no Brave key
+  })
+})
+
+describe('the degenerate-SERP gate (SearXNG first-word collapse, 2026-07-27)', () => {
+  // The REAL prod fixture: SearXNG's engine fleet collapsed to scraped bing,
+  // which answered "Cleveland State Community College scholarships" with
+  // Cleveland-Ohio TOURISM pages — a SERP for the query's first word only.
+  const SCHOOL_QUERY = 'Cleveland State Community College scholarships'
+  // The Wikipedia snippet REALLY says "state of Ohio" — the single
+  // quasi-generic word "state" is why an any-one-term relevance test
+  // under-fired on this very SERP (verified live 2026-07-27). The fixture
+  // keeps it so a weakened gate fails these tests.
+  const JUNK_SERP = [
+    { url: 'https://en.wikipedia.org/wiki/Cleveland', title: 'Cleveland - Wikipedia', snippet: 'Cleveland is a city in the U.S. state of Ohio' },
+    { url: 'https://www.thisiscleveland.com/', title: 'Things to Do, Events, Restaurants & Hotels', snippet: 'Cleveland vacation guide' },
+    { url: 'https://travel.usnews.com/Cleveland_OH/Things_To_Do/', title: '14 Fun Things to Do in Cleveland, Ohio', snippet: 'travel' },
+  ]
+  const REAL_HIT = {
+    url: 'https://clevelandstatecc.scholarships.ngwebsolutions.com/Scholarships/Search',
+    title: 'Cleveland State Community College Foundation Scholarships',
+    snippet: 'Browse available Foundation Scholarship awards',
+  }
+
+  it('looksDegenerateSerp: flags the real prod junk SERP', async () => {
+    const { looksDegenerateSerp } = await import('../services/shared/webSearchEngine.js')
+    expect(looksDegenerateSerp(SCHOOL_QUERY, JUNK_SERP)).toBe(true)
+  })
+
+  it('looksDegenerateSerp: a single on-topic result clears the whole set', async () => {
+    const { looksDegenerateSerp } = await import('../services/shared/webSearchEngine.js')
+    expect(looksDegenerateSerp(SCHOOL_QUERY, [...JUNK_SERP, REAL_HIT])).toBe(false)
+  })
+
+  it('looksDegenerateSerp: never fires on single-distinctive-term or empty inputs', async () => {
+    const { looksDegenerateSerp } = await import('../services/shared/webSearchEngine.js')
+    expect(looksDegenerateSerp('scholarships Cleveland', JUNK_SERP)).toBe(false) // one distinctive term
+    expect(looksDegenerateSerp(SCHOOL_QUERY, [])).toBe(false)
+    expect(looksDegenerateSerp('', JUNK_SERP)).toBe(false)
+  })
+
+  it('fails over to Brave when SearXNG answers with a first-word SERP', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue(JUNK_SERP)
+    braveSearchFn.mockResolvedValue([REAL_HIT])
+
+    const results = await searchWeb(SCHOOL_QUERY)
+    expect(searxngSearchFn).toHaveBeenCalled()
+    expect(braveSearchFn).toHaveBeenCalled()
+    expect(results[0].url).toBe(REAL_HIT.url)
+  })
+
+  it('returns the held SearXNG set unchanged when Brave cannot improve on it', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue(JUNK_SERP)
+    braveSearchFn.mockResolvedValue([]) // budget-paused / no results
+
+    const results = await searchWeb(SCHOOL_QUERY)
+    expect(results.map((r) => r.url)).toEqual(JUNK_SERP.map((r) => r.url))
+  })
+
+  it('never consults Brave for a healthy SearXNG SERP', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue([REAL_HIT, ...JUNK_SERP])
+
+    const results = await searchWeb(SCHOOL_QUERY)
+    expect(braveSearchFn).not.toHaveBeenCalled()
+    expect(results[0].url).toBe(REAL_HIT.url)
+  })
+})
+
+describe('the fallback-engines rung (SearXNG engines=yahoo, 2026-07-27)', () => {
+  const SCHOOL_QUERY = 'Cleveland State Community College scholarships'
+  const JUNK = [
+    { url: 'https://en.wikipedia.org/wiki/Cleveland', title: 'Cleveland - Wikipedia', snippet: 'Cleveland is a city in the U.S. state of Ohio' },
+  ]
+  const YAHOO_HIT = {
+    url: 'https://www.clevelandstatecc.edu/paying-for-college/scholarships/',
+    title: 'Scholarships | Cleveland State Community College',
+    snippet: 'Cleveland State Community College Foundation scholarships',
+  }
+
+  it('retries the SAME instance with the fallback allowlist before spending Brave budget', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockImplementation(async ({ engines }) =>
+      engines === 'yahoo,mojeek,yandex' ? [YAHOO_HIT] : JUNK,
+    )
+
+    const results = await searchWeb(SCHOOL_QUERY)
+    expect(searxngSearchFn).toHaveBeenCalledTimes(2)
+    expect(searxngSearchFn.mock.calls[1][0].engines).toBe('yahoo,mojeek,yandex')
+    expect(braveSearchFn).not.toHaveBeenCalled()
+    expect(results[0].url).toBe(YAHOO_HIT.url)
+  })
+
+  it('falls through to Brave when the fallback engines are junk too', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue(JUNK) // both calls junk
+    braveSearchFn.mockResolvedValue([YAHOO_HIT])
+
+    const results = await searchWeb(SCHOOL_QUERY)
+    expect(searxngSearchFn).toHaveBeenCalledTimes(2)
+    expect(braveSearchFn).toHaveBeenCalled()
+    expect(results[0].url).toBe(YAHOO_HIT.url)
+  })
+
+  it('honors SEARXNG_FALLBACK_ENGINES and skips the rung when set empty', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    process.env.SEARXNG_FALLBACK_ENGINES = ''
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue(JUNK)
+    braveSearchFn.mockResolvedValue([])
+
+    const results = await searchWeb(SCHOOL_QUERY)
+    expect(searxngSearchFn).toHaveBeenCalledTimes(1) // no second call
+    // Brave empty → held junk returned unchanged (never lose results).
+    expect(results.map((r) => r.url)).toEqual(JUNK.map((r) => r.url))
+    delete process.env.SEARXNG_FALLBACK_ENGINES
+  })
+})
+
+describe('the cross-query identity breaker (degraded-instance signature)', () => {
+  // Junk that the RELEVANCE gate cannot catch: a Montana-tourism SERP really
+  // does cover "montana" and "state" at word boundaries, so it reads on-topic
+  // for "Montana State University Billings scholarships". What it cannot fake
+  // is being the IDENTICAL set for a DIFFERENT query.
+  const MONTANA_JUNK = [
+    { url: 'https://www.visitmt.com/', title: 'Visit Montana', snippet: 'Montana is a state with Billings, Bozeman and more' },
+    { url: 'https://en.wikipedia.org/wiki/Montana', title: 'Montana - Wikipedia', snippet: 'Montana is a state in the western United States' },
+    { url: 'https://mt.gov/', title: 'Montana official state website', snippet: 'the state of Montana' },
+  ]
+  const GOOD_HIT = {
+    url: 'https://www.msubillings.edu/finaid/scholarships.htm',
+    title: 'Scholarships - Montana State University Billings',
+    snippet: 'MSU Billings scholarship opportunities',
+  }
+
+  it('an identical set for a DIFFERENT query trips the breaker and prefers fallback engines', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockImplementation(async ({ engines }) =>
+      engines === 'yahoo,mojeek,yandex' ? [GOOD_HIT] : MONTANA_JUNK,
+    )
+
+    // Query 1: junk covers its terms → relevance gate passes it (returned).
+    const first = await searchWeb('Montana State University Billings scholarships')
+    expect(first.map((r) => r.url)).toEqual(MONTANA_JUNK.map((r) => r.url))
+
+    // Query 2 (different string, same set): identity breaker fires → fallback
+    // engines answer.
+    const second = await searchWeb('Montana State University Billings foundation scholarships')
+    expect(second[0].url).toBe(GOOD_HIT.url)
+
+    // Query 3: breaker active → default engines are SKIPPED entirely.
+    searxngSearchFn.mockClear()
+    const third = await searchWeb('Montana State University Billings endowed scholarships')
+    expect(third[0].url).toBe(GOOD_HIT.url)
+    expect(searxngSearchFn).toHaveBeenCalledTimes(1)
+    expect(searxngSearchFn.mock.calls[0][0].engines).toBe('yahoo,mojeek,yandex')
+  })
+
+  it('the SAME query repeated never trips the breaker', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue(MONTANA_JUNK)
+
+    const q = 'Montana State University Billings scholarships'
+    const first = await searchWeb(q)
+    const second = await searchWeb(q)
+    expect(first.map((r) => r.url)).toEqual(MONTANA_JUNK.map((r) => r.url))
+    expect(second.map((r) => r.url)).toEqual(MONTANA_JUNK.map((r) => r.url))
+    // Only ever called with the default engine set — the breaker stayed cold.
+    for (const call of searxngSearchFn.mock.calls) expect(call[0].engines).toBeUndefined()
   })
 })

@@ -92,6 +92,35 @@ function getBraveProvider() {
   return _brave
 }
 
+// ── Cross-query identity breaker (the collapse's unfakeable signature) ──────
+// A degraded SearXNG returns the IDENTICAL result set for DIFFERENT queries
+// (its surviving scraped engine answers only the leading token, so every
+// "<School X> …" query gets the same 8 links). Two genuinely different queries
+// never share an identical top-8, so exact-set identity across distinct query
+// strings is mechanical proof of instance degradation — no relevance heuristic
+// involved. While tripped, the default engine set is skipped in favor of the
+// fallback allowlist; the TTL re-probes so a recovered instance is readopted.
+const SEARXNG_DEGRADED_TTL_MS = 10 * 60 * 1000
+const RECENT_SERP_CAP = 20
+let _recentSerps = [] // [{ q, key }]
+let _searxngDegradedUntil = 0
+
+function serpIdentityKey(results) {
+  return results.map((r) => String(r?.url ?? '')).sort().join('|')
+}
+
+/** Record a default-engine SERP; returns true when it proves degradation. */
+function tripsCrossQueryIdentity(q, results) {
+  if (!Array.isArray(results) || results.length < 3) return false
+  const key = serpIdentityKey(results)
+  const clash = _recentSerps.find((e) => e.key === key && e.q !== q)
+  if (!_recentSerps.some((e) => e.q === q && e.key === key)) {
+    _recentSerps.push({ q, key })
+    if (_recentSerps.length > RECENT_SERP_CAP) _recentSerps.shift()
+  }
+  return Boolean(clash)
+}
+
 /** Reset cached provider state — test seam only. */
 export function _resetWebSearchEngineForTests() {
   _searxng = null
@@ -99,12 +128,75 @@ export function _resetWebSearchEngineForTests() {
   _brave = null
   _braveResolved = false
   _ddgBlocked = false
+  _recentSerps = []
+  _searxngDegradedUntil = 0
 }
 
 function shouldSkip(url) {
   const u = String(url || '').toLowerCase()
   if (!/^https?:\/\//.test(u)) return true
   return SKIP_SUBSTRINGS.some((s) => u.includes(s))
+}
+
+// Tokens too common to prove a result is ABOUT the query. Deliberately small:
+// the gate below only needs to tell "results about the whole query" from
+// "results about its first word", not to rank relevance.
+const DEGENERATE_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'near', 'about',
+  'grants', 'grant', 'scholarships', 'scholarship', 'assistance', 'programs',
+  'program', 'funding', 'financial',
+])
+
+/**
+ * looksDegenerateSerp — does this result set answer only the query's FIRST
+ * word?
+ *
+ * THE FAILURE THIS CATCHES (prod, found 2026-07-27): the self-hosted SearXNG's
+ * engine fleet collapsed — brave/google-cse/qwant/startpage/wikipedia all
+ * suspended (datacenter-IP rate limits / CAPTCHAs) — leaving only the scraped
+ * bing engine, which degrades to a generic SERP for the query's leading token.
+ * "Cleveland State Community College scholarships" returned Cleveland-Ohio
+ * TOURISM pages on every call. The provider chain saw a non-empty result set
+ * and never consulted Brave, so every multi-word discovery query fleet-wide
+ * got junk: Amy's student cohort missed institution recall 6/6 (the
+ * institution_recall_miss ×12 class), and web-lane runs extracted 0.
+ *
+ * The test: a SERP is healthy only if at least ONE result covers a real
+ * MAJORITY (>= 60%) of the query's distinctive terms. "Any result matches any
+ * non-leading term" was tried first and under-fired on the live junk —
+ * Wikipedia's Cleveland-the-city snippet says "state of Ohio", so the single
+ * quasi-generic word "state" cleared the whole tourism SERP (verified live
+ * 2026-07-27). A genuinely on-topic result names most of the query's terms; a
+ * first-word SERP tops out around half. One passing result clears the set, so
+ * a healthy-but-mediocre SERP is never rejected; single-distinctive-term
+ * queries can never be degenerate (nothing to cover beyond that term). A
+ * wrong "degenerate" verdict costs one budget-metered Brave call and keeps
+ * the held set as fallback — results are rerouted, never lost.
+ *
+ * Pure; exported for tests.
+ */
+export function looksDegenerateSerp(query, results) {
+  if (!Array.isArray(results) || results.length === 0) return false
+  const terms = String(query || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 4 && !DEGENERATE_STOPWORDS.has(t) && !/^\d+$/.test(t))
+  if (terms.length < 2) return false
+  const needed = Math.ceil(terms.length * 0.6)
+  // WHOLE-WORD matching: substring matching let 'western United States' count
+  // as covering the term 'west' (the University-of-West-Florida junk SERP
+  // slipped through on it, verified live 2026-07-27).
+  const res = terms.map((t) => new RegExp(`\\b${t}\\b`))
+  return !results.some((r) => {
+    const hay = `${r?.url ?? ''} ${r?.title ?? ''} ${r?.snippet ?? ''}`.toLowerCase()
+    let covered = 0
+    for (const re of res) {
+      if (re.test(hay)) covered += 1
+      if (covered >= needed) return true
+    }
+    return false
+  })
 }
 
 async function duckDuckGoSearch(query, count, timeoutMs) {
@@ -188,22 +280,73 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   }
 
   // 1. SearXNG (self-hosted, primary): keyless, unlimited, datacenter-reliable.
+  // A non-empty result set is NOT proof the backend is healthy: when its engine
+  // fleet collapses to scraped-bing, it returns a generic SERP for the query's
+  // first word (see looksDegenerateSerp). Those junk sets are HELD rather than
+  // returned, the fallbacks get the query, and the held set is the last-resort
+  // return so a misfiring heuristic can never make results worse than before.
+  let heldDegenerate = null
   const searxng = getSearxngProvider()
-  if (searxng) {
+  const searxngClean = async (engines) => {
+    const results = await searxng({ query: q, count, timeoutMs, ...(engines !== undefined ? { engines } : {}) })
+    if (!Array.isArray(results) || !results.length) return null
+    const cleaned = results
+      .filter((r) => r?.url && !shouldSkip(r.url))
+      .slice(0, count)
+      .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
+    return cleaned.length ? cleaned : null
+  }
+  const degradedActive = Date.now() < _searxngDegradedUntil
+  if (searxng && !degradedActive) {
     try {
-      const results = await searxng({ query: q, count, timeoutMs })
-      if (Array.isArray(results) && results.length) {
-        return results
-          .filter((r) => r?.url && !shouldSkip(r.url))
-          .slice(0, count)
-          .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
+      const cleaned = await searxngClean(undefined)
+      if (cleaned) {
+        // The cross-query identity breaker outranks the relevance gate: an
+        // identical set for a DIFFERENT query is proof of degradation even
+        // when the junk happens to share words with this query (the
+        // Montana-tourism SERP covered "montana"+"state" and read on-topic).
+        if (tripsCrossQueryIdentity(q, cleaned)) {
+          _searxngDegradedUntil = Date.now() + SEARXNG_DEGRADED_TTL_MS
+          heldDegenerate = cleaned
+          log.warn(`[webSearchEngine] SearXNG served an IDENTICAL result set for different queries (instance degraded) — preferring fallback engines for ${Math.round(SEARXNG_DEGRADED_TTL_MS / 60000)}m`)
+        } else if (!looksDegenerateSerp(q, cleaned)) {
+          return cleaned
+        } else {
+          heldDegenerate = cleaned
+          log.warn(`[webSearchEngine] SearXNG returned a degenerate first-word SERP for "${q}" — trying fallback engines`)
+        }
       }
     } catch (err) {
       log.warn(`[webSearchEngine] SearXNG search failed for "${q}": ${err?.message ?? err}`)
     }
   }
 
-  // 2. Brave API (fallback, only when keyed): a metered backstop.
+  // 1b. SAME SearXNG instance, known-good engine allowlist — after the default
+  // set answered with junk, or straight away while the degraded-instance
+  // breaker is active. On 2026-07-27 every scraping engine on the instance was
+  // suspended (datacenter-IP rate limits/CAPTCHAs) except a broken bing — but
+  // `engines=yahoo` still answered "Cleveland State Community College
+  // scholarships" with the college's own scholarship pages. Keyless, so this
+  // rung costs nothing; a healthy default set never pays the second call.
+  if (searxng && (heldDegenerate || degradedActive)) {
+    // Multiple engines, ONE call — SearXNG merges them, so whichever of the
+    // three is currently un-suspended contributes (live 2026-07-27: yahoo went
+    // from perfect to "HTTP protocol error" within 20 minutes while mojeek and
+    // yandex came back; the merged set stayed on-topic throughout).
+    const fallbackEngines = String(process.env.SEARXNG_FALLBACK_ENGINES ?? 'yahoo,mojeek,yandex').trim()
+    if (fallbackEngines) {
+      try {
+        const cleaned = await searxngClean(fallbackEngines)
+        if (cleaned && !looksDegenerateSerp(q, cleaned)) return cleaned
+        if (cleaned && !heldDegenerate) heldDegenerate = cleaned
+      } catch (err) {
+        log.warn(`[webSearchEngine] SearXNG fallback-engines search failed for "${q}": ${err?.message ?? err}`)
+      }
+    }
+  }
+
+  // 2. Brave API (fallback, only when keyed): a metered backstop with its own
+  // budget breaker — a paused/exhausted key returns [] and costs nothing here.
   const brave = getBraveProvider()
   if (brave) {
     try {
@@ -218,6 +361,10 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
       log.warn(`[webSearchEngine] Brave search failed for "${q}": ${err?.message ?? err}`)
     }
   }
+
+  // Brave could not improve on a held degenerate set — return it unchanged
+  // (status quo ante: the gate must never LOSE results, only reroute).
+  if (heldDegenerate) return heldDegenerate
 
   // 3. DuckDuckGo HTML (last resort, no key): dead from cloud IPs, kept for dev.
   // Once the block is observed once, every later query no-ops instantly so a

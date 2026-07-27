@@ -492,6 +492,14 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // liveCrawlGapLearning into Anya's brain, attached to the thesis by
   // buildThesisForProfile), steer THIS run to fill it — so the crawlers evolve
   // from what they learn instead of repeating the same misses.
+  // These land in `forced`, which is emitted FIRST: a rich student profile
+  // already builds 15+ CORE queries, and the final `.slice(0, max)` truncates
+  // from the END — so gap-steering queries appended to core were exactly the
+  // ones a query-rich profile dropped, and the closed loop silently never
+  // closed (found 2026-07-27 while tracing institution_recall_miss ×12).
+  // The `seen` dedup still applies: a school query core already emits (within
+  // the cap at its normal position) is not re-added here.
+  const forced = [];
   const learned = thesis.learned_gaps || null;
   if (learned) {
     const classes = Array.isArray(learned.classes) ? learned.classes : [];
@@ -501,16 +509,16 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     // scholarships are reachable ONLY by the institution's name).
     if (classes.includes('institution_gap') || missingSchools.length) {
       for (const s of missingSchools.slice(0, 3)) {
-        add(core, `${s} scholarships`);
-        add(core, `${s} foundation scholarships`);
+        add(forced, `${s} scholarships`);
+        add(forced, `${s} foundation scholarships`);
       }
     }
     // hyperlocal_gap → re-emit county-scoped queries even if a prior run tried
     // them, AND escalate to the hyperlocal entity classes (education foundation
     // / churches / civic clubs) that plain county phrasing misses.
     if (classes.includes('hyperlocal_gap') && county) {
-      add(core, isStudent ? `local scholarships ${county}` : `local assistance programs ${county}`);
-      add(core, isStudent ? `${county} education foundation scholarships` : `${county} emergency assistance fund`);
+      add(forced, isStudent ? `local scholarships ${county}` : `local assistance programs ${county}`);
+      add(forced, isStudent ? `${county} education foundation scholarships` : `${county} emergency assistance fund`);
       add(extra, `community foundation grants ${county}`);
       add(extra, isStudent ? `Rotary Club scholarship ${county}` : `church assistance programs ${county}`);
     }
@@ -522,9 +530,9 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   }
 
   // Last resort: a sparse profile still searches something useful.
-  if (core.length === 0 && extra.length === 0) add(core, `grants for ${word} ${geo || year}`);
+  if (forced.length === 0 && core.length === 0 && extra.length === 0) add(core, `grants for ${word} ${geo || year}`);
 
-  return [...core, ...rotate(extra, seed)].slice(0, max);
+  return [...forced, ...core, ...rotate(extra, seed)].slice(0, max);
 }
 
 export default { buildWebQueries };

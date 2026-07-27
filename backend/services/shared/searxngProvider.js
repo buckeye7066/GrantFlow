@@ -49,7 +49,7 @@ function toSearchEndpoint(base) {
  * @param {number} [opts.timeoutMs=8000] Per-query network budget.
  * @param {string} [opts.engines]      Optional comma-separated engine allowlist (SEARXNG_ENGINES).
  * @param {string} [opts.language='en'] Result language hint.
- * @returns {(args:{query:string,count?:number,timeoutMs?:number}) => Promise<Array<{url,title,snippet}>>}
+ * @returns {(args:{query:string,count?:number,timeoutMs?:number,engines?:string}) => Promise<Array<{url,title,snippet}>>}
  * @throws if no baseUrl is configured (so the engine can skip-construct like Brave).
  */
 export function makeSearxngProvider({
@@ -62,11 +62,16 @@ export function makeSearxngProvider({
   const endpoint = toSearchEndpoint(baseUrl)
   if (!endpoint) throw new Error('makeSearxngProvider: SEARXNG_URL is required')
 
-  return async function search({ query, count: countOverride, timeoutMs: timeoutOverride } = {}) {
+  // `engines` is per-call overridable: when the DEFAULT engine set degrades to
+  // junk (the 2026-07-27 first-word-SERP collapse — every scraping engine
+  // suspended except a broken bing), the caller retries the SAME instance with
+  // a known-good allowlist instead of abandoning SearXNG entirely.
+  return async function search({ query, count: countOverride, timeoutMs: timeoutOverride, engines: enginesOverride } = {}) {
     const q = String(query || '').trim()
     if (!q) return []
     const want = Math.max(1, Number(countOverride) || count)
     const budget = Math.max(1000, Number(timeoutOverride) || timeoutMs)
+    const effEngines = enginesOverride !== undefined ? String(enginesOverride) : engines
 
     const params = new URLSearchParams({
       q,
@@ -74,7 +79,7 @@ export function makeSearxngProvider({
       language,
       safesearch: '0',
     })
-    if (engines) params.set('engines', engines)
+    if (effEngines) params.set('engines', effEngines)
     const url = `${endpoint}?${params.toString()}`
 
     let response
