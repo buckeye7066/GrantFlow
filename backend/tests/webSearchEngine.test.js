@@ -373,3 +373,32 @@ describe('the cross-query identity breaker (degraded-instance signature)', () =>
     for (const call of searxngSearchFn.mock.calls) expect(call[0].engines).toBeUndefined()
   })
 })
+
+describe('the empty-default rung (all engines suspended, Brave paused)', () => {
+  it('an EMPTY default SERP still consults the fallback engines before giving up', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    // Default engine set: every engine suspended → zero results (observed live
+    // 2026-07-27). Fallback allowlist still answers. No Brave key at all —
+    // the keyless ladder alone must carry the query.
+    searxngSearchFn.mockImplementation(async ({ engines }) =>
+      engines ? [{ url: 'https://uwf.academicworks.com/', title: 'UWF Scholarships — AcademicWorks', snippet: 'University of West Florida scholarship portal' }] : [],
+    )
+
+    const results = await searchWeb('University of West Florida scholarships')
+    expect(searxngSearchFn).toHaveBeenCalledTimes(2)
+    expect(searxngSearchFn.mock.calls[1][0].engines).toBe('yahoo,mojeek,yandex')
+    expect(results[0].url).toBe('https://uwf.academicworks.com/')
+  })
+
+  it('a transport-level SearXNG failure does NOT re-hit the dead instance on the fallback rung', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockRejectedValue(new Error('ECONNREFUSED'))
+    getWithRetryMock.mockResolvedValue({ data: DDG_HTML })
+
+    const results = await searchWeb('local grant')
+    expect(searxngSearchFn).toHaveBeenCalledTimes(1) // no second call at the same dead endpoint
+    expect(results[0].url).toBe('https://bradleyfoundation.org/grants') // DDG still ran
+  })
+})

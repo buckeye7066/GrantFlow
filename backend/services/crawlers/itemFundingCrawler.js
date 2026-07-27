@@ -12,15 +12,25 @@
  *
  * HOW IT WORKS:
  * 1. Parse the item request to understand what's being asked for
- * 2. Search Google (via scraping) for real sources that donate/provide/fund that item
+ * 2. Search the live web through the SHARED search engine
+ *    (services/shared/webSearchEngine.js) for real sources that
+ *    donate/provide/fund that item
  * 3. Search known item-specific organizations
  * 4. Combine profile signals for targeted searches (e.g., "veteran van donation")
  * 5. Return ONLY results with real, clickable URLs
  *
  * CRITICAL: No fabricated data. Every result must have a real URL.
+ *
+ * SEARCH BACKEND (2026-07-27): this crawler used to scrape DuckDuckGo HTML
+ * directly — a backend that answers datacenter IPs with a 202 anti-bot
+ * challenge, so in prod every item search silently returned zero results, and
+ * it never consulted SearXNG or Brave at all. It now routes through the shared
+ * `searchWeb` ladder (SearXNG default engines → fallback engines → Brave →
+ * DuckDuckGo), so it degrades exactly like profile discovery instead of dying
+ * alone when any single backend is down or budget-paused.
  */
-import * as cheerio from 'cheerio'
 import { scoreOpportunity as calculateMatchScore } from '../matchEngine.js'
+import { searchWeb } from '../shared/webSearchEngine.js'
 
 function buildSearchKeywords(profile, maxKeywords = 10) {
   const kw = new Set();
@@ -34,7 +44,6 @@ function buildSearchKeywords(profile, maxKeywords = 10) {
   if (name) kw.add(name.split(/\s+/)[0]);
   return [...kw].slice(0, maxKeywords);
 }
-import { getWithRetry } from '../shared/httpClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
@@ -845,85 +854,28 @@ async function searchWebForItem(itemRequest, profile) {
   const uniqueQueries = [...new Set(queries)]
   const searchPromises = uniqueQueries.slice(0, 10).map(async (query) => {
         try {
-                const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-
-          const response = await getWithRetry(
-                    searchUrl,
-            {
-                        headers: {
-                                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                                      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                                      'Accept-Language': 'en-US,en;q=0.5',
-                        },
-            },
-            { timeoutMs: 8000, retries: 1 },
-                  )
-
-          if (!response?.data) return []
-
-                  const $ = cheerio.load(response.data)
+                // The shared engine already normalizes {url,title,snippet}, applies the
+                // search-engine/social/retail skip list, and carries the full backend
+                // ladder (SearXNG default -> fallback engines -> Brave -> DuckDuckGo),
+                // including Brave's budget breaker — a paused key just moves down the
+                // ladder instead of killing item search.
+                const hits = await searchWeb(query, { count: 8, timeoutMs: 8000 })
                 const found = []
-
-                        // DuckDuckGo HTML results
-                        $('.result, .results_links').each((i, elem) => {
-                                  if (i >= 8) return // Cap per query
-
-                                                                  const $elem = $(elem)
-                                  const titleElem = $elem.find('.result__title a, .result__a')
-                                  const title = titleElem.text().trim()
-                                  const href = titleElem.attr('href') || ''
-                                  const snippet = $elem.find('.result__snippet').text().trim()
-
-                                                                  if (!title || !href) return
-
-                                                                  // Extract the actual URL from DuckDuckGo redirect
-                                                                  let actualUrl = href
-                                  if (href.includes('uddg=')) {
-                                              try {
-                                                            const urlParam = new URL(href, 'https://duckduckgo.com')
-                                                            actualUrl = urlParam.searchParams.get('uddg') || href
-                                              } catch {
-                                                            actualUrl = href
-                                              }
-                                  }
-
-                                                                  // Decode if needed
-                                                                  try {
-                                                                              actualUrl = decodeURIComponent(actualUrl)
-                                                                  } catch (err) {
-                                                                              console.warn('[ItemFundingCrawler] URL decode failed:', actualUrl, err.message)
-                                                                  }
-
-                                                                  // Skip search engine results pages, ads, and non-useful URLs
-                                                                  if (actualUrl.includes('google.com/search') ||
-                                                                                  actualUrl.includes('bing.com/search') ||
-                                                                                  actualUrl.includes('duckduckgo.com') ||
-                                                                                  actualUrl.includes('youtube.com/watch') ||
-                                                                                  actualUrl.includes('facebook.com') ||
-                                                                                  actualUrl.includes('twitter.com') ||
-                                                                                  actualUrl.includes('instagram.com') ||
-                                                                                  actualUrl.includes('pinterest.com') ||
-                                                                                  actualUrl.includes('amazon.com') ||
-                                                                                  actualUrl.includes('ebay.com') ||
-                                                                                  actualUrl.includes('walmart.com') ||
-                                                                                  actualUrl.includes('target.com')) {
-                                                                              return
-                                                                  }
-
-                                                                  // Skip if already seen
-                                                                  const urlKey = actualUrl.toLowerCase().replace(/\/$/, '')
-                                  if (seenUrls.has(urlKey)) return
-                                  seenUrls.add(urlKey)
-
-                                                                  found.push({
-                                                                              title,
-                                                                              url: actualUrl,
-                                                                              description: snippet,
-                                                                              _search_query: query,
-                                                                  })
+                for (const hit of Array.isArray(hits) ? hits : []) {
+                        const url = String(hit?.url || '').trim()
+                        if (!url) continue
+                        // Skip if already seen (across ALL of this run's queries).
+                        const urlKey = url.toLowerCase().replace(/\/$/, '')
+                        if (seenUrls.has(urlKey)) continue
+                        seenUrls.add(urlKey)
+                        found.push({
+                                title: hit.title || '',
+                                url,
+                                description: hit.snippet || '',
+                                _search_query: query,
                         })
-
-          return found
+                }
+                return found
         } catch (error) {
                 console.error(`[ItemFundingCrawler] Web search failed for "${query}":`, error.message)
                 return []

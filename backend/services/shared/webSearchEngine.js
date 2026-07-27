@@ -297,6 +297,11 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     return cleaned.length ? cleaned : null
   }
   const degradedActive = Date.now() < _searxngDegradedUntil
+  // The default engine set answering EMPTY is its own failure mode: every
+  // engine suspended at once returns zero results (observed live 2026-07-27),
+  // which is neither degenerate nor an error — and with Brave budget-paused
+  // the old chain returned [] without ever asking the fallback engines.
+  let defaultCameUpEmpty = false
   if (searxng && !degradedActive) {
     try {
       const cleaned = await searxngClean(undefined)
@@ -315,20 +320,26 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
           heldDegenerate = cleaned
           log.warn(`[webSearchEngine] SearXNG returned a degenerate first-word SERP for "${q}" — trying fallback engines`)
         }
+      } else {
+        defaultCameUpEmpty = true
       }
     } catch (err) {
+      // A transport-level throw means the INSTANCE is unreachable — the
+      // fallback rung would hit the same dead endpoint, so it is not
+      // triggered on this branch (Brave/DDG still run below).
       log.warn(`[webSearchEngine] SearXNG search failed for "${q}": ${err?.message ?? err}`)
     }
   }
 
   // 1b. SAME SearXNG instance, known-good engine allowlist — after the default
-  // set answered with junk, or straight away while the degraded-instance
-  // breaker is active. On 2026-07-27 every scraping engine on the instance was
-  // suspended (datacenter-IP rate limits/CAPTCHAs) except a broken bing — but
-  // `engines=yahoo` still answered "Cleveland State Community College
-  // scholarships" with the college's own scholarship pages. Keyless, so this
-  // rung costs nothing; a healthy default set never pays the second call.
-  if (searxng && (heldDegenerate || degradedActive)) {
+  // set answered with junk OR nothing at all, or straight away while the
+  // degraded-instance breaker is active. On 2026-07-27 every scraping engine
+  // on the instance was suspended (datacenter-IP rate limits/CAPTCHAs) except
+  // a broken bing — but `engines=yahoo` still answered "Cleveland State
+  // Community College scholarships" with the college's own scholarship pages.
+  // Keyless, so this rung costs nothing; a healthy default set never pays the
+  // second call.
+  if (searxng && (heldDegenerate || degradedActive || defaultCameUpEmpty)) {
     // Multiple engines, ONE call — SearXNG merges them, so whichever of the
     // three is currently un-suspended contributes (live 2026-07-27: yahoo went
     // from perfect to "HTTP protocol error" within 20 minutes while mojeek and
