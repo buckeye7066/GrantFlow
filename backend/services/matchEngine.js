@@ -464,7 +464,7 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     else ineligibilityReasons.push('Requires business or self-employment')
   }
 
-  if (oppNorm.isInstitutionalOnly || oppNorm.isResearchOnly) {
+  if (oppNorm.isInstitutionalOnly || oppNorm.isResearchOnly || oppNorm.titleIsResearchProgram) {
     const isOrdinaryIndividual = !profileNorm.isNonprofit && !profileNorm.isBusiness &&
       profileNorm.entityType !== 'researcher' && profileNorm.entityType !== 'organization'
     if (isOrdinaryIndividual) {
@@ -2846,6 +2846,56 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     }
   }
 
+  // ── Research/TA-program guard (applicant-class mismatch, precise) ──
+  // A federal research / cooperative-agreement / communities-of-practice
+  // program (DRRP disability research, Vet-LIRN "(U18)" lab capacity, CSBG
+  // Communities of Practice) funds institutions that DO research or deliver
+  // technical assistance. Person profiles are hard-rejected downstream, but an
+  // ORG profile sailed straight through the institutional gate — a church or
+  // service nonprofit inherited a university's eligibility surface and these
+  // reached the match list at 16-18 on topical keyword overlap alone (the
+  // DRRP-deaf-employment-research class, owner report 2026-07-27). Fires on
+  // TITLE evidence only (oppNorm.titleIsResearchProgram) per the
+  // precise-detector doctrine — full-text INSTITUTIONAL/RESEARCH patterns
+  // over-match eligibility prose like "nonprofits and local governments may
+  // apply". A profile with a real research/academic mission keeps full score
+  // (G4: population mismatch reduces, never hard-rejects an org).
+  if (oppNorm?.titleIsResearchProgram && profileEntityTypeForGuards !== 'researcher') {
+    // Research-mission evidence is read from every field an org states its
+    // identity in — declared focus/industry, mission prose, and the org's own
+    // NAME ("… Research Institute"). The raw needs list is included because
+    // the canonical need taxonomy has no 'research' category, so a declared
+    // research need would otherwise be normalized away.
+    const researchMissionText = [
+      profileNorm?.missionFocus, profileNorm?.industry, profileNorm?.populationServed,
+      profileNorm?.organizationType, profileNorm?.organization?.mission,
+      profileNorm?.displayName,
+      effectiveProfile?.organization_name, effectiveProfile?.name,
+      effectiveProfile?.mission_statement,
+      safeParseArrayField(effectiveProfile?.needs, []),
+      ...(Array.isArray(profileNorm?.needCategories) ? profileNorm.needCategories : []),
+    ].filter(Boolean).join(' ')
+    const hasResearchMission = /research|academic|universit|laborator|clinical|scientif/i.test(researchMissionText)
+    if (!hasResearchMission) {
+      rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+      eligibilityMismatches.push('research_program_no_research_mission')
+      housingBonusReasons.push('No research/academic mission × research-institution program (capped)')
+    }
+  }
+
+  // ── Procedural-notice guard (not a funding opportunity for ANYONE) ──
+  // A Paperwork Reduction Act / "30-Day Notice of Proposed Information
+  // Collection" row is a comment period on form paperwork — there is nothing
+  // to apply to. It leaks in because its title names a real funding program
+  // ("…: Economic Development Initiative Community Project Funding Grants").
+  // computeMatchDecision hard-rejects it; this keeps the stored SCORE honest
+  // too so no surfacing path that reads score-without-decision can admit it.
+  if (oppNorm?.isProceduralNotice) {
+    rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+    eligibilityMismatches.push('procedural_notice_not_fundable')
+    housingBonusReasons.push('Federal Register procedural/paperwork notice — not an applyable funding opportunity')
+  }
+
   // ══ NEED-ANCHORED FINAL SCORE (owner directive 2026-07-06) ══
   // score = needCoverage% × eligibilityFactor × geoFactor. The legacy weighted
   // rawScore above survives ONLY as bounded topical evidence for profiles with
@@ -3391,6 +3441,20 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // ── Categorical restriction gates — all driven by `on` (normalizeOpportunity
   //    flags), the single source of truth. Order and reason strings preserved.
 
+  // Procedural / Paperwork Reduction Act notice: a "30-Day Notice of Proposed
+  // Information Collection" is a comment period on form paperwork, not a
+  // funding opportunity — there is nothing to apply to, for any profile type.
+  // These leak in via Federal Register ingest because the title names a real
+  // program ("…: Community Project Funding Grants").
+  if (on.isProceduralNotice) {
+    reasons.push('Federal Register procedural/paperwork notice — not an applyable funding opportunity')
+    return {
+      decision: 'REJECT',
+      explanation: 'This is a Federal Register paperwork/comment notice about a program, not a funding opportunity anyone can apply to.',
+      reasons,
+    }
+  }
+
   // Loan: `on.isLoan` already exempts loan forgiveness / repayment / PSLF and
   // mixed loan+grant programs, and catches "microloan" — both of which the old
   // inline `\bloan\b` regex got wrong.
@@ -3469,7 +3533,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // ordinary individual and must not be blanket-rejected from research grants.
   // (The old regex detection was too weak to ever flag open research opps, which
   // hid this divergence; the structured flag surfaces it.)
-  if ((on.isInstitutionalOnly || on.isResearchOnly) &&
+  if ((on.isInstitutionalOnly || on.isResearchOnly || on.titleIsResearchProgram) &&
       !isNonprofit && !isBusiness && !isResearcher && profileType !== 'organization') {
     reasons.push('Research/institutional-only program; profile lacks org/research credentials')
     return { decision: 'REJECT', explanation: 'Opportunity is for research institutions only; profile has no organization credentials.', reasons }

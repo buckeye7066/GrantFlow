@@ -17,6 +17,12 @@ import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
+import {
+  ensurePipelineDismissalsSchema,
+  recordDismissal,
+  reconcileDismissedGrants,
+  reconcileDismissedMatches,
+} from '../services/pipelineDismissals.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:funding-sources')
@@ -48,6 +54,10 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
 
   try {
     const profileContext = buildProfileFacets(await loadProfileContext(req.db, profileId))
+    // Sticky deletes: a source the owner removed from this list must never
+    // re-render, even if a discovery run re-upserted its match row between
+    // boots (the boot sweep is the net; this predicate is the per-read gate).
+    await ensurePipelineDismissalsSchema(req.db)
     const rows = await req.db.prepare(
       `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.deadline, fo.deadline_type,
               fo.amount_min, fo.amount_max, fo.state, fo.is_national,
@@ -60,6 +70,12 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         WHERE pom.profile_id = ? AND pom.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
           AND (fo.is_active IS NULL OR fo.is_active = 1)
           AND (fo.is_hidden IS NULL OR fo.is_hidden = 0)
+          AND NOT EXISTS (
+            SELECT 1 FROM pipeline_dismissals d
+             WHERE d.profile_id = pom.profile_id
+               AND ((d.opportunity_id IS NOT NULL AND d.opportunity_id = pom.opportunity_id)
+                 OR (d.title IS NOT NULL AND lower(d.title) = lower(fo.title)))
+          )
         ORDER BY pom.match_score DESC, fo.updated_at DESC`,
     ).all(profileId)
 
@@ -119,6 +135,69 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
   } catch (err) {
     log.warn('funding_sources.failed', { profileId, error: err?.message || String(err) })
     return res.status(200).json({ profile_id: profileId, total: 0, sources: [], best_matches: [], worth_reviewing: [], directories: [], note: 'funding sources unavailable' })
+  }
+})
+
+/**
+ * DELETE /api/profiles/:id/funding-sources/:opportunityId
+ *
+ * Owner-facing STICKY delete from the curated match list. Records a
+ * pipeline_dismissals tombstone (the same store the pipeline's sticky-delete
+ * rule uses, so the matcher / promotion / re-crawl loop can never resurrect
+ * this source for this profile), then purges the match row and any pipeline
+ * grant already created from it via the canonical reconcile sweeps.
+ *
+ * A deliberate re-add (POST /api/grants/from-opportunity) clears the
+ * tombstone, so this is reversible by the user.
+ */
+router.delete('/profiles/:id/funding-sources/:opportunityId', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const profileId = String(req.params?.id || '').trim()
+  const opportunityId = String(req.params?.opportunityId || '').trim()
+  if (!profileId || !opportunityId) {
+    return res.status(400).json({ error: 'profile id and opportunity id required' })
+  }
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+
+  try {
+    const opportunity = await req.db.prepare(
+      'SELECT * FROM funding_opportunities WHERE id = ?',
+    ).get(opportunityId)
+
+    // The match row may point at an already-purged catalog row (the dangling-
+    // match class); a tombstone keyed on opportunity_id alone still blocks it.
+    const dismissal = await recordDismissal(req.db, {
+      profileId,
+      opportunity: opportunity ?? { id: opportunityId },
+      userId: user.id ?? user.email ?? null,
+      reason: 'owner_removed_from_funding_sources',
+    })
+    if (!dismissal.recorded) {
+      return res.status(422).json({ error: 'could not record dismissal', reason: dismissal.reason })
+    }
+
+    // Purge through the canonical sweeps (profile-scoped by tombstone), so
+    // this delete and the boot net can never disagree on what "gone" means.
+    const matchRowsRemoved = await reconcileDismissedMatches(req.db)
+    const grantsRemoved = await reconcileDismissedGrants(req.db)
+
+    log.info('funding_sources.dismissed', {
+      profileId, opportunityId, matchRowsRemoved, grantsRemoved,
+      alreadyExisted: dismissal.alreadyExisted === true,
+    })
+    return res.json({
+      dismissed: true,
+      profile_id: profileId,
+      opportunity_id: opportunityId,
+      match_rows_removed: matchRowsRemoved,
+      pipeline_grants_removed: grantsRemoved,
+    })
+  } catch (err) {
+    log.error('funding_sources.dismiss_failed', { profileId, opportunityId, error: err?.message || String(err) })
+    return res.status(500).json({ error: 'failed to remove funding source' })
   }
 })
 

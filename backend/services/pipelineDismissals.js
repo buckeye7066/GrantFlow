@@ -402,6 +402,70 @@ export async function reconcileDismissedGrants(db, { limit = 100000 } = {}) {
 }
 
 /**
+ * GLOBAL ENFORCEMENT SWEEP (match-list side) — reconcile the per-profile
+ * MATCH store against every tombstone.
+ *
+ * reconcileDismissedGrants() covers the pipeline (grants); this covers the
+ * curated match list (profile_opportunity_matches — the "Funding Sources"
+ * card). The crawler-os pipeline re-scores and upserts match rows on every
+ * discovery run with no knowledge of dismissals, so without this net a
+ * source the owner deleted from the match list would resurrect on the next
+ * crawl. Same posture as the grants sweep: one set-based statement, profile-
+ * scoped throughout, safe to run on every boot.
+ *
+ * Matching mirrors findDismissal() priority where the match store can express
+ * it: opportunity_id exact, then lower(title) via the joined catalog row.
+ * (Match rows carry no fingerprint — the opportunity_id tier is the primary
+ * key here, recorded by every dismissal taken from the funding-sources list.)
+ *
+ * Returns the number of resurrected match rows removed.
+ */
+export async function reconcileDismissedMatches(db, { limit = 100000 } = {}) {
+  if (!db || typeof db.prepare !== 'function') return 0
+  await ensurePipelineDismissalsSchema(db)
+
+  const sql = `
+    DELETE FROM profile_opportunity_matches
+    WHERE id IN (
+      SELECT pom.id
+      FROM profile_opportunity_matches pom
+      JOIN pipeline_dismissals d ON d.profile_id = pom.profile_id
+      LEFT JOIN funding_opportunities fo ON fo.id = pom.opportunity_id
+      WHERE
+        (d.opportunity_id IS NOT NULL AND d.opportunity_id = pom.opportunity_id)
+        OR (d.title IS NOT NULL AND fo.title IS NOT NULL
+           AND lower(d.title) = lower(fo.title))
+      LIMIT ${Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 100000}
+    )
+  `
+  try {
+    const result = await db.prepare(sql).run()
+    const removed = Number(result?.changes ?? result?.rowCount ?? 0)
+    if (removed > 0) {
+      log.info('reconcileDismissedMatches: purged resurrected match rows', { removed })
+    }
+    return Number.isFinite(removed) ? removed : 0
+  } catch (err) {
+    // Same Postgres LIMIT-in-subselect tolerance as reconcileDismissedGrants.
+    const msg = String(err?.message || '')
+    if (/LIMIT|syntax/i.test(msg)) {
+      try {
+        const noLimitSql = sql.replace(/\s+LIMIT\s+\d+\s*\n/, '\n')
+        const result = await db.prepare(noLimitSql).run()
+        const removed = Number(result?.changes ?? result?.rowCount ?? 0)
+        if (removed > 0) log.info('reconcileDismissedMatches: purged (no-limit fallback)', { removed })
+        return Number.isFinite(removed) ? removed : 0
+      } catch (retryErr) {
+        log.error('reconcileDismissedMatches failed (fallback)', { error: String(retryErr?.message || retryErr) })
+        return 0
+      }
+    }
+    log.error('reconcileDismissedMatches failed', { error: msg })
+    return 0
+  }
+}
+
+/**
  * Diagnostic: count tombstones for a profile.
  */
 export async function countDismissals(db, profileId) {

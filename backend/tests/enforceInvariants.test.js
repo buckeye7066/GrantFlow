@@ -198,6 +198,83 @@ describe('enforceInvariants — sticky deletes', () => {
     expect(res.repaired).toBe(0)
     expect(count(db)).toBe(1)
   })
+
+  // ── Match-list side (profile_opportunity_matches — the Funding Sources
+  //    card). The crawler-os pipeline upserts match rows on every discovery
+  //    run with no knowledge of dismissals; the sweep is what makes an
+  //    owner's delete stick (2026-07-27 owner report).
+  function makeMatchTables(db) {
+    db.exec(`
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL,
+        opportunity_id TEXT NOT NULL,
+        match_score REAL,
+        match_decision TEXT,
+        matcher_version TEXT
+      );
+      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT);
+    `)
+  }
+  function insertMatch(db, { id, profileId, oppId, title }) {
+    db.prepare(
+      'INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision) VALUES (?, ?, ?, 18, ?)',
+    ).run(id, profileId, oppId, 'accept')
+    if (title) {
+      db.prepare('INSERT OR IGNORE INTO funding_opportunities (id, title) VALUES (?, ?)').run(oppId, title)
+    }
+  }
+  function matchIds(db) {
+    return db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+  }
+
+  it('purges a dismissed opportunity\'s MATCH row, profile-scoped (funding-sources side)', async () => {
+    const db = makeDb()
+    makeMatchTables(db)
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    insertProfile(db, { id: 'p2', orgId: 'org2' })
+
+    await recordDismissal(db, {
+      profileId: 'p1',
+      opportunity: { id: 'opp-drrp', title: 'DRRP Research Program', sponsor: 'ACL' },
+    })
+
+    // Discovery re-upserts the match row for p1; p2 legitimately keeps its own.
+    insertMatch(db, { id: 'm1', profileId: 'p1', oppId: 'opp-drrp', title: 'DRRP Research Program' })
+    insertMatch(db, { id: 'm2', profileId: 'p2', oppId: 'opp-drrp', title: 'DRRP Research Program' })
+
+    const res = await enforceStickyDeletes(db)
+    expect(res.ok).toBe(true)
+    expect(res.matchRowsRemoved).toBe(1)
+    expect(matchIds(db)).toEqual(['m2'])
+  })
+
+  it('title tier: purges a match row whose catalog row was re-keyed under a new id', async () => {
+    const db = makeDb()
+    makeMatchTables(db)
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+
+    await recordDismissal(db, {
+      profileId: 'p1',
+      opportunity: { id: 'opp-old', title: 'Vet-LIRN Capacity Grants', sponsor: 'FDA' },
+    })
+
+    // Re-crawl created the same real-world source under a NEW catalog id.
+    insertMatch(db, { id: 'm1', profileId: 'p1', oppId: 'opp-new', title: 'Vet-LIRN Capacity Grants' })
+
+    const res = await enforceStickyDeletes(db)
+    expect(res.matchRowsRemoved).toBe(1)
+    expect(matchIds(db)).toEqual([])
+  })
+
+  it('tolerates databases without the match tables (older/minimal schemas)', async () => {
+    const db = makeDb() // no profile_opportunity_matches table at all
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    await recordDismissal(db, { profileId: 'p1', opportunity: { id: 'opp-1', title: 'X' } })
+    const res = await enforceStickyDeletes(db)
+    expect(res.ok).toBe(true)
+    expect(res.matchRowsRemoved).toBe(0)
+  })
 })
 
 describe('enforceInvariants — no cross-profile / cross-tenant bleed', () => {

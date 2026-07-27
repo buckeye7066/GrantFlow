@@ -8,6 +8,20 @@ export async function listProfileFundingSources(profileId, { minScore = AUTO_ADD
   return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/funding-sources?${params}`)
 }
 
+/**
+ * Sticky-remove a matched source from a profile's Funding Sources list.
+ * Records a dismissal tombstone server-side, so discovery/re-crawl can never
+ * bring it back for this profile (deliberate re-add clears the tombstone).
+ */
+export async function dismissProfileFundingSource(profileId, opportunityId) {
+  if (!profileId) throw new Error('profileId is required')
+  if (!opportunityId) throw new Error('opportunityId is required')
+  return apiFetch(
+    `/api/profiles/${encodeURIComponent(profileId)}/funding-sources/${encodeURIComponent(opportunityId)}`,
+    { method: 'DELETE' },
+  )
+}
+
 export async function matchProfileToGrants(profileId) {
   if (!profileId) throw new Error('profileId is required')
   return apiFetch(`/api/matching/profile/${profileId}/grants`)

@@ -91,6 +91,48 @@ const RESEARCH_ONLY_PATTERNS = [
 ]
 
 // ---------------------------------------------------------------------------
+// TITLE-scoped research/TA program tells (precise-detector class).
+//
+// The INSTITUTIONAL/RESEARCH patterns above scan the FULL text (title +
+// description + eligibility), which is the right recall posture for the
+// person-profile hard gate but too noisy to drive a score-crushing mismatch
+// for organization profiles (a legit nonprofit grant whose description says
+// "nonprofits and local governments may apply" contains 'local government').
+// These regexes look at the TITLE ONLY, where federal research/TA programs
+// announce themselves unambiguously:
+//   • a parenthesized federal activity code — "(U18)", "(R01)", "(T32)". The
+//     Vet-LIRN class: nothing else in the title says "research", but no
+//     individual or service nonprofit can ever hold a federal cooperative
+//     agreement. K12 is excluded (education pattern, not the career award).
+//   • "Research Projects/Program/Grants/Center" as a title phrase — the DRRP
+//     class. Fellowships/scholarships are deliberately NOT matched: those fund
+//     people, not institutions.
+//   • "Communities of Practice" — federal TA/peer-network cooperative
+//     agreements (the CSBG COP class): they fund ONE national TA provider,
+//     never services for a local applicant.
+const RE_TITLE_FEDERAL_ACTIVITY_CODE = /\(\s*(?!k12\b)[rpukt]\d{2}[a-z]?\s*\)/i
+const RE_TITLE_RESEARCH_PROGRAM = /\bresearch (?:projects?|programs?|grants?|awards?|centers?)\b/i
+const RE_TITLE_COMMUNITIES_OF_PRACTICE = /\bcommunities of practice\b/i
+// SBIR/STTR carve-out: "Small Business Innovation Research" grants ARE for
+// small businesses — the applicant does R&D by definition of applying, so the
+// institutional-research tell must not crush them for business profiles.
+// (Ordinary individuals are still rejected via the full-text RESEARCH_ONLY
+// patterns, which match 'research grant' in these titles.)
+const RE_TITLE_SMALL_BUSINESS_RESEARCH = /\bsmall business\b|\bsbir\b|\bsttr\b/i
+
+// Federal Register / Paperwork Reduction Act procedural documents. A "30-Day
+// Notice of Proposed Information Collection: … Funding Grants" is a comment
+// period on FORM PAPERWORK about a program — there is nothing to apply to, for
+// anyone. These leak in through Federal Register ingest because their titles
+// name real funding programs.
+// Exported for the drift tripwire: the Federal Register adapter
+// (backend/crawler-os/adapters/federalRegisterAdapter.js) keeps a LOCAL copy
+// (crawler-os is deliberately self-contained) and a test asserts the two stay
+// identical, so ingest and match-time judgments can never disagree.
+export const RE_PROCEDURAL_NOTICE_TITLE =
+  /\b(?:30|60)[- ]day notice\b|\bnotice of proposed information collection\b|\bproposed information collection\b|\bpaperwork reduction act\b|\brequest for (?:comments?|information)\b|\bnotice of a federal advisory\b/i
+
+// ---------------------------------------------------------------------------
 // Senior/aging service programs (Area Agencies on Aging, eldercare locators,
 // senior centers). NOT an eligibility gate — a family/caregiver profile
 // legitimately reaches these for a household elder — but a young student with
@@ -821,6 +863,16 @@ export function normalizeOpportunity(rawOpp) {
     isAlreadyAwarded ||
     matchesAnyPattern(text, RESEARCH_ONLY_PATTERNS)
 
+  // -- TITLE-scoped research/TA program + procedural-notice tells --
+  // (see the pattern block above for why these read the title only)
+  const rawTitle = String(rawOpp.title ?? '')
+  const titleIsResearchProgram =
+    (RE_TITLE_FEDERAL_ACTIVITY_CODE.test(rawTitle) ||
+      RE_TITLE_RESEARCH_PROGRAM.test(rawTitle) ||
+      RE_TITLE_COMMUNITIES_OF_PRACTICE.test(rawTitle)) &&
+    !RE_TITLE_SMALL_BUSINESS_RESEARCH.test(rawTitle)
+  const isProceduralNotice = RE_PROCEDURAL_NOTICE_TITLE.test(rawTitle)
+
   // -- Disease-specific flag --
   const diseaseSpecific = Boolean(rawOpp.disease_specific) ||
     matchesAnyPattern(text, DISEASE_SPECIFIC_PATTERNS)
@@ -954,6 +1006,8 @@ export function normalizeOpportunity(rawOpp) {
     isReferralOnly,
     isInstitutionalOnly,
     isResearchOnly,
+    titleIsResearchProgram,
+    isProceduralNotice,
     isAlreadyAwarded,
     educationLevel,
     diseaseSpecific,
@@ -1077,6 +1131,8 @@ export function computeOpportunityFingerprint(normalizedOpp) {
     isLoan: normalizedOpp.isLoan,
     isInstitutionalOnly: normalizedOpp.isInstitutionalOnly,
     isResearchOnly: normalizedOpp.isResearchOnly,
+    titleIsResearchProgram: normalizedOpp.titleIsResearchProgram,
+    isProceduralNotice: normalizedOpp.isProceduralNotice,
     diseaseSpecific: normalizedOpp.diseaseSpecific,
     requiresDisasterContext: normalizedOpp.requiresDisasterContext,
     requiresVeteran: normalizedOpp.requiresVeteran,

@@ -53,7 +53,7 @@
  */
 
 import { createLogger } from '../utils/logger.js'
-import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
+import { reconcileDismissedGrants, reconcileDismissedMatches } from '../services/pipelineDismissals.js'
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
@@ -261,7 +261,12 @@ async function listGrantColumns(db) {
 export async function enforceStickyDeletes(db) {
   return runInvariant('sticky_deletes', async () => {
     const removed = await reconcileDismissedGrants(db)
-    return { repaired: removed }
+    // Match-list side of the same rule: the crawler-os pipeline upserts
+    // profile_opportunity_matches on every discovery run with no knowledge of
+    // dismissals, so a source deleted from the Funding Sources list would
+    // resurrect on the next crawl without this sweep.
+    const matchRowsRemoved = await reconcileDismissedMatches(db)
+    return { repaired: removed + matchRowsRemoved, matchRowsRemoved }
   })
 }
 

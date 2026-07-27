@@ -63,6 +63,18 @@ function hasFederalRegisterFundingSignal(...parts) {
   return FEDERAL_REGISTER_FUNDING_SIGNALS.some((s) => hay.includes(s));
 }
 
+// PROCEDURAL EXCLUSION — outranks the funding-signal include above. A
+// Paperwork Reduction Act / information-collection / comment notice often
+// NAMES a real funding program in its title ("30-Day Notice of Proposed
+// Information Collection: … Community Project Funding Grants"), so the
+// funding vocabulary reads as a NOFO — but there is nothing to apply to, for
+// anyone. LOCAL copy of RE_PROCEDURAL_NOTICE_TITLE in
+// services/opportunityNormalizer.js (crawler-os stays self-contained); the
+// drift tripwire in backend/tests/matchEngineResearchProgramGuard.test.js
+// asserts the two regexes stay identical.
+export const RE_PROCEDURAL_NOTICE_TITLE =
+  /\b(?:30|60)[- ]day notice\b|\bnotice of proposed information collection\b|\bproposed information collection\b|\bpaperwork reduction act\b|\brequest for (?:comments?|information)\b|\bnotice of a federal advisory\b/i;
+
 export function federalRegisterParseCfg() {
   return {
     listPath: 'results',
@@ -98,6 +110,9 @@ export function createFederalRegisterAdapter() {
         : null;
       const infoUrl = typeof raw.info_url === 'string' ? raw.info_url.trim() : null;
       if (!infoUrl) return null; // no official notice URL -> nothing to surface honestly
+      // PROCEDURAL EXCLUSION first: a PRA/comment notice naming a funding
+      // program in its title would otherwise pass the funding-signal gate.
+      if (RE_PROCEDURAL_NOTICE_TITLE.test(String(raw.title ?? ''))) return null;
       // PRECISION GATE (recall-safe): drop notices whose kept text (title +
       // abstract) shows no funding signal — these matched the term only in their
       // body and are meeting/rule/information-collection notices, not NOFOs.
