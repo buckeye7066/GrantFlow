@@ -120,7 +120,6 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
 export default function Layout({ children }) {
   const location = useLocation()
   const { t } = useLanguage()
-  const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen()
   const [showAdvancedTools, setShowAdvancedToolsState] = useState(getShowAdvancedTools)
 
   const user = useAuthStore((state) => state.user)
@@ -129,6 +128,12 @@ export default function Layout({ children }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
 
   const isAdmin = hasFullAdminWorkspace(user)
+  // Admins get every nav group expanded on first render (the "old view": all
+  // tabs visible); their own collapse choices persist from then on. End users
+  // keep the compact simplified nav untouched.
+  const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen(
+    isAdmin ? NAV_GROUPS.map((group) => group.groupId) : null,
+  )
   const showAdminGroup = isAdmin || showAdvancedTools
   const navigationGroups = isAdmin
     ? NAV_GROUPS.filter((group) => group.groupId !== 'admin' || showAdminGroup)
