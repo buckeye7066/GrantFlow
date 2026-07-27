@@ -72,6 +72,58 @@ describe('buildHamiltonTodoCategory', () => {
     expect(vaultItem.go_to).toEqual({ tab: 'pipeline', focus: 'portal-logins' })
   })
 
+  // ── "Go there" opens the REAL portal (owner report 2026-07-27: the MTSU
+  //    off-campus-housing task's "Go there" dumped the owner on an internal
+  //    page instead of the actual application portal) ──────────────────────
+  it('a blocked task with a recorded application URL carries it as link_url (no internal go_to)', async () => {
+    const task = await ensureApplicationTask(db, {
+      profileId: PROFILE_ID, grantId: 'g-mtsu', automationType: 'portal',
+    })
+    await updateApplicationTask(db, task.id, {
+      status: 'blocked_login_required',
+      applicationUrl: 'https://www.mtsu.edu/offcampushousing/apply',
+    })
+
+    const category = await buildHamiltonTodoCategory(db, PROFILE_ID)
+    const item = category.items.find((i) => i.hamilton_kind === 'task_blocked')
+    expect(item).toBeTruthy()
+    expect(item.link_url).toBe('https://www.mtsu.edu/offcampushousing/apply')
+    expect(item.go_to).toBeUndefined()
+  })
+
+  it('falls back to the linked grant/pipeline URL when the task has none', async () => {
+    await db.prepare('CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, profile_id TEXT, title TEXT, application_url TEXT, url TEXT, source_url TEXT)').run()
+    await db.prepare(
+      "INSERT INTO grants (id, profile_id, title, application_url) VALUES ('g-hous', ?, 'MTSU Off-Campus Housing & Rent Assistance', 'https://www.mtsu.edu/housing/portal')",
+    ).run(PROFILE_ID)
+
+    const task = await ensureApplicationTask(db, {
+      profileId: PROFILE_ID, grantId: 'g-hous', automationType: 'portal',
+    })
+    await updateApplicationTask(db, task.id, { status: 'blocked_missing_info' })
+
+    const category = await buildHamiltonTodoCategory(db, PROFILE_ID)
+    const item = category.items.find((i) => i.title.startsWith('MTSU Off-Campus Housing'))
+    expect(item).toBeTruthy()
+    expect(item.link_url).toBe('https://www.mtsu.edu/housing/portal')
+  })
+
+  it('never emits a search-results page as the portal (falls back to internal navigation)', async () => {
+    const task = await ensureApplicationTask(db, {
+      profileId: PROFILE_ID, grantId: 'g-junk-url', automationType: 'portal',
+    })
+    await updateApplicationTask(db, task.id, {
+      status: 'blocked',
+      applicationUrl: 'https://www.google.com/search?q=mtsu+off+campus+housing',
+    })
+
+    const category = await buildHamiltonTodoCategory(db, PROFILE_ID)
+    const item = category.items.find((i) => i.hamilton_kind === 'task_blocked')
+    expect(item).toBeTruthy()
+    expect(item.link_url ?? null).toBeNull()
+    expect(item.go_to).toEqual({ tab: 'pipeline', focus: 'portal-logins' })
+  })
+
   it('folds duplicate titles to one item', async () => {
     const t1 = await ensureApplicationTask(db, { profileId: PROFILE_ID, grantId: 'g-todo-2', automationType: 'pdf_docx' })
     const t2 = await ensureApplicationTask(db, { profileId: PROFILE_ID, grantId: 'g-todo-3', automationType: 'portal' })

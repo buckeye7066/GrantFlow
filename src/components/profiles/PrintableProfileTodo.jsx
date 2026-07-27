@@ -14,6 +14,8 @@ import { ingestDocument } from "@/api/documents"
 import { useToast } from "@/components/ui/use-toast"
 import { buildProfileSectionLink } from "@/config/missingInfoTargets"
 import { createPageUrl } from "@/utils"
+import { safeHttpUrl } from "@/lib/safeUrl"
+import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
 
 const ICON_MAP = {
   clipboard: ClipboardList,
@@ -154,10 +156,25 @@ function TodoItemCard({ item, profileId, categoryName, done, onToggleDone, onUpl
   // This is the "add the information manually to the profile" path.
   const profileLink = buildProfileSectionLink(profileId, item.field_key || item.profile_section)
 
+  // A Hamilton task that carries its REAL portal/application page: "Go there"
+  // must open THAT (side-by-side, Hamilton watching), never an internal area —
+  // the MTSU off-campus-housing class, owner report 2026-07-27. link_url wins
+  // over any internal {tab, focus} target.
+  const portalUrl = item.source === "hamilton" ? safeHttpUrl(item.link_url) : null
+  const [openingPortal, setOpeningPortal] = useState(false)
+  // The popup must open inside the click gesture — no awaits before the call.
+  const openPortal = (e) => {
+    e.stopPropagation()
+    if (!portalUrl || openingPortal) return
+    setOpeningPortal(true)
+    openWithHamiltonWatching({ profileId, url: portalUrl, label: item.title, toast })
+      .finally(() => setOpeningPortal(false))
+  }
+
   // Hamilton items carry an explicit navigation target ({tab, focus}) so one
   // click drops the user exactly where the need is fixed (e.g. the portal
   // sign-in list for a "sign in once" item). Falls back to the field link.
-  const goToLink = !profileLink && item.go_to?.tab
+  const goToLink = !profileLink && !portalUrl && item.go_to?.tab
     ? createPageUrl("ProfileDetail", {
         id: profileId,
         tab: item.go_to.tab,
@@ -290,6 +307,17 @@ function TodoItemCard({ item, profileId, categoryName, done, onToggleDone, onUpl
             Add to profile <ArrowRight className="w-3 h-3" />
           </Link>
         )}
+        {portalUrl && (
+          <button
+            type="button"
+            onClick={openPortal}
+            disabled={openingPortal}
+            title="Opens this application's own portal page with Hamilton watching"
+            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline disabled:opacity-50"
+          >
+            Go there {openingPortal ? <Loader2 className="w-3 h-3 animate-spin" /> : <ArrowRight className="w-3 h-3" />}
+          </button>
+        )}
         {goToLink && (
           <Link
             to={goToLink}
@@ -299,7 +327,7 @@ function TodoItemCard({ item, profileId, categoryName, done, onToggleDone, onUpl
             Go there <ArrowRight className="w-3 h-3" />
           </Link>
         )}
-        {item.link_url && (
+        {item.link_url && !portalUrl && (
           <a
             href={item.link_url}
             target="_blank"

@@ -21,6 +21,7 @@ import {
 } from './applicationTaskStore.js'
 import { getHamiltonReadiness } from './hamiltonScheduleService.js'
 import { getMasterVaultStatus } from './hamiltonPortalMasterVault.js'
+import { isSearchEngineUrl } from '../../config/urlRules.js'
 
 // Canonical task vocabulary lives in applicationTaskStore (TASK_BLOCKED_STATUSES
 // = blocked_* gates that need the owner; TASK_TERMINAL_STATUSES = done/failed/
@@ -52,30 +53,46 @@ function humanizeAutomationType(t) {
   return s.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-// Best-effort, batched title resolution from the grants / funding_opportunities
-// tables so tasks read as real funding-source names instead of raw ids. Missing
-// tables or rows simply leave the fallback (humanized automation type) in place.
+// Best-effort, batched title + portal-URL resolution from the grants /
+// funding_opportunities tables so tasks read as real funding-source names
+// instead of raw ids, and so a blocked task can carry the REAL portal page the
+// owner must visit. Missing tables or rows simply leave the fallbacks in place.
 async function resolveTaskTitles(db, tasks, profileId) {
   const map = new Map()
+  const urlMap = new Map()
   const grantIds = [...new Set((tasks || []).map((t) => t.grant_id).filter(Boolean).map(String))]
   const oppIds = [...new Set((tasks || []).map((t) => t.opportunity_id).filter(Boolean).map(String))]
   if (grantIds.length && profileId) {
     try {
       const ph = grantIds.map(() => '?').join(',')
+      // TRAP (the #946/#954 schema-drift class): prod Postgres `grants` has NO
+      // source_url column (SQLite does) — selecting it here would throw, the
+      // catch would swallow it, and every task would silently lose its real
+      // TITLE too. Reference only columns that exist in BOTH dialects.
       const rows = await db
-        .prepare(`SELECT id, title FROM grants WHERE profile_id = ? AND id IN (${ph})`)
+        .prepare(`SELECT id, title, application_url, url FROM grants WHERE profile_id = ? AND id IN (${ph})`)
         .all(String(profileId), ...grantIds)
-      for (const r of rows || []) if (r?.title) map.set(`grant:${r.id}`, r.title)
+      for (const r of rows || []) {
+        if (r?.title) map.set(`grant:${r.id}`, r.title)
+        const u = r?.application_url || r?.url
+        if (u) urlMap.set(`grant:${r.id}`, u)
+      }
     } catch { /* table/shape mismatch — keep fallbacks */ }
   }
   if (oppIds.length) {
     try {
       const ph = oppIds.map(() => '?').join(',')
-      const rows = await db.prepare(`SELECT id, title FROM funding_opportunities WHERE id IN (${ph})`).all(...oppIds)
-      for (const r of rows || []) if (r?.title) map.set(`opp:${r.id}`, r.title)
+      const rows = await db
+        .prepare(`SELECT id, title, application_url, source_url FROM funding_opportunities WHERE id IN (${ph})`)
+        .all(...oppIds)
+      for (const r of rows || []) {
+        if (r?.title) map.set(`opp:${r.id}`, r.title)
+        const u = r?.application_url || r?.source_url
+        if (u) urlMap.set(`opp:${r.id}`, u)
+      }
     } catch { /* table/shape mismatch — keep fallbacks */ }
   }
-  return map
+  return { titleMap: map, urlMap }
 }
 
 function taskTitleFromMap(task, titleMap) {
@@ -84,6 +101,27 @@ function taskTitleFromMap(task, titleMap) {
     (task.opportunity_id && titleMap.get(`opp:${task.opportunity_id}`)) ||
     humanizeAutomationType(task.automation_type)
   )
+}
+
+// The REAL page the owner must visit for a task: the task's own recorded
+// application/portal URL first, then the linked grant's, then the catalog
+// row's. Only a plain http(s), non-search-engine URL qualifies — a Google
+// results page is never a portal (the enforceNoSearchEngineApplicationTargets
+// class), and returning null keeps the internal-navigation fallback honest.
+function taskPortalUrl(task, urlMap) {
+  const candidates = [
+    task.application_url,
+    task.portal_url,
+    task.grant_id ? urlMap.get(`grant:${task.grant_id}`) : null,
+    task.opportunity_id ? urlMap.get(`opp:${task.opportunity_id}`) : null,
+  ]
+  for (const raw of candidates) {
+    const u = String(raw || '').trim()
+    if (!/^https?:\/\//i.test(u)) continue
+    if (isSearchEngineUrl(u)) continue
+    return u
+  }
+  return null
 }
 
 /**
@@ -97,7 +135,7 @@ export async function buildHamiltonProfileSummary(db, profileId) {
   // 1. Active tasks + their unresolved missing info.
   let tasks = []
   try { tasks = await listApplicationTasks(db, { profileId, limit: 200 }) } catch { tasks = [] }
-  const titleMap = await resolveTaskTitles(db, tasks, profileId)
+  const { titleMap, urlMap } = await resolveTaskTitles(db, tasks, profileId)
   // One batched read for every task's missing info — a per-task query inside
   // the loop below was up to 200 serial round-trips, slow enough under a
   // contended pool to trip the edge-proxy timeout on the profile page.
@@ -117,6 +155,9 @@ export async function buildHamiltonProfileSummary(db, profileId) {
         detail: t.last_agent_message || t.current_step || 'Open the task to see what Hamilton is waiting on.',
         where: 'action-plan',
         task_id: t.id,
+        // The REAL portal/application page for this task, so "Go there" can
+        // open the actual destination instead of an internal fallback area.
+        link_url: taskPortalUrl(t, urlMap),
       })
     } else {
       workingOn.push({
@@ -217,9 +258,17 @@ function todoItemFromNeed(need) {
   } else if (kind === 'vault') {
     base.instructions = `${need.detail || ''}\n\nUse "Go there" to open the portal area — the vault controls are at the top.`.trim()
     base.go_to = { tab: 'pipeline', focus: 'portal-logins' }
+  } else if (need.link_url) {
+    // task_blocked with a KNOWN portal/application page: "Go there" must open
+    // the ACTUAL destination (the owner report 2026-07-27: the MTSU off-campus
+    // housing task's "Go there" dumped the owner on an internal page instead
+    // of the portal). The frontend opens link_url side-by-side with Hamilton
+    // watching, so anything unlocked there is captured for the application.
+    base.link_url = need.link_url
+    base.instructions = `${need.detail || ''}\n\n"Go there" opens this application's own portal page side-by-side with Hamilton watching — finish the step it is stuck on and he continues automatically.`.trim()
   } else {
-    // task_blocked and anything unexpected → the task details live in the
-    // pipeline/portal area alongside the Hamilton work panel.
+    // task_blocked with no recorded URL, and anything unexpected → the task
+    // details live in the pipeline/portal area alongside the Hamilton panel.
     base.go_to = { tab: 'pipeline', focus: 'portal-logins' }
   }
   return base
