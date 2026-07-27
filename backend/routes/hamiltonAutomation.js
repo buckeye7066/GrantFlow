@@ -1080,6 +1080,13 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
     // Public origin of THIS request so the self_hosted liveUrl is absolute and
     // points back at GrantFlow's own /HamiltonLiveLogin live-view page.
     origin: `${req.protocol}://${req.get('host')}`,
+    // REQUIRED for session seeding: with the db the live context is seeded from
+    // the profile's existing valid saved session for this portal, so a watched
+    // side-by-side open lands SIGNED IN and "Done" refreshes that session
+    // instead of overwriting it with a signed-out cookie jar (which is what
+    // took the portal offline for Hamilton — see loadSeedSession in
+    // hamiltonCloudLogin.js). Omitting db silently reverts to cold starts.
+    db: req.db,
   })
   if (!result.ok) {
     // LEARN: a navigation failure that classifies as a STABLE anti-bot wall
@@ -1229,7 +1236,15 @@ router.post('/sessions/cloud-login/:liveSessionId/complete', async (req, res) =>
       label: meta.label || `${meta.portalHost} session`,
       authenticationStrategy: 'imported_session',
       expiresAt: req.body?.expires_at || new Date(Date.now() + 14 * 86400_000).toISOString(),
-      metadata: { imported_via: 'cloud_interactive_login', consent, capture_request_id: meta.captureRequestId || undefined },
+      metadata: {
+        imported_via: 'cloud_interactive_login',
+        consent,
+        capture_request_id: meta.captureRequestId || undefined,
+        // Provenance: when the live context was seeded from an existing saved
+        // session, this capture is a REFRESH of that session (the seeded jar +
+        // whatever the portal reissued), not a from-scratch login.
+        refreshed_from_session_id: meta.seededFromSessionId || undefined,
+      },
     })
     if (meta.captureRequestId) {
       await completeCaptureRequest(req.db, meta.captureRequestId, { sessionId: session?.id || null }).catch(() => {})
