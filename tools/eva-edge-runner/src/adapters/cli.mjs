@@ -36,9 +36,18 @@ export async function runCliJourney({ manifest, journey, dryRun = false }) {
     return { journey_id: journey.id, name: journey.name, status: 'skipped', duration_ms: Date.now() - started }
   }
 
-  const tmp = mkdtempSync(join(os.tmpdir(), 'eva-cli-'))
+  // Run the command in the app's OWN repo directory so relative commands like
+  // `python flexfactor.py --help` or `python system_cleaner/cleaner.py --help`
+  // can find their script. Previously the command ran in a fresh empty temp dir,
+  // so the interpreter could not open the script and exited 2 with no usage
+  // output — which is exactly the "CLI renders usage/help" failure we saw. The
+  // manifest's disposable_data_root (a relative fixture path) also resolves
+  // correctly from here. Fall back to a temp dir only if the app has no path.
+  const appDir = manifest.local_path || null
+  const tmp = appDir ? null : mkdtempSync(join(os.tmpdir(), 'eva-cli-'))
+  const cwd = appDir || tmp
   try {
-    const result = await runProcess(cmd, journey.args || [], { cwd: tmp, timeoutMs: journey.timeout_ms || 60000 })
+    const result = await runProcess(cmd, journey.args || [], { cwd, timeoutMs: journey.timeout_ms || 60000 })
     const exitOk = journey.expect_exit_code == null || result.code === journey.expect_exit_code
     const stdoutOk = !journey.expect_stdout_matches || new RegExp(journey.expect_stdout_matches).test(result.stdout)
     if (exitOk && stdoutOk) {
@@ -54,10 +63,12 @@ export async function runCliJourney({ manifest, journey, dryRun = false }) {
       confidence: 0.75,
     })
   } finally {
-    try {
-      rmSync(tmp, { recursive: true, force: true })
-    } catch {
-      /* best-effort cleanup */
+    if (tmp) {
+      try {
+        rmSync(tmp, { recursive: true, force: true })
+      } catch {
+        /* best-effort cleanup */
+      }
     }
   }
 }

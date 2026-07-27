@@ -13,7 +13,10 @@
 import { runSelftest } from '../src/selftest.mjs'
 import { loadRunnerConfig, ensureDataDir, readMarker, writeMarker, loadRegistry, loadManifest, etDayKey } from '../src/config.mjs'
 import { runAppJourneys, buildPayload } from '../src/runner.mjs'
+import { launchWebApp } from '../src/launcher.mjs'
 import { uploadResult, sendHeartbeat } from '../src/uploader.mjs'
+
+const WEB_RUNTIMES = new Set(['web', 'mobile-web'])
 
 const args = new Set(process.argv.slice(2))
 
@@ -64,16 +67,34 @@ async function main() {
       appResults.push({ app_id: app.app_id, display_name: app.display_name, app_status: 'blocked', blocker_reason: app.blocker || 'external service unavailable', duration_ms: 0, journeys: [] })
       continue
     }
-    // NOTE: launching real apps (start_command / readiness probe / stop) is the
-    // per-runtime responsibility documented in EVA_WINDOWS_RUNNER.md. In this
-    // build the orchestrator runs journeys via the adapter against an
-    // already-resolved baseUrl (web) or declared command (cli). Dry-run and the
-    // blocked/manual paths above are always exercised; the launch harness is
-    // installed per-environment. Apps without a resolvable launch are reported
-    // 'manual_required', never silently passed.
+    // Launch real apps the way each manifest declares: for web apps, spawn the
+    // start_command in the app's repo, wait for the readiness_probe to answer,
+    // run the journeys against the live server, then stop the process tree. Web
+    // journeys used to run against a base_url with nothing listening, so every
+    // one failed with ERR_CONNECTION_REFUSED even for healthy apps. CLI apps run
+    // their declared command directly via the cli adapter (no server to boot).
     const started = Date.now()
+    const isWeb = WEB_RUNTIMES.has(manifest.runtime_type)
+    let launch = null
     try {
-      const journeys = await runAppJourneys({ app, manifest, baseUrl: app.base_url || manifest.base_url || null, dryRun })
+      let baseUrl = app.base_url || manifest.base_url || null
+      if (!dryRun && isWeb) {
+        launch = await launchWebApp({ app, manifest, log: (m) => console.log(m) })
+        baseUrl = launch.baseUrl || baseUrl
+        if (launch.launched && !launch.ready) {
+          appResults.push({
+            app_id: app.app_id,
+            display_name: app.display_name,
+            repo: app.repo,
+            app_status: 'startup_failed',
+            blocker_reason: `app did not become ready at ${baseUrl || 'its declared base_url'} within the readiness timeout (start_command: ${manifest.start_command})`,
+            duration_ms: Date.now() - started,
+            journeys: [],
+          })
+          continue
+        }
+      }
+      const journeys = await runAppJourneys({ app, manifest, baseUrl, dryRun })
       appResults.push({
         app_id: app.app_id,
         display_name: app.display_name,
@@ -85,6 +106,14 @@ async function main() {
       })
     } catch (err) {
       appResults.push({ app_id: app.app_id, display_name: app.display_name, app_status: 'startup_failed', blocker_reason: String(err?.message || err).slice(0, 300), duration_ms: Date.now() - started, journeys: [] })
+    } finally {
+      if (launch && launch.launched) {
+        try {
+          await launch.stop()
+        } catch {
+          /* best-effort teardown */
+        }
+      }
     }
   }
 
