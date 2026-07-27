@@ -455,7 +455,7 @@ const MessageBubble = React.memo(function MessageBubble({ message, appearance })
       )}
       style={bubbleStyle}
     >
-      <div className="flex items-center justify-between gap-2 text-xs text-slate-600 pb-1" style={metaStyle}>
+      <div className="flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400 pb-1" style={metaStyle}>
         <Badge variant={isAssistant ? "secondary" : "outline"} className="text-[11px] uppercase tracking-wide">
           {isAssistant ? "Anya" : "You"}
         </Badge>
@@ -469,16 +469,16 @@ const MessageBubble = React.memo(function MessageBubble({ message, appearance })
           runs past the right edge of the panel. */}
       <p className="whitespace-pre-wrap break-words leading-relaxed">{message.content}</p>
       {isAppearanceUpdate ? (
-        <div className="mt-2 text-xs text-slate-600" style={metaStyle}>
+        <div className="mt-2 text-xs text-slate-600 dark:text-slate-400" style={metaStyle}>
           🎨 {message.tool_payload?.description || "Chat colors updated."}
         </div>
       ) : message.tool_name ? (
-        <div className="mt-2 space-y-2 text-xs text-slate-600" style={metaStyle}>
+        <div className="mt-2 space-y-2 text-xs text-slate-600 dark:text-slate-400" style={metaStyle}>
           <div>
-            Tool: <span className="font-mono text-xs text-slate-700" style={metaStyle}>{message.tool_name}</span>
+            Tool: <span className="font-mono text-xs text-slate-700 dark:text-slate-300" style={metaStyle}>{message.tool_name}</span>
           </div>
           {message.tool_payload ? (
-            <div className="max-h-48 overflow-auto rounded-md border border-slate-200 bg-white/80 p-2 text-xs text-slate-800">
+            <div className="max-h-48 overflow-auto rounded-md border border-slate-200 dark:border-slate-700 bg-white/80 p-2 text-xs text-slate-800 dark:text-slate-100">
               <pre className="whitespace-pre-wrap break-words">
                 {JSON.stringify(message.tool_payload, null, 2)}
               </pre>
@@ -1336,14 +1336,14 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
 
   if (isUnavailable) {
     return (
-      <div className="rounded-xl border border-slate-200 bg-white/80 p-4 text-sm text-slate-700 shadow-sm">
+      <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 p-4 text-sm text-slate-700 dark:text-slate-300 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600">
             <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
           </div>
-          <div className="font-semibold text-slate-800">Anya is temporarily unavailable</div>
+          <div className="font-semibold text-slate-800 dark:text-slate-100">Anya is temporarily unavailable</div>
         </div>
-        <div className="mt-2 text-xs text-slate-600">
+        <div className="mt-2 text-xs text-slate-600 dark:text-slate-400">
           The core app is still working; we’re restoring Anya’s services in the background. Refresh in a minute.
         </div>
       </div>
@@ -1699,13 +1699,13 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           const label = `${name}${required.has(name) ? " *" : ""}`
           if (isProfileSchemaField(name)) {
             return (
-              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600">
+              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
                 <span>{label}</span>
                 <select
                   id={id}
                   value={value}
                   onChange={(event) => setToolFieldValue(tool.name, name, event.target.value)}
-                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+                  className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white px-2 py-1.5 text-xs text-slate-800 dark:text-slate-100"
                 >
                   <option value="">Select profile...</option>
                   {(profiles || []).map((profile) => (
@@ -1719,7 +1719,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           }
           if (schema?.type === "boolean") {
             return (
-              <label key={name} htmlFor={id} className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs">
+              <label key={name} htmlFor={id} className="flex items-center gap-2 rounded border border-slate-200 dark:border-slate-700 bg-white px-2 py-1.5 text-xs">
                 <Checkbox
                   id={id}
                   checked={value === true || value === "true"}
@@ -1731,13 +1731,13 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           }
           if (Array.isArray(schema?.enum) && schema.enum.length > 0) {
             return (
-              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600">
+              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
                 <span>{label}</span>
                 <select
                   id={id}
                   value={value}
                   onChange={(event) => setToolFieldValue(tool.name, name, event.target.value)}
-                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+                  className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white px-2 py-1.5 text-xs text-slate-800 dark:text-slate-100"
                 >
                   <option value="">Select...</option>
                   {schema.enum.map((option) => (
@@ -1753,7 +1753,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             schema?.type === "array"
           ) {
             return (
-              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600 sm:col-span-2">
+              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600 dark:text-slate-400 sm:col-span-2">
                 <span>{label}</span>
                 <Textarea
                   id={id}
@@ -1766,7 +1766,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             )
           }
           return (
-            <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600">
+            <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
               <span>{label}</span>
               <Input
                 id={id}
@@ -1796,11 +1796,11 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
 
   return (
     <div
-      className="flex h-full min-w-0 flex-col overflow-x-hidden rounded-xl border border-slate-200 bg-white/80 shadow-sm"
+      className="flex h-full min-w-0 flex-col overflow-x-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 shadow-sm"
       style={chatAppearance ? { background: chatAppearance.panelBg, borderColor: chatAppearance.border, color: chatAppearance.bodyText } : undefined}
     >
       <div
-        className="border-b border-slate-200 px-4 py-3 max-h-[40%] overflow-y-auto shrink-0"
+        className="border-b border-slate-200 dark:border-slate-700 px-4 py-3 max-h-[40%] overflow-y-auto shrink-0"
         style={chatAppearance ? { borderColor: chatAppearance.border } : undefined}
       >
         <div className="flex flex-col gap-3">
@@ -1814,7 +1814,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     className="h-full w-full object-cover"
                   />
                 </div>
-                <h2 className="text-sm font-semibold text-slate-800" style={chatAppearance ? { color: chatAppearance.bodyText } : undefined}>Anya, your GrantFlow copilot</h2>
+                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100" style={chatAppearance ? { color: chatAppearance.bodyText } : undefined}>Anya, your GrantFlow copilot</h2>
                 {isAdmin && (
                   <Badge variant="default" className="gap-1 text-[11px] bg-purple-600">
                     <Shield className="h-3 w-3" />
@@ -1825,7 +1825,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-slate-500 hover:text-red-600 hover:bg-red-50"
+                    className="h-7 w-7 p-0 text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
                     onClick={handleClearConversation}
                     disabled={isClearingConversation || messages.length === 0}
                     title="Clear conversation (keeps same session)"
@@ -1839,7 +1839,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-slate-500 hover:text-purple-600 hover:bg-purple-50"
+                    className="h-7 w-7 p-0 text-slate-500 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40"
                     onClick={handleStartNewConversation}
                     disabled={isClearingConversation}
                     title="Start new conversation"
@@ -1848,7 +1848,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   </Button>
                 </div>
               </div>
-              <p className="text-xs text-slate-600" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
+              <p className="text-xs text-slate-600 dark:text-slate-400" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
                 GrantFlow helps you find, track, and apply for grants. Ask Anya to find grants that match
                 your profile, explain next steps, summarise deadlines, or navigate any part of the app.
               </p>
@@ -1856,7 +1856,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {copilotEnabled ? (
               <>
                 <div className="space-y-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Next steps</h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">Next steps</h3>
                   <div className="flex flex-wrap gap-2">
                     {nextStepActions.map((action, idx) => (
                       <Button
@@ -1887,7 +1887,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="gap-1.5 text-xs text-slate-600"
+                    className="gap-1.5 text-xs text-slate-600 dark:text-slate-400"
                     onClick={handleUseCurrentScreen}
                     disabled={!sessionId || isSendingContext}
                     title="Send current page context to Anya"
@@ -1939,7 +1939,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   <Button
                     variant="outline"
                     size="sm"
-                    className="gap-2 border-purple-300 bg-purple-50 hover:bg-purple-100"
+                    className="gap-2 border-purple-300 dark:border-purple-700 bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 dark:hover:bg-purple-900/40"
                     onClick={() => setIsAdminToolsOpen(true)}
                     // Button only opens a local dialog; session gets created
                     // lazily when a tool inside the dialog is actually run.
@@ -1953,12 +1953,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             ) : null}
           </div>
           {!hasQuickActions && !isLoadingTools ? (
-            <p className="text-xs text-slate-600">
+            <p className="text-xs text-slate-600 dark:text-slate-400">
               Tool registry still loading. Quick actions will appear here shortly.
             </p>
           ) : null}
           {sessionId ? (
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+            <div className="mt-4 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/40 p-3">
               <div className="flex items-start justify-between gap-3">
                 <button
                   type="button"
@@ -1966,15 +1966,15 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   onClick={() => setIsTasksExpanded((prev) => !prev)}
                 >
                   {isTasksExpanded ? (
-                    <ChevronDown className="h-3 w-3 text-slate-500 shrink-0" />
+                    <ChevronDown className="h-3 w-3 text-slate-500 dark:text-slate-400 shrink-0" />
                   ) : (
-                    <ChevronRight className="h-3 w-3 text-slate-500 shrink-0" />
+                    <ChevronRight className="h-3 w-3 text-slate-500 dark:text-slate-400 shrink-0" />
                   )}
                   <div>
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
                       Session tasks
                     </h3>
-                    <p className="text-xs text-slate-600">
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
                       {isTasksExpanded ? "Capture action items so nothing falls through." : "Click to expand"}
                     </p>
                   </div>
@@ -1987,8 +1987,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                 <>
                   <div className="mt-3 space-y-2">
                 {isLoadingTasks ? (
-                  <div className="flex items-center gap-2 text-xs text-slate-600">
-                    <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
+                  <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                    <Loader2 className="h-3 w-3 animate-spin text-blue-600 dark:text-blue-300" />
                     Fetching tasks…
                   </div>
                 ) : hasTasks ? (
@@ -2007,7 +2007,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     return (
                       <div
                         key={task.id}
-                        className="flex items-start gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm"
+                        className="flex items-start gap-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white px-3 py-2 shadow-sm"
                       >
                         <Checkbox
                           id={`anya-task-${task.id}`}
@@ -2027,10 +2027,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                           >
                             {task.title}
                           </span>
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                             {dueLabel ? <span>{dueLabel}</span> : null}
                             {task.priority && task.priority !== "normal" ? (
-                              <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 font-medium uppercase tracking-wide text-[11px] text-slate-600">
+                              <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 font-medium uppercase tracking-wide text-[11px] text-slate-600 dark:text-slate-400">
                                 {task.priority}
                               </span>
                             ) : null}
@@ -2040,7 +2040,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     )
                   })
                 ) : (
-                  <p className="text-xs text-slate-600">
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
                     No tasks yet. Log a follow-up below to keep momentum.
                   </p>
                 )}
@@ -2048,7 +2048,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   <form onSubmit={handleTaskSubmit} className="mt-3 space-y-3">
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
                   <div className="space-y-1">
-                    <Label htmlFor="anya-task-title" className="text-xs text-slate-600">
+                    <Label htmlFor="anya-task-title" className="text-xs text-slate-600 dark:text-slate-400">
                       Task title
                     </Label>
                     <Input
@@ -2062,7 +2062,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="anya-task-due" className="text-xs text-slate-600">
+                    <Label htmlFor="anya-task-due" className="text-xs text-slate-600 dark:text-slate-400">
                       Due date (optional)
                     </Label>
                     <Input
@@ -2118,8 +2118,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
               <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
             </div>
             <div className="space-y-2">
-              <p className="text-base font-semibold text-slate-800" style={chatAppearance ? { color: chatAppearance.bodyText } : undefined}>Hi! I'm Anya, your GrantFlow guide.</p>
-              <p className="text-sm text-slate-500 max-w-xs mx-auto" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
+              <p className="text-base font-semibold text-slate-800 dark:text-slate-100" style={chatAppearance ? { color: chatAppearance.bodyText } : undefined}>Hi! I'm Anya, your GrantFlow guide.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400 max-w-xs mx-auto" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
                 I can help you find grants that match your profile, explain what you're seeing, walk you through your pipeline, and answer questions about the application process.
               </p>
             </div>
@@ -2169,7 +2169,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                         })
                     }, 0)
                   }}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:border-purple-300 hover:bg-purple-50 hover:text-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="rounded-full border border-slate-200 dark:border-slate-700 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 shadow-sm hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-700 dark:hover:text-purple-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {suggestion}
                 </button>
@@ -2180,12 +2180,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           <div className="flex flex-col gap-3">
             {/* Profile completeness nudge — shown once per session */}
             {nudgeMessage ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-sm text-slate-800 shadow-sm">
-                <div className="flex items-center justify-between gap-2 pb-1 text-xs text-slate-600">
+              <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/40 px-3 py-2 text-sm text-slate-800 dark:text-slate-100 shadow-sm">
+                <div className="flex items-center justify-between gap-2 pb-1 text-xs text-slate-600 dark:text-slate-400">
                   <Badge variant="secondary" className="text-[11px] uppercase tracking-wide">Anya</Badge>
                   <button
                     type="button"
-                    className="text-slate-400 hover:text-slate-600 text-xs"
+                    className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-400 text-xs"
                     onClick={() => setNudgeMessage(null)}
                     aria-label="Dismiss"
                   >
@@ -2202,16 +2202,16 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
               <MessageBubble key={message.id} message={message} appearance={chatAppearance} />
             ))}
             {isSending && !awaitingRunId ? (
-              <div className="flex items-center gap-2 text-xs text-slate-600">
-                <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
+              <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                <Loader2 className="h-3 w-3 animate-spin text-blue-600 dark:text-blue-300" />
                 Working…
               </div>
             ) : null}
             {awaitingRunId ? (
-              <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2 text-xs text-blue-800">
+              <div className="space-y-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/40 px-3 py-2 text-xs text-blue-800 dark:text-blue-200">
                 <div className="flex items-center justify-between gap-2">
                   <span className="flex items-center gap-2">
-                    <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
+                    <Loader2 className="h-3 w-3 animate-spin text-blue-600 dark:text-blue-300" />
                     {isStopping
                       ? "Stopping — Anya halts before her next step…"
                       : "Anya is working on this. Watch her steps below, keep using GrantFlow, or stop her any time."}
@@ -2220,26 +2220,26 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     type="button"
                     onClick={handleStopRun}
                     disabled={isStopping}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 dark:border-red-800 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 dark:text-red-400 transition hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-60"
                     title="Stop Anya (Esc)"
                   >
                     <Square className="h-3 w-3" /> Stop (Esc)
                   </button>
                 </div>
                 {runProgress.length > 0 ? (
-                  <ul className="space-y-1 border-t border-blue-200/70 pt-2">
+                  <ul className="space-y-1 border-t border-blue-200/70 dark:border-blue-800/60 pt-2">
                     {runProgress.map((step, idx) => (
                       <li key={idx} className="flex items-center gap-1.5">
                         {step.status === "done" ? (
-                          <span className="text-emerald-600">✓</span>
+                          <span className="text-emerald-600 dark:text-emerald-400">✓</span>
                         ) : step.status === "error" ? (
-                          <span className="text-red-600">✗</span>
+                          <span className="text-red-600 dark:text-red-400">✗</span>
                         ) : step.status === "cancelled" ? (
-                          <span className="text-slate-500">⏹</span>
+                          <span className="text-slate-500 dark:text-slate-400">⏹</span>
                         ) : (
-                          <Loader2 className="h-2.5 w-2.5 animate-spin text-blue-500" />
+                          <Loader2 className="h-2.5 w-2.5 animate-spin text-blue-500 dark:text-blue-300" />
                         )}
-                        <span className={step.status === "error" ? "text-red-700" : undefined}>{step.label}</span>
+                        <span className={step.status === "error" ? "text-red-700 dark:text-red-400" : undefined}>{step.label}</span>
                       </li>
                     ))}
                   </ul>
@@ -2251,7 +2251,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
       </ScrollArea>
 
       <form
-        className="border-t border-slate-200 bg-slate-50/80 px-4 py-3"
+        className="border-t border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-900/40 px-4 py-3"
         style={chatAppearance ? { background: chatAppearance.composerBg, borderColor: chatAppearance.border } : undefined}
         onSubmit={(event) => {
           event.preventDefault()
@@ -2269,11 +2269,11 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           }}
           placeholder="Ask Anya for help…"
           rows={3}
-          className="resize-none text-sm bg-white border-slate-200 text-slate-900 placeholder:text-slate-500 focus-visible:ring-slate-400"
+          className="resize-none text-sm bg-white border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:text-slate-400 focus-visible:ring-slate-400"
           disabled={isDisabled}
         />
         <div className="mt-3 flex items-center justify-between">
-          <span className="text-xs text-slate-600" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
+          <span className="text-xs text-slate-600 dark:text-slate-400" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
             Anya keeps all actions scoped to this profile.
           </span>
           <Button
@@ -2328,7 +2328,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                 }
                 placeholder="backend/routes"
               />
-              <p className="text-xs text-slate-600">
+              <p className="text-xs text-slate-600 dark:text-slate-400">
                 Path should be relative to the repository root and within backend/, src/, or scripts/.
               </p>
             </div>
@@ -2360,7 +2360,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Shield className="h-5 w-5 text-purple-600" />
+              <Shield className="h-5 w-5 text-purple-600 dark:text-purple-300" />
               Admin Tools
             </DialogTitle>
             <DialogDescription>
@@ -2372,21 +2372,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.diagnostics && adminTools.diagnostics.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-purple-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">System Diagnostics</h3>
+                  <Activity className="h-4 w-4 text-purple-700 dark:text-purple-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">System Diagnostics</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.diagnostics.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2394,7 +2394,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                       <Button
                         size="sm"
                         variant="outline"
-                        className="shrink-0 gap-1.5 border-purple-300 text-purple-700 hover:bg-purple-50"
+                        className="shrink-0 gap-1.5 border-purple-300 dark:border-purple-700 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40"
                         disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
@@ -2414,21 +2414,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.health && adminTools.health.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-slate-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">Health & Monitoring</h3>
+                  <Activity className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">Health & Monitoring</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.health.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2456,21 +2456,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.crawler && adminTools.crawler.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-slate-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">Crawler Management</h3>
+                  <Activity className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">Crawler Management</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.crawler.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2498,21 +2498,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.autonomous && adminTools.autonomous.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-slate-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">Autonomous Operations</h3>
+                  <Sparkles className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">Autonomous Operations</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.autonomous.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2540,21 +2540,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.code && adminTools.code.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Code className="h-4 w-4 text-slate-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">Code Analysis</h3>
+                  <Code className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">Code Analysis</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.code.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2582,21 +2582,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.database && adminTools.database.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Database className="h-4 w-4 text-slate-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">Database & Queries</h3>
+                  <Database className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">Database & Queries</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.database.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2624,21 +2624,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.functions && adminTools.functions.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Wrench className="h-4 w-4 text-slate-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">Function Testing</h3>
+                  <Wrench className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">Function Testing</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.functions.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2666,21 +2666,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.brain && adminTools.brain.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-slate-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">Brain Management</h3>
+                  <Sparkles className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">Brain Management</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.brain.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2708,21 +2708,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
             {adminTools.other && adminTools.other.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Wrench className="h-4 w-4 text-slate-700" />
-                  <h3 className="font-semibold text-sm text-slate-900">Other Tools</h3>
+                  <Wrench className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">Other Tools</h3>
                 </div>
                 <div className="grid gap-2">
                   {adminTools.other.map((tool) => (
                     <div
                       key={tool.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      className="flex items-center justify-between rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-sm"
                     >
                       <div className="flex-1 min-w-0 mr-3">
-                        <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
-                        <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        <div className="font-mono text-xs text-purple-700 dark:text-purple-300 font-medium">{tool.name}</div>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 mt-1">{tool.description}</div>
                         {renderAdminToolFields(tool)}
                         {missingRequiredFields(tool).length > 0 ? (
-                          <div className="mt-2 text-xs font-medium text-amber-700">
+                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                             Missing required parameter: {missingRequiredFields(tool).join(", ")}
                           </div>
                         ) : null}
@@ -2749,7 +2749,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           </div>
 
           <DialogFooter>
-            <p className="text-xs text-slate-600 text-left flex-1">
+            <p className="text-xs text-slate-600 dark:text-slate-400 text-left flex-1">
               You can also ask Anya to use any tool by referencing its name in your message.
             </p>
             <Button variant="outline" onClick={() => setIsAdminToolsOpen(false)}>
