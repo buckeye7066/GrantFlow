@@ -1836,6 +1836,55 @@ export async function enforceStaleMissingFieldResolution(db) {
   })
 }
 
+/**
+ * INVARIANT: A SYSTEM-SIDE TASK STOP THAT NO LONGER REPRODUCES IS CLEARED,
+ * AND A TASK WHOSE FUNDING SOURCE WAS PURGED IS CLOSED (the Robert White
+ * 41-stop class, owner report 2026-07-27).
+ *
+ * Preflight files 'crawler_profile_rules' / 'application_url' hard stops as
+ * missing-info rows, but nothing ever re-ran the check — the blocked-task
+ * self-heal above deliberately skips non-profile-field items. So a stop was
+ * permanent by construction (a later crawl endorsing the pair, or URL-rescue
+ * finding the portal page, changed nothing), and 18 tasks whose grant row
+ * had been PURGED sat blocked forever as unfulfillable zombies.
+ *
+ * Re-check runs the SAME code that wrote each stop (assessHamiltonFundingSource
+ * / the usable-URL bar) with three honest outcomes: passes → resolve + resume;
+ * source gone entirely → cancel the task; still failing → leave it visible.
+ *
+ * OVERRIDE: ENFORCE_HAMILTON_STOP_RECHECK=0 for count-only; bound
+ * HAMILTON_STOP_RECHECK_LIMIT (default 200 tasks per boot).
+ */
+export async function enforceHamiltonStopRecheck(db) {
+  return runInvariant('hamilton_stop_recheck', async () => {
+    try {
+      await db.prepare('SELECT task_id FROM application_missing_info LIMIT 1').get()
+    } catch {
+      return { repaired: 0, skipped: 'schema' }
+    }
+    const enforce = process.env.ENFORCE_HAMILTON_STOP_RECHECK !== '0'
+    const limRaw = Number.parseInt(process.env.HAMILTON_STOP_RECHECK_LIMIT || '', 10)
+    const limit = Number.isFinite(limRaw) && limRaw > 0 ? limRaw : 200
+
+    let recheckHamiltonPolicyStops
+    try {
+      ;({ recheckHamiltonPolicyStops } = await import('../services/hamilton/hamiltonStopRecheck.js'))
+    } catch {
+      return { repaired: 0, skipped: 'store_unavailable' }
+    }
+    const r = await recheckHamiltonPolicyStops(db, { limit, enforce })
+    return {
+      repaired: r.itemsResolved + r.tasksCancelled,
+      itemsResolved: r.itemsResolved,
+      tasksResumed: r.tasksResumed,
+      tasksCancelled: r.tasksCancelled,
+      leftHonest: r.leftHonest,
+      scannedTasks: r.scannedTasks,
+      enforced: enforce,
+    }
+  })
+}
+
 export async function enforceHamiltonTaskSelfHeal(db) {
   return runInvariant('hamilton_task_self_heal', async () => {
     // application_tasks may not exist on a minimal/test DB — degrade silently.
@@ -5516,6 +5565,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // AFTER the task self-heal so a just-requeued task's remaining flags are
   // reconciled in the same boot (and a fully-answered one can resume).
   steps.push(await enforceStaleMissingFieldResolution(db))
+  // System-side stops (crawler policy / portal URL) re-checked with the same
+  // code that wrote them; zombie tasks for purged sources are closed.
+  steps.push(await enforceHamiltonStopRecheck(db))
   // URL-hygiene net: a search-engine RESULTS url is never a portal/application
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
@@ -5654,6 +5706,7 @@ export const __testables = {
   STUDENT_AID_DEMOTE_SCORE,
   enforceHamiltonTaskSelfHeal,
   enforceStaleMissingFieldResolution,
+  enforceHamiltonStopRecheck,
   resolveSelfHealRequeueCap,
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
   enforceAdminReinterviewSuppression,

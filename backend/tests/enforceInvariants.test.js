@@ -1072,7 +1072,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    expect(summary.ran).toBe(33)
+    expect(summary.ran).toBe(34)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1105,6 +1105,9 @@ describe('enforceInvariants — runner', () => {
       // AFTER self-heal: a just-requeued task's remaining flags reconcile the
       // same boot (the Anastasia stale first-name class).
       'stale_missing_field_resolution',
+      // System-side stops re-checked with the producer's own code; zombie
+      // tasks for purged sources closed (the Robert White 41-stop class).
+      'hamilton_stop_recheck',
       'no_search_engine_application_targets',
       'live_crawl_verified_at_honesty',
       'application_url_rescue',
@@ -1715,6 +1718,156 @@ describe('enforceStaleMissingFieldResolution', () => {
     const res = await __testables.enforceStaleMissingFieldResolution(db)
     expect(res.repaired).toBe(0)
     expect(await unresolvedKeys(db, t.id)).toEqual(['first_name'])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: a system-side task stop that no longer reproduces is cleared, and
+// a task whose funding source was purged is closed (the Robert White 41-stop
+// class, 2026-07-27): 'crawler_profile_rules' / 'application_url' stops were
+// permanent by construction — nothing re-ran the check, and the blocked-task
+// self-heal deliberately skips non-profile-field items.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforceHamiltonStopRecheck', () => {
+  let taskStore
+
+  async function makeDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+      CREATE TABLE grants (
+        id TEXT PRIMARY KEY, profile_id TEXT, funding_opportunity_id TEXT,
+        title TEXT, application_url TEXT, url TEXT, record_origin TEXT
+      );
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT,
+        application_url TEXT, source_url TEXT, deadline TEXT, deadline_type TEXT,
+        record_origin TEXT, is_national INTEGER DEFAULT 1, profile_id TEXT
+      );
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        profile_id TEXT, opportunity_id TEXT, match_score REAL,
+        match_decision TEXT, match_explanation TEXT, matcher_version TEXT,
+        updated_at DATETIME, computed_at DATETIME
+      );
+    `)
+    taskStore = await import('../services/hamilton/applicationTaskStore.js')
+    taskStore._resetSchemaCache()
+    await taskStore.ensureApplicationTaskSchema(raw)
+    raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-rob', 'Robert Michael White')
+    return raw
+  }
+
+  const TSAA_OPP = {
+    id: 'opp-tsaa',
+    title: 'Tennessee Student Assistance Award (TSAA)',
+    sponsor: 'TSAC',
+    application_url: 'https://www.tn.gov/collegepays/tsaa.html',
+    source_url: 'https://www.tn.gov/collegepays/tsaa.html',
+    deadline_type: 'rolling',
+    record_origin: 'live_crawl',
+  }
+
+  function insertOpp(db, opp = {}) {
+    const o = { ...TSAA_OPP, ...opp }
+    db.prepare(
+      'INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url, deadline_type, record_origin) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(o.id, o.title, o.sponsor, o.application_url, o.source_url, o.deadline_type, o.record_origin)
+    return o
+  }
+
+  async function makeStoppedTask(db, {
+    oppId = null, grantId = null, key = 'crawler_profile_rules',
+    label = 'Funding source does not meet GrantFlow rules',
+  } = {}) {
+    const task = await taskStore.ensureApplicationTask(db, {
+      profileId: 'p-rob', grantId, opportunityId: oppId, automationType: 'portal', initialStatus: 'queued',
+    })
+    await taskStore.updateApplicationTask(db, task.id, { status: 'blocked' })
+    await taskStore.setMissingInfo(db, task.id, [{ kind: 'other', key, label }])
+    return task
+  }
+
+  const unresolved = async (db, taskId) =>
+    (await taskStore.listMissingInfo(db, taskId, { includeResolved: false })).map((m) => m.key)
+
+  beforeEach(() => { delete process.env.ENFORCE_HAMILTON_STOP_RECHECK })
+  afterEach(() => { delete process.env.ENFORCE_HAMILTON_STOP_RECHECK })
+
+  it('clears a policy stop once the engine endorses the pair, and resumes the task', async () => {
+    const db = await makeDb()
+    insertOpp(db)
+    db.prepare(
+      "INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES ('p-rob', 'opp-tsaa', 14, 'accept', 'crawler-os')",
+    ).run()
+    const task = await makeStoppedTask(db, { oppId: 'opp-tsaa' })
+
+    const res = await __testables.enforceHamiltonStopRecheck(db)
+    expect(res.ok).toBe(true)
+    expect(res.itemsResolved).toBe(1)
+    expect(await unresolved(db, task.id)).toEqual([])
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('ready')
+  })
+
+  it('cancels a zombie task whose grant AND catalog row are both gone', async () => {
+    const db = await makeDb()
+    const task = await makeStoppedTask(db, { grantId: 'g-purged-long-ago' })
+
+    const res = await __testables.enforceHamiltonStopRecheck(db)
+    expect(res.tasksCancelled).toBe(1)
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('cancelled')
+  })
+
+  it('leaves an honest stop untouched (no match row yet — may clear on a future crawl)', async () => {
+    const db = await makeDb()
+    insertOpp(db)
+    const task = await makeStoppedTask(db, { oppId: 'opp-tsaa' })
+
+    const res = await __testables.enforceHamiltonStopRecheck(db)
+    expect(res.itemsResolved).toBe(0)
+    expect(res.tasksCancelled).toBe(0)
+    expect(await unresolved(db, task.id)).toEqual(['crawler_profile_rules'])
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
+  })
+
+  it('resolves a portal-URL stop when the catalog row now has a real URL, and stamps it on the task', async () => {
+    const db = await makeDb()
+    insertOpp(db)
+    const task = await makeStoppedTask(db, {
+      oppId: 'opp-tsaa', key: 'application_url', label: 'Portal URL is missing',
+    })
+
+    const res = await __testables.enforceHamiltonStopRecheck(db)
+    expect(res.itemsResolved).toBe(1)
+    const after = await taskStore.getApplicationTask(db, task.id)
+    expect(after.application_url).toBe(TSAA_OPP.application_url)
+    expect(after.status).toBe('ready')
+  })
+
+  it('never accepts a search-results page as the portal URL', async () => {
+    const db = await makeDb()
+    insertOpp(db, {
+      application_url: 'https://www.google.com/search?q=tsaa',
+      source_url: 'https://www.google.com/search?q=tsaa',
+    })
+    const task = await makeStoppedTask(db, {
+      oppId: 'opp-tsaa', key: 'application_url', label: 'Portal URL is missing',
+    })
+
+    const res = await __testables.enforceHamiltonStopRecheck(db)
+    expect(res.itemsResolved).toBe(0)
+    expect(await unresolved(db, task.id)).toEqual(['application_url'])
+  })
+
+  it('ENFORCE_HAMILTON_STOP_RECHECK=0 counts but never writes', async () => {
+    const db = await makeDb()
+    process.env.ENFORCE_HAMILTON_STOP_RECHECK = '0'
+    const task = await makeStoppedTask(db, { grantId: 'g-purged-long-ago' })
+
+    const res = await __testables.enforceHamiltonStopRecheck(db)
+    expect(res.repaired).toBe(0)
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
   })
 })
 
