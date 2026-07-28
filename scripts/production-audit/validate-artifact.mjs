@@ -398,8 +398,12 @@ function selfTest() {
     'storage state blob': {
       'application-findings.json': '{"storageState":"eyJjb29raWVzIjpbeyJuYW1lIjoic2Vzc2lvbiJ9XX0abcdef"}',
     },
-    'bearer token': { 'report.md': '# report\n\nAuthorization: Bearer sk-live-9f8a7b6c5d4e3f2a1b0c\n' },
-    'private key': { 'report.md': '# r\n\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n' },
+    // Both literals are INVENTED, and both must stay literal: the point of the
+    // self-test is that a planted secret is REJECTED, so a fixture assembled at
+    // runtime to slip past scan-secrets would weaken the repo's scanner without
+    // strengthening this one. `scan:allow` is the sanctioned annotation.
+    'bearer token': { 'report.md': '# report\n\nAuthorization: Bearer sk-live-9f8a7b6c5d4e3f2a1b0c\n' }, // scan:allow — synthetic test fixture
+    'private key': { 'report.md': '# r\n\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n' }, // scan:allow — synthetic test fixture
     'disallowed file': { '.env.local': 'GRANTFLOW_AUDIT_PASSWORD=abc123456789' },
     'fake png': { 'screenshots/evil.png': 'this is not a png, it is text with password: Sup3rS3cret123' },
   };

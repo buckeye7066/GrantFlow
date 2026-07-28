@@ -281,9 +281,15 @@ const FIXTURES = [
     mustDetect: true,
   },
   {
+    // The two literals below are INVENTED fixtures, not credentials. They exist
+    // so the self-test can prove the redactor strips a bearer token and the
+    // detector flags one. `scan:allow` is the repo's sanctioned annotation for
+    // exactly this case — the alternative, splicing the string together to slip
+    // past scan-secrets, would be dodging a guardrail rather than answering it,
+    // and would leave the next real leak just as unscanned.
     name: 'bearer token',
-    input: 'Authorization: Bearer sk-live-9f8a7b6c5d4e3f2a1b0c',
-    mustNotContain: ['sk-live-9f8a7b6c5d4e3f2a1b0c'],
+    input: 'Authorization: Bearer sk-live-9f8a7b6c5d4e3f2a1b0c', // scan:allow — synthetic test fixture
+    mustNotContain: ['sk-live-9f8a7b6c5d4e3f2a1b0c'], // scan:allow — synthetic test fixture
     mustDetect: true,
   },
   {
