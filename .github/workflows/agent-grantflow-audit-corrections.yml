@@ -1,11 +1,12 @@
 name: Apply remaining GrantFlow audit corrections
 
-# This second branch push deliberately triggers the one-shot workflow after the
-# workflow file already exists on the branch.
 on:
   push:
     branches:
       - agent/grantflow-audit-corrections-20260728
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -16,6 +17,7 @@ concurrency:
 
 jobs:
   apply-and-verify:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
