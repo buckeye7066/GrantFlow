@@ -1855,7 +1855,7 @@ export async function enforceStaleMissingFieldResolution(db) {
  * OVERRIDE: ENFORCE_HAMILTON_STOP_RECHECK=0 for count-only; bound
  * HAMILTON_STOP_RECHECK_LIMIT (default 200 tasks per boot).
  */
-export async function enforceHamiltonStopRecheck(db) {
+export async function enforceHamiltonStopRecheck(db, deps = {}) {
   return runInvariant('hamilton_stop_recheck', async () => {
     try {
       await db.prepare('SELECT task_id FROM application_missing_info LIMIT 1').get()
@@ -1872,13 +1872,14 @@ export async function enforceHamiltonStopRecheck(db) {
     } catch {
       return { repaired: 0, skipped: 'store_unavailable' }
     }
-    const r = await recheckHamiltonPolicyStops(db, { limit, enforce })
+    const r = await recheckHamiltonPolicyStops(db, { limit, enforce, verifyLink: deps.verifyLink ?? null })
     return {
       repaired: r.itemsResolved + r.tasksCancelled,
       itemsResolved: r.itemsResolved,
       tasksResumed: r.tasksResumed,
       tasksCancelled: r.tasksCancelled,
       leftHonest: r.leftHonest,
+      linksReverified: r.linksReverified,
       scannedTasks: r.scannedTasks,
       enforced: enforce,
     }

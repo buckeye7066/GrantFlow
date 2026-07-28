@@ -1743,7 +1743,8 @@ describe('enforceHamiltonStopRecheck', () => {
       CREATE TABLE funding_opportunities (
         id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT,
         application_url TEXT, source_url TEXT, deadline TEXT, deadline_type TEXT,
-        record_origin TEXT, is_national INTEGER DEFAULT 1, profile_id TEXT
+        record_origin TEXT, is_national INTEGER DEFAULT 1, profile_id TEXT,
+        link_status TEXT, last_verified_at TEXT
       );
       CREATE TABLE profile_opportunity_matches (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -1880,6 +1881,59 @@ describe('enforceHamiltonStopRecheck', () => {
     const res = await __testables.enforceHamiltonStopRecheck(db)
     expect(res.itemsResolved).toBe(0)
     expect(await unresolved(db, task.id)).toEqual(['application_url'])
+  })
+
+  it('re-probes a stale broken-link mark blocking a task and clears the stop when the URL is alive', async () => {
+    // Insert-time HEAD probe failed once → link_status='broken' WITH
+    // last_verified_at set → the recurring verifier won't revisit for its
+    // window, and trust blocks every task on the row the whole time (the
+    // MTSU off-campus-housing-portal chain).
+    const db = await makeDb()
+    insertOpp(db)
+    db.prepare("UPDATE funding_opportunities SET link_status = 'broken', last_verified_at = '2026-07-26T00:00:00Z' WHERE id = 'opp-tsaa'").run()
+    db.prepare(
+      "INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES ('p-rob', 'opp-tsaa', 14, 'accept', 'crawler-os')",
+    ).run()
+    const task = await makeStoppedTask(db, { oppId: 'opp-tsaa' })
+
+    // Canonical-shaped stub: persists the verdict like verifyOpportunityLinkNow.
+    const verifyLink = async (dbi, opp) => {
+      await dbi.prepare("UPDATE funding_opportunities SET link_status = 'ok' WHERE id = ?").run(opp.id)
+      return { status: 'ok', code: 200, updated: true }
+    }
+    const res = await __testables.enforceHamiltonStopRecheck(db, { verifyLink })
+    expect(res.linksReverified).toBe(1)
+    expect(res.itemsResolved).toBe(1)
+    expect(await unresolved(db, task.id)).toEqual([])
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('ready')
+  })
+
+  it('a link that is REALLY dead keeps the stop (probe persists the broken verdict, nothing resolves)', async () => {
+    const db = await makeDb()
+    insertOpp(db)
+    db.prepare("UPDATE funding_opportunities SET link_status = 'broken' WHERE id = 'opp-tsaa'").run()
+    const task = await makeStoppedTask(db, { oppId: 'opp-tsaa' })
+
+    const verifyLink = async () => ({ status: 'broken', code: 404, updated: true })
+    const res = await __testables.enforceHamiltonStopRecheck(db, { verifyLink })
+    expect(res.linksReverified).toBe(1)
+    expect(res.itemsResolved).toBe(0)
+    expect(await unresolved(db, task.id)).toEqual(['crawler_profile_rules'])
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
+  })
+
+  it('count-only mode never probes links (no verification writes)', async () => {
+    const db = await makeDb()
+    process.env.ENFORCE_HAMILTON_STOP_RECHECK = '0'
+    insertOpp(db)
+    db.prepare("UPDATE funding_opportunities SET link_status = 'broken' WHERE id = 'opp-tsaa'").run()
+    await makeStoppedTask(db, { oppId: 'opp-tsaa' })
+
+    let probed = 0
+    const verifyLink = async () => { probed += 1; return { status: 'ok', code: 200, updated: true } }
+    const res = await __testables.enforceHamiltonStopRecheck(db, { verifyLink })
+    expect(probed).toBe(0)
+    expect(res.linksReverified).toBe(0)
   })
 
   it('ENFORCE_HAMILTON_STOP_RECHECK=0 counts but never writes', async () => {

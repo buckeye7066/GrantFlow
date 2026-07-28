@@ -64,12 +64,33 @@ async function loadRow(db, table, id) {
   }
 }
 
+// Trust reasons that mean "the ONLY problem is a link marked broken" — the
+// class where re-probing the URL right now can clear the whole stop. An
+// insert-time HEAD probe that failed once (bot-block/timeout) stamps
+// link_status='broken' WITH last_verified_at, so the recurring verifier will
+// not revisit for its re-verify window while every task on the row stays
+// blocked (the MTSU off-campus-housing-portal chain, 2026-07-27).
+const LINK_ONLY_TRUST_REASONS = new Set([
+  'link_marked_broken', 'hidden_broken_direct_link', 'link_unverified',
+])
+
+function blockedOnlyByLink(assessment) {
+  const reasons = Array.isArray(assessment?.reasons) ? assessment.reasons : []
+  return (
+    assessment?.code === 'funding_source_disallowed' &&
+    reasons.length > 0 &&
+    reasons.every((r) => LINK_ONLY_TRUST_REASONS.has(String(r)))
+  )
+}
+
 /**
  * Re-check unresolved system stops on live tasks.
- * @returns {Promise<{scannedTasks:number, itemsResolved:number, tasksResumed:number, tasksCancelled:number, leftHonest:number}>}
+ * @param {object} deps.verifyLink — test seam; defaults to the canonical
+ *   verifyOpportunityLinkNow (same prober + write path as the recurring sweep).
+ * @returns {Promise<{scannedTasks:number, itemsResolved:number, tasksResumed:number, tasksCancelled:number, leftHonest:number, linksReverified:number}>}
  */
-export async function recheckHamiltonPolicyStops(db, { limit = 200, enforce = true } = {}) {
-  const out = { scannedTasks: 0, itemsResolved: 0, tasksResumed: 0, tasksCancelled: 0, leftHonest: 0 }
+export async function recheckHamiltonPolicyStops(db, { limit = 200, enforce = true, verifyLink = null } = {}) {
+  const out = { scannedTasks: 0, itemsResolved: 0, tasksResumed: 0, tasksCancelled: 0, leftHonest: 0, linksReverified: 0 }
   if (!db || typeof db.prepare !== 'function') return out
   await ensureApplicationTaskSchema(db)
 
@@ -130,9 +151,28 @@ export async function recheckHamiltonPolicyStops(db, { limit = 200, enforce = tr
       }
 
       // crawler_profile_rules — re-run the SAME policy that wrote the stop.
-      const assessment = await assessHamiltonFundingSource(db, {
+      let assessment = await assessHamiltonFundingSource(db, {
         profileId: task.profile_id, opportunity, grant,
       })
+      // Blocked ONLY by a broken-link mark? Probe the URL right now (the mark
+      // may be an insert-time transient the recurring verifier won't revisit
+      // for weeks) and re-assess on a fresh row. Enforce-gated: count-only
+      // runs must not write verification columns either.
+      if (!assessment.ok && enforce && opportunity && blockedOnlyByLink(assessment)) {
+        try {
+          const doVerify = verifyLink ?? (await import('../linkVerificationService.js')).verifyOpportunityLinkNow
+          const probe = await doVerify(db, opportunity, { verifiedBy: 'hamilton-stop-recheck' })
+          if (probe?.updated) {
+            out.linksReverified += 1
+            const fresh = await loadRow(db, 'funding_opportunities', opportunity.id)
+            if (fresh) {
+              assessment = await assessHamiltonFundingSource(db, {
+                profileId: task.profile_id, opportunity: fresh, grant,
+              })
+            }
+          }
+        } catch { /* probe is best-effort; the honest stop stays */ }
+      }
       if (assessment.ok) {
         if (!enforce) continue
         const ok = await resolveMissingInfoItem(db, taskId, {

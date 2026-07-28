@@ -167,6 +167,68 @@ export async function checkUrl(url, opts = {}) {
 }
 
 /**
+ * Verify ONE opportunity's link RIGHT NOW and persist the verdict through the
+ * same columns + audit event the recurring sweep writes (one write path, no
+ * drift). For rows whose stale 'broken' mark is actively BLOCKING something —
+ * the Hamilton stop-recheck class (2026-07-27): an insert-time HEAD probe
+ * failed once (bot-block/timeout), stamped link_status='broken' WITH
+ * last_verified_at set, so the recurring sweep won't revisit for the
+ * re-verify window while trust blocks every task on the row the whole time.
+ *
+ * @returns {Promise<{status:string, code:number|null, updated:boolean}>}
+ */
+export async function verifyOpportunityLinkNow(db, oppRow, { verifiedBy = 'stop-recheck' } = {}) {
+  const url = oppRow?.application_url || oppRow?.source_url || null
+  if (!db || !oppRow?.id || !url) return { status: 'skipped', code: null, updated: false }
+
+  const startMs = Date.now()
+  const result = await checkUrl(url)
+  if (result.status === 'skipped') return { status: 'skipped', code: null, updated: false }
+
+  try {
+    await db.prepare(`
+      UPDATE funding_opportunities
+      SET last_verified_at = ?,
+          link_status = ?,
+          link_status_code = ?,
+          verification_method = ?,
+          verified_by = ?,
+          verification_error = ?,
+          final_url = COALESCE(?, final_url),
+          http_status = COALESCE(?, http_status)
+      WHERE id = ?
+    `).run(
+      new Date().toISOString(),
+      result.status,
+      result.code,
+      result.method,
+      verifiedBy,
+      result.error,
+      result.finalUrl ?? null,
+      typeof result.code === 'number' ? result.code : null,
+      String(oppRow.id),
+    )
+  } catch {
+    return { status: result.status, code: result.code, updated: false }
+  }
+
+  try {
+    await recordVerificationEvent(db, {
+      opportunity_id: oppRow.id,
+      url,
+      link_status: result.status,
+      link_status_code: result.code,
+      verification_method: result.method,
+      verified_by: verifiedBy,
+      verification_error: result.error,
+      duration_ms: Date.now() - startMs,
+    })
+  } catch { /* audit is best-effort, same as the sweep */ }
+
+  return { status: result.status, code: result.code, updated: true }
+}
+
+/**
  * Verify a batch of opportunities that have not been checked recently or have
  * never been verified at all.
  *
