@@ -498,6 +498,24 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     return skippedDiscoveryResult(profileId, `profile_${profileStatus || 'deleted'}`);
   }
   const thesis = buildThesis(profileContextToThesisInput(ctx));
+  // FULL-CONTEXT scoring for the PRIMARY profile (2026-07-27, the "9 of the
+  // profile's 6 data points — 83%" class): the pipeline used to score every
+  // profile against its THESIS STUB (~6 data points: the needs list), so any
+  // broad registry directory trivially "covered" 50–100% of EVERY profile and
+  // identical junk lists topped Anita's and Anastasia's matches. The engine's
+  // calibrated bands assume real 50–150-point inventories, which live in the
+  // profile context this function already loaded — attach it so the pipeline
+  // scores the discovering profile against everything it actually knows.
+  // Non-enumerable: the thesis is persisted/logged as JSON and the context is
+  // heavy run-scoped scoring input, not thesis content. Cross-match theses
+  // (buildThesisForProfile) deliberately carry no context and fall under the
+  // engine's MIN_CALIBRATED_INVENTORY topical cap — additive candidates only,
+  // and the promotion lane canonically rescores before anything reaches a
+  // pipeline.
+  Object.defineProperty(thesis, '_profileContext', {
+    value: { profile: ctx?.profile ?? null, sections: ctx?.sections ?? null, signals: ctx?.signals ?? null },
+    enumerable: false,
+  });
   // Close the learning loop ON THE CRAWL PATH. The learned-gap attach used to
   // live only in buildThesisForProfile — whose callers (Robert's cross-profile
   // matchProfiles, invariants, audits) use the thesis for MATCHING, not query

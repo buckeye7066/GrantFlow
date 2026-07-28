@@ -72,6 +72,21 @@ export const SCORE_SCALE_ID = 'data_point_v1'
 export const DATA_POINT_MIN_TERM_LENGTH = 3
 
 /**
+ * Minimum inventory size for a CALIBRATED coverage claim (2026-07-27, the
+ * "9 of the profile's 6 data points — 83%" class). The bands above are
+ * empirically calibrated against REAL profiles carrying 50–150 data points;
+ * the crawler-os lane scored against thesis STUB profiles carrying ~6 (needs
+ * list only), so any topically broad directory trivially "covered" 50–100%
+ * of every profile — Anita (KY, individual) and Anastasia (TN, student) got
+ * the SAME registry-directory-dominated list, labeled "Excellent Match".
+ * An inventory below this floor cannot support a percentage claim on the
+ * calibrated scale: the engine falls back to the bounded topical path
+ * (NO_NEEDS_TOPICAL_CAP), exactly like a bare profile. Real profiles clear
+ * this floor by an order of magnitude; only stub/thin-context callers hit it.
+ */
+export const MIN_CALIBRATED_INVENTORY = 15
+
+/**
  * Number of "main needs" the coverage denominator counts, so a profile that
  * lists 10 needs is not punished: coverage is measured against
  * min(totalNeeds, NEED_DENOMINATOR_CAP). One fully-matched main need on a

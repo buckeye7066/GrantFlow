@@ -23,6 +23,11 @@ import { AUTO_ADD_SCORE } from '../config/matchThresholds.js'
 
 const CORE = ['education', 'housing', 'healthcare', 'employment']
 const EXTRA = ['transportation', 'childcare', 'food_assistance', 'legal_aid', 'mental_health', 'dental', 'utilities', 'clothing', 'internet']
+// Ballast needs the opportunity text never mentions: dilution semantics apply
+// to CALIBRATABLE inventories (>= MIN_CALIBRATED_INVENTORY, 2026-07-27) —
+// below the floor a fixed denominator deliberately mutes dilution, so both
+// fixtures must clear it for the comparison to be meaningful.
+const BALLAST = ['agriculture', 'maritime', 'aviation', 'forestry', 'archaeology', 'astronomy', 'robotics', 'ceramics', 'geology', 'meteorology', 'linguistics', 'philately']
 
 function ctx(needs) {
   return {
@@ -53,8 +58,8 @@ const broadOpp = {
 
 describe('data-point denominator semantics', () => {
   it('a richer profile scores the same partial match lower — but core-need coverage stays pipeline-worthy', () => {
-    const focused = scoreOpportunity(ctx(CORE), opp).score
-    const broad = scoreOpportunity(ctx([...CORE, ...EXTRA]), opp).score
+    const focused = scoreOpportunity(ctx([...CORE, ...BALLAST]), opp).score
+    const broad = scoreOpportunity(ctx([...CORE, ...BALLAST, ...EXTRA]), opp).score
     // Deliberate dilution: same 4 matched needs over a larger inventory.
     expect(broad).toBeLessThan(focused)
     // But real core-need coverage must remain surfaceable, not floor-crushed.
@@ -62,8 +67,8 @@ describe('data-point denominator semantics', () => {
   })
 
   it('matching more of the profile monotonically raises the score', () => {
-    const partial = scoreOpportunity(ctx([...CORE, ...EXTRA]), opp).score
-    const fuller = scoreOpportunity(ctx([...CORE, ...EXTRA]), broadOpp).score
+    const partial = scoreOpportunity(ctx([...CORE, ...BALLAST, ...EXTRA]), opp).score
+    const fuller = scoreOpportunity(ctx([...CORE, ...BALLAST, ...EXTRA]), broadOpp).score
     expect(fuller).toBeGreaterThan(partial)
   })
 })

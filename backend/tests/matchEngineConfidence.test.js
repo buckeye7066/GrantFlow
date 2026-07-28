@@ -104,8 +104,11 @@ describe('confidence is orthogonal to (independent of) match score', () => {
   })
 
   it('both rows are a strong MATCH (high fit)', () => {
-    expect(high.score).toBeGreaterThanOrEqual(60)
-    expect(low.score).toBeGreaterThanOrEqual(60)
+    // 14 = STRONG_MATCH_SCORE on the data-point scale; the old ">= 60" bar
+    // predates the 2026-07-06 recalibration and the 2026-07-27
+    // MIN_CALIBRATED_INVENTORY denominator floor (this fixture is thin).
+    expect(high.score).toBeGreaterThanOrEqual(14)
+    expect(low.score).toBeGreaterThanOrEqual(14)
   })
 
   it('official + actionable + detailed source earns HIGH confidence', () => {

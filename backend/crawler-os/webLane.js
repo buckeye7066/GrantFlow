@@ -482,7 +482,15 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       // Per-profile matching — decision comes ONLY from the canonical engine.
       const matchOpp = canonicalId !== opp.id ? { ...opp, id: canonicalId } : opp;
       for (const mp of matchProfiles) {
-        const decision = computeMatchDecision(matchOpp, mp, { floor: opts.floor });
+        // Full profile context when the thesis carries it (primary profile) —
+        // see pipeline.js: context-less cross-match stubs fall under the
+        // engine's MIN_CALIBRATED_INVENTORY topical cap.
+        const decision = computeMatchDecision(matchOpp, mp, {
+          floor: opts.floor,
+          profileRow: mp._profileContext?.profile ?? null,
+          profileSections: mp._profileContext?.sections ?? null,
+          signals: mp._profileContext?.signals ?? null,
+        });
         // Provenance for the crawler doctor: the exact query that surfaced the
         // page this opportunity was extracted from.
         upsertMatch(store, { ...decision, source_query: page.query, discovered_via: 'web_search' });

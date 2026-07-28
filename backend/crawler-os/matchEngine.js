@@ -117,7 +117,14 @@ export function isRecommendable(opportunity, decision) {
  *   decision:string, match_explain:object }}
  */
 export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
-  const profile = thesisToCanonicalProfile(thesis, opts);
+  // FULL-CONTEXT scoring (2026-07-27): when the caller supplies the REAL
+  // profiles row (runProfileDiscoveryLive attaches it for the PRIMARY
+  // profile), score with it — the exact inputs the funding-sources read path
+  // uses — so stored match rows and live route recomputes can never disagree.
+  // The thesis stub remains the fallback for cross-match theses, whose thin
+  // inventory the canonical engine now caps at the topical bound
+  // (MIN_CALIBRATED_INVENTORY) instead of minting "9 of 6 data points — 83%".
+  const profile = opts.profileRow ?? thesisToCanonicalProfile(thesis, opts);
   const opp = opportunityToCanonicalOpportunity(opportunity);
   const canonical = computeCanonicalMatchDecision(profile, opp, {
     profileSections: opts.profileSections ?? opts.sections ?? null,

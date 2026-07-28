@@ -48,7 +48,7 @@ import {
   DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
   NEED_FULL_CREDIT_HITS,
   // Need-anchored scale (owner directive 2026-07-06)
-  NEED_DENOMINATOR_CAP, NO_NEEDS_TOPICAL_CAP, FIT_EVIDENCE_HALF_CREDIT,
+  NEED_DENOMINATOR_CAP, NO_NEEDS_TOPICAL_CAP, FIT_EVIDENCE_HALF_CREDIT, MIN_CALIBRATED_INVENTORY,
   ELIG_MATCH_FACTOR, ELIG_UNKNOWN_FACTOR, ELIG_MISMATCH_FACTOR,
   GEO_MATCH_FACTOR, GEO_UNKNOWN_FACTOR, GEO_MISMATCH_FACTOR,
   CONF_W_SOURCE, CONF_W_ACTIONABILITY, CONF_W_ELIGIBILITY, CONF_W_FRESHNESS,
@@ -3074,13 +3074,47 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // most ONE coverage point (bounded), so it refines the ratio without
   // recreating the old additive boost stack.
   const dataPointCredit = dataPointEval.credit + (hasFitEvidence ? Math.min(1, fitEvidencePoints / 12) : 0)
+  // A coverage PERCENTAGE is a calibrated claim: the display bands (8 bar /
+  // 11 good / 14 strong) were fit against real profiles carrying 50–150 data
+  // points. An inventory below MIN_CALIBRATED_INVENTORY (a thesis stub, a
+  // barely-started profile) makes the ratio meaningless — the crawler-os lane
+  // scored "9 of the profile's 6 data points — 83%" and every broad registry
+  // directory read as an Excellent Match for EVERY profile (the identical
+  // Anita/Anastasia junk lists, 2026-07-27). Below the floor we fall back to
+  // the same bounded topical path a bare profile gets: reachable, never
+  // "Excellent".
+  const inventoryCalibratable = dataPointInventory.total >= MIN_CALIBRATED_INVENTORY
   let dataPointCoverage
   if (dataPointInventory.total === 0) {
-    // Empty inventory (bare profile row): same bounded topical fallback as the
-    // no-needs case — an empty profile can never claim real coverage.
+    // Empty inventory (bare profile row): bounded topical fallback — a
+    // profile the engine knows nothing about can never claim real coverage.
     dataPointCoverage = Math.max(0, Math.min(100, rawScore)) * (NO_NEEDS_TOPICAL_CAP / 100)
   } else {
-    dataPointCoverage = Math.min(100, (dataPointCredit / dataPointInventory.total) * 100)
+    // DENOMINATOR FLOOR: a thin inventory divides by MIN_CALIBRATED_INVENTORY,
+    // never by its own tiny size — "9 of 6 data points = 83%" becomes an
+    // honest 9/15 = 60% ceiling that only well-targeted matches approach. A
+    // SPECIFIC, genuinely relevant grant still scores meaningfully for a
+    // sparse-but-real profile (the G4 degraded-context doctrine), while no
+    // tiny denominator can ever mint phantom "Excellent" coverage again.
+    dataPointCoverage = Math.min(
+      100,
+      (dataPointCredit / Math.max(dataPointInventory.total, MIN_CALIBRATED_INVENTORY)) * 100,
+    )
+  }
+  // Resource-kind thin-context cap — the identical-junk-lists class
+  // (2026-07-27): a broad DIRECTORY/BENEFIT pointer "covers" almost any
+  // inventory it meets, so against a thin one (thesis stubs, barely-started
+  // profiles) it is bounded at the topical cap. Specific fundable rows are
+  // deliberately NOT capped here (the veteran/student/population gates and
+  // the eligibility-mismatch crushers judge those), and a directory scored
+  // against a REAL, calibratable inventory keeps its honest number — the
+  // locator rule already keeps it from ever claiming ACCEPT.
+  const RESOURCE_KINDS_FOR_CAP = new Set(['DIRECTORY', 'BENEFIT', 'PAST_AWARD_INTEL', 'SCHOOL_PORTAL'])
+  const isResourceKindRow =
+    Boolean(oppNorm?.isDirectory) ||
+    RESOURCE_KINDS_FOR_CAP.has(String(effectiveOpp?.opportunity_kind ?? '').toUpperCase())
+  if (!inventoryCalibratable && isResourceKindRow) {
+    dataPointCoverage = Math.min(dataPointCoverage, NO_NEEDS_TOPICAL_CAP)
   }
 
   // Behavior nudge (soft preference learning) still tips borderline scores.
@@ -3104,9 +3138,12 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   const finalScore = Math.max(SCORE_FLOOR, Math.min(100, Math.round(anchoredScore)))
 
   // ── Plain-language score explanation (the score IS this sentence) ──
-  if (modelUsesDataPoints && dataPointInventory.total > 0) {
+  if (modelUsesDataPoints && inventoryCalibratable) {
     reasons.push(
-      `Matches ${dataPointEval.matched.length} of the profile's ${dataPointInventory.total} data points` +
+      // Clamp the matched count to the inventory size — bonus/fit credit once
+      // produced "Matches 9 of the profile's 6 data points", an impossible
+      // sentence that also flagged the uncalibratable-stub class above.
+      `Matches ${Math.min(dataPointEval.matched.length, dataPointInventory.total)} of the profile's ${dataPointInventory.total} data points` +
       ` — ${Math.round(dataPointCoverage)}% coverage of everything this profile tells us`,
     )
     if (matchedNeedSet.size > 0) {
@@ -3114,6 +3151,12 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
         `Including ${matchedNeedSet.size} of ${totalDeclaredNeeds || matchedNeedSet.size} stated need${totalDeclaredNeeds === 1 ? '' : 's'}`,
       )
     }
+  } else if (modelUsesDataPoints && dataPointInventory.total > 0) {
+    reasons.push(
+      isResourceKindRow
+        ? `Profile context too thin for a calibrated coverage claim (${dataPointInventory.total} data points < ${MIN_CALIBRATED_INVENTORY}); directory/benefit pointers are bounded at ${NO_NEEDS_TOPICAL_CAP} until the profile is filled out`
+        : `Matches ${Math.min(dataPointEval.matched.length, dataPointInventory.total)} of the profile's ${dataPointInventory.total} data points — coverage measured against the ${MIN_CALIBRATED_INVENTORY}-point calibration floor (${Math.round(dataPointCoverage)}%)`,
+    )
   } else if (!modelUsesDataPoints && totalDeclaredNeeds > 0) {
     reasons.push(
       `Addresses ${matchedNeedSet.size} of the profile's ${needDenominator} main need${needDenominator === 1 ? '' : 's'}` +

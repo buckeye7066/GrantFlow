@@ -87,9 +87,31 @@ export const GOLDEN_SCORING_PROFILES = Object.freeze([
       needs_assessment: {
         needs: ['housing', 'food', 'medical', 'utilities'],
       },
+      employment: {
+        employment_status: 'part_time',
+        occupation: 'home health aide',
+      },
+      housing: {
+        housing_status: 'renting',
+        monthly_rent: 1100,
+        behind_on_rent: true,
+      },
+      government_assistance: {
+        snap_recipient: true,
+        medicaid_recipient: true,
+      },
     },
   },
 
+
+// DENSITY NOTE (2026-07-27, MIN_CALIBRATED_INVENTORY): calibrated coverage
+// claims require a real data-point inventory (>= 15). These golden archetypes
+// previously carried 3-11 points — the SAME range as the crawler-os thesis
+// stubs whose tiny denominators minted the "83% coverage for everyone" junk —
+// so their STRONG bands were passing on the very phantom math the floor
+// kills. Each fixture now mirrors the density of its real prod counterpart
+// (e.g. Vermilion Church = 19 points, Anastasia = 66) so the bands assert
+// HONEST calibrated behavior.
   // 3) CHURCH / FAITH-BASED ORG.
   {
     key: 'church_faith_org',
@@ -117,6 +139,19 @@ export const GOLDEN_SCORING_PROFILES = Object.freeze([
       },
       programs_services: {
         focus_areas: ['faith', 'church', 'ministry', 'community', 'food', 'youth'],
+        services: ['weekly food pantry', 'youth mentoring', 'benevolence assistance'],
+      },
+      organization_details: {
+        year_founded: 1978,
+        volunteers: 45,
+        service_area: 'McLennan County, Texas',
+      },
+      financial_information: {
+        annual_budget: 250000,
+        funding_amount_needed: 40000,
+      },
+      needs_assessment: {
+        needs: ['food', 'community', 'youth', 'facility'],
       },
     },
   },
@@ -148,6 +183,19 @@ export const GOLDEN_SCORING_PROFILES = Object.freeze([
       },
       programs_services: {
         focus_areas: ['fire', 'ems', 'rescue', 'equipment', 'training', 'safety', 'rural', 'first responder'],
+        services: ['structure fire response', 'vehicle extrication', 'emergency medical first response'],
+      },
+      organization_details: {
+        year_founded: 1965,
+        volunteers: 28,
+        service_area: 'Bradley County, Tennessee',
+      },
+      financial_information: {
+        annual_budget: 120000,
+        funding_amount_needed: 60000,
+      },
+      needs_assessment: {
+        needs: ['equipment', 'emergency', 'training', 'vehicle'],
       },
     },
   },
@@ -175,6 +223,20 @@ export const GOLDEN_SCORING_PROFILES = Object.freeze([
       },
       programs_services: {
         focus_areas: ['education', 'youth', 'after school', 'tutoring', 'community', 'low_income'],
+        services: ['after-school tutoring', 'summer learning camps', 'college readiness coaching'],
+      },
+      organization_details: {
+        year_founded: 2010,
+        staff: 9,
+        volunteers: 40,
+        service_area: 'Davidson County, Tennessee',
+      },
+      financial_information: {
+        annual_budget: 500000,
+        funding_amount_needed: 75000,
+      },
+      needs_assessment: {
+        needs: ['education', 'youth', 'program_funding', 'capacity_building'],
       },
     },
   },

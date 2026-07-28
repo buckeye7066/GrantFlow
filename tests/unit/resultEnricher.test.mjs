@@ -55,7 +55,11 @@ test('canonicalResultForProfile returns canonical fields for a true housing matc
   const result = canonicalResultForProfile(profile, opp)
 
   assert.equal(result.display, true)
-  assert.ok(result.opportunity.match_score >= 50, `score=${result.opportunity.match_score}`)
+  // Thin fixture profiles (<15 data points) score in the TOPICAL band by
+  // design since the MIN_CALIBRATED_INVENTORY floor (2026-07-27): a profile
+  // the engine barely knows cannot claim calibrated coverage — it still gets
+  // meaningful, correctly-ranked results, bounded at NO_NEEDS_TOPICAL_CAP.
+  assert.ok(result.opportunity.match_score >= 8, `score=${result.opportunity.match_score}`)
   assert.ok(['ACCEPT', 'REVIEW'].includes(result.opportunity.match_decision))
   assert.ok(Array.isArray(result.opportunity.matched_profile_facts))
   assert.ok(result.opportunity.matched_profile_facts.length > 0)

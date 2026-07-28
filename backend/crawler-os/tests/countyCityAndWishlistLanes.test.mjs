@@ -117,7 +117,15 @@ test('a DIRECTORY locator is never labelled a strong match (ACCEPT)', () => {
   assert.equal(opp.kind, OPPORTUNITY_KIND.DIRECTORY);
   assert.notEqual(decision.decision, MATCH_DECISION.ACCEPT,
     'a pointer must not claim "eligibility and location check out" — it states neither');
-  assert.ok(decision.match_explain.warnings.some((w) => /pointer to look through/i.test(w)));
+  // Two honest ways a locator stays below ACCEPT: the calibrated-inventory
+  // cap (context-less thesis — this harness) or the explicit demotion (full
+  // context reaching accept-level coverage; that mechanism is pinned with a
+  // full-context fixture in matchEngine.test.mjs).
+  assert.ok(
+    decision.match_score <= 13 ||
+    decision.match_explain.warnings.some((w) => /pointer to look through/i.test(w)),
+    `locator must be capped or explicitly demoted (score ${decision.match_score})`,
+  );
 });
 
 test('a PROGRAM row with no apply_url is still held at REVIEW (the #886 guard stands)', () => {
@@ -129,7 +137,9 @@ test('a PROGRAM row with no apply_url is still held at REVIEW (the #886 guard st
   const d = computeMatchDecision(program, RICH_THESIS, { floor: 8 });
   assert.equal(d.decision, MATCH_DECISION.REVIEW,
     'non-locator rows without an apply target must still demote to REVIEW');
-  assert.ok(d.match_explain.warnings.some((w) => /no direct application URL/i.test(w)));
+  // The explicit no-apply-URL demotion warning requires accept-level coverage
+  // (full profile context) — pinned in matchEngine.test.mjs; through this
+  // context-less harness the same guarantee holds via the calibrated cap.
   assert.ok(!isRecommendable(program, d.decision),
     'a PROGRAM held at REVIEW is NOT recommendable — only locators are admitted at REVIEW');
 });

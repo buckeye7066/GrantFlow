@@ -83,7 +83,16 @@ export async function runDiscovery(deps, opts = {}) {
     const canonicalOpp = canonicalId && canonicalId !== opp.id ? { ...opp, id: canonicalId } : opp;
     storedOppIds.add(canonicalOpp.id);
     for (const mp of matchProfiles) {
-      const decision = computeMatchDecision(canonicalOpp, mp, { floor: opts.floor });
+      // A thesis carrying its profile's FULL context (attached by
+      // runProfileDiscoveryLive for the PRIMARY profile) scores against the
+      // real data-point inventory; context-less theses (cross-match stubs)
+      // fall under the engine's MIN_CALIBRATED_INVENTORY topical cap.
+      const decision = computeMatchDecision(canonicalOpp, mp, {
+        floor: opts.floor,
+        profileRow: mp._profileContext?.profile ?? null,
+        profileSections: mp._profileContext?.sections ?? null,
+        signals: mp._profileContext?.signals ?? null,
+      });
       // Crawler-doctor provenance: registry adapters have no query string, but
       // the SOURCE that produced the match is knowable (web lane sets both
       // source_query and discovered_via; here only the source id applies).

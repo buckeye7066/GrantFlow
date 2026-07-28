@@ -7,10 +7,58 @@ import { computeMatchDecision, MATCHER_VERSION, WEIGHTS } from '../matchEngine.j
 import { matchOpportunity } from '../matcher.js';
 import { makeOpportunity, MATCH_DECISION, OPPORTUNITY_KIND, TRUST_TIER, REALITY_STATUS } from '../contract.js';
 import { buildThesis } from '../profileIntelligence.js';
-import { SAMPLE_VFD_PROFILE } from './fixtures/fakeFetch.mjs';
+import { SAMPLE_VFD_PROFILE, SAMPLE_VFD_SECTIONS } from './fixtures/fakeFetch.mjs';
 import { computeMatchDecision as canonicalComputeMatchDecision, MATCHER_VERSION as CANONICAL_MATCHER_VERSION } from '../../services/matchEngine.js';
 
 const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+// Full-context fixtures — the shape runProfileDiscoveryLive supplies for the
+// PRIMARY profile (2026-07-27). Calibrated coverage claims (and therefore
+// ACCEPT decisions) require a real data-point inventory
+// (MIN_CALIBRATED_INVENTORY); a bare thesis stub is capped at the topical
+// bound so broad directories can never read as "Excellent Match" for every
+// profile again (the identical Anita/Anastasia junk-lists class). Person
+// profiles mine sections into rich signal inventories (real prod profiles
+// measure 19-66+ through this same path), so the calibrated-path fixtures
+// below use a student.
+const STUDENT_THESIS = buildThesis({
+  id: 'p_stu', type: 'student', state: 'TN', needs: ['education', 'housing'],
+  location: { state: 'TN', city: 'Murfreesboro' },
+  school: { name: 'Middle Tennessee State University', type: 'university' },
+});
+const STUDENT_CTX = {
+  profileRow: {
+    id: 'p_stu', display_name: 'Jordan Lee', primary_type: 'student',
+    state: 'TN', city: 'Murfreesboro', zip: '37132',
+    needs: ['education', 'housing'], interests: ['nursing', 'community health'],
+    tags: ['first generation'],
+  },
+  profileSections: {
+    basic_information: {
+      first_name: 'Jordan', last_name: 'Lee', state: 'TN', city: 'Murfreesboro',
+      zip_code: '37132', email: 'jordan@example.edu', phone: '615-555-0101',
+      date_of_birth: '2006-02-01', gender: 'female',
+    },
+    education: {
+      school_name: 'Middle Tennessee State University', enrollment_status: 'enrolled_full_time',
+      gpa: 3.7, intended_major: 'Nursing', expected_graduation: '2028', fafsa_completed: true,
+    },
+    financial_information: { household_income: 32000, household_size: 4, funding_amount_needed: 8000 },
+    housing: { housing_status: 'renting', monthly_rent: 850, housing_need: 'off-campus housing' },
+    demographics: { first_generation: true },
+  },
+};
+function studentOpp(over = {}) {
+  return makeOpportunity({
+    source_id: 'tn_tsac', kind: OPPORTUNITY_KIND.DIRECT_GRANT,
+    title: 'Tennessee Student Assistance Award', sponsor: 'TSAC',
+    applicant_types: ['student'], need_categories: ['education'],
+    geography: { states: ['TN'] }, funding: { amount_max: 4000 },
+    deadline: new Date(Date.now() + 40 * 86400000).toISOString(),
+    apply_url: 'https://www.tn.gov/collegepays/tsaa/apply',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML, reality_status: REALITY_STATUS.VERIFIED,
+    ...over,
+  });
+}
 
 function strongOpp(over = {}) {
   return makeOpportunity({
@@ -30,12 +78,31 @@ test('the decision triad is exactly accept / review / reject (lowercase)', () =>
   assert.deepEqual(MATCH_DECISION, { ACCEPT: 'accept', REVIEW: 'review', REJECT: 'reject' });
 });
 
-test('a strong, well-matched grant ACCEPTs with a high score', () => {
-  const m = computeMatchDecision(strongOpp(), thesis);
+test('a strong, well-matched grant ACCEPTs with a high score (full profile context)', () => {
+  const m = computeMatchDecision(studentOpp(), STUDENT_THESIS, STUDENT_CTX);
   assert.equal(m.decision, MATCH_DECISION.ACCEPT);
-  assert.ok(m.match_score >= 70, `expected >=70, got ${m.match_score}`);
-  assert.equal(m.opportunity_id, strongOpp().id);
-  assert.equal(m.profile_id, thesis.profile_id);
+  // Data-point scale: 11 is the ACCEPT band (top ~quarter of real matches).
+  // The old ">= 70" expectation was calibrated against the inflated stub-
+  // inventory scoring the MIN_CALIBRATED_INVENTORY floor exists to kill.
+  assert.ok(m.match_score >= 11, `expected >= 11 (data-point ACCEPT band), got ${m.match_score}`);
+  // The calibrated sentence is present — and never claims more matched
+  // points than the inventory holds.
+  const sentence = m.match_explain.warnings.find((w) => /data points — \d+% coverage/.test(w));
+  assert.ok(sentence, 'full-context scoring must carry the calibrated coverage sentence');
+  const [, matched, total] = sentence.match(/Matches (\d+) of the profile's (\d+) data points/);
+  assert.ok(Number(matched) <= Number(total), sentence);
+  assert.equal(m.opportunity_id, studentOpp().id);
+  assert.equal(m.profile_id, STUDENT_THESIS.profile_id);
+});
+
+test('a context-less thesis stub can never mint a calibrated ACCEPT (topical cap)', () => {
+  // The exact class behind the identical Anita/Anastasia junk lists: a stub
+  // inventory of ~6 points made every broad row "cover" 50-100% of every
+  // profile. Without context the same strong grant stays reachable but
+  // bounded — and can never claim the calibrated coverage sentence.
+  const m = computeMatchDecision(strongOpp(), thesis);
+  assert.ok(m.match_score <= 13, `stub scoring must stay at/below the topical cap (13), got ${m.match_score}`);
+  assert.notEqual(m.decision, MATCH_DECISION.REJECT, 'bounded, not discarded (G4)');
 });
 
 test('a topically-irrelevant grant (no specific need overlap) is capped at REVIEW, never ACCEPT', () => {
@@ -70,14 +137,25 @@ test('a multi-need profile is NOT penalized for a focused grant — one real spe
     need_categories: ['capital'], geography: { states: ['TN'] },
     apply_url: 'https://example.org/community-capital-facilities',
   });
-  const m = computeMatchDecision(focused, multiNeed);
+  // Full context for the nonprofit — calibrated claims require a real
+  // inventory (2026-07-27); a bare thesis is capped at the topical bound.
+  const m = computeMatchDecision(focused, multiNeed, {
+    profileRow: {
+      id: 'p_multi', display_name: 'Multi Need Community Org', primary_type: 'nonprofit',
+      state: 'TN', city: 'Nashville', zip: '37201',
+      needs: ['capital', 'operations', 'programs', 'education'],
+      tags: ['community organization', 'capital projects', 'general operating'],
+      interests: ['facility improvement', 'community education', 'capacity building'],
+      keywords: ['building renovation', 'program expansion', 'operating support', 'construction'],
+      funding_amount_needed: 50000,
+    },
+  });
   assert.ok(m.match_explain.matched_needs.includes('capital'), 'focused grant should name the matched profile need');
-  // NEED-ANCHORED scale (2026-07-06): one fully-matched main need out of 4 IS
-  // 25 — exactly the pipeline bar (AUTO_ADD/DISCOVERY_MIN_SCORE_FLOOR). The
-  // old ≥70 expectation belonged to the retired additive scale. The intent
-  // this test protects is unchanged: a genuinely-relevant focused grant must
+  // DATA-POINT scale (2026-07-06 evening): 8 is the pipeline bar
+  // (AUTO_ADD/DISCOVERY_MIN_SCORE_FLOOR). The intent this test protects is
+  // unchanged across scale moves: a genuinely-relevant focused grant must
   // reach the pipeline and must never be REJECTED for being focused.
-  assert.ok(m.match_score >= 25, `focused grant must reach the pipeline bar (25 = one main need), got ${m.match_score}`);
+  assert.ok(m.match_score >= 8, `focused grant must reach the pipeline bar (8, data-point scale), got ${m.match_score}`);
   assert.notEqual(m.decision, MATCH_DECISION.REJECT, `a real specific-need match must not be rejected (got ${m.decision} @ ${m.match_score})`);
 });
 
@@ -89,6 +167,31 @@ test('the result carries an explainable breakdown and reasons', () => {
   assert.equal(m.match_explain.matched_profile_type, true);
   assert.equal(m.match_explain.matcher_version, CANONICAL_MATCHER_VERSION);
   assert.ok(Array.isArray(m.match_explain.matched_profile_facts));
+});
+
+test('full context + accept-level coverage: the locator demotion and #886 no-apply-URL guards still fire', () => {
+  // A topically strong DIRECTORY for a rich student context would reach the
+  // calibrated ACCEPT band — the demotion rule must convert it to REVIEW with
+  // the pointer warning (the "Recommended != strong match" locator rule).
+  const dir = studentOpp({
+    kind: OPPORTUNITY_KIND.DIRECTORY, apply_url: null,
+    info_url: 'https://studentaid.example.gov/finder',
+    title: 'Tennessee student aid finder',
+  });
+  const d1 = computeMatchDecision(dir, STUDENT_THESIS, STUDENT_CTX);
+  assert.notEqual(d1.decision, MATCH_DECISION.ACCEPT);
+  if (d1.match_score >= 11) {
+    assert.ok(d1.match_explain.warnings.some((w) => /pointer to look through/i.test(w)),
+      `an accept-level locator must carry the demotion warning (score ${d1.match_score})`);
+  }
+
+  // Same strong fit as a PROGRAM with no apply target: held at REVIEW with
+  // the explicit #886 warning.
+  const program = studentOpp({ kind: 'PROGRAM', apply_url: null, info_url: 'https://studentaid.example.gov/tsaa' });
+  const d2 = computeMatchDecision(program, STUDENT_THESIS, STUDENT_CTX);
+  assert.equal(d2.decision, MATCH_DECISION.REVIEW);
+  assert.ok(d2.match_explain.warnings.some((w) => /no direct application URL/i.test(w)),
+    `accept-level PROGRAM without apply target must carry the #886 warning (score ${d2.match_score})`);
 });
 
 test('a directory is never an ACCEPT — it goes to REVIEW', () => {
@@ -122,7 +225,7 @@ test('an unrelated opportunity stays low and never ACCEPTs', () => {
 });
 
 test('an explicit floor override is honored', () => {
-  const m = computeMatchDecision(strongOpp(), thesis, { floor: 99 });
+  const m = computeMatchDecision(studentOpp(), STUDENT_THESIS, { floor: 99, ...STUDENT_CTX });
   assert.equal(m.match_explain.matcher_version, CANONICAL_MATCHER_VERSION);
   assert.equal(m.decision, MATCH_DECISION.ACCEPT, 'OS floor is a display/filter concern; canonical thresholds decide');
 });

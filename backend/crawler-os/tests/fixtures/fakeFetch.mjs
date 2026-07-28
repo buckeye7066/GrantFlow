@@ -149,6 +149,33 @@ export const SAMPLE_VFD_PROFILE = Object.freeze({
   mission: 'Protect our rural community with reliable fire and emergency response.',
 });
 
+/**
+ * FULL profile-section context for the VFD (2026-07-27): calibrated coverage
+ * claims require a real data-point inventory (MIN_CALIBRATED_INVENTORY).
+ * Context-less thesis stubs are capped at the topical bound by design — the
+ * "9 of the profile's 6 data points — 83%" class — so tests that assert
+ * calibrated ACCEPT behavior must score through this context, exactly like
+ * runProfileDiscoveryLive does for the primary profile.
+ */
+export const SAMPLE_VFD_SECTIONS = Object.freeze({
+  basic_information: {
+    organization_name: 'Cleveland Volunteer Fire Department',
+    state: 'TN', county: 'Bradley', city: 'Cleveland', zip_code: '37311',
+    email: 'chief@clevelandvfd.example.org', phone: '423-555-0100',
+    website: 'https://clevelandvfd.example.org',
+  },
+  organization_details: {
+    organization_type: 'volunteer_fire_department',
+    mission: 'Protect our rural community with reliable fire and emergency response.',
+    year_founded: 1962, volunteers: 24, service_area: 'Bradley County, Tennessee',
+  },
+  financial_information: { annual_budget: 85000, funding_amount_needed: 50000 },
+  programs_services: {
+    services: ['fire suppression', 'emergency medical response', 'vehicle extrication rescue'],
+    equipment_needs: ['SCBA units', 'turnout gear', 'thermal imaging camera'],
+  },
+})
+
 /** A student/individual profile (lower floor, education needs). */
 export const SAMPLE_STUDENT_PROFILE = Object.freeze({
   id: 'profile_student_1',
@@ -160,4 +187,4 @@ export const SAMPLE_STUDENT_PROFILE = Object.freeze({
   school: { name: 'State University', type: 'university' },
 });
 
-export default { makeFakeFetch, makeOfflineFetcher, grantsGovBody, federalRegisterBody, SAMPLE_VFD_PROFILE, SAMPLE_STUDENT_PROFILE };
+export default { makeFakeFetch, makeOfflineFetcher, grantsGovBody, federalRegisterBody, SAMPLE_VFD_PROFILE, SAMPLE_VFD_SECTIONS, SAMPLE_STUDENT_PROFILE };
