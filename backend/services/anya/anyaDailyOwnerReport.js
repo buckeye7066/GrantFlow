@@ -125,6 +125,55 @@ async function defaultLoadCrawlerResearch(db) {
   }
 }
 
+/**
+ * Load the agent-mesh overview for the digest (system_kv agent_mesh_messages +
+ * agent_mesh_lessons — the inter-agent message/lesson exchange). Best-effort —
+ * the digest sends without the section until the mesh has been used once.
+ */
+async function defaultLoadAgentMesh(db, { now = null } = {}) {
+  try {
+    const { readMeshOverview } = await import('../agentMesh/agentMeshStore.js')
+    return await readMeshOverview(db, { now: now || undefined })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Summarize the agent mesh for the owner: which agents talked to which, what
+ * was taught, and — the bar that matters — which lessons another agent
+ * actually CONSUMED (a lesson nobody folds into a run is a note, not
+ * teaching). Pure; exported for tests.
+ *
+ * @param {{recent_messages?:Array, fresh_lessons?:Array}|null} meshOverview
+ * @returns {{headline:string, messages:string[], lessons:string[]}|null}
+ */
+export function summarizeAgentMesh(meshOverview) {
+  if (!meshOverview) return null
+  const messages = Array.isArray(meshOverview.recent_messages) ? meshOverview.recent_messages : []
+  const lessons = Array.isArray(meshOverview.fresh_lessons) ? meshOverview.fresh_lessons : []
+  if (messages.length === 0 && lessons.length === 0) return null
+
+  const consumedCount = lessons.filter((l) => Object.keys(l.consumed_by || {}).length > 0).length
+  const headline = `${messages.length} message(s) exchanged in the last 24h; ${lessons.length} fresh lesson(s) on the board, ${consumedCount} consumed by another agent.`
+
+  const messageLines = messages.slice(-8).map((m) => `${m.from} → ${m.to}: ${maskSecrets(m.body || m.kind || 'message')}`)
+  const lessonLines = lessons.slice(0, 8).map((l) => {
+    const consumers = Object.keys(l.consumed_by || {})
+    const confirms = (l.confirmations || []).map((c) => c.agent)
+    const refutes = (l.refutations || []).map((c) => c.agent)
+    const tail = [
+      consumers.length ? `consumed by ${consumers.join(', ')}` : 'not yet consumed',
+      confirms.length ? `confirmed by ${confirms.join(', ')}` : null,
+      refutes.length ? `refuted by ${refutes.join(', ')}` : null,
+      (Number(l.times_seen) || 1) > 1 ? `seen ${l.times_seen}×` : null,
+    ].filter(Boolean).join('; ')
+    return `[${l.author} · ${l.topic}] ${maskSecrets(l.claim)} (${tail})`
+  })
+
+  return { headline, messages: messageLines, lessons: lessonLines }
+}
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -337,7 +386,7 @@ export function summarizeWebParity(parity) {
  * scan of how other crawler codebases work + implementation suggestions
  * (see summarizeCrawlerResearch).
  */
-export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null, research = null, eva = undefined, samUnavailable = false } = {}) {
+export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null, research = null, eva = undefined, agentMesh = null, samUnavailable = false } = {}) {
   const findings = Array.isArray(run?.findings) ? run.findings : []
   const repairPlan = Array.isArray(run?.repair_plan) ? run.repair_plan : []
   const planByFindingId = new Map(repairPlan.map((p) => [p?.finding_id, p]))
@@ -503,6 +552,21 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       t.push('Nothing beat our current crawler approach this run.')
     }
   }
+  const meshSummary = summarizeAgentMesh(agentMesh)
+  if (meshSummary) {
+    t.push('')
+    t.push('AGENT MESH (what the agents told each other)')
+    t.push('============================================')
+    t.push(meshSummary.headline)
+    if (meshSummary.lessons.length) {
+      t.push('Lessons on the shared board:')
+      meshSummary.lessons.forEach((l) => t.push(`  • ${l}`))
+    }
+    if (meshSummary.messages.length) {
+      t.push('Messages exchanged (last 24h):')
+      meshSummary.messages.forEach((m) => t.push(`  • ${m}`))
+    }
+  }
   // EVA portfolio user-journey section (independent of Sam — always rendered
   // when EVA loading was attempted, even if it reports "not run / stale").
   if (evaSection) {
@@ -652,6 +716,25 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       </div>`
       })()}
 
+      ${(() => {
+        const ms = summarizeAgentMesh(agentMesh)
+        if (!ms) return ''
+        const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
+        const lessonsHtml = ms.lessons.length
+          ? `<div style="margin-top:8px;"><strong style="color:#1d4ed8;">Lessons on the shared board:</strong>${list(ms.lessons, '#1e3a8a')}</div>`
+          : ''
+        const messagesHtml = ms.messages.length
+          ? `<div style="margin-top:8px;"><strong>Messages exchanged (last 24h):</strong>${list(ms.messages)}</div>`
+          : ''
+        return `
+      <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Agent mesh</h3>
+      <div style="font-size:13px;">
+        <div style="color:#334155;">${esc(ms.headline)}</div>
+        ${lessonsHtml}
+        ${messagesHtml}
+      </div>`
+      })()}
+
       ${evaSection ? evaSection.html : ''}
 
       <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
@@ -695,6 +778,7 @@ export async function runAnyaDailyOwnerReport(db, {
   loadParity = defaultLoadWebParity,
   loadResearch = defaultLoadCrawlerResearch,
   loadEva = defaultLoadEvaPortfolioQa,
+  loadAgentMesh = defaultLoadAgentMesh,
   now = null,
 } = {}) {
   try {
@@ -721,7 +805,10 @@ export async function runAnyaDailyOwnerReport(db, {
     const gaps = run ? await loadGaps(db, { now }).catch(() => null) : null
     const parity = run ? await loadParity(db).catch(() => null) : null
     const research = run ? await loadResearch(db).catch(() => null) : null
-    const { subject, html, text, stats } = buildOwnerReport(run || {}, { now, amy, gaps, parity, research, eva, samUnavailable })
+    // The mesh is cross-agent, not Sam-derived — load it independently of Sam
+    // (like EVA) so a missing Sam run never hides what the agents exchanged.
+    const agentMesh = await loadAgentMesh(db, { now }).catch(() => null)
+    const { subject, html, text, stats } = buildOwnerReport(run || {}, { now, amy, gaps, parity, research, eva, agentMesh, samUnavailable })
     const to = recipient()
     const res = await send({ to, subject, html, text })
     if (res?.ok) {

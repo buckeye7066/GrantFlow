@@ -53,6 +53,13 @@ import {
 } from './samSafeFixes.js'
 import { escalateSamCritical } from './samEscalation.js'
 import { sendSamReportEmail } from './samEmailReport.js'
+import {
+  consumeMeshInbox,
+  readMeshLessons,
+  recordMeshLesson,
+  postMeshMessage,
+  markMeshLessonConsumed,
+} from '../agentMesh/agentMeshStore.js'
 import { gitProposeFixes } from './samGit.js'
 import { runAdversarialRepairs } from './samAdversarialRepair.js'
 import fs from 'node:fs'
@@ -73,6 +80,95 @@ import {
   maskSecrets,
   startRun,
 } from './samAuditStore.js'
+
+// ---------------------------------------------------------------------------
+// Agent mesh (awareness/communication/learning between the resident agents)
+// ---------------------------------------------------------------------------
+
+/** Default agent-mesh surface (injectable for tests via runSam args.mesh). */
+export const DEFAULT_MESH = Object.freeze({
+  consumeInbox: consumeMeshInbox,
+  readLessons: readMeshLessons,
+  recordLesson: recordMeshLesson,
+  postMessage: postMeshMessage,
+  markConsumed: markMeshLessonConsumed,
+})
+
+/**
+ * Run-start consumption: drain Sam's inbox and surface fresh peer lessons Sam
+ * has not yet consumed as INFO findings in this sweep — that is how Amy's
+ * persistent gap classes reach the owner THROUGH Sam's own report surface.
+ * One-shot by design: each lesson is stamped consumed (markConsumed) the run
+ * it is surfaced, so a standing lesson never becomes nightly wallpaper.
+ * A cross-agent finding carries evidence.mesh_lesson_id, which is also the
+ * echo-chamber guard: teachMeshFromSamFindings refuses to re-teach it.
+ */
+export async function consumeMeshForSam(db, { mesh = DEFAULT_MESH, now = null } = {}) {
+  const inbox = await mesh.consumeInbox(db, 'sam', { now })
+  const lessons = await mesh.readLessons(db, {
+    excludeAuthor: 'sam',
+    notConsumedBy: 'sam',
+    freshWithinHours: 7 * 24,
+    limit: 5,
+    now,
+  })
+  const findings = []
+  for (const lesson of lessons) {
+    findings.push(makeFinding({
+      severity: SEVERITY.INFO,
+      category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+      title: `Cross-agent lesson from ${lesson.author}: ${lesson.claim}`,
+      description: `Shared on the agent mesh (topic: ${lesson.topic}, seen ${lesson.times_seen}×, last ${lesson.updated_at}).`,
+      evidence: { mesh_lesson_id: lesson.id, topic: lesson.topic, author: lesson.author, lesson_evidence: lesson.evidence || null },
+      recommended_fix: 'Informational: peer telemetry folded into this sweep. Review the evidence if the class persists.',
+      confidence: 0.5,
+    }))
+    await mesh.markConsumed(db, lesson.id, 'sam', { now })
+  }
+  return { inbox, lessons, findings }
+}
+
+/**
+ * Run-end teaching: Sam's own crawler_reliability findings (medium+) become
+ * lessons on the shared board + a direct message to Amy, so tonight's
+ * "web-search backend degraded" is TOMORROW's "don't learn low_results from
+ * this outage" instead of a report line the fleet never reads. Bounded to 3
+ * per run; the store's (author, topic, claim) dedupe makes repeats a
+ * strengthening signal, never spam. Cross-agent findings (evidence.mesh_lesson_id)
+ * are never re-taught — heard is not learned-anew.
+ */
+export async function teachMeshFromSamFindings(db, findings, { mesh = DEFAULT_MESH, now = null } = {}) {
+  const teachable = (Array.isArray(findings) ? findings : []).filter((f) => (
+    f?.category === SAM_CATEGORIES.CRAWLER_RELIABILITY
+    && [SEVERITY.CRITICAL, SEVERITY.HIGH, SEVERITY.MEDIUM].includes(f?.severity)
+    && !f?.evidence?.mesh_lesson_id
+  )).slice(0, 3)
+  const taught = []
+  for (const f of teachable) {
+    const lesson = await mesh.recordLesson(db, {
+      author: 'sam',
+      topic: 'crawler_reliability',
+      claim: f.title,
+      evidence: {
+        finding_id: f.id || null,
+        severity: f.severity,
+        category: f.category,
+        description: String(f.description || '').slice(0, 300),
+      },
+      now,
+    })
+    taught.push({ id: lesson.id, topic: lesson.topic, claim: lesson.claim })
+    await mesh.postMessage(db, {
+      from: 'sam',
+      to: 'amy',
+      kind: 'lesson',
+      body: f.title,
+      data: { lesson_id: lesson.id, severity: f.severity },
+      now,
+    })
+  }
+  return taught
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -122,6 +218,9 @@ export async function runSam(args = {}) {
     // (see agentControlOrchestrator's per-agent directive channel). Recorded
     // for visibility only — Sam does not infer check scoping from it.
     operatorNote = null,
+    // Agent mesh surface (injectable for tests). Best-effort: a mesh failure
+    // never fails a Sam run.
+    mesh = DEFAULT_MESH,
   } = args
 
   const mode = isValidMode(requestedMode) ? String(requestedMode).toLowerCase() : DEFAULT_MODE
@@ -258,6 +357,28 @@ export async function runSam(args = {}) {
       }
     }
 
+    // ---------- Agent mesh: hear, then teach (best-effort) ----------------
+    // Consume Sam's inbox + fresh peer lessons (surfaced as INFO findings so
+    // they ride the existing report/telemetry surfaces), then teach Sam's own
+    // crawler_reliability findings back to the board for Amy's next run.
+    let meshSummary = null
+    if (db) {
+      try {
+        const heard = await consumeMeshForSam(db, { mesh })
+        findings.push(...heard.findings)
+        const taught = await teachMeshFromSamFindings(db, findings, { mesh })
+        meshSummary = {
+          inbox: heard.inbox.length,
+          lessons_heard: heard.lessons.length,
+          lessons_taught: taught.length,
+          taught,
+        }
+      } catch (meshErr) {
+        console.warn('[sam] agent-mesh exchange skipped:', meshErr?.message || meshErr)
+        meshSummary = { error: String(meshErr?.message || meshErr) }
+      }
+    }
+
     const score = computeHealthScore(findings)
     const productionReady = determineProductionReady(findings, { failOnCritical })
 
@@ -283,6 +404,7 @@ export async function runSam(args = {}) {
         duration_ms: g.duration_ms,
       })),
       operator_note: operatorNote || null,
+      agent_mesh: meshSummary,
       _downgradedFromRepair: args._downgradedFromRepair || null,
     }
 

@@ -115,3 +115,36 @@ becomes a golden expectation. Every benchmark failure becomes queued work.
 
 Their run telemetry is part of Anya's morning brief and Sam's sweep like every
 other agent's (Agent Observability Rule).
+
+## The agent mesh (awareness · communication · learning between agents)
+
+Owner directive 2026-07-28: the agents must know each other, talk to each
+other, and teach each other — not only report upward to the owner.
+
+- **Awareness**: `backend/services/agentMesh/agentMeshRegistry.js` is the ONE
+  registry of every resident agent (id, name, charter, entry points, where its
+  telemetry/lessons live). Totality-tested in `backend/tests/agentMesh.test.js`
+  against `agentControlTypes.ALL_AGENTS`/`STATUS_AGENTS`, the adapter registry,
+  and `backend/crawler-os/agents/*` — a new agent cannot appear anywhere
+  without registering. The registry is also the runtime identity choke point:
+  the stores refuse unregistered ids.
+- **Communication**: `backend/services/agentMesh/agentMeshStore.js` — bounded
+  `system_kv` stores `agent_mesh_messages` (post / inbox / ack, direct or
+  broadcast, ring of 200) and `agent_mesh_lessons` (the shared lesson board:
+  `{author, topic, claim, evidence, times_seen, confirmations, refutations,
+  consumed_by}`, closed topic list, (author, topic, claim) dedupe-refresh,
+  ring of 100). No PII in bodies; loud refusal beats silent drop; every agent
+  call site is best-effort (a mesh failure never fails a run).
+- **Teaching each other (the live loop)**: Sam's `crawler_reliability`
+  findings (e.g. "web-search backend degraded") become lessons + a message to
+  Amy (`teachMeshFromSamFindings`); Amy consumes them at run start and, on a
+  degraded night, SUPPRESSES `low_results` archetype learning and suspends
+  lesson-clearing (an outage proves neither weakness nor health). Amy's
+  persistent gap classes become lessons + a message to Sam
+  (`runAmyTraining` teach step); Sam surfaces unconsumed peer lessons as
+  one-shot INFO findings in his own sweep (`consumeMeshForSam`). Consumption
+  is stamped (`consumed_by`) so "taught" always means "visibly consumed by
+  another agent", never "posted into the void".
+- **Owner visibility**: Anya's daily report renders an "Agent mesh" section
+  (messages exchanged, lessons taught/consumed) via `readMeshOverview` +
+  `summarizeAgentMesh`.

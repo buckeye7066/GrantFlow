@@ -53,6 +53,22 @@ import { saveAmyReport } from './amyReportStore.js'
 import { recordFlywheelCohort } from './flywheelCohort.js'
 import { buildFleetGapScoreboard, weightCategoriesByGaps, deriveAmyGapActions } from '../coverageGapScoreboard.js'
 import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
+import {
+  consumeMeshInbox,
+  readMeshLessons,
+  recordMeshLesson,
+  postMeshMessage,
+  markMeshLessonConsumed,
+} from '../agentMesh/agentMeshStore.js'
+
+/** Default agent-mesh surface (injectable for tests via options.mesh). */
+const DEFAULT_MESH = Object.freeze({
+  consumeInbox: consumeMeshInbox,
+  readLessons: readMeshLessons,
+  recordLesson: recordMeshLesson,
+  postMessage: postMeshMessage,
+  markConsumed: markMeshLessonConsumed,
+})
 
 const defaultLog = createLogger('services:amy:agent')
 
@@ -169,6 +185,11 @@ export async function runAmyTraining(options = {}) {
     gapScanLimit = 100,
     refreshScoreboard = buildFleetGapScoreboard,
     recordActivity = insertActivityEvent,
+    // Agent mesh (awareness/communication/learning between the resident
+    // agents): consume Amy's inbox + fresh peer lessons at run start, teach
+    // what this run proved at run end. Injectable; best-effort everywhere —
+    // a mesh failure must never fail a training run.
+    mesh = DEFAULT_MESH,
   } = options
 
   const startedAtDate = clock()
@@ -186,6 +207,36 @@ export async function runAmyTraining(options = {}) {
     apply_tuning: applyTuning,
     keep_profiles: keepProfiles,
   })
+
+  // ── AGENT MESH: read the inbox + fresh peer lessons BEFORE training ──────
+  // Sam's overnight sweep teaches Amy about degraded discovery dependencies
+  // (topic crawler_reliability, e.g. "web-search backend down"). On such a
+  // night a zero/weak cohort is an ENVIRONMENT fact, not a crawler-quality
+  // fact, so Amy must not burn it into the archetype learning store as a
+  // `low_results` lesson (the same silence-is-not-a-denial posture as the
+  // amount sweep). Everything here is best-effort.
+  let meshInbox = []
+  let meshLessonsHeard = []
+  let searchDegraded = false
+  try {
+    meshInbox = await mesh.consumeInbox(db, 'amy', { now: clock() })
+    meshLessonsHeard = await mesh.readLessons(db, {
+      topics: ['crawler_reliability'],
+      excludeAuthor: 'amy',
+      freshWithinHours: 48,
+      limit: 5,
+      now: clock(),
+    })
+    searchDegraded = meshLessonsHeard.length > 0
+    if (searchDegraded) {
+      logger.info('Amy heard fresh crawler_reliability lesson(s) from the mesh — low_results learning suspended this run', {
+        run_id: runId,
+        lessons: meshLessonsHeard.map((l) => `${l.author}: ${l.claim}`),
+      })
+    }
+  } catch (err) {
+    logger.warn('Amy agent-mesh read failed (continuing without peer context)', { error: err?.message })
+  }
 
   // ── LEARN FROM THE FLEET: refresh the Coverage & Evidence gap scoreboard ──
   // Amy derives her work queue from the gaps real profiles actually suffer:
@@ -368,24 +419,53 @@ export async function runAmyTraining(options = {}) {
     at: clock().toISOString(),
     minEvidence: tuningOpts.archetype?.minEvidence,
   })
+  // ── MESH CONSUMPTION WITH TEETH: on a degraded-search night (a fresh
+  // crawler_reliability lesson from another agent, normally Sam), the cohort's
+  // zero/weak outcomes are environment, not crawler quality — strip the
+  // `low_results` class from this run's archetype update so the outage is
+  // never burned into the steering store as an archetype weakness. Recorded
+  // (suppressed_low_results) and stamped consumed on the teaching lesson so
+  // the owner's report can show the teach→learn loop actually closing.
+  const suppressedLowResults = []
+  let effectiveArchetypeUpdate = archetypeUpdate
+  if (searchDegraded) {
+    effectiveArchetypeUpdate = {}
+    for (const [key, entry] of Object.entries(archetypeUpdate)) {
+      const classes = (entry.classes || []).filter((c) => c !== 'low_results')
+      if (classes.length !== (entry.classes || []).length) suppressedLowResults.push(key)
+      if (classes.length > 0) effectiveArchetypeUpdate[key] = { ...entry, classes }
+    }
+    for (const lesson of meshLessonsHeard) {
+      try {
+        await mesh.markConsumed(db, lesson.id, 'amy', { now: clock() })
+      } catch { /* best-effort — consumption stamping never fails a run */ }
+    }
+  }
+
   let archetypeLearningApplied = null
   if (improve && applyLearning) {
     try {
       // Per-archetype cohort sizes: an archetype may only CLEAR a prior lesson
       // when this run exercised it with real evidence (same bar as learning).
-      const cohortArchetypes = Object.fromEntries(
-        Object.entries(archetypeMetrics).map(([key, m]) => [key, m.profiles]),
-      )
-      archetypeLearningApplied = await saveArchetypeLearning(db, archetypeUpdate, {
+      // On a degraded-search night NOTHING may clear: a cohort whose zero/weak
+      // outcomes are environmental proves neither weakness NOR health, and
+      // letting it clear would erase legitimate prior lessons (the same
+      // "an outage never burns" rule the amount sweep enforces).
+      const cohortArchetypes = searchDegraded
+        ? {}
+        : Object.fromEntries(
+            Object.entries(archetypeMetrics).map(([key, m]) => [key, m.profiles]),
+          )
+      archetypeLearningApplied = await saveArchetypeLearning(db, effectiveArchetypeUpdate, {
         runId,
         at: clock().toISOString(),
         cohortArchetypes,
         minEvidence: tuningOpts.archetype?.minEvidence,
       })
-      if (Object.keys(archetypeUpdate).length > 0) {
+      if (Object.keys(effectiveArchetypeUpdate).length > 0) {
         logger.info('Amy recorded archetype query-steering lessons', {
           run_id: runId,
-          archetypes: Object.keys(archetypeUpdate),
+          archetypes: Object.keys(effectiveArchetypeUpdate),
         })
       }
     } catch (err) {
@@ -529,7 +609,7 @@ export async function runAmyTraining(options = {}) {
   const coverageKept = Boolean(coverageTuning?.validation?.kept)
   const weightsKept = Boolean(weightTuning?.validation?.kept)
   const coverageCategories = new Set((coverageTuning?.additions || []).map((a) => a.category))
-  const learnedArchetypes = new Set(Object.keys(archetypeUpdate))
+  const learnedArchetypes = new Set(Object.keys(effectiveArchetypeUpdate))
   for (const item of approvalQueue) {
     if (coverageKept && item.lever === 'source_keyword_coverage' && coverageCategories.has(item.category)) {
       item.auto_applied = { lever: 'source_coverage_overrides', run_id: runId, kept: true }
@@ -588,13 +668,63 @@ export async function runAmyTraining(options = {}) {
     // Per-archetype flywheel: this run's measurement + the steering it recorded.
     archetype_metrics: archetypeMetrics,
     archetype_learning: {
-      update: archetypeUpdate,
+      update: effectiveArchetypeUpdate,
       applied: Boolean(archetypeLearningApplied),
       store: archetypeLearningApplied,
+    },
+    // Agent mesh: what Amy heard (and acted on) + what she taught this run.
+    agent_mesh: {
+      inbox: meshInbox.slice(0, 10).map((m) => ({ id: m.id, from: m.from, kind: m.kind, body: m.body })),
+      lessons_heard: meshLessonsHeard.map((l) => ({ id: l.id, author: l.author, topic: l.topic, claim: l.claim })),
+      search_degraded: searchDegraded,
+      suppressed_low_results: suppressedLowResults,
+      taught: [], // filled below (teach step runs after the combined skeleton exists)
     },
     chain,
     approval_queue: approvalQueue,
     amy: { summary, handoff },
+  }
+
+  // ── AGENT MESH: TEACH what this run proved (best-effort, never fatal) ────
+  // Amy's persistent gap classes become a lesson on the shared board so Sam's
+  // next sweep surfaces them (Sam reads the board at run start), instead of
+  // the knowledge living only in Amy's own stores. Dedupe lives in the store:
+  // a nightly repeat refreshes the lesson (times_seen++), it never spams.
+  // Runs BEFORE the report is persisted below so combined.agent_mesh.taught is
+  // stored on the admin report.
+  try {
+    const taught = []
+    if (gapActions.structural.length > 0) {
+      const top = gapActions.structural.slice(0, 3)
+      const claim = `Structural coverage gaps persist: ${top.map((w) => w.detail || w.lane || w.gap_class).join('; ')}`
+      const lesson = await mesh.recordLesson(db, {
+        author: 'amy',
+        topic: 'coverage_gap',
+        claim,
+        evidence: { run_id: runId, wishlist: top, affected_profiles: top.map((w) => w.affected_profiles_count ?? null) },
+        now: clock(),
+      })
+      taught.push({ id: lesson.id, topic: lesson.topic, claim: lesson.claim })
+      await mesh.postMessage(db, { from: 'amy', to: 'sam', kind: 'lesson', body: claim, data: { lesson_id: lesson.id, run_id: runId }, now: clock() })
+    }
+    if (Object.keys(effectiveArchetypeUpdate).length > 0) {
+      const pairs = Object.entries(effectiveArchetypeUpdate)
+        .slice(0, 4)
+        .map(([k, v]) => `${k}: ${(v.classes || []).join('/')}`)
+      const claim = `Crawler proved weak for archetype(s) this run — ${pairs.join('; ')}`
+      const lesson = await mesh.recordLesson(db, {
+        author: 'amy',
+        topic: 'coverage_gap',
+        claim,
+        evidence: { run_id: runId, update: effectiveArchetypeUpdate },
+        now: clock(),
+      })
+      taught.push({ id: lesson.id, topic: lesson.topic, claim: lesson.claim })
+      await mesh.postMessage(db, { from: 'amy', to: 'sam', kind: 'lesson', body: claim, data: { lesson_id: lesson.id, run_id: runId }, now: clock() })
+    }
+    combined.agent_mesh.taught = taught
+  } catch (err) {
+    logger.warn('Amy agent-mesh teach failed (non-fatal)', { error: err?.message })
   }
 
   // Daily flywheel scoreboard: fold this run's per-profile clean/issue verdicts
@@ -734,7 +864,7 @@ export async function runAmyTraining(options = {}) {
     floor_tuned: tuningApplied?.applied ? `${decision.from}->${decision.to}` : 'none',
     weights_tuned: weightTuning?.validation?.kept ? 'kept' : weightTuning?.applied?.applied ? 'reverted' : 'none',
     coverage_tuned: coverageTuning?.validation?.kept ? 'kept' : coverageTuning?.applied?.applied ? 'reverted' : 'none',
-    archetypes_learned: Object.keys(archetypeUpdate).length,
+    archetypes_learned: Object.keys(effectiveArchetypeUpdate).length,
     fleet_gap_classes: fleetGaps ? (fleetGaps.gaps?.length || 0) : null,
     gap_weighted_cohort: Boolean(categoryWeights),
     adapter_wishlist: gapActions.structural.length,
