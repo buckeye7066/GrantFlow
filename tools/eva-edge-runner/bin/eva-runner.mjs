@@ -110,6 +110,8 @@ async function main() {
                 expected_behavior: 'the declared start_command brings the app up within the readiness timeout',
                 observed_behavior: reason,
                 user_impact: 'no journey can run while the app cannot start',
+                repro_steps: [`run: ${String(manifest.start_command).slice(0, 120)}`, 'poll the readiness_probe until the timeout'],
+                diagnostic_confidence: 0.9,
                 duration_ms: Date.now() - started,
               },
             ],

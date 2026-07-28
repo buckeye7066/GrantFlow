@@ -121,7 +121,10 @@ export async function runWebJourney({ baseUrl, journey, captureDir = null, dryRu
 async function applyStep(page, step, baseUrl) {
   switch (step.action) {
     case 'goto':
-      return page.goto(new URL(step.url || '/', baseUrl).toString(), { waitUntil: 'domcontentloaded', timeout: step.timeout || 15000 })
+      // 30s default: a cold Vite dev server transforms the entry modules on
+      // the first request and routinely blows a 15s budget on a busy machine
+      // (the "intermittent goto timeout" class). Manifests can still override.
+      return page.goto(new URL(step.url || '/', baseUrl).toString(), { waitUntil: 'domcontentloaded', timeout: step.timeout || 30000 })
     case 'fill':
       return page.fill(step.selector, step.value ?? '', { timeout: step.timeout || 10000 })
     case 'click':
@@ -138,10 +141,20 @@ async function applyStep(page, step, baseUrl) {
 async function checkAssertion(page, assertion) {
   try {
     if (assertion.type === 'text_visible') {
+      // POLL until the deadline: a single instant textContent() read raced the
+      // SPA mount — on a cold Vite dev server `body` exists immediately but
+      // React renders seconds later, so healthy apps failed "visible text did
+      // not contain …" (the GrantFlow login class, 2026-07-28).
+      const deadline = Date.now() + (assertion.timeout || 8000)
       const loc = page.locator(assertion.selector || 'body')
-      const text = (await loc.first().textContent({ timeout: assertion.timeout || 8000 })) || ''
-      const ok = text.includes(assertion.value)
-      return { ok, observed: ok ? '' : `visible text did not contain "${assertion.value}"`, expected: `text containing "${assertion.value}"` }
+      let text = ''
+      for (;;) {
+        text = (await loc.first().textContent({ timeout: 1000 }).catch(() => '')) || ''
+        if (text.includes(assertion.value)) return { ok: true }
+        if (Date.now() >= deadline) break
+        await page.waitForTimeout(250)
+      }
+      return { ok: false, observed: `visible text did not contain "${assertion.value}"`, expected: `text containing "${assertion.value}"` }
     }
     if (assertion.type === 'url_contains') {
       const ok = page.url().includes(assertion.value)
