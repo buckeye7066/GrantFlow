@@ -21,6 +21,23 @@ function startServer() {
       DB_PROVIDER: 'sqlite',
       SQLITE_DB_PATH: dbPath,
       DB_AUTO_MIGRATE: 'true',
+      // MIGRATE_ON_BOOT must be set EXPLICITLY here, and DB_AUTO_MIGRATE is not
+      // a substitute for it: the two flags control different things
+      // (backend/startup/bootPolicy.js). DB_AUTO_MIGRATE only applies
+      // backend/db/schema.sql; the numbered migrations are gated by
+      // shouldMigrateOnBoot, which returns `!smoke`.
+      //
+      // This gate's own env — PORT=0 + DB_AUTO_MIGRATE=true + NODE_ENV
+      // != production — is precisely the pattern isSmokeMode() INFERS as smoke,
+      // so asking for auto-migrate is what turned the migration runner OFF. The
+      // server then came up with schema.sql only, which does not declare
+      // profile_opportunity_matches (schema.sql is a partial declaration; ~160
+      // migrations layer on it), and the crawler failed with
+      // "no such table: profile_opportunity_matches".
+      //
+      // isExplicitOptIn(MIGRATE_ON_BOOT) is checked BEFORE the smoke inference,
+      // so this restores the full migrated schema the crawler actually needs.
+      MIGRATE_ON_BOOT: 'true',
       AUTH_JWT_SECRET: 'test-secret',
       LIVE_CRAWL_TIMEOUT_MS: '1',
       // The server's default request/response timeout (30s) is tuned for
