@@ -488,7 +488,7 @@ async function probe(client, sql, params = []) {
 // ---------------------------------------------------------------------------
 // Guard: containment + production safety posture.
 
-async function runGuard(client, { baseUrl }) {
+async function runGuard(client, { baseUrl, writePrivilegeCode }) {
   const checks = [];
   const record = (name, pass, detail) => {
     checks.push({ name, pass, detail });
@@ -533,6 +533,16 @@ async function runGuard(client, { baseUrl }) {
     'INSERT into a real table is REFUSED',
     !ins.ok && (ins.code === '25006' || ins.code === '42501'),
     ins.ok ? 'AN INSERT SUCCEEDED — containment is broken' : `SQLSTATE ${ins.code}`,
+  );
+
+  // The decisive one: refused by PRIVILEGE, with our own read-only guard off.
+  // A superuser SUCCEEDS here even though it returned 25006 above.
+  record(
+    'write is refused by PRIVILEGE even with the guard off',
+    writePrivilegeCode === '42501',
+    writePrivilegeCode === 'SUCCEEDED'
+      ? 'A WRITE SUCCEEDED with the guard off — this account CAN write to production'
+      : `SQLSTATE ${writePrivilegeCode} (42501 = insufficient_privilege)`,
   );
 
   // Sensitive tables must be denied, not merely un-queried.
@@ -652,6 +662,41 @@ async function verifyAutomationPosture(client, { baseUrl, record }) {
 }
 
 /**
+ * Prove the account cannot write even with our OWN guard switched off.
+ *
+ * WHY THIS EXISTS SEPARATELY: the in-transaction write probe demands 25006, but
+ * 25006 is produced by `default_transaction_read_only`, which THIS SCRIPT sets.
+ * So that probe passes for ANY account — including a superuser — and proves only
+ * that we asked politely. Verified live: pointing the lane at the Railway
+ * superuser still returned 25006 on both write probes.
+ *
+ * The decisive control is the GRANT. This lifts the session flag and attempts a
+ * real INSERT, demanding 42501 (insufficient_privilege). An account that can
+ * actually write SUCCEEDS here and fails the audit.
+ *
+ * Must run BEFORE `BEGIN TRANSACTION READ ONLY`: `SET SESSION` cannot make the
+ * current read-only transaction writable, so inside it this would return a
+ * misleading 25006 and test nothing.
+ */
+async function probeWritePrivilege(client) {
+  await client.query('SET SESSION default_transaction_read_only = off');
+  let code = null;
+  try {
+    await client.query('BEGIN');
+    await client.query("INSERT INTO public.profiles (id) VALUES ('_audit_write_privilege_probe')");
+    code = 'SUCCEEDED';
+  } catch (err) {
+    code = err.code || 'unknown';
+  } finally {
+    // Nothing is ever committed: the INSERT lives and dies inside this
+    // transaction, and the guard is restored before anything else runs.
+    await client.query('ROLLBACK').catch(() => {});
+    await client.query('SET SESSION default_transaction_read_only = on').catch(() => {});
+  }
+  return code;
+}
+
+/**
  * Standalone auto-submit gate for callers outside this lane (the app lane).
  *
  * Deliberately shares ONE implementation with the guard above. Two copies of a
@@ -748,12 +793,16 @@ async function main() {
   const started = new Date().toISOString();
 
   try {
+    // Privilege probe FIRST — it needs the session guard off, which cannot be
+    // done from inside a read-only transaction. It restores the guard itself.
+    const writePrivilegeCode = await probeWritePrivilege(client);
+
     // READ ONLY transaction: belt and braces over the session default, and the
     // level the SQL standard actually enforces.
     await client.query('BEGIN TRANSACTION READ ONLY');
 
     console.log('Guard — containment and production safety posture:');
-    const guard = await runGuard(client, { baseUrl });
+    const guard = await runGuard(client, { baseUrl, writePrivilegeCode });
 
     const guardPath = path.join(args.outDir, 'guard.json');
     fs.writeFileSync(guardPath, JSON.stringify(redact(guard), null, 2));
