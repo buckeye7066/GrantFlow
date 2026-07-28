@@ -4,20 +4,18 @@ on:
   push:
     branches:
       - agent/grantflow-audit-corrections-20260728
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
 
+# Earlier setup pushes may have queued obsolete copies. The newest run owns the
+# branch and cancels them so exactly one verifier can patch and commit.
 concurrency:
   group: agent-grantflow-audit-corrections-20260728
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   apply-and-verify:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
