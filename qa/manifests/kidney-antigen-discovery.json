@@ -10,6 +10,13 @@
   "base_url": "http://localhost:3000",
   "test_target": "disposable-local-instance",
   "required_env": ["KAD_DB_PATH", "KAD_UPLOAD_DIR", "KAD_OUTPUT_DIR", "KAD_UPLOAD_TTL_HOURS", "KAD_LOG_LEVEL"],
+  "launch_env": {
+    "KAD_DB_PATH": ".eva-tmp/kidney-antigen-discovery/runs.db",
+    "KAD_UPLOAD_DIR": ".eva-tmp/kidney-antigen-discovery/uploads",
+    "KAD_OUTPUT_DIR": ".eva-tmp/kidney-antigen-discovery/outputs",
+    "KAD_UPLOAD_TTL_HOURS": "24",
+    "KAD_LOG_LEVEL": "info"
+  },
   "seed_command": "python -m app.tests.synthetic_data ../example_data/synthetic (regenerate the artificial demo dataset; cwd backend)",
   "reset_command": "rm -rf .eva-tmp/kidney-antigen-discovery/runs.db",
   "cleanup": "rm -rf .eva-tmp/kidney-antigen-discovery",

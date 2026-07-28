@@ -25,6 +25,7 @@ import * as cheerio from 'cheerio'
 import { getWithRetry } from './httpClient.js'
 import { makeBraveSearchProvider } from '../yana/webSearchProvider.js'
 import { makeSearxngProvider } from './searxngProvider.js'
+import { getCachedSearch, putCachedSearch } from './webSearchCache.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:webSearchEngine')
@@ -300,6 +301,19 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     return []
   }
 
+  // 0. Persistent SERP cache: nightly fan-outs repeat many queries verbatim
+  // (archetype queries recur night over night; golden profiles even share
+  // queries within one run), and that repeated volume is what suspends the
+  // upstream engines. A query answered within the TTL never re-hits an
+  // engine. Only HEALTHY sets are ever cached (below), so junk from a bad
+  // night cannot be replayed. Best-effort: no DB → plain miss.
+  const cached = await getCachedSearch(q, { count })
+  if (cached) return cached
+  const cacheAndReturn = async (results) => {
+    await putCachedSearch(q, results)
+    return results
+  }
+
   // 1. SearXNG (self-hosted, primary): keyless, unlimited, datacenter-reliable.
   // A non-empty result set is NOT proof the backend is healthy: when its engine
   // fleet collapses to scraped-bing, it returns a generic SERP for the query's
@@ -351,7 +365,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
           const suspended = (cleaned.searxngMeta.unresponsive_engines || []).map((u) => `${u.engine}:${u.reason || 'unresponsive'}`).join(', ')
           log.warn(`[webSearchEngine] SearXNG engine fleet collapsed to bing-only for "${q}" (suspended: ${suspended}) — trying fallback engines`)
         } else if (!looksDegenerateSerp(q, cleaned)) {
-          return cleaned
+          return cacheAndReturn(cleaned)
         } else {
           heldDegenerate = cleaned
           log.warn(`[webSearchEngine] SearXNG returned a degenerate first-word SERP for "${q}" — trying fallback engines`)
@@ -386,7 +400,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     if (fallbackEngines) {
       try {
         const cleaned = await searxngClean(fallbackEngines)
-        if (cleaned && !looksDegenerateSerp(q, cleaned)) return cleaned
+        if (cleaned && !looksDegenerateSerp(q, cleaned)) return cacheAndReturn(cleaned)
         if (cleaned && !heldDegenerate) heldDegenerate = cleaned
       } catch (err) {
         log.warn(`[webSearchEngine] SearXNG fallback-engines search failed for "${q}": ${err?.message ?? err}`)
@@ -401,10 +415,12 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     try {
       const results = await brave({ query: q })
       if (Array.isArray(results) && results.length) {
-        return results
+        const cleaned = results
           .filter((r) => r?.url && !shouldSkip(r.url))
           .slice(0, count)
           .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
+        if (cleaned.length) return cacheAndReturn(cleaned)
+        return cleaned
       }
     } catch (err) {
       log.warn(`[webSearchEngine] Brave search failed for "${q}": ${err?.message ?? err}`)

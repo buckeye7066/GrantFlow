@@ -10,6 +10,15 @@
   "base_url": "http://localhost:5273",
   "test_target": "disposable-local-instance",
   "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "CORS_ORIGIN", "ANTHROPIC_API_KEY", "INVITE_ONLY"],
+  "launch_env": {
+    "DATABASE_URL": "postgresql://eva:eva@localhost:5433/mindovermath_eva",
+    "AUTH_JWT_SECRET": "eva-local-test-secret-not-production",
+    "CORS_ORIGIN": "http://localhost:5273",
+    "APP_URL": "http://localhost:5273",
+    "INVITE_ONLY": "false",
+    "PORT": "3001",
+    "VITE_API_URL": "http://localhost:3001"
+  },
   "seed_command": null,
   "reset_command": null,
   "cleanup": "rm -rf .eva-tmp/mind-over-math && drop disposable test database",
@@ -63,7 +72,7 @@
       "steps": [
         { "action": "goto", "url": "/" },
         { "action": "waitForSelector", "selector": "body" },
-        { "action": "click", "selector": "a:has-text('Register'), button:has-text('Register'), a:has-text('Sign up')" },
+        { "action": "click", "selector": "a:has-text('Register'), button:has-text('Register'), a:has-text('Sign up'), button:has-text('Sign up')" },
         { "action": "wait", "ms": 800 }
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "egister" }],

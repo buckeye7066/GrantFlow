@@ -23,6 +23,12 @@ vi.mock('../services/yana/webSearchProvider.js', () => ({
 vi.mock('../services/shared/searxngProvider.js', () => ({
   makeSearxngProvider: (...a) => makeSearxngMock(...a),
 }))
+const cacheGetMock = vi.fn()
+const cachePutMock = vi.fn()
+vi.mock('../services/shared/webSearchCache.js', () => ({
+  getCachedSearch: (...a) => cacheGetMock(...a),
+  putCachedSearch: (...a) => cachePutMock(...a),
+}))
 
 const { searchWeb, _resetWebSearchEngineForTests } = await import(
   '../services/shared/webSearchEngine.js'
@@ -47,6 +53,10 @@ beforeEach(() => {
   makeBraveMock.mockClear()
   searxngSearchFn.mockReset()
   makeSearxngMock.mockClear()
+  cacheGetMock.mockReset()
+  cacheGetMock.mockResolvedValue(null)
+  cachePutMock.mockReset()
+  cachePutMock.mockResolvedValue(true)
   delete process.env.BRAVE_SEARCH_API_KEY
   delete process.env.SEARXNG_URL
   // vitest.setup.js sets GRANTFLOW_TEST_RUNNER=1 so no test hits live web
@@ -316,6 +326,50 @@ describe('the fallback-engines rung (SearXNG engines=yahoo, 2026-07-27)', () => 
     // Brave empty → held junk returned unchanged (never lose results).
     expect(results.map((r) => r.url)).toEqual(JUNK.map((r) => r.url))
     delete process.env.SEARXNG_FALLBACK_ENGINES
+  })
+})
+
+describe('the persistent SERP cache rung (nightly-load reducer, 2026-07-28)', () => {
+  const HIT = [{ url: 'https://county.gov/scholarship', title: 'Bradley County Scholarship', snippet: 'apply' }]
+
+  it('a cache hit short-circuits every provider', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    cacheGetMock.mockResolvedValue(HIT)
+
+    const results = await searchWeb('"Bradley County" scholarship')
+    expect(results).toEqual(HIT)
+    expect(searxngSearchFn).not.toHaveBeenCalled()
+    expect(braveSearchFn).not.toHaveBeenCalled()
+    expect(getWithRetryMock).not.toHaveBeenCalled()
+    expect(cachePutMock).not.toHaveBeenCalled()
+  })
+
+  it('a healthy SearXNG SERP is stored in the cache', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue([
+      { url: 'https://county.gov/scholarship', title: 'Bradley County Scholarship', snippet: 'apply' },
+    ])
+
+    const results = await searchWeb('"Bradley County" scholarship')
+    expect(results).toHaveLength(1)
+    expect(cachePutMock).toHaveBeenCalledTimes(1)
+    expect(cachePutMock.mock.calls[0][0]).toBe('"Bradley County" scholarship')
+  })
+
+  it('a held degenerate SERP is NEVER cached (junk cannot poison the next day)', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    // First-word junk for a multi-term query, no fallback answers, no Brave:
+    searxngSearchFn.mockResolvedValue([
+      { url: 'https://en.wikipedia.org/wiki/Cleveland', title: 'Cleveland - Wikipedia', snippet: 'Cleveland is a city in the U.S. state of Ohio' },
+    ])
+
+    const results = await searchWeb('Cleveland State Community College scholarships')
+    expect(results).toHaveLength(1) // held set still returned (never lose results)
+    expect(cachePutMock).not.toHaveBeenCalled()
   })
 })
 
