@@ -753,13 +753,32 @@ async function collectAmy(client) {
 
   if (report) {
     out.report = report;
+    // Amy's daily numbers live on report.cohort (verified against the live
+    // amy_last_report shape, 2026-07-27): profiles = evaluated, ok = clean.
+    // `issues` is DERIVED as evaluated - ok and labelled as such, because Amy
+    // records no single "issue count" field; inventing one under a name that
+    // implies she reported it would misrepresent her output.
+    const c = report.cohort ?? {};
+    const evaluated = c.profiles ?? null;
+    const clean = c.ok ?? null;
     out.counts = {
-      evaluated: report.evaluated ?? report.profiles_evaluated ?? report.total ?? null,
-      clean: report.clean ?? report.clean_count ?? null,
-      issues: Array.isArray(report.findings)
-        ? report.findings.length
-        : (report.issues ?? report.issue_count ?? null),
-      run_id: report.run_id ?? report.runId ?? null,
+      run_id: report.run_id ?? null,
+      started_at: report.started_at ?? null,
+      completed_at: report.completed_at ?? null,
+      evaluated,
+      clean,
+      issues_derived: evaluated != null && clean != null ? evaluated - clean : null,
+      weak: c.weak ?? null,
+      zero: c.zero ?? null,
+      errored: c.errored ?? null,
+      skipped: c.skipped ?? null,
+      false_positive_rate: c.false_positive_rate ?? null,
+      covered_rate: c.covered_rate ?? null,
+      quality_score: c.quality_score ?? null,
+      current_floor: c.current_floor ?? report.slider_floor ?? null,
+      approval_queue_size: Array.isArray(report.approval_queue)
+        ? report.approval_queue.length
+        : (report.approval_queue?.length ?? null),
     };
   }
 
@@ -858,8 +877,8 @@ async function main() {
     const amy = await collectAmy(client);
     console.log(
       `  ok     amy_findings                   evaluated=${amy.counts.evaluated ?? '?'} ` +
-        `clean=${amy.counts.clean ?? '?'} issues=${amy.counts.issues ?? '?'} ` +
-        `duplicate_runs=${amy.duplicate_runs.length}`,
+        `clean=${amy.counts.clean ?? '?'} issues(derived)=${amy.counts.issues_derived ?? '?'} ` +
+        `runs=${amy.recent_runs?.length ?? 0} duplicate_runs=${amy.duplicate_runs.length}`,
     );
 
     await client.query('COMMIT');

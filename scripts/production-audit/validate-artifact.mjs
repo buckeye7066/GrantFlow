@@ -191,7 +191,12 @@ function composeReport(outDir) {
     L.push(`- Latest report run id: ${c.run_id ?? 'unknown'}`);
     L.push(`- Profiles evaluated: ${c.evaluated ?? 'unknown'}`);
     L.push(`- Clean: ${c.clean ?? 'unknown'}`);
-    L.push(`- Issues: ${c.issues ?? 'unknown'}`);
+    // Labelled "derived" on purpose: Amy records no single issue-count field,
+    // so this is evaluated - clean, not a number she reported.
+    L.push(`- Issues (derived = evaluated - clean): ${c.issues_derived ?? 'unknown'}`);
+    L.push(`- Weak / zero / errored: ${c.weak ?? '?'} / ${c.zero ?? '?'} / ${c.errored ?? '?'}`);
+    L.push(`- False-positive rate: ${c.false_positive_rate ?? 'unknown'}`);
+    L.push(`- Operating floor: ${c.current_floor ?? 'unknown'}`);
     L.push(`- Duplicate runs detected: ${amy.amy.duplicate_runs?.length ?? 0}`);
     L.push(`- Report last written: ${amy.amy.report_updated_at ?? 'unknown'}`);
   } else {
