@@ -387,22 +387,41 @@ async function main() {
             },
             { p: profileId, h: host },
           );
-          // needs_session is reported HONESTLY: no captured Hamilton session
-          // means the read could not happen, which is a result, not a failure
-          // to paper over.
+          // Classify on the BODY, never the HTTP status.
+          //
+          // This route answers HTTP 200 with `{"ok": false, "error": "no
+          // authenticated session or saved login for this profile + portal
+          // host"}`. An earlier version keyed off res.ok (the HTTP status) and
+          // therefore reported three no-session failures as `read_completed` —
+          // the exact dishonesty this lane is supposed to avoid. A portal that
+          // could not be read must never be recorded as read.
+          const body = result?.body ?? {};
+          const bodyOk = body.ok === true;
           const needsSession =
-            result?.body?.needs_session === true ||
-            result?.body?.summary?.needs_session === true ||
-            /needs_session/i.test(JSON.stringify(result?.body ?? {}));
+            body.needs_session === true ||
+            body.summary?.needs_session === true ||
+            (!bodyOk && /session|sign[- ]?in|login/i.test(String(body.error ?? '')));
+
+          let outcome;
+          if (bodyOk) outcome = 'read_completed';
+          else if (needsSession) outcome = 'needs_session';
+          else outcome = 'refused_or_failed';
+
           portalReadResults.push({
             portal_host: host,
             profile_id: profileId,
-            status: result?.status ?? 0,
+            http_status: result?.status ?? 0,
+            body_ok: bodyOk,
             needs_session: needsSession,
-            outcome: result?.ok ? (needsSession ? 'needs_session' : 'read_completed') : 'refused_or_failed',
-            body: result?.body ?? null,
+            outcome,
+            // What the read actually PERSISTED, so "completed" can be checked
+            // against "found nothing", which are different facts.
+            fields_found: body.read?.fields_found ?? null,
+            awards_found: body.read?.awards_found ?? null,
+            error: body.error ?? null,
+            body,
           });
-          return `status ${result?.status} needs_session=${needsSession}`;
+          return `HTTP ${result?.status} body.ok=${bodyOk} outcome=${outcome}`;
         });
       }
     }

@@ -217,10 +217,15 @@ function composeReport(outDir) {
     if (app.portal_reads?.results?.length) {
       L.push('### Portal reads');
       L.push('');
-      L.push('| Portal host | Profile | Outcome |');
-      L.push('| --- | --- | --- |');
+      // fields/awards are shown next to the outcome because "read completed"
+      // and "found something" are different facts, and a table that reports
+      // only the first invites the reader to assume the second.
+      L.push('| Portal host | Profile | Outcome | Fields | Awards | Error |');
+      L.push('| --- | --- | --- | --- | --- | --- |');
       for (const r of app.portal_reads.results) {
-        L.push(`| ${r.portal_host} | ${r.profile_id} | ${r.outcome} |`);
+        L.push(
+          `| ${r.portal_host} | ${r.profile_id} | ${r.outcome} | ${r.fields_found ?? '-'} | ${r.awards_found ?? '-'} | ${r.error ?? '-'} |`,
+        );
       }
       L.push('');
     }
