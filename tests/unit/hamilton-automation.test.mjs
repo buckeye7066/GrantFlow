@@ -375,9 +375,13 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     assert.equal(result.task.output_docx_document_id, null)
   })
 
-  it('automates an auto_profile/FAFSA source: completed without inventing paperwork', async () => {
+  it('automates an auto_profile/FAFSA source with the FAFSA ON FILE: completed without inventing paperwork', async () => {
     resetCaches()
     const db = makeMemoryDb()
+    // FAFSA-link recognition (2026-07-27): "completed" is only honest when
+    // the profile actually HAS a FAFSA to link — seed it.
+    db.raw.prepare(`INSERT INTO profile_sections (id, profile_id, section_key, data)
+                    VALUES ('ps-A-edu-fafsa', 'p-A', 'education', '{"fafsa_completed": true}')`).run()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name)
                     VALUES ('opp-fafsa', 'University Need Aid', 'Awarded based on FAFSA results.', 'auto_profile', 'University')`).run()
     const result = await automateSingleSource(db, {
@@ -387,6 +391,22 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     })
     assert.equal(result.classification.automation_type, 'auto_profile')
     assert.equal(result.task.status, 'completed')
+  })
+
+  it('an auto_profile/FAFSA-link source with NO FAFSA on file parks with ONE honest ask (never fake-completes)', async () => {
+    resetCaches()
+    const db = makeMemoryDb()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name)
+                    VALUES ('opp-fafsa-2', 'University Need Aid', 'Awarded based on FAFSA results.', 'auto_profile', 'University')`).run()
+    const result = await automateSingleSource(db, {
+      profileId: 'p-A',
+      userId: 'u-A',
+      source: { opportunity_id: 'opp-fafsa-2', current_stage: 'submitted' },
+    })
+    assert.equal(result.classification.automation_type, 'auto_profile')
+    // Parked resumable: submitting the FAFSA later auto-resolves the ask via
+    // reconcileProfileFieldsToTasks and the task resumes on its own.
+    assert.equal(result.task.status, 'waiting_for_missing_info')
   })
 
   it('handles a portal source: when browser automation is disabled, marks ready_to_start with portal_url', async () => {
