@@ -36,7 +36,7 @@ jobs:
         run: npm ci
 
       - name: Apply audited corrections
-        run: python3 scripts/agent-apply-audit-corrections-v2.py
+        run: python3 scripts/agent-apply-audit-corrections-v3.py
 
       - name: Verify patch shape
         run: |
@@ -61,6 +61,7 @@ jobs:
         run: |
           rm scripts/agent-apply-audit-corrections.py
           rm scripts/agent-apply-audit-corrections-v2.py
+          rm scripts/agent-apply-audit-corrections-v3.py
           rm .github/workflows/agent-grantflow-audit-corrections.yml
 
       - name: Commit verified corrections
@@ -70,6 +71,7 @@ jobs:
           git add -A -- \
             scripts/agent-apply-audit-corrections.py \
             scripts/agent-apply-audit-corrections-v2.py \
+            scripts/agent-apply-audit-corrections-v3.py \
             .github/workflows/agent-grantflow-audit-corrections.yml \
             backend/routes/hamiltonAutomation.js \
             backend/routes/grantApplications.js \
