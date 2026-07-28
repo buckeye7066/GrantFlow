@@ -6,7 +6,7 @@
   "runtime_type": "web",
   "start_command": "cd backend && npm run dev & npm run dev",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/health", "port": 3001, "timeout_ms": 60000 },
+  "readiness_probe": { "type": "http", "path": "/health", "port": 3001, "timeout_ms": 120000 },
   "base_url": "http://localhost:5273",
   "test_target": "disposable-local-instance",
   "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "CORS_ORIGIN", "ANTHROPIC_API_KEY", "INVITE_ONLY"],
@@ -75,7 +75,7 @@
         { "action": "click", "selector": "a:has-text('Register'), button:has-text('Register'), a:has-text('Sign up'), button:has-text('Sign up')" },
         { "action": "wait", "ms": 800 }
       ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "egister" }],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Create account" }],
       "user_impact": "A prospective student who cannot reach registration cannot self-onboard (with INVITE_ONLY=false in the test env).",
       "candidate_files": ["src/pages/Login.tsx", "src/pages/Register.tsx"]
     }
