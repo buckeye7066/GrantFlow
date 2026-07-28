@@ -26,6 +26,7 @@ import { classifyFundingSource } from './hamiltonAutomationClassifier.js'
 import { assessHamiltonFundingSource } from './hamiltonFundingSourcePolicy.js'
 import { isAuthorizationActive, listActiveAuthorizations } from './hamiltonAuthorizationStore.js'
 import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
+import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
 
 const REQUIRED_IDENTITY_FIELDS = [
   { key: 'first_name', paths: ['basic_information.first_name', 'first_name'] },
@@ -171,6 +172,51 @@ function fieldPresent(profile, paths, key, resolvedFields) {
   return false
 }
 
+// ── FAFSA-linkage readiness (the "link your FAFSA" portal class) ─────────────
+// The structured missing-info key a FAFSA-linked portal's single ask is filed
+// under (kind 'field'), so the profile-wide reconcile can answer it everywhere
+// at once the moment the profile says the FAFSA is filed.
+export const FAFSA_LINK_FIELD_KEY = 'fafsa_link'
+export const FAFSA_LINK_BLOCKER_LABEL = 'Complete and submit your FAFSA'
+
+const FAFSA_TRUTHY = new Set(['true', '1', 'yes', 'y', 'completed', 'submitted', 'done'])
+function fafsaBoolTrue(v) {
+  if (v === true) return true
+  return FAFSA_TRUTHY.has(String(v ?? '').trim().toLowerCase())
+}
+
+/**
+ * Is the profile's FAFSA actually FILED (submitted or beyond)? Reads the
+ * canonical education.fafsa_status lifecycle first (services/college/
+ * fafsaStatus.js), then the legacy education.fafsa_completed boolean, then a
+ * deep scan for the flag stored under another section. Profile-generic —
+ * works for ANY profile's education record. Honesty rule (G-rules): this only
+ * REPORTS what the profile already says; Hamilton never fabricates an FSA ID,
+ * never files a FAFSA, and never invents a completion.
+ */
+export function profileFafsaCompleted(profile, resolvedFields = null) {
+  if (resolvedFields && nonEmpty(resolvedFields[FAFSA_LINK_FIELD_KEY])) return true
+  const education = get(profile, 'education') || get(profile, 'sections.education') || {}
+  if (education?.fafsa_status && deriveFafsaCompleted(normalizeFafsaStatus(education).stage)) return true
+  if (fafsaBoolTrue(education?.fafsa_completed)) return true
+  // Deep scan: some imports store the flag off the canonical education section.
+  const seen = new Set()
+  const stack = [profile]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object' || seen.has(node)) continue
+    seen.add(node)
+    if (Array.isArray(node)) { for (const item of node) stack.push(item); continue }
+    for (const [k, v] of Object.entries(node)) {
+      const nk = normKey(k)
+      if (nk === 'fafsa_completed' && fafsaBoolTrue(v)) return true
+      if (nk === 'fafsa_status' && v && typeof v === 'object' && deriveFafsaCompleted(v.stage)) return true
+      if (v && typeof v === 'object') stack.push(v)
+    }
+  }
+  return false
+}
+
 /**
  * Field keys the preflight can raise a MISSING-PROFILE-FIELD hard stop for.
  * Exported so the boot self-heal sweep (enforceInvariants) can recognise a
@@ -181,6 +227,7 @@ export const PREFLIGHT_PROFILE_FIELD_KEYS = Object.freeze([
   ...REQUIRED_IDENTITY_FIELDS.map((f) => f.key),
   'school_name',
   'household_income',
+  FAFSA_LINK_FIELD_KEY,
 ])
 
 /**
@@ -206,6 +253,12 @@ export function recheckMissingProfileFields(profile, keys = [], resolvedFields =
       if (!fieldPresent(profile, ['financial_information.household_income', 'household.income', 'household_income'], 'household_income', resolvedFields)) {
         stillMissing.push(key)
       }
+      continue
+    }
+    if (key === FAFSA_LINK_FIELD_KEY) {
+      // Answered ONLY by a real profile signal: the education section says the
+      // FAFSA is filed (or the operator cached it). Never inferred.
+      if (!profileFafsaCompleted(profile, resolvedFields)) stillMissing.push(key)
       continue
     }
     const spec = REQUIRED_IDENTITY_FIELDS.find((f) => f.key === key)
@@ -320,6 +373,22 @@ export async function preflightSingleSource(db, {
         detail: 'Need-based aid usually requires income on the application. Hamilton will leave it blank if absent.',
       })
     }
+  }
+
+  // 3b. FAFSA-linked portals ("link your FAFSA" is the whole application).
+  // If the profile already shows the FAFSA FILED there is nothing to ask —
+  // the profile record answers the portal's only requirement. Otherwise raise
+  // ONE structured ask under the canonical key so the profile-wide reconcile
+  // (reconcileProfileFieldsToTasks) clears it across EVERY FAFSA-linked task
+  // the moment education.fafsa_status/fafsa_completed turns real. Hamilton
+  // never files the FAFSA, never creates an FSA ID, and never claims a
+  // portal-side linkage happened.
+  if (classification.fafsa_link && !profileFafsaCompleted(profile, resolvedFields)) {
+    blockers.push({
+      kind: 'missing_field', key: FAFSA_LINK_FIELD_KEY,
+      label: FAFSA_LINK_BLOCKER_LABEL,
+      detail: 'This portal awards aid straight from your FAFSA — completing and submitting the FAFSA at studentaid.gov is the only application step. Once your profile shows it submitted, every FAFSA-linked portal task resumes automatically. Hamilton cannot file the FAFSA for you.',
+    })
   }
 
   // 4. Required documents.
