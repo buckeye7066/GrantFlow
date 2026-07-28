@@ -7,9 +7,11 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
-# Earlier setup pushes may have queued obsolete copies. The newest run owns the
-# branch and cancels them so exactly one verifier can patch and commit.
+# Only the latest verifier owns the branch. A newer diagnostic revision cancels
+# any obsolete run rather than allowing a queue of stale patches to accumulate.
 concurrency:
   group: agent-grantflow-audit-corrections-20260728
   cancel-in-progress: true
@@ -82,3 +84,10 @@ jobs:
           git diff --cached --check
           git commit -m "fix(audit): close remaining production-audit defects"
           git push origin HEAD:agent/grantflow-audit-corrections-20260728
+
+      - name: Report verifier failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment 1026 --body "Correction verifier failed. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
