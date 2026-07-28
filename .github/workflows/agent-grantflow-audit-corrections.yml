@@ -1,5 +1,7 @@
 name: Apply remaining GrantFlow audit corrections
 
+# This second branch push deliberately triggers the one-shot workflow after the
+# workflow file already exists on the branch.
 on:
   push:
     branches:
