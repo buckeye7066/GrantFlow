@@ -44,6 +44,12 @@ import { assertAutoSubmitDisabled } from './db-audit.mjs';
  * is better hygiene than abandoning a live session.
  */
 const MUTATION_ALLOWLIST = [
+  // A READ that uses POST so the email travels in the body rather than in a URL
+  // (and in logs). Verified in backend/routes/auth.js: the handler's only
+  // database statement is a SELECT against users. The sign-in form cannot
+  // advance from the email step to the password step without it — blocking it
+  // made login hang at "waiting for input[type=password]".
+  { method: 'POST', pattern: /\/api\/auth\/access\/check(?:\?|$)/, why: 'read-only auth-method lookup' },
   { method: 'POST', pattern: /\/api\/auth\/password\/login(?:\?|$)/, why: 'authentication' },
   { method: 'POST', pattern: /\/api\/auth\/email\/(?:start|verify)(?:\?|$)/, why: 'authentication' },
   { method: 'POST', pattern: /\/api\/auth\/refresh(?:\?|$)/, why: 'session refresh' },
@@ -309,17 +315,40 @@ async function main() {
       return `status ${capture.portal_sync_runs?.status}`;
     });
 
-    // Visual evidence of what the account is actually shown.
-    await step(`profile ${profileId}: screenshot`, async () => {
+    // Visual evidence of what the account is actually SHOWN.
+    //
+    // The SPA has no /profiles/:id route — its pages are PascalCase
+    // (/MyProfiles, /FundingResults, ...) and profile scoping comes from the
+    // `grantflow:active-profile-id` localStorage key the API client reads
+    // (src/api/client.js). So switch the active profile the way the app does,
+    // then load the real funding view.
+    await step(`profile ${profileId}: funding view screenshot`, async () => {
+      await page.evaluate((pid) => {
+        window.localStorage.setItem('grantflow:active-profile-id', pid);
+      }, profileId);
       await page
-        .goto(`${baseUrl}/profiles/${profileId}`, { waitUntil: 'domcontentloaded', timeout: 45_000 })
+        .goto(`${baseUrl}/FundingResults`, { waitUntil: 'domcontentloaded', timeout: 45_000 })
         .catch(() => {});
       await page.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
-      await shot(`10-profile-${String(i + 1).padStart(2, '0')}`);
+      await shot(`10-funding-${String(i + 1).padStart(2, '0')}`);
       return page.url();
     });
 
     profileCaptures.push(capture);
+  }
+
+  // ---- app-level surfaces -------------------------------------------------
+  for (const [name, route] of [
+    ['20-my-profiles', '/MyProfiles'],
+    ['21-pipeline', '/Pipeline'],
+    ['22-hamilton', '/HamiltonProcessing'],
+  ]) {
+    await step(`screenshot ${route}`, async () => {
+      await page.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
+      await shot(name);
+      return page.url();
+    });
   }
 
   // ---- Amy ---------------------------------------------------------------
@@ -435,13 +464,29 @@ async function main() {
   console.log(`failed requests           : ${failedRequests.length}`);
   console.log(`wrote application-findings.json`);
 
+  // What counts as a FAILED RUN, and what is merely a recorded finding.
+  //
+  // Sign-in failing means the lane produced no authenticated evidence at all —
+  // that is a broken audit and must fail loudly. Individual step failures are
+  // different: a screenshot that could not navigate, or an endpoint that
+  // returned an error, IS the audit's output. Failing the job on those would
+  // discard the whole artifact over exactly the observations worth keeping,
+  // and would train the operator to re-run until it goes green.
   const failed = steps.filter((s) => !s.ok);
+  if (failed.length) {
+    console.error(`\n${failed.length} step(s) failed (recorded in the artifact, not fatal):`);
+    failed.forEach((f) => console.error(`  - ${f.name}: ${f.error}`));
+  }
   if (!signedIn) {
     console.error('\nFAILED: could not sign in — the authenticated lane produced no evidence.');
     process.exit(1);
   }
-  if (failed.length) {
-    console.error(`\n${failed.length} step(s) failed: ${failed.map((f) => f.name).join('; ')}`);
+  // Every profile failing is not a flake, it is a broken lane.
+  const captured = profileCaptures.filter(
+    (c) => c.funding_sources || c.hamilton_tasks || c.portal_sync_runs,
+  );
+  if (args.profiles.length && !captured.length) {
+    console.error('\nFAILED: signed in, but not one profile yielded any data.');
     process.exit(1);
   }
 }

@@ -26,6 +26,7 @@ const CASES = [
   ['GET', `${B}/api/hamilton/automation/tasks?profileId=x`, true, {}, 'task read'],
   ['HEAD', `${B}/`, true, {}, 'harmless'],
   ['OPTIONS', `${B}/api/anything`, true, {}, 'preflight'],
+  ['POST', `${B}/api/auth/access/check`, true, {}, 'read-only auth-method lookup; login cannot advance without it'],
   ['POST', `${B}/api/auth/password/login`, true, {}, 'nothing is visible without a session'],
   ['POST', `${B}/api/auth/refresh`, true, {}, 'session refresh'],
   ['POST', `${B}/api/auth/logout`, true, {}, 'clean logout'],

@@ -29,11 +29,32 @@ import { createLogger } from '../utils/logger.js'
 const log = createLogger('route:funding-sources')
 const router = express.Router()
 
-async function userMayAccessProfile(req, user, profileId) {
+/**
+ * getAccessibleProfileIds returns a **Set** of ids, or `null` as the DB-backed
+ * admin "all access" sentinel — it has never returned an Array.
+ *
+ * This used to read `Array.isArray(accessible) && accessible.includes(id)`,
+ * which is ALWAYS false for a Set, so every non-admin caller got 403 on their
+ * own funding-sources list. Admins were unaffected because the isAdmin branch
+ * above returns first, which is why it survived: the accounts most likely to
+ * test this endpoint could never reproduce it.
+ *
+ * Found 2026-07-28 by the production-audit bridge, using a non-admin account
+ * with access to five profiles: /funding-sources returned 403 for all five
+ * while the Hamilton and portal-sync routes (which handle the Set correctly)
+ * returned 200 for the same account and the same profiles.
+ *
+ * Both container shapes are accepted here so this cannot silently break again
+ * if the helper's return type is ever widened.
+ */
+export async function userMayAccessProfile(req, user, profileId) {
   if (!profileId) return false
   if (req.ctx?.isAdmin === true) return true
   const accessible = await getAccessibleProfileIds(req.db, user)
-  return Array.isArray(accessible) && accessible.includes(profileId)
+  if (accessible === null) return true // DB-backed admin sentinel => global access
+  const id = String(profileId)
+  if (accessible instanceof Set) return accessible.has(id)
+  return Array.isArray(accessible) && accessible.includes(id)
 }
 
 function jparse(v, fallback) {
