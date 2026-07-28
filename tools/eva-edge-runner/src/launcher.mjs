@@ -29,6 +29,15 @@ export async function launchWebApp({ app, manifest, log = () => {} }) {
     return { launched: false, ready: true, baseUrl, reason: 'no start_command', stop: async () => {} }
   }
 
+  // Pre-launch hygiene: a prior app (or a dev server the owner left running)
+  // squatting this app's ports makes the new server fail to bind. Free them
+  // before spawning so the fleet run is order-independent.
+  const preClearPorts = new Set()
+  if (probe.port) preClearPorts.add(Number(probe.port))
+  const preBasePort = baseUrl ? portOfUrl(baseUrl) : null
+  if (preBasePort && preBasePort !== 80 && preBasePort !== 443) preClearPorts.add(preBasePort)
+  for (const port of preClearPorts) freePortAndWait(port, { attempts: 8 })
+
   const env = { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
   // Manifests use the POSIX idiom "backend & frontend" to mean "run BOTH
   // concurrently". Under shell:true on Windows that string reaches cmd.exe,
@@ -178,7 +187,30 @@ function stopLaunched(children, probe = {}, baseUrl = null) {
   if (probe.port) ports.add(Number(probe.port))
   const basePort = baseUrl ? portOfUrl(baseUrl) : null
   if (basePort && basePort !== 80 && basePort !== 443) ports.add(basePort)
-  for (const port of ports) freePort(port)
+  // Free each port AND confirm it is actually released before returning. Apps
+  // run sequentially and several share ports (are-we-mice + mind-over-math both
+  // bind frontend 5273 / backend 3001), so if the NEXT app spawns while a prior
+  // grandchild still holds the port, its own server fails to bind and reads as
+  // startup_failed — a teardown race, not a real failure (the 2026-07-28
+  // flaky-fleet class). Block here until the ports are free (bounded).
+  for (const port of ports) freePortAndWait(port)
+}
+
+// Free a port and spin until it is no longer LISTENing (Windows), bounded to a
+// few seconds so a genuinely stuck port can't hang the whole fleet run.
+function freePortAndWait(port, { attempts = 20, intervalMs = 250 } = {}) {
+  freePort(port)
+  if (process.platform !== 'win32') return
+  for (let i = 0; i < attempts; i++) {
+    const res = spawnSync(
+      'powershell',
+      ['-NoProfile', '-Command', `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Measure-Object).Count`],
+      { encoding: 'utf8' },
+    )
+    if (String(res.stdout || '').trim() === '0') return
+    freePort(port)
+    spawnSync('powershell', ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${intervalMs}`], { stdio: 'ignore' })
+  }
 }
 
 // Kill whatever still holds a TCP port (Windows). Only used as a post-stop
