@@ -77,6 +77,14 @@
  *           from a saved username/password alone (SSO / 2FA) — a captured login
  *           session (durable storageState) is mandatory. runPortalSync fails
  *           honestly instead of running an unauthenticated, empty sync.
+ * @property {boolean} [supportsFullMerge]  when true, this connector CAN certify
+ *           a full merge (all its data domains read) — a prerequisite for the
+ *           terminal `merged` lifecycle state. A connector without this (the
+ *           generic LLM-extraction connector) reaches at most `partially_synced`.
+ * @property {string[]} [requiredReadDomains]  the data domains this connector
+ *           must read `complete` (readResult.domains[d].complete === true) before
+ *           a run may be recorded as terminally `merged`. Empty/undefined ⇒ the
+ *           connector can never reach full merge (audit #19 completeness contract).
  * @property {(page: import('playwright').Page, ctx: PortalSyncContext) => Promise<PortalReadResult>} read
  * @property {(page: import('playwright').Page, ctx: PortalSyncContext, data: object) => Promise<PortalWriteResult>} write
  */

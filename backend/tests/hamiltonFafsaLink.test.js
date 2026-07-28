@@ -342,6 +342,83 @@ describe('FAFSA-link fulfillment loop (Anastasia + Robert — profile-generic)',
   })
 })
 
+// ── 3b. Canonical field aliases + nested-path safety (audit #15) ─────────────
+
+describe('reconcile resolves aliased field keys and never guesses across nested parties', () => {
+  let db
+  beforeEach(async () => {
+    db = makeDb()
+    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-a', 'Applicant')").run(ANASTASIA)
+  })
+
+  const flagField = async (key) => {
+    const t = await ensureApplicationTask(db, { profileId: ANASTASIA, opportunityId: LINK_ONLY_OPP.id, automationType: 'auto_profile' })
+    await updateApplicationTask(db, t.id, { status: 'waiting_for_missing_info' })
+    await setMissingInfo(db, t.id, [{ kind: 'field', key, label: key, required: true }])
+    return t
+  }
+
+  it('a portal flag named "given_name" is answered by the profile\'s first_name', async () => {
+    await setSection(db, ANASTASIA, 'basic_information', { first_name: 'Anastasia' })
+    const t = await flagField('given_name')
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    expect(rec.fieldsResolved).toBe(1)
+    const resolved = (await listMissingInfo(db, t.id)).find((m) => m.key === 'given_name')
+    expect(resolved.resolved).toBe(true)
+    expect(String(resolved.resolved_value)).toBe('Anastasia')
+  })
+
+  it('other spellings resolve too: firstName / legal_first_name / postal_code / phone_number', async () => {
+    await setSection(db, ANASTASIA, 'basic_information', { firstName: 'Ana', legal_last_name: 'Steele' })
+    await setSection(db, ANASTASIA, 'contact', { postal_code: '37311', phone_number: '555-0100' })
+    const tFirst = await flagField('first_name')
+    const tZip = await flagField('zip_code')
+    const tPhone = await flagField('telephone')
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    expect(rec.fieldsResolved).toBe(3)
+    const val = async (t, k) => String((await listMissingInfo(db, t.id)).find((m) => m.key === k).resolved_value)
+    expect(await val(tFirst, 'first_name')).toBe('Ana')
+    expect(await val(tZip, 'zip_code')).toBe('37311')
+    expect(await val(tPhone, 'telephone')).toBe('555-0100')
+  })
+
+  it('the APPLICANT\'s section-root first_name wins over a nested guardian.first_name', async () => {
+    await setSection(db, ANASTASIA, 'basic_information', {
+      first_name: 'Anastasia',
+      guardian: { first_name: 'Margaret' },
+    })
+    const t = await flagField('first_name')
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    expect(rec.fieldsResolved).toBe(1)
+    const resolved = (await listMissingInfo(db, t.id)).find((m) => m.key === 'first_name')
+    expect(String(resolved.resolved_value)).toBe('Anastasia') // never the guardian's
+  })
+
+  it('a genuinely ambiguous bare leaf (two nested parties, no root) resolves NOTHING — no wrong guess', async () => {
+    // phone is not derivable from display_name, so this isolates the nested
+    // ambiguity: two parties carry a phone, neither at section root.
+    await setSection(db, ANASTASIA, 'household', {
+      guardian: { phone: '555-1111' },
+      sibling: { phone: '555-2222' },
+    })
+    await flagField('phone') // bare, ambiguous
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    expect(rec.fieldsResolved).toBe(0)
+  })
+
+  it('an explicit nested path still resolves exactly its own value', async () => {
+    await setSection(db, ANASTASIA, 'household', {
+      guardian: { first_name: 'Margaret' },
+      sibling: { first_name: 'Elyria' },
+    })
+    const t = await flagField('household.guardian.first_name')
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    expect(rec.fieldsResolved).toBe(1)
+    const resolved = (await listMissingInfo(db, t.id)).find((m) => m.key === 'household.guardian.first_name')
+    expect(String(resolved.resolved_value)).toBe('Margaret')
+  })
+})
+
 // ── 4. One deduped honest ask across N portals ──────────────────────────────
 
 describe('one honest FAFSA ask across N portals (summary/action plan)', () => {

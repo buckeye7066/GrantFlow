@@ -38,6 +38,16 @@ export const hostMatch = /(^|\.)mtsu\.edu$|mtsu\.academicworks\.com$/i
 // "completed, 0 awards" pass. See portalSync/index.js.
 export const requiresSession = true
 
+// Completeness contract (2026-07-28 audit #19): MTSU is a dedicated connector
+// that CAN, in principle, certify a full merge — but only once its read()
+// reports every one of these domains `complete` (readResult.domains[d].complete).
+// Until the read reports that, resolveMergeState keeps the portal
+// `partially_synced`, never a false terminal `merged` (MTSU's selectors are all
+// documented ASSUMPTIONs, so claiming full merge before the read proves each
+// domain would be exactly the dishonesty the audit flagged).
+export const supportsFullMerge = true
+export const requiredReadDomains = ['identity', 'applications', 'application_statuses', 'awards']
+
 // How long any single page interaction waits before we treat the element as
 // absent. Short on purpose: a missing selector should fail FAST into `notFound`,
 // not hang the whole sync.

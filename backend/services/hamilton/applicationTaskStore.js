@@ -729,29 +729,84 @@ export async function reconcileProfileDocumentUploads(db, { profileId, documentN
   return out
 }
 
+// Portal labels for the SAME field vary ("firstname" / "given_name" /
+// "legal_first_name"); without a canonical map each spelling is a different key
+// and a flag never matches the profile value (external audit 2026-07-28, the
+// #15 remaining-weakness class). Map known synonyms to one canonical segment;
+// an unknown segment normalizes to itself (never invents an alias).
+const FIELD_ALIASES = Object.freeze({
+  firstname: 'first_name', givenname: 'first_name', given_name: 'first_name', legal_first_name: 'first_name', first: 'first_name', fname: 'first_name',
+  lastname: 'last_name', surname: 'last_name', familyname: 'last_name', family_name: 'last_name', legal_last_name: 'last_name', last: 'last_name', lname: 'last_name',
+  middlename: 'middle_name', legal_middle_name: 'middle_name', middle: 'middle_name',
+  zipcode: 'zip_code', zip: 'zip_code', postalcode: 'zip_code', postal_code: 'zip_code',
+  telephone: 'phone', phonenumber: 'phone', phone_number: 'phone', mobilephone: 'phone', mobile_phone: 'phone', mobile: 'phone', cellphone: 'phone', cell_phone: 'phone', cell: 'phone',
+  emailaddress: 'email', email_address: 'email', e_mail: 'email',
+  dob: 'date_of_birth', birthdate: 'date_of_birth', birth_date: 'date_of_birth',
+  ssn: 'social_security_number',
+})
+
+function canonicalFieldSegment(value) {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return FIELD_ALIASES[normalized] ?? normalized
+}
+
+function canonicalFieldPath(value) {
+  return String(value ?? '')
+    .split('.')
+    .map(canonicalFieldSegment)
+    .filter(Boolean)
+    .join('.')
+}
+
 // Flatten profile_sections rows into a lookup of candidate field keys → value,
-// indexing both the leaf key ("ein") and the dotted path ("organization_details.ein")
-// so a flagged field's key matches however it was named. Empty values are skipped.
+// keyed by the CANONICAL dotted path ("basic_information.first_name") so aliases
+// collapse to one key. A bare-leaf shortcut ("first_name") is added only when it
+// is UNAMBIGUOUS: previously a nested "guardian.first_name" and a top-level
+// "first_name" both clobbered the single leaf entry (first-wins), so a bare flag
+// could resolve to the wrong person's name (audit #15). Section-root candidates
+// (the applicant's OWN field) win the shortcut over deeper nested parties.
 function flattenProfileSectionValues(sectionRows) {
-  const map = {}
+  const exact = {}
+  const leafCandidates = new Map() // leaf -> [{ path, value }]
+  const addLeaf = (leaf, path, value) => {
+    if (!leafCandidates.has(leaf)) leafCandidates.set(leaf, [])
+    leafCandidates.get(leaf).push({ path, value })
+  }
   for (const row of (sectionRows || [])) {
     let data = row?.data
     if (typeof data === 'string') { try { data = JSON.parse(data) } catch { data = null } }
-    const sectionKey = String(row?.section_key || '').toLowerCase()
-    const walk = (obj) => {
+    const sectionKey = canonicalFieldSegment(row?.section_key)
+    const walk = (obj, parent = []) => {
       if (!obj || typeof obj !== 'object') return
       for (const [k, v] of Object.entries(obj)) {
-        if (v && typeof v === 'object' && !Array.isArray(v)) { walk(v); continue }
+        const seg = canonicalFieldSegment(k)
+        const nextPath = [...parent, seg]
+        if (v && typeof v === 'object' && !Array.isArray(v)) { walk(v, nextPath); continue }
         const val = Array.isArray(v) ? v.filter(Boolean).join(', ') : v
         if (val === null || val === undefined || String(val).trim() === '') continue
-        const leaf = String(k).toLowerCase()
-        if (!map[leaf]) map[leaf] = String(val)
-        if (sectionKey) map[`${sectionKey}.${leaf}`] = String(val)
+        const text = String(val)
+        const leaf = nextPath[nextPath.length - 1]
+        const full = [sectionKey, ...nextPath].filter(Boolean).join('.')
+        if (!(full in exact)) exact[full] = text
+        addLeaf(leaf, full, text)
       }
     }
     walk(data)
   }
-  return map
+  for (const [leaf, candidates] of leafCandidates) {
+    if (leaf in exact) continue
+    // Prefer section-root candidates (path depth 2 = "section.leaf" = the
+    // applicant's own field) over deeper nested parties sharing the leaf name.
+    const roots = candidates.filter((c) => c.path.split('.').length === 2)
+    const pool = roots.length ? roots : candidates
+    const uniqueValues = [...new Set(pool.map((c) => c.value))]
+    if (uniqueValues.length === 1) exact[leaf] = uniqueValues[0]
+  }
+  return exact
 }
 
 // Statuses whose missing-info rows are DEAD — the task's run is over, so a
@@ -804,7 +859,7 @@ export async function reconcileProfileFieldsToTasks(db, {
       if (v === null || v === undefined || typeof v === 'object') continue
       const s = String(v).trim()
       if (!s) continue
-      const leaf = String(k).toLowerCase()
+      const leaf = canonicalFieldSegment(k)
       if (!values[leaf]) values[leaf] = s
     }
   } catch { /* profiles table shape varies on minimal DBs */ }
@@ -861,7 +916,9 @@ export async function reconcileProfileFieldsToTasks(db, {
       .filter((m) => m.kind === 'field')
     let resolvedHere = 0
     for (const item of fieldItems) {
-      const key = String(item.key || '').toLowerCase()
+      // Canonicalize the flagged key the SAME way the profile values were, so a
+      // portal's "given_name" flag matches the profile's "first_name" (audit #15).
+      const key = canonicalFieldPath(item.key)
       const leaf = key.split('.').pop()
       const value = (values[key] && values[key].trim()) ? values[key] : (leaf && values[leaf] && values[leaf].trim() ? values[leaf] : null)
       if (value) {

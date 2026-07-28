@@ -69,11 +69,12 @@ export async function selectUnmergedPortals(db, profileId) {
       if (!host) continue
       const st = statusMap.get(String(host))
       if (st?.status === PORTAL_STATUS.MERGED) continue
+      const passthrough = st?.status === PORTAL_STATUS.COMPLETE || st?.status === PORTAL_STATUS.PARTIALLY_SYNCED
       out.set(String(host), {
         host: String(host),
         label: p.label || String(host),
         loginUrl: p.loginUrl || `https://${host}`,
-        status: st?.status === PORTAL_STATUS.COMPLETE ? PORTAL_STATUS.COMPLETE : PORTAL_STATUS.UNMERGED,
+        status: passthrough ? st.status : PORTAL_STATUS.UNMERGED,
       })
     }
     // 2. Status rows in 'complete'/'unmerged' that no longer derive a tile (e.g. a
@@ -81,11 +82,12 @@ export async function selectUnmergedPortals(db, profileId) {
     for (const [host, st] of statusMap.entries()) {
       if (st.status === PORTAL_STATUS.MERGED) continue
       if (out.has(host)) continue
+      const passthrough = st.status === PORTAL_STATUS.COMPLETE || st.status === PORTAL_STATUS.PARTIALLY_SYNCED
       out.set(host, {
         host,
         label: host,
         loginUrl: `https://${host}`,
-        status: st.status === PORTAL_STATUS.COMPLETE ? PORTAL_STATUS.COMPLETE : PORTAL_STATUS.UNMERGED,
+        status: passthrough ? st.status : PORTAL_STATUS.UNMERGED,
       })
     }
     return [...out.values()].sort((a, b) => a.label.localeCompare(b.label))
@@ -103,7 +105,9 @@ export function buildReminder({ displayName, unmerged }) {
   const line = (p) => {
     const tag = p.status === PORTAL_STATUS.COMPLETE
       ? ' (application complete — merge it to pull your results in)'
-      : ' (log in to finish + merge)'
+      : p.status === PORTAL_STATUS.PARTIALLY_SYNCED
+        ? ' (partially synced — some data pulled; finish the rest)'
+        : ' (log in to finish + merge)'
     return `${p.label}${tag}: ${p.loginUrl}`
   }
 

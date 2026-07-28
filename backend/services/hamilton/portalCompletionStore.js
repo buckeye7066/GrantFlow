@@ -37,11 +37,16 @@ import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:portal-completion-store')
 
-// The three lifecycle states. "unmerged" is the implicit default (no row).
+// The lifecycle states. "unmerged" is the implicit default (no row).
 export const PORTAL_STATUS = Object.freeze({
   UNMERGED: 'unmerged',
   COMPLETE: 'complete', // application complete, NOT yet merged
-  MERGED: 'merged', // data pulled into the profile (terminal)
+  // A sync genuinely pulled SOME data in, but the connector cannot certify it
+  // read every required domain (2026-07-28 audit #19): a portal is not "merged"
+  // on one field/award write. Non-terminal — still reminder-eligible — but
+  // honestly distinct from "nothing synced".
+  PARTIALLY_SYNCED: 'partially_synced',
+  MERGED: 'merged', // ALL required domains pulled into the profile (terminal)
 })
 
 const VALID_STATUSES = new Set(Object.values(PORTAL_STATUS))
@@ -248,6 +253,34 @@ export async function markPortalMerged(db, opts = {}) {
     || (opts.syncRunId ? `portal_sync_run:${opts.syncRunId}` : null)
     || (confirmed ? 'human_confirmed' : null)
   return setPortalStatus(db, { ...opts, evidence, status: PORTAL_STATUS.MERGED })
+}
+
+/**
+ * Mark a portal PARTIALLY_SYNCED — a real sync pulled data in, but the
+ * connector could not certify every required read domain (2026-07-28 audit).
+ * Non-terminal: still reminder-eligible, but the tile reads "partially synced"
+ * instead of a false "merged" or a misleading "unmerged". Refuses to downgrade
+ * an already-MERGED portal, and requires the same proof a merge does.
+ *
+ * @returns the status row, or null when unconfirmed (refused).
+ */
+export async function markPortalPartiallySynced(db, opts = {}) {
+  const existing = await getPortalStatus(db, opts.profileId, opts.portalHost)
+  if (existing?.status === PORTAL_STATUS.MERGED) return existing
+  const confirmed = opts.confirmed === true || opts.confirmed === 1 || opts.confirmed === 'true'
+  const hasProof = Boolean(opts.evidence || opts.syncRunId || opts.documentId || opts.grantId)
+  if (!confirmed && !hasProof) {
+    log.warn('partial_sync_refused_unconfirmed', {
+      profileId: String(opts.profileId || ''),
+      host: portalStatusKeyHost(opts.portalHost),
+      source: opts.source || null,
+    })
+    return null
+  }
+  const evidence = opts.evidence
+    || (opts.syncRunId ? `portal_sync_run:${opts.syncRunId}` : null)
+    || (confirmed ? 'human_confirmed' : null)
+  return setPortalStatus(db, { ...opts, evidence, status: PORTAL_STATUS.PARTIALLY_SYNCED })
 }
 
 /** Record that we sent a reminder for this portal (idempotency / audit). */

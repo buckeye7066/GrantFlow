@@ -85,6 +85,12 @@ const generic = {
   // implements a login workflow may relax this for ITS hosts.
   requiresSession: true,
 
+  // Completeness contract (2026-07-28 audit #19): generic LLM extraction cannot
+  // certify it read a portal's every domain, so it can NEVER reach the terminal
+  // `merged` state — a generic sync that pulls real data reaches at most
+  // `partially_synced`. supportsFullMerge:false is what enforces that.
+  supportsFullMerge: false,
+
   async read(page, ctx) {
     const log = ctx?.log || (() => {})
     const nav = await visit(page, ctx)

@@ -42,6 +42,7 @@ import { upsertSchoolPortalAwardAsOpportunity } from '../../schoolPortalImportSe
 import { isDismissed } from '../../pipelineDismissals.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../../shared/nameParsing.js'
 import { createLogger } from '../../../utils/logger.js'
+import { PORTAL_STATUS } from '../portalCompletionStore.js'
 import { listConnectors, getConnectorForHost, resolveConnector } from './registry.js'
 import {
   ensurePortalSyncSchema,
@@ -214,25 +215,54 @@ export function shouldMarkMergedAfterRead(persisted) {
 }
 
 /**
- * Record the terminal `merged` lifecycle state after a successful READ that
- * truly pulled data in (shouldMarkMergedAfterRead), with the sync run as the
- * auditable proof markPortalMerged requires. Returns whether the merge was
- * recorded. Best-effort — a status write failure never breaks the sync.
+ * The COMPLETENESS contract (2026-07-28 audit #19): a read may be marked the
+ * TERMINAL `merged` state only when the connector can certify it read every
+ * domain it is responsible for — not merely that one field/award wrote. Returns
+ * the honest lifecycle target: 'merged', 'partially_synced', or null.
+ *
+ * FULL merge requires ALL of: a clean pull (shouldMarkMergedAfterRead),
+ * connector.supportsFullMerge === true, a non-empty connector.requiredReadDomains,
+ * and every one of those domains reported `complete` in readResult.domains. A
+ * connector that pulls data but cannot certify completeness (the generic
+ * LLM-extraction connector, or a full-merge connector whose read didn't cover
+ * every domain this run) reaches `partially_synced` — real progress, never a
+ * false terminal merge.
  */
-export async function finalizeReadMerge(db, { profileId, host, runId = null, persisted } = {}) {
-  if (!shouldMarkMergedAfterRead(persisted)) return false
+export function resolveMergeState(persisted, connector, readResult) {
+  if (!shouldMarkMergedAfterRead(persisted)) return null
+  const required = Array.isArray(connector?.requiredReadDomains) ? connector.requiredReadDomains : []
+  const domains = (readResult && typeof readResult.domains === 'object' && readResult.domains) || {}
+  const allDomainsComplete = required.length > 0 && required.every((d) => domains?.[d]?.complete === true)
+  if (connector?.supportsFullMerge === true && allDomainsComplete) return PORTAL_STATUS.MERGED
+  return PORTAL_STATUS.PARTIALLY_SYNCED
+}
+
+/**
+ * Record the lifecycle state after a successful READ, per the completeness
+ * contract (resolveMergeState): terminal `merged` ONLY when the connector
+ * certified every required domain, else the honest non-terminal
+ * `partially_synced` when real data was pulled. The sync run is the auditable
+ * proof both states require. Returns { state, recorded }. Best-effort — a
+ * status write failure never breaks the sync.
+ */
+export async function finalizeReadMerge(db, { profileId, host, runId = null, persisted, connector = null, readResult = null } = {}) {
+  const state = resolveMergeState(persisted, connector, readResult)
+  if (!state) return { state: null, recorded: false, merged: false }
   try {
-    const { markPortalMerged } = await import('../portalCompletionStore.js')
-    const merged = await markPortalMerged(db, {
+    const { markPortalMerged, markPortalPartiallySynced } = await import('../portalCompletionStore.js')
+    const opts = {
       profileId, portalHost: host,
       source: 'portal_sync',
       syncRunId: runId || undefined,
       evidence: runId ? `portal_sync_run:${runId}` : `portal_sync_read:${new Date().toISOString()}`,
-    })
-    return Boolean(merged)
+    }
+    const row = state === PORTAL_STATUS.MERGED
+      ? await markPortalMerged(db, opts)
+      : await markPortalPartiallySynced(db, opts)
+    return { state, recorded: Boolean(row), merged: state === PORTAL_STATUS.MERGED && Boolean(row) }
   } catch (err) {
     log.warn('portal_sync_merge_mark_failed', { profileId, host, err: err?.message })
-    return false
+    return { state, recorded: false, merged: false }
   }
 }
 
@@ -424,14 +454,16 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       }
       summary.read = result.read
 
-      // TRUE MERGE: a successful READ that actually pulled the portal's data
-      // into the profile IS the merge the lifecycle store defines — record it,
-      // with the sync run as auditable proof, so the tile turns "merged" and
-      // the weekly unmerged-portals reminder stops nagging about a portal
-      // whose data is already in.
-      const merged = await finalizeReadMerge(db, { profileId, host, runId, persisted })
-      result.merged = merged
-      summary.merged = merged
+      // Lifecycle state per the completeness contract: terminal `merged` ONLY
+      // when the connector certified every required domain, else the honest
+      // non-terminal `partially_synced` when real data was pulled. Recorded
+      // with the sync run as auditable proof; a partial sync stays on the
+      // weekly reminder (it isn't done) but no longer reads as "unmerged".
+      const mergeOutcome = await finalizeReadMerge(db, { profileId, host, runId, persisted, connector, readResult })
+      result.merged = mergeOutcome.merged
+      result.sync_state = mergeOutcome.state
+      summary.merged = mergeOutcome.merged
+      summary.sync_state = mergeOutcome.state
     }
 
     if (dir === 'write' || dir === 'both') {

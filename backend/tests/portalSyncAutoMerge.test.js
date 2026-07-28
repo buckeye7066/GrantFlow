@@ -19,13 +19,20 @@ import { describe, it, expect, beforeEach } from 'vitest'
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'a'.repeat(64)
 
 const Database = (await import('better-sqlite3')).default
-const { shouldMarkMergedAfterRead, finalizeReadMerge } = await import('../services/hamilton/portalSync/index.js')
+const { shouldMarkMergedAfterRead, finalizeReadMerge, resolveMergeState } = await import('../services/hamilton/portalSync/index.js')
 const {
   getPortalStatus,
   _resetPortalCompletionSchemaCache,
 } = await import('../services/hamilton/portalCompletionStore.js')
 
 const CLEAN = { fieldsWritten: 2, fieldsRejected: [], awardsWritten: 1, awardsDismissed: 0, awardsFailed: [] }
+
+// A dedicated connector that CAN certify full merge, and a read reporting its
+// one domain complete.
+const FULL_CONNECTOR = { id: 'mtsu', supportsFullMerge: true, requiredReadDomains: ['awards'] }
+const FULL_READ = { domains: { awards: { complete: true } } }
+// The generic connector can never certify completeness.
+const GENERIC_CONNECTOR = { id: 'generic', supportsFullMerge: false }
 
 describe('shouldMarkMergedAfterRead', () => {
   it('merges only a read that truly pulled data in, cleanly', () => {
@@ -54,6 +61,24 @@ describe('shouldMarkMergedAfterRead', () => {
   })
 })
 
+describe('resolveMergeState (completeness contract, audit #19)', () => {
+  it('FULL merge only when the connector certifies every required domain', () => {
+    expect(resolveMergeState(CLEAN, FULL_CONNECTOR, FULL_READ)).toBe('merged')
+  })
+  it('a full-merge connector whose read did NOT cover every domain is PARTIAL, not merged', () => {
+    expect(resolveMergeState(CLEAN, FULL_CONNECTOR, { domains: { awards: { complete: false } } })).toBe('partially_synced')
+    expect(resolveMergeState(CLEAN, FULL_CONNECTOR, { domains: {} })).toBe('partially_synced')
+    expect(resolveMergeState(CLEAN, FULL_CONNECTOR, null)).toBe('partially_synced')
+  })
+  it('the generic connector can never reach full merge — real data is at most PARTIAL', () => {
+    expect(resolveMergeState(CLEAN, GENERIC_CONNECTOR, FULL_READ)).toBe('partially_synced')
+    expect(resolveMergeState(CLEAN, null, FULL_READ)).toBe('partially_synced')
+  })
+  it('no clean pull → no state at all', () => {
+    expect(resolveMergeState({ fieldsWritten: 0, awardsWritten: 0, awardsFailed: [], fieldsRejected: [] }, FULL_CONNECTOR, FULL_READ)).toBeNull()
+  })
+})
+
 describe('finalizeReadMerge', () => {
   let db
   beforeEach(() => {
@@ -62,9 +87,10 @@ describe('finalizeReadMerge', () => {
     _resetPortalCompletionSchemaCache()
   })
 
-  it('records the terminal merged state with the sync run as evidence', async () => {
-    const merged = await finalizeReadMerge(db, { profileId: 'p1', host: 'mtsu.edu', runId: 'run-42', persisted: CLEAN })
-    expect(merged).toBe(true)
+  it('records the terminal merged state (full connector + all domains) with the run as evidence', async () => {
+    const out = await finalizeReadMerge(db, { profileId: 'p1', host: 'mtsu.edu', runId: 'run-42', persisted: CLEAN, connector: FULL_CONNECTOR, readResult: FULL_READ })
+    expect(out.merged).toBe(true)
+    expect(out.state).toBe('merged')
     const status = await getPortalStatus(db, 'p1', 'mtsu.edu')
     expect(status.status).toBe('merged')
     expect(status.merged_at).toBeTruthy()
@@ -72,18 +98,29 @@ describe('finalizeReadMerge', () => {
     expect(status.source).toBe('portal_sync')
   })
 
-  it('does not record a merge for an empty read', async () => {
-    const merged = await finalizeReadMerge(db, {
+  it('records PARTIALLY_SYNCED (real data, completeness uncertified) — not a false merge', async () => {
+    const out = await finalizeReadMerge(db, { profileId: 'p2', host: 'someportal.edu', runId: 'run-44', persisted: CLEAN, connector: GENERIC_CONNECTOR, readResult: FULL_READ })
+    expect(out.merged).toBe(false)
+    expect(out.state).toBe('partially_synced')
+    const status = await getPortalStatus(db, 'p2', 'someportal.edu')
+    expect(status.status).toBe('partially_synced')
+    expect(status.evidence).toBe('portal_sync_run:run-44')
+  })
+
+  it('does not record anything for an empty read', async () => {
+    const out = await finalizeReadMerge(db, {
       profileId: 'p1', host: 'mtsu.edu', runId: 'run-43',
       persisted: { fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [] },
+      connector: FULL_CONNECTOR, readResult: FULL_READ,
     })
-    expect(merged).toBe(false)
+    expect(out.state).toBeNull()
+    expect(out.merged).toBe(false)
     expect(await getPortalStatus(db, 'p1', 'mtsu.edu')).toBeNull()
   })
 
   it('still merges (with timestamp evidence) when run bookkeeping was degraded', async () => {
-    const merged = await finalizeReadMerge(db, { profileId: 'p1', host: 'mtsu.edu', runId: null, persisted: CLEAN })
-    expect(merged).toBe(true)
+    const out = await finalizeReadMerge(db, { profileId: 'p1', host: 'mtsu.edu', runId: null, persisted: CLEAN, connector: FULL_CONNECTOR, readResult: FULL_READ })
+    expect(out.merged).toBe(true)
     const status = await getPortalStatus(db, 'p1', 'mtsu.edu')
     expect(status.status).toBe('merged')
     expect(String(status.evidence)).toMatch(/^portal_sync_read:/)
