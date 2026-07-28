@@ -87,6 +87,7 @@ import {
   startCloudLogin,
   getCloudLoginMeta,
   getCloudLoginSession,
+  registerCloudLoginViewer,
   startScreencast,
   dispatchInput,
   completeCloudLogin,
@@ -1167,16 +1168,28 @@ router.get('/sessions/cloud-login/:liveSessionId/stream', async (req, res) => {
     }
   }, 15_000)
 
+  let unregisterViewer = null
   const cleanup = () => {
     if (closed) return
     closed = true
     clearInterval(heartbeat)
+    if (typeof unregisterViewer === 'function') { try { unregisterViewer() } catch { /* ignore */ } }
     if (typeof stop === 'function') { stop().catch(() => {}) }
     try { res.end() } catch { /* ignore */ }
   }
 
   req.on('close', cleanup)
   req.on('error', cleanup)
+
+  // When the live session is torn down (complete / cancel / TTL sweep), END
+  // this stream with a terminal event. Without this the SSE stayed open on
+  // heartbeats over a DEAD session: the window read "Live" over the last
+  // painted frame while every click 404'd silently.
+  unregisterViewer = registerCloudLoginViewer(ctx.liveSessionId, (code) => {
+    if (closed) return
+    try { res.write(`event: error\ndata: ${JSON.stringify({ error: code || 'session_closed' })}\n\n`) } catch { /* ignore */ }
+    cleanup()
+  })
 
   try {
     stop = await startScreencast(ctx.liveSessionId, (frame) => {
