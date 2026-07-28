@@ -143,6 +143,10 @@ export async function buildHamiltonProfileSummary(db, profileId) {
   try {
     missingByTask = await listMissingInfoForTasks(db, (tasks || []).map((t) => t.id), { includeResolved: false })
   } catch { missingByTask = new Map() }
+  // FAFSA-linked portal asks are collected across tasks and emitted ONCE —
+  // N portals that only need the FAFSA linked are one real-world action
+  // (submit the FAFSA), not N separate stops.
+  const fafsaLinkAsks = []
   for (const t of tasks || []) {
     const status = String(t.status || '').toLowerCase()
     if (TERMINAL_TASK_STATUS.has(status)) continue
@@ -173,6 +177,10 @@ export async function buildHamiltonProfileSummary(db, profileId) {
     const missing = missingByTask.get(String(t.id)) || []
     for (const m of missing) {
       if (m.resolved) continue
+      if (String(m.kind || '').toLowerCase() === 'field' && String(m.key || '') === 'fafsa_link') {
+        fafsaLinkAsks.push({ task_id: t.id, title })
+        continue
+      }
       const isDoc = String(m.kind || '').toLowerCase() === 'document'
       needsYou.push({
         id: `missing:${m.id}`,
@@ -185,6 +193,28 @@ export async function buildHamiltonProfileSummary(db, profileId) {
         required: Boolean(m.required),
       })
     }
+  }
+
+  // 1b. The single deduped FAFSA ask. One honest action ("complete and submit
+  // the FAFSA") that names how many portals it unlocks — never N per-portal
+  // stops. It clears on its own everywhere once the profile's education
+  // section shows the FAFSA submitted (reconcileProfileFieldsToTasks);
+  // Hamilton never files the FAFSA or creates an FSA ID for the student.
+  if (fafsaLinkAsks.length > 0) {
+    const n = fafsaLinkAsks.length
+    const portalNames = [...new Set(fafsaLinkAsks.map((a) => a.title).filter(Boolean))].slice(0, 3)
+    needsYou.push({
+      id: 'fafsa:link',
+      kind: 'missing_field',
+      title: 'Complete and submit your FAFSA',
+      detail: `${n === 1 ? '1 portal' : `${n} portals`} on this profile (${portalNames.join(', ')}${n > portalNames.length ? ', …' : ''}) award aid straight from your FAFSA — submitting the FAFSA once covers ${n === 1 ? 'it' : 'all of them'}. File it at studentaid.gov, then mark it submitted on the profile's education section; every FAFSA-linked task resumes automatically. Hamilton never files the FAFSA or creates an FSA ID for you.`,
+      where: 'profile',
+      task_id: fafsaLinkAsks[0].task_id,
+      task_ids: fafsaLinkAsks.map((a) => a.task_id),
+      task_count: n,
+      field_key: 'fafsa_completed',
+      required: true,
+    })
   }
 
   // 2. Portals that still need a captured login session ("sign in once").

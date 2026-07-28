@@ -18,6 +18,7 @@
 import crypto from 'crypto'
 import { withProfileScope } from '../../middleware/profileContext.js'
 import { parseFullName } from '../../../shared/nameParsing.js'
+import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
 
 export const TASK_STATUSES = Object.freeze([
   // Legacy task statuses (per-grant Hamilton flow).
@@ -818,6 +819,32 @@ export async function reconcileProfileFieldsToTasks(db, {
       if (parts.last_name && !values.last_name) values.last_name = parts.last_name
     }
   }
+
+  // FAFSA-linked portals file ONE structured ask (kind 'field', key
+  // 'fafsa_link' — "this portal awards straight from your FAFSA"). It is
+  // answerable ONLY by a real profile signal: the education section's
+  // canonical FAFSA lifecycle says the FAFSA is FILED (fafsa_status at/after
+  // 'submitted', or the legacy fafsa_completed boolean). A not-yet-filed FAFSA
+  // keeps the honest ask, and nothing here ever fabricates an FSA ID or claims
+  // a portal-side linkage happened. The generic flatten above must never
+  // decide this key (a stray profile field named fafsa_link, or a
+  // fafsa_completed=false stringified to 'false', would otherwise "answer"
+  // it), so the honest gate below is the single authority.
+  delete values.fafsa_link
+  delete values['education.fafsa_link']
+  const eduRow = (sections || []).find((r) => String(r?.section_key || '').toLowerCase() === 'education')
+  if (eduRow) {
+    let edu = eduRow.data
+    if (typeof edu === 'string') { try { edu = JSON.parse(edu) } catch { edu = null } }
+    if (edu && typeof edu === 'object') {
+      const status = normalizeFafsaStatus(edu)
+      const filed = (edu.fafsa_status && deriveFafsaCompleted(status.stage))
+        || edu.fafsa_completed === true
+        || String(edu.fafsa_completed).trim().toLowerCase() === 'true'
+      if (filed) values.fafsa_link = `fafsa_${status.stage}`
+    }
+  }
+
   if (Object.keys(values).length === 0) return out
 
   const skip = FIELD_RECONCILE_SKIP_STATUSES.map(() => '?').join(',')

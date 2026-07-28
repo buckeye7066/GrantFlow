@@ -62,6 +62,34 @@ const SUBMIT_MAIL_RX = /(mail|post|send)\s*(application|form|packet|materials|do
 const PDF_DOCX_RX = /\.(pdf|docx?|rtf)(\?|#|$)/i
 const FAX_NUMBER_RX = /\bfax(?:[\s:.]+)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/i
 
+// ── FAFSA-linkage detection (the "link your FAFSA" portal class) ─────────────
+// Many portals on a student profile require NO application of their own — the
+// whole "application" is connecting the student's already-filed FAFSA (state
+// aid portals like the TSAA, schools that award straight from FAFSA data,
+// "import your FAFSA" flows). Detection is deliberately PRECISE: a page merely
+// MENTIONING FAFSA eligibility ("FAFSA encouraged", "may also qualify for
+// federal aid") is NOT link-only. A hit requires explicit linkage/import
+// language, an awards-directly-from-FAFSA claim, or the-FAFSA-IS-the-
+// application phrasing — plus student-aid context. This flag never asserts a
+// linkage HAPPENED; it only marks that the portal's requirement IS the FAFSA.
+const FAFSA_LINK_PATTERNS = [
+  // Direct linkage/import verbs aimed at the FAFSA or the federal student aid account.
+  /\b(?:link|links|linking|import|imports|importing|connect|connects|connecting|sync|syncs|syncing|transfer|transfers|transferring)\s+(?:your\s+|the\s+|a\s+)?fafsa\b/i,
+  /\b(?:link|import|connect)\w*\s+(?:your\s+|the\s+)?(?:federal\s+student\s+aid|studentaid\.gov)\s+(?:account|information|data|record)s?\b/i,
+  // The FAFSA IS the application.
+  /\bfafsa\s+(?:is|serves\s+as|acts\s+as)\s+(?:the|your)\s+(?:only\s+|sole\s+)?application\b/i,
+  /\bno\s+(?:separate|additional|other)\s+application[^.\n]{0,120}\bfafsa\b/i,
+  /\bfafsa\b[^.\n]{0,120}\bno\s+(?:separate|additional|other)\s+application\b/i,
+  // Awards determined straight from FAFSA data.
+  /\b(?:awarded?|considered|determined|selected|evaluated)\s+(?:automatically\s+)?(?:based\s+(?:solely\s+|entirely\s+)?on|using|directly\s+from|from)\s+(?:the\s+|your\s+)?fafsa\b/i,
+  /\buses?\s+(?:your\s+|the\s+)?fafsa\s+(?:data|information|results?)\s+directly\b/i,
+  /\bschools?\s+(?:that\s+)?us(?:e|ing)\s+fafsa\s+data\s+directly\b/i,
+  // "Just complete/submit/file the FAFSA to apply / be considered."
+  /\b(?:complete|submit|file)\w*\s+(?:the\s+|your\s+|a\s+)?fafsa\s+to\s+(?:apply|be\s+considered|qualify|receive)\b/i,
+  /\bonly\s+requir\w+\s+(?:is\s+)?(?:a\s+|the\s+|your\s+)?(?:completed\s+|submitted\s+)?fafsa\b/i,
+]
+const STUDENT_AID_CONTEXT_RX = /\b(?:students?|scholarships?|tuition|colleges?|universit(?:y|ies)|education|financial\s+aid|student\s+aid|\baid\b|grants?|semesters?|undergraduate|graduate)\b/i
+
 function lower(value) { return String(value || '').toLowerCase() }
 function nonEmpty(value) { return value !== null && value !== undefined && String(value).trim() !== '' }
 function buildText(opportunity) {
@@ -111,6 +139,38 @@ function readUrl(opportunity, grant) {
   return null
 }
 
+/**
+ * Does this source's application method consist of LINKING the student's
+ * FAFSA (rather than filing anything of its own)? Pure — no IO. Reads the
+ * same explicit metadata the classifier honors (application_mode /
+ * opportunity_kind === 'fafsa') plus precise linkage phrasing in the copy.
+ * Profile-agnostic by design: the verdict is about the PORTAL, never about
+ * who is applying.
+ *
+ * @returns {{ fafsa_link: boolean, signal: string|null }}
+ */
+export function detectFafsaLinkRequirement({ opportunity = null, grant = null } = {}) {
+  const mode = lower(readMode(opportunity, grant) || '')
+  const oppKind = lower(opportunity?.opportunity_kind || grant?.opportunity_kind || '')
+  if (mode === 'fafsa' || oppKind === 'fafsa') {
+    return { fafsa_link: true, signal: `metadata.fafsa:${mode || oppKind}` }
+  }
+  const text = [
+    buildText(opportunity || {}),
+    grant?.title,
+    grant?.description,
+    grant?.eligibility_text,
+    grant?.notes,
+  ].filter(Boolean).join('\n')
+  if (!FAFSA_RX.test(text)) return { fafsa_link: false, signal: null }
+  if (!STUDENT_AID_CONTEXT_RX.test(text)) return { fafsa_link: false, signal: null }
+  for (const rx of FAFSA_LINK_PATTERNS) {
+    const m = rx.exec(text)
+    if (m) return { fafsa_link: true, signal: `text.fafsa_link:${String(m[0]).slice(0, 60)}` }
+  }
+  return { fafsa_link: false, signal: null }
+}
+
 function readContact(opportunity, grant, key) {
   return (
     opportunity?.[key]
@@ -137,6 +197,7 @@ function readContact(opportunity, grant, key) {
  *   mailing_address: string|null,
  *   apply_email: string|null,
  *   apply_fax: string|null,
+ *   fafsa_link: boolean,
  * }}
  */
 export function classifyFundingSource({ opportunity = null, grant = null, profile = null, portalLink = null } = {}) {
@@ -158,6 +219,13 @@ export function classifyFundingSource({ opportunity = null, grant = null, profil
     || readContact(opportunity, grant, 'application_address')
     || readContact(opportunity, grant, 'address')
 
+  // FAFSA-linkage marker (additive — never changes automation_type). A portal
+  // whose whole application method is "link your FAFSA" carries fafsa_link so
+  // preflight/pathways can answer it from the profile's education record
+  // instead of raising generic stops.
+  const fafsaLink = detectFafsaLinkRequirement({ opportunity, grant })
+  if (fafsaLink.fafsa_link) reasons.push({ rule: 'fafsa.link_only', signal: fafsaLink.signal })
+
   const setAndReturn = (type, conf, rule, signal) => {
     reasons.push({ rule, signal })
     return {
@@ -168,6 +236,7 @@ export function classifyFundingSource({ opportunity = null, grant = null, profil
       mailing_address: mailingAddress || null,
       apply_email: applyEmail || null,
       apply_fax: applyFax || null,
+      fafsa_link: fafsaLink.fafsa_link,
     }
   }
 
@@ -250,5 +319,6 @@ export const _internal = {
   FAFSA_RX, NOMINATION_RX, INSTITUTIONAL_RX,
   SUBMIT_EMAIL_RX, SUBMIT_FAX_RX, SUBMIT_MAIL_RX,
   PDF_DOCX_RX, FAX_NUMBER_RX,
+  FAFSA_LINK_PATTERNS, STUDENT_AID_CONTEXT_RX,
   readMode, readUrl, readContact, buildText,
 }

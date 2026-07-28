@@ -41,6 +41,7 @@ import {
   updateApplicationTask,
   appendTaskEvent,
   setMissingInfo,
+  resolveMissingInfoItem,
 } from './applicationTaskStore.js'
 import { generateAndSavePacket } from './hamiltonApplicationPacketGenerator.js'
 import {
@@ -74,6 +75,9 @@ import { isAutomationEnabled } from '../../../shared/automationPreferences.js'
 import {
   preflightSingleSource,
   readAuthorizations,
+  profileFafsaCompleted,
+  FAFSA_LINK_FIELD_KEY,
+  FAFSA_LINK_BLOCKER_LABEL,
 } from './hamiltonPreflight.js'
 import {
   createAutopilotRun,
@@ -663,9 +667,128 @@ async function runDocumentPathway(db, {
   return { task: await reload(db, task.id), classification, packet: result, proposal: proposalResult }
 }
 
+/**
+ * FAFSA-linked pathway ("link your FAFSA" portals — the Anastasia/Robert
+ * class, owner request 2026-07-27). PROFILE-GENERIC by design: it reads ANY
+ * profile's education FAFSA record and is never keyed to a specific profile.
+ *
+ *   - Profile shows the FAFSA FILED (education.fafsa_status at/after
+ *     'submitted', or the legacy fafsa_completed boolean) → the task completes
+ *     honestly: the FAFSA on file IS this portal's application. Hamilton
+ *     records readiness FROM THE PROFILE — he never logs into studentaid.gov,
+ *     never fabricates an FSA ID, and never claims a portal-side linkage
+ *     happened; the student is told to confirm the school/portal shows the
+ *     FAFSA received.
+ *   - FAFSA not filed → ONE structured ask (missing-info kind 'field', key
+ *     'fafsa_link'); the task parks resumable (waiting_for_missing_info). The
+ *     profile-wide reconcile (reconcileProfileFieldsToTasks — per-call profile
+ *     saves + the boot net) answers the ask across EVERY FAFSA-linked task the
+ *     moment the profile says the FAFSA is submitted, and auto-resumes them.
+ */
+async function runFafsaLinkPathway(db, {
+  task, profile, opportunity, grant, classification, userId,
+}) {
+  const title = opportunity?.title || grant?.title || 'this funding source'
+  const fafsaOnFile = profileFafsaCompleted(profile)
+
+  if (!fafsaOnFile) {
+    const message = `"${title}" awards aid straight from your FAFSA — completing and submitting the FAFSA at studentaid.gov is the only application step. Hamilton can't file it for you (federal aid must be filed by the student/family), but the moment your profile's education section shows it submitted, every FAFSA-linked portal task resumes automatically.`
+    const missingItems = [{
+      kind: 'field',
+      key: FAFSA_LINK_FIELD_KEY,
+      label: FAFSA_LINK_BLOCKER_LABEL,
+      description: message,
+      required: true,
+    }]
+    await updateApplicationTask(db, task.id, {
+      status: 'waiting_for_missing_info',
+      currentStep: 'fafsa_link',
+      lastAgentMessage: message,
+      auditSummary: { classification, fafsa_link: { required: true, fafsa_on_file: false } },
+    })
+    await setMissingInfo(db, task.id, missingItems)
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'missing_info',
+      status: 'waiting_for_missing_info',
+      step: 'fafsa_link',
+      message,
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { fafsa_link: true, fafsa_on_file: false },
+    })
+    const alertIds = await emitMissingInfoAlert(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      taskId: task.id,
+      missing: missingItems,
+      fundingSourceTitle: title,
+    })
+    if (alertIds.length === 0) {
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        type: 'hamilton_task_blocked',
+        title: 'Complete your FAFSA — it unlocks this portal',
+        message,
+        severity: 'warning',
+        data: { task_id: task.id, fafsa_link: true },
+      })
+    }
+    return { task: await reload(db, task.id), classification, fafsa_link: true, waiting_on_fafsa: true }
+  }
+
+  // FAFSA filed — the profile's own record answers this portal's only
+  // requirement. Resolve any earlier fafsa_link ask on this task so history
+  // stays consistent (no-op when none was filed).
+  try {
+    await resolveMissingInfoItem(db, task.id, {
+      kind: 'field', key: FAFSA_LINK_FIELD_KEY,
+      value: 'fafsa_on_file', resolvedBy: 'hamilton_fafsa_link',
+    })
+  } catch { /* best-effort */ }
+  const message = `"${title}" awards aid straight from your FAFSA, and your profile shows the FAFSA submitted — there is nothing separate to file here. Hamilton recorded that this portal is covered by the FAFSA on your profile (he never logs into studentaid.gov); double-check the school/portal shows your FAFSA received.`
+  await updateApplicationTask(db, task.id, {
+    status: 'completed',
+    currentStep: 'fafsa_link',
+    lastAgentMessage: message,
+    auditSummary: { classification, action_packet: true, fafsa_link: { required: true, fafsa_on_file: true } },
+    completedAt: new Date().toISOString(),
+  })
+  await appendTaskEvent(db, {
+    taskId: task.id,
+    eventType: 'note',
+    status: 'completed',
+    step: 'fafsa_link',
+    message,
+    actorUserId: userId,
+    actorRole: 'agent',
+    details: { fafsa_link: true, fafsa_on_file: true },
+  })
+  await emitHamiltonNotificationToProfileAndAdmins(db, {
+    profileId: task.profile_id,
+    profileUserId: task.user_id,
+    type: 'hamilton_task_started',
+    title: 'Your FAFSA covers this funding source',
+    message,
+    severity: 'success',
+    data: { task_id: task.id, fafsa_link: true, classification },
+  })
+  return { task: await reload(db, task.id), classification, fafsa_link: true, action_packet: true }
+}
+
 async function runActionPacketPathway(db, {
   task, profile, opportunity, grant, classification, userId,
 }) {
+  // FAFSA-linked sources get a REAL readiness check against the profile's
+  // education record instead of the generic "confirm your FAFSA is on file"
+  // sign-off below.
+  if (classification.fafsa_link) {
+    return await runFafsaLinkPathway(db, {
+      task, profile, opportunity, grant, classification, userId,
+    })
+  }
+
   // No application is generated. We persist a clear "what to do" packet
   // and notify the user.
   const message = classification.automation_type === 'auto_profile'
