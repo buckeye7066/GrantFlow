@@ -42,6 +42,21 @@ export async function runEvaMaintenance(db, { now = null, staleMs = LIMITS.DEFAU
          WHERE lifecycle_state NOT IN ('resolved', 'stale')`,
       ).run(at)
       markedStale = Number(res?.changes ?? res?.rowCount ?? 0)
+    } else {
+      // Fresh runs exist, but a finding a fresh run did NOT re-observe is just
+      // as unvouchable: when an app fails startup its journeys never execute,
+      // so its old failures (e.g. the pre-launcher ERR_CONNECTION_REFUSED
+      // class) were re-rendered as "recurring" every morning forever — nothing
+      // could ever pass-resolve them. Age them out individually by
+      // last_seen_at: re-observation makes a finding fresh again, silence does
+      // not keep it alive.
+      const at = new Date(nowMs).toISOString()
+      const cutoff = new Date(nowMs - staleMs).toISOString()
+      const res = await db.prepare(
+        `UPDATE eva_findings SET lifecycle_state = 'stale', updated_at = ?
+         WHERE lifecycle_state NOT IN ('resolved', 'stale') AND last_seen_at < ?`,
+      ).run(at, cutoff)
+      markedStale = Number(res?.changes ?? res?.rowCount ?? 0)
     }
 
     // Prune replay nonces older than the freshness window. A request bearing an

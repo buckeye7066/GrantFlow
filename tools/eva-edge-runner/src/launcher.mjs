@@ -30,45 +30,94 @@ export async function launchWebApp({ app, manifest, log = () => {} }) {
   }
 
   const env = { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
-  // shell:true so multi-part manifest commands work verbatim on Windows and
-  // POSIX ("npm run dev", "npm run dev:full", "a && b", "a & b"). detached on
-  // POSIX gives us a process group to kill; on Windows we use taskkill /T.
-  const child = spawn(startCmd, {
-    cwd,
-    shell: true,
-    detached: process.platform !== 'win32',
-    stdio: 'ignore',
-    env,
-  })
+  // Manifests use the POSIX idiom "backend & frontend" to mean "run BOTH
+  // concurrently". Under shell:true on Windows that string reaches cmd.exe,
+  // where a single `&` is a SEQUENTIAL separator — the backend dev server runs
+  // in the foreground forever and the frontend is never started, so every
+  // `a & b` app failed readiness on its frontend port (the 5273/5173
+  // startup_failed class, 2026-07-28). Split on single `&` (never `&&`) and
+  // spawn each segment as its own shell child; `cd x && …` prefixes stay inside
+  // their own segment, and each segment starts from the app's repo root.
+  const segments = splitConcurrentSegments(startCmd)
+  const children = segments.map((segment) =>
+    spawn(segment, {
+      cwd,
+      shell: true,
+      detached: process.platform !== 'win32',
+      stdio: 'ignore',
+      env,
+    }),
+  )
 
-  let exited = false
-  let exitInfo = null
-  child.on('exit', (code, signal) => {
-    exited = true
-    exitInfo = { code, signal }
+  const exitInfos = new Array(children.length).fill(null)
+  children.forEach((child, i) => {
+    child.on('exit', (code, signal) => {
+      exitInfos[i] = { code, signal }
+    })
   })
+  // "Dead" means EVERY segment has exited — while any survives, the server we
+  // are waiting on may still be coming up.
+  const allExited = () => exitInfos.every(Boolean)
 
-  const stop = async () => stopLaunched(child, probe)
+  const stop = async () => stopLaunched(children, probe, baseUrl)
 
   // Readiness: for an http probe, poll until the server answers (any HTTP
   // response means it is up). Without an http probe we cannot confirm a port,
   // so we grant a short grace period and proceed — the journey's own goto still
   // fails honestly if nothing is listening.
   const timeoutMs = probe.timeout_ms || manifest.max_runtime_ms || 60000
-  if (probe.type === 'http' && baseUrl) {
-    const readyUrl = safeJoin(baseUrl, probe.path || '/')
-    const ready = await waitForHttp(readyUrl, {
-      timeoutMs,
-      isDead: () => exited,
-    })
-    if (!ready) {
-      log(`[launcher] ${manifest.app_id || app?.app_id}: not ready at ${readyUrl} within ${timeoutMs}ms${exited ? ` (start_command exited ${JSON.stringify(exitInfo)})` : ''}`)
+  if (probe.type === 'http' && (baseUrl || probe.port)) {
+    // Manifests may declare the health endpoint on a BACKEND port (probe.port)
+    // while journeys navigate the FRONTEND base_url. Probing only base_url
+    // asked e.g. are-we-mice for /health on 5273 (its Vite port) though the
+    // health route lives on 3001 — and probing only probe.port would declare
+    // ready before the frontend listens. Wait for BOTH when they differ.
+    const readyUrls = []
+    const probePath = probe.path || '/'
+    if (probe.port) readyUrls.push(safeJoin(`http://localhost:${probe.port}`, probePath))
+    if (baseUrl) {
+      const baseProbe = probe.port && portOfUrl(baseUrl) !== Number(probe.port)
+        ? safeJoin(baseUrl, '/')
+        : safeJoin(baseUrl, probe.port ? '/' : probePath)
+      if (!readyUrls.includes(baseProbe)) readyUrls.push(baseProbe)
     }
-    return { launched: true, ready, baseUrl, pid: child.pid, stop }
+    let ready = true
+    for (const readyUrl of readyUrls) {
+      ready = await waitForHttp(readyUrl, {
+        timeoutMs,
+        isDead: allExited,
+      })
+      if (!ready) {
+        log(`[launcher] ${manifest.app_id || app?.app_id}: not ready at ${readyUrl} within ${timeoutMs}ms${allExited() ? ` (start_command exited ${JSON.stringify(exitInfos)})` : ''}`)
+        break
+      }
+    }
+    return { launched: true, ready, baseUrl, pid: children[0]?.pid, stop }
   }
 
   await sleep(Math.min(timeoutMs, 3000))
-  return { launched: true, ready: !exited, baseUrl, pid: child.pid, stop }
+  return { launched: true, ready: !allExited(), baseUrl, pid: children[0]?.pid, stop }
+}
+
+// Split a start_command on single `&` (the POSIX "run concurrently" idiom) while
+// leaving `&&` chains intact. "cd backend && npm run dev & npm run dev" →
+// ["cd backend && npm run dev", "npm run dev"]. Quoted ampersands are not a
+// concern for these manifests (commands are simple npm/pnpm/python invocations).
+export function splitConcurrentSegments(command) {
+  const segments = String(command || '')
+    .split(/(?<![&])&(?![&])/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return segments.length ? segments : [String(command || '')]
+}
+
+function portOfUrl(url) {
+  try {
+    const u = new URL(url)
+    return Number(u.port || (u.protocol === 'https:' ? 443 : 80))
+  } catch {
+    return null
+  }
 }
 
 // Poll an http(s) endpoint until it answers or the deadline passes. Uses the
@@ -97,31 +146,39 @@ async function waitForHttp(url, { timeoutMs = 60000, intervalMs = 600, isDead = 
   return false
 }
 
-// Tear down the spawned server and everything it started. On Windows the child
-// is a shell whose grandchildren (node/vite/python) survive a plain kill, so we
-// use `taskkill /T` to kill the tree; on POSIX we signal the process group.
-// stop_command "taskkill-by-port" additionally frees the readiness port in case
-// a grandchild re-parented away from our tree.
-function stopLaunched(child, probe = {}) {
-  const pid = child?.pid
-  try {
-    if (process.platform === 'win32') {
-      if (pid) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-    } else if (pid) {
-      try {
-        process.kill(-pid, 'SIGKILL')
-      } catch {
+// Tear down the spawned server(s) and everything they started. On Windows each
+// child is a shell whose grandchildren (node/vite/python) survive a plain kill,
+// so we use `taskkill /T` to kill the tree; on POSIX we signal the process
+// group. We additionally free BOTH declared ports (readiness probe port and the
+// base_url port — often backend + frontend of the same app) in case a
+// grandchild re-parented away from our tree.
+function stopLaunched(children, probe = {}, baseUrl = null) {
+  const list = Array.isArray(children) ? children : [children]
+  for (const child of list) {
+    const pid = child?.pid
+    try {
+      if (process.platform === 'win32') {
+        if (pid) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+      } else if (pid) {
         try {
-          process.kill(pid, 'SIGKILL')
+          process.kill(-pid, 'SIGKILL')
         } catch {
-          /* already gone */
+          try {
+            process.kill(pid, 'SIGKILL')
+          } catch {
+            /* already gone */
+          }
         }
       }
+    } catch {
+      /* best-effort */
     }
-  } catch {
-    /* best-effort */
   }
-  if (probe.port) freePort(probe.port)
+  const ports = new Set()
+  if (probe.port) ports.add(Number(probe.port))
+  const basePort = baseUrl ? portOfUrl(baseUrl) : null
+  if (basePort && basePort !== 80 && basePort !== 443) ports.add(basePort)
+  for (const port of ports) freePort(port)
 }
 
 // Kill whatever still holds a TCP port (Windows). Only used as a post-stop

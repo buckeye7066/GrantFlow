@@ -78,23 +78,55 @@ async function main() {
     let launch = null
     try {
       let baseUrl = app.base_url || manifest.base_url || null
+      // Startup itself is reported as a synthetic journey ('app-startup',
+      // failure_class 'startup-failed'). This gives startup failures the SAME
+      // dedup + lifecycle as any other finding — and, crucially, a night where
+      // the app boots records a PASS that resolves the open startup finding.
+      // With `journeys: []` those findings could never resolve and re-rendered
+      // in the owner's email forever ("recurring", last pass never).
+      let startupJourney = null
       if (!dryRun && isWeb) {
         launch = await launchWebApp({ app, manifest, log: (m) => console.log(m) })
         baseUrl = launch.baseUrl || baseUrl
         if (launch.launched && !launch.ready) {
+          const reason = `app did not become ready at ${baseUrl || 'its declared base_url'} within the readiness timeout (start_command: ${manifest.start_command})`
           appResults.push({
             app_id: app.app_id,
             display_name: app.display_name,
             repo: app.repo,
             app_status: 'startup_failed',
-            blocker_reason: `app did not become ready at ${baseUrl || 'its declared base_url'} within the readiness timeout (start_command: ${manifest.start_command})`,
+            blocker_reason: reason,
             duration_ms: Date.now() - started,
-            journeys: [],
+            journeys: [
+              {
+                journey_id: 'app-startup',
+                name: 'App process starts and answers its readiness probe',
+                status: 'failed',
+                severity: 'critical',
+                retry_classification: 'reproducible',
+                failure_class: 'startup-failed',
+                route_or_control: baseUrl || manifest.start_command,
+                error_signature: reason.slice(0, 200),
+                expected_behavior: 'the declared start_command brings the app up within the readiness timeout',
+                observed_behavior: reason,
+                user_impact: 'no journey can run while the app cannot start',
+                duration_ms: Date.now() - started,
+              },
+            ],
           })
           continue
         }
+        if (launch.launched && launch.ready) {
+          startupJourney = {
+            journey_id: 'app-startup',
+            name: 'App process starts and answers its readiness probe',
+            status: 'passed',
+            duration_ms: Date.now() - started,
+          }
+        }
       }
       const journeys = await runAppJourneys({ app, manifest, baseUrl, dryRun })
+      if (startupJourney) journeys.unshift(startupJourney)
       appResults.push({
         app_id: app.app_id,
         display_name: app.display_name,

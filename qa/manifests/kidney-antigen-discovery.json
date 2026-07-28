@@ -4,7 +4,7 @@
   "repo": "local-git-no-remote",
   "local_path": "C:/Users/firer/kidney-antigen-discovery",
   "runtime_type": "web",
-  "start_command": "backend: uvicorn app.main:app --port 8000 (cwd backend) + frontend: npm run dev (cwd frontend, port 3000)",
+  "start_command": "cd backend && uvicorn app.main:app --port 8000 & cd frontend && npm run dev",
   "stop_command": "taskkill-by-port",
   "readiness_probe": { "type": "http", "path": "/", "port": 3000, "timeout_ms": 60000 },
   "base_url": "http://localhost:3000",

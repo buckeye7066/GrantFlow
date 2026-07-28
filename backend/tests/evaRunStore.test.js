@@ -132,4 +132,34 @@ describe('stale detection', () => {
     const res = await runEvaMaintenance(db, {})
     expect(res.heartbeatState).toBe('missing')
   })
+
+  it('ages out an individual finding fresh runs stopped re-observing (startup_failed apps run no journeys)', async () => {
+    // Old finding from a night the app failed to start…
+    await persistRun(db, run('r1', [failJourney()]), {
+      idempotencyKey: 'k1',
+      now: new Date(Date.now() - 40 * 3600 * 1000).toISOString(),
+    })
+    // …and a FRESH run that skipped the app entirely (no journeys), so the
+    // finding is neither re-observed nor pass-resolved.
+    await persistRun(db, run('r2', []), { idempotencyKey: 'k2' })
+
+    const res = await runEvaMaintenance(db, {})
+    expect(res.runStale).toBe(false) // the latest run is fresh…
+    expect(res.markedStale).toBe(1) // …but the unobserved finding still ages out
+    const f = db.prepare('SELECT lifecycle_state FROM eva_findings').get()
+    expect(f.lifecycle_state).toBe('stale')
+  })
+
+  it('a finding a fresh run re-observed stays actionable', async () => {
+    await persistRun(db, run('r1', [failJourney()]), {
+      idempotencyKey: 'k1',
+      now: new Date(Date.now() - 40 * 3600 * 1000).toISOString(),
+    })
+    await persistRun(db, run('r2', [failJourney()]), { idempotencyKey: 'k2' })
+    const res = await runEvaMaintenance(db, {})
+    expect(res.runStale).toBe(false)
+    expect(res.markedStale).toBe(0)
+    const f = db.prepare('SELECT lifecycle_state FROM eva_findings').get()
+    expect(f.lifecycle_state).toBe('recurring')
+  })
 })

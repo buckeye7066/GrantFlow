@@ -40,7 +40,16 @@ export async function runWebJourney({ baseUrl, journey, captureDir = null, dryRu
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text())
     })
-    page.on('requestfailed', (req) => failedRequests.push(`${req.method()} ${req.url()}`))
+    page.on('requestfailed', (req) => {
+      // ERR_ABORTED is the browser cancelling its own in-flight request
+      // (navigation away, <video> teardown, dev-server HMR churn) — not a
+      // server failure a user would hit. Counting it made healthy journeys
+      // fail intermittently (the GrantFlow onboarding-mp4 class: the file
+      // exists and serves fine; the dialog closing aborts the media load).
+      const errText = req.failure()?.errorText || ''
+      if (errText.includes('ERR_ABORTED')) return
+      failedRequests.push(`${req.method()} ${req.url()}${errText ? ` (${errText})` : ''}`)
+    })
     page.on('response', (resp) => {
       if (resp.status() >= 500) failedRequests.push(`${resp.status()} ${resp.url()}`)
     })
