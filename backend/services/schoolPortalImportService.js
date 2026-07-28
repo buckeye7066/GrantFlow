@@ -1,6 +1,9 @@
 ﻿import { randomUUID, createHash } from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
+import { createLogger } from '../utils/logger.js'
+
+const log = createLogger('service:schoolPortalImport')
 
 // Manual-import remains as a fallback path. The primary product
 // behavior is now Hamilton Autopilot driving the live portal — see
@@ -501,6 +504,15 @@ export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection
             amountMax,
             applyUrl,
             applyUrl,
+            // profile_id = COALESCE(profile_id, ?). This argument was MISSING:
+            // updateSql has ten placeholders and only nine were bound, so
+            // award.id landed on the profile_id slot and the WHERE clause got
+            // nothing. The UPDATE therefore matched no row — a re-imported
+            // award never refreshed its catalog entry (changed amount, changed
+            // description, all silently dropped) while the function still
+            // reported success. Introduced with the profile_id column in
+            // 736b16fc: the SET clause was extended, the argument list was not.
+            profileId ? String(profileId) : null,
             award.id,
           )
         return true
@@ -508,11 +520,22 @@ export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection
         return false
       }
     }
-    // Missing table / other error — fail soft so the per-profile merge
-    // still completes. Operator will see the warning in logs.
-    if (msg.includes('no such table') || msg.includes('does not exist')) {
-      return false
-    }
+    // Missing table / missing column / other error — fail soft so the
+    // per-profile merge still completes.
+    //
+    // This branch used to claim "Operator will see the warning in logs" while
+    // emitting nothing at all, so a schema drift made every merged award
+    // vanish from the catalog with zero signal. That is exactly what happened:
+    // adding profile_id to the INSERT without adding it to the test fixtures
+    // sent every insert down this path, and the only symptom was an assertion
+    // in CI. Soft failure is fine; SILENT soft failure is not.
+    log.warn('school_portal_opportunity_upsert_failed', {
+      award_id: award.id,
+      // The message, not the error object: it names the missing table/column,
+      // which is the whole diagnostic value, and carries no award content.
+      reason: String(err?.message || err).slice(0, 200),
+      schema_drift: msg.includes('no such column') || msg.includes('no such table') || msg.includes('does not exist'),
+    })
     return false
   }
 }

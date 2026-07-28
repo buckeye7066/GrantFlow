@@ -74,6 +74,11 @@ function makeDb() {
       source_url TEXT,
       record_origin TEXT,
       description TEXT,
+      -- Must mirror production: upsertSchoolPortalAwardAsOpportunity INSERTs
+      -- profile_id, and without the column the insert fails as schema drift
+      -- rather than as a duplicate, so the award silently never reaches the
+      -- catalog and the #534 assertion below fails.
+      profile_id TEXT,
       amount_min REAL,
       amount_max REAL,
       amount_description TEXT,

@@ -50,6 +50,12 @@ async function makeDb() {
       source_url TEXT,
       record_origin TEXT,
       description TEXT,
+      -- Present in production Postgres AND in backend/db/schema.sql. Omitting it
+      -- here made every INSERT fail with "no such column: profile_id", which is
+      -- not a unique/duplicate error, so the service's soft-fail path returned
+      -- false and no row was ever written — three tests red for a reason that
+      -- had nothing to do with the behavior under test.
+      profile_id TEXT,
       eligibility_bullets TEXT,
       amount_min REAL,
       amount_max REAL,
