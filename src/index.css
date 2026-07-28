@@ -306,9 +306,20 @@ button:focus-visible {
 
 /* Contrast hardening:
    Many screens still use fixed Tailwind grays (e.g. text-slate-500/600) which can be
-   too light on white. These overrides keep the UI readable without needing per-component edits. */
+   too light on white. These overrides keep the UI readable without needing per-component edits.
+
+   ANYA APPEARANCE EXEMPTION (2026-07-27, the "high contrast made it worse" chat bug):
+   these remaps use !important, which BEATS INLINE STYLES — inside Anya's chat panel,
+   a user-directed appearance (chat.setAppearance) paints surfaces/inks inline with
+   backend-computed, contrast-enforced colors. In dark mode the remaps were
+   half-overriding that: inline white bubble backgrounds lost to the forced dark card
+   (.dark .bg-white → card !important) while class inks were forced light
+   (.dark .text-slate-800 → slate-100 !important) — producing white-on-white and
+   black-on-dark no matter which look Anya applied. Every remap below therefore
+   excludes the .anya-appearance-active subtree; inside it, the rules at the end of
+   this block make text inherit from the nearest inline-styled surface instead. */
 @layer utilities {
-  :root:not(.dark) :is(.text-slate-400, .text-slate-500, .text-slate-600, .text-gray-400, .text-gray-500, .text-gray-600) {
+  :root:not(.dark) :is(.text-slate-400, .text-slate-500, .text-slate-600, .text-gray-400, .text-gray-500, .text-gray-600):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     color: rgb(51 65 85) !important; /* slate-700 */
   }
 
@@ -332,34 +343,47 @@ button:focus-visible {
      without per-component edits. IMPORTANT: text and surface are remapped TOGETHER
      — remapping text to light without darkening bg-white would make text vanish on
      the white-opacity cards some pages use (e.g. Automation's bg-white/80). */
-  .dark :is(.text-slate-900, .text-slate-800, .text-slate-700, .text-gray-900, .text-gray-800, .text-gray-700) {
+  .dark :is(.text-slate-900, .text-slate-800, .text-slate-700, .text-gray-900, .text-gray-800, .text-gray-700):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     color: rgb(226 232 240) !important; /* slate-100 — headings, card titles, body */
   }
-  .dark :is(.text-slate-600, .text-slate-500, .text-gray-600, .text-gray-500) {
+  .dark :is(.text-slate-600, .text-slate-500, .text-gray-600, .text-gray-500):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     color: rgb(148 163 184) !important; /* slate-400 — keep muted but readable */
   }
-  .dark :is(.bg-white, .bg-white\/95, .bg-white\/90, .bg-white\/80, .bg-white\/70, .bg-white\/60, .bg-white\/50) {
+  .dark :is(.bg-white, .bg-white\/95, .bg-white\/90, .bg-white\/80, .bg-white\/70, .bg-white\/60, .bg-white\/50):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     background-color: hsl(var(--card)) !important;
   }
   /* Extend coverage to the lighter tints that remained faint: 400/300 text,
      light non-white surfaces (slate/gray 50/100), and the app's custom ink token
      used with an opacity modifier (text-current-ink/60 on Pipeline). Keep these
      muted-but-readable rather than full white so hierarchy survives. */
-  .dark :is(.text-slate-400, .text-slate-300, .text-gray-400, .text-gray-300) {
+  .dark :is(.text-slate-400, .text-slate-300, .text-gray-400, .text-gray-300):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     color: rgb(148 163 184) !important; /* slate-400 — readable muted on dark */
   }
-  .dark :is(.text-muted-foreground) {
+  .dark :is(.text-muted-foreground):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     color: rgb(148 163 184) !important;
   }
-  .dark :is(.text-current-ink\/60, .text-current-ink\/70, .text-current-ink\/50) {
+  .dark :is(.text-current-ink\/60, .text-current-ink\/70, .text-current-ink\/50):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     color: rgb(148 163 184) !important;
   }
-  .dark :is(.bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-gray-100) {
+  .dark :is(.bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-gray-100):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     background-color: hsl(var(--card)) !important;
   }
 
-  .high-contrast :is(.text-slate-400, .text-slate-500, .text-slate-600, .text-gray-400, .text-gray-500, .text-gray-600, .text-muted-foreground) {
+  .high-contrast :is(.text-slate-400, .text-slate-500, .text-slate-600, .text-gray-400, .text-gray-500, .text-gray-600, .text-muted-foreground):not(:where(.anya-appearance-active, .anya-appearance-active *)) {
     color: hsl(var(--foreground)) !important;
+  }
+
+  /* Inside an appearance-active Anya panel: text elements that do not carry
+     their OWN background utility inherit ink from the nearest inline-styled
+     surface (panel, bubble, meta row — all painted by the backend's
+     contrast-enforced palette). Elements WITH a bg-* utility (badges, chips,
+     buttons) keep their paired ink classes, which now all carry dark:
+     variants, so they stay a readable island under any app theme. */
+  .anya-appearance-active :where(p, span, li, h1, h2, h3, h4, h5, h6, pre, code, time, small, strong, em, b, i, label, td, th, dt, dd, blockquote):not([class*="bg-"]) {
+    color: inherit !important;
+  }
+  .anya-appearance-active :where(.text-slate-600, .text-slate-500, .text-slate-400, .text-gray-600, .text-gray-500, .text-gray-400):not([class*="bg-"]) {
+    color: var(--anya-muted) !important;
   }
 
   .high-contrast :is(

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
+import { MessageBubble } from "./AnyaMessageBubble.jsx"
 import { cn } from "@/lib/utils"
 import { formatDistanceToNow } from "date-fns"
 import { toast } from "@/components/ui/use-toast"
@@ -239,7 +240,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
   }
 
   const AnyaBubble = ({ children }) => (
-    <div className="rounded-lg border border-blue-200 bg-blue-50/80 px-3 py-2 text-sm text-slate-800 shadow-sm">
+    <div className="rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50/80 dark:bg-blue-950/60 px-3 py-2 text-sm text-slate-800 dark:text-slate-100 shadow-sm">
       <div className="flex items-center gap-2 pb-1 text-xs text-slate-600">
         <Badge variant="secondary" className="text-[11px] uppercase tracking-wide">Anya</Badge>
       </div>
@@ -264,7 +265,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
               type="button"
               lang={lang.code}
               onClick={() => onPickLanguage(lang.code)}
-              className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:border-purple-300 hover:bg-purple-50 hover:text-purple-700"
+              className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-700 dark:hover:text-purple-300"
             >
               {lang.nativeName}
             </button>
@@ -314,7 +315,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
                 "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
                 profileType === type
                   ? "border-purple-500 bg-purple-100 text-purple-800"
-                  : "border-slate-200 bg-white text-slate-700 hover:border-purple-300 hover:bg-purple-50 hover:text-purple-700"
+                  : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-700 dark:hover:text-purple-300"
               )}
             >
               {type}
@@ -335,7 +336,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
           {LIFE_SITUATIONS.map((item) => (
             <label
               key={item}
-              className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm hover:border-purple-200 hover:bg-purple-50 transition-colors"
+              className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs text-slate-700 dark:text-slate-300 shadow-sm hover:border-purple-200 dark:hover:border-purple-800 hover:bg-purple-50 dark:hover:bg-purple-950/40 transition-colors"
             >
               <Checkbox
                 checked={situations.includes(item)}
@@ -374,7 +375,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
           <select
             value={state}
             onChange={(e) => setState(e.target.value)}
-            className="flex-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-400"
+            className="flex-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-400"
           >
             <option value="">Select a state…</option>
             {US_STATES.map((s) => (
@@ -428,67 +429,6 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
 
   return null
 }
-
-const MessageBubble = React.memo(function MessageBubble({ message, appearance }) {
-  const isAssistant = message.role === "assistant"
-  const isAppearanceUpdate = message.tool_name === "chat.setAppearance"
-  // Inline styles win over the static Tailwind palette only when the user has
-  // asked Anya for different chat colors; otherwise the stock look is untouched.
-  const bubbleStyle = appearance
-    ? {
-        background: isAssistant ? appearance.assistantBubbleBg : appearance.userBubbleBg,
-        borderColor: appearance.border,
-        color: isAssistant ? appearance.assistantText : appearance.userText,
-      }
-    : undefined
-  const metaStyle = appearance ? { color: appearance.mutedText } : undefined
-  return (
-    <div
-      className={cn(
-        // min-w-0 + overflow-hidden keep a bubble from being widened by a long
-        // unbreakable token; the panel hugs the viewport's right edge, so any
-        // overflow here would be clipped off-screen ("half-readable menu").
-        "min-w-0 max-w-full overflow-hidden rounded-lg border px-3 py-2 text-sm shadow-sm transition",
-        isAssistant
-          ? "border-blue-200 bg-blue-50/80 text-slate-800"
-          : "border-slate-200 bg-white text-slate-700",
-      )}
-      style={bubbleStyle}
-    >
-      <div className="flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400 pb-1" style={metaStyle}>
-        <Badge variant={isAssistant ? "secondary" : "outline"} className="text-[11px] uppercase tracking-wide">
-          {isAssistant ? "Anya" : "You"}
-        </Badge>
-        <span>
-          {message.created_at
-            ? formatDistanceToNow(new Date(message.created_at), { addSuffix: true })
-            : "now"}
-        </span>
-      </div>
-      {/* break-words wraps long URLs / unbroken tokens so Anya's reply never
-          runs past the right edge of the panel. */}
-      <p className="whitespace-pre-wrap break-words leading-relaxed">{message.content}</p>
-      {isAppearanceUpdate ? (
-        <div className="mt-2 text-xs text-slate-600 dark:text-slate-400" style={metaStyle}>
-          🎨 {message.tool_payload?.description || "Chat colors updated."}
-        </div>
-      ) : message.tool_name ? (
-        <div className="mt-2 space-y-2 text-xs text-slate-600 dark:text-slate-400" style={metaStyle}>
-          <div>
-            Tool: <span className="font-mono text-xs text-slate-700 dark:text-slate-300" style={metaStyle}>{message.tool_name}</span>
-          </div>
-          {message.tool_payload ? (
-            <div className="max-h-48 overflow-auto rounded-md border border-slate-200 dark:border-slate-700 bg-white/80 p-2 text-xs text-slate-800 dark:text-slate-100">
-              <pre className="whitespace-pre-wrap break-words">
-                {JSON.stringify(message.tool_payload, null, 2)}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  )
-})
 
 function resolvePageName(pathname) {
   if (!pathname) return null
@@ -1336,7 +1276,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
 
   if (isUnavailable) {
     return (
-      <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 p-4 text-sm text-slate-700 dark:text-slate-300 shadow-sm">
+      <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 p-4 text-sm text-slate-700 dark:text-slate-300 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600">
             <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
@@ -1705,7 +1645,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   id={id}
                   value={value}
                   onChange={(event) => setToolFieldValue(tool.name, name, event.target.value)}
-                  className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white px-2 py-1.5 text-xs text-slate-800 dark:text-slate-100"
+                  className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-xs text-slate-800 dark:text-slate-100"
                 >
                   <option value="">Select profile...</option>
                   {(profiles || []).map((profile) => (
@@ -1719,7 +1659,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           }
           if (schema?.type === "boolean") {
             return (
-              <label key={name} htmlFor={id} className="flex items-center gap-2 rounded border border-slate-200 dark:border-slate-700 bg-white px-2 py-1.5 text-xs">
+              <label key={name} htmlFor={id} className="flex items-center gap-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-xs text-slate-700 dark:text-slate-200">
                 <Checkbox
                   id={id}
                   checked={value === true || value === "true"}
@@ -1737,7 +1677,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   id={id}
                   value={value}
                   onChange={(event) => setToolFieldValue(tool.name, name, event.target.value)}
-                  className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white px-2 py-1.5 text-xs text-slate-800 dark:text-slate-100"
+                  className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-xs text-slate-800 dark:text-slate-100"
                 >
                   <option value="">Select...</option>
                   {schema.enum.map((option) => (
@@ -1796,8 +1736,24 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
 
   return (
     <div
-      className="flex h-full min-w-0 flex-col overflow-x-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 shadow-sm"
-      style={chatAppearance ? { background: chatAppearance.panelBg, borderColor: chatAppearance.border, color: chatAppearance.bodyText } : undefined}
+      className={cn(
+        "flex h-full min-w-0 flex-col overflow-x-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/90 shadow-sm",
+        // Custom appearance opts the whole panel OUT of the app light/dark
+        // palette: index.css forces text elements without their own bg-*
+        // utility to INHERIT from the nearest inline-styled surface, so a
+        // theme-class ink can never fight the appearance surface again (the
+        // "high contrast made it white-on-white in dark mode" class).
+        chatAppearance && "anya-appearance-active",
+      )}
+      style={chatAppearance ? {
+        background: chatAppearance.panelBg,
+        borderColor: chatAppearance.border,
+        color: chatAppearance.bodyText,
+        "--anya-panel": chatAppearance.panelBg,
+        "--anya-text": chatAppearance.bodyText,
+        "--anya-muted": chatAppearance.mutedText,
+        "--anya-border": chatAppearance.border,
+      } : undefined}
     >
       <div
         className="border-b border-slate-200 dark:border-slate-700 px-4 py-3 max-h-[40%] overflow-y-auto shrink-0"
@@ -2007,7 +1963,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     return (
                       <div
                         key={task.id}
-                        className="flex items-start gap-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white px-3 py-2 shadow-sm"
+                        className="flex items-start gap-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 shadow-sm"
                       >
                         <Checkbox
                           id={`anya-task-${task.id}`}
@@ -2169,7 +2125,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                         })
                     }, 0)
                   }}
-                  className="rounded-full border border-slate-200 dark:border-slate-700 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 shadow-sm hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-700 dark:hover:text-purple-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 shadow-sm hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-700 dark:hover:text-purple-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {suggestion}
                 </button>
@@ -2220,7 +2176,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     type="button"
                     onClick={handleStopRun}
                     disabled={isStopping}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 dark:border-red-800 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 dark:text-red-400 transition hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-60"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 dark:border-red-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-semibold text-red-700 dark:text-red-400 transition hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-60"
                     title="Stop Anya (Esc)"
                   >
                     <Square className="h-3 w-3" /> Stop (Esc)
@@ -2269,7 +2225,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           }}
           placeholder="Ask Anya for help…"
           rows={3}
-          className="resize-none text-sm bg-white border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:text-slate-400 focus-visible:ring-slate-400"
+          className="resize-none text-sm bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus-visible:ring-slate-400"
           disabled={isDisabled}
         />
         <div className="mt-3 flex items-center justify-between">
