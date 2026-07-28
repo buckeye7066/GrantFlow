@@ -113,12 +113,38 @@ function sweepExpired() {
 }
 
 async function closeQuietly(s) {
+  // FIRST: tell every attached live viewer the session is over. Without this a
+  // torn-down session (cancel/complete/TTL sweep) left the viewer's SSE stream
+  // OPEN — the 15s heartbeat kept flowing, so the window read "Live" forever
+  // over the last painted frame while every click 404'd silently (the
+  // "portal looks alive but nothing I click works" report, 2026-07-27).
+  try {
+    for (const notify of s?.viewers ?? []) {
+      try { notify('session_closed') } catch { /* viewer already gone */ }
+    }
+    if (s?.viewers?.clear) s.viewers.clear()
+  } catch { /* ignore */ }
   try { if (s?.keyframeTimer) clearInterval(s.keyframeTimer) } catch { /* ignore */ }
   if (s) s.keyframeTimer = null
   try { await s?.screencastCdp?.detach() } catch { /* ignore */ }
   try { await s?.inputCdp?.detach() } catch { /* ignore */ }
   try { await s?.browser?.close() } catch { /* ignore */ }
   try { await s?.server?.close() } catch { /* ignore */ }
+}
+
+/**
+ * Register a live-view callback that fires when the session is torn down
+ * (complete / cancel / TTL sweep), so the SSE route can END the viewer's
+ * stream with a terminal event instead of leaving a heartbeat-alive stream
+ * over a dead session. Returns an unregister function (also safe to call
+ * after teardown). No-op when the session is already gone.
+ */
+export function registerCloudLoginViewer(liveSessionId, notify) {
+  const s = sessions.get(liveSessionId)
+  if (!s || typeof notify !== 'function') return () => {}
+  if (!s.viewers) s.viewers = new Set()
+  s.viewers.add(notify)
+  return () => { try { s.viewers?.delete(notify) } catch { /* ignore */ } }
 }
 
 /**
@@ -329,6 +355,10 @@ function finalizeStart({ browser, server, context, page, userId, profileId, port
     inputCdp: null,
     keyframeTimer: null,
     lastFrameMeta: null,
+    // Live-view teardown callbacks (see registerCloudLoginViewer/closeQuietly):
+    // a torn-down session must END its viewer streams, never leave them
+    // heartbeat-alive over a dead browser.
+    viewers: new Set(),
     meta: {
       userId, profileId: String(profileId), portalHost, loginUrl: target, label, captureRequestId,
       // The saved-session row this live context was seeded from (null = cold
@@ -505,20 +535,9 @@ async function ensureInputCdp(s) {
   return s.inputCdp
 }
 
-/**
- * Translate ONE normalized input event into a CDP Input.* dispatch on the live
- * page. Coordinates (x, y) arrive as 0..1 fractions of the displayed image; we
- * scale them by the page viewport (preferring the latest screencast frame's
- * device size, falling back to the Playwright viewport). Returns { ok } or
- * { ok:false, reason }.
- */
-export async function dispatchInput(liveSessionId, event) {
-  const s = sessions.get(liveSessionId)
-  if (!s || !s.page) return { ok: false, reason: 'not_found_or_expired' }
-  if (!event || typeof event !== 'object') return { ok: false, reason: 'bad_event' }
-
-  const cdp = await ensureInputCdp(s)
-  const vp = s.page.viewportSize() || { width: 1280, height: 900 }
+/** Send one normalized event over an already-open Input.* CDP session. */
+async function sendInputOverCdp(cdp, s, event) {
+  const vp = (typeof s.page.viewportSize === 'function' && s.page.viewportSize()) || { width: 1280, height: 900 }
   const width = Number(s.lastFrameMeta?.deviceWidth) || vp.width || 1280
   const height = Number(s.lastFrameMeta?.deviceHeight) || vp.height || 900
 
@@ -527,54 +546,90 @@ export async function dispatchInput(liveSessionId, event) {
 
   const type = String(event.type || '')
 
+  if (type === 'mousemove' || type === 'mousedown' || type === 'mouseup' || type === 'click') {
+    const x = scaleX(event.x)
+    const y = scaleY(event.y)
+    const button = event.button === 2 ? 'right' : event.button === 1 ? 'middle' : 'left'
+    if (type === 'mousemove') {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
+    } else if (type === 'mousedown') {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 })
+    } else if (type === 'mouseup') {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 })
+    } else {
+      // A full tap/click: move + press + release.
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 })
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 })
+    }
+    return { ok: true }
+  }
+
+  if (type === 'wheel' || type === 'scroll') {
+    const x = scaleX(event.x)
+    const y = scaleY(event.y)
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseWheel',
+      x,
+      y,
+      deltaX: Number(event.deltaX) || 0,
+      deltaY: Number(event.deltaY) || 0,
+    })
+    return { ok: true }
+  }
+
+  if (type === 'keydown' || type === 'keyup' || type === 'char') {
+    const cdpType = type === 'keydown' ? 'keyDown' : type === 'keyup' ? 'keyUp' : 'char'
+    const payload = {
+      type: cdpType,
+      key: typeof event.key === 'string' ? event.key : undefined,
+      code: typeof event.code === 'string' ? event.code : undefined,
+      text: typeof event.text === 'string' ? event.text : undefined,
+      windowsVirtualKeyCode: Number.isFinite(event.keyCode) ? event.keyCode : undefined,
+      modifiers: Number.isFinite(event.modifiers) ? event.modifiers : 0,
+    }
+    await cdp.send('Input.dispatchKeyEvent', payload)
+    return { ok: true }
+  }
+
+  return { ok: false, reason: 'unsupported_event' }
+}
+
+/**
+ * Translate ONE normalized input event into a CDP Input.* dispatch on the live
+ * page. Coordinates (x, y) arrive as 0..1 fractions of the displayed image; we
+ * scale them by the page viewport (preferring the latest screencast frame's
+ * device size, falling back to the Playwright viewport). Returns { ok } or
+ * { ok:false, reason } — NEVER throws (a rejected ensureInputCdp used to escape
+ * this function and 500 the input route).
+ *
+ * LIFECYCLE: the Input.* CDP session is created once and cached, but a cached
+ * handle can die under the page (a detach, a target swap). A dead cached handle
+ * used to fail EVERY subsequent event forever ("dispatch_failed" on each click
+ * while the screencast kept streaming). One failed send now drops the cache and
+ * retries once over a freshly attached session, so a single stale handle can
+ * never permanently disconnect the user's clicks from a live page.
+ */
+export async function dispatchInput(liveSessionId, event) {
+  const s = sessions.get(liveSessionId)
+  if (!s || !s.page) return { ok: false, reason: 'not_found_or_expired' }
+  if (!event || typeof event !== 'object') return { ok: false, reason: 'bad_event' }
+
   try {
-    if (type === 'mousemove' || type === 'mousedown' || type === 'mouseup' || type === 'click') {
-      const x = scaleX(event.x)
-      const y = scaleY(event.y)
-      const button = event.button === 2 ? 'right' : event.button === 1 ? 'middle' : 'left'
-      if (type === 'mousemove') {
-        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
-      } else if (type === 'mousedown') {
-        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 })
-      } else if (type === 'mouseup') {
-        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 })
-      } else {
-        // A full tap/click: move + press + release.
-        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
-        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 })
-        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 })
+    const cdp = await ensureInputCdp(s)
+    try {
+      return await sendInputOverCdp(cdp, s, event)
+    } catch (err) {
+      // The cached CDP session may be stale/detached — reattach once and retry.
+      try { await s.inputCdp?.detach?.() } catch { /* already dead */ }
+      s.inputCdp = null
+      const fresh = await ensureInputCdp(s)
+      try {
+        return await sendInputOverCdp(fresh, s, event)
+      } catch (retryErr) {
+        return { ok: false, reason: 'dispatch_failed', detail: retryErr?.message || err?.message }
       }
-      return { ok: true }
     }
-
-    if (type === 'wheel' || type === 'scroll') {
-      const x = scaleX(event.x)
-      const y = scaleY(event.y)
-      await cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseWheel',
-        x,
-        y,
-        deltaX: Number(event.deltaX) || 0,
-        deltaY: Number(event.deltaY) || 0,
-      })
-      return { ok: true }
-    }
-
-    if (type === 'keydown' || type === 'keyup' || type === 'char') {
-      const cdpType = type === 'keydown' ? 'keyDown' : type === 'keyup' ? 'keyUp' : 'char'
-      const payload = {
-        type: cdpType,
-        key: typeof event.key === 'string' ? event.key : undefined,
-        code: typeof event.code === 'string' ? event.code : undefined,
-        text: typeof event.text === 'string' ? event.text : undefined,
-        windowsVirtualKeyCode: Number.isFinite(event.keyCode) ? event.keyCode : undefined,
-        modifiers: Number.isFinite(event.modifiers) ? event.modifiers : 0,
-      }
-      await cdp.send('Input.dispatchKeyEvent', payload)
-      return { ok: true }
-    }
-
-    return { ok: false, reason: 'unsupported_event' }
   } catch (err) {
     return { ok: false, reason: 'dispatch_failed', detail: err?.message }
   }
