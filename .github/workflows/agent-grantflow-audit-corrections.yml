@@ -10,8 +10,6 @@ permissions:
   issues: write
   pull-requests: write
 
-# Only the latest verifier owns the branch. A newer diagnostic revision cancels
-# any obsolete run rather than allowing a queue of stale patches to accumulate.
 concurrency:
   group: agent-grantflow-audit-corrections-20260728
   cancel-in-progress: true
@@ -38,7 +36,7 @@ jobs:
         run: npm ci
 
       - name: Apply audited corrections
-        run: python3 scripts/agent-apply-audit-corrections.py
+        run: python3 scripts/agent-apply-audit-corrections-v2.py
 
       - name: Verify patch shape
         run: |
@@ -62,6 +60,7 @@ jobs:
       - name: Remove one-shot agent scaffolding
         run: |
           rm scripts/agent-apply-audit-corrections.py
+          rm scripts/agent-apply-audit-corrections-v2.py
           rm .github/workflows/agent-grantflow-audit-corrections.yml
 
       - name: Commit verified corrections
@@ -70,6 +69,7 @@ jobs:
           git config user.email "noreply@openai.com"
           git add -A -- \
             scripts/agent-apply-audit-corrections.py \
+            scripts/agent-apply-audit-corrections-v2.py \
             .github/workflows/agent-grantflow-audit-corrections.yml \
             backend/routes/hamiltonAutomation.js \
             backend/routes/grantApplications.js \
@@ -80,6 +80,7 @@ jobs:
             backend/services/matching/fundingSourcePresentation.js \
             backend/services/matching/resourceDecisionGuard.js \
             backend/services/matchEngine.js \
+            backend/tests/amyAgent.test.js \
             backend/tests/remainingAuditCorrections.test.js
           git diff --cached --check
           git commit -m "fix(audit): close remaining production-audit defects"
