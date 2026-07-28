@@ -79,6 +79,7 @@ import {
   buildProfileDataPointInventory,
   evaluateDataPointMatches,
 } from './profileDataPoints.js'
+import { guardDirectFundingDecision } from './matching/resourceDecisionGuard.js'
 // Live, DB-persisted scoring tuning (Amy's improvement loop writes these). With
 // no override active these return the matchThresholds.js defaults, so default
 // behavior is unchanged.
@@ -3946,6 +3947,26 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
 
   // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
   let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals, oppNorm)
+
+  // A directory/referral can be useful, but it is not a direct award. Enforce
+  // that distinction in the canonical engine so every caller gets the same
+  // decision, not only the crawler-os compatibility facade.
+  const opportunityKind = String(
+    rawOpportunity?.opportunity_kind ??
+    rawOpportunity?.opportunity_type ??
+    rawOpportunity?.type ??
+    '',
+  ).toUpperCase()
+  const guardedDecision = guardDirectFundingDecision({
+    decision,
+    explanation,
+    reasons: decisionReasons,
+    isDirectoryResource: Boolean(oppNorm?.isDirectory) ||
+      ['DIRECTORY', 'PAST_AWARD_INTEL', 'SCHOOL_PORTAL', 'REFERRAL'].includes(opportunityKind),
+  })
+  decision = guardedDecision.decision
+  explanation = guardedDecision.explanation
+  decisionReasons = guardedDecision.reasons
 
   // Post-decision guards
   const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.url)

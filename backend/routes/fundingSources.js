@@ -16,6 +16,7 @@ import { isTemplatedGeoStub } from '../services/relevanceFilterRules.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
+import { partitionFundingSources } from '../services/matching/fundingSourcePresentation.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
@@ -153,16 +154,12 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     // surfaces (the Anastasia-HOPE class), a REJECT/low REVIEW never does,
     // directories keep their own floor.
     const qualified = sources.filter((s) => qualifiesForDisplay(s, minScore))
+    const presented = partitionFundingSources(qualified)
     return res.json({
       profile_id: profileId,
       engine: 'crawler-os',
       min_score: minScore,
-      total: qualified.length,
-      // Honest grouping for the owner: apply-now vs worth-a-look vs directories.
-      best_matches: qualified.filter((s) => String(s.match_decision).toLowerCase() === 'accept' && !s.is_directory),
-      worth_reviewing: qualified.filter((s) => String(s.match_decision).toLowerCase() === 'review' && !s.is_directory),
-      directories: qualified.filter((s) => s.is_directory),
-      sources: qualified,
+      ...presented,
       geo_stubs_hidden: geoStubsHidden,
     })
   } catch (err) {
