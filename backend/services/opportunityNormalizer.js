@@ -855,18 +855,36 @@ export function normalizeOpportunity(rawOpp) {
   const isAlreadyAwarded = isAlreadyAwardedRecord(rawOpp, text)
 
   // -- Institutional / research-only flags --
+  //
+  // STRUCTURAL-KIND OVERRIDE (the MTSU off-campus-housing class, 2026-07-27):
+  // a row DECLARED as a resource/pointer kind (school portal, directory,
+  // benefit, past-award intel) exists FOR the profile's benefit, and its
+  // prose naturally mentions institutions ("many institutions partner with
+  // the listing service… institutional housing voucher") — the full-text
+  // INSTITUTIONAL/RESEARCH patterns include bare 'institution', so an MTSU
+  // student's own housing portal hard-rejected as "institutions or research
+  // organizations only". The declared kind is the stronger structural fact
+  // (same doctrine as the locator kind tug-of-war): prose-based restriction
+  // tells never fire on resource kinds. Explicit DB flags and the
+  // already-awarded fingerprint still win — those are structural too.
+  const kindLowerForFlags = String(rawOpp.opportunity_kind ?? rawOpp.kind ?? '').toLowerCase()
+  const isResourceKind = ['directory', 'benefit', 'past_award_intel', 'school_portal'].includes(kindLowerForFlags)
+
   const isInstitutionalOnly = Boolean(rawOpp.is_institutional_only) ||
     isAlreadyAwarded ||
-    matchesAnyPattern(text, INSTITUTIONAL_PATTERNS)
+    (!isResourceKind && matchesAnyPattern(text, INSTITUTIONAL_PATTERNS))
 
   const isResearchOnly = Boolean(rawOpp.is_research_only) ||
     isAlreadyAwarded ||
-    matchesAnyPattern(text, RESEARCH_ONLY_PATTERNS)
+    (!isResourceKind && matchesAnyPattern(text, RESEARCH_ONLY_PATTERNS))
 
   // -- TITLE-scoped research/TA program + procedural-notice tells --
   // (see the pattern block above for why these read the title only)
   const rawTitle = String(rawOpp.title ?? '')
+  // Resource kinds are exempt here too: a "Research Grants Directory" is a
+  // pointer to funders, not an institutional program someone applies to.
   const titleIsResearchProgram =
+    !isResourceKind &&
     (RE_TITLE_FEDERAL_ACTIVITY_CODE.test(rawTitle) ||
       RE_TITLE_RESEARCH_PROGRAM.test(rawTitle) ||
       RE_TITLE_COMMUNITIES_OF_PRACTICE.test(rawTitle)) &&

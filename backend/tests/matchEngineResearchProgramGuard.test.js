@@ -240,6 +240,62 @@ describe('research-program + procedural-notice guard (decision path)', () => {
   })
 })
 
+// ── Structural-kind override: resource kinds never trip prose-based
+//    restriction tells (the MTSU off-campus-housing class, 2026-07-27) ─────
+
+describe('resource-kind override for institutional/research tells', () => {
+  // Real prod row (verbatim description): Anastasia's own university housing
+  // portal hard-rejected as "institutions or research organizations only"
+  // because its prose contains 'institutions'/'institutional'.
+  const MTSU_PORTAL = {
+    id: 'mtsu-portal',
+    title: 'Middle Tennessee State University — Off-Campus Housing Portal',
+    sponsor: 'Middle Tennessee State University Department of Housing & Residential Life',
+    description:
+      'Official off-campus housing listing portal vetted by Middle Tennessee State University. Lists landlord contact info, pricing, lease terms for properties near campus. Many institutions partner with the listing service to flag properties that accept the institutional housing voucher / direct-bill the student account.',
+    application_url: 'https://offcampushousing.mtsu.edu',
+    source_url: 'https://offcampushousing.mtsu.edu',
+    deadline_type: 'rolling',
+    record_origin: 'live_crawl',
+    opportunity_kind: 'school_portal',
+  }
+
+  const MTSU_STUDENT = {
+    id: 'p-mtsu-student',
+    primary_type: 'student',
+    first_name: 'Anastasia',
+    state: 'TN',
+    needs: ['housing', 'education'],
+  }
+
+  it('a declared school_portal never reads as institutional-only from its prose', () => {
+    const n = normalizeOpportunity(MTSU_PORTAL)
+    expect(n.isInstitutionalOnly).toBe(false)
+    expect(n.isResearchOnly).toBe(false)
+  })
+
+  it('A/B: the SAME text WITHOUT a resource kind still trips the pattern (recall preserved)', () => {
+    const n = normalizeOpportunity({ ...MTSU_PORTAL, opportunity_kind: null })
+    expect(n.isInstitutionalOnly).toBe(true)
+  })
+
+  it('an explicit is_institutional_only DB flag still wins on a resource kind (structural beats structural)', () => {
+    const n = normalizeOpportunity({ ...MTSU_PORTAL, is_institutional_only: 1 })
+    expect(n.isInstitutionalOnly).toBe(true)
+  })
+
+  it('a student is never hard-rejected from her own school portal', () => {
+    const d = computeMatchDecision(MTSU_STUDENT, MTSU_PORTAL)
+    expect(d.decision).not.toBe('REJECT')
+  })
+
+  it('a research directory (resource kind) does not trip the title tell either', () => {
+    expect(normalizeOpportunity({
+      id: 'rd', title: 'Federal Research Grants Directory', opportunity_kind: 'DIRECTORY',
+    }).titleIsResearchProgram).toBe(false)
+  })
+})
+
 // ── Ingest side: the Federal Register adapter drops PRA notices ───────────
 
 describe('federalRegisterAdapter procedural exclusion (ingest side)', () => {
