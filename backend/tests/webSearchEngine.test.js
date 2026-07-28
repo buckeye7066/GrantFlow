@@ -280,12 +280,12 @@ describe('the fallback-engines rung (SearXNG engines=yahoo, 2026-07-27)', () => 
     process.env.BRAVE_SEARCH_API_KEY = 'test-key'
     _resetWebSearchEngineForTests()
     searxngSearchFn.mockImplementation(async ({ engines }) =>
-      engines === 'yahoo,mojeek,yandex' ? [YAHOO_HIT] : JUNK,
+      engines === 'yandex,seznam,yahoo' ? [YAHOO_HIT] : JUNK,
     )
 
     const results = await searchWeb(SCHOOL_QUERY)
     expect(searxngSearchFn).toHaveBeenCalledTimes(2)
-    expect(searxngSearchFn.mock.calls[1][0].engines).toBe('yahoo,mojeek,yandex')
+    expect(searxngSearchFn.mock.calls[1][0].engines).toBe('yandex,seznam,yahoo')
     expect(braveSearchFn).not.toHaveBeenCalled()
     expect(results[0].url).toBe(YAHOO_HIT.url)
   })
@@ -319,6 +319,78 @@ describe('the fallback-engines rung (SearXNG engines=yahoo, 2026-07-27)', () => 
   })
 })
 
+describe('the engine-collapse gate (bing-only fleet telemetry, 2026-07-28)', () => {
+  // The 2026-07-28 prod state: brave + google-cse "Suspended: too many
+  // requests", startpage/qwant CAPTCHA'd — every result came from scraped bing
+  // and covered ENOUGH query words to slip past the relevance gate
+  // ("wheelchair van grants tennessee mobility" → wheelchair-shopping junk
+  // that names 'wheelchair' and 'mobility'). The engine telemetry the provider
+  // now attaches is the mechanical tell.
+  const QUERY = 'wheelchair van grants tennessee mobility'
+  const BING_JUNK = withMeta(
+    [
+      { url: 'https://mobilitydeck.com/best-wheelchairs/', title: 'Best Wheelchairs 2026', snippet: 'wheelchair and mobility product roundup' },
+      { url: 'https://en.wikipedia.org/wiki/Wheelchair', title: 'Wheelchair - Wikipedia', snippet: 'a wheelchair is a mobility device' },
+      { url: 'https://www.karmanhealthcare.com/blog/', title: 'Wheelchair Blog', snippet: 'mobility tips for wheelchair users' },
+    ],
+    {
+      result_engines: ['bing'],
+      unresponsive_engines: [
+        { engine: 'brave', reason: 'Suspended: too many requests' },
+        { engine: 'startpage', reason: 'Suspended: CAPTCHA' },
+        { engine: 'qwant', reason: 'CAPTCHA' },
+      ],
+    },
+  )
+  const REAL_HIT = {
+    url: 'https://www.themobilityresource.com/wheelchair-van-grants-tennessee/',
+    title: 'Wheelchair Van Grants in Tennessee | The Mobility Resource',
+    snippet: 'grants for wheelchair accessible vans in Tennessee',
+  }
+
+  function withMeta(results, meta) {
+    Object.defineProperty(results, 'searxngMeta', { value: meta, enumerable: false })
+    return results
+  }
+
+  it('looksEngineCollapse: fires on bing-only results with 2+ suspended engines', async () => {
+    const { looksEngineCollapse } = await import('../services/shared/webSearchEngine.js')
+    expect(looksEngineCollapse(BING_JUNK.searxngMeta)).toBe(true)
+  })
+
+  it('looksEngineCollapse: never fires on a diverse fleet, one suspension, or missing telemetry', async () => {
+    const { looksEngineCollapse } = await import('../services/shared/webSearchEngine.js')
+    expect(looksEngineCollapse({ result_engines: ['bing', 'yandex'], unresponsive_engines: BING_JUNK.searxngMeta.unresponsive_engines })).toBe(false)
+    expect(looksEngineCollapse({ result_engines: ['bing'], unresponsive_engines: [{ engine: 'qwant', reason: 'CAPTCHA' }] })).toBe(false)
+    expect(looksEngineCollapse(undefined)).toBe(false)
+    expect(looksEngineCollapse({ result_engines: [], unresponsive_engines: [] })).toBe(false)
+  })
+
+  it('a collapsed-fleet SERP is held and the fallback engines answer, even when it reads topical', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockImplementation(async ({ engines }) =>
+      engines === 'yandex,seznam,yahoo' ? [REAL_HIT] : BING_JUNK,
+    )
+
+    const results = await searchWeb(QUERY)
+    expect(searxngSearchFn).toHaveBeenCalledTimes(2)
+    expect(searxngSearchFn.mock.calls[1][0].engines).toBe('yandex,seznam,yahoo')
+    expect(braveSearchFn).not.toHaveBeenCalled()
+    expect(results[0].url).toBe(REAL_HIT.url)
+  })
+
+  it('the held bing-only set is still returned when every fallback comes up empty (never lose results)', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockImplementation(async ({ engines }) => (engines ? [] : BING_JUNK))
+
+    const results = await searchWeb(QUERY)
+    expect(results.map((r) => r.url)).toEqual(BING_JUNK.map((r) => r.url))
+  })
+})
+
 describe('the cross-query identity breaker (degraded-instance signature)', () => {
   // Junk that the RELEVANCE gate cannot catch: a Montana-tourism SERP really
   // does cover "montana" and "state" at word boundaries, so it reads on-topic
@@ -339,7 +411,7 @@ describe('the cross-query identity breaker (degraded-instance signature)', () =>
     process.env.SEARXNG_URL = 'https://searx.example.com'
     _resetWebSearchEngineForTests()
     searxngSearchFn.mockImplementation(async ({ engines }) =>
-      engines === 'yahoo,mojeek,yandex' ? [GOOD_HIT] : MONTANA_JUNK,
+      engines === 'yandex,seznam,yahoo' ? [GOOD_HIT] : MONTANA_JUNK,
     )
 
     // Query 1: junk covers its terms → relevance gate passes it (returned).
@@ -356,7 +428,7 @@ describe('the cross-query identity breaker (degraded-instance signature)', () =>
     const third = await searchWeb('Montana State University Billings endowed scholarships')
     expect(third[0].url).toBe(GOOD_HIT.url)
     expect(searxngSearchFn).toHaveBeenCalledTimes(1)
-    expect(searxngSearchFn.mock.calls[0][0].engines).toBe('yahoo,mojeek,yandex')
+    expect(searxngSearchFn.mock.calls[0][0].engines).toBe('yandex,seznam,yahoo')
   })
 
   it('the SAME query repeated never trips the breaker', async () => {
@@ -387,7 +459,7 @@ describe('the empty-default rung (all engines suspended, Brave paused)', () => {
 
     const results = await searchWeb('University of West Florida scholarships')
     expect(searxngSearchFn).toHaveBeenCalledTimes(2)
-    expect(searxngSearchFn.mock.calls[1][0].engines).toBe('yahoo,mojeek,yandex')
+    expect(searxngSearchFn.mock.calls[1][0].engines).toBe('yandex,seznam,yahoo')
     expect(results[0].url).toBe('https://uwf.academicworks.com/')
   })
 

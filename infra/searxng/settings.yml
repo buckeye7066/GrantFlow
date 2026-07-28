@@ -40,25 +40,30 @@ outgoing:
   max_request_timeout: 7.0
 
 # Engine mix for a DATACENTER egress IP, tuned against MEASURED per-engine health
-# on this Railway instance (5-query probe, 2026-07-23), not assumptions.
+# on this Railway instance (re-measured 2026-07-28; prior probe 2026-07-23), not
+# assumptions.
 #
-# RELIABLE CORE (fire on every query — these carry funding recall):
-#   google, startpage, qwant, bing — together the major distinct web indices, so
-#   coverage is effectively complete for local/foundation/scholarship queries.
-# BEST-EFFORT (independent index; rate-limits under load but self-recovers via the
-#   short suspended_times above, so it adds unique results when available):
-#   brave.
-# DISABLED — cannot fire from a datacenter IP, so leaving them on only spends the
-#   occasional re-attempt after a suspension expires (each measured 5/5 failing
-#   with a HARD reason, not a transient rate-limit):
+# UPSTREAM CHANGE (2026-07): the `google` scraping engine NO LONGER EXISTS in
+# current searxng/searxng images (Google's JS-required SERP wall killed it) —
+# an `engines: - name: google` entry is a silent no-op, which is how the
+# "reliable core" quietly lost its anchor and nights collapsed to bing-only
+# junk. The image's default replacement is `google cse` (default-enabled, no
+# entry needed here); it carries a small daily quota and self-suspends with
+# "too many requests" when exhausted — the short suspended_times above re-probe
+# it every 5 minutes, so leave it enabled and treat it as best-effort.
+#
+# RELIABLE CORE (measured answering 2026-07-28 even while the scrape-prone trio
+# below sat suspended — these carry funding recall):
+#   bing, yandex, seznam, yahoo (yahoo's image bug from 2026-07-23 is fixed;
+#   re-measured 7 clean results).
+# BEST-EFFORT (real indices, but CAPTCHA/rate-limit under load; self-recover via
+#   the short suspended_times above): startpage, qwant, brave.
+# DISABLED — hard-blocked from a datacenter IP (measured failing with a HARD
+#   reason, not a transient rate-limit):
 #   - duckduckgo: CAPTCHA-walls DC IPs (and is Bing-backed → redundant with bing).
-#   - mojeek:     actively blocks DC scraping ("access denied").
-#   - yahoo:      "HTTP protocol error" — the engine itself is broken in this image
-#                 (a bug, not an IP block), so it never returns results.
+#   - mojeek:     actively blocks DC scraping ("access denied", re-confirmed
+#                 2026-07-28).
 engines:
-  - name: google
-    disabled: false
-    timeout: 6.0
   - name: startpage
     disabled: false
     timeout: 6.0
@@ -71,9 +76,16 @@ engines:
   - name: brave
     disabled: false
     timeout: 6.0
-  - name: mojeek
-    disabled: true
+  - name: yandex
+    disabled: false
+    timeout: 6.0
+  - name: seznam
+    disabled: false
+    timeout: 6.0
   - name: yahoo
+    disabled: false
+    timeout: 6.0
+  - name: mojeek
     disabled: true
   - name: duckduckgo
     disabled: true

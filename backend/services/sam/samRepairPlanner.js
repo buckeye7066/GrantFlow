@@ -83,7 +83,12 @@ const CATEGORY_STRATEGIES = Object.freeze({
     verification_commands: ['npm run -s unit'],
   },
   [SAM_CATEGORIES.CRAWLER_RELIABILITY]: {
-    strategy: 'crawler-doctor (manual)',
+    // Sam runs the crawler doctor itself now: the crawler.searchProviderHealth
+    // check actively probes SearXNG engines + the Brave key every sweep and the
+    // finding's evidence carries the diagnosis (search_provider_health). The
+    // owner acts on the named cause; the offline crawler:doctor gate remains
+    // the code-side verification.
+    strategy: 'crawler-doctor (auto-diagnosed by crawler.searchProviderHealth; see finding evidence)',
     risk_level: RISK_LEVEL.MODERATE,
     verification_commands: ['npm run -s crawler:doctor'],
   },

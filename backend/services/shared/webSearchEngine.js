@@ -199,6 +199,27 @@ export function looksDegenerateSerp(query, results) {
   })
 }
 
+/**
+ * looksEngineCollapse — is this SERP the product of a collapsed engine fleet?
+ *
+ * The searxngProvider attaches per-response telemetry (non-enumerable
+ * `searxngMeta`): which engines actually produced results and which the
+ * instance reports as unresponsive/suspended. When results come ONLY from
+ * scraped bing while 2+ other engines sit suspended (the 2026-07-28 state:
+ * brave + google-cse "too many requests", startpage/qwant CAPTCHA), the SERP
+ * may still LOOK topical enough to clear looksDegenerateSerp (bing covers a
+ * couple of the query's words with shopping/aggregator junk) — but recall
+ * quality is gone. Mechanical, no relevance heuristic: pure engine telemetry.
+ *
+ * Pure; exported for tests.
+ */
+export function looksEngineCollapse(meta) {
+  if (!meta || typeof meta !== 'object') return false
+  const engines = Array.isArray(meta.result_engines) ? meta.result_engines : []
+  const unresponsive = Array.isArray(meta.unresponsive_engines) ? meta.unresponsive_engines : []
+  return engines.length > 0 && engines.every((e) => e === 'bing') && unresponsive.length >= 2
+}
+
 async function duckDuckGoSearch(query, count, timeoutMs) {
   const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
   const response = await getWithRetry(
@@ -294,7 +315,13 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
       .filter((r) => r?.url && !shouldSkip(r.url))
       .slice(0, count)
       .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
-    return cleaned.length ? cleaned : null
+    if (!cleaned.length) return null
+    // Carry the provider's engine-health telemetry through the cleanup (it is
+    // non-enumerable, so the [{url,title,snippet}] contract is unchanged).
+    if (results.searxngMeta) {
+      Object.defineProperty(cleaned, 'searxngMeta', { value: results.searxngMeta, enumerable: false })
+    }
+    return cleaned
   }
   const degradedActive = Date.now() < _searxngDegradedUntil
   // The default engine set answering EMPTY is its own failure mode: every
@@ -314,6 +341,15 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
           _searxngDegradedUntil = Date.now() + SEARXNG_DEGRADED_TTL_MS
           heldDegenerate = cleaned
           log.warn(`[webSearchEngine] SearXNG served an IDENTICAL result set for different queries (instance degraded) — preferring fallback engines for ${Math.round(SEARXNG_DEGRADED_TTL_MS / 60000)}m`)
+        } else if (looksEngineCollapse(cleaned.searxngMeta)) {
+          // Engine telemetry outranks the relevance gate in the OTHER
+          // direction too: a bing-only SERP produced while the rest of the
+          // fleet sits suspended is degraded even when it happens to cover
+          // enough query words to read topical (the 2026-07-28
+          // wheelchair-van-grants → shopping-junk class). Held, never lost.
+          heldDegenerate = cleaned
+          const suspended = (cleaned.searxngMeta.unresponsive_engines || []).map((u) => `${u.engine}:${u.reason || 'unresponsive'}`).join(', ')
+          log.warn(`[webSearchEngine] SearXNG engine fleet collapsed to bing-only for "${q}" (suspended: ${suspended}) — trying fallback engines`)
         } else if (!looksDegenerateSerp(q, cleaned)) {
           return cleaned
         } else {
@@ -341,10 +377,12 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   // second call.
   if (searxng && (heldDegenerate || degradedActive || defaultCameUpEmpty)) {
     // Multiple engines, ONE call — SearXNG merges them, so whichever of the
-    // three is currently un-suspended contributes (live 2026-07-27: yahoo went
-    // from perfect to "HTTP protocol error" within 20 minutes while mojeek and
-    // yandex came back; the merged set stayed on-topic throughout).
-    const fallbackEngines = String(process.env.SEARXNG_FALLBACK_ENGINES ?? 'yahoo,mojeek,yandex').trim()
+    // three is currently un-suspended contributes. Default roster re-measured
+    // live 2026-07-28 (5-engine probe against the prod instance): yandex 14
+    // results, seznam 10, yahoo 7 — all clean — while mojeek answered
+    // "Suspended: access denied" (it hard-blocks datacenter IPs; keeping it
+    // here only spent a dead call). Re-measure before editing this default.
+    const fallbackEngines = String(process.env.SEARXNG_FALLBACK_ENGINES ?? 'yandex,seznam,yahoo').trim()
     if (fallbackEngines) {
       try {
         const cleaned = await searxngClean(fallbackEngines)

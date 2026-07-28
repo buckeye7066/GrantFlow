@@ -451,9 +451,20 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         return { ok: true, summary: `GOAL: full cohort clean — ${label}.${store.goal_notified_at ? '' : ' Owner notification pending.'}` }
       }
       if (latest.issues > 0) {
+        // Recall-miss classes are exactly what a degraded search backend
+        // produces (bing-only junk SERPs can't surface institution pages), so
+        // attach the live provider diagnosis: the owner reads WHY, not just
+        // WHAT (the 2026-07-28 institution_recall_miss ×6 class).
+        let providerHealth = null
+        try {
+          const { probeSearchProviderHealth } = await import('../searchProviderHealth.js')
+          providerHealth = await probeSearchProviderHealth()
+        } catch { providerHealth = null }
+        const envDegraded = providerHealth && !providerHealth.skipped && providerHealth.verdict !== 'healthy'
+        const envNote = envDegraded ? ` Environment diagnosis: search backend ${providerHealth.verdict} — ${providerHealth.detail}.` : ''
         return {
           ok: false,
-          summary: `${latest.issues} of ${latest.evaluated} synthetic profiles had issues — ${label}. Top classes: ${topTypes || 'n/a'}.`,
+          summary: `${latest.issues} of ${latest.evaluated} synthetic profiles had issues — ${label}. Top classes: ${topTypes || 'n/a'}.${envNote}`,
           evidence: {
             day: latest.day,
             target: latest.target,
@@ -463,8 +474,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
             finding_types: latest.finding_types || {},
             issue_examples: (latest.issue_examples || []).slice(0, 8),
             runs: latest.runs || [],
+            ...(providerHealth && !providerHealth.skipped ? { search_provider_health: { verdict: providerHealth.verdict, detail: providerHealth.detail } } : {}),
           },
-          recommended_fix: 'Each issue example names its finding types (amyReport FINDING_TYPES) — ineligible_match/false_positive route to the matchEngine eligibility gates, institution/hyperlocal recall misses route to buildWebQueries breadth, field-mapping/geo misses route to profileIntelligence. Amy\'s own tuning levers (floor/weights/coverage/archetype lessons) act on these automatically; whatever persists across days needs a code change.',
+          recommended_fix: envDegraded
+            ? 'The search backend is degraded (see search_provider_health evidence) — fix the environment first (restart searxng-search, check Brave 402) and expect the next cohort to recover; only misses that persist on a HEALTHY backend need a code change.'
+            : 'Each issue example names its finding types (amyReport FINDING_TYPES) — ineligible_match/false_positive route to the matchEngine eligibility gates, institution/hyperlocal recall misses route to buildWebQueries breadth, field-mapping/geo misses route to profileIntelligence. Amy\'s own tuning levers (floor/weights/coverage/archetype lessons) act on these automatically; whatever persists across days needs a code change.',
           confidence: 0.9,
         }
       }
@@ -959,6 +973,50 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // ACTIVE search-backend probe — the autonomous "crawler doctor" lane
+    // (2026-07-28). The two recurring crawler_reliability findings (Amy's
+    // institution_recall_miss cohort misses, the Google-bar parity regression)
+    // shared one environment root cause nothing in the nightly sweep could
+    // see: SearXNG's engine fleet collapsed to bing-only junk (brave/google-cse
+    // quota-suspended, startpage/qwant CAPTCHA'd) while the Brave API fallback
+    // sat on HTTP 402 (its $5/mo cap exhausts mid-month). The repair plan said
+    // "crawler-doctor (manual)" — this check IS that doctor, run by Sam on
+    // every sweep, so the morning report names the environment cause instead of
+    // asking the owner to probe by hand.
+    id: 'crawler.searchProviderHealth',
+    label: 'Search backend health (SearXNG engines + Brave API)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Actively probes the live search providers: SearXNG default engine set (detects engine-fleet collapse / bing-only generic SERPs via result-engine + unresponsive_engines telemetry), the SEARXNG_FALLBACK_ENGINES rung, and the Brave API key (402 = monthly cap exhausted). Findings carry the exact per-engine suspension reasons so crawler-quality regressions are diagnosable as environment vs. code.',
+    async run() {
+      let health
+      try {
+        const { probeSearchProviderHealth } = await import('../searchProviderHealth.js')
+        health = await probeSearchProviderHealth()
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `search provider probe unavailable: ${err?.message || err}` }
+      }
+      if (health?.skipped) {
+        return { ok: true, skipped: true, summary: `search provider probe skipped: ${health.detail || health.verdict}` }
+      }
+      if (health.verdict === 'healthy') {
+        return { ok: true, summary: `Search backend healthy: ${health.detail}`, evidence: { verdict: health.verdict, searxng: health.searxng, brave: health.brave } }
+      }
+      return {
+        ok: false,
+        summary: `Search backend ${health.verdict.toUpperCase()}: ${health.detail}`,
+        evidence: { verdict: health.verdict, searxng: health.searxng, brave: health.brave, probed_at: health.probed_at },
+        recommended_fix:
+          'Environment repair, not code: restart/redeploy the searxng-search Railway service to clear engine suspensions (CAPTCHA suspensions self-clear in ~1h, quota suspensions in ~5m); ' +
+          'keep SEARXNG_FALLBACK_ENGINES pointed at currently-alive engines (measured 2026-07-28: yandex, seznam, yahoo); ' +
+          'Brave HTTP 402 means the $5/mo cap is exhausted — it self-resets on the 1st, or raise the plan (owner action). ' +
+          'While degraded, treat same-night recall/parity regressions as environment-caused before changing crawler code.',
+        confidence: 0.95,
+      }
+    },
+  },
+  {
     // Brave monthly-budget pacing (braveBudget.js): the shared Brave key has a
     // small monthly quota that the fleet historically drained in the first days
     // of the month, leaving every consumer dark for weeks. The pacer rations a
@@ -1439,11 +1497,31 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         : null
       const latestParity = Number(latest.fleet_parity)
       if (Number.isFinite(latestParity) && Number.isFinite(median) && median - latestParity > mod.REGRESSION_POINTS) {
+        // A parity crash and a degraded search backend are usually ONE event:
+        // the benchmark's stored side is fed by the same SearXNG/Brave ladder,
+        // so when the engine fleet collapses, GrantFlow's crawl (and thus its
+        // stored matches) starves while the "plain web" side still counts —
+        // parity tanks. Attach the live diagnosis so the owner reads WHY
+        // (the 2026-07-28 23.6-vs-41 class).
+        let providerHealth = null
+        try {
+          const { probeSearchProviderHealth } = await import('../searchProviderHealth.js')
+          providerHealth = await probeSearchProviderHealth()
+        } catch { providerHealth = null }
+        const envDegraded = providerHealth && !providerHealth.skipped && providerHealth.verdict !== 'healthy'
+        const envNote = envDegraded ? ` Environment diagnosis: search backend ${providerHealth.verdict} — ${providerHealth.detail}.` : ''
         return {
           ok: false,
-          summary: `Google-bar REGRESSION: fleet web-parity ${latestParity} is ${Math.round((median - latestParity) * 10) / 10} points below the trailing median of the last ${priorParities.length} run(s) (${median}) — the system got WORSE vs a plain web search.`,
-          evidence: { ...evidence, trailing_median_fleet_parity: median, trailing_runs: priorParities.length },
-          recommended_fix: recommendedFix,
+          summary: `Google-bar REGRESSION: fleet web-parity ${latestParity} is ${Math.round((median - latestParity) * 10) / 10} points below the trailing median of the last ${priorParities.length} run(s) (${median}) — the system got WORSE vs a plain web search.${envNote}`,
+          evidence: {
+            ...evidence,
+            trailing_median_fleet_parity: median,
+            trailing_runs: priorParities.length,
+            ...(providerHealth && !providerHealth.skipped ? { search_provider_health: { verdict: providerHealth.verdict, detail: providerHealth.detail } } : {}),
+          },
+          recommended_fix: envDegraded
+            ? 'The search backend is degraded (see search_provider_health evidence) — fix the environment first (restart searxng-search, check Brave 402); re-measure with a healthy backend before treating this as a crawler-code regression. ' + recommendedFix
+            : recommendedFix,
           confidence: 0.85,
         }
       }

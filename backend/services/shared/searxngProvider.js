@@ -29,6 +29,39 @@ import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:searxngProvider')
 
+// ── Global pacer ────────────────────────────────────────────────────────────
+// The nightly discovery fan-out (50 Amy synthetics × 6-8 queries, plus the
+// parity benchmark) fired back-to-back queries at the instance, whose upstream
+// engines then rate-limited/CAPTCHA'd US: on 2026-07-28 brave + google-cse sat
+// "Suspended: too many requests" and startpage/qwant "Suspended: CAPTCHA",
+// leaving bing-only junk SERPs for the rest of the night (the
+// institution_recall_miss ×6 / parity-23.6 root cause). A minimum gap between
+// SearXNG calls keeps the upstream engines under their limits. Shared across
+// every provider instance in the process; disabled in the unit-test runner and
+// tunable via SEARXNG_MIN_INTERVAL_MS (0 disables).
+let _pacerChain = Promise.resolve()
+let _lastCallAt = 0
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function paceMinIntervalMs() {
+  if (process.env.GRANTFLOW_TEST_RUNNER === '1') return 0
+  const raw = Number(process.env.SEARXNG_MIN_INTERVAL_MS)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 750
+}
+
+function pacedTurn() {
+  const minInterval = paceMinIntervalMs()
+  if (!minInterval) return Promise.resolve()
+  const turn = _pacerChain.then(async () => {
+    const wait = _lastCallAt + minInterval - Date.now()
+    if (wait > 0) await _sleep(wait)
+    _lastCallAt = Date.now()
+  })
+  // Chain never rejects (the body only sleeps), so no catch needed.
+  _pacerChain = turn
+  return turn
+}
+
 /**
  * Normalize a configured base URL into the SearXNG `/search` JSON endpoint.
  * Accepts `https://host`, `https://host/`, or `https://host/search`.
@@ -82,6 +115,8 @@ export function makeSearxngProvider({
     if (effEngines) params.set('engines', effEngines)
     const url = `${endpoint}?${params.toString()}`
 
+    await pacedTurn()
+
     let response
     try {
       response = await getWithRetry(
@@ -108,8 +143,10 @@ export function makeSearxngProvider({
     const results = Array.isArray(json?.results) ? json.results : []
     const out = []
     const seen = new Set()
+    const resultEngines = new Set()
     for (const r of results) {
-      if (out.length >= want) break
+      for (const e of Array.isArray(r?.engines) ? r.engines : []) resultEngines.add(String(e))
+      if (out.length >= want) continue
       const u = String(r?.url || '').trim()
       if (!/^https?:\/\//i.test(u)) continue
       const key = u.toLowerCase().replace(/\/$/, '')
@@ -121,6 +158,19 @@ export function makeSearxngProvider({
         snippet: String(r?.content || r?.snippet || '').trim(),
       })
     }
+    // Engine-health telemetry rides along as a NON-ENUMERABLE property so the
+    // `[{url,title,snippet}]` contract (and any deep-equality test on it) is
+    // untouched. webSearchEngine reads it to detect engine-fleet collapse
+    // (bing-only SERPs while the rest of the fleet sits suspended).
+    const unresponsive = []
+    for (const entry of Array.isArray(json?.unresponsive_engines) ? json.unresponsive_engines : []) {
+      if (Array.isArray(entry)) unresponsive.push({ engine: String(entry[0] ?? ''), reason: String(entry[1] ?? '') })
+      else if (entry) unresponsive.push({ engine: String(entry), reason: '' })
+    }
+    Object.defineProperty(out, 'searxngMeta', {
+      value: { result_engines: [...resultEngines].sort(), unresponsive_engines: unresponsive },
+      enumerable: false,
+    })
     return out
   }
 }
