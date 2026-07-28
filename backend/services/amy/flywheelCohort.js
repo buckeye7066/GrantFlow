@@ -54,14 +54,34 @@ export function isCleanEvaluation(evaluation) {
 /**
  * PURE: fold one run's evaluations into the rolling store.
  *
- * @returns {{ store: object, day: object, goal_reached_now: boolean }}
+ * @returns {{ store: object, day: object, goal_reached_now: boolean, duplicate: boolean }}
  *   goal_reached_now — this fold made today's cohort complete AND fully clean
  *   (regardless of the notified flag; the caller decides whether to notify).
+ *   duplicate — this runId was ALREADY folded into this day: the store is
+ *   returned unchanged and no counter moves. Only the runs[] list used to be
+ *   deduped, so re-folding a run double-counted evaluated/clean/issues, could
+ *   falsely trip day.complete, and could fire the one-shot owner GOAL
+ *   notification on inflated numbers.
  */
 export function buildCohortUpdate(prev, { dayKey, target, runId = null, at = null, evaluations = [] } = {}) {
   const base = prev && typeof prev === 'object' ? prev : {}
   const days = { ...(base.days && typeof base.days === 'object' ? base.days : {}) }
   const prevDay = days[dayKey] && typeof days[dayKey] === 'object' ? days[dayKey] : {}
+
+  // Idempotence: a runId already folded into this day is a duplicate fold —
+  // return the store unchanged BEFORE any counter increments.
+  if (runId && Array.isArray(prevDay.runs) && prevDay.runs.includes(runId)) {
+    return {
+      store: {
+        days,
+        goal_notified_at: base.goal_notified_at ?? null,
+        updated_at: base.updated_at ?? null,
+      },
+      day: { ...prevDay },
+      goal_reached_now: false,
+      duplicate: true,
+    }
+  }
 
   const day = {
     day: dayKey,
@@ -112,6 +132,7 @@ export function buildCohortUpdate(prev, { dayKey, target, runId = null, at = nul
     },
     day,
     goal_reached_now: day.complete && day.all_clean,
+    duplicate: false,
   }
 }
 
@@ -191,13 +212,20 @@ export async function recordFlywheelCohort(db, {
     const prevRow = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(KV_KEY)
     const prev = prevRow?.value ? JSON.parse(prevRow.value) : null
 
-    const { store, day, goal_reached_now } = buildCohortUpdate(prev, {
+    const { store, day, goal_reached_now, duplicate } = buildCohortUpdate(prev, {
       dayKey,
       target: Number(target) > 0 ? Number(target) : dailyTarget(),
       runId,
       at: at ?? when.toISOString(),
       evaluations,
     })
+
+    // Duplicate fold (same runId already recorded today): the store is
+    // unchanged — nothing to persist, never notify.
+    if (duplicate) {
+      log.warn('flywheel cohort fold skipped: runId already recorded for this day', { run_id: runId, day: dayKey })
+      return { ok: true, day, goal_reached: false, notified: false, duplicate: true }
+    }
 
     let notified = false
     if (goal_reached_now && !store.goal_notified_at) {
@@ -219,7 +247,7 @@ export async function recordFlywheelCohort(db, {
     if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
       await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(KV_KEY, value, ts)
     }
-    return { ok: true, day, goal_reached: goal_reached_now, notified }
+    return { ok: true, day, goal_reached: goal_reached_now, notified, duplicate: false }
   } catch (err) {
     log.warn('flywheel cohort record failed (non-fatal)', { error: err?.message })
     return { ok: false, error: err?.message }

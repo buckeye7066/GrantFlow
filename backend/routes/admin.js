@@ -4178,7 +4178,7 @@ router.post('/feature-flags/cleanup', async (req, res) => {
  * Body:
  *  - profile_ids?: string[]
  *  - crawler_types?: string[] (defaults to all)
- *  - min_match_score?: number (defaults 50)
+ *  - min_match_score?: number (data-point scale; defaults DEFAULT_MIN_SCORE)
  *  - timeout_ms?: number (defaults 20000)
  *  - limit_profiles?: number (defaults 25 when profile_ids not provided)
  *  - item_request?: string (used for item_matching)
@@ -4190,7 +4190,9 @@ router.post('/crawlers/audit-live', async (req, res) => {
     const {
       profile_ids,
       crawler_types,
-      min_match_score = 50,
+      // Data-point scale (pipeline bar ~8) — the old literal 50 was a
+      // retired-scale fossil kept alive by the *0.25 conversion below.
+      min_match_score = null,
       timeout_ms = 20000,
       limit_profiles = 25,
       item_request = null,
@@ -4249,7 +4251,14 @@ router.post('/crawlers/audit-live', async (req, res) => {
           } else {
             const curatedResult = await withTimeout(
               runCuratedCrawlerForAudit(req.db, profileId, {
-                minScore: Math.max(1, Math.floor((Number(min_match_score) || 50) * 0.25)),
+                // min_match_score is on the CANONICAL data-point scale now; the
+                // old (50-default * 0.25) dance converted retired-scale input.
+                minScore: Math.max(
+                  1,
+                  Number.isFinite(Number(min_match_score)) && min_match_score !== null
+                    ? Number(min_match_score)
+                    : (await import('../config/matchThresholds.js')).DEFAULT_MIN_SCORE,
+                ),
                 maxResults: 100,
               }),
               Math.max(1000, Number(timeout_ms) || 20000),

@@ -1,10 +1,38 @@
 import Database from 'better-sqlite3'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import {
   getPortalCheckStatus,
   mergePortalAwardIntoApplications,
 } from '../services/portalCheckService.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+describe('public portal checks can NEVER create a personal award (canonical G0)', () => {
+  // Static tripwire (the funderFieldDrift pattern): the unauthenticated
+  // landing-page checker used to promote award keywords / the LARGEST dollar
+  // figure on a public page into updateType='scholarship_award' and merge it
+  // into the student's financial-aid pipeline as 'merged'/'completed'
+  // (2026-07-28 audit — fabricated funding presented as real). The award
+  // write path must stay deleted: only an authenticated connector
+  // (hamilton/portalSync) may create a personal award.
+  const src = readFileSync(join(__dirname, '..', 'services', 'portalCheckService.js'), 'utf8')
+
+  it('the public checker has no award-sync path', () => {
+    expect(src).not.toMatch(/async function syncAwardToProfile/)
+    expect(src).not.toMatch(/updateType = amount \? 'scholarship_award'/)
+  })
+
+  it('public detection is recorded as SIGNALS, never as an award', () => {
+    expect(src).toMatch(/publicSignals = \{/)
+    expect(src).toMatch(/has_award_language/)
+    // The run summary reports a hard 0 — not a computed count of "detections".
+    expect(src).toMatch(/awardsDetected: 0/)
+  })
+})
 
 describe('mergePortalAwardIntoApplications', () => {
   it('stores merged portal awards and adds a completed pipeline item', () => {

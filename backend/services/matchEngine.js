@@ -3073,7 +3073,8 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // when the page text doesn't echo their exact need word. It counts as at
   // most ONE coverage point (bounded), so it refines the ratio without
   // recreating the old additive boost stack.
-  const dataPointCredit = dataPointEval.credit + (hasFitEvidence ? Math.min(1, fitEvidencePoints / 12) : 0)
+  const fitEvidenceCredit = hasFitEvidence ? Math.min(1, fitEvidencePoints / 12) : 0
+  const dataPointCredit = dataPointEval.credit + fitEvidenceCredit
   // A coverage PERCENTAGE is a calibrated claim: the display bands (8 bar /
   // 11 good / 14 strong) were fit against real profiles carrying 50–150 data
   // points. An inventory below MIN_CALIBRATED_INVENTORY (a thesis stub, a
@@ -3266,7 +3267,15 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     dataPointEvidence: {
       total: dataPointInventory.total,
       matched_count: dataPointEval.matched.length,
+      // `credit` = credit from matched inventory entries alone (kept under its
+      // original key for existing consumers). The fit bonus is reported
+      // SEPARATELY and `total_credit` is the numerator the score actually
+      // used — evidence must reconcile with the score (the 2026-07-28 audit's
+      // evidence-drift finding: coverage was computed from a credit the
+      // explanation never showed).
       credit: Math.round(dataPointEval.credit * 10) / 10,
+      bonus_credit: Math.round(fitEvidenceCredit * 10) / 10,
+      total_credit: Math.round(dataPointCredit * 10) / 10,
       matched: dataPointEval.matched,
     },
     matchedSignals,
@@ -3283,13 +3292,18 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       data_point_total: dataPointInventory.total,
       data_point_matched: dataPointEval.matched.length,
       data_point_credit: Math.round(dataPointEval.credit * 10) / 10,
+      data_point_bonus_credit: Math.round(fitEvidenceCredit * 10) / 10,
+      data_point_total_credit: Math.round(dataPointCredit * 10) / 10,
       data_point_coverage: Math.round(dataPointCoverage),
       // Need-anchored formula inputs (legacy scale; still reported)
       need_coverage: Math.round(needCoverage),
       matched_needs_count: matchedNeedSet.size,
       need_denominator: needDenominator,
       total_declared_needs: totalDeclaredNeeds,
-      fit_evidence: hasFitEvidence ? FIT_EVIDENCE_HALF_CREDIT : 0,
+      // The ACTUAL bonus applied on the data_point model (0..1, fitEvidencePoints/12
+      // bounded) — this used to report the legacy-path constant 0.5 regardless
+      // of what the score really added.
+      fit_evidence: Math.round(fitEvidenceCredit * 10) / 10,
       eligibility_factor: eligFactor,
       geo_factor: geoFactor,
       eligibility_mismatches: eligibilityMismatches.length ? eligibilityMismatches : undefined,

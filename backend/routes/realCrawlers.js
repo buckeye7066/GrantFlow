@@ -757,7 +757,9 @@ const WEB_LEAD_MAX_RESULTS = Number(process.env.ITEM_WEB_LEAD_MAX_RESULTS) || 12
  *      `variant: 'gift'` biases queries toward donation / in-kind programs.
  */
 router.post('/specific-need', ensureAuth, async (req, res) => {
-  const { profile_id, need_text, min_match_score = 30, max_results = 20, variant = 'funding' } = req.body
+  // Default = the canonical data-point-scale bar; the old literal 30 was a
+  // retired-scale fossil that filtered out nearly everything (p90 is ~15).
+  const { profile_id, need_text, min_match_score = DEFAULT_MIN_SCORE, max_results = 20, variant = 'funding' } = req.body
 
   if (!profile_id) return res.status(400).json({ error: 'profile_id is required' })
   if (!need_text || typeof need_text !== 'string' || need_text.trim().length < 2) {

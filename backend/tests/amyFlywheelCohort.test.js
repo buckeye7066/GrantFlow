@@ -76,6 +76,46 @@ describe('buildCohortUpdate (pure fold)', () => {
     expect(full.day.all_clean).toBe(true)
   })
 
+  it('re-folding the SAME runId is a no-op: counters unchanged, duplicate:true', () => {
+    const r1 = buildCohortUpdate(null, {
+      dayKey: '2026-07-06', target: 4, runId: 'run-a', at: 't1',
+      evaluations: [clean(1), gappy(1)],
+    })
+    expect(r1.duplicate).toBe(false)
+
+    const dup = buildCohortUpdate(r1.store, {
+      dayKey: '2026-07-06', target: 4, runId: 'run-a', at: 't2',
+      evaluations: [clean(1), gappy(1)],
+    })
+    expect(dup.duplicate).toBe(true)
+    expect(dup.goal_reached_now).toBe(false)
+    // Counters untouched — the old fold double-counted these.
+    expect(dup.day.evaluated).toBe(2)
+    expect(dup.day.clean).toBe(1)
+    expect(dup.day.issues).toBe(1)
+    expect(dup.day.finding_types).toEqual(r1.day.finding_types)
+    expect(dup.day.issue_examples.length).toBe(r1.day.issue_examples.length)
+    expect(dup.day.runs).toEqual(['run-a'])
+    expect(dup.store).toEqual(r1.store)
+  })
+
+  it('a duplicate fold can never fabricate day.complete or fire the goal', () => {
+    // target 2, one clean profile folded once: incomplete, no goal.
+    const r1 = buildCohortUpdate(null, {
+      dayKey: '2026-07-06', target: 2, runId: 'run-a', evaluations: [clean(1)],
+    })
+    expect(r1.goal_reached_now).toBe(false)
+    // Old bug: re-folding run-a pushed evaluated to 2 → complete + all_clean →
+    // goal_reached_now true → false one-shot owner GOAL notification.
+    const dup = buildCohortUpdate(r1.store, {
+      dayKey: '2026-07-06', target: 2, runId: 'run-a', evaluations: [clean(1)],
+    })
+    expect(dup.duplicate).toBe(true)
+    expect(dup.day.evaluated).toBe(1)
+    expect(dup.day.complete).toBe(false)
+    expect(dup.goal_reached_now).toBe(false)
+  })
+
   it('retains only the most recent day buckets', () => {
     let store = null
     for (let d = 1; d <= 30; d += 1) {
@@ -128,6 +168,34 @@ describe('recordFlywheelCohort (store + one-shot goal notification)', () => {
     const db2 = freshDb()
     await recordFlywheelCohort(db2, { evaluations: [clean(1)], runId: 'r', now, target: 50, send })
     expect(sent.length).toBe(0)
+  })
+
+  it('recording the SAME runId twice leaves the store unchanged and never notifies', async () => {
+    const db = freshDb()
+    const sent = []
+    const send = async (msg) => { sent.push(msg); return { ok: true } }
+    const now = new Date('2026-07-06T15:00:00Z')
+
+    const r1 = await recordFlywheelCohort(db, { evaluations: [clean(1)], runId: 'run-1', now, target: 2, send })
+    expect(r1.ok).toBe(true)
+    expect(r1.duplicate).toBe(false)
+
+    // Old bug: this duplicate fold pushed evaluated to target → complete +
+    // all_clean → one-shot GOAL email fired on inflated numbers.
+    const r2 = await recordFlywheelCohort(db, { evaluations: [clean(1)], runId: 'run-1', now, target: 2, send })
+    expect(r2.ok).toBe(true)
+    expect(r2.duplicate).toBe(true)
+    expect(r2.goal_reached).toBe(false)
+    expect(r2.notified).toBe(false)
+    expect(sent.length).toBe(0)
+
+    const store = await getFlywheelCohort(db)
+    const day = store.days['2026-07-06']
+    expect(day.evaluated).toBe(1)
+    expect(day.clean).toBe(1)
+    expect(day.issues).toBe(0)
+    expect(day.runs).toEqual(['run-1'])
+    expect(store.goal_notified_at).toBe(null)
   })
 
   it('a failed send leaves the flag unset so the next qualifying run retries', async () => {

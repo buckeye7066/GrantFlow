@@ -73,8 +73,17 @@ async function visit(page, ctx) {
 
 const generic = {
   id: 'generic',
-  label: 'Generic portal (sign-in only)',
+  label: 'Generic portal (captured session required)',
   hostMatch: /.*/,
+  // This connector NEVER fills or submits a login form — it only navigates
+  // and extracts from whatever the page shows. A saved username/password
+  // therefore cannot authenticate anything here: without a captured browser
+  // session the run lands on a login wall, extracts nothing, and used to be
+  // recorded as a clean "completed" (the 2026-07-28 audit's misleading-merge
+  // class). Requiring a session makes the orchestrator's honesty gate refuse
+  // password-only generic syncs up front. A future connector that actually
+  // implements a login workflow may relax this for ITS hosts.
+  requiresSession: true,
 
   async read(page, ctx) {
     const log = ctx?.log || (() => {})

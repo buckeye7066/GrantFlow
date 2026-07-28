@@ -341,6 +341,55 @@ describe('Amy training run (end-to-end, offline discovery)', () => {
     }
   })
 
+  it('the PERSISTED admin report carries the flywheel cohort result (recorded before save)', async () => {
+    const db = createDb()
+    try {
+      const out = await runAmyTraining({
+        db,
+        categories,
+        perCategory: 1,
+        // Live (non-dry-run) discovery is the flywheel-recording path; the
+        // injected fake keeps it offline.
+        dryRunDiscovery: false,
+        runDiscovery: makeFakeDiscovery(db),
+        clock: () => new Date('2026-06-28T12:00:00Z'),
+      })
+
+      // The in-memory report has the flywheel record and no swallowed failure.
+      expect(out.combined.flywheel_cohort?.ok).toBe(true)
+      expect(out.combined.flywheel_record_error).toBeUndefined()
+      expect(out.combined.report_persistence_error).toBeUndefined()
+
+      // Regression (order-of-operations): saveAmyReport used to run BEFORE
+      // flywheel_cohort was attached, so the STORED report never carried it.
+      const persisted = await readLatestAmyReport(db)
+      expect(persisted).toBeTruthy()
+      expect(persisted.run_id).toBe(out.run_id)
+      expect(persisted.flywheel_cohort?.ok).toBe(true)
+      expect(persisted.flywheel_cohort?.day?.evaluated).toBe(categories.length)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('AMY_RUN_ON_STARTUP defaults FALSE (boot uses the overdue catch-up); explicit true still forces boot runs', () => {
+    const prev = { ...process.env }
+    try {
+      delete process.env.AMY_RUN_ON_STARTUP
+      // Default: no unconditional run on every deploy — the startup catch-up
+      // branch (runStartupCatchUpIfOverdue) is the default boot path.
+      expect(getAmyConfig().runOnStartup).toBe(false)
+
+      process.env.AMY_RUN_ON_STARTUP = 'true'
+      expect(getAmyConfig().runOnStartup).toBe(true)
+
+      process.env.AMY_RUN_ON_STARTUP = 'false'
+      expect(getAmyConfig().runOnStartup).toBe(false)
+    } finally {
+      process.env = prev
+    }
+  })
+
   it('scheduler is ON by default (owner directive) and targets 100/day; opt out with AMY_ENABLED=false', () => {
     const prev = { ...process.env }
     try {

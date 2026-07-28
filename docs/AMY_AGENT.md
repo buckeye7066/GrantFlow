@@ -143,15 +143,19 @@ npm run amy:train -- --list-categories
 
 ## Daily run (100 profiles/day)
 
-A background scheduler runs Amy once per day. It is **off by default** (like
-every sibling agent) and is enabled with `AMY_ENABLED=true`. The daily volume
-defaults to **100 profiles**, distributed evenly across all categories.
+A background scheduler runs Amy once per day. It is **on by default** (owner
+directive 2026-06-29); opt out with `AMY_ENABLED=false`. The daily volume
+defaults to **100 profiles**, distributed evenly across all categories. By
+default a boot only triggers a run when the daily run is actually **overdue**
+(no successful report within the daily window), so redeploy bursts do not pile
+up runs; set `AMY_RUN_ON_STARTUP=true` to force a full run ~1 min after every
+boot instead.
 
 | Env | Default | Purpose |
 |-----|---------|---------|
-| `AMY_ENABLED` | `false` | Master switch for the daily scheduler |
-| `AMY_RUN_ON_SCHEDULE` | `true` | Run once per day (when enabled) |
-| `AMY_RUN_ON_STARTUP` | `false` | Also run ~1 min after boot |
+| `AMY_ENABLED` | `true` | Master switch for the daily scheduler (set `false` to turn Amy off) |
+| `AMY_RUN_ON_SCHEDULE` | `true` | Run once per day (when enabled); a boot still catches up an overdue daily run |
+| `AMY_RUN_ON_STARTUP` | `false` | Force a run ~1 min after EVERY boot (default is the overdue catch-up only) |
 | `AMY_DAILY_PROFILE_TARGET` | `100` | Profiles generated per day |
 | `AMY_PERSIST` | `true` | Store discovered opportunities in `funding_opportunities` so agent Robert can parse them (synthetic profiles + scoped matches are still cleaned up). Set `false` for measurement-only dry runs |
 | `AMY_KEEP_PROFILES` | `false` | Leave profiles for Sam instead of auto-clean |
@@ -164,10 +168,10 @@ defaults to **100 profiles**, distributed evenly across all categories.
 | `AMY_INTERVAL_MS` | `86400000` | Override the 24h cadence (testing/ops) |
 | `AMY_AUTO_CLEANUP` | `false` | Let Sam's nightly sweep delete expired Amy profiles |
 
-To turn it on at 100/day:
+It already runs at 100/day by default; to turn it off:
 
 ```bash
-AMY_ENABLED=true            # daily scheduler on; AMY_DAILY_PROFILE_TARGET defaults to 100
+AMY_ENABLED=false           # daily scheduler off; AMY_DAILY_PROFILE_TARGET defaults to 100
 ```
 
 The scheduler runs at most one job at a time (in-memory flag + DB scheduler

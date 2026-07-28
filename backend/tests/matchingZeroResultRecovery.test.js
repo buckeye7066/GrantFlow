@@ -1,8 +1,13 @@
 import express from 'express'
 import request from 'supertest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import matchingRouter from '../routes/matching.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 /**
  * Mission regression: "0 included of X found" must never happen.
@@ -167,6 +172,53 @@ describe('matching zero-result recovery (no "0 included of X found")', () => {
     } finally {
       db.close()
     }
+  })
+
+  it('HARD INELIGIBILITY IS NEVER OUTRUNNABLE: recovery never returns a REJECT/ineligible/relaxed row', async () => {
+    // The 2026-07-28 audit found Tier B re-canonicalized raw candidates with
+    // rejectHardIneligible:false and RELABELED live-decision REJECT rows to
+    // match_decision:'REVIEW' + eligibility_relaxed:true — a path that, for any
+    // REJECT row surviving canonicalization's other gates, would put a
+    // hard-ineligible source in the owner's opportunities array. Canonical
+    // rule (canonical_rules.md): hard ineligibility stays REJECT no matter how
+    // empty the result set is. The relabel is removed and a final surfacing
+    // guard now filters REJECT/ineligible/relaxed rows regardless of how they
+    // arrived. This asserts the END-TO-END invariant over the below-floor
+    // recovery set (which really does surface relaxed-SCORE rows): none of the
+    // surfaced rows is a REJECT, ineligible, or eligibility-RELAXED row.
+    const db = new Database(':memory:')
+    createSchema(db)
+    seedBelowFloor(db)
+    try {
+      const res = await request(createApp(db))
+        .get('/api/matching/profile/below-floor/opportunities')
+        .query({ min_score: 101, limit: 2000, skip_readiness_check: 1 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.returned).toBeGreaterThan(0) // recovery DID surface eligible rows
+      for (const o of res.body.opportunities ?? []) {
+        expect(String(o.match_decision ?? o.decision ?? '').toUpperCase()).not.toBe('REJECT')
+        expect(o.eligible).not.toBe(false)
+        // eligibility (not score) was never relaxed — the removed relabel is
+        // the only thing that ever set this flag.
+        expect(o.eligibility_relaxed).not.toBe(true)
+      }
+      expect(res.body.relaxation?.eligibility_relaxed).not.toBe(true)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('static tripwire: the Tier B REJECT→REVIEW relabel is gone and never returns', () => {
+    // A crafted live seed can't reliably reach the relabel (trust/profile
+    // gates drop the common hard-ineligible classes first), so guard the
+    // removal structurally: the route must not relabel a REJECT to REVIEW, and
+    // must not mint eligibility_relaxed on recovered rows.
+    const src = readFileSync(join(__dirname, '..', 'routes', 'matching.js'), 'utf8')
+    expect(src).not.toMatch(/match_decision:\s*['"]REVIEW['"]/)
+    expect(src).not.toMatch(/eligibility_relaxed:\s*true/)
+    // The defense-in-depth final surfacing filter must be present.
+    expect(src).toMatch(/\.toUpperCase\(\)\s*!==\s*['"]REJECT['"]/)
   })
 
   it('?no_fallback=1 preserves strict legacy behavior (returns 0 below the floor)', async () => {

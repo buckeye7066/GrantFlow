@@ -30,8 +30,13 @@ const CLEAN = { fieldsWritten: 2, fieldsRejected: [], awardsWritten: 1, awardsDi
 describe('shouldMarkMergedAfterRead', () => {
   it('merges only a read that truly pulled data in, cleanly', () => {
     expect(shouldMarkMergedAfterRead(CLEAN)).toBe(true)
-    // deliberately-dismissed awards count as handled data
-    expect(shouldMarkMergedAfterRead({ ...CLEAN, fieldsWritten: 0, awardsWritten: 0, awardsDismissed: 1 })).toBe(true)
+    // Dismissals are NOT pulled data: a run that wrote nothing because the
+    // user had dismissed everything is a no-op read — marking it terminally
+    // `merged` silenced the weekly reminder off pure suppression
+    // (2026-07-28 audit; this assertion previously encoded the defect).
+    expect(shouldMarkMergedAfterRead({ ...CLEAN, fieldsWritten: 0, awardsWritten: 0, awardsDismissed: 1 })).toBe(false)
+    // …but dismissals alongside real writes never BLOCK the merge.
+    expect(shouldMarkMergedAfterRead({ ...CLEAN, awardsDismissed: 3 })).toBe(true)
   })
 
   it('refuses an empty read (nothing pulled → still unmerged, still reminded)', () => {

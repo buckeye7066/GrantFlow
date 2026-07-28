@@ -414,11 +414,14 @@ export async function startCloudLogin(profileId, { portalHost, loginUrl = null, 
 }
 
 // Finish a cloud login: capture + import the authenticated session (profile-bound).
-export function completeCloudLogin(liveSessionId) {
+// `force: true` overrules the server's visible-password-field heuristic (the
+// "did you actually finish logging in?" check) after it refused a capture with
+// reason 'login_not_verified'.
+export function completeCloudLogin(liveSessionId, { force = false } = {}) {
   if (!liveSessionId) return Promise.reject(new Error('liveSessionId required'))
   return apiFetch(`/api/hamilton/automation/sessions/cloud-login/${encodeURIComponent(liveSessionId)}/complete`, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(force ? { force: true } : {}),
   })
 }
 

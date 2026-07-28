@@ -33,6 +33,13 @@ function useQueryParam(name) {
   return params.get(name)
 }
 
+// CDP Input.* modifier bitmask (Alt=1, Ctrl=2, Meta/Command=4, Shift=8) from a
+// DOM mouse/keyboard/touch event, so shift-click, ctrl+A, shift-Tab etc. reach
+// the live page instead of arriving unmodified.
+function cdpModifiers(e) {
+  return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0)
+}
+
 export default function HamiltonLiveLogin() {
   const navigate = useNavigate()
   const liveSessionId = useQueryParam('session')
@@ -53,6 +60,10 @@ export default function HamiltonLiveLogin() {
   const [streamError, setStreamError] = useState(null)
   const [busy, setBusy] = useState(null) // 'complete' | 'cancel' | null
   const [doneMessage, setDoneMessage] = useState(null)
+  // Non-fatal Done failures — the live session is still alive server-side, so
+  // these render as a retry strip, NOT as the stream-failure overlay:
+  //   { kind: 'not_verified' | 'import_failed', message }
+  const [completeIssue, setCompleteIssue] = useState(null)
   // Bumping this re-runs the stream effect so a dropped connection can be
   // re-attached WITHOUT restarting the login — the live browser persists
   // server-side (15-min TTL), so reconnecting just resumes the screencast.
@@ -206,40 +217,43 @@ export default function HamiltonLiveLogin() {
   const onMouseEvent = useCallback((type) => (e) => {
     const n = normalizedFromEvent(e)
     if (!n) return
-    post({ type, x: n.x, y: n.y, button: e.button || 0 })
+    post({ type, x: n.x, y: n.y, button: e.button || 0, modifiers: cdpModifiers(e) })
   }, [normalizedFromEvent, post])
 
   const onWheel = useCallback((e) => {
     const n = normalizedFromEvent(e)
     if (!n) return
-    post({ type: 'wheel', x: n.x, y: n.y, deltaX: e.deltaX, deltaY: e.deltaY })
+    post({ type: 'wheel', x: n.x, y: n.y, deltaX: e.deltaX, deltaY: e.deltaY, modifiers: cdpModifiers(e) })
   }, [normalizedFromEvent, post])
 
-  // Touch → tap maps to a click so the page is usable on a phone.
+  // Touch → tap maps to a synthetic 'click' (the backend expands it into
+  // move+press+release) so the page is usable on a phone. Desktop clicks ride
+  // the separate mousedown/mouseup relays instead — see the canvas handlers.
   const onTouch = useCallback((e) => {
     const n = normalizedFromEvent(e)
     if (!n) return
     e.preventDefault()
-    post({ type: 'click', x: n.x, y: n.y, button: 0 })
+    post({ type: 'click', x: n.x, y: n.y, button: 0, modifiers: cdpModifiers(e) })
   }, [normalizedFromEvent, post])
 
   // Keyboard: send keydown (with key/code) and, for printable chars, a char
-  // event so typed text lands in the page's focused field.
+  // event so typed text lands in the page's focused field. The CDP modifier
+  // bitmask rides along so ctrl/shift shortcuts work inside the portal.
   const onKeyDown = useCallback((e) => {
     if (!focusedRef.current) return
     // Don't hijack browser refresh / devtools.
     if ((e.ctrlKey || e.metaKey) && ['r', 'R'].includes(e.key)) return
     e.preventDefault()
-    post({ type: 'keydown', key: e.key, code: e.code, keyCode: e.keyCode })
+    post({ type: 'keydown', key: e.key, code: e.code, keyCode: e.keyCode, modifiers: cdpModifiers(e) })
     if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      post({ type: 'char', key: e.key, text: e.key })
+      post({ type: 'char', key: e.key, text: e.key, modifiers: cdpModifiers(e) })
     }
   }, [post])
 
   const onKeyUp = useCallback((e) => {
     if (!focusedRef.current) return
     e.preventDefault()
-    post({ type: 'keyup', key: e.key, code: e.code, keyCode: e.keyCode })
+    post({ type: 'keyup', key: e.key, code: e.code, keyCode: e.keyCode, modifiers: cdpModifiers(e) })
   }, [post])
 
   useEffect(() => {
@@ -251,14 +265,38 @@ export default function HamiltonLiveLogin() {
     }
   }, [onKeyDown, onKeyUp])
 
-  const handleDone = useCallback(async () => {
+  // `force` overrules the server's visible-password-field heuristic after it
+  // refused with 'login_not_verified' (a heuristic, not proof — the user may
+  // know the portal simply keeps a password box on screen).
+  const handleDone = useCallback(async ({ force = false } = {}) => {
     if (!liveSessionId || busy) return
     setBusy('complete')
+    setCompleteIssue(null)
     try {
-      await completeCloudLogin(liveSessionId)
+      await completeCloudLogin(liveSessionId, { force })
       try { streamRef.current?.close() } catch { /* ignore */ }
       setDoneMessage('Session captured — Hamilton can now act inside this portal for this profile. You can close this window.')
     } catch (err) {
+      const reason = err?.details?.reason || err?.errorCode || ''
+      if (reason === 'login_not_verified') {
+        // The live session is untouched — offer a force retry.
+        setCompleteIssue({
+          kind: 'not_verified',
+          message: err?.details?.detail || 'The portal still shows a password field — finish logging in first.',
+        })
+        setBusy(null)
+        return
+      }
+      if (err?.errorCode === 'import_failed' || err?.details?.retryable === true) {
+        // Capture succeeded but the DB write failed; the live login is still
+        // alive server-side, so Done can simply be clicked again.
+        setCompleteIssue({
+          kind: 'import_failed',
+          message: 'Saving the captured session failed — your login is still live. Click Done again to retry.',
+        })
+        setBusy(null)
+        return
+      }
       setStreamError(err?.message || 'complete_failed')
       setBusy(null)
     }
@@ -298,7 +336,7 @@ export default function HamiltonLiveLogin() {
               You are driving a real, private browser <span className="font-medium text-slate-300">on this laptop</span> — type
               the username &amp; password and complete 2FA in this window. Only a phone-<em>push</em> 2FA (Duo / Microsoft
               Authenticator) needs the phone; a texted or app code can be entered here. We capture the logged-in session
-              only — never your password or 2FA code. The window expires in 15 minutes.
+              only — never your password or 2FA code. The window expires after 15 minutes of inactivity (60 minutes maximum).
             </p>
           </div>
         </div>
@@ -307,15 +345,51 @@ export default function HamiltonLiveLogin() {
             {connected && painted ? <Wifi className="h-4 w-4 text-emerald-400" /> : <WifiOff className="h-4 w-4 text-amber-400" />}
             {connected && painted ? 'Live' : painted ? 'Reconnecting…' : 'Connecting…'}
           </span>
-          <Button size="sm" disabled={busy === 'complete'} onClick={handleDone}>
-            {busy === 'complete' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-1.5 h-4 w-4" />}
-            Done — I&apos;ve finished logging in
-          </Button>
+          {/* Done is gated on a genuinely LIVE view (connected + painted + no
+              stream error): completing against a window that never painted or
+              whose session died would capture a jar the user never saw. The
+              title (on a wrapper span — disabled buttons swallow hover) says
+              why it's disabled. */}
+          <span
+            title={
+              connected && painted && !streamError
+                ? undefined
+                : 'Done unlocks once the live portal view is connected and showing — wait for "Live" (or reconnect) first.'
+            }
+          >
+            <Button
+              size="sm"
+              disabled={busy === 'complete' || !(connected && painted && !streamError)}
+              onClick={() => handleDone()}
+            >
+              {busy === 'complete' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-1.5 h-4 w-4" />}
+              Done — I&apos;ve finished logging in
+            </Button>
+          </span>
           <Button size="sm" variant="ghost" disabled={busy === 'cancel'} onClick={handleCancel}>
             <X className="mr-1.5 h-4 w-4" /> Cancel
           </Button>
         </div>
       </div>
+
+      {/* Non-fatal Done failure strip: the live session is still alive, so this
+          offers a retry (and, for the login-not-verified heuristic, an explicit
+          "Force save anyway") instead of the dead-stream overlay. */}
+      {completeIssue && (
+        <div className="flex flex-col gap-2 border-b border-amber-600/40 bg-amber-950/40 px-4 py-2 text-xs text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+          <span>{completeIssue.message}</span>
+          <div className="flex shrink-0 items-center gap-2">
+            {completeIssue.kind === 'not_verified' && (
+              <Button size="sm" variant="secondary" disabled={busy === 'complete'} onClick={() => handleDone({ force: true })}>
+                Force save anyway
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => setCompleteIssue(null)}>
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Live viewport */}
       <div className="relative flex flex-1 items-center justify-center overflow-auto p-2 sm:p-4">
@@ -347,13 +421,18 @@ export default function HamiltonLiveLogin() {
             </div>
           </div>
         )}
+        {/* NO onClick relay on the canvas: the browser fires click AFTER
+            mousedown+mouseup, and the backend expands 'click' into
+            move+press+release — so relaying it too made every physical click a
+            DOUBLE click at the portal (checkboxes toggled back off, double form
+            submits). The synthetic 'click' stays reserved for the touch path
+            (onTouchStart), which posts it as the whole tap. */}
         <canvas
           ref={canvasRef}
           tabIndex={0}
           onMouseDown={onMouseEvent('mousedown')}
           onMouseUp={onMouseEvent('mouseup')}
           onMouseMove={onMouseEvent('mousemove')}
-          onClick={onMouseEvent('click')}
           onWheel={onWheel}
           onTouchStart={onTouch}
           onFocus={() => { focusedRef.current = true }}

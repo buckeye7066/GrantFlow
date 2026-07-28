@@ -90,7 +90,9 @@ import {
   registerCloudLoginViewer,
   startScreencast,
   dispatchInput,
-  completeCloudLogin,
+  captureCloudLoginState,
+  releaseCloudLoginCompletion,
+  finalizeCloudLogin,
   cancelCloudLogin,
   cloudLoginStatus,
 } from '../services/hamilton/hamiltonCloudLogin.js'
@@ -1226,12 +1228,22 @@ router.post('/sessions/cloud-login/:liveSessionId/input', async (req, res) => {
 // Finish: capture the authenticated session and import it (profile-bound). The
 // live session already carries the profile it was started for; we re-verify the
 // caller may access that profile before storing anything.
+//
+// LOSSLESS ORDER: capture (browser stays ALIVE) → importSession (the DB write)
+// → completeCaptureRequest → finalize (teardown) ONLY after the DB write
+// succeeded. The old flow captured-then-closed BEFORE importing, so an import
+// failure permanently lost the live login; now it releases the completion mark
+// and returns a retryable 500 so the user can just click Done again.
+//
+// `force: true` in the body skips the visible-password-field heuristic (the
+// "did you actually log in?" check — a heuristic, not proof; see
+// captureCloudLoginState).
 router.post('/sessions/cloud-login/:liveSessionId/complete', async (req, res) => {
   const meta = getCloudLoginMeta(req.params.liveSessionId)
   if (!meta) return res.status(404).json({ error: 'not_found_or_expired' })
   const user = await requireProfileScope(req, res, meta.profileId)
   if (!user) return
-  const result = await completeCloudLogin(req.params.liveSessionId)
+  const result = await captureCloudLoginState(req.params.liveSessionId, { force: req.body?.force === true })
   if (!result.ok) return res.status(400).json({ error: 'cloud_login_complete_failed', ...result })
   try {
     const consent = {
@@ -1262,9 +1274,16 @@ router.post('/sessions/cloud-login/:liveSessionId/complete', async (req, res) =>
     if (meta.captureRequestId) {
       await completeCaptureRequest(req.db, meta.captureRequestId, { sessionId: session?.id || null }).catch(() => {})
     }
+    // The session row is durably written — NOW it is safe to tear the live
+    // browser down.
+    await finalizeCloudLogin(req.params.liveSessionId)
     return res.json({ ok: true, session })
   } catch (err) {
-    return res.status(400).json({ error: 'import_failed', detail: err?.message })
+    // The DB write failed but the live login is still alive — release the
+    // completion mark so the user can retry Done without logging in again.
+    releaseCloudLoginCompletion(req.params.liveSessionId)
+    log.error('cloud_login_import_failed', { liveSessionId: req.params.liveSessionId, err: err?.message })
+    return res.status(500).json({ error: 'import_failed', retryable: true, detail: err?.message })
   }
 })
 

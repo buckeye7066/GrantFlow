@@ -597,20 +597,46 @@ export async function runAmyTraining(options = {}) {
     amy: { summary, handoff },
   }
 
-  // Persist combined report for the admin panel (best-effort).
-  if (saveReport && db) {
-    await saveAmyReport(db, combined).catch(() => {})
-  }
-
   // Daily flywheel scoreboard: fold this run's per-profile clean/issue verdicts
   // into the ET-day cohort; the first fully-clean full-target day sends the
-  // owner's one-shot goal-reached notification. Best-effort, never fatal.
+  // owner's one-shot goal-reached notification. Recorded BEFORE the report is
+  // persisted so the stored admin report carries the flywheel result. Never
+  // fatal, but a failure is RECORDED on the report (G1: no silent failures).
   if (db && !dryRunDiscovery) {
-    combined.flywheel_cohort = await recordFlywheelCohort(db, {
-      evaluations,
-      runId,
-      at: completedAtDate.toISOString(),
-    }).catch(() => null)
+    try {
+      combined.flywheel_cohort = await recordFlywheelCohort(db, {
+        evaluations,
+        runId,
+        at: completedAtDate.toISOString(),
+      })
+      if (combined.flywheel_cohort?.ok === false && !combined.flywheel_cohort?.skipped) {
+        combined.degraded = true
+        combined.flywheel_record_error = combined.flywheel_cohort?.error || 'flywheel cohort record failed'
+        logger.error('Amy flywheel cohort record failed', { run_id: runId, error: combined.flywheel_record_error })
+      }
+    } catch (err) {
+      combined.flywheel_cohort = null
+      combined.degraded = true
+      combined.flywheel_record_error = err?.message || String(err)
+      logger.error('Amy flywheel cohort record failed', { run_id: runId, error: combined.flywheel_record_error })
+    }
+  }
+
+  // Persist combined report for the admin panel (after the flywheel cohort is
+  // attached). Non-fatal, but a persistence failure is recorded + logged (G1).
+  if (saveReport && db) {
+    try {
+      const saved = await saveAmyReport(db, combined)
+      if (saved === false) {
+        combined.degraded = true
+        combined.report_persistence_error = 'saveAmyReport returned false (persist failed; see reportStore logs)'
+        logger.error('Amy report persistence failed', { run_id: runId, error: combined.report_persistence_error })
+      }
+    } catch (err) {
+      combined.degraded = true
+      combined.report_persistence_error = err?.message || String(err)
+      logger.error('Amy report persistence failed', { run_id: runId, error: combined.report_persistence_error })
+    }
   }
 
   // Persist per-archetype metrics history — the run-over-run PROOF that the

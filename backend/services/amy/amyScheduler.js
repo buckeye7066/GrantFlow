@@ -12,8 +12,10 @@
  *   AMY_ENABLED                 master switch (default true — owner directive).
  *                               Set AMY_ENABLED=false to turn the agent off.
  *   AMY_RUN_ON_SCHEDULE         daily run (default true when enabled)
- *   AMY_RUN_ON_STARTUP          one run shortly after boot (default true, so an
- *                               enabled deploy actually runs without waiting 24h)
+ *   AMY_RUN_ON_STARTUP          force one run ~60s after EVERY boot (default
+ *                               false — the overdue catch-up below already runs
+ *                               a missed daily run shortly after boot, so every
+ *                               redeploy does not fire a full run)
  *   AMY_DAILY_PROFILE_TARGET    profiles per day (default 100)
  *   AMY_PERSIST                 store discovered opportunities in the live catalog
  *                               (funding_opportunities) so agent Robert can parse
@@ -67,7 +69,7 @@ export function getAmyConfig() {
   return {
     enabled,
     runOnSchedule: bool(process.env.AMY_RUN_ON_SCHEDULE, true),
-    runOnStartup: bool(process.env.AMY_RUN_ON_STARTUP, true),
+    runOnStartup: bool(process.env.AMY_RUN_ON_STARTUP, false),
     dailyTarget: Math.max(1, Math.min(5000, Number(process.env.AMY_DAILY_PROFILE_TARGET) || 100)),
     // Store discovered opportunities in funding_opportunities so Robert can parse
     // them. Real, reality-gated, deduped funding sources — not synthetic noise.

@@ -166,13 +166,31 @@ function cleanTerms(values) {
  */
 export function buildProfileDataPointInventory({ profile, signals, profileNorm = null, coverageNeeds = null } = {}) {
   const dataPoints = []
-  const seen = new Set() // normalized value dedup across ALL kinds
+  // One real-world FACT counts once among the SUBSTANTIVE kinds (this is what
+  // keeps an org focus area from double-counting as interest + need). But the
+  // GATE kinds (applicant_type, geo) are excluded from coverage entirely
+  // (DENOMINATOR/NUMERATOR_EXCLUDE_KINDS), so letting them CONSUME a value
+  // silently deleted substantive traits: applicant_type is pushed first, and
+  // profileHelpers promotes militarySet('veteran') into applicantType —
+  // so `military:veteran` never existed and a veteran-targeted source lost
+  // its coverage credit (external audit 2026-07-28, confirmed). Gate kinds now
+  // dedup only within themselves and never touch the substantive pool.
+  const GATE_KINDS = new Set(['applicant_type', 'geo'])
+  const seenSubstantive = new Set()
+  const seenGate = new Set()
   const push = (kind, value) => {
     const v = String(value ?? '').toLowerCase().trim()
     if (!v) return
     const key = norm(v)
-    if (!key || seen.has(key)) return
-    seen.add(key)
+    if (!key) return
+    if (GATE_KINDS.has(kind)) {
+      const gateKey = `${kind}:${key}`
+      if (seenGate.has(gateKey)) return
+      seenGate.add(gateKey)
+    } else {
+      if (seenSubstantive.has(key)) return
+      seenSubstantive.add(key)
+    }
     dataPoints.push({ id: `${kind}:${v}`, kind, value: v })
   }
   // Plain-row list column: JSON array, array, or comma string.

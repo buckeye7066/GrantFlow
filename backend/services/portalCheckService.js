@@ -22,7 +22,6 @@ import { URL } from 'url'
 import { SCHOLARSHIPS } from './shared/data/scholarships.js'
 import { STATE_REGISTRY } from './shared/data/stateRegistry.js'
 import ensurePortalCheckResultsTable from '../utils/ensurePortalCheckResultsTable.js'
-import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('portalCheckService')
 
@@ -452,67 +451,33 @@ async function checkPortal(portal) {
     return { ...base, error: err?.message || 'fetch failed' }
   }
 
+  // PUBLIC content is never proof of a PERSONAL award (canonical G0: the AI /
+  // automation may not invent amounts or facts). This checker fetches
+  // unauthenticated landing pages; award language there is marketing copy, and
+  // the largest dollar figure on such a page is tuition / program totals /
+  // advertised maxima — not something this student was granted. It used to be
+  // promoted to updateType='scholarship_award' and merged into the student's
+  // financial-aid pipeline as status 'merged'/'completed' (external audit
+  // 2026-07-28, confirmed — fabricated funding presented as real). Public
+  // signals are now recorded as SIGNALS ONLY; a personal award may be created
+  // exclusively by an AUTHENTICATED portal connector.
   const hasAwardKeywords = detectAwardKeywords(rawText)
   const amount = detectScholarshipAmount(rawText)
-
-  if (hasAwardKeywords || amount) {
-    base.updateType = amount ? 'scholarship_award' : 'award_notification'
-    base.awardName = portal.portalName
-    base.awardAmount = amount ? amount.value : null
-    base.awardAmountRaw = amount ? amount.raw : null
+  base.publicSignals = {
+    has_award_language: Boolean(hasAwardKeywords),
+    advertised_amount: amount ? amount.value : null,
+    advertised_amount_raw: amount ? amount.raw : null,
   }
 
   return base
 }
 
-// ---------------------------------------------------------------------------
-// Sync updates into the student's university_applications pipeline
-// ---------------------------------------------------------------------------
-
-async function syncAwardToProfile(db, profileId, update) {
-  if (!update.applicationId) return
-
-  const row = await new Promise((resolve, reject) => {
-    try {
-      const stmt = db.prepare(`SELECT data FROM profile_sections
-       WHERE profile_id = ? AND section_key = 'university_applications'
-       LIMIT 1`)
-      const result = stmt.get(profileId)
-      resolve(result)
-    } catch (err) {
-      reject(err)
-    }
-  })
-
-  if (!row?.data) return
-
-  let parsed
-  try {
-    parsed = JSON.parse(row.data)
-  } catch {
-    return
-  }
-
-  const apps = Array.isArray(parsed?.applications) ? parsed.applications : []
-  const merged = mergePortalAwardIntoApplications(apps, update)
-  const nextPayload = { ...(parsed || {}), applications: merged.applications }
-
-  await new Promise((resolve, reject) => {
-    try {
-      const stmt = db.prepare(`INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-       VALUES (?, 'university_applications', ?, 'portal_check')
-       ON CONFLICT(profile_id, section_key) DO UPDATE SET
-         data = excluded.data,
-         updated_at = CURRENT_TIMESTAMP,
-         updated_by = excluded.updated_by`)
-      guardProfileSectionForWrite(db, profileId, 'university_applications', nextPayload)
-        .then((guarded) => resolve(stmt.run(profileId, JSON.stringify(guarded.data))))
-        .catch(reject)
-    } catch (err) {
-      reject(err)
-    }
-  })
-}
+// NOTE: the unauthenticated checker used to have a syncAwardToProfile() here
+// that wrote publicly-scraped "awards" into the student's
+// university_applications pipeline. Deleted 2026-07-28 (audit): only an
+// authenticated connector (hamilton/portalSync) may create a personal award.
+// mergePortalAwardIntoApplications stays exported for the user-driven route
+// (routes/profiles.js) where the OWNER records an award deliberately.
 
 // ---------------------------------------------------------------------------
 // Store portal check result
@@ -687,25 +652,21 @@ export async function runPortalCheck(db, profileId, options = {}) {
 
   log.info(`[portal-check] Checking ${portals.length} portals for profile ${profileId}`)
 
-  const updates = []
-  let awardsDetected = 0
+  // Liveness + public-signal scan ONLY. awardsDetected is structurally 0 now:
+  // a public page can never mint a personal award (see checkPortal). The field
+  // and `updates` stay in the return shape for existing consumers.
+  const publicSignals = []
 
   for (const portal of portals) {
     const result = await checkPortal(portal)
 
-    if (result.updateType) {
-      awardsDetected++
-      updates.push(result)
-
-      // Sync to pipeline if this portal is linked to a specific application
-      if (result.applicationId) {
-        try {
-          await syncAwardToProfile(db, profileId, result)
-        } catch (err) {
-          console.warn(`[portal-check] failed to sync award for app ${result.applicationId}:`, err?.message)
-        }
-      }
-    }
+    publicSignals.push({
+      portalName: portal.portalName,
+      portalUrl: portal.portalUrl,
+      status: result.error ? 'unreachable' : 'reachable',
+      public_signals: result.publicSignals ?? null,
+      error: result.error ?? null,
+    })
 
     // Store check-in record
     await storePortalCheckResult(db, {
@@ -713,17 +674,18 @@ export async function runPortalCheck(db, profileId, options = {}) {
       portalName: portal.portalName,
       portalUrl: portal.portalUrl,
       checkType,
-      awardsDetected: result.updateType ? 1 : 0,
+      awardsDetected: 0,
       resultsJson: JSON.stringify(result),
     })
   }
 
-  log.info(`[portal-check] Completed for profile ${profileId}: ${awardsDetected} awards detected across ${portals.length} portals`)
+  log.info(`[portal-check] Completed for profile ${profileId}: ${portals.length} portal(s) scanned (public liveness/signals only — awards require an authenticated connector)`)
 
   return {
     profileId,
     portalsChecked: portals.length,
-    awardsDetected,
-    updates,
+    awardsDetected: 0,
+    updates: [],
+    publicSignals,
   }
 }

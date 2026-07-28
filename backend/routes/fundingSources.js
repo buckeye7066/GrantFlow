@@ -16,7 +16,8 @@ import { isTemplatedGeoStub } from '../services/relevanceFilterRules.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
-import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
+import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
+import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
   ensurePipelineDismissalsSchema,
   recordDismissal,
@@ -50,7 +51,14 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     return res.status(403).json({ error: 'forbidden' })
   }
 
-  const minScore = Number.isFinite(Number.parseInt(req.query.min_score, 10)) ? Number.parseInt(req.query.min_score, 10) : 50
+  // Default = the canonical data-point-scale bar (8), NOT the retired 75/50
+  // scale — a hard-coded 50 here returned near-nothing for any caller that
+  // omitted min_score (the 2026-07-28 audit's stale-constant class). Clamp to
+  // the slider range so a junk query param cannot go negative/absurd.
+  const requestedMinScore = Number.parseInt(req.query.min_score, 10)
+  const minScore = Number.isFinite(requestedMinScore)
+    ? Math.max(0, Math.min(100, requestedMinScore))
+    : DEFAULT_MIN_SCORE
 
   try {
     const profileContext = buildProfileFacets(await loadProfileContext(req.db, profileId))
@@ -119,7 +127,11 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       })
     }
 
-    const qualified = sources.filter((s) => Number(s.match_score) >= minScore)
+    // The canonical display gate — never an inlined score predicate (the
+    // matchSurfacing.js contract): an engine ACCEPT below the floor still
+    // surfaces (the Anastasia-HOPE class), a REJECT/low REVIEW never does,
+    // directories keep their own floor.
+    const qualified = sources.filter((s) => qualifiesForDisplay(s, minScore))
     return res.json({
       profile_id: profileId,
       engine: 'crawler-os',

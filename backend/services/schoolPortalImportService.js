@@ -388,15 +388,25 @@ function createPipelineStage(award, connection) {
  * Discover Grants, the analytics counts, and the agent surfaces.
  *
  * IMPORTANT privacy note: only PUBLIC scholarship metadata is written
- * to the global table (title, sponsor, amount range, public URL,
- * description). Student-specific award status / academic year /
- * school name stay in the profile section only.
+ * to the table (title, sponsor, amount range, public URL, description).
+ * Student-specific award status / academic year / school name stay in
+ * the profile section only.
+ *
+ * PROFILE SCOPING (2026-07-28 audit, G4/G8 cross-profile-bleed class):
+ * an award read from ONE student's authenticated portal is that
+ * student's fact, not a reusable opportunity for every profile — but
+ * this insert wrote profile_id NULL, and every catalog read treats
+ * NULL as globally visible (`profile_id IS NULL OR profile_id = ?`),
+ * at source_trust_tier 'official_portal' no less. Callers now pass
+ * profileId and the row is scoped to that profile. A personal award
+ * may enter the GLOBAL catalog only via a separate public-source
+ * verification proving it is an open program.
  *
  * Returns true if a row was written, false on graceful failure
  * (missing table, etc.). Never throws — failure to write the global
  * row must NOT block the per-profile merge.
  */
-export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection) {
+export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection, { profileId = null } = {}) {
   if (!db || !award || !award.id || !award.title) return false
   if (!connection) connection = {}
 
@@ -410,7 +420,7 @@ export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection
   const insertSql = `
     INSERT INTO funding_opportunities (
       id, title, sponsor, source, source_id, source_url,
-      record_origin, description,
+      record_origin, description, profile_id,
       amount_min, amount_max, amount_description,
       application_url, apply_url, application_mode,
       opportunity_type, opportunity_kind, source_trust_tier,
@@ -419,7 +429,7 @@ export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection
       created_at, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?,
-      ?, ?,
+      ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?,
@@ -438,6 +448,7 @@ export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection
            amount_max = COALESCE(?, amount_max),
            application_url = COALESCE(?, application_url),
            apply_url = COALESCE(?, apply_url),
+           profile_id = COALESCE(profile_id, ?),
            updated_at = CURRENT_TIMESTAMP
      WHERE id = ?
   `
@@ -451,6 +462,7 @@ export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection
     sourceUrl,
     'school_portal',
     description,
+    profileId ? String(profileId) : null,
     amountMin,
     amountMax,
     award.amount_display || null,

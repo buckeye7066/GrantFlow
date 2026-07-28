@@ -125,7 +125,11 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
     const title = String(a?.title || '').trim()
     if (!title) continue
     // Stable id so re-syncing the same award updates rather than duplicates.
-    const fp = crypto.createHash('sha1').update(`${portalHost}|${title}|${a?.amount ?? ''}`).digest('hex').slice(0, 24)
+    // The PROFILE is part of the identity: without it, two students with the
+    // same portal + title + amount collide on one row, and now that award rows
+    // are profile-scoped (the G4/G8 fix below) the second student's award
+    // would silently update the first student's row.
+    const fp = crypto.createHash('sha1').update(`${profileId}|${portalHost}|${title}|${a?.amount ?? ''}`).digest('hex').slice(0, 24)
     const awardId = `portal_sync_${fp}`
     // DISMISSED gate: if the user previously removed this award from their
     // pipeline, do NOT resurrect it. isDismissed accepts an opportunity-shaped
@@ -154,7 +158,10 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
     // failure list rides the run summary (and blocks the auto-merge below) so
     // the sync never looks more successful than it was.
     try {
-      const ok = await upsertSchoolPortalAwardAsOpportunity(db, award, connection)
+      // profileId scopes the row: a student's authenticated portal award is
+      // THEIR fact, never a global catalog entry every profile can match
+      // (2026-07-28 audit — the cross-profile-bleed class).
+      const ok = await upsertSchoolPortalAwardAsOpportunity(db, award, connection, { profileId })
       if (ok) out.awardsWritten += 1
       else out.awardsFailed.push({ title, reason: 'upsert_returned_false' })
     } catch (err) {
@@ -195,9 +202,12 @@ async function recordStudentPortalChecks(db, { profileId, host, status }) {
  */
 export function shouldMarkMergedAfterRead(persisted) {
   if (!persisted || typeof persisted !== 'object') return false
+  // Dismissals do NOT count as pulled data: a run that wrote zero fields and
+  // zero awards because the user had previously dismissed everything is a
+  // no-op read, not a merge — counting it marked portals terminally `merged`
+  // off pure suppression (2026-07-28 audit).
   const pulledData = (Number(persisted.fieldsWritten) || 0)
-    + (Number(persisted.awardsWritten) || 0)
-    + (Number(persisted.awardsDismissed) || 0) > 0
+    + (Number(persisted.awardsWritten) || 0) > 0
   const cleanPersist = (persisted.awardsFailed || []).length === 0
     && (persisted.fieldsRejected || []).length === 0
   return pulledData && cleanPersist

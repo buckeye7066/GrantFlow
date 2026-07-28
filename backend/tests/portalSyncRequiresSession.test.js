@@ -52,14 +52,32 @@ describe('runPortalSync — requiresSession honesty gate', () => {
     expect(runs[0].status).toBe('failed')
   })
 
-  it('the gate is connector-scoped: MTSU requires a session, the generic connector does not', () => {
-    // Deterministic (no browser/network): MTSU declares requiresSession so the
-    // honesty gate fires; the generic connector that handles any other host does
-    // NOT, so non-SSO portals are unaffected by the gate.
+  it('EVERY connector without a real login workflow requires a captured session', () => {
+    // Deterministic (no browser/network). The generic connector never fills a
+    // login form, so a saved password cannot authenticate anything through it —
+    // it used to declare requiresSession falsy, letting a password-only sync
+    // land on a login wall, extract nothing, and record a misleading clean
+    // "completed" (2026-07-28 audit). Both connectors now demand the captured
+    // session the sync actually needs.
     const mtsuC = resolveConnector({ host: 'mtsu.edu' })
     const genericC = resolveConnector({ host: 'example.com' })
     expect(mtsuC.id).toBe('mtsu')
     expect(mtsuC.requiresSession).toBe(true)
-    expect(genericC.requiresSession).toBeFalsy()
+    expect(genericC.id).toBe('generic')
+    expect(genericC.requiresSession).toBe(true)
+  })
+
+  it('a generic-portal sync with only a saved password fails honestly (needs_session)', async () => {
+    await saveCredential(db, {
+      userId: 'u1', profileId: 'pB', portalHost: 'someportal.example.org',
+      username: 'student@example.org', password: 'pw-cannot-log-in-by-itself',
+    })
+
+    const r = await runPortalSync(db, { profileId: 'pB', portalHost: 'someportal.example.org', direction: 'read', actorUserId: 'u1' })
+
+    expect(r.ok).toBe(false)
+    expect(r.needs_session).toBe(true)
+    expect(r.connectorId).toBe('generic')
+    expect(r.read).toBeUndefined()
   })
 })

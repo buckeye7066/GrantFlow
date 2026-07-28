@@ -49,15 +49,37 @@ import { findValidSession, getSessionStorageState } from './hamiltonCredentialSe
 
 const log = createLogger('service:hamiltonCloudLogin')
 
-const SESSION_TTL_MS = 15 * 60_000
+// Idle-based session lifecycle. The old model was a single absolute TTL
+// (15 min from createdAt) checked ONLY when a NEW login started — so an ACTIVE
+// user was killed mid-2FA at exactly 15 minutes, while an abandoned session
+// leaked its Chromium forever on a quiet deployment (no new login → no sweep).
+// Now: a session stays alive while it is actually USED (viewer streaming,
+// input flowing, capture in progress) and expires after 15 minutes of true
+// inactivity, with a hard 60-minute cap on total lifetime; a background
+// sweeper enforces expiry independent of new logins.
+const SESSION_IDLE_TTL_MS = 15 * 60_000
+const SESSION_MAX_AGE_MS = 60 * 60_000
+const SWEEP_INTERVAL_MS = 30_000
 // liveSessionId -> {
-//   browser, server, context, page, meta, createdAt,
+//   browser, server, context, page, meta, createdAt, expiresAt,
+//   completing,      // capture-in-progress guard (see captureCloudLoginState)
 //   screencastCdp,   // CDP session driving Page.startScreencast (1 active stream)
 //   inputCdp,        // CDP session for Input.* dispatch
 //   keyframeTimer,   // idle-keyframe interval (see attachScreencast)
 //   lastFrameMeta,   // { deviceWidth, deviceHeight, ... } from the latest frame
 // }
 const sessions = new Map()
+
+/**
+ * Refresh a session's expiry on real activity: expiresAt slides forward to
+ * now + IDLE_TTL but never past createdAt + MAX_AGE. Called on viewer connect,
+ * on every input event, on every frame sent, and on capture.
+ */
+function touchSession(s) {
+  if (!s) return
+  const createdAt = Number(s.createdAt) || Date.now()
+  s.expiresAt = Math.min(createdAt + SESSION_MAX_AGE_MS, Date.now() + SESSION_IDLE_TTL_MS)
+}
 
 // JPEG quality for keyframe screenshots (matches the screencast stream quality).
 const KEYFRAME_QUALITY = 60
@@ -105,12 +127,20 @@ export function isCloudLoginConfigured() {
 function sweepExpired() {
   const now = Date.now()
   for (const [id, s] of sessions.entries()) {
-    if (now - s.createdAt > SESSION_TTL_MS) {
-      closeQuietly(s)
+    const expiresAt = Number(s.expiresAt) || (Number(s.createdAt) + SESSION_IDLE_TTL_MS)
+    if (now > expiresAt) {
       sessions.delete(id)
+      closeQuietly(s)
+      log.info('cloud login session expired', { liveSessionId: id, idleTtlMs: SESSION_IDLE_TTL_MS, maxAgeMs: SESSION_MAX_AGE_MS })
     }
   }
 }
+
+// Background sweeper: idle/over-age sessions must die (and free their
+// Chromium) even when no new login ever starts. unref() so the interval never
+// holds the process open (tests, graceful shutdown).
+const sweepTimer = setInterval(sweepExpired, SWEEP_INTERVAL_MS)
+if (typeof sweepTimer.unref === 'function') sweepTimer.unref()
 
 async function closeQuietly(s) {
   // FIRST: tell every attached live viewer the session is over. Without this a
@@ -142,6 +172,7 @@ async function closeQuietly(s) {
 export function registerCloudLoginViewer(liveSessionId, notify) {
   const s = sessions.get(liveSessionId)
   if (!s || typeof notify !== 'function') return () => {}
+  touchSession(s) // a viewer attaching is activity
   if (!s.viewers) s.viewers = new Set()
   s.viewers.add(notify)
   return () => { try { s.viewers?.delete(notify) } catch { /* ignore */ } }
@@ -349,8 +380,9 @@ function makeLiveSessionId() {
 
 function finalizeStart({ browser, server, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl, liveSessionId, seededFromSessionId = null }) {
   const id = liveSessionId || makeLiveSessionId()
-  sessions.set(id, {
+  const record = {
     browser, server, context, page,
+    completing: false,
     screencastCdp: null,
     inputCdp: null,
     keyframeTimer: null,
@@ -367,12 +399,15 @@ function finalizeStart({ browser, server, context, page, userId, profileId, port
       seededFromSessionId: seededFromSessionId || null,
     },
     createdAt: Date.now(),
-  })
+  }
+  touchSession(record)
+  sessions.set(id, record)
   log.info('cloud login session started', {
     liveSessionId: id, profileId: String(profileId), portalHost,
     provider: cloudLoginProvider(), seeded: Boolean(seededFromSessionId),
   })
-  return { ok: true, liveSessionId: id, liveUrl, portalHost, expires_in_ms: SESSION_TTL_MS, seeded: Boolean(seededFromSessionId) }
+  // expires_in_ms is the IDLE window (activity extends it, up to the max age).
+  return { ok: true, liveSessionId: id, liveUrl, portalHost, expires_in_ms: SESSION_IDLE_TTL_MS, max_age_ms: SESSION_MAX_AGE_MS, seeded: Boolean(seededFromSessionId) }
 }
 
 export function getCloudLoginMeta(liveSessionId) {
@@ -465,6 +500,9 @@ export async function attachScreencast(s, onFrame, { quality = KEYFRAME_QUALITY,
     if (!frame || !frame.data) return
     s.lastFrameMeta = frame.metadata || s.lastFrameMeta
     lastFrameAt = Date.now()
+    // A frame actually SENT to a viewer is activity: while someone is watching
+    // the mirror the session must not idle out under them.
+    touchSession(s)
     try { onFrame(frame) } catch { /* consumer error — ignore, keep stream alive */ }
   }
 
@@ -524,6 +562,7 @@ export async function attachScreencast(s, onFrame, { quality = KEYFRAME_QUALITY,
 export async function startScreencast(liveSessionId, onFrame, opts = {}) {
   const s = sessions.get(liveSessionId)
   if (!s || !s.page) return null
+  touchSession(s) // viewer connect is activity
   s.__id = liveSessionId
   return attachScreencast(s, onFrame, opts)
 }
@@ -545,22 +584,28 @@ async function sendInputOverCdp(cdp, s, event) {
   const scaleY = (ny) => Math.max(0, Math.min(height, Math.round(Number(ny) * height)))
 
   const type = String(event.type || '')
+  // CDP modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8), sent by the live
+  // viewer with mouse AND key events so shift-click / ctrl-shortcuts work.
+  const modifiers = Number.isFinite(event.modifiers) ? event.modifiers : 0
 
   if (type === 'mousemove' || type === 'mousedown' || type === 'mouseup' || type === 'click') {
     const x = scaleX(event.x)
     const y = scaleY(event.y)
     const button = event.button === 2 ? 'right' : event.button === 1 ? 'middle' : 'left'
     if (type === 'mousemove') {
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', modifiers })
     } else if (type === 'mousedown') {
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 })
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1, modifiers })
     } else if (type === 'mouseup') {
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 })
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1, modifiers })
     } else {
-      // A full tap/click: move + press + release.
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 })
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 })
+      // A full tap/click: move + press + release. Used by the TOUCH path (a
+      // phone tap posts one synthetic 'click'); the desktop viewer relays
+      // mousedown/mouseup separately and must NOT also post 'click', or one
+      // physical click becomes two full click sequences at the portal.
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', modifiers })
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1, modifiers })
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1, modifiers })
     }
     return { ok: true }
   }
@@ -574,6 +619,7 @@ async function sendInputOverCdp(cdp, s, event) {
       y,
       deltaX: Number(event.deltaX) || 0,
       deltaY: Number(event.deltaY) || 0,
+      modifiers,
     })
     return { ok: true }
   }
@@ -614,6 +660,7 @@ export async function dispatchInput(liveSessionId, event) {
   const s = sessions.get(liveSessionId)
   if (!s || !s.page) return { ok: false, reason: 'not_found_or_expired' }
   if (!event || typeof event !== 'object') return { ok: false, reason: 'bad_event' }
+  touchSession(s) // user input is activity — never idle out someone mid-2FA
 
   try {
     const cdp = await ensureInputCdp(s)
@@ -657,26 +704,124 @@ export function fetchDebugJson(httpBase, pathSuffix = '/json/list') {
 }
 
 /**
- * Finish a cloud login: read the authenticated storageState from the live
- * context, tear the browser down, and return the storageState for the caller to
- * import (profile-bound). Returns { ok, storageState, meta } or { ok:false }.
+ * HEURISTIC login check — not proof. If the live page still shows a VISIBLE
+ * password input, the portal is almost certainly still sitting on its login
+ * form, and capturing now would save a jar of tracker/CSRF cookies as a
+ * "valid" session (the any-cookie hole documented at loadSeedSession). It can
+ * only catch that obvious case: a portal that hides the password behind a
+ * multi-step flow, or a page we cannot read, passes — which is why the caller
+ * exposes a `force` escape hatch instead of trusting this as a verdict.
+ * Best-effort and bounded: any locator failure (or a slow page) reads as
+ * "cannot tell" → false, never a block and never a throw.
  */
-export async function completeCloudLogin(liveSessionId) {
+async function pageStillShowsPasswordField(page, timeoutMs = 1500) {
+  try {
+    const locator = page?.locator?.('input[type=password]:visible')
+    if (!locator || typeof locator.count !== 'function') return false
+    let timer = null
+    try {
+      const count = await Promise.race([
+        locator.count(),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(0), timeoutMs)
+          if (typeof timer.unref === 'function') timer.unref()
+        }),
+      ])
+      return Number(count) > 0
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Step 1 of completion: capture the authenticated storageState from the live
+ * context WITHOUT tearing anything down. The browser stays alive so a failed
+ * import (the DB write) can be retried against the same live login — the old
+ * capture-then-close flow deleted the session and closed the browser BEFORE
+ * importSession ran, so an import failure permanently lost the live login.
+ *
+ * Marks the session `completing` so a concurrent double-complete (double-sent
+ * Done) is refused instead of capturing/importing twice;
+ * releaseCloudLoginCompletion() clears the mark for an explicit retry, and
+ * every failure path here clears it itself so the user can always try again.
+ *
+ * `force: true` skips the pageStillShowsPasswordField heuristic (see above —
+ * a heuristic, not proof, so the user may overrule it).
+ *
+ * Returns { ok, storageState, meta } or { ok:false, reason, ... }.
+ */
+export async function captureCloudLoginState(liveSessionId, { force = false } = {}) {
   const s = sessions.get(liveSessionId)
   if (!s) return { ok: false, reason: 'not_found_or_expired' }
+  if (s.completing) return { ok: false, reason: 'completion_in_progress' }
+  s.completing = true
+  touchSession(s) // capture is activity
   try {
+    if (!force && await pageStillShowsPasswordField(s.page)) {
+      s.completing = false
+      return {
+        ok: false,
+        reason: 'login_not_verified',
+        detail: 'The portal still shows a password field — finish logging in first.',
+        meta: s.meta,
+      }
+    }
     const storageState = await s.context.storageState()
-    sessions.delete(liveSessionId)
-    await closeQuietly(s)
     if (!storageState?.cookies?.length && !storageState?.origins?.length) {
+      // Nothing captured at all — keep the session alive so the user can keep
+      // logging in and click Done again.
+      s.completing = false
       return { ok: false, reason: 'empty_session', meta: s.meta }
     }
     return { ok: true, storageState, meta: s.meta }
   } catch (err) {
-    sessions.delete(liveSessionId)
-    await closeQuietly(s)
+    s.completing = false
     return { ok: false, reason: 'capture_failed', detail: err?.message }
   }
+}
+
+/**
+ * Clear a session's `completing` mark after a failed import so the user can
+ * retry Done against the still-alive live login (no new login required).
+ */
+export function releaseCloudLoginCompletion(liveSessionId) {
+  const s = sessions.get(liveSessionId)
+  if (!s) return { ok: false, reason: 'not_found_or_expired' }
+  s.completing = false
+  touchSession(s)
+  return { ok: true }
+}
+
+/**
+ * Step 2 of completion: tear the live session down (delete from the Map +
+ * close the browser). Call ONLY after the captured state has been durably
+ * persisted — the capture → import → finalize order is what makes an import
+ * failure recoverable instead of session-destroying.
+ */
+export async function finalizeCloudLogin(liveSessionId) {
+  const s = sessions.get(liveSessionId)
+  if (!s) return { ok: true, already: true }
+  sessions.delete(liveSessionId)
+  await closeQuietly(s)
+  return { ok: true }
+}
+
+/**
+ * Back-compat one-shot: capture + finalize with no DB import in between. Kept
+ * for callers/tests that treat completion as a single step; the HTTP route
+ * uses the three-step API (captureCloudLoginState → importSession →
+ * finalizeCloudLogin) so an import failure can no longer lose the live login.
+ * On a failed capture the session is left alive (already released) so the
+ * caller can retry or cancel.
+ */
+export async function completeCloudLogin(liveSessionId, opts = {}) {
+  const captured = await captureCloudLoginState(liveSessionId, opts)
+  if (!captured.ok) return captured
+  await finalizeCloudLogin(liveSessionId)
+  return captured
 }
 
 export async function cancelCloudLogin(liveSessionId) {

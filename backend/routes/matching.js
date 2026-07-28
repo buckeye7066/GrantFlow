@@ -14,7 +14,6 @@ import {
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import {
   DEFAULT_MIN_SCORE,
-  REVIEW_SCORE,
   MODERATE_MATCH_SCORE,
   GOOD_MATCH_SCORE,
   STRONG_MATCH_SCORE,
@@ -576,11 +575,21 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
         }
 
-        // Tier B — canonicalization removed EVERYTHING (hard ineligibility /
-        // trust / profile-gate). Mission rule: population/eligibility
-        // mismatches must REDUCE score, not discard. Re-canonicalize softly so
-        // those candidates survive as low-confidence reviewable results, then
-        // relax the score floor over them.
+        // Tier B — canonicalization removed EVERYTHING (trust / profile-gate /
+        // directory suppression). Mission rule G2: zero results is a failure
+        // state, so re-canonicalize softly and let gate-dropped-but-ELIGIBLE
+        // candidates and directories survive as low-confidence reviewable
+        // results.
+        //
+        // HARD INELIGIBILITY IS NEVER OUTRUNNABLE (canonical_rules.md: the
+        // seniors-only-vs-30-year-old / org-vs-individual class stays REJECT no
+        // matter how empty the result set is). This tier previously RELABELED
+        // live-decision REJECT rows to REVIEW with eligibility_relaxed=true —
+        // the one path in the codebase where a hard-ineligible source could
+        // reach the owner's opportunities array (external audit 2026-07-28,
+        // confirmed). REJECT rows are now dropped here, exactly like the
+        // profile gate itself does; recovery may only widen across rows the
+        // engine still deems eligible.
         if (recovered.length === 0 && rawMapped.length > 0) {
           const soft = canonicalizeOpportunityList(profileContext, rawMapped, {
             preserveDirectories: true,
@@ -588,16 +597,8 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
             profileGateMode: 'fallback',
             allowUnmatchedDirectoryFallback: true,
           })
-          const softKept = (soft.kept || []).map((o) =>
-            String(o.match_decision || '').toUpperCase() === 'REJECT'
-              ? {
-                  ...o,
-                  match_decision: 'REVIEW',
-                  decision: 'REVIEW',
-                  match_score: Math.min(Number(o.match_score) || 0, REVIEW_SCORE),
-                  eligibility_relaxed: true,
-                }
-              : o,
+          const softKept = (soft.kept || []).filter(
+            (o) => String(o.match_decision || '').toUpperCase() !== 'REJECT' && o.eligible !== false,
           )
           if (softKept.length > 0) {
             ladder = assembleFundingResults(toLadderInput(softKept), {
@@ -607,7 +608,6 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
               strictMinScore: false,
             })
             recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
-            recovered = recovered.map((o) => ({ ...o, eligibility_relaxed: true }))
           }
         }
 
@@ -632,6 +632,18 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           )
         }
       }
+
+      // ── Final surfacing guard (defense in depth) ────────────────────────
+      // No path above may return a hard-REJECT / ineligible row, but this
+      // response is the owner-facing boundary — enforce it mechanically so a
+      // future recovery tier cannot silently re-open the hole the 2026-07-28
+      // audit found.
+      qualified = qualified.filter(
+        (o) =>
+          String(o.match_decision ?? o.decision ?? '').toUpperCase() !== 'REJECT' &&
+          o.eligible !== false &&
+          o.eligibility_relaxed !== true,
+      )
 
       const qualifiedCount = qualified.filter((o) => Number(o.match_score) >= osMin).length
       const zeroResult = qualified.length === 0

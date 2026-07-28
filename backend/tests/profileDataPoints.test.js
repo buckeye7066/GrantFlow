@@ -97,6 +97,37 @@ describe('buildProfileDataPointInventory', () => {
     expect(Math.min(100, Math.round((r.credit / inv.total) * 100))).toBe(100)
   })
 
+  it('a gate kind never CONSUMES a substantive trait: veteran stays both applicant_type AND military', () => {
+    // profileHelpers promotes militarySet('veteran') into applicantType, and
+    // applicant_type is pushed BEFORE the trait sets — under the old
+    // value-global dedup that deleted military:veteran from the inventory, so
+    // a veteran-targeted source lost its coverage credit while the surviving
+    // applicant_type point counted in NEITHER the numerator NOR the
+    // denominator (2026-07-28 audit, confirmed).
+    const inv = buildProfileDataPointInventory({
+      profile: {},
+      signals: signalsFixture({ applicantType: 'veteran' }),
+    })
+    const ids = inv.dataPoints.map((d) => d.id)
+    expect(ids).toContain('applicant_type:veteran')
+    expect(ids).toContain('military:veteran')
+    // The substantive military trait counts in the coverage denominator:
+    // 2 need + rural + snap + veteran + disability + gardening = 7 (identical
+    // to the individual-type fixture — the promotion must not shrink it to 6).
+    expect(inv.total).toBe(7)
+  })
+
+  it('substantive kinds still dedup one real-world fact across kinds (interest vs need)', () => {
+    // The one-fact-counts-once rule among SUBSTANTIVE kinds is deliberate —
+    // an org focus area must not double-count as interest + need.
+    const inv = buildProfileDataPointInventory({
+      profile: {},
+      signals: signalsFixture({ needs: new Set(['gardening']), interests: new Set(['gardening']) }),
+    })
+    expect(inv.dataPoints.filter((d) => /gardening/.test(d.id))).toHaveLength(1)
+    expect(inv.dataPoints.find((d) => d.id === 'need:gardening')).toBeTruthy()
+  })
+
   it('honors the engine-resolved coverage needs (org-aware) over raw signals', () => {
     const inv = buildProfileDataPointInventory({
       profile: {},
