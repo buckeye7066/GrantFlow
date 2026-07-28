@@ -11,6 +11,7 @@ import { MATCHER_VERSION } from '../services/matchEngine.js'
 import { RELEVANCE_RULES } from '../services/relevanceFilterRules.js'
 import { buildMissionHealth } from '../services/missionHealthService.js'
 import { looksUnsafeJwtSecret } from '../config/env.js'
+import { BOOT_ID } from '../config/bootId.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:health')
@@ -365,6 +366,12 @@ router.get('/api/health/deployment', (_req, res) => {
     branch: process.env.GIT_BRANCH || process.env.RAILWAY_GIT_BRANCH || 'unknown',
     deployedAt: process.env.DEPLOY_TIMESTAMP || 'unknown',
     uptime: process.uptime(),
+    // Minted once per process (config/bootId.js). The production-audit bridge
+    // compares this against the boot_id inside system_kv.automation_posture to
+    // prove that posture row was written by THIS process, not a prior deploy
+    // with different flags. Not a secret and not a credential — a random id
+    // whose only meaning is "same process or not".
+    bootId: BOOT_ID,
     nodeVersion: process.version,
     matcherVersion: MATCHER_VERSION,
     relevanceFilterRuleCount: RELEVANCE_RULES.length,

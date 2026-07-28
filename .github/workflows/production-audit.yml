@@ -1,0 +1,153 @@
+name: production-audit
+
+# Manual only. There is deliberately NO push or pull_request trigger: this
+# workflow authenticates against live production and reads real people's
+# financial-aid records, so it must never fire as a side effect of a commit.
+on:
+  workflow_dispatch:
+    inputs:
+      profile_ids:
+        description: 'Comma-separated production profile IDs to audit'
+        required: true
+        type: string
+      portal_hosts:
+        description: 'Comma-separated portal hosts (only used when run_portal_reads is true)'
+        required: false
+        default: ''
+        type: string
+      run_portal_reads:
+        description: 'Perform READ-ONLY Hamilton portal syncs (requires an already-captured session)'
+        required: false
+        default: false
+        type: boolean
+      include_screenshots:
+        description: 'Capture sanitized screenshots'
+        required: false
+        default: true
+        type: boolean
+
+# Least privilege. The audit reads a database and a website; it never needs to
+# write to the repository, publish packages, or mint an id-token.
+permissions:
+  contents: read
+  actions: read
+
+# Two concurrent production audits would race on the same live session and make
+# the mutation-block counts meaningless. Never cancel an in-flight run — it
+# holds an authenticated production session that should end cleanly.
+concurrency:
+  group: production-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Audit production (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Protected environment. The three secrets live here, NOT at repo level, so
+    # they are reachable only from this workflow and only under whatever
+    # reviewers/branch rules the environment enforces.
+    environment: production-audit
+
+    env:
+      GRANTFLOW_PROD_BASE_URL: ${{ vars.GRANTFLOW_PROD_BASE_URL }}
+      AUDIT_OUT: ${{ github.workspace }}/audit-out
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ---- offline control checks -------------------------------------
+      # These run BEFORE anything touches production. If the redactor, the
+      # mutation policy, or the artifact validator is broken, the audit must
+      # not start — a working audit with a broken redactor is the worst case.
+
+      - name: Verify the redactor and secret detector
+        run: node scripts/production-audit/redact.mjs --self-test
+
+      - name: Verify the mutation policy
+        run: node scripts/production-audit/policy.test.mjs
+
+      - name: Verify the artifact validator rejects planted secrets
+        run: node scripts/production-audit/validate-artifact.mjs --self-test
+
+      # ---- production containment gate --------------------------------
+      # Proves: scoped non-superuser role, read-only session, writes refused,
+      # sensitive tables denied, and HAMILTON_ALLOW_AUTOSUBMIT disabled in the
+      # process actually serving traffic. Any failure stops the job here.
+
+      - name: Verify database guard and auto-submit posture
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+        run: |
+          mkdir -p "$AUDIT_OUT"
+          node scripts/production-audit/db-audit.mjs --guard-only --out "$AUDIT_OUT"
+
+      # ---- lanes ------------------------------------------------------
+
+      # Dispatch inputs are passed through `env`, never interpolated into the
+      # shell. `${{ inputs.x }}` inside a run: block is substituted as raw text
+      # BEFORE the shell parses it, so a crafted value would execute as script.
+      - name: Run database audit
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+          PROFILE_IDS: ${{ inputs.profile_ids }}
+        run: |
+          node scripts/production-audit/db-audit.mjs \
+            --out "$AUDIT_OUT" \
+            --profiles "$PROFILE_IDS"
+
+      # Installs the browser for the Playwright version pinned in the lockfile,
+      # so the lane cannot silently run against a different build than the repo.
+      - name: Install Playwright browser (repo-pinned version)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run authenticated application audit
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+          GRANTFLOW_AUDIT_EMAIL: ${{ secrets.GRANTFLOW_AUDIT_EMAIL }}
+          GRANTFLOW_AUDIT_PASSWORD: ${{ secrets.GRANTFLOW_AUDIT_PASSWORD }}
+          PROFILE_IDS: ${{ inputs.profile_ids }}
+          PORTAL_HOSTS: ${{ inputs.portal_hosts }}
+          RUN_PORTAL_READS: ${{ inputs.run_portal_reads }}
+          INCLUDE_SCREENSHOTS: ${{ inputs.include_screenshots }}
+        run: |
+          FLAGS=""
+          if [ "$RUN_PORTAL_READS" = "true" ]; then FLAGS="$FLAGS --portal-reads"; fi
+          if [ "$INCLUDE_SCREENSHOTS" != "true" ]; then FLAGS="$FLAGS --no-screenshots"; fi
+          # shellcheck disable=SC2086  # FLAGS is built from fixed literals only
+          node scripts/production-audit/app-audit.mjs \
+            --out "$AUDIT_OUT" \
+            --profiles "$PROFILE_IDS" \
+            --portal-hosts "$PORTAL_HOSTS" \
+            $FLAGS
+
+      # ---- artifact contract ------------------------------------------
+
+      - name: Compose the audit report
+        run: node scripts/production-audit/validate-artifact.mjs --compose --out "$AUDIT_OUT"
+
+      # The gate. Enforces the exact file allowlist and rescans every byte —
+      # including the two files the compose step just wrote. Any hit fails the
+      # job BEFORE upload, so a rejected artifact is never published.
+      - name: Validate artifact and scan for secrets
+        run: node scripts/production-audit/validate-artifact.mjs --out "$AUDIT_OUT"
+
+      - name: Upload sanitized artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grantflow-production-audit
+          path: ${{ env.AUDIT_OUT }}
+          if-no-files-found: error
+          retention-days: 14
