@@ -225,7 +225,7 @@ function hasProductionHostGuard(rewrite) {
 )
 replaceOne(
   'scripts/check-deployment-config.mjs',
-  /assert\(hasRewrite\(vercel, '\/grantflow\/api:[\s\S]*?assert\(hasRewrite\(vercel, '\/uploads\/:path\*', railwayUploads\),[^\n]*\n/,
+  /assert\(hasRewrite\(vercel, '\/grantflow\/api\/:path\*', railwayApi\),[^\n]*\nassert\(hasRewrite\(vercel, '\/api\/:path\*', railwayApi\),[^\n]*\nassert\(hasRewrite\(vercel, '\/grantflow\/uploads\/:path\*', railwayUploads\),[^\n]*\nassert\(hasRewrite\(vercel, '\/uploads\/:path\*', railwayUploads\),[^\n]*\n/,
   `const productionRewrites = [
   ['/grantflow/api/:path*', railwayApi],
   ['/api/:path*', railwayApi],
