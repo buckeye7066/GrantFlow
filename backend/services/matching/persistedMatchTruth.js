@@ -1,4 +1,8 @@
 import { canonicalOpportunityKey } from '../../crawler-os/contract.js'
+import {
+  applyNeedFirstScoring,
+  NEED_FIRST_SCORING_VERSION,
+} from './needFirstScoringAdapter.js'
 
 function parseJson(value, fallback = null) {
   if (value === null || value === undefined || value === '') return fallback
@@ -48,7 +52,8 @@ function isDirectory(row) {
   )
 }
 
-function scoreEvidence(row, score) {
+function scoreEvidence(row, score, adjusted = null) {
+  if (adjusted?.explanation) return adjusted.explanation
   const explanation = parseJson(row?.match_explain_json, {}) || {}
   const breakdown = explanation.scoreBreakdown ?? explanation.score_breakdown ?? {}
   const evidence = explanation.dataPointEvidence ?? explanation.data_point_evidence ?? {}
@@ -119,18 +124,54 @@ function duplicateKeys(row) {
   return [...new Set([canonical, loose].filter((key) => key && key !== 'id:'))]
 }
 
+function adjustPersistedRow(persisted, canonical, profileContext, directory) {
+  const storedDecision = directory
+    ? 'REVIEW'
+    : String(persisted.match_decision ?? 'REVIEW').trim().toUpperCase()
+  const storedScore = numericScore(persisted.match_score, canonical.match_score)
+  const rawExplain = parseJson(persisted.match_explain_json, {}) || {}
+  const storedReasons = parseReasons(persisted.match_reasons)
+  const matchedNeeds = Array.isArray(rawExplain.matchedNeeds)
+    ? rawExplain.matchedNeeds
+    : Array.isArray(rawExplain.matched_needs)
+      ? rawExplain.matched_needs
+      : []
+
+  if (!profileContext) {
+    return {
+      score: storedScore,
+      decision: storedDecision,
+      explanation: null,
+      reasons: storedReasons,
+      match_explain: rawExplain,
+      scoringPolicyVersion: rawExplain.scoring_policy_version ?? null,
+    }
+  }
+
+  return applyNeedFirstScoring({
+    canonical: {
+      score: storedScore,
+      decision: storedDecision,
+      explanation: persisted.match_explanation ?? null,
+      reasons: storedReasons,
+      matchedNeeds,
+      match_explain: rawExplain,
+      matcherVersion: rawExplain.matcher_version ?? null,
+    },
+    profileContext,
+    opportunity: persisted,
+  })
+}
+
 /**
- * Reapply the persisted profile↔opportunity score and decision after the
- * read-time trust/profile gate has run.
- *
- * The gate is intentionally allowed to recompute internally because it catches
- * current hard-ineligibility and malformed-source conditions. Its recomputed
- * score is NOT allowed to replace the persisted data-point-scale score, however.
- * Doing so produced owner-facing values as high as 97 for rows stored at 2–36,
- * inflated broad matches into ACCEPT, and made the explanation disagree with
- * the database. This helper restores one score truth before display filtering.
+ * Restore one persisted score truth after read-time trust/profile gates, then
+ * enforce the current need-first policy against that exact stored evidence.
+ * The owner-facing score therefore equals the persisted score unless the current
+ * policy intentionally lowers/rejects it; the reconciliation service persists
+ * that same adjustment so the two converge permanently.
  */
-export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = []) {
+export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [], opts = {}) {
+  const profileContext = opts?.profileContext ?? null
   const persistedById = new Map()
   for (const row of Array.isArray(persistedRows) ? persistedRows : []) {
     const key = rowKey(row)
@@ -147,18 +188,14 @@ export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [
 
     const directory = isDirectory(canonical) || isDirectory(persisted)
     const storedDecision = String(persisted.match_decision ?? '').trim().toUpperCase()
-
-    // A direct REJECT is never owner-facing. Directory and referral resources
-    // remain REVIEW-only search aids and still have to clear the resource floor.
     if (!directory && storedDecision === 'REJECT') continue
 
-    const score = numericScore(persisted.match_score, canonical.match_score)
-    const decision = directory
-      ? 'REVIEW'
-      : storedDecision === 'ACCEPT' || storedDecision === 'REVIEW'
-        ? storedDecision
-        : 'REVIEW'
-    const explanation = scoreEvidence(persisted, score)
+    const adjusted = adjustPersistedRow(persisted, canonical, profileContext, directory)
+    const decision = directory ? 'REVIEW' : String(adjusted.decision ?? 'REVIEW').toUpperCase()
+    if (!directory && decision === 'REJECT') continue
+
+    const score = numericScore(adjusted.score, persisted.match_score)
+    const explanation = scoreEvidence(persisted, score, adjusted)
 
     restored.push({
       ...canonical,
@@ -168,17 +205,18 @@ export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [
       match_explanation: explanation,
       match_decision_explanation: explanation,
       why: explanation,
-      match_reasons: parseReasons(persisted.match_reasons),
+      match_reasons: Array.isArray(adjusted.reasons) ? adjusted.reasons : parseReasons(persisted.match_reasons),
+      match_explain_json: adjusted.match_explain ?? parseJson(persisted.match_explain_json, {}),
       matcher_version: persisted.matcher_version ?? canonical.matcher_version ?? null,
+      scoring_policy_version: adjusted.scoringPolicyVersion ??
+        adjusted.match_explain?.scoring_policy_version ??
+        null,
       ineligibility_reasons: parseReasons(persisted.ineligibility_reasons),
       is_directory: directory,
       is_resource: directory,
     })
   }
 
-  // Defense in depth for historical duplicates: use both the repository's
-  // canonical cross-source identity and a conservative singular/plural-normalized
-  // title+sponsor identity. Keep the highest persisted score for each program.
   restored.sort((a, b) => Number(b.match_score || 0) - Number(a.match_score || 0))
   const seen = new Set()
   return restored.filter((row) => {
