@@ -61,7 +61,10 @@ async function refreshEnvExamples() {
 
 const present = signatures.filter(hasSignature)
 if (present.length === signatures.length && hasResourcePreservation()) {
-  await refreshEnvExamples()
+  // The first materialization pass already regenerated the env contracts from
+  // the final source tree. Repeated npm prehooks run concurrently in the unit
+  // suite and must remain read-only, otherwise server-start tests race while
+  // rescanning and rewriting the same files.
   console.log('[source-materialization] verified product source already present')
   process.exit(0)
 }
