@@ -27,6 +27,10 @@ run([
 ], 'focused Vitest regressions')
 
 run(['exec', '--', 'node', 'scripts/need-first-build-self-test.mjs'], 'backend integration assertions')
+run(['run', 'check:prepush'], 'pre-push quality suite')
+run(['run', 'scan:secrets'], 'secret scan')
+run(['audit', '--omit=dev', '--audit-level=high'], 'production dependency audit')
+run(['run', 'release:gates'], 'complete release gates')
 run(['run', 'build'], 'production Vite build')
 
 console.log('[need-first-preview-gate] PASS')
