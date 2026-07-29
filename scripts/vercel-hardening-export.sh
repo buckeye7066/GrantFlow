@@ -4,7 +4,31 @@ set -euo pipefail
 node scripts/prepare-global-hardening-run.mjs
 node scripts/apply-code-hardening.mjs
 node scripts/apply-readiness-deployment.mjs
+node scripts/apply-hardening-test-updates.mjs
 node scripts/generate-env-examples.mjs
+
+# Run the verifier in a clean CI-equivalent environment. Preview builds inherit
+# deployment integrations, and tests must never send mail, call paid APIs, touch
+# Stripe/Twilio, or connect to the production database.
+unset NODE_ENV VERCEL VERCEL_ENV VERCEL_URL VERCEL_GIT_COMMIT_SHA
+unset DATABASE_URL POSTGRES_URL POSTGRES_PRISMA_URL POSTGRES_URL_NON_POOLING
+unset RESEND_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY ANYA_API_KEY
+unset TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_MESSAGING_SERVICE_SID TWILIO_FROM_NUMBER
+unset STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
+unset SAM_GOV_PUBLIC_API_KEY SIMPLER_GRANTS_API_KEY API_DATA_GOV_KEY GRANTS_GOV_API_KEY
+unset URL_VERIFICATION_ENABLED FUNDING_APIS_REQUIRE_KEYS GRANTFLOW_SKIP_VERIFICATION_GATE
+unset RUN_SQLITE_MIGRATION MIGRATE_ON_BOOT DB_AUTO_MIGRATE
+export CI=true
+
+# Remove one-shot transformer scaffolding before static import and repository
+# integrity checks. Only the transformed product files belong in the final tree.
+rm -f .github/workflows/apply-global-production-hardening.yml
+rm -f scripts/prepare-global-hardening-run.mjs
+rm -f scripts/apply-code-hardening.mjs
+rm -f scripts/apply-readiness-deployment.mjs
+rm -f scripts/apply-hardening-test-updates.mjs
+
+npm audit --omit=dev --audit-level=high
 npm run release:gates
 
 git diff --name-status > dist/hardening-manifest.txt
@@ -34,9 +58,11 @@ tar -czf dist/hardening-output.tar.gz \
   api/preview-backend-disabled.js \
   tests/unit/api-rate-limit-policy.test.mjs \
   tests/unit/deployment-preview-isolation.test.mjs \
+  tests/unit/healthz-schema-bootstrap.test.mjs \
   tests/unit/production-readiness-hardening.test.mjs \
   tests/unit/runtime-secrets-hardening.test.mjs \
   tests/unit/safe-remote-fetch.test.mjs \
   tests/unit/sms-inbound-security.test.mjs \
   tests/unit/start-single-migration-owner.test.mjs \
+  tests/unit/startup-smoke-mode.test.mjs \
   vercel.json
