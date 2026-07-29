@@ -4,6 +4,7 @@ import {
   enforceNeedFirstDecision,
   evaluateNeedFirstMatchPolicy,
 } from '../services/matching/needFirstMatchPolicy.js'
+import { applyNeedFirstScoring } from '../services/matching/needFirstScoringAdapter.js'
 
 function studentContext(overrides = {}) {
   return {
@@ -41,6 +42,30 @@ const studentNorm = {
 
 function matched(...points) {
   return { matched: points, credit: points.reduce((sum, point) => sum + Number(point.credit || 0), 0) }
+}
+
+function canonicalMatch({ points = [], needs = [] } = {}) {
+  return {
+    score: 12,
+    decision: 'ACCEPT',
+    explanation: 'Strong match',
+    reasons: [],
+    matchedNeeds: needs,
+    match_explain: {
+      matchedNeeds: needs,
+      dataPointEvidence: {
+        total: 20,
+        credit: points.reduce((sum, point) => sum + Number(point.credit || 0), 0),
+        matched: points,
+      },
+      scoreBreakdown: {
+        data_point_total: 20,
+        data_point_credit: points.reduce((sum, point) => sum + Number(point.credit || 0), 0),
+        eligibility_factor: 1,
+        geo_factor: 1,
+      },
+    },
+  }
 }
 
 describe('need-first match policy', () => {
@@ -115,27 +140,48 @@ describe('need-first match policy', () => {
         occupation: { ems_worker: true, job_title: 'AEMT' },
         education: { intended_major: 'Paramedicine' },
       },
-    }
-    const policy = evaluateNeedFirstMatchPolicy({
-      profileContext,
       profileNorm: {
         isStudent: true,
         entityType: 'individual',
         education: { intendedMajor: 'Paramedicine' },
         needCategories: ['education'],
       },
+    }
+    const result = applyNeedFirstScoring({
+      canonical: canonicalMatch({
+        points: [{ kind: 'occupation', value: 'AEMT', credit: 1 }],
+        needs: ['education'],
+      }),
+      profileContext,
       opportunity: {
         title: 'NAEMT EMS Education Scholarship for Paramedics',
         sponsor: 'NAEMT',
         opportunity_kind: 'SCHOLARSHIP',
       },
-      dataPointEval: matched({ kind: 'occupation', value: 'AEMT', credit: 1 }),
-      matchedNeeds: ['education'],
     })
 
-    expect(policy.hardMismatch).toBe(false)
-    expect(policy.purposeAnchor).toBe(true)
-    expect(policy.purposeReasons.join(' ')).toMatch(/EMS\/paramedic/i)
+    expect(result.decision).toBe('ACCEPT')
+    expect(result.match_explain.needFirstPolicy.hardMismatch).toBe(false)
+    expect(result.match_explain.needFirstPolicy.purposeReasons.join(' ')).toMatch(/EMS\/EMT\/paramedic/i)
+  })
+
+  it('rejects an EMS scholarship for a non-EMS student', () => {
+    const result = applyNeedFirstScoring({
+      canonical: canonicalMatch({
+        points: [{ kind: 'academic', value: 'GPA 3.84', credit: 1 }],
+        needs: ['education'],
+      }),
+      profileContext: { ...studentContext(), profileNorm: studentNorm },
+      opportunity: {
+        title: 'NAEMT EMS Education Scholarship for Paramedics',
+        sponsor: 'NAEMT',
+        opportunity_kind: 'SCHOLARSHIP',
+      },
+    })
+
+    expect(result.decision).toBe('REJECT')
+    expect(result.match_explain.needFirstPolicy.hardMismatch).toBe(true)
+    expect(result.reasons.join(' ')).toMatch(/EMS\/EMT\/paramedic/i)
   })
 
   it('does not treat student status as proof of a child or dependent', () => {
