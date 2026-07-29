@@ -18,7 +18,6 @@ const signatures = Object.freeze([
   ['backend/start.js', 'Schema migrations have exactly one owner'],
   ['backend/routes/health.js', "reason: 'mission_gate_failed'"],
   ['backend/server.js', 'ensureRuntimeSecretKeyMaterial'],
-  ['backend/services/crawlerOsPersistence.js', 'const deleteStaleDirectMatches'],
   ['backend/services/linkVerificationService.js', 'stats.quarantined'],
   ['scripts/check-deployment-config.mjs', 'hasProductionHostGuard'],
   ['src/config/env.js', 'VITE_PREVIEW_API_URL'],
@@ -27,6 +26,22 @@ const signatures = Object.freeze([
 const hasSignature = ([file, signature]) => {
   try {
     return fs.readFileSync(file, 'utf8').includes(signature)
+  } catch {
+    return false
+  }
+}
+
+function hasResourcePreservation() {
+  try {
+    const source = fs.readFileSync('backend/services/crawlerOsPersistence.js', 'utf8')
+    const inlineImplementation =
+      source.includes('const deleteStaleDirectMatches = db.prepare') &&
+      source.includes('const deleteExplicitReject = db.prepare')
+    const needFirstFacade =
+      source.includes('async function snapshotResourceMatches') &&
+      source.includes('async function restoreResourceMatches') &&
+      source.includes('resourcesPreserved')
+    return inlineImplementation || needFirstFacade
   } catch {
     return false
   }
@@ -45,7 +60,7 @@ async function refreshEnvExamples() {
 }
 
 const present = signatures.filter(hasSignature)
-if (present.length === signatures.length) {
+if (present.length === signatures.length && hasResourcePreservation()) {
   await refreshEnvExamples()
   console.log('[source-materialization] verified product source already present')
   process.exit(0)
@@ -74,6 +89,9 @@ if (missing.length > 0) {
   throw new Error(
     `[source-materialization] final signatures missing: ${missing.map(([file]) => file).join(', ')}`,
   )
+}
+if (!hasResourcePreservation()) {
+  throw new Error('[source-materialization] resource-preserving reconciliation is missing')
 }
 
 await refreshEnvExamples()
