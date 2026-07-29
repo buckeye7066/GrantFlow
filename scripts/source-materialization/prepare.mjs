@@ -9,20 +9,20 @@ function replaceExact(file, before, after, label) {
 
 replaceExact('scripts/source-materialization/apply-code.mjs', `replaceOne(
   'backend/crawler-os/tests/fetcher.test.mjs',
-  /\\['203\\.0\\.113\\.10'\\]/g,
+  /\['203\.0\.113\.10'\]/g,
   "['8.8.8.8']",
   'fetcher public fixture',
 )`, `{ // Two public-address fixtures intentionally share the same test resolver.
   const file = 'backend/crawler-os/tests/fetcher.test.mjs'
   const before = read(file)
-  const matches = before.match(/\\['203\\.0\\.113\\.10'\\]/g) || []
+  const matches = before.match(/\['203\.0\.113\.10'\]/g) || []
   if (matches.length !== 2) throw new Error(\`fetcher public fixture: expected two matches, found \${matches.length}\`)
   write(file, before.replaceAll("['203.0.113.10']", "['8.8.8.8']"))
 }`, 'fetcher fixture transformation')
 
 replaceExact('scripts/source-materialization/apply-code.mjs', `replaceOne(
   'tests/mission/mission-health-dashboard.test.mjs',
-  /import \\{ buildMissionHealth, MISSION_TARGETS \\} from '\\.\\.\\/\\.\\.\\/backend\\/services\\/missionHealthService\\.js'/,
+  /import \{ buildMissionHealth, MISSION_TARGETS \} from '\.\.\/\.\.\/backend\/services\/missionHealthService\.js'/,
   \`import {
   buildMissionHealth,
   MISSION_TARGETS,
@@ -32,7 +32,7 @@ replaceExact('scripts/source-materialization/apply-code.mjs', `replaceOne(
   'mission test import',
 )`, `replaceOne(
   'tests/mission/mission-health-dashboard.test.mjs',
-  /import \\{ buildMissionHealth, MISSION_TARGETS \\} from '\\.\\.\\/\\.\\.\\/backend\\/services\\/missionHealthService\\.js'/,
+  /import \{ buildMissionHealth, MISSION_TARGETS \} from '\.\.\/\.\.\/backend\/services\/missionHealthService\.js'/,
   \`const missionHealthModule = await import('../../backend/services/' + 'missionHealthService.js')
 const {
   buildMissionHealth,
@@ -58,4 +58,34 @@ const readinessText = fs.readFileSync(readiness, 'utf8')
 const updated = readinessText.replaceAll('npm ci --include=optional', 'npm ci --include=dev --include=optional')
 if (updated === readinessText) throw new Error('readiness install command transformation found no source')
 fs.writeFileSync(readiness, updated)
+
+// Offline geo crawls must meet their minimum with real, canonical state-level
+// sources, never with one templated locator row per ZIP. The supplemental map is
+// separately maintained and contains only official government directories.
+const geoCrawler = 'backend/services/crawlers/nationalZipCrawler.js'
+let geoText = fs.readFileSync(geoCrawler, 'utf8')
+if (!geoText.includes("from './stateSupplementalDirectories.js'")) {
+  replaceExact(
+    geoCrawler,
+    "import { upsertFundingOpportunity } from '../opportunityInserter.js'",
+    "import { upsertFundingOpportunity } from '../opportunityInserter.js'\nimport { buildStateSupplementalDirectories } from './stateSupplementalDirectories.js'",
+    'geo supplemental directory import',
+  )
+}
+
+geoText = fs.readFileSync(geoCrawler, 'utf8')
+if (!geoText.includes('buildStateSupplementalDirectories({ state: stateForZip, zip })')) {
+  replaceExact(
+    geoCrawler,
+    `      stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
+
+      await reportSource('foundation_locator', 'Querying source: foundation locators')`,
+    `      stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
+      stateResults.push(...buildStateSupplementalDirectories({ state: stateForZip, zip }))
+
+      await reportSource('foundation_locator', 'Querying source: foundation locators')`,
+    'geo supplemental directory wiring',
+  )
+}
+
 console.log('[source-materialization] preparation complete')
