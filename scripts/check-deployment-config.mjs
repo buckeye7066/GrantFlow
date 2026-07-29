@@ -14,6 +14,16 @@ function readJson(relativePath) {
   }
 }
 
+function readText(relativePath) {
+  const fullPath = path.join(root, relativePath)
+  try {
+    return fs.readFileSync(fullPath, 'utf8')
+  } catch (error) {
+    failures.push(`${relativePath}: could not read file (${error?.message || error})`)
+    return ''
+  }
+}
+
 function assert(condition, message) {
   if (!condition) failures.push(message)
 }
@@ -30,6 +40,8 @@ const vercel = readJson('vercel.json')
 const railway = readJson('railway.json')
 const pkg = readJson('package.json')
 const lock = readJson('package-lock.json')
+const healthRoutes = readText('backend/routes/health.js')
+const readinessTransform = readText('scripts/source-materialization/apply-readiness-deployment.mjs')
 
 const railwayApi = 'https://grantflow-production.up.railway.app/api/:path*'
 const railwayUploads = 'https://grantflow-production.up.railway.app/uploads/:path*'
@@ -82,7 +94,19 @@ assert(
   'index.html must stay no-store so deploy/promote rollouts are not masked by cache',
 )
 
-assert(railway?.deploy?.healthcheckPath === '/readyz', 'Railway healthcheckPath must use /readyz so deploy readiness checks DB, schema, secrets, and uploads')
+// Railway must promote a technically healthy container before the product-level
+// mission gate can run against that exact build. Pointing the platform healthcheck
+// at /readyz creates a deployment deadlock whenever production data needs repair:
+// the old container stays live, so the new verifier and reconciliation code never
+// gets a chance to correct the data. /healthz owns process/schema liveness; /readyz
+// remains the separate, blocking release gate for DB, storage, secrets, and mission.
+assert(railway?.deploy?.healthcheckPath === '/healthz', 'Railway healthcheckPath must use /healthz; mission readiness is verified separately on /readyz')
+assert(healthRoutes.includes("router.get('/healthz'"), 'backend health routes must expose /healthz liveness')
+assert(healthRoutes.includes("router.get('/readyz'"), 'backend health routes must expose /readyz release readiness')
+assert(
+  healthRoutes.includes("reason: 'mission_gate_failed'") || readinessTransform.includes("reason: 'mission_gate_failed'"),
+  '/readyz must retain the production mission gate even though Railway promotion uses /healthz',
+)
 assert(Number(railway?.deploy?.healthcheckTimeout || 0) >= 120, 'Railway healthcheckTimeout must be long enough for cold boot/migrations')
 assert(railway?.deploy?.restartPolicyType === 'ALWAYS', 'Railway restart policy must stay ALWAYS')
 assert(Number(railway?.deploy?.restartPolicyMaxRetries || 0) >= 3, 'Railway restart retries must be configured')
