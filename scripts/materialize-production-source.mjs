@@ -24,11 +24,13 @@ const coreSignatures = Object.freeze([
   ['scripts/check-deployment-config.mjs', 'hasProductionHostGuard'],
   ['src/config/env.js', 'VITE_PREVIEW_API_URL'],
 ])
-const webParitySignature = Object.freeze([
-  'backend/services/webParityBenchmark.js',
-  'export function isBenchmarkRelevantHit',
+const webParitySignatures = Object.freeze([
+  ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
+  ['backend/services/webParityBenchmark.js', 'export function isGenericFundingPortalHit'],
+  ['backend/services/webParityBenchmark.js', 'function isTerminalGapStatus'],
+  ['backend/services/webParityBenchmark.js', 'const WEB_ONLY_TOP_CAP = 20'],
 ])
-const signatures = Object.freeze([...coreSignatures, webParitySignature])
+const signatures = Object.freeze([...coreSignatures, ...webParitySignatures])
 
 const hasSignature = ([file, signature]) => {
   try {
@@ -77,10 +79,13 @@ if (corePresent.length === coreSignatures.length && hasResourcePreservation()) {
   // product corrections idempotently before the read-only early exit.
   await applyModule(
     'scripts/source-materialization/apply-web-parity-relevance.mjs',
-    'web-parity relevance correction',
+    'web-parity relevance and source-quality correction',
   )
-  if (!hasSignature(webParitySignature)) {
-    throw new Error('[source-materialization] web-parity relevance signature is missing')
+  const missingWebParity = webParitySignatures.filter((entry) => !hasSignature(entry))
+  if (missingWebParity.length > 0) {
+    throw new Error(
+      `[source-materialization] web-parity signatures missing: ${missingWebParity.map(([, signature]) => signature).join(', ')}`,
+    )
   }
   // Repeated npm prehooks run concurrently in the unit suite and must remain
   // read-only once every signature is present.
@@ -112,7 +117,7 @@ for (const modulePath of modules) {
 const missing = signatures.filter((entry) => !hasSignature(entry))
 if (missing.length > 0) {
   throw new Error(
-    `[source-materialization] final signatures missing: ${missing.map(([file]) => file).join(', ')}`,
+    `[source-materialization] final signatures missing: ${missing.map(([file, signature]) => `${file}:${signature}`).join(', ')}`,
   )
 }
 if (!hasResourcePreservation()) {
