@@ -131,6 +131,12 @@ function Group({ title, hint, items, profileId, onRemoved }) {
   )
 }
 
+export function fundingSourceCounts(data) {
+  const direct = Number(data?.total) || 0
+  const resources = Number(data?.resource_count ?? data?.directories?.length) || 0
+  return { direct, resources, any: direct + resources > 0 }
+}
+
 export default function ProfileFundingSourcesCard({ profileId }) {
   const queryClient = useQueryClient()
   const { data, isLoading, isError } = useQuery({
@@ -141,24 +147,30 @@ export default function ProfileFundingSourcesCard({ profileId }) {
   const refreshSources = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["profile-funding-sources", profileId] })
   }, [queryClient, profileId])
+  const counts = fundingSourceCounts(data)
 
   return (
     <div id="profile-funding-sources" className="scroll-mt-24 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-base font-semibold text-slate-900">Funding Sources</h3>
-        {data?.total ? <span className="text-xs text-slate-500">{data.total} matched</span> : null}
+        {counts.any ? (
+          <span className="text-xs text-slate-500">
+            {counts.direct} direct {counts.direct === 1 ? "match" : "matches"}
+            {counts.resources ? ` · ${counts.resources} ${counts.resources === 1 ? "resource" : "resources"}` : ""}
+          </span>
+        ) : null}
       </div>
       <p className="mt-0.5 text-xs text-slate-500">
-        Matched to this profile by the Crawler OS — best apply-now fits first, then worth-reviewing, then directories to search.
+        Matched to this profile by the Crawler OS — direct opportunities first, with directories listed separately as resources.
       </p>
 
       {isLoading ? (
         <p className="mt-4 text-sm text-slate-500">Loading funding sources…</p>
       ) : isError ? (
         <p className="mt-4 text-sm text-slate-500">Funding sources are unavailable right now.</p>
-      ) : !data?.total ? (
+      ) : !counts.any ? (
         <p className="mt-4 text-sm text-slate-500">
-          No funding sources matched yet. Run discovery for this profile and they’ll appear here.
+          No direct funding opportunities or resource directories matched yet. Run discovery for this profile and they’ll appear here.
         </p>
       ) : (
         <>
