@@ -12,9 +12,12 @@ RUN apt-get update \
 
 COPY package*.json ./
 
-# The source materializer is copied later with the source tree. Skip the npm
-# lifecycle hook during dependency installation, then run it explicitly once the
-# complete repository is present. Native dependency install scripts still run.
+# npm runs the root `prepare` lifecycle during `npm ci`. Copy the tiny,
+# skip-aware bootstrap before dependency installation so the lifecycle can
+# observe GRANTFLOW_SKIP_SOURCE_MATERIALIZATION instead of failing because the
+# script path does not exist yet. The full generator tree arrives with COPY . .
+# and runs exactly once after the repository is complete.
+COPY scripts/materialize-production-source.mjs ./scripts/materialize-production-source.mjs
 RUN GRANTFLOW_SKIP_SOURCE_MATERIALIZATION=1 \
   npm ci --include=dev --include=optional --legacy-peer-deps
 
