@@ -1,12 +1,12 @@
 name: production-audit-runtime-finalizer
 
 on:
-  pull_request_target:
-    branches: [main]
-    types: [reopened]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
+  pull-requests: read
 
 concurrency:
   group: production-audit-runtime-finalizer
@@ -14,47 +14,78 @@ concurrency:
 
 jobs:
   apply-verified-correction:
+    # This is intentionally a one-command, same-owner maintenance action. The
+    # workflow runs from trusted default-branch code, checks out one immutable
+    # commit, and refuses to act after the target branch has moved.
     if: >-
-      github.event.pull_request.head.ref == 'agent/finish-runtime-finalizer-20260729' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
+      github.repository == 'buckeye7066/GrantFlow' &&
+      github.event.issue.pull_request &&
+      github.event.issue.number == 1035 &&
+      github.event.comment.user.login == 'buckeye7066' &&
+      github.event.comment.body == '/run-runtime-finalizer-1035'
+    runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      TARGET_BRANCH: agent/finish-runtime-finalizer-20260729
+      EXPECTED_HEAD: 06c61917f4c57d1de708222ef08350b2062d8939
     steps:
-      - name: Check out the exact same-repository correction branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check out the immutable correction commit
+        uses: actions/checkout@v7
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: 06c61917f4c57d1de708222ef08350b2062d8939
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Refuse stale or repeated execution
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          if [ "$remote_head" != "$EXPECTED_HEAD" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Target branch already moved; the one-shot finalizer will not run again."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Node 20
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
 
       - name: Install locked dependencies
+        if: steps.guard.outputs.run == 'true'
         run: npm ci --include=optional
 
       - name: Apply deterministic runtime correction
+        if: steps.guard.outputs.run == 'true'
         run: python scripts/production-audit-runtime-finalizer.py
 
       - name: Run focused regressions
+        if: steps.guard.outputs.run == 'true'
         run: |
           node --test tests/unit/anya-chat-hook-order.test.mjs
           npm exec -- vitest run backend/tests/portalCheckLegacyHonesty.test.js backend/tests/portalCheckService.test.js --reporter=verbose
 
       - name: Run pre-push quality gates
+        if: steps.guard.outputs.run == 'true'
         run: npm run check:prepush
 
       - name: Run secret scan
+        if: steps.guard.outputs.run == 'true'
         run: npm run scan:secrets
 
       - name: Run complete release gates
+        if: steps.guard.outputs.run == 'true'
         run: npm run release:gates
 
       - name: Remove one-shot scaffolding and commit verified correction
+        if: steps.guard.outputs.run == 'true'
+        shell: bash
         run: |
           set -euo pipefail
           rm -f .github/workflows/apply-runtime-finalizer-branch.yml
@@ -65,4 +96,4 @@ jobs:
           git config user.email "grantflow-audit-finalizer[bot]@users.noreply.github.com"
           git add -A
           git commit -m "fix(audit): close Dashboard hook crash and legacy portal claims"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_HEAD" origin "HEAD:refs/heads/$TARGET_BRANCH"
