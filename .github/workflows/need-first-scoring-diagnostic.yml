@@ -1,0 +1,50 @@
+name: need-first-scoring-diagnostic
+
+on:
+  push:
+    branches:
+      - agent/need-first-scoring-20260729
+
+permissions:
+  contents: read
+
+concurrency:
+  group: need-first-scoring-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    name: Diagnose production match inputs (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-audit
+    env:
+      PROFILE_IDS: c4a92724-9cee-416f-ba30-e91b9b5cd885,6b3c75ec-dc56-46f9-b380-394172688175
+      DIAGNOSTIC_OUT: profile-scoring-diagnostic.json
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run read-only diagnostic
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+        run: node scripts/production-audit/profile-signal-diagnostic.mjs
+
+      - name: Upload sanitized diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: need-first-scoring-diagnostic
+          path: profile-scoring-diagnostic.json
+          if-no-files-found: error
+          retention-days: 2
