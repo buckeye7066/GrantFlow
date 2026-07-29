@@ -23,6 +23,10 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     resolve: {
       alias: {
+        // Every page-level Anya import passes through a React error boundary.
+        // Keep this exact alias before the broad @ alias; SafeAnyaChat imports
+        // the underlying component relatively, so there is no alias recursion.
+        '@/components/anya/AnyaChat': path.resolve(__dirname, 'src/components/anya/SafeAnyaChat.jsx'),
         '@': path.resolve(__dirname, 'src'),
       },
       extensions: ['.mjs', '.js', '.jsx', '.ts', '.tsx', '.json'],
@@ -68,15 +72,15 @@ export default defineConfig(({ mode }) => {
           // lands in its own chunk. Groups match in order; first match wins.
           codeSplitting: {
             groups: [
-              { name: 'react-vendor', test: /node_modules[\\/](?:react|react-dom|scheduler|react-is)[\\/]/ },
-              { name: 'zustand-vendor', test: /node_modules[\\/](?:zustand|use-sync-external-store)[\\/]/ },
-              { name: 'radix-ui', test: /node_modules[\\/]@radix-ui[\\/]/ },
-              { name: 'query', test: /node_modules[\\/]@tanstack[\\/]react-query[\\/]/ },
-              { name: 'recharts', test: /node_modules[\\/]recharts[\\/]/ },
-              { name: 'framer-motion', test: /node_modules[\\/]framer-motion[\\/]/ },
-              { name: 'date-fns', test: /node_modules[\\/]date-fns[\\/]/ },
-              { name: 'lucide-react', test: /node_modules[\\/]lucide-react[\\/]/ },
-              { name: 'zod', test: /node_modules[\\/]zod[\\/]/ },
+              { name: 'react-vendor', test: /node_modules[\/](?:react|react-dom|scheduler|react-is)[\/]/ },
+              { name: 'zustand-vendor', test: /node_modules[\/](?:zustand|use-sync-external-store)[\/]/ },
+              { name: 'radix-ui', test: /node_modules[\/]@radix-ui[\/]/ },
+              { name: 'query', test: /node_modules[\/]@tanstack[\/]react-query[\/]/ },
+              { name: 'recharts', test: /node_modules[\/]recharts[\/]/ },
+              { name: 'framer-motion', test: /node_modules[\/]framer-motion[\/]/ },
+              { name: 'date-fns', test: /node_modules[\/]date-fns[\/]/ },
+              { name: 'lucide-react', test: /node_modules[\/]lucide-react[\/]/ },
+              { name: 'zod', test: /node_modules[\/]zod[\/]/ },
             ],
           },
         },
