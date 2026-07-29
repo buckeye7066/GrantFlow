@@ -9,33 +9,88 @@ function isTextFile(p) {
   return /\.(cjs|mjs|js|jsx|ts|tsx)$/.test(p)
 }
 
-/**
- * Enumerate files to scan via `git ls-files` rather than a hand-walked,
- * hand-denylisted directory tree. CI only ever sees committed content, so
- * scanning anything else (untracked scratch scripts, stray duplicate
- * checkouts like GrantFlow-public-audit/, .claude/worktrees/<name>/ nested
- * agent scratch, ...) risks a local run picking up env vars a clean CI
- * checkout never has, and the generated file permanently disagreeing with
- * what the release gate expects. A denylist has to be updated by hand every
- * time a new kind of stray directory shows up (this repo has already hit
- * that three times); tracking git's own notion of "what belongs in this
- * repo" doesn't.
- *
- * One exception: `.cursor/skills/impeccable/` AND `.claude/skills/impeccable/`
- * ARE tracked (force-added past their own gitignore entries -- the same
- * vendored editor tooling, mirrored for both editors), so git ls-files alone
- * would still pull in their IMPECCABLE_* / CURSOR_* / HOME / USERPROFILE env
- * references. Those aren't GrantFlow app config, so both stay explicitly
- * excluded even though they're (partially) tracked.
- */
-function walk() {
-  const out = execFileSync('git', ['ls-files'], { cwd: repoRoot, encoding: 'utf8' })
-    .split('\n')
-    .filter(Boolean)
-    .filter((rel) => !rel.startsWith('.cursor/') && !rel.startsWith('.claude/'))
-    .filter(isTextFile)
-    .map((rel) => path.join(repoRoot, rel))
+const FALLBACK_EXCLUDED_DIRS = new Set([
+  '.git',
+  '.github',
+  '.cursor',
+  '.claude',
+  '.vercel',
+  'node_modules',
+  'dist',
+  'coverage',
+  'audit-dist',
+  'audit-reports',
+  'playwright-report',
+  'test-results',
+])
+
+function enumerateFilesystemSources(root = repoRoot) {
+  const out = []
+
+  const visit = (absoluteDir, relativeDir = '') => {
+    let entries = []
+    try {
+      entries = fs.readdirSync(absoluteDir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name
+      const absolute = path.join(absoluteDir, entry.name)
+
+      if (entry.isDirectory()) {
+        if (FALLBACK_EXCLUDED_DIRS.has(entry.name)) continue
+        if (
+          relative === 'backend/data' ||
+          relative === 'backend/uploads' ||
+          relative === 'backend/temp_images'
+        ) continue
+        visit(absolute, relative)
+        continue
+      }
+
+      if (!entry.isFile()) continue
+      if (relative.startsWith('.cursor/') || relative.startsWith('.claude/')) continue
+      if (isTextFile(relative)) out.push(absolute)
+    }
+  }
+
+  visit(root)
   return out
+}
+
+/**
+ * Enumerate source files deterministically.
+ *
+ * A normal checkout uses `git ls-files`, which is the most precise definition
+ * of repository-owned content. Docker intentionally excludes `.git`, though,
+ * and the production builder still runs the source materializer. In that
+ * environment we fall back to a sorted filesystem walk with build/output and
+ * editor-worktree directories excluded. This keeps the generated env contract
+ * reproducible without copying repository history into the image.
+ */
+export function enumerateSourceFiles({ forceFilesystem = false, root = repoRoot } = {}) {
+  if (!forceFilesystem) {
+    try {
+      return execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
+        .split('\n')
+        .filter(Boolean)
+        .filter((rel) => !rel.startsWith('.cursor/') && !rel.startsWith('.claude/'))
+        .filter(isTextFile)
+        .map((rel) => path.join(root, rel))
+        .sort()
+    } catch {
+      // Docker builders and source archives deliberately have no .git metadata.
+    }
+  }
+
+  return enumerateFilesystemSources(root)
+}
+
+function walk() {
+  return enumerateSourceFiles()
 }
 
 function extractEnvVars(source) {
