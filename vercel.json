@@ -1,6 +1,6 @@
 {
   "installCommand": "npm install --include=dev",
-  "buildCommand": "node scripts/need-first-build-self-test.mjs && npm run build",
+  "buildCommand": "npm exec -- vitest run backend/tests/needFirstMatchPolicy.test.js backend/tests/needFirstProductionExamples.test.js backend/tests/persistedMatchTruth.test.js backend/tests/remainingAuditCorrections.test.js backend/tests/fundingSourceCounts.test.js --reporter=verbose && node scripts/need-first-build-self-test.mjs && npm run build",
   "trailingSlash": false,
   "rewrites": [
     {
