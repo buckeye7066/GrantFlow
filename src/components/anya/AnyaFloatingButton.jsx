@@ -3,7 +3,7 @@ import { Sparkles, X, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import AnyaChat from "./AnyaChat"
+import AnyaChat from "./SafeAnyaChat"
 import { cn } from "@/lib/utils"
 import { useAuthStore, normalizeUserAdmin } from "@/stores/authStore"
 
