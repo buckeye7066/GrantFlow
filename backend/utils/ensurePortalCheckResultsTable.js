@@ -12,6 +12,7 @@ function normalize(value) {
 }
 
 function numericIdentity(value) {
+  if (value === null || value === undefined || value === '') return ''
   const number = Number(value)
   return Number.isFinite(number) ? String(number) : ''
 }
@@ -22,11 +23,14 @@ function awardMatchesPortalResult(award = {}, row = {}, parsed = {}) {
   const rowPortal = normalize(parsed.portalName ?? parsed.portal_name ?? row.portal_name)
   const awardPortal = normalize(award.portal_name ?? award.portalName)
 
-  // A public landing-page row may omit award details, so require a strong portal
-  // identity before treating an owner-persisted award as independent evidence.
-  const sameUrl = rowUrl && awardUrl && rowUrl === awardUrl
-  const samePortal = rowPortal && awardPortal && rowPortal === awardPortal
-  if (!sameUrl && !samePortal) return false
+  // URL identity is authoritative when both sides have one. A shared portal name
+  // must never override two conflicting URLs. Name identity is the conservative
+  // fallback only when at least one side lacks a URL.
+  if (rowUrl && awardUrl) {
+    if (rowUrl !== awardUrl) return false
+  } else if (!rowPortal || !awardPortal || rowPortal !== awardPortal) {
+    return false
+  }
 
   const rowAward = normalize(parsed.awardName ?? parsed.award_name)
   const awardName = normalize(award.award_name ?? award.awardName)
@@ -62,14 +66,19 @@ async function findOwnerPersistedAward(db, row, parsed) {
     ? applications.filter((application) => String(application?.id ?? '') === applicationId)
     : applications
 
+  const matches = []
   for (const application of scopedApplications) {
     const awards = Array.isArray(application?.imported_portal_awards)
       ? application.imported_portal_awards
       : []
-    const match = awards.find((award) => awardMatchesPortalResult(award, row, parsed))
-    if (match) return match
+    for (const award of awards) {
+      if (awardMatchesPortalResult(award, row, parsed)) matches.push(award)
+    }
   }
-  return null
+
+  // Never guess between multiple owner records. Ambiguity falls back to the
+  // public-signal classification, preserving every owner record untouched.
+  return matches.length === 1 ? matches[0] : null
 }
 
 export async function repairLegacyPublicAwardClaims(db) {
@@ -93,7 +102,10 @@ export async function repairLegacyPublicAwardClaims(db) {
 
     const rawAmount = parsed?.awardAmount ?? parsed?.award_amount ?? null
     const rawAmountText = parsed?.awardAmountRaw ?? parsed?.award_amount_raw ?? null
-    const numericAmount = Number.isFinite(Number(rawAmount)) ? Number(rawAmount) : null
+    const hasAmount = rawAmount !== null && rawAmount !== undefined && rawAmount !== ''
+    const numericAmount = hasAmount && Number.isFinite(Number(rawAmount))
+      ? Number(rawAmount)
+      : null
     const existingSignals = parsed?.publicSignals ?? parsed?.public_signals ?? null
     const hadPublicAwardClaim =
       Number(row?.awards_detected ?? 0) !== 0 ||
