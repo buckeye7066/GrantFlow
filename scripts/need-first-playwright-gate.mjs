@@ -16,22 +16,12 @@ const CHROMIUM_SYSTEM_DEPS = [
   'gtk3', 'dbus-libs',
 ]
 
-function cleanBaseEnv() {
-  const passthrough = [
-    'PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR', 'TEMP', 'TMP',
-    'SystemRoot', 'ComSpec', 'PATHEXT', 'APPDATA', 'LOCALAPPDATA',
-    'NPM_CONFIG_CACHE', 'npm_config_cache', 'NODE_OPTIONS',
-  ]
-  const env = {}
-  for (const key of passthrough) {
-    if (process.env[key] !== undefined) env[key] = process.env[key]
-  }
-  return env
-}
-
 function smokeEnv(nodeEnv = 'development') {
+  // Vercel Sandbox supplies its own runtime PATH/HOME. Passing the host build
+  // image's PATH into the microVM makes npm's `env node` shebang unable to find
+  // the VM's Node binary. Supply only application variables and let runCommand
+  // retain the sandbox defaults.
   return {
-    ...cleanBaseEnv(),
     CI: 'true',
     NODE_ENV: nodeEnv,
     PORT: '8080',
