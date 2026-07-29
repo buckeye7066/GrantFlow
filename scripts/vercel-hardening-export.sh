@@ -4,6 +4,7 @@ set -euo pipefail
 node scripts/prepare-global-hardening-run.mjs
 node scripts/apply-code-hardening.mjs
 node scripts/apply-readiness-deployment.mjs
+node scripts/generate-env-examples.mjs
 npm run release:gates
 
 git diff --name-status > dist/hardening-manifest.txt
