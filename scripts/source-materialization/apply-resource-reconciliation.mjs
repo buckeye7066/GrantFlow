@@ -12,6 +12,15 @@ function replaceOne(file, pattern, replacement, label) {
   write(file, before.replace(pattern, replacement))
 }
 
+function insertBefore(file, marker, text, label) {
+  const before = read(file)
+  const first = before.indexOf(marker)
+  if (first < 0 || before.indexOf(marker, first + marker.length) >= 0) {
+    throw new Error(`${label || file}: marker missing or ambiguous`)
+  }
+  write(file, before.slice(0, first) + text + before.slice(first))
+}
+
 const persistenceFile = 'backend/services/crawlerOsPersistence.js'
 const persistenceBefore = read(persistenceFile)
 const hasSnapshotFacade =
@@ -80,8 +89,84 @@ if (!hasSnapshotFacade && !hasInlineReconciliation) {
   console.log('[global-hardening] compatible resource-preserving reconciliation already present')
 }
 
+const verificationFile = 'backend/services/linkVerificationService.js'
+
+// Separate the catalog safety transition from network verification. Railway
+// probes /readyz immediately after the process binds; the recurring verifier is
+// intentionally delayed and network-bound. This helper is one bounded SQL-only
+// transaction surface that can run synchronously after schema initialization.
+insertBefore(
+  verificationFile,
+  'export async function runLinkVerification(',
+  `export async function quarantineUnverifiedDirectOpportunities(db) {
+  if (!db || typeof db.prepare !== 'function') {
+    return { ok: false, quarantined: 0, deactivated: 0, restored: 0, reason: 'database_unavailable' }
+  }
+
+  const isPostgres = db?.dialect === 'postgres'
+  const trueVal = isPostgres ? true : 1
+  const falseVal = isPostgres ? false : 0
+  const changes = (result) => Number(result?.changes ?? result?.rowCount ?? 0)
+  const directPredicate = [
+    "LOWER(COALESCE(opportunity_kind, 'direct')) IN ('direct', 'benefit')",
+    "UPPER(COALESCE(type, '')) NOT IN ('DIRECTORY', 'REFERRAL', 'SCHOOL_PORTAL', 'PAST_AWARD_INTEL')",
+    "LOWER(COALESCE(result_kind, '')) NOT IN ('directory', 'referral', 'school_portal', 'past_award_intel')",
+    "LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%directory%'",
+    "LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%referral%'",
+  ].join(' AND ')
+
+  try {
+    const quarantined = await db
+      .prepare(
+        'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + directPredicate +
+        " AND COALESCE(is_hidden, ?) = ? AND COALESCE(link_status, 'unverified') IN ('unverified', 'unknown', 'broken')",
+      )
+      .run(trueVal, falseVal, falseVal)
+
+    // Broken direct targets get both the soft quarantine and the hard active-row
+    // kill switch so older readers that only filter is_active still fail closed.
+    const deactivated = await db
+      .prepare(
+        'UPDATE funding_opportunities SET is_active = ? WHERE ' + directPredicate +
+        " AND COALESCE(is_active, ?) = ? AND link_status = 'broken'",
+      )
+      .run(falseVal, trueVal, trueVal)
+
+    // A prior interrupted sweep may have left a proven row hidden. Reveal only
+    // rows carrying both a successful canonical status and a real timestamp;
+    // never reactivate an independently expired/deactivated program.
+    const restored = await db
+      .prepare(
+        'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + directPredicate +
+        " AND COALESCE(is_hidden, ?) = ? AND link_status IN ('ok', 'redirect', 'verified') AND last_verified_at IS NOT NULL",
+      )
+      .run(falseVal, falseVal, trueVal)
+
+    return {
+      ok: true,
+      quarantined: changes(quarantined),
+      deactivated: changes(deactivated),
+      restored: changes(restored),
+      reason: null,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      quarantined: 0,
+      deactivated: 0,
+      restored: 0,
+      reason: 'quarantine_failed',
+      error: error?.message || String(error),
+    }
+  }
+}
+
+`,
+  'SQL-only direct catalog quarantine helper',
+)
+
 replaceOne(
-  'backend/services/linkVerificationService.js',
+  verificationFile,
   /    expired: 0,\n  \}/,
   `    expired: 0,
     quarantined: 0,
@@ -91,32 +176,18 @@ replaceOne(
 )
 
 replaceOne(
-  'backend/services/linkVerificationService.js',
+  verificationFile,
   /  const isPostgres = db\?\.dialect === 'postgres'\n  const falseVal = isPostgres \? false : 0/,
   `  const isPostgres = db?.dialect === 'postgres'
   const falseVal = isPostgres ? false : 0
-  const trueVal = isPostgres ? true : 1
 
-  // Fail closed at the catalog boundary. Direct opportunities are hidden until
-  // a target URL has actually been proven reachable. Directories and referrals
-  // remain visible because they are navigation resources rather than promises of
-  // an application-ready award. The recurring verifier can still select hidden
-  // rows, and a successful probe reveals them again below.
-  try {
-    const quarantined = await db
-      .prepare(\`
-        UPDATE funding_opportunities
-           SET is_hidden = ?
-         WHERE LOWER(COALESCE(opportunity_kind, 'direct')) IN ('direct', 'benefit')
-           AND COALESCE(is_hidden, ?) = ?
-           AND COALESCE(link_status, 'unverified') IN ('unverified', 'unknown', 'broken')
-      \`)
-      .run(trueVal, falseVal, falseVal)
-    stats.quarantined = Number(quarantined?.changes ?? quarantined?.rowCount ?? 0)
-  } catch (err) {
-    // Older/minimal schemas can lack is_hidden/opportunity_kind. Verification
-    // itself remains available; production schemas carry both columns.
-    console.warn('[link-verify] quarantine pass failed:', err?.message)
+  const quarantine = await quarantineUnverifiedDirectOpportunities(db)
+  if (quarantine?.ok) {
+    stats.quarantined += Number(quarantine.quarantined || 0)
+    stats.deactivated += Number(quarantine.deactivated || 0)
+    stats.restored += Number(quarantine.restored || 0)
+  } else {
+    console.warn('[link-verify] quarantine pass failed:', quarantine?.reason || 'unknown')
   }
 
   const revealVerified = db.prepare(\`
@@ -128,7 +199,7 @@ replaceOne(
 )
 
 replaceOne(
-  'backend/services/linkVerificationService.js',
+  verificationFile,
   /        stats\.checked\+\+\n        stats\[result\.status\] = \(stats\[result\.status\] \|\| 0\) \+ 1/,
   `        stats.checked++
         stats[result.status] = (stats[result.status] || 0) + 1
@@ -144,6 +215,98 @@ replaceOne(
   'link verification reveal on success',
 )
 
+// The SQL-only transition must finish after migrations/schema invariants and
+// before app.listen makes /readyz reachable. The slow network sweep remains on
+// its existing 30-second delayed scheduler.
+replaceOne(
+  'backend/server.js',
+  /import \{ runLinkVerification, getLinkHealthSummary \} from '\.\/services\/linkVerificationService\.js'/,
+  `import {
+  runLinkVerification,
+  getLinkHealthSummary,
+  quarantineUnverifiedDirectOpportunities,
+} from './services/linkVerificationService.js'`,
+  'startup quarantine import',
+)
+
+insertBefore(
+  'backend/server.js',
+  '  // Publish this process\'s automation posture',
+  `  // Production readiness is allowed to inspect only the safe, user-visible
+  // direct catalog. Quarantine every unproven/broken direct row synchronously,
+  // after schema initialization but before app.listen exposes /readyz. This is
+  // SQL-only; the recurring network verifier remains non-blocking below.
+  const enforceMissionGateAtBoot =
+    String(process.env.NODE_ENV || '').toLowerCase() === 'production' &&
+    String(process.env.GRANTFLOW_SKIP_MISSION_GATE || '').toLowerCase() !== 'true'
+  if (enforceMissionGateAtBoot) {
+    try {
+      const quarantine = await quarantineUnverifiedDirectOpportunities(db)
+      if (quarantine?.ok) {
+        console.info('[link-verify] startup quarantine complete', quarantine)
+      } else {
+        console.warn('[link-verify] startup quarantine failed closed', {
+          reason: quarantine?.reason || 'unknown',
+        })
+      }
+    } catch (quarantineErr) {
+      console.warn('[link-verify] startup quarantine threw (readiness remains closed):', quarantineErr?.message || quarantineErr)
+    }
+  }
+
+`,
+  'pre-listen startup quarantine wiring',
+)
+
+// Functional regression coverage: the startup helper performs no network I/O,
+// preserves resources, hard-deactivates broken direct rows, and restores proven
+// rows that were hidden by an interrupted prior cycle.
+replaceOne(
+  'backend/tests/linkVerificationQuarantine.test.js',
+  /import \{ runLinkVerification \} from '\.\.\/services\/linkVerificationService\.js'/,
+  `import {
+  quarantineUnverifiedDirectOpportunities,
+  runLinkVerification,
+} from '../services/linkVerificationService.js'`,
+  'link quarantine test import',
+)
+
+const quarantineTestFile = 'backend/tests/linkVerificationQuarantine.test.js'
+const quarantineTest = read(quarantineTestFile)
+if (!quarantineTest.includes("describe('startup SQL-only link quarantine'")) {
+  write(quarantineTestFile, `${quarantineTest}
+
+describe('startup SQL-only link quarantine', () => {
+  it('fails closed without fetching, preserves resources, and restores proven rows', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    try {
+      insertOpportunity(db, { id: 'unverified-direct', url: 'https://8.8.8.8/unverified' })
+      insertOpportunity(db, { id: 'broken-direct', url: 'https://8.8.8.8/broken', status: 'broken' })
+      insertOpportunity(db, { id: 'directory-resource', kind: 'directory', status: 'unverified' })
+      insertOpportunity(db, { id: 'proven-hidden', url: 'https://8.8.8.8/proven', status: 'ok', hidden: 1 })
+      db.prepare('UPDATE funding_opportunities SET last_verified_at = ? WHERE id = ?')
+        .run('2026-07-29T12:00:00.000Z', 'proven-hidden')
+
+      const stats = await quarantineUnverifiedDirectOpportunities(db)
+
+      expect(stats).toMatchObject({ ok: true, quarantined: 2, deactivated: 1, restored: 1 })
+      expect(fetchSpy).not.toHaveBeenCalled()
+
+      expect(readRow(db, 'unverified-direct')).toMatchObject({ is_hidden: 1, is_active: 1 })
+      expect(readRow(db, 'broken-direct')).toMatchObject({ is_hidden: 1, is_active: 0 })
+      expect(readRow(db, 'directory-resource')).toMatchObject({ is_hidden: 0, is_active: 1 })
+      expect(readRow(db, 'proven-hidden')).toMatchObject({ is_hidden: 0, is_active: 1, link_status: 'ok' })
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+})
+`)
+}
+
 const persistence = read(persistenceFile)
 const resourcePreservationInstalled =
   (
@@ -158,12 +321,22 @@ if (!resourcePreservationInstalled) {
   throw new Error('resource-preserving reconciliation was not installed')
 }
 
-const verification = read('backend/services/linkVerificationService.js')
+const verification = read(verificationFile)
+if (!verification.includes('export async function quarantineUnverifiedDirectOpportunities')) {
+  throw new Error('SQL-only direct catalog quarantine helper was not installed')
+}
 if (!verification.includes("COALESCE(link_status, 'unverified') IN ('unverified', 'unknown', 'broken')")) {
   throw new Error('unverified-direct quarantine was not installed')
 }
 if (!verification.includes("result.status === 'ok' || result.status === 'redirect'")) {
   throw new Error('verified-row reveal was not installed')
+}
+
+const server = read('backend/server.js')
+const startupQuarantine = server.indexOf('await quarantineUnverifiedDirectOpportunities(db)')
+const listen = server.indexOf("app.listen(PORT, '0.0.0.0')")
+if (startupQuarantine < 0 || listen < 0 || startupQuarantine > listen) {
+  throw new Error('startup catalog quarantine must be awaited before app.listen')
 }
 
 console.log('[global-hardening] resource reconciliation and verification quarantine transformations applied')
