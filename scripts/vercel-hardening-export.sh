@@ -86,6 +86,8 @@ tar -czf dist/hardening-output.tar.gz \
   api/preview-backend-disabled.js \
   tests/unit/api-rate-limit-policy.test.mjs \
   tests/unit/deployment-preview-isolation.test.mjs \
+  tests/unit/funding-api-keys.test.mjs \
+  tests/unit/funding-provider-clients.test.mjs \
   tests/unit/healthz-schema-bootstrap.test.mjs \
   tests/unit/production-readiness-hardening.test.mjs \
   tests/unit/runtime-secrets-hardening.test.mjs \
