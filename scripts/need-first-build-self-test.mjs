@@ -135,7 +135,7 @@ await test('Crawler OS facade applies policy', () => {
     profileNorm: context.profileNorm,
   })
   assert.equal(result.decision, 'reject')
-  assert.equal(result.match_explain.scoring_policy_version, 'need_first_v1')
+  assert.equal(result.match_explain.scoring_policy_version, 'need_first_v2')
 })
 
 await test('persisted truth hides rejected direct row and keeps resource REVIEW', () => {
