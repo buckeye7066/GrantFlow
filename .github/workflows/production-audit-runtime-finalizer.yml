@@ -5,7 +5,7 @@ on:
     types: [created]
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 
 concurrency:
@@ -14,9 +14,10 @@ concurrency:
 
 jobs:
   apply-verified-correction:
-    # This is intentionally a one-command, same-owner maintenance action. The
-    # workflow runs from trusted default-branch code, checks out one immutable
-    # commit, and refuses to act after the target branch has moved.
+    # One exact owner command runs one immutable same-repository commit. The
+    # branch equality guard makes the workflow one-shot even if the command is
+    # repeated. A dedicated PAT performs the final push so GitHub emits a normal
+    # pull_request synchronize event and required checks attach to the new head.
     if: >-
       github.repository == 'buckeye7066/GrantFlow' &&
       github.event.issue.pull_request &&
@@ -34,14 +35,20 @@ jobs:
         with:
           ref: 06c61917f4c57d1de708222ef08350b2062d8939
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
-      - name: Refuse stale or repeated execution
+      - name: Refuse stale, repeated, or unauthenticated execution
         id: guard
         shell: bash
+        env:
+          FINALIZER_PAT: ${{ secrets.ANYA_PR_TOKEN }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          if [ -z "$FINALIZER_PAT" ]; then
+            echo "ANYA_PR_TOKEN is required so the verified push triggers ordinary PR checks."
+            exit 1
+          fi
           remote_head="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
           if [ "$remote_head" != "$EXPECTED_HEAD" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -83,9 +90,11 @@ jobs:
         if: steps.guard.outputs.run == 'true'
         run: npm run release:gates
 
-      - name: Remove one-shot scaffolding and commit verified correction
+      - name: Remove scaffolding, commit, and push through the PR token
         if: steps.guard.outputs.run == 'true'
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ANYA_PR_TOKEN }}
         run: |
           set -euo pipefail
           rm -f .github/workflows/apply-runtime-finalizer-branch.yml
@@ -96,4 +105,5 @@ jobs:
           git config user.email "grantflow-audit-finalizer[bot]@users.noreply.github.com"
           git add -A
           git commit -m "fix(audit): close Dashboard hook crash and legacy portal claims"
+          gh auth setup-git
           git push --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_HEAD" origin "HEAD:refs/heads/$TARGET_BRANCH"
