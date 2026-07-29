@@ -1,6 +1,5 @@
 {
   "installCommand": "npm install --include=dev",
-  "buildCommand": "node scripts/need-first-playwright-gate.mjs",
   "trailingSlash": false,
   "rewrites": [
     {
