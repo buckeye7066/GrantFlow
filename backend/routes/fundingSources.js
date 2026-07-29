@@ -56,6 +56,17 @@ function jparse(value, fallback) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
+function emptyReconciliation() {
+  return {
+    scanned: 0,
+    updated: 0,
+    rejected: 0,
+    demoted: 0,
+    score_lowered: 0,
+    failures: [],
+  }
+}
+
 router.get('/profiles/:id/funding-sources', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
@@ -75,19 +86,29 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     const profileContext = buildProfileFacets(loadedContext)
     // buildProfileFacets preserves profile/sections/signals but its normalized
     // context does not retain profileNorm. Reattach the already-built canonical
-    // normalization so the need-first policy sees the same facts as discovery.
+    // normalization so presentation and discovery use the same facts.
     profileContext.profileNorm = loadedContext.profileNorm ?? null
 
     await ensurePipelineDismissalsSchema(req.db)
 
-    // Idempotent convergence: old crawler-os/web-llm rows are rewritten to the
-    // current need-first score and decision before the owner sees them. A future
-    // discovery run that writes an older policy shape becomes stale and is
-    // reconciled on the next read. Discovery lane identity is preserved.
-    const reconciliation = await reconcileNeedFirstProfileMatches(req.db, {
-      profileId,
-      profileContext,
-    })
+    // Persisted rows converge in bounded slices, but a reconciliation failure
+    // never empties the user's list. restorePersistedMatchTruth below applies the
+    // same policy at read time, so owner-facing correctness does not depend on a
+    // successful write-back during this request.
+    let reconciliation = emptyReconciliation()
+    try {
+      reconciliation = await reconcileNeedFirstProfileMatches(req.db, {
+        profileId,
+        profileContext,
+        limit: 100,
+      })
+    } catch (error) {
+      reconciliation.failures.push({ error: error?.message || String(error) })
+      log.warn('funding_sources.need_first_reconcile_failed', {
+        profileId,
+        error: error?.message || String(error),
+      })
+    }
 
     const rows = await req.db.prepare(
       `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.summary,
@@ -164,7 +185,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         is_directory: isFundingResource(row),
         trust_tier: row.source_trust_tier ?? null,
         matcher_version: row.matcher_version ?? null,
-        scoring_policy_version: row.scoring_policy_version ?? NEED_FIRST_SCORING_VERSION,
+        scoring_policy_version: row.scoring_policy_version ?? null,
       })
     }
 
