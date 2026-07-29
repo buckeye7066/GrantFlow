@@ -8,74 +8,42 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 20
           cache: npm
 
       - name: Install
-        # Work around occasional npm optional-deps resolution issues (rollup native bindings used by Vite).
-        # Keep CI lockfile-only so it validates the committed dependency graph.
         run: npm ci --include=optional
 
-      # Same command Vercel runs; fail in minutes instead of after full unit + release gates.
       - name: Vite production build (Vercel parity)
         run: npm run build
 
       - name: Detect code corruption
-        # Early detection of common automated code fixer corruption patterns before
-        # running full test suite. This gives clearer error messages for duplicate
-        # declarations, undefined variables, and parsing errors that are commonly
-        # introduced by AI assistants and similar automated tools.
         run: |
           echo "Checking for code corruption patterns..."
           node scripts/detect-code-corruption.mjs || {
             echo ""
             echo "CODE CORRUPTION DETECTED - See above for details"
-            echo "This is likely caused by automated code fixers."
-            echo "The corrupted code must be fixed before CI can pass."
             exit 1
           }
 
       - name: Secret scan
-        # This is blocking on purpose: production readiness cannot depend on
-        # someone noticing leaked credentials after a deploy.
         run: npm run scan:secrets
 
       - name: Audit (high+)
-        # Blocking for production dependencies; missing fixes should be explicit,
-        # not silently bypassed by CI.
         run: npm audit --omit=dev --audit-level=high
 
       - name: Release gates
         run: npm run release:gates
 
-      - name: Playwright smoke
-        # Non-blocking: smoke tests require a running database (Postgres) which is not
-        # available in CI yet. The step still runs to surface issues but won't block CI.
-        # Step-level timeout prevents Playwright install from exhausting the job timeout.
-        continue-on-error: true
-        timeout-minutes: 5
-        env:
-          ALLOW_EPHEMERAL_UPLOADS: 'true'
-        run: |
-          npx playwright install chromium --with-deps 2>/dev/null || npm run smoke:install
-          npm run smoke
-
-  # Replays the full Postgres migration chain against an ephemeral database on
-  # every PR. Production runs Postgres (Railway) but the unit suite runs on
-  # in-memory SQLite, so dialect-only migration bugs (TEXT-vs-JSONB drift,
-  # missing ADD COLUMN, tables never ported from the SQLite set, boolean=integer
-  # comparisons) were invisible until a real deploy/restore. This job is the
-  # guard: a fresh `npm run migrate` must apply cleanly, be idempotent on
-  # re-run, and produce the canonical schema.
   postgres-migrations:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -103,10 +71,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 20
           cache: npm
@@ -122,3 +90,155 @@ jobs:
 
       - name: Verify canonical Postgres schema
         run: node backend/scripts/verify-pg-schema.mjs
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grantflow_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      CI: 'true'
+      NODE_ENV: development
+      SMOKE_MODE: 'true'
+      PORT: '8080'
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_smoke
+      DB_PROVIDER: postgres
+      DB_DIALECT: postgres
+      MIGRATE_ON_BOOT: 'false'
+      DB_AUTO_MIGRATE: 'false'
+      ALLOW_EPHEMERAL_UPLOADS: 'true'
+      UPLOADS_DIR: /tmp/grantflow-smoke-uploads
+      AUTH_JWT_SECRET: grantflow-ci-browser-smoke-secret-not-for-production
+      ADMIN_TOKEN: grantflow-ci-browser-smoke-admin-token
+      RUNTIME_SECRETS_KEY: 4444444444444444444444444444444444444444444444444444444444444444
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --include=dev --include=optional
+
+      - name: Prepare PostgreSQL schema
+        run: |
+          npm run migrate
+          node backend/scripts/verify-pg-schema.mjs
+          mkdir -p "$UPLOADS_DIR"
+
+      - name: Install Playwright Chromium
+        run: node ./node_modules/playwright/cli.js install chromium --with-deps
+
+      - name: Blocking Playwright critical-path smoke
+        run: npm run smoke
+
+      - name: Retain Playwright diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a147cf0351cc9 # v7.0.1
+        with:
+          name: playwright-smoke-diagnostics
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  production-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grantflow_container_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build exact production Docker image
+        run: docker build --pull --tag grantflow:ci .
+
+      - name: Boot image against PostgreSQL and verify health
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_container_ci
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/grantflow-uploads"
+          docker run --detach --name grantflow-ci --network host \
+            --volume "$RUNNER_TEMP/grantflow-uploads:/data/uploads" \
+            --env NODE_ENV=production \
+            --env PORT=8080 \
+            --env DATABASE_URL="$DATABASE_URL" \
+            --env DB_PROVIDER=postgres \
+            --env DB_DIALECT=postgres \
+            --env MIGRATE_ON_BOOT=true \
+            --env DB_AUTO_MIGRATE=false \
+            --env GRANTFLOW_SKIP_MISSION_GATE=true \
+            --env UPLOADS_DIR=/data/uploads \
+            --env AUTH_JWT_SECRET=grantflow-ci-container-secret-not-for-production \
+            --env ADMIN_TOKEN=grantflow-ci-container-admin-token \
+            --env RUNTIME_SECRETS_KEY=5555555555555555555555555555555555555555555555555555555555555555 \
+            grantflow:ci
+
+          cleanup() {
+            docker logs grantflow-ci || true
+            docker rm --force grantflow-ci >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/healthz >/tmp/healthz.json; then
+              break
+            fi
+            sleep 2
+          done
+
+          curl --fail --silent --show-error http://127.0.0.1:8080/healthz | tee /tmp/healthz-final.json
+          curl --fail --silent --show-error http://127.0.0.1:8080/readyz | tee /tmp/readyz-final.json
+          curl --fail --silent --show-error http://127.0.0.1:8080/api/health | tee /tmp/api-health-final.json
+
+          process_uid="$(docker exec grantflow-ci sh -c "awk '/^Uid:/{print \$2}' /proc/1/status")"
+          test "$process_uid" != "0"
+
+          for attempt in $(seq 1 30); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' grantflow-ci)"
+            if [ "$health" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$health" = "unhealthy" ]; then
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Container healthcheck did not become healthy"
+          exit 1
