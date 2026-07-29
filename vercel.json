@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm ci --include=optional",
+  "installCommand": "npm ci --include=dev --include=optional",
   "trailingSlash": false,
   "rewrites": [
     {
