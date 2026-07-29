@@ -4,6 +4,7 @@ set -euo pipefail
 node scripts/prepare-global-hardening-run.mjs
 node scripts/apply-code-hardening.mjs
 node scripts/apply-readiness-deployment.mjs
+node scripts/apply-hardening-test-updates.mjs
 node scripts/generate-env-examples.mjs
 
 # Vercel preview builds inherit deployment integrations. The test suite must run
@@ -23,6 +24,8 @@ node --test tests/unit/anya-tools.test.mjs
 node --test tests/unit/auth-access-check.test.mjs
 node --test tests/unit/auth-email-otp.test.mjs
 node --test tests/unit/auth-email-production-503.test.mjs
+node --test tests/unit/healthz-schema-bootstrap.test.mjs
+node --test tests/unit/startup-smoke-mode.test.mjs
 
 npm exec -- vitest run tests/unit/api-rate-limit-policy.test.mjs tests/unit/production-readiness-hardening.test.mjs --reporter=verbose
 npm run build
