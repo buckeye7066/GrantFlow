@@ -105,6 +105,20 @@ assert(
 assert(railway?.deploy?.startCommand === 'node backend/start.js', 'Railway must start the materialized runtime directly; npm start would invoke a build-only prestart script')
 assert(dockerfile.includes('CMD ["node", "backend/start.js"]'), 'Dockerfile CMD must start backend/start.js directly')
 
+// npm executes the root `prepare` lifecycle during npm ci. The builder therefore
+// has to copy the skip-aware bootstrap before dependency installation and set the
+// skip flag for that lifecycle. Moving either line below npm ci reopens the exact
+// Railway build failure where the lifecycle asks for a script that is not present.
+const bootstrapCopyIndex = dockerfile.indexOf('COPY scripts/materialize-production-source.mjs ./scripts/materialize-production-source.mjs')
+const dependencyInstallIndex = dockerfile.indexOf('npm ci --include=dev --include=optional --legacy-peer-deps')
+assert(bootstrapCopyIndex >= 0, 'Docker builder must copy the skip-aware materializer before npm ci')
+assert(dependencyInstallIndex >= 0, 'Docker builder must use the locked dependency install command')
+assert(bootstrapCopyIndex < dependencyInstallIndex, 'Docker materializer bootstrap must appear before npm ci')
+assert(
+  dockerfile.slice(Math.max(0, dependencyInstallIndex - 120), dependencyInstallIndex).includes('GRANTFLOW_SKIP_SOURCE_MATERIALIZATION=1'),
+  'Docker npm ci must suppress the prepare-time materialization until the full source tree is copied',
+)
+
 // The builder itself runs the materializer after COPY . . . That program imports
 // scripts/source-materialization modules and rewrites regression fixtures, so the
 // Docker context must retain scripts and tests even though the final runtime stage
