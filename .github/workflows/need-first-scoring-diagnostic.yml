@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - agent/need-first-scoring-20260729
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -15,6 +19,7 @@ concurrency:
 jobs:
   diagnose:
     name: Diagnose production match inputs (read-only)
+    if: github.event_name == 'push' || github.head_ref == 'agent/need-first-scoring-20260729'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production-audit
