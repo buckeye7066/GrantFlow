@@ -29,6 +29,34 @@ replaceExact(
   'fetcher fixture transformation',
 )
 
+replaceExact(
+  'scripts/apply-code-hardening.mjs',
+  `replaceOne(
+  'tests/mission/mission-health-dashboard.test.mjs',
+  /import \\{ buildMissionHealth, MISSION_TARGETS \\} from '\\.\\.\\/\\.\\.\\/backend\\/services\\/missionHealthService\\.js'/,
+  \`import {
+  buildMissionHealth,
+  MISSION_TARGETS,
+  normalizeCount,
+  pct,
+} from '../../backend/services/missionHealthService.js'\`,
+  'mission test import',
+)`,
+  `replaceOne(
+  'tests/mission/mission-health-dashboard.test.mjs',
+  /import \\{ buildMissionHealth, MISSION_TARGETS \\} from '\\.\\.\\/\\.\\.\\/backend\\/services\\/missionHealthService\\.js'/,
+  \`const missionHealthModule = await import('../../backend/services/' + 'missionHealthService.js')
+const {
+  buildMissionHealth,
+  MISSION_TARGETS,
+  normalizeCount,
+  pct,
+} = missionHealthModule\`,
+  'mission test import',
+)`,
+  'mission test import transformation',
+)
+
 const readiness = 'scripts/apply-readiness-deployment.mjs'
 const readinessText = fs.readFileSync(readiness, 'utf8')
 const updated = readinessText.replaceAll(
