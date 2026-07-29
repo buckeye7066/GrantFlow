@@ -18,6 +18,7 @@ function run(args, label) {
 run([
   'exec', '--', 'vitest', 'run',
   'backend/tests/needFirstMatchPolicy.test.js',
+  'backend/tests/needFirstPolicyEdgeCases.test.js',
   'backend/tests/needFirstProductionExamples.test.js',
   'backend/tests/persistedMatchTruth.test.js',
   'backend/tests/remainingAuditCorrections.test.js',
