@@ -242,19 +242,97 @@ describe('need-first policy edge cases', () => {
     expect(result.decision).toBe('REVIEW')
   })
 
-  it('still rejects a strong sponsor-confirmed unrelated institution', () => {
+  it('downgrades a university-administered broad scholarship when enrollment restriction is not stated', () => {
     const context = studentProfile()
     const policy = evaluateNeedFirstMatchPolicy({
       profileContext: context,
       profileNorm: context.profileNorm,
       opportunity: {
-        title: 'Merit Scholarship',
+        title: 'Regional First-Generation Student Scholarship',
         sponsor: 'University at Buffalo',
+        description: 'A regional award for first-generation college students.',
+      },
+      dataPointEval: { matched: [{ kind: 'demographic', value: 'first generation', credit: 1 }] },
+    })
+    expect(policy.hardMismatch).toBe(false)
+    expect(policy.reviewOnly).toBe(true)
+    expect(policy.decision).toBe('REVIEW')
+    expect(policy.reasons.join(' ')).toMatch(/does not prove enrollment/i)
+  })
+
+  it('still rejects a sponsor-confirmed unrelated institution when the restriction is stated', () => {
+    const context = studentProfile()
+    const policy = evaluateNeedFirstMatchPolicy({
+      profileContext: context,
+      profileNorm: context.profileNorm,
+      opportunity: {
+        title: 'University at Buffalo Merit Scholarship',
+        sponsor: 'University at Buffalo',
+        eligibility_text: 'Applicants must be enrolled at the University at Buffalo.',
       },
       dataPointEval: { matched: [{ kind: 'academic', value: 'student', credit: 1 }] },
     })
     expect(policy.hardMismatch).toBe(true)
     expect(policy.decision).toBe('REJECT')
+  })
+
+  it('does not reject employee aid merely because the employer is a small business', () => {
+    const context = {
+      profile: { primary_type: 'individual' },
+      sections: { occupation: { employment_status: 'employed' } },
+      profileNorm: { entityType: 'individual', occupation: { employment_status: 'employed' } },
+    }
+    const policy = evaluateNeedFirstMatchPolicy({
+      profileContext: context,
+      profileNorm: context.profileNorm,
+      opportunity: {
+        title: 'Emergency Relief for Employees of Small Businesses',
+        description: 'Direct assistance for workers whose small-business employer closed after a disaster.',
+      },
+      dataPointEval: { matched: [{ kind: 'occupation', value: 'employed', credit: 1 }] },
+    })
+    expect(policy.hardMismatch).toBe(false)
+    expect(policy.decision).toBeNull()
+    expect(policy.reasons.join(' ')).toMatch(/employer context/i)
+  })
+
+  it('still rejects an explicitly business-only grant for an individual profile', () => {
+    const context = {
+      profile: { primary_type: 'individual' },
+      sections: { occupation: { employment_status: 'employed' } },
+      profileNorm: { entityType: 'individual' },
+    }
+    const policy = evaluateNeedFirstMatchPolicy({
+      profileContext: context,
+      profileNorm: context.profileNorm,
+      opportunity: {
+        title: 'Small Business Recovery Grant',
+        eligibility_text: 'Eligible applicants are small businesses.',
+      },
+      dataPointEval: { matched: [{ kind: 'occupation', value: 'employed', credit: 1 }] },
+    })
+    expect(policy.hardMismatch).toBe(true)
+    expect(policy.hardMismatches.join(' ')).toMatch(/Business-only funding/i)
+  })
+
+  it('does not interpret nursing-home assistance as a nurse-only profession program', () => {
+    const context = {
+      profile: { primary_type: 'individual' },
+      sections: { health_medical: { support_needs: ['long term care'] } },
+      profileNorm: { entityType: 'individual', needCategories: ['healthcare'] },
+    }
+    const policy = evaluateNeedFirstMatchPolicy({
+      profileContext: context,
+      profileNorm: context.profileNorm,
+      opportunity: {
+        title: 'Nursing Home Resident Assistance Fund',
+        description: 'Financial help with skilled nursing facility care costs.',
+      },
+      dataPointEval: { matched: [{ kind: 'health', value: 'long term care', credit: 1 }] },
+    })
+    expect(policy.hardMismatch).toBe(false)
+    expect(policy.decision).toBeNull()
+    expect(policy.reasons.join(' ')).toMatch(/care setting/i)
   })
 
   it('does not confuse domestic-violence survivor assistance with death-survivor benefits', () => {
