@@ -1,14 +1,10 @@
 /**
  * GET /api/profiles/:id/funding-sources
  *
- * The owner-facing, friendly list of funding sources matched to a profile by the
- * Crawler OS. Unlike the raw discovery catalog or Hamilton's mail/fax packet
- * list, this is the curated per-profile match list: profile_opportunity_matches
- * (the per-profile score — Crawler OS) joined to the global funding_opportunities
- * catalog, sorted by match score, geo-stubs excluded, grouped accept/review.
- *
- * Auth: authenticated caller, profile-access scoped (admin sees all; others only
- * profiles they can access) — same gate as the rest of the profile surface.
+ * The curated owner-facing match list. Per-profile score truth lives in
+ * profile_opportunity_matches; the global funding_opportunities table supplies
+ * opportunity facts only. Direct funding, resources, and rejected rows remain
+ * structurally distinct.
  */
 import express from 'express'
 import { requireAuthenticatedUser, getAccessibleProfileIds } from '../utils/accessControl.js'
@@ -21,6 +17,8 @@ import {
   partitionFundingSources,
 } from '../services/matching/fundingSourcePresentation.js'
 import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
+import { reconcileNeedFirstProfileMatches } from '../services/matching/needFirstReconciler.js'
+import { NEED_FIRST_SCORING_VERSION } from '../services/matching/needFirstScoringAdapter.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
@@ -35,14 +33,8 @@ const log = createLogger('route:funding-sources')
 const router = express.Router()
 
 /**
- * getAccessibleProfileIds returns a Set of ids, or null as its DB-backed admin
- * sentinel. Global access, however, is authorized only by req.ctx.isAdmin: a
- * second helper call can disagree with the already-built request context after
- * a transient lookup failure. A null returned while the canonical context says
- * non-admin therefore fails closed instead of widening access.
- *
- * Both Set and Array containers are accepted so the gate remains stable if the
- * helper's scoped return type is widened later.
+ * Global access is authorized only by the canonical request context. A null
+ * returned from a second helper lookup never widens a non-admin request.
  */
 export async function userMayAccessProfile(req, user, profileId) {
   if (!profileId) return false
@@ -53,18 +45,15 @@ export async function userMayAccessProfile(req, user, profileId) {
   if (contextAccessible instanceof Set) return contextAccessible.has(id)
   if (Array.isArray(contextAccessible)) return contextAccessible.includes(id)
 
-  // Compatibility fallback for direct/unit callers that do not run the request
-  // context middleware. Null is deliberately denied here: only the explicit
-  // isAdmin branch above may grant global access.
   const accessible = await getAccessibleProfileIds(req.db, user)
   if (accessible instanceof Set) return accessible.has(id)
   return Array.isArray(accessible) && accessible.includes(id)
 }
 
-function jparse(v, fallback) {
-  if (v === null || v === undefined) return fallback
-  if (typeof v !== 'string') return v
-  try { return JSON.parse(v) } catch { return fallback }
+function jparse(value, fallback) {
+  if (value === null || value === undefined) return fallback
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return fallback }
 }
 
 router.get('/profiles/:id/funding-sources', async (req, res) => {
@@ -76,29 +65,41 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     return res.status(403).json({ error: 'forbidden' })
   }
 
-  // Default = the canonical data-point-scale bar (8), NOT the retired 75/50
-  // scale — a hard-coded 50 here returned near-nothing for any caller that
-  // omitted min_score (the 2026-07-28 audit's stale-constant class). Clamp to
-  // the slider range so a junk query param cannot go negative/absurd.
   const requestedMinScore = Number.parseInt(req.query.min_score, 10)
   const minScore = Number.isFinite(requestedMinScore)
     ? Math.max(0, Math.min(100, requestedMinScore))
     : DEFAULT_MIN_SCORE
 
   try {
-    const profileContext = buildProfileFacets(await loadProfileContext(req.db, profileId))
-    // Sticky deletes: a source the owner removed from this list must never
-    // re-render, even if a discovery run re-upserted its match row between
-    // boots (the boot sweep is the net; this predicate is the per-read gate).
+    const loadedContext = await loadProfileContext(req.db, profileId)
+    const profileContext = buildProfileFacets(loadedContext)
+    // buildProfileFacets preserves profile/sections/signals but its normalized
+    // context does not retain profileNorm. Reattach the already-built canonical
+    // normalization so the need-first policy sees the same facts as discovery.
+    profileContext.profileNorm = loadedContext.profileNorm ?? null
+
     await ensurePipelineDismissalsSchema(req.db)
+
+    // Idempotent convergence: old crawler-os/web-llm rows are rewritten to the
+    // current need-first score and decision before the owner sees them. A future
+    // discovery run that writes an older policy shape becomes stale and is
+    // reconciled on the next read. Discovery lane identity is preserved.
+    const reconciliation = await reconcileNeedFirstProfileMatches(req.db, {
+      profileId,
+      profileContext,
+    })
+
     const rows = await req.db.prepare(
-      `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.deadline, fo.deadline_type,
-              fo.amount_min, fo.amount_max, fo.state, fo.is_national,
-              fo.application_url, fo.apply_url, fo.source_url, fo.source, fo.source_id,
-              fo.record_origin, fo.opportunity_kind, fo.opportunity_type, fo.type, fo.funding_type,
+      `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.summary,
+              fo.eligibility, fo.eligibility_text, fo.eligibility_criteria, fo.restrictions,
+              fo.deadline, fo.deadline_type, fo.amount_min, fo.amount_max,
+              fo.state, fo.is_national, fo.application_url, fo.apply_url,
+              fo.source_url, fo.source, fo.source_id, fo.record_origin,
+              fo.opportunity_kind, fo.opportunity_type, fo.type, fo.funding_type,
               fo.source_trust_tier, fo.categories, fo.keywords,
-              pom.match_score, pom.match_decision, pom.match_explanation, pom.match_reasons,
-              pom.match_explain_json, pom.matcher_version, pom.ineligibility_reasons
+              pom.match_score, pom.match_decision, pom.match_explanation,
+              pom.match_reasons, pom.match_explain_json, pom.matcher_version,
+              pom.ineligibility_reasons
          FROM profile_opportunity_matches pom
          JOIN funding_opportunities fo ON fo.id = pom.opportunity_id
         WHERE pom.profile_id = ? AND pom.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
@@ -113,74 +114,80 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         ORDER BY pom.match_score DESC, fo.updated_at DESC`,
     ).all(profileId)
 
-    const mapped = rows.map((r) => ({
-      ...r,
-      match_score: r.match_score,
-      match_decision: r.match_decision,
-      match_explanation: r.match_explanation,
-      match_reasons: jparse(r.match_reasons, []),
-      match_explain_json: jparse(r.match_explain_json, r.match_explain_json ?? null),
-      ineligibility_reasons: jparse(r.ineligibility_reasons, r.ineligibility_reasons ?? []),
-      url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
-      actionable_url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
-      is_directory: isFundingResource(r),
+    const mapped = rows.map((row) => ({
+      ...row,
+      match_score: row.match_score,
+      match_decision: row.match_decision,
+      match_explanation: row.match_explanation,
+      match_reasons: jparse(row.match_reasons, []),
+      match_explain_json: jparse(row.match_explain_json, row.match_explain_json ?? null),
+      ineligibility_reasons: jparse(row.ineligibility_reasons, row.ineligibility_reasons ?? []),
+      url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
+      actionable_url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
+      is_directory: isFundingResource(row),
     }))
 
-    // Current trust/profile/eligibility gates still decide whether a row is safe
-    // enough to display. Their temporary recomputed score does not become a new
-    // owner-facing truth. Reapply the persisted profile-opportunity score,
-    // decision, and evidence before thresholding and presentation. The pre-fix
-    // route turned stored data-point scores of 2–36 into values as high as 97,
-    // promoted broad REVIEW rows to ACCEPT, and made the explanation disagree
-    // with the database.
+    // Trust and hard-eligibility gates may still remove unsafe/ineligible rows,
+    // but their temporary recomputed score never replaces persisted score truth.
     const canonical = canonicalizeOpportunityList(profileContext, mapped, {
       preserveDirectories: true,
       rejectHardIneligible: true,
     })
-    const persistedTruth = restorePersistedMatchTruth(canonical.kept, mapped)
+    const persistedTruth = restorePersistedMatchTruth(canonical.kept, mapped, {
+      profileContext,
+    })
 
     const sources = []
     let geoStubsHidden = 0
-    for (const r of persistedTruth) {
-      if (isTemplatedGeoStub({ title: r.title, opportunity_kind: r.opportunity_kind })) { geoStubsHidden += 1; continue }
-      const kind = String(r.opportunity_kind ?? '').toUpperCase()
+    for (const row of persistedTruth) {
+      if (isTemplatedGeoStub({ title: row.title, opportunity_kind: row.opportunity_kind })) {
+        geoStubsHidden += 1
+        continue
+      }
+      const kind = String(row.opportunity_kind ?? '').toUpperCase()
       sources.push({
-        id: r.id,
-        title: r.title,
-        sponsor: r.sponsor,
-        summary: r.description,
-        url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
-        deadline: r.deadline ?? null,
-        is_rolling: r.deadline_type === 'rolling' || !r.deadline,
-        amount_min: r.amount_min ?? null,
-        amount_max: r.amount_max ?? null,
-        geography: r.is_national ? 'National' : (r.state || null),
-        categories: jparse(r.categories, []),
-        match_score: r.match_score,
-        match_decision: r.match_decision, // accept | review | reject
-        why: r.match_explanation,
+        id: row.id,
+        title: row.title,
+        sponsor: row.sponsor,
+        summary: row.description,
+        url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
+        deadline: row.deadline ?? null,
+        is_rolling: row.deadline_type === 'rolling' || !row.deadline,
+        amount_min: row.amount_min ?? null,
+        amount_max: row.amount_max ?? null,
+        geography: row.is_national ? 'National' : (row.state || null),
+        categories: jparse(row.categories, []),
+        match_score: row.match_score,
+        match_decision: row.match_decision,
+        why: row.match_explanation,
         opportunity_kind: kind || null,
-        is_directory: isFundingResource(r),
-        trust_tier: r.source_trust_tier ?? null,
-        matcher_version: r.matcher_version ?? null,
+        is_directory: isFundingResource(row),
+        trust_tier: row.source_trust_tier ?? null,
+        matcher_version: row.matcher_version ?? null,
+        scoring_policy_version: row.scoring_policy_version ?? NEED_FIRST_SCORING_VERSION,
       })
     }
 
-    // The canonical display gate — never an inlined score predicate (the
-    // matchSurfacing.js contract): an engine ACCEPT below the floor still
-    // surfaces (the Anastasia-HOPE class), a REJECT/low REVIEW never does, and
-    // non-direct resources keep their own display floor.
-    const qualified = sources.filter((s) => qualifiesForDisplay(s, minScore))
+    const qualified = sources.filter((source) => qualifiesForDisplay(source, minScore))
     const presented = partitionFundingSources(qualified)
     return res.json({
       profile_id: profileId,
       engine: 'crawler-os',
+      scoring_policy_version: NEED_FIRST_SCORING_VERSION,
       min_score: minScore,
       ...presented,
       geo_stubs_hidden: geoStubsHidden,
+      need_first_reconciliation: {
+        scanned: reconciliation.scanned,
+        updated: reconciliation.updated,
+        rejected: reconciliation.rejected,
+        demoted: reconciliation.demoted,
+        score_lowered: reconciliation.score_lowered,
+        failures: reconciliation.failures?.length ?? 0,
+      },
     })
-  } catch (err) {
-    log.warn('funding_sources.failed', { profileId, error: err?.message || String(err) })
+  } catch (error) {
+    log.warn('funding_sources.failed', { profileId, error: error?.message || String(error) })
     return res.status(200).json({
       profile_id: profileId,
       total: 0,
@@ -189,22 +196,15 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       worth_reviewing: [],
       directories: [],
       resource_count: 0,
+      scoring_policy_version: NEED_FIRST_SCORING_VERSION,
       note: 'funding sources unavailable',
     })
   }
 })
 
 /**
- * DELETE /api/profiles/:id/funding-sources/:opportunityId
- *
- * Owner-facing STICKY delete from the curated match list. Records a
- * pipeline_dismissals tombstone (the same store the pipeline's sticky-delete
- * rule uses, so the matcher / promotion / re-crawl loop can never resurrect
- * this source for this profile), then purges the match row and any pipeline
- * grant already created from it via the canonical reconcile sweeps.
- *
- * A deliberate re-add (POST /api/grants/from-opportunity) clears the
- * tombstone, so this is reversible by the user.
+ * Owner-facing sticky removal. A dismissal tombstone prevents discovery from
+ * silently resurrecting the source for this profile.
  */
 router.delete('/profiles/:id/funding-sources/:opportunityId', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
@@ -223,8 +223,6 @@ router.delete('/profiles/:id/funding-sources/:opportunityId', async (req, res) =
       'SELECT * FROM funding_opportunities WHERE id = ?',
     ).get(opportunityId)
 
-    // The match row may point at an already-purged catalog row (the dangling-
-    // match class); a tombstone keyed on opportunity_id alone still blocks it.
     const dismissal = await recordDismissal(req.db, {
       profileId,
       opportunity: opportunity ?? { id: opportunityId },
@@ -235,13 +233,14 @@ router.delete('/profiles/:id/funding-sources/:opportunityId', async (req, res) =
       return res.status(422).json({ error: 'could not record dismissal', reason: dismissal.reason })
     }
 
-    // Purge through the canonical sweeps (profile-scoped by tombstone), so
-    // this delete and the boot net can never disagree on what "gone" means.
     const matchRowsRemoved = await reconcileDismissedMatches(req.db)
     const grantsRemoved = await reconcileDismissedGrants(req.db)
 
     log.info('funding_sources.dismissed', {
-      profileId, opportunityId, matchRowsRemoved, grantsRemoved,
+      profileId,
+      opportunityId,
+      matchRowsRemoved,
+      grantsRemoved,
       alreadyExisted: dismissal.alreadyExisted === true,
     })
     return res.json({
@@ -251,8 +250,12 @@ router.delete('/profiles/:id/funding-sources/:opportunityId', async (req, res) =
       match_rows_removed: matchRowsRemoved,
       pipeline_grants_removed: grantsRemoved,
     })
-  } catch (err) {
-    log.error('funding_sources.dismiss_failed', { profileId, opportunityId, error: err?.message || String(err) })
+  } catch (error) {
+    log.error('funding_sources.dismiss_failed', {
+      profileId,
+      opportunityId,
+      error: error?.message || String(error),
+    })
     return res.status(500).json({ error: 'failed to remove funding source' })
   }
 })
