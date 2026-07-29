@@ -6,6 +6,11 @@ on:
       - audit/fresh-production-verification-20260729
     paths:
       - .github/workflows/fresh-production-audit.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fresh-production-audit.yml
 
 permissions:
   contents: write
@@ -92,6 +97,7 @@ jobs:
           retention-days: 14
 
       - name: Publish non-secret run pointer on audit branch
+        continue-on-error: true
         env:
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         run: |
