@@ -40,6 +40,7 @@ const vercel = readJson('vercel.json')
 const railway = readJson('railway.json')
 const pkg = readJson('package.json')
 const lock = readJson('package-lock.json')
+const dockerfile = readText('Dockerfile')
 const healthRoutes = readText('backend/routes/health.js')
 const readinessTransform = readText('scripts/source-materialization/apply-readiness-deployment.mjs')
 
@@ -93,6 +94,14 @@ assert(
   byKey(indexHeaderBlock?.headers).get('cache-control') === 'no-cache, no-store, must-revalidate',
   'index.html must stay no-store so deploy/promote rollouts are not masked by cache',
 )
+
+// The Docker runtime intentionally contains the already-materialized product, not
+// the build-only scripts directory. `npm start` is therefore unsafe in that image:
+// npm would execute package.json's `prestart` materializer and immediately fail on
+// a missing scripts/materialize-production-source.mjs. Railway must invoke the
+// same direct command declared by the Dockerfile CMD.
+assert(railway?.deploy?.startCommand === 'node backend/start.js', 'Railway must start the materialized runtime directly; npm start would invoke a build-only prestart script')
+assert(dockerfile.includes('CMD ["node", "backend/start.js"]'), 'Dockerfile CMD must start backend/start.js directly')
 
 // Railway must promote a technically healthy container before the product-level
 // mission gate can run against that exact build. Pointing the platform healthcheck
