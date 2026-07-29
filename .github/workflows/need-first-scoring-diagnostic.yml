@@ -1,0 +1,59 @@
+name: need-first-scoring-diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/need-first-scoring-diagnostic.yml'
+      - 'scripts/production-audit/profile-signal-diagnostic.mjs'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: need-first-scoring-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    name: Diagnose production match inputs (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-audit
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run read-only diagnostic
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+        run: node scripts/production-audit/profile-signal-diagnostic.mjs
+
+      - name: Upload sanitized diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: need-first-scoring-diagnostic
+          path: profile-scoring-diagnostic.json
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Publish run address to the diagnostic PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/issues/1033/comments" \
+            -f body="need-first-scoring-diagnostic completed on main. Run ID: ${GITHUB_RUN_ID}. Artifact: need-first-scoring-diagnostic. Commit: ${GITHUB_SHA}."
