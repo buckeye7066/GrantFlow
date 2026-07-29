@@ -17,5 +17,5 @@ test('Vercel production rewrites are host-gated and previews fail closed', () =>
     rule.source === '/grantflow/api/:path*' &&
     rule.destination === '/api/preview-backend-disabled',
   ))
-  assert.equal(config.installCommand, 'npm ci --include=optional')
+  assert.equal(config.installCommand, 'npm ci --include=dev --include=optional')
 })
