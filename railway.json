@@ -1,15 +1,15 @@
 {
-    "$schema": "https://railway.com/railway.schema.json",
-    "build": {
-          "builder": "DOCKERFILE",
-          "dockerfilePath": "Dockerfile"
-    },
-    "deploy": {
-          "startCommand": "npm start",
-          "healthcheckPath": "/readyz",
-          "healthcheckTimeout": 300,
-          "cronSchedule": null,
-          "restartPolicyType": "ALWAYS",
-          "restartPolicyMaxRetries": 10
-    }
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  },
+  "deploy": {
+    "startCommand": "npm start",
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 300,
+    "cronSchedule": null,
+    "restartPolicyType": "ALWAYS",
+    "restartPolicyMaxRetries": 10
+  }
 }
