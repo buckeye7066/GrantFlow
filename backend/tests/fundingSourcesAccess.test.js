@@ -12,7 +12,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { userMayAccessProfile } from '../routes/fundingSources.js'
+import fs from 'node:fs'
+import {
+  isFundingSourcesReadOnlyAudit,
+  userMayAccessProfile,
+} from '../routes/fundingSources.js'
 
 const PROFILE = 'profile-hollie-knox'
 const OTHER = '6b3c75ec-dc56-46f9-b380-394172688175'
@@ -29,6 +33,7 @@ function makeReq({
   grantedByEmail = [],
   userId = 'u-audit',
   email = 'a@b.test',
+  headers = {},
 } = {}) {
   const db = {
     prepare(sql) {
@@ -57,7 +62,7 @@ function makeReq({
   }
   const ctx = { isAdmin }
   if (accessibleProfileIds !== undefined) ctx.accessibleProfileIds = accessibleProfileIds
-  return { db, ctx, user: { id: userId, email } }
+  return { db, ctx, headers, user: { id: userId, email } }
 }
 
 describe('funding-sources profile access gate', () => {
@@ -96,5 +101,31 @@ describe('funding-sources profile access gate', () => {
     const set = new Set([PROFILE])
     expect(Array.isArray(set)).toBe(false)
     expect(set.has(PROFILE)).toBe(true)
+  })
+})
+
+describe('funding-sources read-only audit mode', () => {
+  it('is enabled only for a resolved admin plus the explicit audit header', () => {
+    expect(isFundingSourcesReadOnlyAudit(makeReq({
+      isAdmin: true,
+      headers: { 'x-grantflow-audit-read-only': 'true' },
+    }))).toBe(true)
+
+    expect(isFundingSourcesReadOnlyAudit(makeReq({
+      isAdmin: false,
+      headers: { 'x-grantflow-audit-read-only': 'true' },
+    }))).toBe(false)
+
+    expect(isFundingSourcesReadOnlyAudit(makeReq({
+      isAdmin: true,
+      headers: {},
+    }))).toBe(false)
+  })
+
+  it('pins both write-capable reconciliation calls behind the read-only guard', () => {
+    const source = fs.readFileSync('backend/routes/fundingSources.js', 'utf8')
+    expect(source).toContain('if (!readOnlyAudit) await ensurePipelineDismissalsSchema(req.db)')
+    expect(source).toMatch(/if \(!readOnlyAudit\) \{[\s\S]*reconcileNeedFirstProfileMatches/)
+    expect(source).toContain('read_only_audit: readOnlyAudit')
   })
 })
