@@ -2,19 +2,24 @@
 //
 // Compatibility facade for Crawler OS callers.
 //
-// Doctrine rule: backend/services/matchEngine.js is the only place allowed to
-// make ACCEPT / REVIEW / REJECT decisions. Crawler OS still persists its own
-// profile_opportunity_matches rows and uses lower-case OS decision tokens, so
-// this module adapts the OS thesis/opportunity shapes into the canonical engine
-// and maps the canonical output back to the OS storage contract.
+// Doctrine rule: backend/services/matchEngine.js remains the canonical source for
+// normalization, evidence, eligibility, geography, and confidence. The need-first
+// adapter then enforces the owner-facing product rule that a direct source must
+// address a profile's actual funding purpose. Crawler OS maps the result back to
+// its lower-case storage contract.
 
 import {
   computeMatchDecision as computeCanonicalMatchDecision,
   MATCHER_VERSION,
 } from '../services/matchEngine.js';
+import {
+  applyNeedFirstScoring,
+  NEED_FIRST_SCORING_VERSION,
+} from '../services/matching/needFirstScoringAdapter.js';
 import { MATCH_DECISION, OPPORTUNITY_KIND } from './contract.js';
 
 export { MATCHER_VERSION };
+export const SCORING_POLICY_VERSION = NEED_FIRST_SCORING_VERSION;
 
 export const WEIGHTS = Object.freeze({
   canonical_match_engine: 100,
@@ -50,15 +55,9 @@ const APPLICANT_TYPE_TO_CANONICAL_ALLOWED = Object.freeze({
   individual: ['individual'],
 });
 
-// OPPORTUNITY-side applicant-type → allowed entity types. This map must be
-// RESTRICTIVE, unlike the profile-side map above: profile-side, "a veteran IS
-// an individual" correctly widens what a veteran can apply to; opportunity-side
-// the same expansion means "a veterans-only program allows any individual" —
-// which is how DOL TAP / Boots to Business surfaced as ACCEPT for an 18-year-old
-// non-military student. Military-affiliation buckets all collapse to 'veteran'
-// so the normalizer's requiresVeteran gate can fire; population buckets that
-// merely DESCRIBE the audience (senior, caregiver) stay reachable as
-// individuals — relevance is the scorer's job, eligibility is this map's.
+// Opportunity-side applicant-type mapping is deliberately restrictive. Profile
+// types may widen to their parent entity type, but a veterans-only opportunity
+// must never widen to every individual.
 const OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED = Object.freeze({
   vfd: ['nonprofit', 'organization'],
   church: ['nonprofit', 'organization'],
@@ -82,23 +81,9 @@ const OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED = Object.freeze({
 });
 
 /**
- * Does this (opportunity, decision) pair belong in a run's recommendation list?
- *
- * THE single admission rule — both producers (pipeline.js registry lane and
- * webLane.js) must consult it, so "recommended" cannot drift apart from what a
- * decision means.
- *
- * "Recommended" and "strong match" are deliberately NOT the same bit. A grant
- * row earns its place by scoring ACCEPT. A DIRECTORY locator is admitted at
- * REVIEW: it is worth showing (it is often the only route to hyperlocal help)
- * but is a pointer, not an award, so computeMatchDecision never lets it claim
- * ACCEPT. Conflating the two forced a choice between Amy's false_positive
- * (locators ACCEPTing as strong matches) and hyperlocal_recall_miss (locators
- * dropped from the list entirely) — they were the same defect from both ends.
- *
- * @param {object} opportunity Crawler OS canonical Opportunity
- * @param {string} decision    crawler decision ('accept' | 'review' | 'reject')
- * @returns {boolean}
+ * Does this pair belong in a run's recommendation list?
+ * Direct funding requires ACCEPT. A directory locator is separately reachable
+ * at REVIEW because it is a place to search, not an award.
  */
 export function isRecommendable(opportunity, decision) {
   if (decision === MATCH_DECISION.ACCEPT) return true;
@@ -107,65 +92,48 @@ export function isRecommendable(opportunity, decision) {
 }
 
 /**
- * Score an OS-normalized opportunity against one OS thesis using the canonical
- * GrantFlow matcher.
- *
- * @param {object} opportunity Crawler OS canonical Opportunity
- * @param {object} thesis      profileIntelligence.buildThesis output
- * @param {object} [opts]
- * @returns {{ profile_id:string|null, opportunity_id:string, match_score:number,
- *   decision:string, match_explain:object }}
+ * Score an OS-normalized opportunity against one thesis.
  */
 export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
-  // FULL-CONTEXT scoring (2026-07-27): when the caller supplies the REAL
-  // profiles row (runProfileDiscoveryLive attaches it for the PRIMARY
-  // profile), score with it — the exact inputs the funding-sources read path
-  // uses — so stored match rows and live route recomputes can never disagree.
-  // The thesis stub remains the fallback for cross-match theses, whose thin
-  // inventory the canonical engine now caps at the topical bound
-  // (MIN_CALIBRATED_INVENTORY) instead of minting "9 of 6 data points — 83%".
   const profile = opts.profileRow ?? thesisToCanonicalProfile(thesis, opts);
   const opp = opportunityToCanonicalOpportunity(opportunity);
-  const canonical = computeCanonicalMatchDecision(profile, opp, {
-    profileSections: opts.profileSections ?? opts.sections ?? null,
-    signals: opts.signals ?? null,
+  const sections = opts.profileSections ?? opts.sections ?? null;
+  const signals = opts.signals ?? null;
+
+  const canonicalBase = computeCanonicalMatchDecision(profile, opp, {
+    profileSections: sections,
+    signals,
     preferenceSignals: opts.preferenceSignals,
   });
+  const canonical = applyNeedFirstScoring({
+    canonical: canonicalBase,
+    profileContext: {
+      profile,
+      sections: sections ?? {},
+      signals,
+      profileNorm: opts.profileNorm ?? null,
+    },
+    opportunity: opp,
+  });
 
-  const score = Number.isFinite(Number(canonical?.score)) ? Math.round(Number(canonical.score)) : 0;
+  const score = Number.isFinite(Number(canonical?.score))
+    ? Math.round(Number(canonical.score))
+    : 0;
   let decision = toCrawlerDecision(canonical?.decision);
   const warnings = collectWarnings(canonical);
-  // A PROGRAM/listing row with no direct apply_url cannot be applied to as-is:
-  // the reality gate stores such rows for REVIEW, and the match decision must
-  // not out-promote the row's own lifecycle — however strong the topical fit,
-  // a human (or the URL-rescue lane) has to produce an application target
-  // before this can be an apply-now ACCEPT.
-  //
-  // DIRECTORY locators are exempt: a locator's contract IS its info link —
-  // every directory adapter sets apply_url null BY DESIGN (honesty rule: a
-  // pointer, not an application). Demoting them here locked the whole locator
-  // fleet (county_city, 211, state portals, disease-support) out of the
-  // recommendation list from #886 onward — the 07-08 county lane shipped
-  // structurally unreachable (Amy hyperlocal_recall_miss ×50/day).
+
+  // A program/listing with no direct apply target cannot be an apply-now ACCEPT.
+  // Directory locators are exempt because their contract is the information link.
   const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
   const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
-  if (!hasApplyUrl && !isDirectoryLocator && decision === 'accept') {
-    decision = 'review';
+  if (!hasApplyUrl && !isDirectoryLocator && decision === MATCH_DECISION.ACCEPT) {
+    decision = MATCH_DECISION.REVIEW;
     warnings.push('no direct application URL — strong fit held at REVIEW until an apply target is known');
   }
 
-  // A DIRECTORY locator is a POINTER, never a strong match: it promises a place
-  // to look, not an award, and carries no per-award amount by design. Labelling
-  // one ACCEPT asserts "eligibility and location check out" about a row that
-  // states neither — the generic/directory false-positive class (Amy ×56).
-  //
-  // This does NOT hide locators. `isRecommendable()` admits a locator to the
-  // recommendation list at REVIEW, so the county/211/state-portal/disease-support
-  // fleet stays reachable (the #886 hyperlocal regression came from demoting
-  // locators while recommendations still required ACCEPT — the two must move
-  // together, which is why the demotion lives beside the admission rule).
-  if (isDirectoryLocator && decision === 'accept') {
-    decision = 'review';
+  // A directory is a pointer, never direct funding.
+  if (isDirectoryLocator && decision === MATCH_DECISION.ACCEPT) {
+    decision = MATCH_DECISION.REVIEW;
     warnings.push('directory locator surfaced as a pointer to look through, not a strong match');
   }
 
@@ -178,16 +146,19 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
       matched_profile_type: Boolean(canonical?.match_explain?.matchedSignals?.includes?.('applicant_type')),
       matched_location: describeLocationMatch(canonical),
       eligibility_fit: canonical?.eligible ?? 'maybe',
-      why: canonical?.explanation ?? `Canonical ${MATCHER_VERSION} decision: ${String(canonical?.decision ?? 'REVIEW')}`,
+      why: canonical?.explanation ?? `Canonical ${MATCHER_VERSION} / ${NEED_FIRST_SCORING_VERSION} decision: ${String(canonical?.decision ?? 'REVIEW')}`,
       warnings,
       matched_needs: canonical?.matchedNeeds ?? [],
       matched_profile_facts: canonical?.matched_profile_facts ?? [],
       missing_eligibility_fields: canonical?.missingEligibilityFields ?? [],
+      dataPointEvidence: canonical?.match_explain?.dataPointEvidence ?? {},
       score_breakdown: canonical?.match_explain?.scoreBreakdown ?? canonical?.match_explain?.score_breakdown ?? {},
+      need_first_policy: canonical?.match_explain?.needFirstPolicy ?? null,
+      scoring_policy_version: NEED_FIRST_SCORING_VERSION,
       canonical_decision: canonical?.decision ?? 'REVIEW',
       canonical_score: score,
       matcher_version: canonical?.matcherVersion ?? MATCHER_VERSION,
-      evaluated_at: canonical?.evaluatedAt ?? null,
+      evaluated_at: canonical?.evaluatedAt ?? new Date().toISOString(),
     },
   };
 }
@@ -208,9 +179,6 @@ function thesisToCanonicalProfile(thesis = {}, opts = {}) {
     type: profileType,
     applicant_types: applicantTypes,
     applicantTypes: new Set(uniqueStrings([profileType, ...applicantTypes, ...canonicalApplicantTypes])),
-    // Structured eligibility facts carried on the thesis (the OS path passes
-    // no sections): the engine's age-contradiction and foster-youth gates
-    // read profileNorm.age / hasFosterIndicator.
     age: Number.isFinite(Number(thesis.age)) ? Number(thesis.age) : null,
     foster_youth: thesis.has_foster_indicator === true,
     needs: uniqueStrings(thesis.needs),
@@ -234,10 +202,10 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
   const needs = uniqueStrings(opportunity.need_categories);
   const geography = opportunity.geography ?? {};
   const states = uniqueStrings(geography.states);
-  const isNational = Boolean(geography.national) || states.some((s) => /^national|nationwide$/i.test(s));
+  const isNational = Boolean(geography.national) || states.some((state) => /^national|nationwide$/i.test(state));
   const description = [
     opportunity.summary,
-    applicantTypes.filter((x) => x !== '*').length
+    applicantTypes.filter((value) => value !== '*').length
       ? `Eligible applicants: ${uniqueStrings([...applicantTypes, ...allowedTypes]).join(', ')}`
       : '',
     needs.length ? `Funding needs: ${needs.join(', ')}` : '',
@@ -282,19 +250,14 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
     source_url: url,
     url,
     type: isDirectory ? 'DIRECTORY' : (opportunity.kind ?? null),
+    opportunity_kind: isDirectory ? 'DIRECTORY' : (opportunity.kind ?? null),
     opportunity_type: isDirectory ? 'directory' : 'grant',
+    funding_type: opportunity.funding_type ?? null,
     source: opportunity.source_id ?? null,
     record_origin: 'crawler_os',
     trust_tier: opportunity.trust_tier ?? null,
     reality_status: opportunity.reality_status ?? null,
     verification: opportunity.verification ?? null,
-    // Page-fact provenance (Phase 0.1) — carried through so downstream consumers
-    // CAN read it, without changing any score. NOTHING populates these yet, so
-    // for every existing opportunity they are null: `eligibility_text` is a
-    // Boolean-filtered input to the canonical engine's eligibility-completeness
-    // CONFIDENCE fallback, and null behaves exactly as today's absent value.
-    // The DERIVED `eligibility_bullets` above (from applicant types) is left
-    // untouched so scoring is unchanged; the raw scraped bullets ride alongside.
     eligibility_text: opportunity.eligibility_text ?? null,
     page_fact_eligibility_bullets: Array.isArray(opportunity.eligibility_bullets)
       ? opportunity.eligibility_bullets
@@ -309,7 +272,7 @@ function choosePrimaryApplicantType(applicantTypes) {
     'vfd', 'church', 'ministry', 'nonprofit', 'school', 'government',
     'business', 'farm', 'student', 'veteran', 'family', 'individual',
   ];
-  return priority.find((t) => applicantTypes.includes(t)) ?? applicantTypes[0] ?? null;
+  return priority.find((type) => applicantTypes.includes(type)) ?? applicantTypes[0] ?? null;
 }
 
 function expandAllowedEntityTypes(applicantTypes) {
@@ -321,7 +284,6 @@ function expandAllowedEntityTypes(applicantTypes) {
   return uniqueStrings(expanded);
 }
 
-// Opportunity-side (restrictive) counterpart — see OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED.
 function expandOpportunityAllowedTypes(applicantTypes) {
   const expanded = [];
   for (const type of applicantTypes) {
@@ -345,10 +307,10 @@ function collectWarnings(canonical) {
     ...(canonical?.ineligibilityReasons ?? []),
     ...(canonical?.match_explain?.scoreCaps ?? []),
   ]) {
-    const s = String(value ?? '').trim();
-    if (s && !out.includes(s)) out.push(s);
+    const text = String(value ?? '').trim();
+    if (text && !out.includes(text)) out.push(text);
   }
-  if (out.some((s) => /^Opportunity is for .* but profile is /i.test(s))) {
+  if (out.some((text) => /^Opportunity is for .* but profile is /i.test(text))) {
     out.push('Applicant type mismatch');
   }
   return out;
@@ -356,7 +318,7 @@ function collectWarnings(canonical) {
 
 function describeLocationMatch(canonical) {
   const signals = canonical?.match_explain?.matchedSignals ?? [];
-  const geo = signals.find((sig) => String(sig).startsWith('geo:'));
+  const geo = signals.find((signal) => String(signal).startsWith('geo:'));
   if (geo) return String(geo).slice(4);
   const breakdownGeo = canonical?.match_explain?.scoreBreakdown?.geo;
   if (Number.isFinite(Number(breakdownGeo)) && Number(breakdownGeo) > 0) return 'partial';
@@ -366,8 +328,8 @@ function describeLocationMatch(canonical) {
 function uniqueStrings(values = []) {
   const out = [];
   for (const value of Array.isArray(values) ? values : [values]) {
-    const s = String(value ?? '').trim().toLowerCase();
-    if (s && !out.includes(s)) out.push(s);
+    const text = String(value ?? '').trim().toLowerCase();
+    if (text && !out.includes(text)) out.push(text);
   }
   return out;
 }
@@ -376,4 +338,9 @@ function stripWildcard(values = []) {
   return values.filter((value) => value !== '*');
 }
 
-export default { computeMatchDecision, WEIGHTS, MATCHER_VERSION };
+export default {
+  computeMatchDecision,
+  WEIGHTS,
+  MATCHER_VERSION,
+  SCORING_POLICY_VERSION,
+};
