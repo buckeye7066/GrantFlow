@@ -19,6 +19,7 @@ const signatures = Object.freeze([
   ['backend/routes/health.js', "reason: 'mission_gate_failed'"],
   ['backend/server.js', 'ensureRuntimeSecretKeyMaterial'],
   ['backend/services/linkVerificationService.js', 'stats.quarantined'],
+  ['backend/services/linkVerificationService.js', 'proof-based startup quarantine'],
   ['scripts/check-deployment-config.mjs', 'hasProductionHostGuard'],
   ['src/config/env.js', 'VITE_PREVIEW_API_URL'],
 ])
@@ -78,6 +79,7 @@ const modules = [
   'scripts/source-materialization/prepare.mjs',
   'scripts/source-materialization/apply-code.mjs',
   'scripts/source-materialization/apply-resource-reconciliation.mjs',
+  'scripts/source-materialization/apply-proof-based-quarantine.mjs',
   'scripts/source-materialization/apply-readiness-deployment.mjs',
   'scripts/source-materialization/apply-runtime-secret-wiring.mjs',
   'scripts/source-materialization/apply-test-updates.mjs',
