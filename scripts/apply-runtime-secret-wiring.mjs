@@ -106,7 +106,7 @@ export function checkRuntimeSecretKeySecurity({ env = process.env } = {}) {
       return {
         id: 'runtime_secret_key_security',
         level: 'info',
-        detail: `Dedicated runtime-secret key is configured via ${posture.dedicated_key_source}.`,
+        detail: 'Dedicated runtime-secret key is configured via ' + posture.dedicated_key_source + '.',
         ok: true,
       }
     }
@@ -120,7 +120,7 @@ export function checkRuntimeSecretKeySecurity({ env = process.env } = {}) {
     return {
       id: 'runtime_secret_key_security',
       level: 'error',
-      detail: `Runtime-secret key posture could not be verified: ${error?.message || String(error)}`,
+      detail: 'Runtime-secret key posture could not be verified: ' + (error?.message || String(error)),
       ok: false,
     }
   }
