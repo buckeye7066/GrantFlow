@@ -3,11 +3,10 @@ name: need-first-scoring-diagnostic
 on:
   push:
     branches:
-      - agent/need-first-scoring-20260729
-  pull_request:
-    branches:
       - main
-    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/need-first-scoring-diagnostic.yml'
+      - 'scripts/production-audit/profile-signal-diagnostic.mjs'
 
 permissions:
   contents: read
@@ -19,7 +18,6 @@ concurrency:
 jobs:
   diagnose:
     name: Diagnose production match inputs (read-only)
-    if: github.event_name == 'push' || github.head_ref == 'agent/need-first-scoring-20260729'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production-audit
@@ -27,7 +25,7 @@ jobs:
       PROFILE_IDS: c4a92724-9cee-416f-ba30-e91b9b5cd885,6b3c75ec-dc56-46f9-b380-394172688175
       DIAGNOSTIC_OUT: profile-scoring-diagnostic.json
     steps:
-      - name: Check out branch
+      - name: Check out main
         uses: actions/checkout@v4
         with:
           persist-credentials: false
