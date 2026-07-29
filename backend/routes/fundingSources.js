@@ -31,6 +31,20 @@ import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:funding-sources')
 const router = express.Router()
+const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on'])
+
+/**
+ * The production audit must compare displayed output with persisted score truth
+ * without changing either side during the comparison. Only an already-resolved
+ * DB-backed admin context may request this mode; an ordinary user cannot turn a
+ * GET into a reconciliation bypass by supplying a header.
+ */
+export function isFundingSourcesReadOnlyAudit(req) {
+  const requested = String(req?.headers?.['x-grantflow-audit-read-only'] || '')
+    .trim()
+    .toLowerCase()
+  return req?.ctx?.isAdmin === true && TRUE_VALUES.has(requested)
+}
 
 /**
  * Global access is authorized only by the canonical request context. A null
@@ -80,6 +94,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
   const minScore = Number.isFinite(requestedMinScore)
     ? Math.max(0, Math.min(100, requestedMinScore))
     : DEFAULT_MIN_SCORE
+  const readOnlyAudit = isFundingSourcesReadOnlyAudit(req)
 
   try {
     const loadedContext = await loadProfileContext(req.db, profileId)
@@ -89,25 +104,29 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     // normalization so presentation and discovery use the same facts.
     profileContext.profileNorm = loadedContext.profileNorm ?? null
 
-    await ensurePipelineDismissalsSchema(req.db)
+    // The production audit deliberately performs SELECT-only comparison. In
+    // ordinary product traffic, keep the existing self-heal + reconciliation.
+    if (!readOnlyAudit) await ensurePipelineDismissalsSchema(req.db)
 
     // Persisted rows converge in bounded slices, but a reconciliation failure
     // never empties the user's list. restorePersistedMatchTruth below applies the
     // same policy at read time, so owner-facing correctness does not depend on a
     // successful write-back during this request.
     let reconciliation = emptyReconciliation()
-    try {
-      reconciliation = await reconcileNeedFirstProfileMatches(req.db, {
-        profileId,
-        profileContext,
-        limit: 100,
-      })
-    } catch (error) {
-      reconciliation.failures.push({ error: error?.message || String(error) })
-      log.warn('funding_sources.need_first_reconcile_failed', {
-        profileId,
-        error: error?.message || String(error),
-      })
+    if (!readOnlyAudit) {
+      try {
+        reconciliation = await reconcileNeedFirstProfileMatches(req.db, {
+          profileId,
+          profileContext,
+          limit: 100,
+        })
+      } catch (error) {
+        reconciliation.failures.push({ error: error?.message || String(error) })
+        log.warn('funding_sources.need_first_reconcile_failed', {
+          profileId,
+          error: error?.message || String(error),
+        })
+      }
     }
 
     const rows = await req.db.prepare(
@@ -191,6 +210,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
 
     const qualified = sources.filter((source) => qualifiesForDisplay(source, minScore))
     const presented = partitionFundingSources(qualified)
+    res.set('Cache-Control', 'no-store')
     return res.json({
       profile_id: profileId,
       engine: 'crawler-os',
@@ -205,6 +225,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         demoted: reconciliation.demoted,
         score_lowered: reconciliation.score_lowered,
         failures: reconciliation.failures?.length ?? 0,
+        read_only_audit: readOnlyAudit,
       },
     })
   } catch (error) {
@@ -219,6 +240,9 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       resource_count: 0,
       scoring_policy_version: NEED_FIRST_SCORING_VERSION,
       note: 'funding sources unavailable',
+      need_first_reconciliation: {
+        read_only_audit: readOnlyAudit,
+      },
     })
   }
 })
