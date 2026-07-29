@@ -7,6 +7,7 @@ import {
   enforceNeedFirstDecision,
   evaluateNeedFirstMatchPolicy,
 } from './needFirstMatchPolicy.js'
+import { evaluateExclusivePurposePolicy } from './exclusivePurposePolicy.js'
 
 export const NEED_FIRST_SCORING_VERSION = 'need_first_v1'
 
@@ -170,6 +171,52 @@ function boundedFitScore(canonical = {}) {
   }
 }
 
+function mergePolicies(basePolicy, exclusivePolicy) {
+  const hardMismatches = [
+    ...(Array.isArray(basePolicy?.hardMismatches) ? basePolicy.hardMismatches : []),
+    ...(Array.isArray(exclusivePolicy?.hardMismatches) ? exclusivePolicy.hardMismatches : []),
+  ]
+  const purposeReasons = [
+    ...(Array.isArray(basePolicy?.purposeReasons) ? basePolicy.purposeReasons : []),
+    ...(Array.isArray(exclusivePolicy?.purposeReasons) ? exclusivePolicy.purposeReasons : []),
+  ]
+  const reasons = [
+    ...(Array.isArray(basePolicy?.reasons) ? basePolicy.reasons : []),
+    ...hardMismatches,
+  ]
+  const hardMismatch = Boolean(basePolicy?.hardMismatch || exclusivePolicy?.hardMismatch)
+  const purposeAnchor = Boolean(basePolicy?.purposeAnchor || exclusivePolicy?.purposeAnchor)
+  const resource = Boolean(basePolicy?.resource)
+  const reviewOnly = !hardMismatch && Boolean(basePolicy?.reviewOnly)
+  const decision = hardMismatch
+    ? 'REJECT'
+    : !purposeAnchor && !resource
+      ? 'REJECT'
+      : reviewOnly
+        ? 'REVIEW'
+        : basePolicy?.decision ?? null
+  const scoreCap = hardMismatch
+    ? SCORE_FLOOR
+    : basePolicy?.scoreCap ?? null
+
+  return {
+    ...basePolicy,
+    resource,
+    purposeAnchor,
+    reviewOnly,
+    hardMismatch,
+    scoreCap,
+    decision,
+    reasons: [...new Set(reasons.filter(Boolean))],
+    purposeReasons: [...new Set(purposeReasons.filter(Boolean))],
+    hardMismatches: [...new Set(hardMismatches.filter(Boolean))],
+    diagnostics: {
+      ...(basePolicy?.diagnostics ?? {}),
+      exclusive_rules: exclusivePolicy?.matchedRules ?? [],
+    },
+  }
+}
+
 /**
  * Apply the profile-purpose policy to one canonical match result.
  *
@@ -196,7 +243,7 @@ export function applyNeedFirstScoring({
     profileContext?.normalized ??
     derivePolicyProfileNorm(profileContext)
 
-  const policy = evaluateNeedFirstMatchPolicy({
+  const basePolicy = evaluateNeedFirstMatchPolicy({
     profileContext,
     profileNorm,
     opportunity,
@@ -209,6 +256,12 @@ export function applyNeedFirstScoring({
     },
     matchedNeeds,
   })
+  const exclusivePolicy = evaluateExclusivePurposePolicy({
+    profileContext,
+    profileNorm,
+    opportunity,
+  })
+  const policy = mergePolicies(basePolicy, exclusivePolicy)
 
   const fit = boundedFitScore(canonical)
   let score = fit.score
