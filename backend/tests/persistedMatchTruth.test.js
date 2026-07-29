@@ -106,14 +106,15 @@ describe('owner-facing persisted match truth', () => {
     expect(result[0].match_score).toBe(20)
   })
 
-  it('pins the funding-source route to the persisted-truth restoration boundary', () => {
+  it('pins the funding-source route to the profile-aware persisted-truth boundary', () => {
     const routeSource = fs.readFileSync(
       path.join(HERE, '..', 'routes', 'fundingSources.js'),
       'utf8',
     )
-    expect(routeSource).toContain('restorePersistedMatchTruth(canonical.kept, mapped)')
+    expect(routeSource).toContain('restorePersistedMatchTruth(canonical.kept, mapped, {')
+    expect(routeSource).toContain('profileContext,')
     expect(routeSource).toContain('pom.match_explain_json')
     expect(routeSource).toContain('pom.matcher_version')
-    expect(routeSource).toContain('isFundingResource(r)')
+    expect(routeSource).toContain('isFundingResource(row)')
   })
 })
