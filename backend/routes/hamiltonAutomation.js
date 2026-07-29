@@ -35,6 +35,7 @@ import {
   listTaskEvents,
   listMissingInfo,
 } from '../services/hamilton/applicationTaskStore.js'
+import { listScopedHamiltonTasks } from '../services/hamilton/hamiltonTaskListing.js'
 import {
   automateSelected,
   automateSingleSource,
@@ -348,21 +349,24 @@ router.get('/tasks', async (req, res) => {
   const profileIdParam = req.query.profile_id || req.query.profileId || null
 
   try {
-    let tasks
-    if (req.ctx?.isAdmin === true && profileIdParam) {
-      tasks = await listApplicationTasks(req.db, { profileId: String(profileIdParam), status, limit: 200 })
-    } else if (req.ctx?.isAdmin === true) {
-      tasks = await listApplicationTasks(req.db, { status, limit: 200 })
-    } else {
-      const accessible = await getAccessibleProfileIds(req.db, user)
-      if (!accessible || accessible.size === 0) return res.json({ ok: true, tasks: [] })
-      const all = []
-      for (const pid of accessible) {
-        const some = await listApplicationTasks(req.db, { profileId: pid, status, limit: 200 })
-        all.push(...some)
-      }
-      tasks = all
+    const accessibleProfileIds = req.ctx?.isAdmin === true
+      ? null
+      : await getAccessibleProfileIds(req.db, user)
+
+    const scoped = await listScopedHamiltonTasks({
+      isAdmin: req.ctx?.isAdmin === true,
+      requestedProfileId: profileIdParam,
+      accessibleProfileIds,
+      status,
+      limit: 200,
+      listTasks: (opts) => listApplicationTasks(req.db, opts),
+    })
+
+    if (scoped.forbidden) {
+      return res.status(403).json({ error: 'forbidden' })
     }
+
+    let tasks = scoped.tasks
     if (automationType) {
       tasks = (tasks || []).filter((t) => t.automation_type === automationType)
     }

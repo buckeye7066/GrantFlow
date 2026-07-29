@@ -18,7 +18,7 @@ import { generateScenarios, planVariantCounts, CATEGORY_IDS } from '../services/
 import { evaluateDiscovery, buildAnyaHandoff } from '../services/amy/amyReport.js'
 import { ORIGIN_CREATED_BY, METADATA_SECTION_KEY } from '../services/amy/amyConstants.js'
 import { startAmyScheduler, stopAmyScheduler, getAmyConfig } from '../services/amy/amyScheduler.js'
-import { ACCEPT_SCORE, DISCOVERY_MIN_SCORE_FLOOR } from '../config/matchThresholds.js'
+import { ACCEPT_SCORE, DISCOVERY_MIN_SCORE_FLOOR, REVIEW_SCORE } from '../config/matchThresholds.js'
 
 function createDb() {
   const db = new Database(':memory:')
@@ -459,11 +459,15 @@ describe('Amy training run (end-to-end, offline discovery)', () => {
 function evalFix({ category = 'veteran', status = 'ok', scores = [], generics = [], sourcesFailed = 0 } = {}) {
   const candidates = scores.map((s, i) => ({
     score: s,
-    decision: s >= 70 ? 'ACCEPT' : s >= 35 ? 'REVIEW' : 'REJECT',
+    decision: s >= ACCEPT_SCORE ? 'ACCEPT' : s >= REVIEW_SCORE ? 'REVIEW' : 'REJECT',
     title: generics[i] ? 'Resource Directory' : 'Specific Grant',
     generic: Boolean(generics[i]),
+    genericOnly: Boolean(generics[i]),
+    locator: false,
   }))
-  const false_positives = candidates.filter((c) => c.generic && (c.decision === 'ACCEPT' || c.score >= 70)).length
+  const false_positives = candidates.filter(
+    (c) => c.genericOnly && !c.locator && c.decision === 'ACCEPT',
+  ).length
   return { scenario_id: `${category}-v1`, category, status, candidates, false_positives, sources_failed: sourcesFailed, findings: [] }
 }
 
@@ -490,14 +494,18 @@ describe('crawlerMetrics', () => {
 
 describe('crawlerTuner', () => {
   it('proposes a bounded floor RAISE when the cohort proves it cuts false positives', () => {
-    // Every profile has a real 82 match plus a generic/directory 78 accepted as
-    // strong — raising the floor to 80 keeps coverage and removes the junk.
-    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [82, 78], generics: [false, true] }))
-    const current = cohortMetricsAtFloor(evals, 75)
+    // Every profile has a real 12 match plus a generic-only 11 ACCEPT.
+    // Raising the data-point floor from 8 to 12 keeps coverage and removes junk.
+    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [12, 11], generics: [false, true] }))
+    const current = cohortMetricsAtFloor(evals, DISCOVERY_MIN_SCORE_FLOOR)
     const { best } = sweepFloors(evals)
-    const decision = decideFloorChange({ currentFloor: 75, best, currentMetrics: current })
+    const decision = decideFloorChange({
+      currentFloor: DISCOVERY_MIN_SCORE_FLOOR,
+      best,
+      currentMetrics: current,
+    })
     expect(decision.change).toBe(true)
-    expect(decision.to).toBe(80)
+    expect(decision.to).toBe(12)
   })
 
   it('SAFETY: never proposes dropping the floor below the documented pipeline bar (data-point scale)', () => {
@@ -612,9 +620,9 @@ describe('amyReportStore', () => {
 describe('Amy improvement loop (end-to-end, injected)', () => {
   it('measures, tunes (validated), runs chain, persists, and cleans only crawled', async () => {
     const db = createDb()
-    // Every profile finds a real 82 match plus a generic/directory 78 accepted
-    // as strong — the cohort PROVES raising the floor to 80 cuts the junk
-    // without losing coverage (the only direction the safety bound allows).
+    // Every profile finds a real 12 match plus a generic-only 11 ACCEPT.
+    // The cohort proves raising the live data-point floor from 8 to 12 cuts the
+    // junk without losing direct-funding coverage.
     const fakeDiscovery = async ({ profileId, floor }) => {
       const t = db.prepare('SELECT primary_type FROM profiles WHERE id=?').get(profileId)
       return {
@@ -622,8 +630,8 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
           run_id: 'r', stored: 2,
           sources: [{ source_id: 'grants_gov', outcome: 'OK', fetched: 5, stored: 2 }],
           recommendations: [
-            { title: 'Specific Grant', match_score: 82, decision: 'ACCEPT' },
-            { title: 'Resource Directory', match_score: 78, decision: 'ACCEPT' },
+            { title: 'Specific Grant', match_score: 12, decision: 'ACCEPT' },
+            { title: 'Resource Directory', match_score: 11, decision: 'ACCEPT' },
           ],
           zero_result: null,
         },
@@ -631,7 +639,7 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
         thesis: { applicant_types: [t?.primary_type || 'x'], needs: ['funding'], location: { state: 'TN' }, min_match_score: floor },
       }
     }
-    const editorState = { value: 75 }
+    const editorState = { value: DISCOVERY_MIN_SCORE_FLOOR }
     const fakeEditor = {
       read: async () => editorState.value,
       apply: async (to) => { const from = editorState.value; editorState.value = to; return { applied: true, from, to, backup_path: 'audit-reports/x.bak.js' } },
@@ -654,11 +662,11 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
 
       expect(out.combined.tuning.change).toBe(true)
       expect(out.combined.tuning.applied.applied).toBe(true)
-      expect(editorState.value).toBe(80)
+      expect(editorState.value).toBe(12)
       expect(pipelineCalled).toBe(true)
       expect(out.combined.chain.sam.run_id).toBe('sam-9')
       expect(out.combined.metrics.before).toBeTruthy()
-      expect(out.combined.metrics.best.floor).toBe(80)
+      expect(out.combined.metrics.best.floor).toBe(12)
       expect(out.crawled_profile_ids.length).toBe(16)
       expect(out.cleanup.deleted).toBe(16)
       expect(out.cleanup.require_crawled).toBe(true)

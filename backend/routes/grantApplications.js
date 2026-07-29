@@ -4,6 +4,7 @@ import {
   requireAuthenticatedUser,
   ensureProfileAccess,
 } from '../utils/accessControl.js'
+import { mapHamiltonStatus } from '../services/hamilton/applicationStatusPresentation.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grantApplications')
@@ -57,17 +58,8 @@ function mapRow(row) {
   }
 }
 
-// Map a Hamilton application_tasks.status to the tracker's status vocabulary.
-function mapHamiltonStatus(taskStatus) {
-  const s = String(taskStatus || '')
-  if (s === 'submitted') return 'submitted'
-  if (s === 'completed' || s === 'completed_draft' || s === 'draft_completed') return 'submitted'
-  if (s === 'cancelled') return 'withdrawn'
-  // Everything else still in flight (queued/analyzing/filling_portal/generating/
-  // waiting_for_review/ready_to_print_mail/ready_to_fax/blocked_*/failed/…) is
-  // an in-progress application from the tracker's point of view.
-  return 'in_progress'
-}
+// Hamilton task status mapping lives in applicationStatusPresentation.js so
+// every tracker uses the same evidence-backed definition of "submitted".
 
 // Pull Hamilton's automated applications (application_tasks) for this caller,
 // shaped like grant_applications so the tracker can show them alongside manual
@@ -102,7 +94,7 @@ async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId,
       opportunity_id: r.opportunity_id ?? null,
       pipeline_grant_id: r.grant_id ?? null,
       user_id: r.user_id,
-      status: mapHamiltonStatus(r.task_status),
+      status: mapHamiltonStatus(r),
       title: r.title ?? null,
       grant_name: r.title ?? (r.funder_name ? `Application — ${r.funder_name}` : 'Untitled application'),
       funder_name: r.funder_name ?? null,

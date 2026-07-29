@@ -11,11 +11,28 @@
  * every tuning change is judged by whether it raises the cohort quality score.
  */
 
-import { ACCEPT_SCORE } from '../../config/matchThresholds.js'
+import {
+  ACCEPT_SCORE,
+  DISCOVERY_MIN_SCORE_FLOOR,
+  STRONG_MATCH_SCORE,
+} from '../../config/matchThresholds.js'
 
 function num(v) {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * The same false-positive rule used by Amy's per-profile finding generator:
+ * generic-only, non-locator, and still certified ACCEPT. A generic directory
+ * is a resource pointer, not a false-positive award; it also does not count as
+ * direct funding coverage below.
+ */
+export function candidateIsFalsePositive(candidate) {
+  const genericOnly = candidate?.genericOnly === true ||
+    ((candidate?.genericOnly === null || candidate?.genericOnly === undefined) && candidate?.generic === true)
+  return genericOnly && candidate?.locator !== true &&
+    String(candidate?.decision || '').toUpperCase() === 'ACCEPT'
 }
 
 /**
@@ -38,12 +55,16 @@ function num(v) {
 export function profileOutcomeAtFloor(evaluation, floor, { scoreKey = 'score' } = {}) {
   const candidates = Array.isArray(evaluation?.candidates) ? evaluation.candidates : []
   const qualified = candidates.filter((c) => num(c?.[scoreKey] ?? c?.score) >= floor)
-  // A "real" qualified match = qualified AND not a generic/directory false-positive.
-  const real = qualified.filter((c) => !c.generic)
-  const falsePositives = qualified.filter((c) => c.generic)
+  // Direct funding coverage excludes locator resources. Locators remain useful
+  // and are not false positives, but a pointer alone must not make a profile
+  // count as funded/covered.
+  const falsePositives = qualified.filter(candidateIsFalsePositive)
+  const real = qualified.filter((c) => c?.locator !== true && !candidateIsFalsePositive(c))
+  const resources = qualified.filter((c) => c?.locator === true)
   return {
     qualified: qualified.length,
     accepted: real.length,
+    resources: resources.length,
     falsePositives: falsePositives.length,
     covered: real.length > 0,
   }
@@ -103,10 +124,14 @@ export function cohortMetricsAtFloor(evaluations, floor, { scoreKey = 'score' } 
  * quality_score (tie-break: higher floor → more precision).
  *
  * @param {Array<object>} evaluations
- * @param {object} [opts] { min=50, max=90, step=5 }
+ * @param {object} [opts] defaults to the current data-point scale
  * @returns {{ sweep: object[], best: object }}
  */
-export function sweepFloors(evaluations, { min = 50, max = 90, step = 5 } = {}) {
+export function sweepFloors(evaluations, {
+  min = DISCOVERY_MIN_SCORE_FLOOR,
+  max = STRONG_MATCH_SCORE + 10,
+  step = 1,
+} = {}) {
   const sweep = []
   for (let f = min; f <= max; f += step) {
     sweep.push(cohortMetricsAtFloor(evaluations, f))
@@ -147,4 +172,4 @@ export function summarizeCohort(evaluations, currentFloor = ACCEPT_SCORE) {
   }
 }
 
-export default { profileOutcomeAtFloor, cohortMetricsAtFloor, sweepFloors, summarizeCohort, FALSE_POSITIVE_PENALTY }
+export default { candidateIsFalsePositive, profileOutcomeAtFloor, cohortMetricsAtFloor, sweepFloors, summarizeCohort, FALSE_POSITIVE_PENALTY }
