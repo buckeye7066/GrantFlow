@@ -89,7 +89,7 @@ export async function repairLegacyPublicAwardClaims(db) {
                   FROM portal_check_results
                  WHERE COALESCE(awards_detected, 0) <> 0
                     OR (results_json IS NOT NULL
-                        AND results_json NOT LIKE '%\"publicPortalHonestyVersion\":1%')`)
+                        AND results_json NOT LIKE '%"publicPortalHonestyVersion":1%')`)
       .all()
   } catch {
     return 0
