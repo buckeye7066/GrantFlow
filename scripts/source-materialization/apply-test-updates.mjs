@@ -66,4 +66,43 @@ replaceOne(
   'single migration owner assertion',
 )
 
+// Vitest workers can reuse a process across files. A neighboring suite that
+// deliberately sets an agent/provider variable must never redefine another
+// suite's documented default. Pin each default-contract test to a clean local
+// environment as well as isolating the top-level test runner.
+replaceOne(
+  'backend/tests/amyAgent.test.js',
+  /      delete process\.env\.AMY_RUN_ON_STARTUP\n      expect\(getAmyConfig\(\)\.enabled\)\.toBe\(true\)/,
+  `      delete process.env.AMY_RUN_ON_STARTUP
+      delete process.env.AMY_DAILY_PROFILE_TARGET
+      expect(getAmyConfig().enabled).toBe(true)`,
+  'Amy default target isolation',
+)
+
+replaceOne(
+  'backend/tests/yanaScheduler.test.js',
+  /beforeEach\(\(\) => \{\n  _resetYanaSchemaCache\(\)\n  __testing__\._resetLock\(\)\n\}\)/,
+  `beforeEach(() => {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('YANA_')) delete process.env[key]
+  }
+  _resetYanaSchemaCache()
+  __testing__._resetLock()
+})`,
+  'Yana scheduler environment isolation',
+)
+
+replaceOne(
+  'backend/tests/hamiltonWeeklyDigest.test.js',
+  /const ENV_KEYS = \['HAMILTON_WEEKLY_DIGEST_DELIVERY', 'HAMILTON_WEEKLY_DIGEST_ENABLED'\]/,
+  `const ENV_KEYS = [
+  'HAMILTON_WEEKLY_DIGEST_DELIVERY',
+  'HAMILTON_WEEKLY_DIGEST_ENABLED',
+  'MICROSOFT_TENANT_ID',
+  'MICROSOFT_CLIENT_ID',
+  'MICROSOFT_CLIENT_SECRET',
+]`,
+  'Hamilton digest provider environment isolation',
+)
+
 console.log('[global-hardening] test contract updates applied')
