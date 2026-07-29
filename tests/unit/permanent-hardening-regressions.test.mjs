@@ -56,13 +56,20 @@ test('hosted test runs cannot inherit production infrastructure, live providers,
   }
 })
 
-test('all Vitest package entry points use the hosted-environment isolation wrapper', () => {
+test('all package and direct release-gate test entry points use the isolation boundary', () => {
   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+  const releaseGates = fs.readFileSync('scripts/release-gates.mjs', 'utf8')
 
   assert.match(pkg.scripts.unit, /run-unit-tests\.mjs/)
   assert.match(pkg.scripts.unit, /run-vitest-isolated\.mjs run/)
   assert.doesNotMatch(pkg.scripts.unit, /npm exec -- vitest/)
   assert.match(pkg.scripts['test:endpoints'], /run-vitest-isolated\.mjs run/)
+
+  assert.match(releaseGates, /function runNodeTests\(/)
+  assert.match(releaseGates, /isolatedTest: true/)
+  assert.match(releaseGates, /scripts\/run-vitest-isolated\.mjs/)
+  assert.doesNotMatch(releaseGates, /await run\('node', \['--test'/)
+  assert.doesNotMatch(releaseGates, /await run\('npx', \['vitest'/)
 })
 
 test('Ohio offline supplement is one canonical official state directory, not a per-ZIP clone', () => {
