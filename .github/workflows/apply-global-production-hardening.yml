@@ -38,7 +38,7 @@ jobs:
       - name: Apply deterministic transformations
         run: |
           set -euo pipefail
-          sed -i 's/npm ci --include=optional/npm ci --include=dev --include=optional/g' scripts/apply-readiness-deployment.mjs
+          node scripts/prepare-global-hardening-run.mjs
           node scripts/apply-code-hardening.mjs
           node scripts/apply-readiness-deployment.mjs
           node --check backend/utils/safeRemoteFetch.js
@@ -72,7 +72,8 @@ jobs:
           git rm -- \
             .github/workflows/apply-global-production-hardening.yml \
             scripts/apply-code-hardening.mjs \
-            scripts/apply-readiness-deployment.mjs
+            scripts/apply-readiness-deployment.mjs \
+            scripts/prepare-global-hardening-run.mjs
 
       - name: Refuse undeclared working-tree changes
         run: |
@@ -98,6 +99,7 @@ jobs:
             '.github/workflows/apply-global-production-hardening.yml',
             'scripts/apply-code-hardening.mjs',
             'scripts/apply-readiness-deployment.mjs',
+            'scripts/prepare-global-hardening-run.mjs',
           ])
           const raw = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' })
           const changed = raw.trim().split('\n').filter(Boolean).map((line) => {
