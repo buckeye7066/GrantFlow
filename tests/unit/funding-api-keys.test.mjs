@@ -7,6 +7,13 @@ import {
   validateFundingApiKeys,
 } from '../../backend/src/config/apiKeys.js'
 
+const SAM_KEY_NAMES = [
+  'SAM_GOV_PUBLIC_API_KEY',
+  'SAM_GOV_API_KEY',
+  'SAM_GOV_KEY',
+  'Sam_gov_key',
+]
+
 test('funding api keys presence never includes values', () => {
   const original = process.env.SIMPLER_GRANTS_API_KEY
   process.env.SIMPLER_GRANTS_API_KEY = 'secret-value-should-not-leak'
@@ -26,15 +33,10 @@ test('funding api keys presence never includes values', () => {
 })
 
 test('validateFundingApiKeys finds missing required keys when enforced', () => {
-  const originals = {
-    SIMPLER_GRANTS_API_KEY: process.env.SIMPLER_GRANTS_API_KEY,
-    SAM_GOV_PUBLIC_API_KEY: process.env.SAM_GOV_PUBLIC_API_KEY,
-    SAM_GOV_API_KEY: process.env.SAM_GOV_API_KEY,
-  }
+  const keyNames = ['SIMPLER_GRANTS_API_KEY', ...SAM_KEY_NAMES]
+  const originals = Object.fromEntries(keyNames.map((key) => [key, process.env[key]]))
 
-  delete process.env.SIMPLER_GRANTS_API_KEY
-  delete process.env.SAM_GOV_PUBLIC_API_KEY
-  delete process.env.SAM_GOV_API_KEY
+  for (const key of keyNames) delete process.env[key]
 
   try {
     const res = validateFundingApiKeys({ enforce: true })
@@ -45,10 +47,9 @@ test('validateFundingApiKeys finds missing required keys when enforced', () => {
       new Set(['SIMPLER_GRANTS_API_KEY', 'SAM_GOV_PUBLIC_API_KEY']),
     )
   } finally {
-    for (const [k, v] of Object.entries(originals)) {
-      if (v == null) delete process.env[k]
-      else process.env[k] = v
+    for (const [key, value] of Object.entries(originals)) {
+      if (value == null) delete process.env[key]
+      else process.env[key] = value
     }
   }
 })
-

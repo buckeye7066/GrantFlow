@@ -16,36 +16,45 @@ jobs:
   analyze:
     name: Analyze JavaScript and TypeScript
     runs-on: ubuntu-latest
-    # Main-branch runs were taking ~15m23s and getting CANCELLED at the old
-    # 15-minute timeout — security scanning was silently dying. PR runs finish
-    # ~13m; 25 gives headroom without letting a hang burn an hour.
     timeout-minutes: 25
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node 20 for baseline enforcement
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           languages: javascript-typescript
           queries: security-extended,security-and-quality
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+        uses: github/codeql-action/autobuild@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
 
       - name: Perform CodeQL Analysis
         id: analyze
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           # This private repo does not currently have GitHub Advanced Security
           # purchased, so Code Scanning uploads fail with a configuration error.
-          # Keep the analysis real and preserve SARIF as a workflow artifact.
+          # Keep the analysis real, retain SARIF, and enforce the measured baseline.
           upload: never
+
+      - name: Block new high-confidence findings
+        if: steps.analyze.outputs.sarif-output != ''
+        run: >-
+          node scripts/check-codeql-baseline.mjs
+          "${{ steps.analyze.outputs.sarif-output }}"
+          .github/codeql-baseline.json
 
       - name: Retain CodeQL SARIF artifact
         if: always() && steps.analyze.outputs.sarif-output != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a147cf0351cc9 # v7.0.1
         with:
           name: codeql-sarif
           path: ${{ steps.analyze.outputs.sarif-output }}
