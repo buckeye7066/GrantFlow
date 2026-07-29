@@ -18,8 +18,12 @@ import {
 } from '../services/matching/fundingSourcePresentation.js'
 import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
 import { reconcileNeedFirstProfileMatches } from '../services/matching/needFirstReconciler.js'
+import {
+  FUNDING_SOURCE_QUERY_CONTRACT,
+  readFundingSourceRows,
+} from '../services/matching/fundingSourceQueries.js'
 import { NEED_FIRST_SCORING_VERSION } from '../services/matching/needFirstScoringAdapter.js'
-import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
+import { qualifiesForDisplay } from '../config/matchSurfacing.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
   ensurePipelineDismissalsSchema,
@@ -81,6 +85,30 @@ function emptyReconciliation() {
   }
 }
 
+/**
+ * Classify the failure without reflecting SQL, column names, or stack traces to
+ * the client. The old route converted every failure into HTTP 200 + empty data,
+ * making a broken query indistinguishable from a real zero-result profile.
+ */
+export function classifyFundingSourcesError(error) {
+  const code = String(error?.code || '')
+  const message = String(error?.message || error || '')
+
+  if (/^Profile\s+.+\s+not found$/i.test(message)) {
+    return { status: 404, error: 'PROFILE_NOT_FOUND', failureClass: 'profile_not_found' }
+  }
+  if (code === '42703' || /no such column|column\s+.+\s+does not exist/i.test(message)) {
+    return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'schema_projection_drift' }
+  }
+  if (code === '42P01' || /no such table|relation\s+.+\s+does not exist/i.test(message)) {
+    return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'schema_table_missing' }
+  }
+  if (code === '57014' || /statement timeout|database is locked|SQLITE_BUSY/i.test(message)) {
+    return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'database_busy' }
+  }
+  return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'internal_failure' }
+}
+
 router.get('/profiles/:id/funding-sources', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
@@ -129,30 +157,8 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       }
     }
 
-    const rows = await req.db.prepare(
-      `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.summary,
-              fo.eligibility, fo.eligibility_text, fo.eligibility_criteria, fo.restrictions,
-              fo.deadline, fo.deadline_type, fo.amount_min, fo.amount_max,
-              fo.state, fo.is_national, fo.application_url, fo.apply_url,
-              fo.source_url, fo.source, fo.source_id, fo.record_origin,
-              fo.opportunity_kind, fo.opportunity_type, fo.type, fo.funding_type,
-              fo.source_trust_tier, fo.categories, fo.keywords,
-              pom.match_score, pom.match_decision, pom.match_explanation,
-              pom.match_reasons, pom.match_explain_json, pom.matcher_version,
-              pom.ineligibility_reasons
-         FROM profile_opportunity_matches pom
-         JOIN funding_opportunities fo ON fo.id = pom.opportunity_id
-        WHERE pom.profile_id = ? AND pom.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
-          AND (fo.is_active IS NULL OR fo.is_active = 1)
-          AND (fo.is_hidden IS NULL OR fo.is_hidden = 0)
-          AND NOT EXISTS (
-            SELECT 1 FROM pipeline_dismissals d
-             WHERE d.profile_id = pom.profile_id
-               AND ((d.opportunity_id IS NOT NULL AND d.opportunity_id = pom.opportunity_id)
-                 OR (d.title IS NOT NULL AND lower(d.title) = lower(fo.title)))
-          )
-        ORDER BY pom.match_score DESC, fo.updated_at DESC`,
-    ).all(profileId)
+    const loadedRows = await readFundingSourceRows(req.db, profileId)
+    const rows = loadedRows.rows
 
     const mapped = rows.map((row) => ({
       ...row,
@@ -167,11 +173,14 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       is_directory: isFundingResource(row),
     }))
 
-    // Trust and hard-eligibility gates may still remove unsafe/ineligible rows,
-    // but their temporary recomputed score never replaces persisted score truth.
+    // Trust and hard-eligibility gates may remove unsafe/ineligible rows, but
+    // stored profile↔opportunity decisions are the authority. This prevents a
+    // read from silently recomputing a different score before persisted truth is
+    // restored and compared by the production audit.
     const canonical = canonicalizeOpportunityList(profileContext, mapped, {
       preserveDirectories: true,
       rejectHardIneligible: true,
+      useStoredDecision: true,
     })
     const persistedTruth = restorePersistedMatchTruth(canonical.kept, mapped, {
       profileContext,
@@ -212,8 +221,12 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     const presented = partitionFundingSources(qualified)
     res.set('Cache-Control', 'no-store')
     return res.json({
+      ok: true,
+      available: true,
       profile_id: profileId,
       engine: 'crawler-os',
+      query_contract: FUNDING_SOURCE_QUERY_CONTRACT,
+      dismissal_filter: loadedRows.dismissal_filter,
       scoring_policy_version: NEED_FIRST_SCORING_VERSION,
       min_score: minScore,
       ...presented,
@@ -229,8 +242,20 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       },
     })
   } catch (error) {
-    log.warn('funding_sources.failed', { profileId, error: error?.message || String(error) })
-    return res.status(200).json({
+    const failure = classifyFundingSourcesError(error)
+    log.warn('funding_sources.failed', {
+      profileId,
+      code: error?.code || null,
+      failure_class: failure.failureClass,
+      error: error?.message || String(error),
+    })
+    res.set('Cache-Control', 'no-store')
+    return res.status(failure.status).json({
+      ok: false,
+      available: false,
+      error: failure.error,
+      failure_class: failure.failureClass,
+      details_redacted: true,
       profile_id: profileId,
       total: 0,
       sources: [],
@@ -239,7 +264,6 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       directories: [],
       resource_count: 0,
       scoring_policy_version: NEED_FIRST_SCORING_VERSION,
-      note: 'funding sources unavailable',
       need_first_reconciliation: {
         read_only_audit: readOnlyAudit,
       },
