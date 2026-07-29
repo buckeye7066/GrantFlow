@@ -1,0 +1,63 @@
+name: production-audit-runtime-finalizer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: production-audit-runtime-finalizer
+  cancel-in-progress: false
+
+jobs:
+  build-correction-branch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=optional
+
+      - name: Create correction branch and apply patch
+        run: |
+          git checkout -B agent/production-audit-runtime-applied-20260729
+          python scripts/production-audit-runtime-finalizer.py
+
+      - name: Run focused regressions
+        run: |
+          node --test tests/unit/anya-chat-hook-order.test.mjs
+          npm exec -- vitest run backend/tests/portalCheckLegacyHonesty.test.js backend/tests/portalCheckService.test.js --reporter=verbose
+
+      - name: Run pre-push quality gates
+        run: npm run check:prepush
+
+      - name: Run secret scan
+        run: npm run scan:secrets
+
+      - name: Run release gates
+        run: npm run release:gates
+
+      - name: Commit verified correction branch
+        run: |
+          rm -f .github/workflows/production-audit-runtime-finalizer.yml
+          rm -f scripts/production-audit-runtime-finalizer.py
+          git config user.name "grantflow-audit-finalizer[bot]"
+          git config user.email "grantflow-audit-finalizer[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(audit): close Dashboard hook crash and legacy portal claims"
+          git push --force-with-lease origin HEAD:agent/production-audit-runtime-applied-20260729
