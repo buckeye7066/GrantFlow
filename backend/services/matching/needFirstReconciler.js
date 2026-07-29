@@ -36,7 +36,7 @@ function persistedCanonical(row, explain) {
     ? explain.matchedNeeds
     : Array.isArray(explain?.matched_needs)
       ? explain.matched_needs
-      : parseReasons(row.match_reasons)
+      : []
   return {
     score: Number(row.match_score) || 0,
     decision: String(row.match_decision || 'REVIEW').toUpperCase(),
@@ -48,30 +48,26 @@ function persistedCanonical(row, explain) {
   }
 }
 
-function changed(row, adjusted) {
-  const oldScore = Math.round(Number(row.match_score) || 0)
-  const oldDecision = String(row.match_decision || 'REVIEW').toUpperCase()
-  const newScore = Math.round(Number(adjusted.score) || 0)
-  const newDecision = String(adjusted.decision || 'REVIEW').toUpperCase()
-  return oldScore !== newScore || oldDecision !== newDecision
-}
-
 /**
- * Idempotently reconcile a profile's persisted surfaced matches to the current
- * need-first scoring policy. Discovery lane identity remains untouched.
+ * Idempotently reconcile a bounded slice of a profile's persisted surfaced
+ * matches to the current need-first scoring policy. Discovery lane identity is
+ * preserved. Read-time presentation applies the same policy immediately, so a
+ * bounded reconciliation can converge safely across calls without surfacing
+ * stale decisions in the meantime.
  */
 export async function reconcileNeedFirstProfileMatches(db, {
   profileId,
   profileContext,
-  limit = 2000,
+  limit = 250,
 } = {}) {
   if (!db || typeof db.prepare !== 'function') {
-    return { ok: false, reason: 'db_required', scanned: 0, updated: 0 }
+    return { ok: false, reason: 'db_required', scanned: 0, updated: 0, failures: [] }
   }
   if (!profileId || !profileContext) {
-    return { ok: false, reason: 'profile_context_required', scanned: 0, updated: 0 }
+    return { ok: false, reason: 'profile_context_required', scanned: 0, updated: 0, failures: [] }
   }
 
+  const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 250))
   const rows = await db.prepare(
     `SELECT m.profile_id, m.opportunity_id, m.match_score, m.match_decision,
             m.match_explanation, m.match_reasons, m.match_explain_json,
@@ -86,7 +82,7 @@ export async function reconcileNeedFirstProfileMatches(db, {
       WHERE m.profile_id = ?
       ORDER BY m.match_score DESC
       LIMIT ?`,
-  ).all(String(profileId), Math.max(1, Math.min(5000, Number(limit) || 2000)))
+  ).all(String(profileId), safeLimit)
 
   let scanned = 0
   let current = 0
@@ -113,11 +109,6 @@ export async function reconcileNeedFirstProfileMatches(db, {
       })
       const newDecision = String(adjusted.decision || 'REVIEW').toUpperCase()
       const newScore = Math.round(Number(adjusted.score) || 0)
-      const wasChanged = changed(row, adjusted)
-
-      if (newDecision === 'REJECT') rejected += 1
-      if (String(row.match_decision || '').toUpperCase() === 'ACCEPT' && newDecision !== 'ACCEPT') demoted += 1
-      if (newScore < Math.round(Number(row.match_score) || 0)) scoreLowered += 1
 
       const result = await db.prepare(
         `UPDATE profile_opportunity_matches
@@ -138,7 +129,21 @@ export async function reconcileNeedFirstProfileMatches(db, {
         String(profileId),
         String(row.opportunity_id),
       )
-      if (Number(result?.changes ?? result?.rowCount ?? 0) > 0 || wasChanged) updated += 1
+      const changes = Number(result?.changes ?? result?.rowCount ?? 0)
+      if (changes <= 0) {
+        failures.push({
+          opportunity_id: row.opportunity_id,
+          error: 'selected match row was not updated',
+        })
+        continue
+      }
+
+      updated += changes
+      if (newDecision === 'REJECT') rejected += changes
+      if (String(row.match_decision || '').toUpperCase() === 'ACCEPT' && newDecision !== 'ACCEPT') {
+        demoted += changes
+      }
+      if (newScore < Math.round(Number(row.match_score) || 0)) scoreLowered += changes
     } catch (error) {
       failures.push({
         opportunity_id: row.opportunity_id,
