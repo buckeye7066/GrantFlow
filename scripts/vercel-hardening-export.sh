@@ -4,6 +4,7 @@ set -euo pipefail
 node scripts/prepare-global-hardening-run.mjs
 node scripts/apply-code-hardening.mjs
 node scripts/apply-readiness-deployment.mjs
+node scripts/apply-runtime-secret-wiring.mjs
 node scripts/apply-hardening-test-updates.mjs
 node scripts/generate-env-examples.mjs
 
@@ -18,6 +19,7 @@ unset STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
 unset SAM_GOV_PUBLIC_API_KEY SIMPLER_GRANTS_API_KEY API_DATA_GOV_KEY GRANTS_GOV_API_KEY
 unset URL_VERIFICATION_ENABLED FUNDING_APIS_REQUIRE_KEYS GRANTFLOW_SKIP_VERIFICATION_GATE
 unset RUN_SQLITE_MIGRATION MIGRATE_ON_BOOT DB_AUTO_MIGRATE
+unset RUNTIME_SECRETS_KEY RUNTIME_SECRETS_KEY_PREVIOUS RUNTIME_SECRETS_KEY_FILE
 export CI=true
 
 # Remove one-shot transformer scaffolding before static import and repository
@@ -26,7 +28,9 @@ rm -f .github/workflows/apply-global-production-hardening.yml
 rm -f scripts/prepare-global-hardening-run.mjs
 rm -f scripts/apply-code-hardening.mjs
 rm -f scripts/apply-readiness-deployment.mjs
+rm -f scripts/apply-runtime-secret-wiring.mjs
 rm -f scripts/apply-hardening-test-updates.mjs
+rm -f scripts/vercel-hardening-diagnose.sh
 
 npm audit --omit=dev --audit-level=high
 npm run release:gates
@@ -44,6 +48,7 @@ tar -czf dist/hardening-output.tar.gz \
   backend/crawler-os/tests/fetcher.test.mjs \
   backend/routes/ai.js \
   backend/start.js \
+  backend/server.js \
   backend/middleware/pipelineMonitor.js \
   backend/routes/admin.js \
   backend/routes/health.js \
@@ -61,6 +66,7 @@ tar -czf dist/hardening-output.tar.gz \
   tests/unit/healthz-schema-bootstrap.test.mjs \
   tests/unit/production-readiness-hardening.test.mjs \
   tests/unit/runtime-secrets-hardening.test.mjs \
+  tests/unit/runtime-secrets-startup-wiring.test.mjs \
   tests/unit/safe-remote-fetch.test.mjs \
   tests/unit/sms-inbound-security.test.mjs \
   tests/unit/start-single-migration-owner.test.mjs \
