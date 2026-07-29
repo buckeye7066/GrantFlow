@@ -1,0 +1,70 @@
+name: apply-need-first-scoring-once
+
+on:
+  push:
+    branches:
+      - agent/need-first-scoring-final-20260729
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-need-first-scoring-once
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify:
+    if: ${{ !contains(github.event.head_commit.message, 'feat(matching): enforce need-first scoring') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Check out correction branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/need-first-scoring-final-20260729
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=optional
+
+      - name: Apply exact engine patch
+        run: python scripts/apply-need-first-scoring.py
+
+      - name: Run focused scoring regressions
+        run: |
+          npm exec -- vitest run \
+            backend/tests/needFirstMatchPolicy.test.js \
+            backend/tests/persistedMatchTruth.test.js \
+            backend/tests/remainingAuditCorrections.test.js \
+            backend/tests/matching-pipeline.test.js \
+            --reporter=verbose
+
+      - name: Run pre-push verification
+        run: npm run check:prepush
+
+      - name: Run release gates
+        run: npm run release:gates
+
+      - name: Run secret scan
+        run: npm run scan:secrets
+
+      - name: Commit verified product correction
+        run: |
+          rm -f .github/workflows/apply-need-first-scoring-once.yml
+          rm -f scripts/apply-need-first-scoring.py
+          git config user.name 'grantflow-need-first-verifier[bot]'
+          git config user.email 'grantflow-need-first-verifier[bot]@users.noreply.github.com'
+          git add -- \
+            backend/services/matchEngine.js \
+            backend/services/matching/needFirstMatchPolicy.js \
+            backend/tests/needFirstMatchPolicy.test.js \
+            .github/workflows/apply-need-first-scoring-once.yml \
+            scripts/apply-need-first-scoring.py
+          git commit -m 'feat(matching): enforce need-first scoring'
+          git push origin HEAD:agent/need-first-scoring-final-20260729
