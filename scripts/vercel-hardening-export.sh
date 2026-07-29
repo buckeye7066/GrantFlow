@@ -73,7 +73,9 @@ tar -czf dist/hardening-output.tar.gz \
   backend/crawler-os/fetcher.js \
   backend/crawler-os/tests/fetcher.test.mjs \
   backend/services/crawlerOsPersistence.js \
+  backend/services/linkVerificationService.js \
   backend/tests/crawlerOsResourceReconciliation.test.js \
+  backend/tests/linkVerificationQuarantine.test.js \
   backend/routes/ai.js \
   backend/start.js \
   backend/server.js \
