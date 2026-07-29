@@ -134,3 +134,5 @@ jobs:
           git commit -m "fix(hardening): close global production review findings" \
             -m "Correct PostgreSQL mission metrics, enforce readiness, close portal SSRF, isolate previews, remove duplicate migrations, add shared throttling, fail closed on Twilio webhooks, and repair async seeding."
           git push origin HEAD:agent/global-production-hardening-20260729
+
+# retrigger: 2026-07-29T02:00Z
