@@ -14,6 +14,7 @@ process.chdir(repoRoot)
 
 const coreSignatures = Object.freeze([
   ['backend/services/missionHealthService.js', 'export function normalizeCount'],
+  ['backend/services/missionHealthService.js', 'verification_events WHERE ts >= ?'],
   ['backend/routes/ai.js', 'fetchPublicText(portal_url'],
   ['backend/start.js', 'Schema migrations have exactly one owner'],
   ['backend/routes/health.js', "reason: 'mission_gate_failed'"],
@@ -95,6 +96,7 @@ if (corePresent.length > 0) {
 const modules = [
   'scripts/source-materialization/prepare.mjs',
   'scripts/source-materialization/apply-code.mjs',
+  'scripts/source-materialization/apply-verification-events-metric.mjs',
   'scripts/source-materialization/apply-resource-reconciliation.mjs',
   'scripts/source-materialization/apply-proof-based-quarantine.mjs',
   'scripts/source-materialization/apply-readiness-deployment.mjs',
