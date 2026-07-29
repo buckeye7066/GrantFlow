@@ -12,10 +12,25 @@ function replaceOne(file, pattern, replacement, label) {
   write(file, before.replace(pattern, replacement))
 }
 
-replaceOne(
-  'backend/services/crawlerOsPersistence.js',
-  /  \/\/ per-profile matches \(score lives ONLY here\)\.[\s\S]*?(?=  const nowFn =)/,
-  `  // per-profile matches (score lives ONLY here).
+const persistenceFile = 'backend/services/crawlerOsPersistence.js'
+const persistenceBefore = read(persistenceFile)
+const hasSnapshotFacade =
+  persistenceBefore.includes('async function snapshotResourceMatches') &&
+  persistenceBefore.includes('async function restoreResourceMatches') &&
+  persistenceBefore.includes('resourcesPreserved')
+const hasInlineReconciliation =
+  persistenceBefore.includes('const deleteStaleDirectMatches = db.prepare') &&
+  persistenceBefore.includes('const deleteExplicitReject = db.prepare')
+
+// Current need-first main already carries a stronger snapshot/restore facade. It
+// preserves omitted resource rows across the authoritative core reconcile and
+// still honors explicit current REJECT decisions. Do not replace a newer valid
+// implementation merely because the earlier inline implementation is absent.
+if (!hasSnapshotFacade && !hasInlineReconciliation) {
+  replaceOne(
+    persistenceFile,
+    /  \/\/ per-profile matches \(score lives ONLY here\)\.[\s\S]*?(?=  const nowFn =)/,
+    `  // per-profile matches (score lives ONLY here).
   //
   // Direct funding is authoritative per discovery run: an old direct match that
   // was not reproduced is stale and must be removed. Non-direct resources are
@@ -59,8 +74,11 @@ replaceOne(
     await deleteExplicitReject.run(String(match.profile_id), rejectedOpportunityId);
   }
 `,
-  'resource-preserving profile-match reconciliation',
-)
+    'resource-preserving profile-match reconciliation',
+  )
+} else {
+  console.log('[global-hardening] compatible resource-preserving reconciliation already present')
+}
 
 replaceOne(
   'backend/services/linkVerificationService.js',
@@ -126,12 +144,18 @@ replaceOne(
   'link verification reveal on success',
 )
 
-const persistence = read('backend/services/crawlerOsPersistence.js')
-if (!persistence.includes('const deleteStaleDirectMatches = db.prepare')) {
+const persistence = read(persistenceFile)
+const resourcePreservationInstalled =
+  (
+    persistence.includes('const deleteStaleDirectMatches = db.prepare') &&
+    persistence.includes('const deleteExplicitReject = db.prepare')
+  ) || (
+    persistence.includes('async function snapshotResourceMatches') &&
+    persistence.includes('async function restoreResourceMatches') &&
+    persistence.includes('resourcesPreserved')
+  )
+if (!resourcePreservationInstalled) {
   throw new Error('resource-preserving reconciliation was not installed')
-}
-if (!persistence.includes('const deleteExplicitReject = db.prepare')) {
-  throw new Error('explicit resource reject cleanup was not installed')
 }
 
 const verification = read('backend/services/linkVerificationService.js')
