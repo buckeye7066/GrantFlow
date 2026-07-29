@@ -1,0 +1,136 @@
+name: Apply global production hardening
+
+on:
+  push:
+    branches:
+      - agent/global-production-hardening-20260729
+    paths:
+      - .github/workflows/apply-global-production-hardening.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-global-production-hardening
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact hardening branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/global-production-hardening-20260729
+          fetch-depth: 0
+
+      - name: Setup Node 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Apply deterministic transformations
+        run: |
+          set -euo pipefail
+          node scripts/apply-code-hardening.mjs
+          node scripts/apply-readiness-deployment.mjs
+          node --check backend/utils/safeRemoteFetch.js
+          node --check backend/middleware/apiRateLimitPolicy.js
+          node --check backend/routes/smsInbound.js
+          node --check backend/routes/health.js
+          node --check backend/services/missionHealthService.js
+          git diff --check
+
+      - name: Install locked dependencies
+        run: npm ci --include=optional
+
+      - name: Run focused hardening regressions
+        run: |
+          node --test \
+            tests/unit/safe-remote-fetch.test.mjs \
+            tests/unit/start-single-migration-owner.test.mjs \
+            tests/unit/api-rate-limit-policy.test.mjs \
+            tests/unit/sms-inbound-security.test.mjs \
+            tests/unit/runtime-secrets-hardening.test.mjs \
+            tests/unit/deployment-preview-isolation.test.mjs \
+            tests/unit/production-readiness-hardening.test.mjs \
+            tests/mission/mission-health-dashboard.test.mjs
+          npm run deployment-config:check
+
+      - name: Run complete release gate
+        run: npm run release:gates
+
+      - name: Remove one-shot scaffolding
+        run: |
+          git rm -- \
+            .github/workflows/apply-global-production-hardening.yml \
+            scripts/apply-code-hardening.mjs \
+            scripts/apply-readiness-deployment.mjs
+
+      - name: Refuse undeclared working-tree changes
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process')
+          const allowed = new Set([
+            '.env.example',
+            'backend/.env.example',
+            'backend/env.example',
+            'backend/services/missionHealthService.js',
+            'tests/mission/mission-health-dashboard.test.mjs',
+            'backend/crawler-os/safeUrl.js',
+            'backend/crawler-os/fetcher.js',
+            'backend/crawler-os/tests/fetcher.test.mjs',
+            'backend/routes/ai.js',
+            'backend/start.js',
+            'backend/middleware/pipelineMonitor.js',
+            'backend/routes/admin.js',
+            'backend/routes/health.js',
+            'backend/services/productionReadinessChecks.js',
+            'scripts/check-deployment-config.mjs',
+            'src/config/env.js',
+            '.github/workflows/apply-global-production-hardening.yml',
+            'scripts/apply-code-hardening.mjs',
+            'scripts/apply-readiness-deployment.mjs',
+          ])
+          const raw = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' })
+          const changed = raw.trim().split('\n').filter(Boolean).map((line) => {
+            const path = line.slice(3).trim()
+            const arrow = path.lastIndexOf(' -> ')
+            return arrow >= 0 ? path.slice(arrow + 4) : path
+          })
+          const unexpected = changed.filter((path) => !allowed.has(path))
+          if (unexpected.length) {
+            console.error('Undeclared changes:', unexpected)
+            process.exit(1)
+          }
+          console.log('Declared working tree:', changed)
+          NODE
+
+      - name: Commit verified hardening
+        run: |
+          set -euo pipefail
+          git config user.name "GrantFlow Hardening Agent"
+          git config user.email "noreply@openai.com"
+          git add -- \
+            .env.example \
+            backend/.env.example \
+            backend/env.example \
+            backend/services/missionHealthService.js \
+            tests/mission/mission-health-dashboard.test.mjs \
+            backend/crawler-os/safeUrl.js \
+            backend/crawler-os/fetcher.js \
+            backend/crawler-os/tests/fetcher.test.mjs \
+            backend/routes/ai.js \
+            backend/start.js \
+            backend/middleware/pipelineMonitor.js \
+            backend/routes/admin.js \
+            backend/routes/health.js \
+            backend/services/productionReadinessChecks.js \
+            scripts/check-deployment-config.mjs \
+            src/config/env.js
+          git diff --cached --check
+          git commit -m "fix(hardening): close global production review findings" \
+            -m "Correct PostgreSQL mission metrics, enforce readiness, close portal SSRF, isolate previews, remove duplicate migrations, add shared throttling, fail closed on Twilio webhooks, and repair async seeding."
+          git push origin HEAD:agent/global-production-hardening-20260729
