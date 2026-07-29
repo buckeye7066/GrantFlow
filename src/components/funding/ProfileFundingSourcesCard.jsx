@@ -22,6 +22,7 @@ import { ExternalLink, Loader2, X } from "lucide-react"
 import { safeHttpUrl } from "@/lib/safeUrl"
 import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
 import { useToast } from "@/components/ui/use-toast"
+import { fundingSourceCounts } from "@/components/funding/fundingSourceCounts"
 
 function fmtAmount(min, max) {
   const f = (n) => `$${Number(n).toLocaleString()}`
@@ -129,12 +130,6 @@ function Group({ title, hint, items, profileId, onRemoved }) {
       </ul>
     </section>
   )
-}
-
-export function fundingSourceCounts(data) {
-  const direct = Number(data?.total) || 0
-  const resources = Number(data?.resource_count ?? data?.directories?.length) || 0
-  return { direct, resources, any: direct + resources > 0 }
 }
 
 export default function ProfileFundingSourcesCard({ profileId }) {
