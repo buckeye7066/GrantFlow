@@ -89,6 +89,35 @@ function scoreEvidence(row, score) {
     : `Profile match score ${score}; detailed data-point evidence is unavailable for this legacy match.`
 }
 
+function looseIdentityText(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\bscholarships\b/g, 'scholarship')
+    .replace(/\bgrants\b/g, 'grant')
+    .replace(/\bawards\b/g, 'award')
+    .replace(/\bfellowships\b/g, 'fellowship')
+    .replace(/\bprogrammes\b/g, 'program')
+    .replace(/\bprograms\b/g, 'program')
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort()
+    .join(' ')
+}
+
+function duplicateKeys(row) {
+  const canonical = canonicalOpportunityKey({
+    ...row,
+    apply_url: row.apply_url ?? row.application_url ?? row.url ?? null,
+    info_url: row.source_url ?? null,
+  })
+  const title = looseIdentityText(row.title)
+  const sponsor = looseIdentityText(row.sponsor)
+  const loose = title ? `loose:${sponsor}::${title}` : ''
+  return [...new Set([canonical, loose].filter((key) => key && key !== 'id:'))]
+}
+
 /**
  * Reapply the persisted profile↔opportunity score and decision after the
  * read-time trust/profile gate has run.
@@ -145,19 +174,15 @@ export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [
     })
   }
 
-  // Defense in depth for historical duplicates: use the repository's canonical
-  // cross-source identity and keep the highest persisted score for each program.
+  // Defense in depth for historical duplicates: use both the repository's
+  // canonical cross-source identity and a conservative singular/plural-normalized
+  // title+sponsor identity. Keep the highest persisted score for each program.
   restored.sort((a, b) => Number(b.match_score || 0) - Number(a.match_score || 0))
   const seen = new Set()
   return restored.filter((row) => {
-    const key = canonicalOpportunityKey({
-      ...row,
-      apply_url: row.apply_url ?? row.application_url ?? row.url ?? null,
-      info_url: row.source_url ?? null,
-    })
-    if (!key || key === 'id:') return true
-    if (seen.has(key)) return false
-    seen.add(key)
+    const keys = duplicateKeys(row)
+    if (keys.some((key) => seen.has(key))) return false
+    keys.forEach((key) => seen.add(key))
     return true
   })
 }
