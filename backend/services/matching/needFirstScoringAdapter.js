@@ -7,9 +7,39 @@ import {
   enforceNeedFirstDecision,
   evaluateNeedFirstMatchPolicy,
 } from './needFirstMatchPolicy.js'
-import { evaluateExclusivePurposePolicy } from './exclusivePurposePolicy.js'
 
-export const NEED_FIRST_SCORING_VERSION = 'need_first_v1'
+export const NEED_FIRST_SCORING_VERSION = 'need_first_v2'
+
+const STUDENT_TYPES = new Set([
+  'student',
+  'high_school_student',
+  'college_student',
+  'graduate_student',
+  'undergraduate_student',
+  'adult_learner',
+])
+
+const BUSINESS_TYPES = new Set([
+  'business',
+  'small_business',
+  'minority_owned_business',
+  'women_owned_business',
+  'farm',
+])
+
+const NONPROFIT_TYPES = new Set([
+  'nonprofit',
+  'church',
+  'ministry',
+  'food_pantry',
+  'homeless_shelter',
+  'animal_rescue',
+  'mental_health_nonprofit',
+  'substance_recovery_org',
+  'reentry_program',
+  'community_center',
+  'museum',
+])
 
 function num(value, fallback = 0) {
   const parsed = Number(value)
@@ -46,6 +76,14 @@ function asArray(value) {
   return [value]
 }
 
+function normalizeType(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
 function derivePolicyProfileNorm(profileContext = {}) {
   const profile = profileContext?.profile ?? profileContext ?? {}
   const sections = profileContext?.sections ?? {}
@@ -55,24 +93,66 @@ function derivePolicyProfileNorm(profileContext = {}) {
   const military = asObject(sections.military_service)
   const demographics = asObject(sections.demographics)
   const organization = asObject(sections.organization_details)
-  const type = String(
-    profile.applicant_type ?? profile.primary_type ?? profile.profile_type ?? organization.organization_type ?? '',
-  ).trim().toLowerCase()
+  const health = asObject(sections.health_medical)
+  const type = normalizeType(
+    profile.applicant_type ??
+    profile.primary_type ??
+    profile.profile_type ??
+    organization.organization_type,
+  )
   const applications = asObject(sections.university_applications).applications
+
+  const explicitStudentType = STUDENT_TYPES.has(type)
   const studentEvidence = Boolean(
-    /student|college|school/.test(type) ||
-    education.current_institution || education.current_college || education.intended_major ||
-    education.field_of_study || Number(education.gpa) > 0 ||
+    explicitStudentType ||
+    education.student_status === true ||
+    education.current_institution ||
+    education.current_college ||
+    education.intended_major ||
+    education.field_of_study ||
+    Number(education.gpa) > 0 ||
     (Array.isArray(applications) && applications.length > 0)
   )
   const businessEvidence = Boolean(
-    /business|company|farm|entrepreneur/.test(type) ||
+    BUSINESS_TYPES.has(type) ||
     occupation.small_business_owner === true ||
-    occupation.farmer === true
+    occupation.farmer === true ||
+    organization.is_for_profit === true
   )
   const nonprofitEvidence = Boolean(
-    /nonprofit|church|ministry|charity|foundation/.test(type) ||
-    profile.ein || organization.ein
+    NONPROFIT_TYPES.has(type) ||
+    profile.ein ||
+    organization.ein ||
+    organization.is_nonprofit === true ||
+    organization.is_faith_based === true
+  )
+  const caregiverEvidence = Boolean(
+    family.caregiver === true ||
+    family.is_caregiver === true ||
+    demographics.is_caregiver === true ||
+    demographics.caregiver_status === true ||
+    /\bcaregiver\b/i.test(String(demographics.caregiver_status ?? ''))
+  )
+  const fosterEvidence = Boolean(
+    family.foster_youth === true ||
+    family.former_foster_youth === true ||
+    demographics.foster_care_alumni === true ||
+    demographics.former_foster_youth === true ||
+    demographics.in_foster_care === true
+  )
+  const immigrantStatus = String(
+    demographics.immigrant_status ?? demographics.citizenship_status ?? '',
+  ).trim()
+  const immigrantEvidence = Boolean(
+    demographics.is_refugee_or_immigrant === true ||
+    demographics.is_international_student === true ||
+    (immigrantStatus && !/^(none|no|false|unknown|not applicable|u\.?s\.? citizen)$/i.test(immigrantStatus))
+  )
+  const childrenEvidence = Boolean(
+    family.has_children === true ||
+    family.is_parent === true ||
+    demographics.is_parent === true ||
+    Number(family.number_of_children ?? family.number_of_dependents ?? family.num_dependents ?? 0) > 0
   )
 
   return {
@@ -80,22 +160,21 @@ function derivePolicyProfileNorm(profileContext = {}) {
     isStudent: studentEvidence,
     isBusiness: businessEvidence,
     isNonprofit: nonprofitEvidence,
-    isCaregiver: Boolean(family.caregiver || family.is_caregiver),
-    hasFosterIndicator: Boolean(family.foster_youth || family.former_foster_youth),
+    isCaregiver: caregiverEvidence,
+    hasFosterIndicator: fosterEvidence,
     isWidow: Boolean(family.widow_widower || family.surviving_spouse),
     isOrphan: Boolean(family.orphan),
-    isImmigrant: Boolean(
-      demographics.immigrant_status &&
-      !/^(none|no|false|unknown|not applicable)$/i.test(String(demographics.immigrant_status).trim())
-    ),
+    isImmigrant: immigrantEvidence,
     isInternationalStudent: Boolean(
-      /international|foreign student|non[- ]?citizen|visa/i.test(
-        String(demographics.immigrant_status ?? demographics.citizenship_status ?? ''),
-      )
+      demographics.is_international_student === true ||
+      /international|foreign student|non[- ]?citizen|visa/i.test(immigrantStatus)
     ),
-    hasChildren: Boolean(
-      family.has_children || family.caregiver ||
-      Number(family.number_of_children ?? family.number_of_dependents ?? 0) > 0
+    hasChildren: childrenEvidence,
+    isPregnant: Boolean(
+      family.expecting_child === true ||
+      health.pregnant === true ||
+      health.pregnancy === true ||
+      demographics.pregnant === true
     ),
     isVeteran: Boolean(military.veteran || military.disabled_veteran),
     education: {
@@ -171,61 +250,12 @@ function boundedFitScore(canonical = {}) {
   }
 }
 
-function mergePolicies(basePolicy, exclusivePolicy) {
-  const hardMismatches = [
-    ...(Array.isArray(basePolicy?.hardMismatches) ? basePolicy.hardMismatches : []),
-    ...(Array.isArray(exclusivePolicy?.hardMismatches) ? exclusivePolicy.hardMismatches : []),
-  ]
-  const purposeReasons = [
-    ...(Array.isArray(basePolicy?.purposeReasons) ? basePolicy.purposeReasons : []),
-    ...(Array.isArray(exclusivePolicy?.purposeReasons) ? exclusivePolicy.purposeReasons : []),
-  ]
-  const reasons = [
-    ...(Array.isArray(basePolicy?.reasons) ? basePolicy.reasons : []),
-    ...hardMismatches,
-  ]
-  const hardMismatch = Boolean(basePolicy?.hardMismatch || exclusivePolicy?.hardMismatch)
-  const purposeAnchor = Boolean(basePolicy?.purposeAnchor || exclusivePolicy?.purposeAnchor)
-  const resource = Boolean(basePolicy?.resource)
-  const reviewOnly = !hardMismatch && Boolean(basePolicy?.reviewOnly)
-  const decision = hardMismatch
-    ? 'REJECT'
-    : !purposeAnchor && !resource
-      ? 'REJECT'
-      : reviewOnly
-        ? 'REVIEW'
-        : basePolicy?.decision ?? null
-  const scoreCap = hardMismatch
-    ? SCORE_FLOOR
-    : basePolicy?.scoreCap ?? null
-
-  return {
-    ...basePolicy,
-    resource,
-    purposeAnchor,
-    reviewOnly,
-    hardMismatch,
-    scoreCap,
-    decision,
-    reasons: [...new Set(reasons.filter(Boolean))],
-    purposeReasons: [...new Set(purposeReasons.filter(Boolean))],
-    hardMismatches: [...new Set(hardMismatches.filter(Boolean))],
-    diagnostics: {
-      ...(basePolicy?.diagnostics ?? {}),
-      exclusive_rules: exclusivePolicy?.matchedRules ?? [],
-    },
-  }
-}
-
 /**
  * Apply the profile-purpose policy to one canonical match result.
  *
- * The existing canonical engine remains responsible for normalization,
- * eligibility, geography, confidence, and evidence extraction. This adapter
- * changes only two things:
- *   1. the documented fit bonus is truly bounded to half a data point; and
- *   2. peripheral/administrative facts cannot substitute for a direct funding
- *      purpose in the profile.
+ * The canonical engine remains responsible for normalization, evidence,
+ * eligibility, geography, and confidence. This adapter bounds fit bonus credit
+ * and prevents peripheral facts from substituting for an actual funding purpose.
  */
 export function applyNeedFirstScoring({
   canonical = {},
@@ -243,7 +273,7 @@ export function applyNeedFirstScoring({
     profileContext?.normalized ??
     derivePolicyProfileNorm(profileContext)
 
-  const basePolicy = evaluateNeedFirstMatchPolicy({
+  const policy = evaluateNeedFirstMatchPolicy({
     profileContext,
     profileNorm,
     opportunity,
@@ -256,14 +286,15 @@ export function applyNeedFirstScoring({
     },
     matchedNeeds,
   })
-  const exclusivePolicy = evaluateExclusivePurposePolicy({
-    profileContext,
-    profileNorm,
-    opportunity,
-  })
-  const policy = mergePolicies(basePolicy, exclusivePolicy)
 
-  const fit = boundedFitScore(canonical)
+  const fit = policy.resource
+    ? {
+        score: clampScore(canonical?.score),
+        originalBonus: 0,
+        boundedBonus: 0,
+        adjusted: false,
+      }
+    : boundedFitScore(canonical)
   let score = fit.score
   if (Number.isFinite(Number(policy.scoreCap))) {
     score = Math.min(score, Number(policy.scoreCap))
@@ -278,6 +309,8 @@ export function applyNeedFirstScoring({
 
   if (policy.resource) {
     decisionResult.decision = 'REVIEW'
+    decisionResult.explanation = canonical?.explanation ??
+      'Resource retained as a search aid; it is not a direct funding award.'
   }
 
   const previousExplain = canonical?.match_explain ?? {}
