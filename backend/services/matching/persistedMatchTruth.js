@@ -135,7 +135,7 @@ function adjustPersistedRow(persisted, canonical, profileContext, directory) {
     ? rawExplain.matchedNeeds
     : Array.isArray(rawExplain.matched_needs)
       ? rawExplain.matched_needs
-      : storedReasons
+      : []
 
   if (!profileContext) {
     return {
@@ -208,7 +208,9 @@ export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [
       match_reasons: Array.isArray(adjusted.reasons) ? adjusted.reasons : parseReasons(persisted.match_reasons),
       match_explain_json: adjusted.match_explain ?? parseJson(persisted.match_explain_json, {}),
       matcher_version: persisted.matcher_version ?? canonical.matcher_version ?? null,
-      scoring_policy_version: adjusted.scoringPolicyVersion ?? NEED_FIRST_SCORING_VERSION,
+      scoring_policy_version: adjusted.scoringPolicyVersion ??
+        adjusted.match_explain?.scoring_policy_version ??
+        null,
       ineligibility_reasons: parseReasons(persisted.ineligibility_reasons),
       is_directory: directory,
       is_resource: directory,
