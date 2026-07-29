@@ -32,8 +32,21 @@ const hasSignature = ([file, signature]) => {
   }
 }
 
+async function refreshEnvExamples() {
+  const generatorPath = path.resolve('scripts/generate-env-examples.mjs')
+  const { buildOutputs } = await import(
+    `${pathToFileURL(generatorPath).href}?materialize-env=${Date.now()}`
+  )
+  const { rootEnvExample, backendEnvExample } = buildOutputs()
+  fs.writeFileSync(path.resolve('.env.example'), rootEnvExample)
+  fs.mkdirSync(path.resolve('backend'), { recursive: true })
+  fs.writeFileSync(path.resolve('backend/.env.example'), backendEnvExample)
+  console.log('[source-materialization] regenerated env examples from the materialized source tree')
+}
+
 const present = signatures.filter(hasSignature)
 if (present.length === signatures.length) {
+  await refreshEnvExamples()
   console.log('[source-materialization] verified product source already present')
   process.exit(0)
 }
@@ -50,7 +63,6 @@ const modules = [
   'scripts/source-materialization/apply-readiness-deployment.mjs',
   'scripts/source-materialization/apply-runtime-secret-wiring.mjs',
   'scripts/source-materialization/apply-test-updates.mjs',
-  'scripts/generate-env-examples.mjs',
 ]
 
 for (const modulePath of modules) {
@@ -63,6 +75,8 @@ if (missing.length > 0) {
     `[source-materialization] final signatures missing: ${missing.map(([file]) => file).join(', ')}`,
   )
 }
+
+await refreshEnvExamples()
 
 // The generator inputs are permanent source-build infrastructure, not runtime
 // files. Keep them available through env-contract and release verification.
