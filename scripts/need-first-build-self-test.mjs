@@ -40,7 +40,7 @@ async function test(name, fn) {
   tests.push(name)
 }
 
-test('unrelated institution rejected', () => {
+await test('unrelated institution rejected', () => {
   const result = evaluateNeedFirstMatchPolicy({
     profileContext: context,
     profileNorm: context.profileNorm,
@@ -55,7 +55,7 @@ test('unrelated institution rejected', () => {
   assert.equal(result.decision, 'REJECT')
 })
 
-test('committed institution and major retained', () => {
+await test('committed institution and major retained', () => {
   const result = evaluateNeedFirstMatchPolicy({
     profileContext: context,
     profileNorm: context.profileNorm,
@@ -74,7 +74,7 @@ test('committed institution and major retained', () => {
   assert.equal(result.purposeAnchor, true)
 })
 
-test('fit bonus bounded and no-purpose direct source rejected', () => {
+await test('fit bonus bounded and no-purpose direct source rejected', () => {
   const result = applyNeedFirstScoring({
     canonical: {
       score: 14,
@@ -110,7 +110,7 @@ test('fit bonus bounded and no-purpose direct source rejected', () => {
   assert.equal(result.match_explain.dataPointEvidence.bonus_credit, 0.5)
 })
 
-test('Crawler OS facade applies policy', () => {
+await test('Crawler OS facade applies policy', () => {
   const result = computeMatchDecision({
     id: 'nurse-1',
     title: 'Future Nurses Scholarship',
@@ -138,7 +138,7 @@ test('Crawler OS facade applies policy', () => {
   assert.equal(result.match_explain.scoring_policy_version, 'need_first_v1')
 })
 
-test('persisted truth hides rejected direct row and keeps resource REVIEW', () => {
+await test('persisted truth hides rejected direct row and keeps resource REVIEW', () => {
   const canonical = [
     { id: 'bad', title: 'Wrong Program', opportunity_kind: 'DIRECT_GRANT', match_score: 90, match_decision: 'ACCEPT' },
     { id: 'dir', title: 'Search Directory', opportunity_kind: 'DIRECTORY', is_directory: true, match_score: 20, match_decision: 'ACCEPT' },
@@ -159,7 +159,7 @@ test('persisted truth hides rejected direct row and keeps resource REVIEW', () =
   assert.equal(result[0].match_decision, 'REVIEW')
 })
 
-test('reconciler persists same policy decision', async () => {
+await test('reconciler persists same policy decision', async () => {
   const updates = []
   const row = {
     profile_id: 'student-test', opportunity_id: 'bad-1', id: 'bad-1',
@@ -189,5 +189,5 @@ test('reconciler persists same policy decision', async () => {
   assert.equal(updates[0][1], 'reject')
 })
 
-await Promise.all(tests.map(() => undefined))
+assert.equal(tests.length, 6, `expected 6 completed tests, got ${tests.length}`)
 console.log(`[need-first-build-self-test] PASS ${tests.length}/6`)
