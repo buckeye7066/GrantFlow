@@ -158,5 +158,3 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
     </Dialog>
   )
 }
-
-export { configuredVideoUrl, WALKTHROUGH_STEPS }
