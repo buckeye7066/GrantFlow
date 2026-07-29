@@ -205,6 +205,19 @@ function placeholders(count) {
   return Array.from({ length: count }, () => '?').join(', ')
 }
 
+function isKnownMatchStoreSchemaGap(error) {
+  const code = String(error?.code || '')
+  const message = String(error?.message || error || '')
+  return (
+    code === '42P01' ||
+    code === '42703' ||
+    /no such table:\s*(profile_opportunity_matches|funding_opportunities)/i.test(message) ||
+    /relation\s+["']?(profile_opportunity_matches|funding_opportunities)["']?\s+does not exist/i.test(message) ||
+    /no such column:\s*(pom\.|fo\.)?(match_score|match_decision|matcher_version|match_explain_json|updated_at|title|sponsor|source|source_id|opportunity_kind|opportunity_type|type|result_kind|is_active|is_hidden)/i.test(message) ||
+    /column\s+["']?(match_score|match_decision|matcher_version|match_explain_json|updated_at|title|sponsor|source|source_id|opportunity_kind|opportunity_type|type|result_kind|is_active|is_hidden)["']?\s+does not exist/i.test(message)
+  )
+}
+
 async function readKvRows(db) {
   try {
     const rows = await db.prepare(
@@ -237,39 +250,49 @@ async function runSnapshotQueries(db, { profileIds, matchLimitPerProfile }) {
       ORDER BY display_name, id`,
   ).all(...profileIds)
 
-  const matchRows = await db.prepare(
-    `WITH ranked AS (
-       SELECT pom.profile_id,
-              pom.opportunity_id,
-              pom.match_score,
-              pom.match_decision,
-              pom.matcher_version,
-              pom.match_explain_json,
-              pom.updated_at AS match_updated_at,
-              fo.title,
-              fo.sponsor,
-              fo.source,
-              fo.source_id,
-              fo.opportunity_kind,
-              fo.opportunity_type,
-              fo.type,
-              fo.result_kind,
-              fo.is_active,
-              fo.is_hidden,
-              ROW_NUMBER() OVER (
-                PARTITION BY pom.profile_id
-                ORDER BY pom.match_score DESC, pom.updated_at DESC, pom.opportunity_id
-              ) AS audit_rank
-         FROM profile_opportunity_matches pom
-         JOIN funding_opportunities fo ON fo.id = pom.opportunity_id
-        WHERE pom.profile_id IN (${idsSql})
-          AND pom.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
-     )
-     SELECT *
-       FROM ranked
-      WHERE audit_rank <= ?
-      ORDER BY profile_id, audit_rank`,
-  ).all(...profileIds, matchLimitPerProfile)
+  let matchRows = []
+  let matchStoreAvailable = true
+  let matchStoreReason = null
+  try {
+    matchRows = await db.prepare(
+      `WITH ranked AS (
+         SELECT pom.profile_id,
+                pom.opportunity_id,
+                pom.match_score,
+                pom.match_decision,
+                pom.matcher_version,
+                pom.match_explain_json,
+                pom.updated_at AS match_updated_at,
+                fo.title,
+                fo.sponsor,
+                fo.source,
+                fo.source_id,
+                fo.opportunity_kind,
+                fo.opportunity_type,
+                fo.type,
+                fo.result_kind,
+                fo.is_active,
+                fo.is_hidden,
+                ROW_NUMBER() OVER (
+                  PARTITION BY pom.profile_id
+                  ORDER BY pom.match_score DESC, pom.updated_at DESC, pom.opportunity_id
+                ) AS audit_rank
+           FROM profile_opportunity_matches pom
+           JOIN funding_opportunities fo ON fo.id = pom.opportunity_id
+          WHERE pom.profile_id IN (${idsSql})
+            AND pom.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
+       )
+       SELECT *
+         FROM ranked
+        WHERE audit_rank <= ?
+        ORDER BY profile_id, audit_rank`,
+    ).all(...profileIds, matchLimitPerProfile)
+  } catch (error) {
+    if (!isKnownMatchStoreSchemaGap(error)) throw error
+    matchStoreAvailable = false
+    matchStoreReason = 'schema_unavailable'
+    matchRows = []
+  }
 
   const normalizedMatches = (matchRows || []).map((row) => {
     const resource = isFundingResource(row) || RESOURCE_KINDS.has(normalizedKind(row))
@@ -434,6 +457,8 @@ async function runSnapshotQueries(db, { profileIds, matchLimitPerProfile }) {
       missing_profile_ids: profileIds.filter((id) => !(profiles || []).some((profile) => String(profile.id) === id)),
     },
     matches: {
+      store_available: matchStoreAvailable,
+      store_reason: matchStoreReason,
       rows: normalizedMatches,
       integrity_by_profile: integrityByProfile,
       duplicate_groups: duplicateGroups.slice(0, 100),
