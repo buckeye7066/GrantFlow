@@ -1,5 +1,6 @@
 {
   "installCommand": "npm install --include=dev",
+  "buildCommand": "node scripts/need-first-build-self-test.mjs && npm run build",
   "trailingSlash": false,
   "rewrites": [
     {
