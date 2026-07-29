@@ -21,7 +21,9 @@ RUN GRANTFLOW_SKIP_SOURCE_MATERIALIZATION=1 \
 COPY . .
 
 # Materialize and verify the exact product tree that passed the clean-room gate.
-# Generator inputs delete themselves before the build and never reach runtime.
+# Generator inputs remain available in the builder for contract verification.
+# The production Docker runtime stage copies only materialized product/runtime
+# files, so the generator inputs and build-only verification scripts never ship.
 RUN node scripts/materialize-production-source.mjs
 
 RUN npm run build
