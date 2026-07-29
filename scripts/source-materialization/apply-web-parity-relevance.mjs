@@ -5,10 +5,10 @@ import path from 'node:path'
 const file = path.resolve('backend/services/webParityBenchmark.js')
 let source = fs.readFileSync(file, 'utf8')
 
-if (source.includes('export function isBenchmarkRelevantHit')) {
-  console.log('[source-materialization] web-parity relevance correction already present')
-  process.exit(0)
-}
+const RELEVANCE_SIGNATURE = 'export function isBenchmarkRelevantHit'
+const SOURCE_QUALITY_SIGNATURE = 'export function isGenericFundingPortalHit'
+const QUEUE_REFRESH_SIGNATURE = 'function isTerminalGapStatus'
+const TOP_EVIDENCE_SIGNATURE = 'const WEB_ONLY_TOP_CAP = 20'
 
 function replaceOnce(before, after, label) {
   const first = source.indexOf(before)
@@ -18,12 +18,28 @@ function replaceOnce(before, after, label) {
   source = source.replace(before, after)
 }
 
-const fundingMarker = `/** Text signal that a page is about money an applicant can get. */
+function replaceRange(startMarker, endMarker, replacement, label) {
+  const start = source.indexOf(startMarker)
+  const end = start < 0 ? -1 : source.indexOf(endMarker, start + startMarker.length)
+  if (start < 0 || end < 0) {
+    throw new Error(`[web-parity-relevance] ${label} markers missing`)
+  }
+  if (
+    source.indexOf(startMarker, start + startMarker.length) >= 0 ||
+    source.indexOf(endMarker, end + endMarker.length) >= 0
+  ) {
+    throw new Error(`[web-parity-relevance] ${label} markers ambiguous`)
+  }
+  source = source.slice(0, start) + replacement + source.slice(end)
+}
+
+if (!source.includes(RELEVANCE_SIGNATURE)) {
+  const fundingMarker = `/** Text signal that a page is about money an applicant can get. */
 const FUNDING_SIGNAL_RE =
   /\\b(grants?|scholarships?|funding|funds?|assistance|awards?|stipends?|fellowships?|benefits?|relief|financial aid)\\b/i
 `
 
-const relevanceHelpers = `${fundingMarker}
+  const relevanceHelpers = `${fundingMarker}
 /**
  * Search results that mention money are not automatically funding opportunities
  * for THIS profile. The live 2026-07-29 benchmark counted a Czech government
@@ -140,22 +156,22 @@ export function isBenchmarkRelevantHit(hit, { needs = [], applicantTypes = [] } 
 }
 `
 
-replaceOnce(fundingMarker, relevanceHelpers, 'funding marker')
+  replaceOnce(fundingMarker, relevanceHelpers, 'funding marker')
 
-replaceOnce(
-  `export function classifyWebResults(webHits, storedMatches, { needs = [], state = null } = {}) {`,
-  `export function classifyWebResults(webHits, storedMatches, { needs = [], state = null, applicantTypes = [] } = {}) {`,
-  'classify signature',
-)
+  replaceOnce(
+    `export function classifyWebResults(webHits, storedMatches, { needs = [], state = null } = {}) {`,
+    `export function classifyWebResults(webHits, storedMatches, { needs = [], state = null, applicantTypes = [] } = {}) {`,
+    'classify signature',
+  )
 
-replaceOnce(
-  `    const covers =
+  replaceOnce(
+    `    const covers =
       storedUrlKeys.has(urlKey) ||
       (titleKey && storedTitleKeys.has(titleKey)) ||
       (domain && storedDomains.has(domain))
 
     if (covers) {`,
-  `    const covers =
+    `    const covers =
       storedUrlKeys.has(urlKey) ||
       (titleKey && storedTitleKeys.has(titleKey)) ||
       (domain && storedDomains.has(domain))
@@ -167,25 +183,25 @@ replaceOnce(
     webReal += 1
 
     if (covers) {`,
-  'relevance gate',
-)
+    'relevance gate',
+  )
 
-replaceOnce(
-  `    seen.add(urlKey)
+  replaceOnce(
+    `    seen.add(urlKey)
     webReal += 1
 
     const titleKey = titleIdentityKey(hit.title) || ''`,
-  `    seen.add(urlKey)
+    `    seen.add(urlKey)
 
     const titleKey = titleIdentityKey(hit.title) || ''`,
-  'web-real counter move',
-)
+    'web-real counter move',
+  )
 
-replaceOnce(
-  `    const needs = Array.isArray(thesis.needs) ? thesis.needs : []
+  replaceOnce(
+    `    const needs = Array.isArray(thesis.needs) ? thesis.needs : []
     const profileState = thesis?.location?.state ?? null
     const { overlap, web_only, grantflow_only, web_real } = classifyWebResults(hits, stored, { needs, state: profileState })`,
-  `    const needs = Array.isArray(thesis.needs) ? thesis.needs : []
+    `    const needs = Array.isArray(thesis.needs) ? thesis.needs : []
     const applicantTypes = Array.isArray(thesis.applicant_types)
       ? thesis.applicant_types
       : (Array.isArray(thesis.applicantTypes) ? thesis.applicantTypes : [])
@@ -195,20 +211,231 @@ replaceOnce(
       state: profileState,
       applicantTypes,
     })`,
-  'profile context handoff',
-)
+    'profile context handoff',
+  )
 
-replaceOnce(
-  `  normalizeUrlKey,
+  replaceOnce(
+    `  normalizeUrlKey,
   isRealFundingHit,
   parityScore,`,
-  `  normalizeUrlKey,
+    `  normalizeUrlKey,
   isRealFundingHit,
   isForeignGovernmentHit,
   isBenchmarkRelevantHit,
   parityScore,`,
-  'default exports',
-)
+    'default exports',
+  )
+}
+
+if (!source.includes(SOURCE_QUALITY_SIGNATURE)) {
+  replaceOnce(
+    `  'disabilityguidance.org',
+]))`,
+    `  'disabilityguidance.org',
+  // Search/listing/referral sites observed in the final 2026-07-29 benchmark.
+  // They point applicants elsewhere and are not direct award opportunities.
+  'thegrantportal.com',
+  'disability-grants.org',
+  'themobilityresource.com',
+]))`,
+    'source-quality noise domains',
+  )
+
+  replaceOnce(
+    `  if (!domain || AGGREGATOR_NOISE_DOMAINS.has(domain)) return false`,
+    `  if (
+    !domain ||
+    [...AGGREGATOR_NOISE_DOMAINS].some(
+      (noiseDomain) => domain === noiseDomain || domain.endsWith('.' + noiseDomain),
+    )
+  ) return false`,
+    'subdomain-aware noise filter',
+  )
+
+  replaceOnce(
+    `const WEB_ONLY_TOP_CAP = 5`,
+    `const WEB_ONLY_TOP_CAP = 20`,
+    'expanded web-only evidence',
+  )
+
+  replaceOnce(
+    `  return applicantMatchesHit(hit, applicantTypes)
+}
+
+/**
+ * True only when a non-overlapping web hit is a plausible actionable funding`,
+    `  return applicantMatchesHit(hit, applicantTypes)
+}
+
+const GENERIC_PORTAL_TITLE_RE =
+  /^(?:home|search grants|browse grants|find grants|grant search|funding opportunities)(?:\\s*[|–—-]\\s*grants?\\.gov)?$/i
+const GENERIC_GRANTS_GOV_PATH_RE =
+  /^\\/(?:$|search-grants\\/?$|learn-grants(?:\\/.*)?$|applicants(?:\\/.*)?$|grantors(?:\\/.*)?$|support(?:\\/.*)?$)/i
+
+/**
+ * A federal or state portal can contain real opportunities without being one.
+ * Only a specific opportunity/detail page belongs in the direct-recall metric.
+ */
+export function isGenericFundingPortalHit(hit) {
+  const url = String(hit?.url || '').trim()
+  const domain = extractHostname(url)
+  const title = String(hit?.title || '').trim()
+  if (GENERIC_PORTAL_TITLE_RE.test(title)) return true
+  if (domain !== 'grants.gov') return false
+  try {
+    return GENERIC_GRANTS_GOV_PATH_RE.test(new URL(url).pathname || '/')
+  } catch {
+    return true
+  }
+}
+
+/** Final direct-source gate for a purported web-only recall miss. */
+export function isBenchmarkDirectFundingHit(hit, context = {}) {
+  return isBenchmarkRelevantHit(hit, context) && !isGenericFundingPortalHit(hit)
+}
+
+/**
+ * True only when a non-overlapping web hit is a plausible actionable funding`,
+    'direct-funding quality helpers',
+  )
+
+  replaceOnce(
+    `if (!covers && !isBenchmarkRelevantHit(hit, { needs, applicantTypes })) continue`,
+    `if (!covers && !isBenchmarkDirectFundingHit(hit, { needs, applicantTypes })) continue`,
+    'direct-funding classification gate',
+  )
+
+  replaceOnce(
+    `  isForeignGovernmentHit,
+  isBenchmarkRelevantHit,
+  parityScore,`,
+    `  isForeignGovernmentHit,
+  isBenchmarkRelevantHit,
+  isGenericFundingPortalHit,
+  isBenchmarkDirectFundingHit,
+  parityScore,`,
+    'direct-funding default exports',
+  )
+}
+
+if (!source.includes(QUEUE_REFRESH_SIGNATURE)) {
+  const refreshedQueueFunction = `function isTerminalGapStatus(value) {
+  return new Set(['adopted', 'gated_out', 'dismissed']).has(
+    String(value || '').trim().toLowerCase(),
+  )
+}
+
+function gapCandidateKey(candidate) {
+  const profileId = String(candidate?.profile_id || '').trim()
+  const urlKey = normalizeUrlKey(candidate?.url)
+  return profileId && urlKey ? profileId + '|' + urlKey : ''
+}
+
+/**
+ * Refresh the benchmark-owned pending queue to the latest scoped run.
+ *
+ * Terminal decisions and candidates owned by other producers are retained.
+ * Pending web-parity candidates that disappeared from the latest run are pruned,
+ * preventing generic portals and previously filtered noise from being re-seeded
+ * forever. Scoped profile ids make partial/manual runs non-destructive.
+ */
+export async function appendGapCandidates(
+  db,
+  entries = [],
+  { now = new Date(), profileIds = null } = {},
+) {
+  if (!db?.prepare) return { appended: 0, refreshed: 0, pruned: 0, total: 0 }
+
+  const incoming = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry && entry.url && entry.profile_id)
+  const explicitScope = Array.isArray(profileIds)
+    ? profileIds.map(String).filter(Boolean)
+    : []
+  const inferredScope = [...new Set(incoming.map((entry) => String(entry.profile_id)))]
+  const scope = new Set(explicitScope.length ? explicitScope : inferredScope)
+  const existing = await readWebParityGapQueue(db)
+  const currentKeys = new Set(incoming.map(gapCandidateKey).filter(Boolean))
+  const previousPending = new Map()
+  const byKey = new Map()
+
+  let pruned = 0
+  let refreshed = 0
+  let appended = 0
+
+  for (const candidate of existing) {
+    const key = gapCandidateKey(candidate)
+    if (!key) continue
+    const sourceName = String(candidate?.source || 'web_parity_benchmark')
+    const terminal = isTerminalGapStatus(candidate?.status)
+    const inScope = scope.has(String(candidate?.profile_id || ''))
+
+    if (sourceName === 'web_parity_benchmark' && !terminal && inScope) {
+      previousPending.set(key, candidate)
+      if (currentKeys.has(key)) refreshed += 1
+      else pruned += 1
+      continue
+    }
+    byKey.set(key, candidate)
+  }
+
+  const at = (now instanceof Date ? now : new Date(now)).toISOString()
+  for (const entry of incoming) {
+    const key = gapCandidateKey(entry)
+    if (!key || byKey.has(key)) continue
+    if (!previousPending.has(key)) appended += 1
+    byKey.set(key, {
+      url: String(entry.url).trim(),
+      title: String(entry.title || '').trim().slice(0, 200),
+      profile_id: entry.profile_id,
+      need: entry.need ?? null,
+      domain: entry.domain ?? extractHostname(entry.url) ?? null,
+      source: entry.source ?? 'web_parity_benchmark',
+      status: 'candidate',
+      found_at: at,
+    })
+  }
+
+  const candidates = [...byKey.values()].slice(-GAP_QUEUE_CAP)
+  await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates }, at)
+  return {
+    appended,
+    refreshed,
+    pruned,
+    total: candidates.length,
+    scoped_profiles: scope.size,
+  }
+}
+
+`
+
+  replaceRange(
+    `export async function appendGapCandidates(`,
+    `/**
+ * Seed pages for ONE profile's next discovery run`,
+    refreshedQueueFunction,
+    'benchmark gap-queue refresh',
+  )
+
+  replaceOnce(
+    `result.gap_queue = await appendGapCandidates(db, gapEntries, { now })`,
+    `result.gap_queue = await appendGapCandidates(db, gapEntries, {
+        now,
+        profileIds: golden.map((profile) => profile.profile_id),
+      })`,
+    'gap-queue scope handoff',
+  )
+}
+
+const required = [
+  RELEVANCE_SIGNATURE,
+  SOURCE_QUALITY_SIGNATURE,
+  QUEUE_REFRESH_SIGNATURE,
+  TOP_EVIDENCE_SIGNATURE,
+]
+const missing = required.filter((signature) => !source.includes(signature))
+if (missing.length > 0) {
+  throw new Error('[web-parity-relevance] final signatures missing: ' + missing.join(', '))
+}
 
 fs.writeFileSync(file, source)
-console.log('[source-materialization] web-parity profile relevance correction applied')
+console.log('[source-materialization] web-parity relevance, direct-source quality, and queue convergence applied')
