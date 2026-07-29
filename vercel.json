@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm ci --include=dev --include=optional",
-  "buildCommand": "bash scripts/vercel-hardening-export.sh",
+  "buildCommand": "bash scripts/vercel-hardening-diagnose.sh",
   "outputDirectory": "dist",
   "trailingSlash": false,
   "rewrites": [
