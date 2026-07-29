@@ -19,6 +19,109 @@ function clampScore(value) {
   return Math.round(Math.max(SCORE_FLOOR, Math.min(100, num(value, SCORE_FLOOR))))
 }
 
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value.answers && typeof value.answers === 'object' ? value.answers : value)
+    : {}
+}
+
+function asArray(value) {
+  if (Array.isArray(value)) return value
+  if (value instanceof Set) return [...value]
+  if (value === null || value === undefined || value === '') return []
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return []
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (Array.isArray(parsed)) return parsed
+      } catch {
+        // Fall through to delimiter splitting.
+      }
+    }
+    return trimmed.split(/[,;|\n]+/).map((entry) => entry.trim()).filter(Boolean)
+  }
+  return [value]
+}
+
+function derivePolicyProfileNorm(profileContext = {}) {
+  const profile = profileContext?.profile ?? profileContext ?? {}
+  const sections = profileContext?.sections ?? {}
+  const education = asObject(sections.education)
+  const occupation = asObject(sections.occupation)
+  const family = asObject(sections.family_life ?? sections.family)
+  const military = asObject(sections.military_service)
+  const demographics = asObject(sections.demographics)
+  const organization = asObject(sections.organization_details)
+  const type = String(
+    profile.applicant_type ?? profile.primary_type ?? profile.profile_type ?? organization.organization_type ?? '',
+  ).trim().toLowerCase()
+  const applications = asObject(sections.university_applications).applications
+  const studentEvidence = Boolean(
+    /student|college|school/.test(type) ||
+    education.current_institution || education.current_college || education.intended_major ||
+    education.field_of_study || Number(education.gpa) > 0 ||
+    (Array.isArray(applications) && applications.length > 0)
+  )
+  const businessEvidence = Boolean(
+    /business|company|farm|entrepreneur/.test(type) ||
+    occupation.small_business_owner === true ||
+    occupation.farmer === true
+  )
+  const nonprofitEvidence = Boolean(
+    /nonprofit|church|ministry|charity|foundation/.test(type) ||
+    profile.ein || organization.ein
+  )
+
+  return {
+    entityType: type || null,
+    isStudent: studentEvidence,
+    isBusiness: businessEvidence,
+    isNonprofit: nonprofitEvidence,
+    isCaregiver: Boolean(family.caregiver || family.is_caregiver),
+    hasFosterIndicator: Boolean(family.foster_youth || family.former_foster_youth),
+    isWidow: Boolean(family.widow_widower || family.surviving_spouse),
+    isOrphan: Boolean(family.orphan),
+    isImmigrant: Boolean(
+      demographics.immigrant_status &&
+      !/^(none|no|false|unknown|not applicable)$/i.test(String(demographics.immigrant_status).trim())
+    ),
+    isInternationalStudent: Boolean(
+      /international|foreign student|non[- ]?citizen|visa/i.test(
+        String(demographics.immigrant_status ?? demographics.citizenship_status ?? ''),
+      )
+    ),
+    hasChildren: Boolean(
+      family.has_children || family.caregiver ||
+      Number(family.number_of_children ?? family.number_of_dependents ?? 0) > 0
+    ),
+    isVeteran: Boolean(military.veteran || military.disabled_veteran),
+    education: {
+      currentInstitution: education.current_institution ?? education.current_college ?? null,
+      intendedMajor: education.intended_major ?? education.field_of_study ?? null,
+      targetColleges: asArray(education.target_colleges),
+    },
+    academics: {
+      gpa: num(education.gpa, null),
+      act: num(education.act_score, null),
+      sat: num(education.sat_score, null),
+    },
+    occupation,
+    industry: occupation.industry ?? null,
+    needCategories: [
+      ...asArray(profile.needs),
+      ...asArray(profile.need_categories),
+      ...asArray(profileContext?.facets?.intent?.primary_need_category),
+    ],
+    effectiveFacets: [
+      type,
+      ...asArray(profile.tags),
+      ...asArray(profile.interests),
+    ].filter(Boolean),
+  }
+}
+
 function boundedFitScore(canonical = {}) {
   const breakdown = canonical?.match_explain?.scoreBreakdown ??
     canonical?.match_explain?.score_breakdown ?? {}
@@ -89,10 +192,13 @@ export function applyNeedFirstScoring({
     : Array.isArray(canonical?.match_explain?.matchedNeeds)
       ? canonical.match_explain.matchedNeeds
       : []
+  const profileNorm = profileContext?.profileNorm ??
+    profileContext?.normalized ??
+    derivePolicyProfileNorm(profileContext)
 
   const policy = evaluateNeedFirstMatchPolicy({
     profileContext,
-    profileNorm: profileContext?.profileNorm ?? profileContext?.normalized ?? null,
+    profileNorm,
     opportunity,
     oppNorm,
     dataPointEval: {
