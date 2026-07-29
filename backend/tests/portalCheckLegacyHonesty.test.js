@@ -43,6 +43,20 @@ function insertPortalResult(db, {
   )
 }
 
+function storeApplications(db, applications) {
+  db.prepare(`
+    INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+    VALUES (?, 'university_applications', ?, 'test')
+  `).run('profile-1', JSON.stringify({ applications }))
+}
+
+function readResult(db, id) {
+  const stored = db.prepare(
+    'SELECT awards_detected, results_json FROM portal_check_results WHERE id = ?',
+  ).get(id)
+  return { ...stored, parsed: JSON.parse(stored.results_json) }
+}
+
 describe('legacy public portal-award honesty', () => {
   it('reclassifies an unauthenticated public-page claim as advertising evidence', async () => {
     const db = makeDb()
@@ -60,13 +74,9 @@ describe('legacy public portal-award honesty', () => {
       })
 
       expect(await repairLegacyPublicAwardClaims(db)).toBe(1)
+      const { awards_detected: awardsDetected, parsed } = readResult(db, 'legacy-public')
 
-      const stored = db.prepare(
-        'SELECT awards_detected, results_json FROM portal_check_results WHERE id = ?',
-      ).get('legacy-public')
-      const parsed = JSON.parse(stored.results_json)
-
-      expect(stored.awards_detected).toBe(0)
+      expect(awardsDetected).toBe(0)
       expect(parsed).toMatchObject({
         publicPortalHonestyVersion: 1,
         updateType: null,
@@ -86,28 +96,39 @@ describe('legacy public portal-award honesty', () => {
     }
   })
 
+  it('does not turn a missing advertised amount into a fabricated zero', async () => {
+    const db = makeDb()
+    try {
+      await ensurePortalCheckResultsTable(db)
+      insertPortalResult(db, {
+        id: 'legacy-no-amount',
+        awardsDetected: 3,
+        payload: { updateType: 'scholarship_award', awardName: 'Marketing headline' },
+      })
+
+      expect(await repairLegacyPublicAwardClaims(db)).toBe(1)
+      const { parsed } = readResult(db, 'legacy-no-amount')
+      expect(parsed.publicSignals.advertised_amount).toBeNull()
+      expect(parsed.awardAmount).toBeNull()
+    } finally {
+      db.close()
+    }
+  })
+
   it('preserves only independently owner-recorded award facts', async () => {
     const db = makeDb()
     try {
       await ensurePortalCheckResultsTable(db)
-      db.prepare(`
-        INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-        VALUES (?, 'university_applications', ?, 'test')
-      `).run(
-        'profile-1',
-        JSON.stringify({
-          applications: [{
-            id: 'app-1',
-            imported_portal_awards: [{
-              portal_name: 'TSAC Portal',
-              portal_url: 'https://example.test/aid',
-              award_name: 'Owner-confirmed merit scholarship',
-              award_amount: 2500,
-              award_amount_raw: '$2,500',
-            }],
-          }],
-        }),
-      )
+      storeApplications(db, [{
+        id: 'app-1',
+        imported_portal_awards: [{
+          portal_name: 'TSAC Portal',
+          portal_url: 'https://example.test/aid',
+          award_name: 'Owner-confirmed merit scholarship',
+          award_amount: 2500,
+          award_amount_raw: '$2,500',
+        }],
+      }])
       insertPortalResult(db, {
         id: 'legacy-owner-confirmed',
         portalName: 'TSAC Portal',
@@ -123,13 +144,9 @@ describe('legacy public portal-award honesty', () => {
       })
 
       expect(await repairLegacyPublicAwardClaims(db)).toBe(1)
+      const { awards_detected: awardsDetected, parsed } = readResult(db, 'legacy-owner-confirmed')
 
-      const stored = db.prepare(
-        'SELECT awards_detected, results_json FROM portal_check_results WHERE id = ?',
-      ).get('legacy-owner-confirmed')
-      const parsed = JSON.parse(stored.results_json)
-
-      expect(stored.awards_detected).toBe(0)
+      expect(awardsDetected).toBe(0)
       expect(parsed).toMatchObject({
         publicPortalHonestyVersion: 1,
         updateType: 'owner_merged_award',
@@ -138,6 +155,64 @@ describe('legacy public portal-award honesty', () => {
         awardAmount: 2500,
         awardAmountRaw: '$2,500',
       })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('never guesses between multiple owner awards on the same portal', async () => {
+    const db = makeDb()
+    try {
+      await ensurePortalCheckResultsTable(db)
+      storeApplications(db, [{
+        id: 'app-1',
+        imported_portal_awards: [
+          { portal_name: 'TSAC Portal', portal_url: 'https://example.test/aid', award_name: 'Award A' },
+          { portal_name: 'TSAC Portal', portal_url: 'https://example.test/aid', award_name: 'Award B' },
+        ],
+      }])
+      insertPortalResult(db, {
+        id: 'ambiguous-owner-awards',
+        portalName: 'TSAC Portal',
+        portalUrl: 'https://example.test/aid',
+        awardsDetected: 2,
+        payload: { applicationId: 'app-1', updateType: 'scholarship_award' },
+      })
+
+      expect(await repairLegacyPublicAwardClaims(db)).toBe(1)
+      const { parsed } = readResult(db, 'ambiguous-owner-awards')
+      expect(parsed.updateType).toBeNull()
+      expect(parsed.awardName).toBeNull()
+      expect(parsed.publicSignals.legacy_reclassified).toBe(true)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('does not match a same-named portal when both URLs conflict', async () => {
+    const db = makeDb()
+    try {
+      await ensurePortalCheckResultsTable(db)
+      storeApplications(db, [{
+        id: 'app-1',
+        imported_portal_awards: [{
+          portal_name: 'Shared Portal Name',
+          portal_url: 'https://owner.example/aid',
+          award_name: 'Owner award',
+        }],
+      }])
+      insertPortalResult(db, {
+        id: 'conflicting-urls',
+        portalName: 'Shared Portal Name',
+        portalUrl: 'https://public.example/landing',
+        awardsDetected: 1,
+        payload: { applicationId: 'app-1', updateType: 'scholarship_award' },
+      })
+
+      expect(await repairLegacyPublicAwardClaims(db)).toBe(1)
+      const { parsed } = readResult(db, 'conflicting-urls')
+      expect(parsed.updateType).toBeNull()
+      expect(parsed.awardName).toBeNull()
     } finally {
       db.close()
     }
