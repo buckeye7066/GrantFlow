@@ -54,25 +54,46 @@ const EXACT_KEYS_TO_REMOVE = new Set([
 ])
 
 const PREFIXES_TO_REMOVE = [
+  // Hosting and live infrastructure.
   'RAILWAY_',
   'VERCEL_',
   'POSTGRES_',
   'UPSTASH_',
+
+  // External providers and credentials.
   'TWILIO_',
   'RESEND_',
   'OPENAI_',
   'ANTHROPIC_',
+  'MICROSOFT_',
+  'MS_GRAPH_',
+  'GRAPH_',
+  'OUTLOOK_',
+  'AZURE_',
+
+  // Funding-provider credentials.
   'GRANTS_GOV_',
   'SIMPLER_GRANTS_',
   'SAM_GOV_',
   'API_DATA_GOV_',
+
+  // Production agent schedules, limits, and delivery modes. Tests set the
+  // values they need explicitly; inherited hosted values must not redefine a
+  // default, start a scheduler, or enable live delivery inside a unit process.
+  'AMY_',
+  'YANA_',
+  'LARRY_',
+  'HAMILTON_',
+  'JOHN_',
 ]
 
 /**
  * Build a deterministic environment for isolated unit and integration tests.
  * Hosted build environments can expose production database URLs, provider
- * credentials, and feature switches. Unit fixtures must never inherit those
- * values and silently turn a local SQLite test into a production-network test.
+ * credentials, agent schedules, and feature switches. Test fixtures must never
+ * inherit those values and silently become production-network or scheduler
+ * tests. Individual tests can opt into a production-shaped value explicitly
+ * after the isolated child process starts.
  */
 export function buildIsolatedTestEnv(base = process.env, overrides = {}) {
   const env = { ...base }
