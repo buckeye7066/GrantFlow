@@ -92,7 +92,11 @@ for (const target of [dbPath, uploadsPath, browserPath]) {
 
 const env = smokeEnv()
 run(['run', 'build'], 'production frontend build', { ...env, NODE_ENV: 'production' })
-run(['exec', '--', 'playwright', 'install', 'chromium'], 'install Chromium', env)
+run(
+  ['exec', '--', 'playwright', 'install', '--with-deps', 'chromium'],
+  'install Chromium and system dependencies',
+  env,
+)
 run(['run', 'smoke'], 'Playwright smoke suite', env)
 
 console.log('[need-first-playwright-gate] PASS')
