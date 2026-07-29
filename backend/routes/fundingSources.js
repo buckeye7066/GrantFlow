@@ -17,6 +17,7 @@ import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { partitionFundingSources } from '../services/matching/fundingSourcePresentation.js'
+import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
@@ -94,7 +95,8 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
               fo.application_url, fo.apply_url, fo.source_url, fo.source, fo.source_id,
               fo.record_origin, fo.opportunity_kind, fo.opportunity_type, fo.type, fo.funding_type,
               fo.source_trust_tier, fo.categories, fo.keywords,
-              pom.match_score, pom.match_decision, pom.match_explanation, pom.match_reasons
+              pom.match_score, pom.match_decision, pom.match_explanation, pom.match_reasons,
+              pom.match_explain_json, pom.matcher_version, pom.ineligibility_reasons
          FROM profile_opportunity_matches pom
          JOIN funding_opportunities fo ON fo.id = pom.opportunity_id
         WHERE pom.profile_id = ? AND pom.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
@@ -115,18 +117,29 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       match_decision: r.match_decision,
       match_explanation: r.match_explanation,
       match_reasons: jparse(r.match_reasons, []),
+      match_explain_json: jparse(r.match_explain_json, r.match_explain_json ?? null),
+      ineligibility_reasons: jparse(r.ineligibility_reasons, r.ineligibility_reasons ?? []),
       url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
       actionable_url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
       is_directory: String(r.opportunity_kind ?? '').toUpperCase() === 'DIRECTORY' ||
         String(r.opportunity_kind ?? '').toUpperCase() === 'PAST_AWARD_INTEL',
     }))
+
+    // The current profile/trust gate still decides whether the row is safe and
+    // applicable enough to display. Its temporary recomputed score does NOT
+    // become owner-facing truth: restorePersistedMatchTruth re-applies the
+    // profile_opportunity_matches score/decision/explanation before the display
+    // floor and grouping run. The pre-fix route turned stored scores of 2–36 into
+    // values as high as 97 at read time and promoted broad REVIEW rows to ACCEPT.
     const canonical = canonicalizeOpportunityList(profileContext, mapped, {
       preserveDirectories: true,
       rejectHardIneligible: true,
     })
+    const persistedTruth = restorePersistedMatchTruth(canonical.kept, mapped)
+
     const sources = []
     let geoStubsHidden = 0
-    for (const r of canonical.kept) {
+    for (const r of persistedTruth) {
       if (isTemplatedGeoStub({ title: r.title, opportunity_kind: r.opportunity_kind })) { geoStubsHidden += 1; continue }
       const kind = String(r.opportunity_kind ?? '').toUpperCase()
       sources.push({
@@ -144,8 +157,9 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         match_score: r.match_score,
         match_decision: r.match_decision, // accept | review | reject
         why: r.match_explanation,
-        is_directory: kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL',
+        is_directory: kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL' || r.is_directory === true,
         trust_tier: r.source_trust_tier ?? null,
+        matcher_version: r.matcher_version ?? null,
       })
     }
 
