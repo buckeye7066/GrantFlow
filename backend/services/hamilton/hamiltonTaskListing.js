@@ -19,8 +19,12 @@ export async function listScopedHamiltonTasks({
 
   const requested = requestedProfileId ? String(requestedProfileId) : null
 
-  // `null` is the DB-backed global-access sentinel returned for admins.
-  if (isAdmin || accessibleProfileIds === null) {
+  // Global access is authorized by the explicit, DB-backed admin decision only.
+  // A null profile set is never sufficient by itself: requestContext reserves
+  // null for admins, but callers that recompute access can observe a null
+  // sentinel after an inconsistent/failed context lookup. Treating that null as
+  // authority would turn an access-control disagreement into a cross-tenant leak.
+  if (isAdmin === true) {
     const tasks = await listTasks({
       ...(requested ? { profileId: requested } : {}),
       status,
@@ -33,13 +37,13 @@ export async function listScopedHamiltonTasks({
     ? new Set([...accessibleProfileIds].map(String))
     : new Set((Array.isArray(accessibleProfileIds) ? accessibleProfileIds : []).map(String))
 
-  if (accessible.size === 0) return { forbidden: false, tasks: [] }
-
   if (requested) {
     if (!accessible.has(requested)) return { forbidden: true, tasks: [] }
     const tasks = await listTasks({ profileId: requested, status, limit })
     return { forbidden: false, tasks: Array.isArray(tasks) ? tasks : [] }
   }
+
+  if (accessible.size === 0) return { forbidden: false, tasks: [] }
 
   const tasks = []
   for (const profileId of accessible) {
