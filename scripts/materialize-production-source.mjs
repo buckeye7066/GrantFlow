@@ -12,7 +12,7 @@ if (truthy(process.env.GRANTFLOW_SKIP_SOURCE_MATERIALIZATION)) {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 process.chdir(repoRoot)
 
-const signatures = Object.freeze([
+const coreSignatures = Object.freeze([
   ['backend/services/missionHealthService.js', 'export function normalizeCount'],
   ['backend/routes/ai.js', 'fetchPublicText(portal_url'],
   ['backend/start.js', 'Schema migrations have exactly one owner'],
@@ -23,6 +23,11 @@ const signatures = Object.freeze([
   ['scripts/check-deployment-config.mjs', 'hasProductionHostGuard'],
   ['src/config/env.js', 'VITE_PREVIEW_API_URL'],
 ])
+const webParitySignature = Object.freeze([
+  'backend/services/webParityBenchmark.js',
+  'export function isBenchmarkRelevantHit',
+])
+const signatures = Object.freeze([...coreSignatures, webParitySignature])
 
 const hasSignature = ([file, signature]) => {
   try {
@@ -48,6 +53,11 @@ function hasResourcePreservation() {
   }
 }
 
+async function applyModule(modulePath, label = modulePath) {
+  await import(`${pathToFileURL(path.resolve(modulePath)).href}?materialize=${Date.now()}`)
+  console.log(`[source-materialization] applied ${label}`)
+}
+
 async function refreshEnvExamples() {
   const generatorPath = path.resolve('scripts/generate-env-examples.mjs')
   const { buildOutputs } = await import(
@@ -60,18 +70,25 @@ async function refreshEnvExamples() {
   console.log('[source-materialization] regenerated env examples from the materialized source tree')
 }
 
-const present = signatures.filter(hasSignature)
-if (present.length === signatures.length && hasResourcePreservation()) {
-  // The first materialization pass already regenerated the env contracts from
-  // the final source tree. Repeated npm prehooks run concurrently in the unit
-  // suite and must remain read-only, otherwise server-start tests race while
-  // rescanning and rewriting the same files.
+const corePresent = coreSignatures.filter(hasSignature)
+if (corePresent.length === coreSignatures.length && hasResourcePreservation()) {
+  // The global hardening tree is already materialized. Apply later incremental
+  // product corrections idempotently before the read-only early exit.
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-relevance.mjs',
+    'web-parity relevance correction',
+  )
+  if (!hasSignature(webParitySignature)) {
+    throw new Error('[source-materialization] web-parity relevance signature is missing')
+  }
+  // Repeated npm prehooks run concurrently in the unit suite and must remain
+  // read-only once every signature is present.
   console.log('[source-materialization] verified product source already present')
   process.exit(0)
 }
-if (present.length > 0) {
+if (corePresent.length > 0) {
   throw new Error(
-    `[source-materialization] partial source tree detected: ${present.map(([file]) => file).join(', ')}`,
+    `[source-materialization] partial source tree detected: ${corePresent.map(([file]) => file).join(', ')}`,
   )
 }
 
@@ -83,10 +100,11 @@ const modules = [
   'scripts/source-materialization/apply-readiness-deployment.mjs',
   'scripts/source-materialization/apply-runtime-secret-wiring.mjs',
   'scripts/source-materialization/apply-test-updates.mjs',
+  'scripts/source-materialization/apply-web-parity-relevance.mjs',
 ]
 
 for (const modulePath of modules) {
-  await import(`${pathToFileURL(path.resolve(modulePath)).href}?materialize=${Date.now()}`)
+  await applyModule(modulePath)
 }
 
 const missing = signatures.filter((entry) => !hasSignature(entry))
