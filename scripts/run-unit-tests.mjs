@@ -3,6 +3,7 @@ import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { spawn } from 'node:child_process'
+import { buildIsolatedTestEnv } from './test-environment.mjs'
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true })
@@ -32,17 +33,23 @@ async function main() {
     return
   }
 
-  // Node's default test concurrency can overwhelm machines because many tests spawn full backend
-  // processes. Keep this conservative by default to reduce flakes/timeouts.
+  // Node's default test concurrency can overwhelm machines because many tests
+  // spawn full backend processes. Keep this conservative by default to reduce
+  // flakes/timeouts.
   const concurrencyRaw = process.env.UNIT_TEST_CONCURRENCY || process.env.TEST_CONCURRENCY || '4'
   const concurrency = Math.max(1, Number.parseInt(String(concurrencyRaw), 10) || 4)
 
+  // Unit tests are hermetic. In hosted builds, inherited DATABASE_URL and
+  // provider settings can otherwise redirect SQLite fixtures to production
+  // services or alter feature behavior. Child tests can still opt into an
+  // explicit production-shaped environment inside their own spawn calls.
+  const testEnv = buildIsolatedTestEnv(process.env, {
+    GRANTFLOW_TEST_RUNNER: process.env.GRANTFLOW_TEST_RUNNER || '1',
+  })
+
   const child = spawn(process.execPath, ['--test', `--test-concurrency=${concurrency}`, ...testFiles], {
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      GRANTFLOW_TEST_RUNNER: process.env.GRANTFLOW_TEST_RUNNER || '1',
-    },
+    env: testEnv,
   })
 
   let exited = false
