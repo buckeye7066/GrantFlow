@@ -3,7 +3,6 @@
 # Stage 1: Build stage
 FROM node:20-slim AS builder
 
-# Set working directory
 WORKDIR /app
 
 # Build deps for native modules (node-gyp: better-sqlite3, etc.)
@@ -11,16 +10,22 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy package files
 COPY package*.json ./
 
-# Install ALL deps (incl dev) for build. Use lockfile.
-RUN npm ci --legacy-peer-deps
+# The source materializer is copied later with the source tree. Skip the npm
+# lifecycle hook during dependency installation, then run it explicitly once the
+# complete repository is present. Native dependency install scripts still run.
+RUN GRANTFLOW_SKIP_SOURCE_MATERIALIZATION=1 \
+  npm ci --include=dev --include=optional --legacy-peer-deps
 
-# Copy all source files
 COPY . .
 
-# Build Vite frontend to dist/
+# Materialize and verify the exact product tree that passed the clean-room gate.
+# Generator inputs remain available in the builder for contract verification.
+# The production Docker runtime stage copies only materialized product/runtime
+# files, so the generator inputs and build-only verification scripts never ship.
+RUN node scripts/materialize-production-source.mjs
+
 RUN npm run build
 
 # Remove devDependencies so runtime image doesn't ship them
@@ -29,7 +34,6 @@ RUN npm prune --omit=dev
 # Stage 2: Production stage
 FROM node:20-slim
 
-# Set working directory
 WORKDIR /app
 
 # Runtime deps for document ingestion:
@@ -57,55 +61,29 @@ COPY --from=builder /app/node_modules/playwright-core /tmp/pw/node_modules/playw
 RUN node /tmp/pw/node_modules/playwright/cli.js install --with-deps chromium \
   && rm -rf /tmp/pw /var/lib/apt/lists/*
 
-# Copy ONLY production dependencies from builder
 COPY --from=builder /app/node_modules ./node_modules
-
-# Copy backend code
 COPY --from=builder /app/backend ./backend
 
-# Copy `shared/` — backend re-exports from it (e.g.
-# `backend/utils/profileSuggestionGuards.js` -> `shared/profileSuggestionGuards.js`).
-# Without this, the container crashes at boot with ERR_MODULE_NOT_FOUND and
-# Railway silently keeps serving the previous deployment.
+# Backend runtime imports shared modules and selected frontend configuration.
 COPY --from=builder /app/shared ./shared
-
-# Copy `src/config/` — `shared/` transitively imports `src/config/sectionMetadata.js`
-# (and other config modules) at runtime. We deliberately copy only `src/config/`
-# (not the entire frontend `src/`) to keep the runtime image small while still
-# satisfying every transitive backend import.
 COPY --from=builder /app/src/config ./src/config
 
-# Copy seed data needed for admin maintenance operations (e.g., baseline profile seeding)
 COPY seed ./seed
-
-# Copy the pricing/service-catalog extract required by
-# seedServiceCatalogFromExtract(). The Docker context intentionally excludes the
-# rest of docs; this single file is runtime data, not documentation decoration.
 COPY --from=builder /app/docs/Payment_sheet_Grantflow_2026-06-15_EXTRACT.md ./docs/Payment_sheet_Grantflow_2026-06-15_EXTRACT.md
-
-# Copy built frontend assets from builder stage
 COPY --from=builder /app/dist ./dist
-
-# Copy package manifests so runtime has /app/package.json
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
 
-# Runtime writes are limited to app data/upload directories. Drop root before
-# booting the server so a compromised request handler does not own the image.
 RUN mkdir -p /app/data /app/uploads \
   && chown -R node:node /app/data /app/uploads
 # Production must set UPLOADS_DIR to a mounted persistent volume (Railway: /data/uploads).
-# Do not default it in the image; the backend fails fast if production storage is ephemeral.
 COPY docker-entrypoint.sh /usr/local/bin/grantflow-entrypoint
 RUN chmod +x /usr/local/bin/grantflow-entrypoint
 ENTRYPOINT ["grantflow-entrypoint"]
 
-# Expose port (Railway will set PORT env var)
 EXPOSE 8080
 
-# Liveness check on /healthz endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 8080) + '/healthz', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
 
-# Start the Express server
 CMD ["node", "backend/start.js"]

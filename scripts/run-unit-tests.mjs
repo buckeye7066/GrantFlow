@@ -3,6 +3,7 @@ import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { spawn } from 'node:child_process'
+import { buildIsolatedTestEnv } from './test-environment.mjs'
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true })
@@ -32,17 +33,24 @@ async function main() {
     return
   }
 
-  // Node's default test concurrency can overwhelm machines because many tests spawn full backend
-  // processes. Keep this conservative by default to reduce flakes/timeouts.
-  const concurrencyRaw = process.env.UNIT_TEST_CONCURRENCY || process.env.TEST_CONCURRENCY || '4'
-  const concurrency = Math.max(1, Number.parseInt(String(concurrencyRaw), 10) || 4)
+  // Several files boot full backends or exercise native SQLite in child
+  // processes. Four-way parallelism produced sporadic file-level exits on the
+  // hosted 4-core builder even though the same suites passed alone. Two workers
+  // retain useful parallelism while keeping native/process pressure bounded.
+  const concurrencyRaw = process.env.UNIT_TEST_CONCURRENCY || process.env.TEST_CONCURRENCY || '2'
+  const concurrency = Math.max(1, Number.parseInt(String(concurrencyRaw), 10) || 2)
+
+  // Unit tests are hermetic. In hosted builds, inherited DATABASE_URL and
+  // provider settings can otherwise redirect SQLite fixtures to production
+  // services or alter feature behavior. Child tests can still opt into an
+  // explicit production-shaped environment inside their own spawn calls.
+  const testEnv = buildIsolatedTestEnv(process.env, {
+    GRANTFLOW_TEST_RUNNER: process.env.GRANTFLOW_TEST_RUNNER || '1',
+  })
 
   const child = spawn(process.execPath, ['--test', `--test-concurrency=${concurrency}`, ...testFiles], {
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      GRANTFLOW_TEST_RUNNER: process.env.GRANTFLOW_TEST_RUNNER || '1',
-    },
+    env: testEnv,
   })
 
   let exited = false
@@ -53,10 +61,8 @@ async function main() {
 
   // Test-spawned server processes may keep open handles that prevent
   // node --test from exiting. Keep a deadman switch, but size it for the
-  // current suite: many tests intentionally boot the backend, exercise auth,
-  // parse documents, and run Hamilton/agent flows. This is not a performance
-  // SLA; CI/local callers can still lower or raise it with UNIT_TEST_HARD_TIMEOUT_MS.
-  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 12 * 60 * 1000
+  // conservative two-worker suite. Callers can still override it explicitly.
+  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 18 * 60 * 1000
   setTimeout(() => {
     if (!exited) {
       console.error(`[unit] Hard timeout (${HARD_TIMEOUT_MS / 1000}s) reached — killing test runner`)

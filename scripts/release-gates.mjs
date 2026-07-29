@@ -4,28 +4,35 @@
  * Goal:
  * - Make regressions loud and repeatable.
  * - Keep logic simple and reversible (only runs checks; no writes/migrations).
+ * - Keep hosted deployment credentials, volumes, and agent schedules out of
+ *   isolated test processes.
  *
  * Run:
  *   npm run release:gates
  */
 
 import { spawn } from 'node:child_process'
+import process from 'node:process'
+import { buildIsolatedTestEnv } from './test-environment.mjs'
 
 function npmBin() {
   // Prefer `npm` and let the platform resolve it (we enable `shell` on Windows below).
   return 'npm'
 }
 
-function run(cmd, args, { label } = {}) {
+function run(cmd, args, { label, isolatedTest = false } = {}) {
   return new Promise((resolve, reject) => {
     const pretty = `${cmd} ${args.join(' ')}`
     const name = label ? `[gate:${label}]` : '[gate]'
-    console.log(`${name} start: ${pretty}`)
+    console.log(`${name} start: ${pretty}${isolatedTest ? ' [isolated-env]' : ''}`)
 
     // Windows: `npm`/`.cmd` resolution can fail with shell: false depending on environment.
     // Run via shell on Windows to make this robust for local dev + CI.
     const useShell = process.platform === 'win32'
-    const child = spawn(cmd, args, { stdio: 'inherit', shell: useShell })
+    const env = isolatedTest
+      ? buildIsolatedTestEnv(process.env, { GRANTFLOW_TEST_RUNNER: '1' })
+      : process.env
+    const child = spawn(cmd, args, { stdio: 'inherit', shell: useShell, env })
     child.on('error', reject)
     child.on('exit', (code) => {
       if (code === 0) {
@@ -36,6 +43,14 @@ function run(cmd, args, { label } = {}) {
       reject(new Error(`${name} failed (exit ${code})`))
     })
   })
+}
+
+function runNodeTests(files, label) {
+  return run('node', ['--test', ...files], { label, isolatedTest: true })
+}
+
+function runVitest(args, label) {
+  return run('node', ['scripts/run-vitest-isolated.mjs', 'run', ...args], { label })
 }
 
 async function main() {
@@ -58,47 +73,58 @@ async function main() {
   await run('node', ['scripts/check-env-examples.mjs'], { label: 'env-examples' })
   await run(npmBin(), ['run', 'profile-scope:check'], { label: 'profile-scope' })
   await run(npmBin(), ['run', 'safe-sql:check'], { label: 'safe-sql' })
-  await run('node', ['--test', 'tests/unit/no-fake-production-rule.test.mjs'], { label: 'no-fake-rule' })
-  await run('node', ['--test', 'tests/unit/profile-context-middleware.test.mjs'], { label: 'profile-context' })
-  await run('node', ['scripts/crawler-profile-routing-proof.mjs'], { label: 'crawler-profile-routing' })
+  await runNodeTests(['tests/unit/no-fake-production-rule.test.mjs'], 'no-fake-rule')
+  await runNodeTests(['tests/unit/profile-context-middleware.test.mjs'], 'profile-context')
+  await run('node', ['scripts/crawler-profile-routing-proof.mjs'], {
+    label: 'crawler-profile-routing',
+    isolatedTest: true,
+  })
 
-  // Gate 1: baseline quality + build
+  // Gate 1: baseline quality + build. The package's Node and Vitest lanes apply
+  // their own isolation wrappers; the Vite production build still sees the
+  // deployment build-time settings being validated by this exact run.
   await run(npmBin(), ['test'], { label: 'quality+build' })
 
   // Gate 2: contrast
-  await run('node', ['--test', 'tests/unit/ui-dashboard-contrast.test.mjs'], { label: 'ui-contrast-dashboard' })
-  await run('node', ['--test', 'tests/unit/ui-geo-crawl-contrast.test.mjs'], { label: 'ui-contrast-geo' })
-  await run('node', ['--test', 'tests/unit/profile-flow-mobile-static.test.mjs'], { label: 'profile-mobile-static' })
+  await runNodeTests(['tests/unit/ui-dashboard-contrast.test.mjs'], 'ui-contrast-dashboard')
+  await runNodeTests(['tests/unit/ui-geo-crawl-contrast.test.mjs'], 'ui-contrast-geo')
+  await runNodeTests(['tests/unit/profile-flow-mobile-static.test.mjs'], 'profile-mobile-static')
 
   // Gate 3: auth/downloads
-  await run('node', ['--test', 'tests/unit/ui-honesty-guard.test.mjs'], { label: 'ui-honesty' })
-  await run('node', ['--test', 'tests/unit/avatar-download-auth.test.mjs'], { label: 'auth-avatar-download' })
-  await run('node', ['--test', 'tests/unit/documents-download-auth.test.mjs'], { label: 'auth-doc-download' })
+  await runNodeTests(['tests/unit/ui-honesty-guard.test.mjs'], 'ui-honesty')
+  await runNodeTests(['tests/unit/avatar-download-auth.test.mjs'], 'auth-avatar-download')
+  await runNodeTests(['tests/unit/documents-download-auth.test.mjs'], 'auth-doc-download')
 
   // Gate 4: uploads persistence
-  await run('node', ['--test', 'tests/unit/avatar-upload-and-download.test.mjs'], { label: 'uploads-avatar' })
-  await run('node', ['--test', 'tests/unit/avatar-upload-persistence-restart.test.mjs'], { label: 'uploads-avatar-restart' })
+  await runNodeTests(['tests/unit/avatar-upload-and-download.test.mjs'], 'uploads-avatar')
+  await runNodeTests(['tests/unit/avatar-upload-persistence-restart.test.mjs'], 'uploads-avatar-restart')
 
   // Gate 5: Discover Grants: local funding directory resources survive filtering
-  await run('node', ['scripts/verify-discover-grants-local-funding.mjs'], { label: 'discover-local-funding' })
+  await run('node', ['scripts/verify-discover-grants-local-funding.mjs'], {
+    label: 'discover-local-funding',
+    isolatedTest: true,
+  })
 
   // Gate 6: Pipeline add-to-pipeline: no 500s under schema drift
-  await run('node', ['--test', 'tests/unit/grants-add-to-pipeline-schema-drift.test.mjs'], { label: 'pipeline-add' })
+  await runNodeTests(['tests/unit/grants-add-to-pipeline-schema-drift.test.mjs'], 'pipeline-add')
 
   // Gate 7: Matching pipeline integration — profiles must always find real results
-  await run('npx', ['vitest', 'run', 'backend/tests/matching-pipeline.test.js', '--reporter=verbose'], { label: 'matching-pipeline' })
+  await runVitest(['backend/tests/matching-pipeline.test.js', '--reporter=verbose'], 'matching-pipeline')
 
   // Gate 8: Validation layer — URL format, required fields, duplicate detection
-  await run('node', ['--test', 'tests/unit/opportunity-validation-layer.test.mjs'], { label: 'validation-layer' })
-  await run('node', ['--test', 'tests/unit/funding-trace-consolidation.test.mjs'], { label: 'funding-trace' })
+  await runNodeTests(['tests/unit/opportunity-validation-layer.test.mjs'], 'validation-layer')
+  await runNodeTests(['tests/unit/funding-trace-consolidation.test.mjs'], 'funding-trace')
 
   // Gate 9: Multi-profile matching — individual/student/nonprofit/business must return results
-  await run('node', ['--test', 'tests/unit/multi-profile-matching.test.mjs', 'tests/unit/validation-gate.test.mjs'], { label: 'multi-profile-matching' })
+  await runNodeTests(
+    ['tests/unit/multi-profile-matching.test.mjs', 'tests/unit/validation-gate.test.mjs'],
+    'multi-profile-matching',
+  )
 
   // Gate 10: Endpoint sweep — every GET handler is mounted + runs without 5xx
   // (integration gate; boots the full server, so it lives here, not in the
   // parallel fast `unit` lane).
-  await run('npx', ['vitest', 'run', '--config', 'vitest.endpoints.config.js'], { label: 'endpoint-sweep' })
+  await runVitest(['--config', 'vitest.endpoints.config.js'], 'endpoint-sweep')
 
   console.log('[gate] all release gates passed')
 }

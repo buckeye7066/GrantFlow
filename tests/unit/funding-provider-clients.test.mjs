@@ -11,17 +11,17 @@ import { searchEntitiesByUei as searchSamEntitiesByUei } from '../../backend/src
 
 async function withEnv(vars, fn) {
   const originals = {}
-  for (const k of Object.keys(vars)) originals[k] = process.env[k]
-  for (const [k, v] of Object.entries(vars)) {
-    if (v == null) delete process.env[k]
-    else process.env[k] = String(v)
+  for (const key of Object.keys(vars)) originals[key] = process.env[key]
+  for (const [key, value] of Object.entries(vars)) {
+    if (value == null) delete process.env[key]
+    else process.env[key] = String(value)
   }
   try {
     return await fn()
   } finally {
-    for (const [k, v] of Object.entries(originals)) {
-      if (v == null) delete process.env[k]
-      else process.env[k] = v
+    for (const [key, value] of Object.entries(originals)) {
+      if (value == null) delete process.env[key]
+      else process.env[key] = value
     }
   }
 }
@@ -32,26 +32,28 @@ test('funding clients: required keys throw deterministic MISSING_API_KEY', async
       SIMPLER_GRANTS_API_KEY: null,
       SAM_GOV_PUBLIC_API_KEY: null,
       SAM_GOV_API_KEY: null,
+      SAM_GOV_KEY: null,
+      Sam_gov_key: null,
       API_DATA_GOV_KEY: null,
     },
     async () => {
-      await assert.rejects(() => fetchSimpler({ query: 'x', pageOffset: 1, pageSize: 1 }), (err) => {
-        assert.equal(err.code, 'MISSING_API_KEY')
+      await assert.rejects(() => fetchSimpler({ query: 'x', pageOffset: 1, pageSize: 1 }), (error) => {
+        assert.equal(error.code, 'MISSING_API_KEY')
         return true
       })
 
-      await assert.rejects(() => fetchSam({ keyword: 'x', limit: 1, offset: 0 }), (err) => {
-        assert.equal(err.code, 'MISSING_API_KEY')
+      await assert.rejects(() => fetchSam({ keyword: 'x', limit: 1, offset: 0 }), (error) => {
+        assert.equal(error.code, 'MISSING_API_KEY')
         return true
       })
 
-      await assert.rejects(() => searchSamEntitiesByUei({ uei: 'SAMPLEUEI123456', limit: 1 }), (err) => {
-        assert.equal(err.code, 'MISSING_API_KEY')
+      await assert.rejects(() => searchSamEntitiesByUei({ uei: 'SAMPLEUEI123456', limit: 1 }), (error) => {
+        assert.equal(error.code, 'MISSING_API_KEY')
         return true
       })
 
-      await assert.rejects(() => fetchGovInfoPackageSummary('FR-2018-08-03'), (err) => {
-        assert.equal(err.code, 'MISSING_API_KEY')
+      await assert.rejects(() => fetchGovInfoPackageSummary('FR-2018-08-03'), (error) => {
+        assert.equal(error.code, 'MISSING_API_KEY')
         return true
       })
     },
@@ -180,9 +182,9 @@ test('funding clients: normalize responses (no real network)', async () => {
         assert.ok(Array.isArray(samEntity.entities))
         assert.equal(samEntity.entities[0].ueiSAM, 'TESTUEI123456')
 
-        const gg = await fetchGrantsGov({ keyword: 'health', rows: 1, startRecordNum: 0 })
-        assert.equal(gg[0].source, 'grants.gov')
-        assert.equal(gg[0].source_id, 'gg-1')
+        const grantsGov = await fetchGrantsGov({ keyword: 'health', rows: 1, startRecordNum: 0 })
+        assert.equal(grantsGov[0].source, 'grants.gov')
+        assert.equal(grantsGov[0].source_id, 'gg-1')
 
         const nih = await fetchNih({ text: 'cancer', limit: 1, offset: 0 })
         assert.equal(nih[0].source, 'nih.reporter')
@@ -193,10 +195,9 @@ test('funding clients: normalize responses (no real network)', async () => {
       },
     )
 
-    // Sanity: ensure we actually mocked outbound calls
+    // Sanity: ensure we actually mocked outbound calls.
     assert.ok(calls.length >= 5)
   } finally {
     __resetAxiosForTests()
   }
 })
-
