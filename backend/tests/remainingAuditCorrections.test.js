@@ -6,7 +6,10 @@ import {
   profileOutcomeAtFloor,
   sweepFloors,
 } from '../services/amy/crawlerMetrics.js'
-import { partitionFundingSources } from '../services/matching/fundingSourcePresentation.js'
+import {
+  isFundingResource,
+  partitionFundingSources,
+} from '../services/matching/fundingSourcePresentation.js'
 import { guardDirectFundingDecision } from '../services/matching/resourceDecisionGuard.js'
 import {
   DISCOVERY_MIN_SCORE_FLOOR,
@@ -39,6 +42,44 @@ describe('remaining 2026-07-28 production-audit corrections', () => {
 
       expect(result).toEqual({ forbidden: true, tasks: [] })
       expect(listTasks).not.toHaveBeenCalled()
+    })
+
+    it('fails closed when a non-admin receives the null all-access sentinel', async () => {
+      const listTasks = vi.fn()
+      const requested = await listScopedHamiltonTasks({
+        isAdmin: false,
+        requestedProfileId: 'p1',
+        accessibleProfileIds: null,
+        listTasks,
+      })
+      const aggregate = await listScopedHamiltonTasks({
+        isAdmin: false,
+        accessibleProfileIds: null,
+        listTasks,
+      })
+
+      expect(requested).toEqual({ forbidden: true, tasks: [] })
+      expect(aggregate).toEqual({ forbidden: false, tasks: [] })
+      expect(listTasks).not.toHaveBeenCalled()
+    })
+
+    it('uses global scope only when the explicit admin decision is true', async () => {
+      const listTasks = vi.fn(async ({ profileId }) => [
+        { id: profileId ? `task-${profileId}` : 'task-all', profile_id: profileId ?? null },
+      ])
+      const result = await listScopedHamiltonTasks({
+        isAdmin: true,
+        requestedProfileId: 'p1',
+        accessibleProfileIds: null,
+        status: 'queued',
+        listTasks,
+      })
+
+      expect(result).toEqual({
+        forbidden: false,
+        tasks: [{ id: 'task-p1', profile_id: 'p1' }],
+      })
+      expect(listTasks).toHaveBeenCalledWith({ profileId: 'p1', status: 'queued', limit: 200 })
     })
 
     it('aggregates accessible profiles only when no profile filter was requested', async () => {
@@ -93,16 +134,21 @@ describe('remaining 2026-07-28 production-audit corrections', () => {
   })
 
   describe('funding versus resources', () => {
-    it('keeps directories visible without inflating the funding-source total', () => {
-      const direct = { id: 'direct', match_decision: 'accept', is_directory: false }
+    it('keeps every non-direct resource visible without inflating funding totals', () => {
+      const direct = { id: 'direct', match_decision: 'accept', is_directory: false, opportunity_kind: 'GRANT' }
       const directory = { id: 'directory', match_decision: 'review', is_directory: true }
-      const result = partitionFundingSources([direct, directory])
+      const referral = { id: 'referral', match_decision: 'accept', is_directory: false, opportunity_kind: 'REFERRAL' }
+      const schoolPortal = { id: 'school', match_decision: 'review', opportunity_kind: 'SCHOOL_PORTAL' }
+      const result = partitionFundingSources([direct, directory, referral, schoolPortal])
 
+      expect(isFundingResource(referral)).toBe(true)
+      expect(isFundingResource(schoolPortal)).toBe(true)
       expect(result.total).toBe(1)
       expect(result.sources).toEqual([direct])
       expect(result.best_matches).toEqual([direct])
-      expect(result.directories).toEqual([directory])
-      expect(result.resource_count).toBe(1)
+      expect(result.worth_reviewing).toEqual([])
+      expect(result.directories).toEqual([directory, referral, schoolPortal])
+      expect(result.resource_count).toBe(3)
     })
 
     it('demotes a directory ACCEPT at the canonical decision boundary', () => {

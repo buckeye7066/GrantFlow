@@ -16,7 +16,10 @@ import { isTemplatedGeoStub } from '../services/relevanceFilterRules.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
-import { partitionFundingSources } from '../services/matching/fundingSourcePresentation.js'
+import {
+  isFundingResource,
+  partitionFundingSources,
+} from '../services/matching/fundingSourcePresentation.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
@@ -31,29 +34,28 @@ const log = createLogger('route:funding-sources')
 const router = express.Router()
 
 /**
- * getAccessibleProfileIds returns a **Set** of ids, or `null` as the DB-backed
- * admin "all access" sentinel — it has never returned an Array.
+ * getAccessibleProfileIds returns a Set of ids, or null as its DB-backed admin
+ * sentinel. Global access, however, is authorized only by req.ctx.isAdmin: a
+ * second helper call can disagree with the already-built request context after
+ * a transient lookup failure. A null returned while the canonical context says
+ * non-admin therefore fails closed instead of widening access.
  *
- * This used to read `Array.isArray(accessible) && accessible.includes(id)`,
- * which is ALWAYS false for a Set, so every non-admin caller got 403 on their
- * own funding-sources list. Admins were unaffected because the isAdmin branch
- * above returns first, which is why it survived: the accounts most likely to
- * test this endpoint could never reproduce it.
- *
- * Found 2026-07-28 by the production-audit bridge, using a non-admin account
- * with access to five profiles: /funding-sources returned 403 for all five
- * while the Hamilton and portal-sync routes (which handle the Set correctly)
- * returned 200 for the same account and the same profiles.
- *
- * Both container shapes are accepted here so this cannot silently break again
- * if the helper's return type is ever widened.
+ * Both Set and Array containers are accepted so the gate remains stable if the
+ * helper's scoped return type is widened later.
  */
 export async function userMayAccessProfile(req, user, profileId) {
   if (!profileId) return false
   if (req.ctx?.isAdmin === true) return true
-  const accessible = await getAccessibleProfileIds(req.db, user)
-  if (accessible === null) return true // DB-backed admin sentinel => global access
+
   const id = String(profileId)
+  const contextAccessible = req.ctx?.accessibleProfileIds
+  if (contextAccessible instanceof Set) return contextAccessible.has(id)
+  if (Array.isArray(contextAccessible)) return contextAccessible.includes(id)
+
+  // Compatibility fallback for direct/unit callers that do not run the request
+  // context middleware. Null is deliberately denied here: only the explicit
+  // isAdmin branch above may grant global access.
+  const accessible = await getAccessibleProfileIds(req.db, user)
   if (accessible instanceof Set) return accessible.has(id)
   return Array.isArray(accessible) && accessible.includes(id)
 }
@@ -117,8 +119,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       match_reasons: jparse(r.match_reasons, []),
       url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
       actionable_url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
-      is_directory: String(r.opportunity_kind ?? '').toUpperCase() === 'DIRECTORY' ||
-        String(r.opportunity_kind ?? '').toUpperCase() === 'PAST_AWARD_INTEL',
+      is_directory: isFundingResource(r),
     }))
     const canonical = canonicalizeOpportunityList(profileContext, mapped, {
       preserveDirectories: true,
@@ -144,15 +145,16 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         match_score: r.match_score,
         match_decision: r.match_decision, // accept | review | reject
         why: r.match_explanation,
-        is_directory: kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL',
+        opportunity_kind: kind || null,
+        is_directory: isFundingResource(r),
         trust_tier: r.source_trust_tier ?? null,
       })
     }
 
     // The canonical display gate — never an inlined score predicate (the
     // matchSurfacing.js contract): an engine ACCEPT below the floor still
-    // surfaces (the Anastasia-HOPE class), a REJECT/low REVIEW never does,
-    // directories keep their own floor.
+    // surfaces (the Anastasia-HOPE class), a REJECT/low REVIEW never does, and
+    // non-direct resources keep their own display floor.
     const qualified = sources.filter((s) => qualifiesForDisplay(s, minScore))
     const presented = partitionFundingSources(qualified)
     return res.json({
@@ -164,7 +166,16 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     })
   } catch (err) {
     log.warn('funding_sources.failed', { profileId, error: err?.message || String(err) })
-    return res.status(200).json({ profile_id: profileId, total: 0, sources: [], best_matches: [], worth_reviewing: [], directories: [], note: 'funding sources unavailable' })
+    return res.status(200).json({
+      profile_id: profileId,
+      total: 0,
+      sources: [],
+      best_matches: [],
+      worth_reviewing: [],
+      directories: [],
+      resource_count: 0,
+      note: 'funding sources unavailable',
+    })
   }
 })
 

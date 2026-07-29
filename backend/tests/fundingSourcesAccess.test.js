@@ -1,24 +1,14 @@
 /**
  * Regression guard for GET /api/profiles/:id/funding-sources access control.
  *
- * THE DEFECT (found 2026-07-28 by the production-audit bridge): the gate read
+ * THE ORIGINAL DEFECT (found 2026-07-28 by the production-audit bridge): the
+ * gate used Array.isArray even though getAccessibleProfileIds returns a Set.
+ * That denied every non-admin caller access to their own funding-source list.
  *
- *     Array.isArray(accessible) && accessible.includes(profileId)
- *
- * but `getAccessibleProfileIds` returns a **Set** (or `null`, the DB-backed
- * admin all-access sentinel) and has never returned an Array. `Array.isArray`
- * on a Set is false, so the expression was ALWAYS false and every non-admin
- * caller received 403 on their own funding-sources list — the list that powers
- * ProfileFundingSourcesCard.
- *
- * It survived from #973 (2026-07-19) to 2026-07-28 because the `isAdmin` branch
- * returns before this line: the accounts most likely to exercise the endpoint
- * were exactly the ones that could not reproduce it. Live evidence: a non-admin
- * account with access to five profiles got 403 on all five here, while the
- * Hamilton and portal-sync routes — which handle the Set correctly — returned
- * 200 for the same account and the same profiles.
- *
- * Every test below FAILS on the pre-fix expression.
+ * THE FOLLOW-UP DEFECT: the helper can also return null as its admin sentinel.
+ * That sentinel must never override an already-built non-admin request context;
+ * only req.ctx.isAdmin may grant global access. A disagreement therefore fails
+ * closed instead of widening access across profiles.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -28,21 +18,28 @@ const PROFILE = 'profile-hollie-knox'
 const OTHER = '6b3c75ec-dc56-46f9-b380-394172688175'
 
 /**
- * `user` is passed straight through to getAccessibleProfileIds, so the accessible
- * set is stubbed by swapping req.db — the helper's only real dependency here is
- * the users-row existence check inside getOwnedAndGrantedProfileIds.
+ * `user` is passed through to getAccessibleProfileIds when the request context
+ * does not carry a scoped Set, so the database behavior is stubbed here.
  */
-function makeReq({ isAdmin = false, owned = [], grantedByEmail = [], userId = 'u-audit', email = 'a@b.test' } = {}) {
+function makeReq({
+  isAdmin = false,
+  dbAdmin = false,
+  accessibleProfileIds,
+  owned = [],
+  grantedByEmail = [],
+  userId = 'u-audit',
+  email = 'a@b.test',
+} = {}) {
   const db = {
     prepare(sql) {
       const s = String(sql)
       return {
         async get() {
-          if (/FROM users WHERE id/i.test(s)) return { id: userId }
-          if (/FROM users WHERE LOWER/i.test(s)) return { id: userId }
+          if (/FROM users WHERE id/i.test(s)) return { id: userId, is_admin: dbAdmin ? 1 : 0 }
+          if (/FROM users WHERE LOWER/i.test(s)) return { id: userId, is_admin: dbAdmin ? 1 : 0 }
           return null
         },
-        async all(...args) {
+        async all() {
           if (/FROM profiles WHERE user_id/i.test(s)) return owned.map((id) => ({ id }))
           if (/FROM profiles WHERE created_by/i.test(s)) return []
           if (/FROM profile_emails/i.test(s) || /profile_id[\s\S]*profile_emails/i.test(s)) {
@@ -58,23 +55,36 @@ function makeReq({ isAdmin = false, owned = [], grantedByEmail = [], userId = 'u
     },
     exec: async () => {},
   }
-  return { db, ctx: { isAdmin }, user: { id: userId, email } }
+  const ctx = { isAdmin }
+  if (accessibleProfileIds !== undefined) ctx.accessibleProfileIds = accessibleProfileIds
+  return { db, ctx, user: { id: userId, email } }
 }
 
 describe('funding-sources profile access gate', () => {
-  it('ADMITS a profile the user owns (the Set is handled, not Array.isArray-d away)', async () => {
+  it('admits a profile the user owns when access is recomputed as a Set', async () => {
     const req = makeReq({ owned: [PROFILE] })
     await expect(userMayAccessProfile(req, req.user, PROFILE)).resolves.toBe(true)
   })
 
-  it('REFUSES a profile the user has no claim on', async () => {
+  it('uses the canonical request-context Set when it is available', async () => {
+    const req = makeReq({ accessibleProfileIds: new Set([PROFILE]), owned: [] })
+    await expect(userMayAccessProfile(req, req.user, PROFILE)).resolves.toBe(true)
+    await expect(userMayAccessProfile(req, req.user, OTHER)).resolves.toBe(false)
+  })
+
+  it('refuses a profile the user has no claim on', async () => {
     const req = makeReq({ owned: [OTHER] })
     await expect(userMayAccessProfile(req, req.user, PROFILE)).resolves.toBe(false)
   })
 
-  it('admits an admin through the ctx branch without consulting the set', async () => {
+  it('admits an admin through the canonical ctx branch', async () => {
     const req = makeReq({ isAdmin: true, owned: [] })
     await expect(userMayAccessProfile(req, req.user, PROFILE)).resolves.toBe(true)
+  })
+
+  it('fails closed when a second DB lookup returns the null admin sentinel under a non-admin context', async () => {
+    const req = makeReq({ isAdmin: false, dbAdmin: true, owned: [] })
+    await expect(userMayAccessProfile(req, req.user, PROFILE)).resolves.toBe(false)
   })
 
   it('refuses when no profile id is supplied', async () => {
@@ -82,12 +92,9 @@ describe('funding-sources profile access gate', () => {
     await expect(userMayAccessProfile(req, req.user, '')).resolves.toBe(false)
   })
 
-  // Pins the container contract itself. If getAccessibleProfileIds ever returns
-  // a Set again after someone "simplifies" the gate back to an Array check, this
-  // is the test that reds.
-  it('a Set containing the id grants access — the exact shape the helper returns', async () => {
+  it('pins the Set container contract that the original gate mishandled', () => {
     const set = new Set([PROFILE])
-    expect(Array.isArray(set)).toBe(false) // why the old gate could never pass
+    expect(Array.isArray(set)).toBe(false)
     expect(set.has(PROFILE)).toBe(true)
   })
 })
