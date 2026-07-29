@@ -4,6 +4,7 @@
  * These endpoints provide safe, auditable operations for:
  *   GET  /api/admin/queue/stats            → status/type counts + stale job summary
  *   GET  /api/admin/queue/jobs?status=...  → paginated job listing
+ *   GET  /api/admin/queue/production-audit/snapshot → bounded read-only production truth
  *   POST /api/admin/queue/jobs/:id/requeue → re-queue a failed / cancelled / running job
  *   POST /api/admin/queue/jobs/:id/cancel  → cancel a queued / running job
  *   POST /api/admin/queue/recover-stale    → invoke stale-job cleanup on demand
@@ -24,6 +25,11 @@ import {
   cleanupStaleCrawlers,
   cleanupStaleQueuedJobs,
 } from '../services/crawlerConcurrencyGuard.js'
+import {
+  buildProductionAuditSnapshot,
+  normalizeAuditProfileIds,
+  normalizeAuditMatchLimit,
+} from '../services/productionAuditSnapshot.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:adminQueueOps')
@@ -108,6 +114,44 @@ router.get('/stats', async (req, res) => {
   } catch (err) {
     routeLogger.error('[adminQueueOps] stats failed:', err?.message || err)
     res.status(500).json({ error: 'Failed to load queue stats', detail: err?.message })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Permanent production-audit bridge (SELECT-only, sanitized, bounded)
+// ---------------------------------------------------------------------------
+
+router.get('/production-audit/snapshot', async (req, res) => {
+  if (!requireAdmin(req, res)) return
+  try {
+    const rawProfiles = Array.isArray(req.query?.profile)
+      ? req.query.profile
+      : (req.query?.profiles ?? req.query?.profile ?? '')
+    const profileIds = normalizeAuditProfileIds(rawProfiles)
+    const matchLimitPerProfile = normalizeAuditMatchLimit(
+      req.query?.match_limit ?? req.query?.matchLimit,
+    )
+    const snapshot = await buildProductionAuditSnapshot(req.db, {
+      profileIds,
+      matchLimitPerProfile,
+    })
+    res.set('Cache-Control', 'no-store')
+    return res.json(snapshot)
+  } catch (error) {
+    const status = Number(error?.status) || 500
+    const code = error?.code || 'PRODUCTION_AUDIT_SNAPSHOT_FAILED'
+    routeLogger.warn('[adminQueueOps] production audit snapshot failed', {
+      code,
+      status,
+      message: error?.message || String(error),
+      request_id: req.requestId || null,
+    })
+    return res.status(status).json({
+      ok: false,
+      error: code,
+      details_redacted: true,
+      request_id: req.requestId || null,
+    })
   }
 })
 
