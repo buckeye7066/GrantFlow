@@ -7,8 +7,37 @@ import {
 
 export { collectProfileSchools, enforceNeedFirstDecision, isNeedFirstResource }
 
+function withProfessionAliases(args = {}) {
+  const opportunity = args?.opportunity ?? {}
+  const text = [
+    opportunity.title,
+    opportunity.name,
+    opportunity.description,
+    opportunity.summary,
+    opportunity.eligibility,
+    opportunity.eligibility_text,
+    opportunity.eligibility_criteria,
+    opportunity.restrictions,
+  ].filter(Boolean).join(' ')
+  const aliases = []
+  if (/\bmedical students\b/i.test(text)) aliases.push('medical student')
+  if (/\bdental students\b/i.test(text)) aliases.push('dental student')
+  if (/\blaw students\b/i.test(text)) aliases.push('law student')
+  if (aliases.length === 0) return args
+  return {
+    ...args,
+    opportunity: {
+      ...opportunity,
+      keywords: [
+        ...(Array.isArray(opportunity.keywords) ? opportunity.keywords : []),
+        ...aliases,
+      ],
+    },
+  }
+}
+
 export function evaluateNeedFirstMatchPolicy(args = {}) {
-  const result = evaluateCorrectedPolicy(args)
+  const result = evaluateCorrectedPolicy(withProfessionAliases(args))
   const childMismatch = result?.hardMismatches?.some((reason) =>
     String(reason).includes('Child/dependent program'),
   )
