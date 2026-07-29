@@ -33,11 +33,12 @@ async function main() {
     return
   }
 
-  // Node's default test concurrency can overwhelm machines because many tests
-  // spawn full backend processes. Keep this conservative by default to reduce
-  // flakes/timeouts.
-  const concurrencyRaw = process.env.UNIT_TEST_CONCURRENCY || process.env.TEST_CONCURRENCY || '4'
-  const concurrency = Math.max(1, Number.parseInt(String(concurrencyRaw), 10) || 4)
+  // Several files boot full backends or exercise native SQLite in child
+  // processes. Four-way parallelism produced sporadic file-level exits on the
+  // hosted 4-core builder even though the same suites passed alone. Two workers
+  // retain useful parallelism while keeping native/process pressure bounded.
+  const concurrencyRaw = process.env.UNIT_TEST_CONCURRENCY || process.env.TEST_CONCURRENCY || '2'
+  const concurrency = Math.max(1, Number.parseInt(String(concurrencyRaw), 10) || 2)
 
   // Unit tests are hermetic. In hosted builds, inherited DATABASE_URL and
   // provider settings can otherwise redirect SQLite fixtures to production
@@ -60,10 +61,8 @@ async function main() {
 
   // Test-spawned server processes may keep open handles that prevent
   // node --test from exiting. Keep a deadman switch, but size it for the
-  // current suite: many tests intentionally boot the backend, exercise auth,
-  // parse documents, and run Hamilton/agent flows. This is not a performance
-  // SLA; CI/local callers can still lower or raise it with UNIT_TEST_HARD_TIMEOUT_MS.
-  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 12 * 60 * 1000
+  // conservative two-worker suite. Callers can still override it explicitly.
+  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 18 * 60 * 1000
   setTimeout(() => {
     if (!exited) {
       console.error(`[unit] Hard timeout (${HARD_TIMEOUT_MS / 1000}s) reached — killing test runner`)
