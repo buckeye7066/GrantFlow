@@ -6,9 +6,12 @@ on:
       - agent/global-production-hardening-20260729
     paths:
       - .github/workflows/apply-global-production-hardening.yml
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
+  pull-requests: read
 
 concurrency:
   group: apply-global-production-hardening
@@ -16,6 +19,7 @@ concurrency:
 
 jobs:
   apply:
+    if: github.head_ref == 'agent/global-production-hardening-20260729' || github.ref_name == 'agent/global-production-hardening-20260729'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -34,6 +38,7 @@ jobs:
       - name: Apply deterministic transformations
         run: |
           set -euo pipefail
+          sed -i 's/npm ci --include=optional/npm ci --include=dev --include=optional/g' scripts/apply-readiness-deployment.mjs
           node scripts/apply-code-hardening.mjs
           node scripts/apply-readiness-deployment.mjs
           node --check backend/utils/safeRemoteFetch.js
@@ -44,7 +49,7 @@ jobs:
           git diff --check
 
       - name: Install locked dependencies
-        run: npm ci --include=optional
+        run: npm ci --include=dev --include=optional
 
       - name: Run focused hardening regressions
         run: |
@@ -134,5 +139,3 @@ jobs:
           git commit -m "fix(hardening): close global production review findings" \
             -m "Correct PostgreSQL mission metrics, enforce readiness, close portal SSRF, isolate previews, remove duplicate migrations, add shared throttling, fail closed on Twilio webhooks, and repair async seeding."
           git push origin HEAD:agent/global-production-hardening-20260729
-
-# retrigger: 2026-07-29T02:00Z
