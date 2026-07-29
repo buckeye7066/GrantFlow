@@ -8,183 +8,131 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Info, X, CheckCircle } from 'lucide-react'
+import { CheckCircle, FileText, Info, Search, Sparkles, X } from 'lucide-react'
 
-// The onboarding MP4 is expected to be deployed as a *public* asset.
-// README: "Drop the final MP4 into public/Grant Flow_ Get Started.mp4"
-//
-// IMPORTANT: We must respect Vite's base path (prod uses "/grantflow/"), otherwise we 404.
-const VIDEO_FILENAMES = [
-  'Grant Flow_ Get Started.mp4',
-  // Back-compat (a previous broken filename variant we’ve seen in the wild)
-  'Grant Flow_ Get Started. mp4',
-]
-
-function normalizeBaseUrl(baseUrl) {
-  const b = String(baseUrl || '/').trim() || '/'
-  return b.endsWith('/') ? b : b + '/'
+function configuredVideoUrl() {
+  const value = String(import.meta?.env?.VITE_ONBOARDING_VIDEO_URL || '').trim()
+  return /^https?:\/\//i.test(value) ? value : null
 }
 
-function buildVideoCandidates() {
-  const base = normalizeBaseUrl(import.meta?.env?.BASE_URL)
-  const override = String(import.meta?.env?.VITE_ONBOARDING_VIDEO_URL || '').trim()
-  const candidates = []
-  if (override) candidates.push(override)
-  for (const name of VIDEO_FILENAMES) {
-    candidates.push(base + encodeURIComponent(name))
-  }
-  return candidates
-}
+const WALKTHROUGH_STEPS = Object.freeze([
+  {
+    icon: Search,
+    title: 'Find funding that fits',
+    body: 'GrantFlow compares real opportunities with your profile, location, eligibility, and stated needs.',
+  },
+  {
+    icon: FileText,
+    title: 'Keep the work together',
+    body: 'Save documents and track each application from discovery through submission and follow-up.',
+  },
+  {
+    icon: Sparkles,
+    title: 'Ask Anya what comes next',
+    body: 'Anya explains matches, identifies missing details, and guides you to the next useful action.',
+  },
+])
 
 export default function OnboardingVideo({ open, onComplete, onSkip }) {
-  const [videoError, setVideoError] = useState(null)
-  const [sourceIndex, setSourceIndex] = useState(0)
-  const [candidates] = useState(() => buildVideoCandidates())
+  const [videoError, setVideoError] = useState(false)
+  const [videoUrl] = useState(() => configuredVideoUrl())
   const videoRef = useRef(null)
+  const showVideo = Boolean(videoUrl) && !videoError
 
-  // Prevent browser warning: don't allow focus to remain inside a dialog that is being aria-hidden during close.
   useEffect(() => {
     if (open) return
     try {
       videoRef.current?.pause?.()
     } catch {
-      // ignore
+      // The browser may have already released the media element.
     }
     try {
       const active = typeof document !== 'undefined' ? document.activeElement : null
       active?.blur?.()
     } catch {
-      // ignore
+      // Focus cleanup is best-effort.
     }
   }, [open])
 
-  const handleComplete = () => {
+  const closeWith = (callback) => {
     try {
       const active = typeof document !== 'undefined' ? document.activeElement : null
       active?.blur?.()
     } catch {
-      // ignore
+      // Focus cleanup is best-effort.
     }
-    onComplete?.()
+    callback?.()
   }
 
-  const handleSkip = () => {
-    try {
-      const active = typeof document !== 'undefined' ? document.activeElement : null
-      active?.blur?.()
-    } catch {
-      // ignore
-    }
-    onSkip?.()
-  }
-
-  const sourceIndexRef = useRef(sourceIndex)
-  useEffect(() => {
-    sourceIndexRef.current = sourceIndex
-  }, [sourceIndex])
+  const handleComplete = () => closeWith(onComplete)
+  const handleSkip = () => closeWith(onSkip)
 
   const handleVideoError = () => {
-    const currentIndex = sourceIndexRef.current
-    const failedSrc = candidates[currentIndex] || null
-    console.error('[onboarding-video] Failed to load video source', {
-      src: failedSrc,
-      base_url: import.meta?.env?.BASE_URL,
-      has_override: Boolean(String(import.meta?.env?.VITE_ONBOARDING_VIDEO_URL || '').trim()),
-    })
-
-    const nextIndex = currentIndex + 1
-    if (nextIndex < candidates.length) {
-      sourceIndexRef.current = nextIndex
-      setSourceIndex(nextIndex)
-      return
-    }
-
-    setVideoError({
-      message: 'Failed to load onboarding tutorial video.',
-      tried: candidates,
-    })
+    console.warn('[onboarding-video] Configured onboarding video could not be loaded; using the built-in walkthrough.')
+    setVideoError(true)
   }
 
   return (
     <Dialog
       open={open}
       onOpenChange={(isOpen) => {
-        if (!isOpen) {
-          try {
-            const active = typeof document !== 'undefined' ? document.activeElement : null
-            active?.blur?.()
-          } catch {
-            // ignore
-          }
-          handleSkip()
-        }
+        if (!isOpen) handleSkip()
       }}
     >
-      <DialogContent className="sm:max-w-[900px] max-h-[90vh]">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[900px]">
         <DialogHeader>
           <DialogTitle>Welcome to GrantFlow!</DialogTitle>
           <DialogDescription>
-            Watch this quick walkthrough to see how GrantFlow finds real funding for you — and how
-            Anya, your in-app guide, helps at every step.
+            Here is the quick tour: find relevant funding, organize the application work, and ask Anya for guidance at any step.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="py-4">
-          {videoError ? (
-            <Alert>
-              <Info className="h-4 w-4" />
-              <AlertDescription>
-                <p className="font-medium mb-1">The welcome video couldn't load right now</p>
-                <p className="text-sm">
-                  No problem — you don't need it to get started. Anya will walk you through
-                  everything the video covers. Just continue below.
-                </p>
-                {import.meta.env.DEV ? (
-                  <div className="text-sm space-y-2 mt-3 border-t pt-3">
-                    <p className="font-medium">Dev-only details — tried these URL(s):</p>
-                    <ul className="list-disc list-inside space-y-1">
-                      {(videoError?.tried || []).map((u) => (
-                        <li key={u} className="break-all">{u}</li>
-                      ))}
-                    </ul>
-                    <p className="mt-3">
-                      Fix by adding the file to <code className="px-1 py-0.5 bg-white/60 rounded">public/Grant Flow_ Get Started.mp4</code> and redeploying,
-                      or set <code className="px-1 py-0.5 bg-white/60 rounded">VITE_ONBOARDING_VIDEO_URL</code> to a hosted MP4 URL at build time.
-                    </p>
-                  </div>
-                ) : null}
-              </AlertDescription>
-            </Alert>
-          ) : (
-            <div className="relative w-full aspect-video bg-slate-900 rounded-lg overflow-hidden">
+        <div className="space-y-4 py-4">
+          {showVideo ? (
+            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-slate-900">
               <video
                 ref={videoRef}
                 controls
-                className="w-full h-full"
+                className="h-full w-full"
                 onError={handleVideoError}
                 tabIndex={-1}
+                preload="metadata"
               >
-                <source src={candidates[sourceIndex]} type="video/mp4" />
+                <source src={videoUrl} type="video/mp4" />
                 Your browser does not support the video tag.
               </video>
             </div>
-          )}
+          ) : (
+            <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-5 dark:border-blue-900 dark:bg-blue-950/30">
+              <div className="mb-4 flex items-start gap-3">
+                <Info className="mt-0.5 h-5 w-5 shrink-0 text-blue-600 dark:text-blue-300" />
+                <div>
+                  <p className="font-medium text-blue-950 dark:text-blue-100">Your three-step GrantFlow walkthrough</p>
+                  <p className="mt-1 text-sm text-blue-900 dark:text-blue-200">
+                    Everything needed to begin is here in the app. No video download or external media is required.
+                  </p>
+                </div>
+              </div>
 
-          <div className="mt-4 p-4 bg-blue-50 border border-blue-100 rounded-lg">
-            <div className="flex items-start gap-3">
-              <Info className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-blue-900">
-                <p className="font-medium mb-1">What you'll learn:</p>
-                <ul className="list-disc list-inside space-y-1 ml-2">
-                  <li>Finding real funding that matches your situation</li>
-                  <li>Tracking the opportunities you're pursuing, from found to submitted</li>
-                  <li>Uploading documents so applications can fill themselves in</li>
-                  <li>Getting help from Anya, your in-app guide, anytime</li>
-                </ul>
+              <div className="grid gap-3 md:grid-cols-3">
+                {WALKTHROUGH_STEPS.map(({ icon: Icon, title, body }, index) => (
+                  <div
+                    key={title}
+                    className="rounded-lg border border-blue-100 bg-white p-4 shadow-sm dark:border-blue-900 dark:bg-slate-900"
+                  >
+                    <div className="mb-3 flex items-center gap-2">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-200">
+                        {index + 1}
+                      </span>
+                      <Icon className="h-4 w-4 text-blue-600 dark:text-blue-300" />
+                    </div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">{body}</p>
+                  </div>
+                ))}
               </div>
             </div>
-          </div>
+          )}
         </div>
 
         <DialogFooter className="flex justify-between sm:justify-between">
@@ -203,10 +151,12 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
             className="flex items-center gap-2 bg-green-600 hover:bg-green-700"
           >
             <CheckCircle className="h-4 w-4" />
-            Mark as Complete
+            Continue to GrantFlow
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
+
+export { configuredVideoUrl, WALKTHROUGH_STEPS }
