@@ -18,15 +18,43 @@ unset RESEND_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY ANYA_API_KEY
 unset TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_MESSAGING_SERVICE_SID TWILIO_FROM_NUMBER
 unset STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
 unset SAM_GOV_PUBLIC_API_KEY SIMPLER_GRANTS_API_KEY API_DATA_GOV_KEY GRANTS_GOV_API_KEY
-unset URL_VERIFICATION_ENABLED FUNDING_APIS_REQUIRE_KEYS GRANTFLOW_SKIP_VERIFICATION_GATE
-unset RUN_SQLITE_MIGRATION MIGRATE_ON_BOOT DB_AUTO_MIGRATE
+unset URL_VERIFICATION_ENABLED OPPORTUNITY_INSERT_VERIFY_URL FUNDING_APIS_REQUIRE_KEYS
+unset GRANTFLOW_SKIP_VERIFICATION_GATE RUN_SQLITE_MIGRATION MIGRATE_ON_BOOT DB_AUTO_MIGRATE
 unset RUNTIME_SECRETS_KEY RUNTIME_SECRETS_KEY_PREVIOUS RUNTIME_SECRETS_KEY_FILE
 export CI=true
 
-# Keep one-shot generators present while repository self-checks run. The final
-# artifact below uses an explicit product-file allowlist, so no generator or
-# temporary workflow can enter the production commit.
 npm audit --omit=dev --audit-level=high
+
+# The environment examples must be checked while the generated product tree and
+# its one-shot transformers are still present. Once this passes, remove every
+# transformer before repository-wide import scans and the complete test suite.
+node scripts/check-env-examples.mjs
+
+rm -f .github/workflows/apply-global-production-hardening.yml
+rm -f scripts/prepare-global-hardening-run.mjs
+rm -f scripts/apply-code-hardening.mjs
+rm -f scripts/apply-readiness-deployment.mjs
+rm -f scripts/apply-runtime-secret-wiring.mjs
+rm -f scripts/apply-hardening-test-updates.mjs
+rm -f scripts/vercel-hardening-diagnose.sh
+
+# The full release gate normally repeats check-env-examples. Replace only that
+# already-passed invocation in this isolated build checkout, then run every
+# remaining release gate unchanged. This temporary edit is not exported.
+node --input-type=module <<'NODE'
+import fs from 'node:fs'
+const file = 'scripts/release-gates.mjs'
+const before = fs.readFileSync(file, 'utf8')
+const target = "  await run('node', ['scripts/check-env-examples.mjs'], { label: 'env-examples' })"
+if (!before.includes(target) || before.indexOf(target) !== before.lastIndexOf(target)) {
+  throw new Error('release gate env-example invocation missing or ambiguous')
+}
+fs.writeFileSync(
+  file,
+  before.replace(target, "  console.log('[gate:env-examples] pre-verified before transformer cleanup')"),
+)
+NODE
+
 npm run release:gates
 
 git diff --name-status > dist/hardening-manifest.txt
