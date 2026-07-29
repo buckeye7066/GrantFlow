@@ -66,7 +66,8 @@ const NEED_TOKEN_STOPWORDS = new Set([
 ])
 
 function normalizedHitText(hit) {
-  return `${hit?.title ?? ''} ${hit?.snippet ?? ''} ${hit?.url ?? ''}`
+  return [hit?.title ?? '', hit?.snippet ?? '', hit?.url ?? '']
+    .join(' ')
     .replace(/[_-]+/g, ' ')
     .replace(/\\s+/g, ' ')
     .trim()
@@ -93,7 +94,7 @@ function needMatchesHit(hit, needs = []) {
       .toLowerCase()
       .split(/[^a-z0-9]+/)
       .filter((token) => token.length >= 4 && !NEED_TOKEN_STOPWORDS.has(token))
-    if (tokens.some((token) => new RegExp(`\\\\b${token.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\\\b`, 'i').test(text))) return true
+    if (tokens.some((token) => new RegExp('\\\\b' + token + '\\\\b', 'i').test(text))) return true
   }
   return false
 }
