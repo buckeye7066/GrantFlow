@@ -14,7 +14,25 @@ function requestPath(req) {
   return String(req?.path || req?.originalUrl || '').split('?')[0]
 }
 
+function isTruthy(value) {
+  return /^(1|true|yes|on)$/i.test(String(value ?? '').trim())
+}
+
+function isDeterministicTestHarness(env) {
+  if (isTruthy(env?.API_RATE_LIMIT_IN_TESTS)) return false
+  return (
+    String(env?.NODE_ENV || '').toLowerCase() === 'test' ||
+    isTruthy(env?.GRANTFLOW_TEST_RUNNER)
+  )
+}
+
 export function classifyApiRatePolicy(req, env = process.env) {
+  // Production limits are process/database state by design. Deterministic tests
+  // frequently boot several app instances in one Node process and otherwise
+  // inherit one anonymous-IP bucket across unrelated cases. Keep the harness
+  // isolated unless a focused rate-limit test explicitly supplies its own env.
+  if (isDeterministicTestHarness(env)) return null
+
   const path = requestPath(req)
   const method = String(req?.method || 'GET').toUpperCase()
   if (!path.startsWith('/api/')) return null
