@@ -22,16 +22,9 @@ unset RUN_SQLITE_MIGRATION MIGRATE_ON_BOOT DB_AUTO_MIGRATE
 unset RUNTIME_SECRETS_KEY RUNTIME_SECRETS_KEY_PREVIOUS RUNTIME_SECRETS_KEY_FILE
 export CI=true
 
-# Remove one-shot transformer scaffolding before static import and repository
-# integrity checks. Only the transformed product files belong in the final tree.
-rm -f .github/workflows/apply-global-production-hardening.yml
-rm -f scripts/prepare-global-hardening-run.mjs
-rm -f scripts/apply-code-hardening.mjs
-rm -f scripts/apply-readiness-deployment.mjs
-rm -f scripts/apply-runtime-secret-wiring.mjs
-rm -f scripts/apply-hardening-test-updates.mjs
-rm -f scripts/vercel-hardening-diagnose.sh
-
+# Keep one-shot generators present while repository self-checks run. The final
+# artifact below uses an explicit product-file allowlist, so no generator or
+# temporary workflow can enter the production commit.
 npm audit --omit=dev --audit-level=high
 npm run release:gates
 
