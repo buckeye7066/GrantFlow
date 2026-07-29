@@ -37,7 +37,14 @@ function withProfessionAliases(args = {}) {
 }
 
 export function evaluateNeedFirstMatchPolicy(args = {}) {
-  const result = evaluateCorrectedPolicy(withProfessionAliases(args))
+  const evaluated = evaluateCorrectedPolicy(withProfessionAliases(args))
+  // `Number(null)` is zero. The scoring adapter accepts only numeric caps, so
+  // represent "no cap" as undefined rather than null to prevent valid matches
+  // and resources from being collapsed to SCORE_FLOOR.
+  const result = evaluated?.scoreCap === null
+    ? { ...evaluated, scoreCap: undefined }
+    : evaluated
+
   const childMismatch = result?.hardMismatches?.some((reason) =>
     String(reason).includes('Child/dependent program'),
   )
