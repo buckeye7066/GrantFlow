@@ -8,7 +8,7 @@ import {
   STATE_DIRECTORIES,
 } from '../../backend/services/crawlers/stateSupplementalDirectories.js'
 
-test('hosted unit runs cannot inherit production databases or live URL verification', () => {
+test('hosted test runs cannot inherit production infrastructure, live providers, or agent schedules', () => {
   const isolated = buildIsolatedTestEnv({
     PATH: '/usr/bin',
     DATABASE_URL: 'postgres://production.invalid/grantflow',
@@ -18,19 +18,42 @@ test('hosted unit runs cannot inherit production databases or live URL verificat
     LINK_VERIFICATION_ENABLED: 'true',
     URL_VERIFICATION_ENABLED: 'true',
     TWILIO_AUTH_TOKEN: 'not-a-real-token',
+    AMY_DAILY_TARGET: '50',
+    AMY_ENABLED: 'true',
+    YANA_ENABLED: 'true',
+    LARRY_RUN_ON_SCHEDULE: 'true',
+    HAMILTON_WEEKLY_DIGEST_DELIVERY: 'send',
+    MICROSOFT_TENANT_ID: 'tenant',
+    MICROSOFT_CLIENT_ID: 'client',
+    MICROSOFT_CLIENT_SECRET: 'secret',
+    JOHN_PRIMARY_MAILBOX: 'owner@example.invalid',
   })
 
   assert.equal(isolated.PATH, '/usr/bin')
   assert.equal(isolated.NODE_ENV, 'test')
   assert.equal(isolated.GRANTFLOW_TEST_RUNNER, '1')
   assert.equal(isolated.DISABLE_BACKGROUND_SERVICES, 'true')
-  assert.equal(isolated.DATABASE_URL, undefined)
-  assert.equal(isolated.RAILWAY_PRIVATE_DOMAIN, undefined)
-  assert.equal(isolated.VERCEL_ENV, undefined)
-  assert.equal(isolated.OPPORTUNITY_INSERT_VERIFY_URL, undefined)
-  assert.equal(isolated.LINK_VERIFICATION_ENABLED, undefined)
-  assert.equal(isolated.URL_VERIFICATION_ENABLED, undefined)
-  assert.equal(isolated.TWILIO_AUTH_TOKEN, undefined)
+
+  for (const key of [
+    'DATABASE_URL',
+    'RAILWAY_PRIVATE_DOMAIN',
+    'VERCEL_ENV',
+    'OPPORTUNITY_INSERT_VERIFY_URL',
+    'LINK_VERIFICATION_ENABLED',
+    'URL_VERIFICATION_ENABLED',
+    'TWILIO_AUTH_TOKEN',
+    'AMY_DAILY_TARGET',
+    'AMY_ENABLED',
+    'YANA_ENABLED',
+    'LARRY_RUN_ON_SCHEDULE',
+    'HAMILTON_WEEKLY_DIGEST_DELIVERY',
+    'MICROSOFT_TENANT_ID',
+    'MICROSOFT_CLIENT_ID',
+    'MICROSOFT_CLIENT_SECRET',
+    'JOHN_PRIMARY_MAILBOX',
+  ]) {
+    assert.equal(isolated[key], undefined, `${key} leaked into the isolated test environment`)
+  }
 })
 
 test('all Vitest package entry points use the hosted-environment isolation wrapper', () => {
