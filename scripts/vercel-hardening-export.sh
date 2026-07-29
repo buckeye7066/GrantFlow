@@ -3,6 +3,7 @@ set -euo pipefail
 
 node scripts/prepare-global-hardening-run.mjs
 node scripts/apply-code-hardening.mjs
+node scripts/apply-resource-reconciliation.mjs
 node scripts/apply-readiness-deployment.mjs
 node scripts/apply-runtime-secret-wiring.mjs
 node scripts/apply-hardening-test-updates.mjs
@@ -35,6 +36,7 @@ CLEAN_ENV=(
 rm -f .github/workflows/apply-global-production-hardening.yml
 rm -f scripts/prepare-global-hardening-run.mjs
 rm -f scripts/apply-code-hardening.mjs
+rm -f scripts/apply-resource-reconciliation.mjs
 rm -f scripts/apply-readiness-deployment.mjs
 rm -f scripts/apply-runtime-secret-wiring.mjs
 rm -f scripts/apply-hardening-test-updates.mjs
@@ -70,6 +72,8 @@ tar -czf dist/hardening-output.tar.gz \
   backend/crawler-os/safeUrl.js \
   backend/crawler-os/fetcher.js \
   backend/crawler-os/tests/fetcher.test.mjs \
+  backend/services/crawlerOsPersistence.js \
+  backend/tests/crawlerOsResourceReconciliation.test.js \
   backend/routes/ai.js \
   backend/start.js \
   backend/server.js \
