@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "generated_from": {
+    "repository": "buckeye7066/GrantFlow",
+    "commit": "4c8f3ab93b6b4f27fb4d8fcfcccf300b797a3080",
+    "workflow_run_id": 30416484693,
+    "artifact_id": 8710448020,
+    "artifact_digest": "sha256:fbf899f511a5eee4b2f435c9b6651f2f849e8fadbb3fd4e2386ea8fc1e2582b3",
+    "generated_at": "2026-07-29T02:26:33Z"
+  },
+  "policy": {
+    "minimum_security_severity": 7.0,
+    "allowed_precisions": ["high", "very-high"],
+    "behavior": "Existing measured rule counts are tolerated temporarily. Any new qualifying rule or count increase fails CI. Reductions pass and should be captured in a reviewed baseline refresh.",
+    "refresh_requires": "security review and an explicit baseline commit"
+  },
+  "counts_by_rule": {
+    "js/bad-tag-filter": 4,
+    "js/double-escaping": 10,
+    "js/incomplete-multi-character-sanitization": 2,
+    "js/incomplete-sanitization": 6,
+    "js/incomplete-url-substring-sanitization": 39,
+    "js/insecure-helmet-configuration": 1,
+    "js/missing-rate-limiting": 429
+  },
+  "total": 491
+}
