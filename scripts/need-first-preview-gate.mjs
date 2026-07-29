@@ -3,63 +3,36 @@ import { spawnSync } from 'node:child_process'
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 function buildCleanRoomEnv() {
-  const env = { ...process.env }
-  const exact = new Set([
-    'DATABASE_URL',
-    'DATABASE_PUBLIC_URL',
-    'DATABASE_PRIVATE_URL',
-    'POSTGRES_URL',
-    'POSTGRES_PRISMA_URL',
-    'POSTGRES_URL_NON_POOLING',
-    'PGHOST',
-    'PGHOST_UNPOOLED',
-    'PGPORT',
-    'PGUSER',
-    'PGPASSWORD',
-    'PGDATABASE',
-    'DB_PROVIDER',
-    'DB_DIALECT',
-    'SQLITE_DB_PATH',
-    'VITE_API_URL',
-    'VITE_API_BASE_URL',
-    'VITE_BACKEND_URL',
-    'URL_VERIFICATION_ENABLED',
-    'OPPORTUNITY_INSERT_VERIFY_URL',
-    'GEO_CRAWL_FIXTURES_DIR',
-    'GRANTFLOW_ALLOW_LIVE_WEB_IN_TESTS',
-    'ENFORCE_VERIFIED_AT_HONESTY',
-  ])
-  const secretPrefixes = [
-    'RAILWAY_',
-    'TWILIO_',
-    'RESEND_',
-    'SMTP_',
-    'OPENAI_',
-    'ANTHROPIC_',
-    'GOOGLE_',
-    'BING_',
-    'BRAVE_',
-    'SERPAPI_',
-    'SIMPLER_',
-    'GRANTS_GOV_',
-    'API_DATA_GOV_',
-    'RUNTIME_SECRET_',
-    'ENCRYPTION_',
+  // Deliberately allowlist only operating-system values needed to launch Node/npm.
+  // Copying process.env and deleting a handful of names is not a clean room: Vercel
+  // injects production-like feature flags, scheduler targets, auth secrets, and
+  // service credentials into preview builds. Those changed test defaults for Amy,
+  // Yana, Hamilton/Outlook, and auth even though the product code was correct.
+  const passthrough = [
+    'PATH',
+    'HOME',
+    'USER',
+    'SHELL',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'SystemRoot',
+    'ComSpec',
+    'PATHEXT',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'NPM_CONFIG_CACHE',
+    'npm_config_cache',
+    'NODE_OPTIONS',
   ]
-
-  for (const key of Object.keys(env)) {
-    const upper = key.toUpperCase()
-    if (
-      exact.has(key) ||
-      upper.includes('SAM_GOV') ||
-      secretPrefixes.some((prefix) => upper.startsWith(prefix))
-    ) {
-      delete env[key]
-    }
+  const env = {}
+  for (const key of passthrough) {
+    if (process.env[key] !== undefined) env[key] = process.env[key]
   }
 
   Object.assign(env, {
     NODE_ENV: 'test',
+    CI: 'true',
     DB_PROVIDER: 'sqlite',
     DB_DIALECT: 'sqlite',
     DB_AUTO_MIGRATE: 'true',
@@ -74,6 +47,7 @@ function buildCleanRoomEnv() {
     ANYA_RUN_ON_SCHEDULE: 'false',
     NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
     STARTUP_SMOKE_CRAWL_ENABLED: 'false',
+    HAMILTON_ALLOW_AUTOSUBMIT: 'false',
   })
   return env
 }
@@ -116,6 +90,9 @@ run(['run', 'check:prepush'], 'pre-push quality suite')
 run(['run', 'scan:secrets'], 'secret scan')
 run(['audit', '--omit=dev', '--audit-level=high'], 'production dependency audit')
 run(['run', 'release:gates'], 'complete clean-room release gates')
-run(['run', 'build'], 'production Vite build', process.env)
+run(['run', 'build'], 'production Vite build', {
+  ...cleanRoomEnv,
+  NODE_ENV: 'production',
+})
 
 console.log('[need-first-preview-gate] PASS')
