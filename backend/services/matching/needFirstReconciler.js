@@ -3,6 +3,7 @@ import {
   applyNeedFirstScoring,
   NEED_FIRST_SCORING_VERSION,
 } from './needFirstScoringAdapter.js'
+import { NEED_FIRST_RECONCILIATION_ROWS_SQL } from './fundingSourceQueries.js'
 
 const log = createLogger('needFirstReconciler')
 const SURFACED_LANES = new Set(['crawler-os', 'crawler-os-xmatch', 'web-llm'])
@@ -68,21 +69,13 @@ export async function reconcileNeedFirstProfileMatches(db, {
   }
 
   const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 250))
-  const rows = await db.prepare(
-    `SELECT m.profile_id, m.opportunity_id, m.match_score, m.match_decision,
-            m.match_explanation, m.match_reasons, m.match_explain_json,
-            m.matcher_version,
-            o.id, o.title, o.sponsor, o.description, o.summary,
-            o.eligibility, o.eligibility_text, o.eligibility_criteria,
-            o.restrictions, o.opportunity_kind, o.opportunity_type, o.type,
-            o.funding_type, o.categories, o.keywords, o.application_url,
-            o.apply_url, o.source_url, o.record_origin
-       FROM profile_opportunity_matches m
-       JOIN funding_opportunities o ON o.id = m.opportunity_id
-      WHERE m.profile_id = ?
-      ORDER BY m.match_score DESC
-      LIMIT ?`,
-  ).all(String(profileId), safeLimit)
+  // This shares the owner-facing route's canonical live-column projection. The
+  // old query used Crawler OS in-memory field names such as `o.summary` against
+  // PostgreSQL, so reconciliation failed before it scanned a single persisted
+  // match.
+  const rows = await db
+    .prepare(NEED_FIRST_RECONCILIATION_ROWS_SQL)
+    .all(String(profileId), safeLimit)
 
   let scanned = 0
   let current = 0
