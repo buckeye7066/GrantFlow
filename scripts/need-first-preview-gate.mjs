@@ -24,6 +24,10 @@ function buildCleanRoomEnv() {
     'VITE_API_BASE_URL',
     'VITE_BACKEND_URL',
     'URL_VERIFICATION_ENABLED',
+    'OPPORTUNITY_INSERT_VERIFY_URL',
+    'GEO_CRAWL_FIXTURES_DIR',
+    'GRANTFLOW_ALLOW_LIVE_WEB_IN_TESTS',
+    'ENFORCE_VERIFIED_AT_HONESTY',
   ])
   const secretPrefixes = [
     'RAILWAY_',
@@ -64,6 +68,7 @@ function buildCleanRoomEnv() {
     DISABLE_BACKGROUND_SERVICES: 'true',
     SMOKE_MODE: 'true',
     URL_VERIFICATION_ENABLED: 'false',
+    OPPORTUNITY_INSERT_VERIFY_URL: 'false',
     ANYA_AUTONOMOUS_ENABLED: 'false',
     ANYA_RUN_ON_STARTUP: 'false',
     ANYA_RUN_ON_SCHEDULE: 'false',
@@ -99,6 +104,12 @@ run([
   'backend/tests/fundingSourceCounts.test.js',
   '--reporter=verbose',
 ], 'focused Vitest regressions')
+
+run([
+  'exec', '--', 'node', '--test',
+  'tests/unit/opportunityInserter.test.mjs',
+  'tests/unit/geo-crawl-zip-44089-minimums.test.mjs',
+], 'shared release regressions')
 
 run(['exec', '--', 'node', 'scripts/need-first-build-self-test.mjs'], 'backend integration assertions')
 run(['run', 'check:prepush'], 'pre-push quality suite')
