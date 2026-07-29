@@ -1,0 +1,146 @@
+name: fresh-production-audit-r2
+
+on:
+  push:
+    branches:
+      - audit/fresh-production-verification-20260729-r2
+    paths:
+      - .github/workflows/fresh-production-audit-r2.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fresh-production-audit-r2.yml
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: fresh-production-audit-20260729-r2
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Fresh authenticated production audit for 4a533b3
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production-audit
+
+    env:
+      GRANTFLOW_PROD_BASE_URL: ${{ vars.GRANTFLOW_PROD_BASE_URL }}
+      AUDIT_OUT: ${{ github.workspace }}/audit-out
+      PROFILE_IDS: profile-hollie-knox,6b3c75ec-dc56-46f9-b380-394172688175,c4a92724-9cee-416f-ba30-e91b9b5cd885,profile-olivia-beltran,profile-john-white
+      EXPECTED_DEPLOYED_COMMIT: 4a533b3f0da4d647333ef092799e845f442b375f
+
+    steps:
+      - name: Check out exact audit branch
+        uses: actions/checkout@v4
+        with:
+          ref: audit/fresh-production-verification-20260729-r2
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify audit controls before production access
+        run: |
+          node scripts/production-audit/redact.mjs --self-test
+          node scripts/production-audit/policy.test.mjs
+          node scripts/production-audit/validate-artifact.mjs --self-test
+
+      - name: Confirm the exact deployed production commit
+        run: |
+          node - <<'NODE'
+          const base = String(process.env.GRANTFLOW_PROD_BASE_URL || '').replace(/\/$/, '')
+          if (!base) throw new Error('GRANTFLOW_PROD_BASE_URL is not configured')
+          const response = await fetch(`${base}/api/version`, {
+            headers: { accept: 'application/json', 'cache-control': 'no-store' },
+          })
+          if (!response.ok) throw new Error(`version endpoint returned ${response.status}`)
+          const body = await response.json()
+          if (body.commit !== process.env.EXPECTED_DEPLOYED_COMMIT) {
+            throw new Error(`deployed commit mismatch: expected ${process.env.EXPECTED_DEPLOYED_COMMIT}, got ${body.commit || 'missing'}`)
+          }
+          console.log(`[audit] exact deployed commit confirmed: ${body.commit}`)
+          NODE
+
+      - name: Verify database guard and live auto-submit posture
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+        run: |
+          mkdir -p "$AUDIT_OUT"
+          node scripts/production-audit/db-audit.mjs --guard-only --out "$AUDIT_OUT"
+
+      - name: Run fresh read-only database audit
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+        run: |
+          node scripts/production-audit/db-audit.mjs \
+            --out "$AUDIT_OUT" \
+            --profiles "$PROFILE_IDS"
+
+      - name: Install repository-pinned Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run authenticated application audit
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+          GRANTFLOW_AUDIT_EMAIL: ${{ secrets.GRANTFLOW_AUDIT_EMAIL }}
+          GRANTFLOW_AUDIT_PASSWORD: ${{ secrets.GRANTFLOW_AUDIT_PASSWORD }}
+        run: |
+          node scripts/production-audit/app-audit.mjs \
+            --out "$AUDIT_OUT" \
+            --profiles "$PROFILE_IDS"
+
+      - name: Compose and validate sanitized evidence
+        run: |
+          node scripts/production-audit/validate-artifact.mjs --compose --out "$AUDIT_OUT"
+          node scripts/production-audit/validate-artifact.mjs --out "$AUDIT_OUT"
+
+      - name: Upload fresh sanitized audit artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: grantflow-production-audit-fresh-4a533b3
+          path: ${{ env.AUDIT_OUT }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish non-secret run pointer on audit branch
+        continue-on-error: true
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          mkdir -p audit-evidence
+          node - <<'NODE'
+          const fs = require('fs')
+          const summary = JSON.parse(fs.readFileSync(process.env.AUDIT_OUT + '/audit-summary.json', 'utf8'))
+          const pointer = {
+            audit: 'fresh-production-audit-r2',
+            run_id: process.env.GITHUB_RUN_ID,
+            run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+            artifact_id: process.env.ARTIFACT_ID,
+            artifact_name: 'grantflow-production-audit-fresh-4a533b3',
+            audited_repository_sha: process.env.GITHUB_SHA,
+            expected_deployed_commit: process.env.EXPECTED_DEPLOYED_COMMIT,
+            deployed_commit: summary?.posture?.deployment_commit ?? summary?.database?.posture?.deployment_commit ?? null,
+            generated_at: summary.generated_at ?? new Date().toISOString(),
+            profiles_scoped: summary.profiles_scoped ?? [],
+            safety: summary.safety ?? {},
+            amy: summary.amy ?? null,
+          }
+          fs.writeFileSync('audit-evidence/latest-run-r2.json', JSON.stringify(pointer, null, 2) + '\n')
+          fs.writeFileSync('audit-evidence/latest-summary-r2.json', JSON.stringify(summary, null, 2) + '\n')
+          NODE
+          git config user.name "grantflow-production-audit[bot]"
+          git config user.email "grantflow-production-audit@users.noreply.github.com"
+          git add audit-evidence/latest-run-r2.json audit-evidence/latest-summary-r2.json
+          git commit -m "audit(evidence): publish fresh production verification $GITHUB_RUN_ID [skip ci]"
+          git push origin HEAD:audit/fresh-production-verification-20260729-r2
