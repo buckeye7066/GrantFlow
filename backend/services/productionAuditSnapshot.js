@@ -234,7 +234,6 @@ async function runSnapshotQueries(db, { profileIds, matchLimitPerProfile }) {
     `SELECT id, display_name, primary_type
        FROM profiles
       WHERE id IN (${idsSql})
-        AND deleted_at IS NULL
       ORDER BY display_name, id`,
   ).all(...profileIds)
 
