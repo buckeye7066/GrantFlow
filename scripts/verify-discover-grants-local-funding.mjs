@@ -2,7 +2,7 @@
  * Release gate: verify local_funding crawler returns directory resources.
  *
  * Boots a test server, authenticates, runs the local_funding crawler,
- * and asserts that at least one result survives filtering.
+ * and asserts that at least one persisted directory match survives filtering.
  */
 import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
@@ -26,28 +26,13 @@ function startServer() {
       // (backend/startup/bootPolicy.js). DB_AUTO_MIGRATE only applies
       // backend/db/schema.sql; the numbered migrations are gated by
       // shouldMigrateOnBoot, which returns `!smoke`.
-      //
-      // This gate's own env — PORT=0 + DB_AUTO_MIGRATE=true + NODE_ENV
-      // != production — is precisely the pattern isSmokeMode() INFERS as smoke,
-      // so asking for auto-migrate is what turned the migration runner OFF. The
-      // server then came up with schema.sql only, which does not declare
-      // profile_opportunity_matches (schema.sql is a partial declaration; ~160
-      // migrations layer on it), and the crawler failed with
-      // "no such table: profile_opportunity_matches".
-      //
-      // isExplicitOptIn(MIGRATE_ON_BOOT) is checked BEFORE the smoke inference,
-      // so this restores the full migrated schema the crawler actually needs.
       MIGRATE_ON_BOOT: 'true',
       AUTH_JWT_SECRET: 'test-secret',
+      // This is a deterministic persistence/surfacing gate, not a remote-web
+      // availability test. Live crawling is deliberately given no useful time;
+      // the fixture below owns both the catalog row and its profile match.
       LIVE_CRAWL_TIMEOUT_MS: '1',
-      // The server's default request/response timeout (30s) is tuned for
-      // user-facing requests. This gate fires a COLD-START local_funding
-      // discovery on a fresh DB; on a slow/loaded CI runner that first run can
-      // take longer than 30s and trip the response-timeout middleware (504
-      // error_type:'timeout') even though it finishes in seconds locally and is
-      // otherwise healthy. Give the gate server generous headroom so a cold run
-      // isn't cut off. (LIVE_CRAWL_TIMEOUT_MS=1 already disables live web crawls,
-      // so this can't hang on the network — it only absorbs cold-start latency.)
+      ENABLE_TOKEN_NARROWING: 'false',
       REQUEST_TIMEOUT_MS: '120000',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -95,6 +80,8 @@ async function main() {
     const credId = '20000000-0000-0000-0000-000000000002'
     const orgId = '20000000-0000-0000-0000-000000000003'
     const profileId = '20000000-0000-0000-0000-000000000004'
+    const opportunityId = '20000000-0000-0000-0000-000000000005'
+    const matchId = '20000000-0000-0000-0000-000000000006'
 
     const Database = (await import('better-sqlite3')).default
     const db = new Database(srv.dbPath)
@@ -104,6 +91,57 @@ async function main() {
       INSERT INTO organizations (id, name, city, state, zip) VALUES ('${orgId}', 'Org', 'Columbus', 'OH', '43215');
       INSERT INTO profiles (id, user_id, organization_id, display_name, primary_type, status, tags) VALUES ('${profileId}', '${userId}', '${orgId}', 'P', 'individual_need', 'active', '[]');
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by) VALUES ('${profileId}', 'basic_information', '{"city":"Columbus","state":"OH","zip":"43215","primary_needs":["housing","food","utilities"]}', 'test');
+
+      INSERT INTO funding_opportunities (
+        id, title, sponsor, source, source_id, source_url, description,
+        application_url, is_national, state, categories, keywords,
+        eligibility_bullets, opportunity_kind, opportunity_type,
+        deadline, deadline_type, is_active, record_origin, created_at, updated_at
+      ) VALUES (
+        '${opportunityId}',
+        'Ohio Community Resource Directory',
+        'Community Action Partnership',
+        'directory',
+        'community_action_ohio_fixture',
+        'https://communityactionpartnership.com/find-a-cap/',
+        'Directory for local housing, food, and utility assistance resources.',
+        'https://communityactionpartnership.com/find-a-cap/',
+        0,
+        'OH',
+        '["housing","food","utilities","community"]',
+        '["community action","utility assistance","food assistance","housing assistance"]',
+        '[]',
+        'DIRECTORY',
+        'program',
+        NULL,
+        'rolling',
+        1,
+        'curated_verified',
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      );
+
+      -- /api/real-crawlers/run returns the profile_opportunity_matches join. A
+      -- catalog row alone cannot prove this route's persisted-result boundary,
+      -- so the gate owns a deterministic per-profile REVIEW match as well.
+      INSERT INTO profile_opportunity_matches (
+        id, profile_id, opportunity_id, match_score, match_decision,
+        match_explanation, match_reasons, match_explain_json,
+        matcher_version, computed_at, updated_at, evaluated_at
+      ) VALUES (
+        '${matchId}',
+        '${profileId}',
+        '${opportunityId}',
+        9,
+        'review',
+        'Directory resource for this profile to search.',
+        '["housing","food","utilities"]',
+        '{"canonical_decision":"REVIEW","scoreBreakdown":{"scoring_model":"data_point","data_point_total":15,"data_point_total_credit":1.4}}',
+        'crawler-os',
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      );
     `)
     db.close()
 
@@ -127,13 +165,6 @@ async function main() {
     }
     const token = verify.json.accessToken
 
-    // The local_funding discovery is a cold-start, first-request run. On a slow /
-    // loaded CI runner it can exceed the server's response-timeout middleware and
-    // come back as a transient 504 (error_type:'timeout') even though the crawler
-    // itself is healthy — it passes reliably locally. Retry a transient gateway /
-    // timeout response a couple of times (a warm second attempt is fast) before
-    // failing the gate. This tolerates infra slowness WITHOUT weakening the real
-    // assertion below (we still require >=1 surviving result).
     const isTransient = (r) =>
       r.status === 502 ||
       r.status === 503 ||
@@ -164,7 +195,12 @@ async function main() {
     }
 
     const json = run.json
-    const count = json.count ?? json.results?.length ?? 0
+    const opportunities = Array.isArray(json.opportunities)
+      ? json.opportunities
+      : Array.isArray(json.results)
+        ? json.results
+        : []
+    const count = json.count ?? opportunities.length
     const totalFound = json.total_found ?? count
 
     if (!json.success) {
@@ -175,8 +211,14 @@ async function main() {
 
     console.log(`[gate:discover-local-funding] total_found=${totalFound} count=${count}`)
 
-    if (count === 0 && totalFound === 0) {
-      console.error('[gate:discover-local-funding] FAIL: 0 results returned')
+    const fixture = opportunities.find((opp) => String(opp?.id || '') === opportunityId)
+    if (!fixture) {
+      console.error('[gate:discover-local-funding] FAIL: persisted directory fixture did not survive')
+      process.exitCode = 1
+      return
+    }
+    if (fixture.is_directory !== true || String(fixture.match_decision || '').toLowerCase() !== 'review') {
+      console.error('[gate:discover-local-funding] FAIL: fixture lost directory/REVIEW semantics', fixture)
       process.exitCode = 1
       return
     }
