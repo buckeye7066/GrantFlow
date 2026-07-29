@@ -21,6 +21,15 @@ function reconcileProfileIds(memStore, primaryProfileId) {
   return [...new Set(rows.map((row) => String(row?.profile_id ?? '')).filter(Boolean))]
 }
 
+function isMissingSnapshotTable(error) {
+  const message = String(error?.message ?? error ?? '')
+  return Boolean(
+    error?.code === '42P01' ||
+    /no such table:\s*(profile_opportunity_matches|funding_opportunities)/i.test(message) ||
+    /relation\s+["']?(profile_opportunity_matches|funding_opportunities)["']?\s+does not exist/i.test(message)
+  )
+}
+
 async function snapshotResourceMatches(db, profileIds) {
   if (!db || profileIds.length === 0) return []
 
@@ -56,11 +65,17 @@ async function snapshotResourceMatches(db, profileIds) {
     try {
       snapshots.push(...(await db.prepare(fullSql).all(profileId)))
     } catch (error) {
+      // A completely fresh database has nothing to preserve. The core adapter
+      // creates the match table before writing the first run, so missing-table
+      // is the one snapshot failure that is safely equivalent to an empty set.
+      if (isMissingSnapshotTable(error)) continue
+
       // Older/minimal schemas can predate crawler-doctor provenance columns. The
       // resource contract still applies, so retry with the canonical match fields.
       try {
         snapshots.push(...(await db.prepare(coreSql).all(profileId)))
       } catch (fallbackError) {
+        if (isMissingSnapshotTable(fallbackError)) continue
         const wrapped = new Error(
           `Resource reconciliation snapshot failed; refusing a destructive match refresh: ${fallbackError?.message || error?.message || fallbackError}`,
         )
