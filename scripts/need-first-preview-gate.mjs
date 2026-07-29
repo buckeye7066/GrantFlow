@@ -21,6 +21,7 @@ run([
   'backend/tests/needFirstPolicyEdgeCases.test.js',
   'backend/tests/needFirstProductionExamples.test.js',
   'backend/tests/persistedMatchTruth.test.js',
+  'backend/tests/persistedNeedFirstEdgeCases.test.js',
   'backend/tests/remainingAuditCorrections.test.js',
   'backend/tests/fundingSourceCounts.test.js',
   '--reporter=verbose',
