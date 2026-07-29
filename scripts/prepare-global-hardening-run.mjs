@@ -57,6 +57,27 @@ const {
   'mission test import transformation',
 )
 
+replaceExact(
+  'backend/utils/runtimeSecrets.js',
+  "const DEFAULT_PRODUCTION_KEY_FILE = '/data/grantflow-runtime-secrets.key'",
+  "const DEFAULT_PRODUCTION_KEY_FILE = '/data/uploads/.grantflow-runtime-secrets.key'",
+  'runtime secret default key path',
+)
+
+replaceExact(
+  'backend/utils/runtimeSecrets.js',
+  `  const uploadsDir = String(env.UPLOADS_DIR || '').trim()
+  if (uploadsDir && path.isAbsolute(uploadsDir)) {
+    const parent = path.dirname(uploadsDir)
+    return path.join(parent, 'grantflow-runtime-secrets.key')
+  }`,
+  `  const uploadsDir = String(env.UPLOADS_DIR || '').trim()
+  if (uploadsDir && path.isAbsolute(uploadsDir)) {
+    return path.join(uploadsDir, '.grantflow-runtime-secrets.key')
+  }`,
+  'runtime secret writable volume path',
+)
+
 const readiness = 'scripts/apply-readiness-deployment.mjs'
 const readinessText = fs.readFileSync(readiness, 'utf8')
 const updated = readinessText.replaceAll(
