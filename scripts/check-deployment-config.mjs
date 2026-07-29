@@ -41,6 +41,8 @@ const railway = readJson('railway.json')
 const pkg = readJson('package.json')
 const lock = readJson('package-lock.json')
 const dockerfile = readText('Dockerfile')
+const dockerignore = readText('.dockerignore')
+const envGenerator = readText('scripts/generate-env-examples.mjs')
 const healthRoutes = readText('backend/routes/health.js')
 const readinessTransform = readText('scripts/source-materialization/apply-readiness-deployment.mjs')
 
@@ -102,6 +104,17 @@ assert(
 // same direct command declared by the Dockerfile CMD.
 assert(railway?.deploy?.startCommand === 'node backend/start.js', 'Railway must start the materialized runtime directly; npm start would invoke a build-only prestart script')
 assert(dockerfile.includes('CMD ["node", "backend/start.js"]'), 'Dockerfile CMD must start backend/start.js directly')
+
+// The builder itself runs the materializer after COPY . . . That program imports
+// scripts/source-materialization modules and rewrites regression fixtures, so the
+// Docker context must retain scripts and tests even though the final runtime stage
+// never copies them. Docker also omits .git; the env generator must therefore have
+// a deterministic filesystem fallback rather than unconditionally running git.
+assert(!/^scripts\/?$/m.test(dockerignore), '.dockerignore must not remove the source materializer from the builder context')
+assert(!/^tests\/?$/m.test(dockerignore), '.dockerignore must not remove test fixtures consumed by source materialization')
+assert(!/^\*\.test\.\*$/m.test(dockerignore), '.dockerignore must not blanket-remove backend test fixtures consumed by source materialization')
+assert(envGenerator.includes('enumerateFilesystemSources'), 'env-example generator must support source archives and Docker contexts without .git')
+assert(envGenerator.includes('forceFilesystem'), 'env-example generator no-git fallback must be directly regression-testable')
 
 // Railway must promote a technically healthy container before the product-level
 // mission gate can run against that exact build. Pointing the platform healthcheck
