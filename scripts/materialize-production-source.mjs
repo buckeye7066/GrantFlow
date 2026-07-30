@@ -32,7 +32,14 @@ const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'function isTerminalGapStatus'],
   ['backend/services/webParityBenchmark.js', 'const WEB_ONLY_TOP_CAP = 20'],
 ])
-const signatures = Object.freeze([...coreSignatures, ...webParitySignatures])
+const amySignatures = Object.freeze([
+  ['backend/services/amy/amyAgent.js', "boundedAmyPreflight('mesh_context'"],
+  ['backend/services/amy/amyAgent.js', "'fleet_gap_scoreboard'"],
+  ['backend/services/amy/amyRunner.js', 'export async function recoverStaleAmyRunLock'],
+  ['backend/services/amy/amyRunner.js', 'AMY_SCHEDULER_LOCK_NAME'],
+  ['backend/routes/amy.js', "router.post('/recover-stale-run-lock'"],
+])
+const signatures = Object.freeze([...coreSignatures, ...webParitySignatures, ...amySignatures])
 
 const hasSignature = ([file, signature]) => {
   try {
@@ -78,6 +85,13 @@ async function applyWebParityCorrections() {
   )
 }
 
+async function applyAmyCorrections() {
+  await applyModule(
+    'scripts/source-materialization/apply-amy-preflight-watchdog.mjs',
+    'Amy preflight watchdog',
+  )
+}
+
 async function refreshEnvExamples() {
   const generatorPath = path.resolve('scripts/generate-env-examples.mjs')
   const { buildOutputs } = await import(
@@ -95,10 +109,11 @@ if (corePresent.length === coreSignatures.length && hasResourcePreservation()) {
   // The global hardening tree is already materialized. Apply later incremental
   // product corrections idempotently before the read-only early exit.
   await applyWebParityCorrections()
-  const missingWebParity = webParitySignatures.filter((entry) => !hasSignature(entry))
-  if (missingWebParity.length > 0) {
+  await applyAmyCorrections()
+  const missingIncremental = [...webParitySignatures, ...amySignatures].filter((entry) => !hasSignature(entry))
+  if (missingIncremental.length > 0) {
     throw new Error(
-      `[source-materialization] web-parity signatures missing: ${missingWebParity.map(([, signature]) => signature).join(', ')}`,
+      `[source-materialization] incremental signatures missing: ${missingIncremental.map(([, signature]) => signature).join(', ')}`,
     )
   }
   // Repeated npm prehooks run concurrently in the unit suite and must remain
@@ -127,6 +142,7 @@ for (const modulePath of modules) {
   await applyModule(modulePath)
 }
 await applyWebParityCorrections()
+await applyAmyCorrections()
 
 const missing = signatures.filter((entry) => !hasSignature(entry))
 if (missing.length > 0) {
