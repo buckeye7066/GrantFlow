@@ -1,9 +1,12 @@
 import fs from 'node:fs'
-import { chromium } from 'playwright'
+import chromiumBinary from '@sparticuz/chromium'
+import { chromium } from 'playwright-core'
 
+const executablePath = await chromiumBinary.executablePath()
 const browser = await chromium.launch({
+  args: chromiumBinary.args,
+  executablePath,
   headless: true,
-  args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
 })
 try {
   const page = await browser.newPage()
