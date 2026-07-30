@@ -18,20 +18,32 @@ if (source.includes(signature)) {
   const falseVal = isPostgres ? false : 0
   const trueVal = isPostgres ? true : 1
   // link_repair_success_restores_visibility: current proof heals quarantine.
-  const restoreActive = db.prepare(\`
-    UPDATE funding_opportunities
-       SET is_hidden = ?, is_active = ?,
-           status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
-     WHERE id = ? AND COALESCE(status, 'active') <> 'expired'
-  \`)`,
-    'Recurring verifier restore statement',
+  // Legacy/minimal schemas may not carry status; restoration is additive and
+  // must never invalidate the canonical verification timestamp write.
+  const restoreVerifiedVisibility = async (opportunityId) => {
+    try {
+      await db.prepare(\`
+        UPDATE funding_opportunities
+           SET is_hidden = ?, is_active = ?,
+               status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
+         WHERE id = ? AND COALESCE(status, 'active') <> 'expired'
+      \`).run(falseVal, trueVal, opportunityId)
+    } catch {
+      try {
+        await db.prepare(\`
+          UPDATE funding_opportunities SET is_hidden = ?, is_active = ? WHERE id = ?
+        \`).run(falseVal, trueVal, opportunityId)
+      } catch { /* visibility columns may also be absent on a narrow legacy fixture */ }
+    }
+  }`,
+    'Recurring verifier restore helper',
   )
   replaceOnce(
     /          row\.id,\n        \)\n        stats\.checked\+\+/,
     `          row.id,
         )
         if (result.status === 'ok' || result.status === 'redirect') {
-          await restoreActive.run(falseVal, trueVal, row.id)
+          await restoreVerifiedVisibility(row.id)
         }
         stats.checked++`,
     'Recurring verifier lifecycle restore',
@@ -42,12 +54,22 @@ if (source.includes(signature)) {
     )
     if (result.status === 'ok' || result.status === 'redirect') {
       const isPostgres = db?.dialect === 'postgres'
-      await db.prepare(\`
-        UPDATE funding_opportunities
-           SET is_hidden = ?, is_active = ?,
-               status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
-         WHERE id = ? AND COALESCE(status, 'active') <> 'expired'
-      \`).run(isPostgres ? false : 0, isPostgres ? true : 1, String(oppRow.id))
+      const falseVal = isPostgres ? false : 0
+      const trueVal = isPostgres ? true : 1
+      try {
+        await db.prepare(\`
+          UPDATE funding_opportunities
+             SET is_hidden = ?, is_active = ?,
+                 status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
+           WHERE id = ? AND COALESCE(status, 'active') <> 'expired'
+        \`).run(falseVal, trueVal, String(oppRow.id))
+      } catch {
+        try {
+          await db.prepare(\`
+            UPDATE funding_opportunities SET is_hidden = ?, is_active = ? WHERE id = ?
+          \`).run(falseVal, trueVal, String(oppRow.id))
+        } catch { /* legacy schema: verification truth already persisted above */ }
+      }
     }
   } catch {`,
     'Immediate verifier lifecycle restore',
