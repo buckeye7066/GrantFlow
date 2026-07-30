@@ -12,7 +12,12 @@ import {
   readAmyHistory,
   readAmyApprovalQueue,
 } from '../services/amy/amyReportStore.js'
-import { launchAmyRun, getAmyRunState } from '../services/amy/amyRunner.js'
+import {
+  launchAmyRun,
+  getAmyRunState,
+  inspectAmySchedulerLock,
+  recoverStaleAmyRunLock,
+} from '../services/amy/amyRunner.js'
 import { getAmyConfig } from '../services/amy/amyScheduler.js'
 
 const log = createLogger('route:amy')
@@ -29,6 +34,14 @@ router.use(adminOnly)
 router.get('/status', async (req, res) => {
   try {
     const latest = await readLatestAmyReport(req.db)
+    // Lock visibility is diagnostic only. A minimal test database or a partial
+    // deployment must not turn the otherwise healthy status endpoint into 500.
+    let schedulerLock = null
+    try {
+      schedulerLock = await inspectAmySchedulerLock(req.db)
+    } catch (lockError) {
+      log.warn('scheduler lock status unavailable', { error: lockError?.message })
+    }
     // Reflect the REAL effective config (Amy is ON by default) instead of a raw
     // env read that defaulted to false — otherwise the panel shows "OFF" even
     // when the daily scheduler is running.
@@ -51,7 +64,17 @@ router.get('/status', async (req, res) => {
         running: run.running,
         running_run_id: run.run_id,
         running_source: run.source,
+        running_phase: run.phase,
         running_started_at: run.started_at,
+        process_started_at: run.process_started_at,
+        scheduler_lock: schedulerLock
+          ? {
+              control_run_id: schedulerLock.control_run_id,
+              acquired_by: schedulerLock.acquired_by,
+              acquired_at: schedulerLock.acquired_at,
+              expires_at: schedulerLock.expires_at,
+            }
+          : null,
         last_run_ok: run.ok,
         last_run_error: run.error,
         // Honesty: a run deduped by the scheduler lock records ok:true with
@@ -97,6 +120,33 @@ router.get('/approvals', async (req, res) => {
     return res.json({ ok: true, ...queue })
   } catch (err) {
     return res.status(500).json({ ok: false, error: 'amy_approvals_failed' })
+  }
+})
+
+/**
+ * Recover only a proven orphaned scheduler lease. This is deliberately NOT a
+ * generic "unlock" button: the exact durable control_run_id is required and the
+ * runner refuses to release a current-process lock or one that produced any Amy
+ * profiles/telemetry after acquisition.
+ */
+router.post('/recover-stale-run-lock', async (req, res) => {
+  try {
+    const controlRunId = String(req.body?.control_run_id || '').trim()
+    if (!controlRunId) {
+      return res.status(400).json({ ok: false, error: 'control_run_id_required' })
+    }
+    const result = await recoverStaleAmyRunLock({
+      db: req.db,
+      controlRunId,
+      logger: log,
+    })
+    if (!result.recovered) {
+      return res.status(409).json({ ok: false, error: result.reason, recovery: result })
+    }
+    return res.json({ ok: true, recovery: result })
+  } catch (err) {
+    log.error('stale Amy lock recovery failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'amy_lock_recovery_failed' })
   }
 })
 
