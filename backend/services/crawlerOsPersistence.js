@@ -12,6 +12,7 @@ import {
   profileContextToThesisInput,
   sectionSignalText,
 } from './crawlerOsPersistenceCore.js'
+import { normalizePersistedMatchDecisionIntegrity } from './matching/matchDecisionIntegrity.js'
 
 const RESOURCE_KINDS_SQL = "('DIRECTORY', 'PAST_AWARD_INTEL', 'SCHOOL_PORTAL', 'REFERRAL')"
 
@@ -172,10 +173,12 @@ export async function persistRun(db, memStore, run, opts = {}) {
   const persisted = await persistRunCore(db, memStore, run, opts)
   const explicitRejects = currentExplicitRejects(memStore, persisted?.idRemap)
   const resourcesPreserved = await restoreResourceMatches(db, durableResources, explicitRejects)
+  const matchDecisionIntegrity = await normalizePersistedMatchDecisionIntegrity(db, { profileIds })
 
   return {
     ...persisted,
     resourcesPreserved,
+    matchDecisionIntegrity,
   }
 }
 
