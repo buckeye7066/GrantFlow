@@ -71,7 +71,7 @@ if (source.includes(signature)) {
     } catch (error) {
       stats.row_errors += 1
       stats.failures.repair_exception = (stats.failures.repair_exception || 0) + 1
-      const message = String(error?.message || error).replace(/[\r\n]+/g, ' ').slice(0, 120)
+      const message = String(error?.message || error).replace(/[\\r\\n]+/g, ' ').slice(0, 120)
       outcome = {
         status: 'broken', code: null, method: 'repair_exception', error: message,
         finalUrl: null, url: null, role: null, duration_ms: 0,
