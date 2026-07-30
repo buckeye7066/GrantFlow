@@ -23,6 +23,7 @@ const state = {
   error: null,
   summary: null,
 }
+let launchClaimed = false
 
 function requireAdmin(req, res) {
   if (req.ctx?.isAdmin === true) return true
@@ -41,19 +42,36 @@ function pendingWebParity(queue = []) {
   )
 }
 
+/**
+ * Synchronously claim the single in-process launch slot. There is deliberately
+ * no await between inspecting and setting the claim; a re-entrant caller sees
+ * launchClaimed immediately, while the durable scheduler lock fences instances.
+ */
+function claimParityLaunch() {
+  if (launchClaimed || state.running) return null
+  launchClaimed = true
+  try {
+    const runId = `web-parity-${new Date().toISOString()}-${crypto.randomUUID().slice(0, 8)}`
+    Object.assign(state, {
+      running: true,
+      run_id: runId,
+      started_at: new Date().toISOString(),
+      finished_at: null,
+      ok: null,
+      error: null,
+      summary: null,
+    })
+    return runId
+  } finally {
+    launchClaimed = false
+  }
+}
+
 function launchParityRun({ db, profileIds = null, logger = log } = {}) {
-  if (state.running) {
+  const runId = claimParityLaunch()
+  if (!runId) {
     return { already_running: true, run_id: state.run_id }
   }
-
-  const runId = `web-parity-${new Date().toISOString()}-${crypto.randomUUID().slice(0, 8)}`
-  state.running = true
-  state.run_id = runId
-  state.started_at = new Date().toISOString()
-  state.finished_at = null
-  state.ok = null
-  state.error = null
-  state.summary = null
 
   const promise = (async () => {
     try {
@@ -144,5 +162,5 @@ router.post('/run', (req, res) => {
   }
 })
 
-export { launchParityRun, pendingWebParity, snapshotState }
+export { claimParityLaunch, launchParityRun, pendingWebParity, snapshotState }
 export default router
