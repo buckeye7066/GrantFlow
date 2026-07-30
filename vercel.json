@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm ci --include=dev --include=optional && npm install --no-save --no-package-lock @sparticuz/chromium playwright-core@1.61.1",
+  "installCommand": "npm ci --include=dev --include=optional && npm install --prefix .audit-browser-deps --no-save --no-package-lock @sparticuz/chromium && cp -R .audit-browser-deps/node_modules/. node_modules/",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "trailingSlash": false,
