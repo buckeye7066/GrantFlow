@@ -44,6 +44,8 @@ const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'if (!covers && !isBenchmarkDirectFundingHit'],
   ['backend/services/webParityBenchmark.js', 'function isTerminalGapStatus'],
   ['backend/services/webParityBenchmark.js', 'const WEB_ONLY_TOP_CAP = 20'],
+  ['backend/server.js', "app.use('/api/admin/web-parity'"],
+  ['backend/routes/webParityAdmin.js', 'function launchParityRun'],
 ])
 const amySignatures = Object.freeze([
   ['backend/services/amy/amyAgent.js', "boundedAmyPreflight('mesh_context'"],
@@ -123,6 +125,10 @@ async function applyWebParityCorrections() {
   await applyModule(
     'scripts/source-materialization/apply-web-parity-source-quality-finalize.mjs',
     'web-parity direct-source finalization',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-admin-route.mjs',
+    'web-parity background admin route',
   )
 }
 
