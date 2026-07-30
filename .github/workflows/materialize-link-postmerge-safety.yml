@@ -32,7 +32,7 @@ jobs:
           npm ci --include=dev --include=optional
           node scripts/materialize-production-source.mjs
 
-      - name: Commit exact materialized product and remove this one-shot workflow
+      - name: Commit exact materialized product
         shell: bash
         run: |
           set -euo pipefail
@@ -43,6 +43,9 @@ jobs:
             backend/routes/linkBacklogRepair.js \
             backend/tests/linkBacklogRepairService.test.js \
             backend/tests/linkBacklogSafetyRegression.test.js
-          git rm .github/workflows/materialize-link-postmerge-safety.yml
+          if git diff --cached --quiet; then
+            echo "Materialized product source is already committed."
+            exit 0
+          fi
           git commit -m "fix(links): commit final materialized rescue and lock safety"
           git push origin HEAD:fix/link-backlog-postmerge-safety-20260730
