@@ -27,11 +27,15 @@ const coreSignatures = Object.freeze([
 const linkBacklogSignatures = Object.freeze([
   ['backend/services/crawlers/nationalZipCrawler.js', 'link_backlog_resource_contract'],
   ['backend/services/linkVerificationService.js', 'browser-compatible liveness probe'],
+  ['backend/services/linkVerificationService.js', 'link_repair_success_restores_visibility'],
   ['backend/server.js', "app.use('/api/admin/link-repair'"],
   ['backend/server.js', '[link-repair] recurring lifecycle pass'],
   ['backend/services/missionHealthService.js', 'repair_pending_broken_direct_opportunities'],
   ['backend/services/linkBacklogRepairService.js', 'export async function repairBrokenDirectBatch'],
-  ['backend/routes/linkBacklogRepair.js', "router.post('/run'"],
+  ['backend/services/linkBacklogRepairService.js', 'link_backlog_selected_row_claim'],
+  ['backend/services/linkBacklogRepairService.js', 'link_backlog_row_error_isolation'],
+  ['backend/routes/linkBacklogRepair.js', 'link_backlog_shared_scheduler_lock'],
+  ['backend/tests/linkBacklogRepairService.test.js', 'link_backlog_extended_url_fixture'],
 ])
 const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
@@ -88,6 +92,22 @@ async function applyLinkBacklogCorrections() {
   await applyModule(
     'scripts/source-materialization/apply-link-backlog-resolution.mjs',
     'link backlog lifecycle correction',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-candidate-selection.mjs',
+    'link backlog candidate selection',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-row-isolation.mjs',
+    'link backlog row isolation',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-verification-success-restore.mjs',
+    'link verification success restore',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-route-lock.mjs',
+    'link backlog route lock',
   )
 }
 
