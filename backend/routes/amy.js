@@ -33,10 +33,15 @@ router.use(adminOnly)
 /** Lightweight status + last-run headline for the panel header. */
 router.get('/status', async (req, res) => {
   try {
-    const [latest, schedulerLock] = await Promise.all([
-      readLatestAmyReport(req.db),
-      inspectAmySchedulerLock(req.db),
-    ])
+    const latest = await readLatestAmyReport(req.db)
+    // Lock visibility is diagnostic only. A minimal test database or a partial
+    // deployment must not turn the otherwise healthy status endpoint into 500.
+    let schedulerLock = null
+    try {
+      schedulerLock = await inspectAmySchedulerLock(req.db)
+    } catch (lockError) {
+      log.warn('scheduler lock status unavailable', { error: lockError?.message })
+    }
     // Reflect the REAL effective config (Amy is ON by default) instead of a raw
     // env read that defaulted to false — otherwise the panel shows "OFF" even
     // when the daily scheduler is running.
