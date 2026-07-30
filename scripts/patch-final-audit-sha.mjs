@@ -6,6 +6,7 @@ if (!/^[a-f0-9]{40}$/i.test(expected)) throw new Error('A 40-character EXPECTED_
 const files = [
   'scripts/vercel-final-audit-challenge.mjs',
   'scripts/vercel-final-authenticated-audit.mjs',
+  'scripts/vercel-inspect-final-audit-findings.mjs',
   'api/final-production-audit.js',
 ]
 
