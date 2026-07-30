@@ -1,12 +1,19 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm ci --include=dev --include=optional",
-  "buildCommand": "node scripts/vercel-authenticated-production-audit.mjs",
-  "outputDirectory": "audit-dist",
+  "installCommand": "npm ci --include=dev --include=optional && npm install --no-save --no-package-lock @sparticuz/chromium playwright-core@1.61.1",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "trailingSlash": false,
+  "functions": {
+    "api/final-production-audit.js": {
+      "maxDuration": 300,
+      "memory": 3008,
+      "includeFiles": "node_modules/@sparticuz/chromium/**"
+    }
+  },
   "headers": [
     {
-      "source": "/(.*)",
+      "source": "/api/final-production-audit",
       "headers": [
         { "key": "Cache-Control", "value": "no-store" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
