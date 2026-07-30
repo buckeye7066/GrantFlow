@@ -7,14 +7,29 @@ function changes(result) {
   return Number(result?.changes ?? result?.rowCount ?? 0)
 }
 
-function profileClause(profileIds = []) {
-  const ids = [...new Set((Array.isArray(profileIds) ? profileIds : [profileIds])
+function uniqueProfileIds(profileIds = []) {
+  return [...new Set((Array.isArray(profileIds) ? profileIds : [profileIds])
     .map((value) => String(value || '').trim())
     .filter(Boolean))]
-  if (ids.length === 0) return { sql: '', params: [] }
+}
+
+function profileClause(profileIds = [], column = 'profile_id') {
+  const ids = uniqueProfileIds(profileIds)
+  if (ids.length === 0) return { sql: '', params: [], ids }
   return {
-    sql: ` AND profile_id IN (${ids.map(() => '?').join(', ')})`,
+    sql: ` AND ${column} IN (${ids.map(() => '?').join(', ')})`,
     params: ids,
+    ids,
+  }
+}
+
+function parseCanonicalDecision(value) {
+  if (value === null || value === undefined || value === '') return null
+  try {
+    const parsed = typeof value === 'object' ? value : JSON.parse(String(value))
+    return String(parsed?.canonical_decision || '').trim().toLowerCase() || null
+  } catch {
+    return null
   }
 }
 
@@ -26,41 +41,75 @@ function isMissingIntegritySchema(error) {
     code === '42703' ||
     /no such table:\s*(profile_opportunity_matches|funding_opportunities)/i.test(message) ||
     /relation\s+["']?(profile_opportunity_matches|funding_opportunities)["']?\s+does not exist/i.test(message) ||
-    /no such column:\s*(match_decision|match_score|matcher_version|opportunity_kind)/i.test(message) ||
-    /column\s+["']?(match_decision|match_score|matcher_version|opportunity_kind)["']?\s+does not exist/i.test(message)
+    /no such column:\s*(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)/i.test(message) ||
+    /column\s+["']?(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)["']?\s+does not exist/i.test(message)
   )
 }
 
 /**
- * Normalize persisted profile-match decisions to the product's structural rules.
+ * Normalize persisted profile-match decisions to GrantFlow's structural rules.
  *
- * - REJECT is not a surfaced match and is removed from every surfaced matcher lane.
- * - A resource below the REVIEW score is profile-irrelevant and is removed.
- * - Every surviving resource is navigational evidence, not direct funding, and is
- *   persisted as REVIEW so no directory/referral inflates ACCEPT totals.
+ * Rules, in precedence order:
+ * 1. A persisted REJECT is not a surfaced match and is deleted.
+ * 2. A row whose canonical evidence says REJECT is also deleted. A later writer
+ *    may never relabel hard ineligibility as REVIEW or ACCEPT.
+ * 3. A resource with an explicit score below REVIEW is profile-irrelevant and
+ *    is deleted.
+ * 4. Every surviving resource is navigational evidence, not direct funding, and
+ *    is persisted as REVIEW so it cannot inflate ACCEPT totals.
  *
- * The pass is bounded by optional profile ids, idempotent, and safe to run at
- * startup, after crawler persistence, and before an owner-facing match read.
+ * The pass covers every surfaced matcher lane, including web-llm, is optionally
+ * profile-scoped, idempotent, and safe at startup and after every match writer.
  */
 export async function normalizePersistedMatchDecisionIntegrity(db, options = {}) {
-  if (!db?.prepare) {
-    return {
-      ok: false,
-      removed_rejects: 0,
-      removed_below_review_resources: 0,
-      normalized_resources: 0,
-      reason: 'database_unavailable',
-    }
-  }
+  const ids = options.profileIds || options.profileId || []
+  const plainScope = profileClause(ids, 'profile_id')
+  const aliasedScope = profileClause(ids, 'm.profile_id')
 
-  const scope = profileClause(options.profileIds || options.profileId || [])
+  const empty = (reason) => ({
+    ok: false,
+    scanned_canonical_evidence: 0,
+    removed_rejects: 0,
+    removed_canonical_rejects: 0,
+    removed_below_review_resources: 0,
+    normalized_resources: 0,
+    repaired: 0,
+    profile_count: plainScope.ids.length,
+    reason,
+  })
+
+  if (!db?.prepare) return empty('database_unavailable')
+
   const run = async (connection) => {
     const removedRejects = await connection.prepare(
       `DELETE FROM profile_opportunity_matches
         WHERE matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
           AND LOWER(COALESCE(match_decision, '')) = 'reject'
-          ${scope.sql}`,
-    ).run(...scope.params)
+          ${plainScope.sql}`,
+    ).run(...plainScope.params)
+
+    // Canonical-decision evidence is JSON text in both SQLite and PostgreSQL.
+    // Parse it in JavaScript rather than relying on dialect-specific JSON SQL.
+    const evidenceRows = await connection.prepare(
+      `SELECT m.profile_id, m.opportunity_id, m.match_explain_json
+         FROM profile_opportunity_matches m
+        WHERE m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
+          AND m.match_explain_json IS NOT NULL
+          ${aliasedScope.sql}`,
+    ).all(...aliasedScope.params)
+
+    const deleteCanonicalReject = connection.prepare(
+      `DELETE FROM profile_opportunity_matches
+        WHERE profile_id = ? AND opportunity_id = ?
+          AND matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}`,
+    )
+    let removedCanonicalRejects = 0
+    for (const row of Array.isArray(evidenceRows) ? evidenceRows : []) {
+      if (parseCanonicalDecision(row.match_explain_json) !== 'reject') continue
+      removedCanonicalRejects += changes(
+        await deleteCanonicalReject.run(String(row.profile_id), String(row.opportunity_id)),
+      )
+    }
 
     const removedBelowReview = await connection.prepare(
       `DELETE FROM profile_opportunity_matches
@@ -72,8 +121,8 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
           )
           AND match_score IS NOT NULL
           AND match_score < ?
-          ${scope.sql}`,
-    ).run(REVIEW_SCORE, ...scope.params)
+          ${plainScope.sql}`,
+    ).run(REVIEW_SCORE, ...plainScope.params)
 
     const normalizedResources = await connection.prepare(
       `UPDATE profile_opportunity_matches
@@ -87,35 +136,29 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
           )
           AND (match_score IS NULL OR match_score >= ?)
           AND LOWER(COALESCE(match_decision, '')) <> 'review'
-          ${scope.sql}`,
-    ).run(REVIEW_SCORE, ...scope.params)
+          ${plainScope.sql}`,
+    ).run(REVIEW_SCORE, ...plainScope.params)
 
-    return {
+    const result = {
       ok: true,
+      scanned_canonical_evidence: Array.isArray(evidenceRows) ? evidenceRows.length : 0,
       removed_rejects: changes(removedRejects),
+      removed_canonical_rejects: removedCanonicalRejects,
       removed_below_review_resources: changes(removedBelowReview),
       normalized_resources: changes(normalizedResources),
-      profile_count: scope.params.length,
+      profile_count: plainScope.ids.length,
       reason: null,
     }
+    result.repaired = result.removed_rejects + result.removed_canonical_rejects +
+      result.removed_below_review_resources + result.normalized_resources
+    return result
   }
 
   try {
-    if (typeof db.withTransaction === 'function') {
-      return await db.withTransaction(run)
-    }
+    if (typeof db.withTransaction === 'function') return await db.withTransaction(run)
     return await run(db)
   } catch (error) {
-    if (isMissingIntegritySchema(error)) {
-      return {
-        ok: false,
-        removed_rejects: 0,
-        removed_below_review_resources: 0,
-        normalized_resources: 0,
-        profile_count: scope.params.length,
-        reason: 'schema_unavailable',
-      }
-    }
+    if (isMissingIntegritySchema(error)) return empty('schema_unavailable')
     throw error
   }
 }
