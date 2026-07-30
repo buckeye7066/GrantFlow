@@ -1,19 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm ci --include=dev --include=optional && npm install --prefix .audit-browser-deps --no-save --no-package-lock @sparticuz/chromium && cp -R .audit-browser-deps/node_modules/. node_modules/",
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
+  "installCommand": "npm ci --include=dev --include=optional",
+  "buildCommand": "node scripts/vercel-final-audit-challenge.mjs",
+  "outputDirectory": "audit-dist",
   "trailingSlash": false,
-  "functions": {
-    "api/final-production-audit.js": {
-      "maxDuration": 300,
-      "memory": 3008,
-      "includeFiles": "node_modules/@sparticuz/chromium/**"
-    }
-  },
   "headers": [
     {
-      "source": "/api/final-production-audit",
+      "source": "/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "no-store" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
