@@ -19,10 +19,14 @@ export function osmElementUrl(sourceId) {
 
 export function candidateUrlEntries(row = {}) {
   const seen = new Set()
+  // Probe every canonical stored HTTP candidate before retirement.
   return [
     { role: 'application_url', url: row.application_url },
+    { role: 'apply_url', url: row.apply_url },
+    { role: 'apply_guidelines_url', url: row.apply_guidelines_url },
     { role: 'final_url', url: row.final_url },
     { role: 'source_url', url: row.source_url },
+    { role: 'evidence_url', url: row.evidence_url },
   ]
     .map((entry) => ({ ...entry, url: String(entry.url || '').trim() }))
     .filter((entry) => {
@@ -238,32 +242,48 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   const timeoutMs = Math.max(3000, Math.min(20000, Number(options.timeoutMs) || 10000))
   const cycleId = String(options.cycleId || '').trim() || null
   const verifiedBy = String(options.verifiedBy || (cycleId ? `link-backlog-repair:${cycleId}` : 'link-backlog-repair'))
-  const cycleMarker = cycleId ? verifiedBy : null
+  const pendingRetryAfterMs = Math.max(
+    5 * 60 * 1000,
+    Math.min(30 * 24 * 60 * 60 * 1000, Number(options.pendingRetryAfterMs) || 24 * 60 * 60 * 1000),
+  )
+  const pendingRetryCutoff = new Date(Date.now() - pendingRetryAfterMs).toISOString()
   const findOfficialUrlImpl = options.findOfficialUrlImpl || findOfficialUrlForOpportunity
   const { yes, no } = bools(db)
   const before = await brokenDirectSummary(db)
   const reclassified = await reclassifyBrokenResources(db)
 
+  // Quarantine every broken direct row, but claim only the selected batch as
+  // paused. Untouched rows remain active-status quarantine, not fake pending work.
   await db.prepare(`
     UPDATE funding_opportunities
-       SET is_hidden=?, is_active=?, status='paused'
+       SET is_hidden=?, is_active=?
      WHERE COALESCE(opportunity_kind,'direct') IN ('direct','benefit')
        AND link_status='broken' AND COALESCE(status,'active') <> 'expired'
   `).run(yes, no)
 
+  // link_backlog_selected_row_claim: active quarantine drains first. Fresh
+  // retryable rows wait for the bounded retry window; cycle IDs never exclude them.
   const rows = await db.prepare(`
-    SELECT id, title, sponsor, source, application_url, source_url, final_url
+    SELECT id, title, sponsor, source, application_url, apply_url,
+           apply_guidelines_url, source_url, evidence_url, final_url,
+           status, last_verified_at
       FROM funding_opportunities
      WHERE COALESCE(opportunity_kind,'direct') IN ('direct','benefit')
-       AND link_status='broken' AND status='paused'
-       AND (? IS NULL OR COALESCE(verified_by, '') <> ?)
-     ORDER BY last_verified_at ASC NULLS FIRST
+       AND link_status='broken'
+       AND (
+         COALESCE(status,'active')='active'
+         OR (status='paused' AND (last_verified_at IS NULL OR last_verified_at < ?))
+       )
+     ORDER BY CASE WHEN COALESCE(status,'active')='active' THEN 0 ELSE 1 END,
+              CASE WHEN last_verified_at IS NULL THEN 0 ELSE 1 END,
+              last_verified_at ASC, id ASC
      LIMIT ?
-  `).all(cycleMarker, cycleMarker, limit)
+  `).all(pendingRetryCutoff, limit)
 
   const stats = {
     cycle_id: cycleId,
     selected: rows.length,
+    claimed: 0,
     checked: 0,
     restored: 0,
     retired: 0,
@@ -271,12 +291,31 @@ export async function repairBrokenDirectBatch(db, options = {}) {
     official_searches: 0,
     official_search_rescues: 0,
     official_search_unavailable: 0,
+    row_errors: 0,
     failures: {},
     reclassified,
   }
+  const claimSelected = db.prepare(`
+    UPDATE funding_opportunities
+       SET is_hidden=?, is_active=?, status='paused'
+     WHERE id=? AND link_status='broken' AND COALESCE(status,'active') <> 'expired'
+  `)
+  const claimedRows = []
+  for (const row of rows || []) {
+    try {
+      const claimed = countChanges(await claimSelected.run(yes, no, row.id))
+      if (claimed > 0) {
+        stats.claimed += claimed
+        claimedRows.push(row)
+      }
+    } catch {
+      stats.row_errors += 1
+      stats.failures.claim_failed = (stats.failures.claim_failed || 0) + 1
+    }
+  }
   const restore = db.prepare(`
     UPDATE funding_opportunities
-       SET application_url=?, source_url=?, final_url=?, last_verified_at=?, link_status=?,
+       SET application_url=?, apply_url=?, source_url=?, final_url=?, last_verified_at=?, link_status=?,
            link_status_code=?, verification_method=?, verified_by=?, verification_error=NULL,
            http_status=?, is_hidden=?, is_active=?, status='active'
      WHERE id=?
@@ -298,65 +337,120 @@ export async function repairBrokenDirectBatch(db, options = {}) {
      WHERE id=?
   `)
 
-  await concurrentMap(rows || [], concurrency, async (row) => {
-    let result = await probeRow(row, timeoutMs)
-    stats.checked += 1
-
-    if (!result.success && String(row.title || '').trim()) {
-      stats.official_searches += 1
-      const rescue = await rescueOfficialUrl(row, findOfficialUrlImpl)
-      if (rescue.rescued) {
-        stats.official_search_rescues += 1
-        result = { success: true, terminal: false, outcome: rescue.outcome, outcomes: result.outcomes }
-      } else if (rescue.unavailable) {
-        stats.official_search_unavailable += 1
-        result.terminal = false
-      }
+  // link_backlog_row_error_isolation: one provider, probe, or DB failure
+  // never aborts the remaining selected rows. Each worker accumulates locally;
+  // the final synchronous fold prevents lost += updates across awaited work.
+  await concurrentMap(claimedRows, concurrency, async (row) => {
+    const rowStats = {
+      checked: 0, restored: 0, retired: 0, pending: 0,
+      official_searches: 0, official_search_rescues: 0,
+      official_search_unavailable: 0, row_errors: 0, failures: {},
     }
+    const fail = (kind) => {
+      rowStats.failures[kind] = (rowStats.failures[kind] || 0) + 1
+    }
+    let outcome = {
+      status: 'broken', code: null, method: null, error: 'repair_exception:unknown',
+      finalUrl: null, url: null, role: null, duration_ms: 0,
+    }
+    let finalStatus = 'broken'
+    try {
+      let result = await probeRow(row, timeoutMs)
+      rowStats.checked += 1
 
-    const outcome = result.outcome
-    const at = nowIso()
-    if (result.success) {
-      const url = outcome.finalUrl || outcome.url
-      // Only a proven application endpoint may populate application_url. A
-      // source-page or search rescue remains source evidence, not an apply link.
-      const applicationUrl = outcome.role === 'application_url' ? url : null
-      const sourceUrl = outcome.role === 'application_url' ? (row.source_url || url) : url
-      stats.restored += countChanges(await restore.run(
-        applicationUrl, sourceUrl, url, at, outcome.status === 'verified' ? 'ok' : outcome.status,
-        outcome.code ?? null, outcome.method ?? 'get', verifiedBy,
-        typeof outcome.code === 'number' ? outcome.code : null, no, yes, row.id,
-      ))
-    } else {
-      const kind = failureClass(outcome)
-      stats.failures[kind] = (stats.failures[kind] || 0) + 1
-      if (result.terminal) {
-        stats.retired += countChanges(await retire.run(
-          at, outcome.code ?? null, outcome.method ?? null, verifiedBy,
-          `${RETIRED_MARKER}${kind}:${String(outcome.error || '').slice(0,120)}`,
-          outcome.finalUrl ?? null, typeof outcome.code === 'number' ? outcome.code : null,
-          yes, no, row.id,
+      if (!result.success && String(row.title || '').trim()) {
+        rowStats.official_searches += 1
+        const rescue = await rescueOfficialUrl(row, findOfficialUrlImpl)
+        if (rescue.rescued) {
+          rowStats.official_search_rescues += 1
+          result = { success: true, terminal: false, outcome: rescue.outcome, outcomes: result.outcomes }
+        } else if (rescue.unavailable) {
+          rowStats.official_search_unavailable += 1
+          result.terminal = false
+        }
+      }
+
+      outcome = result.outcome
+      const at = nowIso()
+      if (result.success) {
+        const url = outcome.finalUrl || outcome.url
+        const isApply = outcome.role === 'application_url' || outcome.role === 'apply_url'
+        const applicationUrl = isApply ? url : null
+        const applyUrl = isApply ? url : null
+        const sourceUrl = isApply ? (row.source_url || row.evidence_url || url) : url
+        rowStats.restored = countChanges(await restore.run(
+          applicationUrl, applyUrl, sourceUrl, url, at,
+          outcome.status === 'verified' ? 'ok' : outcome.status,
+          outcome.code ?? null, outcome.method ?? 'get', verifiedBy,
+          typeof outcome.code === 'number' ? outcome.code : null, no, yes, row.id,
         ))
+        finalStatus = outcome.status === 'verified' ? 'ok' : outcome.status
       } else {
-        stats.pending += countChanges(await keepPending.run(
-          at, outcome.code ?? null, outcome.method ?? null, verifiedBy,
-          `retryable_after_recheck:${kind}:${String(outcome.error || '').slice(0,120)}`,
-          outcome.finalUrl ?? null, typeof outcome.code === 'number' ? outcome.code : null,
-          yes, no, row.id,
+        const kind = failureClass(outcome)
+        fail(kind)
+        if (result.terminal) {
+          rowStats.retired = countChanges(await retire.run(
+            at, outcome.code ?? null, outcome.method ?? null, verifiedBy,
+            `${RETIRED_MARKER}${kind}:${String(outcome.error || '').slice(0,120)}`,
+            outcome.finalUrl ?? null, typeof outcome.code === 'number' ? outcome.code : null,
+            yes, no, row.id,
+          ))
+          finalStatus = 'skipped'
+        } else {
+          rowStats.pending = countChanges(await keepPending.run(
+            at, outcome.code ?? null, outcome.method ?? null, verifiedBy,
+            `retryable_after_recheck:${kind}:${String(outcome.error || '').slice(0,120)}`,
+            outcome.finalUrl ?? null, typeof outcome.code === 'number' ? outcome.code : null,
+            yes, no, row.id,
+          ))
+        }
+      }
+    } catch (error) {
+      rowStats.row_errors += 1
+      fail('repair_exception')
+      const message = String(error?.message || error).replace(/[\r\n]+/g, ' ').slice(0, 120)
+      outcome = {
+        status: 'broken', code: null, method: 'repair_exception', error: message,
+        finalUrl: null, url: null, role: null, duration_ms: 0,
+      }
+      try {
+        rowStats.pending = countChanges(await keepPending.run(
+          nowIso(), null, 'repair_exception', verifiedBy,
+          `retryable_after_recheck:repair_exception:${message}`,
+          null, null, yes, no, row.id,
         ))
+      } catch {
+        fail('pending_persist_failed')
       }
     }
-    await recordVerificationEvent(db, {
-      opportunity_id: row.id,
-      source: row.source,
-      url: outcome.url,
-      link_status: result.success ? outcome.status : (result.terminal ? 'skipped' : 'broken'),
-      link_status_code: outcome.code,
-      verification_method: outcome.method,
-      verified_by: verifiedBy,
-      verification_error: result.success ? null : outcome.error,
-      duration_ms: outcome.duration_ms,
-    })
+
+    // No await in this fold. JavaScript cannot interleave another worker between
+    // reading and writing these counters.
+    stats.checked += rowStats.checked
+    stats.restored += rowStats.restored
+    stats.retired += rowStats.retired
+    stats.pending += rowStats.pending
+    stats.official_searches += rowStats.official_searches
+    stats.official_search_rescues += rowStats.official_search_rescues
+    stats.official_search_unavailable += rowStats.official_search_unavailable
+    stats.row_errors += rowStats.row_errors
+    for (const [kind, count] of Object.entries(rowStats.failures)) {
+      stats.failures[kind] = (stats.failures[kind] || 0) + count
+    }
+
+    try {
+      await recordVerificationEvent(db, {
+        opportunity_id: row.id,
+        source: row.source,
+        url: outcome.url,
+        link_status: finalStatus,
+        link_status_code: outcome.code,
+        verification_method: outcome.method,
+        verified_by: verifiedBy,
+        verification_error: finalStatus === 'ok' || finalStatus === 'redirect' ? null : outcome.error,
+        duration_ms: outcome.duration_ms,
+      })
+    } catch { /* audit persistence is best-effort */ }
   })
 
   return { ok: true, before, ...stats, after: await brokenDirectSummary(db) }
