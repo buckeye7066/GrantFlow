@@ -4,9 +4,9 @@ import path from 'node:path'
 
 const BASE_URL = 'https://app.axiombiolabs.org'
 const EXPECTED_SHA = '12ee0af3be440c093f0daf50eedd573d504ee317'
-const AUDIT_EMAIL = 'buckeye7066@gmail.com'
+const AUDIT_EMAIL = 'buckeye7066+grantflow-production-audit@gmail.com'
 const OUT_DIR = path.resolve('audit-dist')
-const CHALLENGE_TTL_MS = 12 * 60 * 1000
+const CHALLENGE_TTL_MS = 25 * 60 * 1000
 
 const b64u = (value) => Buffer.from(value).toString('base64url')
 const secretKey = () => {
@@ -48,7 +48,7 @@ if (
   Number(counts.repair_pending_broken_direct_opportunities || 0) !== 0
 ) throw new Error('unsafe link lifecycle counters are nonzero')
 
-const start = await requestJson('/api/auth/email/start', {
+const start = await requestJson('/api/auth/password/reset/start', {
   method: 'POST',
   body: { email: AUDIT_EMAIL },
 })
@@ -62,7 +62,8 @@ const iv = crypto.randomBytes(12)
 const cipher = crypto.createCipheriv('aes-256-gcm', secretKey(), iv)
 const encrypted = Buffer.concat([cipher.update(privateKey, 'utf8'), cipher.final()])
 const payload = {
-  v: 1,
+  v: 2,
+  purpose: 'password_reset_token',
   exp: Date.now() + CHALLENGE_TTL_MS,
   iv: b64u(iv),
   tag: b64u(cipher.getAuthTag()),
@@ -70,13 +71,14 @@ const payload = {
 }
 const challenge = b64u(JSON.stringify(payload))
 const output = {
-  audit: 'grantflow-final-authenticated-audit-challenge-v1',
+  audit: 'grantflow-final-authenticated-audit-challenge-v2',
   expected_sha: EXPECTED_SHA,
   generated_at: new Date().toISOString(),
   expires_at: new Date(payload.exp).toISOString(),
   challenge,
   public_key_b64u: b64u(publicKey),
   email_sent: start?.email_sent === true,
+  account: '<dedicated-non-admin-audit-account>',
   values_exposed: false,
 }
 
