@@ -40,6 +40,52 @@ export function candidateUrls(row = {}) {
   return candidateUrlEntries(row).map((entry) => entry.url)
 }
 
+/**
+ * Build the six persisted URL fields after a successful rescue.
+ *
+ * A candidate proven permanently gone is cleared. Transiently blocked or
+ * untested candidates are preserved because silence/access denial is not proof
+ * of death. The successful candidate remains in its semantic field and becomes
+ * final_url; an application/apply endpoint is mirrored across both apply fields.
+ */
+export function restoredUrlFields(row = {}, result = {}, outcome = {}, url = null) {
+  const permanentRoles = new Set(
+    (Array.isArray(result?.outcomes) ? result.outcomes : [])
+      .filter((entry) => PERMANENT_HTTP_CODES.has(Number(entry?.code)))
+      .map((entry) => String(entry?.role || ''))
+      .filter(Boolean),
+  )
+  const keep = (role) => permanentRoles.has(role) ? null : (row?.[role] || null)
+  const restored = {
+    application_url: keep('application_url'),
+    apply_url: keep('apply_url'),
+    apply_guidelines_url: keep('apply_guidelines_url'),
+    source_url: keep('source_url'),
+    evidence_url: keep('evidence_url'),
+    final_url: url || null,
+  }
+
+  switch (outcome?.role) {
+    case 'application_url':
+    case 'apply_url':
+      restored.application_url = url
+      restored.apply_url = url
+      break
+    case 'apply_guidelines_url':
+      restored.apply_guidelines_url = url
+      break
+    case 'source_url':
+      restored.source_url = url
+      break
+    case 'evidence_url':
+      restored.evidence_url = url
+      break
+    default:
+      break
+  }
+  return restored
+}
+
 function parseContactInfo(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) return { ...value }
   try {
@@ -223,8 +269,7 @@ export async function brokenDirectSummary(db) {
       SUM(CASE WHEN link_status='broken' AND COALESCE(status,'active')='active'
                     AND (COALESCE(is_hidden,FALSE)=TRUE OR COALESCE(is_active,TRUE)=FALSE) THEN 1 ELSE 0 END) quarantined,
       SUM(CASE WHEN link_status='broken' AND status='paused' THEN 1 ELSE 0 END) repair_pending,
-      SUM(CASE WHEN (link_status='skipped' AND verification_error LIKE ?)
-                    OR status='expired' THEN 1 ELSE 0 END) retired
+      SUM(CASE WHEN link_status='skipped' AND verification_error LIKE ? THEN 1 ELSE 0 END) retired
       FROM funding_opportunities
      WHERE COALESCE(opportunity_kind,'direct') IN ('direct','benefit')
   `).get(`${RETIRED_MARKER}%`)
@@ -315,7 +360,8 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   }
   const restore = db.prepare(`
     UPDATE funding_opportunities
-       SET application_url=?, apply_url=?, source_url=?, final_url=?, last_verified_at=?, link_status=?,
+       SET application_url=?, apply_url=?, apply_guidelines_url=?,
+           source_url=?, evidence_url=?, final_url=?, last_verified_at=?, link_status=?,
            link_status_code=?, verification_method=?, verified_by=?, verification_error=NULL,
            http_status=?, is_hidden=?, is_active=?, status='active'
      WHERE id=?
@@ -374,15 +420,23 @@ export async function repairBrokenDirectBatch(db, options = {}) {
       const at = nowIso()
       if (result.success) {
         const url = outcome.finalUrl || outcome.url
-        const isApply = outcome.role === 'application_url' || outcome.role === 'apply_url'
-        const applicationUrl = isApply ? url : null
-        const applyUrl = isApply ? url : null
-        const sourceUrl = isApply ? (row.source_url || row.evidence_url || url) : url
+        const fields = restoredUrlFields(row, result, outcome, url)
         rowStats.restored = countChanges(await restore.run(
-          applicationUrl, applyUrl, sourceUrl, url, at,
+          fields.application_url,
+          fields.apply_url,
+          fields.apply_guidelines_url,
+          fields.source_url,
+          fields.evidence_url,
+          fields.final_url,
+          at,
           outcome.status === 'verified' ? 'ok' : outcome.status,
-          outcome.code ?? null, outcome.method ?? 'get', verifiedBy,
-          typeof outcome.code === 'number' ? outcome.code : null, no, yes, row.id,
+          outcome.code ?? null,
+          outcome.method ?? 'get',
+          verifiedBy,
+          typeof outcome.code === 'number' ? outcome.code : null,
+          no,
+          yes,
+          row.id,
         ))
         finalStatus = outcome.status === 'verified' ? 'ok' : outcome.status
       } else {
@@ -463,6 +517,7 @@ export default {
   failureClass,
   osmElementUrl,
   preservedOsmContactInfo,
+  restoredUrlFields,
   reclassifyBrokenResources,
   repairBrokenDirectBatch,
 }
