@@ -24,6 +24,15 @@ const coreSignatures = Object.freeze([
   ['scripts/check-deployment-config.mjs', 'hasProductionHostGuard'],
   ['src/config/env.js', 'VITE_PREVIEW_API_URL'],
 ])
+const linkBacklogSignatures = Object.freeze([
+  ['backend/services/crawlers/nationalZipCrawler.js', 'link_backlog_resource_contract'],
+  ['backend/services/linkVerificationService.js', 'browser-compatible liveness probe'],
+  ['backend/server.js', "app.use('/api/admin/link-repair'"],
+  ['backend/server.js', '[link-repair] recurring lifecycle pass'],
+  ['backend/services/missionHealthService.js', 'repair_pending_broken_direct_opportunities'],
+  ['backend/services/linkBacklogRepairService.js', 'export async function repairBrokenDirectBatch'],
+  ['backend/routes/linkBacklogRepair.js', "router.post('/run'"],
+])
 const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
   ['backend/services/webParityBenchmark.js', 'export function isGenericFundingPortalHit'],
@@ -39,7 +48,12 @@ const amySignatures = Object.freeze([
   ['backend/services/amy/amyRunner.js', 'AMY_SCHEDULER_LOCK_NAME'],
   ['backend/routes/amy.js', "router.post('/recover-stale-run-lock'"],
 ])
-const signatures = Object.freeze([...coreSignatures, ...webParitySignatures, ...amySignatures])
+const signatures = Object.freeze([
+  ...coreSignatures,
+  ...linkBacklogSignatures,
+  ...webParitySignatures,
+  ...amySignatures,
+])
 
 const hasSignature = ([file, signature]) => {
   try {
@@ -68,6 +82,13 @@ function hasResourcePreservation() {
 async function applyModule(modulePath, label = modulePath) {
   await import(`${pathToFileURL(path.resolve(modulePath)).href}?materialize=${Date.now()}`)
   console.log(`[source-materialization] applied ${label}`)
+}
+
+async function applyLinkBacklogCorrections() {
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-resolution.mjs',
+    'link backlog lifecycle correction',
+  )
 }
 
 async function applyWebParityCorrections() {
@@ -106,11 +127,16 @@ async function refreshEnvExamples() {
 
 const corePresent = coreSignatures.filter(hasSignature)
 if (corePresent.length === coreSignatures.length && hasResourcePreservation()) {
-  // The global hardening tree is already materialized. Apply later incremental
-  // product corrections idempotently before the read-only early exit.
+  // Apply every later product correction idempotently before the read-only exit.
+  // This ordering prevents one independently verified repair from erasing another.
+  await applyLinkBacklogCorrections()
   await applyWebParityCorrections()
   await applyAmyCorrections()
-  const missingIncremental = [...webParitySignatures, ...amySignatures].filter((entry) => !hasSignature(entry))
+  const missingIncremental = [
+    ...linkBacklogSignatures,
+    ...webParitySignatures,
+    ...amySignatures,
+  ].filter((entry) => !hasSignature(entry))
   if (missingIncremental.length > 0) {
     throw new Error(
       `[source-materialization] incremental signatures missing: ${missingIncremental.map(([, signature]) => signature).join(', ')}`,
@@ -141,6 +167,7 @@ const modules = [
 for (const modulePath of modules) {
   await applyModule(modulePath)
 }
+await applyLinkBacklogCorrections()
 await applyWebParityCorrections()
 await applyAmyCorrections()
 
