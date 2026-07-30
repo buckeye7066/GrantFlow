@@ -24,6 +24,19 @@ const coreSignatures = Object.freeze([
   ['scripts/check-deployment-config.mjs', 'hasProductionHostGuard'],
   ['src/config/env.js', 'VITE_PREVIEW_API_URL'],
 ])
+const linkBacklogSignatures = Object.freeze([
+  ['backend/services/crawlers/nationalZipCrawler.js', 'link_backlog_resource_contract'],
+  ['backend/services/linkVerificationService.js', 'browser-compatible liveness probe'],
+  ['backend/services/linkVerificationService.js', 'link_repair_success_restores_visibility'],
+  ['backend/server.js', "app.use('/api/admin/link-repair'"],
+  ['backend/server.js', '[link-repair] recurring lifecycle pass'],
+  ['backend/services/missionHealthService.js', 'repair_pending_broken_direct_opportunities'],
+  ['backend/services/linkBacklogRepairService.js', 'export async function repairBrokenDirectBatch'],
+  ['backend/services/linkBacklogRepairService.js', 'link_backlog_selected_row_claim'],
+  ['backend/services/linkBacklogRepairService.js', 'link_backlog_row_error_isolation'],
+  ['backend/routes/linkBacklogRepair.js', 'link_backlog_shared_scheduler_lock'],
+  ['backend/tests/linkBacklogRepairService.test.js', 'link_backlog_extended_url_fixture'],
+])
 const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
   ['backend/services/webParityBenchmark.js', 'export function isGenericFundingPortalHit'],
@@ -31,6 +44,8 @@ const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'if (!covers && !isBenchmarkDirectFundingHit'],
   ['backend/services/webParityBenchmark.js', 'function isTerminalGapStatus'],
   ['backend/services/webParityBenchmark.js', 'const WEB_ONLY_TOP_CAP = 20'],
+  ['backend/server.js', "app.use('/api/admin/web-parity'"],
+  ['backend/routes/webParityAdmin.js', 'function launchParityRun'],
 ])
 const amySignatures = Object.freeze([
   ['backend/services/amy/amyAgent.js', "boundedAmyPreflight('mesh_context'"],
@@ -39,7 +54,12 @@ const amySignatures = Object.freeze([
   ['backend/services/amy/amyRunner.js', 'AMY_SCHEDULER_LOCK_NAME'],
   ['backend/routes/amy.js', "router.post('/recover-stale-run-lock'"],
 ])
-const signatures = Object.freeze([...coreSignatures, ...webParitySignatures, ...amySignatures])
+const signatures = Object.freeze([
+  ...coreSignatures,
+  ...linkBacklogSignatures,
+  ...webParitySignatures,
+  ...amySignatures,
+])
 
 const hasSignature = ([file, signature]) => {
   try {
@@ -70,6 +90,29 @@ async function applyModule(modulePath, label = modulePath) {
   console.log(`[source-materialization] applied ${label}`)
 }
 
+async function applyLinkBacklogCorrections() {
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-resolution.mjs',
+    'link backlog lifecycle correction',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-candidate-selection.mjs',
+    'link backlog candidate selection',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-row-isolation.mjs',
+    'link backlog row isolation',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-verification-success-restore.mjs',
+    'link verification success restore',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-route-lock.mjs',
+    'link backlog route lock',
+  )
+}
+
 async function applyWebParityCorrections() {
   await applyModule(
     'scripts/source-materialization/apply-web-parity-source-quality-prelude.mjs',
@@ -82,6 +125,10 @@ async function applyWebParityCorrections() {
   await applyModule(
     'scripts/source-materialization/apply-web-parity-source-quality-finalize.mjs',
     'web-parity direct-source finalization',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-admin-route.mjs',
+    'web-parity background admin route',
   )
 }
 
@@ -106,11 +153,16 @@ async function refreshEnvExamples() {
 
 const corePresent = coreSignatures.filter(hasSignature)
 if (corePresent.length === coreSignatures.length && hasResourcePreservation()) {
-  // The global hardening tree is already materialized. Apply later incremental
-  // product corrections idempotently before the read-only early exit.
+  // Apply every later product correction idempotently before the read-only exit.
+  // This ordering prevents one independently verified repair from erasing another.
+  await applyLinkBacklogCorrections()
   await applyWebParityCorrections()
   await applyAmyCorrections()
-  const missingIncremental = [...webParitySignatures, ...amySignatures].filter((entry) => !hasSignature(entry))
+  const missingIncremental = [
+    ...linkBacklogSignatures,
+    ...webParitySignatures,
+    ...amySignatures,
+  ].filter((entry) => !hasSignature(entry))
   if (missingIncremental.length > 0) {
     throw new Error(
       `[source-materialization] incremental signatures missing: ${missingIncremental.map(([, signature]) => signature).join(', ')}`,
@@ -141,6 +193,7 @@ const modules = [
 for (const modulePath of modules) {
   await applyModule(modulePath)
 }
+await applyLinkBacklogCorrections()
 await applyWebParityCorrections()
 await applyAmyCorrections()
 
