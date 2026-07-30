@@ -114,7 +114,7 @@ function canonicalRecommendationDecision(recommendation) {
   const campus = words.at(-1)
   if (!campus || GENERIC_INSTITUTION_TAILS.has(campus)) return ''
   const baseAcronym = words.slice(0, -1).map((x) => x[0]).join('')
-  return baseAcronym.length >= 2 ? `${baseAcronym} ${campus}` : ''
+  return baseAcronym.length >= 2 ? \`${'${baseAcronym}'} ${'${campus}'}\` : ''
 }
 
 /** True if any normalized title/sponsor references the school (full name, acronym, or precise campus alias). */`,
@@ -124,7 +124,7 @@ function canonicalRecommendationDecision(recommendation) {
   const campus = words.at(-1)
   if (!campus || GENERIC_INSTITUTION_TAILS.has(campus)) return ''
   const baseAcronym = words.slice(0, -1).map((x) => x[0]).join('')
-  return baseAcronym.length >= 2 ? `${baseAcronym} ${campus}` : ''
+  return baseAcronym.length >= 2 ? \`${'${baseAcronym}'} ${'${campus}'}\` : ''
 }
 
 // A very small, evidence-backed publication-name registry. Institutions often
@@ -358,33 +358,33 @@ function schoolPublicationAliases(name) {
 
   replaceExact(
     files.webQueries,
-    `      add(core, \`"${school}" scholarships\`);
-      add(core, \`${school} scholarships\`);
-      if (i === 0) add(extra, \`"${school}" financial aid scholarships\`);`,
-    `      add(core, \`"${school}" scholarships\`);
+    `      add(core, \`"${'${school}'}" scholarships\`);
+      add(core, \`${'${school}'} scholarships\`);
+      if (i === 0) add(extra, \`"${'${school}'}" financial aid scholarships\`);`,
+    `      add(core, \`"${'${school}'}" scholarships\`);
       for (const alias of schoolPublicationAliases(school)) {
-        add(core, \`"${alias}" scholarships\`);
-        if (i === 0) add(extra, \`"${alias}" financial aid scholarships\`);
+        add(core, \`"${'${alias}'}" scholarships\`);
+        if (i === 0) add(extra, \`"${'${alias}'}" financial aid scholarships\`);
       }
-      add(core, \`${school} scholarships\`);
-      if (i === 0) add(extra, \`"${school}" financial aid scholarships\`);`,
+      add(core, \`${'${school}'} scholarships\`);
+      if (i === 0) add(extra, \`"${'${school}'}" financial aid scholarships\`);`,
     'publication-name institution queries',
   )
 
   replaceExact(
     files.webQueries,
-    `        add(forced, \`${s} scholarships\`);
-        add(forced, \`"${s}" scholarships\`);
-        add(forced, \`${s} foundation scholarships\`);
-        add(extra, \`"${s}" financial aid scholarships\`);`,
-    `        add(forced, \`${s} scholarships\`);
-        add(forced, \`"${s}" scholarships\`);
+    `        add(forced, \`${'${s}'} scholarships\`);
+        add(forced, \`"${'${s}'}" scholarships\`);
+        add(forced, \`${'${s}'} foundation scholarships\`);
+        add(extra, \`"${'${s}'}" financial aid scholarships\`);`,
+    `        add(forced, \`${'${s}'} scholarships\`);
+        add(forced, \`"${'${s}'}" scholarships\`);
         for (const alias of schoolPublicationAliases(s)) {
-          add(forced, \`"${alias}" scholarships\`);
-          add(extra, \`"${alias}" financial aid scholarships\`);
+          add(forced, \`"${'${alias}'}" scholarships\`);
+          add(extra, \`"${'${alias}'}" financial aid scholarships\`);
         }
-        add(forced, \`${s} foundation scholarships\`);
-        add(extra, \`"${s}" financial aid scholarships\`);`,
+        add(forced, \`${'${s}'} foundation scholarships\`);
+        add(extra, \`"${'${s}'}" financial aid scholarships\`);`,
     'learned publication-name institution queries',
   )
 
