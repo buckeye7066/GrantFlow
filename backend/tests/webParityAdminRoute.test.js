@@ -8,6 +8,7 @@ import router, {
   pendingWebParity,
   snapshotState,
 } from '../routes/webParityAdmin.js'
+import { ensureSchema } from '../services/agentControl/agentControlStore.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -89,6 +90,36 @@ describe('web parity background admin route', () => {
     expect(first.already_running).toBe(false)
     expect(second).toEqual({ already_running: true, run_id: first.run_id })
     await first.promise
+  })
+
+  it('records a cross-instance scheduler-lock collision as skipped, not successful', async () => {
+    const db = makeDb()
+    await ensureSchema(db)
+    const now = new Date()
+    db.prepare(`
+      INSERT INTO agent_control_locks
+        (id, lock_name, control_run_id, owner_token, acquired_by, acquired_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'held-parity-lock',
+      'scheduler:web-parity-benchmark',
+      'other-instance-run',
+      'other-owner-token',
+      'other-instance',
+      now.toISOString(),
+      new Date(now.getTime() + 30 * 60 * 1000).toISOString(),
+    )
+
+    const launch = launchParityRun({ db, logger: { info() {}, error() {} } })
+    await launch.promise
+    expect(snapshotState()).toMatchObject({
+      running: false,
+      run_id: launch.run_id,
+      ok: null,
+      error: null,
+      summary: { ran: false, skipped: true, reason: 'lock_held' },
+    })
+    db.close()
   })
 
   it('launches asynchronously and records an honest no-db completion', async () => {
