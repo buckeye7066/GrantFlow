@@ -3,20 +3,45 @@ import fs from 'node:fs'
 const read = (file) => fs.readFileSync(file, 'utf8')
 const write = (file, value) => fs.writeFileSync(file, value)
 
-function replaceOnce(file, pattern, replacement, label) {
-  const before = read(file)
-  const matches = before.match(new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`)) || []
-  if (matches.length !== 1) throw new Error(`${label}: expected one match, found ${matches.length}`)
-  write(file, before.replace(pattern, replacement))
+function countMatches(value, pattern) {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`
+  return value.match(new RegExp(pattern.source, flags))?.length || 0
 }
 
-function insertAfter(file, marker, addition, label) {
-  const before = read(file)
-  const first = before.indexOf(marker)
-  if (first < 0 || before.indexOf(marker, first + marker.length) >= 0) {
-    throw new Error(`${label}: marker missing or ambiguous`)
+function preflightOperation(operation) {
+  const before = read(operation.file)
+  if (operation.type === 'replace') {
+    const matches = countMatches(before, operation.pattern)
+    if (matches !== 1) {
+      throw new Error(
+        `[source-materialization] prerequisite missing before mutation: ${operation.label} ` +
+        `(${operation.file}; expected one match, found ${matches})`,
+      )
+    }
+    return
   }
-  write(file, before.slice(0, first + marker.length) + addition + before.slice(first + marker.length))
+
+  const first = before.indexOf(operation.marker)
+  if (first < 0 || before.indexOf(operation.marker, first + operation.marker.length) >= 0) {
+    throw new Error(
+      `[source-materialization] prerequisite missing before mutation: ${operation.label} ` +
+      `(${operation.file}; marker missing or ambiguous)`,
+    )
+  }
+}
+
+function applyOperation(operation) {
+  const before = read(operation.file)
+  if (operation.type === 'replace') {
+    write(operation.file, before.replace(operation.pattern, operation.replacement))
+    return
+  }
+
+  const first = before.indexOf(operation.marker)
+  write(
+    operation.file,
+    before.slice(0, first + operation.marker.length) + operation.addition + before.slice(first + operation.marker.length),
+  )
 }
 
 const signatures = [
@@ -38,10 +63,15 @@ if (alreadyPresent) {
     throw new Error('[source-materialization] partial link backlog lifecycle repair detected')
   }
 
-  replaceOnce(
-    'backend/services/crawlers/nationalZipCrawler.js',
-    /  const url = pickFirstUrl\([\s\S]*?\n  \)\n  if \(!url\) return null/,
-    `  const contactUrl = pickFirstUrl(
+  // Every prerequisite is validated before the first write. If an independent
+  // invocation lacks apply-code.mjs's mission-health block (or any other base
+  // shape), the materializer fails cleanly instead of leaving a half-applied tree.
+  const operations = [
+    {
+      type: 'replace',
+      file: 'backend/services/crawlers/nationalZipCrawler.js',
+      pattern: /  const url = pickFirstUrl\([\s\S]*?\n  \)\n  if \(!url\) return null/,
+      replacement: `  const contactUrl = pickFirstUrl(
       tags.website,
       tags['contact:website'],
       tags.url,
@@ -57,28 +87,29 @@ if (alreadyPresent) {
     const osmType = ['node', 'way', 'relation'].includes(String(element?.type || '').toLowerCase())
       ? String(element.type).toLowerCase()
       : null
-    const osmId = /^\\d+$/.test(String(element?.id || '')) ? String(element.id) : null
+    const osmId = /^\d+$/.test(String(element?.id || '')) ? String(element.id) : null
     const url = osmType && osmId ? \`https://www.openstreetmap.org/\${osmType}/\${osmId}\` : null
     if (!url) return null`,
-    'Overpass stable-resource URL',
-  )
-  replaceOnce(
-    'backend/services/crawlers/nationalZipCrawler.js',
-    /    opportunity_type: 'benefit',\n    type: 'PROGRAM',/,
-    `    opportunity_kind: 'directory',
+      label: 'Overpass stable-resource URL',
+    },
+    {
+      type: 'replace',
+      file: 'backend/services/crawlers/nationalZipCrawler.js',
+      pattern: /    opportunity_type: 'benefit',\n    type: 'PROGRAM',/,
+      replacement: `    opportunity_kind: 'directory',
       result_kind: 'directory',
       opportunity_type: 'directory',
       type: 'DIRECTORY',
       record_origin: 'directory_resource',
       source_trust_tier: 'community_directory',
       contact_info: contactUrl ? { website: contactUrl } : null,`,
-    'Overpass resource classification',
-  )
-
-  replaceOnce(
-    'backend/services/linkVerificationService.js',
-    /        headers: \{\n          'User-Agent': 'GrantFlow-LinkChecker\/1\.0 \(contact: support@grantflow\.app\)',\n        \},/,
-    `        headers: {
+      label: 'Overpass resource classification',
+    },
+    {
+      type: 'replace',
+      file: 'backend/services/linkVerificationService.js',
+      pattern: /        headers: \{\n          'User-Agent': 'GrantFlow-LinkChecker\/1\.0 \(contact: support@grantflow\.app\)',\n        \},/,
+      replacement: `        headers: {
             // browser-compatible liveness probe: transparent product token plus
             // normal document headers avoids false 403/404 results from servers
             // that reject bare programmatic HEAD requests.
@@ -86,18 +117,20 @@ if (alreadyPresent) {
             Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
           },`,
-    'Verifier request headers',
-  )
-  replaceOnce(
-    'backend/services/linkVerificationService.js',
-    /  if \(outcome\.code === 405 \|\| outcome\.code === 403 \|\| outcome\.code === 501\) \{/,
-    `  if (outcome.code === null || outcome.code < 200 || outcome.code >= 400) {`,
-    'HEAD-to-GET fallback',
-  )
-  replaceOnce(
-    'backend/services/linkVerificationService.js',
-    /        WHERE \(application_url IS NOT NULL OR source_url IS NOT NULL\)\n          AND \(last_verified_at IS NULL OR last_verified_at < \?\)\n        ORDER BY \(last_verified_at IS NULL\) DESC, last_verified_at ASC/,
-    `        WHERE (application_url IS NOT NULL OR source_url IS NOT NULL)
+      label: 'Verifier request headers',
+    },
+    {
+      type: 'replace',
+      file: 'backend/services/linkVerificationService.js',
+      pattern: /  if \(outcome\.code === 405 \|\| outcome\.code === 403 \|\| outcome\.code === 501\) \{/,
+      replacement: `  if (outcome.code === null || outcome.code < 200 || outcome.code >= 400) {`,
+      label: 'HEAD-to-GET fallback',
+    },
+    {
+      type: 'replace',
+      file: 'backend/services/linkVerificationService.js',
+      pattern: /        WHERE \(application_url IS NOT NULL OR source_url IS NOT NULL\)\n          AND \(last_verified_at IS NULL OR last_verified_at < \?\)\n        ORDER BY \(last_verified_at IS NULL\) DESC, last_verified_at ASC/,
+      replacement: `        WHERE (application_url IS NOT NULL OR source_url IS NOT NULL)
             AND NOT (
               link_status = 'skipped'
               AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'
@@ -105,35 +138,38 @@ if (alreadyPresent) {
             AND (link_status = 'broken' OR last_verified_at IS NULL OR last_verified_at < ?)
           ORDER BY CASE WHEN link_status = 'broken' THEN 0 ELSE 1 END,
                    (last_verified_at IS NULL) DESC, last_verified_at ASC`,
-    'Broken-link priority selection',
-  )
-  replaceOnce(
-    'backend/services/linkVerificationService.js',
-    /  const hide = db\.prepare\(`\n    UPDATE funding_opportunities\n    SET is_hidden = 1\n    WHERE id = \?\n  `\)/,
-    `  const hide = db.prepare(\`
+      label: 'Broken-link priority selection',
+    },
+    {
+      type: 'replace',
+      file: 'backend/services/linkVerificationService.js',
+      pattern: /  const hide = db\.prepare\(`\n    UPDATE funding_opportunities\n    SET is_hidden = 1\n    WHERE id = \?\n  `\)/,
+      replacement: `  const hide = db.prepare(\`
       UPDATE funding_opportunities
       SET is_hidden = ?
       WHERE id = ?
     \`)`,
-    'Postgres-safe hide SQL',
-  )
-  replaceOnce(
-    'backend/services/linkVerificationService.js',
-    /            await hide\.run\(row\.id\)/,
-    `            await hide.run(isPostgres ? true : 1, row.id)`,
-    'Postgres-safe hide call',
-  )
-
-  insertAfter(
-    'backend/server.js',
-    "app.use('/api/admin/queue', adminQueueOpsRouter)",
-    "\napp.use('/api/admin/link-repair', lazyRouter('./routes/linkBacklogRepair.js'))",
-    'Link repair route mount',
-  )
-  replaceOnce(
-    'backend/server.js',
-    /        console\.log\('\[link-verify\] completed:', stats\)/,
-    `        console.log('[link-verify] completed:', stats)
+      label: 'Postgres-safe hide SQL',
+    },
+    {
+      type: 'replace',
+      file: 'backend/services/linkVerificationService.js',
+      pattern: /            await hide\.run\(row\.id\)/,
+      replacement: `            await hide.run(isPostgres ? true : 1, row.id)`,
+      label: 'Postgres-safe hide call',
+    },
+    {
+      type: 'insert_after',
+      file: 'backend/server.js',
+      marker: "app.use('/api/admin/queue', adminQueueOpsRouter)",
+      addition: "\napp.use('/api/admin/link-repair', lazyRouter('./routes/linkBacklogRepair.js'))",
+      label: 'Link repair route mount',
+    },
+    {
+      type: 'replace',
+      file: 'backend/server.js',
+      pattern: /        console\.log\('\[link-verify\] completed:', stats\)/,
+      replacement: `        console.log('[link-verify] completed:', stats)
           const { repairBrokenDirectBatch } = await import('./services/linkBacklogRepairService.js')
           const lifecycle = await repairBrokenDirectBatch(dbInstance, {
             limit: Math.min(100, limit),
@@ -142,13 +178,13 @@ if (alreadyPresent) {
             verifiedBy: \`recurring-link-repair:pid=\${process.pid}\`,
           })
           console.log('[link-repair] recurring lifecycle pass:', lifecycle)`,
-    'Recurring link lifecycle pass',
-  )
-
-  replaceOnce(
-    'backend/services/missionHealthService.js',
-    /  const quarantinedBrokenDirect = normalizeCount\(\(await safeGet\(\n    db,\n    `SELECT COUNT\(\*\) AS n FROM funding_opportunities\n     WHERE COALESCE\(opportunity_kind,'direct'\) IN \$\{directKinds\}\n       AND link_status = 'broken'\n       AND \(COALESCE\(is_hidden, FALSE\) = TRUE OR COALESCE\(is_active, TRUE\) = FALSE\)`,\n  \)\)\?\.n\)/,
-    `  const quarantinedBrokenDirect = normalizeCount((await safeGet(
+      label: 'Recurring link lifecycle pass',
+    },
+    {
+      type: 'replace',
+      file: 'backend/services/missionHealthService.js',
+      pattern: /  const quarantinedBrokenDirect = normalizeCount\(\(await safeGet\(\n    db,\n    `SELECT COUNT\(\*\) AS n FROM funding_opportunities\n     WHERE COALESCE\(opportunity_kind,'direct'\) IN \$\{directKinds\}\n       AND link_status = 'broken'\n       AND \(COALESCE\(is_hidden, FALSE\) = TRUE OR COALESCE\(is_active, TRUE\) = FALSE\)`,\n  \)\)\?\.n\)/,
+      replacement: `  const quarantinedBrokenDirect = normalizeCount((await safeGet(
       db,
       \`SELECT COUNT(*) AS n FROM funding_opportunities
        WHERE COALESCE(opportunity_kind,'direct') IN \${directKinds}
@@ -169,16 +205,30 @@ if (alreadyPresent) {
          AND link_status = 'skipped'
          AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'\`,
     ))?.n)`,
-    'Mission broken-link lifecycle metrics',
-  )
-  replaceOnce(
-    'backend/services/missionHealthService.js',
-    /      quarantined_broken_direct_opportunities: quarantinedBrokenDirect,/,
-    `      quarantined_broken_direct_opportunities: quarantinedBrokenDirect,
+      label: 'Mission broken-link lifecycle metrics',
+    },
+    {
+      type: 'replace',
+      file: 'backend/services/missionHealthService.js',
+      pattern: /      quarantined_broken_direct_opportunities: quarantinedBrokenDirect,/,
+      replacement: `      quarantined_broken_direct_opportunities: quarantinedBrokenDirect,
         repair_pending_broken_direct_opportunities: repairPendingBrokenDirect,
         retired_broken_direct_opportunities: retiredBrokenDirect,`,
-    'Mission lifecycle count response',
-  )
+      label: 'Mission lifecycle count response',
+    },
+  ]
+
+  for (const operation of operations) preflightOperation(operation)
+
+  // Snapshot every touched file and roll all of them back if an unexpected write
+  // failure occurs. The lifecycle patch is therefore all-or-nothing.
+  const originals = new Map([...new Set(operations.map((operation) => operation.file))].map((file) => [file, read(file)]))
+  try {
+    for (const operation of operations) applyOperation(operation)
+  } catch (error) {
+    for (const [file, original] of originals) write(file, original)
+    throw error
+  }
 
   console.log('[source-materialization] link backlog lifecycle repair applied')
 }
