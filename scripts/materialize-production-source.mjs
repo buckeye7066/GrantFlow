@@ -38,13 +38,16 @@ const linkBacklogSignatures = Object.freeze([
   ['backend/services/linkBacklogRepairService.js', 'link_backlog_row_error_isolation'],
   ['backend/services/linkBacklogRepairService.js', 'export function estimateRepairLockTtlMs'],
   ['backend/services/linkBacklogRepairService.js', 'official_rescue_clears_unprobeable_urls'],
+  ['backend/services/linkBacklogRepairService.js', 'scheduled_retry_portable_order'],
   ['backend/routes/linkBacklogRepair.js', 'link_backlog_shared_scheduler_lock'],
   ['backend/routes/linkBacklogRepair.js', 'link_backlog_runtime_bounded_lock_ttl'],
   ['backend/routes/linkBacklogRepair.js', "router.post('/schedule-retry'"],
+  ['backend/routes/linkBacklogRepair.js', 'scheduled_retry_uses_canonical_30_day_window'],
   ['backend/tests/linkBacklogRepairService.test.js', 'link_backlog_extended_url_fixture'],
   ['backend/tests/linkBacklogSafetyRegression.test.js', 'official-only rescue clears unprobeable URL fields'],
   ['backend/tests/linkBacklogSafetyRegression.test.js', 'sizes the shared lock lease for the bounded worst case'],
   ['backend/tests/linkBacklogSafetyRegression.test.js', 'schedules exhausted transient rows without retiring them'],
+  ['backend/tests/linkBacklogSafetyRegression.test.js', 'pins scheduled retry to portable ordering and the verifier window'],
 ])
 const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
@@ -131,6 +134,10 @@ async function applyLinkBacklogCorrections() {
   await applyModule(
     'scripts/source-materialization/apply-link-backlog-scheduled-retry.mjs',
     'link backlog scheduled-retry lifecycle',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-scheduled-retry-portability.mjs',
+    'link backlog scheduled-retry portability',
   )
 }
 
