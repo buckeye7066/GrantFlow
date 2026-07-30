@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm ci --include=dev --include=optional && npm install --prefix .audit-browser-deps --no-save --no-package-lock @sparticuz/chromium && cp -R .audit-browser-deps/node_modules/. node_modules/",
-  "buildCommand": "node scripts/vercel-final-audit-build.mjs",
+  "installCommand": "npm ci --include=dev --include=optional",
+  "buildCommand": "node scripts/vercel-inspect-final-audit-findings.mjs",
   "outputDirectory": "audit-dist",
   "trailingSlash": false,
   "headers": [
