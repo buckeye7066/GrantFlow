@@ -27,6 +27,8 @@ const coreSignatures = Object.freeze([
 const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
   ['backend/services/webParityBenchmark.js', 'export function isGenericFundingPortalHit'],
+  ['backend/services/webParityBenchmark.js', 'export function isBenchmarkDirectFundingHit'],
+  ['backend/services/webParityBenchmark.js', 'if (!covers && !isBenchmarkDirectFundingHit'],
   ['backend/services/webParityBenchmark.js', 'function isTerminalGapStatus'],
   ['backend/services/webParityBenchmark.js', 'const WEB_ONLY_TOP_CAP = 20'],
 ])
@@ -61,6 +63,21 @@ async function applyModule(modulePath, label = modulePath) {
   console.log(`[source-materialization] applied ${label}`)
 }
 
+async function applyWebParityCorrections() {
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-source-quality-prelude.mjs',
+    'web-parity source-quality prelude',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-relevance.mjs',
+    'web-parity relevance and queue correction',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-source-quality-finalize.mjs',
+    'web-parity direct-source finalization',
+  )
+}
+
 async function refreshEnvExamples() {
   const generatorPath = path.resolve('scripts/generate-env-examples.mjs')
   const { buildOutputs } = await import(
@@ -77,10 +94,7 @@ const corePresent = coreSignatures.filter(hasSignature)
 if (corePresent.length === coreSignatures.length && hasResourcePreservation()) {
   // The global hardening tree is already materialized. Apply later incremental
   // product corrections idempotently before the read-only early exit.
-  await applyModule(
-    'scripts/source-materialization/apply-web-parity-relevance.mjs',
-    'web-parity relevance and source-quality correction',
-  )
+  await applyWebParityCorrections()
   const missingWebParity = webParitySignatures.filter((entry) => !hasSignature(entry))
   if (missingWebParity.length > 0) {
     throw new Error(
@@ -107,12 +121,12 @@ const modules = [
   'scripts/source-materialization/apply-readiness-deployment.mjs',
   'scripts/source-materialization/apply-runtime-secret-wiring.mjs',
   'scripts/source-materialization/apply-test-updates.mjs',
-  'scripts/source-materialization/apply-web-parity-relevance.mjs',
 ]
 
 for (const modulePath of modules) {
   await applyModule(modulePath)
 }
+await applyWebParityCorrections()
 
 const missing = signatures.filter((entry) => !hasSignature(entry))
 if (missing.length > 0) {
