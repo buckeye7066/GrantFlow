@@ -46,7 +46,7 @@ const compact = (row) => ({
   matcher_version: row.matcher_version,
 })
 const result = {
-  audit: 'grantflow-final-audit-finding-inspection-v1',
+  audit: 'grantflow-final-audit-finding-inspection-v2',
   expected_sha: EXPECTED_SHA,
   generated_at: new Date().toISOString(),
   resource_non_review: resourceNonReview.map(compact),
@@ -59,4 +59,21 @@ const result = {
 fs.mkdirSync(OUT_DIR, { recursive: true })
 fs.writeFileSync(path.join(OUT_DIR, 'findings.json'), JSON.stringify(result, null, 2) + '\n')
 fs.writeFileSync(path.join(OUT_DIR, 'index.html'), '<!doctype html><meta charset="utf-8"><title>GrantFlow audit findings</title><pre>See findings.json</pre>')
-console.log(`[final-audit-findings] ${JSON.stringify(result)}`)
+
+const categories = [
+  ['resource_non_review', result.resource_non_review],
+  ['visible_direct_rejects', result.visible_direct_rejects],
+  ['canonical_reject_relabelled', result.canonical_reject_relabelled],
+]
+console.log(`[final-audit-findings] SUMMARY ${JSON.stringify({
+  audit: result.audit,
+  expected_sha: result.expected_sha,
+  counts: Object.fromEntries(categories.map(([name, entries]) => [name, entries.length])),
+  totals: result.totals,
+  integrity_by_profile: result.integrity_by_profile,
+})}`)
+for (const [category, entries] of categories) {
+  for (const [index, entry] of entries.entries()) {
+    console.log(`[final-audit-findings] ${category} ${index + 1}/${entries.length} ${JSON.stringify(entry)}`)
+  }
+}
