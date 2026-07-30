@@ -93,8 +93,8 @@ describe('web parity relevance regression', () => {
     ]
 
     for (const hit of noise) {
-      expect(isBenchmarkRelevantHit(hit, INDIVID_DISABILITY_CONTEXT)).toBe(false)
-      expect(isBenchmarkDirectFundingHit(hit, INDIVID_DISABILITY_CONTEXT)).toBe(false)
+      expect(isBenchmarkRelevantHit(hit, INDIVIDUAL_DISABILITY_CONTEXT)).toBe(false)
+      expect(isBenchmarkDirectFundingHit(hit, INDIVIDUAL_DISABILITY_CONTEXT)).toBe(false)
     }
   })
 
@@ -105,7 +105,7 @@ describe('web parity relevance regression', () => {
       snippet: 'Find and apply for federal grants and funding opportunities.',
     }
     expect(isGenericFundingPortalHit(homepage)).toBe(true)
-    expect(isBenchmarkDirectFundingHit(homepage, INDIVID_DISABILITY_CONTEXT)).toBe(false)
+    expect(isBenchmarkDirectFundingHit(homepage, INDIVIDUAL_DISABILITY_CONTEXT)).toBe(false)
 
     const opportunity = {
       url: 'https://www.grants.gov/search-results-detail/354321',
