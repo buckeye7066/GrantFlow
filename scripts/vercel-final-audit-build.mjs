@@ -13,6 +13,7 @@ function run(args, { allowFailure = false } = {}) {
   return Number(result.status || 0)
 }
 
+run(['scripts/patch-final-audit-readiness.mjs'])
 run(['scripts/production-audit/redact.mjs', '--self-test'])
 run(['scripts/production-audit/policy.test.mjs'])
 run(['scripts/production-audit/validate-artifact.mjs', '--self-test'])
