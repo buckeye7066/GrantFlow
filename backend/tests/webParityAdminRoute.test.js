@@ -82,6 +82,15 @@ describe('web parity background admin route', () => {
     db.close()
   })
 
+  it('atomically deduplicates two immediate in-process launch attempts', async () => {
+    const logger = { error() {} }
+    const first = launchParityRun({ db: null, logger })
+    const second = launchParityRun({ db: null, logger })
+    expect(first.already_running).toBe(false)
+    expect(second).toEqual({ already_running: true, run_id: first.run_id })
+    await first.promise
+  })
+
   it('launches asynchronously and records an honest no-db completion', async () => {
     const launch = launchParityRun({ db: null, logger: { error() {} } })
     expect(launch.already_running).toBe(false)
