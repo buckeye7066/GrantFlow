@@ -334,25 +334,15 @@ function toValueList(setOrArray) {`,
 
   replaceExact(
     files.webQueries,
-    `function cleanInstitution(v) {
-  const s = String(v || '').replace(/\s+/g, ' ').replace(/[.,;]+$/, '').trim();
-  return s.length >= 3 && s.length <= 90 ? s : '';
-}
-
-// Turn an internal need/interest token`,
-    `function cleanInstitution(v) {
-  const s = String(v || '').replace(/\s+/g, ' ').replace(/[.,;]+$/, '').trim();
-  return s.length >= 3 && s.length <= 90 ? s : '';
-}
-
-const SCHOOL_PUBLICATION_ALIASES = Object.freeze({
+    `// Turn an internal need/interest token (e.g. "medical_bills", "first_gen") into`,
+    `const SCHOOL_PUBLICATION_ALIASES = Object.freeze({
   'the ohio state university': ['Ohio State'],
 });
 function schoolPublicationAliases(name) {
   return SCHOOL_PUBLICATION_ALIASES[String(name || '').toLowerCase().trim()] || [];
 }
 
-// Turn an internal need/interest token`,
+// Turn an internal need/interest token (e.g. "medical_bills", "first_gen") into`,
     'publication-name query registry',
   )
 
