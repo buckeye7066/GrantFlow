@@ -125,6 +125,10 @@ async function applyLinkBacklogCorrections() {
     'link backlog final rescue and lock safety',
   )
   await applyModule(
+    'scripts/source-materialization/apply-link-backlog-scheduled-retry-prelude.mjs',
+    'link backlog scheduled-retry anchor normalization',
+  )
+  await applyModule(
     'scripts/source-materialization/apply-link-backlog-scheduled-retry.mjs',
     'link backlog scheduled-retry lifecycle',
   )
