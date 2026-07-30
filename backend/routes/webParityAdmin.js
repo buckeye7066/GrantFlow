@@ -86,8 +86,15 @@ function launchParityRun({ db, profileIds = null, logger = log } = {}) {
       }))
 
       if (result?.skipped) {
-        state.ok = true
-        state.summary = { skipped: true, reason: result.reason || 'lock_held' }
+        // A held cross-instance lease means this launch did no benchmark work.
+        // Preserve it as an honest skipped outcome, never a successful run.
+        state.ok = null
+        state.error = null
+        state.summary = {
+          ran: false,
+          skipped: true,
+          reason: result.reason || 'lock_held',
+        }
         return result
       }
 
