@@ -4,6 +4,7 @@ import {
   NEED_FIRST_SCORING_VERSION,
 } from './needFirstScoringAdapter.js'
 import { NEED_FIRST_RECONCILIATION_ROWS_SQL } from './fundingSourceQueries.js'
+import { normalizePersistedMatchDecisionIntegrity } from './matchDecisionIntegrity.js'
 
 const log = createLogger('needFirstReconciler')
 const SURFACED_LANES = new Set(['crawler-os', 'crawler-os-xmatch', 'web-llm'])
@@ -145,6 +146,19 @@ export async function reconcileNeedFirstProfileMatches(db, {
     }
   }
 
+  // A REJECT is a decision, not a surfaced match. Run the structural integrity
+  // pass after the scorer writes so this choke point can never leave a rejected
+  // direct row visible or an ACCEPT-labelled directory in persisted truth.
+  let matchDecisionIntegrity = null
+  try {
+    matchDecisionIntegrity = await normalizePersistedMatchDecisionIntegrity(db, { profileId })
+  } catch (error) {
+    failures.push({
+      opportunity_id: null,
+      error: `match decision integrity failed: ${error?.message || String(error)}`,
+    })
+  }
+
   const summary = {
     ok: failures.length === 0,
     profile_id: String(profileId),
@@ -155,9 +169,12 @@ export async function reconcileNeedFirstProfileMatches(db, {
     rejected,
     demoted,
     score_lowered: scoreLowered,
+    match_decision_integrity: matchDecisionIntegrity,
     failures,
   }
-  if (updated > 0 || failures.length > 0) log.info('need_first_reconcile', summary)
+  if (updated > 0 || Number(matchDecisionIntegrity?.repaired || 0) > 0 || failures.length > 0) {
+    log.info('need_first_reconcile', summary)
+  }
   return summary
 }
 
