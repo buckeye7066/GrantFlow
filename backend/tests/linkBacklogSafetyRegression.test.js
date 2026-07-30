@@ -183,11 +183,75 @@ describe('link backlog safety regression', () => {
     db.close()
   })
 
+  it('clears definitively dead higher-priority URLs when evidence_url rescues the row', async () => {
+    const db = makeDb()
+    const liveEvidence = 'https://8.8.4.4/evidence-live'
+    insert(db, {
+      id: 'evidence-rescue',
+      application_url: 'https://8.8.8.8/application-dead',
+      apply_url: 'https://8.8.8.8/apply-dead',
+      apply_guidelines_url: 'https://8.8.8.8/guidelines-dead',
+      final_url: 'https://8.8.8.8/final-dead',
+      source_url: 'https://8.8.8.8/source-dead',
+      evidence_url: liveEvidence,
+    })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const text = String(url)
+      return text === liveEvidence ? { status: 200, url: text } : { status: 404, url: text }
+    })
+
+    const result = await repairBrokenDirectBatch(db, {
+      limit: 1, concurrency: 1, timeoutMs: 3000,
+      findOfficialUrlImpl: async () => ({ url: null, searched: true, hits: 0 }),
+    })
+    const row = db.prepare('SELECT * FROM funding_opportunities WHERE id=?').get('evidence-rescue')
+
+    expect(result).toMatchObject({ restored: 1, retired: 0, pending: 0 })
+    expect(row).toMatchObject({
+      application_url: null,
+      apply_url: null,
+      apply_guidelines_url: null,
+      source_url: null,
+      evidence_url: liveEvidence,
+      final_url: liveEvidence,
+      link_status: 'ok',
+      status: 'active',
+      is_hidden: 0,
+      is_active: 1,
+    })
+    db.close()
+  })
+
+  it('counts only rows carrying the definitive repair-retirement marker', async () => {
+    const db = makeDb()
+    insert(db, {
+      id: 'repair-retired',
+      link_status: 'skipped',
+      status: 'expired',
+      verification_error: 'retired_after_definitive_recheck:permanent_http_gone:HTTP 404',
+      is_hidden: 1,
+      is_active: 0,
+    })
+    insert(db, {
+      id: 'ordinary-expired',
+      link_status: 'skipped',
+      status: 'expired',
+      verification_error: 'expired_after_deadline',
+      is_hidden: 1,
+      is_active: 0,
+    })
+
+    expect(await brokenDirectSummary(db)).toMatchObject({ retired: 1 })
+    db.close()
+  })
+
   it('pins shared locking and success-driven visibility restoration', () => {
     const route = fs.readFileSync(path.join(HERE, '..', 'routes', 'linkBacklogRepair.js'), 'utf8')
     const verifier = fs.readFileSync(path.join(HERE, '..', 'services', 'linkVerificationService.js'), 'utf8')
     expect(route).toContain('link_backlog_shared_scheduler_lock')
-    expect(route).toContain("lockName: 'link-verification'")
+    expect(route).toContain("const LOCK_NAME = 'link-verification'")
+    expect(route).toContain('admin-link-reclassify:')
+    expect(route).toContain('admin-link-repair:')
     expect(verifier).toContain('link_repair_success_restores_visibility')
     expect(verifier).toContain("status = CASE WHEN status = 'paused' THEN 'active' ELSE status END")
   })
