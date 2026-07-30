@@ -24,11 +24,15 @@ const coreSignatures = Object.freeze([
   ['scripts/check-deployment-config.mjs', 'hasProductionHostGuard'],
   ['src/config/env.js', 'VITE_PREVIEW_API_URL'],
 ])
-const webParitySignature = Object.freeze([
-  'backend/services/webParityBenchmark.js',
-  'export function isBenchmarkRelevantHit',
+const webParitySignatures = Object.freeze([
+  ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
+  ['backend/services/webParityBenchmark.js', 'export function isGenericFundingPortalHit'],
+  ['backend/services/webParityBenchmark.js', 'export function isBenchmarkDirectFundingHit'],
+  ['backend/services/webParityBenchmark.js', 'if (!covers && !isBenchmarkDirectFundingHit'],
+  ['backend/services/webParityBenchmark.js', 'function isTerminalGapStatus'],
+  ['backend/services/webParityBenchmark.js', 'const WEB_ONLY_TOP_CAP = 20'],
 ])
-const signatures = Object.freeze([...coreSignatures, webParitySignature])
+const signatures = Object.freeze([...coreSignatures, ...webParitySignatures])
 
 const hasSignature = ([file, signature]) => {
   try {
@@ -59,6 +63,21 @@ async function applyModule(modulePath, label = modulePath) {
   console.log(`[source-materialization] applied ${label}`)
 }
 
+async function applyWebParityCorrections() {
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-source-quality-prelude.mjs',
+    'web-parity source-quality prelude',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-relevance.mjs',
+    'web-parity relevance and queue correction',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-web-parity-source-quality-finalize.mjs',
+    'web-parity direct-source finalization',
+  )
+}
+
 async function refreshEnvExamples() {
   const generatorPath = path.resolve('scripts/generate-env-examples.mjs')
   const { buildOutputs } = await import(
@@ -75,12 +94,12 @@ const corePresent = coreSignatures.filter(hasSignature)
 if (corePresent.length === coreSignatures.length && hasResourcePreservation()) {
   // The global hardening tree is already materialized. Apply later incremental
   // product corrections idempotently before the read-only early exit.
-  await applyModule(
-    'scripts/source-materialization/apply-web-parity-relevance.mjs',
-    'web-parity relevance correction',
-  )
-  if (!hasSignature(webParitySignature)) {
-    throw new Error('[source-materialization] web-parity relevance signature is missing')
+  await applyWebParityCorrections()
+  const missingWebParity = webParitySignatures.filter((entry) => !hasSignature(entry))
+  if (missingWebParity.length > 0) {
+    throw new Error(
+      `[source-materialization] web-parity signatures missing: ${missingWebParity.map(([, signature]) => signature).join(', ')}`,
+    )
   }
   // Repeated npm prehooks run concurrently in the unit suite and must remain
   // read-only once every signature is present.
@@ -102,17 +121,17 @@ const modules = [
   'scripts/source-materialization/apply-readiness-deployment.mjs',
   'scripts/source-materialization/apply-runtime-secret-wiring.mjs',
   'scripts/source-materialization/apply-test-updates.mjs',
-  'scripts/source-materialization/apply-web-parity-relevance.mjs',
 ]
 
 for (const modulePath of modules) {
   await applyModule(modulePath)
 }
+await applyWebParityCorrections()
 
 const missing = signatures.filter((entry) => !hasSignature(entry))
 if (missing.length > 0) {
   throw new Error(
-    `[source-materialization] final signatures missing: ${missing.map(([file]) => file).join(', ')}`,
+    `[source-materialization] final signatures missing: ${missing.map(([file, signature]) => `${file}:${signature}`).join(', ')}`,
   )
 }
 if (!hasResourcePreservation()) {
