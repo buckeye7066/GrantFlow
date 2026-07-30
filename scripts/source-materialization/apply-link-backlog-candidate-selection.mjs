@@ -19,18 +19,14 @@ function insertAfter(file, marker, addition, label) {
   write(file, before.slice(0, first + marker.length) + addition + before.slice(first + marker.length))
 }
 
-const signatures = [
-  ['backend/services/linkBacklogRepairService.js', 'link_backlog_selected_row_claim'],
-  ['backend/tests/linkBacklogRepairService.test.js', 'link_backlog_extended_url_fixture'],
-]
-const present = signatures.filter(([file, signature]) => read(file).includes(signature))
-if (present.length === signatures.length) {
-  console.log('[source-materialization] link backlog candidate selection already safe')
-} else {
-  if (present.length > 0) throw new Error('[source-materialization] partial link backlog candidate-selection repair')
+const serviceFile = 'backend/services/linkBacklogRepairService.js'
+const testFile = 'backend/tests/linkBacklogRepairService.test.js'
+const serviceSafe = read(serviceFile).includes('link_backlog_selected_row_claim')
+const testSafe = read(testFile).includes('link_backlog_extended_url_fixture')
 
+if (!serviceSafe) {
   replaceOnce(
-    'backend/services/linkBacklogRepairService.js',
+    serviceFile,
     /  return \[\n    \{ role: 'application_url', url: row\.application_url \},\n    \{ role: 'final_url', url: row\.final_url \},\n    \{ role: 'source_url', url: row\.source_url \},\n  \]/,
     `  // Probe every canonical stored HTTP candidate before retirement.
   return [
@@ -45,7 +41,7 @@ if (present.length === signatures.length) {
   )
 
   replaceOnce(
-    'backend/services/linkBacklogRepairService.js',
+    serviceFile,
     /  const cycleMarker = cycleId \? verifiedBy : null\n/,
     `  const pendingRetryAfterMs = Math.max(
     5 * 60 * 1000,
@@ -57,7 +53,7 @@ if (present.length === signatures.length) {
   )
 
   replaceOnce(
-    'backend/services/linkBacklogRepairService.js',
+    serviceFile,
     /  await db\.prepare\(`\n    UPDATE funding_opportunities\n       SET is_hidden=\?, is_active=\?, status='paused'\n     WHERE COALESCE\(opportunity_kind,'direct'\) IN \('direct','benefit'\)\n       AND link_status='broken' AND COALESCE\(status,'active'\) <> 'expired'\n  `\)\.run\(yes, no\)\n\n  const rows = await db\.prepare\(`\n    SELECT id, title, sponsor, source, application_url, source_url, final_url\n      FROM funding_opportunities\n     WHERE COALESCE\(opportunity_kind,'direct'\) IN \('direct','benefit'\)\n       AND link_status='broken' AND status='paused'\n       AND \(\? IS NULL OR COALESCE\(verified_by, ''\) <> \?\)\n     ORDER BY last_verified_at ASC NULLS FIRST\n     LIMIT \?\n  `\)\.all\(cycleMarker, cycleMarker, limit\)/,
     `  // Quarantine every broken direct row, but claim only the selected batch as
   // paused. Untouched rows remain active-status quarantine, not fake pending work.
@@ -90,7 +86,7 @@ if (present.length === signatures.length) {
   )
 
   replaceOnce(
-    'backend/services/linkBacklogRepairService.js',
+    serviceFile,
     /  const stats = \{\n    cycle_id: cycleId,\n    selected: rows\.length,\n    checked: 0,/,
     `  const stats = {
     cycle_id: cycleId,
@@ -100,7 +96,7 @@ if (present.length === signatures.length) {
     'Claim metric',
   )
   replaceOnce(
-    'backend/services/linkBacklogRepairService.js',
+    serviceFile,
     /    official_search_unavailable: 0,\n    failures: \{},/,
     `    official_search_unavailable: 0,
     row_errors: 0,
@@ -125,7 +121,7 @@ if (present.length === signatures.length) {
   }
 `
   insertAfter(
-    'backend/services/linkBacklogRepairService.js',
+    serviceFile,
     statsMarker,
     `  const claimSelected = db.prepare(\`
     UPDATE funding_opportunities
@@ -150,16 +146,18 @@ if (present.length === signatures.length) {
   )
 
   replaceOnce(
-    'backend/services/linkBacklogRepairService.js',
+    serviceFile,
     /  const restore = db\.prepare\(`\n    UPDATE funding_opportunities\n       SET application_url=\?, source_url=\?, final_url=\?, last_verified_at=\?, link_status=\?,/,
     `  const restore = db.prepare(\`
     UPDATE funding_opportunities
        SET application_url=?, apply_url=?, source_url=?, final_url=?, last_verified_at=?, link_status=?,`,
     'Restore canonical apply fields',
   )
+}
 
+if (!testSafe) {
   replaceOnce(
-    'backend/tests/linkBacklogRepairService.test.js',
+    testFile,
     /      application_url TEXT,\n      source_url TEXT,/,
     `      -- link_backlog_extended_url_fixture
       application_url TEXT,
@@ -169,24 +167,28 @@ if (present.length === signatures.length) {
     'Test URL columns',
   )
   replaceOnce(
-    'backend/tests/linkBacklogRepairService.test.js',
+    testFile,
     /id,title,sponsor,source,source_id,application_url,source_url,final_url,contact_info,/,
     `id,title,sponsor,source,source_id,application_url,apply_url,apply_guidelines_url,source_url,final_url,contact_info,`,
     'Test insert columns',
   )
   replaceOnce(
-    'backend/tests/linkBacklogRepairService.test.js',
+    testFile,
     /@id,@title,@sponsor,@source,@source_id,@application_url,@source_url,@final_url,@contact_info,/,
     `@id,@title,@sponsor,@source,@source_id,@application_url,@apply_url,@apply_guidelines_url,@source_url,@final_url,@contact_info,`,
     'Test insert values',
   )
   replaceOnce(
-    'backend/tests/linkBacklogRepairService.test.js',
+    testFile,
     /    application_url: null, source_url: null, final_url: null, contact_info: null,/,
     `    application_url: null, apply_url: null, apply_guidelines_url: null,
     source_url: null, final_url: null, contact_info: null,`,
     'Test URL defaults',
   )
-
-  console.log('[source-materialization] link backlog candidate selection hardened')
 }
+
+console.log(
+  serviceSafe && testSafe
+    ? '[source-materialization] link backlog candidate selection already safe'
+    : '[source-materialization] link backlog candidate selection hardened',
+)
