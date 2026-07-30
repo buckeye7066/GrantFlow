@@ -10,8 +10,17 @@ if (source.includes(signature)) {
   const matches = source.match(new RegExp(pattern.source, 'g')) || []
   if (matches.length !== 1) throw new Error(`link backlog row isolation: expected one match, found ${matches.length}`)
   const replacement = `  // link_backlog_row_error_isolation: one provider, probe, or DB failure
-  // never aborts the remaining selected rows.
+  // never aborts the remaining selected rows. Each worker accumulates locally;
+  // the final synchronous fold prevents lost += updates across awaited work.
   await concurrentMap(claimedRows, concurrency, async (row) => {
+    const rowStats = {
+      checked: 0, restored: 0, retired: 0, pending: 0,
+      official_searches: 0, official_search_rescues: 0,
+      official_search_unavailable: 0, row_errors: 0, failures: {},
+    }
+    const fail = (kind) => {
+      rowStats.failures[kind] = (rowStats.failures[kind] || 0) + 1
+    }
     let outcome = {
       status: 'broken', code: null, method: null, error: 'repair_exception:unknown',
       finalUrl: null, url: null, role: null, duration_ms: 0,
@@ -19,16 +28,16 @@ if (source.includes(signature)) {
     let finalStatus = 'broken'
     try {
       let result = await probeRow(row, timeoutMs)
-      stats.checked += 1
+      rowStats.checked += 1
 
       if (!result.success && String(row.title || '').trim()) {
-        stats.official_searches += 1
+        rowStats.official_searches += 1
         const rescue = await rescueOfficialUrl(row, findOfficialUrlImpl)
         if (rescue.rescued) {
-          stats.official_search_rescues += 1
+          rowStats.official_search_rescues += 1
           result = { success: true, terminal: false, outcome: rescue.outcome, outcomes: result.outcomes }
         } else if (rescue.unavailable) {
-          stats.official_search_unavailable += 1
+          rowStats.official_search_unavailable += 1
           result.terminal = false
         }
       }
@@ -41,7 +50,7 @@ if (source.includes(signature)) {
         const applicationUrl = isApply ? url : null
         const applyUrl = isApply ? url : null
         const sourceUrl = isApply ? (row.source_url || row.evidence_url || url) : url
-        stats.restored += countChanges(await restore.run(
+        rowStats.restored = countChanges(await restore.run(
           applicationUrl, applyUrl, sourceUrl, url, at,
           outcome.status === 'verified' ? 'ok' : outcome.status,
           outcome.code ?? null, outcome.method ?? 'get', verifiedBy,
@@ -50,9 +59,9 @@ if (source.includes(signature)) {
         finalStatus = outcome.status === 'verified' ? 'ok' : outcome.status
       } else {
         const kind = failureClass(outcome)
-        stats.failures[kind] = (stats.failures[kind] || 0) + 1
+        fail(kind)
         if (result.terminal) {
-          stats.retired += countChanges(await retire.run(
+          rowStats.retired = countChanges(await retire.run(
             at, outcome.code ?? null, outcome.method ?? null, verifiedBy,
             \`\${RETIRED_MARKER}\${kind}:\${String(outcome.error || '').slice(0,120)}\`,
             outcome.finalUrl ?? null, typeof outcome.code === 'number' ? outcome.code : null,
@@ -60,7 +69,7 @@ if (source.includes(signature)) {
           ))
           finalStatus = 'skipped'
         } else {
-          stats.pending += countChanges(await keepPending.run(
+          rowStats.pending = countChanges(await keepPending.run(
             at, outcome.code ?? null, outcome.method ?? null, verifiedBy,
             \`retryable_after_recheck:\${kind}:\${String(outcome.error || '').slice(0,120)}\`,
             outcome.finalUrl ?? null, typeof outcome.code === 'number' ? outcome.code : null,
@@ -69,22 +78,36 @@ if (source.includes(signature)) {
         }
       }
     } catch (error) {
-      stats.row_errors += 1
-      stats.failures.repair_exception = (stats.failures.repair_exception || 0) + 1
+      rowStats.row_errors += 1
+      fail('repair_exception')
       const message = String(error?.message || error).replace(/[\\r\\n]+/g, ' ').slice(0, 120)
       outcome = {
         status: 'broken', code: null, method: 'repair_exception', error: message,
         finalUrl: null, url: null, role: null, duration_ms: 0,
       }
       try {
-        stats.pending += countChanges(await keepPending.run(
+        rowStats.pending = countChanges(await keepPending.run(
           nowIso(), null, 'repair_exception', verifiedBy,
           \`retryable_after_recheck:repair_exception:\${message}\`,
           null, null, yes, no, row.id,
         ))
       } catch {
-        stats.failures.pending_persist_failed = (stats.failures.pending_persist_failed || 0) + 1
+        fail('pending_persist_failed')
       }
+    }
+
+    // No await in this fold. JavaScript cannot interleave another worker between
+    // reading and writing these counters.
+    stats.checked += rowStats.checked
+    stats.restored += rowStats.restored
+    stats.retired += rowStats.retired
+    stats.pending += rowStats.pending
+    stats.official_searches += rowStats.official_searches
+    stats.official_search_rescues += rowStats.official_search_rescues
+    stats.official_search_unavailable += rowStats.official_search_unavailable
+    stats.row_errors += rowStats.row_errors
+    for (const [kind, count] of Object.entries(rowStats.failures)) {
+      stats.failures[kind] = (stats.failures[kind] || 0) + count
     }
 
     try {
