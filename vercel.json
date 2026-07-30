@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm ci --include=dev --include=optional && npx playwright install chromium",
-  "buildCommand": "node scripts/patch-final-audit-sha.mjs 472511148b8becf9ba16b59cf3fa6a9a528d8886 && node scripts/patch-final-audit-browser.mjs && node scripts/vercel-final-audit-build.mjs",
+  "installCommand": "npm ci --include=dev --include=optional && npx playwright install --with-deps chromium",
+  "buildCommand": "node scripts/vercel-browser-launch-smoke.mjs",
   "outputDirectory": "audit-dist",
   "trailingSlash": false,
   "headers": [
