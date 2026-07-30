@@ -49,6 +49,16 @@ const linkBacklogSignatures = Object.freeze([
   ['backend/tests/linkBacklogSafetyRegression.test.js', 'schedules exhausted transient rows without retiring them'],
   ['backend/tests/linkBacklogSafetyRegression.test.js', 'pins scheduled retry to portable ordering and the verifier window'],
 ])
+const matchDecisionIntegritySignatures = Object.freeze([
+  ['backend/services/matching/matchDecisionIntegrity.js', 'normalizePersistedMatchDecisionIntegrity'],
+  ['backend/services/matching/matchDecisionIntegrity.js', 'removed_canonical_rejects'],
+  ['backend/services/crawlerOsPersistence.js', 'matchDecisionIntegrity'],
+  ['backend/services/crawlerOsService.js', 'post_crawl_match_decision_integrity'],
+  ['backend/services/matching/needFirstReconciler.js', 'match_decision_integrity: matchDecisionIntegrity'],
+  ['backend/startup/enforceInvariants.js', 'enforcePersistedMatchDecisionIntegrity'],
+  ['backend/tests/matchDecisionIntegrity.test.js', 'canonical reject cannot be relabelled'],
+  ['tests/unit/match-decision-integrity-contract.test.mjs', 'post-crawl and boot choke points'],
+])
 const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
   ['backend/services/webParityBenchmark.js', 'export function isGenericFundingPortalHit'],
@@ -69,6 +79,7 @@ const amySignatures = Object.freeze([
 const signatures = Object.freeze([
   ...coreSignatures,
   ...linkBacklogSignatures,
+  ...matchDecisionIntegritySignatures,
   ...webParitySignatures,
   ...amySignatures,
 ])
@@ -141,6 +152,13 @@ async function applyLinkBacklogCorrections() {
   )
 }
 
+async function applyMatchDecisionIntegrity() {
+  await applyModule(
+    'scripts/source-materialization/apply-match-decision-integrity.mjs',
+    'persisted match-decision integrity',
+  )
+}
+
 async function applyWebParityCorrections() {
   await applyModule(
     'scripts/source-materialization/apply-web-parity-source-quality-prelude.mjs',
@@ -184,10 +202,12 @@ if (corePresent.length === coreSignatures.length && hasResourcePreservation()) {
   // Apply every later product correction idempotently before the read-only exit.
   // This ordering prevents one independently verified repair from erasing another.
   await applyLinkBacklogCorrections()
+  await applyMatchDecisionIntegrity()
   await applyWebParityCorrections()
   await applyAmyCorrections()
   const missingIncremental = [
     ...linkBacklogSignatures,
+    ...matchDecisionIntegritySignatures,
     ...webParitySignatures,
     ...amySignatures,
   ].filter((entry) => !hasSignature(entry))
@@ -222,6 +242,7 @@ for (const modulePath of modules) {
   await applyModule(modulePath)
 }
 await applyLinkBacklogCorrections()
+await applyMatchDecisionIntegrity()
 await applyWebParityCorrections()
 await applyAmyCorrections()
 
