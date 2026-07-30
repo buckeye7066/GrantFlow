@@ -1,0 +1,139 @@
+name: fresh-production-audit-12ee0af
+
+on:
+  push:
+    branches:
+      - audit/fresh-production-verification-12ee0af-20260730
+    paths:
+      - .github/workflows/fresh-production-audit-12ee0af.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: fresh-production-audit-12ee0af
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Fresh authenticated read-only audit for 12ee0af
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production-audit
+
+    env:
+      GRANTFLOW_PROD_BASE_URL: ${{ vars.GRANTFLOW_PROD_BASE_URL }}
+      AUDIT_OUT: ${{ github.workspace }}/audit-out
+      PROFILE_IDS: profile-hollie-knox,6b3c75ec-dc56-46f9-b380-394172688175,c4a92724-9cee-416f-ba30-e91b9b5cd885,profile-olivia-beltran,profile-john-white
+      EXPECTED_DEPLOYED_COMMIT: 12ee0af3be440c093f0daf50eedd573d504ee317
+
+    steps:
+      - name: Check out exact audit branch
+        uses: actions/checkout@v4
+        with:
+          ref: audit/fresh-production-verification-12ee0af-20260730
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify audit controls before production access
+        run: |
+          node scripts/production-audit/redact.mjs --self-test
+          node scripts/production-audit/policy.test.mjs
+          node scripts/production-audit/validate-artifact.mjs --self-test
+
+      - name: Confirm exact deployed production commit and mission gate
+        run: |
+          node - <<'NODE'
+          const base = String(process.env.GRANTFLOW_PROD_BASE_URL || '').replace(/\/$/, '')
+          if (!base) throw new Error('GRANTFLOW_PROD_BASE_URL is not configured')
+          const fresh = Date.now()
+          const [buildResponse, missionResponse] = await Promise.all([
+            fetch(`${base}/api/meta/build?fresh=${fresh}`, { headers: { accept: 'application/json', 'cache-control': 'no-store' } }),
+            fetch(`${base}/api/health/mission?fresh=${fresh}`, { headers: { accept: 'application/json', 'cache-control': 'no-store' } }),
+          ])
+          if (!buildResponse.ok) throw new Error(`build endpoint returned ${buildResponse.status}`)
+          if (!missionResponse.ok) throw new Error(`mission endpoint returned ${missionResponse.status}`)
+          const build = await buildResponse.json()
+          const mission = await missionResponse.json()
+          if (build.sha !== process.env.EXPECTED_DEPLOYED_COMMIT) {
+            throw new Error(`deployed commit mismatch: expected ${process.env.EXPECTED_DEPLOYED_COMMIT}, got ${build.sha || 'missing'}`)
+          }
+          const counts = mission.counts || {}
+          const blockers = Array.isArray(mission.release_blockers) ? mission.release_blockers : []
+          if (mission.production_gate !== true) throw new Error('production_gate is not true')
+          if (blockers.length) throw new Error(`release blockers present: ${blockers.join(',')}`)
+          if (Number(counts.direct_opportunities_broken || 0) !== 0) throw new Error('direct_opportunities_broken is nonzero')
+          if (Number(counts.quarantined_broken_direct_opportunities || 0) !== 0) throw new Error('quarantined_broken_direct_opportunities is nonzero')
+          if (Number(counts.repair_pending_broken_direct_opportunities || 0) !== 0) throw new Error('repair_pending_broken_direct_opportunities is nonzero')
+          console.log(`[audit] exact deployed commit and mission gate confirmed: ${build.sha}`)
+          NODE
+
+      - name: Verify database guard and live auto-submit posture
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+        run: |
+          mkdir -p "$AUDIT_OUT"
+          node scripts/production-audit/db-audit.mjs --guard-only --out "$AUDIT_OUT"
+
+      - name: Run fresh read-only database audit
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+        run: |
+          node scripts/production-audit/db-audit.mjs \
+            --out "$AUDIT_OUT" \
+            --profiles "$PROFILE_IDS"
+
+      - name: Install repository-pinned Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run authenticated application audit
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+          GRANTFLOW_AUDIT_EMAIL: ${{ secrets.GRANTFLOW_AUDIT_EMAIL }}
+          GRANTFLOW_AUDIT_PASSWORD: ${{ secrets.GRANTFLOW_AUDIT_PASSWORD }}
+        run: |
+          node scripts/production-audit/app-audit.mjs \
+            --out "$AUDIT_OUT" \
+            --profiles "$PROFILE_IDS"
+
+      - name: Compose and validate sanitized evidence
+        run: |
+          node scripts/production-audit/validate-artifact.mjs --compose --out "$AUDIT_OUT"
+          node scripts/production-audit/validate-artifact.mjs --out "$AUDIT_OUT"
+
+      - name: Publish sanitized audit summary to job report
+        run: |
+          node - <<'NODE'
+          const fs = require('fs')
+          const path = require('path')
+          const file = path.join(process.env.AUDIT_OUT, 'audit-summary.json')
+          const summary = JSON.parse(fs.readFileSync(file, 'utf8'))
+          const report = [
+            '# GrantFlow final production audit',
+            '',
+            `- Expected deployed commit: ${process.env.EXPECTED_DEPLOYED_COMMIT}`,
+            `- Generated at: ${summary.generated_at || 'unknown'}`,
+            `- Profiles scoped: ${Array.isArray(summary.profiles_scoped) ? summary.profiles_scoped.length : 0}`,
+            `- Safety result: ${JSON.stringify(summary.safety || {})}`,
+          ].join('\n')
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\n')
+          NODE
+
+      - name: Upload final sanitized audit artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: grantflow-production-audit-final-12ee0af
+          path: ${{ env.AUDIT_OUT }}
+          if-no-files-found: error
+          retention-days: 14
