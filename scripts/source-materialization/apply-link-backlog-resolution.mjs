@@ -166,9 +166,8 @@ if (alreadyPresent) {
       db,
       \`SELECT COUNT(*) AS n FROM funding_opportunities
        WHERE COALESCE(opportunity_kind,'direct') IN \${directKinds}
-         AND ((link_status = 'skipped'
-               AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%')
-              OR status = 'expired')\`,
+         AND link_status = 'skipped'
+         AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'\`,
     ))?.n)`,
     'Mission broken-link lifecycle metrics',
   )
