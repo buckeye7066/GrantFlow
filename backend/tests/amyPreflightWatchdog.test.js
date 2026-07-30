@@ -146,6 +146,22 @@ describe('Amy orphaned scheduler-lock recovery', () => {
     db.close()
   })
 
+  it('fails closed when durable activity cannot be read', async () => {
+    const db = makeDb()
+    const controlRunId = insertLock(db)
+    db.exec('DROP TABLE agent_activity_events')
+
+    await expect(recoverStaleAmyRunLock({
+      db,
+      controlRunId,
+      minAgeMs: 60_000,
+      now: new Date('2026-07-30T01:00:00.000Z'),
+    })).rejects.toThrow(/agent_activity_events|no such table/i)
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM agent_control_locks').get().n).toBe(1)
+    db.close()
+  })
+
   it('refuses a lease acquired by the current process lifetime', async () => {
     const db = makeDb()
     const processStartedAt = getAmyRunState().process_started_at
