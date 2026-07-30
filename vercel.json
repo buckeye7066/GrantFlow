@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm ci --include=dev --include=optional",
-  "buildCommand": "npm run release:gates",
+  "buildCommand": "npm run release:gates && node scripts/export-materialized-link-safety.mjs dist/_materialized-link-safety",
   "outputDirectory": "dist",
   "trailingSlash": false,
   "rewrites": [
