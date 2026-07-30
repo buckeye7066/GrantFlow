@@ -126,17 +126,6 @@ async function main() {
   // parallel fast `unit` lane).
   await runVitest(['--config', 'vitest.endpoints.config.js'], 'endpoint-sweep')
 
-  // Branch-scoped audit export: only after every gate passes, expose the exact
-  // materialized product files through the protected preview deployment so they
-  // can be committed back without relying on unavailable hosted Actions runners.
-  if (process.env.VERCEL_GIT_COMMIT_REF === 'fix/link-backlog-postmerge-safety-20260730') {
-    await run(
-      'node',
-      ['scripts/export-materialized-link-safety.mjs', 'dist/_materialized-link-safety'],
-      { label: 'materialized-link-export' },
-    )
-  }
-
   console.log('[gate] all release gates passed')
 }
 
