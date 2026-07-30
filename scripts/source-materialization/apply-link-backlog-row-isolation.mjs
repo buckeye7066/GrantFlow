@@ -54,7 +54,7 @@ if (source.includes(signature)) {
         if (result.terminal) {
           stats.retired += countChanges(await retire.run(
             at, outcome.code ?? null, outcome.method ?? null, verifiedBy,
-            \`${RETIRED_MARKER}\${kind}:\${String(outcome.error || '').slice(0,120)}\`,
+            \`\${RETIRED_MARKER}\${kind}:\${String(outcome.error || '').slice(0,120)}\`,
             outcome.finalUrl ?? null, typeof outcome.code === 'number' ? outcome.code : null,
             yes, no, row.id,
           ))
