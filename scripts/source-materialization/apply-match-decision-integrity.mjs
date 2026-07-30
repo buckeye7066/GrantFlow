@@ -36,6 +36,7 @@ function apply(operation) {
 
 const crawlerFile = 'backend/services/crawlerOsService.js'
 const invariantFile = 'backend/startup/enforceInvariants.js'
+const invariantTestFile = 'backend/tests/enforceInvariants.test.js'
 const needFirstFile = 'backend/services/matching/needFirstReconciler.js'
 const operations = []
 
@@ -76,17 +77,6 @@ import { normalizePersistedMatchDecisionIntegrity } from '../services/matching/m
   })
 }
 if (!invariants.includes('export async function enforcePersistedMatchDecisionIntegrity')) {
-  operations.push({
-    type: 'insert_after',
-    file: invariantFile,
-    marker: `export async function enforceNoDanglingMatches(db) {`,
-    addition: ``,
-    label: 'placeholder',
-  })
-  // Replace the placeholder operation with a deterministic insert immediately
-  // before the run orchestrator. Keeping this separate makes the marker stable
-  // even as individual invariant bodies evolve.
-  operations.pop()
   operations.push({
     type: 'replace',
     file: invariantFile,
@@ -140,6 +130,25 @@ if (!invariants.includes('  enforcePersistedMatchDecisionIntegrity,')) {
   })
 }
 
+const invariantTest = read(invariantTestFile)
+if (!invariantTest.includes("'persisted_match_decision_integrity',")) {
+  operations.push({
+    type: 'replace',
+    file: invariantTestFile,
+    pattern: /expect\(summary\.ran\)\.toBe\(34\)/,
+    replacement: `expect(summary.ran).toBe(35)`,
+    label: 'Invariant runner count',
+  })
+  operations.push({
+    type: 'insert_after',
+    file: invariantTestFile,
+    marker: `      'no_dangling_matches',`,
+    addition: `
+      'persisted_match_decision_integrity',`,
+    label: 'Invariant runner ordered name',
+  })
+}
+
 const needFirst = read(needFirstFile)
 if (!needFirst.includes("from './matchDecisionIntegrity.js'")) {
   operations.push({
@@ -152,16 +161,6 @@ import { normalizePersistedMatchDecisionIntegrity } from './matchDecisionIntegri
   })
 }
 if (!needFirst.includes('match_decision_integrity: matchDecisionIntegrity')) {
-  operations.push({
-    type: 'insert_after',
-    file: needFirstFile,
-    marker: `  }
-
-  const summary = {`,
-    addition: ``,
-    label: 'placeholder',
-  })
-  operations.pop()
   operations.push({
     type: 'replace',
     file: needFirstFile,
