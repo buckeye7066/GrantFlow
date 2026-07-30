@@ -34,8 +34,13 @@ const linkBacklogSignatures = Object.freeze([
   ['backend/services/linkBacklogRepairService.js', 'export async function repairBrokenDirectBatch'],
   ['backend/services/linkBacklogRepairService.js', 'link_backlog_selected_row_claim'],
   ['backend/services/linkBacklogRepairService.js', 'link_backlog_row_error_isolation'],
+  ['backend/services/linkBacklogRepairService.js', 'export function estimateRepairLockTtlMs'],
+  ['backend/services/linkBacklogRepairService.js', 'official_rescue_clears_unprobeable_urls'],
   ['backend/routes/linkBacklogRepair.js', 'link_backlog_shared_scheduler_lock'],
+  ['backend/routes/linkBacklogRepair.js', 'link_backlog_runtime_bounded_lock_ttl'],
   ['backend/tests/linkBacklogRepairService.test.js', 'link_backlog_extended_url_fixture'],
+  ['backend/tests/linkBacklogSafetyRegression.test.js', 'official-only rescue clears unprobeable URL fields'],
+  ['backend/tests/linkBacklogSafetyRegression.test.js', 'sizes the shared lock lease for the bounded worst case'],
 ])
 const webParitySignatures = Object.freeze([
   ['backend/services/webParityBenchmark.js', 'export function isBenchmarkRelevantHit'],
@@ -110,6 +115,10 @@ async function applyLinkBacklogCorrections() {
   await applyModule(
     'scripts/source-materialization/apply-link-backlog-route-lock.mjs',
     'link backlog route lock',
+  )
+  await applyModule(
+    'scripts/source-materialization/apply-link-backlog-final-safety.mjs',
+    'link backlog final rescue and lock safety',
   )
 }
 
