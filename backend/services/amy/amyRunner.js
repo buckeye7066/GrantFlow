@@ -67,12 +67,15 @@ async function makeArtifactWriter() {
 }
 
 async function countSince(db, sql, since) {
-  try {
-    const row = await db.prepare(sql).get(since)
-    return Number(row?.n || 0)
-  } catch {
-    return 0
+  // Recovery is destructive with respect to the lease, so evidence reads must
+  // fail closed. A missing table, schema drift, or transient DB error is not
+  // proof of zero activity and must leave the lock untouched.
+  const row = await db.prepare(sql).get(since)
+  const count = Number(row?.n)
+  if (!Number.isFinite(count) || count < 0) {
+    throw new Error('Amy lock recovery could not prove a valid durable activity count')
   }
+  return count
 }
 
 /** Read the durable Amy scheduler lease without mutating it. */
@@ -147,6 +150,7 @@ export async function recoverStaleAmyRunLock({
   const released = await releaseLock(db, {
     lockName: AMY_SCHEDULER_LOCK_NAME,
     controlRunId: lock.control_run_id,
+    ownerToken: lock.owner_token,
   })
   const recovered = released === 1
   if (recovered) {
