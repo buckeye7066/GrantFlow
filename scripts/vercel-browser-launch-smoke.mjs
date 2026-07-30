@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { chromium } from 'playwright'
 
 const browser = await chromium.launch({
@@ -14,6 +15,9 @@ try {
     version: browser.version(),
   }
   console.log(`[audit-browser-smoke] ${JSON.stringify(result)}`)
+  fs.mkdirSync('audit-dist', { recursive: true })
+  fs.writeFileSync('audit-dist/browser-smoke.json', JSON.stringify(result, null, 2) + '\n')
+  fs.writeFileSync('audit-dist/index.html', '<!doctype html><meta charset="utf-8"><title>GrantFlow audit browser smoke</title><p>ok</p>')
 } finally {
   await browser.close()
 }
