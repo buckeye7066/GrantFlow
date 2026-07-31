@@ -8,9 +8,11 @@ on:
     - cron: "30 8 * * 1"
 
 # See ci.yml: supersede in-flight runs per branch, but never on main, whose
-# per-commit analysis record must stay complete.
+# per-commit analysis record must stay complete — main gets a UNIQUE group per
+# commit because a shared group's single pending slot still drops runs under
+# rapid merges (observed live 2026-07-31).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
