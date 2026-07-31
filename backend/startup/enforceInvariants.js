@@ -69,6 +69,7 @@ import { findOfficialUrlForOpportunity, significantTitleTokens } from '../servic
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS } from '../services/sources/locatorUrlKind.js'
 import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from '../config/amountEnrichEnv.js'
+import { normalizePersistedMatchDecisionIntegrity } from '../services/matching/matchDecisionIntegrity.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -5461,6 +5462,27 @@ export async function enforceLeadContactPlausibility(db) {
   })
 }
 
+/**
+ * INVARIANT: persisted surfaced matches obey the decision contract.
+ * REJECT rows are removed, below-REVIEW resources are removed, and surviving
+ * directory/referral/school-portal evidence is labelled REVIEW. This global,
+ * idempotent boot net repairs legacy and web-llm rows regardless of writer.
+ */
+export async function enforcePersistedMatchDecisionIntegrity(db) {
+  return runInvariant('persisted_match_decision_integrity', async () => {
+    const result = await normalizePersistedMatchDecisionIntegrity(db)
+    return {
+      scanned: Number(result?.scanned_canonical_evidence || 0),
+      repaired: Number(result?.repaired || 0),
+      removedRejects: Number(result?.removed_rejects || 0),
+      removedCanonicalRejects: Number(result?.removed_canonical_rejects || 0),
+      removedBelowReviewResources: Number(result?.removed_below_review_resources || 0),
+      normalizedResources: Number(result?.normalized_resources || 0),
+      ...(result?.reason ? { skipped: result.reason } : {}),
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -5533,6 +5555,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
   // unusable ghost that inflates the matches view and wastes promote passes.
   steps.push(await enforceNoDanglingMatches(db))
+  // Persisted-decision integrity AFTER dangling cleanup: no direct REJECT may
+  // remain surfaced, and every surviving resource is REVIEW rather than ACCEPT.
+  steps.push(await enforcePersistedMatchDecisionIntegrity(db))
   // Profession-eligibility net: cancel the Hamilton tasks + purge the early-status
   // grants for opportunities LOCKED to a profession the profile does not practise
   // (e.g. a nursing scholarship in a paramedic student's pipeline). Reuses the
@@ -5693,6 +5718,7 @@ export const __testables = {
   enforceFunderBackfill,
   enforceGrantAmountBackfill,
   enforceNoDanglingMatches,
+  enforcePersistedMatchDecisionIntegrity,
   enforceImportedStatusHonesty,
   enforceGrantCatalogLink,
   enforceAmountEnrichment,

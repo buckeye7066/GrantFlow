@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
-const DEFAULT_PRODUCTION_KEY_FILE = '/data/grantflow-runtime-secrets.key'
+const DEFAULT_PRODUCTION_KEY_FILE = '/data/uploads/.grantflow-runtime-secrets.key'
 let warnedLegacyFallback = false
 let cachedFileKey = null
 let cachedFilePath = null
@@ -47,8 +47,7 @@ function keyFilePath(env = process.env) {
 
   const uploadsDir = String(env.UPLOADS_DIR || '').trim()
   if (uploadsDir && path.isAbsolute(uploadsDir)) {
-    const parent = path.dirname(uploadsDir)
-    return path.join(parent, 'grantflow-runtime-secrets.key')
+    return path.join(uploadsDir, '.grantflow-runtime-secrets.key')
   }
   return DEFAULT_PRODUCTION_KEY_FILE
 }

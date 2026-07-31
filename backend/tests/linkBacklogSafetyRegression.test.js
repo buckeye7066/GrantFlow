@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   brokenDirectSummary,
   candidateUrlEntries,
+  estimateRepairLockTtlMs,
   repairBrokenDirectBatch,
+  scheduleRetryableBrokenRows,
 } from '../services/linkBacklogRepairService.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -107,6 +109,57 @@ describe('link backlog safety regression', () => {
       'application_url', 'apply_url', 'apply_guidelines_url',
       'final_url', 'source_url', 'evidence_url',
     ])
+  })
+
+  it('official-only rescue clears unprobeable URL fields', async () => {
+    const db = makeDb()
+    insert(db, {
+      id: 'official-only-rescue',
+      application_url: 'mailto:old@example.org',
+      apply_url: '/relative-apply',
+      apply_guidelines_url: 'not a URL',
+      evidence_url: 'javascript:void(0)',
+    })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('HTTP probe should not run'))
+    const officialUrl = 'https://official.example.org/current-program'
+
+    const result = await repairBrokenDirectBatch(db, {
+      limit: 1,
+      concurrency: 1,
+      timeoutMs: 3000,
+      findOfficialUrlImpl: async () => ({
+        url: officialUrl,
+        searched: true,
+        hits: 1,
+        probe: { status: 'ok', code: 200, method: 'get', finalUrl: officialUrl },
+      }),
+    })
+    const row = db.prepare('SELECT * FROM funding_opportunities WHERE id=?').get('official-only-rescue')
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ restored: 1, retired: 0, pending: 0 })
+    expect(row).toMatchObject({
+      application_url: null,
+      apply_url: null,
+      apply_guidelines_url: null,
+      evidence_url: null,
+      source_url: officialUrl,
+      final_url: officialUrl,
+      link_status: 'ok',
+      status: 'active',
+      is_hidden: 0,
+      is_active: 1,
+    })
+    db.close()
+  })
+
+  it('sizes the shared lock lease for the bounded worst case', () => {
+    const minimum = 30 * 60 * 1000
+    const maximum = 12 * 60 * 60 * 1000
+    expect(estimateRepairLockTtlMs()).toBeGreaterThanOrEqual(minimum)
+    const worstCase = estimateRepairLockTtlMs({ limit: 100, concurrency: 1, timeoutMs: 20_000 })
+    expect(worstCase).toBeGreaterThan(minimum)
+    expect(worstCase).toBeLessThanOrEqual(maximum)
   })
 
   it('quarantines all broken rows but marks only selected rows pending', async () => {
@@ -245,10 +298,71 @@ describe('link backlog safety regression', () => {
     db.close()
   })
 
+  it('schedules exhausted transient rows without retiring them', async () => {
+    const db = makeDb()
+    insert(db, {
+      id: 'bounded-transient',
+      application_url: 'https://8.8.8.8/blocked',
+      link_status: 'broken',
+      status: 'paused',
+      is_hidden: 1,
+      is_active: 0,
+      verification_error: 'retryable_after_recheck:access_or_bot_block:HTTP 403',
+    })
+    const addEvent = db.prepare(`
+      INSERT INTO verification_events (
+        opportunity_id, source, url, link_status, verification_method,
+        verified_by, verification_error, duration_ms
+      ) VALUES (?, 'verified_real', ?, 'broken', 'get', ?, 'HTTP 403', 10)
+    `)
+    addEvent.run('bounded-transient', 'https://8.8.8.8/blocked', 'admin-link-repair:proof-cycle-r1')
+    addEvent.run('bounded-transient', 'https://8.8.8.8/blocked', 'admin-link-repair:proof-cycle-r2')
+
+    const result = await scheduleRetryableBrokenRows(db, {
+      cyclePrefix: 'proof-cycle-r',
+      minAttempts: 2,
+      retryAfterDays: 30,
+    })
+    const row = db.prepare('SELECT * FROM funding_opportunities WHERE id=?').get('bounded-transient')
+
+    expect(result).toMatchObject({ selected: 1, scheduled: 1, min_attempts: 2, retry_after_days: 30 })
+    expect(row).toMatchObject({
+      link_status: 'skipped',
+      status: 'paused',
+      verification_method: 'scheduled_retry',
+      is_hidden: 1,
+      is_active: 0,
+    })
+    expect(row.verification_error).toMatch(/^retry_scheduled_after_bounded_recheck:/)
+    expect(await brokenDirectSummary(db)).toMatchObject({
+      visible: 0,
+      quarantined: 0,
+      repair_pending: 0,
+      retired: 0,
+      scheduled_retry: 1,
+    })
+    const latest = db.prepare('SELECT * FROM verification_events ORDER BY id DESC LIMIT 1').get()
+    expect(latest).toMatchObject({ link_status: 'skipped', verification_method: 'scheduled_retry' })
+    db.close()
+  })
+
+  it('pins scheduled retry to portable ordering and the verifier window', () => {
+    const service = fs.readFileSync(path.resolve(HERE, '../services/linkBacklogRepairService.js'), 'utf8')
+    const route = fs.readFileSync(path.resolve(HERE, '../routes/linkBacklogRepair.js'), 'utf8')
+    expect(service).toContain('scheduled_retry_portable_order')
+    expect(service).not.toContain('fo.last_verified_at ASC NULLS FIRST')
+    expect(service).toContain('const retryAfterDays = 30')
+    expect(route).toContain('scheduled_retry_uses_canonical_30_day_window')
+    expect(route).toContain('retryAfterDays: 30')
+  })
+
   it('pins shared locking and success-driven visibility restoration', () => {
     const route = fs.readFileSync(path.join(HERE, '..', 'routes', 'linkBacklogRepair.js'), 'utf8')
     const verifier = fs.readFileSync(path.join(HERE, '..', 'services', 'linkVerificationService.js'), 'utf8')
     expect(route).toContain('link_backlog_shared_scheduler_lock')
+    expect(route).toContain('link_backlog_runtime_bounded_lock_ttl')
+    expect(route).toContain("router.post('/schedule-retry'")
+    expect(route).toContain('ttlMs: estimateRepairLockTtlMs(repairOptions)')
     expect(route).toContain("const LOCK_NAME = 'link-verification'")
     expect(route).toContain('admin-link-reclassify:')
     expect(route).toContain('admin-link-repair:')

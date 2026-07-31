@@ -3512,7 +3512,7 @@ router.post('/seed-assistance-directories', async (req, res) => {
         .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
         .get())?.count || 0,
     );
-    const result = seedAssistanceDirectories(req.db);
+    const result = await seedAssistanceDirectories(req.db);
     const after = Number(
       (await req.db
         .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")

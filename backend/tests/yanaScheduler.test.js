@@ -43,6 +43,9 @@ function richOrg(i) {
 const loaderFor = (orgs) => async () => orgs
 
 beforeEach(() => {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('YANA_')) delete process.env[key]
+  }
   _resetYanaSchemaCache()
   __testing__._resetLock()
 })

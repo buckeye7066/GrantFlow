@@ -245,7 +245,7 @@ assert(
   hasRewrite(vercel, '/api/:path((?!preview-backend-disabled$).*)', '/api/preview-backend-disabled'),
   'root preview API calls must fail closed',
 )
-assert(vercel.installCommand === 'npm ci --include=optional', 'Vercel must use npm ci')
+assert(vercel.installCommand === 'npm ci --include=dev --include=optional', 'Vercel must use npm ci')
 `,
   'deployment rewrite assertions',
 )

@@ -24,7 +24,7 @@ test('makeOfflineFetcher is hermetic: it reaches the fake body with no live DNS'
 
 test('the injected resolver is actually consulted (regression guard for the DNS coupling)', async () => {
   // a resolver returning a public IP -> guard passes, fetch proceeds
-  const pass = createFetcher({ doFetch: okDoFetch('body'), resolve: async () => ['203.0.113.10'] });
+  const pass = createFetcher({ doFetch: okDoFetch('body'), resolve: async () => ['8.8.8.8'] });
   assert.equal((await pass.fetch('https://example.org/x')).ok, true);
 
   // a resolver returning a PRIVATE IP -> DNS-rebinding guard blocks before fetch
@@ -58,7 +58,7 @@ test('a redirect to an unsafe location is re-validated and blocked', async () =>
     }
     return { status: 200, ok: true, url, headers: { get: () => null }, async text() { return 'should not reach'; } };
   };
-  const f = createFetcher({ doFetch, resolve: async () => ['203.0.113.10'] });
+  const f = createFetcher({ doFetch, resolve: async () => ['8.8.8.8'] });
   const r = await f.fetch('https://example.org/start');
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'private_host'); // the redirect target is loopback

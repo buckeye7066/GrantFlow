@@ -26,7 +26,10 @@ function dbFixture() {
       sponsor TEXT,
       source TEXT,
       source_id TEXT,
+      -- link_backlog_extended_url_fixture
       application_url TEXT,
+      apply_url TEXT,
+      apply_guidelines_url TEXT,
       source_url TEXT,
       evidence_url TEXT,
       final_url TEXT,
@@ -68,15 +71,16 @@ function dbFixture() {
 function insert(db, row) {
   db.prepare(`
     INSERT INTO funding_opportunities (
-      id,title,sponsor,source,source_id,application_url,source_url,final_url,contact_info,
+      id,title,sponsor,source,source_id,application_url,apply_url,apply_guidelines_url,source_url,final_url,contact_info,
       type,opportunity_type,result_kind,opportunity_kind,link_status,
       link_status_code,verification_error,is_hidden,is_active,status
-    ) VALUES (@id,@title,@sponsor,@source,@source_id,@application_url,@source_url,@final_url,@contact_info,
+    ) VALUES (@id,@title,@sponsor,@source,@source_id,@application_url,@apply_url,@apply_guidelines_url,@source_url,@final_url,@contact_info,
       @type,@opportunity_type,@result_kind,@opportunity_kind,@link_status,
       @link_status_code,@verification_error,@is_hidden,@is_active,@status)
   `).run({
     title: 'Test Program', sponsor: 'Test Sponsor', source: 'verified_real', source_id: null,
-    application_url: null, source_url: null, final_url: null, contact_info: null,
+    application_url: null, apply_url: null, apply_guidelines_url: null,
+    source_url: null, final_url: null, contact_info: null,
     type: 'OPPORTUNITY', opportunity_type: 'grant', result_kind: 'direct',
     opportunity_kind: 'direct', link_status: 'broken', link_status_code: 404,
     verification_error: 'HTTP 404', is_hidden: 1, is_active: 0, status: 'active',
@@ -179,6 +183,7 @@ describe('link backlog repair', () => {
       quarantined: 0,
       repair_pending: 0,
       retired: 1,
+      scheduled_retry: 0,
     })
     expect(db.prepare('SELECT link_status FROM verification_events WHERE opportunity_id=?').get('retire').link_status).toBe('skipped')
     expect(db.prepare('SELECT COUNT(*) AS n FROM verification_events').get().n).toBe(2)
@@ -269,6 +274,7 @@ describe('link backlog repair', () => {
       quarantined: 0,
       repair_pending: 1,
       retired: 0,
+      scheduled_retry: 0,
     })
     expect(db.prepare('SELECT link_status FROM verification_events').get().link_status).toBe('broken')
     db.close()

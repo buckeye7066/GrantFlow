@@ -18,6 +18,10 @@
  * tests without touching real env/disk.
  */
 
+import { twilioWebhookPosture } from './twilioWebhookSecurity.js'
+
+import { runtimeSecretKeyPosture } from '../utils/runtimeSecrets.js'
+
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on'])
 const FALSE_VALUES = new Set(['0', 'false', 'no', 'off'])
 
@@ -285,6 +289,89 @@ export function checkMissionHealthAvailability(missionHealth = null, { selfRefer
 }
 
 /**
+ * Check 7: configured production SMS must authenticate inbound consent mutations.
+ */
+export function checkTwilioWebhookSecurity({ env = process.env } = {}) {
+  const posture = twilioWebhookPosture(env)
+  if (!posture.production || !posture.configured) {
+    return {
+      id: 'twilio_webhook_security',
+      level: 'info',
+      detail: posture.production ? 'Twilio SMS is not configured.' : 'NODE_ENV is not production.',
+      ok: true,
+    }
+  }
+  if (!posture.token_configured) {
+    return {
+      id: 'twilio_webhook_security',
+      level: 'error',
+      detail: 'Twilio SMS is configured in production but TWILIO_AUTH_TOKEN is missing.',
+      ok: false,
+    }
+  }
+  if (posture.validation_explicitly_disabled) {
+    return {
+      id: 'twilio_webhook_security',
+      level: 'error',
+      detail: 'TWILIO_VALIDATE_SIGNATURE=false is forbidden in production.',
+      ok: false,
+    }
+  }
+  return {
+    id: 'twilio_webhook_security',
+    level: 'info',
+    detail: 'Twilio inbound webhook signatures are required in production.',
+    ok: true,
+  }
+}
+
+/**
+ * Check 8: production provider secrets must be encrypted with a dedicated key,
+ * never solely with the authentication/JWT signing material.
+ */
+export function checkRuntimeSecretKeySecurity({ env = process.env } = {}) {
+  const production = String(env.NODE_ENV || '').trim().toLowerCase() === 'production'
+  const testLike =
+    String(env.NODE_ENV || '').trim().toLowerCase() === 'test' ||
+    envBool(env.SMOKE_MODE) === true ||
+    envBool(env.ALLOW_EPHEMERAL_SQLITE) === true
+
+  if (!production || testLike) {
+    return {
+      id: 'runtime_secret_key_security',
+      level: 'info',
+      detail: production ? 'Production-shaped test runtime is exempt.' : 'NODE_ENV is not production.',
+      ok: true,
+    }
+  }
+
+  try {
+    const posture = runtimeSecretKeyPosture(env)
+    if (posture.dedicated_key_configured) {
+      return {
+        id: 'runtime_secret_key_security',
+        level: 'info',
+        detail: 'Dedicated runtime-secret key is configured via ' + posture.dedicated_key_source + '.',
+        ok: true,
+      }
+    }
+    return {
+      id: 'runtime_secret_key_security',
+      level: 'error',
+      detail: 'No dedicated runtime-secret key is configured or present on persistent storage.',
+      ok: false,
+    }
+  } catch (error) {
+    return {
+      id: 'runtime_secret_key_security',
+      level: 'error',
+      detail: 'Runtime-secret key posture could not be verified: ' + (error?.message || String(error)),
+      ok: false,
+    }
+  }
+}
+
+/**
  * Aggregate all checks into a single readiness report.
  * Each input is optional; missing inputs degrade to a warn (the gate
  * cannot prove safety without them).
@@ -307,6 +394,8 @@ export function buildProductionReadinessReport({
     checkPendingMigrations({ pendingMigrations }),
     checkCrawlerFreshness({ ageHours: crawlerSourceRunsAgeHours, maxAgeHours: crawlerSourceRunsMaxAgeHours, env, tablePresent: crawlerSourceRunsTablePresent }),
     checkMissionHealthAvailability(missionHealth, { selfReference }),
+    checkTwilioWebhookSecurity({ env }),
+    checkRuntimeSecretKeySecurity({ env }),
   ]
 
   const errors = results.filter((r) => r.level === 'error')

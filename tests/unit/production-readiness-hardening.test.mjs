@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { checkTwilioWebhookSecurity } from '../../backend/services/productionReadinessChecks.js'
+import {
+  checkRuntimeSecretKeySecurity,
+  checkTwilioWebhookSecurity,
+} from '../../backend/services/productionReadinessChecks.js'
 
 test('production readiness rejects configured Twilio without a signing token', () => {
   const check = checkTwilioWebhookSecurity({
@@ -31,4 +34,28 @@ test('production readiness accepts signed Twilio configuration', () => {
     },
   })
   assert.equal(check.ok, true)
+})
+
+test('production readiness rejects missing dedicated runtime-secret key', () => {
+  const check = checkRuntimeSecretKeySecurity({
+    env: {
+      NODE_ENV: 'production',
+      RUNTIME_SECRETS_KEY_FILE: '/definitely/not/present/grantflow-runtime.key',
+      AUTH_JWT_SECRET: 'legacy-only',
+    },
+  })
+  assert.equal(check.ok, false)
+  assert.equal(check.level, 'error')
+})
+
+test('production readiness accepts a dedicated runtime-secret environment key', () => {
+  const check = checkRuntimeSecretKeySecurity({
+    env: {
+      NODE_ENV: 'production',
+      RUNTIME_SECRETS_KEY: '44'.repeat(32),
+      AUTH_JWT_SECRET: 'legacy-for-migration-only',
+    },
+  })
+  assert.equal(check.ok, true)
+  assert.equal(check.level, 'info')
 })

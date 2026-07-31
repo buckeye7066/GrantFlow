@@ -31,7 +31,13 @@ const fakeDb = () => ({
   }),
 })
 
-const ENV_KEYS = ['HAMILTON_WEEKLY_DIGEST_DELIVERY', 'HAMILTON_WEEKLY_DIGEST_ENABLED']
+const ENV_KEYS = [
+  'HAMILTON_WEEKLY_DIGEST_DELIVERY',
+  'HAMILTON_WEEKLY_DIGEST_ENABLED',
+  'MICROSOFT_TENANT_ID',
+  'MICROSOFT_CLIENT_ID',
+  'MICROSOFT_CLIENT_SECRET',
+]
 const saved = {}
 beforeEach(() => { for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k] } })
 afterEach(() => {

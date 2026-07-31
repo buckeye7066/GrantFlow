@@ -53,6 +53,7 @@ import { saveAmyReport } from './amyReportStore.js'
 import { recordFlywheelCohort } from './flywheelCohort.js'
 import { buildFleetGapScoreboard, weightCategoriesByGaps, deriveAmyGapActions } from '../coverageGapScoreboard.js'
 import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
+import { boundedAmyPreflight } from './amyPreflight.js'
 import {
   consumeMeshInbox,
   readMeshLessons,
@@ -218,24 +219,31 @@ export async function runAmyTraining(options = {}) {
   let meshInbox = []
   let meshLessonsHeard = []
   let searchDegraded = false
-  try {
-    meshInbox = await mesh.consumeInbox(db, 'amy', { now: clock() })
-    meshLessonsHeard = await mesh.readLessons(db, {
-      topics: ['crawler_reliability'],
-      excludeAuthor: 'amy',
-      freshWithinHours: 48,
-      limit: 5,
-      now: clock(),
+  const meshContext = await boundedAmyPreflight('mesh_context', async () => {
+    const [inbox, lessons] = await Promise.all([
+      mesh.consumeInbox(db, 'amy', { now: clock() }),
+      mesh.readLessons(db, {
+        topics: ['crawler_reliability'],
+        excludeAuthor: 'amy',
+        freshWithinHours: 48,
+        limit: 5,
+        now: clock(),
+      }),
+    ])
+    return { inbox, lessons }
+  }, {
+    timeoutMs: 15_000,
+    logger,
+    fallback: { inbox: [], lessons: [] },
+  })
+  meshInbox = Array.isArray(meshContext?.inbox) ? meshContext.inbox : []
+  meshLessonsHeard = Array.isArray(meshContext?.lessons) ? meshContext.lessons : []
+  searchDegraded = meshLessonsHeard.length > 0
+  if (searchDegraded) {
+    logger.info('Amy heard fresh crawler_reliability lesson(s) from the mesh — low_results learning suspended this run', {
+      run_id: runId,
+      lessons: meshLessonsHeard.map((l) => `${l.author}: ${l.claim}`),
     })
-    searchDegraded = meshLessonsHeard.length > 0
-    if (searchDegraded) {
-      logger.info('Amy heard fresh crawler_reliability lesson(s) from the mesh — low_results learning suspended this run', {
-        run_id: runId,
-        lessons: meshLessonsHeard.map((l) => `${l.author}: ${l.claim}`),
-      })
-    }
-  } catch (err) {
-    logger.warn('Amy agent-mesh read failed (continuing without peer context)', { error: err?.message })
   }
 
   // ── LEARN FROM THE FLEET: refresh the Coverage & Evidence gap scoreboard ──
@@ -251,7 +259,11 @@ export async function runAmyTraining(options = {}) {
   let categoryWeights = null
   if (gapLearning) {
     try {
-      fleetGaps = await refreshScoreboard(db, { limit: gapScanLimit, now: clock() })
+      fleetGaps = await boundedAmyPreflight(
+        'fleet_gap_scoreboard',
+        () => refreshScoreboard(db, { limit: gapScanLimit, now: clock() }),
+        { timeoutMs: 45_000, logger, fallback: null },
+      )
       if (fleetGaps?.profiles_scanned > 0) {
         categoryWeights = weightCategoriesByGaps(fleetGaps, categories)
       }
@@ -263,7 +275,7 @@ export async function runAmyTraining(options = {}) {
   const gapActions = deriveAmyGapActions(fleetGaps)
   if (fleetGaps) {
     const topGap = fleetGaps.gaps?.[0]
-    await Promise.resolve(recordActivity(db, {
+    await boundedAmyPreflight('gap_scoreboard_telemetry', () => Promise.resolve(recordActivity(db, {
       agent_name: 'amy',
       event_type: 'amy.gap_scoreboard.refreshed',
       status: 'succeeded',
@@ -279,7 +291,7 @@ export async function runAmyTraining(options = {}) {
         actionable: gapActions.actionable.length,
         structural: gapActions.structural.length,
       },
-    })).catch(() => {})
+    })), { timeoutMs: 10_000, logger, fallback: null })
     if (gapActions.structural.length > 0) {
       // ACT on the wishlist, don't just log it. A `no_disease_source` gap is a
       // search waiting to happen: find a real patient-assistance source for the
@@ -296,13 +308,17 @@ export async function runAmyTraining(options = {}) {
           import('../coverageAudit/conditionSourceSearch.js'),
           import('../shared/webSearchEngine.js'),
         ])
-        searchOutcome = await searchForMissingConditionSources(db, gapActions.structural, { searchWeb })
+        searchOutcome = await boundedAmyPreflight(
+          'condition_source_search',
+          () => searchForMissingConditionSources(db, gapActions.structural, { searchWeb }),
+          { timeoutMs: 30_000, logger, fallback: { ran: false, reason: 'preflight_timeout_or_error' } },
+        )
       } catch (err) {
         searchOutcome = { ran: false, reason: String(err?.message ?? err) }
       }
 
       const queued = Number(searchOutcome?.queued ?? 0)
-      await Promise.resolve(recordActivity(db, {
+      await boundedAmyPreflight('adapter_wishlist_telemetry', () => Promise.resolve(recordActivity(db, {
         agent_name: 'amy',
         event_type: 'amy.adapter_wishlist',
         // Only still 'blocked' when nothing could be queued for ANY of them. If a
@@ -323,7 +339,7 @@ export async function runAmyTraining(options = {}) {
         // `condition_search` records what the SEARCH did (queued ≠ added — the gates
         // have not run yet). Anya's report reads the evidence store for the rest.
         details_json: { run_id: runId, wishlist: gapActions.structural, condition_search: searchOutcome },
-      })).catch(() => {})
+      })), { timeoutMs: 10_000, logger, fallback: null })
     }
   }
 

@@ -2211,8 +2211,10 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
 
   // ============ ORGANIZATION DETAILS ============
   if (organizationDetails.organization_type) {
+    // Keep the specific organization identity available to discovery, but do
+    // not count it again as a broad applicant-type fact. The dedicated
+    // organization data point owns this evidence exactly once.
     registerKeyword(organizationDetails.organization_type)
-    applicantTypeSet.add(normalizeString(organizationDetails.organization_type))
   }
   if (organizationDetails.nicra_rate) {
     // NICRA = Negotiated Indirect Cost Rate Agreement (common for federal compliance).
@@ -3324,7 +3326,13 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // ============ ORGANIZATION DETAILS ============
   const orgDetailsSection = sections?.organization_details ?? {}
   const npCompliance = sections?.nonprofit_compliance ?? {}
+  const organizationType = String(
+    orgDetailsSection.organization_type ?? orgDetailsSection.org_type ?? '',
+  ).trim() || null
   const organizationSignals = {
+    // Specific organization identity is substantive matching evidence, not a
+    // replacement for the broad applicant-type eligibility gate.
+    orgType: organizationType,
     is501c3: !!npCompliance.has_501c3 || !!npCompliance.is_501c3 || !!orgDetailsSection.is_501c3,
     samRegistered: !!npCompliance.sam_registered || !!orgDetailsSection.sam_registered,
     faithBased: !!orgDetailsSection.faith_based,

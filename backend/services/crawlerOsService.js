@@ -761,6 +761,18 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     /* post-crawl eligibility re-score must never fail the crawl */
   }
 
+  // post_crawl_match_decision_integrity: eligibility and need-first scorers may
+  // legitimately produce REJECT, but REJECT is never a surfaced match. Run the
+  // structural pass after every post-persistence writer, including web-llm.
+  try {
+    if (!dryRun && String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
+      const { normalizePersistedMatchDecisionIntegrity } = await import('./matching/matchDecisionIntegrity.js');
+      await normalizePersistedMatchDecisionIntegrity(db, { profileId });
+    }
+  } catch {
+    /* match-decision integrity is also re-asserted by the boot invariant net */
+  }
+
   return { run, persisted, thesis, opportunities };
 }
 

@@ -1072,7 +1072,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    expect(summary.ran).toBe(34)
+    expect(summary.ran).toBe(35)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1096,6 +1096,7 @@ describe('enforceInvariants — runner', () => {
       'individual_amount_ceiling',
       'student_aid_eligibility',
       'no_dangling_matches',
+      'persisted_match_decision_integrity',
       'profession_eligibility',
       'funder_backfill',
       'profile_display_name_not_doubled',

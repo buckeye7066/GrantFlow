@@ -18,6 +18,32 @@ const routeLogger = createLogger('route:health')
 
 const router = express.Router()
 
+const MISSION_READINESS_CACHE_MS = Math.max(5_000, Number(process.env.MISSION_READINESS_CACHE_MS) || 30_000)
+let missionReadinessCache = { at: 0, db: null, payload: null }
+
+async function getMissionReadiness(db) {
+  const now = Date.now()
+  if (
+    missionReadinessCache.db === db &&
+    missionReadinessCache.payload &&
+    now - missionReadinessCache.at < MISSION_READINESS_CACHE_MS
+  ) return missionReadinessCache.payload
+
+  const payload = await buildMissionHealth(db)
+  missionReadinessCache = { at: now, db, payload }
+  return payload
+}
+
+function publicFailure(code, timestampKey = 'timestamp') {
+  return {
+    ok: false,
+    status: 'error',
+    error_code: code,
+    details_redacted: true,
+    [timestampKey]: new Date().toISOString(),
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -172,12 +198,10 @@ router.get('/api/health', async (req, res) => {
       build: getBuildInfo(),
     })
   } catch (error) {
+    routeLogger.error('public health summary failed', { error: error?.message || String(error) })
     return res.status(500).json({
-      ok: false,
-      status: 'error',
+      ...publicFailure('health_summary_failed'),
       summary: 'Failed to retrieve health information',
-      error: error?.message || String(error),
-      timestamp: new Date().toISOString(),
     })
   }
 })
@@ -208,8 +232,8 @@ router.get('/healthz', (req, res) => {
       status: 'degraded',
       reason: schemaBootstrapFailed ? 'schema_bootstrap_failed' : 'db_startup_error',
       schema_bootstrap_failed: schemaBootstrapFailed,
-      missing_tables: missingTables,
-      detail: locals.schema_bootstrap_error || dbStartupError || null,
+      missing_table_count: missingTables.length,
+      details_redacted: true,
       timestamp: new Date().toISOString(),
     })
   }
@@ -272,7 +296,7 @@ router.get('/readyz', async (req, res) => {
       ok: false,
       status: 'not_ready',
       reason: dbCheck.reason,
-      error: dbCheck.error || null,
+      details_redacted: true,
       timestamp: new Date().toISOString(),
     })
   }
@@ -284,7 +308,7 @@ router.get('/readyz', async (req, res) => {
       status: 'not_ready',
       reason: schema.reason,
       missing: schema.missing || null,
-      error: schema.error || null,
+      details_redacted: true,
       timestamp: new Date().toISOString(),
     })
   }
@@ -305,9 +329,31 @@ router.get('/readyz', async (req, res) => {
       status: 'not_ready',
       reason: uploads.reason,
       uploads_configured: uploads.configured ?? null,
-      error: uploads.error || null,
+      error_code: uploads.error || null,
+      details_redacted: true,
       timestamp: new Date().toISOString(),
     })
+  }
+
+  const isProduction = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+  const skipMissionGate =
+    String(process.env.GRANTFLOW_SKIP_MISSION_GATE || '').toLowerCase() === 'true' ||
+    String(process.env.NODE_ENV || '').toLowerCase() === 'test'
+
+  if (isProduction && !skipMissionGate) {
+    const mission = await getMissionReadiness(req.db)
+    if (mission?.production_gate !== true) {
+      return res.status(503).json({
+        ok: false,
+        status: 'not_ready',
+        reason: 'mission_gate_failed',
+        release_blockers: Array.isArray(mission?.release_blockers)
+          ? mission.release_blockers.map((item) => item?.code).filter(Boolean)
+          : ['mission_gate_unavailable'],
+        details_redacted: true,
+        timestamp: new Date().toISOString(),
+      })
+    }
   }
 
   const pipeline = getPipelineHealth()
@@ -317,6 +363,7 @@ router.get('/readyz', async (req, res) => {
     status: 'ready',
     dialect: dbCheck.dialect ?? null,
     pipeline_status: pipeline.overall,
+    mission_gate: isProduction && !skipMissionGate ? 'passed' : 'not_enforced',
     timestamp: new Date().toISOString(),
   })
 })
@@ -387,16 +434,12 @@ router.get('/api/health/deployment', (_req, res) => {
 // CI fails if placeholders inserted, etc.).
 router.get('/api/health/mission', async (req, res) => {
   try {
-    const payload = await buildMissionHealth(req.db)
-    const code = payload?.ok === false ? 503 : 200
+    const payload = await getMissionReadiness(req.db)
+    const code = payload?.ok === false || payload?.production_gate === false ? 503 : 200
     return res.status(code).json(payload)
   } catch (err) {
     routeLogger.error('mission health failed', { err: err?.message })
-    return res.status(500).json({
-      ok: false,
-      error: err?.message ?? String(err),
-      generated_at: new Date().toISOString(),
-    })
+    return res.status(500).json(publicFailure('mission_health_failed', 'generated_at'))
   }
 })
 

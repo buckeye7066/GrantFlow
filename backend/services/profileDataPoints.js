@@ -37,6 +37,7 @@ export const DATA_POINT_KINDS = Object.freeze([
   'need',
   'geo',
   'applicant_type',
+  'organization',
   'demographic',
   'gender',
   'assistance',
@@ -133,6 +134,71 @@ export function declaredProgramMatchesSource(declaredValue, normSourceId) {
   if (!normSourceId) return false
   const sourceIds = PROGRAM_SOURCE_AFFINITY.get(norm(declaredValue))
   return Boolean(sourceIds && sourceIds.has(normSourceId))
+}
+
+// One declared organization identity contributes one denominator point. These
+// aliases only teach that point how real program pages name the same entity
+// class; they never mint extra points or bypass eligibility/geography gates.
+const ORGANIZATION_IDENTITY_ALIASES = new Map(
+  Object.entries({
+    'tribal government': [
+      'tribal government',
+      'tribal organization',
+      'tribal nation',
+      'native american',
+      'american indian',
+      'indigenous',
+      'indian country',
+    ],
+    'tribal organization': [
+      'tribal government',
+      'tribal organization',
+      'tribal nation',
+      'native american',
+      'american indian',
+      'indigenous',
+      'indian country',
+    ],
+    'community development corporation': [
+      'community development corporation',
+      'community development block grant',
+      'community development',
+      'cdbg',
+      'chdo',
+      'cdfi',
+    ],
+    'public housing authority': [
+      'public housing authority',
+      'housing authority',
+      'public housing',
+      'public housing capital fund',
+      'choice neighborhoods',
+      'resident opportunities and self sufficiency',
+      'ross',
+    ],
+    'housing authority': [
+      'public housing authority',
+      'housing authority',
+      'public housing',
+      'public housing capital fund',
+      'choice neighborhoods',
+      'resident opportunities and self sufficiency',
+      'ross',
+    ],
+    'workforce development board': [
+      'workforce development board',
+      'workforce development',
+      'workforce innovation and opportunity act',
+      'wioa',
+      'employment and training administration',
+      'apprenticeship',
+    ],
+  }).map(([key, values]) => [norm(key), values.map(norm)]),
+)
+
+function organizationIdentityAliases(value) {
+  const normalized = norm(value)
+  return ORGANIZATION_IDENTITY_ALIASES.get(normalized) || [normalized]
 }
 
 function toValueList(setOrArray) {
@@ -232,6 +298,14 @@ export function buildProfileDataPointInventory({ profile, signals, profileNorm =
     profile?.applicant_type ?? profile?.primary_type ?? profile?.profile_type
   if (primaryType) push('applicant_type', primaryType)
   for (const t of cleanTerms(toValueList(signals?.applicantTypes))) push('applicant_type', t)
+
+  // ── specific organization identity: one fact, many precise textual aliases ──
+  const organizationType =
+    signals?.organization?.orgType ??
+    profileNorm?.organization?.orgType ??
+    profile?.organization_type ??
+    null
+  if (organizationType) push('organization', organizationType)
 
   // ── trait sets, in fixed kind order ──
   const setKinds = [
@@ -374,6 +448,13 @@ export function evaluateDataPointMatches({
         const isPrimary = primaryType && norm(dp.value) === norm(primaryType)
         if ((isPrimary && applicantTypeMatch) || scanValue(dp.value)) {
           record(dp, 1, isPrimary && applicantTypeMatch ? 'eligibility_gate' : 'text') // evidence only
+        }
+        break
+      }
+      case 'organization': {
+        const alias = organizationIdentityAliases(dp.value).find((term) => scanValue(term))
+        if (alias) {
+          record(dp, 1, norm(alias) === norm(dp.value) ? 'text' : 'organization_identity_alias')
         }
         break
       }
