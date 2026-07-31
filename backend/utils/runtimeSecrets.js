@@ -135,7 +135,12 @@ function keyCandidates(env = process.env) {
   const current = decodeKeyMaterial(env.RUNTIME_SECRETS_KEY, 'RUNTIME_SECRETS_KEY')
   if (current) candidates.push({ name: 'dedicated-env', key: current })
 
-  const fileKey = loadOrCreateDedicatedFileKey(env, { create: isProduction(env) && !isTestLikeRuntime(env) })
+  // Decryption NEVER creates key material. A freshly-minted random key cannot
+  // decrypt pre-existing ciphertext, so creating one here bought nothing and
+  // made a read path write to persistent storage — which hard-fails (EACCES)
+  // anywhere the production key directory is not writable, e.g. CI runners.
+  // The encrypt path (currentEncryptionKey) remains the sole creator.
+  const fileKey = loadOrCreateDedicatedFileKey(env, { create: false })
   if (fileKey) candidates.push({ name: 'dedicated-file', key: fileKey })
 
   const previous = decodeKeyMaterial(
