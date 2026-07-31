@@ -25,6 +25,7 @@ import * as cheerio from 'cheerio'
 import { getWithRetry } from './httpClient.js'
 import { makeBraveSearchProvider } from '../yana/webSearchProvider.js'
 import { makeSearxngProvider } from './searxngProvider.js'
+import { distinctiveTerms, coveredTerms } from './queryRelevance.js'
 import { getCachedSearch, putCachedSearch } from './webSearchCache.js'
 import { createLogger } from '../../utils/logger.js'
 
@@ -142,11 +143,9 @@ function shouldSkip(url) {
 // Tokens too common to prove a result is ABOUT the query. Deliberately small:
 // the gate below only needs to tell "results about the whole query" from
 // "results about its first word", not to rank relevance.
-const DEGENERATE_STOPWORDS = new Set([
-  'the', 'and', 'for', 'with', 'from', 'near', 'about',
-  'grants', 'grant', 'scholarships', 'scholarship', 'assistance', 'programs',
-  'program', 'funding', 'financial',
-])
+// Tokenizer + coverage rule live in ./queryRelevance.js so this per-SERP gate
+// and searxngProvider's per-result ranking can never disagree about the same
+// SERP. Do not re-inline them here.
 
 /**
  * looksDegenerateSerp — does this result set answer only the query's FIRST
@@ -178,26 +177,14 @@ const DEGENERATE_STOPWORDS = new Set([
  */
 export function looksDegenerateSerp(query, results) {
   if (!Array.isArray(results) || results.length === 0) return false
-  const terms = String(query || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((t) => t.length >= 4 && !DEGENERATE_STOPWORDS.has(t) && !/^\d+$/.test(t))
+  const terms = distinctiveTerms(query)
   if (terms.length < 2) return false
   const needed = Math.ceil(terms.length * 0.6)
-  // WHOLE-WORD matching: substring matching let 'western United States' count
-  // as covering the term 'west' (the University-of-West-Florida junk SERP
-  // slipped through on it, verified live 2026-07-27).
-  const res = terms.map((t) => new RegExp(`\\b${t}\\b`))
-  return !results.some((r) => {
-    const hay = `${r?.url ?? ''} ${r?.title ?? ''} ${r?.snippet ?? ''}`.toLowerCase()
-    let covered = 0
-    for (const re of res) {
-      if (re.test(hay)) covered += 1
-      if (covered >= needed) return true
-    }
-    return false
-  })
+  // WHOLE-WORD matching (in coveredTerms): substring matching let 'western
+  // United States' count as covering the term 'west' (the
+  // University-of-West-Florida junk SERP slipped through on it, verified live
+  // 2026-07-27).
+  return !results.some((r) => coveredTerms(r, terms).length >= needed)
 }
 
 /**
