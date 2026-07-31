@@ -253,7 +253,12 @@ replaceOne(
   'scripts/check-deployment-config.mjs',
   /assert\(csp\.includes\('https:\/\/grantflow-production\.up\.railway\.app'\),[^\n]*\)/,
   `assert(csp.includes('https://grantflow-production.up.railway.app'), 'CSP must allow the production Railway backend')
-assert(csp.includes('ingest.sentry.io'), 'CSP must allow configured browser Sentry ingestion')`,
+// Exact-token check, not a substring: \`csp.includes('ingest.sentry.io')\` would
+// pass with the host in the wrong directive (or inside another host), and it
+// reads to CodeQL as incomplete URL substring sanitization. Browser Sentry
+// ingestion specifically needs the wildcard token in connect-src.
+const connectSrcTokens = String(csp.split(';').map((d) => d.trim()).find((d) => d.startsWith('connect-src')) || '').split(/\\s+/).slice(1)
+assert(connectSrcTokens.includes('https://*.ingest.sentry.io'), 'CSP connect-src must carry the exact https://*.ingest.sentry.io token for browser Sentry ingestion')`,
   'CSP assertions',
 )
 
