@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy, isSearchEngineUrl } from './shared/opportunityPolicy.js'
+import { canonicalProgramTargetRepair } from '../config/canonicalProgramRegistry.js'
 import { applyFundableOpportunityNormalization, evaluateFundableOpportunity } from './matching/qualityGate.js'
 import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
 import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js'
@@ -495,8 +496,24 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   // gate just below instead of entering the catalog as an unsubmittable target.
   const dropSearchResultsUrl = (u) => (isSearchEngineUrl(u) ? null : u)
   const sourceUrl = dropSearchResultsUrl(normalizeUrl(opportunity.source_url ?? opportunity.url ?? opportunity.application_url))
-  const applicationUrl = dropSearchResultsUrl(normalizeUrl(opportunity.application_url))
+  let applicationUrl = dropSearchResultsUrl(normalizeUrl(opportunity.application_url))
   const evidenceUrl = dropSearchResultsUrl(normalizeUrl(opportunity.evidence_url ?? sourceUrl ?? applicationUrl))
+
+  // Canonical-program choke point (the "TN Promise opens a paramedic page"
+  // class): a row whose title/sponsor name a REGISTERED public program (TN
+  // Promise / Reconnect / HOPE — canonicalProgramRegistry.js) but whose
+  // application_url sits off the program's official host set was extracted
+  // from a page that merely MENTIONS the program; sending an applicant there
+  // is wrong by construction. Repoint the APPLICATION target to the official,
+  // live-verified URL. source/evidence URLs stay untouched — where we read
+  // the mention remains honest provenance. Boot net:
+  // enforceCanonicalProgramApplicationTargets().
+  {
+    const repair = canonicalProgramTargetRepair({
+      title: opportunity.title, sponsor: resolveSponsorName(opportunity), application_url: applicationUrl,
+    })
+    if (repair) applicationUrl = repair.officialUrl
+  }
 
   const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
   if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {
