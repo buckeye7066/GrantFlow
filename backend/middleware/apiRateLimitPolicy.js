@@ -60,6 +60,27 @@ export function classifyApiRatePolicy(req, env = process.env) {
     }
   }
 
+  // Live co-browse interaction lane — MUST be classified before the general
+  // hamilton/automation bucket. The cloud-login live viewer relays ONE POST per
+  // mouse/key event and holds one long-lived SSE screencast GET. Classified as
+  // 'automation' (25 req / 10 min, shared) these burned the entire budget the
+  // moment the user MOVED THE MOUSE toward the sign-in button: every input then
+  // 429'd ("the live page stopped accepting your clicks") and the stream
+  // reconnect 429'd too (stream_http_429 → "the live connection ended") — the
+  // 2026-07-31 MTSU live-login report. These endpoints are cheap (one CDP
+  // dispatch / one stream attach), already triple-gated (auth + profile access
+  // + live-session existence), and human-bounded, so they get a real-time
+  // per-user budget instead. Deliberately shared:false — a DB write per mouse
+  // event would be its own outage.
+  if (/^\/api\/hamilton\/automation\/sessions\/cloud-login\/[^/]+\/(?:input|stream)$/.test(path)) {
+    return {
+      name: 'live_interaction',
+      windowMs: positiveInt(env.API_LIVE_INTERACTION_RATE_LIMIT_WINDOW_MS, 60 * 1000),
+      max: positiveInt(env.API_LIVE_INTERACTION_RATE_LIMIT_MAX, 1800),
+      shared: false,
+    }
+  }
+
   if (
     /^\/api\/(?:hamilton|application-tasks|admin\/agent-control|admin\/queue)(?:\/|$)/.test(path)
   ) {

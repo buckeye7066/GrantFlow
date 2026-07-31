@@ -400,8 +400,12 @@ function finalizeStart({ browser, server, context, page, userId, profileId, port
     },
     createdAt: Date.now(),
   }
+  record.__id = id
   touchSession(record)
   sessions.set(id, record)
+  // Follow SSO popups/new tabs so the mirror always shows the page the user is
+  // actually signing in on (see wirePageFollow).
+  try { wirePageFollow(record) } catch { /* best-effort */ }
   log.info('cloud login session started', {
     liveSessionId: id, profileId: String(profileId), portalHost,
     provider: cloudLoginProvider(), seeded: Boolean(seededFromSessionId),
@@ -479,14 +483,39 @@ export async function captureKeyframe(cdp, page, quality = KEYFRAME_QUALITY) {
  */
 export async function attachScreencast(s, onFrame, { quality = KEYFRAME_QUALITY, maxWidth = 1280, maxHeight = 1280 } = {}) {
   if (!s || !s.page) return null
-  const liveSessionId = s.__id
-  // Tear down a previous viewer's screencast / keyframe loop if one was left on.
-  if (s.screencastCdp) {
-    try { await s.screencastCdp.send('Page.stopScreencast') } catch { /* ignore */ }
-    try { await s.screencastCdp.detach() } catch { /* ignore */ }
-    s.screencastCdp = null
+  // Remember the viewer so a PAGE RETARGET (an SSO popup opening — see
+  // retargetLivePage) can move the screencast to the new page and keep feeding
+  // the SAME onFrame / the same open SSE response.
+  s.activeViewer = { onFrame, quality, maxWidth, maxHeight }
+  await attachScreencastToCurrentPage(s)
+  return async function stop() {
+    s.activeViewer = null
+    await teardownScreencast(s)
   }
+}
+
+/** Stop + detach the current screencast CDP session and its keyframe timer. */
+async function teardownScreencast(s) {
   if (s.keyframeTimer) { clearInterval(s.keyframeTimer); s.keyframeTimer = null }
+  const cdp = s.screencastCdp
+  s.screencastCdp = null
+  if (!cdp) return
+  try { await cdp.send('Page.stopScreencast') } catch { /* ignore */ }
+  try { await cdp.detach() } catch { /* ignore */ }
+}
+
+/**
+ * (Re)attach the screencast + keyframe net to s.page for the CURRENT viewer
+ * (s.activeViewer). Called on viewer connect and again on every page retarget.
+ */
+async function attachScreencastToCurrentPage(s) {
+  const viewer = s.activeViewer
+  if (!viewer || !s.page) return
+  const { onFrame, quality, maxWidth, maxHeight } = viewer
+  const liveSessionId = s.__id
+  // Tear down any previous screencast / keyframe loop first (a prior viewer's,
+  // or the previous page's after a retarget).
+  await teardownScreencast(s)
 
   const cdp = await s.page.context().newCDPSession(s.page)
   s.screencastCdp = cdp
@@ -497,6 +526,9 @@ export async function attachScreencast(s, onFrame, { quality = KEYFRAME_QUALITY,
   // record metadata (for input coordinate scaling), mark the time (idle net),
   // and forward. A consumer error never kills the stream.
   const emit = (frame) => {
+    // A retarget may have superseded this attach; a stale emitter must not
+    // clobber the new page's frame metadata or keep touching the session.
+    if (s.screencastCdp !== cdp) return
     if (!frame || !frame.data) return
     s.lastFrameMeta = frame.metadata || s.lastFrameMeta
     lastFrameAt = Date.now()
@@ -545,12 +577,82 @@ export async function attachScreencast(s, onFrame, { quality = KEYFRAME_QUALITY,
   if (typeof s.keyframeTimer.unref === 'function') s.keyframeTimer.unref()
 
   log.info('cloud login screencast started', { liveSessionId, quality, maxWidth, maxHeight })
-  return async function stop() {
-    if (s.keyframeTimer) { clearInterval(s.keyframeTimer); s.keyframeTimer = null }
-    try { await cdp.send('Page.stopScreencast') } catch { /* ignore */ }
-    try { await cdp.detach() } catch { /* ignore */ }
-    if (s.screencastCdp === cdp) s.screencastCdp = null
+}
+
+/**
+ * Point the live session at a different page (the mirror FOLLOWS the user).
+ *
+ * THE BUG THIS FIXES (the MTSU "disconnects when I click sign in" report,
+ * verified live 2026-07-31): portal sign-in links routinely open the SSO login
+ * in a NEW WINDOW — mtsu.edu's "PipelineMT" opens login.microsoftonline.com as
+ * a POPUP. The screencast and Input.* CDP sessions were bound to the ORIGINAL
+ * page, which never changes, so the real login form existed invisibly
+ * server-side while the user's mirror sat frozen on the opener — every click
+ * "did nothing" and signing in was structurally impossible on any popup-based
+ * portal. Now the mirror retargets: the screencast moves to the new page over
+ * the SAME open SSE stream, and the input channel re-attaches lazily (the
+ * cached inputCdp is dropped; dispatchInput's existing reattach path rebuilds
+ * it against the new s.page).
+ */
+export async function retargetLivePage(s, page) {
+  if (!s || !page || s.page === page) return
+  s.page = page
+  // Frame metadata belongs to the OLD page's compositor; input scaling must not
+  // map coordinates through it while the new page's first frame is in flight.
+  s.lastFrameMeta = null
+  try { await s.inputCdp?.detach?.() } catch { /* already dead */ }
+  s.inputCdp = null
+  if (s.activeViewer) {
+    await attachScreencastToCurrentPage(s)
   }
+}
+
+/**
+ * Follow popups/new tabs for the life of a live session: when the portal opens
+ * a new window (SSO login, "apply here" tab), the mirror retargets to it; when
+ * that window closes (SAML popups close themselves after login), the mirror
+ * falls back to the most recent still-open page — typically the opener, now
+ * signed in. Best-effort by design: a context without events (tests, hosted
+ * cdp providers) simply never retargets.
+ */
+function wirePageFollow(record) {
+  const ctx = record.context
+  if (!ctx || typeof ctx.on !== 'function') return
+  const isClosed = (p) => { try { return typeof p.isClosed === 'function' ? p.isClosed() : false } catch { return true } }
+  // During teardown (cancel/complete/TTL) every page fires 'close' at once; a
+  // dead session must not chase CDP attaches against a closing browser.
+  const sessionLive = () => sessions.get(record.__id) === record
+  record.pageStack = [record.page]
+
+  const onPageClose = (page) => {
+    record.pageStack = record.pageStack.filter((p) => p !== page && !isClosed(p))
+    if (!sessionLive()) return
+    if (record.page !== page) return
+    const fallback = record.pageStack[record.pageStack.length - 1]
+    if (!fallback) return
+    log.info('cloud login popup closed — mirror falling back', { liveSessionId: record.__id })
+    retargetLivePage(record, fallback).catch((err) => {
+      log.warn('cloud login mirror fallback failed', { error: err?.message })
+    })
+  }
+
+  const follow = (page) => {
+    if (typeof page?.on === 'function') page.on('close', () => onPageClose(page))
+  }
+  follow(record.page)
+
+  ctx.on('page', (newPage) => {
+    try {
+      if (!sessionLive()) return
+      record.pageStack.push(newPage)
+      follow(newPage)
+      touchSession(record) // a popup opening is user-driven activity
+      log.info('cloud login popup opened — mirror following', { liveSessionId: record.__id })
+      retargetLivePage(record, newPage).catch((err) => {
+        log.warn('cloud login mirror retarget failed', { error: err?.message })
+      })
+    } catch { /* never break the context on a follow failure */ }
+  })
 }
 
 /**
