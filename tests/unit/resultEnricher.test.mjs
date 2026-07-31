@@ -66,6 +66,37 @@ test('canonicalResultForProfile returns canonical fields for a true housing matc
   assert.ok(result.opportunity.actionable_url || result.opportunity.url)
 })
 
+test('canonicalResultForProfile preserves an authoritative stored score under a trust downgrade', () => {
+  const profile = {
+    primary_type: 'individual',
+    state: 'OH',
+    needs: ['housing'],
+  }
+
+  const opp = {
+    id: 'stored-housing-review',
+    title: 'Ohio Housing Stability Program',
+    description: 'Housing stability and eviction prevention assistance for Ohio residents.',
+    application_url: 'https://ohio.gov/housing-assistance',
+    state: 'OH',
+    categories: '["housing"]',
+    keywords: '["housing", "eviction prevention"]',
+    record_origin: 'manual_import',
+    link_status: 'unverified',
+    match_score: 20,
+    match_decision: 'REVIEW',
+    match_reasons: ['housing'],
+    matched_needs: ['housing'],
+  }
+
+  const result = canonicalResultForProfile(profile, opp, { useStoredDecision: true })
+
+  assert.equal(result.display, true)
+  assert.equal(result.trust.downgrade, true)
+  assert.equal(result.opportunity.match_score, 20)
+  assert.equal(result.opportunity.match_decision, 'REVIEW')
+})
+
 test('canonicalizeOpportunityList sorts by canonical score and reports drops', () => {
   const profile = {
     primary_type: 'individual',

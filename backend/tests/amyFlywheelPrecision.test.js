@@ -27,6 +27,34 @@ function evaluateHomeschool(recommendations) {
   })
 }
 
+function evaluateSchoolRecall(school, recommendation) {
+  return evaluateDiscovery(
+    {
+      scenario_id: 'student-school-alias-v1',
+      category: 'student',
+      label: 'Named School Student',
+      expected: { state: 'OH' },
+    },
+    'p-school-alias',
+    {
+      run: {
+        run_id: 'amy-school-alias-test',
+        stored: 1,
+        sources: [],
+        recommendations: [recommendation],
+      },
+      persisted: { opportunities: 1 },
+      thesis: {
+        applicant_types: ['student', 'individual'],
+        needs: ['scholarship', 'education'],
+        is_student: true,
+        schools: [school],
+        location: { state: 'OH' },
+      },
+    },
+  )
+}
+
 describe('Amy canonical recommendation decisions', () => {
   it('does not relabel an explicit REVIEW as ACCEPT merely because its raw score is high', () => {
     const evaluation = evaluateHomeschool([
@@ -40,14 +68,25 @@ describe('Amy canonical recommendation decisions', () => {
     expect(evaluation.findings.some((finding) => finding.type === 'ineligible_match')).toBe(false)
   })
 
-  it('still uses score bands for legacy recommendations that carry no decision', () => {
+  it('reads the canonical match_decision alias used by persisted and display rows', () => {
     const evaluation = evaluateHomeschool([
-      { title: 'Tennessee HOPE Scholarship', sponsor: 'TSAC', match_score: 88 },
+      { title: 'Federal Pell Grant', sponsor: 'U.S. Department of Education', match_score: 38, match_decision: 'REVIEW' },
     ])
 
-    expect(evaluation.accepted).toBe(1)
-    expect(evaluation.ineligible_accepts).toBe(1)
-    expect(evaluation.findings.some((finding) => finding.type === 'ineligible_match')).toBe(true)
+    expect(evaluation.accepted).toBe(0)
+    expect(evaluation.review).toBe(1)
+    expect(evaluation.ineligible_accepts).toBe(0)
+  })
+
+  it('fails closed to REVIEW when a legacy recommendation has a high score but no canonical decision', () => {
+    const evaluation = evaluateHomeschool([
+      { title: 'Federal Pell Grant', sponsor: 'U.S. Department of Education', match_score: 38 },
+    ])
+
+    expect(evaluation.accepted).toBe(0)
+    expect(evaluation.review).toBe(1)
+    expect(evaluation.ineligible_accepts).toBe(0)
+    expect(evaluation.findings.some((finding) => finding.type === 'ineligible_match')).toBe(false)
   })
 
   it('keeps an explicit REJECT out of ACCEPT and REVIEW even when the raw score is high', () => {
@@ -63,34 +102,22 @@ describe('Amy canonical recommendation decisions', () => {
 
 describe('Amy flywheel discovery priorities', () => {
   it('recognizes a precise acronym-plus-campus alias in institution recall', () => {
-    const scenario = {
-      scenario_id: 'student-campus-alias-v1',
-      category: 'student',
-      label: 'Branch Campus Student',
-      expected: { state: 'MT' },
-    }
-    const evaluation = evaluateDiscovery(scenario, 'p-campus-alias', {
-      run: {
-        run_id: 'amy-campus-alias-test',
-        stored: 1,
-        sources: [],
-        recommendations: [
-          {
-            title: 'MSU Billings Foundation Scholarships',
-            sponsor: 'MSU Billings Foundation',
-            match_score: 82,
-            decision: 'ACCEPT',
-          },
-        ],
-      },
-      persisted: { opportunities: 1 },
-      thesis: {
-        applicant_types: ['student', 'individual'],
-        needs: ['scholarship', 'education'],
-        is_student: true,
-        schools: ['Montana State University Billings'],
-        location: { state: 'MT' },
-      },
+    const evaluation = evaluateSchoolRecall('Montana State University Billings', {
+      title: 'MSU Billings Foundation Scholarships',
+      sponsor: 'MSU Billings Foundation',
+      match_score: 82,
+      decision: 'ACCEPT',
+    })
+
+    expect(evaluation.findings.some((finding) => finding.type === 'institution_recall_miss')).toBe(false)
+  })
+
+  it('recognizes the protected Ohio State publication name for The Ohio State University', () => {
+    const evaluation = evaluateSchoolRecall('The Ohio State University', {
+      title: 'Ohio State Nursing Alumni Scholarship',
+      sponsor: 'Ohio State College of Nursing',
+      match_score: 18,
+      decision: 'ACCEPT',
     })
 
     expect(evaluation.findings.some((finding) => finding.type === 'institution_recall_miss')).toBe(false)
@@ -108,6 +135,20 @@ describe('Amy flywheel discovery priorities', () => {
 
     expect(queries[0]).toBe('"Middle Tennessee State University" scholarships')
     expect(queries.some((query) => query === 'Middle Tennessee State University scholarships')).toBe(true)
+  })
+
+  it('pins the Ohio State publication-name query inside the default cap', () => {
+    const queries = buildWebQueries({
+      applicant_types: ['student', 'individual'],
+      is_student: true,
+      schools: ['The Ohio State University'],
+      field_of_study: 'Nursing',
+      needs: ['scholarship', 'education', 'tuition'],
+      location: { city: 'Columbus', state: 'OH', county: 'Franklin County' },
+    }, { year: 2026, max: 6 })
+
+    expect(queries[0]).toBe('"The Ohio State University" scholarships')
+    expect(queries).toContain('"Ohio State" scholarships')
   })
 
   it('pins CDBG, HOME/CHDO, and CDFI searches for a community-development corporation', () => {
