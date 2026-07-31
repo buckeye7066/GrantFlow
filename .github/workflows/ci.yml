@@ -124,7 +124,10 @@ jobs:
       UPLOADS_DIR: /tmp/grantflow-smoke-uploads
       AUTH_JWT_SECRET: grantflow-ci-browser-smoke-secret-not-for-production
       ADMIN_TOKEN: grantflow-ci-browser-smoke-admin-token
-      RUNTIME_SECRETS_KEY: 4444444444444444444444444444444444444444444444444444444444444444
+      # MUST stay quoted: unquoted, YAML reads these 64 digits as a number and
+      # the value reaches Node as "4.444444444444445e+63", which is neither hex
+      # nor base64 — runtimeSecrets then aborts boot with a FATAL.
+      RUNTIME_SECRETS_KEY: '4444444444444444444444444444444444444444444444444444444444444444'
 
     steps:
       - name: Checkout
@@ -138,6 +141,12 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci --include=dev --include=optional
+
+      # The smoke suite drives the real Express server, which serves the SPA from
+      # dist/. Without this the server answers every route with
+      # ENOENT ... dist/index.html and all 10 specs fail on a blank page.
+      - name: Build frontend for the server to serve
+        run: npm run build
 
       - name: Prepare PostgreSQL schema
         run: |
