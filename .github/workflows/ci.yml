@@ -10,11 +10,15 @@ on:
 # superseded run kept burning four jobs' worth of Actions minutes toward the
 # spending cap that halted CI account-wide on 2026-07-29.
 #
-# main is deliberately EXCLUDED: each commit on main must keep its own
-# completed verification record, and cancelling those would leave gaps in
-# exactly the history the required checks exist to prove.
+# main is deliberately EXEMPT — via a UNIQUE group per commit, not merely
+# cancel-in-progress:false. A shared group still allows only ONE pending run,
+# so under rapid merges a third push DISPLACES the second commit's queued run
+# and that commit loses its verification record (observed live 2026-07-31:
+# 3d635fa4's main run was cancelled by the next merge minutes after this
+# guard shipped). A per-sha group means main runs never queue against each
+# other, so every commit on main keeps its own completed record.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
