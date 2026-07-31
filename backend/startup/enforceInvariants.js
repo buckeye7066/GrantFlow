@@ -57,6 +57,7 @@ import { reconcileDismissedGrants, reconcileDismissedMatches } from '../services
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
+import { CANONICAL_PROGRAMS, canonicalProgramTargetRepair } from '../config/canonicalProgramRegistry.js'
 import { PIPELINE_ACTIVE_STATUSES, WIDE_AWARD_RANGE_RATIO, pipelineValueSql } from '../config/pipelineValue.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
@@ -2245,6 +2246,94 @@ export async function enforceNoSearchEngineApplicationTargets(db) {
       log.info('nulled search-engine application targets + reclassified affected tasks', { scanned, repaired })
     }
     return { scanned, repaired, enforced: true }
+  })
+}
+
+/**
+ * INVARIANT: a row naming a REGISTERED canonical public program (TN Promise /
+ * TN Reconnect / TN HOPE — backend/config/canonicalProgramRegistry.js) sends
+ * the applicant to the program's OFFICIAL application URL.
+ *
+ * THE CLASS (the "TN Promise opens a Cleveland State paramedic page" report,
+ * 2026-07-31): the web lane reads a page that merely MENTIONS a famous
+ * program ("TN Promise eligible!") and emits an opportunity TITLED by the
+ * mention with the PAGE's url as application target. Measured in prod:
+ * 6 of 10 TN Promise rows pointed at program pages / blog posts; TN HOPE rows
+ * pointed at a College Confidential forum thread. Clicking "Open" on such a
+ * card launches a secure login for a page where the program cannot be applied
+ * for at all.
+ *
+ * Repair repoints application_url ONLY — source_url/evidence_url stay as
+ * honest provenance of where the mention was read. Linked pipeline grants
+ * still carrying the EXACT old junk target are echoed the fix (exact-match
+ * only, so a user-entered URL is never clobbered). Per-call gate:
+ * opportunityInserter.upsertFundingOpportunity. Idempotent: a repaired row's
+ * host is official, so it leaves the candidate set. LIKE prefilter per
+ * registry entry keeps the sweep off full scans; the registry's precise JS
+ * matcher is authoritative on every row before any write ("Bank of Hope
+ * Scholarship" must never be claimed by Tennessee HOPE).
+ * OVERRIDE: ON by default; ENFORCE_CANONICAL_PROGRAM_TARGETS=0 for count-only.
+ */
+const CANONICAL_PROGRAM_SWEEP_LIMIT = 500
+
+export async function enforceCanonicalProgramApplicationTargets(db) {
+  return runInvariant('canonical_program_application_targets', async () => {
+    const disabled = _parseBoolEnv(process.env.ENFORCE_CANONICAL_PROGRAM_TARGETS) === false
+    let scanned = 0
+    let repaired = 0
+    let grantsEchoed = 0
+
+    for (const program of CANONICAL_PROGRAMS) {
+      const likes = Array.isArray(program.likePrefilters) ? program.likePrefilters : []
+      if (likes.length === 0) continue
+      const where = likes.map(() => '(LOWER(title) LIKE ? OR LOWER(sponsor) LIKE ?)').join(' OR ')
+      const params = likes.flatMap((l) => [l, l])
+      let rows = []
+      try {
+        rows = await db.prepare(
+          `SELECT id, title, sponsor, application_url FROM funding_opportunities
+            WHERE ${where} LIMIT ${CANONICAL_PROGRAM_SWEEP_LIMIT}`,
+        ).all(...params)
+      } catch { rows = [] /* table/columns absent on this schema — skip */ }
+
+      for (const row of rows || []) {
+        const repair = canonicalProgramTargetRepair(row)
+        if (!repair) continue // not this program, or already on an official host
+        scanned += 1
+        if (disabled) continue
+        try {
+          const res = await db.prepare(
+            'UPDATE funding_opportunities SET application_url = ? WHERE id = ?',
+          ).run(repair.officialUrl, row.id)
+          repaired += changesOf(res) || 1
+          // Echo onto linked pipeline grants STILL carrying the exact old junk
+          // target. Exact-match only — a user-entered URL is never clobbered.
+          if (row.application_url) {
+            for (const col of ['application_url', 'url']) {
+              try {
+                const g = await db.prepare(
+                  `UPDATE grants SET ${col} = ? WHERE funding_opportunity_id = ? AND ${col} = ?`,
+                ).run(repair.officialUrl, row.id, row.application_url)
+                grantsEchoed += changesOf(g) || 0
+              } catch { /* column absent on this schema */ }
+            }
+          }
+        } catch (err) {
+          log.warn('canonical-program target repair failed (non-fatal)', { id: row.id, error: String(err?.message || err) })
+        }
+      }
+    }
+
+    if (disabled) {
+      if (scanned > 0) {
+        log.warn('canonical-program rows with off-program application targets present (repair DISABLED via ENFORCE_CANONICAL_PROGRAM_TARGETS=0)', { scanned })
+      }
+      return { scanned, repaired: 0, grantsEchoed: 0, enforced: false }
+    }
+    if (repaired > 0) {
+      log.info('repointed canonical-program application targets to official URLs', { scanned, repaired, grantsEchoed })
+    }
+    return { scanned, repaired, grantsEchoed, enforced: true }
   })
 }
 
@@ -5598,6 +5687,13 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
   steps.push(await enforceNoSearchEngineApplicationTargets(db))
+  // Canonical-program net: a row naming a registered public program (TN
+  // Promise / Reconnect / HOPE) must send the applicant to the program's
+  // OFFICIAL application URL — never the program page / blog post / forum
+  // thread that happened to mention it (the "TN Promise opens a paramedic
+  // page" class). Runs right after URL hygiene so both target repairs land
+  // the same boot.
+  steps.push(await enforceCanonicalProgramApplicationTargets(db))
   // Verification-honesty net: clear `last_verified_at` timestamps that the
   // crawler-os source-capture path stamped from the SOURCE page's fetched_at
   // (never a real target check), so the recurring verifier stops skipping them

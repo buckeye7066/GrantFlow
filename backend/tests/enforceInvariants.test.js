@@ -45,6 +45,7 @@ import {
   enforceIndividualOrgSectionConflict,
   enforceProfileIdIntegrity,
   enforceNoSearchEngineApplicationTargets,
+  enforceCanonicalProgramApplicationTargets,
   enforceApplicationUrlRescue,
   enforceImportedStatusHonesty,
   enforceAmountEnrichment,
@@ -1072,7 +1073,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    expect(summary.ran).toBe(35)
+    expect(summary.ran).toBe(36)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1110,6 +1111,10 @@ describe('enforceInvariants — runner', () => {
       // tasks for purged sources closed (the Robert White 41-stop class).
       'hamilton_stop_recheck',
       'no_search_engine_application_targets',
+      // Right after URL hygiene: a registered canonical program's application
+      // target is repointed to its official URL (the "TN Promise opens a
+      // paramedic page" class) the same boot the hygiene net runs.
+      'canonical_program_application_targets',
       'live_crawl_verified_at_honesty',
       'application_url_rescue',
       'grant_score_backfill',
@@ -2078,6 +2083,158 @@ describe('enforceNoSearchEngineApplicationTargets', () => {
     const res = await enforceNoSearchEngineApplicationTargets(bare)
     expect(res.ok).toBe(true)
     expect(res.repaired).toBe(0)
+  })
+})
+
+describe('enforceCanonicalProgramApplicationTargets', () => {
+  // The real prod rows behind the 2026-07-31 report: "TN Promise Scholarship"
+  // extracted from a Cleveland State PARAMEDIC program page, with the page's
+  // URL persisted as the application target — clicking "Open" launched a
+  // secure login for a page where TN Promise cannot be applied for at all.
+  const PARAMEDIC_URL = 'https://www.clevelandstatecc.edu/academic-programs/healthcare/paramedic/'
+  const OFFICIAL_TN_PROMISE = 'https://www.tnpromise.gov/'
+
+  function makeProgramDb() {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        sponsor TEXT,
+        application_url TEXT,
+        source_url TEXT
+      );
+      CREATE TABLE grants (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT,
+        title TEXT,
+        funding_opportunity_id TEXT,
+        application_url TEXT,
+        url TEXT
+      );
+    `)
+    return db
+  }
+
+  afterEach(() => {
+    delete process.env.ENFORCE_CANONICAL_PROGRAM_TARGETS
+  })
+
+  it('repoints a TN Promise row extracted from an unrelated program page to the official URL — evidence stays untouched', async () => {
+    const db = makeProgramDb()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url)
+       VALUES ('fo-tnp', 'TN Promise Scholarship', 'Tennessee Promise', ?, ?)`,
+    ).run(PARAMEDIC_URL, PARAMEDIC_URL)
+
+    const res = await enforceCanonicalProgramApplicationTargets(db)
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBe(1)
+
+    const fo = db.prepare("SELECT * FROM funding_opportunities WHERE id = 'fo-tnp'").get()
+    expect(fo.application_url).toBe(OFFICIAL_TN_PROMISE)
+    // Where we READ the mention stays honest provenance.
+    expect(fo.source_url).toBe(PARAMEDIC_URL)
+  })
+
+  it('echoes the fix onto linked grants still carrying the exact old junk target — never a user-entered URL', async () => {
+    const db = makeProgramDb()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url)
+       VALUES ('fo-tnp', 'TN Promise Scholarship', 'Tennessee Promise', ?, ?)`,
+    ).run(PARAMEDIC_URL, PARAMEDIC_URL)
+    db.prepare(
+      `INSERT INTO grants (id, profile_id, title, funding_opportunity_id, application_url, url)
+       VALUES ('g-junk', 'pA', 'TN Promise Scholarship', 'fo-tnp', ?, ?)`,
+    ).run(PARAMEDIC_URL, PARAMEDIC_URL)
+    db.prepare(
+      `INSERT INTO grants (id, profile_id, title, funding_opportunity_id, application_url, url)
+       VALUES ('g-user', 'pB', 'TN Promise Scholarship', 'fo-tnp', 'https://my-counselor-link.example.org/tnp', 'https://my-counselor-link.example.org/tnp')`,
+    ).run()
+
+    await enforceCanonicalProgramApplicationTargets(db)
+
+    const junk = db.prepare("SELECT * FROM grants WHERE id = 'g-junk'").get()
+    expect(junk.application_url).toBe(OFFICIAL_TN_PROMISE)
+    expect(junk.url).toBe(OFFICIAL_TN_PROMISE)
+    const user = db.prepare("SELECT * FROM grants WHERE id = 'g-user'").get()
+    expect(user.application_url).toBe('https://my-counselor-link.example.org/tnp')
+  })
+
+  it('never claims a same-word STRANGER (Bank of Hope / AGC Hope), and leaves official-host rows exactly alone', async () => {
+    const db = makeProgramDb()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url)
+       VALUES ('fo-bank', 'Bank of Hope Scholarship', 'Bank of Hope', 'https://www.bankofhope.com/scholarship', 'https://www.bankofhope.com/scholarship')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url)
+       VALUES ('fo-agc', 'AGC Hope Scholarship', 'AGC Scholarship Foundation', 'https://familyequality.org/whatever', 'https://familyequality.org/whatever')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url)
+       VALUES ('fo-official', 'Tennessee Promise', 'TSAC', 'https://www.tnachieves.org/tn-promise', 'https://www.tnachieves.org/tn-promise')`,
+    ).run()
+
+    const res = await enforceCanonicalProgramApplicationTargets(db)
+    expect(res.scanned).toBe(0)
+    expect(res.repaired).toBe(0)
+    expect(db.prepare("SELECT application_url FROM funding_opportunities WHERE id = 'fo-bank'").get().application_url)
+      .toBe('https://www.bankofhope.com/scholarship')
+    expect(db.prepare("SELECT application_url FROM funding_opportunities WHERE id = 'fo-agc'").get().application_url)
+      .toBe('https://familyequality.org/whatever')
+    // tnachieves.org is an official TN Promise property — untouched.
+    expect(db.prepare("SELECT application_url FROM funding_opportunities WHERE id = 'fo-official'").get().application_url)
+      .toBe('https://www.tnachieves.org/tn-promise')
+  })
+
+  it('a TN HOPE row pointing at a forum thread is repointed (the prod College Confidential row)', async () => {
+    const db = makeProgramDb()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url)
+       VALUES ('fo-hope', 'TN HOPE Scholarship', 'State of Tennessee', 'https://talk.collegeconfidential.com/t/some-thread/3685739', 'https://talk.collegeconfidential.com/t/some-thread/3685739')`,
+    ).run()
+
+    const res = await enforceCanonicalProgramApplicationTargets(db)
+    expect(res.repaired).toBe(1)
+    expect(db.prepare("SELECT application_url FROM funding_opportunities WHERE id = 'fo-hope'").get().application_url)
+      .toBe('https://www.tn.gov/collegepays')
+  })
+
+  it('count-only when ENFORCE_CANONICAL_PROGRAM_TARGETS=0; idempotent otherwise; tolerant of missing tables', async () => {
+    const db = makeProgramDb()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, application_url, source_url)
+       VALUES ('fo-tnp', 'TN Promise Scholarship', 'Tennessee Promise', ?, ?)`,
+    ).run(PARAMEDIC_URL, PARAMEDIC_URL)
+
+    process.env.ENFORCE_CANONICAL_PROGRAM_TARGETS = '0'
+    const counted = await enforceCanonicalProgramApplicationTargets(db)
+    expect(counted.enforced).toBe(false)
+    expect(counted.scanned).toBe(1)
+    expect(counted.repaired).toBe(0)
+    expect(db.prepare("SELECT application_url FROM funding_opportunities WHERE id = 'fo-tnp'").get().application_url).toBe(PARAMEDIC_URL)
+
+    delete process.env.ENFORCE_CANONICAL_PROGRAM_TARGETS
+    const first = await enforceCanonicalProgramApplicationTargets(db)
+    expect(first.repaired).toBe(1)
+    const second = await enforceCanonicalProgramApplicationTargets(db)
+    expect(second.scanned).toBe(0)
+    expect(second.repaired).toBe(0)
+
+    const bare = new Database(':memory:')
+    const res = await enforceCanonicalProgramApplicationTargets(bare)
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBe(0)
+  })
+
+  it('wiring tripwire: the inserter (per-call gate) consults canonicalProgramTargetRepair', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const { fileURLToPath } = await import('node:url')
+    const path = await import('node:path')
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    const src = await readFile(path.join(here, '..', 'services', 'opportunityInserter.js'), 'utf8')
+    expect(src).toContain('canonicalProgramTargetRepair')
   })
 })
 
