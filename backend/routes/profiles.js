@@ -1250,14 +1250,27 @@ router.post('/', createProfileLimiter, async (req, res) => {
   // behind a reverse proxy. Admins may explicitly set user_id to create an owned profile for a user.
   const profileUserId = isAdmin ? (user_id || null) : userId
 
-  // ux_profiles_user_id: one owned profile per user (prod Postgres enforces
-  // it; the fresh-DB SQLite schema does not, so this pre-check IS the behavior
-  // of record). Signup already auto-creates a fallback shell profile (auth
-  // email verify), so an explicit "create profile" from a user who owns one is
-  // the NORMAL first-run flow — not an error. Adopt the existing profile:
-  // apply the submitted identity fields to it and return it as the created
-  // profile. Before this, prod answered the second INSERT with a raw
-  // duplicate-key 500 (2026-07-13). status is never changed on adopt (owner
+  // MULTI-PROFILE OWNERSHIP (owner directive 2026-07-31, migration 160/0164):
+  // one login may own many profiles — a person applies as an individual AND
+  // runs a farm/business/nonprofit, or has students in school. The old
+  // ux_profiles_user_id index (one owned profile per user) is gone; its
+  // anti-duplicate job now lives in ux_profiles_user_display
+  // (user_id, LOWER(display_name)) and in the adopt rules below.
+  //
+  // An explicit create ADOPTS an existing owned profile only when it is
+  // plainly the same intent, in priority order:
+  //   1. SAME NAME (case-insensitive) — a re-submitted/retried create must
+  //      converge on the same row, never mint a twin (the 2026-07-13
+  //      duplicate-key-500 class).
+  //   2. THE SIGNUP SHELL — auth email-verify auto-creates a sectionless
+  //      fallback profile for every new user, so the user's FIRST explicit
+  //      create should fill that shell rather than orphan it. A profile that
+  //      has any profile_sections rows went through a real create/adopt and
+  //      is somebody's actual applicant identity — it is NEVER adopted by a
+  //      differently-named create (that was the pre-160 corruption: creating
+  //      "Anita's Farm" RENAMED her personal profile).
+  // Anything else creates an additional owned profile, bounded by
+  // MAX_OWNED_PROFILES. status is never changed on adopt (owner
   // suspend/ban tooling must not be undone by a re-submitted create) and tags
   // are only overwritten when explicitly provided.
   const adoptOwnedProfile = async (existingId) => {
@@ -1291,14 +1304,45 @@ router.post('/', createProfileLimiter, async (req, res) => {
     }
   }
 
+  const MAX_OWNED_PROFILES = Math.max(1, Number(process.env.MAX_OWNED_PROFILES) || 12)
+
   let adoptedExisting = false
   let profileId = null
   if (profileUserId) {
-    const existing = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').get(profileUserId)
-    if (existing?.id) {
-      profileId = existing.id
+    const owned = await req.db
+      .prepare(
+        `SELECT p.id, p.display_name
+           FROM profiles p
+          WHERE p.user_id = ?
+          ORDER BY p.created_at ASC, p.id ASC`,
+      )
+      .all(profileUserId)
+    const wantedName = display_name.trim().toLowerCase()
+    const sameName = owned.find((r) => String(r.display_name || '').trim().toLowerCase() === wantedName)
+    // Shell detection queries profile_sections PER PROFILE with a literal
+    // profile_id predicate: the safe-SQL guard (assertProfileScopedSql)
+    // rejects any profile_sections SELECT without that exact scope shape, so
+    // a correlated EXISTS in the owned-profiles query 500s on the real DB
+    // layer. Owned profiles are capped (MAX_OWNED_PROFILES), so this stays a
+    // handful of indexed point lookups.
+    let shell = null
+    if (!sameName) {
+      for (const r of owned) {
+        const hasAnySection = await req.db
+          .prepare('SELECT 1 AS one FROM profile_sections WHERE profile_id = ? LIMIT 1')
+          .get(r.id)
+        if (!hasAnySection) { shell = r; break }
+      }
+    }
+    const target = sameName || shell
+    if (target?.id) {
+      profileId = target.id
       adoptedExisting = true
       await adoptOwnedProfile(profileId)
+    } else if (!isAdmin && owned.length >= MAX_OWNED_PROFILES) {
+      return res.status(409).json({
+        error: `Profile limit reached (${MAX_OWNED_PROFILES}). Delete an unused profile or contact support.`,
+      })
     }
   }
 
@@ -1338,9 +1382,11 @@ router.post('/', createProfileLimiter, async (req, res) => {
         }
       })
     } catch (err) {
-      // Concurrent-create race: two requests passed the pre-check above and
-      // this one lost the unique index (Postgres 23505 / SQLite UNIQUE).
-      // Adopt the winner's row instead of surfacing a 500.
+      // Concurrent-create race: two SAME-NAME requests passed the pre-check
+      // above and this one lost ux_profiles_user_display (Postgres 23505 /
+      // SQLite UNIQUE). Adopt the winner's row instead of surfacing a 500.
+      // Differently-named creates no longer collide — each gets its own row
+      // by design (multi-profile ownership, migration 160/0164).
       const msg = String(err?.message || '')
       const isUniqueViolation =
         err?.code === '23505' ||
@@ -1348,7 +1394,9 @@ router.post('/', createProfileLimiter, async (req, res) => {
         msg.includes('UNIQUE constraint failed')
       const winner =
         isUniqueViolation && profileUserId
-          ? await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').get(profileUserId)
+          ? await req.db
+              .prepare('SELECT id FROM profiles WHERE user_id = ? AND LOWER(display_name) = LOWER(?)')
+              .get(profileUserId, display_name)
           : null
       if (!winner?.id) throw err
       profileId = winner.id
@@ -2257,8 +2305,25 @@ router.put('/:id', async (req, res) => {
   }
 
   if (updates.length > 0) {
-    const stmt = req.db.prepare(`UPDATE profiles SET ${updates.join(', ')} WHERE id = ?`)
-    await stmt.run(...values, id)
+    try {
+      const stmt = req.db.prepare(`UPDATE profiles SET ${updates.join(', ')} WHERE id = ?`)
+      await stmt.run(...values, id)
+    } catch (err) {
+      // ux_profiles_user_display: a user may not own two profiles with the
+      // same (case-insensitive) name. Renaming onto a sibling's name is a
+      // user-visible conflict, not a server fault — answer 409, never 500.
+      const msg = String(err?.message || '')
+      const isUniqueViolation =
+        err?.code === '23505' ||
+        msg.includes('duplicate key value') ||
+        msg.includes('UNIQUE constraint failed')
+      if (isUniqueViolation && display_name !== undefined) {
+        return res.status(409).json({
+          error: 'You already have another profile with this name. Choose a different name.',
+        })
+      }
+      throw err
+    }
   }
 
   if (display_name !== undefined) {
