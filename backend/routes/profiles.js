@@ -1311,18 +1311,29 @@ router.post('/', createProfileLimiter, async (req, res) => {
   if (profileUserId) {
     const owned = await req.db
       .prepare(
-        `SELECT p.id, p.display_name,
-                EXISTS (SELECT 1 FROM profile_sections ps WHERE ps.profile_id = p.id) AS has_sections
+        `SELECT p.id, p.display_name
            FROM profiles p
           WHERE p.user_id = ?
           ORDER BY p.created_at ASC, p.id ASC`,
       )
       .all(profileUserId)
-    // SQLite answers EXISTS with 0/1, Postgres with a boolean.
-    const hasSections = (v) => v === true || v === 1 || v === '1' || v === 't'
     const wantedName = display_name.trim().toLowerCase()
     const sameName = owned.find((r) => String(r.display_name || '').trim().toLowerCase() === wantedName)
-    const shell = owned.find((r) => !hasSections(r.has_sections))
+    // Shell detection queries profile_sections PER PROFILE with a literal
+    // profile_id predicate: the safe-SQL guard (assertProfileScopedSql)
+    // rejects any profile_sections SELECT without that exact scope shape, so
+    // a correlated EXISTS in the owned-profiles query 500s on the real DB
+    // layer. Owned profiles are capped (MAX_OWNED_PROFILES), so this stays a
+    // handful of indexed point lookups.
+    let shell = null
+    if (!sameName) {
+      for (const r of owned) {
+        const hasAnySection = await req.db
+          .prepare('SELECT 1 AS one FROM profile_sections WHERE profile_id = ? LIMIT 1')
+          .get(r.id)
+        if (!hasAnySection) { shell = r; break }
+      }
+    }
     const target = sameName || shell
     if (target?.id) {
       profileId = target.id

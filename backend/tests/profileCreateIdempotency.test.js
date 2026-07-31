@@ -100,6 +100,8 @@ function wrapDb(raw, { hidePrecheckOnce = false } = {}) {
       const stmt = raw.prepare(sql)
       const isOwnedPrecheck =
         normalized.startsWith('select p.id, p.display_name') && normalized.includes('where p.user_id = ?')
+      // (the per-profile shell check runs profile_id-scoped SELECTs against
+      // profile_sections; those are never blinded)
       return {
         get: (...args) => stmt.get(...args),
         all: (...args) => {
