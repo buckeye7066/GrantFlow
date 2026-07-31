@@ -125,7 +125,7 @@
     "acorn": "^8.17.0",
     "axios": "^1.18.1",
     "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.1",
     "cheerio": "^1.2.0",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
