@@ -46,6 +46,36 @@ test('ordinary mutations are bounded per authenticated user', async () => {
   assert.equal(second.res.body.rate_limit_policy, 'mutation')
 })
 
+test('cloud-login live input/stream ride the real-time lane, not the 25/10min automation bucket', () => {
+  const env = {} // bypass the deterministic-test-harness null so classification is observable
+  const input = classifyApiRatePolicy(
+    { path: '/api/hamilton/automation/sessions/cloud-login/cl_abc123/input', method: 'POST' },
+    env,
+  )
+  assert.equal(input.name, 'live_interaction')
+  // A mousemove flood (~60 events/s for a few seconds) must fit the budget —
+  // the automation bucket's 25 died on the first mouse movement.
+  assert.ok(input.max >= 600, `live input max ${input.max} would still 429 on a mouse move`)
+  assert.equal(input.shared, false)
+
+  const stream = classifyApiRatePolicy(
+    { path: '/api/hamilton/automation/sessions/cloud-login/cl_abc123/stream', method: 'GET' },
+    env,
+  )
+  assert.equal(stream.name, 'live_interaction')
+
+  // The rest of the cloud-login lifecycle (start/complete/cancel) and all other
+  // hamilton routes stay in the automation bucket.
+  for (const p of [
+    '/api/hamilton/automation/sessions/cloud-login/start',
+    '/api/hamilton/automation/sessions/cloud-login/cl_abc123/complete',
+    '/api/hamilton/automation/sessions/cloud-login/cl_abc123/cancel',
+    '/api/hamilton/automation/readiness',
+  ]) {
+    assert.equal(classifyApiRatePolicy({ path: p, method: 'POST' }, env).name, 'automation', p)
+  }
+})
+
 test('cost limits are shared through the database across middleware instances', async () => {
   resetApiRateLimitStateForTests()
   const db = new SqliteDb(':memory:')

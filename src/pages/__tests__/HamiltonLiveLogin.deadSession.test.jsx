@@ -195,6 +195,68 @@ describe('HamiltonLiveLogin — dead session must not masquerade as a live porta
   })
 })
 
+describe('HamiltonLiveLogin — input relay is coalesced (the rate-budget flood fix)', () => {
+  it('a 60-event mousemove burst collapses to a few coalesced POSTs, ending on the LATEST position', async () => {
+    const { container } = renderLivePage()
+    await paintFrame(streamHandlers)
+    const canvas = container.querySelector('canvas')
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1280, height: 900, right: 1280, bottom: 900, x: 0, y: 0 })
+
+    for (let i = 0; i < 60; i++) {
+      fireEvent.mouseMove(canvas, { clientX: 100 + i, clientY: 200 })
+    }
+    // let the trailing coalesce timer flush
+    await new Promise((r) => setTimeout(r, 150))
+
+    const moves = apiMocks.sendCloudLoginInput.mock.calls
+      .map(([, ev]) => ev)
+      .filter((ev) => ev.type === 'mousemove')
+    // OLD behavior: 60 events = 60 POSTs — which burned the entire API rate
+    // budget while the user merely moved toward the sign-in button.
+    expect(moves.length).toBeLessThanOrEqual(5)
+    expect(moves.length).toBeGreaterThanOrEqual(1)
+    // Latest-wins: the final delivered position is the burst's last one.
+    expect(moves[moves.length - 1].x).toBeCloseTo(159 / 1280, 5)
+  })
+
+  it('mousedown flushes the pending coalesced move FIRST, so the press lands where the page last saw the cursor', async () => {
+    const { container } = renderLivePage()
+    await paintFrame(streamHandlers)
+    const canvas = container.querySelector('canvas')
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1280, height: 900, right: 1280, bottom: 900, x: 0, y: 0 })
+
+    fireEvent.mouseMove(canvas, { clientX: 100, clientY: 100 }) // immediate
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 500 }) // coalesced-pending
+    fireEvent.mouseDown(canvas, { clientX: 500, clientY: 500, button: 0 })
+
+    await waitFor(() => {
+      const types = apiMocks.sendCloudLoginInput.mock.calls.map(([, ev]) => ev.type)
+      expect(types).toContain('mousedown')
+    })
+    const evs = apiMocks.sendCloudLoginInput.mock.calls.map(([, ev]) => ev)
+    const downIdx = evs.findIndex((ev) => ev.type === 'mousedown')
+    const lastMoveBeforeDown = evs.slice(0, downIdx).reverse().find((ev) => ev.type === 'mousemove')
+    expect(lastMoveBeforeDown).toBeTruthy()
+    expect(lastMoveBeforeDown.x).toBeCloseTo(500 / 1280, 5)
+  })
+
+  it('repeated 429s surface the HONEST rate-limited message with Reconnect — never the generic dead-connection one', async () => {
+    const limited = Object.assign(new Error('rate_limit_exceeded'), { status: 429 })
+    apiMocks.sendCloudLoginInput.mockRejectedValue(limited)
+
+    const { container } = renderLivePage()
+    await paintFrame(streamHandlers)
+
+    clickCanvas(container) // mousedown+mouseup = 2 failed posts
+    clickCanvas(container) // streak crosses the 3-failure threshold
+
+    expect(await screen.findByText(/rate-limited this window/i)).toBeTruthy()
+    // Recoverable, not terminal: the session is still alive server-side.
+    expect(screen.getByRole('button', { name: /reconnect/i })).toBeTruthy()
+    expect(screen.queryByText(/live connection ended/i)).toBeNull()
+  })
+})
+
 describe('HamiltonLiveLogin — CDP modifiers ride along with input', () => {
   it('shift-click posts modifiers=8; ctrl+key posts keydown modifiers=2 and suppresses the char event', async () => {
     const { container } = renderLivePage()

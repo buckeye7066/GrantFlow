@@ -162,6 +162,9 @@ export default function HamiltonLiveLogin() {
     if (c === 'input_failed') {
       return "The live page stopped accepting your clicks and typing. Reconnect to retry; if it keeps failing, start a new secure login."
     }
+    if (c === 'stream_http_429' || c === 'input_rate_limited') {
+      return 'GrantFlow briefly rate-limited this window. Wait about a minute, then click Reconnect — your login session is still alive on the server.'
+    }
     return 'The live connection ended. If you had already finished logging in, your session may be captured — otherwise reconnect or start a new secure login.'
   }, [])
 
@@ -205,6 +208,17 @@ export default function HamiltonLiveLogin() {
           setStreamError((prev) => prev || `input_http_${status}`)
           return
         }
+        if (status === 429) {
+          // Rate-limited: the session is alive server-side; tell the user to
+          // pause instead of the generic "connection ended". (The backend now
+          // classifies live input on its own real-time lane, so this should be
+          // rare — but a 429 must never masquerade as a dead connection.)
+          inputFailStreakRef.current += 1
+          if (inputFailStreakRef.current >= 3) {
+            setStreamError((prev) => prev || 'input_rate_limited')
+          }
+          return
+        }
         inputFailStreakRef.current += 1
         // A lone blip (one dropped POST) shouldn't alarm; a streak means the
         // input channel is really down while the mirror may still look alive.
@@ -214,17 +228,81 @@ export default function HamiltonLiveLogin() {
       })
   }, [liveSessionId])
 
+  // COALESCED relays. A raw mousemove fires ~60×/s and each event is one
+  // authenticated POST — an unthrottled relay burned hundreds of requests just
+  // moving the mouse toward the sign-in button (which is also what blew the
+  // API rate budget and killed the whole window — the 2026-07-31 MTSU report).
+  // Mousemove keeps only the LATEST position (~20 POSTs/s max, plenty for
+  // hover fidelity); wheel ACCUMULATES deltas so no scroll distance is lost.
+  // mousedown/mouseup/keys stay immediate — a click must never feel throttled —
+  // and any pending move is flushed first so the press lands where the page
+  // last saw the cursor.
+  const INPUT_COALESCE_MS = 50
+  const pendingMoveRef = useRef(null)
+  const moveTimerRef = useRef(null)
+  const lastMoveSentAtRef = useRef(0)
+  const pendingWheelRef = useRef(null)
+  const wheelTimerRef = useRef(null)
+
+  const flushPendingMove = useCallback(() => {
+    if (moveTimerRef.current) { clearTimeout(moveTimerRef.current); moveTimerRef.current = null }
+    const ev = pendingMoveRef.current
+    pendingMoveRef.current = null
+    if (ev) { lastMoveSentAtRef.current = Date.now(); post(ev) }
+  }, [post])
+
+  const postMove = useCallback((ev) => {
+    const elapsed = Date.now() - lastMoveSentAtRef.current
+    if (elapsed >= INPUT_COALESCE_MS && !moveTimerRef.current) {
+      lastMoveSentAtRef.current = Date.now()
+      post(ev)
+      return
+    }
+    pendingMoveRef.current = ev // latest wins
+    if (!moveTimerRef.current) {
+      moveTimerRef.current = setTimeout(() => {
+        moveTimerRef.current = null
+        flushPendingMove()
+      }, Math.max(0, INPUT_COALESCE_MS - elapsed))
+    }
+  }, [post, flushPendingMove])
+
   const onMouseEvent = useCallback((type) => (e) => {
     const n = normalizedFromEvent(e)
     if (!n) return
-    post({ type, x: n.x, y: n.y, button: e.button || 0, modifiers: cdpModifiers(e) })
-  }, [normalizedFromEvent, post])
+    const ev = { type, x: n.x, y: n.y, button: e.button || 0, modifiers: cdpModifiers(e) }
+    if (type === 'mousemove') { postMove(ev); return }
+    flushPendingMove()
+    post(ev)
+  }, [normalizedFromEvent, post, postMove, flushPendingMove])
 
   const onWheel = useCallback((e) => {
     const n = normalizedFromEvent(e)
     if (!n) return
-    post({ type: 'wheel', x: n.x, y: n.y, deltaX: e.deltaX, deltaY: e.deltaY, modifiers: cdpModifiers(e) })
+    const prev = pendingWheelRef.current
+    pendingWheelRef.current = {
+      type: 'wheel',
+      x: n.x,
+      y: n.y,
+      deltaX: (prev?.deltaX || 0) + e.deltaX,
+      deltaY: (prev?.deltaY || 0) + e.deltaY,
+      modifiers: cdpModifiers(e),
+    }
+    if (!wheelTimerRef.current) {
+      wheelTimerRef.current = setTimeout(() => {
+        wheelTimerRef.current = null
+        const ev = pendingWheelRef.current
+        pendingWheelRef.current = null
+        if (ev) post(ev)
+      }, INPUT_COALESCE_MS)
+    }
   }, [normalizedFromEvent, post])
+
+  // Never leave a coalesce timer firing after unmount.
+  useEffect(() => () => {
+    if (moveTimerRef.current) clearTimeout(moveTimerRef.current)
+    if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current)
+  }, [])
 
   // Touch → tap maps to a synthetic 'click' (the backend expands it into
   // move+press+release) so the page is usable on a phone. Desktop clicks ride
