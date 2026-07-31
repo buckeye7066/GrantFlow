@@ -14,6 +14,47 @@ import {
   scoreToMatchLabel,
 } from "../matchDisplayThresholds.js"
 
+import * as backendThresholds from "../../../backend/config/matchThresholds.js"
+
+/**
+ * Drift tripwire.
+ *
+ * matchDisplayThresholds.js has carried the comment "These MUST stay in sync
+ * with backend/config/matchThresholds.js" since it was written, with nothing
+ * enforcing it. Two hand-maintained copies of the same numbers is precisely
+ * the shape this repo's guidelines say to guard mechanically: a recalibration
+ * that updated one file and not the other would leave the backend bucketing a
+ * match one way while the card in front of the user read another, and every
+ * test would still pass.
+ *
+ * Caught for real on 2026-07-31: STRONG_MATCH_SCORE 14 -> 17 had to be applied
+ * in BOTH files plus MATCH_DISPLAY_TIERS.excellent.
+ */
+describe("frontend/backend threshold parity", () => {
+  it.each([
+    ["AUTO_ADD_SCORE", AUTO_ADD_SCORE],
+    ["STRONG_MATCH_SCORE", STRONG_MATCH_SCORE],
+    ["GOOD_MATCH_SCORE", GOOD_MATCH_SCORE],
+    ["MODERATE_MATCH_SCORE", MODERATE_MATCH_SCORE],
+  ])("%s matches backend/config/matchThresholds.js", (name, frontendValue) => {
+    expect(frontendValue).toBe(backendThresholds[name])
+  })
+
+  it("keeps the excellent display tier ON the strong-match bar", () => {
+    // The "Excellent Match" label and the "Best matches" bucket are the same
+    // claim to the user; they must not be able to disagree.
+    expect(MATCH_DISPLAY_TIERS.excellent).toBe(STRONG_MATCH_SCORE)
+    expect(MATCH_DISPLAY_TIERS.good).toBe(GOOD_MATCH_SCORE)
+  })
+
+  it("keeps the tiers strictly ordered", () => {
+    const { excellent, good, fair, potential } = MATCH_DISPLAY_TIERS
+    expect(excellent).toBeGreaterThan(good)
+    expect(good).toBeGreaterThan(fair)
+    expect(fair).toBeGreaterThan(potential)
+  })
+})
+
 describe("scoreToMatchLabel", () => {
   // Regression for the cross-component label conflict: a given score must read
   // as ONE canonical label on every surface. Data-point scale (2026-07-06
