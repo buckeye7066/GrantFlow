@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { toast } from '@/components/ui/use-toast'
 import { apiFetch } from '@/api/client'
+import { humanizeMatchReason } from '@/utils/reasonText'
 
 /**
  * RobertRecommendationDetailsModal
@@ -140,7 +141,10 @@ export default function RobertRecommendationDetailsModal({ open, recommendation,
             <div>
               <div className="font-medium">Why it appears relevant</div>
               <ul className="list-disc list-inside text-muted-foreground">
-                {reasons.slice(0, 6).map((r, i) => <li key={i}>{r}</li>)}
+                {reasons.slice(0, 6).map((r, i) => {
+                  const text = humanizeMatchReason(r)
+                  return text ? <li key={i}>{text}</li> : null
+                })}
               </ul>
             </div>
           )}

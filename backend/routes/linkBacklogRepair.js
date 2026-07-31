@@ -1,8 +1,10 @@
 import express from 'express'
 import {
   brokenDirectSummary,
+  estimateRepairLockTtlMs,
   reclassifyBrokenResources,
   repairBrokenDirectBatch,
+  scheduleRetryableBrokenRows,
 } from '../services/linkBacklogRepairService.js'
 import { runWithSchedulerLock } from '../services/schedulerLock.js'
 import { createLogger } from '../utils/logger.js'
@@ -10,7 +12,7 @@ import { createLogger } from '../utils/logger.js'
 const router = express.Router()
 const log = createLogger('route:link-backlog-repair')
 const LOCK_NAME = 'link-verification'
-const LOCK_TTL_MS = 30 * 60 * 1000
+const RECLASSIFY_LOCK_TTL_MS = 30 * 60 * 1000
 
 function requireAdmin(req, res) {
   if (req.ctx?.isAdmin === true) return true
@@ -58,7 +60,7 @@ router.post('/reclassify', async (req, res) => {
     // same durable lease as recurring verification, preventing row rewrite races.
     const result = await runWithSchedulerLock(req.db, {
       lockName: LOCK_NAME,
-      ttlMs: LOCK_TTL_MS,
+      ttlMs: RECLASSIFY_LOCK_TTL_MS,
       logger: log,
       acquiredBy: `admin-link-reclassify:${actor}`,
     }, async () => {
@@ -81,12 +83,7 @@ router.post('/run', async (req, res) => {
   try {
     const cycleId = cleanCycleId(req.body?.cycle_id)
     const actor = req.ctx?.email || req.ctx?.userId || 'admin'
-    const result = await runWithSchedulerLock(req.db, {
-      lockName: LOCK_NAME,
-      ttlMs: LOCK_TTL_MS,
-      logger: log,
-      acquiredBy: cycleId ? `admin-link-repair:${cycleId}` : `admin-link-repair:${actor}`,
-    }, () => repairBrokenDirectBatch(req.db, {
+    const repairOptions = {
       limit: req.body?.limit,
       concurrency: req.body?.concurrency,
       timeoutMs: req.body?.timeout_ms,
@@ -95,13 +92,50 @@ router.post('/run', async (req, res) => {
       verifiedBy: cycleId
         ? `admin-link-repair:${cycleId}`
         : `admin-link-repair:${actor}`,
-    }))
+    }
+    const result = await runWithSchedulerLock(req.db, {
+      lockName: LOCK_NAME,
+      // link_backlog_runtime_bounded_lock_ttl: derive the lease from the exact
+      // bounded batch instead of letting a fixed 30-minute lease expire mid-run.
+      ttlMs: estimateRepairLockTtlMs(repairOptions),
+      logger: log,
+      acquiredBy: cycleId ? `admin-link-repair:${cycleId}` : `admin-link-repair:${actor}`,
+    }, () => repairBrokenDirectBatch(req.db, repairOptions))
     res.set('Cache-Control', 'no-store')
     if (result?.skipped) return lockConflict(res, result)
     return res.json(result)
   } catch (error) {
     log.error('repair_failed', { error: error?.message || String(error) })
     return res.status(500).json({ ok: false, error: 'LINK_BACKLOG_REPAIR_FAILED', details_redacted: true })
+  }
+})
+
+router.post('/schedule-retry', async (req, res) => {
+  if (!requireAdmin(req, res)) return
+  try {
+    const cyclePrefix = cleanCycleId(req.body?.cycle_prefix)
+    if (!cyclePrefix) {
+      return res.status(400).json({ ok: false, error: 'cycle_prefix is required' })
+    }
+    const actor = req.ctx?.email || req.ctx?.userId || 'admin'
+    const result = await runWithSchedulerLock(req.db, {
+      lockName: LOCK_NAME,
+      ttlMs: RECLASSIFY_LOCK_TTL_MS,
+      logger: log,
+      acquiredBy: `admin-link-schedule-retry:${actor}`,
+    }, () => scheduleRetryableBrokenRows(req.db, {
+      cyclePrefix,
+      minAttempts: req.body?.min_attempts,
+      // scheduled_retry_uses_canonical_30_day_window
+      retryAfterDays: 30,
+      limit: req.body?.limit,
+    }))
+    res.set('Cache-Control', 'no-store')
+    if (result?.skipped) return lockConflict(res, result)
+    return res.json(result)
+  } catch (error) {
+    log.error('schedule_retry_failed', { error: error?.message || String(error) })
+    return res.status(500).json({ ok: false, error: 'LINK_RETRY_SCHEDULING_FAILED', details_redacted: true })
   }
 })
 

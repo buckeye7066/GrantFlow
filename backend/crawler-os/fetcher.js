@@ -32,7 +32,12 @@ function now() { return new Date().toISOString(); }
 export function createFetcher(opts = {}) {
   const doFetch = opts.doFetch;
   if (typeof doFetch !== 'function') throw new Error('createFetcher: opts.doFetch is required');
-  const resolve = typeof opts.resolve === 'function' ? opts.resolve : ((host) => dns.promises.resolve(host));
+  const resolve = typeof opts.resolve === 'function'
+    ? opts.resolve
+    : async (host) => {
+        const records = await dns.promises.lookup(host, { all: true, verbatim: true })
+        return records.map((record) => record.address)
+      };
   const rateMs = Number.isFinite(opts.rateMs) ? opts.rateMs : DEFAULT_RATE_MS;
   const maxRedirects = Number.isFinite(opts.maxRedirects) ? opts.maxRedirects : 4;
   const clock = typeof opts.clock === 'function' ? opts.clock : () => Date.now();

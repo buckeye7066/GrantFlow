@@ -24,12 +24,18 @@ const PRIVATE_HOST_PATTERNS = [
   /\.internal$/i,
 ];
 
-// 172.16.0.0 – 172.31.255.255
-function isPrivate172(host) {
-  const m = /^172\.(\d+)\./.exec(host);
-  if (!m) return false;
-  const second = Number(m[1]);
-  return second >= 16 && second <= 31;
+function isBlockedIpv4Literal(host) {
+  const octets = String(host).split('.').map(Number)
+  if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true
+  const [a, b] = octets
+  if (a === 0 || a === 10 || a === 127) return true
+  if (a === 100 && b >= 64 && b <= 127) return true
+  if (a === 169 && b === 254) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 192 && (b === 0 || b === 168)) return true
+  if (a === 198 && (b === 18 || b === 19)) return true
+  if (a >= 224) return true
+  return false
 }
 
 // Search-engine / aggregator *result* URLs that must never be stored as an
@@ -49,7 +55,6 @@ export function isPrivateHost(host) {
   const h = normalizeHost(host);
   if (!h) return true;
   if (PRIVATE_HOST_PATTERNS.some((re) => re.test(h))) return true;
-  if (isPrivate172(h)) return true;
   if (isBlockedIpLiteral(h)) return true;
   return false;
 }
@@ -66,7 +71,7 @@ function normalizeHost(host) {
 
 function isBlockedIpLiteral(host) {
   const ipVersion = net.isIP(host);
-  if (ipVersion === 4) return false; // IPv4 private ranges are handled by regex above.
+  if (ipVersion === 4) return isBlockedIpv4Literal(host);
   if (ipVersion !== 6) return false;
   if (host === '::' || host === '::1') return true; // unspecified, loopback
   // IPv4-mapped IPv6 literals normalize to hex in WHATWG URL parsing (for
@@ -82,6 +87,7 @@ function isBlockedIpLiteral(host) {
   if ((head & 0xffc0) === 0xfe80) return true;         // fe80::/10 link-local (fe80-febf)
   if ((head & 0xfe00) === 0xfc00) return true;         // fc00::/7  unique-local (fc00-fdff)
   if ((head & 0xffc0) === 0xfec0) return true;         // fec0::/10 deprecated site-local
+  if ((head & 0xff00) === 0xff00) return true;         // ff00::/8 multicast
   return false;
 }
 

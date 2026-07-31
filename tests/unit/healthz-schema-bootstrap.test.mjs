@@ -20,8 +20,8 @@
  *      when app.locals.schema_bootstrap_failed is true.
  *   2. The /healthz handler returns 200 with schema_bootstrap_failed=false
  *      under normal operation.
- *   3. Missing tables are surfaced in the body so operators know exactly
- *      which invariants were violated.
+ *   3. Public liveness reports an opaque missing-table count without exposing
+ *      internal schema names or raw database errors.
  */
 
 import test from 'node:test'
@@ -79,8 +79,10 @@ test('healthz returns 503 when schema_bootstrap_failed is true', async () => {
     assert.equal(body.status, 'degraded')
     assert.equal(body.reason, 'schema_bootstrap_failed')
     assert.equal(body.schema_bootstrap_failed, true)
-    assert.deepEqual(body.missing_tables, ['users'])
-    assert.match(String(body.detail), /syntax error/)
+    assert.equal(body.missing_table_count, 1)
+    assert.equal(body.missing_tables, undefined)
+    assert.equal(body.detail, undefined)
+    assert.equal(body.details_redacted, true)
   } finally {
     await srv.close()
   }
@@ -96,7 +98,8 @@ test('healthz returns 503 with reason=db_startup_error when DB never opened', as
     const body = await res.json()
     assert.equal(body.ok, false)
     assert.equal(body.reason, 'db_startup_error')
-    assert.match(String(body.detail), /connection refused/)
+    assert.equal(body.detail, undefined)
+    assert.equal(body.details_redacted, true)
   } finally {
     await srv.close()
   }
@@ -112,7 +115,9 @@ test('healthz reports multiple missing tables in body', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/healthz`)
     assert.equal(res.status, 503)
     const body = await res.json()
-    assert.deepEqual(body.missing_tables, ['users', 'profiles', 'grants'])
+    assert.equal(body.missing_table_count, 3)
+    assert.equal(body.missing_tables, undefined)
+    assert.equal(body.details_redacted, true)
   } finally {
     await srv.close()
   }

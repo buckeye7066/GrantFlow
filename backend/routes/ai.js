@@ -32,6 +32,7 @@ import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pip
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
 import { buildSchoolLookupFallbackData } from '../services/schoolLookupFallback.js'
 import { enforceTierCapability } from '../middleware/entitlements.js'
+import { fetchPublicText } from '../utils/safeRemoteFetch.js'
 import { TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
   ensureGrantAccess,
@@ -1234,25 +1235,26 @@ router.post('/portal-assist', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_A
       additional: parseSafe(grant.additional_information),
     };
 
-    // Fetch portal page content if URL given and no content provided
-    let portalContent = page_content || '';
+    // Fetch untrusted portal content through the canonical SSRF-safe reader.
+    let portalContent = page_content || ''
     if (!portalContent && portal_url) {
-      try {
-        const resp = await fetch(portal_url, {
-          headers: { 'User-Agent': 'GrantFlow Application Assistant/1.0' },
-          signal: AbortSignal.timeout(15000),
-        });
-        if (resp.ok) {
-          const html = await resp.text();
-          portalContent = html
-            .replace(/<script[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[\s\S]*?<\/style>/gi, '')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/\s{2,}/g, ' ')
-            .slice(0, 12000);
-        }
-      } catch (e) {
-        console.warn('[portal-assist] Failed to fetch portal:', e?.message);
+      const remote = await fetchPublicText(portal_url, {
+        timeoutMs: 15_000,
+        maxBytes: 256_000,
+        userAgent: 'GrantFlow Application Assistant/1.0',
+      })
+      if (remote.ok) {
+        portalContent = remote.body
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s{2,}/g, ' ')
+          .slice(0, 12000)
+      } else {
+        routeLogger.warn('[portal-assist] remote portal read refused or failed', {
+          reason: remote.reason || remote.error || 'remote_fetch_failed',
+          status: remote.status ?? null,
+        })
       }
     }
 

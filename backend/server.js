@@ -99,7 +99,11 @@ import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
 import { resolveGuidedCycleTourStatus, resolveForcedWelcomeVideo } from './services/onboardingGates.js';
 import { runWithSchedulerLock } from './services/schedulerLock.js';
-import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
+import {
+  decryptRuntimeSecret,
+  ensureRuntimeSecretKeyMaterial,
+  migrateRuntimeSecretRows,
+} from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { ensureProfileEmailSchema, buildGrantScopeFromContext, getOwnedAndGrantedProfileIds } from './utils/accessControl.js';
@@ -122,7 +126,11 @@ import savedGrantsRouter from './routes/savedGrants.js'
 import foundationsRouter from './routes/foundations.js'
 import { expirePassedDeadlines } from './services/deadlineExpiryService.js'
 import { generateDeadlineNotifications } from './services/deadlineNotificationService.js'
-import { runLinkVerification, getLinkHealthSummary } from './services/linkVerificationService.js'
+import {
+  runLinkVerification,
+  getLinkHealthSummary,
+  quarantineUnverifiedDirectOpportunities,
+} from './services/linkVerificationService.js'
 import { sendEmail, isEmailServiceConfigured } from './services/email.js'
 import { runBillingCycle } from './services/billing/invoiceService.js'
 import { validateCriticalImports } from './startup/validateImports.js'
@@ -731,6 +739,32 @@ try {
 const { shouldAutoApplySchema } = await import('./startup/bootPolicy.js')
 const shouldAutoMigrate = shouldAutoApplySchema(process.env, db.dialect)
 
+// Ensure runtime-provider secrets are encrypted independently from the JWT
+// signing key. Production uses the persistent Railway volume unless an explicit
+// RUNTIME_SECRETS_KEY is configured. Existing v1/auth-derived rows are migrated
+// idempotently before any provider secret is restored into process.env.
+if (!app.locals.db_startup_error) {
+  try {
+    const keyMaterial = ensureRuntimeSecretKeyMaterial(process.env)
+    const secretMigration = await migrateRuntimeSecretRows(db, {
+      logger: console,
+      env: process.env,
+    })
+    console.info('[runtimeSecrets] dedicated key ready', {
+      source: keyMaterial.source,
+      migrated: Number(secretMigration?.migrated || 0),
+      skipped: Number(secretMigration?.skipped || 0),
+      table_missing: Boolean(secretMigration?.table_missing),
+    })
+  } catch (runtimeSecretError) {
+    app.locals.runtime_secrets_error = runtimeSecretError?.message || String(runtimeSecretError)
+    console.error('[runtimeSecrets] FATAL: dedicated key initialization or migration failed', {
+      error: app.locals.runtime_secrets_error,
+    })
+    if (isProdEnv) process.exit(1)
+  }
+}
+
 // Load persisted runtime secrets (encrypted) if missing from environment.
 // This is intended as an emergency stopgap for hosted environments where env var updates are delayed.
 try {
@@ -929,6 +963,28 @@ if (!app.locals.db_startup_error) {
       '[schema-invariants] orchestrator threw (non-fatal):',
       schemaInvariantsErr?.message || schemaInvariantsErr,
     )
+  }
+
+  // Production readiness is allowed to inspect only the safe, user-visible
+  // direct catalog. Quarantine every unproven/broken direct row synchronously,
+  // after schema initialization but before app.listen exposes /readyz. This is
+  // SQL-only; the recurring network verifier remains non-blocking below.
+  const enforceMissionGateAtBoot =
+    String(process.env.NODE_ENV || '').toLowerCase() === 'production' &&
+    String(process.env.GRANTFLOW_SKIP_MISSION_GATE || '').toLowerCase() !== 'true'
+  if (enforceMissionGateAtBoot) {
+    try {
+      const quarantine = await quarantineUnverifiedDirectOpportunities(db)
+      if (quarantine?.ok) {
+        console.info('[link-verify] startup quarantine complete', quarantine)
+      } else {
+        console.warn('[link-verify] startup quarantine failed closed', {
+          reason: quarantine?.reason || 'unknown',
+        })
+      }
+    } catch (quarantineErr) {
+      console.warn('[link-verify] startup quarantine threw (readiness remains closed):', quarantineErr?.message || quarantineErr)
+    }
   }
 
   // Publish this process's automation posture (booleans only, no secrets) so an
@@ -2222,6 +2278,8 @@ app.use('/api/stripe', stripeRouter);
 app.use('/api/admin', ensureAuth, ensureAdmin)
 app.use('/api/admin/service-catalog', adminServiceCatalogRouter)
 app.use('/api/admin/queue', adminQueueOpsRouter)
+app.use('/api/admin/link-repair', lazyRouter('./routes/linkBacklogRepair.js'))
+app.use('/api/admin/web-parity', lazyRouter('./routes/webParityAdmin.js'))
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
@@ -3691,6 +3749,14 @@ if (process.env.NODE_ENV !== 'test') {
           verifiedBy: `recurring-verifier:pid=${process.pid}`,
         })
         console.log('[link-verify] completed:', stats)
+          const { repairBrokenDirectBatch } = await import('./services/linkBacklogRepairService.js')
+          const lifecycle = await repairBrokenDirectBatch(dbInstance, {
+            limit: Math.min(100, limit),
+            concurrency: 8,
+            timeoutMs: 10_000,
+            verifiedBy: `recurring-link-repair:pid=${process.pid}`,
+          })
+          console.log('[link-repair] recurring lifecycle pass:', lifecycle)
       } catch (err) {
         console.warn('[link-verify] failed:', err.message)
       }

@@ -61,11 +61,11 @@ test('backend/start.js imports server.js dynamically after dotenv is loaded', ()
   )
 })
 
-test('backend/start.js calls runMigrationsInBackground after boot', () => {
+test('backend/start.js does not start a second migration runner', () => {
   const src = fs.readFileSync(path.join(ROOT, 'backend/start.js'), 'utf8')
   assert.ok(
-    src.includes('runMigrationsInBackground()'),
-    'start.js should schedule runMigrationsInBackground() after server import',
+    !src.includes('runMigrationsInBackground()'),
+    'server.js is the single migration owner; start.js must not launch a second runner',
   )
 })
 

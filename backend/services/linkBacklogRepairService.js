@@ -5,6 +5,7 @@ const SUCCESS = new Set(['ok', 'redirect', 'verified'])
 const RESOURCE_RESULTS = new Set(['action_step', 'directory', 'referral', 'school_portal', 'past_award_intel'])
 const PERMANENT_HTTP_CODES = new Set([404, 410])
 const RETIRED_MARKER = 'retired_after_definitive_recheck:'
+const SCHEDULED_RETRY_MARKER = 'retry_scheduled_after_bounded_recheck:'
 
 const countChanges = (result) => Number(result?.changes ?? result?.rowCount ?? 0)
 const nowIso = () => new Date().toISOString()
@@ -40,6 +41,32 @@ export function candidateUrls(row = {}) {
   return candidateUrlEntries(row).map((entry) => entry.url)
 }
 
+const CANDIDATE_URL_FIELD_COUNT = 6
+const ATTEMPTS_PER_URL = 2
+const OFFICIAL_RESCUE_BUDGET_MS = 32_000
+const REPAIR_LOCK_MARGIN_MS = 5 * 60 * 1000
+const MIN_REPAIR_LOCK_TTL_MS = 30 * 60 * 1000
+const MAX_REPAIR_LOCK_TTL_MS = 12 * 60 * 60 * 1000
+
+/**
+ * Size the shared scheduler lease from the same clamps the repair service uses.
+ * One wave can probe six URL fields twice plus one bounded official-page rescue.
+ * The lease therefore cannot expire while a valid worst-case bounded batch is
+ * still working, even when an operator deliberately chooses concurrency=1.
+ */
+export function estimateRepairLockTtlMs(options = {}) {
+  const limit = Math.max(1, Math.min(100, Number(options.limit) || 40))
+  const concurrency = Math.max(1, Math.min(12, Number(options.concurrency) || 8))
+  const timeoutMs = Math.max(3000, Math.min(20000, Number(options.timeoutMs) || 10000))
+  const waves = Math.ceil(limit / concurrency)
+  const perWaveBudgetMs =
+    (CANDIDATE_URL_FIELD_COUNT * ATTEMPTS_PER_URL * timeoutMs) + OFFICIAL_RESCUE_BUDGET_MS
+  return Math.max(
+    MIN_REPAIR_LOCK_TTL_MS,
+    Math.min(MAX_REPAIR_LOCK_TTL_MS, (waves * perWaveBudgetMs) + REPAIR_LOCK_MARGIN_MS),
+  )
+}
+
 /**
  * Build the six persisted URL fields after a successful rescue.
  *
@@ -49,13 +76,19 @@ export function candidateUrls(row = {}) {
  * final_url; an application/apply endpoint is mirrored across both apply fields.
  */
 export function restoredUrlFields(row = {}, result = {}, outcome = {}, url = null) {
+  const outcomes = Array.isArray(result?.outcomes) ? result.outcomes : []
   const permanentRoles = new Set(
-    (Array.isArray(result?.outcomes) ? result.outcomes : [])
+    outcomes
       .filter((entry) => PERMANENT_HTTP_CODES.has(Number(entry?.code)))
       .map((entry) => String(entry?.role || ''))
       .filter(Boolean),
   )
-  const keep = (role) => permanentRoles.has(role) ? null : (row?.[role] || null)
+  // official_rescue_clears_unprobeable_urls: when the row had zero valid HTTP
+  // candidates, its old URL-shaped values were never probeable and cannot remain
+  // beside a newly proven official page. A rescue after real transient outcomes
+  // still preserves those candidates because access denial is not proof of death.
+  const clearUnprobeable = result?.official_rescue === true && outcomes.length === 0
+  const keep = (role) => (clearUnprobeable || permanentRoles.has(role)) ? null : (row?.[role] || null)
   const restored = {
     application_url: keep('application_url'),
     apply_url: keep('apply_url'),
@@ -269,15 +302,108 @@ export async function brokenDirectSummary(db) {
       SUM(CASE WHEN link_status='broken' AND COALESCE(status,'active')='active'
                     AND (COALESCE(is_hidden,FALSE)=TRUE OR COALESCE(is_active,TRUE)=FALSE) THEN 1 ELSE 0 END) quarantined,
       SUM(CASE WHEN link_status='broken' AND status='paused' THEN 1 ELSE 0 END) repair_pending,
-      SUM(CASE WHEN link_status='skipped' AND verification_error LIKE ? THEN 1 ELSE 0 END) retired
+      SUM(CASE WHEN link_status='skipped' AND verification_error LIKE ? THEN 1 ELSE 0 END) retired,
+      SUM(CASE WHEN link_status='skipped' AND status='paused'
+                    AND verification_error LIKE ? THEN 1 ELSE 0 END) scheduled_retry
       FROM funding_opportunities
      WHERE COALESCE(opportunity_kind,'direct') IN ('direct','benefit')
-  `).get(`${RETIRED_MARKER}%`)
+  `).get(`${RETIRED_MARKER}%`, `${SCHEDULED_RETRY_MARKER}%`)
   return {
     visible: Number(row?.visible || 0),
     quarantined: Number(row?.quarantined || 0),
     repair_pending: Number(row?.repair_pending || 0),
     retired: Number(row?.retired || 0),
+    scheduled_retry: Number(row?.scheduled_retry || 0),
+  }
+}
+
+/**
+ * Move repeatedly inconclusive direct rows out of the active repair queue without
+ * pretending they are live or dead. The row remains hidden and inactive, carries
+ * the canonical `skipped` status, and is eligible for the normal verifier again
+ * after its staleness window. Evidence in verification_events proves the bounded
+ * attempts happened before this transition.
+ */
+export async function scheduleRetryableBrokenRows(db, options = {}) {
+  const cyclePrefix = String(options.cyclePrefix || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._:-]/g, '')
+    .slice(0, 96)
+  if (!cyclePrefix) throw new Error('cyclePrefix is required')
+
+  const minAttempts = Math.max(2, Math.min(10, Number(options.minAttempts) || 2))
+  const limit = Math.max(1, Math.min(1000, Number(options.limit) || 500))
+  // scheduled_retry_uses_canonical_30_day_window: runLinkVerification uses
+  // a fixed 30-day re-verification window. Do not expose a pretend per-request
+  // delay that the verifier cannot honor.
+  const retryAfterDays = 30
+  const { yes, no } = bools(db)
+  const verifiedByLike = `admin-link-repair:${cyclePrefix}%`
+  const scheduledBy = `scheduled-link-retry:${cyclePrefix}`
+
+  const rows = await db.prepare(`
+    SELECT fo.id, fo.source, fo.application_url, fo.apply_url,
+           fo.apply_guidelines_url, fo.source_url, fo.evidence_url, fo.final_url,
+           fo.verification_error, attempts.attempt_count
+      FROM funding_opportunities fo
+      JOIN (
+        SELECT opportunity_id, COUNT(DISTINCT verified_by) AS attempt_count
+          FROM verification_events
+         WHERE link_status='broken' AND verified_by LIKE ?
+         GROUP BY opportunity_id
+      ) attempts ON attempts.opportunity_id = fo.id
+     WHERE COALESCE(fo.opportunity_kind,'direct') IN ('direct','benefit')
+       AND fo.link_status='broken' AND fo.status='paused'
+       AND COALESCE(fo.is_hidden,TRUE)=TRUE
+       AND COALESCE(fo.is_active,FALSE)=FALSE
+       AND attempts.attempt_count >= ?
+     -- scheduled_retry_portable_order: explicit CASE works on both SQLite and Postgres.
+     ORDER BY CASE WHEN fo.last_verified_at IS NULL THEN 0 ELSE 1 END,
+              fo.last_verified_at ASC, fo.id ASC
+     LIMIT ?
+  `).all(verifiedByLike, minAttempts, limit)
+
+  const update = db.prepare(`
+    UPDATE funding_opportunities
+       SET link_status='skipped', status='paused',
+           verification_method='scheduled_retry', verified_by=?,
+           verification_error=?, last_verified_at=?,
+           is_hidden=?, is_active=?
+     WHERE id=? AND link_status='broken' AND status='paused'
+  `)
+
+  let scheduled = 0
+  for (const row of rows || []) {
+    const previous = String(row.verification_error || 'transient_failure')
+      .replace(/[\r\n]+/g, ' ')
+      .slice(0, 120)
+    const marker = `${SCHEDULED_RETRY_MARKER}attempts=${Number(row.attempt_count || 0)};retry_after_days=${retryAfterDays};cycle=${cyclePrefix};last=${previous}`
+    const at = nowIso()
+    const changed = countChanges(await update.run(scheduledBy, marker, at, yes, no, row.id))
+    scheduled += changed
+    if (changed > 0) {
+      await recordVerificationEvent(db, {
+        opportunity_id: row.id,
+        source: row.source,
+        url: candidateUrls(row)[0] || null,
+        link_status: 'skipped',
+        link_status_code: null,
+        verification_method: 'scheduled_retry',
+        verified_by: scheduledBy,
+        verification_error: marker,
+        duration_ms: 0,
+      })
+    }
+  }
+
+  return {
+    ok: true,
+    cycle_prefix: cyclePrefix,
+    min_attempts: minAttempts,
+    retry_after_days: retryAfterDays,
+    selected: rows.length,
+    scheduled,
+    summary: await brokenDirectSummary(db),
   }
 }
 
@@ -409,7 +535,13 @@ export async function repairBrokenDirectBatch(db, options = {}) {
         const rescue = await rescueOfficialUrl(row, findOfficialUrlImpl)
         if (rescue.rescued) {
           rowStats.official_search_rescues += 1
-          result = { success: true, terminal: false, outcome: rescue.outcome, outcomes: result.outcomes }
+          result = {
+            success: true,
+            terminal: false,
+            official_rescue: true,
+            outcome: rescue.outcome,
+            outcomes: result.outcomes,
+          }
         } else if (rescue.unavailable) {
           rowStats.official_search_unavailable += 1
           result.terminal = false
@@ -514,10 +646,12 @@ export default {
   brokenDirectSummary,
   candidateUrlEntries,
   candidateUrls,
+  estimateRepairLockTtlMs,
   failureClass,
   osmElementUrl,
   preservedOsmContactInfo,
   restoredUrlFields,
   reclassifyBrokenResources,
   repairBrokenDirectBatch,
+  scheduleRetryableBrokenRows,
 }

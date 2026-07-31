@@ -11,7 +11,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 
-import { buildMissionHealth, MISSION_TARGETS } from '../../backend/services/missionHealthService.js'
+const missionHealthModule = await import('../../backend/services/' + 'missionHealthService.js')
+const {
+  buildMissionHealth,
+  MISSION_TARGETS,
+  normalizeCount,
+  pct,
+} = missionHealthModule
 
 function createDb() {
   const raw = new Database(':memory:')
@@ -23,11 +29,14 @@ function createDb() {
       record_origin TEXT,
       opportunity_kind TEXT,
       link_status TEXT,
+      last_verified_at TIMESTAMP,
+      is_active INTEGER DEFAULT 1,
+      is_hidden INTEGER DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE verification_events (
       id TEXT PRIMARY KEY,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE grant_applications (
       id TEXT PRIMARY KEY,
@@ -55,13 +64,25 @@ function wrapDb(raw) {
   }
 }
 
-function seedRow(db, { id, title = 'Test', source = 'grants.gov', record_origin = 'live_crawl', kind = 'direct', link_status = 'verified' } = {}) {
+function seedRow(db, {
+  id,
+  title = 'Test',
+  source = 'grants.gov',
+  record_origin = 'live_crawl',
+  kind = 'direct',
+  link_status = 'verified',
+  last_verified_at = new Date().toISOString(),
+  is_active = 1,
+  is_hidden = 0,
+} = {}) {
   db.raw
     .prepare(
-      `INSERT INTO funding_opportunities (id, title, source, record_origin, opportunity_kind, link_status)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO funding_opportunities
+        (id, title, source, record_origin, opportunity_kind, link_status,
+         last_verified_at, is_active, is_hidden)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(id, title, source, record_origin, kind, link_status)
+    .run(id, title, source, record_origin, kind, link_status, last_verified_at, is_active, is_hidden)
 }
 
 test('mission-health: empty DB returns ok=true and zero counts', async () => {
@@ -154,6 +175,18 @@ test('mission-health: application_funnel surfaces status counts', async () => {
   assert.equal(submitted.n, 2)
 })
 
+test('mission-health: verification_events_24h uses the canonical ts column', async () => {
+  const db = createDb()
+  const recent = new Date().toISOString()
+  const old = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+  db.raw.prepare('INSERT INTO verification_events (id, ts) VALUES (?, ?)').run('recent', recent)
+  db.raw.prepare('INSERT INTO verification_events (id, ts) VALUES (?, ?)').run('old', old)
+
+  const h = await buildMissionHealth(db)
+
+  assert.equal(h.counts.verification_events_24h, 1)
+})
+
 test('mission-health: targets export matches the production minimums', () => {
   assert.equal(MISSION_TARGETS.verified_pct_min, 95)
   assert.equal(MISSION_TARGETS.broken_pct_max, 5)
@@ -202,6 +235,34 @@ test('mission-health: high broken-link % trips the production gate', async () =>
   const h = await buildMissionHealth(db)
   assert.equal(h.production_gate, false)
   assert.ok(h.release_blockers.some((b) => b.code === 'broken_pct_above_target'))
+})
+
+test('mission-health: PostgreSQL-shaped string counts produce real percentages', () => {
+  assert.equal(normalizeCount('5678'), 5678)
+  assert.equal(pct('652', '5678'), 11.5)
+})
+
+test('mission-health: canonical verifier statuses count as verified', async () => {
+  const db = createDb()
+  seedRow(db, { id: 'ok-1', link_status: 'ok' })
+  seedRow(db, { id: 'redirect-1', link_status: 'redirect' })
+  seedRow(db, { id: 'legacy-1', link_status: 'verified' })
+  const h = await buildMissionHealth(db)
+  assert.equal(h.counts.direct_opportunities_verified, 3)
+  assert.equal(h.rates.verified_pct, 100)
+})
+
+test('mission-health: quarantined broken rows do not poison visible rates', async () => {
+  const db = createDb()
+  seedRow(db, { id: 'ok-1', link_status: 'ok' })
+  seedRow(db, { id: 'hidden', link_status: 'broken', is_hidden: 1 })
+  seedRow(db, { id: 'inactive', link_status: 'broken', is_active: 0 })
+  const h = await buildMissionHealth(db)
+  assert.equal(h.counts.catalog_direct_opportunities_total, 3)
+  assert.equal(h.counts.direct_opportunities_total, 1)
+  assert.equal(h.counts.quarantined_broken_direct_opportunities, 2)
+  assert.equal(h.rates.verified_pct, 100)
+  assert.equal(h.rates.broken_pct, 0)
 })
 
 test('mission-health: TARGETS exposes the release-gate code list', () => {

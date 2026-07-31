@@ -1,3 +1,5 @@
+import { apiRateLimitMiddleware } from './apiRateLimitPolicy.js'
+
 /**
  * Lightweight production monitoring for matching/discovery endpoints.
  *
@@ -83,9 +85,12 @@ function isZeroResult(body) {
 }
 
 export function pipelineMonitor() {
+  const limitRequest = apiRateLimitMiddleware()
+
   return function monitor(req, res, next) {
-    const group = classifyPath(req.path)
-    if (!group) return next()
+    return limitRequest(req, res, () => {
+      const group = classifyPath(req.path)
+      if (!group) return next()
 
     const start = Date.now()
     const originalJson = res.json
@@ -126,7 +131,8 @@ export function pipelineMonitor() {
       return originalJson.call(this, body)
     }
 
-    next()
+      next()
+    })
   }
 }
 

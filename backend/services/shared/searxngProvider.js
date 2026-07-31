@@ -25,6 +25,7 @@
  */
 
 import { getWithRetry } from './httpClient.js'
+import { partitionByRelevance } from './queryRelevance.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:searxngProvider')
@@ -141,23 +142,36 @@ export function makeSearxngProvider({
       try { json = JSON.parse(json) } catch { return [] }
     }
     const results = Array.isArray(json?.results) ? json.results : []
-    const out = []
+    // Normalize the WHOLE pool before truncating. The instance returns ~30-34
+    // results; the caller only wants `count`. Cutting at `want` while walking
+    // the engine's own ranking spent that budget on whatever sat at the top —
+    // and scraped bing/yahoo put the query's LEADING TOKEN there ("Ohio -
+    // Wikipedia", "Texas Maps & Facts") while yandex/seznam answered the real
+    // question further down. Measured live 2026-07-31 over 8 profile-shaped
+    // queries: 46.9% of the returned top-8 was first-word junk, and every one
+    // of those queries had enough real results deeper in the pool to fill the
+    // budget completely.
+    const normalized = []
     const seen = new Set()
     const resultEngines = new Set()
     for (const r of results) {
       for (const e of Array.isArray(r?.engines) ? r.engines : []) resultEngines.add(String(e))
-      if (out.length >= want) continue
       const u = String(r?.url || '').trim()
       if (!/^https?:\/\//i.test(u)) continue
       const key = u.toLowerCase().replace(/\/$/, '')
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({
+      normalized.push({
         url: u,
         title: String(r?.title || '').trim(),
         snippet: String(r?.content || r?.snippet || '').trim(),
       })
     }
+    // Demote (never drop) first-word junk, then truncate. Because weak results
+    // are kept as backfill, this can only ever REORDER a result set: with no
+    // strong results the caller receives exactly what it received before.
+    const { strong, weak } = partitionByRelevance(q, normalized)
+    const out = [...strong, ...weak].slice(0, want)
     // Engine-health telemetry rides along as a NON-ENUMERABLE property so the
     // `[{url,title,snippet}]` contract (and any deep-equality test on it) is
     // untouched. webSearchEngine reads it to detect engine-fleet collapse

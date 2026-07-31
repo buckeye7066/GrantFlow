@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useToast } from "@/components/ui/use-toast"
 import { Link } from "react-router-dom"
 import { createPageUrl } from "@/utils"
-import { formatReasonText } from "@/utils/reasonText"
+import { formatReasonText, humanizeMatchReason } from "@/utils/reasonText"
 import { safeHttpUrl } from "@/lib/safeUrl"
 import {
   AUTO_ADD_SCORE,
@@ -909,7 +909,7 @@ export default function SmartMatcher() {
                                           {inferredNeeds.map((suggestion) => {
                                               const isNeedChecked = !!needsState.checked[suggestion._key]
                                               const reasonText = Array.isArray(suggestion.reasons)
-                                                  ? formatReasonText(suggestion.reasons[0])
+                                                  ? humanizeMatchReason(suggestion.reasons[0])
                                                   : ''
                                               return (
                                               <div key={suggestion._key}>
@@ -1275,7 +1275,7 @@ export default function SmartMatcher() {
                                         {opp.match_reasons && opp.match_reasons.length > 0 && (
                                           <div className="mt-2 flex flex-wrap gap-1">
                                             {opp.match_reasons.slice(0, 6).map((reason, i) => {
-                                              const text = formatReasonText(reason)
+                                              const text = humanizeMatchReason(reason)
                                               return text ? (
                                                 <Badge key={i} variant="secondary" className="text-xs">{text}</Badge>
                                               ) : null
@@ -1411,7 +1411,7 @@ export default function SmartMatcher() {
                           <div className="text-sm font-semibold text-slate-900">Why this matched</div>
                           <div className="flex flex-wrap gap-1">
                             {selectedOpp.match_reasons.map((reason, idx) => {
-                              const text = formatReasonText(reason)
+                              const text = humanizeMatchReason(reason)
                               return text ? (
                                 <Badge key={idx} variant="secondary" className="text-xs">{text}</Badge>
                               ) : null

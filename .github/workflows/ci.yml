@@ -5,6 +5,18 @@ on:
   push:
     branches: [main]
 
+# Supersede in-flight runs on the SAME branch. Agent branches push repeatedly
+# (14 runs against one branch inside a single hour on 2026-07-30), and every
+# superseded run kept burning four jobs' worth of Actions minutes toward the
+# spending cap that halted CI account-wide on 2026-07-29.
+#
+# main is deliberately EXCLUDED: each commit on main must keep its own
+# completed verification record, and cancelling those would leave gaps in
+# exactly the history the required checks exist to prove.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest

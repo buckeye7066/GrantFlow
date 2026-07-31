@@ -397,6 +397,7 @@ describe('Amy training run (end-to-end, offline discovery)', () => {
       delete process.env.AMY_ENABLED
       delete process.env.AMY_RUN_ON_SCHEDULE
       delete process.env.AMY_RUN_ON_STARTUP
+      delete process.env.AMY_DAILY_PROFILE_TARGET
       expect(getAmyConfig().enabled).toBe(true)
       expect(getAmyConfig().dailyTarget).toBe(100)
       const onByDefault = startAmyScheduler({ db: null, logger: { info() {}, error() {} } })

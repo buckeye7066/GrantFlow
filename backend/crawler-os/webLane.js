@@ -500,7 +500,24 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
           // kind + amounts travel with the recommendation so Amy's evaluator
           // measures award-amount recall against what the run actually found
           // (a DIRECTORY locator never carries a per-award amount by design).
-          result.recommendations.push({ opportunity_id: matchOpp.id, title: matchOpp.title, sponsor: matchOpp.sponsor, kind: matchOpp.kind ?? null, amount_min: matchOpp.funding?.amount_min ?? null, amount_max: matchOpp.funding?.amount_max ?? null, amount_status: matchOpp.funding?.amount_status ?? null, match_score: decision.match_score, source: 'web_search', topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
+          result.recommendations.push({
+            opportunity_id: matchOpp.id,
+            title: matchOpp.title,
+            sponsor: matchOpp.sponsor,
+            kind: matchOpp.kind ?? null,
+            amount_min: matchOpp.funding?.amount_min ?? null,
+            amount_max: matchOpp.funding?.amount_max ?? null,
+            amount_status: matchOpp.funding?.amount_status ?? null,
+            match_score: decision.match_score,
+            // The canonical decision must travel with the recommendation. The
+            // registry lane already does this; dropping it here made Amy infer
+            // ACCEPT from a capped REVIEW score and report phantom defects.
+            decision: decision.decision,
+            match_decision: decision.decision,
+            match_explanation: decision.match_explain?.why ?? null,
+            source: 'web_search',
+            topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null,
+          });
         }
       }
     }

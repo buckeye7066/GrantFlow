@@ -13,7 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { formatReasonText } from "@/utils/reasonText"
+import { formatReasonText, humanizeMatchReason } from "@/utils/reasonText"
 
 function safeArray(value) {
   if (!value) return []
@@ -72,7 +72,7 @@ function TraceFact({ icon: Icon, label, value, tone = "slate" }) {
 
 function ReasonList({ reasons }) {
   const cleaned = safeArray(reasons)
-    .map((reason) => formatReasonText(reason) || String(reason || "").trim())
+    .map((reason) => humanizeMatchReason(reason) || String(reason || "").trim())
     .filter(Boolean)
 
   if (cleaned.length === 0) {

@@ -10,9 +10,11 @@
 // ENTIRE data-point inventory the source matches, gated by eligibility and
 // geography ("88 data points, source matches 44 → 50"). Real profiles carry
 // 50–150 data points, so absolute scores run low: bands are empirically
-// calibrated (prod p50=8, p90=15, max=47 — see backend calibration block).
+// calibrated (prod, re-measured 2026-07-31: p50=6, p75=13, p90=17, p95=23,
+// max=85 over 5,706 non-synthetic scored matches — see backend calibration
+// block; the previous fit was p50=8, p90=15, max=47).
 export const AUTO_ADD_SCORE = 8
-export const STRONG_MATCH_SCORE = 14
+export const STRONG_MATCH_SCORE = 17
 export const GOOD_MATCH_SCORE = 11
 export const MODERATE_MATCH_SCORE = 7
 export const SCORE_FLOOR = 2
@@ -35,10 +37,20 @@ export function scoreToLabel(score) {
  * label everywhere. Tiers are display-only and intentionally finer-grained than
  * the matching/auto-add thresholds above.
  */
+// Re-calibrated 2026-07-31 against 5,706 non-synthetic scored prod matches.
+// Only `excellent` moved. Measured share at each bar BEFORE the remap:
+//   >=8  42.4%   >=11 28.6%   >=14 15.4%   >=17 11.8%
+// `excellent` claimed to be "top ~10%" while labelling 15.4% of matches —
+// roughly one in six read "Excellent Match". 17 restores the documented
+// intent at 11.8%. `good` (28.6% vs "top ~quarter") is within tolerance AND
+// equals ACCEPT_SCORE, and `fair` is the PIPELINE BAR, not a percentile —
+// dropping it to the measured p50 of 6 would label rows that never cleared
+// admission, so both stay put. Per the calibration doctrine: re-run
+// backend/scripts/score-distribution.mjs and re-map; never hand-tune one bar.
 export const MATCH_DISPLAY_TIERS = Object.freeze({
-  excellent: 14, // top ~10% of real matches (old 75)
-  good: 11,      // top ~quarter (old 50)
-  fair: 8,       // pipeline-bar coverage (old 25)
+  excellent: 17, // top ~10% of real matches (measured 11.8%)
+  good: 11,      // top ~quarter (measured 28.6%) — also ACCEPT_SCORE
+  fair: 8,       // pipeline-bar coverage (structural, not a percentile)
   potential: 7,  // partial coverage worth a look (old 15)
 })
 

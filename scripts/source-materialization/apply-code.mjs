@@ -156,12 +156,13 @@ replaceOne(
 replaceOne(
   'tests/mission/mission-health-dashboard.test.mjs',
   /import \{ buildMissionHealth, MISSION_TARGETS \} from '\.\.\/\.\.\/backend\/services\/missionHealthService\.js'/,
-  `import {
+  `const missionHealthModule = await import('../../backend/services/' + 'missionHealthService.js')
+const {
   buildMissionHealth,
   MISSION_TARGETS,
   normalizeCount,
   pct,
-} from '../../backend/services/missionHealthService.js'`,
+} = missionHealthModule`,
   'mission test import',
 )
 replaceOne(
@@ -283,12 +284,13 @@ replaceOne(
       };`,
   'DNS A+AAAA resolution',
 )
-replaceOne(
-  'backend/crawler-os/tests/fetcher.test.mjs',
-  /\['203\.0\.113\.10'\]/g,
-  "['8.8.8.8']",
-  'fetcher public fixture',
-)
+{ // Two public-address fixtures intentionally share the same test resolver.
+  const file = 'backend/crawler-os/tests/fetcher.test.mjs'
+  const before = read(file)
+  const matches = before.match(/\['203\.0\.113\.10'\]/g) || []
+  if (matches.length !== 2) throw new Error(`fetcher public fixture: expected two matches, found ${matches.length}`)
+  write(file, before.replaceAll("['203.0.113.10']", "['8.8.8.8']"))
+}
 
 insertBefore(
   'backend/routes/ai.js',

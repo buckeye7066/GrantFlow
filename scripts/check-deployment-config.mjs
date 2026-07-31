@@ -32,8 +32,20 @@ function byKey(headers = []) {
   return new Map(headers.map((header) => [String(header.key || '').toLowerCase(), String(header.value || '')]))
 }
 
+function findRewrite(vercel, source, destination) {
+  return Array.isArray(vercel.rewrites)
+    ? vercel.rewrites.find((rewrite) => rewrite?.source === source && rewrite?.destination === destination)
+    : null
+}
+
 function hasRewrite(vercel, source, destination) {
-  return Array.isArray(vercel.rewrites) && vercel.rewrites.some((rewrite) => rewrite?.source === source && rewrite?.destination === destination)
+  return Boolean(findRewrite(vercel, source, destination))
+}
+
+function hasProductionHostGuard(rewrite) {
+  return Array.isArray(rewrite?.has) && rewrite.has.some(
+    (condition) => condition?.type === 'host' && /axiombiolabs/i.test(String(condition?.value || '')),
+  )
 }
 
 const vercel = readJson('vercel.json')
@@ -49,10 +61,26 @@ const readinessTransform = readText('scripts/source-materialization/apply-readin
 const railwayApi = 'https://grantflow-production.up.railway.app/api/:path*'
 const railwayUploads = 'https://grantflow-production.up.railway.app/uploads/:path*'
 
-assert(hasRewrite(vercel, '/grantflow/api/:path*', railwayApi), 'vercel.json must proxy /grantflow/api/* to the Railway API')
-assert(hasRewrite(vercel, '/api/:path*', railwayApi), 'vercel.json must proxy /api/* to the Railway API')
-assert(hasRewrite(vercel, '/grantflow/uploads/:path*', railwayUploads), 'vercel.json must proxy /grantflow/uploads/* to Railway uploads')
-assert(hasRewrite(vercel, '/uploads/:path*', railwayUploads), 'vercel.json must proxy /uploads/* to Railway uploads')
+const productionRewrites = [
+  ['/grantflow/api/:path*', railwayApi],
+  ['/api/:path*', railwayApi],
+  ['/grantflow/uploads/:path*', railwayUploads],
+  ['/uploads/:path*', railwayUploads],
+]
+for (const [source, destination] of productionRewrites) {
+  const rewrite = findRewrite(vercel, source, destination)
+  assert(Boolean(rewrite), `vercel.json must proxy ${source} to the Railway production backend`)
+  assert(hasProductionHostGuard(rewrite), `production rewrite ${source} must be host-gated`)
+}
+assert(
+  hasRewrite(vercel, '/grantflow/api/:path*', '/api/preview-backend-disabled'),
+  'prefixed preview API calls must fail closed',
+)
+assert(
+  hasRewrite(vercel, '/api/:path((?!preview-backend-disabled$).*)', '/api/preview-backend-disabled'),
+  'root preview API calls must fail closed',
+)
+assert(vercel.installCommand === 'npm ci --include=dev --include=optional', 'Vercel must use npm ci')
 assert(
   hasRewrite(vercel, '/grantflow/((?!assets/).*)', '/index.html'),
   'vercel.json must keep the /grantflow SPA fallback so deep links do not 404',
@@ -77,7 +105,13 @@ assert(csp.includes("default-src 'self'"), 'CSP must default to self')
 assert(csp.includes("object-src 'none'"), 'CSP must block plugin/object execution')
 assert(csp.includes("frame-ancestors 'none'"), 'CSP must block clickjacking via frame-ancestors')
 assert(csp.includes("connect-src 'self'"), 'CSP must allow same-origin API calls')
-assert(csp.includes('https://grantflow-production.up.railway.app'), 'CSP must allow the explicit Railway API fallback used by preview/dev overrides')
+assert(csp.includes('https://grantflow-production.up.railway.app'), 'CSP must allow the production Railway backend')
+// Exact-token check, not a substring: `csp.includes('ingest.sentry.io')` would
+// pass with the host in the wrong directive (or inside another host), and it
+// reads to CodeQL as incomplete URL substring sanitization. Browser Sentry
+// ingestion specifically needs the wildcard token in connect-src.
+const connectSrcTokens = String(csp.split(';').map((d) => d.trim()).find((d) => d.startsWith('connect-src')) || '').split(/\s+/).slice(1)
+assert(connectSrcTokens.includes('https://*.ingest.sentry.io'), 'CSP connect-src must carry the exact https://*.ingest.sentry.io token for browser Sentry ingestion')
 assert(!/script-src[^;]*\*/.test(csp), 'CSP script-src must not use a wildcard')
 assert(!/script-src[^;]*unsafe-eval/.test(csp), 'CSP script-src must not allow unsafe-eval')
 

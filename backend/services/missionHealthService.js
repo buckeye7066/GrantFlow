@@ -78,9 +78,16 @@ async function safeAll(db, sql, params = []) {
   }
 }
 
-function pct(num, denom) {
-  if (!denom || !Number.isFinite(denom) || denom <= 0) return 0
-  return Math.round((Number(num) / Number(denom)) * 1000) / 10
+export function normalizeCount(value) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : 0
+}
+
+export function pct(num, denom) {
+  const numerator = Number(num)
+  const denominator = Number(denom)
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return 0
+  return Math.round((numerator / denominator) * 1000) / 10
 }
 
 /**
@@ -194,46 +201,87 @@ export async function buildMissionHealth(db) {
   // ── Opportunity-level metrics ───────────────────────────────────────
   const directKinds = "('direct','benefit')"
   const directoryKinds = "('directory','referral','school_portal')"
+  const visibleDirectWhere = `
+    COALESCE(opportunity_kind,'direct') IN ${directKinds}
+    AND COALESCE(is_active, TRUE) = TRUE
+    AND COALESCE(is_hidden, FALSE) = FALSE
+  `
 
-  const totalDirect = (await safeGet(
+  // pg returns COUNT(*) as strings. Normalize at the metric boundary.
+  const catalogDirect = normalizeCount((await safeGet(
     db,
     `SELECT COUNT(*) AS n FROM funding_opportunities
      WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}`,
-  ))?.n ?? 0
-  const verifiedDirect = (await safeGet(
+  ))?.n)
+  const totalDirect = normalizeCount((await safeGet(
+    db,
+    `SELECT COUNT(*) AS n FROM funding_opportunities WHERE ${visibleDirectWhere}`,
+  ))?.n)
+  const verifiedDirect = normalizeCount((await safeGet(
     db,
     `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
-       AND link_status = 'verified'`,
-  ))?.n ?? 0
-  const brokenDirect = (await safeGet(
+     WHERE ${visibleDirectWhere}
+       AND link_status IN ('ok','redirect','verified')
+       AND last_verified_at IS NOT NULL`,
+  ))?.n)
+  const brokenDirect = normalizeCount((await safeGet(
     db,
     `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
+     WHERE ${visibleDirectWhere}
        AND link_status = 'broken'`,
-  ))?.n ?? 0
-  const totalDirectory = (await safeGet(
+  ))?.n)
+  const quarantinedBrokenDirect = normalizeCount((await safeGet(
+      db,
+      `SELECT COUNT(*) AS n FROM funding_opportunities
+       WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
+         AND link_status = 'broken'
+         AND COALESCE(status, 'active') = 'active'
+         AND (COALESCE(is_hidden, FALSE) = TRUE OR COALESCE(is_active, TRUE) = FALSE)`,
+    ))?.n)
+    const repairPendingBrokenDirect = normalizeCount((await safeGet(
+      db,
+      `SELECT COUNT(*) AS n FROM funding_opportunities
+       WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
+         AND link_status = 'broken' AND status = 'paused'`,
+    ))?.n)
+  const retiredBrokenDirect = normalizeCount((await safeGet(
     db,
     `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'') IN ${directoryKinds}`,
-  ))?.n ?? 0
+     WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
+       AND link_status = 'skipped'
+       AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'`,
+  ))?.n)
+  const scheduledRetryBrokenDirect = normalizeCount((await safeGet(
+    db,
+    `SELECT COUNT(*) AS n FROM funding_opportunities
+     WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
+       AND link_status = 'skipped' AND status = 'paused'
+       AND COALESCE(verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'`,
+  ))?.n)
+  const totalDirectory = normalizeCount((await safeGet(
+    db,
+    `SELECT COUNT(*) AS n FROM funding_opportunities
+     WHERE COALESCE(opportunity_kind,'') IN ${directoryKinds}
+       AND COALESCE(is_active, TRUE) = TRUE
+       AND COALESCE(is_hidden, FALSE) = FALSE`,
+  ))?.n)
 
-  // Placeholder/synthetic rows that should never exist in production.
-  const placeholderCount = (await safeGet(
+  const placeholderCount = normalizeCount((await safeGet(
     db,
     `SELECT COUNT(*) AS n FROM funding_opportunities
      WHERE LOWER(COALESCE(source,'')) IN ('synthetic','template','fake')
         OR LOWER(COALESCE(record_origin,'')) IN ('synthetic')
         OR LOWER(COALESCE(title,'')) LIKE '%placeholder%'
         OR LOWER(COALESCE(title,'')) LIKE '%lorem ipsum%'`,
-  ))?.n ?? 0
+  ))?.n)
 
-  // ── Verification events (last 24h) ──────────────────────────────────
-  const events24h = (await safeGet(
+  const eventsSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const eventsRow = await safeGet(
     db,
-    `SELECT COUNT(*) AS n FROM verification_events
-     WHERE created_at >= datetime('now','-1 day') OR created_at >= NOW() - INTERVAL '1 day'`,
-  ).catch(() => null))?.n ?? null
+    'SELECT COUNT(*) AS n FROM verification_events WHERE ts >= ?',
+    [eventsSince],
+  )
+  const events24h = eventsRow?.__error ? null : normalizeCount(eventsRow?.n)
 
   // ── Coverage by source ──────────────────────────────────────────────
   const coverage = await safeAll(
@@ -267,6 +315,13 @@ export async function buildMissionHealth(db) {
       `SELECT status, COUNT(*) AS n FROM applications GROUP BY status`,
     )
   }
+
+  const normalizedCoverage = Array.isArray(coverage)
+    ? coverage.map((row) => ({ ...row, n: normalizeCount(row?.n) }))
+    : []
+  const normalizedFunnel = Array.isArray(funnel)
+    ? funnel.map((row) => ({ ...row, n: normalizeCount(row?.n) }))
+    : []
 
   const verifiedPct = pct(verifiedDirect, totalDirect)
   const brokenPct = pct(brokenDirect, totalDirect)
@@ -477,9 +532,14 @@ export async function buildMissionHealth(db) {
     matcher_version: MATCHER_VERSION,
     targets: TARGETS,
     counts: {
+      catalog_direct_opportunities_total: catalogDirect,
       direct_opportunities_total: totalDirect,
       direct_opportunities_verified: verifiedDirect,
       direct_opportunities_broken: brokenDirect,
+      quarantined_broken_direct_opportunities: quarantinedBrokenDirect,
+        repair_pending_broken_direct_opportunities: repairPendingBrokenDirect,
+        retired_broken_direct_opportunities: retiredBrokenDirect,
+      scheduled_retry_broken_direct_opportunities: scheduledRetryBrokenDirect,
       directory_opportunities_total: totalDirectory,
       placeholder_opportunities: placeholderCount,
       verification_events_24h: events24h,
@@ -488,8 +548,8 @@ export async function buildMissionHealth(db) {
       verified_pct: verifiedPct,
       broken_pct: brokenPct,
     },
-    coverage_by_source: coverage,
-    application_funnel: funnel,
+    coverage_by_source: normalizedCoverage,
+    application_funnel: normalizedFunnel,
     integration,
     field_usage: {
       ...fieldUsage,
@@ -505,4 +565,4 @@ export async function buildMissionHealth(db) {
 
 export { TARGETS as MISSION_TARGETS }
 
-export default { buildMissionHealth, MISSION_TARGETS: TARGETS }
+export default { buildMissionHealth, MISSION_TARGETS: TARGETS, normalizeCount, pct }

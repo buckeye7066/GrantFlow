@@ -410,8 +410,20 @@ export const DEMOTED_MATCH_SCORE = 4
  */
 export const AUTO_ADD_SCORE = 8
 
-/** Strong match bucket threshold (top ~10% of real matches; old 75). */
-export const STRONG_MATCH_SCORE = 14
+/**
+ * Strong match bucket threshold (top ~10% of real matches; old 75).
+ *
+ * Re-calibrated 2026-07-31 from 14 against 5,706 non-synthetic scored prod
+ * matches (p50=6, p75=13, p90=17, p95=23, max=85 — the previous fit was
+ * p50=8, p90=15, max=47). At 14 this bar labelled 15.4% of matches "Excellent
+ * Match", roughly one in six, against a documented intent of ~10%; 17 measures
+ * 11.8%. DISPLAY ONLY — decisions run off ACCEPT_SCORE / DECISION_ACCEPT_MIN /
+ * DISCOVERY_MIN_SCORE_FLOOR, which are unchanged. MUST equal
+ * MATCH_DISPLAY_TIERS.excellent in src/lib/matchDisplayThresholds.js; the
+ * drift tripwire in src/lib/__tests__/matchDisplayThresholds.test.js enforces
+ * it.
+ */
+export const STRONG_MATCH_SCORE = 17
 
 /** Good match bucket threshold (top ~quarter; old 50). */
 export const GOOD_MATCH_SCORE = 11

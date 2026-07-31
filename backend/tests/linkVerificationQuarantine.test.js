@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 
-import { runLinkVerification } from '../services/linkVerificationService.js'
+import {
+  quarantineUnverifiedDirectOpportunities,
+  runLinkVerification,
+} from '../services/linkVerificationService.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -135,6 +138,38 @@ describe('link verification quarantine', () => {
       expect(broken.link_status_code).toBe(404)
       expect(broken.is_hidden).toBe(1)
       expect(broken.is_active).toBe(0)
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+})
+
+
+describe('startup SQL-only link quarantine', () => {
+  it('fails closed without fetching, preserves resources, and restores proven rows', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    try {
+      insertOpportunity(db, { id: 'unverified-direct', url: 'https://8.8.8.8/unverified' })
+      insertOpportunity(db, { id: 'broken-direct', url: 'https://8.8.8.8/broken', status: 'broken' })
+      insertOpportunity(db, { id: 'skipped-direct', url: 'https://8.8.8.8/skipped', status: 'skipped' })
+      insertOpportunity(db, { id: 'directory-resource', kind: 'directory', status: 'unverified' })
+      insertOpportunity(db, { id: 'proven-hidden', url: 'https://8.8.8.8/proven', status: 'ok', hidden: 1 })
+      db.prepare('UPDATE funding_opportunities SET last_verified_at = ? WHERE id = ?')
+        .run('2026-07-29T12:00:00.000Z', 'proven-hidden')
+
+      const stats = await quarantineUnverifiedDirectOpportunities(db)
+
+      expect(stats).toMatchObject({ ok: true, quarantined: 3, deactivated: 1, restored: 1 })
+      expect(fetchSpy).not.toHaveBeenCalled()
+
+      expect(readRow(db, 'unverified-direct')).toMatchObject({ is_hidden: 1, is_active: 1 })
+      expect(readRow(db, 'broken-direct')).toMatchObject({ is_hidden: 1, is_active: 0 })
+      expect(readRow(db, 'skipped-direct')).toMatchObject({ is_hidden: 1, is_active: 1 })
+      expect(readRow(db, 'directory-resource')).toMatchObject({ is_hidden: 0, is_active: 1 })
+      expect(readRow(db, 'proven-hidden')).toMatchObject({ is_hidden: 0, is_active: 1, link_status: 'ok' })
     } finally {
       fetchSpy.mockRestore()
       db.close()

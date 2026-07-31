@@ -31,6 +31,26 @@ function decisionUpper(d) {
   return String(d ?? '').trim().toUpperCase()
 }
 
+// The engine's canonical decision is authoritative. A high raw score can still
+// be REVIEW after eligibility, generic-title, locator, or safety caps. Amy used
+// to count such rows as ACCEPT via an OR-score fallback, manufacturing false
+// ineligible/false-positive findings after the engine had already contained the
+// row. Only fall back to score bands for legacy rows that carry no recognized
+// decision at all.
+const CANONICAL_RECOMMENDATION_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
+function canonicalRecommendationDecision(recommendation) {
+  const explicit = decisionUpper(
+    recommendation?.decision ?? recommendation?.match_decision,
+  )
+  if (CANONICAL_RECOMMENDATION_DECISIONS.has(explicit)) return explicit
+
+  // Fail closed for legacy/incomplete producer rows. A score is fit evidence,
+  // not permission to bypass eligibility, generic-title, locator, source, or
+  // actionability caps. Missing canonical truth may remain human-reviewable,
+  // but Amy must never promote it to ACCEPT on score alone.
+  return num(recommendation?.match_score) >= REVIEW_SCORE ? 'REVIEW' : 'REJECT'
+}
+
 /** Build one Anya-shaped finding from a type + specifics. */
 function makeFinding(type, { message, excerpt, evidence, severity }) {
   const target = CODE_TARGETS[type] || { file: 'backend/services/crawlerOsService.js', line: 1, severity: SEVERITY.MEDIUM, hint: '' }
@@ -118,13 +138,44 @@ function schoolAcronym(name) {
   return w.length >= 2 ? w.map((x) => x[0]).join('') : ''
 }
 
-/** True if any normalized title/sponsor references the school (full name or acronym). */
+const GENERIC_INSTITUTION_TAILS = new Set(['university', 'college', 'school', 'institute', 'academy'])
+
+// Branch campuses are often published as "MSU Billings" or "IU Bloomington"
+// rather than the full legal institution name. Build only the high-precision
+// acronym+campus alias; never fall back to loose token overlap.
+function schoolCampusAlias(name) {
+  const words = normLower(name).split(' ').filter((x) => x && !RECALL_STOP.has(x))
+  if (words.length < 3 || words[0] === 'university') return ''
+  const campus = words.at(-1)
+  if (!campus || GENERIC_INSTITUTION_TAILS.has(campus)) return ''
+  const baseAcronym = words.slice(0, -1).map((x) => x[0]).join('')
+  return baseAcronym.length >= 2 ? `${baseAcronym} ${campus}` : ''
+}
+
+// A very small, evidence-backed publication-name registry. Institutions often
+// publish awards under a protected short name that is neither the legal name nor
+// a safe acronym. Keep this explicit rather than accepting loose token overlap.
+const SCHOOL_PUBLICATION_ALIASES = new Map([
+  ['the ohio state university', ['ohio state']],
+])
+function schoolPublicationAliases(name) {
+  return SCHOOL_PUBLICATION_ALIASES.get(normLower(name)) || []
+}
+
+/** True if any normalized title/sponsor references the school (full name, acronym, campus alias, or protected publication name). */
 function titlesReference(normalizedTitles, school) {
   const n = normLower(school)
   if (!n || n.length < 3) return false
   const acr = schoolAcronym(school)
+  const campusAlias = schoolCampusAlias(school)
+  const publicationAliases = schoolPublicationAliases(school)
   const acrRx = acr && acr.length >= 2 ? new RegExp(`\\b${acr}\\b`) : null
-  return normalizedTitles.some((t) => t.includes(n) || (acrRx && acrRx.test(t)))
+  return normalizedTitles.some((t) =>
+    t.includes(n) ||
+    publicationAliases.some((alias) => t.includes(alias)) ||
+    (campusAlias && t.includes(campusAlias)) ||
+    (acrRx && acrRx.test(t)),
+  )
 }
 
 /**
@@ -181,10 +232,10 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   const stored = num(run.stored ?? result?.persisted?.opportunities)
   const recommendations = Array.isArray(run.recommendations) ? run.recommendations : []
   const accepted = recommendations.filter(
-    (r) => decisionUpper(r.decision) === 'ACCEPT' || num(r.match_score) >= ACCEPT_SCORE,
+    (r) => canonicalRecommendationDecision(r) === 'ACCEPT',
   )
   const review = recommendations.filter(
-    (r) => decisionUpper(r.decision) === 'REVIEW' || (num(r.match_score) >= REVIEW_SCORE && num(r.match_score) < ACCEPT_SCORE),
+    (r) => canonicalRecommendationDecision(r) === 'REVIEW',
   )
   const topScore = recommendations.reduce((m, r) => Math.max(m, num(r.match_score)), 0)
 
@@ -208,7 +259,7 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   const candidates = recommendations.map((r) => ({
     score: num(r.match_score),
     topical: topicalEvidenceOf(r),
-    decision: decisionUpper(r.decision),
+    decision: canonicalRecommendationDecision(r),
     title: r.title ?? null,
     locator: isLocatorKind(r.kind),
     generic: isGenericTitle(r.title),

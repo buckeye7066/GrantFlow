@@ -28,6 +28,7 @@ import path from 'path'
 import zipcodes from 'zipcodes-nrviens'
 import { searchGrants } from '../shared/grantsGovClient.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
+import { buildStateSupplementalDirectories } from './stateSupplementalDirectories.js'
 // Profile-driven Grants.gov query terms. When a profile context is supplied to
 // the geo crawl, we build the search keywords from the profile (type + needs +
 // interests, PII-scrubbed) instead of a generic fallback — see canonical_rules
@@ -659,17 +660,25 @@ function mapOsmElementToOpportunity({ element, zip, coords }) {
   const name = String(tags.name || tags.operator || tags.brand || '').trim()
   if (!name) return null
 
-  const url = pickFirstUrl(
-    tags.website,
-    tags['contact:website'],
-    tags.url,
-    tags['contact:url'],
-    tags['contact:facebook'],
-    tags.facebook,
-    tags['contact:instagram'],
-    tags.instagram,
-  )
-  if (!url) return null
+  const contactUrl = pickFirstUrl(
+      tags.website,
+      tags['contact:website'],
+      tags.url,
+      tags['contact:url'],
+      tags['contact:facebook'],
+      tags.facebook,
+      tags['contact:instagram'],
+      tags.instagram,
+    )
+    // link_backlog_resource_contract: Overpass rows are local resource pointers,
+    // never direct funding. The OSM element page is the stable evidence target;
+    // an organization website remains optional contact metadata.
+    const osmType = ['node', 'way', 'relation'].includes(String(element?.type || '').toLowerCase())
+      ? String(element.type).toLowerCase()
+      : null
+    const osmId = /^d+$/.test(String(element?.id || '')) ? String(element.id) : null
+    const url = osmType && osmId ? `https://www.openstreetmap.org/${osmType}/${osmId}` : null
+    if (!url) return null
 
   const kind = String(tags.amenity || tags.social_facility || tags.shop || '').trim()
   const normalizedKind = kind.toLowerCase()
@@ -700,8 +709,13 @@ function mapOsmElementToOpportunity({ element, zip, coords }) {
     application_url: url,
     source_url: url,
     evidence_url: url,
-    opportunity_type: 'benefit',
-    type: 'PROGRAM',
+    opportunity_kind: 'directory',
+      result_kind: 'directory',
+      opportunity_type: 'directory',
+      type: 'DIRECTORY',
+      record_origin: 'directory_resource',
+      source_trust_tier: 'community_directory',
+      contact_info: contactUrl ? { website: contactUrl } : null,
     requires_match: false,
     match_percentage: 0,
     is_national: false,
@@ -1198,6 +1212,7 @@ async function processZip(zip, db, config) {
     } else {
       await reportSource('state_portal', 'Querying source: state portals')
       stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
+      stateResults.push(...buildStateSupplementalDirectories({ state: stateForZip, zip }))
 
       await reportSource('foundation_locator', 'Querying source: foundation locators')
       foundationResults = await searchFoundationLocator(zip, coords ?? meta ?? null)

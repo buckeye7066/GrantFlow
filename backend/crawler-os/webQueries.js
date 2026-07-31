@@ -74,6 +74,13 @@ function cleanInstitution(v) {
   return s.length >= 3 && s.length <= 90 ? s : '';
 }
 
+const SCHOOL_PUBLICATION_ALIASES = Object.freeze({
+  'the ohio state university': ['Ohio State'],
+});
+function schoolPublicationAliases(name) {
+  return SCHOOL_PUBLICATION_ALIASES[String(name || '').toLowerCase().trim()] || [];
+}
+
 // Turn an internal need/interest token (e.g. "medical_bills", "first_gen") into
 // human search language ("medical bills", "first gen"). Bounded + lowercased.
 function humanize(term) {
@@ -170,13 +177,55 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   const core = [];
   const extra = [];
 
+  // Amy flywheel precision lane: pin the defining program families for the
+  // organization classes that repeatedly came back REVIEW-only. These must be
+  // inserted BEFORE generic type/geo queries because the final query cap slices
+  // from the end. The rows still face the normal reality, eligibility, and match
+  // gates; this changes discovery priority, not scoring permissiveness.
+  {
+    const hasType = (t) => types.includes(t);
+    const needSet = needs.map((n) => n.toLowerCase());
+    const needSignal = (re) => needSet.some((n) => re.test(n));
+
+    const communityDevelopment =
+      hasType('nonprofit') && needSignal(/housing development|community facilit/);
+    if (communityDevelopment) {
+      if (state) add(core, `community development block grant ${state}`);
+      if (state) add(core, `HOME CHDO affordable housing funding ${state}`);
+      add(core, `CDFI Fund community development grants ${year}`);
+    }
+
+    const publicHousing = hasType('government') && needSignal(/housing|housing development/);
+    if (publicHousing) {
+      add(core, `HUD Public Housing Capital Fund ${year}`);
+      add(core, `HUD Choice Neighborhoods grants ${year}`);
+      add(core, `HUD ROSS resident services funding ${year}`);
+    }
+
+    const workforceOrganization =
+      (hasType('nonprofit') || hasType('government')) && needSignal(/workforce|employment/);
+    if (workforceOrganization) {
+      if (state) add(core, `WIOA workforce development funding ${state}`);
+      add(core, `Department of Labor apprenticeship grants ${year}`);
+      add(core, `Employment and Training Administration funding opportunities ${year}`);
+    }
+  }
+
   // ── CORE (always emitted, highest signal) ──
   // Institution-specific funding FIRST — endowed / departmental / foundation
   // scholarships are findable ONLY by the school's name; no geo/type/need query
   // can reach them. This is the single biggest recall gap for a named student.
   if (isStudent) {
     schools.forEach((school, i) => {
+      // Exact-name query defeats generic scholarship SERP drift while the
+      // existing unquoted form preserves broad recall.
+      add(core, `"${school}" scholarships`);
+      for (const alias of schoolPublicationAliases(school)) {
+        add(core, `"${alias}" scholarships`);
+        if (i === 0) add(extra, `"${alias}" financial aid scholarships`);
+      }
       add(core, `${school} scholarships`);
+      if (i === 0) add(extra, `"${school}" financial aid scholarships`);
       // Departmental / field-of-study endowment at the primary institution.
       if (i === 0 && field) add(core, `${school} ${field} scholarship`);
       // The university FOUNDATION is where most named endowments live.
@@ -510,7 +559,13 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     if (classes.includes('institution_gap') || missingSchools.length) {
       for (const s of missingSchools.slice(0, 3)) {
         add(forced, `${s} scholarships`);
+        add(forced, `"${s}" scholarships`);
+        for (const alias of schoolPublicationAliases(s)) {
+          add(forced, `"${alias}" scholarships`);
+          add(extra, `"${alias}" financial aid scholarships`);
+        }
         add(forced, `${s} foundation scholarships`);
+        add(extra, `"${s}" financial aid scholarships`);
       }
     }
     // hyperlocal_gap → re-emit county-scoped queries even if a prior run tried

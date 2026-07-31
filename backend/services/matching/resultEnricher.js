@@ -185,7 +185,10 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
   const matchReasons = reasonCodes.length > 0 ? reasonCodes : [fallbackReason]
 
   let score = clampScore(decision?.score)
-  if (trust.downgrade) {
+  // A persisted score/decision pair is the audited canonical artifact. Trust
+  // metadata may explain or sort a live recomputation, but query-time display
+  // enrichment must not silently rewrite a stored score and create parity drift.
+  if (trust.downgrade && !hasStoredDecision) {
     score = clampScore(score - trustDowngradePenalty)
   }
 

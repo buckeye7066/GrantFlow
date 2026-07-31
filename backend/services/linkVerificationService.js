@@ -123,8 +123,13 @@ export async function checkUrl(url, opts = {}) {
         signal: controller.signal,
         redirect: 'follow',
         headers: {
-          'User-Agent': 'GrantFlow-LinkChecker/1.0 (contact: support@grantflow.app)',
-        },
+            // browser-compatible liveness probe: transparent product token plus
+            // normal document headers avoids false 403/404 results from servers
+            // that reject bare programmatic HEAD requests.
+            'User-Agent': 'Mozilla/5.0 (compatible; GrantFlowLinkVerifier/2.0; +https://app.axiombiolabs.org)',
+            Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
       })
       clearTimeout(timer)
       // res.url contains the URL after redirects (whatwg-fetch + node-fetch).
@@ -142,7 +147,7 @@ export async function checkUrl(url, opts = {}) {
 
   // Some servers ban HEAD entirely. Retry with GET when HEAD comes back as
   // method-not-allowed / forbidden so we don't mark a working page as broken.
-  if (outcome.code === 405 || outcome.code === 403 || outcome.code === 501) {
+  if (outcome.code === null || outcome.code < 200 || outcome.code >= 400) {
     outcome = await tryProbe('GET')
     method = 'get'
   }
@@ -208,6 +213,25 @@ export async function verifyOpportunityLinkNow(db, oppRow, { verifiedBy = 'stop-
       typeof result.code === 'number' ? result.code : null,
       String(oppRow.id),
     )
+    if (result.status === 'ok' || result.status === 'redirect') {
+      const isPostgres = db?.dialect === 'postgres'
+      const falseVal = isPostgres ? false : 0
+      const trueVal = isPostgres ? true : 1
+      try {
+        await db.prepare(`
+          UPDATE funding_opportunities
+             SET is_hidden = ?, is_active = ?,
+                 status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
+           WHERE id = ? AND COALESCE(status, 'active') <> 'expired'
+        `).run(falseVal, trueVal, String(oppRow.id))
+      } catch {
+        try {
+          await db.prepare(`
+            UPDATE funding_opportunities SET is_hidden = ?, is_active = ? WHERE id = ?
+          `).run(falseVal, trueVal, String(oppRow.id))
+        } catch { /* legacy schema: verification truth already persisted above */ }
+      }
+    }
   } catch {
     return { status: result.status, code: result.code, updated: false }
   }
@@ -238,6 +262,72 @@ export async function verifyOpportunityLinkNow(db, oppRow, { verifiedBy = 'stop-
  * @param {string} options.verifiedBy - identifier for who/what triggered the run
  * @returns {Promise<{ checked, ok, broken, redirect, skipped, deactivated, expired }>}
  */
+export async function quarantineUnverifiedDirectOpportunities(db) {
+  if (!db || typeof db.prepare !== 'function') {
+    return { ok: false, quarantined: 0, deactivated: 0, restored: 0, reason: 'database_unavailable' }
+  }
+
+  const isPostgres = db?.dialect === 'postgres'
+  const trueVal = isPostgres ? true : 1
+  const falseVal = isPostgres ? false : 0
+  const changes = (result) => Number(result?.changes ?? result?.rowCount ?? 0)
+  const directPredicate = [
+    "LOWER(COALESCE(opportunity_kind, 'direct')) IN ('direct', 'benefit')",
+    "UPPER(COALESCE(type, '')) NOT IN ('DIRECTORY', 'REFERRAL', 'SCHOOL_PORTAL', 'PAST_AWARD_INTEL')",
+    "LOWER(COALESCE(result_kind, '')) NOT IN ('directory', 'referral', 'school_portal', 'past_award_intel')",
+    "LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%directory%'",
+    "LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%referral%'",
+  ].join(' AND ')
+
+  try {
+    const quarantined = await db
+      .prepare(
+        'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + directPredicate +
+        // proof-based startup quarantine: only a timestamped successful probe
+        // may keep a direct/benefit row visible. skipped, null, stale-claimed,
+        // unknown, and future noncanonical statuses all fail closed.
+        " AND COALESCE(is_hidden, ?) = ? AND (COALESCE(link_status, 'unverified') NOT IN ('ok', 'redirect', 'verified') OR last_verified_at IS NULL)",
+      )
+      .run(trueVal, falseVal, falseVal)
+
+    // Broken direct targets get both the soft quarantine and the hard active-row
+    // kill switch so older readers that only filter is_active still fail closed.
+    const deactivated = await db
+      .prepare(
+        'UPDATE funding_opportunities SET is_active = ? WHERE ' + directPredicate +
+        " AND COALESCE(is_active, ?) = ? AND link_status = 'broken'",
+      )
+      .run(falseVal, trueVal, trueVal)
+
+    // A prior interrupted sweep may have left a proven row hidden. Reveal only
+    // rows carrying both a successful canonical status and a real timestamp;
+    // never reactivate an independently expired/deactivated program.
+    const restored = await db
+      .prepare(
+        'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + directPredicate +
+        " AND COALESCE(is_hidden, ?) = ? AND link_status IN ('ok', 'redirect', 'verified') AND last_verified_at IS NOT NULL",
+      )
+      .run(falseVal, falseVal, trueVal)
+
+    return {
+      ok: true,
+      quarantined: changes(quarantined),
+      deactivated: changes(deactivated),
+      restored: changes(restored),
+      reason: null,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      quarantined: 0,
+      deactivated: 0,
+      restored: 0,
+      reason: 'quarantine_failed',
+      error: error?.message || String(error),
+    }
+  }
+}
+
 export async function runLinkVerification(
   db,
   { limit = 100, verifiedBy = 'recurring-verifier' } = {},
@@ -251,8 +341,13 @@ export async function runLinkVerification(
                result_kind, last_verified_at, link_status
         FROM funding_opportunities
         WHERE (application_url IS NOT NULL OR source_url IS NOT NULL)
-          AND (last_verified_at IS NULL OR last_verified_at < ?)
-        ORDER BY (last_verified_at IS NULL) DESC, last_verified_at ASC
+            AND NOT (
+              link_status = 'skipped'
+              AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'
+            )
+            AND (link_status = 'broken' OR last_verified_at IS NULL OR last_verified_at < ?)
+          ORDER BY CASE WHEN link_status = 'broken' THEN 0 ELSE 1 END,
+                   (last_verified_at IS NULL) DESC, last_verified_at ASC
         LIMIT ?
       `,
     )
@@ -267,6 +362,8 @@ export async function runLinkVerification(
     unverified: 0,
     deactivated: 0,
     expired: 0,
+    quarantined: 0,
+    restored: 0,
   }
 
   const update = db.prepare(`
@@ -285,10 +382,10 @@ export async function runLinkVerification(
   // Soft-hide for broken direct opps (separate from is_active; allows admin
   // views to surface them via allowHidden, while normal users don't see them).
   const hide = db.prepare(`
-    UPDATE funding_opportunities
-    SET is_hidden = 1
-    WHERE id = ?
-  `)
+      UPDATE funding_opportunities
+      SET is_hidden = ?
+      WHERE id = ?
+    `)
 
   const deactivate = db.prepare(`
     UPDATE funding_opportunities
@@ -298,6 +395,41 @@ export async function runLinkVerification(
 
   const isPostgres = db?.dialect === 'postgres'
   const falseVal = isPostgres ? false : 0
+  const trueVal = isPostgres ? true : 1
+  // link_repair_success_restores_visibility: current proof heals quarantine.
+  // Legacy/minimal schemas may not carry status; restoration is additive and
+  // must never invalidate the canonical verification timestamp write.
+  const restoreVerifiedVisibility = async (opportunityId) => {
+    try {
+      await db.prepare(`
+        UPDATE funding_opportunities
+           SET is_hidden = ?, is_active = ?,
+               status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
+         WHERE id = ? AND COALESCE(status, 'active') <> 'expired'
+      `).run(falseVal, trueVal, opportunityId)
+    } catch {
+      try {
+        await db.prepare(`
+          UPDATE funding_opportunities SET is_hidden = ?, is_active = ? WHERE id = ?
+        `).run(falseVal, trueVal, opportunityId)
+      } catch { /* visibility columns may also be absent on a narrow legacy fixture */ }
+    }
+  }
+
+  const quarantine = await quarantineUnverifiedDirectOpportunities(db)
+  if (quarantine?.ok) {
+    stats.quarantined += Number(quarantine.quarantined || 0)
+    stats.deactivated += Number(quarantine.deactivated || 0)
+    stats.restored += Number(quarantine.restored || 0)
+  } else {
+    console.warn('[link-verify] quarantine pass failed:', quarantine?.reason || 'unknown')
+  }
+
+  const revealVerified = db.prepare(`
+    UPDATE funding_opportunities
+       SET is_hidden = ?
+     WHERE id = ?
+  `)
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE)
@@ -319,8 +451,20 @@ export async function runLinkVerification(
           typeof result.code === 'number' ? result.code : null,
           row.id,
         )
+        if (result.status === 'ok' || result.status === 'redirect') {
+          await restoreVerifiedVisibility(row.id)
+        }
         stats.checked++
         stats[result.status] = (stats[result.status] || 0) + 1
+
+        if (result.status === 'ok' || result.status === 'redirect') {
+          try {
+            const revealed = await revealVerified.run(falseVal, row.id)
+            stats.restored += Number(revealed?.changes ?? revealed?.rowCount ?? 0)
+          } catch (err) {
+            console.warn('[link-verify] reveal verified row failed for', row.id, err?.message)
+          }
+        }
 
         // Append-only audit log of every probe (mission dashboard input).
         await recordVerificationEvent(db, {
@@ -346,7 +490,7 @@ export async function runLinkVerification(
           try {
             // is_hidden is the soft signal consumer queries filter on; deactivate
             // is the hard kill-switch that strips it from active=1 paths.
-            await hide.run(row.id)
+            await hide.run(isPostgres ? true : 1, row.id)
             await deactivate.run(falseVal, row.id)
             stats.deactivated++
           } catch (err) {

@@ -133,6 +133,40 @@ const MATCH_REASON_LABELS = Object.freeze({
   eligibility_match: 'You meet the eligibility',
   focus_area_match: 'Matches your focus areas',
   deadline_open: 'Deadline is still open',
+  // Category slugs measured in production 2026-07-31, by frequency over
+  // profile_opportunity_matches.match_reasons (education 5314, individual
+  // 4832, housing 3103, health_medical 2668, nonprofit_ministry 1481, ...).
+  // These render as the "Why This Matches" badges; without an entry the
+  // title-case fallback below still prevents raw snake_case, but curated
+  // copy reads better ("Health & medical" vs "Health medical").
+  education: 'Education',
+  individual: 'Individual applicant',
+  housing: 'Housing',
+  health_medical: 'Health & medical',
+  nonprofit_ministry: 'Nonprofit / ministry',
+  business: 'Small business',
+  veteran: 'Veteran',
+  food: 'Food security',
+  caregiving: 'Caregiving',
+  programs: 'Programs & services',
+  energy: 'Energy & utilities',
+  emergency: 'Emergency need',
+  family_life: 'Family circumstances',
+  employment: 'Employment',
+  disability: 'Disability',
+  government: 'Government benefit',
+  technology_equipment: 'Technology & equipment',
+  transportation: 'Transportation',
+  agriculture: 'Agriculture',
+  farm: 'Farming',
+  capital: 'Capital & facilities',
+  research_arts: 'Research & arts',
+  operations: 'Operating support',
+  infrastructure: 'Infrastructure',
+  legal: 'Legal aid',
+  fafsa: 'FAFSA on file',
+  pell: 'Pell-eligible',
+  trusted_source: 'Trusted source',
 })
 
 /**
