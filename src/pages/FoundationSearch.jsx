@@ -17,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog"
-import { formatReasonText } from "@/utils/reasonText"
+import { humanizeMatchReason } from "@/utils/reasonText"
 import {
   Search, Building2, DollarSign, FileText, ExternalLink,
   Loader2, MapPin, TrendingUp, Database, Beaker, Landmark,
@@ -808,7 +808,7 @@ function DetailDialog({ target, onClose, foundationDetail, detailLoading, scores
         {scored?.match_reasons?.length > 0 && (
           <ul className="text-xs text-slate-600 list-disc pl-5 space-y-0.5">
             {scored.match_reasons.slice(0, 5).map((r, i) => {
-              const text = formatReasonText(r)
+              const text = humanizeMatchReason(r)
               return text ? <li key={i}>{text}</li> : null
             })}
           </ul>

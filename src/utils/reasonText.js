@@ -36,72 +36,6 @@ const HUMAN_TEXT_KEYS = [
 
 const MAX_DISPLAY_LENGTH = 240
 
-/**
- * Slug -> human label for match reasons.
- *
- * These render as the "Why This Matches" badges on the matcher, the grant
- * card and the source trace, and until now the raw producer slug was shown
- * verbatim: a profile owner looking at why a source fits their family read
- * `health_medical`, `nonprofit_ministry`, `family_life`,
- * `technology_equipment`. Vocabulary taken from production on 2026-07-31 by
- * frequency over profile_opportunity_matches.match_reasons (top entries:
- * education 5314, individual 4832, housing 3103, health_medical 2668,
- * nonprofit_ministry 1481).
- *
- * Anything not listed falls through to a generic de-slugify, so a NEW producer
- * slug degrades to "Technology Equipment" rather than reappearing as raw
- * snake_case. Only slug-SHAPED strings are touched — a reason that is already
- * a sentence ("Profession/major match: EMS/EMT/paramedic") is left alone.
- */
-const REASON_LABELS = Object.freeze({
-  education: 'Education',
-  individual: 'Individual applicant',
-  housing: 'Housing',
-  health_medical: 'Health & medical',
-  nonprofit_ministry: 'Nonprofit / ministry',
-  business: 'Small business',
-  veteran: 'Veteran',
-  food: 'Food security',
-  caregiving: 'Caregiving',
-  programs: 'Programs & services',
-  energy: 'Energy & utilities',
-  emergency: 'Emergency need',
-  family_life: 'Family circumstances',
-  employment: 'Employment',
-  disability: 'Disability',
-  government: 'Government benefit',
-  technology_equipment: 'Technology & equipment',
-  transportation: 'Transportation',
-  agriculture: 'Agriculture',
-  farm: 'Farming',
-  capital: 'Capital & facilities',
-  research_arts: 'Research & arts',
-  operations: 'Operating support',
-  infrastructure: 'Infrastructure',
-  legal: 'Legal aid',
-  fafsa: 'FAFSA on file',
-  pell: 'Pell-eligible',
-  trusted_source: 'Trusted source',
-})
-
-// Slug shape: lowercase alphanumerics joined by single underscores. A string
-// with spaces, punctuation or capitals is already human-authored copy.
-const SLUG_RE = /^[a-z0-9]+(?:_[a-z0-9]+)*$/
-
-/**
- * Render a reason string for humans. Pure; exported for tests.
- */
-export function humanizeReasonSlug(value) {
-  const str = String(value ?? '')
-  if (!SLUG_RE.test(str)) return str
-  const mapped = REASON_LABELS[str]
-  if (mapped) return mapped
-  return str
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ')
-}
-
 function truncate(value) {
   const str = String(value ?? '')
   if (str.length <= MAX_DISPLAY_LENGTH) return str
@@ -118,9 +52,7 @@ function formatPrimitive(value) {
 
 export function formatReasonText(value) {
   const primitive = formatPrimitive(value)
-  // Humanize BEFORE truncating: labels are short, and a slug that survives to
-  // the UI is the thing users actually read.
-  if (primitive !== null) return truncate(humanizeReasonSlug(primitive))
+  if (primitive !== null) return truncate(primitive)
 
   if (Array.isArray(value)) {
     return truncate(
@@ -144,11 +76,8 @@ export function formatReasonText(value) {
   // optionally annotated with the source — never as raw JSON.
   for (const key of HUMAN_TEXT_KEYS) {
     if (Object.prototype.hasOwnProperty.call(value, key)) {
-      const raw = formatPrimitive(value[key])
-      if (typeof raw === 'string' && raw.length > 0) {
-        // Structured producers emit the same slugs as the string form, so the
-        // two paths must read identically to the user.
-        const inner = humanizeReasonSlug(raw)
+      const inner = formatPrimitive(value[key])
+      if (typeof inner === 'string' && inner.length > 0) {
         const source = formatPrimitive(value.source)
         if (source && key !== 'source' && key !== 'reason') return truncate(inner)
         if (source && key === 'reason') return truncate(`${inner} (${source})`)
@@ -204,6 +133,40 @@ const MATCH_REASON_LABELS = Object.freeze({
   eligibility_match: 'You meet the eligibility',
   focus_area_match: 'Matches your focus areas',
   deadline_open: 'Deadline is still open',
+  // Category slugs measured in production 2026-07-31, by frequency over
+  // profile_opportunity_matches.match_reasons (education 5314, individual
+  // 4832, housing 3103, health_medical 2668, nonprofit_ministry 1481, ...).
+  // These render as the "Why This Matches" badges; without an entry the
+  // title-case fallback below still prevents raw snake_case, but curated
+  // copy reads better ("Health & medical" vs "Health medical").
+  education: 'Education',
+  individual: 'Individual applicant',
+  housing: 'Housing',
+  health_medical: 'Health & medical',
+  nonprofit_ministry: 'Nonprofit / ministry',
+  business: 'Small business',
+  veteran: 'Veteran',
+  food: 'Food security',
+  caregiving: 'Caregiving',
+  programs: 'Programs & services',
+  energy: 'Energy & utilities',
+  emergency: 'Emergency need',
+  family_life: 'Family circumstances',
+  employment: 'Employment',
+  disability: 'Disability',
+  government: 'Government benefit',
+  technology_equipment: 'Technology & equipment',
+  transportation: 'Transportation',
+  agriculture: 'Agriculture',
+  farm: 'Farming',
+  capital: 'Capital & facilities',
+  research_arts: 'Research & arts',
+  operations: 'Operating support',
+  infrastructure: 'Infrastructure',
+  legal: 'Legal aid',
+  fafsa: 'FAFSA on file',
+  pell: 'Pell-eligible',
+  trusted_source: 'Trusted source',
 })
 
 /**

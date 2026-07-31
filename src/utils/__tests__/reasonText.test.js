@@ -1,21 +1,46 @@
 /**
- * Tests for reasonText — the renderer behind the "Why This Matches" badges on
- * the matcher, grant cards and the source trace.
+ * Tests for the reasonText layering — two functions, two contracts:
  *
- * Two jobs, both load-bearing:
- *   1. never crash a render (React error #31: objects as children), and
- *   2. never show the profile owner a raw producer slug when explaining why a
- *      funding source fits their needs.
+ *   formatReasonText    — string COERCION only. Returns values verbatim
+ *                         (never crash a render, React error #31), and its
+ *                         verbatim behavior is pinned by the node:test lane
+ *                         (tests/unit/reasonText.test.mjs,
+ *                         grantOverviewMatchedNeeds.test.mjs) because
+ *                         diagnostic consumers rely on raw values like
+ *                         `missing_employer_evidence`.
  *
- * The slug vocabulary is taken from production on 2026-07-31, by frequency
- * over profile_opportunity_matches.match_reasons.
+ *   humanizeMatchReason — the DISPLAY humanizer behind every "Why This
+ *                         Matches" badge. Maps known slugs to curated copy,
+ *                         title-cases unknown identifiers, passes human
+ *                         sentences through.
+ *
+ * Learned the hard way (2026-07-31): humanization was first added into
+ * formatReasonText itself, which broke the pinned verbatim contract in CI.
+ * Humanize at the DISPLAY layer, never in the coercion layer.
+ *
+ * The slug vocabulary is taken from production 2026-07-31, by frequency over
+ * profile_opportunity_matches.match_reasons.
  */
 
 import { describe, expect, it } from "vitest"
 
-import { formatReasonText, humanizeReasonSlug } from "../reasonText.js"
+import { formatReasonText, humanizeMatchReason } from "../reasonText.js"
 
-describe("humanizeReasonSlug", () => {
+describe("formatReasonText stays verbatim (the coercion contract)", () => {
+  it("passes slug strings through UNTOUCHED", () => {
+    // Diagnostic consumers depend on raw values; humanization is the display
+    // layer's job. This is the exact regression that reddened CI.
+    expect(formatReasonText("health_medical")).toBe("health_medical")
+    expect(formatReasonText("missing_employer_evidence")).toBe("missing_employer_evidence")
+  })
+
+  it("coerces primitives without prettifying", () => {
+    expect(formatReasonText(true)).toBe("true")
+    expect(formatReasonText(42)).toBe("42")
+  })
+})
+
+describe("humanizeMatchReason — the 'Why This Matches' display layer", () => {
   it.each([
     ["health_medical", "Health & medical"],
     ["nonprofit_ministry", "Nonprofit / ministry"],
@@ -25,56 +50,37 @@ describe("humanizeReasonSlug", () => {
     ["individual", "Individual applicant"],
     ["fafsa", "FAFSA on file"],
     ["pell", "Pell-eligible"],
-  ])("maps the production slug %s to a human label", (slug, label) => {
-    expect(humanizeReasonSlug(slug)).toBe(label)
+    ["education", "Education"],
+    ["housing", "Housing"],
+  ])("maps the production slug %s to curated copy", (slug, label) => {
+    expect(humanizeMatchReason(slug)).toBe(label)
   })
 
-  it("de-slugifies an UNKNOWN slug rather than leaking snake_case", () => {
-    // A new producer slug must degrade gracefully, never reach the user raw.
-    expect(humanizeReasonSlug("wildfire_recovery")).toBe("Wildfire Recovery")
-    expect(humanizeReasonSlug("childcare")).toBe("Childcare")
+  it("still maps the original matching-reason codes", () => {
+    expect(humanizeMatchReason("keyword_match")).toBe("Matches your keywords")
+    expect(humanizeMatchReason("geographic_match")).toBe("In your geographic area")
+  })
+
+  it("title-cases an UNKNOWN slug rather than leaking snake_case", () => {
+    expect(humanizeMatchReason("wildfire_recovery")).toBe("Wildfire recovery")
   })
 
   it("leaves human-authored copy untouched", () => {
-    // Real production value — already a sentence, must not be mangled.
     const sentence = "Profession/major match: EMS/EMT/paramedic"
-    expect(humanizeReasonSlug(sentence)).toBe(sentence)
-    expect(humanizeReasonSlug("Serves Shelby County, TN")).toBe("Serves Shelby County, TN")
-  })
-
-  it("is safe on empty / nullish input", () => {
-    expect(humanizeReasonSlug(null)).toBe("")
-    expect(humanizeReasonSlug(undefined)).toBe("")
-    expect(humanizeReasonSlug("")).toBe("")
-  })
-})
-
-describe("formatReasonText", () => {
-  it("humanizes a plain slug", () => {
-    expect(formatReasonText("health_medical")).toBe("Health & medical")
+    expect(humanizeMatchReason(sentence)).toBe(sentence)
+    expect(humanizeMatchReason("Serves Shelby County, TN")).toBe("Serves Shelby County, TN")
   })
 
   it("humanizes a slug arriving inside a structured reason object", () => {
-    // Both producer shapes must read identically to the user.
-    expect(formatReasonText({ reason: "housing" })).toBe("Housing")
-    expect(formatReasonText({ label: "family_life" })).toBe("Family circumstances")
+    // Structured producers ({reason: slug}) must read like the string form.
+    expect(humanizeMatchReason({ reason: "housing" })).toBe("Housing")
+    expect(humanizeMatchReason({ label: "family_life" })).toBe("Family circumstances")
   })
 
-  it("keeps the source annotation on a {reason, source} object", () => {
-    expect(formatReasonText({ reason: "housing", source: "matchEngine" })).toBe(
-      "Housing (matchEngine)",
-    )
-  })
-
-  it("joins an array of slugs as human labels", () => {
-    expect(formatReasonText(["housing", "veteran"])).toBe("Housing, Veteran")
-  })
-
-  it("still never renders an object as a React child", () => {
-    // The original reason this module exists.
-    expect(formatReasonText({})).toBe("")
-    expect(formatReasonText(null)).toBe("")
-    expect(formatReasonText(undefined)).toBe("")
-    expect(formatReasonText({ unknownKey: "x", other: 1 })).toContain("unknownKey")
+  it("never renders an object raw, and is safe on nullish input", () => {
+    expect(humanizeMatchReason(null)).toBe("")
+    expect(humanizeMatchReason(undefined)).toBe("")
+    expect(humanizeMatchReason("")).toBe("")
+    expect(humanizeMatchReason({})).toBe("")
   })
 })

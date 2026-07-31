@@ -16,7 +16,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import HelpTip from '@/components/help/HelpTip';
 import { isRenderableUrl } from '@/lib/matchDisplayThresholds';
-import { formatReasonText } from '@/utils/reasonText';
+import { humanizeMatchReason } from '@/utils/reasonText';
 import { isHumanReviewNeeded, getStageHelp } from '@/components/pipeline/pipelineStageHelp';
 import HamiltonTaskBadge from '@/components/hamilton/HamiltonTaskBadge';
 import HamiltonTaskDrawer from '@/components/hamilton/HamiltonTaskDrawer';
@@ -353,7 +353,7 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
             <div className="bg-emerald-50 border border-emerald-200 rounded-md p-2 space-y-1">
               <p className="text-xs font-semibold text-emerald-900">Why this matches:</p>
               {matchReasons.slice(0, 5).map((reason, idx) => {
-                const text = formatReasonText(reason)
+                const text = humanizeMatchReason(reason)
                 return text ? (
                   <p key={idx} className="text-xs text-emerald-700 leading-tight">
                     {text}
