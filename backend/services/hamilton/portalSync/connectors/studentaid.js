@@ -62,14 +62,44 @@ export const requiresSession = true
 export const supportsFullMerge = true
 export const requiredReadDomains = ['fafsa_status', 'aid_summary']
 
-// Authenticated surfaces worth reading. Best-effort: a 404/redirect simply
-// yields no text for that page and the extractor reads whatever we landed on.
-const NAV = [
-  'https://studentaid.gov/fsa-id/sign-in/landing',
-  'https://studentaid.gov/h/apply-for-aid/fafsa',
-  'https://studentaid.gov/aid-summary/',
-  'https://studentaid.gov/fafsa-apply/status',
-]
+// Surfaces worth visiting, each labelled PRIVATE (the signed-in student's own
+// record) or public.
+//
+// ONLY PRIVATE PAGES MAY FEED A DERIVATION. studentaid.gov's public marketing
+// pages describe the FAFSA in exactly the vocabulary the lifecycle rules look
+// for — /h/apply-for-aid/fafsa is where "FAFSA Form … Complete Aid Application"
+// lives, the nav label that advanced a real student to the terminal `complete`
+// on 2026-08-01. A page anyone can read while signed OUT is never evidence
+// about a particular student, so it is now excluded structurally rather than by
+// hoping the patterns are tight enough.
+const NAV = Object.freeze([
+  { url: 'https://studentaid.gov/aid-summary/', private: true },
+  { url: 'https://studentaid.gov/fafsa-apply/status', private: true },
+  { url: 'https://studentaid.gov/fafsa-view-award/', private: true },
+])
+
+/** The URLs handed to the shared extractor (it takes bare strings). */
+const NAV_URLS = NAV.map((n) => n.url)
+
+/**
+ * Did a request for a PRIVATE page actually land on that page? studentaid.gov
+ * bounces an unauthenticated request to the sign-in landing (often with a
+ * ?redirectTo=) or silently to the public home page. Both are proof we are NOT
+ * signed in — and both previously read as "authenticated" here, because the
+ * page they served did have text and no "please sign in" sentence.
+ */
+export function landedOnRequested(requested, landed) {
+  if (!landed) return false
+  try {
+    const a = new URL(requested)
+    const b = new URL(landed)
+    if (a.origin !== b.origin) return false
+    const norm = (p) => String(p || '/').replace(/\/+$/, '').toLowerCase() || '/'
+    return norm(a.pathname) === norm(b.pathname)
+  } catch {
+    return String(requested) === String(landed)
+  }
+}
 
 // ── Deterministic, quote-anchored FAFSA facts ────────────────────────────────
 // Each rule maps a phrase the portal actually renders to a canonical lifecycle
@@ -254,31 +284,34 @@ export async function read(page, ctx = {}) {
   //    ACCESS STATE. `pages` carries url/title/chars/access only — never page
   //    text, which contains the student's own financial data.
   let corpus = ''
-  for (const url of NAV) {
+  for (const { url } of NAV) {
     const ok = await gotoQuiet(page, url, log)
     if (!ok) continue
     const snap = await readText(page)
     const landed = safeUrl(page) || url
-    const access = classifyAccess({ url: landed, title: snap.title, text: snap.text })
-    raw.pages.push({ url, landed, title: snap.title, chars: snap.text.length, access })
+    // A REDIRECT AWAY FROM A PRIVATE PAGE IS THE AUTHORITATIVE SIGNAL. Content
+    // heuristics cannot see it: studentaid.gov answers an unauthenticated
+    // request for the aid summary with its public home page, which has plenty
+    // of text and no "please sign in" sentence — so it read as authenticated
+    // and made the whole diagnostic lie (2026-08-01).
+    const arrived = landedOnRequested(url, landed)
+    const access = !arrived
+      ? 'signin_wall'
+      : classifyAccess({ url: landed, title: snap.title, text: snap.text })
+    raw.pages.push({
+      url, landed, title: snap.title, chars: snap.text.length, access,
+      redirected: !arrived,
+    })
     if (!snap.text.trim()) continue
-    // Text from a sign-in wall or a bot block is NOT the student's record —
-    // feeding it to the derivations is exactly how a menu label became a
-    // lifecycle stage. Record the page, then refuse to read facts from it.
-    if (access === 'signin_wall' || access === 'blocked') continue
+    // Only a private page we ACTUALLY REACHED is the student's record. Wall
+    // text, block pages, and public marketing copy are all excluded — text
+    // served to us INSTEAD of her record is not her record.
+    if (access !== 'authenticated') continue
     corpus += `\n\n### ${url}\n${snap.text}`
-  }
-  if (!corpus.trim()) {
-    const snap = await readText(page)
-    const landed = safeUrl(page)
-    const access = classifyAccess({ url: landed, title: snap.title, text: snap.text })
-    if (snap.text.trim() && access === 'authenticated') {
-      raw.pages.push({ url: landed, landed, title: snap.title, chars: snap.text.length, access })
-      corpus = snap.text
-    }
   }
 
   // The honest verdict about REACHABILITY, decided before any extraction.
+  // `authenticated` now means: at least one PRIVATE page was genuinely served.
   const seen = raw.pages.map((p) => p.access)
   const accessState = seen.includes('authenticated') ? 'authenticated'
     : seen.includes('blocked') ? 'blocked'
@@ -334,7 +367,7 @@ export async function read(page, ctx = {}) {
   // 3) Federal aid actually OFFERED to this user, via the shared extractor +
   //    its fabrication guard (which rejects anything without user-specific
   //    award evidence — e.g. the generic "types of aid" explainer pages).
-  const llm = await extractPortalDataWithLLM(page, { log, navCandidates: NAV })
+  const llm = await extractPortalDataWithLLM(page, { log, navCandidates: NAV_URLS })
   raw.llm = llm.raw
   const rejected = Array.isArray(llm.rejected) ? llm.rejected : []
   for (const a of llm.awards || []) {
