@@ -78,14 +78,26 @@ export const requiredReadDomains = ['fafsa_status', 'aid_summary']
 // /my-aid/*, the latter 404s. These are the routes that actually render the
 // student's own record.
 const NAV = Object.freeze([
+  // The FAFSA RECORD hub. Her submitted form lives at
+  // /my-activity/cases-and-applications/fafsa?transactionId=<per-submission
+  // id>&role=Student&cycle=2627 — a URL carrying an id that CANNOT be guessed,
+  // so it must be DISCOVERED by following the link from this hub.
+  { url: 'https://studentaid.gov/my-activity/', private: true, followCases: true },
   { url: 'https://studentaid.gov/my-aid/loans', private: true },
   { url: 'https://studentaid.gov/my-aid/grants', private: true },
   { url: 'https://studentaid.gov/my-aid/enrollments', private: true },
-  // The FAFSA form entry point. When a form for the cycle exists it shows its
-  // status; when none does, studentaid.gov redirects to the /roles first step
-  // ("I am starting the FAFSA form as a…").
-  { url: 'https://studentaid.gov/fafsa-apply/status', private: true },
 ])
+
+// NEVER add /fafsa-apply/* here. That is the application WIZARD, not a record:
+// it always opens at the "I am starting the FAFSA form as a Student/Parent"
+// step regardless of what the student has already filed. On 2026-08-01 I read
+// that page and reported to the owner that his daughter might not have filed
+// her 2026-27 FAFSA. She had — submitted Oct 29 2025, processed Oct 30 2025,
+// status "Processed", DRN on file. It was the same mistake as the nav-label
+// bug one level up: drawing a conclusion about her record from a page that was
+// never her record. A page that renders identically for every signed-in user
+// cannot be evidence about any of them.
+const CASES_LINK_RE = /\/my-activity\/cases-and-applications\//i
 
 /** The URLs handed to the shared extractor (it takes bare strings). */
 const NAV_URLS = NAV.map((n) => n.url)
@@ -175,14 +187,17 @@ const STAGE_RULES = Object.freeze([
   },
   {
     stage: 'processed',
-    // The SAI is a printed FIGURE on the student's own summary — a nav item
-    // never carries one. "Submission Summary" alone is a menu link, so it must
-    // be possessive to count.
-    re: /\bstudent aid index\b[^0-9-]{0,40}-?\$?\s?-?[\d,]+|\byour sai\b|\byour fafsa submission summary\b|\byour fafsa (form )?(was|has been) processed\b/i,
+    // VERIFIED against the real record page (owner screenshot, 2026-08-01): the
+    // FAFSA details page shows a "Processed" status chip and a Status Tracker
+    // reading "FAFSA® Form Processed / Processed on <date>", alongside the DRN.
+    // The SAI is a printed FIGURE — a nav item never carries one.
+    re: /\bstudent aid index\b[^0-9-]{0,40}-?\$?\s?-?[\d,]+|\byour sai\b|\bfafsa(®|®)? form processed\b|\bprocessed on\b[^.]{0,30}\d|\bdata release number\b|\byour fafsa (form )?(was|has been) processed\b/i,
   },
   {
     stage: 'submitted',
-    re: /\bsubmitted on\b|\byour fafsa (form )?(was|has been) submitted\b|\byour (fafsa )?application (was|has been) received\b/i,
+    // The real Status Tracker renders "FAFSA® Form Submitted / Submitted on
+    // Oct 29, 2025".
+    re: /\bsubmitted on\b|\bfafsa(®|®)? form submitted\b|\byour fafsa (form )?(was|has been) submitted\b|\byour (fafsa )?application (was|has been) received\b/i,
   },
   {
     stage: 'in_progress',
@@ -331,7 +346,15 @@ export async function read(page, ctx = {}) {
   //    ACCESS STATE. `pages` carries url/title/chars/access only — never page
   //    text, which contains the student's own financial data.
   let corpus = ''
-  for (const { url } of NAV) {
+  // Queue, not a fixed list: the FAFSA record's own URL carries a
+  // per-submission transactionId that cannot be guessed, so following the link
+  // from /my-activity/ is the ONLY way to reach it.
+  const queue = NAV.map((n) => ({ ...n }))
+  const visited = new Set()
+  for (let qi = 0; qi < queue.length && qi < 8; qi++) {
+    const { url, followCases } = queue[qi]
+    if (visited.has(url)) continue
+    visited.add(url)
     const ok = await gotoQuiet(page, url, log)
     if (!ok) continue
     const snap = await readText(page)
@@ -355,6 +378,23 @@ export async function read(page, ctx = {}) {
     // served to us INSTEAD of her record is not her record.
     if (access !== 'authenticated') continue
     corpus += `\n\n### ${url}\n${snap.text}`
+
+    // From the activity hub, enqueue the student's actual case/application
+    // records (the Status Tracker page: started/submitted/processed dates, DRN,
+    // and the SAI). These are the pages that hold the real answer.
+    if (followCases) {
+      let caseLinks = []
+      try {
+        caseLinks = await page.evaluate(() => Array.from(document.querySelectorAll('a[href]')).map((a) => a.href))
+      } catch { caseLinks = [] }
+      // A page that answers with an unexpected shape must never throw the sync.
+      if (!Array.isArray(caseLinks)) caseLinks = []
+      for (const href of caseLinks) {
+        if (!CASES_LINK_RE.test(String(href)) || visited.has(href)) continue
+        queue.push({ url: href, private: true })
+        log(`studentaid: following case record ${String(href).split('?')[0]}`)
+      }
+    }
   }
 
   // The honest verdict about REACHABILITY, decided before any extraction.
@@ -390,28 +430,6 @@ export async function read(page, ctx = {}) {
   const sai = deriveSai(corpus)
   const pell = derivePellEligibility(corpus)
   raw.derived = { stage, sai, pell }
-
-  // "No form for this cycle" is a REAL, user-record observation, not silence:
-  // studentaid.gov answers /fafsa-apply/status by redirecting into the /roles
-  // FIRST STEP ("I am starting the FAFSA form as a Student/Parent") when the
-  // signed-in student has no form for that award year. Verified live
-  // 2026-08-01. It is recorded as an OBSERVATION rather than written as a
-  // stage: the monotonic rule would refuse to regress anyway, and a profile
-  // that claims "submitted" while the federal system shows no form is a
-  // CONFLICT a human must adjudicate — not something a sync should quietly
-  // overwrite in either direction.
-  const rolesPage = raw.pages.find((p) => /\/fafsa-apply\/[^/]*\/roles\b/.test(String(p.landed || '')))
-  if (rolesPage) {
-    const year = String(rolesPage.landed).match(/\/fafsa-apply\/(\d{4}-\d{2})\//)?.[1] || null
-    raw.derived.noFormForCycle = { year, landed: rolesPage.landed }
-    notFound.push({
-      kind: 'status',
-      name: 'fafsa_form_for_cycle',
-      reason: `The signed-in account shows NO FAFSA form for ${year || 'the current cycle'} — studentaid.gov answered the status request with the "start a new form" first step. If this profile records the FAFSA as filed, one of the two is wrong and a human should check.`,
-      observation: 'no_form_for_cycle',
-      year,
-    })
-  }
 
   if (stage) {
     log(`studentaid: FAFSA stage "${stage.stage}" evidenced by "${stage.evidence}"`)
