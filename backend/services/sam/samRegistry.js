@@ -33,6 +33,10 @@ import { ORIGIN_CREATED_BY as AMY_ORIGIN_CREATED_BY } from '../amy/amyConstants.
 // of the env-failure counter and this READER of the `unanswered_blocked` state
 // can never disagree on where "blocked" begins.
 import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS } from '../../config/amountEnrichEnv.js'
+// The canonical set of `opportunity_kind` values that cannot carry a per-award
+// dollar figure by design (pointers + benefit programs). Registry, not a
+// hand-typed string list — see the module header for the prod evidence.
+import { noPerAwardFigureKindSql } from '../../config/opportunityKindClasses.js'
 
 /**
  * Exclude Amy's SYNTHETIC-profile grants from a pipeline-health metric.
@@ -179,6 +183,104 @@ function timeCutoff(db, msAgo) {
   const iso = new Date(Date.now() - msAgo).toISOString()
   if (db?.dialect === 'postgres') return iso
   return iso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
+}
+
+// ---------------------------------------------------------------------------
+// RECENCY WINDOWS — a rate check must be able to go green on its own
+// ---------------------------------------------------------------------------
+//
+// A rate computed over "the last N rows" with NO time bound cannot clear.
+// Prod, 2026-08-01: `agent.anya.toolFailures` reported "44% of the last 200
+// tool calls failed" for a defect that had already been fixed. The 87 failures
+// were ONE ~2-hour burst on 2026-07-30 (87 of that day's 138 calls); the two
+// days since were 18 calls / 0 failures and 18 calls / 0 failures. At prod's
+// measured ~18–30 calls/day those 87 rows need roughly six more days to age
+// out of a 200-row window, so the owner would read the same red line every
+// morning for a week — the "a finding that can never go green is noise" class
+// CLAUDE.md documents, and exactly how the next REAL alarm gets scrolled past.
+//
+// The window is the INTERSECTION of "the newest N rows" and "rows newer than
+// M hours", which is what "N or M, whichever is smaller" means. It is computed
+// by ordering `created_at DESC`, taking N in SQL, then dropping the rows older
+// than the cutoff — and that is NOT the #944 post-LIMIT anti-pattern, because
+// the ordering is BY the same column the filter uses: the newest rows are
+// always inside the LIMIT, so nothing can be starved out of reach.
+//
+// WHY 24 HOURS FOR A RATE, AND WHY NOT SHORTER. Shorter clears faster and
+// fires faster, but at ~18 calls/day a 6-hour window holds ~4 calls — below
+// any honest minimum sample, so the check would be structurally blind most of
+// the day. 24h is the smallest window that clears the minimum sample on the
+// QUIETEST measured day (18 calls). A real burst is self-amplifying — it adds
+// calls as well as failures (the 07-30 burst pushed that day to 138 calls) —
+// so a burst always arrives with its own denominator and fires within hours,
+// while a fixed defect clears one day after its last failure instead of six.
+//
+// MINIMUM SAMPLE is a separate, explicit rule, not an emergent one: a
+// percentage over a tiny denominator is noise in the other direction ("1 of 2
+// failed = 50%!"). Below the minimum the check reports "no reliable signal
+// yet" — never green-as-if-measured, never red.
+
+/** Default recency window for count-bounded rate checks. */
+export const RATE_WINDOW_HOURS_DEFAULT = 24
+
+/**
+ * Resolve a check's window at call time so ops can tune it without a deploy.
+ *
+ * Takes the RAW VALUE, not the variable name: `scripts/generate-env-examples.mjs`
+ * discovers env vars by scanning for literal `process.env.NAME` references, so a
+ * dynamic `process.env[name]` lookup would make every window here invisible to
+ * `check:env-examples` — an undocumented env var, which is the opposite of the
+ * traceability rule that script exists to enforce.
+ */
+export function resolveRateWindowHours(rawValue, fallback = RATE_WINDOW_HOURS_DEFAULT) {
+  const raw = Number.parseFloat(rawValue || '')
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback
+}
+
+/**
+ * Milliseconds for a row's timestamp, or null when it cannot be read.
+ *
+ * TRAP: the same column is `timestamp with time zone` on prod Postgres (the pg
+ * driver hands back a Date) and a TEXT `CURRENT_TIMESTAMP` string on SQLite
+ * (`'2026-08-01 13:20:48'` — no `T`, no offset), which `Date.parse` would read
+ * as LOCAL time and silently shift by the runner's UTC offset. A bare string
+ * with no offset is therefore pinned to UTC explicitly.
+ */
+export function rowTimestampMs(value) {
+  if (value instanceof Date) {
+    const t = value.getTime()
+    return Number.isFinite(t) ? t : null
+  }
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+  const iso = hasZone ? raw.replace(' ', 'T') : `${raw.replace(' ', 'T')}Z`
+  const t = Date.parse(iso)
+  return Number.isFinite(t) ? t : null
+}
+
+/**
+ * Narrow already-newest-first rows to those inside the recency window.
+ *
+ * Returns `{ rows, windowed, unreadable, windowHours }`. `windowed:false` means
+ * NO row carried a readable timestamp, so the window could not be applied and
+ * the caller fell back to the count-only set — a degradation the caller MUST
+ * say out loud rather than report as a clean measurement.
+ */
+export function applyRecencyWindow(rows = [], windowHours, timestampOf = (r) => r?.created_at) {
+  const list = Array.isArray(rows) ? rows : []
+  const cutoff = Date.now() - windowHours * 60 * 60 * 1000
+  let unreadable = 0
+  const kept = []
+  for (const row of list) {
+    const ms = rowTimestampMs(timestampOf(row))
+    if (ms === null) { unreadable += 1; continue }
+    if (ms >= cutoff) kept.push(row)
+  }
+  if (unreadable === list.length && list.length > 0) {
+    return { rows: list, windowed: false, unreadable, windowHours }
+  }
+  return { rows: kept, windowed: true, unreadable, windowHours }
 }
 
 // ---------------------------------------------------------------------------
@@ -566,16 +668,26 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         // orphan — so a read-but-silent row is `unreadable` regardless of which
         // path read it, and a never-looked-at row is `never_read` backlog.
         const V = pipelineValueSql('g')
-        // No-amount-BY-DESIGN kinds: a DIRECTORY locator is a pointer to more
-        // sources, and a BENEFIT program (SSA survivor/disability, FAFSA/Pell/
-        // SSI class) has no fixed per-applicant award figure — exactly the two
-        // classifications this check's own recommended_fix prescribes for such
-        // rows. Both kinds are only ever assigned by POSITIVE classification
-        // (source registry default_kinds, reality gate, or the
-        // locator_kind_classification boot sweep's structural URL-shape rule) —
-        // never inferred from a failed read, so counting them as by-design is
-        // honest, not bucket-widening.
-        const isDir = `LOWER(COALESCE(fo.opportunity_kind, '')) IN ('directory', 'benefit')`
+        // No-amount-BY-DESIGN kinds: a DIRECTORY/REFERRAL/SCHOOL_PORTAL/
+        // PAST_AWARD_INTEL row is a POINTER to somewhere else, and a BENEFIT
+        // program (SSA survivor/disability, FAFSA/Pell/SSI class) has no fixed
+        // per-applicant award figure — exactly the classifications this check's
+        // own recommended_fix prescribes for such rows. Every one of these kinds
+        // is only ever assigned by POSITIVE classification (source registry
+        // default_kinds, reality gate, or the locator_kind_classification boot
+        // sweep's structural URL-shape rule) — never inferred from a failed
+        // read, so counting them as by-design is honest, not bucket-widening.
+        //
+        // THE LIST WAS HAND-TYPED AND SHORT (fixed 2026-08-01). It carried only
+        // ('directory','benefit'), so prod's `referral` (119 catalog rows) and
+        // `school_portal` (102) fell straight through into
+        // `unanswered_unreadable` — the one bucket that reds the owner's report
+        // and names ADAPTER work. That is how Anya came to ask for an API
+        // adapter for `nfb.org` (a referral) and `www.scholarships.com` (a
+        // scholarship DIRECTORY — a list of other people's scholarships): work
+        // that cannot exist, on rows the sweep had already burned fetch attempts
+        // chasing. The set now comes from the canonical registry.
+        const isDir = noPerAwardFigureKindSql('fo.opportunity_kind')
         // NULL-safe (COALESCE): amount_status is NULL on many rows, and a raw
         // `col = 'x'` yields NULL there, which poisons every `NOT (...)` below via
         // three-valued logic (NULL AND anything = NULL → the CASE never fires and
@@ -624,6 +736,18 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
             `SELECT
                SUM(CASE WHEN ${V} > 0 THEN 1 ELSE 0 END) AS carried,
                SUM(CASE WHEN ${V} = 0 AND ${isDir} THEN 1 ELSE 0 END) AS by_design,
+               -- AWARD-BEARING denominator. The headline "% carrying a dollar
+               -- value" is computed over EVERY active row, and ~40% of them are
+               -- pointer/benefit kinds that publish no per-award figure by
+               -- design — so the headline is dragged down by rows that can never
+               -- move it, and it reads as a stuck number the owner is asked to
+               -- improve. Measured in prod 2026-08-01: benefit/BENEFIT 68 rows /
+               -- 0 valued, directory 44 / 6. Reported ALONGSIDE the raw figure,
+               -- never instead of it — and the RATCHET deliberately keeps using
+               -- the raw one, because the wipe detector's history is in those
+               -- units and its job is to notice values DISAPPEARING from any row.
+               SUM(CASE WHEN NOT ${isDir} THEN 1 ELSE 0 END) AS award_total,
+               SUM(CASE WHEN NOT ${isDir} AND ${V} > 0 THEN 1 ELSE 0 END) AS award_with_value,
                SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND ${nonePub} THEN 1 ELSE 0 END) AS answered_none_published,
                SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND ${honestLabel} THEN 1 ELSE 0 END) AS answered_text,
                SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND NOT (${envBlockedPred}) AND ${attemptCount} = 0 AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_never_read,
@@ -706,9 +830,17 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const blocked = Number(answers?.unanswered_blocked) || 0
       const unreadable = Number(answers?.unanswered_unreadable) || 0
       const promotionConverging = Number(answers?.promotion_converging) || 0
+      const awardTotal = Number(answers?.award_total) || 0
+      const awardWithValue = Number(answers?.award_with_value) || 0
+      const awardPct = awardTotal > 0 ? Math.round((awardWithValue / awardTotal) * 100) : null
       const census = answers
         ? {
             carried,
+            // Both readings, always. The raw one is what the ratchet tracks;
+            // the award-bearing one is the number an owner can actually move.
+            award_bearing_total: awardTotal,
+            award_bearing_with_value: awardWithValue,
+            award_bearing_pct: awardPct,
             answered_none_published: nonePublished,
             answered_text: answeredText,
             no_amount_by_design: byDesign,
@@ -761,7 +893,18 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const projectionText = promotionProjection
         ? ` Preflight projection: ${Number(promotionProjection.projected_rows) || 0} rows, ${Number(promotionProjection.projected_null_amounts) || 0} without listed amounts.`
         : ''
-      const summary = `${withValue}/${total} (${pct}%) real active pipeline grants carry a dollar value${trend} (Amy synthetic-training grants excluded); catalog amount coverage ${catWith}/${catTotal} (${catPct}%).${convergingText}${projectionText}`
+      // TWO readings, because ONE of them measures the world. The raw
+      // percentage counts every active row, and pointer/benefit kinds — which
+      // publish no per-award figure by design — are a large, permanent share of
+      // them, so the raw number is structurally capped and reads as a metric
+      // that never improves however much real work lands. The award-bearing
+      // reading is the one an owner can move. Neither replaces the other: the
+      // raw figure stays because the RATCHET (the amount-WIPE detector, the one
+      // check here that ever caught a live bug) is measured in those units.
+      const awardText = awardPct === null
+        ? ''
+        : ` Of the AWARD-BEARING rows only (pointer/benefit kinds excluded — they state no per-award figure by design): ${awardWithValue}/${awardTotal} (${awardPct}%).`
+      const summary = `${withValue}/${total} (${pct}%) real active pipeline grants carry a dollar value${trend} (Amy synthetic-training grants excluded).${awardText} Catalog amount coverage ${catWith}/${catTotal} (${catPct}%).${convergingText}${projectionText}`
 
       // A DROP is reported even when the level is above the bar, and takes
       // precedence when below it: "we went backwards" is a different, more urgent
@@ -837,7 +980,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           : ''
         return {
           ok: false,
-          summary: `${unreadable} active pipeline grant(s) were READ but their source could not be parsed (JS shell / dead page) — they need an API adapter.${hostNote} ${summary}`,
+          summary: `${unreadable} AWARD-BEARING active pipeline grant(s) were READ but their source could not be parsed (JS shell / dead page) — they need an API adapter. (Pointer kinds — directory/referral/school_portal/past_award_intel — and benefit programs are NOT counted here: they publish no per-award figure by design and appear as "no-per-award-figure by design".)${hostNote} ${summary}`,
           evidence: fullCensus,
           recommended_fix: `These are NOT "low coverage" and NOT backlog — the sweep already read them and the page cannot state a per-award figure by fetching (client-rendered shell, or a benefit-eligibility tool with no fixed award). Each needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js) — grants.gov (API + Simpler Grants fallback), sam.gov /fal/ assistance listings, and federalregister.gov documents already have one — or, for a benefit program with no fixed per-applicant award (FAFSA/Pell/SSI), to be classified as a BENEFIT/DIRECTORY kind so it counts as no-amount-by-design. evidence.unreadable_hosts already groups these rows by source_url host (top 10) — a host carrying a large share of the count is a single-adapter opportunity; a flat spread across many hosts is a long tail and not worth a bespoke adapter. sam.gov CONTRACT opportunities remain deliberately unadapted (their award node is what a specific vendor WAS granted, not what an applicant could receive). Do NOT widen the answer buckets to make this green: an answer is a value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.`,
           confidence: 0.85,
@@ -1974,13 +2117,18 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Reads john_runs directly: flags when John\'s recent runs are consistently FAILING (the telemetry endpoint stays 200 through that). Fails open when John has never run or his tables are absent.',
+    description: 'Reads john_runs directly: flags when John\'s runs in the last JOHN_RUN_HEALTH_WINDOW_HOURS (default 168h = 7d, capped at the newest 5 runs) are consistently FAILING — the telemetry endpoint stays 200 through that. RECENCY-bounded so a repaired drafting lane clears once it runs clean, instead of staying red until 5 old failures age out. Fails open when John has never run or his tables are absent.',
     async run({ db } = {}) {
       if (!db?.prepare) return { ok: true, skipped: true, summary: 'john health: db unavailable' }
+      // John runs exactly once a day in prod (measured 2026-08-01: 1/day for
+      // 14 consecutive days), so the newest 5 runs ARE the last 5 days. 168h is
+      // the smallest window that still holds the 5-run sample this check needs;
+      // anything shorter would leave it permanently under-sampled.
+      const windowHours = resolveRateWindowHours(process.env.JOHN_RUN_HEALTH_WINDOW_HOURS, 168)
       let recent
       try {
         recent = await db
-          .prepare('SELECT status FROM john_runs ORDER BY started_at DESC LIMIT 5')
+          .prepare('SELECT status, started_at FROM john_runs ORDER BY started_at DESC LIMIT 5')
           .all()
       } catch (err) {
         return { ok: true, skipped: true, summary: `john_runs not queryable yet (${err?.message || 'unknown'})` }
@@ -1988,20 +2136,35 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       if (!recent || recent.length === 0) {
         return { ok: true, summary: 'John has not run yet (no john_runs rows).' }
       }
-      const failed = recent.filter((r) => String(r.status || '').toLowerCase() === 'failed').length
-      if (recent.length >= 3 && failed === recent.length) {
+      const win = applyRecencyWindow(recent, windowHours, (r) => r?.started_at)
+      const inWindow = win.rows
+      if (win.windowed && inWindow.length === 0) {
+        // NOT a health verdict. Say so rather than reporting green: this check
+        // measures failure CONCENTRATION and has nothing to measure. "John
+        // stopped running" is a different finding (agent.john.health).
+        return {
+          ok: true,
+          summary: `John has not run in the last ${windowHours}h (last run ${String(recent[0]?.started_at ?? 'unknown')}) — no current draft-health signal; this check cannot speak to it.`,
+          evidence: { window_hours: windowHours, window_empty: true, last_run_at: recent[0]?.started_at ?? null },
+        }
+      }
+      const scope = win.windowed
+        ? `last ${windowHours}h`
+        : `last ${inWindow.length} runs (timestamps unreadable — recency window NOT applied)`
+      const failed = inWindow.filter((r) => String(r.status || '').toLowerCase() === 'failed').length
+      if (inWindow.length >= 3 && failed === inWindow.length) {
         return {
           ok: false,
-          summary: `John's last ${recent.length} runs ALL failed — outreach drafting is down while telemetry still answers 200.`,
-          evidence: { recent_statuses: recent.map((r) => r.status), failed },
+          summary: `John's ${inWindow.length} runs in the ${scope} ALL FAILED — outreach drafting is down while telemetry still answers 200.`,
+          evidence: { recent_statuses: inWindow.map((r) => r.status), failed, window_hours: windowHours, windowed: win.windowed },
           recommended_fix: 'Read the latest john_runs.error / summary; usual suspects are Graph auth (alias 403 → User.Read.All) and empty lead input from Yana.',
           confidence: 0.85,
         }
       }
       return {
         ok: true,
-        summary: `John run health ok: ${failed}/${recent.length} recent run(s) failed.`,
-        evidence: { recent_statuses: recent.map((r) => r.status) },
+        summary: `John run health ok: ${failed}/${inWindow.length} run(s) in the ${scope} failed.`,
+        evidence: { recent_statuses: inWindow.map((r) => r.status), window_hours: windowHours, windowed: win.windowed },
       }
     },
   },
@@ -2011,42 +2174,66 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.ADMIN_TOOL_INTEGRITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Reads anya_tool_usage directly: flags when a disproportionate share of Anya\'s recent tool invocations FAILED (her surface can be reachable while individual tools break underneath). Reports the top failing tools so the defect is triageable. Fails open on missing table / small sample.',
+    description: 'Reads anya_tool_usage directly: flags when a disproportionate share of Anya\'s tool invocations in the last ANYA_TOOL_FAILURE_WINDOW_HOURS (default 24h, capped at the newest 200 calls) FAILED — her surface can be reachable while individual tools break underneath. The window is RECENCY-bounded so a fixed defect clears on its own instead of reading red until it ages out of a fixed-count window. Reports the top failing tools so the defect is triageable. Fails open on missing table / small sample.',
     async run({ db } = {}) {
       if (!db?.prepare) return { ok: true, skipped: true, summary: 'anya tool failures: db unavailable' }
+      // Minimum sample before a PERCENTAGE means anything. Prod's quietest
+      // measured day was 18 calls, so 10 is reachable every day inside the 24h
+      // window; below it the honest answer is "no signal", never green-as-if-
+      // measured. With a 30% bar, 10 calls also means at least 4 real failures
+      // — "1 of 2 failed = 50%" can never page anyone.
+      const MIN_SAMPLE = 10
+      const windowHours = resolveRateWindowHours(process.env.ANYA_TOOL_FAILURE_WINDOW_HOURS)
       let rows
       try {
         rows = await db
           .prepare(`
-            SELECT tool_name, success FROM anya_tool_usage
+            SELECT tool_name, success, created_at FROM anya_tool_usage
             ORDER BY created_at DESC LIMIT 200
           `)
           .all()
       } catch (err) {
         return { ok: true, skipped: true, summary: `anya_tool_usage not queryable yet (${err?.message || 'unknown'})` }
       }
-      const total = rows?.length || 0
-      if (total < 10) {
-        return { ok: true, summary: `anya tool usage: only ${total} recent call(s); no reliable failure signal yet.` }
+      const win = applyRecencyWindow(rows, windowHours)
+      const scope = win.windowed
+        ? `last ${windowHours}h`
+        : `last ${win.rows.length} calls (timestamps unreadable — recency window NOT applied)`
+      const total = win.rows.length
+      if (total < MIN_SAMPLE) {
+        return {
+          ok: true,
+          summary: `anya tool usage: only ${total} call(s) in the ${scope} (< ${MIN_SAMPLE}); no reliable failure signal yet.`,
+          evidence: { total, window_hours: windowHours, windowed: win.windowed, min_sample: MIN_SAMPLE },
+        }
       }
-      const failures = rows.filter((r) => Number(r.success) === 0)
+      const failures = win.rows.filter((r) => Number(r.success) === 0)
       const rate = failures.length / total
+      const evidence = {
+        total,
+        failed: failures.length,
+        failure_rate: Number(rate.toFixed(3)),
+        window_hours: windowHours,
+        windowed: win.windowed,
+        min_sample: MIN_SAMPLE,
+        candidates_scanned: rows?.length || 0,
+      }
       if (rate > 0.3) {
         const byTool = {}
         for (const f of failures) byTool[f.tool_name] = (byTool[f.tool_name] || 0) + 1
         const top = Object.entries(byTool).sort((a, b) => b[1] - a[1]).slice(0, 5)
         return {
           ok: false,
-          summary: `${Math.round(rate * 100)}% of Anya's last ${total} tool calls failed. Top failing: ${top.map(([t, n]) => `${t}(${n})`).join(', ')}.`,
-          evidence: { total, failed: failures.length, failure_rate: Number(rate.toFixed(3)), top_failing_tools: top },
+          summary: `${Math.round(rate * 100)}% of Anya's ${total} tool calls in the ${scope} failed. Top failing: ${top.map(([t, n]) => `${t}(${n})`).join(', ')}.`,
+          evidence: { ...evidence, top_failing_tools: top },
           recommended_fix: 'Query anya_tool_usage for error_message on the top failing tools; a single broken dependency (DB column, provider key) usually explains the cluster.',
           confidence: 0.85,
         }
       }
       return {
         ok: true,
-        summary: `Anya tool health ok: ${failures.length}/${total} recent call(s) failed (${Math.round(rate * 100)}%).`,
-        evidence: { total, failed: failures.length },
+        summary: `Anya tool health ok: ${failures.length}/${total} call(s) in the ${scope} failed (${Math.round(rate * 100)}%).`,
+        evidence,
       }
     },
   },
@@ -2501,13 +2688,20 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Makes the crawl coverage dashboard (GET /api/admin/crawl-coverage) observable to Sam: flags when a disproportionate share of recently QUERIED sources FAILED (default threshold 30% over the last ~50 runs), which signals an outage, a bad key, or a broken source adapter. Reads only crawler_source_runs. Fails open: empty/missing table or too few runs → ok:true (no signal yet).',
+    description: 'Makes the crawl coverage dashboard (GET /api/admin/crawl-coverage) observable to Sam: flags when a disproportionate share of recently QUERIED sources FAILED (default threshold 30%, over the newest ~50 crawl runs AND only those inside CRAWLER_COVERAGE_WINDOW_HOURS, default 24h), which signals an outage, a bad key, or a broken source adapter. RECENCY-bounded so an outage that has been repaired clears once fresh runs land, and so a crawler that has STOPPED reports "no signal" instead of replaying its last bad day forever. Reads only crawler_source_runs. Fails open: empty/missing table or too few runs → ok:true (no signal yet).',
     async run({ db }) {
       if (!db?.prepare) return { ok: true, summary: 'crawler coverage: db unavailable' }
       const threshold = Number.parseFloat(process.env.CRAWLER_COVERAGE_FAILURE_THRESHOLD || '0.30')
       // Minimum queried-source sample before we trust the rate — avoids a
       // single failed run reading as "100% degraded".
       const MIN_SAMPLE = 20
+      // Measured 2026-08-01: the newest 50 crawl runs span ~75 MINUTES, so the
+      // count bound already dominates and this window costs nothing in normal
+      // operation. It exists for the one case the count bound cannot cover —
+      // crawling stops, and the last 50 runs (a bad afternoon) stay the
+      // "current" reading indefinitely.
+      const windowHours = resolveRateWindowHours(process.env.CRAWLER_COVERAGE_WINDOW_HOURS)
+      const cutoff = timeCutoff(db, windowHours * 60 * 60 * 1000)
       let row
       try {
         row = await db
@@ -2519,37 +2713,39 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
              WHERE crawler_run_id IN (
                SELECT crawler_run_id FROM crawler_source_runs
                GROUP BY crawler_run_id
+               HAVING MAX(created_at) >= ?
                ORDER BY MAX(created_at) DESC
                LIMIT 50
              )`,
           )
-          .get()
+          .get(cutoff)
       } catch (err) {
         // Table not migrated yet — environment gap, not a defect.
         return { ok: true, summary: `crawler_source_runs not queryable yet (${err?.message || 'unknown'})` }
       }
       const queried = Number(row?.queried ?? 0)
       const failed = Number(row?.failed ?? 0)
+      const evidence = { queried, failed, threshold, window_hours: windowHours }
       if (queried < MIN_SAMPLE) {
         return {
           ok: true,
-          summary: `crawler coverage: only ${queried} queried source(s) sampled (< ${MIN_SAMPLE}); no reliable signal yet`,
-          evidence: { queried, failed, threshold },
+          summary: `crawler coverage: only ${queried} queried source(s) in the last ${windowHours}h (< ${MIN_SAMPLE}); no reliable signal yet`,
+          evidence,
         }
       }
       const rate = failed / queried
       if (rate > threshold) {
         return {
           ok: false,
-          summary: `Crawler coverage DEGRADED: ${failed}/${queried} recently-queried sources failed (${Math.round(rate * 100)}% > ${Math.round(threshold * 100)}% threshold). Check source adapters / API keys / outages on the Crawl Coverage dashboard.`,
-          evidence: { queried, failed, failure_rate: Number(rate.toFixed(3)), threshold },
+          summary: `Crawler coverage DEGRADED: ${failed}/${queried} sources queried in the last ${windowHours}h failed (${Math.round(rate * 100)}% > ${Math.round(threshold * 100)}% threshold). Check source adapters / API keys / outages on the Crawl Coverage dashboard.`,
+          evidence: { ...evidence, failure_rate: Number(rate.toFixed(3)) },
           recommended_fix: 'Open /CrawlCoverage (admin) to see which sources are failing and their errors; verify FUNDING_SOURCES API keys and source endpoint health.',
         }
       }
       return {
         ok: true,
-        summary: `crawler coverage healthy: ${failed}/${queried} queried sources failed (${Math.round(rate * 100)}% ≤ ${Math.round(threshold * 100)}%)`,
-        evidence: { queried, failed, failure_rate: Number(rate.toFixed(3)), threshold },
+        summary: `crawler coverage healthy: ${failed}/${queried} sources queried in the last ${windowHours}h failed (${Math.round(rate * 100)}% ≤ ${Math.round(threshold * 100)}%)`,
+        evidence: { ...evidence, failure_rate: Number(rate.toFixed(3)) },
       }
     },
   },
