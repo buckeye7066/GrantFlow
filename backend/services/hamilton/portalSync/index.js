@@ -97,8 +97,83 @@ function profileToFundingSources(profile) {
  *
  * @returns {Promise<{ fieldsWritten:number, fieldsRejected:Array, awardsWritten:number, awardsDismissed:number }>}
  */
+/**
+ * Apply a connector-reported FAFSA lifecycle stage through the CANONICAL owner
+ * (services/college/fafsaStatus.js), never as a raw section field: that module
+ * owns the stage history and the derived `fafsa_completed` boolean, and
+ * `fafsa_status` is not in the education section's field metadata, so a
+ * setProfileSectionField write would be rejected by the guard anyway.
+ *
+ * MONOTONIC BY DESIGN: a portal read may ADVANCE the stage but never silently
+ * regress it. studentaid.gov renders stale banners ("Submitted on …") next to
+ * newer state, and a regression would erase verification progress the student
+ * already recorded by hand. A lower observed stage is REPORTED (so the run
+ * summary shows the disagreement) and not written.
+ *
+ * @returns {Promise<null|{applied:boolean, stage:string, from:string, reason?:string}>}
+ */
+async function applyFafsaStatusFromRead(db, { profileId, actorUserId, readResult }) {
+  const incoming = readResult?.fafsaStatus
+  const stage = incoming?.stage
+  if (!stage) return null
+  try {
+    const { normalizeFafsaStatus, setFafsaStage, isKnownStage, stageIndex } = await import('../../college/fafsaStatus.js')
+    if (!isKnownStage(stage)) return { applied: false, stage, from: 'unknown', reason: 'unknown_stage' }
+
+    let education = {}
+    try {
+      const row = await db.prepare(
+        "SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'education' LIMIT 1",
+      ).get(String(profileId))
+      if (row?.data) education = typeof row.data === 'object' ? row.data : JSON.parse(row.data)
+    } catch { education = {} }
+
+    const current = normalizeFafsaStatus(education)
+    if (stageIndex(stage) <= stageIndex(current.stage)) {
+      return {
+        applied: false,
+        stage,
+        from: current.stage,
+        reason: stage === current.stage
+          ? 'already_at_stage'
+          : 'would_regress: the portal page evidenced an EARLIER stage than the profile already records (often a stale banner) — left unchanged',
+      }
+    }
+
+    const result = setFafsaStage(current, stage, { now: new Date().toISOString() })
+    if (!result.ok) return { applied: false, stage, from: current.stage, reason: result.error || 'set_failed' }
+
+    const next = { ...education, fafsa_status: result.status, fafsa_completed: result.fafsa_completed }
+    const data = JSON.stringify(next)
+    const updatedBy = actorUserId || 'hamilton_portal_sync'
+    const existing = await db.prepare(
+      "SELECT 1 AS x FROM profile_sections WHERE profile_id = ? AND section_key = 'education'",
+    ).get(String(profileId))
+    if (existing) {
+      await db.prepare(
+        "UPDATE profile_sections SET data = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ? AND section_key = 'education'",
+      ).run(data, updatedBy, String(profileId))
+    } else {
+      await db.prepare(
+        "INSERT INTO profile_sections (profile_id, section_key, data, updated_by) VALUES (?, 'education', ?, ?)",
+      ).run(String(profileId), data, updatedBy)
+    }
+    return { applied: true, stage, from: current.stage }
+  } catch (err) {
+    return { applied: false, stage, from: 'unknown', reason: err?.message || 'fafsa_status_write_failed' }
+  }
+}
+
 async function persistReadResult(db, { profileId, portalHost, actorUserId, readResult }) {
   const out = { fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [] }
+
+  // FAFSA lifecycle (studentaid.gov) rides the canonical stage owner, not the
+  // raw field writer — see applyFafsaStatusFromRead.
+  const fafsa = await applyFafsaStatusFromRead(db, { profileId, actorUserId, readResult })
+  if (fafsa) {
+    out.fafsaStatus = fafsa
+    if (fafsa.applied) out.fieldsWritten += 1
+  }
 
   for (const f of Array.isArray(readResult?.fields) ? readResult.fields : []) {
     if (!f?.sectionKey || !f?.field || f.value === undefined || f.value === null || String(f.value).trim() === '') continue
@@ -491,6 +566,6 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
   }
 }
 
-export const _internal = { persistReadResult, recordStudentPortalChecks }
+export const _internal = { persistReadResult, recordStudentPortalChecks, applyFafsaStatusFromRead }
 
 export default { runPortalSync, listConnectors, getConnectorForHost, ensurePortalSyncSchema, listRuns }
