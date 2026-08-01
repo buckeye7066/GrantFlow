@@ -170,6 +170,53 @@ async function applyFafsaStatusFromRead(db, { profileId, actorUserId, readResult
   }
 }
 
+/**
+ * The saved session provably failed to clear the portal's sign-in wall: mark it
+ * expired and tell the household ONCE, so the fix ("sign in side-by-side one
+ * more time") actually reaches a human instead of dying in a run summary.
+ *
+ * Deliberately reuses the keepalive's own primitives and its re-notify cooldown
+ * so a repeatedly-run sync cannot page the household on every attempt. Entirely
+ * best-effort: a notification failure must never change the sync's outcome.
+ */
+async function markSessionDeadAfterWall(db, session, host) {
+  const RENOTIFY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
+  let meta = {}
+  try {
+    const raw = session.metadata_json ?? session.metadata
+    meta = raw ? (typeof raw === 'object' ? raw : JSON.parse(raw)) : {}
+  } catch { meta = {} }
+
+  try {
+    const { markSessionExpired } = await import('../hamiltonCredentialSessionService.js')
+    await markSessionExpired(db, session.id, 'portal sync reached the sign-in wall — session not accepted')
+  } catch (err) {
+    log.warn('portal_sync_expire_failed', { host, err: err?.message })
+    return
+  }
+
+  const lastNotified = meta.keepalive_notified_at ? Date.parse(meta.keepalive_notified_at) : NaN
+  if (Number.isFinite(lastNotified) && Date.now() - lastNotified < RENOTIFY_COOLDOWN_MS) return
+  try {
+    const { emitHamiltonNotificationToProfileAndAdmins } = await import('../hamiltonNotifications.js')
+    await emitHamiltonNotificationToProfileAndAdmins(db, {
+      profileId: session.profile_id,
+      profileUserId: session.user_id,
+      type: 'hamilton_session_capture_needed',
+      title: `Sign in once to ${host}`,
+      message: `Hamilton's saved session for ${host} was not accepted — the portal returned its sign-in page instead of your account. One side-by-side sign-in restores it. (No data was read, and nothing on your profile was changed.)`,
+      data: { portal_host: host, profile_id: session.profile_id, source: 'portal_sync' },
+      severity: 'warning',
+    })
+    const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+    await db.prepare(
+      `UPDATE hamilton_saved_sessions SET metadata_json = ?, updated_at = ${nowFn} WHERE id = ?`,
+    ).run(JSON.stringify({ ...meta, keepalive_notified_at: new Date().toISOString() }), session.id)
+  } catch (err) {
+    log.warn('portal_sync_notify_failed', { host, err: err?.message })
+  }
+}
+
 async function persistReadResult(db, { profileId, portalHost, actorUserId, readResult }) {
   const out = { fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [] }
 
@@ -458,9 +505,13 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
   // Resolve an authenticated context: durable saved session first, then a saved
   // login. At least one is required — without it we cannot act as the user.
   let storageState = null
+  let savedSession = null
   try {
     const saved = await findValidSession(db, { profileId, portalHost: host })
-    if (saved?.has_storage_state) storageState = await getSessionStorageState(db, saved.id)
+    if (saved?.has_storage_state) {
+      savedSession = saved
+      storageState = await getSessionStorageState(db, saved.id)
+    }
   } catch { storageState = null }
   // `credential` was already resolved above for connector selection.
 
@@ -520,6 +571,17 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       // portals as green on every dashboard.
       if (readResult?.reached === false) {
         return await fail(`portal unreachable: ${readResult?.error || 'navigation failed'}`, { unreachable: true })
+      }
+      // A connector that PROVED it never cleared the portal's sign-in wall has
+      // established the same fact the keepalive sweep expires a session on: the
+      // saved session is dead. Without this the run just reports an empty read
+      // and the owner is never told the one thing that would fix it — capture a
+      // fresh login. Mirrors runSessionKeepAliveSweep exactly, including its
+      // hard-won distinction: an auth challenge is the session's death, while a
+      // BLOCK ('blocked' — a datacenter/WAF refusal) is OUR reachability
+      // problem and must never burn a working session.
+      if (readResult?.access === 'signin_wall' && savedSession?.id) {
+        await markSessionDeadAfterWall(db, savedSession, host).catch(() => {})
       }
       const persisted = await persistReadResult(db, { profileId, portalHost: host, actorUserId, readResult })
       result.read = {
@@ -583,6 +645,8 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
   }
 }
 
-export const _internal = { persistReadResult, recordStudentPortalChecks, applyFafsaStatusFromRead }
+export const _internal = {
+  persistReadResult, recordStudentPortalChecks, applyFafsaStatusFromRead, markSessionDeadAfterWall,
+}
 
 export default { runPortalSync, listConnectors, getConnectorForHost, ensurePortalSyncSchema, listRuns }
