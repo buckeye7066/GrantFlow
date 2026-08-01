@@ -97,7 +97,17 @@ export function syncProfileFieldsFromSection(db, profileId, sectionKey, sectionD
     } catch (err) {
       // Column may not exist in the profiles table — this is not fatal
       if (!String(err?.message).includes('no such column') && !String(err?.message).includes('does not exist')) {
-        console.warn(`[profileSectionSync] Failed to sync ${rule.profileColumn} for profile ${profileId}:`, err.message);
+        // profileId and the column name ride as ARGUMENTS, never interpolated
+        // into the format string: both are user-reachable (a profileId arrives
+        // straight off a request body), and CodeQL flags the interpolated form
+        // as js/tainted-format-string. The new /portal-sync/submit-awards route
+        // is what made this path reachable from a request, which is why a
+        // long-standing line surfaced as a NEW finding.
+        console.warn('[profileSectionSync] Failed to sync column for profile', {
+          column: rule.profileColumn,
+          profileId,
+          error: err.message,
+        });
       }
     }
   }
@@ -122,7 +132,8 @@ export function fullResyncProfileFields(db, profileId) {
       } catch { /* skip unparseable sections */ }
     }
   } catch (err) {
-    console.warn(`[profileSectionSync] fullResync failed for profile ${profileId}:`, err.message);
+    // Same rule as above: a user-reachable profileId never enters the format string.
+    console.warn('[profileSectionSync] fullResync failed for profile', { profileId, error: err.message });
   }
 }
 
