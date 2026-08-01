@@ -169,8 +169,11 @@ describe('lever actionability registry — every emitted lever declares how it c
       const m = /(GET|POST|PUT|PATCH|DELETE)\s+\/api\/amy(\/[a-z0-9\-/]*)/i.exec(meta.surface)
       expect(m, `${lever} surface must name an /api/amy route`).toBeTruthy()
       const [, verb, path] = m
-      expect(src, `${lever}: ${verb} ${path} is not defined in routes/amy.js`)
-        .toMatch(new RegExp(`router\\.${verb.toLowerCase()}\\('${path.replace(/\//g, '\\/')}'`))
+      // Literal substring, never a constructed RegExp: escaping a path into a
+      // pattern is exactly the partial-sanitization shape CodeQL blocks, and a
+      // plain `includes` is both safer and a stricter check.
+      const needle = `router.${verb.toLowerCase()}('${path}'`
+      expect(src.includes(needle), `${lever}: ${verb} ${path} is not defined in routes/amy.js`).toBe(true)
     }
   })
 
