@@ -42,9 +42,14 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
 
   const env = launchEnv || { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
   // The manifest declares where an app's disposable data goes; create it before
-  // launch. Several apps (PromoPilot's better-sqlite3 file) will not create the
-  // parent directory themselves and die on the first write.
-  ensureDisposableRoot(cwd, manifest.disposable_data_root)
+  // launch ONLY when the launch env actually points at it (PromoPilot's
+  // better-sqlite3 SQLITE_PATH will not create its own parent and dies on the
+  // first write). Creating it unconditionally would leave an untracked
+  // `.eva-tmp/` in every app's repo every night — drift the owner never asked
+  // for, in repos EVA is only supposed to read.
+  if (envReferencesRoot(env, manifest.disposable_data_root)) {
+    ensureDisposableRoot(cwd, manifest.disposable_data_root)
+  }
   // Manifests use the POSIX idiom "backend & frontend" to mean "run BOTH
   // concurrently". Under shell:true on Windows that string reaches cmd.exe,
   // where a single `&` is a SEQUENTIAL separator — the backend dev server runs
@@ -155,6 +160,15 @@ export function createOutputRing(limit = 8000) {
 // leaving `&&` chains intact. "cd backend && npm run dev & npm run dev" →
 // ["cd backend && npm run dev", "npm run dev"]. Quoted ampersands are not a
 // concern for these manifests (commands are simple npm/pnpm/python invocations).
+// Does any launch-env value actually point INTO the declared disposable root?
+// Only then is creating the directory something the app asked for.
+export function envReferencesRoot(env, root) {
+  if (!root || typeof root !== 'string') return false
+  const needle = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  if (!needle) return false
+  return Object.values(env || {}).some((v) => String(v ?? '').replace(/\\/g, '/').toLowerCase().includes(needle))
+}
+
 // Create the manifest's declared disposable data root inside the app repo.
 // Only ever a path RELATIVE to the app's own directory — an absolute or
 // escaping root is ignored rather than created somewhere unexpected.

@@ -20,7 +20,7 @@ import {
   loadAppEnvOverrides,
 } from '../../tools/eva-edge-runner/src/prereq.mjs'
 import { blockedAppResult, startupFailedAppResult } from '../../tools/eva-edge-runner/src/appOutcome.mjs'
-import { createOutputRing, ensureDisposableRoot, splitConcurrentSegments } from '../../tools/eva-edge-runner/src/launcher.mjs'
+import { createOutputRing, ensureDisposableRoot, envReferencesRoot, splitConcurrentSegments } from '../../tools/eva-edge-runner/src/launcher.mjs'
 import { expectedConsolePatterns, matchesAny } from '../../tools/eva-edge-runner/src/adapters/web.mjs'
 
 const app = { app_id: 'demo', display_name: 'Demo', repo: 'owner/demo' }
@@ -178,6 +178,14 @@ test('the disposable data root is created inside the app repo, and an escaping r
   assert.equal(ensureDisposableRoot('C:/apps/demo', '\\\\server\\share', mkdir), null)
   assert.equal(ensureDisposableRoot('C:/apps/demo', '/etc/passwd', mkdir), null)
   assert.equal(made.length, 1, 'only the safe relative root was created')
+})
+
+test('the disposable root is created ONLY when the launch env points into it — EVA never litters a repo it merely reads', () => {
+  assert.equal(envReferencesRoot({ SQLITE_PATH: '.eva-tmp/promopilot/promopilot.db' }, '.eva-tmp/promopilot'), true)
+  assert.equal(envReferencesRoot({ SQLITE_PATH: '.eva-tmp\\promopilot\\x.db' }, '.eva-tmp/promopilot'), true)
+  assert.equal(envReferencesRoot({ PATH: '/usr/bin', PORT: '5173' }, '.eva-tmp/grantflow'), false)
+  assert.equal(envReferencesRoot({ ANY: 'x' }, ''), false)
+  assert.equal(envReferencesRoot({ ANY: 'x' }, undefined), false)
 })
 
 test('a POSIX "a & b" start_command still means RUN BOTH (regression guard)', () => {
