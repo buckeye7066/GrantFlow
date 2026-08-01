@@ -261,7 +261,11 @@ describe('pipeline.amountCoverage ratchet', () => {
     seedGrants(100, 15, { unansweredFo: 10 })
     const res = await check().run({ db })
     expect(res.ok).toBe(false)
-    expect(res.summary).toMatch(/10 active pipeline grant\(s\) were READ but their source could not be parsed/)
+    // "AWARD-BEARING" is load-bearing wording (2026-08-01): pointer kinds
+    // (directory/referral/school_portal/past_award_intel) can never carry a
+    // per-award figure, so naming them as adapter work asked for work that
+    // cannot exist. See backend/tests/opportunityKindClasses.test.js.
+    expect(res.summary).toMatch(/10 AWARD-BEARING active pipeline grant\(s\) were READ but their source could not be parsed/)
     expect(res.summary).toMatch(/need an API adapter/)
     expect(res.evidence).toMatchObject({ unanswered_unreadable: 10, answered_none_published: 75 })
   })
