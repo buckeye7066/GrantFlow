@@ -344,8 +344,18 @@ export async function loadProfileContext(db, profileId) {
     } catch (err) {
       // Surface org-load failure so matching doesn't silently lose org-level
       // signals (state/city/zip/mission). Matching continues without the org.
+      //
+      // The ids are passed as ARGUMENTS, never interpolated into the first
+      // argument. Node treats `console.warn`'s first argument as a FORMAT
+      // string, so a caller-supplied `profileId` embedded there is a
+      // format-string injection: a request for `?profileId=%s%o` would consume
+      // the following arguments as substitutions and print unintended values
+      // into the logs. `profileId` reaches here straight from HTTP query
+      // parameters (CodeQL js/tainted-format-string, PR #1081).
       console.warn(
-        `[loadProfileContext] organization lookup failed for profile=${profileId} org=${profile.organization_id}:`,
+        '[loadProfileContext] organization lookup failed for profile=%s org=%s:',
+        profileId,
+        profile.organization_id,
         err?.message || err,
       )
       organization = null
