@@ -226,8 +226,17 @@ describe('summarizeAmyFlywheel + digest section', () => {
       coverage_tuning: { validation: { kept: false }, applied: { applied: true } },
       archetype_learning: { update: { student_committed: {}, veteran_family: {} } },
       approval_queue: [
-        { lever: 'source_keyword_coverage', category: 'foster_youth', reason: 'needs review' },
-        { lever: 'scoring_weights', auto_applied: { kept: true } },
+        {
+          lever: 'relevance_precision',
+          category: 'foster_youth',
+          actionability: 'owner_api',
+          requires_approval: true,
+          apply_surface: 'POST /api/amy/relevance-vocabulary',
+          nights_open: 12,
+          first_seen_at: '2026-07-19T04:00:00Z',
+          stale: true,
+        },
+        { lever: 'scoring_weights', actionability: 'auto', requires_approval: false, auto_applied: { kept: true } },
       ],
     },
   }
@@ -244,6 +253,55 @@ describe('summarizeAmyFlywheel + digest section', () => {
     expect(fw.couldNot.join(' ')).toMatch(/foster_youth/)
     expect(fw.couldNot.join(' ')).not.toMatch(/scoring_weights/)
     expect(fw.couldNot.join(' ')).toMatch(/hyperlocal_recall_miss ×2/)
+  })
+
+  // ── the write-only-queue fix (2026-08-01) ────────────────────────────────
+  // Prod carried a non-empty queue for 20 consecutive runs and the report
+  // rendered six identical ageless "Needs your approval" lines, so night 1 and
+  // night 30 read the same. These assertions FAIL on the pre-fix summarizer.
+  it('an owner ask carries its AGE and the surface that closes it', () => {
+    const fw = summarizeAmyFlywheel(amy)
+    const line = fw.couldNot.find((l) => l.includes('foster_youth'))
+    expect(line).toMatch(/open 12 nights/)
+    expect(line).toMatch(/since 2026-07-19/)
+    expect(line).toMatch(/STALE/)
+    expect(line).toMatch(/POST \/api\/amy\/relevance-vocabulary/)
+  })
+
+  it('a CODE-CHANGE lever is never rendered as "Needs your approval"', () => {
+    const fw = summarizeAmyFlywheel({
+      ...amy,
+      report: {
+        ...amy.report,
+        approval_queue: [{
+          lever: 'eligibility_gate',
+          category: 'homeschool_family',
+          actionability: 'code_change',
+          requires_approval: false,
+          human_gate_reason: 'The eligibility gate is code in the canonical match engine.',
+          nights_open: 3,
+        }],
+      },
+    })
+    const text = fw.couldNot.join(' ')
+    expect(text).toMatch(/Needs a CODE change \(no approval can close this\): eligibility_gate for homeschool_family/)
+    expect(text).not.toMatch(/Needs your approval: eligibility_gate/)
+  })
+
+  it('a CLOSED ledger item is reported as an edit — the loop CAN converge', () => {
+    const fw = summarizeAmyFlywheel({
+      ...amy,
+      report: {
+        ...amy.report,
+        approval_queue: [],
+        approval_ledger: {
+          closed: [{ id: 'scoring:tribal_org', lever: 'scoring_weights', category: 'tribal_org', resolution: 'stopped_reproducing', nights_open: 4 }],
+          stale: [],
+        },
+      },
+    })
+    expect(fw.edits.join(' ')).toMatch(/1 approval item\(s\) CLOSED/)
+    expect(fw.edits.join(' ')).toMatch(/scoring_weights\/tribal_org \(4n\)/)
   })
 
   it('flags the goal when a full day is all clean', () => {

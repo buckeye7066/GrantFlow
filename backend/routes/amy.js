@@ -113,11 +113,29 @@ router.get('/reports', async (req, res) => {
   }
 })
 
-/** Open deeper-improvement proposals awaiting human approval. */
+/**
+ * Open deeper-improvement proposals, aged by the durable approval ledger.
+ *
+ * The queue itself is recomputed from scratch every run, so on its own it can
+ * never say how long an item has been open — which is exactly how it became a
+ * write-only queue (20 consecutive prod runs with a non-empty queue and zero
+ * items ever actioned). The ledger supplies first_seen_at / nights_open /
+ * actionability; a ledger read failure degrades to registry decoration only,
+ * never back to the ageless shape.
+ */
 router.get('/approvals', async (req, res) => {
   try {
     const queue = await readAmyApprovalQueue(req.db)
-    return res.json({ ok: true, ...queue })
+    const { readApprovalLedger, decorateApprovalQueue } = await import('../services/amy/approvalLedger.js')
+    const ledger = await readApprovalLedger(req.db)
+    const items = decorateApprovalQueue(Array.isArray(queue?.items) ? queue.items : [], ledger)
+    return res.json({
+      ok: true,
+      ...queue,
+      items,
+      stale_count: items.filter((i) => i.stale).length,
+      owner_actionable_count: items.filter((i) => i.requires_approval).length,
+    })
   } catch (err) {
     return res.status(500).json({ ok: false, error: 'amy_approvals_failed' })
   }

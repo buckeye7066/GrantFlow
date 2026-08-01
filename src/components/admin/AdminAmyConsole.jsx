@@ -352,6 +352,25 @@ export default function AdminAmyConsole() {
                   <Badge variant="outline" className={SEVERITY_TONE[item.severity] || ''}>{item.severity}</Badge>
                   <span className="font-medium">{item.lever}</span>
                   {item.category && <Badge variant="outline">{item.category}</Badge>}
+                  {/* How this item can actually be closed. An item on an AUTO
+                      lever is Amy's own work and one on a CODE_CHANGE lever
+                      cannot be closed by any approval — showing them all as an
+                      undifferentiated "approval queue" is what made this
+                      surface unreadable. */}
+                  {item.actionability === 'owner_api' && (
+                    <Badge variant="outline" className="bg-amber-50 text-amber-900 border-amber-200">needs you</Badge>
+                  )}
+                  {item.actionability === 'auto' && (
+                    <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200">Amy applies this</Badge>
+                  )}
+                  {item.actionability === 'code_change' && (
+                    <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-200">needs a code change</Badge>
+                  )}
+                  {Number(item.nights_open) > 0 && (
+                    <Badge variant="outline" className={item.stale ? 'bg-red-50 text-red-700 border-red-200' : ''}>
+                      open {item.nights_open} night{item.nights_open === 1 ? '' : 's'}{item.stale ? ' — stale' : ''}
+                    </Badge>
+                  )}
                   {item.auto_applied && (
                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
                       auto-applied: {item.auto_applied.lever}
@@ -360,6 +379,12 @@ export default function AdminAmyConsole() {
                   <code className="text-xs text-muted-foreground">{item.target_file}</code>
                 </div>
                 <div className="text-sm mt-1">{item.rationale}</div>
+                {item.apply_surface && (
+                  <div className="text-xs text-muted-foreground mt-1">Closed by: {item.apply_surface}</div>
+                )}
+                {item.actionability === 'code_change' && item.human_gate_reason && (
+                  <div className="text-xs text-muted-foreground mt-1">{item.human_gate_reason}</div>
+                )}
                 {item.lever === 'relevance_precision' && (
                   <RelevancePrecisionApply item={item} onApplied={refresh} />
                 )}
