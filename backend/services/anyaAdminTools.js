@@ -1469,6 +1469,112 @@ export async function adminFunctionsDiagnose({ route, method = 'GET', body = {} 
 // ============================================================================
 
 /**
+ * The read-only SQL guard's forbidden-keyword REGISTRY — the single list
+ * `assertReadOnlyDiagnosticSql()` (and its totality test) enumerate. Adding a
+ * keyword here is the only supported way to widen the guard.
+ *
+ * THE 2026-07-29 DEFECT (why this is a registry + a word-boundary match, and
+ * never a substring `includes()`): the check used to be
+ *
+ *   dangerousKeywords.some((keyword) => trimmedSql.includes(keyword))
+ *
+ * A bare substring test cannot tell a STATEMENT from an IDENTIFIER, and this
+ * schema is full of identifiers that contain these words:
+ *   `updated_at`  ⊃ update     `created_at`/`created_by` ⊃ create
+ *   `grants`      ⊃ grant      `deleted_at`              ⊃ delete
+ *   `execution_time_ms` ⊃ exec `inserted_at`             ⊃ insert
+ * — i.e. every timestamped table in the product, and the `grants` table this
+ * whole application is named after, were structurally unqueryable.
+ *
+ * Measured in prod `anya_tool_usage` on 2026-08-01: **90 of 90** all-time
+ * `admin.db.query` failures were this class ("Query contains forbidden
+ * keywords"), and **0** of them contained a real SQL keyword at a word
+ * boundary. 86 tripped on `updated_at`, 7 on `created_at`/`created_by`. That
+ * is what drove Anya's "44% of the last 200 tool calls failed" finding.
+ *
+ * Word-boundary matching is STRICTLY MORE PRECISE, not weaker: every genuine
+ * `DROP` / `DELETE` / `UNION SELECT` / `INSERT INTO` form is still rejected
+ * (asserted keyword-by-keyword in the totality test). The real read-only
+ * perimeter is the trio of checks below — must start with SELECT, no `;`, no
+ * second SELECT — which this keyword list only backstops.
+ */
+export const READ_ONLY_SQL_FORBIDDEN_KEYWORDS = Object.freeze([
+  'drop', 'delete', 'update', 'insert', 'alter', 'create', 'truncate',
+  'union', 'into', 'exec', 'execute', 'grant', 'revoke',
+])
+
+const FORBIDDEN_SQL_KEYWORD_PATTERNS = READ_ONLY_SQL_FORBIDDEN_KEYWORDS.map((keyword) => [
+  keyword,
+  new RegExp(`\\b${keyword}\\b`),
+])
+
+/**
+ * A query already carrying its own row bound. Requires a DIGIT after the
+ * keyword so a literal (`WHERE note LIKE '%limit%'`) or an identifier alias
+ * cannot suppress the clamp — the same substring-vs-token confusion as above,
+ * one line down, except there it silently ran an UNBOUNDED query.
+ */
+const EXPLICIT_ROW_LIMIT_RX = /\blimit\s+\d/
+
+/**
+ * Returns the forbidden keyword this SQL actually uses AS A KEYWORD, or null.
+ * @param {string} loweredSql lower-cased SQL text
+ */
+export function findForbiddenSqlKeyword(loweredSql) {
+  const hit = FORBIDDEN_SQL_KEYWORD_PATTERNS.find(([, rx]) => rx.test(loweredSql))
+  return hit ? hit[0] : null
+}
+
+/**
+ * The single choke point deciding whether a string is a safe read-only
+ * diagnostic query. Throws with a message that NAMES the offending token —
+ * `admin.db.query`'s caller is a language model, and "Query contains forbidden
+ * keywords" gives it nothing to correct, so it re-sends the same statement.
+ * (Prod: one identical rejected query was re-issued 83 times in 30 minutes,
+ * which is 83 of the 87 failures in the reported window.)
+ *
+ * @param {string} sql
+ * @returns {{ lowered: string, hasExplicitLimit: boolean }}
+ */
+export function assertReadOnlyDiagnosticSql(sql) {
+  if (!sql || typeof sql !== 'string') {
+    throw new Error('SQL query is required')
+  }
+
+  const lowered = sql.trim().toLowerCase()
+
+  // Security: Only allow SELECT statements
+  if (!lowered.startsWith('select')) {
+    throw new Error('Only SELECT queries are allowed')
+  }
+
+  // Block semicolons to prevent multi-statement injection
+  if (lowered.includes(';')) {
+    throw new Error('Query contains forbidden characters')
+  }
+
+  // Block subqueries by detecting more than one SELECT keyword
+  const selectMatches = lowered.match(/\bselect\b/g)
+  if (selectMatches && selectMatches.length > 1) {
+    throw new Error('Subqueries are not allowed')
+  }
+
+  // Block dangerous keywords — as KEYWORDS (word boundaries), never as
+  // substrings of a column/table identifier. See the registry doc above.
+  const keyword = findForbiddenSqlKeyword(lowered)
+  if (keyword) {
+    throw new Error(
+      `Query contains forbidden keyword "${keyword.toUpperCase()}". `
+      + 'admin.db.query is read-only: only a single SELECT statement is allowed, with no subquery, '
+      + 'no semicolon and no data-modifying keyword. A column named like a keyword '
+      + '(created_at, updated_at) is fine — re-sending the same statement will not help.',
+    )
+  }
+
+  return { lowered, hasExplicitLimit: EXPLICIT_ROW_LIMIT_RX.test(lowered) }
+}
+
+/**
  * Run read-only SQL queries for diagnostics (SELECT only)
  */
 export async function adminDbQuery({ sql, limit = 100 }, context) {
@@ -1477,49 +1583,22 @@ export async function adminDbQuery({ sql, limit = 100 }, context) {
     throw new Error('Database connection unavailable')
   }
 
-  if (!sql || typeof sql !== 'string') {
-    throw new Error('SQL query is required')
-  }
-
-  // Security: Only allow SELECT statements
-  const trimmedSql = sql.trim().toLowerCase()
-  if (!trimmedSql.startsWith('select')) {
-    throw new Error('Only SELECT queries are allowed')
-  }
-
-  // Block semicolons to prevent multi-statement injection
-  if (trimmedSql.includes(';')) {
-    throw new Error('Query contains forbidden characters')
-  }
-
-  // Block subqueries by detecting more than one SELECT keyword
-  const selectMatches = trimmedSql.match(/\bselect\b/g)
-  if (selectMatches && selectMatches.length > 1) {
-    throw new Error('Subqueries are not allowed')
-  }
-
-  // Block dangerous keywords
-  const dangerousKeywords = [
-    'drop', 'delete', 'update', 'insert', 'alter', 'create', 'truncate',
-    'union', 'into', 'exec', 'execute', 'grant', 'revoke',
-  ]
-  if (dangerousKeywords.some((keyword) => trimmedSql.includes(keyword))) {
-    throw new Error('Query contains forbidden keywords')
-  }
+  // Single read-only choke point (see assertReadOnlyDiagnosticSql above).
+  const { hasExplicitLimit } = assertReadOnlyDiagnosticSql(sql)
 
   try {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500))
-    
-    // Append LIMIT clause to the query if not already present.
-    // Build finalSql from trimmedSql (already lowercased/sanitized) to prevent case-bypass attacks.
-    // Security checks use trimmedSql (lowercased). Execution uses the original, case-preserved sql.
-const originalTrimmed = sql.trim();
-let finalSql = originalTrimmed;
-if (!trimmedSql.includes('limit')) {
-  finalSql += ` LIMIT ${safeLimit}`;
-}
 
-const results = rowsFromResult(await db.prepare(finalSql).all())
+    // Append a LIMIT clause when the query does not already bound itself.
+    // Security checks run on the lower-cased text; execution uses the
+    // original, case-preserved SQL. The clamp goes on its OWN LINE so a
+    // trailing `-- comment` cannot swallow it (which would run it unbounded).
+    let finalSql = sql.trim()
+    if (!hasExplicitLimit) {
+      finalSql += `\nLIMIT ${safeLimit}`
+    }
+
+    const results = rowsFromResult(await db.prepare(finalSql).all())
 
     return {
       query: sql,
