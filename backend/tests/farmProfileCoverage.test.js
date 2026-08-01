@@ -324,6 +324,53 @@ describe('agriculture source coverage (registry + totality)', () => {
     }
   })
 
+  // END-TO-END: the whole point of the fix. Anita's declared farm must widen
+  // the set of sources the planner can fire for her, and a person who declared
+  // no farm must NOT gain producer-only lanes (a blind spot must not be traded
+  // for a false positive). This catches an over-broad registry entry too: if a
+  // producer-only lane listed 'individual', every individual would reach it and
+  // this differential would collapse.
+  it('a declared farm WIDENS source reach, and only for her', () => {
+    const thesisFor = (occupation) =>
+      buildThesis({
+        id: 't', primary_type: 'individual', location: { state: 'KY' },
+        sections: [{ section_key: 'occupation', data: occupation }],
+      })
+    const reach = (thesis) =>
+      new Set(
+        sources
+          .filter((s) => (s.applicant_types ?? []).some((t) => thesis.applicant_types.includes(t)))
+          .map((s) => s.source_id),
+      )
+
+    const anita = thesisFor({ farmer: true, small_business_owner: false })
+    const plain = thesisFor({ farmer: false, small_business_owner: false })
+    expect(anita.applicant_types).toEqual(expect.arrayContaining(['individual', 'farm']))
+    expect(plain.applicant_types).not.toContain('farm')
+
+    const anitaReach = reach(anita)
+    const plainReach = reach(plain)
+
+    // Every producer-only lane is reachable by her and by NO plain individual.
+    for (const id of [
+      'usda_conservation',
+      'usda_fsa_farm_programs',
+      'sare_farmer_rancher_grants',
+      'usda_value_added_producer_grants',
+      'ky_agricultural_development_fund',
+      'conservation_districts_directory',
+      'farm_credit_young_beginning_small',
+    ]) {
+      expect(anitaReach.has(id), `Anita must reach ${id}`).toBe(true)
+      expect(plainReach.has(id), `${id} is producer-only — a non-farmer must not reach it`).toBe(false)
+    }
+
+    // ...and she keeps everything a plain individual gets (additive, not a swap).
+    for (const id of plainReach) {
+      expect(anitaReach.has(id), `declaring a farm must not COST her ${id}`).toBe(true)
+    }
+  })
+
   it('the loan lanes are DECLARED as loans (never surfaced as grants by default)', () => {
     expect(byId.get('farm_credit_young_beginning_small').loan_allowed).toBe(true)
     expect(byId.get('usda_fsa_farm_programs').loan_allowed).toBe(true)
