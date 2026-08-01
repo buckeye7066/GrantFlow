@@ -16,11 +16,12 @@
 
 import { normalizeHost } from '../hamiltonCredentialSessionService.js'
 import mtsu from './connectors/mtsu.js'
+import studentaid from './connectors/studentaid.js'
 import genericConnector from './connectors/generic.js'
 
 // Specific connectors. Order matters only for overlapping patterns; keep
 // most-specific first. The generic fallback is intentionally NOT in this list.
-const CONNECTORS = Object.freeze([mtsu])
+const CONNECTORS = Object.freeze([mtsu, studentaid])
 
 /** @returns user-facing list of the real (non-generic) connectors. */
 export function listConnectors() {

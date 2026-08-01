@@ -5,7 +5,16 @@
  * workspace can show stage + the next concrete action. Pure + unit-tested. Stays
  * back-compatible with the existing `education.fafsa_completed` boolean (derived
  * both ways) and stays compliant: this records STATUS only — it never stores an
- * FSA ID, never logs into studentaid.gov, never submits federal aid.
+ * FSA ID and never submits, corrects, or signs federal aid.
+ *
+ * STAGE SOURCES: the student (or an admin) via POST
+ * /api/profiles/:id/fafsa-status, and — since 2026-08-01 — the READ-ONLY
+ * studentaid.gov portal-sync connector
+ * (services/hamilton/portalSync/connectors/studentaid.js), which reads the
+ * student's OWN authenticated pages through a session they captured themselves
+ * with explicit consent, and whose `write()` is a hard refusal. Portal-sourced
+ * stages are applied through setFafsaStage by the sync orchestrator and are
+ * MONOTONIC — a read may advance the lifecycle, never silently regress it.
  */
 
 // Ordered lifecycle. `next` is the concrete action the student should take.
