@@ -3466,6 +3466,61 @@ export async function loadPreferenceSignals(db, profileId) {
  * @returns {{ decision: string, explanation: string, reasons: string[] }}
  */
 /**
+ * Collapse every whitespace run to ONE space, once, before pattern matching.
+ *
+ * WHY THIS EXISTS (js/polynomial-redos, CodeQL, PR #1080). The residency-scope
+ * pattern below is matched against `opp.title + opp.description` — crawler-
+ * controlled text — and it interleaved overlapping whitespace quantifiers
+ * (`must\s+be\s+a?\s*resident`: `\s+`, then an optional `a`, then `\s*`). For a
+ * run of n whitespace characters the engine can split it n ways at each of n
+ * start positions, so the match is QUADRATIC in the length of the run. Measured
+ * on the pre-fix pattern with `'must be' + '\t\t'.repeat(n)`: 2 008 chars →
+ * 11.9 ms, 4 008 → 36.6 ms, 8 008 → 147.6 ms, 16 008 → 567.8 ms — a clean 4×
+ * per doubling. makeDecision runs per-profile × per-opportunity, so ONE
+ * pathological page title is amplified across the whole fleet.
+ *
+ * Normalizing first makes every whitespace quantifier in the pattern a LITERAL
+ * single space, which is disjoint from the character classes around it — the
+ * ambiguity that caused the backtracking simply cannot arise. `\s+` in a global
+ * replace has a single non-overlapping quantifier and is itself linear.
+ */
+export function normalizeMatchWhitespace(text) {
+  return String(text ?? '').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Residency-scope declaration: any phrase tying "residents" to a qualifier.
+ *   • "residents only" / "must be a resident" / "must reside in"
+ *   • "limited to residents"
+ *   • "for <X> residents"            (e.g. "for Texas residents")
+ *   • "<X> residents (only|facing|who|experiencing|must)"
+ *   • "exclusively for <X> residents"
+ *
+ * Operates on `normalizeMatchWhitespace()` output ONLY — every space here is a
+ * literal single space, never `\s+`. Accepts exactly the same phrases the
+ * pre-fix pattern did (proved by an A/B oracle test over a real corpus in
+ * `residencyScopeRedos.test.js`).
+ *
+ * Previously this literal was duplicated verbatim inside makeDecision — once per
+ * branch — which is the two-copies-must-not-drift shape the repo keeps getting
+ * bitten by. One constant now, consulted by both branches.
+ */
+export const RESIDENCY_EXCLUSIVE_RX = new RegExp(
+  '\\b(?:' +
+    [
+      'residents? only',
+      'must be a? ?resident',
+      'must reside in',
+      'limited to residents',
+      'for \\w+(?: \\w+)? residents?',
+      '\\w+ residents? (?:only|facing|who|experiencing|must)',
+      'exclusively for \\w+(?: \\w+)? residents?',
+    ].join('|') +
+    ')\\b',
+  'i',
+)
+
+/**
  * Person-or-household profile types, resolved through the canonical profile-type
  * registry so a leaf like `senior` / `disabled_adult` / `college_student` rolls up
  * to `individual` instead of falling out of a hand-written list (the reason the
@@ -3728,12 +3783,14 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   const oNormState = normalizeState(oppStateRaw)
   const matchesAnyProfileState = Boolean(oNormState) && profStateList.includes(oNormState)
   if (oppStateRaw && !oppIsNational && oNormState && !matchesAnyProfileState) {
+    // Normalize ONCE, here, for both branches below. Computed inside the gate so
+    // rows that never reach a residency question pay nothing for it.
+    const residencyText = normalizeMatchWhitespace(oppText)
     if (profStateList.length === 0) {
       // No profile state at all. Per canonical_rules "missing = neutral": do NOT
       // REJECT even when the opportunity is state-exclusive; surface for review so
       // the user can confirm residency themselves.
-      const RE_STATE_EXCLUSIVE_MISSING = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
-      if (RE_STATE_EXCLUSIVE_MISSING.test(oppText) || opp.state_residents_only === true) {
+      if (RESIDENCY_EXCLUSIVE_RX.test(residencyText) || opp.state_residents_only === true) {
         reasons.push(`Geographic note — opportunity is for ${oppStateRaw} residents; profile state unknown (confirm eligibility)`)
         return {
           decision: 'REVIEW',
@@ -3744,20 +3801,13 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       // No exclusivity signal + unknown profile state: fall through to scoring.
     } else {
       // Opportunity's state is in NONE of the profile's states.
-      // Residency-scope signals: any phrase tying "residents" to a qualifier is
-      // treated as an explicit state-scope declaration.
-      //   • "residents only" / "must be a resident" / "must reside in"
-      //   • "limited to residents"
-      //   • "for <X> residents" (e.g. "for Texas residents")
-      //   • "<X> residents (only|facing|who|experiencing|...)"
-      //   • "exclusively for <X> residents"
-      const RE_STATE_EXCLUSIVE = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
+      // Residency-scope signals live in the canonical RESIDENCY_EXCLUSIVE_RX.
       // A row that names its OWN locality is place-exclusive by construction:
       // "Polk County, TN — Local assistance programs near you" is a directory of
       // Polk County agencies. There is nothing in it an Indiana household can
       // use, so "may still be accessible" is not an honest verdict for it.
       const isExplicitlyExclusive =
-        RE_STATE_EXCLUSIVE.test(oppText) || opp.state_residents_only === true || Boolean(declaredPlaceState)
+        RESIDENCY_EXCLUSIVE_RX.test(residencyText) || opp.state_residents_only === true || Boolean(declaredPlaceState)
       const profStateLabel = profStateList.join('/')
       if (isExplicitlyExclusive) {
         const reasonText = `Geographic mismatch: opportunity is for ${oppStateRaw}, profile is in ${profStateLabel}`
