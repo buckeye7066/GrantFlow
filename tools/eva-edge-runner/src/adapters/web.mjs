@@ -76,18 +76,26 @@ export async function runWebJourney({ baseUrl, journey, captureDir = null, dryRu
       }
     }
 
-    // Uncaught console errors / 5xx are findings even if assertions passed.
-    if (consoleErrors.length || failedRequests.length) {
+    // Uncaught console errors / 5xx are findings even if assertions passed —
+    // EXCEPT ones the journey declares as expected. An unauthenticated view
+    // that fetches a token-gated endpoint logs a 401 by design; reporting that
+    // as a defect every night is the "alarm the owner scrolls past" class.
+    // Declaring it is deliberate and per-journey; it can never suppress an
+    // assertion failure, only this console/network noise lane.
+    const expected = expectedConsolePatterns(journey)
+    const unexpectedConsole = consoleErrors.filter((m) => !matchesAny(m, expected))
+    const unexpectedRequests = failedRequests.filter((m) => !matchesAny(m, expected))
+    if (unexpectedConsole.length || unexpectedRequests.length) {
       return await fail(journey, started, page, captureDir, {
         severity: 'medium',
-        failureClass: consoleErrors.length ? 'console-error' : 'network-5xx',
+        failureClass: unexpectedConsole.length ? 'console-error' : 'network-5xx',
         route: page.url(),
-        observed: [...consoleErrors.slice(0, 3), ...failedRequests.slice(0, 3)].join(' | '),
+        observed: [...unexpectedConsole.slice(0, 3), ...unexpectedRequests.slice(0, 3)].join(' | '),
         expected: 'no console errors or 5xx responses during the journey',
         impact: 'the page reached the right state but logged errors a user’s session could hit',
-        errorSignature: (consoleErrors[0] || failedRequests[0] || '').slice(0, 200),
-        consoleErrors,
-        failedRequests,
+        errorSignature: (unexpectedConsole[0] || unexpectedRequests[0] || '').slice(0, 200),
+        consoleErrors: unexpectedConsole,
+        failedRequests: unexpectedRequests,
       })
     }
 
@@ -116,6 +124,23 @@ export async function runWebJourney({ baseUrl, journey, captureDir = null, dryRu
       /* ignore */
     }
   }
+}
+
+/**
+ * Console/network messages a journey declares as EXPECTED (`expected_console_errors`).
+ * Substring match, case-insensitive. Only ever narrows the console/network
+ * noise lane — assertion failures are untouched.
+ */
+export function expectedConsolePatterns(journey) {
+  const raw = journey?.expected_console_errors
+  if (!Array.isArray(raw)) return []
+  return raw.map((p) => String(p || '').trim().toLowerCase()).filter(Boolean)
+}
+
+export function matchesAny(message, patterns) {
+  if (!patterns.length) return false
+  const m = String(message || '').toLowerCase()
+  return patterns.some((p) => m.includes(p))
 }
 
 async function applyStep(page, step, baseUrl) {

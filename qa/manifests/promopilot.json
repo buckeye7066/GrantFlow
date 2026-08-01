@@ -10,6 +10,13 @@
   "base_url": "http://localhost:8090",
   "test_target": "disposable-local-instance",
   "required_env": ["ADMIN_TOKEN", "PROMO_ENABLED", "SQLITE_PATH"],
+  "$launch_env_comment": "PromoPilot refuses to boot without ADMIN_TOKEN ('FATAL: set ADMIN_TOKEN — PromoPilot refuses to run open to the world.'). The runner never supplied its declared required_env, so a perfectly startable app reported startup_failed every night. ADMIN_TOKEN/CRED_SECRET are GENERATED per run (never committed); PROMO_ENABLED=false keeps the posting scheduler off, which the prohibited_actions require.",
+  "launch_env": {
+    "PROMO_ENABLED": "false",
+    "PORT": "8090",
+    "SQLITE_PATH": ".eva-tmp/promopilot/promopilot.db"
+  },
+  "launch_env_generated": { "ADMIN_TOKEN": "token", "CRED_SECRET": "secret" },
   "seed_command": "none (SQLite auto-initializes at SQLITE_PATH; no external DB needed)",
   "reset_command": "delete disposable SQLite file at SQLITE_PATH and restart",
   "cleanup": "rm -rf .eva-tmp/promopilot && remove disposable SQLite db at SQLITE_PATH",
@@ -43,6 +50,7 @@
     { "feature": "Apps & books campaign manager", "unautomated_reason": "requires token login; any campaign action risks touching the posting scheduler, and real posting is prohibited" },
     { "feature": "Recent posts log", "unautomated_reason": "requires token login and posting history; posting itself is prohibited so the log stays empty in a disposable instance" }
   ],
+  "$expected_console_comment": "The unlocked console fetches token-gated endpoints on load, so an UNAUTHENTICATED visit logs a 401 by design. Measured 2026-08-01 once the app could finally boot. Declaring it keeps a by-design 401 from reddening the report every night; it can never suppress an assertion failure.",
   "journeys": [
     {
       "id": "app-identifies-itself",
@@ -53,6 +61,7 @@
         { "action": "waitForSelector", "selector": "body" }
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "PromoPilot" }],
+      "expected_console_errors": ["401 (unauthorized)", "status of 401"],
       "user_impact": "If the root page does not load, the owner cannot reach the console at all.",
       "candidate_files": ["public/index.html", "server.js"]
     },
@@ -66,6 +75,7 @@
         { "action": "wait", "ms": 500 }
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "token" }],
+      "expected_console_errors": ["401 (unauthorized)", "status of 401"],
       "user_impact": "Without the token unlock input, the single-owner login is impossible and the whole console is locked out.",
       "candidate_files": ["public/index.html", "public/app.js"]
     }

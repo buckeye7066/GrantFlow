@@ -10,6 +10,24 @@
   "base_url": "http://localhost:5173",
   "test_target": "disposable-local-instance",
   "required_env": ["DATABASE_URL", "JWT_SECRET", "COOKIE_SECRET", "CORS_ORIGIN", "OPENAI_API_KEY", "DISABLE_AI", "DISABLE_BILLING", "DISABLE_PASSWORD_RESET"],
+  "$prereq_comment": "Measured 2026-08-01: `npm run dev:api` dies at import time with PrismaClientConstructorValidationError — 'Invalid value undefined for datasource \"db\"' — because DATABASE_URL is unset. There is no safe default: Prisma needs a real, migrated Postgres. That is an ENVIRONMENT prerequisite, not an app defect, so the app reports BLOCKED naming DATABASE_URL rather than a critical never-passing journey.",
+  "prerequisites": [
+    {
+      "id": "sermonsmith-database-url",
+      "type": "env",
+      "env": "DATABASE_URL",
+      "name": "DATABASE_URL for a disposable SermonSmith Postgres",
+      "remedy": "create a throwaway database on the local Postgres, run `npm run db:migrate -w @sermonsmith/api` against it, then set (user scope) EVA_APP_ENV={\"sermonsmith\":{\"DATABASE_URL\":\"postgresql://USER:PASS@127.0.0.1:5432/sermonsmith_eva\"}}"
+    }
+  ],
+  "launch_env": {
+    "NODE_ENV": "development",
+    "CORS_ORIGIN": "http://localhost:5173",
+    "DISABLE_AI": "1",
+    "DISABLE_BILLING": "1",
+    "DISABLE_PASSWORD_RESET": "1"
+  },
+  "launch_env_generated": { "JWT_SECRET": "secret", "COOKIE_SECRET": "secret" },
   "seed_command": "npm run db:seed -w @sermonsmith/api",
   "reset_command": "npm run db:seed -w @sermonsmith/api",
   "cleanup": "rm -rf .eva-tmp/sermonsmith && drop disposable test database",

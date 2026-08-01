@@ -9,13 +9,15 @@
 // whole process tree down again. It only ever launches the declared command in
 // the declared directory — no arbitrary command execution.
 import { spawn, spawnSync } from 'node:child_process'
+import { mkdirSync } from 'node:fs'
+import { join, isAbsolute } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // A launched-but-unreadiable server is reported honestly (startup_failed),
 // never silently passed. A web app with no start_command falls back to the old
 // behavior (assume something external is already serving base_url).
-export async function launchWebApp({ app, manifest, log = () => {} }) {
+export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = null }) {
   const startCmd = manifest.start_command
   const cwd = manifest.local_path || app?.local_path || null
   const probe = manifest.readiness_probe || {}
@@ -26,7 +28,7 @@ export async function launchWebApp({ app, manifest, log = () => {} }) {
 
   // Nothing to launch: no command, an explicit n/a, or no directory to run in.
   if (!startCmd || startCmd === 'n/a' || !cwd) {
-    return { launched: false, ready: true, baseUrl, reason: 'no start_command', stop: async () => {} }
+    return { launched: false, ready: true, baseUrl, reason: 'no start_command', outputTail: () => '', failedProbeUrl: null, stop: async () => {} }
   }
 
   // Pre-launch hygiene: a prior app (or a dev server the owner left running)
@@ -38,7 +40,11 @@ export async function launchWebApp({ app, manifest, log = () => {} }) {
   if (preBasePort && preBasePort !== 80 && preBasePort !== 443) preClearPorts.add(preBasePort)
   for (const port of preClearPorts) freePortAndWait(port, { attempts: 8 })
 
-  const env = { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
+  const env = launchEnv || { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
+  // The manifest declares where an app's disposable data goes; create it before
+  // launch. Several apps (PromoPilot's better-sqlite3 file) will not create the
+  // parent directory themselves and die on the first write.
+  ensureDisposableRoot(cwd, manifest.disposable_data_root)
   // Manifests use the POSIX idiom "backend & frontend" to mean "run BOTH
   // concurrently". Under shell:true on Windows that string reaches cmd.exe,
   // where a single `&` is a SEQUENTIAL separator — the backend dev server runs
@@ -48,20 +54,34 @@ export async function launchWebApp({ app, manifest, log = () => {} }) {
   // spawn each segment as its own shell child; `cd x && …` prefixes stay inside
   // their own segment, and each segment starts from the app's repo root.
   const segments = splitConcurrentSegments(startCmd)
+  // Capture the server's own stdout/stderr into a bounded ring. With
+  // `stdio: 'ignore'` the runner could only ever report "did not become ready",
+  // never WHY — so a one-line, self-describing cause ("FATAL: set ADMIN_TOKEN",
+  // "Invalid value undefined for datasource") was thrown away every night.
+  const output = createOutputRing()
   const children = segments.map((segment) =>
     spawn(segment, {
       cwd,
       shell: true,
       detached: process.platform !== 'win32',
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
       env,
     }),
   )
+  for (const child of children) {
+    child.stdout?.on('data', (chunk) => output.push(chunk))
+    child.stderr?.on('data', (chunk) => output.push(chunk))
+    child.stdout?.on('error', () => {})
+    child.stderr?.on('error', () => {})
+  }
 
   const exitInfos = new Array(children.length).fill(null)
   children.forEach((child, i) => {
     child.on('exit', (code, signal) => {
       exitInfos[i] = { code, signal }
+    })
+    child.on('error', (err) => {
+      output.push(`[launcher] spawn error: ${err?.message || err}\n`)
     })
   })
   // "Dead" means EVERY segment has exited — while any survives, the server we
@@ -91,27 +111,65 @@ export async function launchWebApp({ app, manifest, log = () => {} }) {
       if (!readyUrls.includes(baseProbe)) readyUrls.push(baseProbe)
     }
     let ready = true
+    let failedProbeUrl = null
     for (const readyUrl of readyUrls) {
       ready = await waitForHttp(readyUrl, {
         timeoutMs,
         isDead: allExited,
       })
       if (!ready) {
+        failedProbeUrl = readyUrl
         log(`[launcher] ${manifest.app_id || app?.app_id}: not ready at ${readyUrl} within ${timeoutMs}ms${allExited() ? ` (start_command exited ${JSON.stringify(exitInfos)})` : ''}`)
         break
       }
     }
-    return { launched: true, ready, baseUrl, pid: children[0]?.pid, stop }
+    return { launched: true, ready, baseUrl, failedProbeUrl, exitInfos, outputTail: output.tail, pid: children[0]?.pid, stop }
   }
 
   await sleep(Math.min(timeoutMs, 3000))
-  return { launched: true, ready: !allExited(), baseUrl, pid: children[0]?.pid, stop }
+  return { launched: true, ready: !allExited(), baseUrl, failedProbeUrl: null, exitInfos, outputTail: output.tail, pid: children[0]?.pid, stop }
+}
+
+// Bounded capture of a launched server's console output. Keeps only the LAST
+// `limit` characters so a chatty dev server cannot grow memory, and returns the
+// most useful slice: the tail is where a fatal error lands.
+export function createOutputRing(limit = 8000) {
+  let buf = ''
+  return {
+    push(chunk) {
+      buf += String(chunk)
+      if (buf.length > limit) buf = buf.slice(buf.length - limit)
+    },
+    tail(maxChars = 400) {
+      const lines = buf
+        .split(/\r?\n/)
+        .map((l) => l.replace(/\[[0-9;]*[A-Za-z]/g, '').trim())
+        .filter(Boolean)
+      const out = lines.slice(-6).join(' | ')
+      return out.length > maxChars ? out.slice(out.length - maxChars) : out
+    },
+  }
 }
 
 // Split a start_command on single `&` (the POSIX "run concurrently" idiom) while
 // leaving `&&` chains intact. "cd backend && npm run dev & npm run dev" →
 // ["cd backend && npm run dev", "npm run dev"]. Quoted ampersands are not a
 // concern for these manifests (commands are simple npm/pnpm/python invocations).
+// Create the manifest's declared disposable data root inside the app repo.
+// Only ever a path RELATIVE to the app's own directory — an absolute or
+// escaping root is ignored rather than created somewhere unexpected.
+export function ensureDisposableRoot(cwd, root, mkdir = mkdirSync) {
+  if (!cwd || !root || typeof root !== 'string') return null
+  if (isAbsolute(root) || root.split(/[\\/]/).includes('..')) return null
+  const full = join(cwd, root)
+  try {
+    mkdir(full, { recursive: true })
+    return full
+  } catch {
+    return null
+  }
+}
+
 export function splitConcurrentSegments(command) {
   const segments = String(command || '')
     .split(/(?<![&])&(?![&])/)
