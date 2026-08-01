@@ -142,6 +142,12 @@ async function applyFafsaStatusFromRead(db, { profileId, actorUserId, readResult
 
     const result = setFafsaStage(current, stage, { now: new Date().toISOString() })
     if (!result.ok) return { applied: false, stage, from: current.stage, reason: result.error || 'set_failed' }
+    // The EVIDENCE quote rides the run summary. Without it the 2026-08-01
+    // incident (a nav label advancing a real student to the terminal
+    // `complete`) could only be diagnosed by re-deriving the regex by hand —
+    // a stage write that cannot be audited from its own run record is not
+    // auditable at all.
+    const evidence = incoming?.evidence ? String(incoming.evidence).slice(0, 200) : null
 
     const next = { ...education, fafsa_status: result.status, fafsa_completed: result.fafsa_completed }
     const data = JSON.stringify(next)
@@ -158,7 +164,7 @@ async function applyFafsaStatusFromRead(db, { profileId, actorUserId, readResult
         "INSERT INTO profile_sections (profile_id, section_key, data, updated_by) VALUES (?, 'education', ?, ?)",
       ).run(String(profileId), data, updatedBy)
     }
-    return { applied: true, stage, from: current.stage }
+    return { applied: true, stage, from: current.stage, evidence }
   } catch (err) {
     return { applied: false, stage, from: 'unknown', reason: err?.message || 'fafsa_status_write_failed' }
   }

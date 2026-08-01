@@ -65,6 +65,11 @@ describe('applyFafsaStatusFromRead', () => {
 
     expect(res.applied).toBe(true)
     expect(res.from).toBe('not_started')
+    // The evidence quote must ride the run summary: after the 2026-08-01
+    // incident (a nav label advancing a student to the terminal `complete`),
+    // a stage write that cannot be audited from its own run record is not
+    // auditable at all.
+    expect(res.evidence).toMatch(/submitted on January 5, 2026/)
     const education = readEducation()
     expect(education.fafsa_status.stage).toBe('submitted')
     // The legacy boolean must move with the stage.
