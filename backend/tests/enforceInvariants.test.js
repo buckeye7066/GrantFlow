@@ -1073,7 +1073,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    expect(summary.ran).toBe(36)
+    expect(summary.ran).toBe(37)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1119,6 +1119,9 @@ describe('enforceInvariants — runner', () => {
       'application_url_rescue',
       'grant_score_backfill',
       'converted_applications_have_profiles',
+      // A saved portal session with no session_established_at is structurally
+      // invisible to the lifetime ledger — stamp it from its own created_at.
+      'portal_session_lifetime_stamp',
       'admin_reinterview_suppression',
       'amy_synthetic_expiry',
       'lead_contact_plausibility',
