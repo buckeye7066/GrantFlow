@@ -234,7 +234,7 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
     // page served DID have text and no "please sign in" sentence — so the
     // diagnostic reported success while the student's record was never seen.
     const page = makeRedirectingPage({
-      '/aid-summary/': {
+      '/my-aid/loans': {
         landed: 'https://studentaid.gov/',
         title: 'Home | Federal Student Aid',
         // Marketing copy carrying the very phrase that caused the false stage.
@@ -257,20 +257,32 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
     expect(res.raw.pages.every((p) => p.redirected === true)).toBe(true)
   })
 
-  it('landedOnRequested tolerates trailing-slash/case noise but never a different path or host', async () => {
-    const { landedOnRequested } = await import('../services/hamilton/portalSync/connectors/studentaid.js')
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/aid-summary')).toBe(true)
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/')).toBe(false)
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/fsa-id/sign-in/landing')).toBe(false)
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://evil.example.com/aid-summary/')).toBe(false)
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', null)).toBe(false)
+  it('classifyLanding: only a SIGN-IN or public-home destination means signed out', async () => {
+    const { classifyLanding } = await import('../services/hamilton/portalSync/connectors/studentaid.js')
+    const req = 'https://studentaid.gov/aid-summary/'
+    // Verified live 2026-08-01: a genuinely SIGNED-IN request for the aid
+    // summary lands on /my-aid/loans, and /fafsa-apply/status lands on
+    // /fafsa-apply/2026-27/roles. Treating those redirects as a wall declared a
+    // WORKING session dead and would have expired it.
+    expect(classifyLanding(req, 'https://studentaid.gov/my-aid/loans')).toBe('served')
+    expect(classifyLanding('https://studentaid.gov/fafsa-apply/status', 'https://studentaid.gov/fafsa-apply/2026-27/roles')).toBe('served')
+    expect(classifyLanding(req, 'https://studentaid.gov/aid-summary')).toBe('served')
+    // Signed out: the sign-in flow, or the silent bounce to the public home.
+    expect(classifyLanding(req, 'https://studentaid.gov/fsa-id/sign-in/landing?redirectTo=%2Faid-summary')).toBe('signed_out')
+    expect(classifyLanding(req, 'https://studentaid.gov/')).toBe('signed_out')
+    expect(classifyLanding(req, null)).toBe('signed_out')
+    expect(classifyLanding(req, 'https://evil.example.com/aid-summary/')).toBe('foreign')
+  })
+
+  it('a personalized greeting is proof of being inside the account', () => {
+    expect(classifyAccess({ url: 'https://studentaid.gov/fafsa-apply/2026-27/roles', title: 'Roles', text: 'FORM 2026-27 Welcome, Anastasia, to the FAFSA Form' })).toBe('authenticated')
   })
 
   it('reads a genuinely served private page (the fix must not make every run signin_wall)', async () => {
     const page = makeRedirectingPage({
-      '/aid-summary/': {
-        landed: 'https://studentaid.gov/aid-summary/',
-        title: 'Aid Summary | Federal Student Aid',
+      '/my-aid/grants': {
+        landed: 'https://studentaid.gov/my-aid/grants',
+        title: 'Grants | My Aid | Federal Student Aid',
         text: 'Your FAFSA form was submitted on January 5, 2026. Student Aid Index (SAI): 0',
       },
     }, { landed: 'https://studentaid.gov/fsa-id/sign-in/landing', title: 'Log In', text: 'Log In' })
@@ -319,5 +331,29 @@ describe('studentaid.gov connector — write() is refused by design', () => {
     expect(res.skipped[0].reason).toMatch(/refused_by_design/)
     // The page must never be typed into or submitted.
     expect(page.evaluate).not.toHaveBeenCalled()
+  })
+})
+
+describe('studentaid.gov connector — a missing form for the cycle is an OBSERVATION, not a silent no-op', () => {
+  it('records the no-form-for-cycle conflict when the portal answers with the "start a new form" step', async () => {
+    // Verified live 2026-08-01: a signed-in account with no form for the award
+    // year gets /fafsa-apply/status redirected into /fafsa-apply/2026-27/roles.
+    const page = makeRedirectingPage({
+      '/fafsa-apply/status': {
+        landed: 'https://studentaid.gov/fafsa-apply/2026-27/roles',
+        title: 'Roles 2026–27 | FAFSA Form | Federal Student Aid',
+        text: 'FORM 2026–27 Welcome, Anastasia, to the FAFSA® Form I am starting the FAFSA form as a Student Parent',
+      },
+    }, { landed: 'https://studentaid.gov/my-aid/loans', title: 'Loans | My Aid', text: 'My Loans You Currently Have No Loans' })
+
+    const res = await connector.read(page, { log: () => {} })
+
+    const obs = res.notFound.find((n) => n.observation === 'no_form_for_cycle')
+    expect(obs).toBeTruthy()
+    expect(obs.year).toBe('2026-27')
+    expect(obs.reason).toMatch(/NO FAFSA form for 2026-27/i)
+    // It must NOT write a stage — the monotonic rule owns that, and a
+    // profile/portal disagreement is for a human to adjudicate.
+    expect(res.fafsaStatus).toBe(null)
   })
 })

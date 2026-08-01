@@ -72,33 +72,71 @@ export const requiredReadDomains = ['fafsa_status', 'aid_summary']
 // on 2026-08-01. A page anyone can read while signed OUT is never evidence
 // about a particular student, so it is now excluded structurally rather than by
 // hoping the patterns are tight enough.
+// VERIFIED LIVE 2026-08-01 against a real signed-in account (prod container,
+// read-only probe). The guessed routes were wrong: /aid-summary/ and
+// /fafsa-view-award/ do not exist as data pages — the former redirects into
+// /my-aid/*, the latter 404s. These are the routes that actually render the
+// student's own record.
 const NAV = Object.freeze([
-  { url: 'https://studentaid.gov/aid-summary/', private: true },
+  { url: 'https://studentaid.gov/my-aid/loans', private: true },
+  { url: 'https://studentaid.gov/my-aid/grants', private: true },
+  { url: 'https://studentaid.gov/my-aid/enrollments', private: true },
+  // The FAFSA form entry point. When a form for the cycle exists it shows its
+  // status; when none does, studentaid.gov redirects to the /roles first step
+  // ("I am starting the FAFSA form as a…").
   { url: 'https://studentaid.gov/fafsa-apply/status', private: true },
-  { url: 'https://studentaid.gov/fafsa-view-award/', private: true },
 ])
 
 /** The URLs handed to the shared extractor (it takes bare strings). */
 const NAV_URLS = NAV.map((n) => n.url)
 
 /**
- * Did a request for a PRIVATE page actually land on that page? studentaid.gov
- * bounces an unauthenticated request to the sign-in landing (often with a
- * ?redirectTo=) or silently to the public home page. Both are proof we are NOT
- * signed in — and both previously read as "authenticated" here, because the
- * page they served did have text and no "please sign in" sentence.
+ * Where did a request for a PRIVATE page actually land? Returns
+ * 'served' | 'signed_out' | 'foreign'.
+ *
+ * TWO WRONG RULES PRECEDED THIS, one in each direction:
+ *   1. Trusting page CONTENT: studentaid.gov answers a signed-OUT request for
+ *      the aid summary with its public home page, which has plenty of text and
+ *      no "please sign in" sentence — so it read as authenticated.
+ *   2. Then treating ANY redirect as signed-out — which was equally wrong, and
+ *      measurably so: a genuinely signed-IN request for /aid-summary/ lands on
+ *      /my-aid/loans, and /fafsa-apply/status lands on
+ *      /fafsa-apply/2026-27/roles. Both are the student's own pages. That rule
+ *      declared a working session dead (2026-08-01) and would have expired it.
+ *
+ * The honest signal is the DESTINATION, not the fact of redirection: landing on
+ * the sign-in flow (or bounced to the public marketing home) means signed out;
+ * landing anywhere else inside the app means the portal simply routed us.
  */
-export function landedOnRequested(requested, landed) {
-  if (!landed) return false
+const SIGNIN_WALL_RE = /\b(sign in to your account|log in to your account|please sign in|you must (sign|log) in|create an fsa id|forgot my username)\b/i
+const SIGNIN_URL_RE = /\/(fsa-id\/sign-in|login|signin|auth)\b/i
+// Akamai-class refusals: the wall answers OUR datacenter caller, not the user.
+const BLOCKED_RE = /\b(access denied|reference #[0-9a-f.]+|unusual activity|request (was )?blocked|forbidden)\b/i
+
+/**
+ * Classify what we are actually looking at: 'authenticated', 'signin_wall',
+ * 'blocked', or 'unknown'. Pure + exported so it is testable without a browser.
+ */
+// The strongest possible proof we are inside the student's own account: the
+// portal greets them BY NAME ("Welcome, Anastasia, to the FAFSA® Form").
+// Marketing pages cannot produce this.
+const PUBLIC_HOME_RE = /^\/(index\.html)?$/i
+
+export function classifyLanding(requested, landed) {
+  if (!landed) return 'signed_out'
+  let a
+  let b
   try {
-    const a = new URL(requested)
-    const b = new URL(landed)
-    if (a.origin !== b.origin) return false
-    const norm = (p) => String(p || '/').replace(/\/+$/, '').toLowerCase() || '/'
-    return norm(a.pathname) === norm(b.pathname)
+    a = new URL(requested)
+    b = new URL(landed)
   } catch {
-    return String(requested) === String(landed)
+    return String(requested) === String(landed) ? 'served' : 'signed_out'
   }
+  if (a.origin !== b.origin) return 'foreign'
+  if (SIGNIN_URL_RE.test(b.pathname)) return 'signed_out'
+  // A private request answered with the PUBLIC HOME page is the silent bounce.
+  if (PUBLIC_HOME_RE.test(b.pathname)) return 'signed_out'
+  return 'served'
 }
 
 // ── Deterministic, quote-anchored FAFSA facts ────────────────────────────────
@@ -211,10 +249,25 @@ export function saiBand(value) {
   return `SAI ${value} (lower need)`
 }
 
+// studentaid.gov is a React SPA: domcontentloaded fires with an empty shell and
+// the record renders after XHR. Measured live 2026-08-01, a settled aid page is
+// only ~200-500 characters (they are sparse by design), so waiting on a
+// character threshold alone would spin forever — we poll until the text STOPS
+// GROWING, then take it.
+const SPA_SETTLE_POLLS = 8
+const SPA_SETTLE_INTERVAL_MS = 700
+
 async function gotoQuiet(page, url, log) {
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 })
-    await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {})
+    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
+    let last = -1
+    for (let i = 0; i < SPA_SETTLE_POLLS; i++) {
+      const len = await page.evaluate(() => (document.body?.innerText || '').length).catch(() => 0)
+      if (len > 0 && len === last) break // rendered and stable
+      last = len
+      await page.waitForTimeout?.(SPA_SETTLE_INTERVAL_MS)
+    }
     log?.(`navigated to ${url}`)
     return true
   } catch (err) {
@@ -231,18 +284,12 @@ async function gotoQuiet(page, url, log) {
 // tell them apart). The first two live runs each returned "no FAFSA stage
 // found" with zero fields; nothing in the run record said whether the browser
 // had even cleared the sign-in wall, so the finding was undiagnosable.
-const SIGNIN_WALL_RE = /\b(sign in to your account|log in to your account|please sign in|you must (sign|log) in|create an fsa id|forgot my username)\b/i
-const SIGNIN_URL_RE = /\/(fsa-id\/sign-in|login|signin|auth)\b/i
-// Akamai-class refusals: the wall answers OUR datacenter caller, not the user.
-const BLOCKED_RE = /\b(access denied|reference #[0-9a-f.]+|unusual activity|request (was )?blocked|forbidden)\b/i
+const PERSONAL_GREETING_RE = /\bwelcome,\s+[A-Z][\p{L}'-]{1,30}\b/u
 
-/**
- * Classify what we are actually looking at: 'authenticated', 'signin_wall',
- * 'blocked', or 'unknown'. Pure + exported so it is testable without a browser.
- */
 export function classifyAccess({ url = '', title = '', text = '' } = {}) {
   const hay = `${title}\n${text}`
   if (BLOCKED_RE.test(hay)) return 'blocked'
+  if (PERSONAL_GREETING_RE.test(String(text))) return 'authenticated'
   if (SIGNIN_WALL_RE.test(hay)) return 'signin_wall'
   if (SIGNIN_URL_RE.test(String(url))) return 'signin_wall'
   if (String(text || '').trim().length > 0) return 'authenticated'
@@ -294,13 +341,13 @@ export async function read(page, ctx = {}) {
     // request for the aid summary with its public home page, which has plenty
     // of text and no "please sign in" sentence — so it read as authenticated
     // and made the whole diagnostic lie (2026-08-01).
-    const arrived = landedOnRequested(url, landed)
-    const access = !arrived
+    const landing = classifyLanding(url, landed)
+    const access = landing !== 'served'
       ? 'signin_wall'
       : classifyAccess({ url: landed, title: snap.title, text: snap.text })
     raw.pages.push({
       url, landed, title: snap.title, chars: snap.text.length, access,
-      redirected: !arrived,
+      landing, redirected: landed !== url,
     })
     if (!snap.text.trim()) continue
     // Only a private page we ACTUALLY REACHED is the student's record. Wall
@@ -343,6 +390,28 @@ export async function read(page, ctx = {}) {
   const sai = deriveSai(corpus)
   const pell = derivePellEligibility(corpus)
   raw.derived = { stage, sai, pell }
+
+  // "No form for this cycle" is a REAL, user-record observation, not silence:
+  // studentaid.gov answers /fafsa-apply/status by redirecting into the /roles
+  // FIRST STEP ("I am starting the FAFSA form as a Student/Parent") when the
+  // signed-in student has no form for that award year. Verified live
+  // 2026-08-01. It is recorded as an OBSERVATION rather than written as a
+  // stage: the monotonic rule would refuse to regress anyway, and a profile
+  // that claims "submitted" while the federal system shows no form is a
+  // CONFLICT a human must adjudicate — not something a sync should quietly
+  // overwrite in either direction.
+  const rolesPage = raw.pages.find((p) => /\/fafsa-apply\/[^/]*\/roles\b/.test(String(p.landed || '')))
+  if (rolesPage) {
+    const year = String(rolesPage.landed).match(/\/fafsa-apply\/(\d{4}-\d{2})\//)?.[1] || null
+    raw.derived.noFormForCycle = { year, landed: rolesPage.landed }
+    notFound.push({
+      kind: 'status',
+      name: 'fafsa_form_for_cycle',
+      reason: `The signed-in account shows NO FAFSA form for ${year || 'the current cycle'} — studentaid.gov answered the status request with the "start a new form" first step. If this profile records the FAFSA as filed, one of the two is wrong and a human should check.`,
+      observation: 'no_form_for_cycle',
+      year,
+    })
+  }
 
   if (stage) {
     log(`studentaid: FAFSA stage "${stage.stage}" evidenced by "${stage.evidence}"`)
