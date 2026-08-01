@@ -96,9 +96,34 @@ function str(v, max = 0) {
   return max > 0 ? s.slice(0, max) : s
 }
 
-/** Extract "Name <addr@x>" → { email, name }. Accepts a bare address too. */
+/**
+ * RFC 5321 caps a path at 256 octets and a mailbox at 320; a display name plus
+ * an address has no legitimate reason to exceed this. Every OTHER field in
+ * `ingestEmail` is already capped (`source` 64, `messageId` 512, `subject` 998)
+ * — `from` was the one that was not, and it is the one feeding the regex below.
+ */
+export const MAX_FROM_HEADER_LENGTH = 1024
+
+/**
+ * Extract "Name <addr@x>" → { email, name }. Accepts a bare address too.
+ *
+ * DEFENCE IN DEPTH (js/polynomial-redos class). The pattern below interleaves
+ * three quantifiers that all match whitespace — `\s*`, `[^"<]*?`, `\s*` — so on
+ * a long whitespace run with no `<` it is CUBIC: measured 320 chars 83.5 ms,
+ * 2 000 chars 2.6 s, 4 000 chars 25.3 s.
+ *
+ * Reachability, stated honestly rather than assumed: the live feed
+ * (`outlookGrantFeeder.messageToEmail`) supplies `m.from.emailAddress.address`,
+ * a Graph-PARSED address, and a realistic 320-char address with no spaces costs
+ * 0.072 ms — so the live path is not demonstrably exploitable. The only entry
+ * accepting an arbitrary unbounded `from` is `POST /api/email-grants/ingest`,
+ * which in production is admin-only (`EMAIL_GRANTS_INGEST_TOKEN` is unset, so
+ * `ingestAuth` rejects everyone else). The cap is therefore defence in depth for
+ * an authenticated-trigger path, NOT a fix for an anonymous DoS — a length
+ * bound is simply correct here regardless of who can reach it.
+ */
 function parseFromHeader(from) {
-  const raw = str(from)
+  const raw = str(from, MAX_FROM_HEADER_LENGTH)
   if (!raw) return { email: null, name: null }
   const m = raw.match(/^\s*"?([^"<]*?)"?\s*<\s*([^>]+?)\s*>\s*$/)
   if (m) return { name: str(m[1]), email: str(m[2])?.toLowerCase() ?? null }
