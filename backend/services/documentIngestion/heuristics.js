@@ -26,6 +26,41 @@
 /* Shared helpers                                                    */
 /* ----------------------------------------------------------------- */
 
+/**
+ * Trim trailing whitespace plus any of `extraChars`, in LINEAR time.
+ *
+ * WHY NOT A REGEX (js/polynomial-redos class, 2026-08-01). An anchored
+ * trailing-class trim like `/[\s.;]+$/` is quadratic on a long non-matching
+ * run: the engine retries the match at every start position, and each attempt
+ * walks to the end. Uploaded documents are the clearest unbounded, untrusted
+ * input this codebase has — an OCR/PDF extract of a blank column is a single
+ * line of thousands of spaces. Measured on `extractBasicInformationHeuristics`
+ * with one long blank line: 4k chars 13.8 ms, 8k 51.7 ms, 16k 198.2 ms
+ * (14.4x for 4x the input — quadratic).
+ *
+ * A character-walk from the end is O(trimmed length) and cannot backtrack.
+ * `trimEnd()` is preferred where only whitespace is being removed — it is
+ * native, linear, and matches the same character set JS `\s` does.
+ *
+ * CALL-SITE NOTE that generalises: the danger is the pattern AND its input.
+ * The `Plan type` / `Plan name` / `Insurance provider` patterns in this file
+ * carry the same `\s*[:#-]?\s*` overlap but are NOT exposed, because their
+ * caller matches against `singleLine`, which has already collapsed whitespace
+ * runs. Measuring a regex literal in isolation over-reports; measuring the
+ * exported function is ground truth.
+ */
+export function stripTrailing(value, extraChars = '') {
+  const s = String(value ?? '')
+  const extra = new Set(extraChars)
+  let end = s.length
+  while (end > 0) {
+    const ch = s[end - 1]
+    if (extra.has(ch) || /\s/.test(ch)) end -= 1
+    else break
+  }
+  return end === s.length ? s : s.slice(0, end)
+}
+
 export function extractFirstMatch(text, regex) {
   if (!text) return null
   const match = String(text).match(regex)
@@ -275,7 +310,12 @@ function extractFullNameHeuristic(lines) {
 
     const parenStripped = trimmed
       .replace(/\s*\(.*?\)\s*$/, '')
-      .replace(/\s*[/|].*$/, '')
+      // Was `/\s*[/|].*$/`. The leading `\s*` is redundant — the `.trim()` on the
+      // next line removes the same whitespace — but it makes the match quadratic
+      // on a long run with no `/` or `|` (an OCR/PDF extract of a blank column),
+      // because `\s*` is retried at every start position. Dropping it is
+      // behaviour-identical after the trim and linear.
+      .replace(/[/|].*$/, '')
       .trim()
     const words = parenStripped.split(/\s+/).filter(Boolean)
     if (words.length < 3 || words.length > 12) continue
@@ -288,7 +328,10 @@ function extractFullNameHeuristic(lines) {
 
 export function extractBasicInformationHeuristics(text) {
   const source = String(text || '')
-  const lines = source.split(/\r?\n/).map((l) => l.replace(/\s+$/, ''))
+  // `trimEnd()` not `/\s+$/` — see the ReDoS note on stripTrailing() below.
+  // This map runs over EVERY line of an uploaded document, so it is the single
+  // hottest instance of the trailing-trim class in this file.
+  const lines = source.split(/\r?\n/).map((l) => l.trimEnd())
 
   const email = extractFirstMatch(source, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)
   const phone = extractFirstMatch(
@@ -298,7 +341,7 @@ export function extractBasicInformationHeuristics(text) {
   const websiteRaw = extractFirstMatch(source, /\bhttps?:\/\/[^\s)]+/i)
   // Strip trailing punctuation/whitespace that can leak in from
   // semicolon-delimited URL lists ("https://…org ; https://…com").
-  const website = websiteRaw ? websiteRaw.replace(/[\s);,.]+$/, '') : ''
+  const website = websiteRaw ? stripTrailing(websiteRaw, ');,.') : ''
 
   // Address / city / state / zip — prefer a standalone street line.
   const { address, city, state, zip } = extractStreetAndPostal(source, lines)
@@ -368,7 +411,7 @@ export function extractOrganizationDetailsHeuristics(text) {
   // the curated profiles (e.g. "Support and expand …").
   let mission =
     extractLabeledValue(source, /(?:^|\n)\s*(?:mission(?:\s+statement)?|purpose)\b/i) || ''
-  mission = mission ? mission.replace(/[\s.;]+$/, '').trim() : ''
+  mission = mission ? stripTrailing(mission, '.;').trim() : ''
 
   return {
     organization_type: '',
