@@ -6461,6 +6461,253 @@ export async function enforceInstitutionAidLinkage(db) {
   })
 }
 
+/**
+ * INVARIANT: A CATALOG ROW THAT RECORDS THE PROFILE IT WAS DISCOVERED FOR IS
+ * OFFERED TO THAT PROFILE (the rolling-snapshot erasure, fleet-wide edition).
+ *
+ * THE DEFECT. `profile_opportunity_matches` is a ROLLING SNAPSHOT:
+ * `crawlerOsPersistenceCore.persistRun` DELETEs a profile's
+ * `crawler-os`/`crawler-os-xmatch` rows and re-inserts only what THAT run
+ * re-found. #1089 fixed the institution instance. Measured read-only in prod
+ * 2026-08-01, the same shape holds fleet-wide and the decay is visible in the
+ * data: of active `source='web_search'` catalog rows, those created in AUGUST
+ * are 37% matched (73 of 197), July 3.2% (220 of 6,871) and June 3.9% (26 of
+ * 661). Rows are scored once at discovery and then erased by the next run.
+ *
+ * WHY THIS SWEEP LINKS ONLY WHAT PROVENANCE NAMES. There is no recoverable
+ * per-row record of WHICH profile a `web_search` row was found for:
+ * `opportunity_sources` stores only `source_id='web_search'`, `raw_source_payload`
+ * is NULL on all 7,729 rows, and the `source_query` that DID record the need
+ * ("medical grants for individual Cleveland, TN") lives on the match row the
+ * reconcile deleted. Every broader key was measured against the REAL engine in
+ * prod and floods:
+ *   - declared geography (state OR national) over `verified_real`: 7,581 pairs,
+ *     5,393 links — e.g. "Georgia Senior Property Tax Exemptions" ACCEPTed for a
+ *     Puerto Rico small-business owner.
+ *   - canonical NEED intersection + geography over `web_search`: 23,422 pairs,
+ *     14,822 links across 2,404 rows — e.g. "SBIR Phase II Cooperative
+ *     Agreements" ACCEPT 33 for the same profile.
+ *   - the same key over `school_portal`: 1,115 links, i.e. every school in the
+ *     catalog offered to every student.
+ * So the key here is the ONE fact the row itself records:
+ * `funding_opportunities.profile_id`. 174 active prod rows carry it (113
+ * `school_portal`, 61 `web_search`), each naming exactly one profile.
+ *
+ * THE ASPIRATION GUARD, and why it is not optional. 107 of those 113
+ * `school_portal` rows were minted from ONE student's nineteen
+ * `education.target_colleges` (Harvard, Oberlin, Michigan, Penn State …).
+ * Linking on provenance alone would have re-admitted, through a different door,
+ * exactly the aspiration set #1089 deliberately excluded. The guard reuses the
+ * SAME registry (`config/profileInstitutions.js`) as that fix, so the two doors
+ * cannot drift: a row an ASPIRATION school sponsors, that no ATTENDANCE school
+ * also sponsors, is refused.
+ *
+ * The engine stays the sole authority — this only authorizes it to LOOK at a
+ * pair the row's own provenance names, and a REJECT is never written. No score
+ * bar is added or lowered; `config/matchSurfacing.qualifiesForDisplay` remains
+ * the display rule.
+ *
+ * Candidate discovery is a SQL PREDICATE — the "already linked" exclusion is a
+ * `NOT EXISTS` inside the query, never a post-LIMIT JS filter (#944 / #1080:
+ * the signature of that bug is `scanned === LIMIT` forever).
+ *
+ * Bounded (`PROFILE_DISCOVERY_LINK_LIMIT`, default 500);
+ * `ENFORCE_PROFILE_DISCOVERY_LINK=0` for count-only.
+ */
+export async function enforceProfileDiscoveredCatalogLinkage(db) {
+  return runInvariant('profile_discovered_catalog_linkage', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id') || !matchCols.has('matcher_version')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let resolveAttendedInstitutions, resolveAspirationalInstitutions, opportunitySponsoredByInstitution
+    try {
+      ;({ resolveAttendedInstitutions, resolveAspirationalInstitutions, opportunitySponsoredByInstitution } =
+        await import('../config/profileInstitutions.js'))
+    } catch (err) {
+      log.warn('profile_discovered_catalog_linkage: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+
+    const isPg = (db?.dialect || 'sqlite') === 'postgres'
+    const trueLit = isPg ? 'TRUE' : '1'
+    const writeLimit = _boundedLimit('PROFILE_DISCOVERY_LINK_LIMIT', 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_PROFILE_DISCOVERY_LINK) === false
+
+    // SQL PREDICATE: rows that RECORD a profile, are still active, and are not
+    // already linked to that profile. The exclusion lives inside the query so a
+    // bounded pass always advances instead of re-scanning its own bound.
+    let candidates
+    try {
+      candidates = await db
+        .prepare(
+          `SELECT fo.* FROM funding_opportunities fo
+            WHERE fo.profile_id IS NOT NULL
+              AND (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+              AND NOT EXISTS (
+                SELECT 1 FROM profile_opportunity_matches m
+                 WHERE m.profile_id = fo.profile_id AND m.opportunity_id = fo.id
+              )
+            ORDER BY fo.created_at
+            LIMIT ?`,
+        )
+        .all(writeLimit)
+    } catch (err) {
+      log.warn('profile_discovered_catalog_linkage: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+    const nowFn = isPg ? 'now()' : 'CURRENT_TIMESTAMP'
+
+    let scanned = 0
+    let linked = 0
+    let rejectedByEngine = 0
+    let aspirationRefused = 0
+    let orphanProfile = 0
+    let unscorable = 0
+    const truncated = (candidates?.length ?? 0) >= writeLimit
+    const wouldLink = []
+    const examples = []
+    const ctxCache = new Map()
+    const eligibleByProfile = new Map()
+
+    for (const opp of candidates || []) {
+      const profileId = opp.profile_id
+      if (!ctxCache.has(profileId)) ctxCache.set(profileId, await _loadProfileContextForInvariant(db, profileId))
+      const ctx = ctxCache.get(profileId)
+      // A row naming a profile that no longer exists is counted, never guessed
+      // onto some other profile.
+      if (!ctx) { orphanProfile += 1; continue }
+      if (!eligibleByProfile.has(profileId)) eligibleByProfile.set(profileId, new Set())
+
+      // ASPIRATION NEVER AUTHORIZES (the #1089 rule, same registry).
+      const attended = resolveAttendedInstitutions(ctx.sections)
+      const aspirational = resolveAspirationalInstitutions(ctx.sections)
+      const byAspiration = aspirational.some((s) => opportunitySponsoredByInstitution(s, opp))
+      if (byAspiration && !attended.some((s) => opportunitySponsoredByInstitution(s, opp))) {
+        aspirationRefused += 1
+        continue
+      }
+
+      scanned += 1
+      let decision
+      try {
+        decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections })
+      } catch (err) {
+        unscorable += 1
+        log.warn('profile_discovered_catalog_linkage: scoring failed (non-fatal)', {
+          profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+        })
+        continue
+      }
+      const verdict = String(decision?.decision ?? '').toUpperCase()
+      // The engine stays the sole authority — a REJECT is a REJECT.
+      if (verdict !== 'ACCEPT' && verdict !== 'REVIEW') { rejectedByEngine += 1; continue }
+      eligibleByProfile.get(profileId).add(opp.id)
+      const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
+      if (score === null) { unscorable += 1; continue }
+
+      if (countOnly) {
+        wouldLink.push({ profileId, opportunityId: opp.id })
+        if (examples.length < 3) examples.push(`${opp.title} (${opp.source}, ${verdict} ${score})`)
+        continue
+      }
+      try {
+        const res = await db
+          .prepare(
+            `INSERT INTO profile_opportunity_matches
+               (id, profile_id, opportunity_id, match_score, match_decision, match_explanation,
+                match_reasons, match_explain_json, source_query, discovered_via, matcher_version,
+                computed_at, updated_at, evaluated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'profile-discovery-link', ${nowFn}, ${nowFn}, ${nowFn})
+             ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+          )
+          .run(
+            `pd:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
+            decision?.explanation ?? null,
+            JSON.stringify(decision?.matchedNeeds ?? []),
+            JSON.stringify({ gate: 'recorded_discovery_provenance', source: opp.source ?? null }),
+            null, 'profile_discovery_provenance',
+          )
+        const wrote = changesOf(res)
+        if (wrote > 0) {
+          linked += 1
+          if (examples.length < 3) examples.push(`${opp.title} (${opp.source}, ${verdict} ${score})`)
+        }
+      } catch (err) {
+        log.warn('profile_discovered_catalog_linkage: insert failed (non-fatal)', {
+          profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+        })
+      }
+    }
+
+    // CONVERGENCE: drop rows this gate no longer authorizes (the catalog row was
+    // deactivated, its provenance was re-pointed, or an institution the profile
+    // only ASPIRES to now sponsors it). Skipped entirely on a truncated boot so
+    // a bound-limited pass can never delete rows it never re-derived, and only
+    // for profiles this pass actually re-derived.
+    let stale = 0
+    if (!countOnly && !truncated) {
+      for (const [profileId, eligible] of eligibleByProfile) {
+        try {
+          const existing = await db
+            .prepare(
+              `SELECT m.id, m.opportunity_id
+                 FROM profile_opportunity_matches m
+                 LEFT JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+                WHERE m.profile_id = ? AND m.matcher_version = 'profile-discovery-link'
+                  AND (fo.id IS NULL OR fo.profile_id IS NULL OR fo.profile_id <> m.profile_id
+                       OR NOT (fo.is_active IS NULL OR fo.is_active = ${trueLit}))`,
+            )
+            .all(profileId)
+          const doomed = (existing || []).filter((r) => !eligible.has(r.opportunity_id)).map((r) => r.id)
+          for (let i = 0; i < doomed.length; i += 200) {
+            const slice = doomed.slice(i, i + 200)
+            const ph = slice.map(() => '?').join(', ')
+            const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+            stale += changesOf(res) || slice.length
+          }
+        } catch { /* convergence pass is best-effort; never fails the sweep */ }
+      }
+    }
+
+    if (countOnly) {
+      if (wouldLink.length > 0) {
+        log.warn('catalog rows that RECORD their profile are not reaching it (linking DISABLED via ENFORCE_PROFILE_DISCOVERY_LINK=0)', {
+          wouldLink: wouldLink.length, scanned, aspirationRefused, examples,
+        })
+      }
+      return {
+        scanned,
+        repaired: 0,
+        wouldRepair: wouldLink.length,
+        rejectedByEngine,
+        aspirationRefused,
+        orphanProfile,
+        truncated,
+        enforced: false,
+      }
+    }
+    if (linked > 0 || stale > 0) {
+      log.info('linked profiles to the catalog rows discovered FOR them', {
+        linked, stale, scanned, rejectedByEngine, aspirationRefused, orphanProfile, unscorable, examples,
+      })
+    }
+    return {
+      scanned,
+      repaired: linked,
+      stale,
+      rejectedByEngine,
+      aspirationRefused,
+      orphanProfile,
+      unscorable,
+      truncated,
+      enforced: true,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -6551,6 +6798,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // late. It authorizes the canonical engine to LOOK at an attendance-linked
   // pair; the engine still decides, and a REJECT is never written.
   steps.push(await enforceInstitutionAidLinkage(db))
+  // RECALL net, same class one level up: a catalog row that RECORDS the profile
+  // it was discovered for is re-offered to that profile, because the match store
+  // is a rolling snapshot and the row's own match was erased by a later run.
+  // Runs immediately after the institution net so both linkage gates land before
+  // the dangling/decision-integrity hygiene sweeps read the table.
+  steps.push(await enforceProfileDiscoveredCatalogLinkage(db))
   // Surface-table hygiene: a persisted match whose catalog row was deleted
   // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
   // unusable ghost that inflates the matches view and wastes promote passes.

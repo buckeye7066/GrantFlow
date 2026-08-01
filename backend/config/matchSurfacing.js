@@ -43,12 +43,24 @@ import { REVIEW_SCORE } from './matchThresholds.js'
  *                         would ever look at the catalog row again (prod
  *                         2026-08-01: 52 active MTSU rows, 0 match rows, for a
  *                         student whose current_institution IS MTSU).
+ *   - profile-discovery-link : a catalog row that RECORDS the profile it was
+ *                         discovered for (`funding_opportunities.profile_id`),
+ *                         re-offered to that same profile and scored by the
+ *                         canonical engine (enforceProfileDiscoveredCatalogLinkage).
+ *                         Persisted under its own version for the SAME reason
+ *                         as web-llm and institution-link: the crawler-os
+ *                         reconcile is a rolling snapshot, so a row the next
+ *                         run does not re-find loses its match forever (prod
+ *                         2026-08-01: `web_search` rows created in August were
+ *                         37% matched, June/July rows 3-4% — a decay curve, not
+ *                         a quality story).
  */
 export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   'crawler-os',
   'crawler-os-xmatch',
   'web-llm',
   'institution-link',
+  'profile-discovery-link',
 ])
 
 /**

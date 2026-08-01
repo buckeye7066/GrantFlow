@@ -1130,8 +1130,9 @@ describe('enforceInvariants — runner', () => {
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
     // 37 on main (incl. #1081 portal_session_lifetime_stamp) + 4 scope nets
-    // + the institution-aid RECALL net (institution_recall_miss) here.
-    expect(summary.ran).toBe(42)
+    // + the institution-aid RECALL net (institution_recall_miss)
+    // + the recorded-discovery-provenance RECALL net here.
+    expect(summary.ran).toBe(43)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1165,6 +1166,10 @@ describe('enforceInvariants — runner', () => {
       // Placed before the two hygiene sweeps so the rows it adds are validated
       // by them in the SAME boot.
       'institution_aid_linkage',
+      // Same class one level up: a catalog row that RECORDS the profile it was
+      // discovered for (funding_opportunities.profile_id) is re-offered to that
+      // profile. Also before the hygiene sweeps, for the same reason.
+      'profile_discovered_catalog_linkage',
       'no_dangling_matches',
       'persisted_match_decision_integrity',
       'profession_eligibility',

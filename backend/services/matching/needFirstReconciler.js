@@ -5,9 +5,18 @@ import {
 } from './needFirstScoringAdapter.js'
 import { NEED_FIRST_RECONCILIATION_ROWS_SQL } from './fundingSourceQueries.js'
 import { normalizePersistedMatchDecisionIntegrity } from './matchDecisionIntegrity.js'
+import { SURFACED_MATCHER_VERSIONS } from '../../config/matchSurfacing.js'
 
 const log = createLogger('needFirstReconciler')
-const SURFACED_LANES = new Set(['crawler-os', 'crawler-os-xmatch', 'web-llm'])
+/**
+ * READ FROM THE REGISTRY, never re-type the list. This set was hand-written as
+ * `['crawler-os','crawler-os-xmatch','web-llm']` and immediately drifted: #1089
+ * added `institution-link` to `SURFACED_MATCHER_VERSIONS` but not here, so every
+ * attendance-linked match a student could see was silently skipped by need-first
+ * reconciliation — the exact re-encoding `matchSurfacing.js` exists to prevent
+ * (its own header documents the three-way drift that caused the original bug).
+ */
+const SURFACED_LANES = new Set(SURFACED_MATCHER_VERSIONS)
 
 function parseJson(value, fallback = null) {
   if (value === null || value === undefined || value === '') return fallback

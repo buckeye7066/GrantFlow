@@ -118,6 +118,14 @@ export const PROFILE_INSTITUTION_FIELDS = Object.freeze([
 /** Max ATTENDED institutions honored per profile (a person attends very few). */
 export const MAX_ATTENDED_INSTITUTIONS = 3
 
+/**
+ * Max ASPIRATION institutions read per profile. Deliberately much larger than
+ * `MAX_ATTENDED_INSTITUTIONS`: this set is only ever used to REFUSE a link, so
+ * truncating it would silently let an aspiration row through the very guard it
+ * exists to enforce. Anastasia White lists NINETEEN target colleges in prod.
+ */
+export const MAX_ASPIRATIONAL_INSTITUTIONS = 60
+
 function obj(v) {
   if (!v) return {}
   if (typeof v === 'string') {
@@ -170,6 +178,28 @@ export function resolveSeedInstitutions(sections = {}, { limit = MAX_ATTENDED_IN
   return readInstitutions(sections, ['attendance', 'aspiration']).slice(0, Math.max(0, limit))
 }
 
+/**
+ * Schools the profile only ASPIRES to (target colleges, uncommitted
+ * applications). This set NEVER authorizes anything — it exists so a second
+ * door cannot silently re-open the one `resolveAttendedInstitutions` closed.
+ *
+ * WHY IT IS NEEDED. `enforceInstitutionAidLinkage` refuses aspiration by
+ * asking only for ATTENDED schools. But a catalog row can also name the
+ * profile it was discovered for (`funding_opportunities.profile_id`), and in
+ * prod 2026-08-01 that column carried 107 school-sponsored locator rows minted
+ * from ONE student's nineteen `target_colleges` — Harvard, Oberlin, Michigan,
+ * Penn State, Seton Hall … Linking on provenance alone would have re-admitted
+ * exactly the aspiration set #1089 excluded, through a different door. So
+ * `enforceProfileDiscoveredCatalogLinkage` reads this list and refuses any row
+ * an aspiration school sponsors that no ATTENDED school also sponsors.
+ */
+export function resolveAspirationalInstitutions(
+  sections = {},
+  { limit = MAX_ASPIRATIONAL_INSTITUTIONS } = {},
+) {
+  return readInstitutions(sections, ['aspiration']).slice(0, Math.max(0, limit))
+}
+
 /** Distinctive (identity-bearing) lowercase tokens of an institution name. */
 export function institutionDistinctiveTokens(name) {
   return new Set(
@@ -217,9 +247,11 @@ export default {
   GENERIC_INSTITUTION_WORDS,
   PROFILE_INSTITUTION_FIELDS,
   MAX_ATTENDED_INSTITUTIONS,
+  MAX_ASPIRATIONAL_INSTITUTIONS,
   cleanInstitutionName,
   resolveAttendedInstitutions,
   resolveSeedInstitutions,
+  resolveAspirationalInstitutions,
   institutionDistinctiveTokens,
   opportunitySponsoredByInstitution,
   institutionSponsorLikePattern,
