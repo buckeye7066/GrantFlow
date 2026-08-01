@@ -74,6 +74,42 @@ describe('studentaid.gov connector — quote-anchored derivations', () => {
     expect(deriveFafsaStage('')).toBe(null)
   })
 
+  it('REGRESSION (live incident 2026-08-01, run 6b5a26fd): navigation/CTA copy must never move the lifecycle', () => {
+    // The shipped first version matched /\bfafsa\b[^.]{0,60}\b(complete)\b/,
+    // and studentaid.gov's own persistent nav satisfied it — advancing a real
+    // student's stage to the TERMINAL `complete` off a menu label, on a page
+    // that showed no SAI, no Pell statement, and no aid.
+    const NAV_COPY = [
+      'Loans and Grants FAFSA Form Complete Aid Application', // the exact live false positive
+      'Complete the FAFSA Form',
+      'Complete Your FAFSA® Form',
+      'Start a New FAFSA Form',
+      'View FAFSA Submission Summary',
+      'Your FSA ID',
+      'Submit the FAFSA form by the deadline',
+      'FAFSA Form Complete Aid Application Loan Simulator Your FSA ID Start a New FAFSA',
+    ]
+    for (const copy of NAV_COPY) {
+      // A CTA telling you to DO a thing is evidence you have NOT done it.
+      expect(deriveFafsaStage(copy), `nav copy must not set a stage: ${copy}`).toBe(null)
+    }
+  })
+
+  it('still reads every REAL user-record phrasing (the fix must not go inert)', () => {
+    const REAL = [
+      ['Your FAFSA form was submitted on January 5, 2026.', 'submitted'],
+      ['Student Aid Index (SAI): 0', 'processed'],
+      ['You were selected for verification.', 'verification'],
+      ['Your information was sent to your school.', 'school_received'],
+      ['Your FAFSA form is complete.', 'complete'],
+      ['FAFSA Form Status: In Progress', 'in_progress'],
+      ['You have no FAFSA form on file.', 'not_started'],
+    ]
+    for (const [copy, want] of REAL) {
+      expect(deriveFafsaStage(copy)?.stage, `should read ${want} from: ${copy}`).toBe(want)
+    }
+  })
+
   it('parses the SAI including negative values, and bands it as text', () => {
     expect(deriveSai('Student Aid Index (SAI): -1500').value).toBe(-1500)
     expect(deriveSai('Your SAI is 0 for the 2026-2027 award year.').value).toBe(0)

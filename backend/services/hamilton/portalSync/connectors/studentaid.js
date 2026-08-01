@@ -76,15 +76,54 @@ const NAV = [
 // stage. Ordered MOST-ADVANCED FIRST: a page showing "Verification requested"
 // also says "Submitted", and the furthest stage the page evidences is the true
 // one. Every rule keeps the matched text as evidence.
+//
+// EVERY PATTERN MUST BE USER-RECORD PHRASING, NEVER NAVIGATION OR CTA COPY.
+// This rule is written in blood: the first version matched
+// /\bfafsa\b[^.]{0,60}\b(complete|completed)\b/, and studentaid.gov's own
+// persistent nav ("… Loans and Grants  FAFSA Form  Complete Aid Application
+// …") satisfied it. The first live run (2026-08-01, run 6b5a26fd) therefore
+// advanced a real student's lifecycle to `complete` — the terminal "no further
+// FAFSA action needed" — off a menu label, on a page that showed no SAI, no
+// Pell statement and no aid. A CTA telling you to DO a thing is evidence you
+// have NOT done it; only the student's own record may move the stage.
+//
+// So each pattern requires a possessive ("your FAFSA…"), a status label
+// ("Status: In Progress"), a date ("submitted on …"), or another phrase that
+// cannot appear as a menu item. `fsa_id_created` was REMOVED outright: "Your
+// FSA ID" is nav copy on every signed-in page and no honest user-record
+// phrasing distinguishes it.
 const STAGE_RULES = Object.freeze([
-  { stage: 'complete', re: /\bfafsa\b[^.]{0,60}\b(complete|completed)\b|\byour fafsa (form )?is complete\b/i },
-  { stage: 'verification', re: /\bselected for verification\b|\bverification (is )?(required|requested)\b|\bwe need more information to verify\b/i },
-  { stage: 'school_received', re: /\bsent to (your )?school\b|\bschool(s)? received\b|\bcolleges? (have )?received\b/i },
-  { stage: 'processed', re: /\bfafsa submission summary\b|\bstudent aid index\b|\byour sai\b|\bprocessed\b/i },
-  { stage: 'submitted', re: /\b(form |application )?(was |has been )?submitted\b|\bsubmitted on\b|\bapplication received\b/i },
-  { stage: 'in_progress', re: /\bin progress\b|\bcontinue (your )?(fafsa|application)\b|\bdraft\b|\bnot yet submitted\b/i },
-  { stage: 'fsa_id_created', re: /\bfsa id (created|verified)\b|\byour fsa id\b/i },
-  { stage: 'not_started', re: /\bstart (a |your )?new fafsa\b|\bhaven'?t started\b|\bno fafsa (form )?on file\b/i },
+  {
+    stage: 'complete',
+    re: /\byour fafsa (form )?is complete\b|\bfafsa (form )?status:?\s*complete\b|\byour fafsa (form )?(has been|was) completed\b/i,
+  },
+  {
+    stage: 'verification',
+    re: /\b(you (were|have been) |your fafsa (form )?(was|has been) )?selected for verification\b|\bverification (is )?(required|requested)\b|\bwe need more information to verify\b/i,
+  },
+  {
+    stage: 'school_received',
+    re: /\bsent to your school\b|\byour (fafsa )?(form |information )?was sent to\b|\byour school(s)? (have |has )?received\b/i,
+  },
+  {
+    stage: 'processed',
+    // The SAI is a printed FIGURE on the student's own summary — a nav item
+    // never carries one. "Submission Summary" alone is a menu link, so it must
+    // be possessive to count.
+    re: /\bstudent aid index\b[^0-9-]{0,40}-?\$?\s?-?[\d,]+|\byour sai\b|\byour fafsa submission summary\b|\byour fafsa (form )?(was|has been) processed\b/i,
+  },
+  {
+    stage: 'submitted',
+    re: /\bsubmitted on\b|\byour fafsa (form )?(was|has been) submitted\b|\byour (fafsa )?application (was|has been) received\b/i,
+  },
+  {
+    stage: 'in_progress',
+    re: /\b(fafsa (form )?)?status:?\s*in progress\b|\byour fafsa (form )?is in progress\b|\byou have (an? )?(fafsa )?(form )?in progress\b|\byour (fafsa )?(form )?(is )?not yet submitted\b/i,
+  },
+  {
+    stage: 'not_started',
+    re: /\bno fafsa (form )?on file\b|\byou have(n'?t| not) started\b|\byou have no (fafsa|application)s? (form )?(on file|started)\b/i,
+  },
 ])
 
 // The Student Aid Index (SAI, formerly EFC) as printed on the submission
