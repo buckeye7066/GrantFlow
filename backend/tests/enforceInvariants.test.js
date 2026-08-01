@@ -5231,3 +5231,154 @@ describe('enforce: an out-of-area locator is not surfaced to a profile somewhere
     } finally { db.close() }
   })
 })
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE POST-LIMIT REGRESSION (prod 2026-08-01, #944 class, one level down).
+ *
+ * `enforceForeignJurisdictionMatches` shipped selecting MATCH rows with NO
+ * WHERE clause and deciding foreign-ness in JS *after* `LIMIT ?`. Prod recorded
+ *   {"name":"foreign_jurisdiction_matches","ok":true,"repaired":1,"scanned":2000}
+ * — `scanned` equal to the bound exactly. 515 of 516 foreign rows were
+ * structurally unreachable no matter how many times the sweep ran, while it
+ * reported ok:true. The three sibling sweeps written in the same PR all carried
+ * a SQL predicate and all converged (84/87, 494/875, 157/506).
+ *
+ * These tests pin the DISCOVERY property, not just the delete: the sweep must
+ * find foreign rows that sit BEYOND the bound in insertion order. Every one
+ * FAILS on the pre-fix candidate query.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe('enforce: foreign-jurisdiction purge is not starved by its own bound', () => {
+  function makeFjDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, primary_type TEXT, applicant_type TEXT);
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, state TEXT, is_national INTEGER,
+        amount_min NUMERIC, amount_max NUMERIC,
+        source_url TEXT, application_url TEXT, evidence_url TEXT
+      );
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+        match_score REAL, match_decision TEXT, matcher_version TEXT
+      );
+    `)
+    return raw
+  }
+  const addOpp = (db, id, url, title = 'Opportunity') =>
+    db.prepare('INSERT INTO funding_opportunities (id, title, source_url) VALUES (?, ?, ?)').run(id, title, url)
+  const addMatch = (db, id, pid, oid) =>
+    db.prepare(
+      `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+       VALUES (?, ?, ?, 13, 'review', 'crawler-os-xmatch')`,
+    ).run(id, pid, oid)
+  const remaining = (db) =>
+    db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+
+  afterEach(() => {
+    delete process.env.ENFORCE_FOREIGN_JURISDICTION_SCOPE
+    delete process.env.MATCH_SCOPE_PURGE_LIMIT
+  })
+
+  it('finds foreign rows that sit BEYOND the bound in insertion order (the prod bug)', async () => {
+    const db = makeFjDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'senior')
+      // 60 innocuous US rows FIRST, then the foreign ones — with a bound of 50 the
+      // pre-fix query's unordered slice never reaches them.
+      for (let i = 0; i < 60; i += 1) {
+        addOpp(db, `us-${i}`, `https://example${i}.org/grant`)
+        addMatch(db, `m-us-${i}`, 'p1', `us-${i}`)
+      }
+      addOpp(db, 'ie-1', 'https://www.citizensinformation.ie/en/housing/', 'Housing Adaptation Grant')
+      addOpp(db, 'uk-1', 'https://www.gov.uk/disabled-facilities-grants', 'Disabled Facilities Grant')
+      addMatch(db, 'm-ie-1', 'p1', 'ie-1')
+      addMatch(db, 'm-uk-1', 'p1', 'uk-1')
+
+      process.env.MATCH_SCOPE_PURGE_LIMIT = '50'
+      const res = await enforceForeignJurisdictionMatches(db)
+
+      expect(res.repaired).toBe(2)
+      expect(res.foreignOpportunities).toBe(2)
+      // `scanned` must be the CATALOG candidate count, never the bound.
+      expect(res.scanned).toBeLessThan(50)
+      const left = remaining(db)
+      expect(left).not.toContain('m-ie-1')
+      expect(left).not.toContain('m-uk-1')
+      expect(left).toHaveLength(60) // every US match survives
+    } finally { db.close() }
+  })
+
+  it('scales past the bound: 2 500 US matches never hide 3 foreign ones', async () => {
+    const db = makeFjDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'individual')
+      const insOpp = db.prepare('INSERT INTO funding_opportunities (id, title, source_url) VALUES (?, ?, ?)')
+      const insM = db.prepare(
+        `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+         VALUES (?, 'p1', ?, 13, 'review', 'crawler-os')`,
+      )
+      db.transaction(() => {
+        for (let i = 0; i < 2500; i += 1) {
+          insOpp.run(`us-${i}`, 'US Program', `https://example${i}.org/x`)
+          insM.run(`m-us-${i}`, `us-${i}`)
+        }
+        for (const [id, url] of [['ie-9', 'https://www.seai.ie/grants/'], ['za-9', 'https://srd.sassa.gov.za/'], ['hk-9', 'https://www.housingauthority.gov.hk/en/']]) {
+          insOpp.run(id, 'Foreign scheme', url)
+          insM.run(`m-${id}`, id)
+        }
+      })()
+
+      const res = await enforceForeignJurisdictionMatches(db) // default bound 2000
+      expect(res.repaired).toBe(3)
+      expect(db.prepare('SELECT COUNT(*) AS c FROM profile_opportunity_matches').get().c).toBe(2500)
+    } finally { db.close() }
+  })
+
+  it('CONVERGES: a second run finds nothing (no treadmill)', async () => {
+    const db = makeFjDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'senior')
+      addOpp(db, 'ie-1', 'https://www.citizensinformation.ie/en/housing/', 'Irish scheme')
+      addMatch(db, 'm1', 'p1', 'ie-1')
+      expect((await enforceForeignJurisdictionMatches(db)).repaired).toBe(1)
+      expect((await enforceForeignJurisdictionMatches(db)).repaired).toBe(0)
+      expect((await enforceForeignJurisdictionMatches(db)).repaired).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('the SQL prefilter is a SUPERSET — the JS detector still has the final say', async () => {
+    const db = makeFjDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'individual')
+      // Matches the LIKE list (contains ".in/") but is a US-fronting shortener.
+      addOpp(db, 'short-1', 'https://lnkd.in/dC6VRfHD', 'Alaska Fellows Program')
+      // Matches ".ie/" only inside a PATH segment on a US host.
+      addOpp(db, 'path-1', 'https://www.hud.gov/reports/report.ie/summary', 'HUD report')
+      addOpp(db, 'ie-1', 'https://www.citizensinformation.ie/en/housing/', 'Irish scheme')
+      addMatch(db, 'm-short', 'p1', 'short-1')
+      addMatch(db, 'm-path', 'p1', 'path-1')
+      addMatch(db, 'm-ie', 'p1', 'ie-1')
+
+      const res = await enforceForeignJurisdictionMatches(db)
+      expect(res.repaired).toBe(1)
+      expect(remaining(db)).toEqual(['m-path', 'm-short'])
+    } finally { db.close() }
+  })
+
+  it('count-only mode reports the TRUE total, not a bound-truncated one', async () => {
+    const db = makeFjDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'senior')
+      for (let i = 0; i < 5; i += 1) {
+        addOpp(db, `ie-${i}`, `https://www.citizensinformation.ie/page${i}/`, 'Irish scheme')
+        addMatch(db, `m-${i}`, 'p1', `ie-${i}`)
+      }
+      process.env.ENFORCE_FOREIGN_JURISDICTION_SCOPE = '0'
+      const off = await enforceForeignJurisdictionMatches(db)
+      expect(off.enforced).toBe(false)
+      expect(off.wouldRepair).toBe(5)
+      expect(off.foreignOpportunities).toBe(5)
+      expect(remaining(db)).toHaveLength(5)
+    } finally { db.close() }
+  })
+})

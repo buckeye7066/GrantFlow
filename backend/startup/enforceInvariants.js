@@ -5949,49 +5949,109 @@ export async function enforceForeignJurisdictionMatches(db) {
     if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
     }
-    let detectForeignJurisdiction
+    let detectForeignJurisdiction, foreignUrlSqlPredicate
     try {
-      ;({ detectForeignJurisdiction } = await import('../config/opportunityJurisdiction.js'))
+      ;({ detectForeignJurisdiction, foreignUrlSqlPredicate } = await import(
+        '../config/opportunityJurisdiction.js'
+      ))
     } catch (err) {
       log.warn('foreign_jurisdiction_matches: deps unavailable (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
     }
     const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
 
-    let rows
+    // FOREIGNNESS IS A PROPERTY OF THE OPPORTUNITY, NOT OF THE MATCH — so the
+    // candidate set is the CATALOG, narrowed by a SQL predicate, and the delete
+    // is then targeted by opportunity_id.
+    //
+    // The first version selected MATCH rows with no WHERE clause and decided
+    // foreign-ness in JS after `LIMIT ?`. Prod boot 2026-08-01 recorded
+    // `{"foreign_jurisdiction_matches","repaired":1,"scanned":2000}` — the bound
+    // exactly — so 515 of 516 foreign rows were structurally unreachable however
+    // often it ran (the #944 post-LIMIT class; the three sibling sweeps in the
+    // same PR all had a predicate and all converged: 84/87, 494/875, 157/506).
+    //
+    // Scoping to the catalog also shrinks the candidate set by ~three orders of
+    // magnitude (≈150 foreign rows vs ~11.5k matches), so the bound now limits
+    // DELETES, never DISCOVERY.
+    const hay =
+      "lower(coalesce(o.source_url,'')) || ' ' || lower(coalesce(o.application_url,'')) || ' ' || " +
+      "lower(coalesce(o.evidence_url,'')) || ' '"
+    const { clause, params } = foreignUrlSqlPredicate(`(${hay})`)
+
+    let oppRows
     try {
-      rows = await db
+      oppRows = await db
         .prepare(
-          `SELECT m.id AS match_id, m.profile_id, o.title,
-                  o.source_url, o.application_url, o.evidence_url
-             FROM profile_opportunity_matches m
-             JOIN funding_opportunities o ON o.id = m.opportunity_id
-            LIMIT ?`,
+          `SELECT o.id, o.title, o.source_url, o.application_url, o.evidence_url
+             FROM funding_opportunities o
+            WHERE ${clause}`,
         )
-        .all(limit)
+        .all(...params)
     } catch (err) {
       log.warn('foreign_jurisdiction_matches: candidate query failed (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
     }
 
-    const violating = []
-    for (const row of rows || []) {
+    // The LIKE list is a SUPERSET; detectForeignJurisdiction is the authority
+    // (it re-parses the host and honours JURISDICTION_NEUTRAL_HOSTS).
+    const foreignOpps = new Map()
+    for (const row of oppRows || []) {
       const verdict = detectForeignJurisdiction(row)
-      if (verdict.foreign) violating.push({ ...row, cctld: verdict.cctld, host: verdict.host })
+      if (verdict.foreign) foreignOpps.set(row.id, { ...row, cctld: verdict.cctld, host: verdict.host })
+    }
+    if (foreignOpps.size === 0) return { scanned: oppRows?.length || 0, repaired: 0, enforced: true }
+
+    // Now the matches pointing at them — bounded, but the bound can only cost us
+    // DELETES this boot (the next boot finds the remainder), never visibility.
+    const oppIds = [...foreignOpps.keys()]
+    const violating = []
+    const SELECT_CHUNK = 200
+    for (let i = 0; i < oppIds.length && violating.length < limit; i += SELECT_CHUNK) {
+      const slice = oppIds.slice(i, i + SELECT_CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      let rows
+      try {
+        rows = await db
+          .prepare(
+            `SELECT id AS match_id, profile_id, opportunity_id
+               FROM profile_opportunity_matches
+              WHERE opportunity_id IN (${ph})`,
+          )
+          .all(...slice)
+      } catch (err) {
+        log.warn('foreign_jurisdiction_matches: match lookup failed (non-fatal)', { error: String(err?.message || err) })
+        return { scanned: oppRows?.length || 0, repaired: 0, enforced: true, skipped: 'query' }
+      }
+      for (const r of rows || []) {
+        if (violating.length >= limit) break
+        const opp = foreignOpps.get(r.opportunity_id) || {}
+        violating.push({ ...r, title: opp.title, host: opp.host })
+      }
     }
 
+    const describe = (v) => `${v.title} (${v.host})`
     const disabled = _parseBoolEnv(process.env.ENFORCE_FOREIGN_JURISDICTION_SCOPE) === false
     if (disabled) {
       if (violating.length > 0) {
         log.warn('foreign-jurisdiction programs are matched to profiles (purge DISABLED via ENFORCE_FOREIGN_JURISDICTION_SCOPE=0)', {
           wouldRepair: violating.length,
-          scanned: rows?.length || 0,
-          examples: violating.slice(0, 3).map((v) => `${v.title} (${v.host})`),
+          foreignOpportunities: foreignOpps.size,
+          scanned: oppRows?.length || 0,
+          examples: violating.slice(0, 3).map(describe),
         })
       }
-      return { scanned: rows?.length || 0, repaired: 0, wouldRepair: violating.length, enforced: false }
+      return {
+        scanned: oppRows?.length || 0,
+        repaired: 0,
+        wouldRepair: violating.length,
+        foreignOpportunities: foreignOpps.size,
+        enforced: false,
+      }
     }
-    if (violating.length === 0) return { scanned: rows?.length || 0, repaired: 0, enforced: true }
+    if (violating.length === 0) {
+      return { scanned: oppRows?.length || 0, repaired: 0, foreignOpportunities: foreignOpps.size, enforced: true }
+    }
 
     const ids = violating.map((v) => v.match_id)
     const CHUNK = 200
@@ -6004,12 +6064,14 @@ export async function enforceForeignJurisdictionMatches(db) {
     }
     log.info('removed matches to foreign-jurisdiction programs (a US applicant cannot apply)', {
       repaired,
+      foreignOpportunities: foreignOpps.size,
       profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
-      examples: violating.slice(0, 3).map((v) => `${v.title} (${v.host})`),
+      examples: violating.slice(0, 3).map(describe),
     })
     return {
-      scanned: rows?.length || 0,
+      scanned: oppRows?.length || 0,
       repaired,
+      foreignOpportunities: foreignOpps.size,
       profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
       enforced: true,
     }
