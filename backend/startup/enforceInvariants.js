@@ -5674,6 +5674,459 @@ export async function enforcePersistedMatchDecisionIntegrity(db) {
   })
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * GEOGRAPHIC + AWARD-SCALE SCOPE OF A SURFACED MATCH  (2026-08-01, the GeneMac
+ * report: "the Funding Sources list shows the SAME sources that appear for
+ * unrelated profiles, and NO legitimate matches for what the profile is")
+ *
+ * Three producer-side gates now exist (services/matchEngine.js makeDecision +
+ * services/crawlerOsPersistenceCore.js osOppToLiveRow). They stop NEW bad rows.
+ * The owner sees the rows that are ALREADY THERE, and the match store is a
+ * ROLLING SNAPSHOT rebuilt per run — so without these sweeps the fix would only
+ * take effect for a profile after its next crawl, and the catalog-side geo
+ * damage would never be repaired at all. These three sweep EVERY profile.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Per-boot bound for the declared-geo-scope catalog repair. */
+const DECLARED_GEO_SCOPE_LIMIT_DEFAULT = 500
+/** Per-boot bound for each match-store scope purge. */
+const MATCH_SCOPE_PURGE_LIMIT_DEFAULT = 2000
+
+function _boundedLimit(envName, fallback) {
+  const v = Number.parseInt(process.env[envName] || '', 10)
+  return Number.isFinite(v) && v > 0 ? v : fallback
+}
+
+/**
+ * INVARIANT: a catalog row that NAMES ITS OWN STATE is not nationwide.
+ *
+ * County/city locator rows are minted per-place with the place only in the title
+ * ("Polk County, TN — Local assistance programs near you (findhelp)") and no
+ * geography columns, so they persist `state = NULL, is_national = 1,
+ * geo_county = NULL, geo_zip = NULL`. The geo gate compares `opp.state` and
+ * short-circuits on empty; the geo TIER reads `is_national` and awards the full
+ * nationwide subscale. Every profile is therefore "geographically eligible" for
+ * every other profile's county. Prod 2026-08-01: 89 active rows in this shape,
+ * 373 match rows across 37 of 39 profiles, 213 provably out-of-state.
+ *
+ * The repair reads the state the row already declares about itself — no new
+ * information, no guessing. Touches ONLY rows with NO stored state AND
+ * is_national truthy, so it can never override a scope the source supplied, and
+ * a repaired row leaves the candidate set (idempotent). Writer-side twin:
+ * `correctedGeoScopeFromTitle` in osOppToLiveRow.
+ *
+ * Bounded by DECLARED_GEO_SCOPE_LIMIT (500/boot); ENFORCE_DECLARED_GEO_SCOPE=0
+ * for count-only.
+ */
+export async function enforceDeclaredGeoScope(db) {
+  return runInvariant('declared_geo_scope', async () => {
+    let correctedGeoScopeFromTitle, DECLARED_STATE_TITLE_LIKE_PATTERNS
+    try {
+      ;({ correctedGeoScopeFromTitle, DECLARED_STATE_TITLE_LIKE_PATTERNS } = await import(
+        '../config/opportunityJurisdiction.js'
+      ))
+    } catch (err) {
+      log.warn('declared_geo_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('DECLARED_GEO_SCOPE_LIMIT', DECLARED_GEO_SCOPE_LIMIT_DEFAULT)
+
+    // The title-shape narrowing is a SQL PREDICATE, never a post-LIMIT JS
+    // filter: an unscoped catalog holds thousands of state-less rows, and
+    // filtering after the LIMIT would let rows that declare nothing permanently
+    // starve the ones that do (the #944 "green while doing nothing" class).
+    const likeClause = DECLARED_STATE_TITLE_LIKE_PATTERNS.map(() => 'title LIKE ?').join(' OR ')
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT id, title, state, is_national
+             FROM funding_opportunities
+            WHERE (state IS NULL OR TRIM(state) = '')
+              AND title IS NOT NULL
+              AND (${likeClause})
+            LIMIT ?`,
+        )
+        .all(...DECLARED_STATE_TITLE_LIKE_PATTERNS, limit)
+    } catch (err) {
+      log.warn('declared_geo_scope: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const fixes = []
+    for (const row of rows || []) {
+      const corrected = correctedGeoScopeFromTitle(row)
+      if (corrected) fixes.push({ id: row.id, ...corrected })
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_DECLARED_GEO_SCOPE) === false
+    if (disabled) {
+      if (fixes.length > 0) {
+        log.warn('catalog rows declare a state in their title but are stored NATIONAL (repair DISABLED via ENFORCE_DECLARED_GEO_SCOPE=0)', {
+          wouldRepair: fixes.length,
+          scanned: rows?.length || 0,
+        })
+      }
+      return { scanned: rows?.length || 0, repaired: 0, wouldRepair: fixes.length, enforced: false }
+    }
+    if (fixes.length === 0) return { scanned: rows?.length || 0, repaired: 0, enforced: true }
+
+    let repaired = 0
+    for (const fix of fixes) {
+      const res = await db
+        .prepare('UPDATE funding_opportunities SET state = ?, is_national = 0 WHERE id = ?')
+        .run(fix.state, fix.id)
+      repaired += changesOf(res) || 1
+    }
+    log.info('re-scoped catalog rows from their own declared state (were stored as nationwide)', {
+      repaired,
+      scanned: rows?.length || 0,
+    })
+    return { scanned: rows?.length || 0, repaired, enforced: true }
+  })
+}
+
+/**
+ * Every US state / CA province code a profile declares, from its own sections.
+ * `profiles` carries no state column in prod, so the truth lives in
+ * `profile_sections` (`basic_information.state`, `location_focus.focus_state`).
+ * An empty set means UNKNOWN, which every caller must treat as NEUTRAL.
+ */
+async function loadProfileStates(db, normalizeState) {
+  const byProfile = new Map()
+  let rows
+  try {
+    rows = await db
+      .prepare(
+        `SELECT profile_id, section_key, data FROM profile_sections
+          WHERE section_key IN ('basic_information', 'location_focus')`,
+      )
+      .all()
+  } catch {
+    return byProfile // section table absent on a minimal schema — everyone UNKNOWN
+  }
+  for (const row of rows || []) {
+    let parsed = row?.data
+    if (typeof parsed === 'string') {
+      try { parsed = JSON.parse(parsed) } catch { parsed = null }
+    }
+    if (!parsed || typeof parsed !== 'object') continue
+    for (const key of ['state', 'focus_state']) {
+      const code = normalizeState(parsed[key])
+      if (!code) continue
+      if (!byProfile.has(row.profile_id)) byProfile.set(row.profile_id, new Set())
+      byProfile.get(row.profile_id).add(code)
+    }
+  }
+  return byProfile
+}
+
+/**
+ * INVARIANT: a locator that NAMES its own place is not surfaced to a profile
+ * somewhere else.
+ *
+ * `enforceDeclaredGeoScope()` above repairs the CATALOG so the engine can judge
+ * these rows, and `makeDecision` now REJECTs an out-of-area place-declaring row
+ * — but the match store is only rebuilt when a profile next crawls, and the
+ * owner is looking at it now. Prod 2026-08-01: 1,069 match rows point at a
+ * place-declaring locator; 684 of them, across 25 of 39 profiles, name a state
+ * the profile is not in. That is the top of the owner's GeneMac list — an
+ * Indiana senior shown Polk County TN, Raleigh County WV, Bergen County NJ.
+ *
+ * MISSING = NEUTRAL, exactly as the engine treats it: a profile with no
+ * resolvable state loses nothing, and the profile's OWN county/city locators are
+ * untouched (they declare the state the profile is in). Bounded by
+ * MATCH_SCOPE_PURGE_LIMIT; ENFORCE_DECLARED_PLACE_SCOPE=0 for count-only.
+ */
+export async function enforceDeclaredPlaceScopeMatches(db) {
+  return runInvariant('declared_place_scope_matches', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let declaredStateFromTitle, DECLARED_STATE_TITLE_LIKE_PATTERNS, normalizeState
+    try {
+      ;({ declaredStateFromTitle, DECLARED_STATE_TITLE_LIKE_PATTERNS } = await import(
+        '../config/opportunityJurisdiction.js'
+      ))
+      ;({ normalizeState } = await import('../utils/stateNormalization.js'))
+    } catch (err) {
+      log.warn('declared_place_scope_matches: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+
+    // SQL predicate, not a post-LIMIT filter (#944): only place-declaring titles
+    // are ever candidates, so ordinary rows cannot starve them out of the bound.
+    const likeClause = DECLARED_STATE_TITLE_LIKE_PATTERNS.map(() => 'o.title LIKE ?').join(' OR ')
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT m.id AS match_id, m.profile_id, o.title
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+            WHERE o.title IS NOT NULL AND (${likeClause})
+            LIMIT ?`,
+        )
+        .all(...DECLARED_STATE_TITLE_LIKE_PATTERNS, limit)
+    } catch (err) {
+      log.warn('declared_place_scope_matches: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+    if ((rows || []).length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    const profileStates = await loadProfileStates(db, normalizeState)
+    const violating = []
+    for (const row of rows) {
+      const declared = declaredStateFromTitle(row)
+      if (!declared) continue
+      const states = profileStates.get(row.profile_id)
+      if (!states || states.size === 0) continue // UNKNOWN profile state is NEUTRAL
+      if (!states.has(declared)) violating.push({ ...row, declared })
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_DECLARED_PLACE_SCOPE) === false
+    if (disabled) {
+      if (violating.length > 0) {
+        log.warn('out-of-area place-declaring locators are matched to profiles (purge DISABLED via ENFORCE_DECLARED_PLACE_SCOPE=0)', {
+          wouldRepair: violating.length,
+          scanned: rows.length,
+          examples: violating.slice(0, 3).map((v) => v.title),
+        })
+      }
+      return { scanned: rows.length, repaired: 0, wouldRepair: violating.length, enforced: false }
+    }
+    if (violating.length === 0) return { scanned: rows.length, repaired: 0, enforced: true }
+
+    const ids = violating.map((v) => v.match_id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed out-of-area locators from profiles that are somewhere else', {
+      repaired,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map((v) => v.title),
+    })
+    return {
+      scanned: rows.length,
+      repaired,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: no surfaced match points at a FOREIGN-JURISDICTION program.
+ *
+ * The geography gate only ever compared a US state code, so a program
+ * administered by another government (Ireland's Housing Adaptation Grant on
+ * citizensinformation.ie, gov.uk, sassa.gov.za, dda.gov.in …) has `state NULL`,
+ * skips the gate entirely, and — having no state — was ALSO stamped
+ * `is_national`, which makes the geo tier score it as a fully-eligible
+ * nationwide US program. Prod 2026-08-01: 146 active foreign catalog rows, 55
+ * live match rows across 6 profiles.
+ *
+ * Evidence is the row's own url (`detectForeignJurisdiction`), never sponsor or
+ * title prose — a phrase like "Local Authorities" is how a class fix decays into
+ * a denylist. The CATALOG row is left alone (it is a true record of a real
+ * program); only the profile↔opportunity MATCH is removed, because that is the
+ * claim "you can apply to this". Converges: makeDecision now REJECTs the pair,
+ * and the persist path never stores a REJECT.
+ *
+ * Bounded by MATCH_SCOPE_PURGE_LIMIT (2000/boot);
+ * ENFORCE_FOREIGN_JURISDICTION_SCOPE=0 for count-only.
+ */
+export async function enforceForeignJurisdictionMatches(db) {
+  return runInvariant('foreign_jurisdiction_matches', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let detectForeignJurisdiction
+    try {
+      ;({ detectForeignJurisdiction } = await import('../config/opportunityJurisdiction.js'))
+    } catch (err) {
+      log.warn('foreign_jurisdiction_matches: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT m.id AS match_id, m.profile_id, o.title,
+                  o.source_url, o.application_url, o.evidence_url
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+            LIMIT ?`,
+        )
+        .all(limit)
+    } catch (err) {
+      log.warn('foreign_jurisdiction_matches: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const violating = []
+    for (const row of rows || []) {
+      const verdict = detectForeignJurisdiction(row)
+      if (verdict.foreign) violating.push({ ...row, cctld: verdict.cctld, host: verdict.host })
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_FOREIGN_JURISDICTION_SCOPE) === false
+    if (disabled) {
+      if (violating.length > 0) {
+        log.warn('foreign-jurisdiction programs are matched to profiles (purge DISABLED via ENFORCE_FOREIGN_JURISDICTION_SCOPE=0)', {
+          wouldRepair: violating.length,
+          scanned: rows?.length || 0,
+          examples: violating.slice(0, 3).map((v) => `${v.title} (${v.host})`),
+        })
+      }
+      return { scanned: rows?.length || 0, repaired: 0, wouldRepair: violating.length, enforced: false }
+    }
+    if (violating.length === 0) return { scanned: rows?.length || 0, repaired: 0, enforced: true }
+
+    const ids = violating.map((v) => v.match_id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed matches to foreign-jurisdiction programs (a US applicant cannot apply)', {
+      repaired,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map((v) => `${v.title} (${v.host})`),
+    })
+    return {
+      scanned: rows?.length || 0,
+      repaired,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: an INDIVIDUAL's surfaced matches obey the same award ceiling their
+ * pipeline already does.
+ *
+ * `enforceIndividualAmountCeiling()` has purged above-ceiling rows from a
+ * person's `grants` pipeline since the ">$3M potential" class. It reaches
+ * `grants` only — the MATCH store that feeds the owner-facing Funding Sources
+ * list was never held to the same bar, so the exact institutional money the
+ * pipeline refuses is displayed as a match. Prod 2026-08-01: 174 match rows
+ * across 28 of 39 profiles — NSF Oceanographic Facilities ($47.5M), HUD PRO
+ * Housing ($10M), USDA AFRI ($10M), Title X ($22M), and the HUD Fair Housing
+ * Initiatives Program ($1.25M) the owner reported as "Individual applicant".
+ *
+ * Why an AMOUNT and not eligibility text: `applicantTypeGate` decides from
+ * eligibility prose and these rows carry none (FHIP in prod: `eligibility_text`
+ * NULL, `eligibility_bullets` [], `entity_types_allowed` []). A text gate can
+ * never reach them; the stated per-award ceiling is a structural fact the row
+ * does publish. Silence is never a violation — a row with no amount is exempt.
+ * Orgs/businesses are never touched, and an unknown profile type is treated as
+ * NOT an individual (conservative in the direction that preserves rows).
+ *
+ * Bounded by MATCH_SCOPE_PURGE_LIMIT (2000/boot);
+ * ENFORCE_INDIVIDUAL_MATCH_CEILING=0 for count-only.
+ */
+export async function enforceIndividualMatchAwardCeiling(db) {
+  return runInvariant('individual_match_award_ceiling', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let resolveIndividualAwardCeiling, exceedsIndividualAwardCeiling
+    try {
+      ;({ resolveIndividualAwardCeiling, exceedsIndividualAwardCeiling } = await import(
+        '../config/individualAwardCeiling.js'
+      ))
+    } catch (err) {
+      log.warn('individual_match_award_ceiling: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const ceiling = resolveIndividualAwardCeiling()
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+
+    const profileCols = await listProfileColumns(db)
+    const typeCols = ['applicant_type', 'primary_type'].filter((c) => profileCols.has(c))
+    if (typeCols.length === 0) {
+      return { scanned: 0, repaired: 0, enforced: true, ceiling, skipped: 'schema' }
+    }
+    const typeSelect = typeCols.map((c) => `p.${c} AS ${c}`).join(', ')
+
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT m.id AS match_id, m.profile_id, o.title, o.amount_min, o.amount_max, ${typeSelect}
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+             JOIN profiles p ON p.id = m.profile_id
+            WHERE (o.amount_max IS NOT NULL AND o.amount_max > ?)
+               OR (o.amount_min IS NOT NULL AND o.amount_min > ?)
+            LIMIT ?`,
+        )
+        .all(ceiling, ceiling, limit)
+    } catch (err) {
+      log.warn('individual_match_award_ceiling: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, ceiling, skipped: 'query' }
+    }
+
+    const violating = (rows || []).filter((r) => {
+      if (!isIndividualProfileType(r.applicant_type || r.primary_type)) return false
+      return exceedsIndividualAwardCeiling(r, ceiling)
+    })
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_INDIVIDUAL_MATCH_CEILING) === false
+    if (disabled) {
+      if (violating.length > 0) {
+        log.warn('institutional-scale awards are matched to individual profiles (purge DISABLED via ENFORCE_INDIVIDUAL_MATCH_CEILING=0)', {
+          wouldRepair: violating.length,
+          scanned: rows?.length || 0,
+          ceiling,
+          examples: violating.slice(0, 3).map((v) => `${v.title} ($${v.amount_max ?? v.amount_min})`),
+        })
+      }
+      return { scanned: rows?.length || 0, repaired: 0, wouldRepair: violating.length, ceiling, enforced: false }
+    }
+    if (violating.length === 0) return { scanned: rows?.length || 0, repaired: 0, ceiling, enforced: true }
+
+    const ids = violating.map((v) => v.match_id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed institutional-scale awards from individual profiles’ matches', {
+      repaired,
+      ceiling,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map((v) => `${v.title} ($${v.amount_max ?? v.amount_min})`),
+    })
+    return {
+      scanned: rows?.length || 0,
+      repaired,
+      ceiling,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -5737,6 +6190,22 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // Runs after the relevance floor because those below-floor rows are cheaper to
   // drop first; orgs/businesses and user-progressed work are never touched.
   steps.push(await enforceIndividualAmountCeiling(db))
+  // SCOPE nets for the surfaced match store (2026-08-01, the GeneMac report).
+  // Geo scope FIRST and on the CATALOG, because the two match-store purges below
+  // and every later geo comparison read `funding_opportunities.state` — a row
+  // re-scoped from its own title in this step is judged correctly for the rest
+  // of the boot instead of one boot late.
+  steps.push(await enforceDeclaredGeoScope(db))
+  // …then remove the out-of-area locators that scope already surfaced (the top
+  // of the owner's GeneMac list: an Indiana senior shown Polk County TN).
+  steps.push(await enforceDeclaredPlaceScopeMatches(db))
+  // A program administered by another government can never be applied to from
+  // the US; the geography gate had no country concept at all, so these scored as
+  // nationwide-eligible.
+  steps.push(await enforceForeignJurisdictionMatches(db))
+  // The award ceiling an INDIVIDUAL's pipeline has enforced for months, applied
+  // to the match store that actually feeds the owner-facing list.
+  steps.push(await enforceIndividualMatchAwardCeiling(db))
   // Surface-table eligibility net: demote persisted student-aid matches that are
   // surfacing to a NON-student profile (stale ACCEPTs the live engine already
   // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).
@@ -5917,6 +6386,10 @@ export const __testables = {
   enforceProfileIncomeReconciliation,
   enforceIndividualOrgSectionConflict,
   enforceIndividualAmountCeiling,
+  enforceDeclaredGeoScope,
+  enforceDeclaredPlaceScopeMatches,
+  enforceForeignJurisdictionMatches,
+  enforceIndividualMatchAwardCeiling,
   enforceStudentAidEligibility,
   enforceProfileEligibility,
   enforceFunderBackfill,

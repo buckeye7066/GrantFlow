@@ -58,6 +58,10 @@ import {
   enforceGrantCatalogLink,
   enforceGrantAmountBackfill,
   enforceAmySyntheticExpiry,
+  enforceDeclaredGeoScope,
+  enforceDeclaredPlaceScopeMatches,
+  enforceForeignJurisdictionMatches,
+  enforceIndividualMatchAwardCeiling,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
@@ -1125,7 +1129,8 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    expect(summary.ran).toBe(37)
+    // 37 on main (incl. #1081 portal_session_lifetime_stamp) + 4 scope nets here.
+    expect(summary.ran).toBe(41)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1147,6 +1152,13 @@ describe('enforceInvariants — runner', () => {
       'grant_amount_backfill',
       'grant_direct_amount',
       'individual_amount_ceiling',
+      // SCOPE of a surfaced match (2026-08-01, the GeneMac report). Geo scope is
+      // repaired on the CATALOG first, so every later geo comparison — and both
+      // match-store purges below — read the corrected state this same boot.
+      'declared_geo_scope',
+      'declared_place_scope_matches',
+      'foreign_jurisdiction_matches',
+      'individual_match_award_ceiling',
       'student_aid_eligibility',
       'no_dangling_matches',
       'persisted_match_decision_integrity',
@@ -4848,5 +4860,374 @@ describe('enforceAmySyntheticExpiry', () => {
     } finally {
       db.close()
     }
+  })
+})
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * SCOPE OF A SURFACED MATCH — the 2026-08-01 GeneMac report.
+ *
+ * Producer gates (matchEngine.makeDecision, osOppToLiveRow) stop NEW bad rows.
+ * These three sweeps are what reaches the rows the owner is looking at RIGHT
+ * NOW, for EVERY profile — the match store is a rolling snapshot rebuilt per
+ * run, so without them a fix only lands for a profile after its next crawl.
+ *
+ * Every behavioral test below FAILS on a no-op sweep body.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe('enforce: scope of a surfaced match (geo + award scale)', () => {
+  function makeScopeDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT,
+        display_name TEXT,
+        primary_type TEXT,
+        applicant_type TEXT,
+        status TEXT
+      );
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        sponsor TEXT,
+        state TEXT,
+        is_national INTEGER,
+        amount_min NUMERIC,
+        amount_max NUMERIC,
+        source_url TEXT,
+        application_url TEXT,
+        evidence_url TEXT
+      );
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL,
+        opportunity_id TEXT NOT NULL,
+        match_score REAL,
+        match_decision TEXT,
+        matcher_version TEXT
+      );
+    `)
+    return raw
+  }
+  function opp(db, row) {
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, state, is_national, amount_min, amount_max, source_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      row.id, row.title ?? null, row.sponsor ?? null, row.state ?? null,
+      row.is_national ?? 0, row.amount_min ?? null, row.amount_max ?? null, row.source_url ?? null,
+    )
+  }
+  function match(db, id, profileId, oppId) {
+    db.prepare(
+      `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+       VALUES (?, ?, ?, 13, 'review', 'crawler-os-xmatch')`,
+    ).run(id, profileId, oppId)
+  }
+  const matchIdsOf = (db) =>
+    db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+
+  afterEach(() => {
+    delete process.env.ENFORCE_DECLARED_GEO_SCOPE
+    delete process.env.ENFORCE_FOREIGN_JURISDICTION_SCOPE
+    delete process.env.ENFORCE_INDIVIDUAL_MATCH_CEILING
+    delete process.env.INDIVIDUAL_PIPELINE_AMOUNT_CEILING
+  })
+
+  // ── enforceDeclaredGeoScope ────────────────────────────────────────────────
+  it('re-scopes a catalog row from the state it declares in its OWN title', async () => {
+    const db = makeScopeDb()
+    try {
+      opp(db, { id: 'o-polk', title: 'Polk County, TN — Local assistance programs near you (findhelp)', state: null, is_national: 1 })
+      opp(db, { id: 'o-lagrange', title: 'La Grange County, IN — Local housing help — HUD Resource Locator', state: null, is_national: 1 })
+
+      const res = await enforceDeclaredGeoScope(db)
+      expect(res.repaired).toBe(2)
+      const rows = db.prepare('SELECT id, state, is_national FROM funding_opportunities ORDER BY id').all()
+      expect(rows.find((r) => r.id === 'o-polk')).toMatchObject({ state: 'TN', is_national: 0 })
+      expect(rows.find((r) => r.id === 'o-lagrange')).toMatchObject({ state: 'IN', is_national: 0 })
+    } finally { db.close() }
+  })
+
+  it('never overrides a scope the SOURCE supplied, and never invents one', async () => {
+    const db = makeScopeDb()
+    try {
+      // Source already said GA — a title coincidence must not rewrite it.
+      opp(db, { id: 'o-src', title: 'Polk County, TN — Local assistance', state: 'GA', is_national: 1 })
+      // Genuinely national: declares nothing.
+      opp(db, { id: 'o-natl', title: '211 - Local help with rent, utilities, food & emergencies', state: null, is_national: 1 })
+      // Not a real state code (prod contains "Anytown, SA — …").
+      opp(db, { id: 'o-junk', title: 'Anytown, SA — Local assistance programs near you (findhelp)', state: null, is_national: 1 })
+
+      const res = await enforceDeclaredGeoScope(db)
+      expect(res.repaired).toBe(0)
+      const rows = db.prepare('SELECT id, state, is_national FROM funding_opportunities ORDER BY id').all()
+      expect(rows.find((r) => r.id === 'o-src')).toMatchObject({ state: 'GA', is_national: 1 })
+      expect(rows.find((r) => r.id === 'o-natl')).toMatchObject({ state: null, is_national: 1 })
+      expect(rows.find((r) => r.id === 'o-junk')).toMatchObject({ state: null, is_national: 1 })
+    } finally { db.close() }
+  })
+
+  it('CONVERGES: a second run finds nothing (no nightly tug-of-war)', async () => {
+    const db = makeScopeDb()
+    try {
+      opp(db, { id: 'o-polk', title: 'Polk County, TN — Local assistance', state: null, is_national: 1 })
+      expect((await enforceDeclaredGeoScope(db)).repaired).toBe(1)
+      expect((await enforceDeclaredGeoScope(db)).repaired).toBe(0)
+      expect((await enforceDeclaredGeoScope(db)).repaired).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('ENFORCE_DECLARED_GEO_SCOPE=0 counts without repairing', async () => {
+    const db = makeScopeDb()
+    try {
+      opp(db, { id: 'o-polk', title: 'Polk County, TN — Local assistance', state: null, is_national: 1 })
+      process.env.ENFORCE_DECLARED_GEO_SCOPE = '0'
+      const off = await enforceDeclaredGeoScope(db)
+      expect(off.enforced).toBe(false)
+      expect(off.repaired).toBe(0)
+      expect(off.wouldRepair).toBe(1)
+      expect(db.prepare('SELECT state FROM funding_opportunities WHERE id = ?').get('o-polk').state).toBe(null)
+
+      delete process.env.ENFORCE_DECLARED_GEO_SCOPE
+      expect((await enforceDeclaredGeoScope(db)).repaired).toBe(1)
+    } finally { db.close() }
+  })
+
+  // ── enforceForeignJurisdictionMatches ──────────────────────────────────────
+  it('removes matches to foreign-jurisdiction programs, for EVERY profile', async () => {
+    const db = makeScopeDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-senior', 'senior')
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-org', 'nonprofit')
+      opp(db, { id: 'o-ie', title: 'Housing Adaptation Grant for People with a Disability', sponsor: 'Local Authorities', source_url: 'https://www.citizensinformation.ie/en/housing/housing-grants-and-schemes/', state: null, is_national: 1 })
+      opp(db, { id: 'o-uk', title: 'Disabled Facilities Grant', source_url: 'https://www.gov.uk/disabled-facilities-grants', state: null, is_national: 1 })
+      opp(db, { id: 'o-us', title: 'Indiana FSSA Benefits Portal', source_url: 'https://fssabenefits.in.gov', state: 'IN', is_national: 0 })
+      opp(db, { id: 'o-short', title: 'Alaska Fellows Program', source_url: 'https://lnkd.in/dC6VRfHD', state: null, is_national: 1 })
+      match(db, 'm1', 'p-senior', 'o-ie')
+      match(db, 'm2', 'p-org', 'o-ie')
+      match(db, 'm3', 'p-senior', 'o-uk')
+      match(db, 'm4', 'p-senior', 'o-us')
+      match(db, 'm5', 'p-senior', 'o-short')
+
+      const res = await enforceForeignJurisdictionMatches(db)
+      expect(res.repaired).toBe(3)
+      expect(res.profilesAffected).toBe(2)
+      expect(matchIdsOf(db)).toEqual(['m4', 'm5'])
+      // The CATALOG row survives — it is a true record of a real program.
+      expect(db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get('o-ie')).toBeTruthy()
+    } finally { db.close() }
+  })
+
+  it('foreign purge is idempotent and count-only under ENFORCE_FOREIGN_JURISDICTION_SCOPE=0', async () => {
+    const db = makeScopeDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'individual')
+      opp(db, { id: 'o-ie', title: 'Irish scheme', source_url: 'https://www.citizensinformation.ie/x', state: null, is_national: 1 })
+      match(db, 'm1', 'p1', 'o-ie')
+
+      process.env.ENFORCE_FOREIGN_JURISDICTION_SCOPE = '0'
+      const off = await enforceForeignJurisdictionMatches(db)
+      expect(off.enforced).toBe(false)
+      expect(off.wouldRepair).toBe(1)
+      expect(matchIdsOf(db)).toEqual(['m1'])
+
+      delete process.env.ENFORCE_FOREIGN_JURISDICTION_SCOPE
+      expect((await enforceForeignJurisdictionMatches(db)).repaired).toBe(1)
+      expect((await enforceForeignJurisdictionMatches(db)).repaired).toBe(0)
+    } finally { db.close() }
+  })
+
+  // ── enforceIndividualMatchAwardCeiling ─────────────────────────────────────
+  it('removes institutional-scale awards from a PERSON match set (the HUD FHIP class)', async () => {
+    const db = makeScopeDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-senior', 'senior')
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-student', 'student')
+      opp(db, { id: 'o-fhip', title: 'Fair Housing Initiative Program - Education and Outreach Initiative', sponsor: 'HUD', amount_min: 0, amount_max: 1250000 })
+      opp(db, { id: 'o-nsf', title: 'Oceanographic Facilities and Equipment Support', amount_min: 5000, amount_max: 47500000 })
+      match(db, 'm1', 'p-senior', 'o-fhip')
+      match(db, 'm2', 'p-student', 'o-nsf')
+
+      const res = await enforceIndividualMatchAwardCeiling(db)
+      expect(res.repaired).toBe(2)
+      expect(res.ceiling).toBe(100000)
+      expect(matchIdsOf(db)).toEqual([])
+    } finally { db.close() }
+  })
+
+  it('never touches an ORG, an unknown type, or a row that states NO amount', async () => {
+    const db = makeScopeDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-org', 'nonprofit')
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-unknown', 'wat')
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-senior', 'senior')
+      opp(db, { id: 'o-big', title: 'PRO Housing', amount_min: 5000000, amount_max: 10000000 })
+      opp(db, { id: 'o-silent', title: 'Area Agency on Aging & Eldercare Locator', amount_min: null, amount_max: null })
+      opp(db, { id: 'o-small', title: 'Housing repair assistance', amount_min: 500, amount_max: 25000 })
+      match(db, 'm-org', 'p-org', 'o-big')
+      match(db, 'm-unknown', 'p-unknown', 'o-big')
+      match(db, 'm-silent', 'p-senior', 'o-silent')
+      match(db, 'm-small', 'p-senior', 'o-small')
+
+      const res = await enforceIndividualMatchAwardCeiling(db)
+      expect(res.repaired).toBe(0)
+      expect(matchIdsOf(db)).toEqual(['m-org', 'm-silent', 'm-small', 'm-unknown'])
+    } finally { db.close() }
+  })
+
+  it('ceiling purge is idempotent and count-only under ENFORCE_INDIVIDUAL_MATCH_CEILING=0', async () => {
+    const db = makeScopeDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'individual')
+      opp(db, { id: 'o-big', title: 'Title X', amount_min: 200000, amount_max: 22000000 })
+      match(db, 'm1', 'p1', 'o-big')
+
+      process.env.ENFORCE_INDIVIDUAL_MATCH_CEILING = '0'
+      const off = await enforceIndividualMatchAwardCeiling(db)
+      expect(off.enforced).toBe(false)
+      expect(off.wouldRepair).toBe(1)
+      expect(matchIdsOf(db)).toEqual(['m1'])
+
+      delete process.env.ENFORCE_INDIVIDUAL_MATCH_CEILING
+      expect((await enforceIndividualMatchAwardCeiling(db)).repaired).toBe(1)
+      expect((await enforceIndividualMatchAwardCeiling(db)).repaired).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('honours the SHARED env ceiling (one bar with the pipeline sweep, not two)', async () => {
+    const db = makeScopeDb()
+    try {
+      db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'individual')
+      opp(db, { id: 'o-mid', title: 'Mid-size award', amount_max: 150000 })
+      match(db, 'm1', 'p1', 'o-mid')
+
+      process.env.INDIVIDUAL_PIPELINE_AMOUNT_CEILING = '200000'
+      expect((await enforceIndividualMatchAwardCeiling(db)).repaired).toBe(0)
+      delete process.env.INDIVIDUAL_PIPELINE_AMOUNT_CEILING
+      expect((await enforceIndividualMatchAwardCeiling(db)).repaired).toBe(1)
+    } finally { db.close() }
+  })
+
+  it('all three degrade to a schema skip (never a failure) on a minimal DB', async () => {
+    const db = makeDb() // grants/profiles only — no match or catalog tables
+    try {
+      for (const res of [
+        await enforceForeignJurisdictionMatches(db),
+        await enforceIndividualMatchAwardCeiling(db),
+        await enforceDeclaredGeoScope(db),
+      ]) {
+        expect(res.ok).toBe(true)
+        expect(res.repaired).toBe(0)
+      }
+    } finally { db.close() }
+  })
+})
+
+describe('enforce: an out-of-area locator is not surfaced to a profile somewhere else', () => {
+  function makePlaceDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, primary_type TEXT, applicant_type TEXT);
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, state TEXT, is_national INTEGER);
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+        match_score REAL, match_decision TEXT, matcher_version TEXT
+      );
+    `)
+    return raw
+  }
+  const seed = (db) => {
+    db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-in', 'senior')
+    db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-nostate', 'individual')
+    db.prepare("INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('p-in','basic_information',?)")
+      .run(JSON.stringify({ city: 'Lagrange', state: 'IN', county: 'La Grange' }))
+    // Locators, exactly as prod stores them (place ONLY in the title).
+    for (const [id, title] of [
+      ['o-polk', 'Polk County, TN — Local assistance programs near you (findhelp)'],
+      ['o-raleigh', 'Raleigh County, WV — Local housing help — HUD Resource Locator'],
+      ['o-lagrange', 'La Grange County, IN — Local assistance programs near you (findhelp)'],
+      ['o-211', '211 - Local help with rent, utilities, food & emergencies'],
+    ]) {
+      db.prepare('INSERT INTO funding_opportunities (id, title, state, is_national) VALUES (?, ?, NULL, 1)').run(id, title)
+    }
+    for (const [mid, pid, oid] of [
+      ['m-polk', 'p-in', 'o-polk'],
+      ['m-raleigh', 'p-in', 'o-raleigh'],
+      ['m-lagrange', 'p-in', 'o-lagrange'],
+      ['m-211', 'p-in', 'o-211'],
+      ['m-polk-nostate', 'p-nostate', 'o-polk'],
+    ]) {
+      db.prepare(
+        `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+         VALUES (?, ?, ?, 13, 'review', 'crawler-os-xmatch')`,
+      ).run(mid, pid, oid)
+    }
+  }
+  const idsOf = (db) =>
+    db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+
+  afterEach(() => { delete process.env.ENFORCE_DECLARED_PLACE_SCOPE })
+
+  it('removes another state’s locators and KEEPS the profile’s own + genuinely national ones', async () => {
+    const db = makePlaceDb()
+    try {
+      seed(db)
+      const res = await enforceDeclaredPlaceScopeMatches(db)
+      expect(res.repaired).toBe(2)
+      expect(res.profilesAffected).toBe(1)
+      // m-lagrange (own county), m-211 (national), m-polk-nostate (profile state
+      // UNKNOWN → neutral, exactly as the engine treats it) all survive.
+      expect(idsOf(db)).toEqual(['m-211', 'm-lagrange', 'm-polk-nostate'])
+    } finally { db.close() }
+  })
+
+  it('reads the state from location_focus too, not just basic_information', async () => {
+    const db = makePlaceDb()
+    try {
+      seed(db)
+      db.prepare("DELETE FROM profile_sections WHERE profile_id = 'p-in'").run()
+      db.prepare("INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('p-in','location_focus',?)")
+        .run(JSON.stringify({ focus_state: 'IN', focus_county: 'La Grange' }))
+      expect((await enforceDeclaredPlaceScopeMatches(db)).repaired).toBe(2)
+      expect(idsOf(db)).toEqual(['m-211', 'm-lagrange', 'm-polk-nostate'])
+    } finally { db.close() }
+  })
+
+  it('a MULTI-state profile keeps locators in every state it declares', async () => {
+    const db = makePlaceDb()
+    try {
+      seed(db)
+      db.prepare("INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('p-in','location_focus',?)")
+        .run(JSON.stringify({ focus_state: 'WV' }))
+      const res = await enforceDeclaredPlaceScopeMatches(db)
+      expect(res.repaired).toBe(1) // only TN is now out of area
+      expect(idsOf(db)).toEqual(['m-211', 'm-lagrange', 'm-polk-nostate', 'm-raleigh'])
+    } finally { db.close() }
+  })
+
+  it('is idempotent and count-only under ENFORCE_DECLARED_PLACE_SCOPE=0', async () => {
+    const db = makePlaceDb()
+    try {
+      seed(db)
+      process.env.ENFORCE_DECLARED_PLACE_SCOPE = '0'
+      const off = await enforceDeclaredPlaceScopeMatches(db)
+      expect(off.enforced).toBe(false)
+      expect(off.wouldRepair).toBe(2)
+      expect(idsOf(db)).toHaveLength(5)
+
+      delete process.env.ENFORCE_DECLARED_PLACE_SCOPE
+      expect((await enforceDeclaredPlaceScopeMatches(db)).repaired).toBe(2)
+      expect((await enforceDeclaredPlaceScopeMatches(db)).repaired).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('degrades to a schema skip (never a failure) on a minimal DB', async () => {
+    const db = makeDb()
+    try {
+      const res = await enforceDeclaredPlaceScopeMatches(db)
+      expect(res.ok).toBe(true)
+      expect(res.repaired).toBe(0)
+    } finally { db.close() }
   })
 })

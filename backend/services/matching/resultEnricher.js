@@ -13,6 +13,22 @@ import {
   SUPPRESSIBLE_NO_FIT_RULE_IDS,
 } from './profileSpecificGate.js'
 
+/**
+ * True only for a value that is genuinely a finite number (or the string form of
+ * one). `Number(null)`, `Number('')` and `Number([])` are all 0 — a plain
+ * `Number.isFinite(Number(x))` therefore reads ABSENT as the measured value ZERO.
+ * Every "unknown vs 0" distinction in this file must route through here.
+ */
+export function isFiniteNumberLike(value) {
+  if (typeof value === 'number') return Number.isFinite(value)
+  // A numeric STRING is the shape SQLite/pg drivers hand back for REAL columns;
+  // everything else (null, undefined, boolean, [], {}) coerces to 0 or NaN and
+  // must never be mistaken for a measurement.
+  if (typeof value !== 'string') return false
+  if (value.trim() === '') return false
+  return Number.isFinite(Number(value))
+}
+
 export function isDirectoryRecord(opp) {
   const text = [
     opp?.title,
@@ -148,7 +164,7 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
         decision: opportunity.match_decision ?? 'REVIEW',
         score: Number(opportunity.match_score ?? 0),
         explanation: opportunity.match_explanation ?? null,
-        confidence: Number.isFinite(Number(opportunity.match_confidence)) ? Number(opportunity.match_confidence) : null,
+        confidence: isFiniteNumberLike(opportunity.match_confidence) ? Number(opportunity.match_confidence) : null,
         matched_profile_facts: Array.isArray(opportunity.match_reasons) ? opportunity.match_reasons : [],
         matchedNeeds: Array.isArray(opportunity.matched_needs) ? opportunity.matched_needs : [],
         ineligibilityReasons: Array.isArray(opportunity.ineligibility_reasons) ? opportunity.ineligibility_reasons : [],
@@ -205,9 +221,15 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     decision: decision?.decision ?? 'REVIEW',
     match_explanation: decision?.explanation ?? null,
     match_decision_explanation: decision?.explanation ?? null,
-    match_confidence: Number.isFinite(Number(decision?.confidence))
-      ? Number(decision.confidence)
-      : null,
+    // UNKNOWN CONFIDENCE MUST STAY UNKNOWN. `Number(null)` is 0 and
+    // `Number.isFinite(0)` is true, so the old guard converted "we have no
+    // confidence for this pair" into a hard, published `0` — which the card
+    // renders as "· 0% conf" (FundingResultCard.jsx: a null renders NO chip at
+    // all). Every stored match row in prod carries match_confidence NULL, so
+    // this printed "0% conf" on 100% of cards: a number that looks measured and
+    // says the engine is certain the match is worthless. Reject null/''/NaN
+    // BEFORE coercing.
+    match_confidence: isFiniteNumberLike(decision?.confidence) ? Number(decision.confidence) : null,
     matched_needs: Array.isArray(decision?.matchedNeeds)
       ? decision.matchedNeeds
       : [],

@@ -35,6 +35,9 @@ import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
 import { isGenericOnly } from '../config/genericTitleVocabulary.js'
+import { detectForeignJurisdiction, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
+import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
+import { resolveProfileType, getParentChain } from './profileTypeRegistry.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('matchEngine')
 
@@ -3462,6 +3465,30 @@ export async function loadPreferenceSignals(db, profileId) {
  * @param {Object} opportunity - Raw opportunity object
  * @returns {{ decision: string, explanation: string, reasons: string[] }}
  */
+/**
+ * Person-or-household profile types, resolved through the canonical profile-type
+ * registry so a leaf like `senior` / `disabled_adult` / `college_student` rolls up
+ * to `individual` instead of falling out of a hand-written list (the reason the
+ * inline `['individual','individual_need','family','medical_assistance']` check
+ * below could not see the `senior` profile in the owner's report).
+ *
+ * Conservative in BOTH directions: an unknown type is not a person (never widen a
+ * hard gate onto an org), and a type that also rolls up to an org root is not a
+ * person either.
+ */
+const MATCH_INDIVIDUAL_ROOT_TYPES = Object.freeze(['individual', 'family', 'student', 'veteran'])
+const MATCH_ORG_ROOT_TYPES = Object.freeze([
+  'business', 'nonprofit', 'public_agency', 'local_government', 'school',
+  'school_district', 'church', 'library', 'government', 'organization',
+])
+export function isIndividualLikeProfileType(rawType) {
+  const id = resolveProfileType(rawType)
+  if (!id) return false
+  const chain = [id, ...getParentChain(id)]
+  if (chain.some((t) => MATCH_ORG_ROOT_TYPES.includes(t))) return false
+  return chain.some((t) => MATCH_INDIVIDUAL_ROOT_TYPES.includes(t))
+}
+
 export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null) {
   const reasons = []
   const opp = opportunity || {}
@@ -3495,6 +3522,49 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   const isIndividualOrCaregiver = isIndividual || profileType === 'caregiver' || np?.isCaregiver
   const isResearcher = profileType === 'researcher'
   const profNeeds = np?.needCategories ?? safeParseArrayField(prof.needs, []).map((n) => String(n).toLowerCase())
+
+  // ── Scope gates: WHERE the money is valid and WHO can physically receive it.
+  //    Both read structural facts the row publishes about ITSELF (its own url,
+  //    its own stated award ceiling) rather than eligibility prose, because the
+  //    rows that motivated them carry no eligibility prose at all.
+
+  // JURISDICTION. The geography gate below compares a US STATE code and nothing
+  // else, so a program administered by another government (state NULL) skips it
+  // entirely — and, having no state, it was also stamped is_national, which makes
+  // the geo TIER score it as a fully-eligible NATIONWIDE US program. An Irish
+  // local-authority housing scheme is not "possibly accessible" to a US
+  // applicant; it is categorically unavailable, which is a REJECT, not a REVIEW.
+  const foreignJurisdiction = detectForeignJurisdiction(opp)
+  if (foreignJurisdiction.foreign) {
+    const reasonText =
+      `Foreign jurisdiction: this program is published by ${foreignJurisdiction.host} ` +
+      `(.${foreignJurisdiction.cctld}) and is administered outside the United States`
+    reasons.push(reasonText)
+    return {
+      decision: 'REJECT',
+      explanation: `${reasonText}. A US applicant cannot apply to it.`,
+      reasons,
+    }
+  }
+
+  // AWARD SCALE. An award ceiling above what a person can physically receive is
+  // institutional money, whatever the page says (or fails to say) about who may
+  // apply. This is the SAME bar enforceIndividualAmountCeiling() has applied to
+  // an individual's pipeline for months; the match store was simply never held
+  // to it, so HUD FHIP ($1.25M, eligibility_text NULL) reached a senior's
+  // Funding Sources list as "Individual applicant".
+  if (isIndividualLikeProfileType(profileType) && exceedsIndividualAwardCeiling(opp)) {
+    const stated = statedAwardCeiling(opp)
+    const reasonText =
+      `Institutional award scale: awards up to $${Number(stated).toLocaleString('en-US')} ` +
+      'are made to organizations, not to an individual or household'
+    reasons.push(reasonText)
+    return {
+      decision: 'REJECT',
+      explanation: `${reasonText}. This is an institutional grant, not individual assistance.`,
+      reasons,
+    }
+  }
 
   // ── Categorical restriction gates — all driven by `on` (normalizeOpportunity
   //    flags), the single source of truth. Order and reason strings preserved.
@@ -3641,8 +3711,20 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // Single-address profiles collapse to exactly one state → identical behavior.
   const profStateList = profileStates(signals, np?.state ?? prof.state)
   const profState = profStateList[0] ? profStateList[0] : String((np?.state ?? prof.state) || '').trim()
-  const oppStateRaw = String(opp.state || '').trim()
-  const oppIsNational = Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide'
+  // A row may DECLARE its own service area in its own title ("Polk County, TN —
+  // Local assistance programs near you"). These hyperlocal locator rows are
+  // minted per-place with no geography columns at all, so `opp.state` is empty
+  // and `is_national` is 1 — and this whole block short-circuits on the empty
+  // state while the geo TIER above scores them as nationwide. Read the place the
+  // row itself published: it is the only geographic fact it carries, and a
+  // county resource directory is exclusive to that county by construction (it is
+  // not a program that "may still be accessible" from another state). The
+  // catalog-side repair is enforceDeclaredGeoScope(); this makes the engine
+  // correct even for a row the sweep has not reached yet.
+  const declaredPlaceState = declaredStateFromTitle(opp)
+  const oppStateRaw = String(opp.state || '').trim() || (declaredPlaceState ?? '')
+  const oppIsNational =
+    (Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide') && !declaredPlaceState
   const oNormState = normalizeState(oppStateRaw)
   const matchesAnyProfileState = Boolean(oNormState) && profStateList.includes(oNormState)
   if (oppStateRaw && !oppIsNational && oNormState && !matchesAnyProfileState) {
@@ -3670,8 +3752,12 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       //   • "<X> residents (only|facing|who|experiencing|...)"
       //   • "exclusively for <X> residents"
       const RE_STATE_EXCLUSIVE = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
+      // A row that names its OWN locality is place-exclusive by construction:
+      // "Polk County, TN — Local assistance programs near you" is a directory of
+      // Polk County agencies. There is nothing in it an Indiana household can
+      // use, so "may still be accessible" is not an honest verdict for it.
       const isExplicitlyExclusive =
-        RE_STATE_EXCLUSIVE.test(oppText) || opp.state_residents_only === true
+        RE_STATE_EXCLUSIVE.test(oppText) || opp.state_residents_only === true || Boolean(declaredPlaceState)
       const profStateLabel = profStateList.join('/')
       if (isExplicitlyExclusive) {
         const reasonText = `Geographic mismatch: opportunity is for ${oppStateRaw}, profile is in ${profStateLabel}`

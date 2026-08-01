@@ -22,6 +22,7 @@ import { resolveOpportunityAmounts } from './awardAmountExtractor.js';
 import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
 import { buildLivePageFactColumns } from '../crawler-os/pageFacts.js';
 import { classifyLocatorKindFromRow, GENERIC_OVERRIDABLE_KINDS } from './sources/locatorUrlKind.js';
+import { correctedGeoScopeFromTitle } from '../config/opportunityJurisdiction.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -370,6 +371,7 @@ function osOppToLiveRow(o) {
     requires_match: o.requires_cost_share ? 1 : 0,
     is_national: geo.national ? 1 : 0,
     state,
+    // (geo scope is corrected below, once the whole row exists)
     categories: JSON.stringify(needCats),
     opportunity_kind: structuralKind?.kind ?? o.kind ?? null,
     source_trust_tier: o.trust_tier ?? null,
@@ -408,6 +410,20 @@ function osOppToLiveRow(o) {
   // NOTE: `field_provenance` here is the incoming whole-object; persistRun merges
   // it per-key with the LIVE row so a partial re-crawl never drops stored keys.
   Object.assign(row, buildLivePageFactColumns(o));
+
+  // GEO SCOPE, writer side. County/city locator rows are minted per-place with
+  // the place ONLY in the title ("Polk County, TN — Local assistance programs
+  // near you (findhelp)") and no geography_json, so `state` lands NULL and
+  // `is_national` lands 1 — which tells the geo gate this county resource is a
+  // NATIONWIDE program. Every profile in the fleet then scores geographically
+  // eligible for every other profile's county, and the cross-profile lane pushes
+  // those out-of-state locators ABOVE the profile's own in-state row. Reading the
+  // state the row already declares about itself is not new information. Only
+  // NULL-state + national rows are touched, so this is idempotent and can never
+  // override a scope the source actually supplied. Boot net for rows already
+  // written this way: enforceDeclaredGeoScope() in startup/enforceInvariants.js.
+  const correctedScope = correctedGeoScopeFromTitle(row);
+  if (correctedScope) Object.assign(row, correctedScope);
 
   return row;
 }

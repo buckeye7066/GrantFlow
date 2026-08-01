@@ -227,3 +227,63 @@ describe('reality gate — classifyOpportunityKind consults the structural rule'
     ).toBe('direct')
   })
 })
+
+describe('crawler-os bridge — a row that names its own state is never written NATIONAL', () => {
+  // WRITER side of the 2026-08-01 GeneMac defect. County/city locator rows are
+  // minted per-place with the place ONLY in the title and no geography_json, so
+  // they landed `state = NULL, is_national = 1` — telling the geo gate that a
+  // Polk County TN resource directory is a nationwide program. 89 active rows in
+  // prod were in this shape, feeding 373 match rows across 37 of 39 profiles.
+  // The boot net is enforceDeclaredGeoScope(); this is the first line of defense
+  // so the sweep converges instead of repairing the same rows every night.
+  const geoOf = (db, id) =>
+    db.prepare('SELECT state, is_national FROM funding_opportunities WHERE id = ?').get(id)
+
+  function locator(overrides = {}) {
+    return osOpp({
+      id: 'os-geo-1',
+      source_id: 'findhelp_local_programs',
+      external_id: null,
+      kind: 'DIRECTORY',
+      canonical_opportunity_key: 'ck-geo-1',
+      title: 'Polk County, TN — Local assistance programs near you (findhelp)',
+      sponsor: 'findhelp (Aunt Bertha)',
+      summary: 'Local assistance programs near you.',
+      info_url: 'https://www.findhelp.org/search_results/37323',
+      geography_json: '{}', // exactly what the lane emits: no geography at all
+      ...overrides,
+    })
+  }
+
+  it('writes the state the title declares, and drops the national flag', async () => {
+    const db = makeDb()
+    await persistRun(db, makeMemStore({ catalog: [locator()] }), {})
+    expect(geoOf(db, 'os-geo-1')).toMatchObject({ state: 'TN', is_national: 0 })
+  })
+
+  it('leaves a genuinely national row national', async () => {
+    const db = makeDb()
+    await persistRun(db, makeMemStore({
+      catalog: [locator({
+        id: 'os-geo-natl',
+        canonical_opportunity_key: 'ck-geo-natl',
+        title: '211 - Local help with rent, utilities, food & emergencies',
+        info_url: 'https://www.211.org',
+        geography_json: '{"national":true}',
+      })],
+    }), {})
+    expect(geoOf(db, 'os-geo-natl')).toMatchObject({ state: null, is_national: 1 })
+  })
+
+  it('never overrides a state the SOURCE supplied', async () => {
+    const db = makeDb()
+    await persistRun(db, makeMemStore({
+      catalog: [locator({
+        id: 'os-geo-src',
+        canonical_opportunity_key: 'ck-geo-src',
+        geography_json: '{"states":["GA"]}',
+      })],
+    }), {})
+    expect(geoOf(db, 'os-geo-src')).toMatchObject({ state: 'GA' })
+  })
+})
