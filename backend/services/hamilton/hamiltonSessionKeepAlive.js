@@ -11,15 +11,28 @@
  * The sweep visits each saved session's portal on a cadence WITH the saved
  * storage state (same fingerprint the capture used — Akamai-class WAFs bind
  * cookies to the UA), and:
- *   - still signed in  → re-persists the context's post-visit storageState
- *     (the portal just issued fresh sliding-window cookies) → the session's
- *     real lifetime extends indefinitely while the account stays active;
- *   - auth challenge   → the session is genuinely dead: mark it expired and
- *     notify the household ONCE with the precise ask (one side-by-side login);
+ *   - CONFIRMED signed in → re-persists the context's post-visit storageState
+ *     (the portal just issued fresh sliding-window cookies) and records a
+ *     lifetime observation. Reachable ONLY for hosts with a registered
+ *     auth-gated probe path;
+ *   - CONFIRMED signed out → the session is genuinely dead: mark it expired,
+ *     record the death observation, notify the household ONCE with the precise
+ *     ask (one side-by-side login);
+ *   - UNVERIFIED       → cookies refreshed, but this host has no auth-gated
+ *     probe path so liveness is unknown. Nothing is claimed, nothing recorded;
  *   - wall / outage    → INCONCLUSIVE: touch nothing. A datacenter bot wall
  *     (studentaid.gov's Akamai ERR_HTTP2_PROTOCOL_ERROR class) or a transient
  *     outage is OUR reachability problem, not the session's death — expiring
  *     on it would burn a working session (the "an outage never burns" rule).
+ *
+ * WHAT THIS IS NOT: a way to keep a short-lived session warm. Measured
+ * 2026-08-01, a studentaid.gov session was authenticated at T+30s and refused
+ * at T+~20min. No probe cadence this repo could responsibly run beats that, and
+ * hammering an Akamai-fronted federal host to try would risk a permanent bot
+ * wall — strictly worse than an expired session. Portals whose sessions are too
+ * short to survive to a scheduled run are handled by SYNCING WHILE WARM (on
+ * capture) and by the login-time prompt in `portalSyncStaleness.js`. This sweep
+ * exists to catch genuine expiry and to MEASURE lifetimes, not to prevent them.
  *
  * Bounded per tick (limit + time budget); driven from the Hamilton scheduler
  * tick alongside the email-verification recheck. Best-effort; never throws.
@@ -34,6 +47,12 @@ import {
   markSessionExpired,
 } from './hamiltonCredentialSessionService.js'
 import { emitHamiltonNotificationToProfileAndAdmins } from './hamiltonNotifications.js'
+import { authProbeUrlForHost, isSignInSurfaceUrl } from '../../config/portalSessionProfiles.js'
+import {
+  recordSessionObservation,
+  OBSERVATION_ALIVE,
+  OBSERVATION_DEAD,
+} from './portalSessionLifetime.js'
 
 const log = createLogger('service:hamilton-session-keepalive')
 
@@ -97,8 +116,32 @@ async function openProbeContext(launchBrowser, storageState) {
 }
 
 /**
- * Probe ONE saved session. Returns { outcome, detail } where outcome ∈
- * 'refreshed' | 'expired' | 'inconclusive' | 'skipped'.
+ * Probe ONE saved session.
+ *
+ * OUTCOMES — three of these are verdicts about the SESSION, one is a verdict
+ * about our ability to see it:
+ *
+ *   'refreshed'    CONFIRMED ALIVE. Only reachable when we requested an
+ *                  auth-gated path (registry `authProbePath`) and were NOT sent
+ *                  to a sign-in surface. Cookies re-saved; a lifetime
+ *                  observation is recorded.
+ *   'expired'      CONFIRMED DEAD. Either the classifier saw a real auth
+ *                  challenge, or an auth-gated request landed on a sign-in
+ *                  surface.
+ *   'unverified'   Cookies re-saved opportunistically, but we CANNOT say
+ *                  whether the session is alive — this host has no auth-gated
+ *                  probe path, so the page we read renders the same signed in
+ *                  or out. No observation recorded, no liveness claimed.
+ *   'inconclusive' Wall / outage / CAPTCHA / thin page. Touch nothing.
+ *
+ * WHY 'unverified' EXISTS: the previous version had no such state. It probed
+ * `https://<host>/` (a public homepage — `landing_url` was read here and
+ * written nowhere in the backend) and treated "the classifier found no signal"
+ * as proof of life. Verified live 2026-08-01 with a ZERO-cookie context:
+ * collegefortn.org, leic.tennessee.edu and studentaid.gov ALL reported
+ * "refreshed" while holding no session at all. Reading silence as confirmation
+ * is how prod accumulated `keepalive_refreshes: 11` on a session whose sibling
+ * the owner measured dying in ~20 minutes.
  */
 async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }) {
   const storageState = await getSessionStorageState(db, row.id)
@@ -112,7 +155,11 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
     const page = await context.newPage()
 
     const meta = parseMeta(row.metadata_json ?? row.metadata)
-    const target = meta.landing_url || `https://${row.portal_host}/`
+    // An AUTH-GATED path is the only target whose response carries information
+    // about our session. Without one we can still refresh cookies, but we may
+    // never claim the session is alive.
+    const authProbeUrl = authProbeUrlForHost(row.portal_host)
+    const target = authProbeUrl || meta.landing_url || `https://${row.portal_host}/`
     let navError = null
     try {
       await page.goto(target, { waitUntil: 'domcontentloaded', timeout: probeTimeoutMs })
@@ -144,10 +191,20 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
     if (AUTH_CHALLENGE_CATEGORIES.has(category)) {
       return { outcome: 'expired', detail: `portal challenged with ${category}` }
     }
+    // STRUCTURAL death signal: we asked for a page that requires auth and the
+    // portal moved us to its sign-in surface. This is what studentaid.gov does
+    // (`/my-activity/` -> `/fsa-id/sign-in/landing?redirectTo=%2Fmy-activity`)
+    // and it survives copy changes in a way text classification does not —
+    // that sign-in page itself classifies as `unknown`, i.e. the old rule read
+    // a login wall as a healthy session.
+    if (authProbeUrl && isSignInSurfaceUrl(finalUrl)) {
+      return { outcome: 'expired', detail: `auth-gated probe redirected to sign-in (${finalUrl.slice(0, 120)})` }
+    }
 
-    // Still signed in → persist the refreshed cookie jar so the sliding
-    // window restarts from NOW.
+    // Re-persist the cookie jar so any sliding window restarts from NOW. This is
+    // safe (and useful) whether or not we can confirm liveness.
     const refreshedState = await context.storageState()
+    const confirmedAlive = Boolean(authProbeUrl)
     await importSession(db, {
       userId: row.user_id,
       profileId: row.profile_id,
@@ -162,12 +219,33 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
         keepalive_at: new Date().toISOString(),
         keepalive_refreshes: (Number(meta.keepalive_refreshes) || 0) + 1,
         imported_via: 'session_keepalive_refresh',
+        // Only stamped when a POSITIVE, auth-gated observation backs it. A
+        // surface may present this as "last confirmed signed in"; it must never
+        // be written by a probe that could not tell.
+        ...(confirmedAlive ? { keepalive_confirmed_alive_at: new Date().toISOString() } : {}),
       },
     })
-    return { outcome: 'refreshed', detail: null }
+    return confirmedAlive
+      ? { outcome: 'refreshed', detail: null }
+      : {
+        outcome: 'unverified',
+        detail: `no auth-gated probe path for ${row.portal_host} — cookies refreshed, liveness unknown`,
+      }
   } finally {
     try { await handle?.browser?.close?.() } catch { /* best-effort */ }
   }
+}
+
+/**
+ * The session's TRUE establishment time — when a human last authenticated it,
+ * not when the cookie jar was last re-saved. `session_established_at` is pinned
+ * by importSession and carried across refreshes; `created_at` is the fallback
+ * for rows written before that existed (prod's are, as of 2026-08-01).
+ * Returns null when neither is usable, in which case NO observation is recorded
+ * rather than one measured against an invented clock.
+ */
+function resolveSessionEstablishedAt(row, meta) {
+  return meta?.session_established_at || row?.created_at || null
 }
 
 async function notifySessionExpiredOnce(db, row, detail) {
@@ -216,7 +294,10 @@ export async function runSessionKeepAliveSweep(db, {
   launchBrowser = null,
   probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
 } = {}) {
-  const out = { checked: 0, refreshed: 0, expired: 0, inconclusive: 0, skipped: 0, results: [] }
+  const out = {
+    checked: 0, refreshed: 0, expired: 0, inconclusive: 0, skipped: 0,
+    unverified: 0, observed: 0, results: [],
+  }
   if (!db) return out
 
   // Browser automation must be on unless a test injects its own launcher.
@@ -254,8 +335,26 @@ export async function runSessionKeepAliveSweep(db, {
       result = { outcome: 'inconclusive', detail: err?.message || String(err) }
     }
 
+    // LEARN THE HOST'S REAL SESSION LIFETIME. Only the two CONFIRMED outcomes
+    // produce an observation; 'unverified' / 'inconclusive' / 'skipped' record
+    // nothing, because a failure to observe is not an observation (the same
+    // rule that stops a wall from burning a working session two lines below).
+    const rowMeta = parseMeta(row.metadata_json ?? row.metadata)
+    const establishedAt = resolveSessionEstablishedAt(row, rowMeta)
+    if (result.outcome === 'refreshed' || result.outcome === 'expired') {
+      const rec = await recordSessionObservation(db, {
+        host: row.portal_host,
+        kind: result.outcome === 'refreshed' ? OBSERVATION_ALIVE : OBSERVATION_DEAD,
+        establishedAt,
+        sessionId: row.id,
+      }).catch(() => ({ recorded: false }))
+      if (rec?.recorded) out.observed += 1
+    }
+
     if (result.outcome === 'refreshed') {
       out.refreshed += 1
+    } else if (result.outcome === 'unverified') {
+      out.unverified += 1
     } else if (result.outcome === 'expired') {
       out.expired += 1
       try { await markSessionExpired(db, row.id, result.detail || 'keepalive probe hit auth challenge') } catch { /* row update best-effort */ }
@@ -278,6 +377,7 @@ export async function runSessionKeepAliveSweep(db, {
     log.info('keepalive_sweep', {
       checked: out.checked, refreshed: out.refreshed, expired: out.expired,
       inconclusive: out.inconclusive, skipped: out.skipped,
+      unverified: out.unverified, observed: out.observed,
     })
   }
   return out

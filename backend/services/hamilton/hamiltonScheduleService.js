@@ -20,8 +20,10 @@ import { deriveProfilePortalHosts } from './hamiltonAutomationOrchestrator.js'
 import { listCredentialedDomains } from './hamiltonPortalCredentialService.js'
 import { findValidSession } from './hamiltonCredentialSessionService.js'
 import { emitHamiltonNotificationToProfileAndAdmins } from './hamiltonNotifications.js'
+import { resolveProfileSyncNeeds, SYNC_NEED_ACTION } from './portalSyncStaleness.js'
 
 const SESSION_REMINDER_TYPE = 'hamilton_session_capture_needed'
+const SYNC_REMINDER_TYPE = 'hamilton_portal_sync_needed'
 
 // Tasks that still have work for Hamilton to do (not terminal / not waiting on
 // the owner for something other than a scheduled run).
@@ -100,6 +102,16 @@ export async function getHamiltonReadiness(db, { profileId } = {}) {
 
   const pendingCount = await countActiveTasks(db, profileId)
 
+  // WHICH PORTALS NEED A SYNC (owner rule, 2026-08-01). Computed for THIS
+  // profile only — `resolveProfileSyncNeeds` has no aggregate mode, so an admin
+  // reading this endpoint sees exactly what the profile's owner would see for
+  // the profile they are working in, and nothing about the other 38.
+  // Best-effort: a failure here degrades the banner, it never fails readiness.
+  let syncNeeds = null
+  try {
+    syncNeeds = await resolveProfileSyncNeeds(db, { profileId })
+  } catch { syncNeeds = null }
+
   const portalsNeedingCapture = portals.filter((p) => p.needs_capture)
   return {
     profile_id: String(profileId),
@@ -109,9 +121,15 @@ export async function getHamiltonReadiness(db, { profileId } = {}) {
     pending_task_count: pendingCount,
     portals,
     portals_needing_capture: portalsNeedingCapture.map((p) => p.host),
+    // Login-time sync prompt: which portals are stale / changed-since-sync, why,
+    // and whether the ask is "sync now" or "sign in once".
+    sync_needs: syncNeeds,
     // The banner should prompt setup when there is work to do AND either no
-    // schedule is set, or a portal needs a session captured.
-    needs_attention: pendingCount > 0 && (!schedule.enabled || portalsNeedingCapture.length > 0),
+    // schedule is set, or a portal needs a session captured — OR, independently
+    // of Hamilton's task queue, when a portal has drifted out of sync. A stale
+    // portal is actionable even when there is no pending application work.
+    needs_attention: (pendingCount > 0 && (!schedule.enabled || portalsNeedingCapture.length > 0))
+      || Boolean(syncNeeds?.needs_attention),
   }
 }
 
@@ -272,4 +290,85 @@ export async function emitSessionCaptureReminders(db, { profileId, lookbackHours
   return emitted
 }
 
-export default { getHamiltonReadiness, computeHamiltonCalendarEvents, scanHamiltonSessionReadiness, emitSessionCaptureReminders }
+/**
+ * Login-time PORTAL SYNC prompt for the profile owner AND admins (owner rule,
+ * 2026-08-01): "alert the profile owner and admin ON LOGIN that a sync needs to
+ * happen, and which portals need synced."
+ *
+ * SCOPE IS ONE PROFILE, ALWAYS. `profileId` is required and there is no
+ * all-profiles variant, because an admin digest across 39 prod profiles is a
+ * wall of prompts an admin learns to ignore — which would destroy the surface
+ * for the one profile that matters. An admin working inside a profile gets
+ * exactly the owner's list for that profile.
+ *
+ * Deduped per (profile, host) over `lookbackHours` so a login loop never nags.
+ * The message names the ACTION honestly: a portal with no captured session is
+ * asked for one watched sign-in, never "sync now" — you cannot sync a portal
+ * you cannot get into.
+ *
+ * Returns the number of reminders emitted. Never throws.
+ */
+export async function emitPortalSyncReminders(db, { profileId, lookbackHours = 20 } = {}) {
+  if (!db || !profileId) return 0
+  let needs = null
+  try {
+    needs = await resolveProfileSyncNeeds(db, { profileId })
+  } catch { return 0 }
+  const portals = needs?.portals || []
+  if (portals.length === 0) return 0
+
+  let profileUserId = null
+  try {
+    const row = await db.prepare('SELECT user_id FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+    profileUserId = row?.user_id || null
+  } catch { profileUserId = null }
+
+  // Space-format ('YYYY-MM-DD HH:MM:SS'), NOT ISO — see emitSessionCaptureReminders:
+  // notifications.created_at is written by SQLite CURRENT_TIMESTAMP, and an ISO
+  // cutoff sorts before every space-format value at char 10 (' ' < 'T'), so the
+  // dedup predicate would never match and every login would re-notify.
+  const cutoff = new Date(Date.now() - lookbackHours * 3600_000).toISOString().slice(0, 19).replace('T', ' ')
+  let emitted = 0
+  for (const portal of portals) {
+    const host = portal.portal_host
+    let recent = null
+    try {
+      recent = await db.prepare(
+        `SELECT 1 FROM notifications WHERE type = ? AND data LIKE ? AND created_at > ? LIMIT 1`,
+      ).get(SYNC_REMINDER_TYPE, `%${host}%`, cutoff)
+    } catch { recent = null }
+    if (recent) continue
+
+    const why = portal.reasons.map((r) => r.detail).join(' ')
+    const needsSignIn = portal.action === SYNC_NEED_ACTION.SIGN_IN
+    await emitHamiltonNotificationToProfileAndAdmins(db, {
+      profileId,
+      profileUserId,
+      type: SYNC_REMINDER_TYPE,
+      title: needsSignIn
+        ? `Sign in once to ${portal.label} so it can sync`
+        : `${portal.label} needs a sync`,
+      message: needsSignIn
+        ? `${why} Hamilton has no valid saved session for ${host}, so the sync cannot run yet — one side-by-side sign-in restores it, and the sync runs immediately while the session is still warm.`
+        : `${why} Hamilton holds a valid session for ${host} and can sync now.`,
+      severity: 'info',
+      data: {
+        portal_host: host,
+        action: needsSignIn ? 'capture_session' : 'sync_portal',
+        reason_codes: portal.reason_codes,
+        last_successful_sync_at: portal.last_successful_sync_at,
+        login_url: portal.login_url,
+      },
+    }).catch(() => {})
+    emitted += 1
+  }
+  return emitted
+}
+
+export default {
+  getHamiltonReadiness,
+  computeHamiltonCalendarEvents,
+  scanHamiltonSessionReadiness,
+  emitSessionCaptureReminders,
+  emitPortalSyncReminders,
+}

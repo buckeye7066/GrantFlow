@@ -4,12 +4,23 @@
  * regressing tiles to "Can't auto-merge — open side-by-side login".
  *
  * Correctness rules under test:
- *   - still-signed-in probe → storage state RE-PERSISTED (sliding window restarts)
+ *   - probe on a host with NO auth-gated path → storage state RE-PERSISTED, but
+ *     the outcome is UNVERIFIED, not "refreshed" (see below)
  *   - real auth challenge   → session expired + household notified once
  *   - bot wall / outage / thin page → INCONCLUSIVE: the session is NEVER touched
  *     (an outage never burns — expiring on a datacenter wall would kill a
  *     working session, the studentaid.gov Akamai class)
  *   - cadence: a freshly-refreshed session is not re-probed
+ *
+ * NOTE (2026-08-01): this file used to assert that a page which merely FAILED to
+ * look like a login wall proved the session was alive ("still signed in →
+ * REFRESHES"). It does not. `landing_url` was never written by anything, so the
+ * probe hit the PUBLIC homepage, and `classifyBlocker` returns `unknown` for any
+ * page it has no rule for — so a cookie-less browser scored "refreshed" on
+ * studentaid.gov, collegefortn.org and leic.tennessee.edu alike (verified live).
+ * `mtsu.edu` has no registered auth-gated probe path, so the honest outcome here
+ * is UNVERIFIED. Confirmed-alive/confirmed-dead behavior is covered in
+ * `hamiltonSessionKeepAliveHonesty.test.js`.
  *
  * Playwright is fully mocked — no network, no real browser.
  */
@@ -71,21 +82,28 @@ describe('isSessionDueForKeepAlive', () => {
 })
 
 describe('runSessionKeepAliveSweep', () => {
-  it('still signed in → REFRESHES: re-persists storage state, session stays valid', async () => {
+  it('no auth-gated probe path → UNVERIFIED: cookies re-persisted, liveness NOT claimed', async () => {
     const db = makeDb()
     await seedSession(db)
+    // Account-looking copy on a page we reached WITHOUT requesting anything
+    // auth-gated. It reads like a dashboard, but a signed-out visitor to the
+    // same URL sees a page that scores identically — so this is not evidence.
     const { launcher, calls } = makeFakeLauncher({
       bodyText: 'Welcome back, Anastasia. Your scholarship dashboard. Awards overview. Messages.',
     })
     const out = await runSessionKeepAliveSweep(db, { launchBrowser: launcher })
     expect(out.checked).toBe(1)
-    expect(out.refreshed).toBe(1)
+    expect(out.unverified).toBe(1)
+    expect(out.refreshed).toBe(0)   // liveness is never claimed without proof
+    expect(out.observed).toBe(0)    // …and nothing enters the lifetime ledger
+    // The cookie jar IS still refreshed — that is free and useful either way.
     expect(calls.storageStateReads).toBe(1)
     expect(calls.closed).toBe(1)
     const sess = await findValidSession(db, { profileId: 'p1', portalHost: 'mtsu.edu' })
     expect(sess).not.toBeNull()
     expect(sess.metadata.keepalive_refreshes).toBe(1)
     expect(sess.metadata.imported_via).toBe('session_keepalive_refresh')
+    expect(sess.metadata.keepalive_confirmed_alive_at).toBeUndefined()
   })
 
   it('auth challenge → EXPIRES the session and notifies once', async () => {

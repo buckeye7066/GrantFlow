@@ -5233,6 +5233,92 @@ export async function enforceGrantScoreBackfill(db) {
  * before the fix shipped). Conservative: ambiguous email/name matches are
  * flagged for human review, never guessed.
  */
+/**
+ * INVARIANT: EVERY SAVED PORTAL SESSION KNOWS WHEN A HUMAN AUTHENTICATED IT
+ * (2026-08-01, the "durable for most portals" honesty class).
+ *
+ * `portalSessionLifetime` measures a host's real session lifetime as
+ *   age = observedAt − session_established_at
+ * where `session_established_at` is when a HUMAN last signed in. A row without
+ * it is STRUCTURALLY INVISIBLE to the ledger: `recordSessionObservation`
+ * refuses `no_established_at` rather than invent a clock, so that host can
+ * never accumulate evidence no matter how often it is probed — the same
+ * "unreachable by construction" shape as a grant with a NULL
+ * `funding_opportunity_id`.
+ *
+ * Every row in prod is in exactly that state (5 valid sessions, 2026-08-01),
+ * because the column that used to look like the answer is not one:
+ * `hamilton_saved_sessions.established_at` is REWRITTEN to now() by
+ * `importSession` on every keep-alive cookie refresh. Session 9d9f6b55 read
+ * `created_at 2026-07-21T02:55` against `established_at 2026-08-01T03:23` —
+ * 11 days of drift from 11 refreshes. Reading lifetimes off that column would
+ * report every host's sessions as hours old and permanently healthy.
+ *
+ * REPAIR: stamp `metadata_json.session_established_at` from the row's OWN
+ * `created_at` (the moment the row — and therefore the first human capture —
+ * came into being) wherever it is missing. NEVER invents a time and never
+ * overwrites an existing stamp: a row whose established time is genuinely
+ * unknowable (no created_at) is left alone and counted as `unstamped`, staying
+ * visible rather than being fabricated into the ledger.
+ *
+ * Write-side first line of defense: `importSession` pins
+ * `session_established_at` at capture and carries it across refreshes
+ * (only a real human authentication resets it).
+ *
+ * Bounded (`PORTAL_SESSION_STAMP_LIMIT`, default 500) and idempotent — a
+ * stamped row leaves the candidate set. `ENFORCE_PORTAL_SESSION_LIFETIME=0`
+ * makes it count-only.
+ */
+export async function enforcePortalSessionLifetimeStamp(db) {
+  return runInvariant('portal_session_lifetime_stamp', async () => {
+    const limit = Math.max(1, Number(process.env.PORTAL_SESSION_STAMP_LIMIT) || 500)
+    const countOnly = String(process.env.ENFORCE_PORTAL_SESSION_LIFETIME || '') === '0'
+
+    let rows = []
+    try {
+      rows = await db.prepare(
+        `SELECT id, created_at, established_at, metadata_json
+           FROM hamilton_saved_sessions
+          ORDER BY created_at DESC`,
+      ).all()
+    } catch {
+      // Table absent (fresh/foreign deploy) — nothing to enforce.
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const candidates = []
+    for (const row of rows || []) {
+      let meta = row?.metadata_json
+      if (typeof meta === 'string') { try { meta = JSON.parse(meta) } catch { meta = {} } }
+      if (!meta || typeof meta !== 'object') meta = {}
+      if (meta.session_established_at) continue // already stamped — never overwrite
+      candidates.push({ id: row.id, createdAt: row.created_at, meta })
+    }
+
+    let repaired = 0
+    let unstamped = 0
+    if (countOnly) {
+      for (const c of candidates) {
+        if (c.createdAt) repaired += 1; else unstamped += 1
+      }
+      return { scanned: candidates.length, repaired: 0, wouldRepair: repaired, unstamped, countOnly: true }
+    }
+
+    const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+    for (const c of candidates.slice(0, limit)) {
+      if (!c.createdAt) { unstamped += 1; continue } // never invent a time
+      const stamped = { ...c.meta, session_established_at: new Date(c.createdAt).toISOString() }
+      try {
+        await db.prepare(
+          `UPDATE hamilton_saved_sessions SET metadata_json = ?, updated_at = ${nowFn} WHERE id = ?`,
+        ).run(JSON.stringify(stamped), c.id)
+        repaired += 1
+      } catch { /* per-row best effort; a failure leaves the row a candidate */ }
+    }
+    return { scanned: candidates.length, repaired, unstamped }
+  })
+}
+
 export async function enforceConvertedApplicationsHaveProfiles(db) {
   return runInvariant('converted_applications_have_profiles', async () => {
     const result = await reconcileConvertedApplications(db)
@@ -5731,6 +5817,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // live profile (create-or-link); otherwise a real applicant is invisible to
   // the admin and locked out of login.
   steps.push(await enforceConvertedApplicationsHaveProfiles(db))
+  // Session-lifetime observability net: a saved portal session with no
+  // `session_established_at` can never contribute an observation to the
+  // lifetime ledger (the recorder refuses rather than invent a clock), so the
+  // "how long do this host's sessions live?" question stays permanently
+  // unanswerable for it. Stamp it from the row's own created_at.
+  steps.push(await enforcePortalSessionLifetimeStamp(db))
   // Admin UX net: an already-onboarded (or previously signed-in) ADMIN account
   // never sits in 'pending_reinterview' — a secondary admin login must not
   // re-open Anya's interview. Cheap single UPDATE on users.

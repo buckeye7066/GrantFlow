@@ -55,7 +55,7 @@ import {
   readAuthorizations,
 } from '../services/hamilton/hamiltonPreflight.js'
 import { preflightAndResolveSelected } from '../services/hamilton/hamiltonPreflightResolver.js'
-import { getHamiltonReadiness, computeHamiltonCalendarEvents, emitSessionCaptureReminders } from '../services/hamilton/hamiltonScheduleService.js'
+import { getHamiltonReadiness, computeHamiltonCalendarEvents, emitSessionCaptureReminders, emitPortalSyncReminders } from '../services/hamilton/hamiltonScheduleService.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { listPortalProviders } from '../services/hamilton/hamiltonPortalProviders.js'
 import {
@@ -1281,7 +1281,34 @@ router.post('/sessions/cloud-login/:liveSessionId/complete', async (req, res) =>
     // The session row is durably written — NOW it is safe to tear the live
     // browser down.
     await finalizeCloudLogin(req.params.liveSessionId)
-    return res.json({ ok: true, session })
+
+    // SYNC WHILE WARM. This is the single moment a portal session is PROVABLY
+    // authenticated: a human just completed login + 2FA seconds ago. For a
+    // short-lived host that is the only reliable moment — measured 2026-08-01,
+    // a studentaid.gov session was authenticated at T+30s and refused at
+    // T+~20min, so anything that waits for a scheduled run finds it dead.
+    //
+    // Fire-and-forget: a portal sync launches a browser and can outlive the
+    // HTTP edge timeout, and the capture itself has already succeeded — making
+    // the user wait (or fail) on the sync would throw away a good session.
+    // runPortalSync owns its own in-flight guard, so a double-click cannot run
+    // the same portal twice. Off via HAMILTON_SYNC_ON_CAPTURE=0.
+    const syncOnCapture = !/^(0|false|no|off)$/i.test(String(process.env.HAMILTON_SYNC_ON_CAPTURE ?? '').trim())
+    if (syncOnCapture) {
+      const actorUserId = getAuthUserId(user)
+      import('../services/hamilton/portalSync/index.js')
+        .then(({ runPortalSync }) => runPortalSync(req.db, {
+          profileId: meta.profileId,
+          portalHost: meta.portalHost,
+          direction: 'read',
+          actorUserId,
+        }))
+        .then((r) => log.info('cloud_login_warm_sync', {
+          host: meta.portalHost, ok: r?.ok === true, runId: r?.runId || null, error: r?.error || null,
+        }))
+        .catch((err) => log.warn('cloud_login_warm_sync_failed', { host: meta.portalHost, err: err?.message }))
+    }
+    return res.json({ ok: true, session, warm_sync_started: syncOnCapture })
   } catch (err) {
     // The DB write failed but the live login is still alive — release the
     // completion mark so the user can retry Done without logging in again.
@@ -1312,6 +1339,10 @@ router.get('/readiness', async (req, res) => {
     // portal still needing a captured session, so the owner is nudged even when
     // they aren't looking at the calendar.
     emitSessionCaptureReminders(req.db, { profileId: req.query.profileId }).catch(() => {})
+    // Login-time sync prompt for the SAME profile the caller is scoped to.
+    // requireProfileScope above 400s without a profileId, so an admin who is not
+    // working inside a profile never reaches this and never gets a digest.
+    emitPortalSyncReminders(req.db, { profileId: req.query.profileId }).catch(() => {})
     return res.json({ ok: true, readiness })
   } catch (err) {
     log.error('hamilton_readiness_failed', { err: err?.message })

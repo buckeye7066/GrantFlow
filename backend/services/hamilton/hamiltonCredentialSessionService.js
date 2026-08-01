@@ -226,19 +226,43 @@ export async function importSession(db, {
   await ensureSchema(db)
   // Encrypt the JSON-serialised storage state; never persist it in the clear.
   const encrypted = JSON.stringify(encryptRuntimeSecret(JSON.stringify(storageState)))
+  const importedVia = (metadata && metadata.imported_via) || 'browser_export'
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const existing = await db.prepare(
+    `SELECT id, established_at, metadata_json FROM hamilton_saved_sessions
+      WHERE user_id = ? AND profile_id = ? AND portal_host = ?
+      ORDER BY established_at DESC LIMIT 1`,
+  ).get(String(userId), String(profileId), host)
+
+  // WHEN DID A HUMAN LAST AUTHENTICATE THIS SESSION?
+  //
+  // This UPDATE sets `established_at = now()`, so a keep-alive refresh used to
+  // MOVE the establishment clock forward every time it re-saved the cookie jar
+  // — destroying the one timestamp needed to answer "how long do this host's
+  // sessions actually live?". Prod carried the damage: session 9d9f6b55 read
+  // `created_at 2026-07-21T02:55` but `established_at 2026-08-01T03:23`, i.e.
+  // 11 days of drift from 11 cookie refreshes.
+  //
+  // `session_established_at` is therefore pinned in metadata and carried across
+  // refreshes. Only a real human authentication resets it: a refresh re-saves
+  // cookies the portal reissued, it does not re-authenticate anybody.
+  const existingMeta = jsonOrEmpty(existing?.metadata_json)
+  const isKeepAliveRefresh = importedVia === 'session_keepalive_refresh'
+  let sessionEstablishedAt = metadata?.session_established_at || null
+  if (!sessionEstablishedAt && isKeepAliveRefresh && existing) {
+    sessionEstablishedAt = existingMeta.session_established_at
+      || (existing.established_at ? new Date(existing.established_at).toISOString() : null)
+  }
+  if (!sessionEstablishedAt) sessionEstablishedAt = new Date().toISOString()
+
   // Don't keep raw cookie values in metadata — only non-sensitive counts.
   const safeMeta = {
     ...(metadata || {}),
     cookie_count: Array.isArray(storageState.cookies) ? storageState.cookies.length : 0,
     origin_count: Array.isArray(storageState.origins) ? storageState.origins.length : 0,
-    imported_via: (metadata && metadata.imported_via) || 'browser_export',
+    imported_via: importedVia,
+    session_established_at: sessionEstablishedAt,
   }
-  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
-  const existing = await db.prepare(
-    `SELECT id FROM hamilton_saved_sessions
-      WHERE user_id = ? AND profile_id = ? AND portal_host = ?
-      ORDER BY established_at DESC LIMIT 1`,
-  ).get(String(userId), String(profileId), host)
   if (existing) {
     await db.prepare(
       `UPDATE hamilton_saved_sessions SET
@@ -343,14 +367,31 @@ export async function markSessionUsed(db, sessionId) {
   return rowToSession(await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(String(sessionId)))
 }
 
+/**
+ * Mark a session expired.
+ *
+ * The metadata write MERGES. It used to REPLACE the whole blob with
+ * `{ expired_reason }`, which destroyed the row's `consent` record (the lawful
+ * basis for reusing the session at all), its cookie/origin counts, and —
+ * once lifetime learning landed — `session_established_at`, the timestamp the
+ * death observation is measured against. Expiring a session must never erase
+ * the evidence of what it was.
+ */
 export async function markSessionExpired(db, sessionId, reason = null) {
   if (!db || !sessionId) return null
   await ensureSchema(db)
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const existing = await db.prepare('SELECT metadata_json FROM hamilton_saved_sessions WHERE id = ?')
+    .get(String(sessionId))
+  const merged = {
+    ...jsonOrEmpty(existing?.metadata_json),
+    expired_reason: reason || 'session_expired',
+    expired_at: new Date().toISOString(),
+  }
   await db.prepare(
     `UPDATE hamilton_saved_sessions SET status = 'expired', updated_at = ${nowFn},
       metadata_json = ? WHERE id = ?`,
-  ).run(JSON.stringify({ expired_reason: reason || 'session_expired' }), String(sessionId))
+  ).run(JSON.stringify(merged), String(sessionId))
   return rowToSession(await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(String(sessionId)))
 }
 
