@@ -89,12 +89,27 @@ const INSTITUTION_ONLY_PATTERNS = [
   /\bprincipal\s+investigators?\s+at\s+(?:accredited|us|u\.s\.)\s+institutions?\b/,
   /\b(?:nih|nsf|hrsa|usda|epa|noaa)\s+research\s+institutions?\b/,
   /\bnonprofit\s+organizations?\s+only\b/,
-  /\b501\s*\(?\s*c\s*\)?\s*\(?\s*3\s*\)?\s+(?:status\s+)?(?:required|only)\b/,
+  // ReDoS-hardened (js/polynomial-redos, 2026-08-01). The `501(c)(3)` spelling
+  // tolerance used adjacent UNBOUNDED whitespace quantifiers — `\s*\(?\s*` —
+  // and an optional literal cannot separate them, so a run of whitespace could
+  // be split between the two `\s*` in O(n) ways at each of O(n) positions.
+  // Measured on the shipped pattern: `"501" + "\t"×n`, 2k→3.5ms, 4k→14.8ms,
+  // 8k→54.3ms, 16k→212.9ms — textbook quadratic. Opportunity text is
+  // attacker-influenced (a crawled page's title/description reaches this gate),
+  // so this was reachable. Every `\s*` INSIDE the token is now bounded: a
+  // legal-entity designation never contains a 5-character whitespace run, and a
+  // bounded quantifier makes the worst case constant instead of polynomial.
+  // The `\s+` separators BETWEEN words are untouched — they are unambiguous.
+  /\b501\s{0,4}\(?\s{0,4}c\s{0,4}\)?\s{0,4}\(?\s{0,4}3\s{0,4}\)?\s+(?:status\s+)?(?:required|only)\b/,
   /\bfederal\s+agenc(?:y|ies)\s+only\b/,
   /\bus\s+government\s+agenc(?:y|ies)\s+only\b/,
   /\bstate\s+government\s+agenc(?:y|ies)\s+only\b/,
   /\beligible\s+applicants?\s*[:\-—]\s*(?:institutions?|universities|colleges|nonprofit|state|federal)/,
-  /\bmust\s+be\s+(?:an?\s+)?(?:institution|university|college|nonprofit|state\s+agency|federal\s+agency|501\(?\s*c\s*\)?\s*\(?\s*3\s*\)?)\b/,
+  // Same hardening — and this one was FAR worse: THREE adjacent unbounded
+  // whitespace quantifiers (`\s*\)?\s*\(?\s*`) make it super-quadratic.
+  // Measured on the shipped pattern with `"must be 501c" + "\t"×n`:
+  // 2k→2.1s, 4k→17.4s, 8k→137.4s. A single crawled page could hang a worker.
+  /\bmust\s+be\s+(?:an?\s+)?(?:institution|university|college|nonprofit|state\s+agency|federal\s+agency|501\(?\s{0,4}c\s{0,4}\)?\s{0,4}\(?\s{0,4}3\s{0,4}\)?)\b/,
   // Specific embassy / mission programs mentioned in the bug report.
   /\bu\.?s\.?\s+mission\s+to\b/,
   /\bembassy\s+(?:program|grant|fund)\b/,
@@ -365,4 +380,15 @@ export function isHardApplicantTypeMismatch(opportunity, profileApplicantType, c
   return evalResult.decision === 'mismatch'
 }
 
-export const __testables = { bucket }
+export const __testables = {
+  bucket,
+  // Exposed so a STATIC test can assert none of these patterns ever regrows two
+  // adjacent UNBOUNDED whitespace quantifiers — the js/polynomial-redos shape.
+  // A timing test alone cannot hold this line: it is inherently noisy, and the
+  // pattern that took 137s at 8k chars is only ever a one-character edit away.
+  ELIGIBILITY_PATTERNS: Object.freeze({
+    INSTITUTION_ONLY_PATTERNS,
+    INDIVIDUAL_ONLY_PATTERNS,
+    NON_BUSINESS_PATTERNS,
+  }),
+}

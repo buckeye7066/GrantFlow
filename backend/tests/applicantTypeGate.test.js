@@ -8,9 +8,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { evaluateApplicantTypeEligibility, isHardApplicantTypeMismatch } from '../services/applicantTypeGate.js'
+import { evaluateApplicantTypeEligibility, isHardApplicantTypeMismatch, __testables } from '../services/applicantTypeGate.js'
 
 const STUDENT = 'graduate_student'
+const INDIVIDUAL = 'individual'
 
 describe('applicantTypeGate — institution-only federal mechanisms vs an individual', () => {
   const institutionOnlyTitles = [
@@ -75,5 +76,94 @@ describe('applicantTypeGate — org profiles still get institutional grants', ()
     // The institution-only patterns only mismatch INDIVIDUAL buckets.
     expect(evaluateApplicantTypeEligibility(opp, 'school').decision).not.toBe('mismatch')
     expect(evaluateApplicantTypeEligibility(opp, 'nonprofit').decision).not.toBe('mismatch')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ReDoS hardening (js/polynomial-redos, 2026-08-01)
+//
+// The `501(c)(3)` spelling tolerance in INSTITUTION_ONLY_PATTERNS used ADJACENT
+// UNBOUNDED whitespace quantifiers (`\s*\(?\s*`, and in the "must be …" pattern
+// a three-deep `\s*\)?\s*\(?\s*`). An optional literal cannot separate two
+// `\s*`, so a whitespace run can be split between them in O(n) ways at each of
+// O(n) start positions. Measured on the SHIPPED patterns:
+//
+//   /\b501\s*\(?\s*c…/            "501" + \t×n         2k→3.5ms  16k→212.9ms
+//   /\bmust\s+be\s+…501\(?\s*c…/  "must be 501c" + \t×n 2k→2.1s   8k→137.4s
+//
+// Opportunity text is attacker-influenced — a crawled page's title/description
+// flows into this gate via routes/grants.js and routes/nofo.js — so a single
+// hostile page could pin a worker. Every `\s*` INSIDE the token is now bounded
+// (`\s{0,4}`): a legal-entity designation never contains a 5-char whitespace
+// run, so the worst case is constant instead of polynomial. The `\s+` word
+// separators are untouched — they were never ambiguous.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('applicantTypeGate — 501(c)(3) recognition must not go inert', () => {
+  // The fix cannot be allowed to "work" by simply failing to match. Every real
+  // spelling must still hard-mismatch an individual.
+  it.each([
+    '501(c)(3) status required',
+    '501(c)(3) required',
+    '501c3 required',
+    '501 (c) (3) only',
+    '501(c)3 required',
+    '501 c 3 status required',
+    'Applicants must be a 501(c)(3)',
+    'must be a 501c3',
+    'must be an institution',
+    'must be a nonprofit',
+  ])('still hard-mismatches an individual on: %s', (text) => {
+    const res = evaluateApplicantTypeEligibility({ title: 'Program', description: text }, INDIVIDUAL)
+    expect(res.decision).toBe('mismatch')
+  })
+
+  it('does not over-match text that merely MENTIONS 501(c)(3) alongside individuals', () => {
+    const opp = { title: 'Program', description: 'We fund 501(c)(3) organizations and individuals alike.' }
+    expect(evaluateApplicantTypeEligibility(opp, INDIVIDUAL).decision).not.toBe('mismatch')
+  })
+})
+
+describe('applicantTypeGate — pathological input completes in linear time', () => {
+  // Each of these hangs for MINUTES on the pre-fix patterns (the second case
+  // took 137s at only 8k chars); post-fix both are sub-millisecond. The budget
+  // is deliberately loose — it is detecting a complexity-class regression, not
+  // micro-benchmarking, so it cannot flake on a slow CI runner.
+  const BUDGET_MS = 2000
+
+  it.each([
+    ['501-required (quadratic pre-fix)', '501'],
+    ['must-be-501c (super-quadratic pre-fix)', 'must be 501c'],
+  ])('%s: 200k adversarial whitespace chars finish fast', (_label, prefix) => {
+    const description = `${prefix}${'\t'.repeat(200_000)}!`
+    const started = Date.now()
+    evaluateApplicantTypeEligibility({ title: 'x', description }, INDIVIDUAL)
+    expect(Date.now() - started).toBeLessThan(BUDGET_MS)
+  })
+
+})
+
+describe('applicantTypeGate — no eligibility pattern may regrow the ReDoS shape', () => {
+  // A STATIC tripwire. The timing tests above prove today's patterns are fast,
+  // but sub-millisecond timings are noisy and the 137-second pattern was only a
+  // one-character edit away. This asserts the STRUCTURE that caused it:
+  // two UNBOUNDED whitespace quantifiers that an optional element cannot keep
+  // apart, so a whitespace run can be split between them in O(n) ways.
+  // Matched against a regex's SOURCE text, so `\\s` here means the two literal
+  // characters `\` `s`. Reads as: an unbounded `\s*`/`\s+`, then AT MOST an
+  // optional single escaped literal (`\(?`, `\)?` — the thing that failed to
+  // separate them), then another unbounded `\s*`/`\s+`.
+  // A REQUIRED separator (e.g. `\s*[:\-—]\s*`) is deterministic and not matched.
+  const ADJACENT_UNBOUNDED_WHITESPACE = /\\s[*+](?:\\.\?)?\\s[*+]/
+
+  const allPatterns = Object.entries(__testables.ELIGIBILITY_PATTERNS)
+    .flatMap(([group, patterns]) => patterns.map((re, i) => [`${group}[${i}]`, re]))
+
+  it('has patterns to check (the guard cannot pass vacuously)', () => {
+    expect(allPatterns.length).toBeGreaterThan(15)
+  })
+
+  it.each(allPatterns)('%s has no adjacent unbounded whitespace quantifiers', (_name, re) => {
+    expect(ADJACENT_UNBOUNDED_WHITESPACE.test(re.source)).toBe(false)
   })
 })
