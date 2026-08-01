@@ -101,6 +101,12 @@ export const LANE_OF_SOURCE = Object.freeze({
   // Benchmark-gap lanes (2026-07-13): heirs'-property + beginning farmers.
   farmers_gov_heirs_property: 'federal_grants',
   farmers_gov_beginning_farmers: 'federal_grants',
+  // Agriculture coverage lanes (2026-08-01, the Anita class): the registry
+  // reached USDA RD + NRCS but not FSA, SARE, VAPG or the extension network.
+  usda_fsa_farm_programs: 'federal_grants',
+  sare_farmer_rancher_grants: 'federal_grants',
+  usda_value_added_producer_grants: 'federal_grants',
+  nifa_extension_land_grant: 'federal_grants',
   // ── Federal benefits / federal support programs for people ──
   benefits_gov: 'federal_benefits',
   liheap: 'federal_benefits',
@@ -140,6 +146,10 @@ export const LANE_OF_SOURCE = Object.freeze({
   // portals + state financial-aid grants, mirroring the kynect (KY) shape.
   oh_benefits: 'state_programs',
   oh_college_opportunity_grant: 'state_programs',
+  // Kentucky's state-funded on-farm cost-share (KADF/CAIP) — the KY lane held
+  // only kynect (household benefits), so a Kentucky farm reached no state
+  // agriculture money at all (2026-08-01).
+  ky_agricultural_development_fund: 'state_programs',
   wa_connection_benefits: 'state_programs',
   wa_college_grant: 'state_programs',
   // State benefits portals (2026-07-12): every remaining state + DC + PR gets
@@ -153,6 +163,9 @@ export const LANE_OF_SOURCE = Object.freeze({
   usa_gov_local_governments: 'county_city',
   hud_resource_locator: 'county_city',
   findhelp_local_programs: 'county_city',
+  // Soil-and-water conservation districts are a COUNTY-level delivery arm for
+  // state/federal cost-share — the county lane, not the federal one.
+  conservation_districts_directory: 'county_city',
   // ── Community foundations ──
   cof_locator: 'community_foundations',
   // ── School & student-aid portals ──
@@ -173,6 +186,9 @@ export const LANE_OF_SOURCE = Object.freeze({
   hslda_compassion_grants: 'private_charities',
   // IRS 990 grantmakers (ProPublica) — the private-foundation funder universe.
   propublica_990: 'private_charities',
+  // Farm Credit — the producer-owned private lending system's YBS locator. Not
+  // a charity, but it is the private (non-government) funder lane for a farm.
+  farm_credit_young_beginning_small: 'private_charities',
   // ── Disease-specific support ──
   cancer_care: 'disease_specific',
   alzheimers_gov_services: 'disease_specific',

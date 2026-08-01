@@ -990,6 +990,58 @@ describe('enforceIndividualOrgSectionConflict', () => {
     expect(getSection(db, 'p1', 'organization_details').is_minority_serving).toBe(true)
   })
 
+  // THE INVERSE CASE (the Anita class, 2026-08-01). A person who runs a FARM
+  // legitimately IS also a business. Most farmers tick `occupation.farmer` and
+  // leave `small_business_owner` at its schema DEFAULT of false — they are
+  // farmers, not "small business owners". Reading that default as a structured
+  // DENIAL wipes a real farm identity, and the farm identity is exactly what
+  // makes USDA/FSA/NRCS/SARE reachable through the applicant-type gate.
+  it('NEVER strips the org identity of a person who DECLARES a farm (occupation.farmer)', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'anita', primaryType: 'individual' })
+    setSection(db, 'anita', 'organization_details', { organization_type: 'farm' })
+    setSection(db, 'anita', 'small_business_details', { business_name: 'Anita Family Farm' })
+    setSection(db, 'anita', 'occupation', {
+      farmer: true,
+      nonprofit_employee: false,
+      small_business_owner: false,
+    })
+
+    const res = await enforceIndividualOrgSectionConflict(db)
+    expect(res.repaired).toBe(0)
+    expect(res.flagged).toBe(1) // ambiguous → logged for human review, never changed
+    expect(getSection(db, 'anita', 'organization_details').organization_type).toBe('farm')
+    expect(getSection(db, 'anita', 'small_business_details').business_name).toBe('Anita Family Farm')
+  })
+
+  it('NEVER strips the org identity of a person whose NAICS code is agricultural', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'anita2', primaryType: 'individual' })
+    setSection(db, 'anita2', 'organization_details', { organization_type: 'business' })
+    setSection(db, 'anita2', 'small_business_details', { business_name: 'Bluegrass Cattle Co', naics_code: '112111' })
+    setSection(db, 'anita2', 'occupation', { nonprofit_employee: false, small_business_owner: false })
+
+    const res = await enforceIndividualOrgSectionConflict(db)
+    expect(res.repaired).toBe(0)
+    expect(getSection(db, 'anita2', 'small_business_details').business_name).toBe('Bluegrass Cattle Co')
+  })
+
+  it('STILL clears the Kimberly Botts case when no farm is declared (fix stays narrow)', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'kb2', primaryType: 'individual' })
+    setSection(db, 'kb2', 'organization_details', { organization_type: 'nonprofit' })
+    setSection(db, 'kb2', 'small_business_details', { business_name: 'Hallucinated Nonprofit' })
+    setSection(db, 'kb2', 'occupation', {
+      farmer: false,
+      nonprofit_employee: false,
+      small_business_owner: false,
+    })
+
+    const res = await enforceIndividualOrgSectionConflict(db)
+    expect(res.repaired).toBe(1)
+    expect(getSection(db, 'kb2', 'organization_details').organization_type).toBe(null)
+  })
+
   it('NEVER touches an actual organization/business profile', async () => {
     const db = makeProfileDb()
     insertTypedProfile(db, { id: 'org1', primaryType: 'nonprofit' })

@@ -1076,6 +1076,7 @@ export const SOURCES = Object.freeze([
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['business', 'farm'],
     need_categories: ['capital', 'operations', 'technology', 'agriculture', 'legal', 'startup', 'equipment'],
+    keywords: ['small business', 'rural business', 'farm', 'farmer', 'agribusiness', 'startup'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 62,
@@ -1462,6 +1463,7 @@ export const SOURCES = Object.freeze([
     directory: true, loan_allowed: false, cost_share_allowed: true,
     applicant_types: ['farm', 'government', 'tribal'],
     need_categories: ['agriculture', 'environmental_remediation', 'water_sewer', 'energy'],
+    keywords: ['farm', 'farmer', 'rancher', 'agricultural producer', 'conservation', 'eqip', 'csp', 'cost share'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 14, priority_score: 66,
@@ -2070,6 +2072,7 @@ export const SOURCES = Object.freeze([
     directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['farm', 'individual', 'family'],
     need_categories: ['legal', 'agriculture'],
+    keywords: ['farm', 'farmer', 'rancher', 'agricultural producer', 'heirs property', 'farm number'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.PROGRAM],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
@@ -2088,9 +2091,155 @@ export const SOURCES = Object.freeze([
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['farm', 'individual', 'family'],
     need_categories: ['agriculture', 'startup', 'equipment'],
+    keywords: ['farm', 'farmer', 'rancher', 'agricultural producer', 'beginning farmer', 'young farmer'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  // ── Agriculture lanes (the Anita class, 2026-08-01) ───────────────────────
+  // Coverage audit finding: before this block the registry reached USDA Rural
+  // Development, NRCS conservation, the heirs'-property pathway and the
+  // beginning-farmer hub — but NOT the Farm Service Agency (the actual loan/
+  // disaster/CRP administrator every producer deals with), NOT SARE (the one
+  // national COMPETITIVE grant a working farmer can win directly), NOT the
+  // Value-Added Producer Grant, NOT Cooperative Extension / 1890 & 1994
+  // land-grant programs, NOT state departments of agriculture, and NOT the
+  // county soil-and-water conservation districts that deliver most cost-share.
+  // Every entry is an OFFICIAL .gov/.edu-anchored page; each is classified by
+  // what it really is (a locator is a DIRECTORY, a loan lane is loan_allowed,
+  // a cost-share lane is cost_share_allowed) — never dressed up as a grant.
+  {
+    source_id: 'usda_fsa_farm_programs',
+    name: 'USDA Farm Service Agency programs',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.fsa.usda.gov/programs-and-services',
+    sponsor_name: 'USDA Farm Service Agency',
+    resource_title: 'USDA FSA programs and services (farm loans, disaster, conservation)',
+    resource_summary: 'Official USDA Farm Service Agency index of producer programs: direct and guaranteed farm ownership/operating LOANS, microloans, beginning-farmer and historically-underserved set-asides, disaster assistance (ELAP, LFP, NAP), the Conservation Reserve Program, and the county-office network that administers them.',
+    directory: true, loan_allowed: true, cost_share_allowed: true,
+    applicant_types: ['farm', 'individual', 'family'],
+    need_categories: ['agriculture', 'disaster_recovery', 'equipment', 'operations', 'capital'],
+    keywords: ['farm', 'farmer', 'rancher', 'agricultural producer', 'farm loan', 'beginning farmer', 'crop insurance', 'conservation reserve'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 76,
+  },
+  {
+    // SARE is the one national program where a WORKING FARMER (not a
+    // university) is the named applicant on a competitive grant — the single
+    // highest-value agriculture lane for an individual producer.
+    source_id: 'sare_farmer_rancher_grants',
+    name: 'SARE Farmer/Rancher grants',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.sare.org/grants/',
+    sponsor_name: 'USDA Sustainable Agriculture Research and Education (SARE)',
+    resource_title: 'SARE grants — Farmer/Rancher, Partnership, and Producer grants',
+    resource_summary: 'USDA-funded Sustainable Agriculture Research and Education grant programs. The Farmer/Rancher grant is applied for BY the producer to trial a sustainable practice on their own operation; regional offices (Southern SARE covers Kentucky) run their own calls and award ceilings.',
+    directory: false, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['farm', 'individual', 'family', 'nonprofit'],
+    need_categories: ['agriculture', 'research', 'equipment', 'programs'],
+    keywords: ['farmer', 'rancher', 'sustainable agriculture', 'agricultural producer', 'farm research', 'sare'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECT_GRANT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 21, priority_score: 80,
+  },
+  {
+    source_id: 'usda_value_added_producer_grants',
+    name: 'USDA Value-Added Producer Grants',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.rd.usda.gov/programs-services/business-programs/value-added-producer-grants',
+    sponsor_name: 'USDA Rural Development',
+    resource_title: 'Value-Added Producer Grant (VAPG)',
+    resource_summary: 'USDA Rural Development grants to agricultural producers who process, market, or otherwise add value to what they grow — planning grants and working-capital grants, with set-asides for beginning, veteran, socially-disadvantaged and small/mid-size family farms. Requires matching funds.',
+    directory: false, loan_allowed: false, cost_share_allowed: true,
+    applicant_types: ['farm', 'individual', 'family', 'business'],
+    need_categories: ['agriculture', 'startup', 'capital', 'operations', 'equipment'],
+    keywords: ['agricultural producer', 'value added', 'farm', 'farmer', 'rancher', 'family farm', 'vapg'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECT_GRANT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 78,
+  },
+  {
+    // Extension + the 1890/1994 land-grant network is how a producer actually
+    // REACHES most of the above: a locator, honestly classified as one.
+    source_id: 'nifa_extension_land_grant',
+    name: 'USDA NIFA Cooperative Extension / land-grant network',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.nifa.usda.gov/about-nifa/how-we-work/extension/cooperative-extension-system',
+    sponsor_name: 'USDA National Institute of Food and Agriculture',
+    resource_title: 'Cooperative Extension System and the 1862/1890/1994 land-grant universities',
+    resource_summary: 'Official USDA NIFA directory of the Cooperative Extension System: a county-level office in nearly every U.S. county, plus the 1890 (historically Black) and 1994 (Tribal) land-grant institutions that run producer outreach, beginning-farmer training, and small-farm technical assistance programs.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['farm', 'individual', 'family', 'school', 'tribal'],
+    need_categories: ['agriculture', 'training', 'programs', 'education'],
+    keywords: ['farm', 'farmer', 'rancher', 'agricultural producer', 'extension', 'land grant', 'small farm'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 45, priority_score: 68,
+  },
+  {
+    // Soil-and-water conservation districts are the LOCAL delivery arm for
+    // cost-share; the national association is the only complete directory.
+    source_id: 'conservation_districts_directory',
+    name: 'Conservation district locator (NACD)',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://www.nacdnet.org/general-resources/conservation-district-directory/',
+    sponsor_name: 'National Association of Conservation Districts',
+    resource_title: 'Soil and water conservation district directory',
+    resource_summary: 'Directory of the ~3,000 local soil-and-water conservation districts that deliver state and county cost-share for erosion control, fencing, water development, and other on-farm conservation practices — the local counterpart to NRCS EQIP/CSP.',
+    directory: true, loan_allowed: false, cost_share_allowed: true,
+    applicant_types: ['farm', 'individual', 'family', 'government'],
+    need_categories: ['agriculture', 'environmental_remediation', 'water_sewer', 'equipment'],
+    keywords: ['farm', 'farmer', 'rancher', 'agricultural producer', 'conservation district', 'soil and water', 'cost share'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 60, priority_score: 62,
+  },
+  {
+    // Kentucky specifically (the owner's profile state). KY runs the largest
+    // state-funded on-farm cost-share program in the country via KADF; it is a
+    // real, applicable-for grant an individual producer wins, and NOTHING in
+    // the registry reached it — the state lane held only kynect (benefits).
+    source_id: 'ky_agricultural_development_fund',
+    name: 'Kentucky Agricultural Development Fund (KADF)',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.kyagr.com/agpolicy/Ag-Development-Board.html',
+    sponsor_name: 'Kentucky Department of Agriculture / Governor’s Office of Agricultural Policy',
+    resource_title: 'Kentucky Agricultural Development Fund — County Agricultural Investment Program (CAIP) and state cost-share',
+    resource_summary: 'Kentucky’s tobacco-settlement-funded agricultural development programs: the County Agricultural Investment Program (CAIP) and related on-farm cost-share for fencing, forage, genetics, farm infrastructure and diversification, administered county by county through the Kentucky Department of Agriculture and the Governor’s Office of Agricultural Policy.',
+    directory: false, loan_allowed: false, cost_share_allowed: true,
+    applicant_types: ['farm', 'individual', 'family'],
+    need_categories: ['agriculture', 'equipment', 'capital', 'operations'],
+    keywords: ['farm', 'farmer', 'rancher', 'agricultural producer', 'kentucky', 'caip', 'cost share', 'agricultural development'],
+    geography: { national: false, states: ['KY'] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECT_GRANT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 21, priority_score: 80,
+  },
+  {
+    // Farm Credit is the producer-owned lending system. It is a LOAN lane and
+    // is declared as one so the doctrine default ("never surface loans as
+    // grants") keeps it out of results unless the profile opts in.
+    source_id: 'farm_credit_young_beginning_small',
+    name: 'Farm Credit Young, Beginning and Small farmer programs',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://farmcredit.com/find-local-lender',
+    sponsor_name: 'Farm Credit System',
+    resource_title: 'Farm Credit — Young, Beginning and Small (YBS) farmer lending',
+    resource_summary: 'Locator for the Farm Credit System’s member associations, which are congressionally mandated to serve Young, Beginning and Small farmers with dedicated credit programs, reduced-rate operating loans, and education. LENDING, not grants.',
+    directory: true, loan_allowed: true, cost_share_allowed: false,
+    applicant_types: ['farm', 'individual', 'family', 'business'],
+    need_categories: ['agriculture', 'capital', 'equipment', 'startup'],
+    keywords: ['farm', 'farmer', 'rancher', 'agricultural producer', 'beginning farmer', 'young farmer', 'farm credit'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 60, priority_score: 58,
   },
   {
     // The one national direct-grant program specifically for homeschooling

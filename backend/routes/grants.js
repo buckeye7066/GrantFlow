@@ -1772,8 +1772,32 @@ router.post('/from-opportunity', async (req, res, next) => {
           targetProfileRow?.primary_type ??
           targetProfileRow?.primary_profile_type ??
           null
-        if (profileApplicantType) {
-          const eligDecision = evaluateApplicantTypeEligibility(opportunity, profileApplicantType)
+        // A profile can hold more than one identity (a person who also runs a
+        // farm). Load the sections that structurally DECLARE a second one so
+        // this 400 can never fire on an identity we simply never looked at —
+        // the Anita class, 2026-08-01.
+        const identitySections = {}
+        try {
+          const secRows = await req.db
+            .prepare(
+              `SELECT section_key, data FROM profile_sections
+               WHERE profile_id = ? AND section_key IN ('occupation', 'small_business_details', 'organization_details', 'basic_information')`,
+            )
+            .all(normalizedProfileId)
+          for (const sec of secRows || []) {
+            if (!sec?.data) continue
+            try {
+              identitySections[sec.section_key] =
+                typeof sec.data === 'string' ? JSON.parse(sec.data) : sec.data
+            } catch { /* unparseable section — never guess */ }
+          }
+        } catch { /* profile_sections unavailable — fall back to the type alone */ }
+
+        if (profileApplicantType || Object.keys(identitySections).length > 0) {
+          const eligDecision = evaluateApplicantTypeEligibility(opportunity, profileApplicantType, {
+            profile: targetProfileRow,
+            sections: identitySections,
+          })
           if (eligDecision.decision === 'mismatch') {
             routeLogger.info('[grants/from-opportunity] blocked by applicant-type gate', {
               requestId,

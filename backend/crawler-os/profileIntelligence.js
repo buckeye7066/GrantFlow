@@ -12,6 +12,12 @@
 
 import { nearbyCities } from './geoRadius.js';
 import { containsTermWholeWord } from '../services/shared/textMatch.js';
+// ONE registry of what DECLARES an agricultural producer, shared with the
+// eligibility gate (services/applicantTypeGate.js). If the discovery lane and
+// the gate disagreed about who is a farmer, a profile could be planned INTO the
+// USDA lanes and then hard-dropped by the gate on the way back — static
+// tripwire in backend/tests/farmIdentity.test.js.
+import { FARM_OCCUPATION_FLAG_KEYS, isAgricultureNaics } from '../services/eligibility/farmIdentity.js';
 
 const APPLICANT_TYPE_SYNONYMS = {
   individual: ['individual', 'person', 'resident'],
@@ -268,11 +274,18 @@ function gatherStructuredApplicantHints(profile) {
 // the occupation section's own text is the same declared flag.
 function hasStructuredFarmerFlag(profile) {
   if (profile?.farmer === true || profile?.is_farmer === true) return true;
-  if (profile?.occupation?.farmer === true) return true;
+  for (const flag of FARM_OCCUPATION_FLAG_KEYS) {
+    if (profile?.occupation?.[flag] === true) return true;
+  }
   for (const section of profile?.sections ?? []) {
     const sectionKey = lc(section?.section_key ?? section?.key ?? section?.title);
+    // A NAICS sector-11 code on the business section is an unambiguous
+    // structured self-declaration of an agricultural operation.
+    if (sectionKey === 'small_business_details' && isAgricultureNaics(section?.data?.naics_code)) return true;
     if (sectionKey !== 'occupation') continue;
-    if (section?.data?.farmer === true) return true;
+    for (const flag of FARM_OCCUPATION_FLAG_KEYS) {
+      if (section?.data?.[flag] === true) return true;
+    }
     const text = lc(valueText(section?.data) + ' ' + (section?.body ?? ''));
     if (/(^|[^a-z])farmer([^a-z]|$)/.test(text)) return true;
   }

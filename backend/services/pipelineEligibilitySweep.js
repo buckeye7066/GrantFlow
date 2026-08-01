@@ -26,24 +26,44 @@ import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('service:pipeline-eligibility-sweep')
 
-async function resolveProfileApplicantType(db, profileId) {
+// Sections the gate needs to see a SECOND, structurally-declared identity.
+// This sweep DISMISSES pipeline rows, so a partial view of who the applicant is
+// deletes real funding: before 2026-08-01 it loaded only basic_information, so a
+// farm-owning individual read as plain 'individual' and every USDA/NRCS row
+// (applicant_types ['farm']) in her pipeline was swept out as ineligible.
+const IDENTITY_SECTION_KEYS = Object.freeze([
+  'basic_information', 'occupation', 'small_business_details', 'organization_details',
+])
+
+async function resolveProfileIdentity(db, profileId) {
   let row = null
   try {
     row = await db
       .prepare('SELECT applicant_type, primary_type FROM profiles WHERE id = ? LIMIT 1')
       .get(String(profileId))
   } catch { row = null }
-  let category = null
+
+  const sections = {}
   try {
-    const sec = await db
-      .prepare("SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1")
-      .get(String(profileId))
-    if (sec?.data) {
-      const d = typeof sec.data === 'string' ? JSON.parse(sec.data) : sec.data
-      category = d?.profile_category || d?.applicant_type || null
+    const placeholders = IDENTITY_SECTION_KEYS.map(() => '?').join(', ')
+    const rows = await db
+      .prepare(`SELECT section_key, data FROM profile_sections WHERE profile_id = ? AND section_key IN (${placeholders})`)
+      .all(String(profileId), ...IDENTITY_SECTION_KEYS)
+    for (const sec of rows || []) {
+      if (!sec?.data) continue
+      try {
+        sections[sec.section_key] = typeof sec.data === 'string' ? JSON.parse(sec.data) : sec.data
+      } catch { /* unparseable section — ignore, never guess */ }
     }
-  } catch { category = null }
-  return row?.applicant_type || row?.primary_type || category || null
+  } catch { /* profile_sections may be absent in a degraded deployment */ }
+
+  const basic = sections.basic_information ?? {}
+  const category = basic?.profile_category || basic?.applicant_type || null
+  return {
+    applicantType: row?.applicant_type || row?.primary_type || category || null,
+    profile: row,
+    sections,
+  }
 }
 
 async function loadPipelineRows(db, profileId) {
@@ -82,7 +102,8 @@ export async function sweepProfilePipelineApplicantType(
   { userId = 'system_eligibility_sweep', apply = true } = {},
 ) {
   if (!db || !profileId) return { profileId: profileId ?? null, applicantType: null, scanned: 0, flagged: [], removed: 0 }
-  const applicantType = await resolveProfileApplicantType(db, profileId)
+  const { applicantType, profile: profileRow, sections: identitySections } =
+    await resolveProfileIdentity(db, profileId)
   const rows = await loadPipelineRows(db, profileId)
   const flagged = []
 
@@ -103,7 +124,10 @@ export async function sweepProfilePipelineApplicantType(
       is_directory_resource: r.is_directory_resource,
     }
     if (isDirectoryLikeOpportunity(oppLike)) continue
-    const res = evaluateApplicantTypeEligibility(oppLike, applicantType)
+    const res = evaluateApplicantTypeEligibility(oppLike, applicantType, {
+      profile: profileRow,
+      sections: identitySections,
+    })
     if (res.decision !== 'mismatch') continue
     flagged.push({ grant_id: r.grant_id, title: r.title, reason: res.reason })
     if (apply) {
