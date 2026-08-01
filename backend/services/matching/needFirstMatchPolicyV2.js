@@ -169,8 +169,58 @@ function signalText(value, depth = 0) {
   return ''
 }
 
+/**
+ * Independent text fragments are joined with a PHRASE BOUNDARY, never a bare
+ * space.
+ *
+ * WHY THIS EXISTS — the 2026-08-01 golden-outcome regression. Every rule below
+ * that gates on a MULTI-WORD phrase (`family caregiver`, `respite care`,
+ * `child care`, `foster youth`, `international students only`, the PROFESSION
+ * and death-survivor patterns) is `.test()`ed against ONE string built by
+ * `[...scalars, ...categories, ...keywords].join(' ')`. A space join makes the
+ * boundary between two INDEPENDENT list members indistinguishable from the
+ * space inside a real phrase, so any two adjacent tokens silently fabricate a
+ * phrase no source ever wrote.
+ *
+ * It fired in prod on the owner-verified ECF CHOICES profiles. The
+ * `tn_ecf_choices` registry row declares `applicant_types: ['individual',
+ * 'family', 'veteran', 'disabled', 'caregiver']`, which `crawler-os/matchEngine
+ * .opportunityToCanonicalOpportunity` folds into
+ * `categories: [... 'family', 'caregiver']`. Joined with a space that is the
+ * literal substring `"family caregiver"` → `hardMismatches` →
+ * `decision: REJECT` → `crawlerOsPersistenceCore` drops the row (`decision ===
+ * 'reject' → continue`) → the match store, which is a ROLLING SNAPSHOT, loses
+ * it on the profile's next crawl. Measured 2026-08-01: **0** match rows for
+ * `tn_ecf_choices` fleet-wide against 13 ACTIVE catalog rows and a lane
+ * reporting `failed:false, found:13` minutes earlier; all 13 candidates score
+ * REJECT with "Caregiver-only program requires a caregiver signal", and every
+ * one of them is a Tennessee Medicaid-waiver page for the exact profiles that
+ * lost it. Bisected: ACCEPT at 23dc30d3^, REJECT at 23dc30d3 (#1034).
+ *
+ * A `|` cannot appear inside any pattern here and is not a `\w` character, so
+ * `\b` anchors either side of a real phrase still behave exactly as before —
+ * the ONLY strings this removes are ones that span a fragment boundary, i.e.
+ * ones no source ever published. This LOWERS no bar: a genuine
+ * "Family Caregiver Support Program" still carries the phrase inside its own
+ * title/description and is still hard-matched.
+ *
+ * NOT FIXED HERE (reported, no prod evidence of a live miss): the PROFILE side
+ * (`profilePurposeText`/`signalText`) has the same shape, but its output is
+ * passed through `normalizeText`, which strips `|` — fixing it needs
+ * per-fragment normalization and its own evidence, so it is deliberately left
+ * alone rather than changed blind.
+ */
+export const TEXT_FRAGMENT_SEPARATOR = ' | '
+
+function joinTextFragments(parts) {
+  return parts
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+    .join(TEXT_FRAGMENT_SEPARATOR)
+}
+
 function opportunityText(opportunity = {}) {
-  return [
+  return joinTextFragments([
     opportunity.title,
     opportunity.name,
     opportunity.sponsor,
@@ -186,11 +236,11 @@ function opportunityText(opportunity = {}) {
     opportunity.funding_type,
     ...asArray(opportunity.categories),
     ...asArray(opportunity.keywords),
-  ].filter(Boolean).join(' ')
+  ])
 }
 
 function opportunityTargetingText(opportunity = {}) {
-  return [
+  return joinTextFragments([
     opportunity.title,
     opportunity.name,
     opportunity.description,
@@ -201,7 +251,7 @@ function opportunityTargetingText(opportunity = {}) {
     opportunity.restrictions,
     ...asArray(opportunity.categories),
     ...asArray(opportunity.keywords),
-  ].filter(Boolean).join(' ')
+  ])
 }
 
 export function isNeedFirstResource(opportunity = {}, oppNorm = null) {
