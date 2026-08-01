@@ -271,6 +271,44 @@ export const NEED_ALIAS_MAP = {
   legal_aid: 'legal',
   legal_help: 'legal',
 
+  // Agriculture / farming (the Anita class, 2026-08-01)
+  //
+  // `agriculture` was already a canonical BROWSE category
+  // (constants/needCategories.js) and both agriculture gates in
+  // services/matchEngine.js test for it by name —
+  //   :572  `!profileNorm.needCategories.includes('agriculture')`  (the
+  //         `requiresFarmer` softener: without an 'agriculture' need the
+  //         `clearlyNotAgricultural` branch fires and a real farm applicant is
+  //         handed a hard `Requires agricultural producer status` ineligibility)
+  //   :2792 the ag-signal score cap
+  // — but the map's RANGE never contained it, so no profile could ever hold it
+  // as a bucket. That also left it out of NEED_BUCKET_IDS, i.e. out of the
+  // user-pickable `needs` vocabulary (config/profileVocabulary.js:45), so
+  // `mapFreeTextToNeedTag('farming')` returned null and a farm's need fell
+  // through as an unmapped raw passthrough key no consumer recognises.
+  //
+  // Keys are deliberately high-precision: every key here also becomes a
+  // DOCUMENT-TEXT keyword (_ensureNeedKeywordIndex below), so bare 'crop',
+  // 'produce' and 'ranch' are excluded — they are common words and place-name
+  // fragments, and this is the documented substring-explosion class.
+  agriculture: 'agriculture',
+  agricultural: 'agriculture',
+  farm: 'agriculture',
+  farming: 'agriculture',
+  farmer: 'agriculture',
+  farmers: 'agriculture',
+  farmland: 'agriculture',
+  farm_operation: 'agriculture',
+  family_farm: 'agriculture',
+  ranching: 'agriculture',
+  rancher: 'agriculture',
+  livestock: 'agriculture',
+  crop_production: 'agriculture',
+  agribusiness: 'agriculture',
+  agricultural_producer: 'agriculture',
+  value_added_producer: 'agriculture',
+  soil_conservation: 'agriculture',
+
   // Substance recovery (maps to health_medical)
   substance_recovery: 'health_medical',
   substance_abuse: 'health_medical',
@@ -367,6 +405,28 @@ export const ENTITY_TYPE_ALIAS_MAP = {
   university: 'organization',
   hospital: 'organization',
   medical_center: 'organization',
+
+  // Agricultural producer (the Anita class, 2026-08-01). `farm` is already a
+  // first-class entity type downstream — it is in `ORG_LIKE_ENTITY_TYPES`
+  // (services/matchEngine.js) and BOTH agriculture gates compare against it by
+  // name (`:569` requiresFarmer softener, `:2790` ag score cap) — but the alias
+  // map never produced it, so only the exact literal string 'farm' reached
+  // those gates by raw passthrough. Every way a real profile actually writes
+  // the identity ('farmer', 'rancher', 'agricultural producer', 'agribusiness')
+  // fell through as its own raw key and silently missed every comparison, the
+  // same failure the biotechnology block above exists to fix.
+  farm: 'farm',
+  farmer: 'farm',
+  farming: 'farm',
+  farm_operation: 'farm',
+  family_farm: 'farm',
+  ranch: 'farm',
+  rancher: 'farm',
+  agricultural_producer: 'farm',
+  agriculture_producer: 'farm',
+  agricultural_business: 'farm',
+  agribusiness: 'farm',
+  grower: 'farm',
 }
 
 // ---------------------------------------------------------------------------

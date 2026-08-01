@@ -71,6 +71,7 @@ import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS } from '../services/sources/locatorUrlKind.js'
 import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from '../config/amountEnrichEnv.js'
 import { normalizePersistedMatchDecisionIntegrity } from '../services/matching/matchDecisionIntegrity.js'
+import { hasFarmIdentity } from '../services/eligibility/farmIdentity.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -1383,10 +1384,24 @@ export async function enforceIndividualOrgSectionConflict(db) {
       scanned += 1
 
       const occupation = sections.occupation
+      // THE INVERSE CASE (the Anita class, 2026-08-01). A person who runs a
+      // FARM is a person who legitimately IS also a business — the exact
+      // mirror image of Kimberly Botts. Many farmers tick `occupation.farmer`
+      // and leave `small_business_owner` at its schema DEFAULT of false: they
+      // are farmers, not "small business owners". That default-false is not a
+      // denial, and treating it as one would WIPE a real farm identity
+      // (organization_details.organization_type + small_business_details.
+      // business_name), which is precisely what makes USDA/FSA/NRCS/SARE
+      // programs reachable through the applicant-type gate. A declared farm
+      // identity therefore means the structured denial is INCOMPLETE, and the
+      // profile falls into the module's existing "ambiguous → log for human
+      // review, never change" branch.
+      const declaresFarm = hasFarmIdentity({ profile, sections })
       const contradicts =
         occupation && typeof occupation === 'object' &&
         occupation.nonprofit_employee === false &&
-        occupation.small_business_owner === false
+        occupation.small_business_owner === false &&
+        !declaresFarm
       if (!contradicts) {
         // Genuinely ambiguous: no explicit structured denial. Do NOT guess —
         // this person-type profile may legitimately also run the org.
@@ -1394,6 +1409,7 @@ export async function enforceIndividualOrgSectionConflict(db) {
         log.warn('ambiguous individual/org section conflict left for human review (no structured denial)', {
           profileId: profile.id,
           orgType,
+          declaresFarm,
         })
         continue
       }

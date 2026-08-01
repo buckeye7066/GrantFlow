@@ -72,6 +72,21 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // Amy's amount_recall_miss measure pre-extraction values. Zero imports, zero
   // I/O — verified dependency-free.
   'backend/services/awardAmountExtractor.js',
+  // The need-first scoring policy adapter, imported by crawler-os/matchEngine.js
+  // so the OS decision and the canonical engine apply the SAME need-first rules
+  // (matchEngine.js itself is already an approved contract above; this is the
+  // half of it the OS actually calls). Reaches only config/matchThresholds.js
+  // and its sibling policy module. This escape was already tripping the guard
+  // on main before the 2026-08-01 farm work — allowlisted here so the boundary
+  // test states the real, intended architecture instead of standing red.
+  'backend/services/matching/needFirstScoringAdapter.js',
+  // The ONE registry of agricultural-producer identity (the Anita class,
+  // 2026-08-01). crawler-os/profileIntelligence.js PLANS a declared farmer into
+  // the USDA lanes while services/applicantTypeGate.js decides whether she may
+  // keep what comes back; a private copy on either side means a profile gets
+  // crawled for agriculture and then hard-dropped on the way home. Zero
+  // imports, zero I/O — verified dependency-free.
+  'backend/services/eligibility/farmIdentity.js',
 ]);
 
 function listFiles(dir) {

@@ -356,7 +356,15 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         basicSection?.profile_category ||
         basicSection?.applicant_type ||
         null
-      const applicantEval = evaluateApplicantTypeEligibility(opportunity, profileApplicantType)
+      // Pass the SECTIONS too: a person-type profile that structurally declares
+      // a farm (occupation.farmer / a NAICS-11 code) holds BOTH an individual
+      // and a farm identity, and USDA/NRCS rows carry applicant_types ['farm'].
+      // Without this the gate saw only 'individual' and hard-dropped the entire
+      // agriculture universe (the Anita class, 2026-08-01).
+      const applicantEval = evaluateApplicantTypeEligibility(opportunity, profileApplicantType, {
+        profile: rawProfile,
+        sections: profileSections,
+      })
       if (applicantEval.decision === 'mismatch') {
         if (!quiet) log.info(`[opportunityMatcher] Gate:APPLICANT_TYPE suppressed "${opportunity.title}" — ${applicantEval.reason} (profile applicant type: ${profileApplicantType ?? 'unknown'})`)
         return denied('live_reject', {
