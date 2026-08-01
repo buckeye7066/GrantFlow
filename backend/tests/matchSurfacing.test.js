@@ -8,11 +8,12 @@ import {
 import { REVIEW_SCORE } from '../config/matchThresholds.js'
 
 describe('matchSurfacing — surfaced matcher versions', () => {
-  it('includes crawler-os, cross-match, AND web-llm (the recall regression fix)', () => {
+  it('includes crawler-os, cross-match, web-llm AND institution-link', () => {
     expect(SURFACED_MATCHER_VERSIONS).toEqual([
       'crawler-os',
       'crawler-os-xmatch',
       'web-llm',
+      'institution-link',
     ])
   })
 
@@ -20,9 +21,17 @@ describe('matchSurfacing — surfaced matcher versions', () => {
     expect(SURFACED_MATCHER_VERSIONS).toContain('web-llm')
   })
 
+  it('institution-link must be surfaced — a student\'s OWN school\'s aid', () => {
+    // The reconcile-surviving versions exist precisely because the match store
+    // is a rolling snapshot. Persisting under one of them and then NOT reading
+    // it back is the exact web-llm regression this file was written for
+    // (institution_recall_miss: 52 active MTSU rows, 0 match rows, 2026-08-01).
+    expect(SURFACED_MATCHER_VERSIONS).toContain('institution-link')
+  })
+
   it('builds a valid SQL IN() fragment from the constant', () => {
     expect(SURFACED_MATCHER_VERSIONS_SQL).toBe(
-      "('crawler-os','crawler-os-xmatch','web-llm')",
+      "('crawler-os','crawler-os-xmatch','web-llm','institution-link')",
     )
     // Round-trip: fragment lists exactly the same versions, quoted.
     for (const v of SURFACED_MATCHER_VERSIONS) {

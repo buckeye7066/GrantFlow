@@ -1129,8 +1129,9 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    // 37 on main (incl. #1081 portal_session_lifetime_stamp) + 4 scope nets here.
-    expect(summary.ran).toBe(41)
+    // 37 on main (incl. #1081 portal_session_lifetime_stamp) + 4 scope nets
+    // + the institution-aid RECALL net (institution_recall_miss) here.
+    expect(summary.ran).toBe(42)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1160,6 +1161,10 @@ describe('enforceInvariants — runner', () => {
       'foreign_jurisdiction_matches',
       'individual_match_award_ceiling',
       'student_aid_eligibility',
+      // The RECALL direction of the same store: a student's OWN school's aid.
+      // Placed before the two hygiene sweeps so the rows it adds are validated
+      // by them in the SAME boot.
+      'institution_aid_linkage',
       'no_dangling_matches',
       'persisted_match_decision_integrity',
       'profession_eligibility',
