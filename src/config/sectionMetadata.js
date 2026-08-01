@@ -1745,6 +1745,13 @@ export const SECTION_METADATA = {
         "help": "Additional education context."
       },
       {
+        "name": "aid_types_accepted",
+        "label": "Aid types you will accept",
+        "format": "string_array",
+        "scored": false,
+        "help": "Which kinds of financial aid this profile wants: grant, scholarship, endowment, work_study, loan. Leave blank to accept everything except loans (the default). A declined type is never added to the pipeline — you will still see it on the school's own portal."
+      },
+      {
         "name": "pell_grant_eligible",
         "label": "Pell grant eligible",
         "format": "boolean_tri",

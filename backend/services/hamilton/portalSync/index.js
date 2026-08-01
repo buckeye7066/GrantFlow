@@ -40,6 +40,7 @@ import {
 import { setProfileSectionField } from '../../profileFieldWriter.js'
 import { upsertSchoolPortalAwardAsOpportunity } from '../../schoolPortalImportService.js'
 import { isDismissed } from '../../pipelineDismissals.js'
+import { evaluateAwardAgainstPreferences } from '../../../config/aidTypePreferences.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../../shared/nameParsing.js'
 import { createLogger } from '../../../utils/logger.js'
 import { PORTAL_STATUS } from '../portalCompletionStore.js'
@@ -218,7 +219,26 @@ async function markSessionDeadAfterWall(db, session, host) {
 }
 
 async function persistReadResult(db, { profileId, portalHost, actorUserId, readResult }) {
-  const out = { fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [] }
+  const out = {
+    fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [],
+    // Awards the profile's own aid-type preference declined (e.g. loans).
+    // REPORTED, never silently dropped — the student may still have a real
+    // offer they need to act on at the portal itself.
+    awardsDeclinedByPreference: [],
+  }
+
+  // The profile's aid-type preference (education.aid_types_accepted). Loaded
+  // ONCE per run: a household that has decided against debt must never find a
+  // loan sitting in their pipeline as though it were an award (owner rule,
+  // 2026-08-01). Discovery already refuses loans; this closes the portal-sync
+  // path that bypassed that line entirely.
+  let education = {}
+  try {
+    const row = await db.prepare(
+      "SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'education' LIMIT 1",
+    ).get(String(profileId))
+    if (row?.data) education = typeof row.data === 'object' ? row.data : JSON.parse(row.data)
+  } catch { education = {} }
 
   // FAFSA lifecycle (studentaid.gov) rides the canonical stage owner, not the
   // raw field writer — see applyFafsaStatusFromRead.
@@ -253,6 +273,15 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
   for (const a of Array.isArray(readResult?.awards) ? readResult.awards : []) {
     const title = String(a?.title || '').trim()
     if (!title) continue
+    // AID-TYPE PREFERENCE GATE — before any write. An award whose kind this
+    // profile declined is recorded as declined and skipped; an award whose kind
+    // we cannot name is NEVER excluded (hiding real money because we could not
+    // classify it would be the worse failure).
+    const verdict = evaluateAwardAgainstPreferences(a, education)
+    if (!verdict.accepted) {
+      out.awardsDeclinedByPreference.push({ title, aid_type: verdict.aidType, reason: verdict.reason })
+      continue
+    }
     // Stable id so re-syncing the same award updates rather than duplicates.
     // The PROFILE is part of the identity: without it, two students with the
     // same portal + title + amount collide on one row, and now that award rows
@@ -601,6 +630,9 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
         // unauditable after the fact.
         fields: (readResult?.fields || []).map((f) => ({ sectionKey: f?.sectionKey, field: f?.field })),
         awards_found: (readResult?.awards || []).length,
+        // Aid the profile DECLINED by preference (e.g. loans). Surfaced so the
+        // owner can see exactly what was left out and why — never a silent drop.
+        awards_declined_by_preference: persisted?.awardsDeclinedByPreference || [],
         // Fabrication-guard audit trail: extracted items REFUSED as user awards.
         rejected: readResult?.rejected || [],
         not_found: readResult?.notFound || [],
