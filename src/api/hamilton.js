@@ -692,6 +692,22 @@ export function runPortalSyncBoth(profileId, portalHost) {
   })
 }
 
+// ONE-CLICK SUBMIT: complete the outside-award report on the portal.
+// An ordinary push FILLS the form and stops (submitting on a real
+// financial-aid account is hard to reverse). This is the profile owner's or an
+// admin's explicit "yes, send it" — GrantFlow re-fills and submits in one live
+// session, and records who authorized it. Returns the run result, including
+// `write.submitted` — which is false, honestly, when the portal had no submit
+// control or the form could not be reached.
+export function submitPortalAwards(profileId, portalHost) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!portalHost) return Promise.reject(new Error('portalHost required'))
+  return apiFetch('/api/hamilton/portal-sync/submit-awards', {
+    method: 'POST',
+    body: JSON.stringify({ profileId, portalHost }),
+  })
+}
+
 // Recent portal_sync_runs for a profile (optionally one host).
 export function listPortalSyncRuns(profileId, portalHost = null) {
   if (!profileId) return Promise.reject(new Error('profileId required'))

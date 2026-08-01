@@ -198,3 +198,45 @@ describe('generic connector — every portal now has a real write', () => {
     expect(JSON.stringify(res.skipped)).not.toMatch(/no structured data connector/i)
   })
 })
+
+describe('one-click submit — the owner/admin authorization path', () => {
+  it('an ordinary write NEVER submits; only allowSubmit does', async () => {
+    // This separation is the whole safety model: autonomous syncs stage values,
+    // a human click sends them.
+    const generic = (await import('../services/hamilton/portalSync/connectors/generic.js')).default
+    const page = makeFormPage()
+    page.goto = async () => {}
+
+    const staged = await generic.write(page, { portalHost: 'x.edu', log: () => {} }, {
+      fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
+    })
+    expect(staged.submitted).toBe(false)
+    expect(staged.written[0].state).toBe('filled_not_submitted')
+    expect(page.clicked).toHaveLength(0)
+
+    const authorizedPage = makeFormPage()
+    authorizedPage.goto = async () => {}
+    const sent = await generic.write(authorizedPage, { portalHost: 'x.edu', log: () => {} }, {
+      fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
+      allowSubmit: true,
+    })
+    expect(sent.submitted).toBe(true)
+    expect(authorizedPage.clicked.length).toBeGreaterThan(0)
+  })
+
+  it('an authorized submit with NO submit control reports NOT submitted — never a false send', async () => {
+    // A portal that accepts outside awards by email has no submit button. The
+    // owner must not be told their awards were reported when they were not.
+    const page = makeFormPage()
+    page.getByRole = () => ({ first: () => ({ isVisible: async () => false, click: async () => {} }) })
+
+    const res = await reportOutsideAwards(page, {
+      sources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
+      allowSubmit: true,
+    })
+
+    expect(res.submitted).toBe(false)
+    expect(res.written[0].state).toBe('filled_not_submitted')
+    expect(res.skipped.some((s) => /no submit control/i.test(s.reason))).toBe(true)
+  })
+})

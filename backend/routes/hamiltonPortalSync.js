@@ -112,6 +112,67 @@ router.post('/read', limiter, syncHandler('read'))
 router.post('/write', limiter, syncHandler('write'))
 router.post('/sync', limiter, syncHandler('both'))
 
+/**
+ * POST /submit-awards — the ONE-CLICK submission the owner asked for
+ * (2026-08-01): an ordinary sync fills the portal's outside-award form and
+ * stops; this completes it.
+ *
+ * THE HUMAN CLICK IS THE AUTHORIZATION. That is the whole point of the
+ * separation: an autonomous sync never submits on a real financial-aid account,
+ * but a profile owner (or an admin acting for them) can send it deliberately,
+ * and GrantFlow does the submitting — not the user retyping it on the portal.
+ *
+ * It RE-FILLS and submits in one live session rather than "resuming" the
+ * earlier staged form: the browser and the portal's form state are destroyed
+ * when a sync ends, so there is no half-filled page waiting anywhere. A click
+ * that claimed to resume one would be fiction.
+ *
+ * Every submission records who authorized it on the run row (submit_authorized_by).
+ */
+router.post('/submit-awards', limiter, async (req, res) => {
+  // Must run BEFORE any await — see SYNC_REQUEST_TIMEOUT_MS above.
+  try {
+    req.setTimeout?.(SYNC_REQUEST_TIMEOUT_MS)
+    res.setTimeout?.(SYNC_REQUEST_TIMEOUT_MS)
+  } catch { /* non-socket transports (tests) */ }
+
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.body?.profileId || req.body?.profile_id || '').trim()
+  const portalHost = String(req.body?.portalHost || req.body?.portal_host || '').trim()
+  if (!profileId || !portalHost) {
+    return res.status(400).json({ error: 'profileId and portalHost are required' })
+  }
+  // Owner-or-admin only: submitting to a portal acts on someone's real
+  // financial-aid record, so it uses the same access gate as every mutation
+  // here — never a shared or guessable id.
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const host = normalizeHost(portalHost)
+  if (!host) return res.status(400).json({ error: 'portalHost is not a valid host' })
+
+  try {
+    const result = await runPortalSync(req.db, {
+      profileId,
+      portalHost: host,
+      direction: 'write',
+      actorUserId: getAuthUserId(user) || null,
+      allowSubmit: true,
+    })
+    log.info('portal_sync_submit_awards', {
+      profileId, host, submitted: result?.write?.submitted === true, actor: getAuthUserId(user) || null,
+    })
+    // 200 with the real outcome in the body: a portal with no submit control,
+    // or a form that could not be reached, is reported honestly rather than
+    // dressed up as a send.
+    return res.json(result)
+  } catch (err) {
+    log.error('portal_sync_submit_failed', { profileId, host, err: err?.message })
+    return res.status(500).json({ ok: false, error: err?.message || 'portal_sync_submit_failed' })
+  }
+})
+
 router.get('/runs', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return undefined

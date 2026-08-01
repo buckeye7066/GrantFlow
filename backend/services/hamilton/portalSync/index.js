@@ -461,7 +461,19 @@ async function loadProfileBundle(db, profileId) {
 // dead by then).
 const inFlightSyncs = new Map()
 
-export async function runPortalSync(db, { profileId, portalHost, direction = 'read', actorUserId = null } = {}) {
+export async function runPortalSync(db, {
+  profileId, portalHost, direction = 'read', actorUserId = null,
+  // ONE-CLICK SUBMIT (owner rule, 2026-08-01): an ordinary sync fills the
+  // portal's outside-award form and stops. When the profile owner or an admin
+  // explicitly clicks "Submit", the route passes allowSubmit:true and GrantFlow
+  // completes the submission in the SAME live session.
+  //
+  // Why it re-fills rather than resuming: the browser (and the portal's form
+  // state) is destroyed when a sync ends, so there is no half-filled page
+  // waiting anywhere. A click that pretended to "resume" a staged form would be
+  // fiction. The human click IS the authorization, and it is recorded on the run.
+  allowSubmit = false,
+} = {}) {
   if (!db) return { ok: false, direction, connectorId: null, runId: null, error: 'db required' }
   if (!profileId) return { ok: false, direction, connectorId: null, runId: null, error: 'profileId required' }
   const host = normalizeHost(portalHost)
@@ -483,13 +495,13 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
   }
   inFlightSyncs.set(flightKey, { runId: null, connectorId: null, startedAt: Date.now() })
   try {
-    return await runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey })
+    return await runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey, allowSubmit })
   } finally {
     inFlightSyncs.delete(flightKey)
   }
 }
 
-async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey }) {
+async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey, allowSubmit = false }) {
 
   // Load the saved login up front so connector resolution is credential-aware:
   // an MTSU account saved under login.microsoftonline.com must route to the MTSU
@@ -663,7 +675,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       const fundingSources = accepted.sources.length > 0
         ? accepted.sources
         : profileToFundingSources(profile)
-      const writeResult = await connector.write(page, ctx, { fundingSources })
+      const writeResult = await connector.write(page, ctx, { fundingSources, allowSubmit })
       if (writeResult?.reached === false && dir === 'write') {
         return await fail(`portal unreachable: ${writeResult?.error || 'navigation failed'}`, { unreachable: true })
       }
@@ -676,6 +688,13 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
         declined_by_preference: accepted.declinedByPreference,
         ...(accepted.truncated > 0 ? { truncated: accepted.truncated } : {}),
         skipped: writeResult?.skipped || [],
+        // Did GrantFlow actually SEND it, and who authorized that?
+        submitted: writeResult?.submitted === true,
+        submit_authorized_by: allowSubmit ? (actorUserId || 'unknown') : null,
+        // The UI's cue for the one-click Submit button: values are staged on the
+        // portal's form but nothing was sent yet.
+        submittable: writeResult?.submitted !== true
+          && (writeResult?.written || []).some((w) => w?.state === 'filled_not_submitted'),
       }
       if (writeResult?.reached === false) result.write.unreachable = writeResult?.error || 'navigation failed'
       summary.write = result.write
