@@ -160,7 +160,11 @@ export function createOutputRing(limit = 8000) {
 // escaping root is ignored rather than created somewhere unexpected.
 export function ensureDisposableRoot(cwd, root, mkdir = mkdirSync) {
   if (!cwd || !root || typeof root !== 'string') return null
-  if (isAbsolute(root) || root.split(/[\\/]/).includes('..')) return null
+  // `isAbsolute` is platform-dependent — on POSIX it says "C:/Windows" is
+  // RELATIVE — so the Windows drive-letter and UNC forms are rejected
+  // explicitly. The rule must not change with the host the tests run on.
+  const windowsAbsolute = /^[A-Za-z]:[\\/]/.test(root) || /^[\\/]{2}/.test(root)
+  if (isAbsolute(root) || windowsAbsolute || root.split(/[\\/]/).includes('..')) return null
   const full = join(cwd, root)
   try {
     mkdir(full, { recursive: true })

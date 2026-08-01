@@ -86,6 +86,31 @@ test('release is idempotent and never throws on an already-gone lock', () => {
   assert.equal(fs.existsSync(lockPath), false)
 })
 
+test('the materializer still runs when ONLY its own file was copied (the production Dockerfile stage)', async () => {
+  // The production image's builder stage does `COPY scripts/materialize-production-source.mjs`
+  // — that one file and nothing else — then runs it with the skip flag set. A
+  // STATIC import of the lock module is resolved before any code runs, so it
+  // broke the image build (caught by CI on the first push of this change). The
+  // import must stay dynamic and below the skip exit.
+  const dir = tmp('mat-docker-')
+  fs.mkdirSync(path.join(dir, 'scripts'))
+  fs.copyFileSync(
+    path.resolve(here, '../../scripts/materialize-production-source.mjs'),
+    path.join(dir, 'scripts', 'materialize-production-source.mjs'),
+  )
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'slim', type: 'module' }))
+  const code = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['scripts/materialize-production-source.mjs'], {
+      cwd: dir,
+      stdio: 'ignore',
+      env: { ...process.env, GRANTFLOW_SKIP_SOURCE_MATERIALIZATION: '1' },
+    })
+    child.on('exit', resolve)
+    child.on('error', reject)
+  })
+  assert.equal(code, 0, 'the skip path must not need any file the Docker stage does not copy')
+})
+
 test('two REAL processes never hold the lock at the same time', async () => {
   const dir = tmp('mat-lock-procs-')
   const journal = path.join(dir, 'journal.txt')

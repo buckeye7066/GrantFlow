@@ -2,7 +2,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { acquireMaterializeLockForProcess } from './source-materialization/materialize-lock.mjs'
 
 const truthy = (value) => /^(1|true|yes|on)$/i.test(String(value || '').trim())
 if (truthy(process.env.GRANTFLOW_SKIP_SOURCE_MATERIALIZATION)) {
@@ -18,6 +17,12 @@ process.chdir(repoRoot)
 // pre-hook; the per-module read-modify-write is not atomic, so two of them
 // racing produced intermittent `<anchor> missing or ambiguous` crashes that
 // killed whichever dev server lost the race. See materialize-lock.mjs.
+//
+// DYNAMIC import on purpose: the production Dockerfile copies ONLY this file
+// into the builder stage and runs it with GRANTFLOW_SKIP_SOURCE_MATERIALIZATION=1
+// (the exit above). A static import is resolved before any code runs, so it
+// would break the image build on a module that stage never needs.
+const { acquireMaterializeLockForProcess } = await import('./source-materialization/materialize-lock.mjs')
 const materializeLock = acquireMaterializeLockForProcess({ repoRoot })
 if (materializeLock.waited) {
   console.log('[source-materialization] waited for a concurrent materializer to finish')

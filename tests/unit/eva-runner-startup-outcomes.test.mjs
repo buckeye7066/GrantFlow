@@ -172,7 +172,11 @@ test('the disposable data root is created inside the app repo, and an escaping r
   const mkdir = (p) => made.push(p)
   assert.ok(ensureDisposableRoot('C:/apps/demo', '.eva-tmp/demo', mkdir))
   assert.equal(ensureDisposableRoot('C:/apps/demo', '../../etc', mkdir), null)
+  // Both absolute FORMS are refused on every host — `isAbsolute` alone is
+  // platform-dependent and calls "C:/Windows" relative on POSIX.
   assert.equal(ensureDisposableRoot('C:/apps/demo', 'C:/Windows', mkdir), null)
+  assert.equal(ensureDisposableRoot('C:/apps/demo', '\\\\server\\share', mkdir), null)
+  assert.equal(ensureDisposableRoot('C:/apps/demo', '/etc/passwd', mkdir), null)
   assert.equal(made.length, 1, 'only the safe relative root was created')
 })
 
