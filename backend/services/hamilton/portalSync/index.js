@@ -219,6 +219,89 @@ async function markSessionDeadAfterWall(db, session, host) {
   }
 }
 
+/**
+ * The portal offered no online way to report outside awards. Build the
+ * mailable/faxable package, file it in the profile's Documents, and ALERT the
+ * owner (and admins) that it is waiting for them.
+ *
+ * The alert is the load-bearing half. A document that silently appears in a
+ * Documents list is only marginally better than no document: the family has to
+ * already know to look. Reporting an outside award is usually REQUIRED, and an
+ * unreported one can mean a revised aid package or a repayment demand — so this
+ * has to reach a person.
+ *
+ * Entirely best-effort: the sync already reported the truth about not
+ * submitting, and neither a packet failure nor a notification failure may
+ * change that outcome.
+ */
+/**
+ * Should this run produce the mail/fax packet? Exported and pure so the
+ * DECISION is testable — the first version of this lived inline and a test that
+ * called the builder directly could not see it at all (both mutations of the
+ * inline condition passed, which is exactly the "a check that can't fail proves
+ * nothing" trap this repo warns about).
+ *
+ * True only when there was real work to report AND the portal gave us no online
+ * way to send it. Never after a successful submit; never for an empty list; and
+ * never for an unrelated failure (an unreachable portal is a connectivity
+ * problem to retry, not a reason to hand someone an envelope).
+ */
+export function needsMailFaxPacket(writeResult, fundingSources = []) {
+  if (!Array.isArray(fundingSources) || fundingSources.length === 0) return false
+  if (writeResult?.submitted === true) return false
+  const skipped = Array.isArray(writeResult?.skipped) ? writeResult.skipped : []
+  return skipped.some((s) => /no outside-scholarship reporting form|no submit control/i.test(String(s?.reason || '')))
+}
+
+async function buildOutsideAwardFallbackPacket(db, { profile, profileId, host, fundingSources, actorUserId }) {
+  try {
+    const { generateOutsideAwardPacket } = await import('./outsideAwardPacket.js')
+    const packet = await generateOutsideAwardPacket(db, {
+      profile: profile || { id: profileId },
+      portalHost: host,
+      sources: fundingSources,
+      userId: actorUserId || null,
+    })
+    if (!packet) return null
+
+    try {
+      const { emitHamiltonNotificationToProfileAndAdmins } = await import('../hamiltonNotifications.js')
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId,
+        profileUserId: profile?.user_id || null,
+        // ADMINS ARE DELIBERATELY NOT FANNED OUT TO (owner rule, 2026-08-01:
+        // "only alert admin to what needs synced in a profile when admin is
+        // working in that particular profile — that way admin is not flooded").
+        // This helper otherwise emits a row to EVERY admin, and with 39 profiles
+        // in prod that is a wall of notifications an admin learns to scroll
+        // past — which would also bury the one profile that matters. The people
+        // who must physically mail or fax this are the profile's own household,
+        // so they are the recipients; an admin working inside the profile sees
+        // the packet in its Documents and on the profile's own surfaces.
+        // Passing an explicit empty array is what suppresses the admin lookup.
+        adminUserIds: [],
+        type: 'hamilton_outside_award_packet_ready',
+        title: `Mail or fax your award report to ${host}`,
+        message: `${host} has no online form for reporting outside scholarships, so Hamilton prepared a signed-ready report listing ${packet.count} award${packet.count === 1 ? '' : 's'}. It is in this profile's Documents ("${packet.title}") — print it, sign it, and mail or fax it to the financial-aid office. Reporting outside awards is usually required.`,
+        data: {
+          portal_host: host,
+          profile_id: profileId,
+          document_ids: packet.documentIds,
+          award_count: packet.count,
+          source: 'portal_sync',
+        },
+        severity: 'warning',
+      })
+    } catch (err) {
+      log.warn('outside_award_packet_notify_failed', { host, err: err?.message })
+    }
+    return packet
+  } catch (err) {
+    log.warn('outside_award_packet_build_failed', { host, err: err?.message })
+    return null
+  }
+}
+
 async function persistReadResult(db, { profileId, portalHost, actorUserId, readResult }) {
   const out = {
     fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [],
@@ -696,6 +779,22 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
         submittable: writeResult?.submitted !== true
           && (writeResult?.written || []).some((w) => w?.state === 'filled_not_submitted'),
       }
+
+      // NO ONLINE WAY TO SUBMIT → produce the mail/fax package instead (owner
+      // rule, 2026-08-01). Refusing to fake a submission is honest but
+      // incomplete: without an artifact the family is simply handed the work
+      // back. Hamilton now writes a signed-ready outside-award report into the
+      // profile's Documents and TELLS the owner it is there.
+      //
+      // Fires only when there was real work to report and the portal gave us no
+      // way to send it — never after a successful submit, and never for an
+      // empty list.
+      if (needsMailFaxPacket(writeResult, fundingSources)) {
+        const packet = await buildOutsideAwardFallbackPacket(db, {
+          profile, profileId, host, fundingSources, actorUserId,
+        })
+        if (packet) result.write.mail_fax_packet = packet
+      }
       if (writeResult?.reached === false) result.write.unreachable = writeResult?.error || 'navigation failed'
       summary.write = result.write
     }
@@ -713,6 +812,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
 
 export const _internal = {
   persistReadResult, recordStudentPortalChecks, applyFafsaStatusFromRead, markSessionDeadAfterWall,
+  buildOutsideAwardFallbackPacket,
 }
 
 export default { runPortalSync, listConnectors, getConnectorForHost, ensurePortalSyncSchema, listRuns }

@@ -801,4 +801,8 @@ export async function generateAndSavePacket(db, {
 export const _internal = {
   PERSONA, buildPacketContent, buildMailingInstructions, buildInstructionLines,
   buildHtml, tryBuildPdfFromHtml, insertDocumentRecord, readNarratives,
+  // Exported so the outside-award packet writes into the SAME storage dir
+  // rather than duplicating the path logic (which would silently diverge the
+  // day one of them changes).
+  getPacketStorageDir,
 }
