@@ -25,6 +25,7 @@ import {
   listPortalCredentials,
   runPortalSyncRead,
   runPortalSyncWrite,
+  submitPortalAwards,
   listPortalSyncRuns,
 } from "@/api/hamilton"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
@@ -37,6 +38,7 @@ import {
   Loader2,
   Download,
   Upload,
+  Send,
   CheckCircle2,
   AlertTriangle,
   Clock,
@@ -175,12 +177,43 @@ export default function PortalSyncCard({ profileId }) {
     onError: (err) => showErrorToast(toast, "Could not start push", err?.message || "Please try again."),
   })
 
+  // ONE-CLICK SUBMIT. A push FILLS the portal's outside-award form and stops —
+  // submitting on a real financial-aid account is hard to reverse, so GrantFlow
+  // never does it autonomously. THIS click is the owner's (or an admin's)
+  // explicit authorization, and GrantFlow completes the submission for them.
+  const submitMutation = useMutation({
+    mutationFn: (portalHost) => submitPortalAwards(profileId, portalHost),
+    onSuccess: (res, portalHost) => {
+      refetchRuns()
+      if (res?.ok === false) {
+        showErrorToast(toast, "Submission failed", res?.error || res?.detail || "See the status line for details.")
+        return
+      }
+      // Report what ACTUALLY happened: a portal with no submit control leaves
+      // the values filled, and saying "submitted" there would be a lie.
+      if (res?.write?.submitted === true) {
+        const n = (res?.write?.written || []).length
+        showSuccessToast(toast, "Submitted", `Reported ${n} award${n === 1 ? "" : "s"} to ${portalHost}.`)
+      } else {
+        showErrorToast(
+          toast,
+          "Not submitted",
+          res?.write?.skipped?.[0]?.reason
+            || `${portalHost} did not expose a submit control — your awards were filled in but not sent.`,
+        )
+      }
+    },
+    onError: (err) => showErrorToast(toast, "Could not submit", err?.message || "Please try again."),
+  })
+
   const isLoading = sessionsQuery.isLoading || credentialsQuery.isLoading || runsQuery.isLoading
   const busyHost = readMutation.isPending
     ? readMutation.variables
     : writeMutation.isPending
       ? writeMutation.variables
-      : null
+      : submitMutation.isPending
+        ? submitMutation.variables
+        : null
 
   return (
     <Card>
@@ -281,6 +314,22 @@ export default function PortalSyncCard({ profileId }) {
                         <Upload className="h-4 w-4 mr-1.5" />
                       )}
                       Push my data to portal
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={isBusy}
+                      onClick={() => submitMutation.mutate(host)}
+                      title={
+                        "Report the awards you've accepted in GrantFlow to this portal AND submit them. "
+                        + "A plain push only fills the form — this sends it."
+                      }
+                    >
+                      {isBusy && submitMutation.variables === host ? (
+                        <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4 mr-1.5" />
+                      )}
+                      Submit my awards
                     </Button>
                   </div>
                 </li>

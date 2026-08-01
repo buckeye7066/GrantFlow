@@ -52,12 +52,24 @@ function makeRedirectingPage(routes, fallback = { landed: 'https://studentaid.go
   let current = fallback
   return {
     goto: vi.fn(async (requested) => {
-      const hit = Object.entries(routes).find(([k]) => String(requested).includes(k))
-      current = hit ? hit[1] : fallback
+      // LONGEST key wins: the case-record URL also contains '/my-activity/',
+      // so a first-match rule would serve the hub instead of the record.
+      const hits = Object.entries(routes)
+        .filter(([k]) => String(requested).includes(k))
+        .sort((a, b) => b[0].length - a[0].length)
+      current = hits.length ? hits[0][1] : fallback
     }),
     waitForLoadState: vi.fn(async () => {}),
+    waitForTimeout: vi.fn(async () => {}),
     url: () => current.landed,
-    evaluate: vi.fn(async () => ({ text: current.text, title: current.title })),
+    // Two shapes are evaluated by the connector: the {text,title} snapshot and
+    // the link list used to discover un-guessable case-record URLs.
+    evaluate: vi.fn(async (fn) => {
+      const src = String(fn)
+      if (src.includes('querySelectorAll')) return current.links || []
+      if (src.includes('.length')) return (current.text || '').length
+      return { text: current.text, title: current.title }
+    }),
   }
 }
 
@@ -234,7 +246,7 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
     // page served DID have text and no "please sign in" sentence — so the
     // diagnostic reported success while the student's record was never seen.
     const page = makeRedirectingPage({
-      '/aid-summary/': {
+      '/my-aid/loans': {
         landed: 'https://studentaid.gov/',
         title: 'Home | Federal Student Aid',
         // Marketing copy carrying the very phrase that caused the false stage.
@@ -257,20 +269,32 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
     expect(res.raw.pages.every((p) => p.redirected === true)).toBe(true)
   })
 
-  it('landedOnRequested tolerates trailing-slash/case noise but never a different path or host', async () => {
-    const { landedOnRequested } = await import('../services/hamilton/portalSync/connectors/studentaid.js')
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/aid-summary')).toBe(true)
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/')).toBe(false)
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/fsa-id/sign-in/landing')).toBe(false)
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://evil.example.com/aid-summary/')).toBe(false)
-    expect(landedOnRequested('https://studentaid.gov/aid-summary/', null)).toBe(false)
+  it('classifyLanding: only a SIGN-IN or public-home destination means signed out', async () => {
+    const { classifyLanding } = await import('../services/hamilton/portalSync/connectors/studentaid.js')
+    const req = 'https://studentaid.gov/aid-summary/'
+    // Verified live 2026-08-01: a genuinely SIGNED-IN request for the aid
+    // summary lands on /my-aid/loans, and /fafsa-apply/status lands on
+    // /fafsa-apply/2026-27/roles. Treating those redirects as a wall declared a
+    // WORKING session dead and would have expired it.
+    expect(classifyLanding(req, 'https://studentaid.gov/my-aid/loans')).toBe('served')
+    expect(classifyLanding('https://studentaid.gov/fafsa-apply/status', 'https://studentaid.gov/fafsa-apply/2026-27/roles')).toBe('served')
+    expect(classifyLanding(req, 'https://studentaid.gov/aid-summary')).toBe('served')
+    // Signed out: the sign-in flow, or the silent bounce to the public home.
+    expect(classifyLanding(req, 'https://studentaid.gov/fsa-id/sign-in/landing?redirectTo=%2Faid-summary')).toBe('signed_out')
+    expect(classifyLanding(req, 'https://studentaid.gov/')).toBe('signed_out')
+    expect(classifyLanding(req, null)).toBe('signed_out')
+    expect(classifyLanding(req, 'https://evil.example.com/aid-summary/')).toBe('foreign')
+  })
+
+  it('a personalized greeting is proof of being inside the account', () => {
+    expect(classifyAccess({ url: 'https://studentaid.gov/fafsa-apply/2026-27/roles', title: 'Roles', text: 'FORM 2026-27 Welcome, Anastasia, to the FAFSA Form' })).toBe('authenticated')
   })
 
   it('reads a genuinely served private page (the fix must not make every run signin_wall)', async () => {
     const page = makeRedirectingPage({
-      '/aid-summary/': {
-        landed: 'https://studentaid.gov/aid-summary/',
-        title: 'Aid Summary | Federal Student Aid',
+      '/my-aid/grants': {
+        landed: 'https://studentaid.gov/my-aid/grants',
+        title: 'Grants | My Aid | Federal Student Aid',
         text: 'Your FAFSA form was submitted on January 5, 2026. Student Aid Index (SAI): 0',
       },
     }, { landed: 'https://studentaid.gov/fsa-id/sign-in/landing', title: 'Log In', text: 'Log In' })
@@ -319,5 +343,61 @@ describe('studentaid.gov connector — write() is refused by design', () => {
     expect(res.skipped[0].reason).toMatch(/refused_by_design/)
     // The page must never be typed into or submitted.
     expect(page.evaluate).not.toHaveBeenCalled()
+  })
+})
+
+describe('studentaid.gov connector — the REAL FAFSA record page (owner screenshot, 2026-08-01)', () => {
+  // The actual record, transcribed from the live page:
+  //   "2026-27 Free Application for Federal Student Aid (FAFSA) Form: Details"
+  //   Processed | Student: Anastasia White | Data Release Number (DRN) 2224
+  //   Status Tracker: FAFSA Form Started (Oct 29, 2025) / FAFSA Form Submitted
+  //   (Submitted on Oct 29, 2025) | Started on Oct 29 2025 / Processed on Oct 30 2025
+  const RECORD = [
+    '2026-27 Free Application for Federal Student Aid (FAFSA) Form: Details',
+    'Processed',
+    'FAFSA Information Student Anastasia White Data Release Number (DRN) 2224 Submission Number 01 Submission Type Initial',
+    'Status Tracker',
+    'FAFSA Form Started Started on Oct 29, 2025',
+    'FAFSA Form Submitted Submitted on Oct 29, 2025',
+    'Started on Oct 29, 2025 Processed on Oct 30, 2025',
+  ].join('\n')
+
+  it('reads PROCESSED from the real Status Tracker vocabulary', () => {
+    const hit = deriveFafsaStage(RECORD)
+    expect(hit.stage).toBe('processed')
+  })
+
+  it('follows the un-guessable case-record link from /my-activity/ and reads the record', async () => {
+    // The record URL carries a per-submission transactionId, so it can only be
+    // reached by following the link — never by a guessed route.
+    const CASE_URL = 'https://studentaid.gov/my-activity/cases-and-applications/fafsa?transactionId=5d052e4a-019b-42c0-81d8-e192ae48f1da&role=Student&cycle=2627'
+    const page = makeRedirectingPage({
+      '/my-activity/': {
+        landed: 'https://studentaid.gov/my-activity/',
+        title: 'My Activity | Federal Student Aid',
+        text: 'My Activity FAFSA Form 2026-27',
+        links: [CASE_URL],
+      },
+      'cases-and-applications': {
+        landed: CASE_URL,
+        title: '2026-27 FAFSA Form: Details | Federal Student Aid',
+        text: RECORD,
+      },
+    }, { landed: 'https://studentaid.gov/my-aid/loans', title: 'Loans | My Aid', text: 'My Loans You Currently Have No Loans' })
+
+    const res = await connector.read(page, { log: () => {} })
+
+    expect(res.access).toBe('authenticated')
+    expect(res.fafsaStatus.stage).toBe('processed')
+    expect(res.raw.pages.some((p) => /cases-and-applications/.test(p.url))).toBe(true)
+  })
+
+  it('NEVER navigates the /fafsa-apply wizard (it renders identically for every user)', async () => {
+    const page = makeRedirectingPage({}, { landed: 'https://studentaid.gov/my-aid/loans', title: 'Loans', text: 'My Loans' })
+    await connector.read(page, { log: () => {} })
+    // Reading that wizard is what produced a false "she has not filed" alarm.
+    for (const call of page.goto.mock.calls) {
+      expect(String(call[0])).not.toMatch(/\/fafsa-apply\//)
+    }
   })
 })

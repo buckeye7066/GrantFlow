@@ -40,6 +40,8 @@ import {
 import { setProfileSectionField } from '../../profileFieldWriter.js'
 import { upsertSchoolPortalAwardAsOpportunity } from '../../schoolPortalImportService.js'
 import { isDismissed } from '../../pipelineDismissals.js'
+import { evaluateAwardAgainstPreferences } from '../../../config/aidTypePreferences.js'
+import { collectAcceptedFundingSources } from './acceptedFundingSources.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../../shared/nameParsing.js'
 import { createLogger } from '../../../utils/logger.js'
 import { PORTAL_STATUS } from '../portalCompletionStore.js'
@@ -217,8 +219,110 @@ async function markSessionDeadAfterWall(db, session, host) {
   }
 }
 
+/**
+ * The portal offered no online way to report outside awards. Build the
+ * mailable/faxable package, file it in the profile's Documents, and ALERT the
+ * owner (and admins) that it is waiting for them.
+ *
+ * The alert is the load-bearing half. A document that silently appears in a
+ * Documents list is only marginally better than no document: the family has to
+ * already know to look. Reporting an outside award is usually REQUIRED, and an
+ * unreported one can mean a revised aid package or a repayment demand — so this
+ * has to reach a person.
+ *
+ * Entirely best-effort: the sync already reported the truth about not
+ * submitting, and neither a packet failure nor a notification failure may
+ * change that outcome.
+ */
+/**
+ * Should this run produce the mail/fax packet? Exported and pure so the
+ * DECISION is testable — the first version of this lived inline and a test that
+ * called the builder directly could not see it at all (both mutations of the
+ * inline condition passed, which is exactly the "a check that can't fail proves
+ * nothing" trap this repo warns about).
+ *
+ * True only when there was real work to report AND the portal gave us no online
+ * way to send it. Never after a successful submit; never for an empty list; and
+ * never for an unrelated failure (an unreachable portal is a connectivity
+ * problem to retry, not a reason to hand someone an envelope).
+ */
+export function needsMailFaxPacket(writeResult, fundingSources = []) {
+  if (!Array.isArray(fundingSources) || fundingSources.length === 0) return false
+  if (writeResult?.submitted === true) return false
+  const skipped = Array.isArray(writeResult?.skipped) ? writeResult.skipped : []
+  return skipped.some((s) => /no outside-scholarship reporting form|no submit control/i.test(String(s?.reason || '')))
+}
+
+async function buildOutsideAwardFallbackPacket(db, { profile, profileId, host, fundingSources, actorUserId }) {
+  try {
+    const { generateOutsideAwardPacket } = await import('./outsideAwardPacket.js')
+    const packet = await generateOutsideAwardPacket(db, {
+      profile: profile || { id: profileId },
+      portalHost: host,
+      sources: fundingSources,
+      userId: actorUserId || null,
+    })
+    if (!packet) return null
+
+    try {
+      const { emitHamiltonNotificationToProfileAndAdmins } = await import('../hamiltonNotifications.js')
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId,
+        profileUserId: profile?.user_id || null,
+        // ADMINS ARE DELIBERATELY NOT FANNED OUT TO (owner rule, 2026-08-01:
+        // "only alert admin to what needs synced in a profile when admin is
+        // working in that particular profile — that way admin is not flooded").
+        // This helper otherwise emits a row to EVERY admin, and with 39 profiles
+        // in prod that is a wall of notifications an admin learns to scroll
+        // past — which would also bury the one profile that matters. The people
+        // who must physically mail or fax this are the profile's own household,
+        // so they are the recipients; an admin working inside the profile sees
+        // the packet in its Documents and on the profile's own surfaces.
+        // Passing an explicit empty array is what suppresses the admin lookup.
+        adminUserIds: [],
+        type: 'hamilton_outside_award_packet_ready',
+        title: `Mail or fax your award report to ${host}`,
+        message: `${host} has no online form for reporting outside scholarships, so Hamilton prepared a signed-ready report listing ${packet.count} award${packet.count === 1 ? '' : 's'}. It is in this profile's Documents ("${packet.title}") — print it, sign it, and mail or fax it to the financial-aid office. Reporting outside awards is usually required.`,
+        data: {
+          portal_host: host,
+          profile_id: profileId,
+          document_ids: packet.documentIds,
+          award_count: packet.count,
+          source: 'portal_sync',
+        },
+        severity: 'warning',
+      })
+    } catch (err) {
+      log.warn('outside_award_packet_notify_failed', { host, err: err?.message })
+    }
+    return packet
+  } catch (err) {
+    log.warn('outside_award_packet_build_failed', { host, err: err?.message })
+    return null
+  }
+}
+
 async function persistReadResult(db, { profileId, portalHost, actorUserId, readResult }) {
-  const out = { fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [] }
+  const out = {
+    fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [],
+    // Awards the profile's own aid-type preference declined (e.g. loans).
+    // REPORTED, never silently dropped — the student may still have a real
+    // offer they need to act on at the portal itself.
+    awardsDeclinedByPreference: [],
+  }
+
+  // The profile's aid-type preference (education.aid_types_accepted). Loaded
+  // ONCE per run: a household that has decided against debt must never find a
+  // loan sitting in their pipeline as though it were an award (owner rule,
+  // 2026-08-01). Discovery already refuses loans; this closes the portal-sync
+  // path that bypassed that line entirely.
+  let education = {}
+  try {
+    const row = await db.prepare(
+      "SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'education' LIMIT 1",
+    ).get(String(profileId))
+    if (row?.data) education = typeof row.data === 'object' ? row.data : JSON.parse(row.data)
+  } catch { education = {} }
 
   // FAFSA lifecycle (studentaid.gov) rides the canonical stage owner, not the
   // raw field writer — see applyFafsaStatusFromRead.
@@ -253,6 +357,15 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
   for (const a of Array.isArray(readResult?.awards) ? readResult.awards : []) {
     const title = String(a?.title || '').trim()
     if (!title) continue
+    // AID-TYPE PREFERENCE GATE — before any write. An award whose kind this
+    // profile declined is recorded as declined and skipped; an award whose kind
+    // we cannot name is NEVER excluded (hiding real money because we could not
+    // classify it would be the worse failure).
+    const verdict = evaluateAwardAgainstPreferences(a, education)
+    if (!verdict.accepted) {
+      out.awardsDeclinedByPreference.push({ title, aid_type: verdict.aidType, reason: verdict.reason })
+      continue
+    }
     // Stable id so re-syncing the same award updates rather than duplicates.
     // The PROFILE is part of the identity: without it, two students with the
     // same portal + title + amount collide on one row, and now that award rows
@@ -431,7 +544,19 @@ async function loadProfileBundle(db, profileId) {
 // dead by then).
 const inFlightSyncs = new Map()
 
-export async function runPortalSync(db, { profileId, portalHost, direction = 'read', actorUserId = null } = {}) {
+export async function runPortalSync(db, {
+  profileId, portalHost, direction = 'read', actorUserId = null,
+  // ONE-CLICK SUBMIT (owner rule, 2026-08-01): an ordinary sync fills the
+  // portal's outside-award form and stops. When the profile owner or an admin
+  // explicitly clicks "Submit", the route passes allowSubmit:true and GrantFlow
+  // completes the submission in the SAME live session.
+  //
+  // Why it re-fills rather than resuming: the browser (and the portal's form
+  // state) is destroyed when a sync ends, so there is no half-filled page
+  // waiting anywhere. A click that pretended to "resume" a staged form would be
+  // fiction. The human click IS the authorization, and it is recorded on the run.
+  allowSubmit = false,
+} = {}) {
   if (!db) return { ok: false, direction, connectorId: null, runId: null, error: 'db required' }
   if (!profileId) return { ok: false, direction, connectorId: null, runId: null, error: 'profileId required' }
   const host = normalizeHost(portalHost)
@@ -453,13 +578,13 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
   }
   inFlightSyncs.set(flightKey, { runId: null, connectorId: null, startedAt: Date.now() })
   try {
-    return await runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey })
+    return await runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey, allowSubmit })
   } finally {
     inFlightSyncs.delete(flightKey)
   }
 }
 
-async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey }) {
+async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey, allowSubmit = false }) {
 
   // Load the saved login up front so connector resolution is credential-aware:
   // an MTSU account saved under login.microsoftonline.com must route to the MTSU
@@ -601,6 +726,9 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
         // unauditable after the fact.
         fields: (readResult?.fields || []).map((f) => ({ sectionKey: f?.sectionKey, field: f?.field })),
         awards_found: (readResult?.awards || []).length,
+        // Aid the profile DECLINED by preference (e.g. loans). Surfaced so the
+        // owner can see exactly what was left out and why — never a silent drop.
+        awards_declined_by_preference: persisted?.awardsDeclinedByPreference || [],
         // Fabrication-guard audit trail: extracted items REFUSED as user awards.
         rejected: readResult?.rejected || [],
         not_found: readResult?.notFound || [],
@@ -621,14 +749,51 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
     }
 
     if (dir === 'write' || dir === 'both') {
-      const fundingSources = profileToFundingSources(profile)
-      const writeResult = await connector.write(page, ctx, { fundingSources })
+      // What the household has ACTUALLY WON, read from the pipeline — the
+      // canonical record. profileToFundingSources() reads only the
+      // university_applications section, so any award won outside a school
+      // import was silently never reported to anyone. It stays as a fallback so
+      // a profile whose awards live only in that section is never worse off.
+      const accepted = await collectAcceptedFundingSources(db, { profileId })
+      const fundingSources = accepted.sources.length > 0
+        ? accepted.sources
+        : profileToFundingSources(profile)
+      const writeResult = await connector.write(page, ctx, { fundingSources, allowSubmit })
       if (writeResult?.reached === false && dir === 'write') {
         return await fail(`portal unreachable: ${writeResult?.error || 'navigation failed'}`, { unreachable: true })
       }
       result.write = {
         written: writeResult?.written || [],
+        // Provenance the owner can audit: how many accepted sources were
+        // offered to this portal, and what the household's own aid-type
+        // preference held back (never a silent omission).
+        sources_offered: fundingSources.length,
+        declined_by_preference: accepted.declinedByPreference,
+        ...(accepted.truncated > 0 ? { truncated: accepted.truncated } : {}),
         skipped: writeResult?.skipped || [],
+        // Did GrantFlow actually SEND it, and who authorized that?
+        submitted: writeResult?.submitted === true,
+        submit_authorized_by: allowSubmit ? (actorUserId || 'unknown') : null,
+        // The UI's cue for the one-click Submit button: values are staged on the
+        // portal's form but nothing was sent yet.
+        submittable: writeResult?.submitted !== true
+          && (writeResult?.written || []).some((w) => w?.state === 'filled_not_submitted'),
+      }
+
+      // NO ONLINE WAY TO SUBMIT → produce the mail/fax package instead (owner
+      // rule, 2026-08-01). Refusing to fake a submission is honest but
+      // incomplete: without an artifact the family is simply handed the work
+      // back. Hamilton now writes a signed-ready outside-award report into the
+      // profile's Documents and TELLS the owner it is there.
+      //
+      // Fires only when there was real work to report and the portal gave us no
+      // way to send it — never after a successful submit, and never for an
+      // empty list.
+      if (needsMailFaxPacket(writeResult, fundingSources)) {
+        const packet = await buildOutsideAwardFallbackPacket(db, {
+          profile, profileId, host, fundingSources, actorUserId,
+        })
+        if (packet) result.write.mail_fax_packet = packet
       }
       if (writeResult?.reached === false) result.write.unreachable = writeResult?.error || 'navigation failed'
       summary.write = result.write
@@ -647,6 +812,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
 
 export const _internal = {
   persistReadResult, recordStudentPortalChecks, applyFafsaStatusFromRead, markSessionDeadAfterWall,
+  buildOutsideAwardFallbackPacket,
 }
 
 export default { runPortalSync, listConnectors, getConnectorForHost, ensurePortalSyncSchema, listRuns }
