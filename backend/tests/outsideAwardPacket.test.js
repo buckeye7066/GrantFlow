@@ -14,6 +14,7 @@
  * alert that it exists.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import os from 'node:os'
 
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'a'.repeat(64)
 
@@ -91,7 +92,7 @@ describe('generateOutsideAwardPacket — files it in Documents', () => {
         buildHtml: () => '<html>report</html>',
         tryBuildPdfFromHtml: async () => null,
         insertDocumentRecord,
-        getPacketStorageDir: () => process.env.TEMP || '/tmp',
+        getPacketStorageDir: () => os.tmpdir(),
       },
     }))
     const { generateOutsideAwardPacket } = await import('../services/hamilton/portalSync/outsideAwardPacket.js')
@@ -116,7 +117,7 @@ describe('generateOutsideAwardPacket — files it in Documents', () => {
       buildDocxBuffer: vi.fn(async () => Buffer.from('docx')),
       _internal: {
         buildHtml: () => '<html/>', tryBuildPdfFromHtml: async () => null,
-        insertDocumentRecord, getPacketStorageDir: () => process.env.TEMP || '/tmp',
+        insertDocumentRecord, getPacketStorageDir: () => os.tmpdir(),
       },
     }))
     const { generateOutsideAwardPacket } = await import('../services/hamilton/portalSync/outsideAwardPacket.js')

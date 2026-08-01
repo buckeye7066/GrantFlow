@@ -124,7 +124,11 @@ export async function reportOutsideAwards(page, { sources = [], allowSubmit = fa
         // The state is part of the record: never let "written" be read as "sent".
         state: 'filled_not_submitted',
       })
-      say(`staged outside award "${name}"`)
+      // The award NAME is tainted (it comes from a portal page / the DB), so it
+      // rides as structured detail rather than being interpolated into the log
+      // message — CodeQL flags the interpolated form as js/tainted-format-string,
+      // and the connector log signature is (msg, detail) precisely for this.
+      say('staged outside award', { name })
     } catch (err) {
       skipped.push({ target: name, reason: `fill failed: ${err?.message || err}` })
     }
