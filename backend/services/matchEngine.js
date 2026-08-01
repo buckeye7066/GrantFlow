@@ -35,6 +35,9 @@ import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
 import { isGenericOnly } from '../config/genericTitleVocabulary.js'
+import { detectForeignJurisdiction, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
+import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
+import { resolveProfileType, getParentChain } from './profileTypeRegistry.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('matchEngine')
 
@@ -3462,6 +3465,85 @@ export async function loadPreferenceSignals(db, profileId) {
  * @param {Object} opportunity - Raw opportunity object
  * @returns {{ decision: string, explanation: string, reasons: string[] }}
  */
+/**
+ * Collapse every whitespace run to ONE space, once, before pattern matching.
+ *
+ * WHY THIS EXISTS (js/polynomial-redos, CodeQL, PR #1080). The residency-scope
+ * pattern below is matched against `opp.title + opp.description` — crawler-
+ * controlled text — and it interleaved overlapping whitespace quantifiers
+ * (`must\s+be\s+a?\s*resident`: `\s+`, then an optional `a`, then `\s*`). For a
+ * run of n whitespace characters the engine can split it n ways at each of n
+ * start positions, so the match is QUADRATIC in the length of the run. Measured
+ * on the pre-fix pattern with `'must be' + '\t\t'.repeat(n)`: 2 008 chars →
+ * 11.9 ms, 4 008 → 36.6 ms, 8 008 → 147.6 ms, 16 008 → 567.8 ms — a clean 4×
+ * per doubling. makeDecision runs per-profile × per-opportunity, so ONE
+ * pathological page title is amplified across the whole fleet.
+ *
+ * Normalizing first makes every whitespace quantifier in the pattern a LITERAL
+ * single space, which is disjoint from the character classes around it — the
+ * ambiguity that caused the backtracking simply cannot arise. `\s+` in a global
+ * replace has a single non-overlapping quantifier and is itself linear.
+ */
+export function normalizeMatchWhitespace(text) {
+  return String(text ?? '').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Residency-scope declaration: any phrase tying "residents" to a qualifier.
+ *   • "residents only" / "must be a resident" / "must reside in"
+ *   • "limited to residents"
+ *   • "for <X> residents"            (e.g. "for Texas residents")
+ *   • "<X> residents (only|facing|who|experiencing|must)"
+ *   • "exclusively for <X> residents"
+ *
+ * Operates on `normalizeMatchWhitespace()` output ONLY — every space here is a
+ * literal single space, never `\s+`. Accepts exactly the same phrases the
+ * pre-fix pattern did (proved by an A/B oracle test over a real corpus in
+ * `residencyScopeRedos.test.js`).
+ *
+ * Previously this literal was duplicated verbatim inside makeDecision — once per
+ * branch — which is the two-copies-must-not-drift shape the repo keeps getting
+ * bitten by. One constant now, consulted by both branches.
+ */
+export const RESIDENCY_EXCLUSIVE_RX = new RegExp(
+  '\\b(?:' +
+    [
+      'residents? only',
+      'must be a? ?resident',
+      'must reside in',
+      'limited to residents',
+      'for \\w+(?: \\w+)? residents?',
+      '\\w+ residents? (?:only|facing|who|experiencing|must)',
+      'exclusively for \\w+(?: \\w+)? residents?',
+    ].join('|') +
+    ')\\b',
+  'i',
+)
+
+/**
+ * Person-or-household profile types, resolved through the canonical profile-type
+ * registry so a leaf like `senior` / `disabled_adult` / `college_student` rolls up
+ * to `individual` instead of falling out of a hand-written list (the reason the
+ * inline `['individual','individual_need','family','medical_assistance']` check
+ * below could not see the `senior` profile in the owner's report).
+ *
+ * Conservative in BOTH directions: an unknown type is not a person (never widen a
+ * hard gate onto an org), and a type that also rolls up to an org root is not a
+ * person either.
+ */
+const MATCH_INDIVIDUAL_ROOT_TYPES = Object.freeze(['individual', 'family', 'student', 'veteran'])
+const MATCH_ORG_ROOT_TYPES = Object.freeze([
+  'business', 'nonprofit', 'public_agency', 'local_government', 'school',
+  'school_district', 'church', 'library', 'government', 'organization',
+])
+export function isIndividualLikeProfileType(rawType) {
+  const id = resolveProfileType(rawType)
+  if (!id) return false
+  const chain = [id, ...getParentChain(id)]
+  if (chain.some((t) => MATCH_ORG_ROOT_TYPES.includes(t))) return false
+  return chain.some((t) => MATCH_INDIVIDUAL_ROOT_TYPES.includes(t))
+}
+
 export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null) {
   const reasons = []
   const opp = opportunity || {}
@@ -3495,6 +3577,49 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   const isIndividualOrCaregiver = isIndividual || profileType === 'caregiver' || np?.isCaregiver
   const isResearcher = profileType === 'researcher'
   const profNeeds = np?.needCategories ?? safeParseArrayField(prof.needs, []).map((n) => String(n).toLowerCase())
+
+  // ── Scope gates: WHERE the money is valid and WHO can physically receive it.
+  //    Both read structural facts the row publishes about ITSELF (its own url,
+  //    its own stated award ceiling) rather than eligibility prose, because the
+  //    rows that motivated them carry no eligibility prose at all.
+
+  // JURISDICTION. The geography gate below compares a US STATE code and nothing
+  // else, so a program administered by another government (state NULL) skips it
+  // entirely — and, having no state, it was also stamped is_national, which makes
+  // the geo TIER score it as a fully-eligible NATIONWIDE US program. An Irish
+  // local-authority housing scheme is not "possibly accessible" to a US
+  // applicant; it is categorically unavailable, which is a REJECT, not a REVIEW.
+  const foreignJurisdiction = detectForeignJurisdiction(opp)
+  if (foreignJurisdiction.foreign) {
+    const reasonText =
+      `Foreign jurisdiction: this program is published by ${foreignJurisdiction.host} ` +
+      `(.${foreignJurisdiction.cctld}) and is administered outside the United States`
+    reasons.push(reasonText)
+    return {
+      decision: 'REJECT',
+      explanation: `${reasonText}. A US applicant cannot apply to it.`,
+      reasons,
+    }
+  }
+
+  // AWARD SCALE. An award ceiling above what a person can physically receive is
+  // institutional money, whatever the page says (or fails to say) about who may
+  // apply. This is the SAME bar enforceIndividualAmountCeiling() has applied to
+  // an individual's pipeline for months; the match store was simply never held
+  // to it, so HUD FHIP ($1.25M, eligibility_text NULL) reached a senior's
+  // Funding Sources list as "Individual applicant".
+  if (isIndividualLikeProfileType(profileType) && exceedsIndividualAwardCeiling(opp)) {
+    const stated = statedAwardCeiling(opp)
+    const reasonText =
+      `Institutional award scale: awards up to $${Number(stated).toLocaleString('en-US')} ` +
+      'are made to organizations, not to an individual or household'
+    reasons.push(reasonText)
+    return {
+      decision: 'REJECT',
+      explanation: `${reasonText}. This is an institutional grant, not individual assistance.`,
+      reasons,
+    }
+  }
 
   // ── Categorical restriction gates — all driven by `on` (normalizeOpportunity
   //    flags), the single source of truth. Order and reason strings preserved.
@@ -3641,17 +3766,31 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // Single-address profiles collapse to exactly one state → identical behavior.
   const profStateList = profileStates(signals, np?.state ?? prof.state)
   const profState = profStateList[0] ? profStateList[0] : String((np?.state ?? prof.state) || '').trim()
-  const oppStateRaw = String(opp.state || '').trim()
-  const oppIsNational = Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide'
+  // A row may DECLARE its own service area in its own title ("Polk County, TN —
+  // Local assistance programs near you"). These hyperlocal locator rows are
+  // minted per-place with no geography columns at all, so `opp.state` is empty
+  // and `is_national` is 1 — and this whole block short-circuits on the empty
+  // state while the geo TIER above scores them as nationwide. Read the place the
+  // row itself published: it is the only geographic fact it carries, and a
+  // county resource directory is exclusive to that county by construction (it is
+  // not a program that "may still be accessible" from another state). The
+  // catalog-side repair is enforceDeclaredGeoScope(); this makes the engine
+  // correct even for a row the sweep has not reached yet.
+  const declaredPlaceState = declaredStateFromTitle(opp)
+  const oppStateRaw = String(opp.state || '').trim() || (declaredPlaceState ?? '')
+  const oppIsNational =
+    (Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide') && !declaredPlaceState
   const oNormState = normalizeState(oppStateRaw)
   const matchesAnyProfileState = Boolean(oNormState) && profStateList.includes(oNormState)
   if (oppStateRaw && !oppIsNational && oNormState && !matchesAnyProfileState) {
+    // Normalize ONCE, here, for both branches below. Computed inside the gate so
+    // rows that never reach a residency question pay nothing for it.
+    const residencyText = normalizeMatchWhitespace(oppText)
     if (profStateList.length === 0) {
       // No profile state at all. Per canonical_rules "missing = neutral": do NOT
       // REJECT even when the opportunity is state-exclusive; surface for review so
       // the user can confirm residency themselves.
-      const RE_STATE_EXCLUSIVE_MISSING = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
-      if (RE_STATE_EXCLUSIVE_MISSING.test(oppText) || opp.state_residents_only === true) {
+      if (RESIDENCY_EXCLUSIVE_RX.test(residencyText) || opp.state_residents_only === true) {
         reasons.push(`Geographic note — opportunity is for ${oppStateRaw} residents; profile state unknown (confirm eligibility)`)
         return {
           decision: 'REVIEW',
@@ -3662,16 +3801,13 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       // No exclusivity signal + unknown profile state: fall through to scoring.
     } else {
       // Opportunity's state is in NONE of the profile's states.
-      // Residency-scope signals: any phrase tying "residents" to a qualifier is
-      // treated as an explicit state-scope declaration.
-      //   • "residents only" / "must be a resident" / "must reside in"
-      //   • "limited to residents"
-      //   • "for <X> residents" (e.g. "for Texas residents")
-      //   • "<X> residents (only|facing|who|experiencing|...)"
-      //   • "exclusively for <X> residents"
-      const RE_STATE_EXCLUSIVE = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
+      // Residency-scope signals live in the canonical RESIDENCY_EXCLUSIVE_RX.
+      // A row that names its OWN locality is place-exclusive by construction:
+      // "Polk County, TN — Local assistance programs near you" is a directory of
+      // Polk County agencies. There is nothing in it an Indiana household can
+      // use, so "may still be accessible" is not an honest verdict for it.
       const isExplicitlyExclusive =
-        RE_STATE_EXCLUSIVE.test(oppText) || opp.state_residents_only === true
+        RESIDENCY_EXCLUSIVE_RX.test(residencyText) || opp.state_residents_only === true || Boolean(declaredPlaceState)
       const profStateLabel = profStateList.join('/')
       if (isExplicitlyExclusive) {
         const reasonText = `Geographic mismatch: opportunity is for ${oppStateRaw}, profile is in ${profStateLabel}`
