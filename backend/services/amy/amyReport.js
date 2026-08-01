@@ -18,6 +18,7 @@ import { classifyThesisArchetype } from '../../crawler-os/archetypes.js'
 import { FINDING_TYPES, SEVERITY, SEARCH_KIND, CODE_TARGETS, ORIGIN_AGENT } from './amyConstants.js'
 import { isGenericTitle, isGenericOnly } from '../../config/genericTitleVocabulary.js'
 import { AMOUNT_STATUS_NONE_PUBLISHED } from '../awardAmountExtractor.js'
+import { isPointerKind } from '../../config/opportunityKindClasses.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
 const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
@@ -262,8 +263,24 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   // fix is NOT to drop locators from the list (that is the forbidden other end
   // of the defect) and NOT to let them ACCEPT — it is to say which fact we are
   // reporting: a DIRECT-award recall gap, or a locator-only universe.
-  const locatorRecs = recommendations.filter((r) => isLocatorKind(r.kind))
-  const directRecs = recommendations.filter((r) => !isLocatorKind(r.kind))
+  // WHICH KINDS COUNT AS A POINTER comes from the canonical registry
+  // (`config/opportunityKindClasses.js`), never from a kind typed here. Prod
+  // 2026-08-01 carries FOUR pointer kinds — `directory` 4271, `DIRECTORY` 224,
+  // `referral` 119, `school_portal` 102 — and school_portal rows really do
+  // reach match rows. A hand-typed `=== 'DIRECTORY'` here is the exact subset
+  // bug #1088 fixed one level over in `pipeline.amountCoverage`.
+  //
+  // POINTER_KINDS, not NO_PER_AWARD_FIGURE_KINDS: a BENEFIT program publishes
+  // no fixed figure but IS the thing you apply to, so it is a real direct
+  // award for this question (511 benefit match rows in prod would otherwise
+  // be misreported as pointers).
+  //
+  // `isLocatorKind` is deliberately left alone and still guards the
+  // false_positive detector: CLAUDE.md pins that contract to declared
+  // DIRECTORY locators, and widening it there would change a different,
+  // already-calibrated finding.
+  const locatorRecs = recommendations.filter((r) => isPointerKind(r.kind))
+  const directRecs = recommendations.filter((r) => !isPointerKind(r.kind))
   const topDirectScore = directRecs.reduce((m, r) => Math.max(m, num(r.match_score)), 0)
   const topLocatorScore = locatorRecs.reduce((m, r) => Math.max(m, num(r.match_score)), 0)
   // Locator-only: something was recommended, and every one of them is a pointer.

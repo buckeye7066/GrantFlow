@@ -89,6 +89,21 @@ export function isNoPerAwardFigureKind(kind) {
   return NO_PER_AWARD_FIGURE_KINDS.includes(String(kind ?? '').trim().toLowerCase())
 }
 
+/**
+ * JS-side twin of `pointerKindSql`, for rows already in memory.
+ *
+ * POINTERS ONLY — deliberately NOT the `NO_PER_AWARD_FIGURE_KINDS` union. A
+ * BENEFIT program (Pell, SSI, LIHEAP) publishes no fixed figure but IS the
+ * thing you apply to, so a consumer asking "did this profile actually get
+ * something it can apply to?" must count a benefit as a real award. Prod
+ * 2026-08-01 holds 668 benefit catalog rows behind 511 match rows; folding
+ * them in here would misreport those profiles as having received only
+ * pointers.
+ */
+export function isPointerKind(kind) {
+  return POINTER_KINDS.includes(String(kind ?? '').trim().toLowerCase())
+}
+
 export default {
   POINTER_KINDS,
   NO_FIXED_AWARD_KINDS,
@@ -96,4 +111,5 @@ export default {
   noPerAwardFigureKindSql,
   pointerKindSql,
   isNoPerAwardFigureKind,
+  isPointerKind,
 }

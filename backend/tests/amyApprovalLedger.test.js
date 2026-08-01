@@ -27,6 +27,7 @@ import {
   LEDGER_MAX_ENTRIES,
 } from '../services/amy/approvalLedger.js'
 import { buildApprovalQueue, proposeCoverageOverrides } from '../services/amy/crawlerTuner.js'
+import { POINTER_KINDS } from '../config/opportunityKindClasses.js'
 import { evaluateDiscovery } from '../services/amy/amyReport.js'
 
 const D1 = '2026-07-25T04:00:00.000Z' // ET 2026-07-25
@@ -239,6 +240,55 @@ describe('locator-only weak matches are a COVERAGE gap, not a scoring-weights ga
     // The pre-fix message quoted the locator's score as "top score", which
     // reads as "we nearly had a strong match".
     expect(weak.message).not.toMatch(/top score 10 \(review-band only\)/)
+  })
+
+  // ── the pointer set comes from the REGISTRY, not from a kind typed here ──
+  // #1088 fixed exactly this shape one level over: `pipeline.amountCoverage`
+  // hand-typed ('directory','benefit') while prod carries `referral` (119) and
+  // `school_portal` (102) as well. This split is a NEW consumer of the same
+  // classification, so it must read `POINTER_KINDS`.
+  it('every POINTER kind counts as a pointer, not as a direct award', () => {
+    for (const kind of POINTER_KINDS) {
+      const ev = evaluateDiscovery(scenario, 'p1', {
+        run: {
+          run_id: 'r',
+          stored: 50,
+          recommendations: [{ title: `A ${kind} row`, kind, decision: 'REVIEW', match_score: 9 }],
+          sources: [],
+        },
+        thesis: {},
+      })
+      expect(ev.locator_only, `${kind} must classify as a pointer`).toBe(true)
+      expect(ev.direct_recommendations).toBe(0)
+    }
+  })
+
+  it('prod casing is handled in both directions (directory AND DIRECTORY)', () => {
+    // Prod holds `directory` 4271 AND `DIRECTORY` 224 on the same column.
+    for (const kind of ['directory', 'DIRECTORY', 'School_Portal', ' referral ']) {
+      const ev = evaluateDiscovery(scenario, 'p1', {
+        run: { run_id: 'r', stored: 50, recommendations: [{ title: 't', kind, decision: 'REVIEW', match_score: 9 }], sources: [] },
+        thesis: {},
+      })
+      expect(ev.locator_only, `${JSON.stringify(kind)} must classify as a pointer`).toBe(true)
+    }
+  })
+
+  it('a BENEFIT is a DIRECT award, never a pointer (511 prod match rows ride on this)', () => {
+    // A benefit program publishes no fixed figure but IS the thing you apply
+    // to. Using NO_PER_AWARD_FIGURE_KINDS here would flip real profiles to
+    // locator_only and misroute them at the coverage lever.
+    const ev = evaluateDiscovery(scenario, 'p1', {
+      run: {
+        run_id: 'r',
+        stored: 50,
+        recommendations: [{ title: 'Federal Pell Grant', kind: 'benefit', decision: 'ACCEPT', match_score: 20 }],
+        sources: [],
+      },
+      thesis: {},
+    })
+    expect(ev.locator_only).toBe(false)
+    expect(ev.direct_recommendations).toBe(1)
   })
 
   it('a weak run WITH direct awards is still routed at scoring weights', () => {
