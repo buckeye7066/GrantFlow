@@ -18,6 +18,7 @@ import { classifyThesisArchetype } from '../../crawler-os/archetypes.js'
 import { FINDING_TYPES, SEVERITY, SEARCH_KIND, CODE_TARGETS, ORIGIN_AGENT } from './amyConstants.js'
 import { isGenericTitle, isGenericOnly } from '../../config/genericTitleVocabulary.js'
 import { AMOUNT_STATUS_NONE_PUBLISHED } from '../awardAmountExtractor.js'
+import { isPointerKind } from '../../config/opportunityKindClasses.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
 const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
@@ -238,6 +239,52 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     (r) => canonicalRecommendationDecision(r) === 'REVIEW',
   )
   const topScore = recommendations.reduce((m, r) => Math.max(m, num(r.match_score)), 0)
+
+  // ── LOCATOR-ONLY SPLIT (2026-08-01) ───────────────────────────────────────
+  // `isRecommendable()` (crawler-os/matchEngine.js) admits exactly two things:
+  // an ACCEPT of any kind, and a DIRECTORY locator at REVIEW. So a REVIEW row
+  // in this list is, BY CONSTRUCTION, a DIRECTORY locator — and the canonical
+  // locator rule says a locator can NEVER claim ACCEPT.
+  //
+  // That made the weak_match finding structurally unfalsifiable for any profile
+  // whose reachable universe is pointers: `accepted.length === 0 &&
+  // review.length > 0` reported "top score 54 (review-band only)", inviting the
+  // reader to believe a real award nearly qualified, when 54 was a LOCATOR's
+  // score that the product forbids from ever accepting. Amy then minted a
+  // `scoring_weights` approval item — a lever that provably cannot move the
+  // final score (weights act only inside the topical-evidence blend; see
+  // matchThresholds.TOPICAL_EVIDENCE_STRONG_BAR) — so the item could not be
+  // closed by the only mechanism offered for it. Prod 2026-07-30: four such
+  // items (tribal_org, community_development_corp, housing_authority,
+  // workforce_org), three of them with top_score exactly 10.
+  //
+  // This is the SAME class as the already-fixed false_positive/locator artifact
+  // ("counting locators measured the naming convention, not the matcher"). The
+  // fix is NOT to drop locators from the list (that is the forbidden other end
+  // of the defect) and NOT to let them ACCEPT — it is to say which fact we are
+  // reporting: a DIRECT-award recall gap, or a locator-only universe.
+  // WHICH KINDS COUNT AS A POINTER comes from the canonical registry
+  // (`config/opportunityKindClasses.js`), never from a kind typed here. Prod
+  // 2026-08-01 carries FOUR pointer kinds — `directory` 4271, `DIRECTORY` 224,
+  // `referral` 119, `school_portal` 102 — and school_portal rows really do
+  // reach match rows. A hand-typed `=== 'DIRECTORY'` here is the exact subset
+  // bug #1088 fixed one level over in `pipeline.amountCoverage`.
+  //
+  // POINTER_KINDS, not NO_PER_AWARD_FIGURE_KINDS: a BENEFIT program publishes
+  // no fixed figure but IS the thing you apply to, so it is a real direct
+  // award for this question (511 benefit match rows in prod would otherwise
+  // be misreported as pointers).
+  //
+  // `isLocatorKind` is deliberately left alone and still guards the
+  // false_positive detector: CLAUDE.md pins that contract to declared
+  // DIRECTORY locators, and widening it there would change a different,
+  // already-calibrated finding.
+  const locatorRecs = recommendations.filter((r) => isPointerKind(r.kind))
+  const directRecs = recommendations.filter((r) => !isPointerKind(r.kind))
+  const topDirectScore = directRecs.reduce((m, r) => Math.max(m, num(r.match_score)), 0)
+  const topLocatorScore = locatorRecs.reduce((m, r) => Math.max(m, num(r.match_score)), 0)
+  // Locator-only: something was recommended, and every one of them is a pointer.
+  const locatorOnly = recommendations.length > 0 && directRecs.length === 0
 
   // Retain the scored candidates so the tuner can sweep the score floor across
   // the whole cohort WITHOUT re-crawling (the floor is applied after scoring).
@@ -478,11 +525,30 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   } else if (accepted.length === 0) {
     if (review.length > 0 || topScore >= REVIEW_SCORE) {
       status = 'weak'
+      // Say WHICH fact this is. A locator-only list is a DIRECT-AWARD COVERAGE
+      // gap ("nothing but pointers reached this profile"), not a scoring gap —
+      // and its top score belongs to a row the locator rule forbids from ever
+      // accepting, so quoting it as "top score" is misleading by construction.
+      const message = locatorOnly
+        ? `${scenario.label}: ${stored} stored, but ZERO direct awards were recommended — all ${locatorRecs.length} recommendation(s) are DIRECTORY locators, which by the locator rule can never claim ACCEPT (best locator score ${topLocatorScore}). This is a direct-award COVERAGE gap for this category, not a scoring-weight gap.`
+        : `${scenario.label}: ${stored} stored, but no ACCEPT — top direct-award score ${topDirectScore} (review-band only).`
       findings.push(
         makeFinding(FINDING_TYPES.WEAK_MATCH, {
-          message: `${scenario.label}: ${stored} stored, but no ACCEPT — top score ${topScore} (review-band only).`,
-          excerpt: `stored=${stored} accepted=0 review=${review.length} top_score=${topScore}`,
-          evidence: { ...baseEvidence, stored, top_score: topScore, review: review.length },
+          message,
+          excerpt: `stored=${stored} accepted=0 direct=${directRecs.length} locators=${locatorRecs.length} top_direct=${topDirectScore} top_locator=${topLocatorScore}`,
+          evidence: {
+            ...baseEvidence,
+            stored,
+            // `top_score` keeps its historical meaning (max over the whole
+            // recommendation list) so existing consumers do not silently shift.
+            top_score: topScore,
+            top_direct_score: topDirectScore,
+            top_locator_score: topLocatorScore,
+            review: review.length,
+            direct_recommendations: directRecs.length,
+            locator_recommendations: locatorRecs.length,
+            locator_only: locatorOnly,
+          },
         }),
       )
     } else {
@@ -515,6 +581,12 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     accepted: accepted.length,
     review: review.length,
     top_score: topScore,
+    // The locator split travels with the evaluation so the tuner can route a
+    // weak category at the lever that can actually close it (buildApprovalQueue).
+    direct_recommendations: directRecs.length,
+    locator_recommendations: locatorRecs.length,
+    top_direct_score: topDirectScore,
+    locator_only: locatorOnly,
     sources_total: sources.length,
     sources_failed: failedSources.length,
     candidates,

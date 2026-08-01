@@ -17,6 +17,7 @@
 
 import { DISCOVERY_MIN_SCORE_FLOOR } from '../../config/matchThresholds.js'
 import { FINDING_TYPES, CODE_TARGETS, SEVERITY } from './amyConstants.js'
+import { leverActionability, ACTIONABILITY } from './approvalLedger.js'
 
 /**
  * @param {object} args
@@ -135,7 +136,29 @@ const CATEGORY_COVERAGE = Object.freeze({
   // 2026-07-06: was ABSENT — CDC zero-result gaps could never auto-remediate
   // and every finding for the category dead-ended in the approval queue.
   community_development_corp: { applicant_types: ['nonprofit'], need_categories: ['housing_development', 'economic_development'], source: 'eda_economic_development' },
+  // 2026-08-01: both categories produced a LOCATOR-ONLY crawl in prod (stored
+  // 178/190, zero direct awards recommended) and had no coverage lane at all,
+  // so every finding for them dead-ended in the approval queue against a lever
+  // that cannot move the final score. See the locator-only routing below.
+  housing_authority: { applicant_types: ['government', 'nonprofit'], need_categories: ['housing', 'housing_development'], source: 'hud_homeless_assistance' },
+  tribal_org: { applicant_types: ['government', 'nonprofit'], need_categories: ['programs', 'housing', 'economic_development'], source: 'bia_tribal_programs' },
 })
+
+/**
+ * A weak evaluation whose ENTIRE recommendation list is DIRECTORY locators.
+ *
+ * `isRecommendable` admits an ACCEPT of any kind plus a DIRECTORY locator at
+ * REVIEW, and the canonical locator rule forbids a locator from ever claiming
+ * ACCEPT — so "stored a lot, recommended only locators" is a DIRECT-AWARD
+ * COVERAGE gap. Routing it at `scoring_weights` was unclosable by construction:
+ * W_* weights move only the topical-evidence subscale, never the final score.
+ *
+ * Older evaluations (before the split shipped) carry no `locator_only` field;
+ * they are treated as NOT locator-only so the historical routing is unchanged.
+ */
+function isLocatorOnlyWeak(evaluation) {
+  return evaluation?.status === 'weak' && evaluation?.locator_only === true
+}
 
 /**
  * Propose ADDITIVE coverage overrides for categories that returned zero results
@@ -148,11 +171,26 @@ const CATEGORY_COVERAGE = Object.freeze({
  */
 export function proposeCoverageOverrides(evaluations = [], { liveOverrides = {}, opts = {} } = {}) {
   const minZero = Number.isFinite(opts.minZero) ? opts.minZero : 2
-  const zeroByCat = tally((Array.isArray(evaluations) ? evaluations : []).filter((e) => e.status === 'zero'), (e) => e.category)
+  // A LOCATOR-ONLY crawl is a stronger signal than a zero result at the same
+  // sample size: the run reached the open web, stored 170+ rows, and still
+  // recommended nothing but pointers — that is not a search outage, it is a
+  // missing direct-award lane. It also cannot be closed any other way (the
+  // `scoring_weights` lever provably does not move the final score). Every
+  // proposal here is still additive-only, empirically re-crawl validated,
+  // auto-reverted on no gain, and gated by AMY_APPLY_COVERAGE.
+  const minLocatorOnly = Number.isFinite(opts.minLocatorOnly) ? opts.minLocatorOnly : 1
+  const evals = Array.isArray(evaluations) ? evaluations : []
+  const zeroByCat = tally(evals.filter((e) => e.status === 'zero'), (e) => e.category)
+  const locatorOnlyByCat = tally(evals.filter(isLocatorOnlyWeak), (e) => e.category)
+  const gapByCat = { ...zeroByCat }
+  for (const [category, count] of Object.entries(locatorOnlyByCat)) {
+    if (count < minLocatorOnly) continue
+    gapByCat[category] = Math.max(Number(gapByCat[category]) || 0, minZero)
+  }
   const next = JSON.parse(JSON.stringify(liveOverrides || {}))
   const additions = []
 
-  for (const [category, count] of Object.entries(zeroByCat)) {
+  for (const [category, count] of Object.entries(gapByCat)) {
     if (count < minZero) continue
     const cov = CATEGORY_COVERAGE[category]
     if (!cov) continue
@@ -165,7 +203,14 @@ export function proposeCoverageOverrides(evaluations = [], { liveOverrides = {},
     const merged = { add_need_categories: [...beforeN], add_applicant_types: [...beforeT] }
     if (JSON.stringify(merged) !== JSON.stringify(next[sid] || {})) {
       next[sid] = merged
-      additions.push({ source_id: sid, category, zero_profiles: count, ...cov })
+      additions.push({
+        source_id: sid,
+        category,
+        zero_profiles: Number(zeroByCat[category]) || 0,
+        locator_only_profiles: Number(locatorOnlyByCat[category]) || 0,
+        gap_kind: (Number(zeroByCat[category]) || 0) >= minZero ? 'zero_result' : 'locator_only',
+        ...cov,
+      })
     }
   }
 
@@ -204,7 +249,6 @@ export function buildApprovalQueue(evaluations = []) {
       severity: SEVERITY.HIGH,
       rationale: `${count} synthetic "${category}" profile(s) returned ZERO opportunities — the planner is not selecting any source that covers this category. Add category→source/keyword coverage.`,
       evidence: { zero_profiles: count },
-      requires_approval: true,
     })
   }
 
@@ -219,7 +263,6 @@ export function buildApprovalQueue(evaluations = []) {
       severity: SEVERITY.HIGH,
       rationale: `${count} "${category}" profile(s) had generic results ACCEPTED as strong matches. Approve the relevance_precision lever (Amy console → "relevance") to add the recurring generic phrasing to the shared vocabulary so those titles are held at REVIEW instead of clearing ACCEPT.`,
       evidence: { false_positive_profiles: count },
-      requires_approval: true,
     })
   }
 
@@ -238,22 +281,45 @@ export function buildApprovalQueue(evaluations = []) {
       severity: SEVERITY.HIGH,
       rationale: `${count} "${category}" profile(s) ACCEPTED an opportunity they are INELIGIBLE for (e.g. enrolled-student aid for a non-student). Evolve the eligibility gate so ineligible opportunities REJECT/cap below the floor at scoring time; the surfacedEligibility sweep is only the net.`,
       evidence: { ineligible_profiles: count },
-      requires_approval: true,
     })
   }
 
-  // 3. Weak categories → scoring under-credit (matchEngine weights).
-  const weakByCat = tally(evals.filter((e) => e.status === 'weak'), (e) => e.category)
-  for (const [category, count] of Object.entries(weakByCat)) {
+  // 3. Weak categories. SPLIT BY WHAT ACTUALLY WENT WRONG (2026-08-01).
+  //
+  //  (a) LOCATOR-ONLY — the run recommended nothing but DIRECTORY pointers,
+  //      which the locator rule forbids from ever claiming ACCEPT. Routing this
+  //      at `scoring_weights` asked the owner to approve a lever that provably
+  //      cannot move the final score (weights act only inside the topical
+  //      subscale), so the item could never be closed. It is a DIRECT-AWARD
+  //      coverage gap and goes to the coverage lever, which Amy can apply
+  //      herself under re-crawl validation + auto-revert.
+  //  (b) genuinely weak DIRECT awards — real scoring under-credit, unchanged.
+  const locatorOnlyByCat = tally(evals.filter(isLocatorOnlyWeak), (e) => e.category)
+  const directWeakByCat = tally(
+    evals.filter((e) => e.status === 'weak' && !isLocatorOnlyWeak(e)),
+    (e) => e.category,
+  )
+  for (const [category, count] of Object.entries(locatorOnlyByCat)) {
+    const covered = Boolean(CATEGORY_COVERAGE[category])
+    items.push({
+      id: `coverage_direct:${category}`,
+      lever: 'source_keyword_coverage',
+      target_file: CODE_TARGETS[FINDING_TYPES.ZERO_RESULT].file,
+      category,
+      severity: SEVERITY.HIGH,
+      rationale: `${count} "${category}" profile(s) stored real candidates but recommended ONLY DIRECTORY locators — pointers, which by the locator rule can never claim ACCEPT. This is a direct-award coverage gap for the category, not a scoring gap${covered ? ' (Amy can widen the mapped source lane herself and re-crawl to validate)' : ' — and the category has NO entry in CATEGORY_COVERAGE, so no source lane can be widened for it yet'}.`,
+      evidence: { locator_only_profiles: count, has_coverage_lane: covered },
+    })
+  }
+  for (const [category, count] of Object.entries(directWeakByCat)) {
     items.push({
       id: `scoring:${category}`,
       lever: 'scoring_weights',
       target_file: CODE_TARGETS[FINDING_TYPES.WEAK_MATCH].file,
       category,
       severity: SEVERITY.MEDIUM,
-      rationale: `${count} "${category}" profile(s) found opportunities but none scored strongly. Review need/eligibility/category credit for this applicant type.`,
+      rationale: `${count} "${category}" profile(s) recommended direct awards but none scored strongly. Review need/eligibility/category credit for this applicant type.`,
       evidence: { weak_profiles: count },
-      requires_approval: true,
     })
   }
 
@@ -267,8 +333,23 @@ export function buildApprovalQueue(evaluations = []) {
       severity: SEVERITY.MEDIUM,
       rationale: `${failedSourceProfiles.length} profile(s) hit source fetch/parse failures. Audit adapter health, retries, and missing API keys.`,
       evidence: { profiles_with_source_failures: failedSourceProfiles.length },
-      requires_approval: true,
     })
+  }
+
+  // ── ACTIONABILITY (2026-08-01) ──────────────────────────────────────────
+  // Every item declares HOW it can be closed, from the single LEVER_REGISTRY.
+  // `requires_approval` must mean "a human CAN approve this", never "a human is
+  // being asked to": items on an AUTO lever are Amy's own work, and items on a
+  // CODE_CHANGE lever cannot be closed by any approval at all. Rendering those
+  // as "Needs your approval" is the fake ask that made this queue unreadable —
+  // six lines in the owner's morning email, none of them clickable, none of
+  // them ever actioned in production.
+  for (const item of items) {
+    const meta = leverActionability(item.lever)
+    item.actionability = meta.actionability
+    item.apply_surface = meta.surface
+    item.human_gate_reason = meta.why
+    item.requires_approval = meta.actionability === ACTIONABILITY.OWNER_API
   }
 
   // Order by severity then evidence size.

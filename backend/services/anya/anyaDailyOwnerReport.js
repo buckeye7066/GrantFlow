@@ -246,10 +246,39 @@ export function summarizeAmyFlywheel(amy) {
 
   const couldNot = []
   const queue = Array.isArray(report.approval_queue) ? report.approval_queue.filter((q) => !q?.auto_applied) : []
-  for (const item of queue.slice(0, 6)) {
-    couldNot.push(`Needs your approval: ${item?.lever || 'change'}${item?.category ? ` for ${item.category}` : ''}${item?.reason ? ` — ${item.reason}` : ''}`)
+  // A ledger CLOSE is the only proof this loop can converge — report it first,
+  // above the open items, so an owner can see the queue moving at all.
+  const closed = Array.isArray(report.approval_ledger?.closed) ? report.approval_ledger.closed : []
+  if (closed.length > 0) {
+    edits.push(`${closed.length} approval item(s) CLOSED — stopped reproducing after ${closed.map((c) => `${c.lever || 'change'}${c.category ? `/${c.category}` : ''} (${c.nights_open || 1}n)`).slice(0, 4).join(', ')}.`)
   }
-  if (queue.length > 6) couldNot.push(`…and ${queue.length - 6} more in the approval queue.`)
+  // ASK ONLY FOR WHAT AN APPROVAL CAN CLOSE (2026-08-01). An item on an AUTO
+  // lever is Amy's own work and an item on a CODE_CHANGE lever cannot be closed
+  // by any approval — rendering either as "Needs your approval" is a fake ask,
+  // and six of them a night is how this queue became wallpaper (20 consecutive
+  // runs with a non-empty queue and not one item ever actioned). Each line now
+  // carries its AGE and the exact surface that closes it.
+  const ownerAsks = queue.filter((q) => q?.requires_approval === true || q?.actionability === 'owner_api')
+  const codeChanges = queue.filter((q) => q?.actionability === 'code_change')
+  const age = (item) => {
+    const n = Number(item?.nights_open)
+    if (!Number.isFinite(n) || n <= 0) return ''
+    return ` [open ${n} night${n === 1 ? '' : 's'}${item?.first_seen_at ? ` since ${String(item.first_seen_at).slice(0, 10)}` : ''}${item?.stale ? ' — STALE' : ''}]`
+  }
+  for (const item of ownerAsks.slice(0, 6)) {
+    couldNot.push(
+      `Needs your approval: ${item?.lever || 'change'}${item?.category ? ` for ${item.category}` : ''}${age(item)}`
+      + `${item?.apply_surface ? ` → ${item.apply_surface}` : ''}`,
+    )
+  }
+  if (ownerAsks.length > 6) couldNot.push(`…and ${ownerAsks.length - 6} more awaiting your approval.`)
+  for (const item of codeChanges.slice(0, 4)) {
+    couldNot.push(
+      `Needs a CODE change (no approval can close this): ${item?.lever || 'change'}${item?.category ? ` for ${item.category}` : ''}${age(item)}`
+      + `${item?.human_gate_reason ? ` — ${item.human_gate_reason}` : ''}`,
+    )
+  }
+  if (codeChanges.length > 4) couldNot.push(`…and ${codeChanges.length - 4} more code-change items.`)
   if (day && day.issues > 0) {
     const types = Object.entries(day.finding_types || {})
       .sort((a, b) => b[1] - a[1])

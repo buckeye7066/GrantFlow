@@ -50,6 +50,7 @@ import { readLiveOverrides, applyCoverageOverrides, revertCoverageOverrides } fr
 import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearning, appendArchetypeMetrics, evaluationArchetype } from './archetypeLearning.js'
 import { runAmyAnyaSamPipeline } from './amyPipeline.js'
 import { saveAmyReport } from './amyReportStore.js'
+import { recordApprovalQueue, decorateApprovalQueue } from './approvalLedger.js'
 import { recordFlywheelCohort } from './flywheelCohort.js'
 import { buildFleetGapScoreboard, weightCategoriesByGaps, deriveAmyGapActions } from '../coverageGapScoreboard.js'
 import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
@@ -766,6 +767,46 @@ export async function runAmyTraining(options = {}) {
       combined.flywheel_record_error = err?.message || String(err)
       logger.error('Amy flywheel cohort record failed', { run_id: runId, error: combined.flywheel_record_error })
     }
+  }
+
+  // ── APPROVAL LEDGER (2026-08-01) ────────────────────────────────────────
+  // The queue is recomputed from scratch every run and written whole over
+  // `system_kv amy_approval_queue`, so nothing ever knew how OLD an item was or
+  // that one had stopped reproducing. Verified read-only in prod 2026-07-31:
+  // 20 consecutive runs with a non-empty queue and ZERO items ever actioned
+  // (the only apply path writes `amy_generic_title_additions`, a key that does
+  // not exist in the production database) — the write-only-queue shape this
+  // repo has already paid for twice.
+  //
+  // Folding here ages every item, CLOSES the ones that stopped reproducing, and
+  // decorates the queue with registry actionability, so the stored report and
+  // the owner's morning email can tell night 1 from night 30. Runs BEFORE the
+  // report persist so `combined.approval_queue` carries the decoration.
+  // Never fatal; a store failure still leaves the registry decoration attached.
+  if (db && !dryRunDiscovery) {
+    try {
+      const led = await recordApprovalQueue(db, {
+        items: approvalQueue,
+        runId,
+        at: completedAtDate.toISOString(),
+      })
+      combined.approval_queue = led.decorated
+      combined.approval_ledger = {
+        persisted: led.persisted,
+        duplicate: led.duplicate,
+        closed: led.closed.map((e) => ({ id: e.id, lever: e.lever, category: e.category, resolution: e.resolution, nights_open: e.nights_open })),
+        stale: led.stale.map((e) => ({ id: e.id, lever: e.lever, category: e.category, nights_open: e.nights_open, first_seen_at: e.first_seen_at })),
+        open: led.decorated.filter((i) => !i.auto_applied).length,
+      }
+    } catch (err) {
+      // The decoration is pure and must survive a store outage — otherwise the
+      // report silently regresses to the ageless "Needs your approval" line.
+      combined.approval_queue = decorateApprovalQueue(approvalQueue, null)
+      combined.approval_ledger = { persisted: false, error: err?.message || String(err), closed: [], stale: [] }
+      logger.warn('Amy approval-ledger fold failed (non-fatal)', { run_id: runId, error: err?.message })
+    }
+  } else {
+    combined.approval_queue = decorateApprovalQueue(approvalQueue, null)
   }
 
   // Persist combined report for the admin panel (after the flywheel cohort is
