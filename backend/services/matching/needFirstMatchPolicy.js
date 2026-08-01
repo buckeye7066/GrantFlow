@@ -7,6 +7,7 @@ import {
   enforceNeedFirstDecision,
   evaluateNeedFirstMatchPolicy as evaluateCorrectedPolicy,
   isNeedFirstResource,
+  TEXT_FRAGMENT_SEPARATOR,
 } from './needFirstMatchPolicyV2.js'
 
 export { collectProfileSchools, enforceNeedFirstDecision, isNeedFirstResource }
@@ -40,6 +41,20 @@ function withProfessionAliases(args = {}) {
   }
 }
 
+/**
+ * Same PHRASE-BOUNDARY rule as `needFirstMatchPolicyV2.opportunityText` — see
+ * the long note there for the prod evidence. This copy feeds
+ * `explicitlyBusinessApplicant` / `explicitlyOrganizationApplicant`, whose
+ * patterns are multi-word ("eligible applicants must be …"), so a bare space
+ * join could manufacture an explicit applicant restriction out of two
+ * unrelated category/keyword tokens and KEEP a hard mismatch the wording never
+ * stated.
+ *
+ * `institutionNamedOutsideSponsor` also reads this, but runs the result through
+ * `normalized()`, which strips `|` back to a space — so that call site's
+ * behavior is byte-for-byte unchanged by this fix (it has the same latent
+ * shape; fixing it needs per-fragment normalization and separate evidence).
+ */
 function opportunityText(opportunity = {}, { includeSponsor = true } = {}) {
   return [
     opportunity.title,
@@ -54,7 +69,7 @@ function opportunityText(opportunity = {}, { includeSponsor = true } = {}) {
     opportunity.restrictions,
     ...(Array.isArray(opportunity.categories) ? opportunity.categories : []),
     ...(Array.isArray(opportunity.keywords) ? opportunity.keywords : []),
-  ].filter(Boolean).join(' ')
+  ].map((part) => String(part ?? '').trim()).filter(Boolean).join(TEXT_FRAGMENT_SEPARATOR)
 }
 
 function normalized(value) {
