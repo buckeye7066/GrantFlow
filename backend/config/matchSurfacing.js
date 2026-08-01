@@ -19,8 +19,9 @@
  *
  * IMPORTANT: this governs READ/SURFACE paths only. The crawler-os RECONCILE
  * delete scope (crawlerOsPersistence.js) and the xmatch cleanup (robertAgent.js)
- * deliberately EXCLUDE 'web-llm' so web-discovered matches are never wiped by a
- * reconcile — do NOT wire this constant into those delete paths.
+ * deliberately EXCLUDE 'web-llm' and 'institution-link' so web-discovered and
+ * attendance-linked matches are never wiped by a reconcile — do NOT wire this
+ * constant into those delete paths.
  */
 
 import { REVIEW_SCORE } from './matchThresholds.js'
@@ -32,11 +33,22 @@ import { REVIEW_SCORE } from './matchThresholds.js'
  *   - crawler-os-xmatch : cross-profile matches (Robert's cross-matching)
  *   - web-llm           : Brave/SearXNG + LLM web scholarship discovery,
  *                         persisted specifically to survive the OS reconcile
+ *   - institution-link  : the student's OWN school's aid, linked by the
+ *                         ATTENDANCE gate and scored by the canonical engine
+ *                         (enforceInstitutionAidLinkage). Persisted under its
+ *                         own version for the SAME reason as web-llm: an
+ *                         institution row is reachable only through the
+ *                         name-keyed open-web lane, so any registry-only run
+ *                         of that profile would otherwise erase it and nothing
+ *                         would ever look at the catalog row again (prod
+ *                         2026-08-01: 52 active MTSU rows, 0 match rows, for a
+ *                         student whose current_institution IS MTSU).
  */
 export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   'crawler-os',
   'crawler-os-xmatch',
   'web-llm',
+  'institution-link',
 ])
 
 /**

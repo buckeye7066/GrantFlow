@@ -6189,6 +6189,278 @@ export async function enforceIndividualMatchAwardCeiling(db) {
   })
 }
 
+/**
+ * INVARIANT: A STUDENT'S OWN SCHOOL'S AID REACHES THAT STUDENT
+ * (2026-08-01, `institution_recall_miss` — Amy's only finding that was RED on
+ * 21 of 21 cohort days, 290 occurrences).
+ *
+ * MEASURED READ-ONLY IN PROD, and the numbers are the whole argument:
+ *  - 52 ACTIVE `Middle Tennessee State University` catalog rows (Peggy Perry
+ *    Belcher Scholarship Fund, MTSU Guaranteed Scholarship, Buchanan
+ *    Fellowship, …) carry **ZERO** match rows, for ANY profile — while
+ *    Anastasia White's `education.current_institution` IS
+ *    "Middle Tennessee State University".
+ *  - The same student's only university-sponsored matches are SEVEN
+ *    `Wayne County Community College District` / `Wayne State University`
+ *    (MICHIGAN) rows at scores 3–4, cross-matched onto **28 profiles**
+ *    fleet-wide including nonprofits and a biolab. Both ends of one defect.
+ *
+ * THE ENGINE IS NOT THE DROP POINT. Replaying the REAL canonical engine on the
+ * real pair (`services/matchEngine.computeMatchDecision`, Anastasia + "Peggy
+ * Perry Belcher Scholarship Fund", her live profile row + all live sections)
+ * returns **ACCEPT, score 100** — "Matches 70 of the profile's 70 data points",
+ * "Geography: State match". The pair is simply never SCORED.
+ *
+ * WHY IT IS NEVER SCORED: `profile_opportunity_matches` is a ROLLING SNAPSHOT.
+ * `crawlerOsPersistenceCore.persistRun` DELETEs a profile's
+ * `crawler-os`/`crawler-os-xmatch` rows and re-inserts ONLY what THAT run
+ * re-found. An institution scholarship is reachable ONLY through the open-web
+ * lane keyed on the school's NAME (no registry source lists one school's
+ * endowed funds), so the FIRST run of that profile that is registry-only — web
+ * lane off, rate-limited, or simply no hits — erases the entire institution set
+ * and nothing ever looks at the surviving catalog row again. Anastasia's 35
+ * live `crawler-os` rows are ALL registry lanes (`benefits_gov`, `hrsa_*`,
+ * `tn_benefits`, `findhelp_*`) and not one is from the web lane. Fleet-wide,
+ * same measurement: `source='web_search'` holds **7,645 active catalog rows of
+ * which 172 have EVER carried a match row (2.2%)**.
+ *
+ * THE FIX IS A LINK, NOT A LOWERED BAR. The ATTENDANCE gate
+ * (`config/profileInstitutions.js`) only authorizes the engine to LOOK at a
+ * pair; `services/matchEngine.js` remains the sole decision authority and a
+ * REJECT is still dropped. Two narrowings keep this from becoming the
+ * false-positive flood it is meant to cure:
+ *   1. ATTENDANCE, NOT ASPIRATION — only `current_institution` /
+ *      `current_school` / a COMMITTED university application / `schools.name`.
+ *      `target_colleges` is deliberately excluded: Anastasia lists NINETEEN,
+ *      and nineteen schools' aid is the flood. Aspiration still seeds discovery
+ *      QUERIES; it just never authorizes a match.
+ *   2. THE WHOLE NAME, NOT ONE WORD — bidirectional distinctive-token EQUALITY
+ *      on the SPONSOR. "Wayne State University" and "Wayne County Community
+ *      College District" share `wayne` and must not match; "Ohio University"
+ *      and "Ohio State University" are different real schools.
+ *
+ * Rows are written as `matcher_version='institution-link'`, which the crawler-os
+ * reconcile DELETE deliberately does not touch — the same reason `web-llm`
+ * exists — so a registry-only crawl can no longer erase a student's own school.
+ * ON CONFLICT DO NOTHING, so a profile's own `crawler-os` match always wins.
+ *
+ * Candidate discovery is a SQL PREDICATE (`LOWER(sponsor) LIKE` the
+ * institution's longest distinctive token — a deliberate SUPERSET the JS gate
+ * then adjudicates), never a post-LIMIT filter (#944 / the #1080 repeat).
+ * Bounded: `INSTITUTION_AID_LINK_LIMIT` (500 writes/boot),
+ * `INSTITUTION_AID_CANDIDATE_LIMIT` (500 catalog rows per institution).
+ * `ENFORCE_INSTITUTION_AID_LINK=0` for count-only.
+ *
+ * CONVERGENCE: a profile whose school changed has its stale `institution-link`
+ * rows removed — but ONLY when that profile's whole candidate set was processed
+ * without hitting the write bound, so a truncated boot can never thrash.
+ */
+export async function enforceInstitutionAidLinkage(db) {
+  return runInvariant('institution_aid_linkage', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id') || !matchCols.has('matcher_version')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let resolveAttendedInstitutions, opportunitySponsoredByInstitution, institutionSponsorLikePattern
+    try {
+      ;({ resolveAttendedInstitutions, opportunitySponsoredByInstitution, institutionSponsorLikePattern } =
+        await import('../config/profileInstitutions.js'))
+    } catch (err) {
+      log.warn('institution_aid_linkage: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+
+    // PREDICATE-narrowed profile set: only profiles that carry a section which
+    // can name a school are ever candidates.
+    let sectionRows
+    try {
+      sectionRows = await db
+        .prepare(
+          `SELECT profile_id, section_key, data
+             FROM profile_sections
+            WHERE section_key IN ('education', 'basic_information', 'university_applications')`,
+        )
+        .all()
+    } catch (err) {
+      log.warn('institution_aid_linkage: section query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+    const sectionsByProfile = new Map()
+    for (const row of sectionRows || []) {
+      if (!row?.profile_id) continue
+      if (!sectionsByProfile.has(row.profile_id)) sectionsByProfile.set(row.profile_id, {})
+      let parsed = row.data
+      if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed || '{}') } catch { parsed = {} } }
+      sectionsByProfile.get(row.profile_id)[row.section_key] = parsed || {}
+    }
+
+    const attendedByProfile = new Map()
+    for (const [profileId, sections] of sectionsByProfile) {
+      const schools = resolveAttendedInstitutions(sections)
+      if (schools.length > 0) attendedByProfile.set(profileId, schools)
+    }
+    if (attendedByProfile.size === 0) {
+      return { scanned: 0, repaired: 0, profilesWithInstitution: 0, enforced: true }
+    }
+
+    const writeLimit = _boundedLimit('INSTITUTION_AID_LINK_LIMIT', 500)
+    const candidateLimit = _boundedLimit('INSTITUTION_AID_CANDIDATE_LIMIT', 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_INSTITUTION_AID_LINK) === false
+
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+    const nowFn = (db?.dialect || 'sqlite') === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+
+    let scanned = 0
+    let linked = 0
+    let rejectedByEngine = 0
+    let unscorable = 0
+    let truncated = false
+    const wouldLink = []
+    const examples = []
+    const eligibleByProfile = new Map()
+
+    for (const [profileId, schools] of attendedByProfile) {
+      if (linked + wouldLink.length >= writeLimit) { truncated = true; break }
+      const ctx = await _loadProfileContextForInvariant(db, profileId)
+      if (!ctx) continue
+      const eligible = new Set()
+      eligibleByProfile.set(profileId, eligible)
+
+      for (const school of schools) {
+        const pattern = institutionSponsorLikePattern(school)
+        if (!pattern) continue
+        let candidates
+        try {
+          candidates = await db
+            .prepare(
+              `SELECT * FROM funding_opportunities
+                WHERE sponsor IS NOT NULL AND LOWER(sponsor) LIKE ?
+                  AND (is_active IS NULL OR is_active = ${db?.dialect === 'postgres' ? 'TRUE' : '1'})
+                LIMIT ?`,
+            )
+            .all(pattern.toLowerCase(), candidateLimit)
+        } catch (err) {
+          log.warn('institution_aid_linkage: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+          continue
+        }
+        for (const opp of candidates || []) {
+          if (!opportunitySponsoredByInstitution(school, opp)) continue
+          scanned += 1
+          let decision
+          try {
+            decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections })
+          } catch (err) {
+            unscorable += 1
+            log.warn('institution_aid_linkage: scoring failed (non-fatal)', {
+              profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+            })
+            continue
+          }
+          const verdict = String(decision?.decision ?? '').toUpperCase()
+          // The engine stays the sole authority — a REJECT is a REJECT.
+          if (verdict !== 'ACCEPT' && verdict !== 'REVIEW') { rejectedByEngine += 1; continue }
+          eligible.add(opp.id)
+          const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
+          if (score === null) { unscorable += 1; continue }
+
+          if (countOnly) {
+            wouldLink.push({ profileId, opportunityId: opp.id })
+            if (examples.length < 3) examples.push(`${opp.title} (${school}, ${verdict} ${score})`)
+            if (wouldLink.length >= writeLimit) { truncated = true; break }
+            continue
+          }
+          if (linked >= writeLimit) { truncated = true; break }
+          try {
+            const res = await db
+              .prepare(
+                `INSERT INTO profile_opportunity_matches
+                   (id, profile_id, opportunity_id, match_score, match_decision, match_explanation,
+                    match_reasons, match_explain_json, source_query, discovered_via, matcher_version,
+                    computed_at, updated_at, evaluated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'institution-link', ${nowFn}, ${nowFn}, ${nowFn})
+                 ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+              )
+              .run(
+                `il:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
+                decision?.explanation ?? null,
+                JSON.stringify(decision?.matchedNeeds ?? []),
+                JSON.stringify({ institution: school, gate: 'attendance' }),
+                null, 'institution_attendance_link',
+              )
+            const wrote = changesOf(res)
+            if (wrote > 0) {
+              linked += 1
+              if (examples.length < 3) examples.push(`${opp.title} (${school}, ${verdict} ${score})`)
+            }
+          } catch (err) {
+            log.warn('institution_aid_linkage: insert failed (non-fatal)', {
+              profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+            })
+          }
+        }
+        if (truncated) break
+      }
+      if (truncated) break
+    }
+
+    // CONVERGENCE: drop institution-link rows the attendance gate no longer
+    // authorizes (the student changed schools). Skipped entirely on a truncated
+    // boot, so a bound-limited pass can never delete rows it never re-derived.
+    let stale = 0
+    if (!countOnly && !truncated) {
+      for (const [profileId, eligible] of eligibleByProfile) {
+        try {
+          const existing = await db
+            .prepare(
+              `SELECT id, opportunity_id FROM profile_opportunity_matches
+                WHERE profile_id = ? AND matcher_version = 'institution-link'`,
+            )
+            .all(profileId)
+          const doomed = (existing || []).filter((r) => !eligible.has(r.opportunity_id)).map((r) => r.id)
+          for (let i = 0; i < doomed.length; i += 200) {
+            const slice = doomed.slice(i, i + 200)
+            const ph = slice.map(() => '?').join(', ')
+            const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+            stale += changesOf(res) || slice.length
+          }
+        } catch { /* convergence pass is best-effort; never fails the sweep */ }
+      }
+    }
+
+    if (countOnly) {
+      if (wouldLink.length > 0) {
+        log.warn("a student's own school's aid is not reaching them (linking DISABLED via ENFORCE_INSTITUTION_AID_LINK=0)", {
+          wouldLink: wouldLink.length, scanned, examples,
+        })
+      }
+      return {
+        scanned,
+        repaired: 0,
+        wouldRepair: wouldLink.length,
+        profilesWithInstitution: attendedByProfile.size,
+        rejectedByEngine,
+        truncated,
+        enforced: false,
+      }
+    }
+    if (linked > 0 || stale > 0) {
+      log.info("linked students to their OWN institution's aid", {
+        linked, stale, scanned, rejectedByEngine, unscorable, examples,
+      })
+    }
+    return {
+      scanned,
+      repaired: linked,
+      stale,
+      profilesWithInstitution: attendedByProfile.size,
+      rejectedByEngine,
+      unscorable,
+      truncated,
+      enforced: true,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -6273,6 +6545,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).
   // Operates on profile_opportunity_matches, so it complements the grants sweeps.
   steps.push(await enforceStudentAidEligibility(db))
+  // RECALL net (the other direction): a student's OWN school's aid must reach
+  // them. Runs BEFORE the dangling / decision-integrity sweeps on purpose, so
+  // the rows it adds are validated by them in the SAME boot rather than a boot
+  // late. It authorizes the canonical engine to LOOK at an attendance-linked
+  // pair; the engine still decides, and a REJECT is never written.
+  steps.push(await enforceInstitutionAidLinkage(db))
   // Surface-table hygiene: a persisted match whose catalog row was deleted
   // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
   // unusable ghost that inflates the matches view and wastes promote passes.

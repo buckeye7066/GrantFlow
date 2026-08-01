@@ -23,6 +23,11 @@ import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourc
 import { buildLivePageFactColumns } from '../crawler-os/pageFacts.js';
 import { classifyLocatorKindFromRow, GENERIC_OVERRIDABLE_KINDS } from './sources/locatorUrlKind.js';
 import { correctedGeoScopeFromTitle } from '../config/opportunityJurisdiction.js';
+import {
+  cleanInstitutionName,
+  resolveSeedInstitutions,
+  MAX_ATTENDED_INSTITUTIONS,
+} from '../config/profileInstitutions.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -151,14 +156,12 @@ function sectionObj(v) {
   return {};
 }
 
-/** Clean a free-text institution / employer name for use as a search seed. */
-function cleanName(v) {
-  const s = String(v ?? '').replace(/\s+/g, ' ').trim();
-  // Reject empties, "none"/"n/a" placeholders, and absurdly long blobs.
-  if (!s || s.length < 3 || s.length > 90) return null;
-  if (/^(none|n\/a|na|unknown|tbd|null)$/i.test(s)) return null;
-  return s;
-}
+/**
+ * Clean a free-text institution / employer name for use as a search seed.
+ * The canonical rule lives in `config/profileInstitutions.js` so the discovery
+ * seed path and the institution-aid boot sweep cannot drift apart.
+ */
+const cleanName = cleanInstitutionName;
 
 /**
  * extractEducationEmployment — pull the concrete SCHOOL name(s), field of study,
@@ -173,34 +176,18 @@ function cleanName(v) {
  */
 function extractEducationEmployment(sections = {}) {
   const edu = sectionObj(sections.education);
-  const basic = sectionObj(sections.basic_information);
   const spp = sectionObj(sections.student_portal_plan);
-  const uapps = sectionObj(sections.university_applications);
   const occ = sectionObj(sections.occupation);
   const emp = sectionObj(sections.employment);
   const orgd = sectionObj(sections.organization_details);
 
-  // Schools — current/committed first, then declared, then targets.
-  const committed = Array.isArray(uapps.applications)
-    ? uapps.applications
-        .filter((a) => String(a?.status ?? '').toLowerCase() === 'committed')
-        .map((a) => a?.name)
-    : [];
-  const otherApps = Array.isArray(uapps.applications) ? uapps.applications.map((a) => a?.name) : [];
-  const ordered = [
-    edu.current_institution,
-    basic.current_school,
-    ...committed,
-    edu?.schools?.name,
-    ...otherApps,
-    ...(Array.isArray(edu.target_colleges) ? edu.target_colleges : []),
-  ];
-  const schools = [];
-  for (const raw of ordered) {
-    const name = cleanName(raw);
-    if (name && !schools.some((s) => s.toLowerCase() === name.toLowerCase())) schools.push(name);
-    if (schools.length >= 3) break;
-  }
+  // Schools — attendance (current / committed / declared) first, then
+  // aspiration (other applications, target colleges). The FIELD REGISTRY is
+  // canonical (`config/profileInstitutions.js`): the institution-aid boot sweep
+  // reads the SAME registry, so a new school field cannot reach one consumer
+  // and silently miss the other. Seeding may use aspiration — only the MATCH
+  // gate is restricted to attendance.
+  const schools = resolveSeedInstitutions(sections, { limit: MAX_ATTENDED_INSTITUTIONS });
 
   // Field of study / major (breadth seed only — never used for scoring).
   const field_of_study = cleanName(edu.intended_major || spp.major || edu.major || '');
