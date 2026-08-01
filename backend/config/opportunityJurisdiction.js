@@ -196,6 +196,47 @@ export function correctedGeoScopeFromTitle(row) {
  * character in SQL LIKE, so `'%, __ —%'` is ", XX —" plus a superset of
  * coincidences that `declaredStateFromTitle` then rejects in JS.
  */
+/**
+ * SQL prefilter (superset) for a url on a foreign ccTLD, as a LIKE list.
+ *
+ * WHY THIS EXISTS — the 2026-08-01 prod regression. The first version of
+ * `enforceForeignJurisdictionMatches` selected match rows with NO WHERE clause
+ * at all and decided foreign-ness in JS *after* `LIMIT ?`. With ~11.5k match
+ * rows and a 2 000 bound it scanned an arbitrary, unordered slice: the live boot
+ * summary recorded `{"name":"foreign_jurisdiction_matches","repaired":1,
+ * "scanned":2000}` — 1 of 516 foreign rows removed, the other 515 structurally
+ * unreachable no matter how many times it ran. That is exactly the #944
+ * "green while doing nothing" class this repo already documents for amount
+ * enrichment, and the sibling sweeps written in the same PR all had a SQL
+ * predicate; this one did not.
+ *
+ * A host sits on a ccTLD when the url contains `.<tld>` followed by a path,
+ * port, query, fragment, or end-of-string. Callers concatenate the url columns
+ * with a separator AND a trailing one, so "end of string" is covered by the
+ * space form and the whole set is four shapes per TLD. This is a SUPERSET —
+ * `detectForeignJurisdiction` still decides, so a coincidental match (a path
+ * segment like `/report.ie/`) is rejected in JS, and `JURISDICTION_NEUTRAL_HOSTS`
+ * still wins.
+ */
+export function foreignUrlLikePatterns() {
+  const out = []
+  for (const tld of FOREIGN_CCTLDS) {
+    out.push(`%.${tld}/%`, `%.${tld} %`, `%.${tld}:%`, `%.${tld}?%`)
+  }
+  return out
+}
+
+/**
+ * Build the `(hay LIKE ? OR hay LIKE ? …)` clause + params for a url haystack
+ * expression. Dialect-agnostic: LIKE and `||` behave the same on SQLite and
+ * Postgres, and every url column is lower-cased by the caller.
+ */
+export function foreignUrlSqlPredicate(hayExpr) {
+  const params = foreignUrlLikePatterns()
+  const clause = params.map(() => `${hayExpr} LIKE ?`).join(' OR ')
+  return { clause: `(${clause})`, params }
+}
+
 export const DECLARED_STATE_TITLE_LIKE_PATTERNS = Object.freeze([
   '%, __ —%', // em dash
   '%, __ –%', // en dash
@@ -211,4 +252,6 @@ export default {
   declaredStateFromTitle,
   correctedGeoScopeFromTitle,
   DECLARED_STATE_TITLE_LIKE_PATTERNS,
+  foreignUrlLikePatterns,
+  foreignUrlSqlPredicate,
 }
