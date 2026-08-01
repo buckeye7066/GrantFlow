@@ -405,6 +405,28 @@ export const ENTITY_TYPE_ALIAS_MAP = {
   university: 'organization',
   hospital: 'organization',
   medical_center: 'organization',
+
+  // Agricultural producer (the Anita class, 2026-08-01). `farm` is already a
+  // first-class entity type downstream — it is in `ORG_LIKE_ENTITY_TYPES`
+  // (services/matchEngine.js) and BOTH agriculture gates compare against it by
+  // name (`:569` requiresFarmer softener, `:2790` ag score cap) — but the alias
+  // map never produced it, so only the exact literal string 'farm' reached
+  // those gates by raw passthrough. Every way a real profile actually writes
+  // the identity ('farmer', 'rancher', 'agricultural producer', 'agribusiness')
+  // fell through as its own raw key and silently missed every comparison, the
+  // same failure the biotechnology block above exists to fix.
+  farm: 'farm',
+  farmer: 'farm',
+  farming: 'farm',
+  farm_operation: 'farm',
+  family_farm: 'farm',
+  ranch: 'farm',
+  rancher: 'farm',
+  agricultural_producer: 'farm',
+  agriculture_producer: 'farm',
+  agricultural_business: 'farm',
+  agribusiness: 'farm',
+  grower: 'farm',
 }
 
 // ---------------------------------------------------------------------------

@@ -46,7 +46,7 @@ import {
 } from '../services/eligibility/farmIdentity.js'
 import { allSources } from '../crawler-os/sourceRegistry.js'
 import { LANE_OF_SOURCE, laneForSource } from '../services/coverageEvidenceService.js'
-import { NEED_ALIAS_MAP, normalizeNeedCategory } from '../services/profileNormalizer.js'
+import { NEED_ALIAS_MAP, normalizeNeedCategory, normalizeEntityType } from '../services/profileNormalizer.js'
 import { NEEDS_VOCABULARY, mapFreeTextToNeedTag } from '../config/profileVocabulary.js'
 import { buildThesis } from '../crawler-os/profileIntelligence.js'
 
@@ -402,6 +402,18 @@ describe('need taxonomy — agriculture is a real canonical bucket', () => {
   it('agriculture is user-pickable in the needs vocabulary', () => {
     expect(NEEDS_VOCABULARY.map((n) => n.value)).toContain('agriculture')
     expect(mapFreeTextToNeedTag('farming')).toBe('agriculture')
+  })
+
+  it('every way a profile writes the farm identity normalizes to the "farm" ENTITY type', () => {
+    // `farm` is already first-class downstream — it is in ORG_LIKE_ENTITY_TYPES
+    // and both agriculture gates in services/matchEngine.js compare against it
+    // by name (:569, :2790) — but the alias map never produced it, so only the
+    // exact literal 'farm' ever reached them by raw passthrough.
+    for (const raw of ['farm', 'farmer', 'rancher', 'agricultural producer', 'agribusiness', 'family farm']) {
+      expect(normalizeEntityType(raw), `normalizeEntityType("${raw}")`).toBe('farm')
+    }
+    // Unrelated types are untouched.
+    expect(normalizeEntityType('nonprofit')).not.toBe('farm')
   })
 
   it('does NOT swallow common words into agriculture (substring-explosion guard)', () => {
