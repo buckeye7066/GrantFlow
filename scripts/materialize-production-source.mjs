@@ -12,6 +12,22 @@ if (truthy(process.env.GRANTFLOW_SKIP_SOURCE_MATERIALIZATION)) {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 process.chdir(repoRoot)
 
+// Serialize materializers across processes. `npm run dev:full` starts the
+// backend and the frontend concurrently and BOTH fire this script's npm
+// pre-hook; the per-module read-modify-write is not atomic, so two of them
+// racing produced intermittent `<anchor> missing or ambiguous` crashes that
+// killed whichever dev server lost the race. See materialize-lock.mjs.
+//
+// DYNAMIC import on purpose: the production Dockerfile copies ONLY this file
+// into the builder stage and runs it with GRANTFLOW_SKIP_SOURCE_MATERIALIZATION=1
+// (the exit above). A static import is resolved before any code runs, so it
+// would break the image build on a module that stage never needs.
+const { acquireMaterializeLockForProcess } = await import('./source-materialization/materialize-lock.mjs')
+const materializeLock = acquireMaterializeLockForProcess({ repoRoot })
+if (materializeLock.waited) {
+  console.log('[source-materialization] waited for a concurrent materializer to finish')
+}
+
 const coreSignatures = Object.freeze([
   ['backend/services/missionHealthService.js', 'export function normalizeCount'],
   ['backend/services/missionHealthService.js', 'verification_events WHERE ts >= ?'],

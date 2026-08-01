@@ -50,9 +50,42 @@ fixed coordinator endpoints (`/api/eva/ingest`, `/api/eva/heartbeat`).
 | `EVA_REGISTRY_PATH` | Path to `qa/portfolio-registry.json`. |
 | `EVA_MANIFEST_DIR` | Path to the manifest bundle `qa/manifests/` (fallback when a repo has no `qa/user-journeys.json`). |
 | `EVA_RUNNER_ONLY` | Optional comma-separated `app_id`s to restrict the run. |
+| `EVA_APP_ENV` | JSON `{"<app_id>": {"VAR": "value"}}` — per-app secrets the runner supplies at launch (e.g. a disposable `DATABASE_URL`). Highest precedence; never in source. |
+| `EVA_APP_ENV_FILE` | Path to a JSON file of the same shape, for values too long or too secret for an env var. |
 
 On the **coordinator** side, set `EVA_RUNNER_SECRETS` (JSON `{ "<runner-id>":
 "<secret>" }`) or `EVA_RUNNER_SECRET` + `EVA_RUNNER_ID`.
+
+## Startup: BLOCKED vs STARTUP-FAILED (these are different facts)
+
+Manifests declare what an app needs to boot. The runner now honors that
+declaration instead of launching blind:
+
+| Manifest field | Effect |
+| --- | --- |
+| `launch_env` | Literal, non-secret env supplied at launch (`PROMO_ENABLED=false`, `PORT`, `DISABLE_AI=1`). |
+| `launch_env_generated` | `{"ADMIN_TOKEN": "token"}` → a **fresh random value per run**. Never committed, never reused. |
+| `prerequisites` | `[{id, type, name, remedy, …}]` checked BEFORE launch. Types: `env` (a var with no safe default), `docker` (daemon reachable), `tcp` (`{host, port}`). An **unknown type is treated as unmet** — an unverifiable claim is not a met prerequisite. |
+| `disposable_data_root` | Created inside the app's own repo before launch (an escaping/absolute root is refused). |
+
+Outcomes:
+
+- **`blocked`** — a declared prerequisite is not available on this machine. The
+  `blocker_reason` NAMES the missing thing and its remedy, and the synthetic
+  `app-startup` journey is reported `blocked`, so no new critical finding is
+  minted each night and any pre-existing one ages out to `stale`. This is the
+  same honest state Factory Deck uses for "Anthropic credits empty".
+- **`startup_failed`** — the app *should* start here and did not. Still a
+  critical finding, but the reason now quotes **the process's own output** and
+  the **probe URL that actually failed** (previously it always named `base_url`,
+  even when the failing probe was the backend's health port).
+
+Precedence for launch env, low → high: inherited process env → `launch_env` →
+`launch_env_generated` → `EVA_APP_ENV[app_id]`. A value the owner supplied is
+never overwritten by a generated one.
+
+Guard tests: `tests/unit/eva-runner-startup-outcomes.test.mjs` (run by
+`npm run unit`; mutation-verified).
 
 ## Selftest (fixture apps only — no real apps, no upload)
 

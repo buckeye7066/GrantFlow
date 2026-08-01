@@ -14,6 +14,8 @@ import { runSelftest } from '../src/selftest.mjs'
 import { loadRunnerConfig, ensureDataDir, readMarker, writeMarker, loadRegistry, loadManifest, etDayKey } from '../src/config.mjs'
 import { runAppJourneys, buildPayload } from '../src/runner.mjs'
 import { launchWebApp } from '../src/launcher.mjs'
+import { resolveLaunchEnv, checkPrerequisites } from '../src/prereq.mjs'
+import { blockedAppResult, startupFailedAppResult } from '../src/appOutcome.mjs'
 import { uploadResult, sendHeartbeat } from '../src/uploader.mjs'
 
 const WEB_RUNTIMES = new Set(['web', 'mobile-web'])
@@ -75,6 +77,23 @@ async function main() {
     // their declared command directly via the cli adapter (no server to boot).
     const started = Date.now()
     const isWeb = WEB_RUNTIMES.has(manifest.runtime_type)
+
+    // Prerequisites BEFORE launch. An app that cannot run on this machine
+    // (Docker stopped, no DATABASE_URL) is BLOCKED with the missing thing
+    // named — never a critical, never-passing user-journey failure. Supplying
+    // the declared launch env is the other half: manifests always declared
+    // `required_env` and the runner never provided any of it, so apps that
+    // refuse to boot without a value looked broken when they were merely
+    // unconfigured.
+    const { env: launchEnv } = resolveLaunchEnv({ app, manifest })
+    if (!dryRun) {
+      const pre = await checkPrerequisites({ manifest, resolvedEnv: launchEnv })
+      if (pre.unmet.length) {
+        appResults.push(blockedAppResult({ app, manifest, unmet: pre.unmet, durationMs: Date.now() - started }))
+        continue
+      }
+    }
+
     let launch = null
     try {
       let baseUrl = app.base_url || manifest.base_url || null
@@ -86,36 +105,10 @@ async function main() {
       // in the owner's email forever ("recurring", last pass never).
       let startupJourney = null
       if (!dryRun && isWeb) {
-        launch = await launchWebApp({ app, manifest, log: (m) => console.log(m) })
+        launch = await launchWebApp({ app, manifest, launchEnv, log: (m) => console.log(m) })
         baseUrl = launch.baseUrl || baseUrl
         if (launch.launched && !launch.ready) {
-          const reason = `app did not become ready at ${baseUrl || 'its declared base_url'} within the readiness timeout (start_command: ${manifest.start_command})`
-          appResults.push({
-            app_id: app.app_id,
-            display_name: app.display_name,
-            repo: app.repo,
-            app_status: 'startup_failed',
-            blocker_reason: reason,
-            duration_ms: Date.now() - started,
-            journeys: [
-              {
-                journey_id: 'app-startup',
-                name: 'App process starts and answers its readiness probe',
-                status: 'failed',
-                severity: 'critical',
-                retry_classification: 'reproducible',
-                failure_class: 'startup-failed',
-                route_or_control: baseUrl || manifest.start_command,
-                error_signature: reason.slice(0, 200),
-                expected_behavior: 'the declared start_command brings the app up within the readiness timeout',
-                observed_behavior: reason,
-                user_impact: 'no journey can run while the app cannot start',
-                repro_steps: [`run: ${String(manifest.start_command).slice(0, 120)}`, 'poll the readiness_probe until the timeout'],
-                diagnostic_confidence: 0.9,
-                duration_ms: Date.now() - started,
-              },
-            ],
-          })
+          appResults.push(startupFailedAppResult({ app, manifest, launch, baseUrl, durationMs: Date.now() - started }))
           continue
         }
         if (launch.launched && launch.ready) {
