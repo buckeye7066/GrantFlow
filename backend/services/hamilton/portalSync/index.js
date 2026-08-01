@@ -523,6 +523,17 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       }
       const persisted = await persistReadResult(db, { profileId, portalHost: host, actorUserId, readResult })
       result.read = {
+        // REACHABILITY, recorded before any finding is interpreted: "signed in
+        // with no data" and "never got past the sign-in wall" are different
+        // facts, and a run record that cannot tell them apart makes an empty
+        // read undiagnosable (2026-08-01, two studentaid.gov runs). `pages`
+        // carries url/title/char-count/access ONLY — never page text, which
+        // holds the student's own financial data.
+        access: readResult?.access || null,
+        pages: (readResult?.raw?.pages || []).map((p) => ({
+          url: p?.url || null, landed: p?.landed || null, title: p?.title || null,
+          chars: p?.chars ?? null, access: p?.access || null,
+        })),
         fields_found: (readResult?.fields || []).length,
         // Name the fields a sync wrote — a bare fieldsWritten count is
         // unauditable after the fact.

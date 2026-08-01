@@ -22,6 +22,7 @@ import { describe, it, expect, vi } from 'vitest'
 const connector = (await import('../services/hamilton/portalSync/connectors/studentaid.js')).default
 const {
   deriveFafsaStage, deriveSai, derivePellEligibility, saiBand, stageAdvances, matchesCredential,
+  classifyAccess,
 } = await import('../services/hamilton/portalSync/connectors/studentaid.js')
 const { resolveConnector, getConnectorForHost } = await import('../services/hamilton/portalSync/registry.js')
 
@@ -171,6 +172,55 @@ describe('studentaid.gov connector — read()', () => {
     expect(res.fafsaStatus).toBe(null)
     expect(res.notFound.some((n) => /never defaulted to not_started/i.test(n.reason))).toBe(true)
     expect(res.domains.fafsa_status.complete).toBe(false)
+  })
+})
+
+describe('studentaid.gov connector — "no data" vs "never got in" are different facts', () => {
+  // The same rule this repo learned for award amounts: only a real READ can
+  // distinguish "the funder publishes nothing" from "we could not read it".
+  it('classifies the sign-in wall, a bot block, and a real page distinctly', () => {
+    expect(classifyAccess({ url: 'https://studentaid.gov/fsa-id/sign-in/landing', title: 'Sign In', text: 'Please sign in to continue' })).toBe('signin_wall')
+    expect(classifyAccess({ url: 'https://studentaid.gov/aid-summary/', title: '', text: 'You must sign in to view this page.' })).toBe('signin_wall')
+    expect(classifyAccess({ url: 'https://studentaid.gov/aid-summary/', title: 'Access Denied', text: 'Reference #18.abc123' })).toBe('blocked')
+    expect(classifyAccess({ url: 'https://studentaid.gov/aid-summary/', title: 'Aid Summary', text: 'Your FAFSA form was submitted on January 5, 2026.' })).toBe('authenticated')
+    expect(classifyAccess({ url: 'https://studentaid.gov/aid-summary/', title: '', text: '' })).toBe('unknown')
+  })
+
+  it('a sign-in wall reports NOT SIGNED IN — never "this student has no FAFSA data"', async () => {
+    const page = makePage('Please sign in to continue. Create an FSA ID.', 'https://studentaid.gov/fsa-id/sign-in/landing')
+    const res = await connector.read(page, { log: () => {} })
+
+    expect(res.access).toBe('signin_wall')
+    expect(res.fafsaStatus).toBe(null)
+    const verdict = res.notFound.find((n) => n.name === 'fafsa')
+    expect(verdict.reason).toMatch(/NOT SIGNED IN/)
+    // The crucial disclaimer: this run says nothing about her actual FAFSA.
+    expect(verdict.reason).toMatch(/NOT evidence about the student/i)
+  })
+
+  it('a bot block reports BLOCKED, and neither wall text can ever feed a derivation', async () => {
+    // The wall page even contains a stage-shaped phrase; it must be ignored,
+    // because text we were served INSTEAD of her record is not her record.
+    const page = makePage('Access Denied. Reference #18.9f2. Your FAFSA form is complete.', 'https://studentaid.gov/aid-summary/')
+    const res = await connector.read(page, { log: () => {} })
+
+    expect(res.access).toBe('blocked')
+    expect(res.fafsaStatus).toBe(null) // NOT 'complete'
+    expect(res.notFound.find((n) => n.name === 'fafsa').reason).toMatch(/BLOCKED/)
+  })
+
+  it('records per-page diagnostics (url/title/chars/access) and NEVER the page text', async () => {
+    const page = makePage('Please sign in to continue.', 'https://studentaid.gov/fsa-id/sign-in/landing')
+    const res = await connector.read(page, { log: () => {} })
+
+    expect(res.raw.pages.length).toBeGreaterThan(0)
+    for (const p of res.raw.pages) {
+      expect(p).toHaveProperty('access')
+      expect(p).toHaveProperty('chars')
+      // Page text holds the student's own financial data — it must never ride
+      // the diagnostics into a run record.
+      expect(JSON.stringify(p)).not.toMatch(/Please sign in to continue/)
+    }
   })
 })
 

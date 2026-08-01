@@ -193,6 +193,32 @@ async function gotoQuiet(page, url, log) {
   }
 }
 
+// ── Authentication / reachability state ──────────────────────────────────────
+// "Signed in, and this student has no FAFSA data" and "we never actually got
+// in" are DIFFERENT FACTS, and a connector that reports them identically is
+// lying by omission — the same rule this repo already learned the hard way for
+// award amounts ("no amount" vs "no amount PUBLISHED": only a real READ can
+// tell them apart). The first two live runs each returned "no FAFSA stage
+// found" with zero fields; nothing in the run record said whether the browser
+// had even cleared the sign-in wall, so the finding was undiagnosable.
+const SIGNIN_WALL_RE = /\b(sign in to your account|log in to your account|please sign in|you must (sign|log) in|create an fsa id|forgot my username)\b/i
+const SIGNIN_URL_RE = /\/(fsa-id\/sign-in|login|signin|auth)\b/i
+// Akamai-class refusals: the wall answers OUR datacenter caller, not the user.
+const BLOCKED_RE = /\b(access denied|reference #[0-9a-f.]+|unusual activity|request (was )?blocked|forbidden)\b/i
+
+/**
+ * Classify what we are actually looking at: 'authenticated', 'signin_wall',
+ * 'blocked', or 'unknown'. Pure + exported so it is testable without a browser.
+ */
+export function classifyAccess({ url = '', title = '', text = '' } = {}) {
+  const hay = `${title}\n${text}`
+  if (BLOCKED_RE.test(hay)) return 'blocked'
+  if (SIGNIN_WALL_RE.test(hay)) return 'signin_wall'
+  if (SIGNIN_URL_RE.test(String(url))) return 'signin_wall'
+  if (String(text || '').trim().length > 0) return 'authenticated'
+  return 'unknown'
+}
+
 async function readText(page) {
   try {
     const snap = await page.evaluate(() => ({ text: document.body?.innerText || '', title: document.title || '' }))
@@ -224,28 +250,56 @@ export async function read(page, ctx = {}) {
   const notFound = []
   const raw = { pages: [], llm: null, derived: {} }
 
-  // 1) Gather text from the authenticated FAFSA surfaces.
+  // 1) Gather text from the authenticated FAFSA surfaces, recording per-page
+  //    ACCESS STATE. `pages` carries url/title/chars/access only — never page
+  //    text, which contains the student's own financial data.
   let corpus = ''
   for (const url of NAV) {
     const ok = await gotoQuiet(page, url, log)
     if (!ok) continue
     const snap = await readText(page)
+    const landed = safeUrl(page) || url
+    const access = classifyAccess({ url: landed, title: snap.title, text: snap.text })
+    raw.pages.push({ url, landed, title: snap.title, chars: snap.text.length, access })
     if (!snap.text.trim()) continue
-    raw.pages.push({ url, title: snap.title, chars: snap.text.length })
+    // Text from a sign-in wall or a bot block is NOT the student's record —
+    // feeding it to the derivations is exactly how a menu label became a
+    // lifecycle stage. Record the page, then refuse to read facts from it.
+    if (access === 'signin_wall' || access === 'blocked') continue
     corpus += `\n\n### ${url}\n${snap.text}`
   }
   if (!corpus.trim()) {
     const snap = await readText(page)
-    if (snap.text.trim()) {
-      raw.pages.push({ url: safeUrl(page), title: snap.title, chars: snap.text.length })
+    const landed = safeUrl(page)
+    const access = classifyAccess({ url: landed, title: snap.title, text: snap.text })
+    if (snap.text.trim() && access === 'authenticated') {
+      raw.pages.push({ url: landed, landed, title: snap.title, chars: snap.text.length, access })
       corpus = snap.text
     }
   }
 
+  // The honest verdict about REACHABILITY, decided before any extraction.
+  const seen = raw.pages.map((p) => p.access)
+  const accessState = seen.includes('authenticated') ? 'authenticated'
+    : seen.includes('blocked') ? 'blocked'
+      : seen.includes('signin_wall') ? 'signin_wall'
+        : 'unknown'
+  raw.access = accessState
+  raw.pagesRead = raw.pages.length
+
   if (!corpus.trim()) {
-    notFound.push({ kind: 'status', name: 'fafsa', reason: 'no readable text on any authenticated studentaid.gov page (session may be dead, or the SPA did not render)' })
+    // Name WHICH failure this is. A dead session needs one watched login; a
+    // datacenter block needs a different capture path; an empty render needs
+    // engineering. Reporting all three as "no FAFSA data" hides the fix.
+    const reason = accessState === 'signin_wall'
+      ? 'NOT SIGNED IN: studentaid.gov served its sign-in wall, so no student record was readable. The saved session is expired or was not accepted — capture a fresh one with a watched login. (This is NOT evidence about the student\'s FAFSA.)'
+      : accessState === 'blocked'
+        ? 'BLOCKED: studentaid.gov refused this datacenter browser (Akamai-class wall). Nothing about the student\'s FAFSA can be concluded from this run.'
+        : 'no readable text on any studentaid.gov page (the SPA may not have rendered before the read)'
+    notFound.push({ kind: 'status', name: 'fafsa', reason, access: accessState })
     return {
       fields, awards, notFound, raw,
+      access: accessState,
       fafsaStatus: null,
       domains: { fafsa_status: { complete: false }, aid_summary: { complete: false } },
     }
@@ -308,13 +362,14 @@ export async function read(page, ctx = {}) {
     aid_summary: { complete: Boolean(sai) || awards.length > 0, awards: awards.length },
   }
 
-  log(`studentaid read complete: ${fields.length} fields, ${awards.length} awards (${rejected.length} rejected), ${notFound.length} notFound`)
+  log(`studentaid read complete (${accessState}): ${fields.length} fields, ${awards.length} awards (${rejected.length} rejected), ${notFound.length} notFound`)
   return {
     fields,
     awards,
     notFound,
     rejected,
     raw,
+    access: accessState,
     fafsaStatus: stage ? { stage: stage.stage, evidence: stage.evidence } : null,
     domains,
   }

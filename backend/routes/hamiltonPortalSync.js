@@ -50,9 +50,33 @@ async function userMayAccessProfile(req, user, profileId) {
   return accessible.has(String(profileId))
 }
 
+// A portal sync launches a real browser, navigates several authenticated pages,
+// and runs a model extraction — it is inherently slower than an API call. The
+// GLOBAL 30s request/response timeout (backend/server.js) therefore 504'd a run
+// that had actually SUCCEEDED: the 2026-08-01 studentaid.gov run completed
+// server-side in 36s, wrote to the profile, and recorded a `completed` row in
+// portal_sync_runs — while the caller was told "the server took too long to
+// respond". A sync that works but reports failure is worse than one that fails,
+// because the user retries it and doubts correct data.
+//
+// These routes therefore raise their own socket deadline. The bound is real
+// (not disabled): a wedged browser must still die rather than hold a
+// connection forever. Runs are ALSO durably recorded, so a client that gives up
+// early can still read the true outcome from GET /runs.
+const SYNC_REQUEST_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(process.env.PORTAL_SYNC_REQUEST_TIMEOUT_MS) || 180_000,
+)
+
 // Shared handler for read/write/both — the only difference is the direction.
 function syncHandler(direction) {
   return async (req, res) => {
+    // Must run BEFORE any await: the global 30s deadline is already armed on
+    // this socket, and re-arming it is what keeps a legitimate 36s sync alive.
+    try {
+      req.setTimeout?.(SYNC_REQUEST_TIMEOUT_MS)
+      res.setTimeout?.(SYNC_REQUEST_TIMEOUT_MS)
+    } catch { /* non-socket transports (tests) — nothing to re-arm */ }
     const user = requireAuthenticatedUser(req, res)
     if (!user) return undefined
     const profileId = String(req.body?.profileId || req.body?.profile_id || '').trim()
