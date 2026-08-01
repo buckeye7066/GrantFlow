@@ -41,6 +41,7 @@ import { setProfileSectionField } from '../../profileFieldWriter.js'
 import { upsertSchoolPortalAwardAsOpportunity } from '../../schoolPortalImportService.js'
 import { isDismissed } from '../../pipelineDismissals.js'
 import { evaluateAwardAgainstPreferences } from '../../../config/aidTypePreferences.js'
+import { collectAcceptedFundingSources } from './acceptedFundingSources.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../../shared/nameParsing.js'
 import { createLogger } from '../../../utils/logger.js'
 import { PORTAL_STATUS } from '../portalCompletionStore.js'
@@ -653,13 +654,27 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
     }
 
     if (dir === 'write' || dir === 'both') {
-      const fundingSources = profileToFundingSources(profile)
+      // What the household has ACTUALLY WON, read from the pipeline — the
+      // canonical record. profileToFundingSources() reads only the
+      // university_applications section, so any award won outside a school
+      // import was silently never reported to anyone. It stays as a fallback so
+      // a profile whose awards live only in that section is never worse off.
+      const accepted = await collectAcceptedFundingSources(db, { profileId })
+      const fundingSources = accepted.sources.length > 0
+        ? accepted.sources
+        : profileToFundingSources(profile)
       const writeResult = await connector.write(page, ctx, { fundingSources })
       if (writeResult?.reached === false && dir === 'write') {
         return await fail(`portal unreachable: ${writeResult?.error || 'navigation failed'}`, { unreachable: true })
       }
       result.write = {
         written: writeResult?.written || [],
+        // Provenance the owner can audit: how many accepted sources were
+        // offered to this portal, and what the household's own aid-type
+        // preference held back (never a silent omission).
+        sources_offered: fundingSources.length,
+        declined_by_preference: accepted.declinedByPreference,
+        ...(accepted.truncated > 0 ? { truncated: accepted.truncated } : {}),
         skipped: writeResult?.skipped || [],
       }
       if (writeResult?.reached === false) result.write.unreachable = writeResult?.error || 'navigation failed'

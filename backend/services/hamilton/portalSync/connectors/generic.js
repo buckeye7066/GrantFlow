@@ -127,7 +127,16 @@ const generic = {
     }
   },
 
-  async write(page, ctx /*, data */) {
+  /**
+   * WRITE is now REAL for EVERY portal (owner rule, 2026-08-01: "the two-way
+   * sync should be global for all portals"). This used to return GENERIC_NOTE
+   * and write nothing, so only MTSU ever pushed anything — every other
+   * saved-login portal was a one-way street, pulling data in and never
+   * reporting the household's own accepted awards back.
+   *
+   * It fills and deliberately does NOT submit — see outsideAwardReporter.
+   */
+  async write(page, ctx, data = {}) {
     const nav = await visit(page, ctx)
     if (!nav.reached) {
       return {
@@ -137,7 +146,13 @@ const generic = {
         skipped: [`Could not reach the portal: ${nav.error}`],
       }
     }
-    return { written: [], skipped: [GENERIC_NOTE] }
+    const { reportOutsideAwards } = await import('../outsideAwardReporter.js')
+    const res = await reportOutsideAwards(page, {
+      sources: Array.isArray(data?.fundingSources) ? data.fundingSources : [],
+      allowSubmit: data?.allowSubmit === true,
+      log: ctx?.log,
+    })
+    return { written: res.written, skipped: res.skipped, submitted: res.submitted }
   },
 }
 
