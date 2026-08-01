@@ -43,6 +43,24 @@ function makePage(text, url = 'https://studentaid.gov/aid-summary/') {
   }
 }
 
+/**
+ * A page that REDIRECTS: goto(x) lands wherever `routes` says, exactly as
+ * studentaid.gov bounces an unauthenticated request. `routes` maps a requested
+ * URL substring to { landed, title, text }.
+ */
+function makeRedirectingPage(routes, fallback = { landed: 'https://studentaid.gov/', title: 'Home | Federal Student Aid', text: 'Federal Student Aid home. Complete Aid Application. FAFSA Form.' }) {
+  let current = fallback
+  return {
+    goto: vi.fn(async (requested) => {
+      const hit = Object.entries(routes).find(([k]) => String(requested).includes(k))
+      current = hit ? hit[1] : fallback
+    }),
+    waitForLoadState: vi.fn(async () => {}),
+    url: () => current.landed,
+    evaluate: vi.fn(async () => ({ text: current.text, title: current.title })),
+  }
+}
+
 describe('studentaid.gov connector — registry wiring', () => {
   it('claims studentaid.gov instead of falling through to the generic connector', () => {
     expect(getConnectorForHost('studentaid.gov').id).toBe('studentaid')
@@ -207,6 +225,61 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
     expect(res.access).toBe('blocked')
     expect(res.fafsaStatus).toBe(null) // NOT 'complete'
     expect(res.notFound.find((n) => n.name === 'fafsa').reason).toMatch(/BLOCKED/)
+  })
+
+  it('REGRESSION (live run 2026-08-01): a redirect away from a private page is NOT authenticated', async () => {
+    // The exact live evidence: /fafsa-apply/status bounced to the sign-in
+    // landing with a ?redirectTo=, and /aid-summary/ silently bounced to the
+    // public home page. Both previously read as "authenticated", because the
+    // page served DID have text and no "please sign in" sentence — so the
+    // diagnostic reported success while the student's record was never seen.
+    const page = makeRedirectingPage({
+      '/aid-summary/': {
+        landed: 'https://studentaid.gov/',
+        title: 'Home | Federal Student Aid',
+        // Marketing copy carrying the very phrase that caused the false stage.
+        text: 'Loans and Grants FAFSA Form Complete Aid Application Loan Simulator',
+      },
+      '/fafsa-apply/status': {
+        landed: 'https://studentaid.gov/fsa-id/sign-in/landing?redirectTo=%2Ffafsa-apply%2Fstatus',
+        title: 'Log In | Federal Student Aid',
+        text: 'Log In',
+      },
+    })
+
+    const res = await connector.read(page, { log: () => {} })
+
+    expect(res.access).toBe('signin_wall')
+    // And crucially: the marketing text must not have produced a stage.
+    expect(res.fafsaStatus).toBe(null)
+    expect(res.notFound.find((n) => n.name === 'fafsa').reason).toMatch(/NOT SIGNED IN/)
+    // Every page records WHY it did not count.
+    expect(res.raw.pages.every((p) => p.redirected === true)).toBe(true)
+  })
+
+  it('landedOnRequested tolerates trailing-slash/case noise but never a different path or host', async () => {
+    const { landedOnRequested } = await import('../services/hamilton/portalSync/connectors/studentaid.js')
+    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/aid-summary')).toBe(true)
+    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/')).toBe(false)
+    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://studentaid.gov/fsa-id/sign-in/landing')).toBe(false)
+    expect(landedOnRequested('https://studentaid.gov/aid-summary/', 'https://evil.example.com/aid-summary/')).toBe(false)
+    expect(landedOnRequested('https://studentaid.gov/aid-summary/', null)).toBe(false)
+  })
+
+  it('reads a genuinely served private page (the fix must not make every run signin_wall)', async () => {
+    const page = makeRedirectingPage({
+      '/aid-summary/': {
+        landed: 'https://studentaid.gov/aid-summary/',
+        title: 'Aid Summary | Federal Student Aid',
+        text: 'Your FAFSA form was submitted on January 5, 2026. Student Aid Index (SAI): 0',
+      },
+    }, { landed: 'https://studentaid.gov/fsa-id/sign-in/landing', title: 'Log In', text: 'Log In' })
+
+    const res = await connector.read(page, { log: () => {} })
+
+    expect(res.access).toBe('authenticated')
+    expect(res.fafsaStatus.stage).toBe('processed') // SAI figure is the furthest evidence
+    expect(res.fields.find((f) => f.field === 'efc_sai_band').value).toMatch(/SAI 0/)
   })
 
   it('records per-page diagnostics (url/title/chars/access) and NEVER the page text', async () => {
