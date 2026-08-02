@@ -161,8 +161,31 @@ export function evaluateOpportunityAgainstPreferences(opportunity = {}, educatio
   }
 }
 
+/**
+ * SQL LIKE superset for "this row's TITLE names student aid".
+ *
+ * Candidate discovery must be a SQL PREDICATE, never a post-`LIMIT` JS filter
+ * (the #944 "green while doing nothing" signature is `scanned === bound`
+ * forever), so a recall sweep needs a coarse title filter it can push into the
+ * query. This is deliberately a SUPERSET: `classifyAidType` above stays the
+ * adjudicator and is what actually decides the row's aid type. Keep the two in
+ * step — a term here that `classifyAidType` cannot name only costs a scan;
+ * a term `classifyAidType` recognises but that is MISSING here silently makes
+ * the whole class unreachable, which is the failure that matters.
+ * `aidTypePreferences.test.js` asserts every non-debt vocabulary word the
+ * classifier keys on has a covering pattern here.
+ */
+export const STUDENT_AID_TITLE_LIKE_PATTERNS = Object.freeze([
+  '%scholarship%', '%grant%', '%fellowship%', '%endow%',
+  '%tuition%', '%student%', '%award%', '%promise%', '%pell%',
+  // The classifier names bare acronyms too — "FSEOG" contains none of the words
+  // above, so without these a whole federal aid class is unreachable by SQL.
+  '%seog%', '%fws%', '%merit%', '%work-study%', '%work study%',
+])
+
 export default {
   AID_TYPES, AID_TYPE_KEYS, DEFAULT_ACCEPTED_AID_TYPES,
+  STUDENT_AID_TITLE_LIKE_PATTERNS,
   classifyAidType, resolveAcceptedAidTypes, evaluateAwardAgainstPreferences,
   evaluateOpportunityAgainstPreferences,
 }

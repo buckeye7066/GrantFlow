@@ -315,6 +315,20 @@ export function profileContextToThesisInput(ctx = {}) {
     // crawlers always pull from the profile BEFORE crawling and decide which
     // crawlers are appropriate from what they read.
     derived_facts: derivedFacts,
+    // The profile's DECLARED health vocabulary, carried so LANE SELECTION can
+    // ask a condition lane for a condition. `health_conditions` and
+    // `health_support` are the provenance-split sets `profileHelpers` already
+    // records (a diagnosis vs a support need); the union is used because a
+    // support need can legitimately name the very thing a lane serves —
+    // Dr. John Robert White carries `arthritis` in SUPPORT, not conditions,
+    // and dropping arthritis_foundation_help for him would be a real loss.
+    // `signals.health` (the UNION with free text and flags) is deliberately
+    // NOT used: ~14 consumers test canonical tokens on it and it is exactly
+    // the conflated bag the provenance split was created to stop reading.
+    declared_health_terms: [...new Set([
+      ...asList(signals.health_conditions),
+      ...asList(signals.health_support),
+    ].map((t) => String(t ?? '').trim()).filter(Boolean))],
     applicant_types: Array.isArray(signals.applicantTypes) ? signals.applicantTypes
       : (signals.applicantTypes ? [...signals.applicantTypes] : []),
     name: profile.display_name ?? null,

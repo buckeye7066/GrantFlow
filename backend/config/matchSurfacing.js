@@ -73,6 +73,16 @@ export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   //                         scored ("AFTE Forensic Science Scholarship")
   //                         replays as ACCEPT 83.
   'field-of-study-link',
+  //   - student-aid-instate-link : a catalog row whose TITLE or SPONSOR NAMES
+  //                         the student's own STATE and whose title/aid
+  //                         taxonomy makes it student aid, scored by the
+  //                         canonical engine (enforceStudentAidInStateRecall).
+  //                         Prod 2026-08-02: a TN dual-enrolled senior carried
+  //                         0 of 21 active TN HOPE rows, and the pair nobody
+  //                         had scored replays as ACCEPT 100 ("Matches 70 of
+  //                         the profile's 70 data points"). Same rolling-
+  //                         snapshot reason for its own version as the above.
+  'student-aid-instate-link',
 ])
 
 /**

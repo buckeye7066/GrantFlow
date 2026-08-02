@@ -17,8 +17,31 @@ process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'a'.repeat(
 
 const {
   classifyAidType, resolveAcceptedAidTypes, evaluateAwardAgainstPreferences,
-  DEFAULT_ACCEPTED_AID_TYPES, AID_TYPE_KEYS,
+  DEFAULT_ACCEPTED_AID_TYPES, AID_TYPE_KEYS, STUDENT_AID_TITLE_LIKE_PATTERNS,
 } = await import('../config/aidTypePreferences.js')
+
+describe('STUDENT_AID_TITLE_LIKE_PATTERNS (the SQL superset)', () => {
+  // A recall sweep pushes this list into SQL, then lets `classifyAidType`
+  // adjudicate. An extra pattern only costs a scan; a MISSING one makes a whole
+  // class of aid unreachable while the sweep still reads green (#944).
+  it('covers every non-debt title the classifier can name', () => {
+    const titles = [
+      'HOPE Scholarship', 'Federal Pell Grant', 'FSEOG',
+      'Buchanan Fellowship', 'Warren E. Angel Endowed Scholarship',
+      'TN Promise Scholarship', 'Tuition Assistance Program',
+      'Merit Award', 'Federal Work-Study',
+    ]
+    for (const title of titles) {
+      const aidType = classifyAidType({ title })
+      expect(aidType, `${title} should classify`).not.toBe('unknown')
+      const lower = title.toLowerCase()
+      expect(
+        STUDENT_AID_TITLE_LIKE_PATTERNS.some((p) => lower.includes(p.replace(/%/g, ''))),
+        `"${title}" classifies as ${aidType} but no LIKE pattern would ever fetch it`,
+      ).toBe(true)
+    }
+  })
+})
 
 describe('classifyAidType', () => {
   it('names federal aid the way portals actually print it', () => {

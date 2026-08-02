@@ -38,6 +38,7 @@ import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { detectForeignJurisdiction, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
+import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
 import { resolveProfileType, getParentChain } from './profileTypeRegistry.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('matchEngine')
@@ -3563,6 +3564,21 @@ function sectionsForAid(sections, prof) {
   return typeof edu === 'object' ? edu : {}
 }
 
+/**
+ * The FULL sections map (not the `education` slice `sectionsForAid` returns) —
+ * `deriveStageOfLife` reads `basic_information.academic_status` as well as
+ * `education`. A caller that supplies neither gets `{}`, which derives a null
+ * stage, which the stage gate treats as "nothing to say" (MISSING = NEUTRAL).
+ */
+function fullSections(sections, prof) {
+  const s = sections ?? prof?.sections ?? null
+  if (!s) return {}
+  if (typeof s === 'string') {
+    try { const p = JSON.parse(s); return p && typeof p === 'object' ? p : {} } catch { return {} }
+  }
+  return typeof s === 'object' ? s : {}
+}
+
 export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null, sections = null) {
   const reasons = []
   const opp = opportunity || {}
@@ -3653,6 +3669,25 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return {
       decision: 'REJECT',
       explanation: aidPreference.reason,
+      reasons,
+    }
+  }
+
+  // ACADEMIC STAGE. The engine had no notion that a high-school senior cannot
+  // receive a graduate/professional or adult-reentry award, so the in-state
+  // student-aid recall key that finally reaches TN HOPE (ACCEPT 100) also
+  // returned "Vanderbilt School of Medicine Merit Scholarship" (84) and "Osher
+  // Reentry Scholarship" (84) as ACCEPTs for a 17-year-old (prod 2026-08-02).
+  // The gate refuses ONLY when the row DECLARES, in words its own source
+  // published, a stage the profile's derived stage provably cannot occupy;
+  // silence is never a denial and an unknown stage is neutral. It never asserts
+  // an award IS winnable — `stageOfLifeConflict` returns a conflict or null.
+  const stageConflict = stageOfLifeConflictForSections(fullSections(sections, prof), opp)
+  if (stageConflict) {
+    reasons.push(stageConflict.reason)
+    return {
+      decision: 'REJECT',
+      explanation: `${stageConflict.reason}.`,
       reasons,
     }
   }

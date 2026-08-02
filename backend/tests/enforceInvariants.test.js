@@ -1133,7 +1133,7 @@ describe('enforceInvariants — runner', () => {
     // + the institution-aid RECALL net (institution_recall_miss)
     // + the recorded-discovery-provenance RECALL net
     // + the declared-field-of-study RECALL net here.
-    expect(summary.ran).toBe(45)
+    expect(summary.ran).toBe(47)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1172,6 +1172,8 @@ describe('enforceInvariants — runner', () => {
       // profile. Also before the hygiene sweeps, for the same reason.
       'profile_discovered_catalog_linkage',
       'declared_field_of_study_recall',
+      'student_aid_instate_recall',
+      'stage_of_life_match_scope',
       'no_dangling_matches',
       // RESULT FLOOR census (owner rule 2026-08-01, third clause). After every
       // scope/eligibility/linkage net AND after the dangling cleanup, so the

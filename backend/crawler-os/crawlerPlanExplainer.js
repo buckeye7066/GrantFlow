@@ -26,6 +26,8 @@ export const HUMAN_REASON = Object.freeze({
   applicant_type_not_served: 'Skipped — this source does not fund this applicant type.',
   need_category_not_covered: 'Skipped — none of the profile\'s needs match this source.',
   geography_out_of_scope: 'Skipped — the source is geographically out of scope for this profile.',
+  condition_not_declared: 'Skipped — this is a condition-specific lane and the profile names no matching condition. '
+    + 'A disability with no named diagnosis still reaches the general disability and benefit lanes; add the diagnosis to reach this one.',
   loan_capable_source_kept_loans_gated_downstream: 'Kept — loan-capable program; loans gated downstream.',
 });
 
