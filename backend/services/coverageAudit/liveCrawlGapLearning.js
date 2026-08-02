@@ -55,6 +55,7 @@ export const GAP_CLASSES = Object.freeze([
   'ineligible_surfaced_match',
   'institution_gap',
   'hyperlocal_gap',
+  'result_floor_shortfall',
   'low_results',
 ])
 
@@ -71,7 +72,17 @@ export function classifyGaps(audit) {
   if (audit.ineligible_surfaced_match) out.push('ineligible_surfaced_match')
   if (audit.institution_gap) out.push('institution_gap')
   if (audit.hyperlocal_gap) out.push('hyperlocal_gap')
-  if (audit.low_results) out.push('low_results')
+  // The per-profile RESULT FLOOR (owner rule 2026-08-01). Emitted as its OWN
+  // class so telemetry can tell "this profile is broken" (low_results, 3) from
+  // "this profile is under-served" (below its requested number) — and ALSO as
+  // `low_results`, because that is the class `crawler-os/webQueries.js` already
+  // consumes to broaden the next crawl's queries. Emitting only a new class
+  // would have rebuilt the write-only-queue defect CLAUDE.md documents twice.
+  if (audit.below_result_target) {
+    out.push('result_floor_shortfall')
+    if (!out.includes('low_results')) out.push('low_results')
+  }
+  if (audit.low_results && !out.includes('low_results')) out.push('low_results')
   return out
 }
 

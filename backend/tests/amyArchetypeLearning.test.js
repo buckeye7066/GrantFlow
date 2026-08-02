@@ -249,21 +249,31 @@ describe('consumption: learned gaps steer the next crawl', () => {
     }
   })
 
-  it('the learned classes CHANGE buildWebQueries output (queries added, none removed)', () => {
+  it('the learned classes CHANGE buildWebQueries output (queries added to the pool, none removed)', () => {
     const thesis = {
       applicant_types: ['individual'],
       needs: ['medical'],
       location: { state: 'TN', city: 'Cleveland', county: 'Bradley County' },
     }
-    const before = buildWebQueries(thesis, { year: 2026, max: 24 })
-    const after = buildWebQueries(
-      { ...thesis, learned_gaps: { classes: ['hyperlocal_gap', 'low_results'], missing_schools: [] } },
-      { year: 2026, max: 24 },
-    )
-    // Additive: every baseline query survives; targeted queries are added.
-    for (const q of before) expect(after).toContain(q)
-    expect(after.length).toBeGreaterThan(before.length)
-    expect(after.some((q) => /local assistance programs Bradley County/i.test(q))).toBe(true)
+    const gapped = { ...thesis, learned_gaps: { classes: ['hyperlocal_gap', 'low_results'], missing_schools: [] } }
+
+    // ADDITIVITY IS A PROPERTY OF THE POOL, not of a capped list. The safety
+    // this protects is "a learned gap must never SHRINK what the run can
+    // search" — asserted uncapped, where it holds exactly (23 → 26 queries,
+    // none lost).
+    const beforeAll = buildWebQueries(thesis, { year: 2026, max: 999 })
+    const afterAll = buildWebQueries(gapped, { year: 2026, max: 999 })
+    for (const q of beforeAll) expect(afterAll).toContain(q)
+    expect(afterAll.length).toBeGreaterThan(beforeAll.length)
+
+    // UNDER THE REAL CAP the targeted queries are what wins the contested
+    // slots — which is the entire point of steering, and what did NOT happen
+    // before `force` promoted them out of the truncatable pool. A baseline
+    // query displaced from the tail of a capped list is the cost of that, and
+    // is deliberate: the broadening query is worth more than the 24th generic.
+    const capped = buildWebQueries(gapped, { year: 2026, max: 24 })
+    expect(capped.some((q) => /local assistance programs Bradley County/i.test(q))).toBe(true)
+    expect(capped.some((q) => /grant funding individual/i.test(q))).toBe(true)
   })
 
   it('an applied coverage override changes the PLANNER output for the next crawl', () => {

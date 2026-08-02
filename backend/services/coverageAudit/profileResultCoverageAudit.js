@@ -34,6 +34,8 @@
 
 import { DEFAULT_MIN_SCORE } from '../../config/matchThresholds.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../../config/matchSurfacing.js'
+import { isPointerKind } from '../../config/opportunityKindClasses.js'
+import { resolveFleetResultTarget } from '../../config/profileResultFloor.js'
 import { isStudentAidOpportunity } from '../matchEngine.js'
 import { isTemplatedGeoStub } from '../relevanceFilterRules.js'
 import { createLogger } from '../../utils/logger.js'
@@ -114,6 +116,32 @@ function isActionableRow(row, nowMs = Date.now()) {
 }
 
 /**
+ * A surfaced row is AWARDABLE when it names money this profile could actually
+ * receive: actionable, and NOT a POINTER (directory / referral / school_portal /
+ * past_award_intel — `config/opportunityKindClasses.isPointerKind`).
+ *
+ * This is the count the per-profile RESULT FLOOR is judged on, and it is the
+ * only honest denominator for "is this person served". A locator promises a
+ * place to look, never an award — CLAUDE.md's locator rule — so a profile whose
+ * whole list is locators has been given directions, not funding. Measured in
+ * prod 2026-08-01: `Melissa Justus` and `William` each carry 25 and 24
+ * ACTIONABLE rows and **zero** awardable ones, and both read as healthy against
+ * `MIN_HEALTHY_SURFACED`.
+ *
+ * A BENEFIT program (Pell, SSI, LIHEAP) COUNTS: it publishes no fixed per-award
+ * figure but it IS the thing you apply to (see `opportunityKindClasses`'s own
+ * note on why `isPointerKind` excludes benefits deliberately).
+ *
+ * NOTE this is a stricter way of COUNTING, never a looser way of ADMITTING:
+ * `qualifiesForDisplay` and every engine gate are untouched, and directories
+ * keep surfacing to the owner exactly as before.
+ */
+function isAwardableRow(row, nowMs = Date.now()) {
+  if (!isActionableRow(row, nowMs)) return false
+  return !isPointerKind(row?.opportunity_kind)
+}
+
+/**
  * auditProfileResultCoverageFromData — PURE. Given the already-fetched rows +
  * thesis + counts, compute the coverage gaps. No I/O; unit-testable.
  *
@@ -124,7 +152,7 @@ function isActionableRow(row, nowMs = Date.now()) {
  * @param {object} input.thesis            { is_student, schools[], location:{county} }
  * @param {number} [input.floor]
  */
-export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [], unsurfacedCount = 0, thesis = {}, floor = DEFAULT_MIN_SCORE, nowMs = Date.now() }) {
+export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [], unsurfacedCount = 0, thesis = {}, floor = DEFAULT_MIN_SCORE, nowMs = Date.now(), resultTarget = null }) {
   const qualifying = surfacedRows.filter((r) => qualifiesForDisplay(r, floor))
   // ACTIONABLE = qualifying rows a client could still apply to: not a templated
   // geo-stub and not past deadline. Acquisition gaps (institution / hyperlocal /
@@ -132,8 +160,11 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   // longer mask an empty result set (the exact way Avanell's 12 deadline_passed
   // geo-stubs made her look "covered").
   const actionable = qualifying.filter((r) => isActionableRow(r, nowMs))
+  // AWARDABLE = the per-profile RESULT FLOOR's denominator (see isAwardableRow).
+  const awardable = actionable.filter((r) => isAwardableRow(r, nowMs))
   const geo_stub_count = qualifying.filter((r) => isTemplatedGeoStub(r)).length
   const deadline_passed_count = qualifying.filter((r) => isDeadlinePassed(r, nowMs)).length
+  const pointer_count = actionable.length - awardable.length
   const gaps = []
 
   // 1. Surfacing regression (CODE bug — not crawl-remediable).
@@ -156,8 +187,20 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   if (hyperlocal_gap) gaps.push(`hyperlocal_gap:${countyTok}`)
 
   // 4. Low / zero results — measured on ACTIONABLE sources, not padded totals.
+  //    This stays the "this profile is BROKEN" alarm at MIN_HEALTHY_SURFACED (3).
   const low_results = actionable.length < MIN_HEALTHY_SURFACED
   if (low_results) gaps.push(`low_results:${actionable.length}`)
+
+  // 4b. RESULT FLOOR (owner rule 2026-08-01, third clause of the crawler goal):
+  //     the profile's REQUESTED result number, judged on AWARDABLE rows. A
+  //     target of 0 disables the floor for that profile. Distinct from
+  //     low_results above, which counts pointers and fires at 3 — in prod that
+  //     bar flags 0 of 33 real profiles while 12 sit below a target of 10
+  //     (measured with this code against a full prod replica, 2026-08-01).
+  const result_target = Number.isFinite(Number(resultTarget)) ? Number(resultTarget) : resolveFleetResultTarget()
+  const below_result_target = result_target > 0 && awardable.length < result_target
+  const result_shortfall = below_result_target ? result_target - awardable.length : 0
+  if (below_result_target) gaps.push(`result_floor_shortfall:${awardable.length}_of_${result_target}`)
 
   // 5. Ineligible surfaced match — a student-aid opportunity (TN HOPE, FAFSA,
   //    Pell, TSAA, foundation scholarships…) surfacing to a NON-student profile
@@ -177,14 +220,16 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
     gaps.push(`ineligible_surfaced_match:student_aid_on_nonstudent:${ineligibleAidRows.length}`)
   }
 
-  // Re-discovery can only fix acquisition gaps (2-4), never a code-level
+  // Re-discovery can only fix acquisition gaps (2-4b), never a code-level
   // surfacing regression or a stale-decision eligibility defect (5).
-  const needs_rediscovery = institution_gap || hyperlocal_gap || low_results
+  const needs_rediscovery = institution_gap || hyperlocal_gap || low_results || below_result_target
 
   return {
     profile_id: profileId,
     surfaced_qualifying: qualifying.length,
     surfaced_actionable: actionable.length,
+    surfaced_awardable: awardable.length,
+    pointer_count,
     geo_stub_count,
     deadline_passed_count,
     surfaced_total: surfacedRows.length,
@@ -194,6 +239,9 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
     missing_schools,
     hyperlocal_gap,
     low_results,
+    result_target,
+    below_result_target,
+    result_shortfall,
     ineligible_surfaced_match,
     ineligible_aid_count: ineligibleAidRows.length,
     needs_rediscovery,
@@ -205,7 +253,7 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
 /**
  * auditProfileResultCoverage — DB-bound single-profile audit.
  */
-export async function auditProfileResultCoverage(db, profileId, { floor = DEFAULT_MIN_SCORE, thesis = null } = {}) {
+export async function auditProfileResultCoverage(db, profileId, { floor = DEFAULT_MIN_SCORE, thesis = null, resultTarget = null } = {}) {
   const isPg = db?.dialect === 'postgres'
   const activeClause = isPg
     ? '(o.is_active IS NULL OR o.is_active = TRUE)'
@@ -249,12 +297,27 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
   // Normalize the is_directory flag (SQL boolean → JS boolean).
   const rows = surfacedRows.map((r) => ({ ...r, is_directory: r.is_directory === true || Number(r.is_directory) === 1 }))
 
+  // Per-profile requested result number: the ledger override if one is set,
+  // else the fleet default. Best-effort — an unreadable ledger falls back to
+  // the fleet default rather than silently disabling the floor.
+  let effTarget = resultTarget
+  if (effTarget === null || effTarget === undefined) {
+    try {
+      const { readFloorLedger } = await import('./profileResultFloorLedger.js')
+      const { resolveProfileResultTarget } = await import('../../config/profileResultFloor.js')
+      effTarget = resolveProfileResultTarget(profileId, await readFloorLedger(db))
+    } catch {
+      effTarget = null
+    }
+  }
+
   return auditProfileResultCoverageFromData({
     profileId,
     surfacedRows: rows,
     unsurfacedCount,
     thesis: effThesis || {},
     floor,
+    resultTarget: effTarget,
   })
 }
 
@@ -263,7 +326,7 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
  * Amy training profiles are excluded — they are reaped, not remediated). Returns
  * per-profile audits + an aggregate summary. Read-only.
  */
-export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = DEFAULT_MIN_SCORE } = {}) {
+export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = DEFAULT_MIN_SCORE, ledger = null } = {}) {
   const isPg = db?.dialect === 'postgres'
   const limitClause = isPg ? 'LIMIT $1' : 'LIMIT ?'
   let profiles = []
@@ -293,10 +356,23 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
       .all(limit)
   }
 
+  // Read the floor ledger ONCE for the whole sweep — resolving the target
+  // per profile inside the loop would re-read system_kv 33+ times per run.
+  let effLedger = ledger
+  let resolveTarget = null
+  try {
+    if (!effLedger) {
+      const { readFloorLedger } = await import('./profileResultFloorLedger.js')
+      effLedger = await readFloorLedger(db)
+    }
+    ;({ resolveProfileResultTarget: resolveTarget } = await import('../../config/profileResultFloor.js'))
+  } catch { /* fall back to the fleet default inside the pure audit */ }
+
   const audits = []
   for (const p of profiles) {
     try {
-      const a = await auditProfileResultCoverage(db, p.id, { floor })
+      const resultTarget = resolveTarget ? resolveTarget(p.id, effLedger) : null
+      const a = await auditProfileResultCoverage(db, p.id, { floor, resultTarget })
       audits.push({ ...a, display_name: p.display_name ?? null })
     } catch (err) {
       log.warn('per-profile coverage audit failed (non-fatal)', { profile: p.id, error: err?.message })
@@ -310,6 +386,9 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
     institution_gaps: audits.filter((a) => a.institution_gap).length,
     hyperlocal_gaps: audits.filter((a) => a.hyperlocal_gap).length,
     low_results: audits.filter((a) => a.low_results).length,
+    // The per-profile RESULT FLOOR (owner rule 2026-08-01): how many profiles
+    // hold fewer AWARDABLE results than their requested number.
+    below_result_target: audits.filter((a) => a.below_result_target).length,
     ineligible_surfaced_matches: audits.filter((a) => a.ineligible_surfaced_match).length,
     needs_rediscovery: audits.filter((a) => a.needs_rediscovery).length,
     // Padding signals: profiles whose displayed count is inflated by expired rows
@@ -426,7 +505,20 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     log.warn('surfaced-eligibility re-score unavailable in coverage sweep (non-fatal)', { error: err?.message })
   }
 
-  const { audits, summary } = await auditAllProfilesResultCoverage(db, { limit })
+  // The floor ledger drives BOTH the per-profile target used by the audit and
+  // the attempt/cooldown/exhaustion gating of the heal queue below.
+  let floorLedger = { targets: {}, profiles: {} }
+  let floorApi = null
+  let activeCatalogCount = 0
+  try {
+    floorApi = await import('./profileResultFloorLedger.js')
+    floorLedger = await floorApi.readFloorLedger(db)
+    activeCatalogCount = await floorApi.countActiveCatalogRows(db)
+  } catch (err) {
+    log.warn('result-floor ledger unavailable in coverage sweep (non-fatal)', { error: err?.message })
+  }
+
+  const { audits, summary } = await auditAllProfilesResultCoverage(db, { limit, ledger: floorLedger })
 
   // Telemetry for zero/low-result profiles (reuses the existing low-coverage table).
   try {
@@ -445,29 +537,186 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     })
   }
 
-  // Bounded self-heal of the worst acquisition gaps (institution/hyperlocal/low).
-  const healQueue = audits
+  // ── Bounded, CONVERGING self-heal of the acquisition gaps ─────────────────
+  //
+  // Two defects in the previous version, both visible in prod on 2026-08-01:
+  //
+  //   1. NO CONVERGENCE. It re-ran `runProfileDiscoveryLive` for the same worst
+  //      profiles every night with identical arguments and no record of what
+  //      had already been tried, so an unsatisfiable gap (Noor Hassan's
+  //      `institution_gap:Lewiston High School` — a high school that sponsors
+  //      no catalog aid) was a permanent nightly retry.
+  //   2. IT RANKED BY THE PADDED COUNT. Ordering by `surfaced_actionable` put
+  //      Melissa Justus (25 actionable, **0 awardable**) behind profiles that
+  //      already had real awards.
+  //
+  // Now: the queue is gated by the floor ledger (exhausted / cooling-down
+  // profiles are skipped, and a drifted world re-opens them), ordered
+  // FEWEST-ATTEMPTS-FIRST then deepest shortfall — the attempts key is what
+  // stops retries starving never-tried profiles out of the budget, the exact
+  // way `enforceAmountEnrichment` starved for a week — and every outcome is
+  // folded back with honest burn semantics.
+  const floorAssessments = new Map()
+  if (floorApi) {
+    for (const a of audits) {
+      floorAssessments.set(
+        a.profile_id,
+        floorApi.assessProfileFloor({
+          profileId: a.profile_id,
+          awardable: a.surfaced_awardable ?? 0,
+          ledger: floorLedger,
+          activeCatalogCount,
+        }),
+      )
+    }
+  }
+
+  const { orderFloorQueue, FLOOR_OUTCOME } = await import('../../config/profileResultFloor.js').catch(() => ({}))
+
+  const skippedByLedger = []
+  const candidates = audits
     .filter((a) => a.needs_rediscovery)
-    .sort((x, y) => (x.surfaced_actionable ?? x.surfaced_qualifying) - (y.surfaced_actionable ?? y.surfaced_qualifying))
-    .slice(0, Math.max(0, maxHeal))
+    .filter((a) => {
+      const f = floorAssessments.get(a.profile_id)
+      // Only the RESULT-FLOOR class is ledger-gated. A profile queued for an
+      // institution/hyperlocal gap keeps its existing behaviour — refusing it
+      // on a floor verdict would silently retire a different, unrelated gap.
+      if (!f || !a.below_result_target) return true
+      if (!f.eligible) { skippedByLedger.push({ profile_id: a.profile_id, reason: f.reason, attempts: f.attempts }) }
+      return f.eligible
+    })
+    .map((a) => ({
+      audit: a,
+      profile_id: a.profile_id,
+      attempts: floorAssessments.get(a.profile_id)?.attempts ?? 0,
+      shortfall: a.result_shortfall ?? 0,
+      escalation: floorAssessments.get(a.profile_id)?.escalation ?? 1,
+    }))
+
+  const healQueue = (orderFloorQueue ? orderFloorQueue(candidates) : candidates).slice(0, Math.max(0, maxHeal))
   const healed = []
+  const exhausted = []
   if (autoheal && healQueue.length) {
     try {
       const { runProfileDiscoveryLive } = await import('../crawlerOsService.js')
-      for (const a of healQueue) {
+      for (const item of healQueue) {
+        const a = item.audit
+        // `before` is the AWARDABLE count — what the owner would recognise as
+        // funding — not the pointer-padded total the old loop reported.
+        const before = a.surfaced_awardable ?? 0
+        let run = null
+        let ranOk = false
         try {
-          const before = a.surfaced_actionable ?? a.surfaced_qualifying
-          await runProfileDiscoveryLive({ db, profileId: a.profile_id })
-          const after = await auditProfileResultCoverage(db, a.profile_id)
-          healed.push({ profile_id: a.profile_id, before, after: after.surfaced_actionable ?? after.surfaced_qualifying, gaps_before: a.gaps })
-          log.info('coverage self-heal re-discovered profile', { profile: a.profile_id, before, after: after.surfaced_actionable ?? after.surfaced_qualifying })
+          run = await runProfileDiscoveryLive({ db, profileId: a.profile_id })
+          // A run that was SKIPPED (deleted profile, no sources selected) or
+          // that reports failure has told us nothing about this profile's
+          // ceiling — it must not spend an attempt.
+          ranOk = Boolean(run) && run.ok !== false && run.skipped !== true
         } catch (err) {
           log.warn('coverage self-heal failed for profile (non-fatal)', { profile: a.profile_id, error: err?.message })
+          ranOk = false
+        }
+
+        let after = null
+        try {
+          after = await auditProfileResultCoverage(db, a.profile_id, {
+            resultTarget: floorAssessments.get(a.profile_id)?.target ?? null,
+          })
+        } catch (err) {
+          // The recount failed, so the outcome is UNKNOWN. Writing a mark here
+          // would be the #946 defect (a permanent mark for an answer we do not
+          // have), so nothing is folded in at all.
+          log.warn('coverage self-heal recount failed (non-fatal, attempt NOT spent)', {
+            profile: a.profile_id, error: err?.message,
+          })
+        }
+
+        const afterAwardable = after?.surfaced_awardable ?? null
+        healed.push({
+          profile_id: a.profile_id,
+          before,
+          after: afterAwardable ?? before,
+          target: a.result_target ?? null,
+          escalation: item.escalation,
+          ran: ranOk,
+          gaps_before: a.gaps,
+        })
+        log.info('coverage self-heal re-discovered profile', {
+          profile: a.profile_id, before, after: afterAwardable, target: a.result_target, escalation: item.escalation, ran: ranOk,
+        })
+
+        // Fold the outcome into the ledger — only ever AFTER a successful
+        // recount, and only for profiles the floor actually queued.
+        if (floorApi && FLOOR_OUTCOME && after && a.below_result_target) {
+          const added = Math.max(0, (afterAwardable ?? before) - before)
+          const outcome = !ranOk
+            ? FLOOR_OUTCOME.TRANSIENT
+            : (added > 0 ? FLOOR_OUTCOME.ADDED : FLOOR_OUTCOME.NO_NEW_RESULTS)
+          floorLedger = floorApi.recordFloorAttempt(floorLedger, a.profile_id, {
+            outcome,
+            target: after.result_target,
+            awardable: afterAwardable,
+            added,
+            fingerprint: floorAssessments.get(a.profile_id)?.fingerprint ?? null,
+            evidence: {
+              lanes_queried: Number(run?.sources?.length) || 0,
+              queries_issued: Number(run?.web?.queries?.length) || 0,
+              pages_fetched: Number(run?.web?.fetched) || 0,
+              candidates_extracted: Number(run?.web?.extracted) || 0,
+              rejected_by_engine: Number(run?.web?.rejected) || 0,
+              added_total: added,
+            },
+          })
+          const entry = floorLedger.profiles?.[a.profile_id]
+          if (entry?.exhausted_at) {
+            const { describeExhaustion } = await import('../../config/profileResultFloor.js')
+            log.info('result floor EXHAUSTED for profile (no further nightly retries until drift or cooldown)', {
+              profile: a.profile_id, verdict: describeExhaustion(entry),
+            })
+          }
         }
       }
     } catch (err) {
       log.warn('coverage self-heal unavailable (non-fatal)', { error: err?.message })
     }
+  }
+
+  // Record the OBSERVED floor state for every profile the sweep looked at, so a
+  // profile that reached its target has any stale exhaustion cleared even when
+  // it was never in the heal queue.
+  if (floorApi) {
+    try {
+      for (const a of audits) {
+        const f = floorAssessments.get(a.profile_id)
+        if (!f) continue
+        if (floorLedger.profiles?.[a.profile_id]?.last_attempt_at &&
+            healQueue.some((h) => h.profile_id === a.profile_id)) continue
+        floorLedger = floorApi.refreshFloorObservation(floorLedger, a.profile_id, {
+          target: f.target, awardable: a.surfaced_awardable ?? 0, fingerprint: f.fingerprint,
+        })
+      }
+      await floorApi.writeFloorLedger(db, floorLedger)
+    } catch (err) {
+      log.warn('could not persist result-floor ledger after sweep (non-fatal)', { error: err?.message })
+    }
+
+    // "We stopped looking for this profile" is a STANDING fact, not a one-time
+    // log line on the night it was decided. Report every profile still carrying
+    // an exhausted verdict, so a silence in the owner's report always means "no
+    // profile has been given up on" rather than "the decision scrolled past".
+    try {
+      const { describeExhaustion } = await import('../../config/profileResultFloor.js')
+      for (const a of audits) {
+        const entry = floorLedger.profiles?.[a.profile_id]
+        if (!entry?.exhausted_at) continue
+        exhausted.push({
+          profile_id: a.profile_id,
+          name: a.display_name ?? null,
+          exhausted_at: entry.exhausted_at,
+          verdict: describeExhaustion(entry),
+        })
+      }
+    } catch { /* reporting is best-effort; the ledger is already durable */ }
   }
 
   const result = {
@@ -478,6 +727,14 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     autoheal: Boolean(autoheal),
     healed_count: healed.length,
     healed,
+    // The RESULT-FLOOR ledger's own outcomes, so "we stopped looking" is a
+    // reported, evidenced fact rather than a silent absence of retries.
+    result_floor: {
+      below_target: summary.below_result_target ?? 0,
+      queued: healQueue.length,
+      skipped_by_ledger: skippedByLedger,
+      exhausted,
+    },
     eligibility_heal: eligibilityHeal
       ? { demoted: eligibilityHeal.repaired ?? 0, profilesAffected: eligibilityHeal.profilesAffected ?? 0 }
       : null,
