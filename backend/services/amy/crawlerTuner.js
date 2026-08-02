@@ -323,6 +323,59 @@ export function buildApprovalQueue(evaluations = []) {
     })
   }
 
+  // 3b. RECALL misses → the query-breadth lever (buildWebQueries).
+  //
+  // WHY THIS EXISTS (2026-08-02). Measured over the 21 cohort days in prod's
+  // `system_kv amy_flywheel_cohort`, `institution_recall_miss` is the ONLY
+  // finding present on 21 of 21 days — 282 occurrences, never once green, while
+  // `weak_match` appeared on 2 days (11 occurrences) and LED the report. The
+  // reason it never closed is structural and lives right here: this function
+  // built items from `status === 'zero'`, `false_positives`, `ineligible_accepts`,
+  // `status === 'weak'` and `sources_failed` — and from NOTHING else. No branch
+  // has ever read `e.findings`, so a recall miss could not produce an approval
+  // item, could not acquire a lever, could not enter the durable ledger added in
+  // #1085, and could not be closed by any actor. It was re-reported nightly for
+  // three weeks with no consumer: the same write-only shape as
+  // `web_parity_gap_queue` and the adapter wishlist, one level down.
+  //
+  // The lever is REAL and already documented on the finding itself
+  // (CODE_TARGETS → backend/crawler-os/webQueries.js): a recall miss means the
+  // open-web lane never emitted a query naming the thing the profile declared.
+  // Evidence carries the concrete missed subjects (the school names / the
+  // county), so the item names work that can actually be done rather than a
+  // count. Grouped by (finding type, category) so the ledger can age ONE entry
+  // per class instead of one per night.
+  const RECALL_FINDING_TYPES = [FINDING_TYPES.INSTITUTION_RECALL_MISS, FINDING_TYPES.HYPERLOCAL_RECALL_MISS]
+  for (const type of RECALL_FINDING_TYPES) {
+    const byCat = {}
+    for (const e of evals) {
+      const hits = (Array.isArray(e.findings) ? e.findings : []).filter((f) => f?.type === type)
+      if (hits.length === 0) continue
+      const cat = e.category ?? 'unknown'
+      const bucket = (byCat[cat] ||= { profiles: 0, subjects: new Set() })
+      bucket.profiles += 1
+      for (const h of hits) {
+        for (const s of h?.evidence?.schools ?? []) bucket.subjects.add(String(s))
+        const county = h?.evidence?.county
+        if (county) bucket.subjects.add(String(county))
+      }
+    }
+    for (const [category, bucket] of Object.entries(byCat)) {
+      const target = CODE_TARGETS[type]
+      const subjects = [...bucket.subjects].slice(0, 6)
+      items.push({
+        id: `${type}:${category}`,
+        lever: 'query_breadth',
+        target_file: target.file,
+        category,
+        severity: target.severity,
+        rationale: `${bucket.profiles} "${category}" profile(s) declared something the results never referenced (${type}). ${target.hint}${subjects.length ? ` Missed subject(s): ${subjects.join(', ')}.` : ''}`,
+        evidence: { profiles: bucket.profiles, finding_type: type, missed_subjects: subjects },
+        requires_approval: true,
+      })
+    }
+  }
+
   // 4. Source failures → adapter/source health (sourceRegistry/adapters).
   const failedSourceProfiles = evals.filter((e) => Number(e.sources_failed) > 0)
   if (failedSourceProfiles.length > 0) {

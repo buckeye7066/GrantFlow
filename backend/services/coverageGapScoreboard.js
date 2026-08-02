@@ -504,14 +504,17 @@ export function deriveAmyGapActions(scoreboard) {
  */
 export const LANE_CATEGORY_AFFINITY = Object.freeze({
   disease_specific: ['cancer_patient', 'chronic_illness_patient', 'disabled_person', 'senior_citizen', 'family_caregiver'],
-  school_portals: ['high_school_student', 'college_student', 'graduate_student', 'homeschool_family', 'adult_learner'],
-  federal_benefits: ['individual_assistance', 'veteran', 'military_family', 'single_parent', 'grandparent_caregiver', 'foster_youth', 'domestic_violence_survivor', 'disaster_survivor', 'senior_citizen', 'disabled_person'],
-  state_programs: ['individual_assistance', 'business', 'nonprofit', 'college_student', 'senior_citizen'],
-  county_city: ['nonprofit', 'community_development_corp', 'housing_authority', 'volunteer_fire_department', 'individual_assistance'],
-  community_foundations: ['nonprofit', 'faith_based_org', 'community_development_corp'],
-  private_charities: ['nonprofit', 'cancer_patient', 'individual_assistance', 'foster_youth'],
-  local_211: ['individual_assistance', 'single_parent', 'domestic_violence_survivor', 'disaster_survivor', 'senior_citizen'],
-  federal_grants: ['nonprofit', 'business', 'school_district', 'college_university', 'research_lab', 'workforce_org', 'volunteer_fire_department', 'housing_authority', 'tribal_org', 'rural_health_clinic'],
+  school_portals: ['high_school_student', 'college_student', 'graduate_student', 'homeschool_family', 'adult_learner', 'first_responder'],
+  federal_benefits: ['individual_assistance', 'veteran', 'veteran_entrepreneur', 'military_family', 'single_parent', 'grandparent_caregiver', 'foster_youth', 'domestic_violence_survivor', 'disaster_survivor', 'senior_citizen', 'disabled_person', 'homeowner_foreclosure', 'renter_eviction'],
+  state_programs: ['individual_assistance', 'business', 'veteran_entrepreneur', 'nonprofit', 'college_student', 'senior_citizen', 'homeowner_foreclosure', 'renter_eviction', 'agricultural_cooperative'],
+  county_city: ['nonprofit', 'community_development_corp', 'housing_authority', 'volunteer_fire_department', 'individual_assistance', 'renter_eviction', 'homeowner_foreclosure'],
+  community_foundations: ['nonprofit', 'faith_based_org', 'struggling_congregation', 'community_development_corp'],
+  private_charities: ['nonprofit', 'cancer_patient', 'individual_assistance', 'foster_youth', 'struggling_congregation', 'renter_eviction'],
+  local_211: ['individual_assistance', 'single_parent', 'domestic_violence_survivor', 'disaster_survivor', 'senior_citizen', 'renter_eviction', 'homeowner_foreclosure'],
+  // `first_responder` and `agricultural_cooperative` were in NO lane at all
+  // until the affinity totality test was added (2026-08-02): fleet gap pressure
+  // could never weight them, so two archetypes trained at baseline forever.
+  federal_grants: ['nonprofit', 'business', 'veteran_entrepreneur', 'school_district', 'college_university', 'research_lab', 'workforce_org', 'volunteer_fire_department', 'housing_authority', 'tribal_org', 'rural_health_clinic', 'struggling_congregation', 'first_responder', 'agricultural_cooperative'],
 })
 
 /** Weight bounds: 1 (no gap pressure) … 4 (lane gaps hit most of the fleet). */

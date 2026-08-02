@@ -29,6 +29,10 @@ const LOCATIONS = [
   { state: 'NM', city: 'Gallup', zip: '87301', county: 'McKinley' },
   { state: 'WV', city: 'Beckley', zip: '25801', county: 'Raleigh' },
   { state: 'FL', city: 'Pensacola', zip: '32502', county: 'Escambia' },
+  // Indiana was absent from this list, so Amy had NEVER exercised a single
+  // Indiana profile — and the state lane is one of the two things the planner
+  // gates on. Added 2026-08-02 with the persona coverage audit.
+  { state: 'IN', city: 'Kokomo', zip: '46901', county: 'Howard' },
 ]
 
 const FUNDING_BANDS = ['$5,000', '$15,000', '$25,000', '$50,000', '$100,000', '$250,000']
@@ -787,6 +791,137 @@ export const CATEGORY_CATALOG = Object.freeze({
         focus_areas: ['agriculture', 'rural_cooperative'],
         interests: ['USDA', 'value-added producer', 'farm equipment'],
         keywords: ['agricultural cooperative grant', 'USDA rural', 'value-added'],
+      },
+    }),
+  },
+
+  // ── INTERSECTION archetypes (2026-08-02) ─────────────────────────────────
+  // Every archetype above is SINGLE-AXIS: a veteran, or a business; a church,
+  // or a nonprofit; someone "at-risk" in housing, without saying which way. Real
+  // applicants are intersections, and the intersection is what the planner gates
+  // on. Measured with the real planner + the real discovery path on 2026-08-02:
+  //
+  //   * a WV Army veteran opening a food truck selected 10 of 167 sources and
+  //     EVERY veteran source was excluded `applicant_type_not_served` — the
+  //     thesis emits applicant_types ['business'] and drops the veteran fact;
+  //   * an Indiana homeowner four months behind on his mortgage got 40 rows,
+  //     35 pointers, headed by "Benefits.gov finder — substance_recovery
+  //     benefits" and "Arthritis Foundation help line", and not one row naming
+  //     a mortgage or a foreclosure;
+  //   * an Ohio renter with an eviction hearing in two weeks got 19 rows, 3
+  //     awardable, the single direct grant being "HSLDA Compassion Grants
+  //     (homeschool families)".
+  //
+  // Amy could not have found any of this: `individual_assistance` declares
+  // housing `status:'at-risk', type:'rent'` with generic "rent help" keywords
+  // and no eviction/foreclosure posture, `veteran` never owns a business, and
+  // `faith_based_org` is a solvent 501c3 with no building. These four make the
+  // intersections first-class so the nightly cohort measures them.
+  veteran_entrepreneur: {
+    label: 'Veteran Starting a Business',
+    primary_type: 'small_business',
+    kind: 'org',
+    build: ({ location, rng }) => ({
+      military_service: { veteran: true, notes: 'Army, 2004-2012, honorable discharge.' },
+      occupation: { small_business_owner: true },
+      small_business_details: {
+        business_name: 'Synthetic Veteran-Owned Startup (test)',
+        years_in_business: 0,
+        employee_count: 1,
+        certifications: ['SDVOSB pending'],
+      },
+      organization_details: { organization_type: 'small business', small_business_owner: true, cert_sdvosb: false },
+      location_focus: { geographic_focus: `${location.county} County, ${location.state}` },
+      narrative: {
+        mission: 'Military veteran starting a small business after service.',
+        primary_goal: 'Startup capital, equipment, permits, and veteran business counseling.',
+        funding_amount_needed: pick(rng, FUNDING_BANDS),
+      },
+      programs_services: {
+        focus_areas: ['small_business', 'veteran', 'economic_development'],
+        interests: ['startup capital', 'equipment', 'veteran business', 'business counseling'],
+        keywords: ['veteran owned small business grant', 'SDVOSB', 'veteran entrepreneur', 'startup capital'],
+      },
+    }),
+  },
+
+  struggling_congregation: {
+    label: 'Struggling Congregation (building + ministry)',
+    primary_type: 'faith_based',
+    kind: 'org',
+    build: ({ location, rng }) => ({
+      organization_details: {
+        organization_type: 'church',
+        is_faith_based: true,
+        is_501c3_public_charity: true,
+        annual_budget: 78000,
+        staff_count: 2,
+        sam_gov_registered: false,
+        grants_gov_account: false,
+      },
+      occupation: { clergy: true },
+      financial_information: { financial_need_level: 'high' },
+      location_focus: { geographic_focus: `${location.county} County, ${location.state}` },
+      narrative: {
+        mission: 'A small, long-established congregation with a failing building and a shrinking membership.',
+        primary_goal: 'Roof and mechanical repair on a historic building, operating support, and food-ministry funding.',
+        funding_amount_needed: pick(rng, FUNDING_BANDS),
+        barriers_faced: 'Deferred maintenance on a historic building, shrinking membership, no grant-writing staff.',
+      },
+      programs_services: {
+        focus_areas: ['faith_based', 'community', 'historic_preservation'],
+        interests: ['church building repair', 'historic preservation', 'operating support', 'food pantry'],
+        keywords: ['church grant', 'congregation building repair', 'historic church preservation', 'sacred places'],
+      },
+    }),
+  },
+
+  homeowner_foreclosure: {
+    label: 'Homeowner Facing Foreclosure',
+    primary_type: 'individual_need',
+    kind: 'individual',
+    build: ({ rng }) => ({
+      housing: { status: 'at-risk', type: 'own', notes: 'Behind on the mortgage; pre-foreclosure notice received.' },
+      financial_information: {
+        household_income: 31000, household_size: 2, financial_need_level: 'high',
+        low_income: true, underemployed: true, displaced_worker: true, bankruptcy_foreclosure: true,
+      },
+      narrative: {
+        mission: 'Homeowner trying to keep the house after a loss of income.',
+        primary_goal: 'Mortgage assistance, foreclosure-prevention counseling, and legal help.',
+        funding_amount_needed: pick(rng, ['$5,000', '$9,000', '$15,000']),
+        special_circumstances: 'Pre-foreclosure notice from the mortgage servicer.',
+      },
+      programs_services: {
+        focus_areas: ['housing', 'emergency_assistance', 'legal'],
+        interests: ['mortgage assistance', 'foreclosure prevention', 'housing counseling', 'legal aid'],
+        keywords: ['foreclosure prevention', 'homeowner assistance fund', 'HUD housing counseling', 'mortgage arrears'],
+      },
+    }),
+  },
+
+  renter_eviction: {
+    label: 'Renter Facing Eviction',
+    primary_type: 'individual_need',
+    kind: 'individual',
+    build: ({ rng }) => ({
+      housing: { status: 'at-risk', type: 'rent', notes: 'Notice to vacate served; eviction hearing scheduled.' },
+      financial_information: {
+        household_income: 19500, household_size: 3, financial_need_level: 'high',
+        low_income: true, unemployed: true,
+      },
+      government_assistance: { snap_recipient_self: true },
+      family: { household_size: 3, responsibilities: 'Two school-age children in the household.' },
+      narrative: {
+        mission: 'Renter facing an eviction hearing with children in the household.',
+        primary_goal: 'Emergency rental assistance for back rent, court costs, and a tenant lawyer.',
+        funding_amount_needed: pick(rng, ['$1,500', '$3,200', '$5,000']),
+        special_circumstances: 'Notice to vacate already served; hearing scheduled.',
+      },
+      programs_services: {
+        focus_areas: ['housing', 'emergency_assistance', 'legal'],
+        interests: ['emergency rental assistance', 'back rent', 'eviction defense', 'utility assistance'],
+        keywords: ['emergency rental assistance', 'eviction prevention', 'tenant legal aid', 'rent help'],
       },
     }),
   },

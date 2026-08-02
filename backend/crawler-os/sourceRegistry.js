@@ -8,6 +8,11 @@
 // Pure data. No I/O.
 
 import { TRUST_TIER, OPPORTUNITY_KIND } from './contract.js';
+// State housing-finance agencies are ALREADY a curated registry — every one of
+// the 51 states/DC carries a verified `housingName`/`housingUrl`. The state HFA
+// source rows below are GENERATED from it rather than hand-typed, so a state
+// cannot silently fall out (the repeatedly-shipped hand-typed-subset defect).
+import { STATE_REGISTRY } from '../services/shared/data/stateRegistry.js';
 // Amy-managed additive coverage overrides (broaden an existing source's
 // need_categories/applicant_types). Additive-only + reversible; lives inside
 // the OS so the package stays self-contained. See ./coverageOverrides.js.
@@ -125,6 +130,39 @@ function stateBenefitsPortalRow([state, name, url, sponsor, summary]) {
 /** source_ids of the generated per-state benefits portal rows (adapter + lane wiring). */
 export const STATE_BENEFITS_SOURCE_IDS = Object.freeze(
   STATE_BENEFITS_PORTALS.map(([state]) => `${state.toLowerCase()}_benefits`),
+);
+
+// ── State HOUSING FINANCE AGENCY lane (2026-08-02) ──────────────────────────
+// The state benefits portal above is the SNAP/TANF/Medicaid door. It is not the
+// door for someone losing a HOUSE. Measured end-to-end on 2026-08-02 with the
+// real planner + the real discovery path: a homeowner in Kokomo, Indiana four
+// months behind on his mortgage got 40 rows, 35 of them pointers, headed by
+// "Benefits.gov finder — substance_recovery benefits", "HLAA financial
+// assistance for hearing aids" and "Arthritis Foundation help line" — and NOT
+// ONE row naming a mortgage, a foreclosure, or a housing counselor. The state
+// HFA (IHCDA in Indiana, OHFA in Ohio, WVHDF in West Virginia) is the agency
+// that actually administers Homeowner Assistance Fund money, foreclosure
+// counseling, down-payment and home-repair programs.
+//
+// WHY THIS IS **ONE** ROW AND NOT 51 STATE-SCOPED ROWS. The obvious shape was
+// to mirror STATE_BENEFITS_PORTALS: generate one `<st>_housing_agency` row per
+// state from STATE_REGISTRY (which already carries a curated housingName /
+// housingUrl for all 51). It was built that way first and MEASURED against all
+// 33 real prod profiles before shipping — and it FLOODED: `planner.servesGeo`
+// returns `true` when the thesis has no state ("unknown location -> keep"), so
+// the 5 prod profiles with no resolvable state selected **all 51** rows,
+// +54 sources each (Lisa Klinger 99 → 153). That is the 2026-07 geo-link flood
+// class, and the only clean gate for it lives in planner.js, which is not this
+// change's to touch. The rule is "never fix a gap by widening a gate", so the
+// lane is a SINGLE national row whose adapter resolves the profile's OWN state
+// from STATE_REGISTRY (see adapters/stateHousingAgencyAdapter.js). Measured
+// after: +1 source for a profile with a state, +1 (the honest national HUD
+// fallback) for one without. No profile can select more than one.
+export const STATE_HOUSING_AGENCY_SOURCE_ID = 'state_housing_finance_agency';
+
+/** States/DC whose HFA the adapter can name — read from STATE_REGISTRY, never hand-typed. */
+export const STATE_HOUSING_AGENCY_STATES = Object.freeze(
+  Object.keys(STATE_REGISTRY).filter((st) => STATE_REGISTRY[st]?.housingUrl).sort(),
 );
 
 export const SOURCES = Object.freeze([
@@ -2260,6 +2298,172 @@ export const SOURCES = Object.freeze([
     default_kinds: [OPPORTUNITY_KIND.DIRECT_GRANT],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
   },
+  // ── HOUSING-LOSS lane (2026-08-02) ───────────────────────────────────────
+  // Two whole real-world situations had NO source in this registry: a HOMEOWNER
+  // in foreclosure and a RENTER facing eviction. Verified by grep on
+  // 2026-08-02: zero registry occurrences of foreclos*, mortgage, HAF,
+  // eviction, ERAP, rental assistance, or legal aid — while the need
+  // VOCABULARY has carried them the whole time (needTaxonomy `rent` →
+  // 'eviction prevention', `housing` → 'mortgage assistance', `legal` →
+  // 'eviction defense'). The words existed; nothing to search existed.
+  //
+  // All four base_urls verified live 2026-08-02 (fetch → HTTP 200 after
+  // redirects; the recorded URL is the FINAL post-redirect URL).
+  {
+    source_id: 'hud_avoiding_foreclosure',
+    name: 'HUD — Avoiding foreclosure & HUD-approved housing counseling',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.hud.gov/topics/avoiding_foreclosure',
+    sponsor_name: 'U.S. Department of Housing and Urban Development',
+    resource_title: 'Avoid foreclosure — free HUD-approved housing counseling',
+    resource_summary: 'Official HUD foreclosure-avoidance hub: how to work with your servicer, what a HUD-approved housing counselor does (the counseling is free), state-by-state foreclosure-avoidance resources, and the counselor search at hud.gov/findacounselor. Also covers rental counseling for tenants facing eviction.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran', 'senior'],
+    need_categories: ['housing', 'emergency', 'legal'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 74,
+  },
+  {
+    source_id: 'cfpb_rent_and_housing_help',
+    name: 'CFPB — Find help paying rent and bills',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.consumerfinance.gov/housing/housing-insecurity/help-for-renters/get-help-paying-rent-and-bills/',
+    sponsor_name: 'Consumer Financial Protection Bureau',
+    resource_title: 'Emergency rental assistance & renter protections near you',
+    resource_summary: 'Official CFPB finder for local emergency rental-assistance programs (back rent, utilities, court costs) by state and county, plus renter protections and what to do when an eviction case is filed.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran', 'senior', 'student'],
+    need_categories: ['housing', 'emergency', 'energy'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 74,
+  },
+  {
+    source_id: 'lawhelp_legal_aid',
+    name: 'LawHelp.org — free legal aid by state',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.lawhelp.org/',
+    sponsor_name: 'Pro Bono Net / Legal Services Corporation network',
+    resource_title: 'Free civil legal aid near you (eviction, foreclosure, benefits)',
+    resource_summary: 'State-by-state directory of free civil legal aid organizations for people who cannot afford a lawyer — eviction defense, foreclosure defense, benefits appeals, family and consumer law. Companion to the Legal Services Corporation "I need legal help" locator.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran', 'senior'],
+    need_categories: ['legal', 'housing', 'emergency'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 45, priority_score: 70,
+  },
+
+  // ── CONGREGATION / SACRED-PLACES lane (2026-08-02) ────────────────────────
+  // `church` and `ministry` were applicant_types on four unrelated rows
+  // (a food-bank locator, HUD homeless assistance, a reentry program and the
+  // ProPublica 990 index) and NOTHING else. Measured end-to-end 2026-08-02, a
+  // 120-year-old northern-Ohio congregation with a failing roof and boiler got
+  // 30 rows headed by "PetSmart Charities grant programs", "Petco Love grant
+  // opportunities" and NSF "Combustion and Fire Systems". The National Fund for
+  // Sacred Places is the one national program that gives capital grants to
+  // congregations for exactly this building — it is an AWARD, not a pointer.
+  {
+    source_id: 'national_fund_sacred_places',
+    name: 'National Fund for Sacred Places',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
+    base_url: 'https://www.fundforsacredplaces.org/',
+    sponsor_name: 'Partners for Sacred Places & National Trust for Historic Preservation',
+    resource_title: 'Capital grants for congregations with historic buildings',
+    resource_summary: 'National matching capital grants plus technical assistance for congregations of any denomination stewarding a historic building — roofs, masonry, windows, mechanical systems — awarded to the congregation itself.',
+    directory: false, loan_allowed: false, cost_share_allowed: true,
+    applicant_types: ['church', 'ministry', 'nonprofit'],
+    need_categories: ['capital', 'operations', 'programs', 'historic_preservation'],
+    keywords: ['sacred places', 'congregation', 'church building', 'historic preservation', 'capital campaign', 'roof', 'masonry'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.PROGRAM],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 78,
+  },
+  {
+    source_id: 'partners_sacred_places',
+    name: 'Partners for Sacred Places',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
+    base_url: 'https://sacredplaces.org/',
+    sponsor_name: 'Partners for Sacred Places',
+    resource_title: 'Funding, training & capital planning for older sacred places',
+    resource_summary: 'The national non-sectarian organization for congregations with older and historic buildings: capital-campaign training, community-value assessments, and the funding programs and regional partners a small congregation can actually reach.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['church', 'ministry', 'nonprofit'],
+    need_categories: ['capital', 'operations', 'programs', 'historic_preservation'],
+    keywords: ['sacred places', 'congregation', 'church building', 'historic preservation'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 45, priority_score: 68,
+  },
+  {
+    source_id: 'nthp_preservation_grants',
+    name: 'National Trust for Historic Preservation grants',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
+    base_url: 'https://savingplaces.org/grants',
+    sponsor_name: 'National Trust for Historic Preservation',
+    resource_title: 'National Trust preservation grant programs',
+    resource_summary: 'National Trust grant funds (including the African American Cultural Heritage Action Fund and the Preservation Fund) for planning and capital work on historic buildings owned by nonprofits, congregations, tribes and public agencies.',
+    directory: false, loan_allowed: false, cost_share_allowed: true,
+    applicant_types: ['nonprofit', 'church', 'ministry', 'government', 'tribal'],
+    need_categories: ['capital', 'programs', 'historic_preservation'],
+    keywords: ['historic preservation', 'preservation fund', 'historic building', 'restoration'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.PROGRAM],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 71,
+  },
+
+  // ── VETERAN benefits hub (2026-08-02) ─────────────────────────────────────
+  // The registry carried five veteran BUSINESS rows and `va_housing_grants`,
+  // but no row for VA benefits as such (education, disability compensation,
+  // healthcare, VR&E/Chapter 31 self-employment). NOTE: on 2026-08-02 the
+  // planner excluded EVERY veteran row for a veteran who owns a business,
+  // because the thesis emitted applicant_types:['business'] only — see the
+  // exact patch in the persona-coverage report. This row is only reachable
+  // once that lands.
+  {
+    source_id: 'va_veteran_benefits',
+    name: 'VA benefits (education, disability, healthcare, employment)',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.benefits.va.gov/benefits/',
+    sponsor_name: 'U.S. Department of Veterans Affairs',
+    resource_title: 'VA benefits for veterans and their families',
+    resource_summary: 'Official VA benefits hub: education (GI Bill), disability compensation, healthcare enrollment, home loans, pension, and Veteran Readiness and Employment (Chapter 31) — which includes a self-employment track for veterans starting a business.',
+    directory: true, loan_allowed: true, cost_share_allowed: false,
+    applicant_types: ['veteran', 'active_duty', 'guard_reserve', 'transitioning_service_member', 'military_spouse'],
+    need_categories: ['veterans', 'housing', 'medical', 'education', 'employment', 'disability', 'startup'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 73,
+  },
+
+  {
+    // ONE national row; the adapter names the profile's OWN state HFA from
+    // STATE_REGISTRY (IHCDA / OHFA / WVHDF …). See the note above for why this
+    // is not 51 state-scoped rows.
+    source_id: STATE_HOUSING_AGENCY_SOURCE_ID,
+    name: 'State housing finance agency (homeowner & renter programs)',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.hud.gov/states',
+    sponsor_name: 'State housing finance agency',
+    resource_title: 'State housing agency — homeowner & renter programs',
+    resource_summary: "Your state's housing finance agency: homeowner assistance and foreclosure-prevention programs, rental assistance, home repair and weatherization, down-payment help, and the state's HUD-approved housing counseling network.",
+    directory: true, loan_allowed: true, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran', 'senior'],
+    need_categories: ['housing', 'emergency'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 75,
+  },
+
   // State benefits portals — generated from the verified table above.
   ...STATE_BENEFITS_PORTALS.map(stateBenefitsPortalRow),
 ]);
