@@ -18,7 +18,8 @@ import { createOfficialDirectoryAdapter } from "./officialDirectoryAdapter.js";
 import { createEcfChoicesAdapter } from "./ecfChoicesAdapter.js";
 import { createPropublica990Adapter } from "./propublica990Adapter.js";
 import { createCountyCityDirectoryAdapter } from "./countyCityDirectoryAdapter.js";
-import { STATE_BENEFITS_SOURCE_IDS } from "../sourceRegistry.js";
+import { STATE_BENEFITS_SOURCE_IDS, STATE_HOUSING_AGENCY_SOURCE_ID } from "../sourceRegistry.js";
+import { createStateHousingAgencyAdapter } from "./stateHousingAgencyAdapter.js";
 
 const officialDirectory = (sourceId) => () => createOfficialDirectoryAdapter(sourceId);
 const countyCityDirectory = (sourceId) => () => createCountyCityDirectoryAdapter(sourceId);
@@ -167,9 +168,24 @@ const FACTORIES = Object.freeze({
   farmers_gov_heirs_property: officialDirectory('farmers_gov_heirs_property'),
   farmers_gov_beginning_farmers: officialDirectory('farmers_gov_beginning_farmers'),
   hslda_compassion_grants: officialDirectory('hslda_compassion_grants'),
+  // --- Housing-loss lane (2026-08-02): a homeowner in foreclosure and a renter
+  //     facing eviction had NO source at all before these.
+  hud_avoiding_foreclosure: officialDirectory('hud_avoiding_foreclosure'),
+  cfpb_rent_and_housing_help: officialDirectory('cfpb_rent_and_housing_help'),
+  lawhelp_legal_aid: officialDirectory('lawhelp_legal_aid'),
+  // --- Congregation / sacred-places lane (2026-08-02).
+  national_fund_sacred_places: officialDirectory('national_fund_sacred_places'),
+  partners_sacred_places: officialDirectory('partners_sacred_places'),
+  nthp_preservation_grants: officialDirectory('nthp_preservation_grants'),
+  // --- VA benefits hub (2026-08-02).
+  va_veteran_benefits: officialDirectory('va_veteran_benefits'),
   // --- State benefits portals (2026-07-12): one official portal per remaining
   //     state/DC/PR, generated in lockstep with the registry table.
   ...Object.fromEntries(STATE_BENEFITS_SOURCE_IDS.map((id) => [id, officialDirectory(id)])),
+  // --- State housing finance agency (2026-08-02): ONE national row whose
+  //     adapter resolves the profile's own state from STATE_REGISTRY. See the
+  //     registry note for why this is not 51 state-scoped rows.
+  [STATE_HOUSING_AGENCY_SOURCE_ID]: () => createStateHousingAgencyAdapter(STATE_HOUSING_AGENCY_SOURCE_ID),
 });
 /** @returns {object|null} an adapter instance, or null if none is implemented. */
 export function getAdapter(sourceId) {

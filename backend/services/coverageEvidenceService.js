@@ -22,7 +22,7 @@
 // profileFieldPrompts, matchSurfacing) and never re-scores or mutates data.
 
 import { explainCrawlerPlan, rawReasonCode, HUMAN_REASON } from '../crawler-os/crawlerPlanExplainer.js';
-import { allSources, STATE_BENEFITS_SOURCE_IDS } from '../crawler-os/sourceRegistry.js';
+import { allSources } from '../crawler-os/sourceRegistry.js';
 import { loadProfileContext } from './profileHelpers.js';
 import { profileContextToThesisInput } from './crawlerOsPersistence.js';
 import { computeDetailedReadiness } from './profileReadinessService.js';

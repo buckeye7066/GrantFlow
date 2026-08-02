@@ -24,7 +24,7 @@
 
 // The registry is pure data with no imports of its own, so reading it here
 // cannot re-create the cycle this module exists to break.
-import { STATE_BENEFITS_SOURCE_IDS } from '../crawler-os/sourceRegistry.js';
+import { STATE_BENEFITS_SOURCE_IDS, STATE_HOUSING_AGENCY_SOURCE_ID } from '../crawler-os/sourceRegistry.js';
 
 export const LANES = Object.freeze([
   { lane: 'federal_grants', label: 'Federal grants' },
@@ -141,6 +141,27 @@ export const LANE_OF_SOURCE = Object.freeze({
   // its official benefits portal, generated in lockstep with the registry's
   // STATE_BENEFITS_PORTALS table — closes the fleet-wide per-state gap.
   ...Object.fromEntries(STATE_BENEFITS_SOURCE_IDS.map((id) => [id, 'state_programs'])),
+  // ── Housing-loss lane (2026-08-02, the four-persona audit): foreclosure +
+  //    eviction + civil legal aid. Nothing in this registry named a mortgage, a
+  //    foreclosure, an eviction or legal aid before these rows.
+  hud_avoiding_foreclosure: 'federal_benefits',
+  cfpb_rent_and_housing_help: 'federal_benefits',
+  lawhelp_legal_aid: 'private_charities',
+  // The state housing finance agency row is DELIBERATELY NOT 'state_programs'.
+  // It is a NATIONAL locator whose adapter names the profile's own agency, and
+  // the state_programs lane answers a different question — "does a source
+  // scoped to THIS profile's state exist?". Filing a national row there makes
+  // that gap unreachable for every profile, including the junk-state profiles
+  // the gap exists to catch (caught by "an unparseable state still surfaces the
+  // geographic state-lane gap" before it shipped). It is published by HUD, so
+  // it rides with the other national housing-loss locators.
+  [STATE_HOUSING_AGENCY_SOURCE_ID]: 'federal_benefits',
+  // ── Congregation / sacred-places lane (2026-08-02).
+  national_fund_sacred_places: 'private_charities',
+  partners_sacred_places: 'private_charities',
+  nthp_preservation_grants: 'private_charities',
+  // ── VA benefits hub (2026-08-02).
+  va_veteran_benefits: 'federal_benefits',
   // ── County & city programs — geo-aware locators (2026-07-08; formerly the
   //    fleet's #1 structural gap: 22/22 profiles had no county_city source).
   //    countyCityDirectoryAdapter titles each candidate with the profile's own

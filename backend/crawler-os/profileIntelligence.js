@@ -800,6 +800,70 @@ const NEED_IMPLICATIONS = Object.freeze({
   military_startup: ['startup'],
 });
 
+// A deliberate military_service checkbox declares SERVICE STATUS, and service
+// status is WHO THE APPLICANT IS — the same class of declared identity as the
+// occupation.farmer flag above, not the free-text noise the identity guard
+// exists to stop.
+//
+// WHY THIS IS A SEPARATE FUNCTION AND NOT gatherStructuredApplicantHints:
+// that helper already tries to read these five booleans, but it reads
+// `section.data` — and `profileContextToThesisInput` (crawlerOsPersistenceCore)
+// hands buildThesis `{title, body}` entries, where `body` is the section run
+// through `sectionSignalText`. So `data` is `undefined` on the LIVE discovery
+// path and all five checks are DEAD CODE in production. Measured 2026-08-02 on
+// a real profile shape: military_service {veteran:true} +
+// occupation {small_business_owner:true} produced applicant_types ['business'],
+// and the planner then excluded ALL SIX veteran sources — sba_veteran_business,
+// sba_vboc, sba_boots_to_business, dol_tap, military_onesource,
+// va_housing_grants — as `applicant_type_not_served`. Across all 33 real prod
+// profiles, ZERO reached any veteran source.
+//
+// THE NEGATION TRAP — why this reads ONLY structured booleans and never text.
+// The first version of this function also matched a word-bounded token in the
+// section's rendered text, copying hasStructuredFarmerFlag's two-shape rule.
+// Replayed over all 33 real prod profiles it promoted "Focus Forward Ministry"
+// — a faith-based nonprofit — to `veteran`, because its `military_service`
+// section reads {veteran:false, military_spouse:false, notes:"No military
+// affiliation or documentation indicating veteran status or service found in
+// the profile."}. The word "veteran" appears there inside its own DENIAL. The
+// ministry then picked up the whole individual/household safety net through the
+// veteran bucket — 211, LIHEAP, Medicaid, SSA disability, HUD locator,
+// findhelp, Reeve paralysis — +24 sources on one org profile. Prose that
+// mentions a fact is not a declaration OF that fact, and a schema with an
+// explicit `false` is the only thing that can say NO. The flag is the fact.
+//
+// So the section object must reach buildThesis STRUCTURALLY:
+// `profileContextToThesisInput` now carries `military_service` beside the
+// `age`/`schools`/`employer`/`derived_facts` channels it already carries.
+//
+// Re-measured structurally over the same 33 profiles: 3 profiles gain exactly
+// the 6 veteran sources, 30 gain nothing, and the ministry is untouched.
+const MILITARY_FLAG_TO_APPLICANT = Object.freeze({
+  veteran: 'veteran',
+  disabled_veteran: 'veteran',
+  active_duty_military: 'active_duty',
+  national_guard: 'guard_reserve',
+  military_spouse: 'military_spouse',
+});
+const MILITARY_SECTION_RX = /(^|_)military(_|$)|veteran/;
+
+function structuredMilitaryApplicantTypes(profile) {
+  const found = new Set();
+  // STRUCTURED ONLY — the raw section object, never rendered text. See the
+  // NEGATION TRAP note above.
+  for (const [flag, bucket] of Object.entries(MILITARY_FLAG_TO_APPLICANT)) {
+    if (profile?.military_service?.[flag] === true) found.add(bucket);
+  }
+  for (const section of profile?.sections ?? []) {
+    const sectionKey = lc(section?.section_key ?? section?.key ?? section?.title);
+    if (!MILITARY_SECTION_RX.test(sectionKey)) continue;
+    for (const [flag, bucket] of Object.entries(MILITARY_FLAG_TO_APPLICANT)) {
+      if (section?.data?.[flag] === true) found.add(bucket);
+    }
+  }
+  return [...found];
+}
+
 function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   const explicit = []
     .concat(profile?.applicant_types ?? [])
@@ -921,6 +985,11 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   if (!primaryIsIndividual && (found.has('church') || found.has('ministry'))) {
     found.add('nonprofit');
   }
+
+  // Declared SERVICE STATUS is ADDITIVE identity: a veteran who owns a business
+  // is both, and the six veteran sources are gated on the applicant type, not
+  // the need. Additive only — no existing bucket is ever removed here.
+  for (const t of structuredMilitaryApplicantTypes(profile)) found.add(t);
 
   if (found.size === 0) found.add('individual'); // safe default; never zero
   return [...found];
