@@ -502,6 +502,29 @@ describe('enforceUnconfiguredProfileGeoMatches', () => {
     } finally { db.close() }
   })
 
+  it('the RESULT FLOOR census counts an unconfigured profile as `unconfigured`, never `belowTarget`', async () => {
+    // Otherwise the floor queues a profile that can never be satisfied for
+    // endless backfill — manufacturing junk to hit a quota.
+    const { auditProfileResultCoverageFromData } = await import('../services/coverageAudit/profileResultCoverageAudit.js')
+    const verdict = verdictFor(MELISSA)
+    expect(verdict.unconfigured).toBe(true)
+    const withVerdict = auditProfileResultCoverageFromData({
+      profileId: MELISSA.profile.id, surfacedRows: [], unsurfacedCount: 0, thesis: {}, resultTarget: 10, configuration: verdict,
+    })
+    expect(withVerdict.unconfigured).toBe(true)
+    expect(withVerdict.below_result_target).toBe(false)
+    expect(withVerdict.needs_rediscovery).toBe(false)
+    expect(withVerdict.missing_prerequisites.length).toBeGreaterThan(0)
+    expect(withVerdict.gaps.join(' ')).toMatch(/unconfigured_profile/)
+
+    // A CONFIGURED profile with the same empty result set is still a shortfall.
+    const configured = auditProfileResultCoverageFromData({
+      profileId: 'p-real', surfacedRows: [], unsurfacedCount: 0, thesis: {}, resultTarget: 10, configuration: verdictFor(ANGELIKA),
+    })
+    expect(configured.unconfigured).toBe(false)
+    expect(configured.below_result_target).toBe(true)
+  })
+
   it('a schema without the match table degrades honestly, never silently', async () => {
     const raw = new Database(':memory:')
     try {

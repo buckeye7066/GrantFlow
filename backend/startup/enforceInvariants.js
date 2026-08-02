@@ -7342,9 +7342,24 @@ export async function enforceProfileResultFloor(db) {
     let exhaustedCount = 0
     let reopened = 0
     let servedClearing = 0
+    let unconfigured = 0
     const shortfalls = []
+    const unconfiguredProfiles = []
 
     for (const a of audits) {
+      // A profile that was NEVER FILLED IN is not a shortfall to chase (2026-08-02).
+      // It cannot be satisfied by any amount of crawling, so leaving it in the
+      // below-target set would queue it for endless backfill — manufacturing
+      // junk to hit a quota. Report it as its own class, with prerequisites.
+      if (a.unconfigured) {
+        unconfigured += 1
+        if (unconfiguredProfiles.length < 10) {
+          unconfiguredProfiles.push(
+            `${a.display_name ?? a.profile_id}: ${(a.missing_prerequisites || []).slice(0, 3).join('; ')}`,
+          )
+        }
+        continue
+      }
       const assessment = ledgerApi.assessProfileFloor({
         profileId: a.profile_id,
         awardable: a.surfaced_awardable ?? 0,
@@ -7384,12 +7399,21 @@ export async function enforceProfileResultFloor(db) {
         repaired: 0,
         wouldRepair: below,
         belowTarget: below,
+        unconfigured,
         fleetTarget: floorCfg.resolveFleetResultTarget(),
         enforced: false,
       }
     }
 
     const wrote = await ledgerApi.writeFloorLedger(db, ledger)
+    if (unconfigured > 0) {
+      // A standing fact, reported every boot: these profiles are BLOCKED on a
+      // human, not on the crawlers. Silence here means every profile is
+      // configured, never "we quietly stopped counting some of them".
+      log.warn('profiles are UNCONFIGURED — excluded from the result floor until a human fills them in', {
+        unconfigured, scanned: audits.length, examples: unconfiguredProfiles,
+      })
+    }
     if (below > 0) {
       log.info('result floor: profiles below their requested result number', {
         below, exhausted: exhaustedCount, reopened, scanned: audits.length,
@@ -7403,6 +7427,7 @@ export async function enforceProfileResultFloor(db) {
       // nightly heal queue is what adds those, and it reports them separately.
       repaired: wrote ? audits.length : 0,
       belowTarget: below,
+      unconfigured,
       exhausted: exhaustedCount,
       reopened,
       servedClearing,
@@ -8089,6 +8114,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.exhausted !== undefined ? { exhausted: s.exhausted } : {}),
       ...(s.reopened !== undefined ? { reopened: s.reopened } : {}),
       ...(s.fleetTarget !== undefined ? { fleetTarget: s.fleetTarget } : {}),
+      // Unconfigured-profile nets: how many profiles cannot be served until a
+      // human fills them in, and how many match rows carried a place the system
+      // FABRICATED from a placeholder address.
+      ...(s.unconfigured !== undefined ? { unconfigured: s.unconfigured } : {}),
+      ...(s.unconfiguredProfiles !== undefined ? { unconfiguredProfiles: s.unconfiguredProfiles } : {}),
+      ...(s.fabricatedPlace !== undefined ? { fabricatedPlace: s.fabricatedPlace } : {}),
     })),
   })
 

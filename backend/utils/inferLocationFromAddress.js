@@ -31,7 +31,7 @@ export function inferUsStateZipFromText(text) {
   const s = text.replace(/\s+/g, ' ').trim()
   if (!s) return { state: null, zip: null }
 
-  let m = s.match(/(?:^|[\s,])([A-Za-z]{2})(?![A-Za-z])[\s,]*(\d{5})(?:-\d{4})?\s*$/i)
+  let m = s.match(/(?:^|[\s,])([A-Za-z]{2})(?![A-Za-z])[\s,]{0,3}(\d{5})(?:-\d{4})?$/i)
   if (m && isRegionCode(m[1])) return { state: m[1].toUpperCase(), zip: m[2] }
   // A trailing ZIP is still a real fact even when the token in front of it is
   // not a state — fall through to the ZIP-only branch rather than returning
@@ -43,7 +43,10 @@ export function inferUsStateZipFromText(text) {
     const zip = raw.length >= 5 ? raw.slice(0, 5) : raw
     const idx = s.lastIndexOf(raw)
     const before = idx > 0 ? s.slice(0, idx) : s
-    const sm = before.match(/(?:^|[,\s])([A-Za-z]{2})(?![A-Za-z])\s*,?\s*$/i)
+    // Bounded quantifiers only (js/polynomial-redos): `s` is already
+    // whitespace-collapsed and trimmed above, so `\s*` next to `$` adds no
+    // capability — only ambiguous backtracking on a run of tabs.
+    const sm = before.match(/(?:^|[,\s])([A-Za-z]{2})(?![A-Za-z]) ?,? ?$/i)
     if (sm && isRegionCode(sm[1])) return { state: sm[1].toUpperCase(), zip }
     return { state: null, zip }
   }

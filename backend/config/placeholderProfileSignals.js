@@ -108,11 +108,12 @@ export const PLACEHOLDER_ZIP_CODES = Object.freeze(
 
 /** Placeholder STREET lines (the classic docs/sample address). */
 export const PLACEHOLDER_STREET_RX =
-  /^\s*(?:123|1234)\s+(?:main|elm|any)\s+(?:st|street|ave|avenue|rd|road|ln|lane|dr|drive)\.?\s*$/i
+  /^(?:123|1234)\s{1,3}(?:main|elm|any)\s{1,3}(?:st|street|ave|avenue|rd|road|ln|lane|dr|drive)\.?$/i
 
 /** NANP-reserved fictional exchange (555-0100..555-0199 and the bare 555-XXXX
  *  form real placeholder data uses), plus the "1234567890" keyboard run. */
-export const PLACEHOLDER_PHONE_RX = /^\+?1?[\s\-.()]*(?:555[\s\-.()]*\d{4}|234[\s\-.()]*567[\s\-.()]*890)$/
+export const PLACEHOLDER_PHONE_RX =
+  /^\+?1?[\s\-.()]{0,4}(?:555[\s\-.()]{0,4}\d{4}|234[\s\-.()]{0,4}567[\s\-.()]{0,4}890)$/
 
 /** Placeholder person names. Whole-value comparison after normalization. */
 export const PLACEHOLDER_NAME_TOKENS = Object.freeze(
@@ -534,7 +535,8 @@ export function isFabricatedGeoSource(loc = {}) {
  * consumed by the engine gate and the boot sweep, so they cannot drift.
  */
 export function placePrefixOfTitle(title) {
-  const m = String(title || '').match(/^(.{2,60}?)\s+(?:—|–|--)\s+/)
+  // Bounded on both sides — see the js/polynomial-redos note above.
+  const m = String(title || '').match(/^(.{2,60}?)\s{1,3}(?:—|–|--)\s{1,3}/)
   return m ? m[1] : null
 }
 
@@ -549,7 +551,12 @@ export function isPlaceholderPlaceLabel(place) {
   if (!p) return false
   // Strip a trailing ", XX" state suffix (valid or not) and a "County/Parish/
   // Borough" head noun, then compare the bare place token.
-  const bare = p.replace(/,\s*[a-z]{2,3}\s*$/, '').replace(/\s+(county|parish|borough)$/, '').trim()
+  //
+  // EVERY QUANTIFIER HERE IS BOUNDED (js/polynomial-redos). `norm()` has
+  // already collapsed whitespace runs to a single space and trimmed, so an
+  // unbounded `\s*` next to `$` adds no capability — only ambiguous
+  // backtracking on an attacker-supplied run of tabs.
+  const bare = p.replace(/, ?[a-z]{2,3}$/, '').replace(/ (county|parish|borough)$/, '').trim()
   return PLACEHOLDER_CITY_TOKENS.has(bare)
 }
 
