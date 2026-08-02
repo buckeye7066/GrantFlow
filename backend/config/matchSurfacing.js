@@ -83,6 +83,18 @@ export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   //                         the profile's 70 data points"). Same rolling-
   //                         snapshot reason for its own version as the above.
   'student-aid-instate-link',
+  //   - county-crisis-need-link : a catalog row whose TITLE or SPONSOR NAMES
+  //                         the household's own COUNTY and which serves a
+  //                         CRISIS need the profile declares, scored by the
+  //                         canonical engine (enforceCountyCrisisNeedRecall)
+  //                         and written ONLY on ACCEPT. Prod 2026-08-02: 416
+  //                         active eviction/rental rows carried 16 match rows
+  //                         between them; a family in Lorain County OH had NO
+  //                         row at all for "Love INC Lorain County — Emergency
+  //                         Housing & Rent Assistance", which replays as
+  //                         ACCEPT 100. Same rolling-snapshot reason for its
+  //                         own version as the five above.
+  'county-crisis-need-link',
 ])
 
 /**
