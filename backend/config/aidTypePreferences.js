@@ -112,7 +112,57 @@ export function evaluateAwardAgainstPreferences(award, education = {}) {
   }
 }
 
+/**
+ * The same preference, applied to a CATALOG ROW at the matching choke point.
+ *
+ * WHY THIS EXISTS (2026-08-02). `evaluateAwardAgainstPreferences` above gated
+ * exactly ONE path — portal sync. Everything else ignored the preference, so
+ * measured read-only in prod: Anastasia White declares
+ * `education.aid_types_accepted = ["grant","endowment","scholarship"]` — no
+ * work-study, no loans — and her Funding Sources list carried **"Federal
+ * Work-Study" as an ACCEPT at score 100**, plus two Federal Work-Study rows in
+ * her pipeline. A household that has decided against a kind of aid must never
+ * see it ANYWHERE, and "remember to check the preference in every code path" is
+ * precisely the per-call discipline the repo's invariant rule forbids relying
+ * on. `services/matchEngine.makeDecision` is the one place every surface goes
+ * through, so the rule is re-asserted there.
+ *
+ * CLASSIFIED FROM THE TITLE ONLY, deliberately. `classifyAidType` scans whatever
+ * text it is handed, and a catalog `description` is unbounded prose: a
+ * scholarship page that merely MENTIONS work-study or a loan option would be
+ * classified as one and silently denied. The title (and the amount/status label
+ * a portal wrote) is the row's own name for itself — the same "a gate's phrase
+ * must be one the SOURCE wrote" rule as #1086. An unnamed type stays `unknown`,
+ * which is never excluded.
+ *
+ * @param {{title?:string, amount_text?:string, amount_status?:string}} opportunity
+ * @param {object} education the profile's `education` section
+ * @returns {{ accepted:boolean, aidType:string, reason?:string }}
+ */
+export function evaluateOpportunityAgainstPreferences(opportunity = {}, education = {}) {
+  const verdict = evaluateAwardAgainstPreferences(
+    {
+      title: opportunity?.title || '',
+      amountDisplay: opportunity?.amount_text || '',
+      status: opportunity?.amount_status || '',
+      // description deliberately omitted — see the note above.
+    },
+    education,
+  )
+  if (verdict.accepted) return verdict
+  // The portal-sync wording ("it is still shown on the portal") is false here —
+  // this row came from the catalog, not from a portal the student can open. An
+  // explanation that names the wrong place is its own small lie.
+  return {
+    ...verdict,
+    reason:
+      `declined_aid_type: this profile accepts ${resolveAcceptedAidTypes(education).join(', ')} ` +
+      `and does not accept ${BY_KEY[verdict.aidType]?.label || verdict.aidType}.`,
+  }
+}
+
 export default {
   AID_TYPES, AID_TYPE_KEYS, DEFAULT_ACCEPTED_AID_TYPES,
   classifyAidType, resolveAcceptedAidTypes, evaluateAwardAgainstPreferences,
+  evaluateOpportunityAgainstPreferences,
 }
