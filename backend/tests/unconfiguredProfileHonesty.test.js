@@ -314,6 +314,12 @@ describe('junk geography is never fabricated', () => {
     expect(isPlaceholderPlaceLabel('')).toBe(false)
     expect(placePrefixOfTitle('Anytown, SA — Local assistance programs near you (findhelp)')).toBe('Anytown, SA')
     expect(placePrefixOfTitle('211 - Local help with rent, utilities, food & emergencies')).toBe(null)
+    // CONTROL — "Anytown" is also a REAL program name (the NCCJ Anytown youth
+    // leadership camp). Both of these exist in the prod catalog and must never
+    // be reachable by the fabricated-place rule: they carry no place prefix at
+    // all, so `placePrefixOfTitle` returns null before the token is consulted.
+    expect(placePrefixOfTitle('Financial Assistance for Anytown Leadership Camp')).toBe(null)
+    expect(placePrefixOfTitle('Anytown Tuition Assistance')).toBe(null)
   })
 })
 
