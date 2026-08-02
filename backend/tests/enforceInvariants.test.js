@@ -1132,8 +1132,10 @@ describe('enforceInvariants — runner', () => {
     // 37 on main (incl. #1081 portal_session_lifetime_stamp) + 4 scope nets
     // + the institution-aid RECALL net (institution_recall_miss)
     // + the recorded-discovery-provenance RECALL net
-    // + the declared-field-of-study RECALL net here.
-    expect(summary.ran).toBe(47)
+    // + the declared-field-of-study RECALL net
+    // + the stage-of-life eligibility nets (#1093)
+    // + the unconfigured-profile geography net here.
+    expect(summary.ran).toBe(48)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1162,6 +1164,10 @@ describe('enforceInvariants — runner', () => {
       'declared_place_scope_matches',
       'foreign_jurisdiction_matches',
       'individual_match_award_ceiling',
+      // A profile that was NEVER FILLED IN is not shown geography the system
+      // invented from its placeholder address ("Anytown, SA"). Last in the
+      // scope family so the profile-agnostic nets take their rows first.
+      'unconfigured_profile_matches',
       'student_aid_eligibility',
       // The RECALL direction of the same store: a student's OWN school's aid.
       // Placed before the two hygiene sweeps so the rows it adds are validated

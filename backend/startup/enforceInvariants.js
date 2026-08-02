@@ -6215,6 +6215,237 @@ export async function enforceIndividualMatchAwardCeiling(db) {
   })
 }
 
+const UNCONFIGURED_PROFILE_PURGE_LIMIT_DEFAULT = 2000
+
+/**
+ * Load every profile's UNCONFIGURED verdict, using the canonical detector.
+ *
+ * CANDIDATE DISCOVERY IS A SQL PREDICATE. `PLACEHOLDER_SECTION_LIKE_PATTERNS`
+ * narrows `profile_sections` to rows whose text could possibly carry placeholder
+ * evidence, so the sweep's bound can only ever limit DELETES, never DISCOVERY —
+ * the #944 post-`LIMIT` class whose signature (`scanned == bound`) this repo has
+ * paid for four times. The LIKE list is a deliberate SUPERSET; the JS detector
+ * re-adjudicates every candidate and is the authority.
+ */
+async function loadUnconfiguredProfiles(db) {
+  const out = new Map()
+  let assessProfileConfiguration, PLACEHOLDER_SECTION_LIKE_PATTERNS
+  try {
+    ;({ assessProfileConfiguration } = await import('../services/profile/profileConfiguration.js'))
+    ;({ PLACEHOLDER_SECTION_LIKE_PATTERNS } = await import('../config/placeholderProfileSignals.js'))
+  } catch (err) {
+    log.warn('unconfigured_profile_matches: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+    return { verdicts: out, skipped: 'deps', candidates: 0 }
+  }
+
+  const likeClause = PLACEHOLDER_SECTION_LIKE_PATTERNS.map(() => 'ps.data LIKE ?').join(' OR ')
+  let candidateIds
+  try {
+    const rows = await db
+      .prepare(
+        `SELECT DISTINCT ps.profile_id AS id
+           FROM profile_sections ps
+          WHERE ps.data IS NOT NULL AND (${likeClause})`,
+      )
+      .all(...PLACEHOLDER_SECTION_LIKE_PATTERNS)
+    candidateIds = (rows || []).map((r) => r.id).filter(Boolean)
+  } catch (err) {
+    log.warn('unconfigured_profile_matches: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+    return { verdicts: out, skipped: 'query', candidates: 0 }
+  }
+  if (candidateIds.length === 0) return { verdicts: out, candidates: 0 }
+
+  for (const id of candidateIds) {
+    // `_loadProfileContextForInvariant` already refuses deleted/archived rows,
+    // so a retired demo profile is never touched.
+    const ctx = await _loadProfileContextForInvariant(db, id)
+    if (!ctx?.profile) continue
+    let verdict = null
+    try { verdict = assessProfileConfiguration(ctx) } catch { verdict = null }
+    if (verdict?.unconfigured) out.set(id, verdict)
+  }
+  return { verdicts: out, candidates: candidateIds.length }
+}
+
+/**
+ * INVARIANT: a profile that was NEVER FILLED IN is not shown fabricated
+ * geography (2026-08-02).
+ *
+ * `profile-melissa-justus` is not a person. Its address is
+ * `{ street:'123 Main St', city:'Anytown', state:'USA', zip_code:'12345' }`,
+ * its email is `@example.com`, its phone is `555-1234`, and its own notes say
+ * "Designated roster profile. Add the owner login email here…". It declares no
+ * need, no health condition, no occupation, no school, no income. Measured
+ * read-only in prod 2026-08-02T02:40Z it nonetheless carried 27 surfaced
+ * matches, ALL `DIRECTORY`, whose geography the system INVENTED:
+ * `Anytown, SA` (a state code fabricated from the string "USA" — root-caused
+ * and fixed in `utils/inferLocationFromAddress.js`), plus Anchorage County AK,
+ * Wayne County MI, Dona Ana County NM and Escambia County FL.
+ *
+ * TWO PROVABLE CLASSES, and only these two:
+ *
+ *  1. FABRICATED PLACE — the catalog row's title names a placeholder place
+ *     token ("Anytown"). Such a row cannot apply to ANY profile, so its matches
+ *     are removed fleet-wide, not just on placeholder profiles.
+ *  2. UNSUPPORTABLE PLACE — a place-EXCLUSIVE row (a county/city locator, or a
+ *     non-national row carrying a state) surfaced to an UNCONFIGURED profile. A
+ *     county directory is exclusive by construction (the #1080 rule), so it
+ *     requires POSITIVE evidence the applicant is in that place. An
+ *     unconfigured profile can never supply that evidence: its declared
+ *     location is a placeholder, not merely absent.
+ *
+ * This is NOT the "MISSING = NEUTRAL" case and must not be confused with it.
+ * `enforceDeclaredPlaceScopeMatches` deliberately leaves a profile with no
+ * resolvable state alone — silence is not a denial. Here the profile is not
+ * silent: it positively declares junk, corroborated across three independent
+ * evidence families, with no declared need or eligibility fact anywhere.
+ *
+ * THE CATALOG ROW IS NEVER DELETED and NO PROFILE CONTENT IS EVER TOUCHED —
+ * only the MATCH, which is the claim "you can apply to this". Converges:
+ * `makeDecision` now REJECTs a fabricated-place row and the county/city adapter
+ * no longer mints one.
+ *
+ * Bounded by UNCONFIGURED_PROFILE_PURGE_LIMIT (2000/boot);
+ * ENFORCE_UNCONFIGURED_PROFILE_SCOPE=0 for count-only.
+ */
+export async function enforceUnconfiguredProfileGeoMatches(db) {
+  return runInvariant('unconfigured_profile_matches', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let isPlaceholderPlaceLabel, placePrefixOfTitle, declaredStateFromTitle
+    try {
+      ;({ isPlaceholderPlaceLabel, placePrefixOfTitle } = await import('../config/placeholderProfileSignals.js'))
+      ;({ declaredStateFromTitle } = await import('../config/opportunityJurisdiction.js'))
+    } catch (err) {
+      log.warn('unconfigured_profile_matches: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('UNCONFIGURED_PROFILE_PURGE_LIMIT', UNCONFIGURED_PROFILE_PURGE_LIMIT_DEFAULT)
+
+    const { verdicts, skipped, candidates } = await loadUnconfiguredProfiles(db)
+    if (skipped) return { scanned: 0, repaired: 0, enforced: true, skipped }
+
+    // A place-DECLARING catalog row. SQL narrows to rows that could possibly
+    // declare a place (a title with an em/en-dash place prefix, OR a stored
+    // non-national state, OR a county) — never a post-LIMIT JS filter.
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT m.id AS match_id, m.profile_id, o.title, o.state, o.geo_county, o.is_national
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+            WHERE (o.title LIKE '% — %' OR o.title LIKE '% – %' OR o.title LIKE '% -- %')
+               OR o.geo_county IS NOT NULL
+               OR (o.state IS NOT NULL AND LOWER(o.state) <> 'nationwide')`,
+        )
+        .all()
+    } catch (err) {
+      log.warn('unconfigured_profile_matches: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    // PLACE-EXCLUSIVE, deliberately NARROW: a row that names its OWN locality
+    // (a county/city directory) or carries a county. A merely STATE-scoped
+    // PROGRAM (Iowa Tuition Grant, Washington College Grant) is NOT included —
+    // the engine's honest verdict for those against an unknown-state profile is
+    // REVIEW ("confirm residency"), and overruling that here would delete real,
+    // possibly-applicable awards on a geography argument that does not hold.
+    // Measured against prod 2026-08-02T03:32Z: including the bare state column
+    // would have swept 22 such programs off these two profiles.
+    const declaresPlace = (row) => {
+      if (declaredStateFromTitle(row)) return 'title_state'
+      if (row.geo_county) return 'geo_county'
+      return null
+    }
+
+    const violating = []
+    for (const row of rows || []) {
+      if (violating.length >= limit) break
+      const prefix = placePrefixOfTitle(row.title)
+      if (prefix && isPlaceholderPlaceLabel(prefix)) {
+        violating.push({ ...row, why: 'fabricated_place', place: prefix })
+        continue
+      }
+      if (!verdicts.has(row.profile_id)) continue
+      const why = declaresPlace(row)
+      if (!why) continue
+      violating.push({ ...row, why: `unsupportable_place:${why}`, place: prefix || row.state })
+    }
+
+    const describe = (v) => `${v.title} [${v.why}]`
+    const disabled = _parseBoolEnv(process.env.ENFORCE_UNCONFIGURED_PROFILE_SCOPE) === false
+    if (disabled) {
+      if (violating.length > 0) {
+        log.warn('unconfigured profiles carry fabricated geography (purge DISABLED via ENFORCE_UNCONFIGURED_PROFILE_SCOPE=0)', {
+          wouldRepair: violating.length,
+          unconfiguredProfiles: verdicts.size,
+          placeholderCandidates: candidates,
+          scanned: rows?.length || 0,
+          examples: violating.slice(0, 3).map(describe),
+        })
+      }
+      return {
+        scanned: rows?.length || 0,
+        repaired: 0,
+        wouldRepair: violating.length,
+        unconfiguredProfiles: verdicts.size,
+        placeholderCandidates: candidates,
+        enforced: false,
+      }
+    }
+
+    // "This profile was never filled in" is a STANDING fact, not a one-time log
+    // line on the night it was noticed — report it every boot, with the named
+    // prerequisites, even when there is nothing left to remove.
+    for (const [profileId, verdict] of verdicts) {
+      log.warn('profile is UNCONFIGURED — it declares nothing that can be searched for', {
+        profileId,
+        reason: verdict.reason,
+        missing_prerequisites: verdict.missing_prerequisites,
+      })
+    }
+
+    if (violating.length === 0) {
+      return {
+        scanned: rows?.length || 0,
+        repaired: 0,
+        unconfiguredProfiles: verdicts.size,
+        placeholderCandidates: candidates,
+        enforced: true,
+      }
+    }
+
+    const ids = violating.map((v) => v.match_id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed fabricated/unsupportable geography from unconfigured profiles', {
+      repaired,
+      unconfiguredProfiles: verdicts.size,
+      fabricatedPlace: violating.filter((v) => v.why === 'fabricated_place').length,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map(describe),
+    })
+    return {
+      scanned: rows?.length || 0,
+      repaired,
+      unconfiguredProfiles: verdicts.size,
+      placeholderCandidates: candidates,
+      fabricatedPlace: violating.filter((v) => v.why === 'fabricated_place').length,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
 /**
  * INVARIANT: A STUDENT'S OWN SCHOOL'S AID REACHES THAT STUDENT
  * (2026-08-01, `institution_recall_miss` — Amy's only finding that was RED on
@@ -7111,9 +7342,24 @@ export async function enforceProfileResultFloor(db) {
     let exhaustedCount = 0
     let reopened = 0
     let servedClearing = 0
+    let unconfigured = 0
     const shortfalls = []
+    const unconfiguredProfiles = []
 
     for (const a of audits) {
+      // A profile that was NEVER FILLED IN is not a shortfall to chase (2026-08-02).
+      // It cannot be satisfied by any amount of crawling, so leaving it in the
+      // below-target set would queue it for endless backfill — manufacturing
+      // junk to hit a quota. Report it as its own class, with prerequisites.
+      if (a.unconfigured) {
+        unconfigured += 1
+        if (unconfiguredProfiles.length < 10) {
+          unconfiguredProfiles.push(
+            `${a.display_name ?? a.profile_id}: ${(a.missing_prerequisites || []).slice(0, 3).join('; ')}`,
+          )
+        }
+        continue
+      }
       const assessment = ledgerApi.assessProfileFloor({
         profileId: a.profile_id,
         awardable: a.surfaced_awardable ?? 0,
@@ -7153,12 +7399,21 @@ export async function enforceProfileResultFloor(db) {
         repaired: 0,
         wouldRepair: below,
         belowTarget: below,
+        unconfigured,
         fleetTarget: floorCfg.resolveFleetResultTarget(),
         enforced: false,
       }
     }
 
     const wrote = await ledgerApi.writeFloorLedger(db, ledger)
+    if (unconfigured > 0) {
+      // A standing fact, reported every boot: these profiles are BLOCKED on a
+      // human, not on the crawlers. Silence here means every profile is
+      // configured, never "we quietly stopped counting some of them".
+      log.warn('profiles are UNCONFIGURED — excluded from the result floor until a human fills them in', {
+        unconfigured, scanned: audits.length, examples: unconfiguredProfiles,
+      })
+    }
     if (below > 0) {
       log.info('result floor: profiles below their requested result number', {
         below, exhausted: exhaustedCount, reopened, scanned: audits.length,
@@ -7172,6 +7427,7 @@ export async function enforceProfileResultFloor(db) {
       // nightly heal queue is what adds those, and it reports them separately.
       repaired: wrote ? audits.length : 0,
       belowTarget: below,
+      unconfigured,
       exhausted: exhaustedCount,
       reopened,
       servedClearing,
@@ -7675,6 +7931,13 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // The award ceiling an INDIVIDUAL's pipeline has enforced for months, applied
   // to the match store that actually feeds the owner-facing list.
   steps.push(await enforceIndividualMatchAwardCeiling(db))
+  // A profile that was NEVER FILLED IN is not a crawler failure. Remove the
+  // geography the system INVENTED from its placeholder address ("Anytown, SA",
+  // out-of-state county locators) and report the profile as unconfigured with
+  // the missing prerequisites named. Runs LAST in the scope family so the
+  // catalog is already re-scoped and the ordinary place/foreign/ceiling nets
+  // have taken their (profile-agnostic) rows first.
+  steps.push(await enforceUnconfiguredProfileGeoMatches(db))
   // Surface-table eligibility net: demote persisted student-aid matches that are
   // surfacing to a NON-student profile (stale ACCEPTs the live engine already
   // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).
@@ -7851,6 +8114,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.exhausted !== undefined ? { exhausted: s.exhausted } : {}),
       ...(s.reopened !== undefined ? { reopened: s.reopened } : {}),
       ...(s.fleetTarget !== undefined ? { fleetTarget: s.fleetTarget } : {}),
+      // Unconfigured-profile nets: how many profiles cannot be served until a
+      // human fills them in, and how many match rows carried a place the system
+      // FABRICATED from a placeholder address.
+      ...(s.unconfigured !== undefined ? { unconfigured: s.unconfigured } : {}),
+      ...(s.unconfiguredProfiles !== undefined ? { unconfiguredProfiles: s.unconfiguredProfiles } : {}),
+      ...(s.fabricatedPlace !== undefined ? { fabricatedPlace: s.fabricatedPlace } : {}),
     })),
   })
 

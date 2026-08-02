@@ -17,26 +17,49 @@
 
 import { createBaseAdapter } from './baseAdapter.js';
 import { OPPORTUNITY_KIND } from '../contract.js';
+import { isRegionCode } from '../../../shared/usStateCodes.js';
+import { isPlaceholderPlaceLabel, isFabricatedGeoSource } from '../../config/placeholderProfileSignals.js';
 
-/** "Whatcom County, WA" | "Bellingham, WA" | "WA" | null from a thesis. */
+/**
+ * "Whatcom County, WA" | "Bellingham, WA" | "WA" | null from a thesis.
+ *
+ * AN UNPARSEABLE PLACE PRODUCES NO PLACE (2026-08-02). This function used to
+ * concatenate `loc.state` verbatim with zero validation, so a profile whose
+ * address reads `{ city:'Anytown', state:'USA' }` minted the catalog title
+ * `Anytown, SA — Local assistance programs near you (findhelp)` (live in prod;
+ * `"SA"` came from the address-inference regex, now fixed at its root in
+ * `utils/inferLocationFromAddress.js`). Two gates, defence in depth:
+ *
+ *   - a STATE suffix is appended only when it is a code in the canonical
+ *     `shared/usStateCodes.js` registry; an unusable one is simply dropped,
+ *     never rendered; and
+ *   - a PLACEHOLDER place token ("Anytown") yields NO place at all, so the
+ *     lane falls back to the plain national row — which is honest and useful,
+ *     exactly as it already is for a profile with no known place.
+ */
 function placeLabel(thesis) {
   const loc = thesis?.location ?? {};
-  const state = loc.state ? String(loc.state).trim() : '';
+  const rawState = loc.state ? String(loc.state).trim() : '';
+  const state = isRegionCode(rawState) ? rawState.toUpperCase() : '';
   const county = loc.county ? String(loc.county).trim() : '';
   const city = loc.city ? String(loc.city).trim() : '';
-  if (county) {
+  if (county && !isPlaceholderPlaceLabel(county)) {
     // Normalize "Whatcom" and "Whatcom County" both to "Whatcom County".
     const c = /\b(county|parish|borough)\b/i.test(county) ? county : `${county} County`;
     return state ? `${c}, ${state}` : c;
   }
-  if (city) return state ? `${city}, ${state}` : city;
+  if (city && !isPlaceholderPlaceLabel(city)) return state ? `${city}, ${state}` : city;
   return state || null;
 }
 
 function resolveUrl(thesis, source) {
-  const zip = thesis?.location?.zip ? String(thesis.location.zip).trim() : '';
+  const loc = thesis?.location ?? {};
+  const zip = loc.zip ? String(loc.zip).trim() : '';
   const template = source?.url_template ? String(source.url_template) : '';
-  if (template.includes('{zip}') && /^\d{5}(-\d{4})?$/.test(zip)) {
+  // A deep link is a geographic CLAIM. Refuse to build one from a placeholder
+  // address — `{city:'Anytown', state:'USA', zip:'12345'}` would land the user
+  // on Schenectady, NY's programs. The plain national page is honest.
+  if (template.includes('{zip}') && /^\d{5}(-\d{4})?$/.test(zip) && !isFabricatedGeoSource(loc)) {
     return template.replace('{zip}', zip.slice(0, 5));
   }
   return source?.application_url || source?.base_url;

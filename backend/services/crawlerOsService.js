@@ -22,7 +22,9 @@
 import dns from 'node:dns';
 
 import { getDb } from '../db/index.js';
+import { createLogger } from '../utils/logger.js';
 import { loadProfileContext } from './profileHelpers.js';
+import { assessProfileConfiguration, describeUnconfiguredProfile } from './profile/profileConfiguration.js';
 import { profileContextToThesisInput, persistRun } from './crawlerOsPersistence.js';
 import {
   createSqlStore,
@@ -39,6 +41,8 @@ import {
   ADMIN_EMAIL,
   storage,
 } from '../crawler-os/index.js';
+
+const log = createLogger('crawler-os:service');
 
 // Re-export the canonical, dialect-independent surface for routes/agents.
 export {
@@ -391,11 +395,12 @@ export async function makeBlindShadow() {
   }
 }
 
-function skippedDiscoveryResult(profileId, reason) {
+function skippedDiscoveryResult(profileId, reason, extra = null) {
   return {
-    run: { skipped: true, reason, profile_id: profileId, planned: 0, stored: 0, rejected: 0, sources: [], zero_result: null },
+    run: { skipped: true, reason, profile_id: profileId, planned: 0, stored: 0, rejected: 0, sources: [], zero_result: null, ...(extra || {}) },
     persisted: { opportunities: 0, matches: 0, sources: 0, rejected: 0, pipelinePruned: 0, skipped: true, reason },
     thesis: null,
+    ...(extra || {}),
   };
 }
 
@@ -496,6 +501,28 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   const profileStatus = String(ctx?.profile?.status ?? '').trim().toLowerCase();
   if (NON_DISCOVERABLE_PROFILE_STATUSES.has(profileStatus) || ctx?.profile?.deleted_at) {
     return skippedDiscoveryResult(profileId, `profile_${profileStatus || 'deleted'}`);
+  }
+  // THE CRAWLERS READ THE PROFILE FIRST — and say so when there is nothing in
+  // it (owner rule; 2026-08-02). A profile that declares no need, no
+  // eligibility fact and no usable location cannot be served by ANY lane, and
+  // crawling it anyway is how `profile-melissa-justus` came to hold 27 matches
+  // — every one a DIRECTORY, with invented geography — while reading as a
+  // crawler shortfall to chase. This is the EVA runner's posture: BLOCKED,
+  // with the prerequisite NAMED. It is not a crawler failure and must never be
+  // reported as one. Nothing is written and no profile content is touched.
+  const configuration = assessProfileConfiguration(ctx);
+  if (configuration.unconfigured) {
+    log.warn('discovery blocked: the profile has not been filled in', {
+      profileId,
+      missing_prerequisites: configuration.missing_prerequisites,
+      evidence: configuration.signals.map((s) => `${s.family}/${s.id}`),
+    });
+    return skippedDiscoveryResult(profileId, 'profile_unconfigured', {
+      unconfigured: true,
+      missing_prerequisites: configuration.missing_prerequisites,
+      blocked_reason: describeUnconfiguredProfile(configuration),
+      evidence: configuration.signals,
+    });
   }
   const thesis = buildThesis(profileContextToThesisInput(ctx));
   // FULL-CONTEXT scoring for the PRIMARY profile (2026-07-27, the "9 of the
