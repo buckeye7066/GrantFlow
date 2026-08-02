@@ -8,12 +8,13 @@ import {
 import { REVIEW_SCORE } from '../config/matchThresholds.js'
 
 describe('matchSurfacing — surfaced matcher versions', () => {
-  it('includes crawler-os, cross-match, web-llm AND institution-link', () => {
+  it('includes crawler-os, cross-match, web-llm, institution-link AND profile-discovery-link', () => {
     expect(SURFACED_MATCHER_VERSIONS).toEqual([
       'crawler-os',
       'crawler-os-xmatch',
       'web-llm',
       'institution-link',
+      'profile-discovery-link',
     ])
   })
 
@@ -29,9 +30,18 @@ describe('matchSurfacing — surfaced matcher versions', () => {
     expect(SURFACED_MATCHER_VERSIONS).toContain('institution-link')
   })
 
+  it('profile-discovery-link must be surfaced — the row NAMES the profile', () => {
+    // `funding_opportunities.profile_id` records the profile a row was
+    // discovered FOR. The rolling-snapshot reconcile deleted those matches
+    // (prod 2026-08-01: web_search rows created in August 37% matched, June and
+    // July 3-4%). Persisting under a reconcile-surviving version and then not
+    // reading it back would repeat the web-llm regression exactly.
+    expect(SURFACED_MATCHER_VERSIONS).toContain('profile-discovery-link')
+  })
+
   it('builds a valid SQL IN() fragment from the constant', () => {
     expect(SURFACED_MATCHER_VERSIONS_SQL).toBe(
-      "('crawler-os','crawler-os-xmatch','web-llm','institution-link')",
+      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link')",
     )
     // Round-trip: fragment lists exactly the same versions, quoted.
     for (const v of SURFACED_MATCHER_VERSIONS) {
