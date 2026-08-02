@@ -168,7 +168,22 @@ export const FINDING_ACTORS = Object.freeze({
   },
   // ── The classes that had NO actor before this module ────────────────────
   [FINDING_TYPES.INSTITUTION_RECALL_MISS]: {
-    lever: 'archetype_query_learning',
+    // RECLASSIFIED to `query_breadth` (CODE_CHANGE) 2026-08-02, reconciling
+    // #1097 (this registry, which declared it AUTO) with #1095 (the runtime
+    // branch in crawlerTuner, which emitted `query_breadth`). Merging both left
+    // `main` RED: the registry and the runtime contradicted each other.
+    //
+    // The header measurement above is the verdict: 21 of 21 days, 282
+    // occurrences, NEVER GREEN. The DATA half of this lever has been applied
+    // every single night for three weeks and has not closed it, so declaring it
+    // AUTO told the owner "Amy has this" while nothing converged — the
+    // green-while-doing-nothing anti-pattern this codebase keeps re-finding.
+    // `approvalLedger.js` already reached the same conclusion for
+    // `query_breadth`: "a class that keeps firing after the steering store has
+    // been recording it for weeks is evidence the QUERY BUILDER needs the
+    // change". Amy still applies the data-side steering store; what changes is
+    // that the residual now reaches the owner as a code brief.
+    lever: 'query_breadth',
     emitted: true,
     evidence_key: 'schools',
     // This one is not "no lever" — it is "a lever that is running and not
@@ -183,10 +198,10 @@ export const FINDING_ACTORS = Object.freeze({
     note: 'Auto-applied by the archetype query-steering store (SAFE_LEARNED_CLASSES institution_gap) which buildWebQueries consumes.',
   },
   [FINDING_TYPES.HYPERLOCAL_RECALL_MISS]: {
-    lever: 'archetype_query_learning',
+    lever: 'query_breadth',
     emitted: true,
     evidence_key: 'county',
-    note: 'Same steering store, class hyperlocal_gap.',
+    note: 'Same steering store (class hyperlocal_gap), same reclassification, same reason as institution_recall_miss above.',
   },
   [FINDING_TYPES.AMOUNT_RECALL_MISS]: {
     lever: 'amount_adapter',

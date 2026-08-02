@@ -101,7 +101,11 @@ describe('a recall miss now has a lever, so it can be closed instead of re-repor
     expect(item.evidence.profiles).toBe(2)
     // The concrete missed subjects travel with the item — that is what makes it
     // work someone can do, rather than a number.
-    expect(item.evidence.missed_subjects).toEqual(
+    // `subjects`, not `missed_subjects`: this branch originally wrote the
+    // latter, but `buildCodeBrief` reads `evidence.subjects` and so does the
+    // registry-driven totality pass, so the brief this item now produces would
+    // have named no school at all. See findingActorRegistry.js.
+    expect(item.evidence.subjects).toEqual(
       expect.arrayContaining(['Middle Tennessee State University', 'The Ohio State University']),
     )
     expect(item.rationale).toMatch(/Middle Tennessee State University/)
@@ -112,7 +116,7 @@ describe('a recall miss now has a lever, so it can be closed instead of re-repor
     const item = items.find((i) => i.id === `${FINDING_TYPES.HYPERLOCAL_RECALL_MISS}:renter_eviction`)
     expect(item).toBeTruthy()
     expect(item.lever).toBe('query_breadth')
-    expect(item.evidence.missed_subjects).toContain('Montgomery County')
+    expect(item.evidence.subjects).toContain('Montgomery County')
   })
 
   it('a clean cohort produces NO recall item (the guard can fail)', () => {
