@@ -27,8 +27,24 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:itemNeeds')
 const router = express.Router()
 
-/** Load the profile + sections once; both routes read the same canonical view. */
+/**
+ * Load the profile + sections once; both routes read the same canonical view.
+ *
+ * A NON-EXISTENT ID IS A 404, NEVER A 500. `loadProfileContext` assumes the
+ * profile exists and throws on a missing row, so probing this route with a
+ * placeholder id used to surface the throw as a 500 — caught by CI's
+ * `gate:endpoint-sweep`, which probes every GET handler and treats any 5xx as a
+ * handler that threw. The existence check runs FIRST and a genuine load failure
+ * still propagates: swallowing a real DB error into a 404 would hide exactly
+ * the class of defect this gate exists to catch.
+ */
 async function loadContext(db, profileId) {
+  // `.get()` is SYNCHRONOUS on the better-sqlite3 shim and a promise on the
+  // Postgres one, so `await` handles both and `.catch()` on the result handles
+  // neither — that mistake turned this guard itself into the 500 it was added
+  // to prevent (`Cannot read properties of undefined (reading 'catch')`).
+  const row = await db.prepare('SELECT id FROM profiles WHERE id = ?').get(String(profileId))
+  if (!row) return { profile: null, sections: {} }
   const ctx = await loadProfileContext(db, profileId)
   return ctx ?? { profile: null, sections: {} }
 }
