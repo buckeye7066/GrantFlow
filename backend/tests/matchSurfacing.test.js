@@ -8,7 +8,7 @@ import {
 import { REVIEW_SCORE } from '../config/matchThresholds.js'
 
 describe('matchSurfacing — surfaced matcher versions', () => {
-  it('includes crawler-os, cross-match, web-llm, institution-link, profile-discovery-link AND field-of-study-link', () => {
+  it('includes every reconcile-surviving version, in order', () => {
     expect(SURFACED_MATCHER_VERSIONS).toEqual([
       'crawler-os',
       'crawler-os-xmatch',
@@ -16,6 +16,7 @@ describe('matchSurfacing — surfaced matcher versions', () => {
       'institution-link',
       'profile-discovery-link',
       'field-of-study-link',
+      'student-aid-instate-link',
     ])
   })
 
@@ -50,9 +51,17 @@ describe('matchSurfacing — surfaced matcher versions', () => {
     expect(SURFACED_MATCHER_VERSIONS).toContain('field-of-study-link')
   })
 
+  it('student-aid-instate-link must be surfaced — a student\'s own state\'s aid', () => {
+    // Prod 2026-08-02: the catalog held 21 active TN HOPE rows and a TN
+    // dual-enrolled senior matched ZERO; the unscored pair replays as
+    // ACCEPT 100. Persisting under a reconcile-surviving version and then
+    // not reading it back would repeat the web-llm regression exactly.
+    expect(SURFACED_MATCHER_VERSIONS).toContain('student-aid-instate-link')
+  })
+
   it('builds a valid SQL IN() fragment from the constant', () => {
     expect(SURFACED_MATCHER_VERSIONS_SQL).toBe(
-      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link')",
+      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link')",
     )
     // Round-trip: fragment lists exactly the same versions, quoted.
     for (const v of SURFACED_MATCHER_VERSIONS) {

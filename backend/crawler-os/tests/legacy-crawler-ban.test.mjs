@@ -87,6 +87,17 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // crawled for agriculture and then hard-dropped on the way home. Zero
   // imports, zero I/O — verified dependency-free.
   'backend/services/eligibility/farmIdentity.js',
+  // The ONE derived-profile-fact layer (#1091) and the ONE academic-stage
+  // taxonomy built on it. `crawler-os/planner.js` ranks lanes by what the
+  // profile DECLARED — its topical terms and its derived stage — and the whole
+  // point of those modules is that the derivation has a single owner: a private
+  // copy in the OS would mean the planner selects lanes from one reading of the
+  // profile while the match engine judges the results from another. Both are
+  // pure config; `profileDerivedFacts` reaches only `profileInstitutions.js`,
+  // `aidTypePreferences.js` and `shared/data/stateRegistry.js` (all data-only),
+  // and `stageOfLifeEligibility` reaches only `profileDerivedFacts`. Zero I/O.
+  'backend/config/profileDerivedFacts.js',
+  'backend/config/stageOfLifeEligibility.js',
 ]);
 
 function listFiles(dir) {

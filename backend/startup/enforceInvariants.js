@@ -1532,6 +1532,32 @@ async function listMatchColumns(db) {
   }
 }
 
+/**
+ * Columns `funding_opportunities` actually has here. Prod Postgres and the
+ * SQLite schema have drifted before in BOTH directions (prod carries a bare
+ * `url` the SQLite schema lacks — #946/#954), so a sweep that reads optional
+ * evidence columns must probe rather than assume. An empty set means the probe
+ * itself failed; callers treat that as "assume present" and fall back to their
+ * existing per-query error handling.
+ */
+async function listOpportunityColumns(db) {
+  try {
+    if ((db?.dialect || 'sqlite') === 'postgres') {
+      const rows = await db
+        .prepare(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'funding_opportunities'`,
+        )
+        .all()
+      return new Set((rows || []).map((r) => String(r.column_name)))
+    }
+    const cols = await db.prepare('PRAGMA table_info(funding_opportunities)').all()
+    return new Set((cols || []).map((c) => String(c.name)))
+  } catch {
+    return new Set()
+  }
+}
+
 /** Score a demoted match is forced BELOW the display floor to so it stops
  *  surfacing. Canonical DEMOTED_MATCH_SCORE sits below REVIEW and the
  *  pipeline bar on the live scale (the old hardcoded 10 ended up ABOVE the
@@ -7155,6 +7181,421 @@ export async function enforceProfileResultFloor(db) {
   })
 }
 
+/**
+ * INVARIANT: A SURFACED MATCH IS AN AWARD THE PROFILE'S ACADEMIC STAGE CAN
+ * ACTUALLY RECEIVE (2026-08-02).
+ *
+ * `makeDecision` now refuses a stage-barred pair per call, but the match store
+ * is a ROLLING SNAPSHOT written by several producers, and the cross-profile
+ * (xmatch) lane scores against a thesis stub that carries no sections at all —
+ * so it derives no stage and the per-call gate correctly says nothing. A row
+ * already persisted, or written by a context-less lane, is only reachable from
+ * a sweep. Prod 2026-08-02, before this shipped: 3 live match rows across the
+ * fleet ("Non-Traditional Lottery Scholarship" 80, "Tennessee Education Lottery
+ * Scholarships for Non-Traditional Students" 79, "Graduate Assistantships" 34)
+ * all on ONE 17-year-old dual-enrolled high-school senior.
+ *
+ * The MATCH is deleted, never the catalog row: a graduate fellowship is a real
+ * opportunity for somebody, just not for this applicant. Silence is never a
+ * denial — a row that states no stage is untouched, an unknown/absent profile
+ * stage is neutral, and only stages that PROVABLY cannot occupy the declared
+ * one are barred (`STAGE_REQUIREMENT_CLASSES[].barredStages`).
+ *
+ * Bounded by MATCH_SCOPE_PURGE_LIMIT (2000/boot);
+ * ENFORCE_STAGE_OF_LIFE_SCOPE=0 for count-only.
+ */
+export async function enforceStageOfLifeMatchScope(db) {
+  return runInvariant('stage_of_life_match_scope', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let deriveStageOfLife, stageOfLifeConflict, STAGE_DECLARATION_LIKE_PATTERNS
+    try {
+      ;({ deriveStageOfLife } = await import('../config/profileDerivedFacts.js'))
+      ;({ stageOfLifeConflict, STAGE_DECLARATION_LIKE_PATTERNS } = await import(
+        '../config/stageOfLifeEligibility.js'
+      ))
+    } catch (err) {
+      log.warn('stage_of_life_match_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_STAGE_OF_LIFE_SCOPE) === false
+
+    // ALL profiles — the match store is a rolling snapshot, so a producer-side
+    // gate alone lands only after each profile's next crawl.
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('stage_of_life_match_scope: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    // The evidence columns this DB actually has. `title` is the only one that
+    // is universal; the rest are probed so a schema that lacks one degrades to
+    // "fewer fragments", never to a query error that silently no-ops the whole
+    // sweep while it reads green (the #946/#954 schema-drift class).
+    const oppCols = await listOpportunityColumns(db)
+    const EVIDENCE_COLS = ['title', 'sponsor', 'description', 'eligibility_text', 'eligibility_bullets']
+      .filter((c) => oppCols.size === 0 || oppCols.has(c))
+    if (!EVIDENCE_COLS.includes('title')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    // Only the TEXT columns are LIKE-able; eligibility_bullets is a JSON array
+    // string, which LIKE still matches usefully as a superset.
+    const likeClause = STAGE_DECLARATION_LIKE_PATTERNS
+      .map(() => `(${EVIDENCE_COLS.map((c) => `LOWER(COALESCE(o.${c},'')) LIKE ?`).join(' OR ')})`)
+      .join(' OR ')
+    const likeParams = []
+    for (const p of STAGE_DECLARATION_LIKE_PATTERNS) for (const _c of EVIDENCE_COLS) likeParams.push(p)
+
+    let scanned = 0
+    const violating = []
+    let profilesWithStage = 0
+    for (const row of profileIds || []) {
+      if (violating.length >= limit) break
+      const ctx = await _loadProfileContextForInvariant(db, row.id)
+      if (!ctx) continue
+      let stage
+      try { stage = deriveStageOfLife(ctx.sections ?? {})?.value ?? null } catch { continue }
+      if (!stage || stage === 'unclassified') continue
+      profilesWithStage += 1
+      let candidates
+      try {
+        candidates = await db
+          .prepare(
+            `SELECT m.id AS match_id, m.profile_id, ${EVIDENCE_COLS.map((c) => `o.${c}`).join(', ')}
+               FROM profile_opportunity_matches m
+               JOIN funding_opportunities o ON o.id = m.opportunity_id
+              WHERE m.profile_id = ? AND (${likeClause})
+              LIMIT ?`,
+          )
+          .all(row.id, ...likeParams, limit)
+      } catch (err) {
+        log.warn('stage_of_life_match_scope: candidate query failed (non-fatal)', {
+          profile: row.id, error: String(err?.message || err),
+        })
+        continue
+      }
+      for (const c of candidates || []) {
+        scanned += 1
+        const conflict = stageOfLifeConflict(stage, c)
+        if (conflict) violating.push({ ...c, stage, conflict })
+      }
+    }
+
+    const describe = (v) => `${v.title} (${v.conflict.classId}: "${v.conflict.phrase}" in ${v.conflict.field}; profile is ${v.stage})`
+    if (countOnly) {
+      if (violating.length > 0) {
+        log.warn('awards the profile\'s academic stage cannot receive are surfaced (purge DISABLED via ENFORCE_STAGE_OF_LIFE_SCOPE=0)', {
+          wouldRepair: violating.length, scanned, profilesWithStage, examples: violating.slice(0, 3).map(describe),
+        })
+      }
+      return { scanned, repaired: 0, wouldRepair: violating.length, profilesWithStage, enforced: false }
+    }
+    if (violating.length === 0) return { scanned, repaired: 0, profilesWithStage, enforced: true }
+
+    const ids = violating.map((v) => v.match_id)
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += 200) {
+      const slice = ids.slice(i, i + 200)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed matches to awards the profile\'s academic stage cannot receive', {
+      repaired,
+      scanned,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map(describe),
+    })
+    return {
+      scanned,
+      repaired,
+      profilesWithStage,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: A STUDENT'S OWN STATE'S STUDENT AID REACHES THAT STUDENT
+ * (2026-08-02 — the other half of the stage-gate work).
+ *
+ * MEASURED READ-ONLY IN PROD. Anastasia White is a TN dual-enrolled high-school
+ * senior. The catalog holds 21 active TN HOPE rows; she matched **ZERO**.
+ * Replaying the REAL `computeMatchDecision` on the pair nobody had ever scored
+ * returns **ACCEPT 100 — "Matches 70 of the profile's 70 data points"**. The
+ * engine was never the drop point (the #1089/#1090/#1091 finding again): there
+ * was no KEY that could reach her state's flagship award.
+ *
+ * WHY THIS COULD NOT SHIP BEFORE THE STAGE GATE. #1091 measured this exact key
+ * and refused it: in-state + a student-aid title + the aid taxonomy reached TN
+ * HOPE, but it ALSO handed a 17-year-old "Vanderbilt School of Medicine Merit
+ * Scholarship" (ACCEPT 84) and "Osher Reentry Scholarship" (ACCEPT 84, for
+ * returning adults) — and the engine accepted those too. The missing piece was
+ * a stage-of-life eligibility gate INSIDE the engine, which now exists
+ * (`config/stageOfLifeEligibility.js`), so this key's rejects are the engine's.
+ *
+ * THE ANCHOR IS A NAMED STATE, NOT A STATE COLUMN. Measured on real prod pairs
+ * with the real engine, 2026-08-02:
+ *
+ *   bare in-state student-aid (`fo.state = profile state`)   → 208 links
+ *   …plus: title or sponsor NAMES the state                  →  85 links
+ *
+ * The 123 links the anchor drops are the flood: `funding_opportunities.state`
+ * is stamped by whichever profile's crawl found the row, so a TN student's
+ * "in-state" set carried seven Cuyahoga Community College (Ohio) awards and
+ * five from Cleveland University-KANSAS CITY. A row whose own title or sponsor
+ * says "Tennessee" is making a claim about itself; a state column is making a
+ * claim about a crawl. Anastasia's 13 anchored links are TN HOPE (ACCEPT 100),
+ * TN Promise, the TN General Assembly Merit Scholarship, Education Freedom
+ * Scholarship Act, TN STEP UP, and UT-Chattanooga awards.
+ *
+ * The gate authorizes a LOOK; `computeMatchDecision` still decides and a REJECT
+ * is never written. Bounded by STUDENT_AID_INSTATE_LINK_LIMIT (500/boot);
+ * ENFORCE_STUDENT_AID_INSTATE_LINK=0 for count-only.
+ */
+export async function enforceStudentAidInStateRecall(db) {
+  return runInvariant('student_aid_instate_recall', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id') || !matchCols.has('matcher_version')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let deriveProfileFacts, titleStatesTerm, classifyAidType, STUDENT_AID_TITLE_LIKE_PATTERNS, STATE_REGISTRY
+    try {
+      ;({ deriveProfileFacts, titleStatesTerm } = await import('../config/profileDerivedFacts.js'))
+      ;({ classifyAidType, STUDENT_AID_TITLE_LIKE_PATTERNS } = await import('../config/aidTypePreferences.js'))
+      ;({ STATE_REGISTRY } = await import('../services/shared/data/stateRegistry.js'))
+    } catch (err) {
+      log.warn('student_aid_instate_recall: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+
+    const isPg = (db?.dialect || 'sqlite') === 'postgres'
+    const trueLit = isPg ? 'TRUE' : '1'
+    const falseLit = isPg ? 'FALSE' : '0'
+    const nowFn = isPg ? 'now()' : 'CURRENT_TIMESTAMP'
+    const writeLimit = _boundedLimit('STUDENT_AID_INSTATE_LINK_LIMIT', 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_STUDENT_AID_INSTATE_LINK) === false
+
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('student_aid_instate_recall: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+
+    // ACCEPTED aid classes for this key: the two the taxonomy calls an AWARD a
+    // student competes for. 'grant' is deliberately excluded — measured, it
+    // more than doubles the link count (208 → 423 unanchored) by admitting
+    // every in-state programme grant whose title happens to contain the word.
+    const ACCEPTED_AID = new Set(['scholarship', 'endowment'])
+
+    const titleLike = STUDENT_AID_TITLE_LIKE_PATTERNS
+      .map(() => "LOWER(COALESCE(fo.title,'')) LIKE ?").join(' OR ')
+
+    let scanned = 0
+    let linked = 0
+    let rejectedByEngine = 0
+    let adjudicatedOut = 0
+    let unscorable = 0
+    let profilesEligible = 0
+    let truncated = false
+    const wouldLink = []
+    const examples = []
+    // Every profile examined, with the anchor it CURRENTLY has (null when the
+    // profile no longer qualifies), so convergence re-adjudicates existing links
+    // against the profile's own facts — NOT against the candidate set, which
+    // excludes already-linked rows and would delete every link next boot
+    // (the bug `declaredFieldOfStudyRecall.test.js`'s idempotence test caught).
+    const anchorByProfile = new Map()
+
+    for (const row of profileIds || []) {
+      if (linked + wouldLink.length >= writeLimit) { truncated = true; break }
+      const profileId = row.id
+      const ctx = await _loadProfileContextForInvariant(db, profileId)
+      if (!ctx) continue
+      let facts
+      try { facts = deriveProfileFacts(ctx.profile, ctx.sections) } catch { continue }
+      const stage = facts?.stageOfLife?.value ?? null
+      const state = String(facts?.place?.state || '').toUpperCase()
+      const stateName = String(STATE_REGISTRY?.[state]?.name || '')
+      // STUDENT AID needs a STUDENT: a profile that states no academic stage is
+      // not given a student-aid key at all (silence buys nothing, in either
+      // direction). A profile with no resolvable state loses nothing either.
+      const qualifies = Boolean(stage) && stage !== 'unclassified' && Boolean(stateName)
+      anchorByProfile.set(profileId, qualifies ? stateName : null)
+      if (!qualifies) continue
+      profilesEligible += 1
+
+      const namePattern = `%${stateName.toLowerCase()}%`
+      let candidates
+      try {
+        candidates = await db
+          .prepare(
+            `SELECT fo.* FROM funding_opportunities fo
+              WHERE (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+                AND UPPER(COALESCE(fo.state,'')) = ?
+                AND (fo.is_national IS NULL OR fo.is_national = ${falseLit})
+                AND (LOWER(COALESCE(fo.title,'')) LIKE ? OR LOWER(COALESCE(fo.sponsor,'')) LIKE ?)
+                AND (${titleLike})
+                AND NOT EXISTS (
+                  SELECT 1 FROM profile_opportunity_matches m
+                   WHERE m.profile_id = ? AND m.opportunity_id = fo.id
+                )
+              ORDER BY fo.created_at
+              LIMIT ?`,
+          )
+          .all(state, namePattern, namePattern, ...STUDENT_AID_TITLE_LIKE_PATTERNS, profileId, writeLimit)
+      } catch (err) {
+        log.warn('student_aid_instate_recall: candidate query failed (non-fatal)', {
+          profile: profileId, error: String(err?.message || err),
+        })
+        continue
+      }
+
+      for (const opp of candidates || []) {
+        // TOKEN-BOUNDARY adjudication of the LIKE superset, and the aid
+        // taxonomy read from the row's own IDENTITY fields only (title +
+        // sponsor) — never description prose (#1086 / the aid-gate rule).
+        const hay = `${opp.title ?? ''} ${opp.sponsor ?? ''}`
+        if (!titleStatesTerm(stateName, hay)) { adjudicatedOut += 1; continue }
+        if (!ACCEPTED_AID.has(classifyAidType({ title: opp.title, description: opp.sponsor }))) {
+          adjudicatedOut += 1
+          continue
+        }
+        scanned += 1
+        let decision
+        try {
+          decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections })
+        } catch (err) {
+          unscorable += 1
+          log.warn('student_aid_instate_recall: scoring failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+          continue
+        }
+        const verdict = String(decision?.decision ?? '').toUpperCase()
+        if (verdict !== 'ACCEPT' && verdict !== 'REVIEW') { rejectedByEngine += 1; continue }
+        const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
+        if (score === null) { unscorable += 1; continue }
+
+        if (countOnly) {
+          wouldLink.push({ profileId, opportunityId: opp.id })
+          if (examples.length < 3) examples.push(`${opp.title} (${stateName}, ${verdict} ${score})`)
+          continue
+        }
+        try {
+          const res = await db
+            .prepare(
+              `INSERT INTO profile_opportunity_matches
+                 (id, profile_id, opportunity_id, match_score, match_decision, match_explanation,
+                  match_reasons, match_explain_json, source_query, discovered_via, matcher_version,
+                  computed_at, updated_at, evaluated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'student-aid-instate-link', ${nowFn}, ${nowFn}, ${nowFn})
+               ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+            )
+            .run(
+              `sa:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
+              decision?.explanation ?? null,
+              JSON.stringify(decision?.matchedNeeds ?? []),
+              JSON.stringify({ gate: 'student_aid_instate', state: stateName, stage, evidence: 'basic_information.location' }),
+              null, 'student_aid_instate',
+            )
+          const wrote = changesOf(res)
+          if (wrote > 0) {
+            linked += 1
+            if (examples.length < 3) examples.push(`${opp.title} (${stateName}, ${verdict} ${score})`)
+          }
+        } catch (err) {
+          log.warn('student_aid_instate_recall: insert failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+        }
+      }
+    }
+
+    // CONVERGENCE: the student moved state, stopped being a student, or the row
+    // was deactivated → the gate no longer authorizes the link. Skipped on a
+    // truncated pass so a bound-limited boot never deletes what it never
+    // re-derived.
+    let stale = 0
+    if (!countOnly && !truncated) {
+      for (const [profileId, stateName] of anchorByProfile) {
+        try {
+          const existing = await db
+            .prepare(
+              `SELECT m.id, fo.title, fo.sponsor, fo.is_active
+                 FROM profile_opportunity_matches m
+                 LEFT JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+                WHERE m.profile_id = ? AND m.matcher_version = 'student-aid-instate-link'`,
+            )
+            .all(profileId)
+          const doomed = (existing || [])
+            .filter((r) => {
+              if (!stateName) return true
+              if (r.title === null && r.sponsor === null) return true
+              if (!(r.is_active === null || r.is_active === undefined || r.is_active === 1 || r.is_active === true)) return true
+              return !titleStatesTerm(stateName, `${r.title ?? ''} ${r.sponsor ?? ''}`)
+            })
+            .map((r) => r.id)
+          for (let i = 0; i < doomed.length; i += 200) {
+            const slice = doomed.slice(i, i + 200)
+            const ph = slice.map(() => '?').join(', ')
+            const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+            stale += changesOf(res) || slice.length
+          }
+        } catch { /* convergence is best-effort; never fails the sweep */ }
+      }
+    }
+
+    if (countOnly) {
+      if (wouldLink.length > 0) {
+        log.warn("a student's own state's aid is not reaching them (linking DISABLED via ENFORCE_STUDENT_AID_INSTATE_LINK=0)", {
+          wouldLink: wouldLink.length, scanned, profilesEligible, examples,
+        })
+      }
+      return {
+        scanned,
+        repaired: 0,
+        wouldRepair: wouldLink.length,
+        profilesEligible,
+        rejectedByEngine,
+        adjudicatedOut,
+        truncated,
+        enforced: false,
+      }
+    }
+    if (linked > 0 || stale > 0) {
+      log.info("linked students to their own state's student aid", {
+        linked, stale, scanned, profilesEligible, rejectedByEngine, adjudicatedOut, unscorable, examples,
+      })
+    }
+    return {
+      scanned,
+      repaired: linked,
+      stale,
+      profilesEligible,
+      rejectedByEngine,
+      adjudicatedOut,
+      unscorable,
+      truncated,
+      enforced: true,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -7257,6 +7698,17 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // the other linkage gates, before the dangling/decision-integrity hygiene
   // sweeps read the table.
   steps.push(await enforceDeclaredFieldOfStudyRecall(db))
+  // RECALL net, keyed on the student's own STATE: a catalog row whose title or
+  // sponsor NAMES that state and whose aid taxonomy makes it a scholarship or
+  // endowment is offered to the student. Sits with the other linkage gates; the
+  // stage-scope purge immediately below is what holds everything it (and every
+  // other producer) surfaced to the academic-stage bar.
+  steps.push(await enforceStudentAidInStateRecall(db))
+  // ACADEMIC-STAGE scope net: remove surfaced awards the profile's derived stage
+  // provably cannot receive (graduate/professional, postdoctoral, adult
+  // reentry). Runs immediately AFTER the recall gates so anything they added
+  // this boot is held to the same bar in the SAME boot, not a boot late.
+  steps.push(await enforceStageOfLifeMatchScope(db))
   // Surface-table hygiene: a persisted match whose catalog row was deleted
   // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
   // unusable ghost that inflates the matches view and wastes promote passes.
@@ -7476,4 +7928,6 @@ export const __testables = {
   enforceLeadContactPlausibility,
   enforceJohnDraftPlausibility,
   enforceProfileResultFloor,
+  enforceStageOfLifeMatchScope,
+  enforceStudentAidInStateRecall,
 }
