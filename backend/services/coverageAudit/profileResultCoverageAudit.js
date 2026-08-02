@@ -195,7 +195,8 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   //     the profile's REQUESTED result number, judged on AWARDABLE rows. A
   //     target of 0 disables the floor for that profile. Distinct from
   //     low_results above, which counts pointers and fires at 3 — in prod that
-  //     bar flags 0 of 33 real profiles while 11 sit below a target of 10.
+  //     bar flags 0 of 33 real profiles while 12 sit below a target of 10
+  //     (measured with this code against a full prod replica, 2026-08-01).
   const result_target = Number.isFinite(Number(resultTarget)) ? Number(resultTarget) : resolveFleetResultTarget()
   const below_result_target = result_target > 0 && awardable.length < result_target
   const result_shortfall = below_result_target ? result_target - awardable.length : 0

@@ -76,6 +76,11 @@
  *   below 3: 2/33 · below 5: 5/33 · below 8: 9/33 · **below 10: 11/33** ·
  *   below 14: 17/33 · below 20: 19/33
  *
+ * (That percentile row is a raw-SQL snapshot. Running THIS module's own code
+ * against a full prod replica minutes later reported **12 of 33** below 10 —
+ * live data moves between snapshots, and the replica figure is the
+ * authoritative one. The shape of the argument is unaffected.)
+ *
  * 10 sits above p25 and below the median: it names the under-served THIRD of
  * the fleet without declaring the median profile broken. At the median (14)
  * half the fleet would sit in permanent backfill; at 3 the bar ratifies
