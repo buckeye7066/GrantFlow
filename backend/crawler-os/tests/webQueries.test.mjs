@@ -97,7 +97,9 @@ test('a named school produces institution-specific scholarship queries (CORE)', 
 
 test('institution queries survive even at a small max (they are CORE, not rotated)', () => {
   const qs = buildWebQueries(NAMED_STUDENT, { year: 2026, max: 3, seed: 777 });
-  assert.ok(qs[0].startsWith('Cleveland State Community College'), 'primary institution leads CORE');
+  // The exact-name form is QUOTED (deliberate, #1089: defeats SERP drift) —
+  // strip quotes before asserting the primary institution leads CORE.
+  assert.ok(qs[0].replace(/"/g, '').startsWith('Cleveland State Community College'), 'primary institution leads CORE');
 });
 
 test('county-level hyperlocal queries are emitted from the county signal', () => {

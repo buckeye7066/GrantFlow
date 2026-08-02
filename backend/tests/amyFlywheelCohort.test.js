@@ -116,6 +116,42 @@ describe('buildCohortUpdate (pure fold)', () => {
     expect(dup.goal_reached_now).toBe(false)
   })
 
+  it('an issue example retains the finding EVIDENCE, not only type counts', () => {
+    // The synthetic profiles and their match rows are reaped next run, so the
+    // cohort store is the ONLY thing that outlives a failed day. Measured
+    // 2026-08-02: the 2026-08-01 day's 13 issues retained only {category,
+    // types} — not one missed school name or accepted ineligible title was
+    // attributable post-hoc. The excerpt must survive, bounded.
+    const r = buildCohortUpdate(null, {
+      dayKey: '2026-07-07', target: 1, runId: 'run-e',
+      evaluations: [{
+        scenario_id: 'hs1', label: 'High School Student', category: 'high_school_student', status: 'ok',
+        findings: [
+          {
+            type: 'institution_recall_miss',
+            message: 'student committed to MTSU but 0 of 12 results reference the school',
+            excerpt: 'schools=[Middle Tennessee State University] field=Computer Science',
+          },
+          { type: 'amount_recall_miss', message: 'no excerpt on this one' },
+        ],
+      }],
+    })
+    const ex = r.day.issue_examples[0]
+    expect(ex.findings.length).toBe(2)
+    expect(ex.findings[0].type).toBe('institution_recall_miss')
+    expect(ex.findings[0].excerpt).toContain('Middle Tennessee State University')
+    // excerpt falls back to message, and is BOUNDED
+    expect(ex.findings[1].excerpt).toBe('no excerpt on this one')
+    const long = buildCohortUpdate(null, {
+      dayKey: '2026-07-07', target: 1,
+      evaluations: [{
+        scenario_id: 'x', label: 'X', category: 'veteran', status: 'ok',
+        findings: [{ type: 'weak_match', excerpt: 'y'.repeat(5000) }],
+      }],
+    })
+    expect(long.day.issue_examples[0].findings[0].excerpt.length).toBeLessThanOrEqual(240)
+  })
+
   it('retains only the most recent day buckets', () => {
     let store = null
     for (let d = 1; d <= 30; d += 1) {

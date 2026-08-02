@@ -442,3 +442,93 @@ describe('(f) grants.gov eligibility_json reaches the institutional gate', () =>
     expect(r.decision).toBe('REJECT')
   })
 })
+
+// ── (g) a homeschool FAMILY (the parent) is not an enrolled student ──────────
+//
+// Amy's 2026-08-01 cohort: 2 homeschool_family synthetic profiles ACCEPTED
+// enrolled-student aid (ineligible_match ×2, approval-queue item
+// `ineligible_match:homeschool_family` — "no data knob can close this").
+// Root cause: profileNormalizer's section heuristic treated ANY non-empty
+// education.highest_level as current studenthood, and the archetype declares
+// highest_level 'homeschool (K-12)' — a schooling-mode descriptor for the
+// CHILDREN — so the PARENT read as an enrolled student and the
+// non-student × student-aid cap never fired. Mirrors the synthetic archetype
+// in backend/services/amy/syntheticProfileCatalog.js exactly.
+
+describe('(g) homeschool_family: enrolled-student aid must not ACCEPT for the parent', () => {
+  const HOMESCHOOL_FAMILY = {
+    profile: {
+      id: 'amy-homeschool-family',
+      primary_type: 'homeschool_family',
+      display_name: 'Synthetic Homeschool Family (test)',
+      state: 'TN',
+      city: 'Cleveland',
+    },
+    sections: {
+      family: { household_size: 5, responsibilities: 'Parent homeschooling three children.' },
+      education: { highest_level: 'homeschool (K-12)', cte_pathway: 'General' },
+      narrative: {
+        mission: 'Homeschooling family seeking curriculum and enrichment funding.',
+        primary_goal: 'Curriculum, technology, and enrichment grants.',
+      },
+      programs_services: {
+        focus_areas: ['education', 'homeschool'],
+        interests: ['curriculum', 'enrichment', 'technology'],
+        keywords: ['homeschool grant', 'curriculum', 'education'],
+      },
+    },
+  }
+
+  // An enrolled-student scholarship with NO institutional-only / loan flags —
+  // shaped so nothing but the student-aid gate can stop it (this row ACCEPTed
+  // at score 15 on the pre-fix code).
+  const ENROLLED_STUDENT_SCHOLARSHIP = {
+    id: 'generic-scholarship',
+    title: 'Bright Futures Education Scholarship',
+    sponsor: 'Education Foundation',
+    description: 'Scholarship supporting tuition and education expenses for students pursuing their education goals. Open to applicants nationwide.',
+    application_url: 'https://example.org/apply',
+    is_national: true,
+    funding_type: 'grant',
+  }
+
+  // A homeschool curriculum GRANT (no student-aid tokens) — the archetype's
+  // genuine direct award. Must SURVIVE the fix or the gate traded an
+  // ineligible_match for a zero_result.
+  const HOMESCHOOL_CURRICULUM_GRANT = {
+    id: 'homeschool-curriculum',
+    title: 'HSLDA Compassion Curriculum Grants',
+    sponsor: 'Home School Legal Defense Association',
+    description: 'Grants to help homeschooling families in financial hardship purchase curriculum and educational materials for their children.',
+    application_url: 'https://hslda.org/legal/compassion-grants',
+    is_national: true,
+    funding_type: 'grant',
+  }
+
+  it('the PARENT does not normalize to an enrolled student off highest_level', () => {
+    const n = normalizeProfile(HOMESCHOOL_FAMILY.profile, HOMESCHOOL_FAMILY.sections)
+    expect(n.isStudent).toBe(false)
+  })
+
+  it('an enrolled-student scholarship must not ACCEPT (the ineligible_match class)', () => {
+    const r = computeMatchDecision(HOMESCHOOL_FAMILY.profile, ENROLLED_STUDENT_SCHOLARSHIP, {
+      profileSections: HOMESCHOOL_FAMILY.sections,
+    })
+    expect(r.decision).not.toBe('ACCEPT')
+  })
+
+  it('the homeschool curriculum GRANT still reaches the family (recall guard)', () => {
+    const r = computeMatchDecision(HOMESCHOOL_FAMILY.profile, HOMESCHOOL_CURRICULUM_GRANT, {
+      profileSections: HOMESCHOOL_FAMILY.sections,
+    })
+    expect(r.decision).toBe('ACCEPT')
+  })
+
+  it('a real student typed as one KEEPS studenthood (family gate does not leak)', () => {
+    const n = normalizeProfile(
+      { id: 'p-hs-student', primary_type: 'high_school_student', state: 'TN', age: 17 },
+      { education: { answers: { highest_level: 'high school', school_name: 'Bradley Central High School' } } },
+    )
+    expect(n.isStudent).toBe(true)
+  })
+})

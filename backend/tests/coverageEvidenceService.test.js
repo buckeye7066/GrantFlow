@@ -697,6 +697,13 @@ describe('conditionCoveredBySource — the coverage floor', () => {
     ['anoxic brain injury', 'biausa_brain_injury_resources'],
     ['medical debt', 'dollar_for_charity_care'],
     ['obesity', 'needymeds_diagnosis_assistance'],
+    // Adapter-wishlist lane (2026-08-02) — the exact symptom prose from the
+    // nightly report ("clawing effect in hands" = claw hand, the textbook
+    // Charcot-Marie-Tooth / ulnar-nerve-palsy presentation), human-adjudicated
+    // onto the MDA neuromuscular lane.
+    ['clawing effect in hands', 'mda_neuromuscular_resources'],
+    ['charcot-marie-tooth disease', 'mda_neuromuscular_resources'],
+    ['peripheral neuropathy', 'mda_neuromuscular_resources'],
   ])('keeps covering %s (via %s)', (condition, expectedSource) => {
     expect(coveredBy(condition).map((s) => s.source_id)).toContain(expectedSource)
   })
@@ -787,11 +794,11 @@ describe('conditionCoveredBySource — the coverage floor', () => {
 
   it('leaves a genuinely uncovered diagnosis honestly uncovered', () => {
     // 'retina detachment (left eye)' and 'obesity' moved OUT of this list
-    // 2026-07-26: the vision lane / NeedyMeds diagnosis vocabulary cover them
-    // now. 'clawing effect in hands' is symptom prose in a diagnosis field —
-    // no curated lane can honestly name it, so it stays a true gap for the
-    // wishlist consumer's web search to converge on.
-    for (const c of ['cipn', 'epilepsy', 'clawing effect in hands']) {
+    // 2026-07-26 (vision lane / NeedyMeds vocabulary); 'clawing effect in
+    // hands' moved out 2026-08-02 — human-adjudicated onto the MDA
+    // neuromuscular lane (claw hand = the Charcot-Marie-Tooth / ulnar-nerve
+    // presentation), exactly the convergence this list exists to force.
+    for (const c of ['cipn', 'epilepsy']) {
       expect(coveredBy(c), `${c} should still be an honest gap`).toHaveLength(0)
     }
   })

@@ -234,21 +234,21 @@ export function buildWebQueries(thesis = {}, opts = {}) {
       // most university sites — the word "endowed" is the phrase that reaches them.
       if (i === 0) add(core, `${school} endowed scholarships`);
     });
+    // The student's STATE aid programs (HOPE, TSAA, Promise, Cal Grant…) are
+    // their largest single non-federal source and have no API. For a
+    // school-bearing profile the query is emitted HERE, directly after the
+    // institution block: the late-core slot it also holds (below) sits PAST
+    // the live cap for a query-rich two-school profile — measured 2026-08-02,
+    // `TN state scholarship programs` was position 15 of a 14-slot budget,
+    // truncated on every run: the exact fate its own comment says it was moved
+    // out of the EXTRA pool to prevent, recreated one level up by CORE growth.
+    // A schoolless student's core is far under the cap, so the original late
+    // slot still serves them (the global `seen` dedup collapses the pair).
+    if (schools.length > 0 && state) {
+      add(core, isTerritory ? `${state} scholarship programs` : `${state} state scholarship programs`);
+    }
     // Field-of-study scholarships (major), independent of any one school.
     if (field) add(core, `${field} scholarships ${year}`);
-    // The profile's OWN declared study topics, strongest evidence first
-    // (`config/profileDerivedFacts.js`: intended major, then declared education
-    // interests, then curated programs/services topics).
-    //
-    // THESE MUST BE CORE. The interest-keyed queries below live in the ROTATED
-    // EXTRA pool, and the final `.slice(0, max)` truncates from the END — a
-    // student with two schools builds 8+ CORE queries before the first topical
-    // one, so on the live cap (maxQueries 14) not a single interest query ever
-    // ran. Measured on Anastasia White 2026-08-02: all 14 executed queries were
-    // school/geo CORE, zero topical. Two slots is the bound — enough to reach
-    // the declared major and its nearest declared neighbour, small enough that
-    // the school and county queries #1089/#886 fought for are never displaced.
-    for (const term of interests.slice(0, 2)) add(core, `${term} scholarships ${year}`);
   }
   // Employer education programs (tuition assistance / employer scholarships) —
   // a real funding class for a working applicant, reachable only by employer name.
@@ -258,6 +258,25 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   }
   // The two strongest need-specific searches.
   for (const need of needs.slice(0, 2)) add(core, `${need} grants for ${word} ${geo}`);
+  // The profile's OWN declared study topics, strongest evidence first
+  // (`config/profileDerivedFacts.js`: intended major, then declared education
+  // interests, then curated programs/services topics).
+  //
+  // THESE MUST BE CORE. The interest-keyed queries below live in the ROTATED
+  // EXTRA pool, and the final cap truncates from the END — a student with two
+  // schools builds 8+ CORE queries before the first topical one, so on the
+  // live cap (maxQueries 14) not a single interest query ever ran. Measured on
+  // Anastasia White 2026-08-02: all 14 executed queries were school/geo CORE,
+  // zero topical. Two slots is the bound — enough to reach the declared major
+  // and its nearest declared neighbour, small enough that the school and
+  // county queries #1089/#886 fought for are never displaced. Placed AFTER the
+  // need-specific pair: at a starvation-level budget (max 2–3) the need+geo
+  // queries are the ones that serve ANY profile, and a topical query must not
+  // consume the whole run (the pre-2026-08-02 order put topical first and a
+  // max-2 run searched nothing but the two interests).
+  if (isStudent) {
+    for (const term of interests.slice(0, 2)) add(core, `${term} scholarships ${year}`);
+  }
   // Hyperlocal, COUNTY-level awards (community foundations, county scholarships,
   // local civic clubs) — keyed to the county, which the city phrase never reaches.
   if (county) {
@@ -667,7 +686,20 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     emitted.add(k);
     merged.push(q);
   }
-  return merged.slice(0, max);
+  if (merged.length <= max) return merged;
+  // ONE ROTATING TAIL SLOT (2026-08-02). A plain `.slice(0, max)` makes every
+  // over-budget run IDENTICAL across seeds: once CORE alone reaches the cap
+  // (a two-school student builds 15+ core queries against the live cap of 14),
+  // the rotated EXTRA pool is structurally unreachable and successive nightly
+  // runs stop covering new ground — the whole point of the seed. The head
+  // (max-1 highest-priority queries) stays seed-independent, so every pinned
+  // CORE guarantee up to that line is untouched; the final slot rotates over
+  // everything the budget would otherwise never reach. Seed 0 keeps the exact
+  // pre-change emission (rotate(…, 0) is the identity), so this widens
+  // coverage across runs without moving any single run's baseline.
+  const head = merged.slice(0, Math.max(0, max - 1));
+  const pool = rotate(merged.slice(Math.max(0, max - 1)), seed);
+  return [...head, ...pool.slice(0, 1)];
 }
 
 export default { buildWebQueries };

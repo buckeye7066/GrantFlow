@@ -695,6 +695,40 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     run.amount_overlay = await overlayLiveAmountKnowledge(db, run.recommendations, persisted?.idRemap);
   } catch { /* observability-only; never fails a crawl */ }
 
+  // ── In-run institution catalog recall ──────────────────────────────────────
+  // The attendance-authorized look at the catalog the BOOT net
+  // (enforceInstitutionAidLinkage) gives the fleet — served to the DISCOVERING
+  // profile at crawl time. A profile created, crawled, and read between boots
+  // (every Amy synthetic; a newly-onboarded student's first crawl) never meets
+  // a boot net, so its own school's already-cataloged aid was invisible to this
+  // run's recommendations no matter how good the engine is (the
+  // institution_recall_miss 21-of-21-days class). Same narrow key (attendance
+  // only, whole-name sponsor equality), same match-row identity
+  // ('il:', matcher_version 'institution-link') so the two writers can never
+  // duplicate and the boot net's convergence pass governs both. The engine
+  // remains the sole authority. Best-effort: never fails a crawl.
+  try {
+    const { recallInstitutionAidForRun } = await import('./matching/institutionRunRecall.js');
+    const instRecall = await recallInstitutionAidForRun(db, {
+      profile: ctx?.profile ?? null,
+      sections: ctx?.sections ?? null,
+      idRemap: persisted?.idRemap ?? null,
+      existingRecommendations: run.recommendations ?? [],
+    });
+    run.institution_recall = {
+      schools: instRecall.schools,
+      scanned: instRecall.scanned,
+      linked: instRecall.linked,
+      rejected_by_engine: instRecall.rejectedByEngine,
+      recommended: instRecall.recommendations.length,
+      ...(instRecall.skipped ? { skipped: instRecall.skipped } : {}),
+    };
+    if (instRecall.recommendations.length > 0) {
+      run.recommendations = [...(run.recommendations ?? []), ...instRecall.recommendations]
+        .sort((a, b) => b.match_score - a.match_score);
+    }
+  } catch { /* institution recall is additive; never fails a crawl */ }
+
   // Now that the live result is persisted, settle the bounded Phase-1d target
   // verification (started before the lane returned, so it ran CONCURRENTLY with
   // persistRun and never delayed it) so its promotion_evidence counter is present

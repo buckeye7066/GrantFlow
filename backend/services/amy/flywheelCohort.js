@@ -31,6 +31,11 @@ export const RETENTION_DAYS = 21
 
 /** Cap on stored issue examples per day (observability, not a ledger). */
 const ISSUE_EXAMPLE_CAP = 15
+// Per-example finding evidence retention (see issue_examples below): enough to
+// name the missed schools / accepted titles, small enough that a 15-example
+// day stays a few KB in system_kv.
+const FINDING_EVIDENCE_PER_EXAMPLE = 4
+const FINDING_EVIDENCE_EXCERPT_CHARS = 240
 
 /** The owner's configured daily target (same env knob the scheduler uses). */
 export function dailyTarget() {
@@ -112,6 +117,19 @@ export function buildCohortUpdate(prev, { dayKey, target, runId = null, at = nul
         category: ev?.category || null,
         status: ev?.status || null,
         types,
+        // The CONCRETE evidence (the missed school names, the accepted
+        // ineligible titles, the amount-less rows) — bounded. Without this the
+        // store retains only type COUNTS while the synthetic profiles and
+        // their match rows are reaped next run, so a day-old cohort failure is
+        // unattributable post-hoc (measured 2026-08-02: the 2026-08-01 day's
+        // 13 issues could not be traced to a single title). A finding must
+        // name work someone can do — and outlive the reaper.
+        findings: (Array.isArray(ev?.findings) ? ev.findings : [])
+          .slice(0, FINDING_EVIDENCE_PER_EXAMPLE)
+          .map((f) => ({
+            type: String(f?.type || 'unknown'),
+            excerpt: String(f?.excerpt ?? f?.message ?? '').slice(0, FINDING_EVIDENCE_EXCERPT_CHARS) || null,
+          })),
       })
     }
   }
