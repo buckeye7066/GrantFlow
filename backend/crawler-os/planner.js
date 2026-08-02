@@ -10,6 +10,7 @@
 import { allSources } from './sourceRegistry.js';
 import { titleStatesTerm } from '../config/profileDerivedFacts.js';
 import { STUDENT_AID_NEED_CATEGORIES, isStudentStage } from '../config/stageOfLifeEligibility.js';
+import { isDiseaseSpecificSource, sourceServesDeclaredCondition } from '../config/sourceLanes.js';
 
 function servesApplicant(source, thesis) {
   if (source.applicant_types?.includes('*')) return true;
@@ -23,6 +24,52 @@ function servesNeed(source, thesis) {
   if (!thesis.needs?.length) return true; // unknown needs -> don't exclude on needs
   const wanted = new Set(thesis.needs);
   return (source.need_categories ?? []).some((n) => wanted.has(n));
+}
+
+/**
+ * A CONDITION LANE MUST BE ASKED FOR A CONDITION.
+ *
+ * THE DEFECT, measured read-only in prod 2026-08-02 across all 33 real
+ * profiles: **438 disease-lane selections**, 19 apiece even for profiles whose
+ * declared health vocabulary is completely EMPTY (Robert White, Admin Vault,
+ * Tasha Reynolds). `servesNeed` admits a lane on a coarse `disability` /
+ * `medical` need token, and a `disease_specific` source's whole identity is a
+ * specific diagnosis — so the kidney fund, the amputee coalition, the HIV-care
+ * locator and the rare-disease network all ran for people who evidence needing
+ * none of them.
+ *
+ * The motivating profile is the sharp case. Anastasia White declares
+ * `demographics.disability_status = "Has disability"` and
+ * `government_assistance.ssdi_recipient_self = true` — the disability signal is
+ * REAL, not spurious, and the generic disability/benefit lanes (ssa_disability,
+ * tn_ecf_choices, state_hcbs_waivers, the state portals) are right to run. But
+ * her own medical sections say *"No confirmed medical conditions are present …
+ * no chronic illnesses or disabilities noted"*. **Her disability has no named
+ * condition**, and an unnamed disability is not evidence for every named
+ * condition in the registry.
+ *
+ * THE RULE, and its two deliberate limits:
+ *   - It applies ONLY to `disease_specific` lanes. Everything else is untouched.
+ *   - It is satisfied by the source's own CURATED `keywords[]` naming something
+ *     the profile declared, in either direction, via the single owner of that
+ *     rule (`config/sourceLanes.sourceServesDeclaredCondition`) — never
+ *     re-derived here.
+ *
+ * A profile with a real diagnosis keeps its lanes and loses nothing: measured,
+ * Gilbert McCosh keeps 5 (brain injury, vision, mental health…), Brian Newman 7
+ * (kidney, sleep apnea, vision…), Dr. John Robert White 7 (arthritis, medical
+ * transport, copay…) — including lanes matched from his `health_support` terms,
+ * which is why the union of conditions and support is what the thesis carries.
+ */
+function servesDeclaredCondition(source, thesis) {
+  if (!isDiseaseSpecificSource(source.source_id)) return true;
+  // MISSING = NEUTRAL. An ABSENT `declared_health_terms` means this caller never
+  // supplied the fact (a hand-built thesis, a cross-profile stub) — not that the
+  // profile has nothing. Silence is never a denial, so the gate stays quiet and
+  // the lane is selected exactly as before. An EMPTY ARRAY is different: it is a
+  // read of the profile that found no health vocabulary, and the gate applies.
+  if (!Array.isArray(thesis?.declared_health_terms)) return true;
+  return sourceServesDeclaredCondition(source, thesis.declared_health_terms);
 }
 
 function servesGeo(source, thesis) {
@@ -157,6 +204,8 @@ export function plan(thesis = {}) {
     if (!servesApplicant(source, thesis)) { ok = false; reasons.push('applicant_type_not_served'); }
     if (!servesNeed(source, thesis)) { ok = false; reasons.push('need_category_not_covered'); }
     if (!servesGeo(source, thesis)) { ok = false; reasons.push('geography_out_of_scope'); }
+    // A condition lane must be asked for a condition (see servesDeclaredCondition).
+    if (!servesDeclaredCondition(source, thesis)) { ok = false; reasons.push('condition_not_declared'); }
     // Research-restricted sources (SBIR/STTR solicitations) serve ONLY profiles
     // whose thesis declares research capability — explicit and explainable, so
     // the applicant/need heuristics can't leak solicitations to a food pantry.

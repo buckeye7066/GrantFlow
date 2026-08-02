@@ -98,6 +98,12 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // and `stageOfLifeEligibility` reaches only `profileDerivedFacts`. Zero I/O.
   'backend/config/profileDerivedFacts.js',
   'backend/config/stageOfLifeEligibility.js',
+  // The ONE lane taxonomy + condition vocabulary (moved out of
+  // coverageEvidenceService for exactly this reason: that service imports
+  // crawlerPlanExplainer, which imports the planner, so the planner could not
+  // consult the facts that decide which crawlers are appropriate). Pure data +
+  // pure predicates; its only import is this package's own sourceRegistry.
+  'backend/config/sourceLanes.js',
 ]);
 
 function listFiles(dir) {

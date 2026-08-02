@@ -22,6 +22,7 @@ import assert from 'node:assert/strict';
 import { plan, LANE_TIER } from '../planner.js';
 import { allSources } from '../sourceRegistry.js';
 import { STUDENT_AID_NEED_CATEGORIES } from '../../config/stageOfLifeEligibility.js';
+import { isDiseaseSpecificSource } from '../../config/sourceLanes.js';
 
 /** Anastasia's real thesis shape, trimmed to what the planner reads. */
 function anastasiaThesis(overrides = {}) {
@@ -32,6 +33,8 @@ function anastasiaThesis(overrides = {}) {
       'disability', 'education', 'transportation', 'medical', 'employment', 'technology',
       'professional_development', 'scholarship', 'tuition', 'housing', 'fafsa', 'pell',
       'first_gen', 'emergency', 'equipment', 'programs', 'economic_development',
+      // she translates and advocates for her grandparents (`family_life.caregiver`)
+      'caregiving',
     ],
     location: { state: 'TN', city: 'Cleveland', zip: '37312' },
     derived_facts: {
@@ -146,5 +149,94 @@ test('every STUDENT_AID_NEED_CATEGORY is declared by a real registry source', ()
   for (const s of allSources()) for (const n of s.need_categories ?? []) declared.add(String(n).toLowerCase());
   for (const cat of STUDENT_AID_NEED_CATEGORIES) {
     assert.ok(declared.has(cat), `no registry source declares need "${cat}" — the set would select nothing`);
+  }
+});
+
+// ── A CONDITION LANE MUST BE ASKED FOR A CONDITION ───────────────────────────
+//
+// Measured read-only in prod 2026-08-02 across all 33 real profiles: 438
+// disease-lane selections, 19 apiece even for profiles whose declared health
+// vocabulary is EMPTY. Anastasia White's disability is REAL
+// (`demographics.disability_status = "Has disability"`,
+// `government_assistance.ssdi_recipient_self = true`) — but her own medical
+// sections say "no chronic illnesses or disabilities noted", so it has NO NAMED
+// CONDITION, and an unnamed disability is not evidence for every named
+// condition in the registry.
+
+const withHealth = (terms) => anastasiaThesis({ declared_health_terms: terms });
+
+test('an UNNAMED disability does not fire the named-condition fleet', () => {
+  // `disability` is the only health term she carries. It is a category of
+  // person, not a diagnosis — and it sits inside autism_speaks's curated
+  // "developmental disability" and reeve's "physical disability", which is how
+  // the reverse-direction match used to hand her both.
+  const p = plan(withHealth(['disability']));
+  const sel = new Set(p.selected_source_ids);
+  for (const id of [
+    'american_kidney_fund', 'autism_speaks_family_support', 'reeve_foundation_paralysis',
+    'amputee_coalition_resources', 'findhivcare_ryan_white', 'nord_rare_disease_assistance',
+    'arthritis_foundation_help', 'vision_aware_resources', 'biausa_brain_injury_resources',
+  ]) {
+    assert.ok(!sel.has(id), `${id} must not run for a disability with no named condition`);
+  }
+});
+
+test('the GENERAL disability and benefit lanes still run — the signal is real', () => {
+  const p = plan(withHealth(['disability']));
+  const sel = new Set(p.selected_source_ids);
+  for (const id of ['tn_ecf_choices', 'ssa_disability', 'state_hcbs_waivers', 'tn_benefits', 'united_way_211']) {
+    assert.ok(sel.has(id), `${id} serves an unnamed disability and must still run`);
+  }
+  // She is also a caregiver (`family_life.caregiver = true`); that lane stands.
+  assert.ok(sel.has('acl_family_caregiver_support'));
+});
+
+test('a NAMED condition keeps its lane, from conditions OR support', () => {
+  const kidney = plan(withHealth(['chronic kidney disease']));
+  assert.ok(kidney.selected_source_ids.includes('american_kidney_fund'));
+  assert.ok(!kidney.selected_source_ids.includes('autism_speaks_family_support'));
+  // Dr. John Robert White carries `arthritis` in health_SUPPORT, not conditions.
+  const arthritis = plan(withHealth(['arthritis', 'transportation']));
+  assert.ok(arthritis.selected_source_ids.includes('arthritis_foundation_help'));
+  assert.ok(arthritis.selected_source_ids.includes('mercy_medical_angels'));
+});
+
+test('MISSING is NEUTRAL — a thesis that never carried the fact is not gated', () => {
+  // A hand-built or cross-profile thesis supplies no health terms at all. That
+  // is silence, not "declares nothing", so every lane is selected as before.
+  const absent = plan(anastasiaThesis());
+  assert.ok(absent.selected_source_ids.includes('american_kidney_fund'));
+  const empty = plan(withHealth([]));
+  assert.ok(!empty.selected_source_ids.includes('american_kidney_fund'));
+});
+
+test('the exclusion is RECORDED and explainable', () => {
+  const p = plan(withHealth(['disability']));
+  const d = p.source_decisions.find((x) => x.source_id === 'american_kidney_fund');
+  assert.equal(d.selected, false);
+  assert.ok(d.reasons.includes('condition_not_declared'));
+});
+
+test('ONLY disease_specific lanes are gated', () => {
+  const gated = plan(withHealth([]));
+  const ungated = plan(anastasiaThesis());
+  const diff = ungated.selected_source_ids.filter((id) => !gated.selected_source_ids.includes(id));
+  for (const id of diff) {
+    assert.ok(isDiseaseSpecificSource(id), `${id} is not a disease lane and must not be gated`);
+  }
+});
+
+test('the condition vocabulary is the CURATED keywords, never need_categories', () => {
+  // Gilbert McCosh's real declared term. `need_categories` on
+  // american_kidney_fund / amputee_coalition / arthritis_foundation is
+  // `disability`, which sits whole inside "cognitive disability (f70)" — so
+  // reading need_categories here would hand a cognitive-disability profile the
+  // kidney fund and the amputee coalition. Their curated KEYWORDS say
+  // "chronic kidney disease"/"dialysis" and "amputee"/"prosthesis", which is
+  // what a condition lane actually serves. (#937, one level up.)
+  const p = plan(anastasiaThesis({ declared_health_terms: ['cognitive disability (f70)'] }));
+  const sel = new Set(p.selected_source_ids);
+  for (const id of ['american_kidney_fund', 'amputee_coalition_resources', 'arthritis_foundation_help', 'reeve_foundation_paralysis']) {
+    assert.ok(!sel.has(id), `${id} must not be claimed by a need_categories collision`);
   }
 });

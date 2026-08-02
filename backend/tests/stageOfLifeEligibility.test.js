@@ -337,6 +337,23 @@ describe('stageOfLifeConflict — the gate refuses, and only on a declaration', 
     })
   }
 
+  it('does not undo the ECF CHOICES caregiver path #1086 repaired', () => {
+    // She IS a caregiver (`family_life.caregiver = true`, translating and
+    // advocating for her grandparents). The real tn_ecf_choices rows declare
+    // no academic stage at all, so this gate must have nothing to say about
+    // them — a stage rule that quietly re-broke the caregiver lane would cost
+    // two owner-verified profiles their coverage for the second time in a day.
+    const ecf = row({
+      id: 'row-ecf', title: 'ECF CHOICES — Essential Family Supports',
+      sponsor: 'Tennessee Division of TennCare',
+      description: 'Employment and Community First CHOICES supports for people with intellectual and developmental disabilities and their family caregivers.',
+      source_url: 'https://www.tn.gov/tenncare/long-term-services-supports/employment-and-community-first-choices.html',
+      application_url: 'https://www.tn.gov/tenncare/',
+    })
+    expect(stageOfLifeConflict(HS, ecf)).toBeNull()
+    expect(stageOfLifeConflictForSections(ANASTASIA, ecf)).toBeNull()
+  })
+
   it('SILENCE IS NEVER A DENIAL — a row that states no stage is untouched', () => {
     expect(stageOfLifeConflict(HS, { title: 'Bradley County Bar Association Scholarship', sponsor: 'Cleveland State Foundation' })).toBeNull()
     expect(stageOfLifeConflict(HS, {})).toBeNull()

@@ -1162,6 +1162,15 @@ export function buildThesis(profile = {}) {
     // The derived-fact set with provenance, carried through so LANE SELECTION
     // (planner.plan) reads the same derivation the query builder does.
     derived_facts: profile?.derived_facts ?? null,
+    // The profile's DECLARED health vocabulary (conditions ∪ support), so a
+    // CONDITION lane can be asked for a condition rather than firing on a
+    // coarse `disability` need. Empty when the profile names nothing.
+    // MISSING = NEUTRAL: `null` (not `[]`) when the caller never supplied the
+    // fact, so the planner's condition gate stays quiet for a hand-built or
+    // cross-profile thesis instead of reading absence as "declares nothing".
+    declared_health_terms: Array.isArray(profile?.declared_health_terms)
+      ? profile.declared_health_terms.map((t) => String(t ?? '').trim()).filter(Boolean)
+      : null,
     // Which high-precision identity phrases (if any) pulled in an applicant
     // bucket from free text — surfaced so the crawler-plan explainer / Anya can
     // show WHY a source fired (e.g. "FEMA AFG fired because the mission text
