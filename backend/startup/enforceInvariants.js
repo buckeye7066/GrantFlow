@@ -7852,6 +7852,298 @@ export async function enforceStudentAidInStateRecall(db) {
   })
 }
 
+/**
+ * INVARIANT: LOCAL CRISIS HELP THAT ALREADY EXISTS REACHES THE HOUSEHOLD IN
+ * THAT COUNTY ("found but never surfaced" — the other half of the persona
+ * failure; #1095 adds the missing source LANES, this net surfaces the rows the
+ * catalog already holds).
+ *
+ * Measured read-only in prod, 2026-08-02T04:59Z. 416 active eviction/rental
+ * rows carry 16 match rows between them; homelessness 282→13, utilities
+ * 252→22, food 176→9, foreclosure 95→30. The concrete pair: Hollie Machelle
+ * Knox (family, North Ridgeville OH 44039 = Lorain County, declared need
+ * `housing`) vs "Love INC Lorain County – Emergency Housing & Rent Assistance".
+ * The REAL `computeMatchDecision` returns **ACCEPT 100** and the match store
+ * held NO ROW — NEVER SCORED, not scored-and-rejected. Seven more of her
+ * county's awardable rows sat in the same state (HEAP 69, CHIP 62, Catholic
+ * Charities Housing Services 50, the county Children & Families Mini Grant 55).
+ * What DID reach her were three findhelp / USA.gov / HUD DIRECTORY pointers.
+ *
+ * WHY NOTHING RE-FINDS THEM: `crawlerOsPersistenceCore.persistRun` DELETEs a
+ * profile's `crawler-os` / `crawler-os-xmatch` rows every run and re-inserts
+ * only what THAT run re-produced. A row discovered on another day, for another
+ * profile in the same county, is never re-offered. Her three surviving matches
+ * are all `crawler-os`. Do NOT "fix" that by making the reconcile keep rows —
+ * the snapshot protects the matches view from stale/ineligible rows by design.
+ * The fix is a linkage gate with its own matcher_version, which the reconcile's
+ * DELETE does not name.
+ *
+ * THE KEY IS A REAL PLACE. Measured with the real engine on real prod pairs:
+ *
+ *   bare in-state (fo.state = profile state)      11,628 candidate rows
+ *   county TOKEN + state                             369 scanned
+ *   county PHRASE "<County> County" + state           280 scanned
+ *   …+ row serves a need the profile DECLARES          41 scanned → 21 linked
+ *
+ * Bare in-state was measured at 5,393 / 6,210 / 218 links in three earlier
+ * attempts and rejected every time. Three independent conditions make
+ * cross-state leakage (the Raleigh County WV → Raleigh NC class) impossible:
+ * the phrase is "<County> County" and a City-of-Raleigh grant never writes it;
+ * `fo.state` must equal the profile's state; and a title declaring its own
+ * state in the canonical `"<Place>, XX — "` shape must declare THIS state.
+ *
+ * PRECISION, NOT VOLUME. Only ACCEPT is written — a REVIEW is the locator band
+ * and pointers already flood these households (`isPointerKind` rows are
+ * excluded from the candidate set outright). A person facing eviction who
+ * receives an Eldercare Locator is worse served than one who receives nothing.
+ *
+ * The gate authorizes a LOOK; `computeMatchDecision` still decides. Bounded by
+ * COUNTY_CRISIS_LINK_LIMIT (500/boot); ENFORCE_COUNTY_CRISIS_RECALL=0 for
+ * count-only.
+ */
+export async function enforceCountyCrisisNeedRecall(db) {
+  return runInvariant('county_crisis_need_recall', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id') || !matchCols.has('matcher_version')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let deriveProfileFacts, crisis, normalizeOpportunity, isPointerKind
+    let normalizeNeedCategory, NEED_ALIAS_MAP
+    try {
+      ;({ deriveProfileFacts } = await import('../config/profileDerivedFacts.js'))
+      crisis = await import('../config/crisisNeedRecall.js')
+      ;({ normalizeOpportunity } = await import('../services/matchEngine.js'))
+      ;({ isPointerKind } = await import('../config/opportunityKindClasses.js'))
+      ;({ normalizeNeedCategory, NEED_ALIAS_MAP } = await import('../services/profileNormalizer.js'))
+    } catch (err) {
+      log.warn('county_crisis_need_recall: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+
+    const isPg = (db?.dialect || 'sqlite') === 'postgres'
+    const trueLit = isPg ? 'TRUE' : '1'
+    const nowFn = isPg ? 'now()' : 'CURRENT_TIMESTAMP'
+    const writeLimit = _boundedLimit('COUNTY_CRISIS_LINK_LIMIT', 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_COUNTY_CRISIS_RECALL) === false
+
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('county_crisis_need_recall: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+
+    let scanned = 0
+    let linked = 0
+    let rejectedByEngine = 0
+    let adjudicatedOut = 0
+    let needMiss = 0
+    let unscorable = 0
+    let profilesEligible = 0
+    let truncated = false
+    const wouldLink = []
+    const examples = []
+    // Every profile examined, with the anchor it CURRENTLY has (null when the
+    // profile no longer qualifies), so convergence re-adjudicates existing links
+    // against the profile's own facts — NOT against the candidate set, which
+    // excludes already-linked rows and would delete every link next boot.
+    const anchorByProfile = new Map()
+
+    for (const row of profileIds || []) {
+      if (linked + wouldLink.length >= writeLimit) { truncated = true; break }
+      const profileId = row.id
+      const ctx = await _loadProfileContextForInvariant(db, profileId)
+      if (!ctx) continue
+      let anchor = null
+      let crisisNeeds = new Set()
+      try {
+        const facts = deriveProfileFacts(ctx.profile, ctx.sections)
+        anchor = crisis.resolveProfileCountyAnchor(facts?.place)
+        // DECLARED, not inferred: `normalizeProfile().needCategories` returns a
+        // type-shaped fallback for an EMPTY household profile, and
+        // `signals.needs` mints a need from its own DENIAL (the #1095 class).
+        crisisNeeds = crisis.declaredCrisisNeeds(ctx.profile, ctx.sections, normalizeNeedCategory, NEED_ALIAS_MAP)
+      } catch { anchor = null }
+      // A CRISIS need and a REAL county are BOTH required. A profile that
+      // states neither loses nothing; a profile that states only a state gets
+      // nothing from this gate (bare in-state is the measured flood).
+      const qualifies = Boolean(anchor) && crisisNeeds.size > 0
+      anchorByProfile.set(profileId, qualifies ? anchor : null)
+      if (!qualifies) continue
+      profilesEligible += 1
+
+      const like = crisis.countyLikePattern(anchor.county)
+      if (!like) continue
+      let candidates
+      try {
+        candidates = await db
+          .prepare(
+            `SELECT fo.* FROM funding_opportunities fo
+              WHERE (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+                AND UPPER(COALESCE(fo.state,'')) = ?
+                AND (LOWER(COALESCE(fo.title,'')) LIKE ? OR LOWER(COALESCE(fo.sponsor,'')) LIKE ?)
+                AND NOT EXISTS (
+                  SELECT 1 FROM profile_opportunity_matches m
+                   WHERE m.profile_id = ? AND m.opportunity_id = fo.id
+                )
+              ORDER BY fo.created_at
+              LIMIT ?`,
+          )
+          .all(anchor.state, like, like, profileId, writeLimit)
+      } catch (err) {
+        log.warn('county_crisis_need_recall: candidate query failed (non-fatal)', {
+          profile: profileId, error: String(err?.message || err),
+        })
+        continue
+      }
+
+      for (const opp of candidates || []) {
+        // TOKEN-BOUNDARY adjudication of the LIKE superset, read from the row's
+        // own IDENTITY fields only (title + sponsor), plus the declared-state
+        // refusal that makes the Raleigh WV / Raleigh NC leak impossible.
+        if (!crisis.rowNamesProfileCounty(opp, anchor.county, anchor.state)) { adjudicatedOut += 1; continue }
+        // A pointer promises a place to look, never an award, and these
+        // households are already drowning in pointers.
+        if (isPointerKind(opp.opportunity_kind)) { adjudicatedOut += 1; continue }
+        let oppNorm = null
+        try { oppNorm = normalizeOpportunity(opp) } catch { oppNorm = null }
+        if (!crisis.rowServesCrisisNeed(oppNorm?.needTypesSupported, crisisNeeds)) { needMiss += 1; continue }
+        scanned += 1
+        let decision
+        try {
+          decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections })
+        } catch (err) {
+          unscorable += 1
+          log.warn('county_crisis_need_recall: scoring failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+          continue
+        }
+        // ACCEPT ONLY. REVIEW is the locator/recommendation band and this gate
+        // exists to surface AWARDABLE local help, not more things to look at.
+        if (String(decision?.decision ?? '').toUpperCase() !== 'ACCEPT') { rejectedByEngine += 1; continue }
+        const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
+        if (score === null) { unscorable += 1; continue }
+
+        if (countOnly) {
+          wouldLink.push({ profileId, opportunityId: opp.id })
+          if (examples.length < 3) examples.push(`${opp.title} (${anchor.county} County ${anchor.state}, ACCEPT ${score})`)
+          continue
+        }
+        try {
+          const res = await db
+            .prepare(
+              `INSERT INTO profile_opportunity_matches
+                 (id, profile_id, opportunity_id, match_score, match_decision, match_explanation,
+                  match_reasons, match_explain_json, source_query, discovered_via, matcher_version,
+                  computed_at, updated_at, evaluated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'county-crisis-need-link', ${nowFn}, ${nowFn}, ${nowFn})
+               ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+            )
+            .run(
+              `cc:${profileId}:${opp.id}`, profileId, opp.id, score, 'accept',
+              decision?.explanation ?? null,
+              JSON.stringify(decision?.matchedNeeds ?? []),
+              JSON.stringify({
+                gate: 'county_crisis_need',
+                county: anchor.county,
+                state: anchor.state,
+                anchor_via: anchor.via,
+                needs: [...crisisNeeds],
+                evidence: 'basic_information.location',
+              }),
+              null, 'county_crisis_need',
+            )
+          const wrote = changesOf(res)
+          if (wrote > 0) {
+            linked += 1
+            if (examples.length < 3) examples.push(`${opp.title} (${anchor.county} County ${anchor.state}, ACCEPT ${score})`)
+          }
+        } catch (err) {
+          log.warn('county_crisis_need_recall: insert failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+        }
+      }
+    }
+
+    // CONVERGENCE: the household moved county, stopped declaring a crisis need,
+    // or the row was deactivated → the gate no longer authorizes the link.
+    // Skipped on a truncated pass so a bound-limited boot never deletes what it
+    // never re-derived.
+    let stale = 0
+    if (!countOnly && !truncated) {
+      for (const [profileId, anchor] of anchorByProfile) {
+        try {
+          const existing = await db
+            .prepare(
+              `SELECT m.id, fo.title, fo.sponsor, fo.is_active
+                 FROM profile_opportunity_matches m
+                 LEFT JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+                WHERE m.profile_id = ? AND m.matcher_version = 'county-crisis-need-link'`,
+            )
+            .all(profileId)
+          const doomed = (existing || [])
+            .filter((r) => {
+              if (!anchor) return true
+              if (r.title === null && r.sponsor === null) return true
+              if (!(r.is_active === null || r.is_active === undefined || r.is_active === 1 || r.is_active === true)) return true
+              return !crisis.rowNamesProfileCounty(r, anchor.county, anchor.state)
+            })
+            .map((r) => r.id)
+          for (let i = 0; i < doomed.length; i += 200) {
+            const slice = doomed.slice(i, i + 200)
+            const ph = slice.map(() => '?').join(', ')
+            const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+            stale += changesOf(res) || slice.length
+          }
+        } catch { /* convergence is best-effort; never fails the sweep */ }
+      }
+    }
+
+    if (countOnly) {
+      if (wouldLink.length > 0) {
+        log.warn('local crisis help is not reaching the household in that county (linking DISABLED via ENFORCE_COUNTY_CRISIS_RECALL=0)', {
+          wouldLink: wouldLink.length, scanned, profilesEligible, examples,
+        })
+      }
+      return {
+        scanned,
+        repaired: 0,
+        wouldRepair: wouldLink.length,
+        profilesEligible,
+        rejectedByEngine,
+        adjudicatedOut,
+        needMiss,
+        truncated,
+        enforced: false,
+      }
+    }
+    if (linked > 0 || stale > 0) {
+      log.info('linked households to their own county\'s crisis help', {
+        linked, stale, scanned, profilesEligible, rejectedByEngine, adjudicatedOut, needMiss, unscorable, examples,
+      })
+    }
+    return {
+      scanned,
+      repaired: linked,
+      stale,
+      profilesEligible,
+      rejectedByEngine,
+      adjudicatedOut,
+      needMiss,
+      unscorable,
+      truncated,
+      enforced: true,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -7967,6 +8259,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // stage-scope purge immediately below is what holds everything it (and every
   // other producer) surfaced to the academic-stage bar.
   steps.push(await enforceStudentAidInStateRecall(db))
+  // RECALL net for the OTHER half of the fleet: a household in crisis. Keyed on
+  // the profile's own COUNTY (declared, or ZIP-derived and city-corroborated)
+  // plus a crisis need the profile DECLARES, so already-catalogued local help
+  // reaches the person it was written for. Sits with the other linkage gates so
+  // the rows it adds are held to the scope/hygiene bars in the SAME boot.
+  steps.push(await enforceCountyCrisisNeedRecall(db))
   // ACADEMIC-STAGE scope net: remove surfaced awards the profile's derived stage
   // provably cannot receive (graduate/professional, postdoctoral, adult
   // reentry). Runs immediately AFTER the recall gates so anything they added

@@ -17,6 +17,7 @@ describe('matchSurfacing — surfaced matcher versions', () => {
       'profile-discovery-link',
       'field-of-study-link',
       'student-aid-instate-link',
+      'county-crisis-need-link',
     ])
   })
 
@@ -59,9 +60,18 @@ describe('matchSurfacing — surfaced matcher versions', () => {
     expect(SURFACED_MATCHER_VERSIONS).toContain('student-aid-instate-link')
   })
 
+  it('county-crisis-need-link must be surfaced — the household\'s OWN county\'s help', () => {
+    // Prod 2026-08-02: 416 active eviction/rental rows carried 16 match rows
+    // between them, and a family in Lorain County OH had NO row at all for
+    // "Love INC Lorain County — Emergency Housing & Rent Assistance", which
+    // replays as ACCEPT 100. Persisting under a reconcile-surviving version
+    // and then not reading it back would repeat the web-llm regression exactly.
+    expect(SURFACED_MATCHER_VERSIONS).toContain('county-crisis-need-link')
+  })
+
   it('builds a valid SQL IN() fragment from the constant', () => {
     expect(SURFACED_MATCHER_VERSIONS_SQL).toBe(
-      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link')",
+      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link','county-crisis-need-link')",
     )
     // Round-trip: fragment lists exactly the same versions, quoted.
     for (const v of SURFACED_MATCHER_VERSIONS) {

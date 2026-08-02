@@ -1134,8 +1134,9 @@ describe('enforceInvariants — runner', () => {
     // + the recorded-discovery-provenance RECALL net
     // + the declared-field-of-study RECALL net
     // + the stage-of-life eligibility nets (#1093)
-    // + the unconfigured-profile geography net here.
-    expect(summary.ran).toBe(48)
+    // + the unconfigured-profile geography net (#1094)
+    // + the county/crisis-need RECALL net (local help that already exists) here.
+    expect(summary.ran).toBe(49)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1179,6 +1180,9 @@ describe('enforceInvariants — runner', () => {
       'profile_discovered_catalog_linkage',
       'declared_field_of_study_recall',
       'student_aid_instate_recall',
+      // The same class for the OTHER half of the fleet: a household in crisis
+      // and the local help its own county already holds in the catalog.
+      'county_crisis_need_recall',
       'stage_of_life_match_scope',
       'no_dangling_matches',
       // RESULT FLOOR census (owner rule 2026-08-01, third clause). After every
