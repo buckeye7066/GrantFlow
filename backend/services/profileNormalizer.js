@@ -810,11 +810,25 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     }
   }
 
+  // A FAMILY/HOUSEHOLD profile's education section describes the CHILDREN, not
+  // the applicant (the homeschool_family class, 2026-08-02). The synthetic
+  // homeschool parent declares education.highest_level 'homeschool (K-12)', and
+  // the section heuristic above promoted the PARENT to an enrolled student —
+  // so matchEngine's non-student × student-aid cap never fired and
+  // enrolled-student aid could ACCEPT for a profile that cannot receive it
+  // (Amy's ineligible_match ×2, 2026-08-01 cohort). The applicant on a
+  // family-type profile is the parent: only an explicit top-level
+  // is_student=true or a student-typed profile makes it a student. Student
+  // ADJACENCY is untouched — matchEngine.isStudentAdjacent still sees the
+  // education section, so requires_student aid for a family with an enrolled
+  // child is held at REVIEW, never hard-rejected.
+  const isFamilyHouseholdType = /famil|household/.test(String(rawType ?? '').toLowerCase())
+
   const isStudent =
     asBoolNullable(profile.is_student) === true ||
     entityType === 'student' ||
     String(rawType ?? '').toLowerCase().includes('student') ||
-    isStudentFromSections
+    (isStudentFromSections && !isFamilyHouseholdType)
 
   // -- Nonprofit status --
   // Includes volunteer fire departments, EMS organizations, churches, ministries, and

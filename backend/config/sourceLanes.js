@@ -200,6 +200,7 @@ export const LANE_OF_SOURCE = Object.freeze({
   alzheimers_gov_services: 'disease_specific',
   // Copay/patient-assistance foundation finder (diagnosis-based aid).
   copay_assistance_foundations: 'disease_specific',
+  mda_neuromuscular_resources: 'disease_specific',
   // Mobility-impairment + neurodivergent lanes (adapter wishlist 2026-07-08);
   // registry `keywords` feed conditionCoveredBySource for gap detection.
   reeve_foundation_paralysis: 'disease_specific',

@@ -161,6 +161,9 @@ const FACTORIES = Object.freeze({
   amputee_coalition_resources: officialDirectory('amputee_coalition_resources'),
   nord_rare_disease_assistance: officialDirectory('nord_rare_disease_assistance'),
   caringinfo_serious_illness: officialDirectory('caringinfo_serious_illness'),
+  // --- Adapter-wishlist lane (2026-08-02): neuromuscular / claw-hand class
+  //     ("clawing effect in hands" → Charcot-Marie-Tooth / ulnar nerve palsy).
+  mda_neuromuscular_resources: officialDirectory('mda_neuromuscular_resources'),
   // --- Benchmark-gap lanes (2026-07-13): kinship/grandfamily caregivers,
   //     heirs'-property / beginning farmers, homeschool families.
   acl_family_caregiver_support: officialDirectory('acl_family_caregiver_support'),

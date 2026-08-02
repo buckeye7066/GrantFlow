@@ -118,6 +118,11 @@ const NEED_KEYWORDS = {
   // matched, so 'retina'/'anoxic' are precise; 'tbi' matches only as a token.
   vision_support: ['blind', 'blindness', 'visual impairment', 'visually impaired', 'low vision', 'vision loss', 'legally blind', 'macular degeneration', 'retina', 'retinal', 'retinopathy', 'glaucoma'],
   brain_injury_support: ['brain injury', 'traumatic brain injury', 'acquired brain injury', 'anoxic brain injury', 'anoxic', 'hypoxic', 'tbi', 'concussion', 'post-concussion'],
+  // Neuromuscular / claw-hand lane (2026-08-02 adapter wishlist): 'clawing' /
+  // 'claw hand' are the symptom forms real profiles type — clawing of the
+  // hands is the textbook presentation of Charcot-Marie-Tooth / ulnar nerve
+  // palsy. Whole-word matched, so 'neuropathy'/'clawing' are precise.
+  neuromuscular_support: ['neuromuscular', 'muscular dystrophy', 'charcot-marie-tooth', 'charcot marie tooth', 'neuropathy', 'peripheral neuropathy', 'claw hand', 'clawing', 'ulnar nerve', 'nerve palsy', 'foot drop', 'myasthenia gravis', 'spinal muscular atrophy'],
   black_lung_benefits: ['black lung', 'coal miner widow', 'coal miner survivor', 'miner survivor', 'coal miner benefits'],
   animal_welfare: ['animal shelter', 'animal rescue', 'animal welfare', 'humane society', 'spay', 'neuter', 'veterinary assistance'],
   domestic_violence: ['domestic violence', 'family violence', 'dv shelter', 'victim services', 'vawa', 'survivor advocacy'],
@@ -795,6 +800,7 @@ const NEED_IMPLICATIONS = Object.freeze({
   dementia_support: ['medical', 'caregiving'],
   vision_support: ['medical', 'disability'],
   brain_injury_support: ['medical', 'disability', 'caregiving'],
+  neuromuscular_support: ['medical', 'disability'],
   black_lung_benefits: ['medical', 'survivor_benefits'],
   veteran_startup: ['startup'],
   military_startup: ['startup'],

@@ -2052,6 +2052,40 @@ export const SOURCES = Object.freeze([
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
   },
+  {
+    // Adapter-wishlist lane (2026-08-02): "clawing effect in hands" — symptom
+    // prose a profile typed into a diagnosis field. The 2026-07-26 pass left it
+    // an HONEST gap because symptom prose cannot be auto-mapped to a lane; this
+    // entry is the human adjudication that closes it: clawing of the hands
+    // ("claw hand") is the textbook presentation of Charcot-Marie-Tooth
+    // disease and ulnar nerve palsy — neuromuscular / peripheral-nerve
+    // conditions the Muscular Dystrophy Association serves (MDA's covered
+    // diseases explicitly include CMT). URL verified live 2026-08-02
+    // (curl -L → 200 with BOTH a browser UA and the plain fetcher UA; the page
+    // names Charcot-Marie-Tooth, neuromuscular, and the MDA Resource Center).
+    // cmtausa.org was considered and REJECTED as a base URL: it answers 403 to
+    // non-browser fetchers (the ryanwhite.hrsa.gov WAF class above).
+    source_id: 'mda_neuromuscular_resources',
+    name: 'Muscular Dystrophy Association — services & resource center',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://www.mda.org/services',
+    sponsor_name: 'Muscular Dystrophy Association',
+    resource_title: 'MDA services & resource center (neuromuscular disease)',
+    resource_summary: 'Muscular Dystrophy Association services for people living with neuromuscular diseases (muscular dystrophy, ALS, Charcot-Marie-Tooth, myasthenia gravis, spinal muscular atrophy): the MDA Resource Center, care-center network, and equipment/resource guidance. A support directory, not a direct award.',
+    // Curated match vocabulary (see cancer_care). 'claw hand' / 'clawing' are
+    // the symptom forms real profiles type (the 'diabetic' rule: carry the
+    // form people write — token matching does not stem); 'als support'
+    // carries the sub-4-char token via the reverse direction (the hiv/tbi
+    // rule above).
+    keywords: ['neuromuscular', 'muscular dystrophy', 'charcot-marie-tooth', 'charcot marie tooth', 'peripheral neuropathy', 'neuropathy', 'claw hand', 'clawing', 'ulnar nerve', 'nerve palsy', 'foot drop', 'myasthenia gravis', 'spinal muscular atrophy', 'als support', 'amyotrophic lateral sclerosis'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['neuromuscular_support', 'disability', 'medical'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
+  },
   // ── Benchmark-gap lanes (2026-07-13). Structural gaps surfaced by the
   //    12-persona stress cohort: kinship/grandfamily caregivers, heirs'-property
   //    / beginning farmers, and homeschool families had NO dedicated lane. All
