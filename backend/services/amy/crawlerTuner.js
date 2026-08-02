@@ -453,7 +453,13 @@ export function buildApprovalQueue(evaluations = []) {
         category,
         severity: target.severity,
         rationale: `${bucket.profiles} "${category}" profile(s) declared something the results never referenced (${type}). ${target.hint}${subjects.length ? ` Missed subject(s): ${subjects.join(', ')}.` : ''}`,
-        evidence: { profiles: bucket.profiles, finding_type: type, missed_subjects: subjects },
+        // `subjects` is the CANONICAL evidence key: `buildCodeBrief` reads
+        // `evidence.subjects`, and the registry-driven totality pass below
+        // emits the same key. This branch wrote `missed_subjects`, which
+        // NOTHING read — so once these classes became CODE_CHANGE the owner
+        // would have received a brief with an empty subject list: "some student
+        // profiles missed something", with no school ever named.
+        evidence: { profiles: bucket.profiles, finding_type: type, subjects },
         requires_approval: true,
       })
     }

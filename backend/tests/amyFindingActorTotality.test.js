@@ -201,13 +201,37 @@ describe('buildApprovalQueue now emits an item for EVERY emitted class', () => {
   })
 
   it('does NOT attach a brief to an AUTO item — that is Amy\'s own work', () => {
+    // URL_INVALID -> url_hygiene, which is genuinely AUTO: Amy repairs a dead
+    // link herself and the change is bounded and reversible. This used to use
+    // INSTITUTION_RECALL_MISS, but that class was reclassified from
+    // `archetype_query_learning` (AUTO) to `query_breadth` (CODE_CHANGE) —
+    // its data-side lever ran 21 of 21 days and never closed the finding, so
+    // calling it AUTO was the green-while-doing-nothing anti-pattern.
     const items = buildApprovalQueue([
-      evalWithFinding(FINDING_TYPES.INSTITUTION_RECALL_MISS, 'student', { schools: ['X University'] }),
+      evalWithFinding(FINDING_TYPES.URL_INVALID, 'student', { urls: ['https://example.org/dead'] }),
     ])
-    const item = items.find((i) => itemFindingType(i) === FINDING_TYPES.INSTITUTION_RECALL_MISS)
+    const item = items.find((i) => itemFindingType(i) === FINDING_TYPES.URL_INVALID)
     expect(item.actionability).toBe(ACTIONABILITY.AUTO)
     expect(item.requires_approval).toBe(false)
     expect(item.code_brief).toBeUndefined()
+  })
+
+  it('a reclassified recall miss DOES carry a brief, and the brief names the schools', () => {
+    // The reconciliation regression: #1097 declared these AUTO in the registry
+    // while #1095's runtime branch emitted them as `query_breadth`. Whichever
+    // way that fork is resolved, the registry and the runtime must AGREE — the
+    // it.each above asserts that for every class. This pins the resolution
+    // itself, plus the evidence-key bug it exposed (`missed_subjects` was
+    // written but `buildCodeBrief` reads `subjects`, so the brief was empty).
+    const items = buildApprovalQueue([
+      evalWithFinding(FINDING_TYPES.INSTITUTION_RECALL_MISS, 'student', { schools: ['West Virginia University'] }),
+    ])
+    const item = items.find((i) => itemFindingType(i) === FINDING_TYPES.INSTITUTION_RECALL_MISS)
+    expect(item.lever).toBe('query_breadth')
+    expect(item.actionability).toBe(ACTIONABILITY.CODE_CHANGE)
+    expect(item.code_brief).toBeTruthy()
+    expect(item.code_brief.subjects).toContain('West Virginia University')
+    expect(item.code_brief.patch_authored_by_amy).toBe(false)
   })
 
   it('emits NOTHING for a class no detector produces', () => {
