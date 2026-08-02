@@ -108,6 +108,64 @@ export const LEVER_REGISTRY = Object.freeze({
     surface: null,
     why: 'A failing adapter needs adapter/retry/API-key work in the source registry. Amy cannot write an adapter, so no approval can close this item.',
   }),
+
+  // ── Levers for the finding classes that had NO actor at all (2026-08-02) ──
+  // `buildApprovalQueue` read five evaluation fields and never `e.findings`, so
+  // nine of the seventeen declared finding classes could not produce an item,
+  // acquire a lever, or enter this ledger. `findingActorRegistry.js` is the
+  // total map; these are the levers it names. Every one declares a SURFACE
+  // class there, and `assertAutonomyBoundary()` refuses AUTO on the forbidden
+  // surfaces (matching logic / eligibility / scoring math / security).
+  archetype_query_learning: Object.freeze({
+    actionability: ACTIONABILITY.AUTO,
+    surface: 'amyAgent applyLearning (archetypeLearning saveArchetypeLearning) — a bounded, whitelisted gap class recorded per archetype and consumed by crawlerOsService.attachLearnedGaps → buildWebQueries on the next crawl; cleared automatically when the archetype stops proving the weakness',
+    why: null,
+  }),
+  score_floor: Object.freeze({
+    actionability: ACTIONABILITY.AUTO,
+    surface: 'amyAgent applyTuning (decideFloorChange + scoringTuning) — swept over the whole cohort before it is applied, hard-clamped at DISCOVERY_MIN_SCORE_FLOOR so it can never widen the gate below the product standard; env AMY_APPLY_TUNING=0 disables',
+    why: null,
+  }),
+  url_hygiene: Object.freeze({
+    actionability: ACTIONABILITY.AUTO,
+    surface: 'enforceApplicationUrlRescue (backend/startup/enforceInvariants.js) — a standing, bounded boot sweep that finds a real liveness-verified URL or leaves the row alone; ENFORCE_URL_RESCUE=0 for count-only',
+    why: null,
+  }),
+  query_breadth: Object.freeze({
+    actionability: ACTIONABILITY.CODE_CHANGE,
+    surface: null,
+    why: 'buildWebQueries is code. The DATA-side half of this lever is archetype_query_learning, which Amy does apply herself; a class that keeps firing after the steering store has been recording it for weeks is evidence the QUERY BUILDER needs the change, and no approval can make that edit.',
+  }),
+  amount_adapter: Object.freeze({
+    actionability: ACTIONABILITY.CODE_CHANGE,
+    surface: null,
+    why: 'Either a source adapter (services/sources/amountAdapters.js) or a new per-award phrasing in awardAmountExtractor. Both are code, and both must stay conservative — a wrong phrasing invents a dollar figure, which is worse than none.',
+  }),
+  profile_field_mapping: Object.freeze({
+    actionability: ACTIONABILITY.CODE_CHANGE,
+    surface: null,
+    why: 'A profile signal that never reaches the thesis is a wiring defect between the profile schema and the thesis builder. No data knob can route a field that is not read.',
+  }),
+  geo_scope: Object.freeze({
+    actionability: ACTIONABILITY.CODE_CHANGE,
+    surface: null,
+    why: 'Geographic scoping is match-engine decision logic. It is on the autonomy denylist: widening a geo gate to close a gap is precisely the "close a gap by widening a gate" move that produced 5,393 junk geo links this week.',
+  }),
+  crawler_hardening: Object.freeze({
+    actionability: ACTIONABILITY.CODE_CHANGE,
+    surface: null,
+    why: 'A discovery exception for a profile shape needs the pipeline hardened against that shape. Amy can reproduce it; she cannot write the guard.',
+  }),
+  probe_harness: Object.freeze({
+    actionability: ACTIONABILITY.CODE_CHANGE,
+    surface: null,
+    why: 'Discovery refusing to run for a SYNTHETIC profile is a defect in Amy\'s own harness (profile lifecycle/status), not in the crawlers. It is reported separately so it can never be mistaken for a coverage gap.',
+  }),
+  relevance_policy: Object.freeze({
+    actionability: ACTIONABILITY.CODE_CHANGE,
+    surface: null,
+    why: 'Relevance policy is match-engine logic and is on the autonomy denylist.',
+  }),
 })
 
 /** Resolutions a ledger entry can terminate with. */

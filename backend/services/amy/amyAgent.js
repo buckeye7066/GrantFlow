@@ -41,6 +41,16 @@ import { createLogger } from '../../utils/logger.js'
 import { DEFAULT_MIN_SCORE, TOPICAL_EVIDENCE_STRONG_BAR } from '../../config/matchThresholds.js'
 import { newRunId, clampTtlHours } from './amyMetadata.js'
 import { generateScenarios, CATEGORY_IDS } from './syntheticProfileCatalog.js'
+import { planGapSeekingProbes, resolveCohortSplit } from './gapSeekingPlanner.js'
+import { buildIntersectionScenarios } from './intersectionScenario.js'
+import {
+  readProbeCoverage,
+  recordProbeCoverage,
+  summarizeCoverage,
+  classifyProbeOutcome,
+} from './probeCoverageLedger.js'
+import { assessConvergence } from './gapConvergence.js'
+import { countAmyProfiles, verifyAmyDeletion } from './amyDeletionProof.js'
 import { createAmyProfile, cleanupAmyProfiles, cleanupExpiredAmyProfiles, markProfileCrawled } from './amyProfileStore.js'
 import { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations } from './amyReport.js'
 import { cohortMetricsAtFloor, sweepFloors, summarizeCohort } from './crawlerMetrics.js'
@@ -192,6 +202,12 @@ export async function runAmyTraining(options = {}) {
     // what this run proved at run end. Injectable; best-effort everywhere —
     // a mesh failure must never fail a training run.
     mesh = DEFAULT_MESH,
+    // ADVERSARIAL gap-seeking cohort (owner directive 2026-08-02): part of the
+    // nightly target is spent on intersections of the probe space that have
+    // been asked about least, instead of replaying the fixed catalog.
+    // `AMY_ADVERSARIAL=0` returns the run to catalog-only.
+    adversarial = String(process.env.AMY_ADVERSARIAL ?? '1').toLowerCase() !== '0',
+    adversarialShare = null,
   } = options
 
   const startedAtDate = clock()
@@ -344,7 +360,73 @@ export async function runAmyTraining(options = {}) {
     }
   }
 
-  const scenarios = generateScenarios({ runId, categories, perCategory, targetCount, categoryWeights })
+  // ── THE COHORT: a catalog FLOOR plus ADVERSARIAL gap-seeking probes ──────
+  //
+  // Until 2026-08-02 the cohort WAS the catalog: 32 fixed archetypes, all run
+  // every night, varied only by a seeded pick from ten hard-coded cities. Prod's
+  // `by_category` histogram on 2026-08-02 is literally the catalog key list.
+  // That is a regression suite — it can only re-find holes it has already
+  // found — and every one of its archetypes is SINGLE-AXIS, so the
+  // intersections the planner actually gates on (a veteran WHO RUNS a business;
+  // a nonprofit SERVING a diagnosis) were untestable.
+  //
+  // The catalog stays, at a hard floor of one profile per category, because it
+  // is the proof that a fixed archetype STAYS fixed and breadth must never
+  // collapse in the name of exploration. Whatever the target leaves over goes
+  // to `planGapSeekingProbes`, which selects the intersections of
+  // (entity x identity x need x geography) that GrantFlow has been asked about
+  // LEAST, biased toward where holes have already clustered — see
+  // gapSeekingPlanner.js for the algorithm and probeSpace.js for the axes,
+  // every value of which is read out of a canonical registry.
+  //
+  // Bounded and reproducible: the split is env-tunable (AMY_ADVERSARIAL_SHARE),
+  // the planner is a pure function of (ledger, runId, count), and a coverage
+  // read failure degrades to the catalog alone rather than failing the run.
+  const catalogFloor = Array.isArray(categories) ? categories.length : CATEGORY_IDS.length
+  const split = resolveCohortSplit({
+    targetCount: Number(targetCount) || 0,
+    catalogCategories: catalogFloor,
+    share: adversarialShare,
+  })
+  let probeCoverage = null
+  let probePlan = { cells: [], uncovered_before: null, pairs_targeted: 0, exhausted: false }
+  if (adversarial && split.adversarial > 0) {
+    probeCoverage = await boundedAmyPreflight(
+      'probe_coverage_read',
+      () => readProbeCoverage(db),
+      { timeoutMs: 15_000, logger, fallback: null },
+    )
+    probePlan = planGapSeekingProbes({
+      ledger: probeCoverage,
+      count: split.adversarial,
+      runId,
+      now: startedAtDate,
+    })
+  }
+  // Build the PROBES FIRST, then give the catalog whatever the probes did not
+  // actually consume.
+  //
+  // The reserved share is not the same number as the built count: the lane can
+  // be off (AMY_ADVERSARIAL=0), a cell can fail to build, or a coverage read can
+  // fail. Sizing the catalog from the RESERVATION made the night silently
+  // SHRINK in every one of those cases — with the lane off, a target of 12
+  // produced 7 profiles. A cohort that quietly gets smaller is the exact
+  // "we stopped looking" failure the convergence metric exists to catch, so the
+  // catalog absorbs the slack and the nightly total is always the target.
+  const probeScenarios = buildIntersectionScenarios(probePlan.cells, { runId })
+  const catalogTarget = Number(targetCount) > 0
+    ? Math.max(0, Number(targetCount) - probeScenarios.length)
+    : targetCount
+  const catalogScenarios = generateScenarios({
+    runId,
+    categories,
+    perCategory,
+    targetCount: catalogTarget,
+    categoryWeights,
+  })
+  const scenarios = [...catalogScenarios, ...probeScenarios]
+  const scenarioById = new Map(scenarios.map((sc) => [sc.scenario_id, sc]))
+  let probeCoverageSummary = null
   const evaluations = []
   const createdProfileIds = []
   const crawledProfileIds = []
@@ -699,6 +781,21 @@ export async function runAmyTraining(options = {}) {
     },
     chain,
     approval_queue: approvalQueue,
+    // The adversarial half of the cohort: how the probes were CHOSEN, and how
+    // much of the space they retired. Present even when the lane is off, so a
+    // reader can never mistake "disabled" for "converged".
+    gap_probes: {
+      enabled: adversarial,
+      split,
+      // What was RESERVED vs what was actually BUILT vs where the slack went.
+      catalog_built: catalogScenarios.length,
+      planned: probePlan.cells.length,
+      built: probeScenarios.length,
+      uncovered_pairs_before: probePlan.uncovered_before,
+      pairs_targeted: probePlan.pairs_targeted,
+      pair_space_exhausted: probePlan.exhausted,
+      cells: probeScenarios.slice(0, 50).map((sc) => sc.probe_cell),
+    },
     amy: { summary, handoff },
   }
 
@@ -769,6 +866,122 @@ export async function runAmyTraining(options = {}) {
     }
   }
 
+  // ── PROBE COVERAGE + CONVERGENCE (2026-08-02) ───────────────────────────
+  //
+  // Fold what this run ACTUALLY asked into the durable coverage ledger, then
+  // read the convergence verdict off it. The two must happen together: a gap
+  // count that fell is meaningless without the breadth that produced it, and
+  // `assessConvergence` refuses to say "converging" unless breadth ALSO rose —
+  // the owner's own failure mode ("a shrinking gap count caused by narrower
+  // probing").
+  //
+  // ONLY the adversarial probes are folded. A catalog scenario has no cell it
+  // deliberately chose — it is the regression floor — and back-deriving one from
+  // its declared sections would credit breadth nobody selected and inflate the
+  // exact number the convergence claim rests on. Conservative by construction:
+  // breadth is what Amy DELIBERATELY went looking at, and nothing else.
+  //
+  // A skipped or thrown probe folds as UNKNOWN — it counts for breadth (we did
+  // ask) but never as clean, so a broken night cannot read as convergence.
+  if (db && !dryRunDiscovery) {
+    try {
+      const probes = []
+      for (const ev of evaluations) {
+        const scn = scenarioByProfile.get(ev.profile_id) || scenarioById.get(ev.scenario_id)
+        const cell = scn?.probe_cell
+        if (!cell) continue
+        probes.push({ cell, outcome: classifyProbeOutcome(ev) })
+      }
+      const folded = await recordProbeCoverage(db, { probes, runId, at: completedAtDate.toISOString() })
+      combined.probe_coverage = {
+        persisted: folded.persisted,
+        duplicate: folded.duplicate,
+        probes_folded: probes.length,
+        new_pairs: folded.new_pairs.length,
+        ...folded.summary,
+      }
+      probeCoverageSummary = folded.summary
+    } catch (err) {
+      logger.warn('Amy probe-coverage fold failed (non-fatal)', { error: err?.message })
+      combined.probe_coverage = { error: String(err?.message || err) }
+    }
+  }
+
+  // ── CLEANUP + DELETION PROOF (moved earlier, 2026-08-02) ────────────────
+  //
+  // THIS BLOCK USED TO RUN AFTER `saveAmyReport`. Both `combined.cleanup` and
+  // `combined.cleanup_expired` were assigned to an object that had ALREADY been
+  // written to `system_kv amy_last_report`, so the stored report — the one the
+  // admin panel and the owner's morning email read — carried `cleanup:
+  // undefined` forever. Verified read-only in prod 2026-08-02T04:50Z: the last
+  // report (run amy-2026-08-02T02-23-34-496Z, completed 03:19Z) has both keys
+  // undefined while `profiles` held 55 rows with created_by='agent:amy' out of
+  // 92 profiles total. There had never been a persisted record of what was
+  // deleted, which makes a cleanup indistinguishable from no cleanup.
+  //
+  // The sweeps themselves are UNCHANGED — the run-scoped pass, then the
+  // UNscoped expired-only pass that reaps prior runs' leftovers (the failure
+  // CLAUDE.md documents: an onlyIds scope that leaves a skipped run's rows
+  // permanently unreachable). Only the ORDER changed, plus a count-based proof.
+  //
+  // ── CLEANUP: only profiles crawled at least once; never before. ──────────
+  const amyProfilesBefore = await countAmyProfiles(db)
+  let cleanup = null
+  if (!keepProfiles) {
+    cleanup = await cleanupAmyProfiles(db, {
+      runId,
+      onlyIds: crawledProfileIds,
+      requireCrawled: true,
+      force: true,
+      now: clock(),
+    })
+  }
+  combined.cleanup = cleanup
+
+  // ── CLEANUP NET (owner directive 2026-07-06 "make sure those profiles are
+  // getting deleted afterwards"): the pass above is scoped to THIS run's
+  // crawled ids — when discovery skipped/errored for every profile the id list
+  // is EMPTY and it deletes nothing, and leftovers from PRIOR runs are
+  // permanently out of its scope (prod accumulated 13 live synthetics with a
+  // lifetime reap count of 0). This second, UNscoped expired-only pass sweeps
+  // expired synthetics from ANY run at the end of EVERY run, with all guards
+  // intact (designated / allow_sam_cleanup / synthetic / crawled + TTL escape
+  // hatch / 6h grace). The boot invariant enforceAmySyntheticExpiry is the
+  // standing net behind this per-run gate.
+  let expiredSweep = null
+  if (!keepProfiles) {
+    try {
+      expiredSweep = await cleanupExpiredAmyProfiles(db, { now: clock() })
+    } catch (err) {
+      logger.warn('Amy expired-synthetic sweep failed (non-fatal)', { error: err?.message })
+      expiredSweep = { error: String(err?.message || err), scanned: 0, deleted: 0, skipped: 0 }
+    }
+  }
+  combined.cleanup_expired = expiredSweep
+
+  // PROVE it. Counts before/after plus a scan for rows that outlived their TTL,
+  // taken from the DB rather than from what the sweeps claim. `verifyAmyDeletion`
+  // NEVER deletes — deletion stays with the one guarded sweep — and returns an
+  // honest `unknown` when a count cannot be read, never a false `proven`.
+  if (!keepProfiles) {
+    combined.deletion_proof = await verifyAmyDeletion(db, {
+      before: amyProfilesBefore,
+      runCleanup: cleanup,
+      expiredSweep,
+      created: createdProfileIds.length,
+      now: clock(),
+    })
+    if (combined.deletion_proof?.verdict === 'leaked') {
+      combined.degraded = true
+      logger.error('Amy synthetic profiles survived past TTL', {
+        run_id: runId,
+        survivors: combined.deletion_proof.expired_survivor_count,
+      })
+    }
+  } else {
+    combined.deletion_proof = { verdict: 'unknown', reasons: ['keepProfiles=true — nothing was deleted by design'] }
+  }
+
   // ── APPROVAL LEDGER (2026-08-01) ────────────────────────────────────────
   // The queue is recomputed from scratch every run and written whole over
   // `system_kv amy_approval_queue`, so nothing ever knew how OLD an item was or
@@ -807,6 +1020,25 @@ export async function runAmyTraining(options = {}) {
     }
   } else {
     combined.approval_queue = decorateApprovalQueue(approvalQueue, null)
+  }
+
+  // ── CONVERGENCE VERDICT (2026-08-02) ────────────────────────────────────
+  // "Until her profiles no longer reveal gaps" needs a metric that cannot be
+  // satisfied by looking less hard. `assessConvergence` compares gaps-per-
+  // profile across two windows of the SAME flywheel history the owner's email
+  // already shows, and will only say CONVERGING when probe breadth rose in the
+  // same period; a falling gap count on flat breadth is named NARROWED, out
+  // loud. It also lists the classes no lever can close, with the file and the
+  // human action, instead of letting them sit among "open gaps" forever.
+  // Computed AFTER the ledger fold so `nights_open` is current.
+  try {
+    combined.convergence = assessConvergence({
+      flywheel: combined.flywheel_cohort?.store ?? combined.flywheel_cohort ?? null,
+      coverage: probeCoverageSummary ?? summarizeCoverage(probeCoverage),
+      approvalQueue: combined.approval_queue,
+    })
+  } catch (err) {
+    combined.convergence = { trend: 'insufficient_history', statement: `convergence assessment failed: ${err?.message}` }
   }
 
   // Persist combined report for the admin panel (after the flywheel cohort is
@@ -854,39 +1086,6 @@ export async function runAmyTraining(options = {}) {
     }
   }
 
-  // ── CLEANUP: only profiles crawled at least once; never before. ──────────
-  let cleanup = null
-  if (!keepProfiles) {
-    cleanup = await cleanupAmyProfiles(db, {
-      runId,
-      onlyIds: crawledProfileIds,
-      requireCrawled: true,
-      force: true,
-      now: clock(),
-    })
-  }
-  combined.cleanup = cleanup
-
-  // ── CLEANUP NET (owner directive 2026-07-06 "make sure those profiles are
-  // getting deleted afterwards"): the pass above is scoped to THIS run's
-  // crawled ids — when discovery skipped/errored for every profile the id list
-  // is EMPTY and it deletes nothing, and leftovers from PRIOR runs are
-  // permanently out of its scope (prod accumulated 13 live synthetics with a
-  // lifetime reap count of 0). This second, UNscoped expired-only pass sweeps
-  // expired synthetics from ANY run at the end of EVERY run, with all guards
-  // intact (designated / allow_sam_cleanup / synthetic / crawled + TTL escape
-  // hatch / 6h grace). The boot invariant enforceAmySyntheticExpiry is the
-  // standing net behind this per-run gate.
-  let expiredSweep = null
-  if (!keepProfiles) {
-    try {
-      expiredSweep = await cleanupExpiredAmyProfiles(db, { now: clock() })
-    } catch (err) {
-      logger.warn('Amy expired-synthetic sweep failed (non-fatal)', { error: err?.message })
-      expiredSweep = { error: String(err?.message || err), scanned: 0, deleted: 0, skipped: 0 }
-    }
-  }
-  combined.cleanup_expired = expiredSweep
 
   // Agent Observability Rule: the sweep outcome must be visible to Sam + Anya,
   // not just in ephemeral run logs — emit the standard amy telemetry event.

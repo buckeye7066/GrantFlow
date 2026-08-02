@@ -18,6 +18,7 @@
 import { DISCOVERY_MIN_SCORE_FLOOR } from '../../config/matchThresholds.js'
 import { FINDING_TYPES, CODE_TARGETS, SEVERITY } from './amyConstants.js'
 import { leverActionability, ACTIONABILITY } from './approvalLedger.js'
+import { FINDING_ACTORS, actorFor } from './findingActorRegistry.js'
 
 /**
  * @param {object} args
@@ -228,6 +229,77 @@ function tally(arr, keyFn) {
 }
 
 /**
+ * The finding class an approval item is about.
+ *
+ * Prefers the explicit `finding_type` field. Falls back to the id prefix
+ * because item ids are `<something>:<category>` and several branches (here and
+ * on other open branches) already name the finding class as that prefix — the
+ * fallback is what lets the totality pass dedupe against a branch it did not
+ * write, so two independent emitters can never double-report one class.
+ */
+export function itemFindingType(item) {
+  if (item?.finding_type) return String(item.finding_type)
+  const id = String(item?.id ?? '')
+  if (!id) return null
+  for (const type of Object.keys(FINDING_ACTORS)) {
+    if (id === type || id.startsWith(`${type}:`)) return type
+  }
+  return null
+}
+
+/** Flatten one evidence value (string | string[] | object) into subject text. */
+function collectEvidenceSubjects(set, value) {
+  if (value === undefined || value === null) return
+  if (Array.isArray(value)) {
+    for (const v of value.slice(0, 6)) collectEvidenceSubjects(set, v)
+    return
+  }
+  if (typeof value === 'object') {
+    const label = value.id ?? value.name ?? value.title ?? value.source_id ?? null
+    if (label) set.add(String(label))
+    return
+  }
+  const s = String(value).trim()
+  if (s) set.add(s.slice(0, 80))
+}
+
+/**
+ * The dispatch-ready description of a code change Amy cannot make herself.
+ *
+ * HONESTY, stated once here rather than implied: Amy does NOT open this PR.
+ * The repo's agent PR path (`anyaCodeFixDispatch` → `anya-code-fix-pr.yml`)
+ * requires a validated UNIFIED DIFF, and the classes that reach this function
+ * are exactly the semantic ones — eligibility gates, match logic, adapters,
+ * field wiring. Synthesizing a patch for those would be an unreviewed guess at
+ * the surfaces the autonomy boundary explicitly forbids Amy from touching, and
+ * shipping it behind a green CI run would make the guess look verified. The
+ * brief is therefore the honest artifact: it names the file, the line, the
+ * profiles that failed, and the assertion that would prove the fix.
+ */
+export function buildCodeBrief(item) {
+  const actor = actorFor(item?.finding_type)
+  const subjects = Array.isArray(item?.evidence?.subjects) ? item.evidence.subjects : []
+  return {
+    finding_type: item?.finding_type ?? null,
+    lever: item?.lever ?? null,
+    file: item?.target_file ?? null,
+    line: item?.target_line ?? null,
+    category: item?.category ?? null,
+    failing_profiles: Number(item?.evidence?.profiles ?? item?.evidence?.zero_profiles ?? 0) || 0,
+    subjects,
+    suggested_test: item?.finding_type && item?.category
+      ? `a case asserting a "${item.category}" profile no longer produces ${item.finding_type}`
+      : null,
+    why_not_autonomous: actor
+      ? (leverActionability(item?.lever).why || 'No data-only knob can close this class.')
+      : 'No actor is declared for this finding class — see findingActorRegistry.js.',
+    // Amy authors NO patch. Say so in the artifact so a downstream reader can
+    // never infer that a PR is pending somewhere.
+    patch_authored_by_amy: false,
+  }
+}
+
+/**
  * Build the human-approval queue of deeper crawler improvements from the cohort
  * evaluations. These map systematic weaknesses to concrete files/levers.
  *
@@ -243,6 +315,7 @@ export function buildApprovalQueue(evaluations = []) {
   for (const [category, count] of Object.entries(zeroByCat)) {
     items.push({
       id: `coverage:${category}`,
+      finding_type: FINDING_TYPES.ZERO_RESULT,
       lever: 'source_keyword_coverage',
       target_file: CODE_TARGETS[FINDING_TYPES.ZERO_RESULT].file,
       category,
@@ -257,6 +330,7 @@ export function buildApprovalQueue(evaluations = []) {
   for (const [category, count] of Object.entries(fpByCat)) {
     items.push({
       id: `false_positive:${category}`,
+      finding_type: FINDING_TYPES.FALSE_POSITIVE,
       lever: 'relevance_precision',
       target_file: CODE_TARGETS[FINDING_TYPES.FALSE_POSITIVE].file,
       category,
@@ -275,6 +349,7 @@ export function buildApprovalQueue(evaluations = []) {
   for (const [category, count] of Object.entries(ineligByCat)) {
     items.push({
       id: `ineligible_match:${category}`,
+      finding_type: FINDING_TYPES.INELIGIBLE_MATCH,
       lever: 'eligibility_gate',
       target_file: CODE_TARGETS[FINDING_TYPES.INELIGIBLE_MATCH].file,
       category,
@@ -303,6 +378,7 @@ export function buildApprovalQueue(evaluations = []) {
     const covered = Boolean(CATEGORY_COVERAGE[category])
     items.push({
       id: `coverage_direct:${category}`,
+      finding_type: FINDING_TYPES.WEAK_MATCH,
       lever: 'source_keyword_coverage',
       target_file: CODE_TARGETS[FINDING_TYPES.ZERO_RESULT].file,
       category,
@@ -314,6 +390,13 @@ export function buildApprovalQueue(evaluations = []) {
   for (const [category, count] of Object.entries(directWeakByCat)) {
     items.push({
       id: `scoring:${category}`,
+      finding_type: FINDING_TYPES.WEAK_MATCH,
+      // The weak branch subsumes NO_QUALIFIED_MATCHES: both fire on the same
+      // `status === 'weak'` evaluation and both route at the same lever, so
+      // letting the totality pass emit a second item for it would double-report
+      // one fact. SCORING_FLOOR_SUPPRESSION is deliberately NOT listed — it has
+      // its own AUTO lever (score_floor) and must age separately.
+      also_covers: [FINDING_TYPES.NO_QUALIFIED_MATCHES],
       lever: 'scoring_weights',
       target_file: CODE_TARGETS[FINDING_TYPES.WEAK_MATCH].file,
       category,
@@ -328,12 +411,70 @@ export function buildApprovalQueue(evaluations = []) {
   if (failedSourceProfiles.length > 0) {
     items.push({
       id: 'source_health',
+      finding_type: FINDING_TYPES.SOURCE_FETCH_FAILED,
       lever: 'adapter_source_health',
       target_file: CODE_TARGETS[FINDING_TYPES.SOURCE_FETCH_FAILED].file,
       severity: SEVERITY.MEDIUM,
       rationale: `${failedSourceProfiles.length} profile(s) hit source fetch/parse failures. Audit adapter health, retries, and missing API keys.`,
       evidence: { profiles_with_source_failures: failedSourceProfiles.length },
     })
+  }
+
+  // ── TOTALITY PASS (2026-08-02): every finding class the run EMITTED gets an
+  // item, from the registry, whether or not a branch above happened to see it.
+  //
+  // The branches above read five evaluation FIELDS (`status`,
+  // `false_positives`, `ineligible_accepts`, `sources_failed`) and never
+  // `e.findings`. Nine of the seventeen declared classes are invisible to all
+  // of them, so they were counted nightly and acted on never:
+  // `institution_recall_miss` 21/21 days and 282 occurrences in prod's
+  // `amy_flywheel_cohort`, `amount_recall_miss` 16/21 days and 654 occurrences,
+  // both permanently outside the ledger that measures whether anything closes.
+  //
+  // This pass closes the loop structurally: it walks `FINDING_ACTORS` (the
+  // TOTAL map, guarded by `amyFindingActorTotality.test.js`), skips any class a
+  // branch above already emitted an item for, and emits one item per
+  // (class, category) for the rest. A NEW finding class therefore acquires an
+  // actor the moment it is declared — the registry test fails the build if it
+  // does not — instead of being discovered three weeks later in a report.
+  const covered = new Set()
+  for (const item of items) {
+    const t = itemFindingType(item)
+    if (t) covered.add(t)
+    for (const also of Array.isArray(item.also_covers) ? item.also_covers : []) covered.add(String(also))
+  }
+  for (const [type, actor] of Object.entries(FINDING_ACTORS)) {
+    if (!actor?.emitted) continue
+    if (covered.has(type)) continue
+    const byCat = {}
+    for (const e of evals) {
+      const hits = (Array.isArray(e.findings) ? e.findings : []).filter((f) => f?.type === type)
+      if (hits.length === 0) continue
+      const cat = e.category ?? 'unknown'
+      const bucket = (byCat[cat] ||= { profiles: 0, subjects: new Set(), files: new Set() })
+      bucket.profiles += 1
+      for (const h of hits) {
+        if (h?.file) bucket.files.add(h.file)
+        collectEvidenceSubjects(bucket.subjects, h?.evidence?.[actor.evidence_key])
+      }
+    }
+    for (const [category, bucket] of Object.entries(byCat)) {
+      const target = CODE_TARGETS[type] || {}
+      const subjects = [...bucket.subjects].slice(0, 6)
+      items.push({
+        id: `${type}:${category}`,
+        finding_type: type,
+        lever: actor.lever,
+        target_file: target.file ?? [...bucket.files][0] ?? null,
+        target_line: target.line ?? null,
+        category,
+        severity: target.severity || SEVERITY.MEDIUM,
+        rationale: `${bucket.profiles} "${category}" profile(s) produced ${type}. ${target.hint || ''}${
+          subjects.length ? ` Concrete subject(s): ${subjects.join(', ')}.` : ''
+        }${actor.note ? ` ${actor.note}` : ''}`,
+        evidence: { profiles: bucket.profiles, finding_type: type, subjects },
+      })
+    }
   }
 
   // ── ACTIONABILITY (2026-08-01) ──────────────────────────────────────────
@@ -350,6 +491,14 @@ export function buildApprovalQueue(evaluations = []) {
     item.apply_surface = meta.surface
     item.human_gate_reason = meta.why
     item.requires_approval = meta.actionability === ACTIONABILITY.OWNER_API
+    if (!item.finding_type) item.finding_type = itemFindingType(item)
+    // A CODE_CHANGE item carries a BRIEF, not just a complaint. Amy cannot
+    // write a semantic patch and must not pretend to — but "no approval can
+    // close this" is only useful if the next line says exactly what to open,
+    // where, and which test would prove it fixed.
+    if (meta.actionability === ACTIONABILITY.CODE_CHANGE) {
+      item.code_brief = buildCodeBrief(item)
+    }
   }
 
   // Order by severity then evidence size.

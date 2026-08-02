@@ -244,6 +244,34 @@ export function summarizeAmyFlywheel(amy) {
   const lessonCount = Object.keys(lessons).length
   if (lessonCount > 0) edits.push(`Query-steering lessons recorded for ${lessonCount} profile archetype${lessonCount === 1 ? '' : 's'} (next crawls target the misses).`)
 
+  // ── WHAT AMY WENT LOOKING FOR, and whether the search WIDENED (2026-08-02) ──
+  // The owner's goal is "until her profiles no longer reveal gaps", whose
+  // failure mode is a gap count that falls because the probing narrowed. So the
+  // cohort line never stands alone: the probe breadth that produced it goes
+  // beside it, and the convergence verdict says which of the two happened in
+  // words that cannot be mistaken for each other.
+  const probes = report.gap_probes || null
+  if (probes?.enabled && Number(probes.built) > 0) {
+    edits.push(
+      `${probes.built} adversarial gap-probe profile${probes.built === 1 ? '' : 's'} built on the least-tested intersections`
+      + `${Number.isFinite(Number(probes.pairs_targeted)) ? ` (targeting ${probes.pairs_targeted} never-probed axis pairs)` : ''}`
+      + `${probes.pair_space_exhausted ? ' — the pair space is EXHAUSTED; probes are now stale-rechecks' : ''}.`,
+    )
+  }
+  const conv = report.convergence || null
+  if (conv?.statement) {
+    const label = conv.trend === 'converging' ? 'CONVERGING' : String(conv.trend || '').toUpperCase()
+    edits.push(`Gap trend — ${label}: ${conv.statement}`)
+  }
+  const proof = report.deletion_proof || null
+  if (proof?.verdict) {
+    if (proof.verdict === 'proven') {
+      edits.push(`Synthetic profiles deleted and VERIFIED: ${proof.reported_deleted} reaped, ${proof.profiles_before} → ${proof.profiles_after} rows, zero past TTL.`)
+    } else if (proof.verdict === 'leaked') {
+      edits.push(`Synthetic cleanup LEAKED: ${proof.expired_survivor_count} profile(s) survived past their TTL (${proof.profiles_after} Amy rows still live).`)
+    }
+  }
+
   const couldNot = []
   const queue = Array.isArray(report.approval_queue) ? report.approval_queue.filter((q) => !q?.auto_applied) : []
   // A ledger CLOSE is the only proof this loop can converge — report it first,
@@ -273,8 +301,13 @@ export function summarizeAmyFlywheel(amy) {
   }
   if (ownerAsks.length > 6) couldNot.push(`…and ${ownerAsks.length - 6} more awaiting your approval.`)
   for (const item of codeChanges.slice(0, 4)) {
+    // A code-change line now carries the BRIEF, so "no approval can close this"
+    // is followed by exactly what to open and where — not just a refusal.
+    const brief = item?.code_brief || null
     couldNot.push(
       `Needs a CODE change (no approval can close this): ${item?.lever || 'change'}${item?.category ? ` for ${item.category}` : ''}${age(item)}`
+      + `${brief?.file ? ` → ${brief.file}${brief.line ? `:${brief.line}` : ''}` : ''}`
+      + `${brief?.subjects?.length ? ` [${brief.subjects.slice(0, 3).join(', ')}]` : ''}`
       + `${item?.human_gate_reason ? ` — ${item.human_gate_reason}` : ''}`,
     )
   }
@@ -286,6 +319,13 @@ export function summarizeAmyFlywheel(amy) {
       .map(([k, v]) => `${k} ×${v}`)
       .join(', ')
     couldNot.push(`Open gap classes the loop has not closed yet: ${types || 'n/a'} — persistent classes need a code change.`)
+  }
+  // The honest "this cannot finish itself" list, named rather than counted.
+  for (const u of (Array.isArray(conv?.unclosable_by_any_lever) ? conv.unclosable_by_any_lever : []).slice(0, 3)) {
+    couldNot.push(
+      `NO LEVER CAN CLOSE THIS: ${u.finding_type}${u.category ? ` (${u.category})` : ''} open ${u.nights_open} nights`
+      + `${u.file ? ` → ${u.file}` : ''} — ${u.human_action}`,
+    )
   }
 
   return { cohortLine, edits, couldNot, goal }
