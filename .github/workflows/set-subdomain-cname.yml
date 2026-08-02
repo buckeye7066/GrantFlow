@@ -1,0 +1,74 @@
+# Adds/updates ONE subdomain CNAME on axiombiolabs.org via the GoDaddy API.
+# Deliberately CANNOT touch the apex (@) or www — the lab website owns those
+# (see apply-godaddy-vercel-dns.yml for the incident that rule comes from).
+# The domain is hard-coded and the record name must be a single plain label,
+# so the blast radius is exactly one subdomain CNAME record set.
+name: Set subdomain CNAME (guarded)
+
+on:
+  workflow_dispatch:
+    inputs:
+      subdomain:
+        description: 'Single label under axiombiolabs.org (e.g. sermonsmith). Never @ or www.'
+        required: true
+      target:
+        description: 'CNAME target'
+        required: true
+        default: 'cname.vercel-dns.com'
+      confirm:
+        description: 'Type YES to apply'
+        required: true
+        default: 'NO'
+
+jobs:
+  dns:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        env:
+          SUB_RAW: ${{ github.event.inputs.subdomain }}
+          TARGET_RAW: ${{ github.event.inputs.target }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          sub="$(printf '%s' "$SUB_RAW" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          target="$(printf '%s' "$TARGET_RAW" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | sed 's/\.*$//')"
+          if [ "$CONFIRM" != "YES" ]; then echo "Aborted: confirm must be YES."; exit 1; fi
+          case "$sub" in
+            ''|'@'|'www') echo "BLOCKED: refusing empty/@/www — the lab site owns the apex and www."; exit 1;;
+          esac
+          if ! printf '%s' "$sub" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+            echo "BLOCKED: subdomain must be a single plain DNS label (got: $sub)."; exit 1
+          fi
+          if ! printf '%s' "$target" | grep -Eq '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'; then
+            echo "BLOCKED: target is not a valid hostname (got: $target)."; exit 1
+          fi
+          echo "SUB=$sub" >> "$GITHUB_ENV"
+          echo "TARGET=$target" >> "$GITHUB_ENV"
+
+      - name: Apply CNAME via GoDaddy API
+        env:
+          GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
+          GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
+        run: |
+          set -e
+          body="[{\"data\":\"$TARGET\",\"ttl\":600}]"
+          code=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' -X PUT \
+            "https://api.godaddy.com/v1/domains/axiombiolabs.org/records/CNAME/$SUB" \
+            -H "Authorization: sso-key $GODADDY_API_KEY:$GODADDY_API_SECRET" \
+            -H 'Content-Type: application/json' \
+            -d "$body")
+          echo "PUT status: $code"; cat /tmp/resp.txt || true
+          if [ "$code" != "200" ] && [ "$code" != "204" ]; then echo "GoDaddy PUT failed"; exit 1; fi
+
+      - name: Verify record
+        env:
+          GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
+          GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
+        run: |
+          set -e
+          out=$(curl -sS \
+            "https://api.godaddy.com/v1/domains/axiombiolabs.org/records/CNAME/$SUB" \
+            -H "Authorization: sso-key $GODADDY_API_KEY:$GODADDY_API_SECRET")
+          echo "Current record: $out"
+          printf '%s' "$out" | grep -q "\"data\":\"$TARGET\"" || { echo "Verification failed: record does not match target"; exit 1; }
+          echo "Verified: $SUB.axiombiolabs.org CNAME -> $TARGET (propagation may take minutes)."
