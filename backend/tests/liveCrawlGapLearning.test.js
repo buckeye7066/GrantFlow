@@ -249,12 +249,16 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
     expect(res.ok).toBe(true)
     expect(res.has_gap).toBe(true)
     expect(res.classes).toContain('low_results')
+    // A profile with nothing is also below its requested result number, so the
+    // per-profile RESULT FLOOR class rides alongside (owner rule 2026-08-01).
+    expect(res.classes).toContain('result_floor_shortfall')
 
     const store = await getCrawlerGapLearning(db)
     expect(store.totals.calls).toBe(1)
     expect(store.totals.with_gap).toBe(1)
     expect(store.totals.by_class.low_results).toBe(1)
-    expect(store.recent[0]).toMatchObject({ profile_id: 'kathy', classes: ['low_results'] })
+    expect(store.recent[0].profile_id).toBe('kathy')
+    expect(store.recent[0].classes).toContain('low_results')
 
     // Anya learned it.
     const mem = db.prepare(
@@ -270,10 +274,14 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
     expect(lc.c).toBe(1)
   })
 
-  it('counts a healthy crawl (3 ACCEPTs) as a call with NO gap and NO brain write', async () => {
+  // "Healthy" now means AT THE PROFILE'S REQUESTED RESULT NUMBER (default 10),
+  // counting only rows that name money the profile could actually receive.
+  // Three real awards used to read as healthy because the old bar was
+  // MIN_HEALTHY_SURFACED (3) on a count that also admitted directories.
+  it('counts a healthy crawl (10 real awards) as a call with NO gap and NO brain write', async () => {
     db.prepare("INSERT INTO profiles (id, display_name, created_by) VALUES (?, ?, ?)")
       .run('healthy', 'Healthy Profile', 'system')
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 10; i++) {
       db.prepare("INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?, ?, 'GRANT', 1)")
         .run(`o${i}`, `Real Award ${i}`)
       db.prepare("INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES (?, ?, ?, 'accept', 'crawler-os')")
@@ -291,6 +299,39 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
 
     const mem = db.prepare("SELECT COUNT(*) AS c FROM anya_brain_memory WHERE scope_id='healthy'").get()
     expect(mem.c).toBe(0)
+  })
+
+  it('a profile with only THREE real awards is now a gap — it is below its requested result number', async () => {
+    // The old bar called this healthy. It is the same shape as prod's
+    // "Josh Dasher / Caleb Hart / Tasha Reynolds" cohort: 39–103 stored matches,
+    // 4 that name money. This test FAILS on the pre-floor classifier.
+    db.prepare("INSERT INTO profiles (id, display_name, created_by) VALUES (?, ?, ?)")
+      .run('thin', 'Thin Profile', 'system')
+    for (let i = 0; i < 3; i++) {
+      db.prepare("INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?, ?, 'GRANT', 1)")
+        .run(`t${i}`, `Real Award ${i}`)
+      db.prepare("INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES (?, ?, ?, 'accept', 'crawler-os')")
+        .run('thin', `t${i}`, 82)
+    }
+    const res = await learnFromCrawlGaps(db, { profileId: 'thin', thesis: emptyThesis, displayName: 'Thin Profile' })
+    expect(res.has_gap).toBe(true)
+    expect(res.classes).toContain('result_floor_shortfall')
+  })
+
+  it('a profile padded with TWENTY-FIVE directories and zero awards is a gap — the Melissa Justus shape', async () => {
+    db.prepare("INSERT INTO profiles (id, display_name, created_by) VALUES (?, ?, ?)")
+      .run('padded', 'Padded Profile', 'system')
+    for (let i = 0; i < 25; i++) {
+      db.prepare("INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?, ?, 'directory', 1)")
+        .run(`d${i}`, `Local assistance directory ${i}`)
+      db.prepare("INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES (?, ?, ?, 'review', 'crawler-os')")
+        .run('padded', `d${i}`, 40)
+    }
+    const res = await learnFromCrawlGaps(db, { profileId: 'padded', thesis: emptyThesis, displayName: 'Padded Profile' })
+    expect(res.has_gap).toBe(true)
+    expect(res.classes).toContain('result_floor_shortfall')
+    // …and the OLD alarm still reads it as healthy, which is the whole defect.
+    expect(res.classes).not.toContain('surfacing_regression')
   })
 
   it('is a no-op when disabled by env, and returns null store', async () => {

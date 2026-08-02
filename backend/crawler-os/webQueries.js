@@ -562,6 +562,37 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // The `seen` dedup still applies: a school query core already emits (within
   // the cap at its normal position) is not re-added here.
   const forced = [];
+  // PROMOTE a gap-steering query into `forced`, moving it out of the truncatable
+  // `extra` pool if it is already there.
+  //
+  // THE TRAP, one level below the one the comment above describes. `add`'s
+  // `seen` set is GLOBAL across the three lists, so a query the ordinary
+  // broadening pool already emitted is SILENTLY DISCARDED when a gap branch
+  // tries to force it — and it stays in `extra`, where the final
+  // `.slice(0, max)` cuts it. Line ~334 already adds `<need> grant funding
+  // <word>` to `extra` for every need, which is verbatim what the `low_results`
+  // branch below "forces": moving that branch to `forced` alone changed
+  // NOTHING, because `add` refused every one of its queries as a duplicate.
+  // The institution branch escaped this only by accident — its quoted
+  // `"<school>" scholarships` form differs from anything core emits.
+  //
+  // It does NOT remove the query from `extra`. `extra` is rotated by `seed`
+  // before the cut, so shortening it shifts the rotation and silently drops a
+  // DIFFERENT baseline query — additivity ("every query a gap-free run emits is
+  // still emitted") is a contract `amyArchetypeLearning.test.js` pins. The
+  // duplicate is collapsed at final assembly instead, where the earlier
+  // (forced) copy wins and the pool's order is untouched.
+  const force = (q) => {
+    const s = String(q || '').replace(/\s+/g, ' ').trim();
+    if (s.length <= 6) return;
+    const k = s.toLowerCase();
+    if (forced.some((f) => f.toLowerCase() === k)) return;
+    if (extra.some((e) => e.toLowerCase() === k) || core.some((cq) => cq.toLowerCase() === k)) {
+      forced.push(s);
+      return;
+    }
+    add(forced, s);
+  };
   const learned = thesis.learned_gaps || null;
   if (learned) {
     const classes = Array.isArray(learned.classes) ? learned.classes : [];
@@ -571,13 +602,13 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     // scholarships are reachable ONLY by the institution's name).
     if (classes.includes('institution_gap') || missingSchools.length) {
       for (const s of missingSchools.slice(0, 3)) {
-        add(forced, `${s} scholarships`);
-        add(forced, `"${s}" scholarships`);
+        force(`${s} scholarships`);
+        force(`"${s}" scholarships`);
         for (const alias of schoolPublicationAliases(s)) {
-          add(forced, `"${alias}" scholarships`);
+          force(`"${alias}" scholarships`);
           add(extra, `"${alias}" financial aid scholarships`);
         }
-        add(forced, `${s} foundation scholarships`);
+        force(`${s} foundation scholarships`);
         add(extra, `"${s}" financial aid scholarships`);
       }
     }
@@ -585,22 +616,58 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     // them, AND escalate to the hyperlocal entity classes (education foundation
     // / churches / civic clubs) that plain county phrasing misses.
     if (classes.includes('hyperlocal_gap') && county) {
-      add(forced, isStudent ? `local scholarships ${county}` : `local assistance programs ${county}`);
-      add(forced, isStudent ? `${county} education foundation scholarships` : `${county} emergency assistance fund`);
+      force(isStudent ? `local scholarships ${county}` : `local assistance programs ${county}`);
+      force(isStudent ? `${county} education foundation scholarships` : `${county} emergency assistance fund`);
       add(extra, `community foundation grants ${county}`);
       add(extra, isStudent ? `Rotary Club scholarship ${county}` : `church assistance programs ${county}`);
     }
     // low_results → broaden with national + state fallbacks keyed to the needs.
+    //
+    // These land in `forced`, NOT `extra`. The comment 30 lines up records that
+    // gap-steering queries appended to a truncatable bucket "silently never
+    // closed" the loop for a query-rich profile — and this branch was left in
+    // exactly that bucket. A rich profile builds 15+ core queries against a
+    // default cap of 14, so `[...forced, ...core, ...rotate(extra)].slice(0, max)`
+    // dropped every broadening query this branch has ever produced. The
+    // "too few results ⇒ search wider" hook existed and could not fire.
     if (classes.includes('low_results')) {
-      for (const need of needs.slice(0, 3)) add(extra, `${need} grant funding ${word}`);
-      if (state) add(extra, `${state} assistance programs`);
+      for (const need of needs.slice(0, 3)) force(`${need} grant funding ${word}`);
+      if (state) force(`${state} assistance programs`);
+    }
+    // result_floor_shortfall → the profile is BELOW ITS REQUESTED RESULT NUMBER
+    // on rows that name money it could actually receive (pointers excluded).
+    // Escalate the SEARCH, never the admission: broader geography (national and
+    // the region above the state) and adjacent need phrasing. Every hit still
+    // faces the full fetch → extract → reality gate → match engine stack, so
+    // this can only change WHAT IS LOOKED FOR, never what is let through.
+    if (classes.includes('result_floor_shortfall')) {
+      for (const need of needs.slice(0, 3)) {
+        force(`national ${need} ${isOrgProfile ? 'grants' : 'assistance'} programs ${year}`);
+        add(extra, `${need} fund application ${word} ${year}`);
+      }
+      for (const term of interests.slice(0, 2)) add(extra, `${term} ${isStudent ? 'scholarship' : 'grant'} ${year}`);
+      if (state) force(`${state} foundation grants ${word} ${year}`);
+      if (needs.length === 0) force(`${word} financial assistance programs ${year}`);
     }
   }
 
   // Last resort: a sparse profile still searches something useful.
   if (forced.length === 0 && core.length === 0 && extra.length === 0) add(core, `grants for ${word} ${geo || year}`);
 
-  return [...forced, ...core, ...rotate(extra, seed)].slice(0, max);
+  // Collapse duplicates at assembly, keeping the FIRST occurrence. `force`
+  // deliberately re-emits a query that also lives in the truncatable `extra`
+  // pool: the forced copy wins its early slot here and the later copy falls
+  // away, without the pool's own length (and therefore its `seed` rotation)
+  // ever changing.
+  const emitted = new Set();
+  const merged = [];
+  for (const q of [...forced, ...core, ...rotate(extra, seed)]) {
+    const k = q.toLowerCase();
+    if (emitted.has(k)) continue;
+    emitted.add(k);
+    merged.push(q);
+  }
+  return merged.slice(0, max);
 }
 
 export default { buildWebQueries };

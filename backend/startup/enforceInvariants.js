@@ -7004,6 +7004,157 @@ export async function enforceDeclaredFieldOfStudyRecall(db) {
   })
 }
 
+/**
+ * INVARIANT: EVERY PROFILE IS MEASURED AGAINST ITS REQUESTED RESULT NUMBER, AND
+ * A SHORTFALL BECOMES A STANDING INSTRUCTION TO SEARCH WIDER.
+ *
+ * THE OWNER RULE (2026-08-01, third clause of the crawler goal): "They will add
+ * to the database returns that fall below the profile's requested result
+ * number."
+ *
+ * THE DEFECT. A floor existed (`MIN_HEALTHY_SURFACED` = 3, judged on
+ * `surfaced_actionable`) and an escalation loop existed (a `low_results` gap →
+ * Anya brain → `buildWebQueries` broadening) and an actor existed (the nightly
+ * `runProfileCoverageSweep` autoheal). All three keyed on a count that treats a
+ * DIRECTORY as a result. Measured read-only in prod 2026-08-01 over all 33 real
+ * profiles: 3,924 of 7,009 surfaced match rows are `directory`, every profile
+ * reads 24–190 "results", and **0 of 33** fall below 3 — while, counting only
+ * rows that name money the profile could receive:
+ *
+ *   min 0 · p25 7 · median 14 · p75 26 · max 86 — **11 of 33 below 10**
+ *   Melissa Justus: 25 actionable, **0 awardable**  (and "healed" 2→4 that day)
+ *   William:        24 actionable, **0 awardable**
+ *
+ * WHAT THIS SWEEP DOES, AND WHAT IT DELIBERATELY DOES NOT. It counts (no
+ * network), resolves each profile's target from `config/profileResultFloor.js`,
+ * and maintains the ledger that makes the backfill CONVERGE: attempts,
+ * best-count-reached, a world fingerprint, and — once attempts are spent — an
+ * EVIDENCED "exhausted" verdict that stops the nightly retry. It re-opens a
+ * verdict when the catalog has materially grown or the cooldown has elapsed.
+ *
+ * It does NOT crawl. `runProfileDiscoveryLive` "legitimately runs for minutes"
+ * (routes/realCrawlers.js) and the product's own user-facing route budgets 21s
+ * and expects to lose that race; a boot invariant is the wrong place for it.
+ * The ACTOR is the nightly sweep's heal queue, which this ledger gates and
+ * orders — and a guard test asserts that consumer exists, because CLAUDE.md
+ * records two separate write-only queues in this codebase already.
+ *
+ * IT CAN NEVER PAD. Nothing here admits a row, moves a score, or widens a gate:
+ * a shortfall only ever causes more SEARCHING, and every hit still faces the
+ * full reality-gate → match-engine stack. An honest 12 is reported as 12.
+ *
+ * Bounded (`RESULT_FLOOR_PROFILE_LIMIT`, default 500);
+ * `ENFORCE_PROFILE_RESULT_FLOOR=0` for count-only (assess + log, no ledger write).
+ */
+export async function enforceProfileResultFloor(db) {
+  return runInvariant('profile_result_floor', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+
+    let ledgerApi
+    let auditApi
+    let floorCfg
+    try {
+      ledgerApi = await import('../services/coverageAudit/profileResultFloorLedger.js')
+      auditApi = await import('../services/coverageAudit/profileResultCoverageAudit.js')
+      floorCfg = await import('../config/profileResultFloor.js')
+    } catch (err) {
+      log.warn('profile_result_floor: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+
+    // Read through the shared bound helper, but keep one literal reference to
+    // `process.env.RESULT_FLOOR_PROFILE_LIMIT` in the file: the env-example
+    // generator scans for that exact shape, and a dynamic `process.env[name]`
+    // lookup alone leaves the bound undocumented in the checked-in templates.
+    void process.env.RESULT_FLOOR_PROFILE_LIMIT
+    const limit = _boundedLimit('RESULT_FLOOR_PROFILE_LIMIT', 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_PROFILE_RESULT_FLOOR) === false
+
+    let ledger = await ledgerApi.readFloorLedger(db)
+    const activeCatalogCount = await ledgerApi.countActiveCatalogRows(db)
+
+    // ALL real profiles — the audit's own profile query already excludes Amy
+    // synthetics and deleted/inactive rows, and there is no LIMIT on the match
+    // rows it counts, so this is a full census rather than a bounded scan.
+    const { audits } = await auditApi.auditAllProfilesResultCoverage(db, { limit, ledger })
+
+    let below = 0
+    let exhaustedCount = 0
+    let reopened = 0
+    let servedClearing = 0
+    const shortfalls = []
+
+    for (const a of audits) {
+      const assessment = ledgerApi.assessProfileFloor({
+        profileId: a.profile_id,
+        awardable: a.surfaced_awardable ?? 0,
+        ledger,
+        activeCatalogCount,
+      })
+      const prevEntry = ledger.profiles?.[a.profile_id] ?? null
+      if (prevEntry?.exhausted_at && assessment.eligible) reopened += 1
+      if (prevEntry?.exhausted_at && !assessment.below) servedClearing += 1
+      if (assessment.below) {
+        below += 1
+        if (!assessment.eligible) exhaustedCount += 1
+        if (shortfalls.length < 10) {
+          shortfalls.push(
+            `${a.display_name ?? a.profile_id}: ${assessment.awardable}/${assessment.target}` +
+            (assessment.eligible ? '' : ` (${assessment.reason})`),
+          )
+        }
+      }
+      if (!countOnly) {
+        ledger = ledgerApi.refreshFloorObservation(ledger, a.profile_id, {
+          target: assessment.target,
+          awardable: a.surfaced_awardable ?? 0,
+          fingerprint: assessment.fingerprint,
+        })
+      }
+    }
+
+    if (countOnly) {
+      if (below > 0) {
+        log.warn('profiles are BELOW their requested result number (ledger write DISABLED via ENFORCE_PROFILE_RESULT_FLOOR=0)', {
+          below, scanned: audits.length, examples: shortfalls,
+        })
+      }
+      return {
+        scanned: audits.length,
+        repaired: 0,
+        wouldRepair: below,
+        belowTarget: below,
+        fleetTarget: floorCfg.resolveFleetResultTarget(),
+        enforced: false,
+      }
+    }
+
+    const wrote = await ledgerApi.writeFloorLedger(db, ledger)
+    if (below > 0) {
+      log.info('result floor: profiles below their requested result number', {
+        below, exhausted: exhaustedCount, reopened, scanned: audits.length,
+        fleetTarget: floorCfg.resolveFleetResultTarget(), examples: shortfalls,
+      })
+    }
+    return {
+      scanned: audits.length,
+      // `repaired` is the number of ledger entries refreshed — the unit of work
+      // this sweep actually performs. It is NOT a count of results added; the
+      // nightly heal queue is what adds those, and it reports them separately.
+      repaired: wrote ? audits.length : 0,
+      belowTarget: below,
+      exhausted: exhaustedCount,
+      reopened,
+      servedClearing,
+      fleetTarget: floorCfg.resolveFleetResultTarget(),
+      enforced: true,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -7110,6 +7261,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
   // unusable ghost that inflates the matches view and wastes promote passes.
   steps.push(await enforceNoDanglingMatches(db))
+  // RESULT FLOOR census — runs AFTER every scope/eligibility/linkage net above
+  // and after the dangling cleanup, so the count it takes is of the match store
+  // as it will actually be READ, not of rows this same boot is about to purge.
+  // Counts only (no crawl); the nightly heal queue is its actor.
+  steps.push(await enforceProfileResultFloor(db))
   // Persisted-decision integrity AFTER dangling cleanup: no direct REJECT may
   // remain surfaced, and every surviving resource is REVIEW rather than ACCEPT.
   steps.push(await enforcePersistedMatchDecisionIntegrity(db))
@@ -7235,6 +7391,14 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.skippedCooldown !== undefined ? { skippedCooldown: s.skippedCooldown } : {}),
       ...(s.proposed !== undefined ? { proposed: s.proposed } : {}),
       ...(s.aliveNoRepair !== undefined ? { aliveNoRepair: s.aliveNoRepair } : {}),
+      // Result-floor census: the owner-facing number ("how many profiles hold
+      // fewer real funding sources than they asked for") plus how many of those
+      // have a recorded, evidenced "exhausted" verdict rather than a pending
+      // retry — the difference between a backlog and a converged answer.
+      ...(s.belowTarget !== undefined ? { belowTarget: s.belowTarget } : {}),
+      ...(s.exhausted !== undefined ? { exhausted: s.exhausted } : {}),
+      ...(s.reopened !== undefined ? { reopened: s.reopened } : {}),
+      ...(s.fleetTarget !== undefined ? { fleetTarget: s.fleetTarget } : {}),
     })),
   })
 
@@ -7311,4 +7475,5 @@ export const __testables = {
   enforceAdminReinterviewSuppression,
   enforceLeadContactPlausibility,
   enforceJohnDraftPlausibility,
+  enforceProfileResultFloor,
 }
