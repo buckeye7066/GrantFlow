@@ -37,6 +37,7 @@ import { containsTermWholeWord } from './shared/textMatch.js'
 import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { detectForeignJurisdiction, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
+import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { resolveProfileType, getParentChain } from './profileTypeRegistry.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('matchEngine')
@@ -3544,7 +3545,25 @@ export function isIndividualLikeProfileType(rawType) {
   return chain.some((t) => MATCH_INDIVIDUAL_ROOT_TYPES.includes(t))
 }
 
-export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null) {
+/**
+ * The `education` section for the aid-type preference, from whichever shape the
+ * caller had. `makeDecision` is called both with a bare profiles row and with a
+ * `{ profile, sections }` context; a caller that supplies neither gets `{}`,
+ * which `resolveAcceptedAidTypes` turns into the documented default (everything
+ * except debt) — so an absent section can never manufacture an exclusion.
+ */
+function sectionsForAid(sections, prof) {
+  const s = sections ?? prof?.sections ?? null
+  if (!s || typeof s !== 'object') return {}
+  const edu = s.education
+  if (!edu) return {}
+  if (typeof edu === 'string') {
+    try { const p = JSON.parse(edu); return p && typeof p === 'object' ? p : {} } catch { return {} }
+  }
+  return typeof edu === 'object' ? edu : {}
+}
+
+export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null, sections = null) {
   const reasons = []
   const opp = opportunity || {}
   const prof = profile || {}
@@ -3617,6 +3636,23 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return {
       decision: 'REJECT',
       explanation: `${reasonText}. This is an institutional grant, not individual assistance.`,
+      reasons,
+    }
+  }
+
+  // DECLINED AID TYPE. The household said which KINDS of aid it will accept
+  // (`education.aid_types_accepted`). That preference gated portal sync only, so
+  // a student who accepts grants/endowments/scholarships and no work-study was
+  // still shown "Federal Work-Study" as an ACCEPT at score 100 (prod
+  // 2026-08-02). Re-asserted here because this is the one choke point every
+  // surface passes through. The loan gate below stays — it is the doctrine
+  // default that holds even when a profile has stated no preference at all.
+  const aidPreference = evaluateOpportunityAgainstPreferences(opp, sectionsForAid(sections, prof))
+  if (!aidPreference.accepted) {
+    reasons.push(aidPreference.reason)
+    return {
+      decision: 'REJECT',
+      explanation: aidPreference.reason,
       reasons,
     }
   }
@@ -4082,7 +4118,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   }
 
   // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
-  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals, oppNorm)
+  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals, oppNorm, sectionsForScoring)
 
   // A directory/referral can be useful, but it is not a direct award. Enforce
   // that distinction in the canonical engine so every caller gets the same

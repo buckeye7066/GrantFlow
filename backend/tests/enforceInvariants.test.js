@@ -1131,8 +1131,9 @@ describe('enforceInvariants — runner', () => {
     // Pipeline promotion is intentionally off this boot invariant path.
     // 37 on main (incl. #1081 portal_session_lifetime_stamp) + 4 scope nets
     // + the institution-aid RECALL net (institution_recall_miss)
-    // + the recorded-discovery-provenance RECALL net here.
-    expect(summary.ran).toBe(43)
+    // + the recorded-discovery-provenance RECALL net
+    // + the declared-field-of-study RECALL net here.
+    expect(summary.ran).toBe(44)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1170,6 +1171,7 @@ describe('enforceInvariants — runner', () => {
       // discovered for (funding_opportunities.profile_id) is re-offered to that
       // profile. Also before the hygiene sweeps, for the same reason.
       'profile_discovered_catalog_linkage',
+      'declared_field_of_study_recall',
       'no_dangling_matches',
       'persisted_match_decision_integrity',
       'profession_eligibility',

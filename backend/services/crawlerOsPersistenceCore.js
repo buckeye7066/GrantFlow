@@ -28,6 +28,7 @@ import {
   resolveSeedInstitutions,
   MAX_ATTENDED_INSTITUTIONS,
 } from '../config/profileInstitutions.js';
+import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -272,6 +273,26 @@ export function profileContextToThesisInput(ctx = {}) {
   // employer-specific funding (endowments, departmental & employer scholarships).
   const { schools, field_of_study, employer } = extractEducationEmployment(sections);
 
+  // DERIVED TOPICAL FACTS — the profile's OWN statements about what it studies
+  // and does, ordered by evidence strength and carrying provenance.
+  //
+  // WHY THIS IS EXPLICIT AND NOT LEFT TO `tags`. `buildThesis` used to build its
+  // `interest_terms` (the ONLY topical seed the open-web query builder consumes)
+  // by taking `.slice(0, 12)` of `tags` — which is `signals.keywords`, an
+  // UNRANKED bag. Measured on Anastasia White's live prod profile 2026-08-02
+  // that bag holds 453 entries: display-name tokens, gender synonyms, prose
+  // fragments and bare stopwords first, her actual field vocabulary at index
+  // 127+. The twelve slots resolved to
+  //   ['anastasia','nicole','white','female','woman','women','girl','girls',
+  //    'female-led','led','female identifying','identifying']
+  // for a student whose `education.intended_major` is "Forensic Science". The
+  // system held the fact and did not reason from it.
+  //
+  // `tags` is left EXACTLY as it was — ~14 consumers test canonical tokens on it
+  // (the `signals.health` precedent). This adds a ranked, provenanced channel
+  // beside it; it does not narrow the old one.
+  const derivedFacts = deriveProfileFacts(profile, sections);
+
   return {
     id: profile.id ?? ctx.profileId ?? null,
     profile_type: profile.primary_type ?? profile.applicant_type ?? null,
@@ -286,6 +307,14 @@ export function profileContextToThesisInput(ctx = {}) {
     schools,
     field_of_study,
     employer,
+    // Ranked, provenanced topical seeds. `buildThesis` prefers these over the
+    // unranked `tags` slice; see the note above.
+    derived_interest_terms: searchTermsFromFacts(derivedFacts),
+    // The full fact set, carried onto the thesis so LANE SELECTION (planner.js)
+    // and the query builder read the SAME derivation — the owner's rule that the
+    // crawlers always pull from the profile BEFORE crawling and decide which
+    // crawlers are appropriate from what they read.
+    derived_facts: derivedFacts,
     applicant_types: Array.isArray(signals.applicantTypes) ? signals.applicantTypes
       : (signals.applicantTypes ? [...signals.applicantTypes] : []),
     name: profile.display_name ?? null,

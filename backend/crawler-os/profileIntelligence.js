@@ -1087,8 +1087,20 @@ export function buildThesis(profile = {}) {
   // builder, so a student reaches field-specific scholarships (e.g. "nursing
   // scholarships") instead of only generic ones. Deduped against needs/types and
   // bounded so a verbose profile can't explode the query set.
+  // DERIVED FIRST, MINED SECOND. `derived_interest_terms` is the ranked,
+  // provenanced read of the profile's OWN topical statements
+  // (`config/profileDerivedFacts.js`) — declared major, then declared education
+  // interests, then curated programs/services topics. The `tags` fallback below
+  // is the legacy mined bag and is UNRANKED: taking `.slice(0, 12)` of it spent
+  // a forensic-science student's entire topical budget on her first name and
+  // twelve gender synonyms (measured in prod 2026-08-02). Derived terms are
+  // placed first so the bound truncates the WEAKEST evidence, never the major.
+  const derivedTerms = Array.isArray(profile?.derived_interest_terms)
+    ? profile.derived_interest_terms
+    : [];
   const interest_terms = [...new Set(
     []
+      .concat(derivedTerms)
       .concat(profile?.tags ?? [])
       .concat(profile?.interests ?? [])
       .concat(profile?.keywords ?? [])
@@ -1147,6 +1159,9 @@ export function buildThesis(profile = {}) {
     // Field-of-study / interest seeds for the open-web query builder (breadth
     // only; never used for scoring). See buildWebQueries.
     interest_terms,
+    // The derived-fact set with provenance, carried through so LANE SELECTION
+    // (planner.plan) reads the same derivation the query builder does.
+    derived_facts: profile?.derived_facts ?? null,
     // Which high-precision identity phrases (if any) pulled in an applicant
     // bucket from free text — surfaced so the crawler-plan explainer / Anya can
     // show WHY a source fired (e.g. "FEMA AFG fired because the mission text

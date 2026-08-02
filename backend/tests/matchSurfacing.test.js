@@ -8,13 +8,14 @@ import {
 import { REVIEW_SCORE } from '../config/matchThresholds.js'
 
 describe('matchSurfacing — surfaced matcher versions', () => {
-  it('includes crawler-os, cross-match, web-llm, institution-link AND profile-discovery-link', () => {
+  it('includes crawler-os, cross-match, web-llm, institution-link, profile-discovery-link AND field-of-study-link', () => {
     expect(SURFACED_MATCHER_VERSIONS).toEqual([
       'crawler-os',
       'crawler-os-xmatch',
       'web-llm',
       'institution-link',
       'profile-discovery-link',
+      'field-of-study-link',
     ])
   })
 
@@ -39,9 +40,19 @@ describe('matchSurfacing — surfaced matcher versions', () => {
     expect(SURFACED_MATCHER_VERSIONS).toContain('profile-discovery-link')
   })
 
+  it('field-of-study-link must be surfaced — the profile DECLARED the subject', () => {
+    // `education.intended_major` / `education.interests` are facts the applicant
+    // typed about themselves. Prod 2026-08-02: a forensic-science student
+    // carried 1 of 13 active forensic catalog rows, and the unscored pair
+    // "AFTE Forensic Science Scholarship" replays as ACCEPT 83. Persisting under
+    // a reconcile-surviving version and then not reading it back would repeat
+    // the web-llm regression exactly.
+    expect(SURFACED_MATCHER_VERSIONS).toContain('field-of-study-link')
+  })
+
   it('builds a valid SQL IN() fragment from the constant', () => {
     expect(SURFACED_MATCHER_VERSIONS_SQL).toBe(
-      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link')",
+      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link')",
     )
     // Round-trip: fragment lists exactly the same versions, quoted.
     for (const v of SURFACED_MATCHER_VERSIONS) {

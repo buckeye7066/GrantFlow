@@ -61,6 +61,18 @@ export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   'web-llm',
   'institution-link',
   'profile-discovery-link',
+  //   - field-of-study-link  : a catalog row whose TITLE or SPONSOR names the
+  //                         profile's OWN declared field of study
+  //                         (`education.intended_major` / `education.interests`),
+  //                         scored by the canonical engine
+  //                         (enforceDeclaredFieldOfStudyRecall). Persisted under
+  //                         its own version for the SAME reason as the three
+  //                         above: the reconcile is a rolling snapshot. Prod
+  //                         2026-08-02: a forensic-science student carried 1 of
+  //                         13 active forensic rows, and the pair nobody had
+  //                         scored ("AFTE Forensic Science Scholarship")
+  //                         replays as ACCEPT 83.
+  'field-of-study-link',
 ])
 
 /**

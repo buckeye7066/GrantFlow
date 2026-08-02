@@ -6708,6 +6708,302 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
   })
 }
 
+/**
+ * INVARIANT: A PROFILE'S DECLARED FIELD OF STUDY REACHES THE CATALOG ROWS THAT
+ * NAME IT.
+ *
+ * THE DEFECT (2026-08-02, the owner's north-star rule: "It will determine the
+ * need, run the correct crawlers, and use the profile information in finding the
+ * funding source"). Anastasia White's `education.intended_major` is "Forensic
+ * Science". Measured read-only in prod:
+ *
+ *   forensic rows in the catalog       13 active — 1 carried a match row for her
+ *   criminal-justice rows              12 active — 1
+ *
+ * and replaying the REAL `services/matchEngine.computeMatchDecision` on the
+ * pairs nobody had ever scored returns **ACCEPT 83 for "AFTE Forensic Science
+ * Scholarship"** and ACCEPT 79 for two more. The engine was never the drop
+ * point — same finding as #1089/#1090. There was simply NO KEY that could reach
+ * a topically-relevant row: `profile_opportunity_matches` is a rolling snapshot,
+ * and every existing linkage gate keys on an INSTITUTION (#1089), on the row's
+ * recorded provenance (#1090), or on what this run's web lane happened to
+ * re-find. A subject a person declared they study was not a key at all.
+ *
+ * THE KEY IS A DECLARED FIELD, AND EVERY BROADER ONE WAS MEASURED AND FLOODS.
+ * Replaying the real engine over real prod profiles + rows, 2026-08-02:
+ *
+ *   - in-state geography alone (row.state = profile.state, non-national):
+ *     8,215 pairs -> 6,210 links across 18 profiles. Anastasia alone gains 632,
+ *     including "Route 55 - DONELSON/DELL STATION OUTBOUND (shelter)" and
+ *     "Nashville Chess Center (community centre)". REJECTED.
+ *   - in-state + a student-aid title + the aid taxonomy: 240 pairs -> 217 links.
+ *     Genuinely reaches TN HOPE (ACCEPT 100) and the Bradley County Bar
+ *     Association Scholarship (ACCEPT 91) — but ALSO hands a high-school senior
+ *     "Vanderbilt School of Medicine Merit Scholarship" (84), "Osher Reentry
+ *     Scholarship" (84, for adults returning after a break) and "UAB Blazer
+ *     Graduate Research Fellowship". NOT SHIPPED: the engine accepts those, so
+ *     the missing gate is a STAGE-OF-LIFE eligibility rule inside the engine,
+ *     not a recall key. `deriveStageOfLife` now supplies the fact that gate
+ *     would need; the gate itself is a separate change with fleet-wide blast
+ *     radius. Do not re-attempt this key without it.
+ *   - mined `programs_services.keywords` as recall terms: 613 pairs -> 471
+ *     links, dominated by one profile's "human services" matching 211 rows.
+ *     REJECTED — a machine's paraphrase of prose is a search seed, not evidence.
+ *
+ * So the key is the narrow one the applicant TYPED about themselves:
+ * `DERIVED_FACT_FIELDS` entries marked `recallSafe` (`education.intended_major`,
+ * `education.major`, `student_portal_plan.major`, `education.interests`),
+ * multi-word only, place-names and generic academic vocabulary excluded, matched
+ * by TOKEN-BOUNDARY phrase containment against the row's TITLE and SPONSOR —
+ * the curated identity fields. `description` is deliberately excluded: it is
+ * unbounded prose, and it is what made "Bold.org — Housing & Living Expense
+ * Scholarships" register as a forensic row (the #1089 "evidence is the SPONSOR
+ * only" rule, one door over).
+ *
+ * MEASURED COST OF THIS KEY, fleet-wide on real prod data: 5 of 33 real profiles
+ * declare such a term at all; 8 candidate rows enter the SQL superset; 6 survive
+ * token-boundary adjudication; the engine ACCEPTs 4 and REJECTs 2. Four links.
+ * That is the point — precision over volume, and the owner's bar is "a family
+ * recognizes this as something that applies to them."
+ *
+ * The engine stays the sole authority: this only authorizes it to LOOK, and a
+ * REJECT is never written. No score bar is added or lowered.
+ *
+ * Candidate discovery is a SQL PREDICATE (LIKE superset over title+sponsor),
+ * never a post-`LIMIT` JS filter — `titleStatesTerm` adjudicates the returned
+ * rows (#944 / #1080: the signature of that bug is `scanned === bound` forever).
+ *
+ * Bounded (`FIELD_OF_STUDY_LINK_LIMIT`, default 500);
+ * `ENFORCE_FIELD_OF_STUDY_LINK=0` for count-only.
+ */
+export async function enforceDeclaredFieldOfStudyRecall(db) {
+  return runInvariant('declared_field_of_study_recall', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id') || !matchCols.has('matcher_version')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let deriveProfileFacts, titleStatesTerm, termLikePattern
+    try {
+      ;({ deriveProfileFacts, titleStatesTerm, termLikePattern } =
+        await import('../config/profileDerivedFacts.js'))
+    } catch (err) {
+      log.warn('declared_field_of_study_recall: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+
+    const isPg = (db?.dialect || 'sqlite') === 'postgres'
+    const trueLit = isPg ? 'TRUE' : '1'
+    const nowFn = isPg ? 'now()' : 'CURRENT_TIMESTAMP'
+    const writeLimit = _boundedLimit('FIELD_OF_STUDY_LINK_LIMIT', 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_FIELD_OF_STUDY_LINK) === false
+
+    // ALL profiles — the match store is a rolling snapshot, so a producer-side
+    // fix alone lands only after each profile's next crawl.
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('declared_field_of_study_recall: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+
+    let scanned = 0
+    let linked = 0
+    let rejectedByEngine = 0
+    let adjudicatedOut = 0
+    let unscorable = 0
+    let profilesWithTerms = 0
+    let truncated = false
+    const wouldLink = []
+    const examples = []
+    // EVERY profile this pass examined, with the terms it CURRENTLY declares —
+    // including profiles that now declare NONE. Convergence must re-adjudicate
+    // existing links against these terms, NOT against the candidate set: the
+    // candidate query excludes already-linked rows by design, so diffing
+    // against it would delete every link on the very next boot.
+    const termsByProfile = new Map()
+
+    for (const row of profileIds || []) {
+      if (linked + wouldLink.length >= writeLimit) { truncated = true; break }
+      const profileId = row.id
+      const ctx = await _loadProfileContextForInvariant(db, profileId)
+      if (!ctx) continue
+      let facts
+      try { facts = deriveProfileFacts(ctx.profile, ctx.sections) } catch { continue }
+      const terms = facts?.recallTerms ?? []
+      termsByProfile.set(profileId, terms)
+      if (terms.length === 0) continue
+      profilesWithTerms += 1
+
+      // SQL PREDICATE: a deliberate SUPERSET (substring LIKE over the two
+      // curated identity fields), with the already-linked exclusion INSIDE the
+      // query so a bounded pass always advances instead of re-scanning its bound.
+      const patterns = terms.map((t) => termLikePattern(t.term)).filter(Boolean)
+      if (patterns.length === 0) continue
+      const orClauses = patterns
+        .map(() => "(LOWER(fo.title) LIKE ? OR LOWER(COALESCE(fo.sponsor, '')) LIKE ?)")
+        .join(' OR ')
+      const params = []
+      for (const p of patterns) params.push(p, p)
+      let candidates
+      try {
+        candidates = await db
+          .prepare(
+            `SELECT fo.* FROM funding_opportunities fo
+              WHERE (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+                AND (${orClauses})
+                AND NOT EXISTS (
+                  SELECT 1 FROM profile_opportunity_matches m
+                   WHERE m.profile_id = ? AND m.opportunity_id = fo.id
+                )
+              ORDER BY fo.created_at
+              LIMIT ?`,
+          )
+          .all(...params, profileId, writeLimit)
+      } catch (err) {
+        log.warn('declared_field_of_study_recall: candidate query failed (non-fatal)', {
+          profile: profileId, error: String(err?.message || err),
+        })
+        continue
+      }
+
+      for (const opp of candidates || []) {
+        // TOKEN-BOUNDARY adjudication of the LIKE superset. `renal` must not hit
+        // inside `adrenal` — the same rule the condition-coverage floor uses.
+        const hay = `${opp.title ?? ''} ${opp.sponsor ?? ''}`
+        const hit = terms.find((t) => titleStatesTerm(t.term, hay))
+        if (!hit) { adjudicatedOut += 1; continue }
+        scanned += 1
+        let decision
+        try {
+          decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections })
+        } catch (err) {
+          unscorable += 1
+          log.warn('declared_field_of_study_recall: scoring failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+          continue
+        }
+        const verdict = String(decision?.decision ?? '').toUpperCase()
+        // The engine stays the sole authority — a REJECT is a REJECT.
+        if (verdict !== 'ACCEPT' && verdict !== 'REVIEW') { rejectedByEngine += 1; continue }
+        const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
+        if (score === null) { unscorable += 1; continue }
+
+        if (countOnly) {
+          wouldLink.push({ profileId, opportunityId: opp.id })
+          if (examples.length < 3) examples.push(`${opp.title} (${hit.term} <- ${hit.evidence}, ${verdict} ${score})`)
+          continue
+        }
+        try {
+          const res = await db
+            .prepare(
+              `INSERT INTO profile_opportunity_matches
+                 (id, profile_id, opportunity_id, match_score, match_decision, match_explanation,
+                  match_reasons, match_explain_json, source_query, discovered_via, matcher_version,
+                  computed_at, updated_at, evaluated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'field-of-study-link', ${nowFn}, ${nowFn}, ${nowFn})
+               ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+            )
+            .run(
+              `fs:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
+              decision?.explanation ?? null,
+              JSON.stringify(decision?.matchedNeeds ?? []),
+              // PROVENANCE: which profile field authorized this look.
+              JSON.stringify({ gate: 'declared_field_of_study', term: hit.term, evidence: hit.evidence }),
+              null, 'declared_field_of_study',
+            )
+          const wrote = changesOf(res)
+          if (wrote > 0) {
+            linked += 1
+            if (examples.length < 3) examples.push(`${opp.title} (${hit.term} <- ${hit.evidence}, ${verdict} ${score})`)
+          }
+        } catch (err) {
+          log.warn('declared_field_of_study_recall: insert failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+        }
+      }
+    }
+
+    // CONVERGENCE: drop links this gate no longer authorizes — the student
+    // changed major, dropped an interest, or the catalog row was deactivated.
+    // Each surviving link is RE-ADJUDICATED against the profile's CURRENT terms
+    // (not against the candidate set, which excludes already-linked rows), so a
+    // steady state neither re-writes nor deletes anything. Skipped on a
+    // truncated pass so a bound-limited boot can never delete rows it never
+    // re-derived.
+    let stale = 0
+    if (!countOnly && !truncated) {
+      for (const [profileId, terms] of termsByProfile) {
+        try {
+          const existing = await db
+            .prepare(
+              `SELECT m.id, m.opportunity_id, fo.title, fo.sponsor, fo.is_active
+                 FROM profile_opportunity_matches m
+                 LEFT JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+                WHERE m.profile_id = ? AND m.matcher_version = 'field-of-study-link'`,
+            )
+            .all(profileId)
+          const doomed = (existing || [])
+            .filter((r) => {
+              // Row gone or deactivated → the gate cannot authorize it.
+              if (r.title === null && r.sponsor === null) return true
+              if (!(r.is_active === null || r.is_active === undefined || r.is_active === 1 || r.is_active === true)) return true
+              const hay = `${r.title ?? ''} ${r.sponsor ?? ''}`
+              return !terms.some((t) => titleStatesTerm(t.term, hay))
+            })
+            .map((r) => r.id)
+          for (let i = 0; i < doomed.length; i += 200) {
+            const slice = doomed.slice(i, i + 200)
+            const ph = slice.map(() => '?').join(', ')
+            const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+            stale += changesOf(res) || slice.length
+          }
+        } catch { /* convergence pass is best-effort; never fails the sweep */ }
+      }
+    }
+
+    if (countOnly) {
+      if (wouldLink.length > 0) {
+        log.warn("a profile's declared field of study is not reaching the catalog (linking DISABLED via ENFORCE_FIELD_OF_STUDY_LINK=0)", {
+          wouldLink: wouldLink.length, scanned, profilesWithTerms, examples,
+        })
+      }
+      return {
+        scanned,
+        repaired: 0,
+        wouldRepair: wouldLink.length,
+        profilesWithTerms,
+        rejectedByEngine,
+        adjudicatedOut,
+        truncated,
+        enforced: false,
+      }
+    }
+    if (linked > 0 || stale > 0) {
+      log.info('linked profiles to the funding their DECLARED field of study names', {
+        linked, stale, scanned, profilesWithTerms, rejectedByEngine, adjudicatedOut, unscorable, examples,
+      })
+    }
+    return {
+      scanned,
+      repaired: linked,
+      stale,
+      profilesWithTerms,
+      rejectedByEngine,
+      adjudicatedOut,
+      unscorable,
+      truncated,
+      enforced: true,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -6804,6 +7100,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // Runs immediately after the institution net so both linkage gates land before
   // the dangling/decision-integrity hygiene sweeps read the table.
   steps.push(await enforceProfileDiscoveredCatalogLinkage(db))
+  // RECALL net, keyed on what the profile SAYS IT STUDIES rather than on a
+  // school or on a row's provenance: a catalog row whose title or sponsor names
+  // the profile's DECLARED field of study is offered to that profile. Runs with
+  // the other linkage gates, before the dangling/decision-integrity hygiene
+  // sweeps read the table.
+  steps.push(await enforceDeclaredFieldOfStudyRecall(db))
   // Surface-table hygiene: a persisted match whose catalog row was deleted
   // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
   // unusable ghost that inflates the matches view and wastes promote passes.
