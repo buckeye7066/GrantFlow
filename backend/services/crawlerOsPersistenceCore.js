@@ -307,6 +307,13 @@ export function profileContextToThesisInput(ctx = {}) {
     schools,
     field_of_study,
     employer,
+    // Structured SERVICE STATUS for the applicant-type derivation. The section
+    // is carried as its raw object, not as rendered text: `sectionSignalText`
+    // renders a section's prose too, and a `military_service.notes` reading "No
+    // military affiliation ... indicating veteran status" contains the word
+    // "veteran" inside its own denial (deriveApplicantTypes' NEGATION TRAP note).
+    // Only an explicit `true` flag declares service.
+    military_service: sections?.military_service ?? null,
     // Ranked, provenanced topical seeds. `buildThesis` prefers these over the
     // unranked `tags` slice; see the note above.
     derived_interest_terms: searchTermsFromFacts(derivedFacts),
