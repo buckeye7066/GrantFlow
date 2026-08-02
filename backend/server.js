@@ -36,6 +36,7 @@ import aiRouter from './routes/ai.js';
 import anyaRouter from './routes/anya.js';
 import anyaMatchSuggestionsRouter from './routes/anyaMatchSuggestions.js';
 import itemsRouter from './routes/items.js';
+import itemNeedsRouter from './routes/itemNeeds.js';
 import profilesRouter from './routes/profiles.js';
 import remindersRouter from './routes/reminders.js';
 import crawlersRouter from './routes/crawlers.js';
@@ -2303,6 +2304,9 @@ app.use('/api/billing-settings', billingSettingsRouter);
 app.use('/api/contact-methods', contactMethodsRouter);
 app.use('/api/source-directory', sourceDirectoryRouter);
 app.use('/api/items', itemsRouter);
+// Per-profile ITEM NEEDS (derived list + free-text asks) and the on-demand
+// item crawl. Owner-or-admin gated per profile (see routes/itemNeeds.js).
+app.use('/api/item-needs', itemNeedsRouter);
 // Mission Goal 11 — expose the canonical field-usage registry to the UI/Anya.
 app.use('/api/field-usage', lazyRouter('./routes/fieldUsage.js'));
 // Mission Goal 4/5/9 — single canonical profile-type list shared by every UI selector.

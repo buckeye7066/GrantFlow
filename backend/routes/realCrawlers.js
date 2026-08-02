@@ -25,6 +25,7 @@ import { SCORE_FLOOR, DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import { resolveRunSmartMinScore } from '../services/discoveryPreferences.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
 import { searchNeedWebLeads } from '../services/shared/liveWebSearch.js'
+import { searchItemNeeds } from '../services/itemNeedSearch.js'
 import { ingestOpportunities } from '../services/sources/ingestionService.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import {
@@ -371,7 +372,7 @@ function mapResultToFrontendShape(result) {
 router.post('/run', ensureAuth, async (req, res) => {
   // CUTOVER: discovery + matching is the Crawler OS. Historical crawler_type
   // values are accepted as aliases only; every request uses the OS pipeline.
-  const { crawler_type, profile_id, min_match_score: bodyMinScore } = req.body
+  const { crawler_type, profile_id, min_match_score: bodyMinScore, item_request: itemRequest } = req.body
   let min_match_score = DEFAULT_MIN_SCORE
   if (typeof bodyMinScore === 'number' && bodyMinScore >= 0 && bodyMinScore <= 100) min_match_score = bodyMinScore
   else if (typeof bodyMinScore === 'string' && /^\d+$/.test(bodyMinScore)) min_match_score = Math.min(100, Math.max(0, parseInt(bodyMinScore, 10)))
@@ -380,6 +381,58 @@ router.post('/run', ensureAuth, async (req, res) => {
   }
   if (!profile_id) return res.status(400).json({ error: 'Profile ID required', message: 'Crawler runs require a profile_id.' })
   if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+
+  // ── item_matching ACTUALLY SEARCHES FOR THE ITEM (2026-08-02) ─────────────
+  // `DataSources.jsx` renders an "Item Funding" tool with a REQUIRED free-text
+  // box, `src/api/crawlers.js` puts it on the wire as `item_request` — and this
+  // handler used to destructure only crawler_type/profile_id/min_match_score,
+  // so the item was DROPPED. `crawlerType` then reached exactly one consumer,
+  // `persistSourceCoverage({ crawlerType })`, a telemetry label: the button ran
+  // a generic profile crawl and reported its count as the item's answer. The
+  // legacy `crawlItemFunding` it was meant to reach resolves to
+  // `crawlerOsCompatibility`'s `return { ...SUPERSEDED, items: [] }` stub, and
+  // its real implementation is on `check-runtime-imports`'s legacy list, so it
+  // cannot be wired back. The item now routes to the live item lane
+  // (`services/itemNeedSearch.js`), and a request with NO item is refused
+  // rather than silently answered by something else.
+  if (crawler_type === 'item_matching') {
+    const item = String(itemRequest ?? '').trim()
+    if (item.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'item_request required',
+        message: 'Item funding searches for a specific item. Send item_request (at least 2 characters), or use POST /api/item-needs/:profileId/search to crawl this profile\'s whole item list.',
+      })
+    }
+    if (!(await requireTierCapability(req, res, String(profile_id), TIER_CAPABILITIES.ITEM_FUNDING))) return
+    try {
+      const ctx = await loadProfileContext(req.db, String(profile_id)).catch(() => null)
+      const report = await searchItemNeeds(req.db, {
+        profileId: String(profile_id),
+        items: [item],
+        profileContext: ctx,
+      })
+      const first = report.items?.[0] ?? null
+      return res.json({
+        success: true,
+        crawler_type,
+        profile_id,
+        engine: 'item-need-search',
+        item_request: item,
+        count: report.total_found,
+        awardable_count: report.total_awardable,
+        pointer_count: report.total_pointer,
+        expanded: first?.expanded ?? null,
+        lanes: first?.lanes ?? null,
+        results: first?.results ?? [],
+        opportunities: first?.results ?? [],
+      })
+    } catch (error) {
+      routeLogger.error('[RealCrawlers] item_matching search failed:', error)
+      return res.status(500).json({ success: false, error: 'Item search failed', message: error?.message || String(error), results: [] })
+    }
+  }
+
   try {
     const db = req.db
     // Gateway-safe deadline (mirrors /run-smart): the live crawl legitimately

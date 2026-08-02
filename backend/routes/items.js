@@ -1,6 +1,8 @@
 import express from 'express'
 import { requireAuthenticatedUser, ensureProfileAccess } from '../utils/accessControl.js'
 import { suggestItemsForProfile, discoverNewCatalogItems, ensureItemCatalogSeeded } from '../services/itemCatalogService.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
+import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
 import { formatError } from '../middleware/errorHandler.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -23,11 +25,52 @@ router.get('/suggestions', async (req, res) => {
     }
 
     const limit = Number.parseInt(String(req.query.limit ?? '8'), 10)
-    const response = await suggestItemsForProfile(req.db, {
-      profileId,
-      limit: Number.isFinite(limit) ? limit : 8,
-    })
+    const safeLimit = Number.isFinite(limit) ? limit : 8
 
+    // DERIVED FIRST (owner rule 2026-08-02). `suggestItemsForProfile` scores a
+    // NINE-ROW fixture (laptop / desktop / hotspot / wheelchair van /
+    // wheelchair / hearing aids / glasses / school supplies / work clothing)
+    // against coarse need buckets and asks an LLM for the rest, so two profiles
+    // with nothing in common get the same nine candidates — Focus Forward
+    // Ministry, whose declared focus areas contain "Building supplies", was
+    // offered hearing aids. The suggestions this endpoint serves now come from
+    // what the profile actually DECLARED, each carrying the field id it was
+    // read from. Response shape is unchanged so the existing chips render as-is.
+    let derived = null
+    try {
+      const ctx = await loadProfileContext(req.db, String(profileId))
+      derived = deriveProfileItemNeeds(ctx?.profile ?? {}, ctx?.sections ?? {})
+    } catch (err) {
+      routeLogger.warn(`[items/suggestions] derivation failed: ${err?.message ?? err}`)
+    }
+
+    if (derived) {
+      return res.json({
+        profile_id: String(profileId),
+        count: Math.min(derived.needs.length, safeLimit),
+        suggestions: derived.needs.slice(0, safeLimit).map((n) => ({
+          name: n.item,
+          category: n.category,
+          // Not a score: these are DERIVED facts, not ranked guesses. A number
+          // here would imply a measurement nobody made.
+          score: null,
+          reasons: [`Declared in ${n.evidence}`],
+          source: n.source,
+          evidence: n.evidence,
+          need_text: n.need_text,
+        })),
+        // Honest empties: an owner whose list is short can see exactly which
+        // declared fields produced nothing and which values named no item.
+        unmapped: derived.unmapped,
+        silent_fields: derived.silentFields,
+        free_text_field: 'financial_information.item_needs',
+        generated_at: new Date().toISOString(),
+      })
+    }
+
+    // Derivation unavailable (profile load failed) — fall back to the legacy
+    // catalog scorer rather than returning nothing.
+    const response = await suggestItemsForProfile(req.db, { profileId, limit: safeLimit })
     return res.json(response)
   } catch (error) {
     routeLogger.error('[items/suggestions] error', error)
