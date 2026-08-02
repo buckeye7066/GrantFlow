@@ -215,6 +215,33 @@ export const PROFILE_SCHEMA = {
       first_time_homebuyer: { type: 'boolean', default: false, description: 'True if the applicant is a first-time homebuyer; unlocks down-payment assistance programs.' },
       underemployed: { type: 'boolean', default: false, description: 'True if the applicant is underemployed (working below skill level or part-time involuntarily).' },
       funding_purpose: { type: 'string', format: 'prose', scored: false, default: '', description: 'How funds will be used (narrative). DRAFTING ONLY; not scored or mined — use funding_needs tags for scoring.' },
+      // THE FREE-TEXT ITEM FIELD (owner rule 2026-08-02: "a free-text field
+      // that the profile owner or admin can type in an item they feel they
+      // need"). Read by `config/profileItemNeeds.js` as the STRONGEST evidence
+      // source, and searchable on demand via POST /api/item-needs/:id/search.
+      //
+      // DELIBERATELY `scored: false`. `isFieldScored` defaults every
+      // PROFILE_SCHEMA field to SCORED, and `match_score` is matched data
+      // points ÷ TOTAL data points — so a new scored field lands in every
+      // profile's DENOMINATOR the moment it ships. Prod carries 39 profiles,
+      // none of which have ever seen this box, so scoring it would silently
+      // lower every match score in the fleet on deploy and shift rows across
+      // the freshly-recalibrated bands (#1067). It is also the wrong KIND of
+      // fact: this states what the applicant WANTS, and the data-point
+      // inventory measures what the applicant IS. An unfilled want is not a
+      // missing eligibility fact.
+      item_needs: {
+        // No explicit `format`: PROFILE_SCHEMA's format vocabulary is the
+        // narrow matcher-facing one (`profileSchemaContract.test.js`
+        // KNOWN_FORMATS), so `array<string>` resolves to 'array' here while
+        // `sectionMetadata` carries the UI format 'string_array'. Declaring the
+        // metadata format in both places fails the contract guard.
+        type: 'array<string>',
+        scored: false,
+        default: [],
+        description:
+          'Specific items, equipment, classes, or services this profile needs funding for, in the owner\'s own words (e.g. "PROBE ethics class for nursing licensure", "15 passenger van"). Owner or admin editable; used as the subject of an on-demand item search. NOT scored — this is a request, not an eligibility fact.',
+      },
       notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Concise context about income/need. DRAFTING ONLY; not scored or mined.' },
     },
   },

@@ -292,55 +292,68 @@ export function expandNeed(needText) {
   const text = (needText || '').toLowerCase().trim();
   if (!text) return null;
 
-  // Direct key match — prefer longest matching key for specificity
+  // Content words of the request, stoplisted. `EXPAND_NEED_STOPWORDS` existed
+  // but was applied ONLY in the fallback branch, so the two branches below put
+  // 'for'/'the'/'help'/'funding'/'assistance' into `mustTerms` — and
+  // `scoreNeedMatch` credits 5 points per must-term hit. Measured live against
+  // prod on 2026-08-02 for "PROBE Ethics class for nursing licensure", that is
+  // exactly how the Merriam-Webster and Cambridge Dictionary definitions of the
+  // word "probe" scored 10 ('term:probe' + 'term:for') and were reported as
+  // funding results. A stopword is not evidence.
+  const contentWords = text.split(/\s+/).filter((w) => w.length > 2 && !EXPAND_NEED_STOPWORDS.has(w));
+
+  // Direct key match — a taxonomy KEY is an internal snake_case identifier.
   const keyMatches = [];
   for (const [key, entry] of Object.entries(TAXONOMY)) {
     if (text.includes(key)) {
       keyMatches.push({ key, entry });
     }
   }
-  if (keyMatches.length > 0) {
-    keyMatches.sort((a, b) => b.key.length - a.key.length);
-    const best = keyMatches[0];
-    // Merge categories from all matching keys for broader coverage
-    const allCats = new Set(best.entry.programCategories);
-    for (const km of keyMatches.slice(1)) {
-      for (const c of km.entry.programCategories) allCats.add(c);
-    }
-    return {
-      canonicalNeed: best.entry.canonicalNeed,
-      synonyms: best.entry.synonyms,
-      mustTerms: [...new Set([best.key, ...text.split(/\s+/).filter(w => w.length > 2)])],
-      programCategories: [...allCats],
-      matchedKey: best.key,
-    };
-  }
 
-  // Synonym match — prefer longest matching synonym for specificity
+  // Synonym match — a SYNONYM is the language a real person types.
   const synMatches = [];
   for (const [syn, entry] of KEYWORD_INDEX.entries()) {
     if (text.includes(syn)) {
       synMatches.push({ syn, entry });
     }
   }
-  if (synMatches.length > 0) {
-    synMatches.sort((a, b) => b.syn.length - a.syn.length);
-    const best = synMatches[0];
+
+  // ONE ranking over BOTH, by matched-phrase length.
+  //
+  // These used to be sequential stages: any key hit returned before the synonym
+  // scan ever ran. So "PROBE Ethics class for nursing licensure" matched the
+  // 9-character KEY `licensure` (a bare substring of "nursing licensure", whose
+  // whole entry is 7 generic exam synonyms) and never reached the 18-character
+  // SYNONYM 'probe ethics class' that names the exact program class — even
+  // though `license_reinstatement` carries 'PROBE class', 'PROBE ethics course',
+  // 'board-required ethics course', 'nurse re-entry' and the
+  // `license_reinstatement_support` / `professional_remediation_funding`
+  // categories the whole search depends on. The key could never win that
+  // comparison honestly: it is not a phrase anyone writes. Verified live in prod
+  // 2026-08-02 — before: `matchedKey:'licensure'`, canonicalNeed 'employment'.
+  const all = [
+    ...keyMatches.map((m) => ({ phrase: m.key, entry: m.entry })),
+    ...synMatches.map((m) => ({ phrase: m.syn, entry: m.entry })),
+  ];
+  if (all.length > 0) {
+    all.sort((a, b) => b.phrase.length - a.phrase.length);
+    const best = all[0];
+    // Merge categories from every matching phrase for broader coverage.
     const allCats = new Set(best.entry.programCategories);
-    for (const sm of synMatches.slice(1)) {
-      for (const c of sm.entry.programCategories) allCats.add(c);
+    for (const m of all.slice(1)) {
+      for (const c of m.entry.programCategories) allCats.add(c);
     }
     return {
       canonicalNeed: best.entry.canonicalNeed,
       synonyms: best.entry.synonyms,
-      mustTerms: [...new Set([best.syn, ...text.split(/\s+/).filter(w => w.length > 2)])],
+      mustTerms: [...new Set([best.phrase, ...contentWords])],
       programCategories: [...allCats],
-      matchedKey: best.syn,
+      matchedKey: best.phrase,
     };
   }
 
   // Fallback: collect ALL word-level matches and merge their categories for maximum recall
-  const words = text.split(/\s+/).filter((w) => w.length > 2 && !EXPAND_NEED_STOPWORDS.has(w))
+  const words = contentWords
   const fallbackMatches = [];
   // Collect ALL taxonomy keys that contain any word, then deduplicate by key name.
   // Sort by key length descending before iterating so longer (more specific) keys win
