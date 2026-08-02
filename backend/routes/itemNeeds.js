@@ -12,10 +12,20 @@
  * The search route is additionally held to the SAME tier capability as the
  * existing item-funding lane (`TIER_CAPABILITIES.ITEM_FUNDING`), so the two
  * cannot diverge into different entitlement stories.
+ *
+ * RATE LIMITED, and the search route more strictly than the read. CodeQL's
+ * `js/missing-rate-limiting` flagged both on first submission (429 → 431
+ * high-confidence findings, which blocks the baseline gate), and the search
+ * route deserves the stricter lane on its own merits: one call fans out to five
+ * LIVE web queries per item, for up to `ITEM_SEARCH_MAX_ITEMS` items, against a
+ * SHARED search backend whose datacenter-IP anti-bot behaviour already silently
+ * zeroed item search once (documented in `itemFundingCrawler.js`'s own header).
+ * An unthrottled loop here is how that wall gets rebuilt.
  */
 
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
+import { standardRateLimiter, mutationRateLimiter } from '../middleware/rateLimiting.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
@@ -58,7 +68,7 @@ async function loadContext(db, profileId) {
  * that said nothing, so "your list is short" is explainable rather than
  * mysterious.
  */
-router.get('/:profileId', ensureAuth, async (req, res) => {
+router.get('/:profileId', ensureAuth, standardRateLimiter, async (req, res) => {
   const profileId = String(req.params.profileId ?? '').trim()
   if (!(await ensureProfileAccess(req, res, profileId))) return
   try {
@@ -94,7 +104,7 @@ router.get('/:profileId', ensureAuth, async (req, res) => {
  * those, which is the "I need X right now" action; the caller's words are used
  * verbatim and are never adjudicated against a vocabulary first.
  */
-router.post('/:profileId/search', ensureAuth, async (req, res) => {
+router.post('/:profileId/search', ensureAuth, mutationRateLimiter, async (req, res) => {
   const profileId = String(req.params.profileId ?? '').trim()
   if (!(await ensureProfileAccess(req, res, profileId))) return
   if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.ITEM_FUNDING))) return

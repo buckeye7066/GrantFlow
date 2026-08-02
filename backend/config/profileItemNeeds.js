@@ -162,7 +162,7 @@ export const CREDENTIAL_ROLE_ITEMS = Object.freeze({
 })
 
 /**
- * TAG VOCABULARY for `programs_services.*` and `basic_information.keywords`.
+ * TAG VOCABULARY for `programs_services.*`.
  * ONLY entries that name a purchasable thing. A focus area like "Poverty
  * alleviation" or "Discipleship" is a MISSION, not an item, and admitting it
  * would put every mission word into the item search — the flood signature.
@@ -206,13 +206,23 @@ const CONNECTIVITY_ITEM = Object.freeze({
 
 /**
  * A rule emits `{ item, needText, category }` entries plus `unmapped` strings.
+ *
  * `section` is the PROFILE_SCHEMA section the rule reads; its `applies_to` is
  * the applicability gate (totality-tested).
+ *
+ * `reads` names the concrete field keys the rule consults, so the guard test can
+ * mechanically assert that NOT ONE of them is PROSE. That bar comes from #1096:
+ * its predecessor detected needs from rendered profile text and minted a
+ * `housing` need out of the sentence "We do not need housing assistance of any
+ * kind" — prose cannot be told from its own denial. Structured arrays and
+ * `=== true` flags only. A declaration in a comment is not a guard; `reads` is
+ * what makes the promise checkable.
  */
 export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'financial_information.item_needs',
     section: 'financial_information',
+    reads: ['item_needs'],
     source: 'declared',
     vocabulary: null,
     read: (s) => list(obj(s.financial_information).item_needs),
@@ -230,6 +240,7 @@ export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'medical_history.dme_needed',
     section: 'medical_history',
+    reads: ['dme_needed'],
     source: 'derived',
     vocabulary: null,
     read: (s) => list(obj(s.medical_history).dme_needed),
@@ -246,6 +257,7 @@ export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'health_medical.support_needs',
     section: 'health_medical',
+    reads: ['support_needs'],
     source: 'derived',
     vocabulary: 'SUPPORT_NEED_ITEMS',
     read: (s) => list(obj(s.health_medical).support_needs),
@@ -254,6 +266,7 @@ export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'health_medical.disability_type',
     section: 'health_medical',
+    reads: ['disability_type'],
     source: 'derived',
     vocabulary: 'DISABILITY_TYPE_ITEMS',
     read: (s) => list(obj(s.health_medical).disability_type),
@@ -262,6 +275,7 @@ export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'health_medical.flags',
     section: 'health_medical',
+    reads: Object.keys(HEALTH_FLAG_ITEMS),
     source: 'derived',
     vocabulary: 'HEALTH_FLAG_ITEMS',
     read: (s) => Object.keys(HEALTH_FLAG_ITEMS).filter((k) => obj(s.health_medical)[k] === true),
@@ -273,6 +287,7 @@ export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'occupation.credentialed_role',
     section: 'occupation',
+    reads: ['healthcare_worker_type', 'educator', 'ems_worker', 'firefighter'],
     source: 'derived',
     vocabulary: 'CREDENTIAL_ROLE_ITEMS',
     read: (s) => {
@@ -294,6 +309,7 @@ export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'housing.broadband_speed',
     section: 'housing',
+    reads: ['broadband_speed'],
     source: 'derived',
     vocabulary: null,
     read: (s) => {
@@ -305,6 +321,7 @@ export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'programs_services.focus_areas',
     section: 'programs_services',
+    reads: ['focus_areas'],
     source: 'derived',
     vocabulary: 'ITEM_TAG_VOCABULARY',
     read: (s) => list(obj(s.programs_services).focus_areas),
@@ -317,17 +334,10 @@ export const ITEM_NEED_RULES = Object.freeze([
   Object.freeze({
     id: 'programs_services.keywords',
     section: 'programs_services',
+    reads: ['keywords'],
     source: 'derived',
     vocabulary: 'ITEM_TAG_VOCABULARY',
     read: (s) => list(obj(s.programs_services).keywords),
-    emit: (values) => mapThroughVocabulary(values, ITEM_TAG_VOCABULARY, { reportUnmapped: false }),
-  }),
-  Object.freeze({
-    id: 'basic_information.keywords',
-    section: 'basic_information',
-    source: 'derived',
-    vocabulary: 'ITEM_TAG_VOCABULARY',
-    read: (s) => list(obj(s.basic_information).keywords),
     emit: (values) => mapThroughVocabulary(values, ITEM_TAG_VOCABULARY, { reportUnmapped: false }),
   }),
 ])

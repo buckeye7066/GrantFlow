@@ -31,8 +31,26 @@ import {
   deriveProfileItemNeeds,
   ruleAppliesToProfile,
 } from '../config/profileItemNeeds.js'
-import { PROFILE_SCHEMA, isFieldScored } from '../config/profileSchema.js'
+import fs from 'node:fs'
+import { PROFILE_SCHEMA, isFieldScored, resolveFieldFormat, getUnscoredProseFieldNames } from '../config/profileSchema.js'
 import { SECTION_METADATA } from '../../src/config/sectionMetadata.js'
+
+const readSource = () =>
+  fs.readFileSync(new URL('../config/profileItemNeeds.js', import.meta.url), 'utf8')
+
+/**
+ * The module's CODE, with comments stripped.
+ *
+ * The source scans below assert what the module READS. Scanning raw source made
+ * them fire on the file's own documentation — the header explains that
+ * `narrative.primary_goal` is prose and deliberately NOT mined, and a naive
+ * scan read that sentence as evidence of mining it. A guard that a correct
+ * explanation can trip is a guard that teaches people to delete explanations.
+ */
+const readCode = () =>
+  readSource()
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
 
 // ── Real prod fixtures ──────────────────────────────────────────────────────
 
@@ -94,6 +112,63 @@ describe('profileItemNeeds — the registry', () => {
   it('every rule names a REAL schema section (no rule reads a section that does not exist)', () => {
     for (const rule of ITEM_NEED_RULES) {
       expect(PROFILE_SCHEMA[rule.section], `rule ${rule.id} names unknown section ${rule.section}`).toBeTruthy()
+    }
+  })
+
+  it('no rule reads a DEPRECATED field', () => {
+    // `basic_information.keywords` is a deprecated legacy intake mirror
+    // ("Canonical keywords live in programs_services.keywords") and is absent
+    // from PROFILE_SCHEMA entirely. `isFieldScored` already excludes deprecated
+    // fields from scoring and mining; deriving items from one would re-open the
+    // same drift on a different door. The rule that read it was removed — it
+    // only ever produced a duplicate of the canonical `programs_services` entry.
+    for (const rule of ITEM_NEED_RULES) {
+      for (const key of rule.reads) {
+        const meta = PROFILE_SCHEMA[rule.section]?.fields?.[key]
+        expect(meta?.deprecated, `rule ${rule.id} reads deprecated ${rule.section}.${key}`).toBeFalsy()
+      }
+    }
+  })
+
+  it('NO RULE READS PROSE — every `reads` key is a real, non-prose schema field', () => {
+    // The #1096 bar. Its predecessor detected needs from rendered profile TEXT
+    // and minted a `housing` need from the sentence "We do not need housing
+    // assistance of any kind": prose cannot be distinguished from its own
+    // denial. Structured arrays and `=== true` flags only.
+    for (const rule of ITEM_NEED_RULES) {
+      expect(Array.isArray(rule.reads) && rule.reads.length > 0, `rule ${rule.id} declares no reads[]`).toBe(true)
+      for (const key of rule.reads) {
+        const meta = PROFILE_SCHEMA[rule.section]?.fields?.[key]
+        expect(meta, `${rule.section}.${key} is not a declared schema field`).toBeTruthy()
+        expect(
+          resolveFieldFormat(meta),
+          `rule ${rule.id} reads PROSE field ${rule.section}.${key}`,
+        ).not.toBe('prose')
+      }
+    }
+  })
+
+  it('the derivation never consults signals — the type-shaped need FALLBACK can never reach it', () => {
+    // `buildProfileSignals` injects a type-shaped `signals.needs` fallback, so
+    // that set is NEVER empty: John Doe's entire "need list"
+    // (utilities/housing/food/healthcare/cash_assistance) was that fallback, and
+    // reading it would make every profile "declare" items it never stated. This
+    // module reads SECTIONS directly and must keep doing so.
+    const src = readSource()
+    expect(src).not.toMatch(/\bsignals\b/)
+    expect(src).not.toMatch(/buildProfileSignals|profileHelpers/)
+  })
+
+  it('reads no field the schema marks drafting-only prose, by NAME either', () => {
+    // Belt and braces: the canonical prose-name set, checked against the source.
+    // `item_needs` is in `getUnscoredProseFieldNames()` because it is
+    // scored:false — that is correct and expected, so it is excluded here; the
+    // format assertion above is what actually pins it as non-prose.
+    const proseNames = new Set(getUnscoredProseFieldNames())
+    proseNames.delete('item_needs')
+    const src = readCode()
+    for (const name of proseNames) {
+      expect(src, `reads prose field "${name}"`).not.toMatch(new RegExp(`\\.${name}\\b`))
     }
   })
 
