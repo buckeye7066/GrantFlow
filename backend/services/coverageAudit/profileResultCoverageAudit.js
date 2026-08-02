@@ -152,7 +152,7 @@ function isAwardableRow(row, nowMs = Date.now()) {
  * @param {object} input.thesis            { is_student, schools[], location:{county} }
  * @param {number} [input.floor]
  */
-export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [], unsurfacedCount = 0, thesis = {}, floor = DEFAULT_MIN_SCORE, nowMs = Date.now(), resultTarget = null }) {
+export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [], unsurfacedCount = 0, thesis = {}, floor = DEFAULT_MIN_SCORE, nowMs = Date.now(), resultTarget = null, configuration = null }) {
   const qualifying = surfacedRows.filter((r) => qualifiesForDisplay(r, floor))
   // ACTIONABLE = qualifying rows a client could still apply to: not a templated
   // geo-stub and not past deadline. Acquisition gaps (institution / hyperlocal /
@@ -197,8 +197,21 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   //     low_results above, which counts pointers and fires at 3 — in prod that
   //     bar flags 0 of 33 real profiles while 12 sit below a target of 10
   //     (measured with this code against a full prod replica, 2026-08-01).
+  //
+  //     UNCONFIGURED PROFILES ARE NOT A SHORTFALL (2026-08-02). A profile that
+  //     declares no need, no eligibility fact and no usable location cannot be
+  //     satisfied by any amount of crawling, so counting it "below target"
+  //     would queue it for endless backfill — manufacturing junk to hit a
+  //     quota, the exact trap the floor was warned about. It is reported as
+  //     `unconfigured`, with the missing prerequisites NAMED, and excluded
+  //     from the floor and from `needs_rediscovery`. Measured in prod
+  //     2026-08-02: `profile-melissa-justus` (27 matches, 0 awardable) and
+  //     `profile-william` were both in the below-target set.
+  const unconfigured = configuration?.unconfigured === true
+  const missing_prerequisites = unconfigured ? (configuration.missing_prerequisites || []) : []
+  if (unconfigured) gaps.push(`unconfigured_profile:${missing_prerequisites.length}_prerequisites_unmet`)
   const result_target = Number.isFinite(Number(resultTarget)) ? Number(resultTarget) : resolveFleetResultTarget()
-  const below_result_target = result_target > 0 && awardable.length < result_target
+  const below_result_target = !unconfigured && result_target > 0 && awardable.length < result_target
   const result_shortfall = below_result_target ? result_target - awardable.length : 0
   if (below_result_target) gaps.push(`result_floor_shortfall:${awardable.length}_of_${result_target}`)
 
@@ -222,7 +235,9 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
 
   // Re-discovery can only fix acquisition gaps (2-4b), never a code-level
   // surfacing regression or a stale-decision eligibility defect (5).
-  const needs_rediscovery = institution_gap || hyperlocal_gap || low_results || below_result_target
+  // An unconfigured profile is never queued for re-discovery: re-running the
+  // crawlers over an empty profile is what produced the 27 invented rows.
+  const needs_rediscovery = !unconfigured && (institution_gap || hyperlocal_gap || low_results || below_result_target)
 
   return {
     profile_id: profileId,
@@ -242,6 +257,8 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
     result_target,
     below_result_target,
     result_shortfall,
+    unconfigured,
+    missing_prerequisites,
     ineligible_surfaced_match,
     ineligible_aid_count: ineligibleAidRows.length,
     needs_rediscovery,
@@ -311,6 +328,17 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
     }
   }
 
+  // Does this profile declare ANYTHING that can be searched for? Same detector
+  // the crawl entry point and the boot sweep use, so all three agree.
+  let configuration = null
+  try {
+    const { loadProfileContext } = await import('../profileHelpers.js')
+    const { assessProfileConfiguration } = await import('../profile/profileConfiguration.js')
+    configuration = assessProfileConfiguration(await loadProfileContext(db, profileId))
+  } catch {
+    configuration = null // unknown → treated exactly as before (never assumed unconfigured)
+  }
+
   return auditProfileResultCoverageFromData({
     profileId,
     surfacedRows: rows,
@@ -318,6 +346,7 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
     thesis: effThesis || {},
     floor,
     resultTarget: effTarget,
+    configuration,
   })
 }
 
@@ -389,6 +418,10 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
     // The per-profile RESULT FLOOR (owner rule 2026-08-01): how many profiles
     // hold fewer AWARDABLE results than their requested number.
     below_result_target: audits.filter((a) => a.below_result_target).length,
+    // Profiles that CANNOT be served until a human fills them in. Reported as
+    // its own class so a silence here means "every profile is configured",
+    // never "we quietly stopped counting some of them".
+    unconfigured: audits.filter((a) => a.unconfigured).length,
     ineligible_surfaced_matches: audits.filter((a) => a.ineligible_surfaced_match).length,
     needs_rediscovery: audits.filter((a) => a.needs_rediscovery).length,
     // Padding signals: profiles whose displayed count is inflated by expired rows
@@ -734,6 +767,10 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
       queued: healQueue.length,
       skipped_by_ledger: skippedByLedger,
       exhausted,
+      // NOT a shortfall — a prerequisite. Named, so the owner can act.
+      unconfigured: audits
+        .filter((a) => a.unconfigured)
+        .map((a) => ({ profile_id: a.profile_id, name: a.display_name ?? null, missing_prerequisites: a.missing_prerequisites })),
     },
     eligibility_heal: eligibilityHeal
       ? { demoted: eligibilityHeal.repaired ?? 0, profilesAffected: eligibilityHeal.profilesAffected ?? 0 }

@@ -36,6 +36,7 @@ import { listPresentProfileSignals } from './profileCoverage.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
 import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { detectForeignJurisdiction, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
+import { isPlaceholderPlaceLabel, placePrefixOfTitle } from '../config/placeholderProfileSignals.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
@@ -3847,6 +3848,19 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // not a program that "may still be accessible" from another state). The
   // catalog-side repair is enforceDeclaredGeoScope(); this makes the engine
   // correct even for a row the sweep has not reached yet.
+  // A row whose place was FABRICATED from a placeholder profile ("Anytown, SA —
+  // Local assistance programs near you (findhelp)", live in prod 2026-08-02) is
+  // a directory of a town that does not exist. It cannot serve ANY profile, so
+  // it is refused here rather than allowed to score as a nationwide locator —
+  // this is what makes the boot sweep CONVERGE instead of re-repairing nightly
+  // (the locator kind tug-of-war lesson). The writer-side gate is
+  // `countyCityDirectoryAdapter.placeLabel`.
+  const fabricatedPlace = placePrefixOfTitle(opp?.title)
+  if (fabricatedPlace && isPlaceholderPlaceLabel(fabricatedPlace)) {
+    const reasonText = `Geographic mismatch: "${fabricatedPlace}" is a placeholder place, not a real location`
+    reasons.push(reasonText)
+    return { decision: 'REJECT', explanation: `${reasonText}.`, reasons }
+  }
   const declaredPlaceState = declaredStateFromTitle(opp)
   const oppStateRaw = String(opp.state || '').trim() || (declaredPlaceState ?? '')
   const oppIsNational =

@@ -1,6 +1,12 @@
+import { isRegionCode } from '../../shared/usStateCodes.js'
+
 /**
  * Heuristic extraction of US state + ZIP from a freeform address line when
  * structured basic_information.state / .zip are empty.
+ *
+ * MUST STAY IN LOCKSTEP with `backend/utils/inferLocationFromAddress.js` —
+ * see that file for why an unparseable location must produce NO state rather
+ * than a wrong one (the `state:'USA'` → `"SA"` → "Anytown, SA" chain).
  *
  * @param {unknown} text
  * @returns {{ state: string|null, zip: string|null }}
@@ -10,8 +16,8 @@ export function inferUsStateZipFromText(text) {
   const s = text.replace(/\s+/g, ' ').trim()
   if (!s) return { state: null, zip: null }
 
-  let m = s.match(/,?\s*([A-Za-z]{2})\s+(\d{5})(?:-\d{4})?\s*$/i)
-  if (m) return { state: m[1].toUpperCase(), zip: m[2] }
+  let m = s.match(/(?:^|[\s,])([A-Za-z]{2})(?![A-Za-z])[\s,]*(\d{5})(?:-\d{4})?\s*$/i)
+  if (m && isRegionCode(m[1])) return { state: m[1].toUpperCase(), zip: m[2] }
 
   const zips = s.match(/\b(\d{5})(?:-\d{4})?\b/g)
   if (zips && zips.length > 0) {
@@ -19,8 +25,8 @@ export function inferUsStateZipFromText(text) {
     const zip = raw.length >= 5 ? raw.slice(0, 5) : raw
     const idx = s.lastIndexOf(raw)
     const before = idx > 0 ? s.slice(0, idx) : s
-    const sm = before.match(/(?:^|[,\s])([A-Za-z]{2})\s*,?\s*$/i)
-    if (sm) return { state: sm[1].toUpperCase(), zip }
+    const sm = before.match(/(?:^|[,\s])([A-Za-z]{2})(?![A-Za-z])\s*,?\s*$/i)
+    if (sm && isRegionCode(sm[1])) return { state: sm[1].toUpperCase(), zip }
     return { state: null, zip }
   }
 
@@ -30,8 +36,7 @@ export function inferUsStateZipFromText(text) {
 function normState(v) {
   if (v === null) return null
   const t = String(v).trim()
-  if (t.length === 2) return t.toUpperCase()
-  return null
+  return isRegionCode(t) ? t.toUpperCase() : null
 }
 
 function normZip(v) {

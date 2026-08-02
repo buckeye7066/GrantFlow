@@ -2,6 +2,7 @@ import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
 import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
+import { isFabricatedGeoSource } from '../config/placeholderProfileSignals.js'
 import { normalizeState, normalizeStateFromText } from '../utils/stateNormalization.js'
 import { createLogger } from '../utils/logger.js'
 import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
@@ -1123,6 +1124,10 @@ function resolveSecondaryLocation(raw) {
   let state = null
   let city = null
   let type = null
+  // The state string the address DECLARES, before normalization — a present
+  // but unresolvable one ('USA') is positive junk evidence, an absent one is
+  // ordinary silence. See isFabricatedGeoSource.
+  let declaredState = ''
 
   if (typeof raw === 'string') {
     const trimmed = raw.trim()
@@ -1135,7 +1140,10 @@ function resolveSecondaryLocation(raw) {
     const rawZip = a.zip ?? a.zip_code ?? a.postal ?? a.postal_code ?? null
     zip = rawZip !== null && rawZip !== undefined ? String(rawZip).replace(/\D/g, '').slice(0, 5) || null : null
     const rawState = a.state ?? a.region ?? null
-    state = rawState ? String(rawState).trim().toUpperCase().slice(0, 2) || null : null
+    declaredState = rawState ? String(rawState).trim() : ''
+    // Two letters is a SHAPE; the canonical registry is the AUTHORITY. The old
+    // `.slice(0, 2)` turned 'USA' into 'US', which is not a state either.
+    state = normalizeState(declaredState)
     const rawCity = a.city ?? null
     city = rawCity ? String(rawCity).trim() || null : null
     const rawType = a.type ?? a.label ?? null
@@ -1152,8 +1160,9 @@ function resolveSecondaryLocation(raw) {
     return null
   }
 
-  // Enrich from the offline ZIP database (mirrors the primary-location logic).
-  if (zip && !state) {
+  // Enrich from the offline ZIP database (mirrors the primary-location logic,
+  // including its placeholder-address refusal).
+  if (zip && !state && !isFabricatedGeoSource({ city, state: declaredState, zip })) {
     try {
       const lookup = zipcodes.lookup(zip)
       if (lookup?.state) state = String(lookup.state).toUpperCase()
@@ -1164,7 +1173,7 @@ function resolveSecondaryLocation(raw) {
   }
 
   let county = null
-  if (zip) {
+  if (zip && !isFabricatedGeoSource({ city, state: declaredState, zip })) {
     try {
       county = resolveCountyForZip(zip, state || null) || null
     } catch {
@@ -1255,7 +1264,16 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
 
   // If we have ZIP but not state/city, derive from local ZIP database.
   // This is critical for matching: many opportunities are state-scoped and the scoring engine penalizes unknown state.
-  if (location.zip && !location.state) {
+  //
+  // …UNLESS the address is a PLACEHOLDER (2026-08-02). This branch fires only
+  // when the state is empty, which is exactly what a placeholder address
+  // becomes now that the inference regex no longer mints "SA" from "USA" — so
+  // `{city:'Anytown', state:'USA', zip_code:'12345'}` would resolve to
+  // Schenectady, NY: a real, plausible place the applicant has no connection
+  // to, which is WORSE than an obviously-wrong one. `isFabricatedGeoSource`
+  // requires TWO corroborating placeholder signals, so a real person at ZIP
+  // 12345 (it is an assigned GE ZIP) still resolves normally.
+  if (location.zip && !location.state && !isFabricatedGeoSource(location)) {
     try {
       const lookup = zipcodes.lookup(location.zip)
       if (lookup?.state) location.state = String(lookup.state).toUpperCase()
@@ -1266,8 +1284,10 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   }
 
   // County is a durable "expand outward" geography signal:
-  // city → county → state → national. Never fabricate it unless we can resolve from an offline dataset.
-  if (location.zip && !location.county) {
+  // city → county → state → national. Never fabricate it unless we can resolve
+  // from an offline dataset — and never from a PLACEHOLDER address, for the
+  // same reason as the state rescue above (ZIP 12345 → "Schenectady County").
+  if (location.zip && !location.county && !isFabricatedGeoSource(location)) {
     try {
       const county = resolveCountyForZip(location.zip, location.state || null)
       if (county) location.county = county
@@ -3231,7 +3251,17 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // Forward disability-skew class). Orgs now fall back to org-generic fundable
   // needs; person/household (and untyped, per the safe default) profiles keep
   // the benefit set.
+  //
+  // PROVENANCE (2026-08-02): the fallback makes `needs` NEVER EMPTY, so
+  // "the profile has needs" is not evidence the profile SAID anything. A
+  // consumer asking "did this person declare anything at all?" (the
+  // unconfigured-profile detector) read a defaulted set as a declaration and
+  // concluded a wholly-blank placeholder was servable. `needsDefaulted` records
+  // that the set was INFERRED FROM TYPE, never read — "we could not read it" ≠
+  // "there is nothing". Nothing about the fallback's behaviour changes.
+  let needsDefaulted = false
   if (needs.size === 0) {
+    needsDefaulted = true
     const RE_ORG_SHAPED = /(non.?profit|501c3|501\(c\)|church|ministry|congregation|organi[sz]ation|coalition|consortium|foundation|charity|ngo|business|company|llc|corp|cooperative|school|district|universit|college|government|municipal|county|tribal|fire|ems|first responder|law enforcement|hospital|clinic|laborator|institute|research|biotech|agency|shelter|food bank|food pantry|library|museum|workforce board|chamber)/i
     const declaredTypeText = [profile?.primary_type, profile?.profile_type, profile?.type, ...applicantTypeSet]
       .filter((v) => typeof v === 'string')
@@ -3469,6 +3499,9 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     rawSections,
     coverage,
     needs,
+    // TRUE when `needs` holds only the type-shaped fallback — i.e. the profile
+    // declared no need at all and this set was inferred. See the fallback above.
+    needsDefaulted,
     applicantType,
     immigration: immigrationSet,
     geographic: geographicSet,
