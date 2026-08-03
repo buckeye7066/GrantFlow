@@ -13,6 +13,8 @@
 
 import fs from 'node:fs'
 
+import { CHROMIUM_CONTAINER_ARGS } from './hamilton/browserLaunch.js'
+
 const PDF_OPTS = Object.freeze({
   format: 'Letter',
   printBackground: true,
@@ -47,7 +49,10 @@ export async function renderHtmlBatchToPdf(htmls = []) {
 
   let browser = null
   try {
-    browser = await chromium.launch({ headless: true })
+    // Container args are mandatory on every launch: the bare form here shipped
+    // without --disable-dev-shm-usage, the exact omission that OOM-killed the
+    // container before browserLaunch.js centralized the args.
+    browser = await chromium.launch({ headless: true, args: [...CHROMIUM_CONTAINER_ARGS] })
     const ctx = await browser.newContext()
     const out = []
     for (const html of list) {
