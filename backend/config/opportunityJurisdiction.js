@@ -228,9 +228,29 @@ export function detectForeignOpportunity(row) {
         return { foreign: true, cctld: entry.country.toLowerCase(), host: null, funder: entry.label }
       }
     }
+    // US diplomatic missions abroad: a "U.S. Mission to Azerbaijan" / "U.S.
+    // Embassy Luanda" program is US-government-FUNDED but serves audiences IN
+    // that country — no domestic profile can act on it. Live leak measured
+    // 2026-08-03: the first write-enabled catalog-rescore pass linked "U.S.
+    // Mission to Azerbaijan — English-Language Program" to a TN student at
+    // score 53 (12 mission/embassy rows total in the pass), exactly the class
+    // the flood dry-run flagged. The country varies per row, so cctld stays
+    // null; `foreign: true` is the verdict consumers act on.
+    if (US_MISSION_ABROAD_RX.test(identity)) {
+      return { foreign: true, cctld: null, host: null, funder: 'U.S. diplomatic mission abroad' }
+    }
   }
   return { foreign: false, cctld: null, host: null, funder: null }
 }
+
+/**
+ * US diplomatic posts abroad, identity fields only, word-bounded. "Mission"
+ * alone is ordinary English ("mission statement", church missions) — the
+ * pattern requires the U.S./US prefix AND either the Embassy/Consulate noun or
+ * "Mission to/in <somewhere>" (the State-Department naming shape).
+ */
+export const US_MISSION_ABROAD_RX =
+  /\bu\.?s\.?\s+(?:embassy|consulate(?:\s+general)?)\b|\bu\.?s\.?\s+mission\s+(?:to|in)\s+\S/i
 
 /**
  * A locator title states its place as `"<Place>, XX — <what it is>"`. Only that
@@ -330,7 +350,13 @@ export function foreignUrlLikePatterns() {
  * decides (the "energy saving grants" phrase needs its UK qualifier in JS).
  */
 export function foreignFunderNameLikePatterns() {
-  return ['%tata trust%', '%la flex%', '%energy saving grants%']
+  // Deliberate SUPERSET (detectForeignOpportunity adjudicates each hit):
+  // '%u.s. mission%' also matches "U.S. Mission Statement" — the JS regex's
+  // "Mission to/in" shape is what decides.
+  return [
+    '%tata trust%', '%la flex%', '%energy saving grants%',
+    '%u.s. mission%', '%us mission%', '%u.s. embassy%', '%us embassy%', '%consulate%',
+  ]
 }
 
 export function foreignFunderNameSqlPredicate(hayExpr) {
@@ -362,6 +388,7 @@ export default {
   FOREIGN_FUNDER_HOSTS,
   FOREIGN_FUNDER_NAMES,
   FOREIGN_FUNDER_SPONSORS,
+  US_MISSION_ABROAD_RX,
   hostnameOf,
   foreignCctldOfHost,
   foreignFunderCountryOfHost,
