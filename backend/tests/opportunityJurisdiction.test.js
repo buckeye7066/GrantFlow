@@ -22,6 +22,8 @@ import {
   hostnameOf,
   foreignCctldOfHost,
   detectForeignJurisdiction,
+  detectForeignOpportunity,
+  foreignFunderNameLikePatterns,
   declaredStateFromTitle,
   correctedGeoScopeFromTitle,
 } from '../config/opportunityJurisdiction.js'
@@ -147,5 +149,37 @@ describe('opportunityJurisdiction — a row that names its own state is not nati
     expect(correctedGeoScopeFromTitle({ ...unscoped, state: 'GA' })).toBe(null)
     // Declares nothing → left alone.
     expect(correctedGeoScopeFromTitle({ title: 'Medicaid and CHIP', state: null, is_national: 1 })).toBe(null)
+  })
+})
+
+// ── US diplomatic missions abroad (2026-08-03 rescore-pass leak) ─────────────
+describe('opportunityJurisdiction — US missions abroad are foreign-by-construction', () => {
+  it('detects the verbatim leaked rows (Azerbaijan mission linked to a TN student at 53)', () => {
+    for (const row of [
+      { title: 'English-Language Program for Disadvantaged Communities Initiatives Program', sponsor: 'U.S. Mission to Azerbaijan' },
+      { title: 'U.S. Embassy Luanda Public Diplomacy Grants Program', sponsor: 'U.S. Department of State' },
+      { title: 'Small Grants Program', sponsor: 'U.S. Mission to the United Nations-Geneva' },
+      { title: 'Cultural Affairs Grants', sponsor: 'U.S. Consulate General Karachi' },
+    ]) {
+      const verdict = detectForeignOpportunity(row)
+      expect(verdict.foreign, `${row.sponsor}: ${row.title}`).toBe(true)
+    }
+  })
+
+  it('ordinary "mission" language never trips it', () => {
+    for (const row of [
+      { title: 'Mission-Driven Nonprofit Capacity Grants', sponsor: 'Example Foundation' },
+      { title: 'US Mission Statement Essay Contest', sponsor: 'Civic Education Fund' },
+      { title: 'Rescue Mission Support Grants', sponsor: 'Nashville Rescue Mission' },
+    ]) {
+      const verdict = detectForeignOpportunity(row)
+      expect(verdict.foreign, `${row.sponsor}: ${row.title}`).toBe(false)
+    }
+  })
+
+  it('the LIKE superset covers the mission rows (SQL prefilter cannot starve the detector)', () => {
+    const patterns = foreignFunderNameLikePatterns()
+    const hay = 'small grants program u.s. mission to azerbaijan'
+    expect(patterns.some((p) => hay.includes(p.replaceAll('%', '')))).toBe(true)
   })
 })

@@ -431,3 +431,53 @@ describe('HTML entity hygiene (ingest + read path util)', () => {
     expect(cleanExtractedText(42)).toBe(42)
   })
 })
+
+// ── First write-enabled rescore pass leaks (2026-08-03, verbatim prod rows) ──
+// The catalog-rescore sweep's first pass linked these to a real profile as
+// direct matches; both classes are POINTERS wearing a NULL kind column.
+describe('rescore-pass leak classes: place-locator titles and resource hubs', () => {
+  it('routes "<Org> near <Place>, XX" locator stubs to the resource bucket', () => {
+    for (const title of [
+      'United Way near Auburntown, TN',
+      'United Way near Brentwood, TN',
+      'Community Action Agency near Cedar Hill, TN',
+    ]) {
+      const res = classifyFundingResult({ title, sponsor: 'Community Action Partnership', application_url: 'https://example-agency.org/find' })
+      expect(res.bucket, title).toBe('resource')
+      expect(res.reasons).toContain('place_locator_title')
+    }
+  })
+
+  it('a real award whose title contains "near" without the ", XX" anchor is untouched', () => {
+    const res = classifyFundingResult({
+      title: 'Near Peer Mentoring Scholarship',
+      sponsor: 'Example Foundation',
+      application_url: 'https://example-foundation.org/apply',
+      amount_max: 5000,
+    })
+    expect(res.bucket).toBe('fundable')
+  })
+
+  it('routes registry resource hubs (College Scorecard @78 in prod) to resources — exact identity only', () => {
+    const hub = classifyFundingResult({ title: 'College Scorecard', application_url: 'https://collegescorecard.ed.gov' })
+    expect(hub.bucket).toBe('resource')
+    expect(hub.reasons).toContain('resource_hub_registry')
+    // A scholarship MENTIONING the phrase is not the hub.
+    const notHub = classifyFundingResult({
+      title: 'College Scorecard Excellence Scholarship',
+      sponsor: 'Example Foundation',
+      application_url: 'https://example-foundation.org/apply',
+      amount_max: 2000,
+    })
+    expect(notHub.bucket).toBe('fundable')
+  })
+
+  it('the REAL recall wins from the same pass stay fundable', () => {
+    for (const row of [
+      { title: 'Adrienne Emond/Delta Kappa Gamma Scholarship', sponsor: 'Cleveland State Foundation', application_url: 'https://clevelandstatecc.academicworks.com/', amount_max: 1500 },
+      { title: 'Tennessee Promise', sponsor: 'Tennessee Student Assistance Corporation (TSAC)', application_url: 'https://www.tn.gov/collegepays/tennessee-promise.html', deadline: '2027-03-01' },
+    ]) {
+      expect(classifyFundingResult(row).bucket, row.title).toBe('fundable')
+    }
+  })
+})

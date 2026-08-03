@@ -185,6 +185,23 @@ export const RESULT_BUCKETS = Object.freeze({
 })
 
 /**
+ * "<Org> near <Place>, XX" — the countyCityDirectoryAdapter minting shape.
+ * Requires the two-letter state anchor after the comma; "near" alone is
+ * ordinary English.
+ */
+export const PLACE_LOCATOR_TITLE_RX = /\bnear\s+[A-Za-z][A-Za-z .''-]{1,60},\s*[A-Z]{2}\b/
+
+/**
+ * Resource/data hubs measured leaking into direct matches 2026-08-03 (College
+ * Scorecard linked at score 78): exact lower-cased title identity only.
+ */
+export const RESOURCE_HUB_TITLES = Object.freeze(new Set([
+  'college scorecard',
+  'state higher ed agencies',
+  'united way worldwide',
+]))
+
+/**
  * The chain, in one place. Returns `{ bucket, reasons, stale }`:
  *   - not_a_grant : hidden bucket — regulatory/lead-gen/clearly-expired/
  *                   anonymized-funder records. Never Best matches / Worth
@@ -212,6 +229,23 @@ export function classifyFundingResult(row, { now = new Date() } = {}) {
   const kind = String(row.opportunity_kind ?? '').trim()
   if ((kind && isPointerKind(kind)) || row.is_directory === true || row.is_resource === true) {
     return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['pointer_kind'], stale }
+  }
+  // Machine-minted per-place locator rows carry the "<Org> near <Place>, XX"
+  // title shape with a NULL kind column, so the pointer-kind check above never
+  // sees them. Live leak measured 2026-08-03: the first write-enabled
+  // catalog-rescore pass linked "United Way near Auburntown, TN" (+ Brentwood,
+  // Charlotte, … near-duplicate place variants) to one profile at score 69 —
+  // pointers presented as direct matches. The SHAPE is the claim (a real award
+  // titled "…near…" without the ", XX" anchor is untouched).
+  const title = String(row.title ?? '')
+  if (PLACE_LOCATOR_TITLE_RX.test(title)) {
+    return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['place_locator_title'], stale }
+  }
+  // Known resource/data hubs that carry a URL (a "fundable signal") but award
+  // nothing — REGISTRY of measured leaks, exact identity match only, so a real
+  // scholarship whose title merely contains one of these phrases is untouched.
+  if (RESOURCE_HUB_TITLES.has(title.trim().toLowerCase())) {
+    return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['resource_hub_registry'], stale }
   }
   if (!hasFundableSignal(row)) {
     return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['no_fundable_signal'], stale }
