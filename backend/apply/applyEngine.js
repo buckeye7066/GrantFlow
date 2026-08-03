@@ -9,6 +9,7 @@ import { opportunityKindOf } from '../../shared/opportunityFundability.js'
 import { isNoPerAwardFigureKind } from '../config/opportunityKindClasses.js'
 import { classifyAidType } from '../config/aidTypePreferences.js'
 import { isIndividualLikeProfileType } from '../services/matchEngine.js'
+import { safeParseArrayField } from '../services/profileHelpers.js'
 import { createLogger } from '../utils/logger.js'
 
 const applyLog = createLogger('applyEngine')
@@ -28,6 +29,7 @@ RULES:
 - Every section should demonstrate alignment between the applicant's needs and the funder's mission
 - For submission instructions, provide exact URLs, addresses, fax numbers, and step-by-step guidance
 - ANTI-FABRICATION: never invent dollar amounts, line items, deadlines, addresses, contacts, fax numbers, URLs, or program details that aren't in the user-provided context. If a fact isn't in context, write "not on file" or omit the line — do not guess.
+- TAILOR TO THE FUNDER: name the funder and argue alignment with the SPECIFIC program facts in the GRANT DETAILS (program description, stated eligibility, focus areas, award range). Never produce boilerplate that could be sent to any funder unchanged. If the funder's mission or priorities are NOT stated in the context, write "[review: confirm funder priority]" where an alignment claim would go — do not invent priorities.
 - ANTI-MISMATCH: if the application context indicates a non-discretionary process (FAFSA-driven institutional aid, automatic profile match, nomination-only, invitation-only, or "no application"), do NOT produce a budget justification, project narrative, or evaluation plan. Return a single short note that the section does not apply to this submission style.`
 
 // Hardcoded allowlist of tables + acceptable composite unique key sets used by
@@ -1049,10 +1051,21 @@ export function classifyApplicationStyle(grant, opportunity, profile = null) {
   // The opportunity row's own DECLARED kind wins over every heuristic below.
   // A row that declares nothing falls through — silence is not a denial, and
   // a title WORD alone must never flip the document shape (the #937
-  // one-shared-word class), so there is deliberately NO "scholarship in the
-  // title" heuristic here.
+  // one-shared-word class), so the only title-based arm is the profile-gated
+  // one at the bottom, keyed on an EXISTING classifier.
+  // ORG exception: a church/nonprofit applying against a scholarship-kind row
+  // is FUNDING or administering scholarships, not writing a personal essay —
+  // an org-root profile keeps the organizational proposal shape. A null/
+  // unknown profile does not veto the row's own declared contract.
   const declaredStyle = applicationStyleFromDeclaredKind(opportunity)
-  if (declaredStyle) return declaredStyle
+  const applicantIsIndividual = profile
+    ? isIndividualLikeProfileType(profile.primary_type ?? profile.applicant_type)
+    : null
+  if (declaredStyle === 'scholarship' && applicantIsIndividual === false) {
+    // fall through to the heuristics / standard default below
+  } else if (declaredStyle) {
+    return declaredStyle
+  }
 
   const sponsor = String(grant?.funder || opportunity?.sponsor || '').toLowerCase()
   const title = String(grant?.title || opportunity?.title || '').toLowerCase()
@@ -1123,7 +1136,7 @@ export function classifyApplicationStyle(grant, opportunity, profile = null) {
   // rebuttal — crawlers default that column to 'grant' when the source said
   // nothing (`opp.opportunity_type || 'grant'`), so it cannot veto what the
   // row's own title states.
-  if (profile && isIndividualLikeProfileType(profile.primary_type ?? profile.applicant_type)) {
+  if (applicantIsIndividual === true) {
     const declaredKindRaw = opportunity?.opportunity_kind ?? opportunity?.kind ?? null
     const pointerOrBenefit = isNoPerAwardFigureKind(declaredKindRaw)
     const titleOnly = grant?.title || opportunity?.title || ''
@@ -1690,17 +1703,35 @@ function buildSubmissionInstructions(grant, opportunity) {
   return parts.join('\n') || 'No specific submission instructions available. Contact the funding organization for details.'
 }
 
+// Every fact here must come from the grant/opportunity ROW — this context is
+// what makes a draft argue alignment with THIS funder's program instead of
+// reading like boilerplate. Do not add derived/guessed facts: the prompts'
+// anti-fabrication rules assume everything below was stated by the source.
 function buildGrantContext(grant, opportunity) {
   const parts = []
   parts.push(`Grant/Opportunity: ${grant?.title || opportunity?.title || 'Unknown'}`)
   parts.push(`Funder: ${grant?.funder || opportunity?.sponsor || 'Unknown'}`)
-  if (grant?.deadline) parts.push(`Deadline: ${grant.deadline}`)
+  if (grant?.deadline || opportunity?.deadline) parts.push(`Deadline: ${grant?.deadline || opportunity.deadline}`)
   if (grant?.amount_requested || grant?.amount_max) parts.push(`Amount: $${grant.amount_requested || grant.amount_max}`)
+  // The funder's own stated award range, when the row carries one.
+  if (!grant?.amount_requested && !grant?.amount_max && (opportunity?.amount_min || opportunity?.amount_max)) {
+    const lo = opportunity.amount_min ? `$${opportunity.amount_min}` : null
+    const hi = opportunity.amount_max ? `$${opportunity.amount_max}` : null
+    parts.push(`Stated award range: ${[lo, hi].filter(Boolean).join(' - ')}`)
+  }
   if (grant?.program_description) parts.push(`Program: ${grant.program_description}`)
   if (grant?.eligibility_summary) parts.push(`Eligibility: ${grant.eligibility_summary}`)
   if (grant?.selection_criteria) parts.push(`Criteria: ${grant.selection_criteria}`)
   if (opportunity?.description) parts.push(`Description: ${opportunity.description}`)
   if (opportunity?.eligibility_bullets) parts.push(`Eligibility: ${opportunity.eligibility_bullets}`)
+  // The funder's own eligibility prose (funding_opportunities.eligibility_text)
+  // — the strongest tailoring signal the row can carry.
+  if (opportunity?.eligibility_text) parts.push(`Funder's stated eligibility: ${opportunity.eligibility_text}`)
+  const focusAreas = safeParseArrayField(opportunity?.categories, [])
+    .slice(0, 8)
+    .map((v) => String(v))
+    .filter(Boolean)
+  if (focusAreas.length > 0) parts.push(`Funder focus areas: ${focusAreas.join(', ')}`)
   return parts.join('\n')
 }
 

@@ -443,6 +443,29 @@ test('an ORG profile applying to a scholarship-titled row keeps the org proposal
   )
 })
 
+test('an ORG profile keeps the org proposal shape even against a DECLARED scholarship kind', () => {
+  // A church/ministry applying against a scholarship-kind row is FUNDING or
+  // administering scholarships — it writes an organizational proposal, not a
+  // personal essay. Owner-named org profiles: Vermilion Church of God of
+  // Prophecy, Focus Forward Ministry.
+  for (const orgType of ['church', 'ministry', 'nonprofit']) {
+    assert.equal(
+      classifyApplicationStyle(
+        { funder: 'Local Funder', title: 'Youth Scholarship Fund' },
+        { opportunity_kind: 'SCHOLARSHIP' },
+        { primary_type: orgType },
+      ),
+      'standard',
+      `${orgType} profile must keep the organizational proposal shape`,
+    )
+  }
+  // A null/unknown profile does not veto the row's own declared contract.
+  assert.equal(
+    classifyApplicationStyle({}, { opportunity_kind: 'SCHOLARSHIP' }, null),
+    'scholarship',
+  )
+})
+
 test('a declared POINTER kind never gets the essay shape, even scholarship-titled + student', () => {
   // Real prod shape: "Bold.org — Housing & Living Expense Scholarships" is a
   // DIRECTORY — a pointer, never an award. No personal essay for a locator.
