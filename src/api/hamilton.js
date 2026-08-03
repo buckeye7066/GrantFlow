@@ -162,7 +162,7 @@ export function portalTypeLabel(portalType) {
 // GET   → { fields:{essay_key:text}, status:'pending'|'approved'|'edited',
 //           missing_questions:[{requirement, question, field?, section_key?}],
 //           funder_requirements:[...], can_auto_submit:bool,
-//           gate_reason:'not_approved'|'automation_off'|'missing_info'|null }
+//           gate_reason:'automation_off'|'missing_info'|null } — 'not_approved' retired 2026-08-03 (auto submit means auto submit)
 // NOTE: the backend mounts these at /api/hamilton/tailored/* keyed on grant_id
 // (the portal-card = pipeline grant). profileId is accepted for call-site
 // compatibility but the backend resolves the profile from the grant + auth.
