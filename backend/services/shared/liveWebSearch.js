@@ -23,6 +23,7 @@
 
 import { searchWeb } from './webSearchEngine.js'
 import { buildGrantsGovQueryTerms } from '../sourceRegistry.js'
+import { classifyProductionProfile } from '../../config/productionProfileScope.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:liveWebSearch')
@@ -49,6 +50,21 @@ function stableId(url) {
   const s = String(url || '')
   for (let i = 0; i < s.length; i += 1) hash = (hash * 31 + s.charCodeAt(i)) >>> 0
   return `web-${hash.toString(36)}`
+}
+
+function skippedWebSearch(profileContext = {}) {
+  const scope = classifyProductionProfile(profileContext)
+  if (scope.production) return null
+  return {
+    opportunities: [],
+    debug: {
+      queries: [],
+      raw: 0,
+      deduped: 0,
+      skipped: true,
+      reason: scope.reason,
+    },
+  }
 }
 
 /**
@@ -209,6 +225,9 @@ async function collectWebLeads(queries, { state = null, perQueryCount = 6, timeo
  * @returns {Promise<{ opportunities: Object[], debug: Object }>}
  */
 export async function searchLocalWebByProfile(profileContext = {}, opts = {}) {
+  const skipped = skippedWebSearch(profileContext)
+  if (skipped) return skipped
+
   const maxQueries = Math.max(1, Math.min(Number(opts.maxQueries) || 8, 12))
   const perQueryCount = Math.max(1, Math.min(Number(opts.perQueryCount) || 6, 15))
   const timeoutMs = Math.max(1000, Math.min(Number(opts.timeoutMs) || 9000, 25000))
@@ -341,6 +360,9 @@ export async function searchNeedWebLeads({
   perQueryCount = 6,
   timeoutMs = 12000,
 } = {}) {
+  const skipped = skippedWebSearch(profileContext)
+  if (skipped) return skipped
+
   const queries = buildNeedWebQueries(needText, expandedNeed, profileContext, { variant, maxQueries })
   const debug = { queries, raw: 0, deduped: 0 }
   if (queries.length === 0) return { opportunities: [], debug }

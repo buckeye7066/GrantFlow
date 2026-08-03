@@ -14,6 +14,7 @@
 
 import { detectUnconfiguredProfile } from '../../config/placeholderProfileSignals.js'
 import { deriveProfileFacts } from '../../config/profileDerivedFacts.js'
+import { classifyProductionProfile } from '../../config/productionProfileScope.js'
 import { buildProfileSignals } from '../profileHelpers.js'
 
 /**
@@ -21,13 +22,30 @@ import { buildProfileSignals } from '../profileHelpers.js'
  * @param {object}  ctx.profile
  * @param {object}  ctx.sections
  * @param {object} [ctx.signals]        reused when present (it is expensive)
- * @returns {import('../../config/placeholderProfileSignals.js').default extends never ? object : {
- *   unconfigured: boolean, families: string[], signals: object[],
- *   substance: string[], missing_prerequisites: string[], reason: string|null }}
+ * @returns {object}
  */
 export function assessProfileConfiguration(ctx = {}) {
   const profile = ctx?.profile ?? {}
   const sections = ctx?.sections ?? {}
+
+  // Administration/test fixtures are intentionally valid records, but they are
+  // not funding applicants. Block them at the same choke point the live crawl
+  // consults before building a thesis or performing network work. This prevents
+  // Admin Vault / Play Review from reappearing through a new route that forgot
+  // a local name check.
+  const scope = classifyProductionProfile(ctx)
+  if (!scope.production) {
+    return {
+      unconfigured: true,
+      excluded_from_matching: true,
+      exclusion_reason: scope.reason,
+      families: [],
+      signals: [],
+      substance: [],
+      missing_prerequisites: [],
+      reason: 'profile_non_production',
+    }
+  }
 
   let signals = ctx?.signals ?? null
   if (!signals) {
@@ -47,6 +65,9 @@ export function assessProfileConfiguration(ctx = {}) {
  */
 export function describeUnconfiguredProfile(verdict, { max = 6 } = {}) {
   if (!verdict?.unconfigured) return null
+  if (verdict.excluded_from_matching) {
+    return 'This is an internal or test profile and is excluded from production funding matching.'
+  }
   const prereqs = (verdict.missing_prerequisites || []).slice(0, max)
   return `This profile has not been filled in, so no crawl can mean anything for it yet. Supply: ${prereqs.join('; ')}.`
 }
