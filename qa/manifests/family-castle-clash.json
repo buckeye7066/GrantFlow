@@ -4,7 +4,7 @@
   "repo": "buckeye7066/family-castle-clash",
   "local_path": "C:/Users/firer/family-castle-clash",
   "runtime_type": "web",
-  "start_command": "npm run build && npm start",
+  "start_command": "npm run build && node tools/eva-reset-fixture.mjs && npm start",
   "stop_command": "taskkill-by-port",
   "readiness_probe": { "type": "http", "path": "/api/health", "port": 8080, "timeout_ms": 90000 },
   "base_url": "http://localhost:8080",
@@ -64,12 +64,12 @@
       "steps": [
         { "action": "goto", "url": "/" },
         { "action": "waitForSelector", "selector": "input" },
-        { "action": "fill", "selector": "input[name=username], input[type=text]", "value": "eva-fixture" },
-        { "action": "fill", "selector": "input[name=pin], input[type=password]", "value": "4242" },
-        { "action": "click", "selector": "button[type=submit]" },
+        { "action": "fill", "selector": "input[placeholder^='Your name']", "value": "eva-fixture" },
+        { "action": "fill", "selector": "input[type=password]", "value": "4242" },
+        { "action": "click", "selector": "button:has-text('Create Account')" },
         { "action": "wait", "ms": 1500 }
       ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "mode" }],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Signed in as" }],
       "user_impact": "If offline registration fails, a new player can never create an account (registration is fully offline by design).",
       "candidate_files": ["client/src/screens/Login.tsx", "client/src/screens/Home.tsx", "server/routes/auth.js"]
     }

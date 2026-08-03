@@ -26,8 +26,11 @@
  * and one verdict. The verdict is `proven` ONLY when the after-count is
  * consistent with the deletions the sweeps reported AND no row survives past
  * its TTL. A live-but-unexpired row is NOT a failure — Amy's TTL is 24-72h by
- * design and a profile crawled minutes ago is still inside its grace window —
- * but a row past TTL is, and it is reported as `leaked`, by id.
+ * design and a profile crawled minutes ago is still inside its grace window.
+ * A row past TTL is classified (2026-08-03): one the sweep is deliberately
+ * holding under a documented guard (the 6h crawled grace / the bounded
+ * never-crawled window) is `grace_held`; one NO guard explains is `leaked`,
+ * by id. See DELETION_VERDICT below for why the split exists.
  *
  * WHAT IT WILL NOT DO
  * -------------------
@@ -45,13 +48,87 @@
  */
 
 import { ORIGIN_CREATED_BY } from './amyConstants.js'
+import {
+  AMY_EXPIRED_SWEEP_MIN_CRAWLED_AGE_MS,
+  amyNeverCrawledMaxAgeMs,
+} from './amyProfileStore.js'
 
-/** Verdicts. `unknown` is a first-class outcome: an unreadable DB proves nothing. */
+/**
+ * Verdicts. `unknown` is a first-class outcome: an unreadable DB proves nothing.
+ *
+ * `grace_held` (2026-08-03): a row past its TTL that the sweep is DELIBERATELY
+ * still holding under one of its own documented guards — the 6h crawled grace
+ * or the bounded never-crawled window — is not a leak; it is the sweep working
+ * as designed, and it will be reaped on the first pass after the guard lapses.
+ * Verified against prod 2026-08-03: the two "leaked" survivors in the owner's
+ * morning report (b9ca2567, 67b6f184) were skipped by the expired sweep with
+ * reason `crawled_too_recently` (its own persisted telemetry in
+ * `amy_last_report.cleanup_expired.skipped_ids`) — every marker intact, simply
+ * inside the grace. Reporting that as LEAKED made a by-design hold read as a
+ * cleanup failure, which is the alarm-that-can-never-go-green shape.
+ *
+ * The verdict does NOT go soft: a survivor no documented guard explains — bad
+ * markers, a stale crawl signal the sweep should have reaped, or a row so old
+ * (past AMY_NEVER_CRAWLED_MAX_AGE_HOURS) that riding consecutive grace windows
+ * means it is being starved by perpetual re-discovery — stays LEAKED.
+ */
 export const DELETION_VERDICT = Object.freeze({
   PROVEN: 'proven',
   LEAKED: 'leaked',
+  GRACE_HELD: 'grace_held',
   UNKNOWN: 'unknown',
 })
+
+/** Survivor hold classes — the documented guard that explains a past-TTL row. */
+export const SURVIVOR_HOLD = Object.freeze({
+  /** Crawled/discovered within the sweep's grace window (crawled_too_recently). */
+  CRAWL_GRACE: 'crawl_grace',
+  /** Never crawled, still inside the bounded never-crawled reap window. */
+  NEVER_CRAWLED_WINDOW: 'never_crawled_window',
+})
+
+/**
+ * Which documented sweep guard (if any) explains a past-TTL survivor.
+ * PURE. Returns a SURVIVOR_HOLD value, or null — null means NO guard explains
+ * the row and it is a real leak.
+ *
+ * The rules MIRROR `cleanupAmyProfiles`' own skip logic (read-only — this
+ * never decides deletion):
+ *   - markers must be intact (`allow_sam_cleanup`/`synthetic` === true): a row
+ *     the sweep can never reap is a leak no matter what else is true;
+ *   - a row older than `neverCrawledMaxAgeMs` (default 96h — the sweep's own
+ *     "far past TTL, never going to happen naturally" bound) is a leak even
+ *     inside a crawl grace: a synthetic still riding 6h graces at that age is
+ *     being starved by perpetual re-discovery, not protected mid-flight;
+ *   - inside those bounds, a fresh crawl signal is the 6h grace and an absent
+ *     one is the bounded never-crawled window.
+ */
+export function classifySurvivorHold(
+  survivor,
+  {
+    now = new Date(),
+    minCrawledAgeMs = AMY_EXPIRED_SWEEP_MIN_CRAWLED_AGE_MS,
+    neverCrawledMaxAgeMs = amyNeverCrawledMaxAgeMs(),
+  } = {},
+) {
+  if (!survivor) return null
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now)
+  if (!Number.isFinite(nowMs)) return null
+  // Marker drift = unreachable by the sweep = leak.
+  if (survivor.allow_sam_cleanup !== true || survivor.synthetic !== true) return null
+  // Starvation escalation: far past the sweep's own never-going-to-happen bound.
+  const createdMs = Date.parse(survivor.created_at ?? survivor.expires_at ?? '')
+  const maxAge = Number(neverCrawledMaxAgeMs) || 0
+  if (maxAge > 0 && Number.isFinite(createdMs) && nowMs - createdMs >= maxAge) return null
+  const crawledMs = survivor.crawled_signal_at ? Date.parse(survivor.crawled_signal_at) : NaN
+  if (Number.isFinite(crawledMs)) {
+    return nowMs - crawledMs < (Number(minCrawledAgeMs) || 0) ? SURVIVOR_HOLD.CRAWL_GRACE : null
+  }
+  // No crawl signal at all: inside the bounded never-crawled window (checked
+  // above), the sweep is documented NOT to reap it yet.
+  if (maxAge > 0 && Number.isFinite(createdMs)) return SURVIVOR_HOLD.NEVER_CRAWLED_WINDOW
+  return null
+}
 
 /** Count live Amy-owned profiles. Returns null (not 0) when it cannot read. */
 export async function countAmyProfiles(db) {
@@ -78,28 +155,62 @@ export async function findExpiredSurvivors(db, { now = new Date(), limit = 200 }
   if (!db) return null
   const nowIso = now instanceof Date ? now.toISOString() : String(now)
   try {
-    const rows = await db
-      .prepare(
-        `SELECT p.id AS id, p.display_name AS display_name, p.created_at AS created_at, s.data AS data
-           FROM profiles p
-           LEFT JOIN profile_sections s
-             ON s.profile_id = p.id AND s.section_key = 'amy_metadata'
-          WHERE p.created_by = ?
-          LIMIT ?`,
-      )
-      .all(ORIGIN_CREATED_BY, Math.max(1, Math.min(2000, limit)))
+    // Tolerant of older/test schemas without profiles.last_discovery_at — the
+    // same fallback `listAmyProfiles` (the sweep's own reader) uses; the crawl
+    // signal then comes from amy_metadata alone.
+    let rows
+    const bound = Math.max(1, Math.min(2000, limit))
+    try {
+      rows = await db
+        .prepare(
+          `SELECT p.id AS id, p.display_name AS display_name, p.created_at AS created_at,
+                  p.last_discovery_at AS last_discovery_at, s.data AS data
+             FROM profiles p
+             LEFT JOIN profile_sections s
+               ON s.profile_id = p.id AND s.section_key = 'amy_metadata'
+            WHERE p.created_by = ?
+            LIMIT ?`,
+        )
+        .all(ORIGIN_CREATED_BY, bound)
+    } catch {
+      rows = await db
+        .prepare(
+          `SELECT p.id AS id, p.display_name AS display_name, p.created_at AS created_at, s.data AS data
+             FROM profiles p
+             LEFT JOIN profile_sections s
+               ON s.profile_id = p.id AND s.section_key = 'amy_metadata'
+            WHERE p.created_by = ?
+            LIMIT ?`,
+        )
+        .all(ORIGIN_CREATED_BY, bound)
+    }
     const survivors = []
     for (const row of Array.isArray(rows) ? rows : []) {
-      let expiresAt = null
+      let meta = null
       try {
         const parsed = typeof row?.data === 'string' ? JSON.parse(row.data) : row?.data
-        expiresAt = parsed?.expires_at ?? parsed?.amy?.expires_at ?? null
-      } catch { expiresAt = null }
+        // Same precedence as before this change: the flat shape wins, the
+        // nested `amy` shape is the fallback.
+        meta = parsed?.expires_at ? parsed : (parsed?.amy?.expires_at ? parsed.amy : parsed)
+      } catch { meta = null }
+      const expiresAt = meta?.expires_at ?? null
       if (!expiresAt) continue
       const t = Date.parse(expiresAt)
       if (!Number.isFinite(t)) continue
       if (t < Date.parse(nowIso)) {
-        survivors.push({ id: row.id, display_name: row.display_name, expires_at: expiresAt, created_at: row.created_at })
+        const survivor = {
+          id: row.id,
+          display_name: row.display_name,
+          expires_at: expiresAt,
+          created_at: row.created_at,
+          // Same coalesced proof-of-crawl signal `cleanupAmyProfiles` uses, so
+          // the detector and the sweep can never disagree about the grace.
+          crawled_signal_at: meta?.last_crawled_at || meta?.crawled_at || row.last_discovery_at || null,
+          allow_sam_cleanup: meta?.allow_sam_cleanup === true,
+          synthetic: meta?.synthetic === true,
+        }
+        survivor.hold = classifySurvivorHold(survivor, { now })
+        survivors.push(survivor)
       }
     }
     return survivors
@@ -140,11 +251,33 @@ export function buildDeletionProof({
   let verdict = DELETION_VERDICT.UNKNOWN
   const reasons = []
 
+  // Split past-TTL survivors by whether a DOCUMENTED sweep guard explains them.
+  // A survivor with no `hold` key (an old-shape caller) counts as LEAKED — the
+  // classification failing must fail toward the alarm, never away from it.
+  const allSurvivors = Array.isArray(survivors) ? survivors : []
+  const graceHeld = allSurvivors.filter(
+    (s) => s?.hold === SURVIVOR_HOLD.CRAWL_GRACE || s?.hold === SURVIVOR_HOLD.NEVER_CRAWLED_WINDOW,
+  )
+  const leaked = allSurvivors.filter((s) => !graceHeld.includes(s))
+
   if (!readable) {
     reasons.push('counts or survivor scan unavailable — deletion NOT verified this run')
-  } else if (survivors.length > 0) {
+  } else if (leaked.length > 0) {
     verdict = DELETION_VERDICT.LEAKED
-    reasons.push(`${survivors.length} profile(s) survived past their TTL`)
+    reasons.push(
+      `${leaked.length} profile(s) survived past their TTL with no documented guard holding them`
+      + (graceHeld.length > 0 ? ` (${graceHeld.length} more are held by the sweep's grace windows)` : ''),
+    )
+  } else if (graceHeld.length > 0) {
+    verdict = DELETION_VERDICT.GRACE_HELD
+    reasons.push(
+      `${graceHeld.length} profile(s) are past TTL but inside the sweep's documented grace `
+      + '(crawled/discovered recently or within the bounded never-crawled window) — '
+      + 'deliberately held, reaped on the first sweep after the grace lapses',
+    )
+    if (observedDeleted !== reportedDeleted) {
+      reasons.push(`sweeps reported ${reportedDeleted} deleted; the row count moved by ${observedDeleted}`)
+    }
   } else if (observedDeleted !== reportedDeleted) {
     // Not automatically a failure: a concurrent run or the boot invariant
     // (enforceAmySyntheticExpiry) may legitimately have reaped rows this run
@@ -172,8 +305,14 @@ export function buildDeletionProof({
     // Live-but-unexpired rows are NORMAL (TTL is 24-72h) and are reported as a
     // number so a rising floor is visible, never as a failure.
     live_within_ttl: Number.isFinite(after) && Array.isArray(survivors) ? after - survivors.length : null,
+    // ALL past-TTL rows (meaning unchanged); the split below says which of them
+    // are a real leak vs a documented hold.
     expired_survivors: Array.isArray(survivors) ? survivors.slice(0, 20) : null,
     expired_survivor_count: Array.isArray(survivors) ? survivors.length : null,
+    leaked_survivors: Array.isArray(survivors) ? leaked.slice(0, 20) : null,
+    leaked_survivor_count: Array.isArray(survivors) ? leaked.length : null,
+    grace_held_survivors: Array.isArray(survivors) ? graceHeld.slice(0, 20) : null,
+    grace_held_count: Array.isArray(survivors) ? graceHeld.length : null,
     reasons,
   }
 }
@@ -190,6 +329,8 @@ export async function verifyAmyDeletion(db, { before, runCleanup, expiredSweep, 
 
 export default {
   DELETION_VERDICT,
+  SURVIVOR_HOLD,
+  classifySurvivorHold,
   countAmyProfiles,
   findExpiredSurvivors,
   buildDeletionProof,

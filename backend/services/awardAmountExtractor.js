@@ -35,6 +35,10 @@
  *   - Values outside $100–$10,000,000 are ignored.
  *   - Structured numeric fields from an adapter ALWAYS win; extraction runs
  *     only when both amount_min and amount_max are absent.
+ *   - A TUITION-COVERAGE award ("pays tuition", "covers 100% of tuition and
+ *     fees") is an explicit per-award semantic with no fixed figure → status
+ *     'varies' + the phrase as amount_text, never a fabricated number
+ *     (2026-08-03, the NM Lottery/Opportunity Scholarship class).
  */
 
 const MULTIPLIERS = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6 }
@@ -128,6 +132,31 @@ const RE_VARIES =
   /\b(?:awards?|amounts?|funding|grant\s+amounts?|scholarship\s+amounts?)\s+(?:will\s+)?(?:vary|varies)\b|\bamounts?\s*:\s*varies\b|\bvaries\s+(?:by|depending|based)\b|^\s*varies\.?\s*$/i
 const RE_CONTACT =
   /\bcontact\s+(?:the\s+)?(?:funder|foundation|sponsor|program|organization|office)\s+for\s+(?:award|funding|amount|grant)\b|\b(?:amounts?|awards?)\s+(?:are\s+)?(?:available|determined|provided)\s+(?:up)?on\s+request\b/i
+
+// TUITION-COVERAGE awards (the NM Lottery / NM Opportunity Scholarship class,
+// Amy `amount_recall_miss:high_school_student`, 2026-08-03). The funder's own
+// copy states the award IS tuition coverage — real prod ingest text:
+//   "This scholarship pays tuition and is awarded beginning with the second…"
+//   "The Lottery Scholarship covers 100% of tuition for recent New Mexico…"
+//   "…covers any gap in tuition and allowable fees…, potentially covering up
+//    to 100% of tuition and allowable fees."
+// That is an EXPLICIT per-award semantic with no fixed dollar figure — the
+// value varies by institution and enrolled credit hours — so the honest result
+// is status 'varies' with the phrase as amount_text, NEVER a number (inventing
+// a dollar figure for "covers tuition" would fabricate exactly the class of
+// value the plausibility doctrine exists to prevent). The connector list is a
+// closed set on purpose: a coverage verb must reach "tuition" through known
+// award phrasing only, so "covers everything except tuition" (arbitrary words
+// between) and bare mentions ("eligible for in-state tuition", "help pay for
+// college") can never match.
+const RE_TUITION_COVERAGE = new RegExp(
+  String.raw`\b(?:covers?|covering|pays?|paying|waives?|waiving)\s+`
+    + String.raw`(?:(?:any\s+gap\s+in|up\s+to|all(?:\s+of)?|full|remaining|the\s+(?:full\s+)?cost\s+of|a\s+portion\s+of|\d{1,3}\s*(?:%|percent)(?:\s+of)?)\s+)*`
+    + String.raw`(?:in-?state\s+|resident\s+)?tuition\b`,
+  'i',
+)
+// A negated coverage claim ("does not cover tuition") is NOT a tuition award.
+const RE_TUITION_NEGATION = /\b(?:not|never|no|isn'?t|doesn'?t|don'?t|won'?t|cannot|can'?t|except(?:ing)?|excluding)\s+(?:\w+\s+){0,2}$/i
 
 // A dollar figure in these contexts is a PROGRAM total / org financial, never a
 // per-award amount. Checked in a window around the match.
@@ -318,6 +347,12 @@ export function extractAwardAmountsFromText(text) {
   const contact = RE_CONTACT.exec(t)
   if (contact) {
     return { ...none, amount_text: excerpt(contact[0]), amount_status: 'contact_required' }
+  }
+  // Tuition-coverage: an explicit per-award semantic whose dollar value varies
+  // by institution — a real answer, not silence. Status only; never a number.
+  const tuition = RE_TUITION_COVERAGE.exec(t)
+  if (tuition && !RE_TUITION_NEGATION.test(t.slice(Math.max(0, tuition.index - 40), tuition.index))) {
+    return { ...none, amount_text: excerpt(tuition[0]), amount_status: 'varies' }
   }
   if (t.includes('$')) {
     const totalText = findProgramTotalText(t)

@@ -64,11 +64,12 @@
       "steps": [
         { "action": "goto", "url": "http://localhost:5173/" },
         { "action": "waitForSelector", "selector": "input[type=password]" },
-        { "action": "fill", "selector": "input[type=password]", "value": "EvaFixturePass123!" },
+        { "action": "fill", "selector": "input[placeholder='Master password']", "value": "EvaFixturePass123!" },
+        { "action": "fill", "selector": "input[placeholder='Confirm master password']", "value": "EvaFixturePass123!" },
         { "action": "click", "selector": "button[type=submit]" },
         { "action": "wait", "ms": 2000 }
       ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "vault" }],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Vault" }],
       "user_impact": "If vault creation fails, a new user can never start using the app — local-first onboarding is the only entry path.",
       "candidate_files": ["src/components/VaultGate.tsx", "src/components/Dashboard.tsx", "src/lib/crypto.ts"]
     }

@@ -268,7 +268,15 @@ export function summarizeAmyFlywheel(amy) {
     if (proof.verdict === 'proven') {
       edits.push(`Synthetic profiles deleted and VERIFIED: ${proof.reported_deleted} reaped, ${proof.profiles_before} → ${proof.profiles_after} rows, zero past TTL.`)
     } else if (proof.verdict === 'leaked') {
-      edits.push(`Synthetic cleanup LEAKED: ${proof.expired_survivor_count} profile(s) survived past their TTL (${proof.profiles_after} Amy rows still live).`)
+      const leakedN = Number.isFinite(Number(proof.leaked_survivor_count)) && proof.leaked_survivor_count !== null
+        ? proof.leaked_survivor_count
+        : proof.expired_survivor_count
+      edits.push(`Synthetic cleanup LEAKED: ${leakedN} profile(s) survived past their TTL with no guard holding them (${proof.profiles_after} Amy rows still live).`)
+    } else if (proof.verdict === 'grace_held') {
+      // NOT an alarm: the sweep is deliberately holding these under its own
+      // documented grace (recently crawled/discovered, or inside the bounded
+      // never-crawled window) and reaps them once the grace lapses.
+      edits.push(`Synthetic cleanup: ${proof.grace_held_count} expired profile(s) held by the sweep's documented grace windows — by design, reaped after the grace lapses (${proof.profiles_after} Amy rows live).`)
     }
   }
 

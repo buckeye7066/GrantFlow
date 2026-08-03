@@ -46,10 +46,25 @@ export function startupFailedAppResult({ app, manifest, launch = {}, baseUrl = n
   const probeUrl = launch.failedProbeUrl || baseUrl || manifest?.base_url || 'its declared base_url'
   const tail = typeof launch.outputTail === 'function' ? launch.outputTail() : ''
   const exited = Array.isArray(launch.exitInfos) && launch.exitInfos.every(Boolean)
+  // Two causes the raw output tail cannot state for itself, both fixable in one
+  // line once NAMED: the manifest probes a port the app does not bind (port
+  // drift), and a port EVA refused to clear because shared infrastructure owns
+  // it. Without these an owner reads "not ready at http://localhost:3001/healthz"
+  // every night and has to re-derive the cause each time.
+  const drift = Array.isArray(launch.portDrift) ? launch.portDrift : []
+  const blocked = Array.isArray(launch.blockedPorts) ? launch.blockedPorts : []
   const reason = [
     `app did not answer its readiness probe at ${probeUrl} within the readiness timeout`,
     `(start_command: ${manifest?.start_command})`,
     exited ? '— the start_command exited' : '',
+    drift.length
+      ? `— MANIFEST PORT DRIFT: the app announced port(s) ${drift.join(', ')} but the manifest declares ${(launch.declaredPorts || []).join(', ') || 'none'}; fix readiness_probe.port/base_url (and pin the port in launch_env)`
+      : '',
+    blocked.length
+      ? `— PORT HELD BY A PROTECTED PROCESS: ${blocked
+          .map((b) => `${b.port} (${b.blockedBy.map((p) => p.name).filter(Boolean).join(', ') || 'unknown'})`)
+          .join('; ')}; EVA does not kill shared infrastructure it did not start — move this app to a free port`
+      : '',
     tail ? `— last output: ${tail}` : '— the process printed nothing',
   ]
     .filter(Boolean)
