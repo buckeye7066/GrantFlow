@@ -42,9 +42,9 @@
 import fs from 'node:fs'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import path from 'node:path'
-import os from 'node:os'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { triagePage, PAGE_SURFACES } from './listingPageTriage.js'
+import { resolveConfirmationCaptureDir } from './hamiltonConfirmationArtifacts.js'
 
 const NAV_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS) || 25_000
 const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS) || 8_000
@@ -590,17 +590,84 @@ function isPlausibleConfirmationReference(value, { explicit = false } = {}) {
   return /\d/.test(candidate)
 }
 
+// Confirmation-label vocabulary. Conservative additions (2026-08-03): common
+// real labels a portal prints beside a submission id — Ref/Reference,
+// Application ID, Submission/Receipt/Tracking — WITHOUT loosening the plausible-
+// candidate discipline that already rejected "Application designed…". The
+// captured candidate STILL has to pass isPlausibleConfirmationReference, so a
+// broader label can never manufacture a reference from prose.
+const CONFIRMATION_LABELS = 'confirmation|reference|ref|application|submission|receipt|tracking'
+
 function extractConfirmationReference(text) {
   const haystack = String(text || '').replace(/\s+/g, ' ')
-  const explicit = haystack.match(/\b(?:confirmation|reference|application)\s*(?:number|no\.?|#|id|code)\s*[:#.-]?\s*([A-Za-z0-9][A-Za-z0-9-]{5,})\b/i)
+  const explicit = haystack.match(new RegExp(
+    `\\b(?:${CONFIRMATION_LABELS})\\s*(?:number|no\\.?|#|id|code)\\s*[:#.-]?\\s*([A-Za-z0-9][A-Za-z0-9-]{5,})\\b`, 'i',
+  ))
   if (explicit && isPlausibleConfirmationReference(explicit[1], { explicit: true })) {
     return normalizeConfirmationCandidate(explicit[1])
   }
-  const generic = haystack.match(/\b(?:confirmation|reference|application)\b[\s#:.]*([A-Za-z0-9][A-Za-z0-9-]{5,})\b/i)
+  const generic = haystack.match(new RegExp(
+    `\\b(?:${CONFIRMATION_LABELS})\\b[\\s#:.]*([A-Za-z0-9][A-Za-z0-9-]{5,})\\b`, 'i',
+  ))
   if (generic && isPlausibleConfirmationReference(generic[1], { explicit: false })) {
     return normalizeConfirmationCandidate(generic[1])
   }
   return null
+}
+
+// A submission id printed in the POST-submit URL (?confirmationId=…,
+// /confirmation/<id>). Treated as explicit (a query key / path keyword named the
+// value, so a digitless all-caps id is fine) but still length/charset/word-guard
+// checked, so a `?ref=home` (too short) or a prose word never passes.
+const CONFIRMATION_URL_KEYS = new Set([
+  'confirmationid', 'confirmation', 'confirmationnumber', 'confirmationno',
+  'submissionid', 'submission', 'applicationid', 'appid', 'referenceid',
+  'reference', 'refid', 'trackingid', 'tracking', 'receiptid', 'receipt', 'conf', 'ref',
+])
+const CONFIRMATION_URL_PATH_KEYWORDS =
+  /^(confirmation|confirmations|confirm|submission|submissions|submitted|receipt|receipts|reference|application|applications)$/i
+
+function extractConfirmationReferenceFromUrl(url) {
+  if (!url) return null
+  let parsed
+  try { parsed = new URL(url) } catch { return null }
+
+  for (const [rawKey, value] of parsed.searchParams.entries()) {
+    const key = String(rawKey).toLowerCase().replace(/[_-]/g, '')
+    if (CONFIRMATION_URL_KEYS.has(key) && isPlausibleConfirmationReference(value, { explicit: true })) {
+      return normalizeConfirmationCandidate(value)
+    }
+  }
+
+  const segments = parsed.pathname.split('/').filter(Boolean)
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    if (CONFIRMATION_URL_PATH_KEYWORDS.test(segments[i])) {
+      const value = decodeURIComponent(segments[i + 1])
+      if (isPlausibleConfirmationReference(value, { explicit: true })) {
+        return normalizeConfirmationCandidate(value)
+      }
+    }
+  }
+  return null
+}
+
+// A receipt ACKNOWLEDGEMENT ("your application has been received", "thank you
+// for your submission"). This is corroborating evidence a submit landed on a
+// real confirmation page — it is NOT a reference and NEVER fabricates one; it is
+// recorded as a boolean signal only.
+const RECEIPT_ACK_RX = new RegExp(
+  [
+    '\\b(?:your|the)?\\s*application\\s+(?:has been|was)\\s+(?:successfully\\s+)?(?:received|submitted|accepted)\\b',
+    '\\bthank you for (?:your )?(?:application|submission|applying|submitting)\\b',
+    '\\b(?:your )?submission (?:was|is)?\\s*(?:successful|complete|completed|received|confirmed)\\b',
+    "\\bwe(?:'ve| have) received your (?:application|submission)\\b",
+    '\\bapplication (?:successfully )?(?:received|submitted)\\b',
+  ].join('|'),
+  'i',
+)
+
+function detectReceiptAcknowledgement(text) {
+  return RECEIPT_ACK_RX.test(String(text || ''))
 }
 
 /**
@@ -623,17 +690,43 @@ async function captureConfirmation(page, screenshotsDir) {
   const html = await page.content().catch(() => '')
   // Extract a confirmation reference if any looks like one. The label match is
   // case-insensitive, but we only accept explicit labelled codes or generic
-  // references with digits. That avoids old false positives like "Application
-  // designed..." while still accepting real all-letter IDs when the page says
-  // "Confirmation #:" or "Reference code:".
-  const reference = extractConfirmationReference(bodyText) || extractConfirmationReference(html)
+  // references with digits (or a submission id printed in the post-submit URL).
+  // That avoids old false positives like "Application designed..." while still
+  // accepting real all-letter IDs when the page says "Confirmation #:",
+  // "Reference code:", or the URL carries ?confirmationId=…. A saved page + a
+  // screenshot are captured EVEN WHEN no reference matches, so proof survives a
+  // portal that prints no reference number.
+  const reference = extractConfirmationReference(bodyText)
+    || extractConfirmationReference(html)
+    || extractConfirmationReferenceFromUrl(url)
+  const receivedAcknowledgement = detectReceiptAcknowledgement(bodyText) || detectReceiptAcknowledgement(html)
+  const stamp = Date.now()
   let screenshotPath = null
+  let pageHtmlPath = null
   try {
     if (!fs.existsSync(screenshotsDir)) fs.mkdirSync(screenshotsDir, { recursive: true })
-    screenshotPath = path.join(screenshotsDir, `confirmation_${Date.now()}.png`)
+    screenshotPath = path.join(screenshotsDir, `confirmation_${stamp}.png`)
     await page.screenshot({ path: screenshotPath, fullPage: true })
   } catch { screenshotPath = null }
-  return { url, reference, screenshot_path: screenshotPath }
+  // Save the confirmation page itself (durable, searchable text/HTML proof).
+  // The orchestrator registers both the screenshot and this page as retrievable
+  // documents; capturing the page is what preserves proof when the portal shows
+  // no reference number.
+  try {
+    if (html) {
+      if (!fs.existsSync(screenshotsDir)) fs.mkdirSync(screenshotsDir, { recursive: true })
+      pageHtmlPath = path.join(screenshotsDir, `confirmation_${stamp}.html`)
+      fs.writeFileSync(pageHtmlPath, html, 'utf8')
+    }
+  } catch { pageHtmlPath = null }
+  return {
+    url,
+    reference,
+    screenshot_path: screenshotPath,
+    page_html_path: pageHtmlPath,
+    page_text: bodyText ? String(bodyText).slice(0, 4000) : '',
+    received_acknowledgement: receivedAcknowledgement,
+  }
 }
 
 // ── Main loop ────────────────────────────────────────────────────────
@@ -655,6 +748,10 @@ async function captureConfirmation(page, screenshotsDir) {
  *   pages_visited: number,
  *   confirmation_reference?: string|null,
  *   confirmation_screenshot_path?: string|null,
+ *   confirmation_page_html_path?: string|null,
+ *   confirmation_page_text?: string,
+ *   confirmation_received_acknowledgement?: boolean,
+ *   confirmation_url?: string|null,
  *   trace: Array<{step:string, detail?:any}>,
  * }>}
  */
@@ -722,7 +819,10 @@ export async function runAutopilot({
     throw setupErr
   }
   const valuesByKey = applyNarrativeAnswers(readProfileValues(profile), narrativeAnswers)
-  const screenshotsRoot = screenshotsDir || path.join(os.tmpdir(), 'hamilton-autopilot-screens')
+  // Durable capture dir (UPLOADS_DIR-based in prod, NEVER ephemeral tmp) so a
+  // confirmation screenshot/page survives Railway restarts; the orchestrator
+  // also passes an explicit durable dir. Direct callers/tests fall back to tmp.
+  const screenshotsRoot = screenshotsDir || resolveConfirmationCaptureDir()
 
   try {
     trace.push({ step: 'navigate', detail: { url } })
@@ -913,13 +1013,17 @@ export async function runAutopilot({
             filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
           }
         }
-        trace.push({ step: 'submitted', detail: { from: beforeUrl, to: conf.url, confirmation: conf.reference, confirmation_evidence: evidence.confirmation_evidence } })
+        trace.push({ step: 'submitted', detail: { from: beforeUrl, to: conf.url, confirmation: conf.reference, confirmation_evidence: evidence.confirmation_evidence, received_acknowledgement: conf.received_acknowledgement } })
         return {
           status: 'submitted',
           submit_clicked: true,
           confirmation_evidence: evidence.confirmation_evidence,
           confirmation_reference: conf.reference,
           confirmation_screenshot_path: conf.screenshot_path,
+          confirmation_page_html_path: conf.page_html_path,
+          confirmation_page_text: conf.page_text,
+          confirmation_received_acknowledgement: conf.received_acknowledgement,
+          confirmation_url: conf.url,
           filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
         }
       }
@@ -1021,6 +1125,9 @@ export const _internal = {
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
   detectGate, attemptLogin,
   extractConfirmationReference,
+  extractConfirmationReferenceFromUrl,
+  detectReceiptAcknowledgement,
+  captureConfirmation,
   actionableSubmitButtons,
   assessSubmissionEvidence,
 }

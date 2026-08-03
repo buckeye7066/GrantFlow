@@ -60,6 +60,7 @@ import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
+import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './hamiltonConfirmationArtifacts.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
@@ -1437,6 +1438,11 @@ async function runAutopilotPathway(db, {
       url, profile, authorizations,
       documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
       headless: options?.headless ?? true,
+      // DURABLE proof: capture the confirmation screenshot + saved page under
+      // the persistent volume (UPLOADS_DIR), NOT the container's ephemeral tmp
+      // that Railway wipes on every deploy. Without this the DB kept a path to a
+      // file that no longer existed and a real submission's proof evaporated.
+      screenshotsDir: resolveConfirmationCaptureDir(),
       sessionSink,
       narrativeAnswers,
     })
@@ -1653,6 +1659,32 @@ async function runAutopilotPathway(db, {
     }
   }
 
+  // DURABLE, OWNER-RETRIEVABLE PROOF: register the captured confirmation
+  // (screenshot + saved page) as `documents` rows whose bytes live in
+  // documents.file_bytes, so the owner can open the proof at
+  // /api/documents/<id>/download even after the ephemeral on-disk copy is gone.
+  // Best-effort — a registration failure never fails the run; the filesystem
+  // path fields are still recorded. Only runs on a genuine submission (the
+  // engine already refused status=submitted without captured evidence).
+  if (engineResult.status === 'submitted') {
+    try {
+      const artifact = await registerConfirmationArtifact(db, {
+        profileId: task.profile_id,
+        grantId: grant?.id || task.grant_id || null,
+        opportunityId: opportunity?.id || task.opportunity_id || null,
+        taskId: task.id,
+        title: opportunity?.title || grant?.title || 'Application',
+        screenshotPath: engineResult.confirmation_screenshot_path || null,
+        pageHtmlPath: engineResult.confirmation_page_html_path || null,
+        pageText: engineResult.confirmation_page_text || null,
+        reference: engineResult.confirmation_reference || null,
+        capturedUrl: engineResult.confirmation_url || null,
+      })
+      engineResult.confirmation_document_id = artifact.screenshot_document_id || artifact.page_document_id || null
+      engineResult.confirmation_page_document_id = artifact.page_document_id || null
+    } catch { /* proof registration is best-effort; never fail the run */ }
+  }
+
   await updateAutopilotRun(db, run.id, {
     result: engineResult,
     confirmationReference: engineResult.confirmation_reference || null,
@@ -1680,6 +1712,7 @@ async function runAutopilotPathway(db, {
     const confirmationEvidence = engineResult.confirmation_evidence
       || (engineResult.confirmation_reference ? 'portal_reference' : 'screenshot_only')
     const portalConfirmed = confirmationEvidence === 'portal_reference'
+    const proofDocumentId = engineResult.confirmation_document_id || null
     const submittedMessage = portalConfirmed
       ? `Hamilton Autopilot submitted the application and the portal confirmed receipt. Confirmation: ${engineResult.confirmation_reference}.`
       : 'Hamilton Autopilot completed the portal\'s submit step and captured the final page screenshot; the portal showed no reference number. Verify receipt on the portal.'
@@ -1688,6 +1721,9 @@ async function runAutopilotPathway(db, {
       submittedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
       lastAgentMessage: submittedMessage,
+      // The retrievable proof of external submission: an owner-openable document
+      // (/api/documents/<id>/download), not just an ephemeral filesystem path.
+      ...(proofDocumentId ? { outputDocumentId: proofDocumentId } : {}),
     })
     await appendTaskEvent(db, {
       taskId: task.id,
@@ -1702,6 +1738,9 @@ async function runAutopilotPathway(db, {
         confirmation: engineResult.confirmation_reference,
         screenshot: engineResult.confirmation_screenshot_path,
         confirmation_evidence: confirmationEvidence,
+        confirmation_document_id: proofDocumentId,
+        confirmation_page_document_id: engineResult.confirmation_page_document_id || null,
+        received_acknowledgement: engineResult.confirmation_received_acknowledgement === true,
         submit_clicked: engineResult.submit_clicked !== false,
       },
     })
@@ -1712,7 +1751,7 @@ async function runAutopilotPathway(db, {
       title: 'Hamilton submitted through portal',
       message: `Hamilton submitted "${opportunity?.title || grant?.title || 'this application'}" through the funder's portal. ${portalConfirmed ? `Confirmation: ${engineResult.confirmation_reference}.` : 'The portal showed no reference number — final-page screenshot captured; verify receipt on the portal.'}`,
       severity: 'success',
-      data: { task_id: task.id, run_id: run.id, confirmation: engineResult.confirmation_reference, confirmation_evidence: confirmationEvidence },
+      data: { task_id: task.id, run_id: run.id, confirmation: engineResult.confirmation_reference, confirmation_evidence: confirmationEvidence, confirmation_document_id: proofDocumentId },
     })
     await emitHamiltonLifecycleAlerts(db, {
       profileId: task.profile_id,

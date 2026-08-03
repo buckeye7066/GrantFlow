@@ -122,6 +122,40 @@ rules below win.
   captured portal confirmation evidence (`assessSubmissionEvidence`); a
   submit-click without evidence is a blocker, never "submitted", and
   `submit_unconfirmed` is never blindly retried. All defaults remain OFF.
+- **SUBMISSION PROOF IS DURABLE + OWNER-RETRIEVABLE, never a tmp path**
+  (`hamiltonConfirmationArtifacts.js`, 2026-08-03). The confirmation screenshot
+  `captureConfirmation` writes used to land in `os.tmpdir()` because the
+  orchestrator's `runAutopilot({…})` call passed no `screenshotsDir` — so on
+  Railway's ephemeral FS every screenshot was wiped on the next deploy while
+  `hamilton_autopilot_runs.confirmation_screenshot_path` kept pointing at a file
+  that no longer existed: a genuine external submission's proof evaporated and
+  the DB read as if proof existed. Now: (1) `resolveConfirmationCaptureDir` puts
+  captures under `UPLOADS_DIR` (`<UPLOADS_DIR>/hamilton-confirmations`, the same
+  persistent volume as the runtime-secrets key; `/data/uploads/…` is the prod
+  floor so it can NEVER fall back to tmp in prod — mirrors `runtimeSecrets`'
+  key-file resolution), and the orchestrator passes it into the engine. (2)
+  `captureConfirmation` also SAVES the confirmation page (`.html`) beside the
+  `.png` and returns `page_text`, so proof survives even when the portal prints
+  NO reference number. (3) On a `submitted` run the orchestrator calls
+  `registerConfirmationArtifact`, which reuses the SAME
+  `hamiltonApplicationPacketGenerator._internal.insertDocumentRecord` the
+  mail/fax packet + proposal-PDF paths use — bytes land in
+  `documents.file_bytes` (BYTEA) and the proof opens at
+  `/api/documents/<id>/download` (durable-bytes fallback) even after the on-disk
+  copy is gone. The screenshot doc id is written to
+  `application_tasks.output_document_id` (the retrievable proof LINK, not a
+  filesystem path) and into the run's `result_json`. (4)
+  `extractConfirmationReference` gained conservative real patterns (Ref/
+  Reference, Application ID, Confirmation #, a submission id in the post-submit
+  URL) that STILL pass `isPlausibleConfirmationReference` — it still rejects
+  "Application designed…"; a saved page + screenshot are captured even with NO
+  reference. `assessSubmissionEvidence`'s refuse-without-evidence honesty is
+  UNCHANGED (a saved page is extra proof, not a new way to claim submitted). (5)
+  Backfill honesty: `assessStoredConfirmationProof(db, run)` reports proof
+  PRESENT only when it is actually retrievable (durable doc bytes, or an on-disk
+  file that still exists) — a dangling `confirmation_screenshot_path` reads as
+  NO proof; it reports, never mass-deletes. Guard test:
+  `backend/tests/hamiltonConfirmationProof.test.js`.
 - **Stage derivation trap** (`profileDerivedFacts.GRAD_RX`): "high school
   graduate" / "graduated high school" / "college graduate" must NEVER derive
   `graduate_student` — a live incident disarmed the stage gate this way and
