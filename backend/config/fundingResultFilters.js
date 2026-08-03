@@ -35,8 +35,10 @@
  */
 
 import { RE_PROCEDURAL_NOTICE_TITLE } from '../services/opportunityNormalizer.js'
-import { hostnameOf, detectForeignOpportunity, declaredStateFromTitle } from './opportunityJurisdiction.js'
+import { hostnameOf, detectForeignOpportunity } from './opportunityJurisdiction.js'
+import { resolvedUsOpportunityJurisdiction } from './canonicalUsJurisdiction.js'
 import { isPointerKind } from './opportunityKindClasses.js'
+import { normalizeState } from '../utils/stateNormalization.js'
 
 /** Hosts whose documents are regulatory-register records, never funding pages. */
 export const REGULATORY_SOURCE_HOSTS = Object.freeze(['federalregister.gov'])
@@ -339,11 +341,12 @@ export function passesEligibility(row, facts = {}) {
 }
 
 /**
- * Owner-named predicate #3: geography. Delegates to the canonical jurisdiction
- * facts — foreign funders/jurisdictions are never relevant to a US profile, and
- * a row that DECLARES its own place (the "<Place>, XX —" shape) is relevant
- * only in that state. MISSING = NEUTRAL: a profile with no states loses
- * nothing; a row declaring nothing is not judged here.
+ * Owner-named predicate #3: geography. Foreign funders/jurisdictions are never
+ * relevant to a U.S. profile. A row whose own title declares `Place, XX — ...`
+ * or whose registered funder/institution carries a canonical state is relevant
+ * only in that state. Missing evidence stays neutral; a bare stored `state`
+ * remains insufficient because that column is the crawl-noise field being
+ * repaired.
  */
 export function isRelevantGeo(row, { states = null } = {}) {
   const foreign = detectForeignOpportunity(row)
@@ -355,11 +358,31 @@ export function isRelevantGeo(row, { states = null } = {}) {
         : `foreign_jurisdiction:${foreign.host ?? foreign.cctld}`,
     }
   }
-  const declared = declaredStateFromTitle(row)
-  if (declared && Array.isArray(states) && states.length > 0 && !states.includes(declared)) {
-    return { relevant: false, reason: `declared_place_out_of_state:${declared}` }
+
+  const profileStates = [...new Set(
+    (Array.isArray(states) ? states : [])
+      .map((state) => normalizeState(state))
+      .filter(Boolean),
+  )]
+  const jurisdiction = resolvedUsOpportunityJurisdiction(row)
+  const restrictiveEvidence = jurisdiction.source === 'canonical_funder' ||
+    jurisdiction.source === 'declared_title'
+  if (
+    restrictiveEvidence &&
+    jurisdiction.state &&
+    profileStates.length > 0 &&
+    !profileStates.includes(jurisdiction.state)
+  ) {
+    const prefix = jurisdiction.source === 'canonical_funder'
+      ? `canonical_funder_out_of_state:${jurisdiction.rule_id}`
+      : 'declared_place_out_of_state'
+    return {
+      relevant: false,
+      reason: `${prefix}:${jurisdiction.state}`,
+      jurisdiction,
+    }
   }
-  return { relevant: true, reason: null }
+  return { relevant: true, reason: null, jurisdiction }
 }
 
 /**

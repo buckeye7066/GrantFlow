@@ -118,11 +118,16 @@ describe('probeSearchProviderHealth', () => {
     expect(health.verdict).toBe('unknown')
   })
 
-  it('reports unconfigured when neither provider has config', async () => {
+  it('reports unconfigured as a FINDING (not a skip) when neither provider has config', async () => {
+    // Regression guard: `unconfigured` MUST NOT be `skipped`, or the
+    // crawler.searchProviderHealth Sam check (which returns green on skipped)
+    // reports the dark open-web lane as healthy and the owner is never told to
+    // set a key. The only true skip is the test-runner `unknown` path.
     delete process.env.SEARXNG_URL
     delete process.env.BRAVE_SEARCH_API_KEY
     const health = await probeSearchProviderHealth({ fetchImpl: vi.fn(), cacheTtlMs: 0 })
-    expect(health.skipped).toBe(true)
+    expect(health.skipped).toBe(false)
     expect(health.verdict).toBe('unconfigured')
+    expect(health.detail).toMatch(/SEARXNG_URL|BRAVE_SEARCH_API_KEY/)
   })
 })

@@ -1,3 +1,5 @@
+import { correctedCanonicalUsScope } from '../../config/canonicalUsJurisdiction.js'
+
 const ARTICLE_PATH_RX = /(?:^|[/?#&._-])(?:blog|news|article|story|opinion|press-release|insights|knowledge|guide|how-to|tips|basics)(?:[/?#&._-]|$)/i
 const NON_GRANT_TYPES = new Set(['directory', 'program', 'benefit', 'referral'])
 const QUERY_TEMPLATE_PARAMS = new Set(['zip', 'zipcode', 'postal', 'postal_code', 'state'])
@@ -76,6 +78,13 @@ export function evaluateFundableOpportunity(record) {
 
   const displayType = inferOpportunityDisplayType(record)
   const normalized = {}
+
+  // Canonical U.S. funder/institution jurisdiction outranks a state copied from
+  // search/profile context. This is the ingest choke point used by
+  // opportunityInserter, so new CPCC/Ohio-RDA rows cannot be persisted as TN.
+  const canonicalScope = correctedCanonicalUsScope(record)
+  if (canonicalScope) Object.assign(normalized, canonicalScope)
+
   if (NON_GRANT_TYPES.has(displayType)) {
     normalized.opportunity_type = displayType
     normalized.type = displayType === 'directory' || displayType === 'referral' ? 'DIRECTORY' : 'PROGRAM'
