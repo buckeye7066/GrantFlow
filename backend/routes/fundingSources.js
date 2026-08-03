@@ -303,7 +303,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     // REVIEW / eligibility-unconfirmed, and bypasses only the display floor so
     // the user can see the baseline instead of a blank page. Every candidate
     // still passes the shared junk, eligibility, geography, and match gates.
-    if (presented.total === 0) {
+    if (!readOnlyAudit && presented.total === 0) {
       const fallback = await buildColdStartFundingFallback(req.db, profileContext)
       coldStart = fallback.telemetry
       if (fallback.sources.length > 0) {
