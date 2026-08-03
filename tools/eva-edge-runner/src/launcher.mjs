@@ -14,6 +14,137 @@ import { join, isAbsolute } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// ---------------------------------------------------------------------------
+// WHO MAY BE KILLED TO FREE A PORT
+//
+// Freeing a port used to mean "taskkill whatever owns it". That is a claim
+// about a PORT NUMBER, not about a process EVA started, and the two diverge
+// badly on Windows: Docker Desktop PUBLISHES every container port through
+// `com.docker.backend`, so a published port's owning PID is Docker's backend
+// itself. Measured 2026-08-03 with the family-stewardship-navigator compose
+// stack up: 127.0.0.1:3001 (its server container) and 127.0.0.1:5180 (its web
+// container) both resolve to `com.docker.backend` — and 3001 is the probe port
+// of three OTHER manifests (sermonsmith, are-we-mice, mind-over-math) while
+// 5180 is factory-deck's. Any of them, and FSN itself, would have taskkilled
+// Docker Desktop's backend before launching. FSN's ONLY declared prerequisite
+// is a live Docker daemon, so EVA could destroy the prerequisite it then blocks
+// on, and the owner-facing remedy ("leave Docker Desktop running overnight")
+// could never work. Its manifest even lists `com.docker.backend` in
+// allowlist.processes, i.e. it authorized exactly the kill that breaks it.
+//
+// The rule is therefore a POSITIVE allowlist: EVA frees a port only by killing a
+// process class the manifest declared it may run, and never touches shared
+// infrastructure it did not start. A port it may not clear is REPORTED (the
+// squatter is named), never silently ignored and never force-killed.
+// ---------------------------------------------------------------------------
+
+/** Shared infrastructure EVA never kills, whatever a manifest declares. */
+export const PROTECTED_PORT_HOLDERS = new Set([
+  'com.docker.backend',
+  'com.docker.service',
+  'com.docker.proxy',
+  'com.docker.dev-envs',
+  'docker',
+  'dockerd',
+  'docker desktop',
+  'docker desktop backend',
+  'wsl',
+  'wslservice',
+  'wslhost',
+  'vmmem',
+  'vmmemwsl',
+  'vmcompute',
+  'system',
+  'idle',
+  'services',
+  'svchost',
+  'lsass',
+  'wininit',
+  'csrss',
+  'postgres',
+  'pg_ctl',
+  'mysqld',
+  'sqlservr',
+  'redis-server',
+  'mongod',
+])
+
+/** Dev-server images EVA may clear when a manifest declares no process list. */
+export const DEFAULT_KILLABLE_PROCESSES = new Set([
+  'node',
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'vite',
+  'python',
+  'python3',
+  'py',
+  'streamlit',
+  'uvicorn',
+  'gunicorn',
+  'deno',
+  'bun',
+  'electron',
+])
+
+/** `Node.EXE` / `python3.exe ` / `  npm ` all normalize to one comparable key. */
+export function normalizeProcessName(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\.exe$/, '')
+}
+
+/**
+ * The process names EVA may kill to free THIS app's ports: the manifest's own
+ * `allowlist.processes` when it declares any, else the conservative dev-server
+ * default. `PROTECTED_PORT_HOLDERS` always wins — a manifest cannot authorize
+ * killing shared infrastructure (family-stewardship-navigator's allowlist
+ * literally lists `com.docker.backend`, which is exactly the process whose death
+ * blocks it).
+ */
+export function resolveKillableProcesses(manifest) {
+  const declared = Array.isArray(manifest?.allowlist?.processes) ? manifest.allowlist.processes : []
+  const base = declared.length ? declared.map(normalizeProcessName) : [...DEFAULT_KILLABLE_PROCESSES]
+  return new Set(base.filter(Boolean).filter((n) => !PROTECTED_PORT_HOLDERS.has(n)))
+}
+
+/** May EVA kill a process with this image name to free a port? */
+export function mayKillProcess(name, killable) {
+  const key = normalizeProcessName(name)
+  if (!key) return false
+  if (PROTECTED_PORT_HOLDERS.has(key)) return false
+  return killable instanceof Set ? killable.has(key) : false
+}
+
+/**
+ * Ports a server ANNOUNCED in its own output. A manifest's `readiness_probe.port`
+ * is a GUESS about what the app will bind; the app's own line ("SermonSmith API
+ * running on 127.0.0.1:3101") is the fact. When readiness fails, comparing the
+ * two turns "not ready at http://localhost:3001/healthz" — a mystery repeated
+ * nightly — into a named, one-line fix.
+ * Only 4-5 digit ports are considered so a log timestamp (11:35:41) cannot be
+ * read as a port.
+ */
+export function detectAnnouncedPorts(text) {
+  const s = String(text || '')
+  const out = new Set()
+  for (const m of s.matchAll(/(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\]|[A-Za-z0-9._-]+)?:(\d{4,5})\b/g)) out.add(Number(m[1]))
+  for (const m of s.matchAll(/\bport\s*[=:]?\s*(\d{4,5})\b/gi)) out.add(Number(m[1]))
+  return [...out].filter((p) => p >= 1024 && p <= 65535).sort((a, b) => a - b)
+}
+
+/**
+ * Announced ports the manifest does not declare. Empty when the app announced
+ * nothing, or announced only ports we were already probing — absence of evidence
+ * is never reported as drift.
+ */
+export function detectPortDrift({ output = '', declaredPorts = [] } = {}) {
+  const declared = new Set((declaredPorts || []).map(Number).filter(Boolean))
+  return detectAnnouncedPorts(output).filter((p) => !declared.has(p))
+}
+
 // A launched-but-unreadiable server is reported honestly (startup_failed),
 // never silently passed. A web app with no start_command falls back to the old
 // behavior (assume something external is already serving base_url).
@@ -38,7 +169,21 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
   if (probe.port) preClearPorts.add(Number(probe.port))
   const preBasePort = baseUrl ? portOfUrl(baseUrl) : null
   if (preBasePort && preBasePort !== 80 && preBasePort !== 443) preClearPorts.add(preBasePort)
-  for (const port of preClearPorts) freePortAndWait(port, { attempts: 8 })
+  const killable = resolveKillableProcesses(manifest)
+  // A port EVA is not allowed to clear is NAMED, not silently skipped: the app
+  // will fail to bind and the owner needs to know which process is squatting.
+  const blockedPorts = []
+  for (const port of preClearPorts) {
+    const res = freePortAndWait(port, { attempts: 8, killable })
+    if (res && !res.freed && res.blockedBy?.length) {
+      blockedPorts.push(res)
+      log(
+        `[launcher] ${manifest.app_id || app?.app_id}: port ${port} is held by ${res.blockedBy
+          .map((p) => p.name)
+          .join(', ')} — EVA does not kill shared infrastructure it did not start`,
+      )
+    }
+  }
 
   const env = launchEnv || { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
   // The manifest declares where an app's disposable data goes; create it before
@@ -93,7 +238,8 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
   // are waiting on may still be coming up.
   const allExited = () => exitInfos.every(Boolean)
 
-  const stop = async () => stopLaunched(children, probe, baseUrl)
+  const stop = async () => stopLaunched(children, probe, baseUrl, killable)
+  const declaredPorts = [...preClearPorts]
 
   // Readiness: for an http probe, poll until the server answers (any HTTP
   // response means it is up). Without an http probe we cannot confirm a port,
@@ -128,11 +274,21 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
         break
       }
     }
-    return { launched: true, ready, baseUrl, failedProbeUrl, exitInfos, outputTail: output.tail, pid: children[0]?.pid, stop }
+    // The app's own output outranks the manifest's guess about its port. Only
+    // computed on a FAILED probe: a ready app has already proved the declared
+    // port right, and reporting "drift" for a frontend port the backend logged
+    // would be noise.
+    const portDrift = ready ? [] : detectPortDrift({ output: output.tail(4000), declaredPorts })
+    if (portDrift.length) {
+      log(
+        `[launcher] ${manifest.app_id || app?.app_id}: the app announced port(s) ${portDrift.join(', ')} but the manifest declares ${declaredPorts.join(', ')} — manifest port drift`,
+      )
+    }
+    return { launched: true, ready, baseUrl, failedProbeUrl, exitInfos, outputTail: output.tail, pid: children[0]?.pid, portDrift, blockedPorts, declaredPorts, stop }
   }
 
   await sleep(Math.min(timeoutMs, 3000))
-  return { launched: true, ready: !allExited(), baseUrl, failedProbeUrl: null, exitInfos, outputTail: output.tail, pid: children[0]?.pid, stop }
+  return { launched: true, ready: !allExited(), baseUrl, failedProbeUrl: null, exitInfos, outputTail: output.tail, pid: children[0]?.pid, portDrift: [], blockedPorts, declaredPorts, stop }
 }
 
 // Bounded capture of a launched server's console output. Keeps only the LAST
@@ -237,7 +393,7 @@ async function waitForHttp(url, { timeoutMs = 60000, intervalMs = 600, isDead = 
 // group. We additionally free BOTH declared ports (readiness probe port and the
 // base_url port — often backend + frontend of the same app) in case a
 // grandchild re-parented away from our tree.
-function stopLaunched(children, probe = {}, baseUrl = null) {
+function stopLaunched(children, probe = {}, baseUrl = null, killable = DEFAULT_KILLABLE_PROCESSES) {
   const list = Array.isArray(children) ? children : [children]
   for (const child of list) {
     const pid = child?.pid
@@ -269,45 +425,77 @@ function stopLaunched(children, probe = {}, baseUrl = null) {
   // grandchild still holds the port, its own server fails to bind and reads as
   // startup_failed — a teardown race, not a real failure (the 2026-07-28
   // flaky-fleet class). Block here until the ports are free (bounded).
-  for (const port of ports) freePortAndWait(port)
+  for (const port of ports) freePortAndWait(port, { killable })
 }
 
 // Free a port and spin until it is no longer LISTENing (Windows), bounded to a
 // few seconds so a genuinely stuck port can't hang the whole fleet run.
-function freePortAndWait(port, { attempts = 20, intervalMs = 250 } = {}) {
-  freePort(port)
-  if (process.platform !== 'win32') return
+// Returns `{ port, freed, blockedBy: [{pid,name}] }` — a port still held by a
+// process EVA may not kill is reported, never force-freed.
+export function freePortAndWait(port, { attempts = 20, intervalMs = 250, killable = DEFAULT_KILLABLE_PROCESSES, listHolders = listPortHolders, kill = killPid } = {}) {
+  let blockedBy = freePort(port, { killable, listHolders, kill })
+  if (process.platform !== 'win32') return { port, freed: blockedBy.length === 0, blockedBy }
   for (let i = 0; i < attempts; i++) {
-    const res = spawnSync(
-      'powershell',
-      ['-NoProfile', '-Command', `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Measure-Object).Count`],
-      { encoding: 'utf8' },
-    )
-    if (String(res.stdout || '').trim() === '0') return
-    freePort(port)
+    const holders = listHolders(port)
+    if (!holders.length) return { port, freed: true, blockedBy: [] }
+    // Nothing left but processes we are not allowed to kill: spinning cannot
+    // change that, so stop immediately instead of burning the whole bound.
+    if (holders.every((h) => !mayKillProcess(h.name, killable))) {
+      return { port, freed: false, blockedBy: holders }
+    }
+    blockedBy = freePort(port, { killable, listHolders, kill })
     spawnSync('powershell', ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${intervalMs}`], { stdio: 'ignore' })
   }
+  const holders = listHolders(port)
+  return { port, freed: holders.length === 0, blockedBy: holders.filter((h) => !mayKillProcess(h.name, killable)) }
 }
 
-// Kill whatever still holds a TCP port (Windows). Only used as a post-stop
-// safety net for a server we ourselves launched; we never target a port we
-// weren't asked to free.
-function freePort(port) {
-  if (process.platform !== 'win32') return
+/** PIDs + image names currently LISTENing on a port (Windows). */
+export function listPortHolders(port) {
+  if (process.platform !== 'win32') return []
   try {
     const res = spawnSync(
       'powershell',
-      ['-NoProfile', '-Command', `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -Expand OwningProcess`],
+      [
+        '-NoProfile',
+        '-Command',
+        `Get-NetTCPConnection -LocalPort ${Number(port)} -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; "$($_.OwningProcess)|$($p.ProcessName)" }`,
+      ],
       { encoding: 'utf8' },
     )
-    const pids = String(res.stdout || '')
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-    for (const p of pids) spawnSync('taskkill', ['/PID', p, '/T', '/F'], { stdio: 'ignore' })
+    const seen = new Map()
+    for (const line of String(res.stdout || '').split(/\r?\n/)) {
+      const [pid, name] = line.trim().split('|')
+      if (!pid) continue
+      if (!seen.has(pid)) seen.set(pid, { pid, name: name || '' })
+    }
+    return [...seen.values()]
+  } catch {
+    return []
+  }
+}
+
+function killPid(pid) {
+  spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+}
+
+// Kill the holders of a TCP port that EVA is ALLOWED to kill (Windows).
+// Returns the holders it refused to touch. A port owned by shared
+// infrastructure (Docker Desktop's backend owns 3001 and 5180 on this machine)
+// is left alone: EVA never destroys a service it did not start, least of all one
+// another app in the same run declares as its prerequisite.
+export function freePort(port, { killable = DEFAULT_KILLABLE_PROCESSES, listHolders = listPortHolders, kill = killPid } = {}) {
+  if (process.platform !== 'win32') return []
+  const refused = []
+  try {
+    for (const holder of listHolders(port)) {
+      if (mayKillProcess(holder.name, killable)) kill(holder.pid)
+      else refused.push(holder)
+    }
   } catch {
     /* best-effort */
   }
+  return refused
 }
 
 function safeJoin(baseUrl, path) {

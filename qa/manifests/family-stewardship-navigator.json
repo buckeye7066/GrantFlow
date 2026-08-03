@@ -10,13 +10,13 @@
   "base_url": "http://localhost:5180",
   "test_target": "disposable-local-instance",
   "required_env": ["VITE_API_URL", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "AI_PROVIDER", "OPENAI_API_KEY", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "DB_HOST_PORT"],
-  "$prereq_comment": "Measured 2026-08-01: `docker compose up --build` fails immediately with 'failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine … the daemon is running?'. Docker Desktop is INSTALLED on this machine but not running at EVA's 04:00 slot. The whole stack (app + its Postgres) is the compose stack, so with no daemon there is nothing to test — an environment prerequisite, not an app defect.",
+  "$prereq_comment": "Measured 2026-08-01: `docker compose up --build` fails immediately with 'failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine ... the daemon is running?'. UPDATED 2026-08-03: the earlier remedy ('set it to start at login') was ALREADY SATISFIED and is not sufficient -- Docker Desktop sits in the HKCU Run key and settings-store.json carries AutoStart=True, yet the daemon was still down at 04:00 because its own backend log shows the previous instance quit at 2026-08-02 16:40 EDT and no logon event happened before the slot. A login-scoped remedy cannot cover 'quit yesterday afternoon', so the remedy is now TIME-scoped: the scheduled task 'Docker Desktop for EVA' runs tools/ensure-docker-for-eva.ps1 at 03:40 (idempotent; never restarts a healthy daemon). SEPARATELY, EVA itself used to destroy this prerequisite: Docker publishes container ports through com.docker.backend, so this stack's own published 3001/5180 resolve to it and the launcher's pre-launch port clear taskkilled Docker Desktop's backend -- fixed by the PROTECTED_PORT_HOLDERS allowlist in tools/eva-edge-runner/src/launcher.mjs.",
   "prerequisites": [
     {
       "id": "docker-daemon",
       "type": "docker",
       "name": "Docker daemon (the compose stack provides the app AND its Postgres)",
-      "remedy": "leave Docker Desktop running overnight, or set it to start at login, so the 04:00 EVA run can bring the compose stack up"
+      "remedy": "the scheduled task 'Docker Desktop for EVA' (03:40 daily) runs tools/ensure-docker-for-eva.ps1 to bring the daemon up before this run; if this is still blocking, check that task rather than re-enabling start-at-login, which is already on and cannot cover a daemon quit during the previous day"
     }
   ],
   "seed_command": "npm --prefix server run db:create-admin",
@@ -66,6 +66,8 @@
         { "action": "waitForSelector", "selector": "body" }
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "Family Stewardship" }],
+      "$expected_comment": "The app shell's AuthContext.checkUserAuth probes /api/auth/me on mount; an anonymous visitor's probe can only 401. Declared by ENDPOINT (never a blanket '401'), so a 401 anywhere else still reds the journey and no assertion can be suppressed.",
+      "expected_console_errors": ["/api/auth/me", "User auth check failed"],
       "user_impact": "If the shell does not load, the family cannot reach login or any stewardship data.",
       "candidate_files": ["src/App.tsx", "src/pages/Login.tsx"]
     },
@@ -75,13 +77,15 @@
       "severity": "high",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "input[type=email], input[name=email], input[type=password]" },
+        { "$comment": "30s, not the 10s default: this app's start_command is `docker compose up --build`, so the web container is RECREATED on every run and its Vite dev server is still cold-transforming when the journeys start. Measured 2026-08-03 — the journey passes in isolation and passed on the run right after a warm container, but timed out twice at 10s when run immediately behind app-identifies-itself against a freshly rebuilt container. The email input itself is present and correct (type=email, placeholder you@example.com); this buys boot time, it does not weaken the assertion.", "action": "waitForSelector", "selector": "input[type=email], input[name=email], input[type=password]", "timeout": 30000 },
         { "action": "fill", "selector": "input[type=email], input[name=email]", "value": "eva-fixture@example.com" }
       ],
+      "$assert_comment": "Measured 2026-08-03 against the live compose stack: the page reads 'Welcome Back / Sign in to your wealth planning dashboard / Email / Password / Sign In'. It contains the word LOGIN nowhere, so the old \"ogin\" assertion could never pass — journey drift, not an app defect. The email fill + input_value assertion (which DID pass) is what proves the form is usable; this asserts the page is the sign-in page.",
       "assert": [
         { "type": "input_value", "selector": "input[type=email], input[name=email]", "value": "eva-fixture@example.com" },
-        { "type": "text_visible", "selector": "body", "value": "ogin" }
+        { "type": "text_visible", "selector": "body", "value": "Sign in" }
       ],
+      "expected_console_errors": ["/api/auth/me", "User auth check failed"],
       "user_impact": "A family member who cannot reach a working login form is locked out of every finance feature.",
       "candidate_files": ["src/pages/Login.tsx", "server/src/routes/auth.ts"]
     }

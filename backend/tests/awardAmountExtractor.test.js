@@ -148,6 +148,74 @@ describe('extractAwardAmountsFromText — per-award dollar extraction', () => {
       expect(extractAwardAmountsFromText('Grants of $5,000 to each recipient are available.').amount_max).toBe(5000)
     })
   })
+
+  describe('TUITION-COVERAGE awards (the NM Lottery/Opportunity class, amount_recall_miss:high_school_student 2026-08-03)', () => {
+    // These four strings are the REAL prod ingest descriptions of the rows named
+    // by Amy's finding excerpt ("New Mexico Lottery Scholarship; TheDream.US
+    // Scholarship; UAlbany Alumni Association Scholarships; New Mexico
+    // Opportunity Scholarship"). Each states the award IS tuition coverage — an
+    // explicit per-award semantic with no fixed dollar figure — so the honest
+    // extraction is status 'varies' with the phrase as amount_text, NEVER a
+    // number ('not_listed' silence made these rows count as extraction misses
+    // every night, and a fabricated figure would be strictly worse).
+    it('reads "covers 100% of tuition" as an explicit varies-by-institution award', () => {
+      const r = extractAwardAmountsFromText(
+        'The Lottery Scholarship covers 100% of tuition for recent New Mexico high school graduates who enroll full time at a New Mexico public college or university.',
+      )
+      expect(r).toMatchObject({ amount_min: null, amount_max: null, matched: null, amount_status: 'varies' })
+      expect(r.amount_text).toMatch(/covers 100% of tuition/i)
+    })
+
+    it('reads "pays tuition" as tuition coverage', () => {
+      const r = extractAwardAmountsFromText(
+        'This scholarship pays tuition and is awarded beginning with the second semester of enrollment, renewable for a maximum of seven semesters and three summer semesters.',
+      )
+      expect(r).toMatchObject({ amount_min: null, amount_max: null, amount_status: 'varies' })
+      expect(r.amount_text).toMatch(/pays tuition/i)
+    })
+
+    it('reads "covers any gap in tuition … up to 100% of tuition and allowable fees" (both prod NM Opportunity rows)', () => {
+      const a = extractAwardAmountsFromText(
+        'This scholarship covers any gap in tuition and allowable fees owed by a student after other forms of state aid are applied, potentially covering up to 100% of tuition and allowable fees.',
+      )
+      expect(a).toMatchObject({ amount_min: null, amount_max: null, amount_status: 'varies' })
+      const b = extractAwardAmountsFromText(
+        'Covers any gap in tuition and fees owed by a student after other forms of state aid are applied, can cover up to 100% of tuition and fees.',
+      )
+      expect(b).toMatchObject({ amount_min: null, amount_max: null, amount_status: 'varies' })
+    })
+
+    it('NEVER claims tuition coverage from a bare mention (eligibility phrasing, "help pay for college")', () => {
+      // Real prod rows that genuinely state nothing about the award value —
+      // these must STAY not_listed (silence), not become a fake answer.
+      expect(extractAwardAmountsFromText(
+        'UAlbany has partnered with TheDream.US to offer additional scholarships to undergraduate students without permanent legal status who are eligible for in-state tuition.',
+      ).amount_status).toBe('not_listed')
+      expect(extractAwardAmountsFromText(
+        'The Opportunity Scholarship is available to New Mexico residents to help pay for college, with eligibility based on established need and academic performance.',
+      ).amount_status).toBe('not_listed')
+      expect(extractAwardAmountsFromText(
+        'Current UAlbany students are eligible to apply for UAlbany Alumni Association scholarships, several of which are offered each academic year.',
+      ).amount_status).toBe('not_listed')
+    })
+
+    it('NEVER claims tuition coverage from a negated or excluded claim', () => {
+      expect(extractAwardAmountsFromText('This grant does not cover tuition or fees.').amount_status)
+        .toBe('not_listed')
+      expect(extractAwardAmountsFromText('Funds may be used for books and housing but cannot cover tuition.').amount_status)
+        .toBe('not_listed')
+      expect(extractAwardAmountsFromText('The stipend covers everything excluding tuition.').amount_status)
+        .toBe('not_listed')
+    })
+
+    it('a NUMERIC per-award figure still wins over a tuition-coverage phrase', () => {
+      // "Tuition reimbursement up to $5,250 per year" carries a real ceiling —
+      // the status-only route must not pre-empt it.
+      const r = extractAwardAmountsFromText('Pays tuition costs — tuition reimbursement up to $5,250 per year.')
+      expect(r.amount_max).toBe(5250)
+      expect(r.amount_status).toBe('range')
+    })
+  })
 })
 
 describe('resolveOpportunityAmounts — structured wins, extraction fills', () => {

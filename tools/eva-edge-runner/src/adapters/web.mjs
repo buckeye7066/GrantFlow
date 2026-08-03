@@ -38,7 +38,15 @@ export async function runWebJourney({ baseUrl, journey, captureDir = null, dryRu
     context = await pw.chromium.launchPersistentContext(userDataDir, { headless: true })
     const page = await context.newPage()
     page.on('console', (msg) => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text())
+      // Record the RESOURCE the error came from, not only the sentence. The
+      // browser's own text for a failed fetch is "Failed to load resource: the
+      // server responded with a status of 401 (Unauthorized)" — it names no URL,
+      // so a journey's `expected_console_errors` entry could only ever be a
+      // blanket "401", which would also hide a 401 on a DIFFERENT endpoint.
+      // With the location appended, an allowlist can name one endpoint.
+      if (msg.type() !== 'error') return
+      const url = typeof msg.location === 'function' ? msg.location()?.url : null
+      consoleErrors.push(url ? `${msg.text()} (${url})` : msg.text())
     })
     page.on('requestfailed', (req) => {
       // ERR_ABORTED is the browser cancelling its own in-flight request
@@ -157,10 +165,39 @@ async function applyStep(page, step, baseUrl) {
     case 'wait':
       return page.waitForTimeout(Math.min(step.ms || 500, 5000))
     case 'waitForSelector':
-      return page.waitForSelector(step.selector, { timeout: step.timeout || 10000 })
+      return page.waitForSelector(step.selector, { timeout: step.timeout || 10000, state: resolveWaitState(step) })
     default:
       return null
   }
+}
+
+// The DOCUMENT itself — never a UI element a user looks at.
+const DOCUMENT_ROOT_SELECTORS = new Set(['body', 'html', ':root', 'document'])
+
+/**
+ * Which Playwright state a `waitForSelector` step waits for.
+ *
+ * Playwright's default is `visible`, and `visible` means "has a non-empty
+ * bounding box". A `<body>` that has not been painted yet has ZERO height, so
+ * `waitForSelector('body')` — the "wait for the page to exist" idiom every
+ * manifest uses as its first step — fails with the self-contradictory
+ * "locator resolved to HIDDEN <body>" against any app whose shell renders after
+ * JS boots: Streamlit (CRISPR Compass, 7 recurring nights, never passed) and,
+ * measured 2026-08-03, SermonSmith's Vite/React shell too. It is not a
+ * Streamlit quirk; it is every client-rendered app, and the step was asserting
+ * something no journey ever meant.
+ *
+ * So the document root waits for ATTACHED (the document exists) and the
+ * journey's own `text_visible` assertion — which already POLLS to a deadline —
+ * remains the thing that proves the app actually rendered. This LOWERS no bar:
+ * a real element selector still waits for `visible` exactly as before, and a
+ * journey may still name a state explicitly.
+ */
+export function resolveWaitState(step) {
+  const explicit = step?.state
+  if (explicit) return explicit
+  const sel = String(step?.selector || '').trim().toLowerCase()
+  return DOCUMENT_ROOT_SELECTORS.has(sel) ? 'attached' : 'visible'
 }
 
 async function checkAssertion(page, assertion) {

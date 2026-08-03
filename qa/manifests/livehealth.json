@@ -10,6 +10,12 @@
   "base_url": "http://localhost:5173",
   "test_target": "disposable-local-instance",
   "required_env": ["AUTH_JWT_SECRET", "ADMIN_EMAIL", "ADMIN_PASSWORD", "CORS_ORIGIN", "VITE_API_URL"],
+  "launch_env": {
+    "VITE_API_URL": "http://localhost:3000",
+    "CORS_ORIGIN": "http://localhost:5173",
+    "ADMIN_EMAIL": "eva-admin@example.com"
+  },
+  "launch_env_generated": { "AUTH_JWT_SECRET": "secret", "ADMIN_PASSWORD": "secret" },
   "seed_command": null,
   "reset_command": null,
   "cleanup": "rm -rf .eva-tmp/livehealth (server uses in-memory store when DATABASE_URL is unset — state dies with the process)",
@@ -50,6 +56,7 @@
       "id": "app-identifies-itself",
       "name": "App shell loads and identifies LiveHealth",
       "severity": "critical",
+      "expected_console_errors": ["status of 401"],
       "steps": [
         { "action": "goto", "url": "/" },
         { "action": "waitForSelector", "selector": "body" }
@@ -62,6 +69,7 @@
       "id": "sign-in-screen-renders",
       "name": "Sign-in screen renders with email and password fields",
       "severity": "high",
+      "expected_console_errors": ["status of 401"],
       "steps": [
         { "action": "goto", "url": "/" },
         { "action": "waitForSelector", "selector": "input[type=email], input[name=email]" },

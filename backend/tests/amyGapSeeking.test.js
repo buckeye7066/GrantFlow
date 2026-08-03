@@ -24,7 +24,7 @@ import {
 } from '../services/amy/probeCoverageLedger.js'
 import { cellPairs, isPlausibleCell, reachablePairCount, enumerateReachablePairs, STATE_IDS } from '../services/amy/probeSpace.js'
 import { assessConvergence, TREND } from '../services/amy/gapConvergence.js'
-import { buildDeletionProof, DELETION_VERDICT } from '../services/amy/amyDeletionProof.js'
+import { buildDeletionProof, classifySurvivorHold, DELETION_VERDICT, SURVIVOR_HOLD } from '../services/amy/amyDeletionProof.js'
 import { CATEGORY_IDS } from '../services/amy/syntheticProfileCatalog.js'
 
 const AT = '2026-08-03T04:00:00.000Z'
@@ -343,5 +343,93 @@ describe('deletion is PROVEN from row counts, or it is unknown', () => {
     })
     expect(p.verdict).toBe(DELETION_VERDICT.PROVEN)
     expect(p.reasons.join(' ')).toMatch(/sweeps reported 48 deleted; the row count moved by 52/)
+  })
+
+  describe('a past-TTL row the sweep is DELIBERATELY holding is GRACE_HELD, not LEAKED (2026-08-03)', () => {
+    // The real prod pair behind the 2026-08-03 owner-report alarm: both rows
+    // were skipped by the expired sweep with its OWN telemetry reason
+    // `crawled_too_recently` (amy_last_report.cleanup_expired.skipped_ids) —
+    // markers intact, freshly re-discovered, inside the documented 6h grace —
+    // yet verifyAmyDeletion reported them as LEAKED.
+    const NOW = new Date('2026-08-03T15:28:00.000Z')
+    const prodSurvivorB9 = {
+      id: 'b9ca2567-c124-4a09-8b3a-208f86de9782',
+      expires_at: '2026-08-02T21:58:19.925Z',
+      created_at: '2026-07-31T21:58:19.925Z',
+      crawled_signal_at: '2026-08-03T14:21:53.619Z', // 1.1h before NOW — inside the 6h grace
+      allow_sam_cleanup: true,
+      synthetic: true,
+    }
+
+    it('classifies the real prod survivor as CRAWL_GRACE', () => {
+      expect(classifySurvivorHold(prodSurvivorB9, { now: NOW })).toBe(SURVIVOR_HOLD.CRAWL_GRACE)
+    })
+
+    it('verdict is GRACE_HELD (non-alarming) when every survivor is guard-held', () => {
+      const held = { ...prodSurvivorB9, hold: SURVIVOR_HOLD.CRAWL_GRACE }
+      const p = buildDeletionProof({
+        before: 71, after: 21, created: 50,
+        runCleanup: { deleted: 50 }, expiredSweep: { deleted: 0 },
+        survivors: [held],
+      })
+      expect(p.verdict).toBe(DELETION_VERDICT.GRACE_HELD)
+      expect(p.grace_held_count).toBe(1)
+      expect(p.leaked_survivor_count).toBe(0)
+      expect(p.expired_survivor_count).toBe(1) // meaning unchanged: ALL past-TTL rows
+      expect(p.reasons.join(' ')).toMatch(/documented grace/)
+    })
+
+    it('one unexplained survivor keeps the verdict LEAKED even beside a grace-held one', () => {
+      const p = buildDeletionProof({
+        before: 71, after: 21, created: 50,
+        runCleanup: { deleted: 50 }, expiredSweep: { deleted: 0 },
+        survivors: [
+          { ...prodSurvivorB9, hold: SURVIVOR_HOLD.CRAWL_GRACE },
+          { id: 'p-bad', expires_at: '2026-07-30T00:00:00Z', hold: null },
+        ],
+      })
+      expect(p.verdict).toBe(DELETION_VERDICT.LEAKED)
+      expect(p.leaked_survivor_count).toBe(1)
+      expect(p.grace_held_count).toBe(1)
+    })
+
+    it('an old-shape survivor with NO hold key fails TOWARD the alarm (LEAKED)', () => {
+      const p = buildDeletionProof({
+        before: 55, after: 6, created: 50,
+        runCleanup: { deleted: 49 }, expiredSweep: { deleted: 0 },
+        survivors: [{ id: 'p1', expires_at: '2026-07-30T00:00:00Z' }],
+      })
+      expect(p.verdict).toBe(DELETION_VERDICT.LEAKED)
+    })
+
+    it('a STALE crawl signal is NOT a hold — the sweep should have reaped it', () => {
+      expect(classifySurvivorHold(
+        { ...prodSurvivorB9, crawled_signal_at: '2026-08-03T02:00:00.000Z' }, // 13.5h > 6h grace
+        { now: NOW },
+      )).toBeNull()
+    })
+
+    it('marker drift is NOT a hold even inside the grace (the sweep can never reap it)', () => {
+      expect(classifySurvivorHold({ ...prodSurvivorB9, allow_sam_cleanup: false }, { now: NOW })).toBeNull()
+      expect(classifySurvivorHold({ ...prodSurvivorB9, synthetic: false }, { now: NOW })).toBeNull()
+    })
+
+    it('perpetual grace-riding ESCALATES: past the never-crawled bound (96h) a fresh crawl no longer holds it', () => {
+      // A synthetic still riding 6h graces 4+ days after creation is being
+      // starved by perpetual re-discovery, not protected mid-flight.
+      expect(classifySurvivorHold(
+        { ...prodSurvivorB9, created_at: '2026-07-29T15:00:00.000Z', crawled_signal_at: '2026-08-03T15:00:00.000Z' },
+        { now: NOW },
+      )).toBeNull()
+    })
+
+    it('a never-crawled survivor is held INSIDE the bounded window and a leak past it', () => {
+      const neverCrawled = { ...prodSurvivorB9, crawled_signal_at: null }
+      expect(classifySurvivorHold(neverCrawled, { now: NOW })).toBe(SURVIVOR_HOLD.NEVER_CRAWLED_WINDOW)
+      expect(classifySurvivorHold(
+        { ...neverCrawled, created_at: '2026-07-29T15:00:00.000Z' },
+        { now: NOW },
+      )).toBeNull()
+    })
   })
 })
