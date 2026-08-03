@@ -59,6 +59,24 @@ export const SUPPRESSIBLE_NO_FIT_RULE_IDS = new Set([
 ])
 
 /**
+ * SOFT geographic-mismatch rules that must NOT discard an engine-endorsed row
+ * at display (canonical rule: "geographic matching must expand outward: city →
+ * county → state → national"). The matchEngine already applied its geo logic
+ * before scoring a row ACCEPT/REVIEW above the floor, so a plain state/city
+ * mismatch is a score signal, not a disqualifier — a TN profile can still want a
+ * multi-state or wrongly-title-tagged program the engine judged a real fit.
+ * EXCLUSIVITY is untouched: geographic_residents_only_exclusive and
+ * geographic_rural_exclusive are hard: true and still reject in any mode. Only
+ * suppressed for an authoritative above-floor decision, and only when
+ * PROFILE_GATE_TRUST_ENGINE is on.
+ */
+export const SUPPRESSIBLE_GEO_MISMATCH_RULE_IDS = new Set([
+  'geographic_state_mismatch',
+  'geographic_title_state_mismatch',
+  'geographic_wrong_city',
+])
+
+/**
  * Does this row carry an authoritative stored match decision at/above the
  * surfacing floor? Only such rows earn no-fit suppression — a raw web lead or an
  * unscored candidate keeps the strict keyword gate (it is the only filter those
@@ -436,12 +454,23 @@ export function evaluateProfileSpecificGate(profileContext, opportunity, opts = 
   // drop below.
   const storedAuthoritative = hasAuthoritativeStoredDecision(opportunity, opts)
 
+  // Skip only the no-fit content-shape rules when authoritative; a real
+  // eligibility/demographic rule LATER in the list still fires and rejects.
+  // When PROFILE_GATE_TRUST_ENGINE is on (default), also relax the SOFT
+  // geographic-mismatch rules for an engine-endorsed row (geography expands
+  // outward; hard residents-only/rural-only exclusivity is untouched).
+  let skipRuleIds = null
+  if (storedAuthoritative) {
+    skipRuleIds = new Set(SUPPRESSIBLE_NO_FIT_RULE_IDS)
+    if (TRUST_ENGINE_OVER_CATEGORY_HEURISTICS) {
+      for (const id of SUPPRESSIBLE_GEO_MISMATCH_RULE_IDS) skipRuleIds.add(id)
+    }
+  }
+
   const relevance = applyRelevanceFilter(opportunity, profileData, {
     mode: 'strict',
     allowDirectories: false,
-    // Skip only the no-fit content-shape rules when authoritative; a real
-    // eligibility/demographic rule LATER in the list still fires and rejects.
-    skipRuleIds: storedAuthoritative ? SUPPRESSIBLE_NO_FIT_RULE_IDS : null,
+    skipRuleIds,
   })
   if (!relevance.pass) {
     return {
