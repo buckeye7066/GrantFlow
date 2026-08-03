@@ -11,11 +11,13 @@ import { requireAuthenticatedUser, getAccessibleProfileIds } from '../utils/acce
 import { isTemplatedGeoStub } from '../services/relevanceFilterRules.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
+import { classifyProductionProfile } from '../config/productionProfileScope.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import {
   isFundingResource,
   partitionFundingSources,
 } from '../services/matching/fundingSourcePresentation.js'
+import { buildColdStartFundingFallback } from '../services/matching/coldStartFundingFallback.js'
 import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
 import { reconcileNeedFirstProfileMatches } from '../services/matching/needFirstReconciler.js'
 import {
@@ -86,6 +88,20 @@ function emptyReconciliation() {
   }
 }
 
+function emptyPresentation() {
+  return {
+    total: 0,
+    sources: [],
+    best_matches: [],
+    worth_reviewing: [],
+    directories: [],
+    resource_count: 0,
+    not_a_grant: [],
+    not_a_grant_count: 0,
+    duplicates_collapsed: 0,
+  }
+}
+
 /**
  * Classify the failure without reflecting SQL, column names, or stack traces to
  * the client. The old route converted every failure into HTTP 200 + empty data,
@@ -127,6 +143,43 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
 
   try {
     const loadedContext = await loadProfileContext(req.db, profileId)
+    const productionScope = classifyProductionProfile(loadedContext)
+    if (!productionScope.production) {
+      res.set('Cache-Control', 'no-store')
+      return res.json({
+        ok: true,
+        available: false,
+        excluded_from_matching: true,
+        exclusion_reason: productionScope.reason,
+        profile_id: profileId,
+        engine: 'crawler-os',
+        query_contract: FUNDING_SOURCE_QUERY_CONTRACT,
+        scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+        min_score: minScore,
+        ...emptyPresentation(),
+        geo_stubs_hidden: 0,
+        cold_start_fallback: {
+          attempted: false,
+          eligible_profile: false,
+          profile_reason: productionScope.reason,
+          scanned: 0,
+          kept: 0,
+          removed: 0,
+          families: [],
+          errors: [],
+        },
+        need_first_reconciliation: {
+          scanned: 0,
+          updated: 0,
+          rejected: 0,
+          demoted: 0,
+          score_lowered: 0,
+          failures: 0,
+          read_only_audit: readOnlyAudit,
+        },
+      })
+    }
+
     const profileContext = buildProfileFacets(loadedContext)
     // buildProfileFacets preserves profile/sections/signals but its normalized
     // context does not retain profileNorm. Reattach the already-built canonical
@@ -231,7 +284,33 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     }
 
     const qualified = sources.filter((source) => qualifiesForDisplay(source, minScore))
-    const presented = partitionFundingSources(qualified)
+    let presented = partitionFundingSources(qualified)
+    let coldStart = {
+      attempted: false,
+      eligible_profile: false,
+      profile_reason: null,
+      scanned: 0,
+      kept: 0,
+      removed: 0,
+      families: [],
+      errors: [],
+    }
+
+    // A sparse real profile should never dead-end at an empty owner-facing
+    // list when GrantFlow already holds broadly available programs. This lane is
+    // deliberately read-only and catalog-backed: it runs only when there are no
+    // visible DIRECT results, keeps the canonical raw score, labels every row
+    // REVIEW / eligibility-unconfirmed, and bypasses only the display floor so
+    // the user can see the baseline instead of a blank page. Every candidate
+    // still passes the shared junk, eligibility, geography, and match gates.
+    if (presented.total === 0) {
+      const fallback = await buildColdStartFundingFallback(req.db, profileContext)
+      coldStart = fallback.telemetry
+      if (fallback.sources.length > 0) {
+        presented = partitionFundingSources([...qualified, ...fallback.sources])
+      }
+    }
+
     res.set('Cache-Control', 'no-store')
     return res.json({
       ok: true,
@@ -244,6 +323,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       min_score: minScore,
       ...presented,
       geo_stubs_hidden: geoStubsHidden,
+      cold_start_fallback: coldStart,
       need_first_reconciliation: {
         scanned: reconciliation.scanned,
         updated: reconciliation.updated,
@@ -270,13 +350,18 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       failure_class: failure.failureClass,
       details_redacted: true,
       profile_id: profileId,
-      total: 0,
-      sources: [],
-      best_matches: [],
-      worth_reviewing: [],
-      directories: [],
-      resource_count: 0,
+      ...emptyPresentation(),
       scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+      cold_start_fallback: {
+        attempted: false,
+        eligible_profile: false,
+        profile_reason: 'request_failed',
+        scanned: 0,
+        kept: 0,
+        removed: 0,
+        families: [],
+        errors: [],
+      },
       need_first_reconciliation: {
         read_only_audit: readOnlyAudit,
       },
