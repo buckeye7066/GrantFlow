@@ -24,8 +24,31 @@ import { isGenericOnly } from '../../config/genericTitleVocabulary.js'
  * (foster-youth-only, seniors-only, veterans-only, applicant-type, geography,
  * student-aid-vs-nonstudent): those are real hard-ineligibility and STILL drop
  * however high the stored score (Chafee-for-a-non-foster-adult must stay
- * dropped).
+ * dropped). Those live in the relevance filter (applyRelevanceFilter), which
+ * runs FIRST below and rejects them before the CATEGORY loop is reached.
+ *
+ * OWNER DIRECTIVE 2026-08-03 (recall over suppression — GrantFlow must beat a
+ * free Google search): the gate's OWN CATEGORY_RULES population net (the 14
+ * "opportunity text mentions <population> but the profile shows no <population>
+ * signal" keyword rules below) is ALSO trusted away for an authoritative
+ * above-floor row. Those are hard boolean filters on a population keyword, not
+ * explicit exclusivity — exactly what the canonical rule forbids ("population/
+ * eligibility mismatches must reduce score, not discard results; hard boolean
+ * filters are forbidden unless the funding source is explicitly exclusive").
+ * The matchEngine already scored the row against the FULL profile (fields these
+ * keyword heuristics never see), and explicit exclusivity is still enforced by
+ * the relevance filter's hard: true rules above. Reversible: set
+ * PROFILE_GATE_TRUST_ENGINE=0 to restore the old population-net hard drops.
  */
+/**
+ * When ON (default), an authoritative above-floor engine decision is trusted
+ * over the gate's own CATEGORY_RULES population keyword net (recall over
+ * suppression — owner directive 2026-08-03). Set PROFILE_GATE_TRUST_ENGINE=0 to
+ * restore the old behavior where a population keyword rule could re-adjudicate
+ * an engine-endorsed match away at display time.
+ */
+const TRUST_ENGINE_OVER_CATEGORY_HEURISTICS = process.env.PROFILE_GATE_TRUST_ENGINE !== '0'
+
 export const SUPPRESSIBLE_NO_FIT_RULE_IDS = new Set([
   // relevanceFilter (applyRelevanceFilter) content-shape rejections
   ...NO_FIT_RELEVANCE_RULE_IDS, // referral_directory, generic_directory_page
@@ -429,10 +452,22 @@ export function evaluateProfileSpecificGate(profileContext, opportunity, opts = 
   }
 
   const matched = []
+  let trustedOverCategory = false
   for (const rule of CATEGORY_RULES) {
     if (!rule.re.test(text)) continue
     if (rule.supported(evidence, text, opportunity)) {
       matched.push(rule.id)
+      continue
+    }
+    // Unsupported population category. The gate's own keyword net used to
+    // hard-drop here. When the matchEngine carries an authoritative above-floor
+    // decision for THIS profile, that affirmative score is dispositive (owner
+    // directive: population mismatches reduce score, not discard; hard boolean
+    // filters are forbidden unless the source is explicitly exclusive — and
+    // explicit exclusivity was already enforced by the relevance filter above).
+    // So we do NOT re-adjudicate the row away on a keyword here.
+    if (storedAuthoritative && TRUST_ENGINE_OVER_CATEGORY_HEURISTICS) {
+      trustedOverCategory = true
       continue
     }
     return { pass: false, ruleId: rule.id, reason: rule.reason }
@@ -475,7 +510,7 @@ export function evaluateProfileSpecificGate(profileContext, opportunity, opts = 
     }
   }
 
-  return { pass: true, matchedRules: matched, directory, webLead }
+  return { pass: true, matchedRules: matched, directory, webLead, trustedOverCategory }
 }
 
 export default {

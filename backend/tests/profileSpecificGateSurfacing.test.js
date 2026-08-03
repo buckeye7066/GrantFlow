@@ -109,6 +109,65 @@ describe('no-fit suppression for stored above-floor rows', () => {
   })
 })
 
+// OWNER DIRECTIVE 2026-08-03 (recall over suppression): the gate's OWN
+// CATEGORY_RULES population keyword net must not re-adjudicate away a row the
+// matchEngine already scored above the surfacing floor. Explicit exclusivity
+// (enforced by the relevance filter, which runs first) STILL drops.
+describe("CATEGORY population net trusts an authoritative engine decision", () => {
+  const youngIndividual = {
+    primary_type: 'individual',
+    state: 'TN',
+    needs: ['housing'],
+    // NOTE: no age → age-based relevance rules PASS (missing fields are
+    // neutral, not exclusionary), so the only thing that used to drop a senior
+    // resource was the CATEGORY senior_without_profile_signal keyword rule.
+  }
+
+  // Relevance filter passes this (no explicit exclusivity, unknown age), so the
+  // ONLY thing that dropped it was the CATEGORY senior population keyword rule.
+  function seniorAgingResource(overrides = {}) {
+    return {
+      id: 'aaa-aging',
+      title: 'Area Agency on Aging Resource',
+      description: 'Aging services for senior citizens and older adults.',
+      source: 'aaa_program',
+      source_url: 'https://example.org/aaa',
+      match_score: 30,
+      match_decision: 'REVIEW',
+      ...overrides,
+    }
+  }
+
+  it('SURFACES a CATEGORY-only mismatch when the engine scored it above the floor', () => {
+    const gate = evaluateProfileSpecificGate(youngIndividual, seniorAgingResource(), STORED)
+    expect(gate.pass).toBe(true)
+    expect(gate.trustedOverCategory).toBe(true)
+  })
+
+  it('DROPS the same row on the CATEGORY rule when it has NO authoritative decision', () => {
+    const gate = evaluateProfileSpecificGate(youngIndividual, seniorAgingResource(), UNSCORED)
+    expect(gate.pass).toBe(false)
+    expect(gate.ruleId).toBe('senior_without_profile_signal')
+  })
+
+  it('does NOT trust the engine over EXPLICIT exclusivity (veterans-only still drops)', () => {
+    // "Veterans only" is hard-exclusive in the relevance filter (runs first), so
+    // even an above-floor stored score cannot surface it for a non-veteran.
+    const vetExclusive = {
+      id: 'vet-only-2',
+      title: 'Veterans Only Assistance',
+      description: 'Open only to veterans. Must be a veteran to apply.',
+      source: 'va_program',
+      source_url: 'https://example.org/vet',
+      match_score: 30,
+      match_decision: 'REVIEW',
+    }
+    const gate = evaluateProfileSpecificGate(youngIndividual, vetExclusive, STORED)
+    expect(gate.pass).toBe(false)
+    expect(gate.trustedOverCategory).toBeFalsy()
+  })
+})
+
 describe('hasAuthoritativeStoredDecision', () => {
   it('requires useStoredDecision + above-floor score + ACCEPT/REVIEW', () => {
     expect(hasAuthoritativeStoredDecision({ match_score: 30, match_decision: 'REVIEW' }, { useStoredDecision: true })).toBe(true)
