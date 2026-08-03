@@ -8,9 +8,10 @@
  *   - GET/PUT /api/profiles/:id/discovery-preferences round-trips it;
  *   - run-smart resolves: explicit request min > stored preference > DEFAULT_MIN_SCORE.
  *
- * Canonical guardrail: DEFAULT_MIN_SCORE (display floor >= 8, data-point
- * scale) is never lowered — a stored preference feeds the sanctioned
- * EXPLICIT-min path.
+ * Canonical guardrail: DEFAULT_MIN_SCORE (display floor = the engine REVIEW
+ * bar, REVIEW_SCORE = 7 on the data-point scale, per the 2026-08-03 recall
+ * directive) is the default — a stored preference feeds the sanctioned
+ * EXPLICIT-min path, and an owner may TIGHTEN via the slider.
  */
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import request from 'supertest'
@@ -24,6 +25,7 @@ import {
 import {
   DEFAULT_MIN_SCORE,
   DISCOVERY_MIN_SCORE_FLOOR,
+  REVIEW_SCORE,
   GOOD_MATCH_SCORE,
   STRONG_MATCH_SCORE,
   MIN_SCORE_SLIDER_MAX,
@@ -167,11 +169,14 @@ describe('discoveryPreferences service', () => {
       } finally { db.close() }
     })
 
-    it('never lowers the DISPLAY floor constant itself', () => {
-      // Documented bar (owner directive 2026-07-06 evening, data-point scale):
-      // 8 = pipeline-bar data-point coverage with clean eligibility + geography
-      // (population-preserving mapping of the retired need-anchored 25).
-      expect(DISCOVERY_MIN_SCORE_FLOOR).toBe(8)
+    it('pins the DISPLAY floor to the engine REVIEW bar (recall over suppression)', () => {
+      // OWNER DIRECTIVE 2026-08-03: the display floor is the engine REVIEW bar
+      // (REVIEW_SCORE = 7, "some real coverage worth a human look"), NOT the
+      // stricter pipeline/auto-add bar (AUTO_ADD_SCORE = 8). Every review-worthy
+      // source surfaces in Discover so GrantFlow beats a free Google search.
+      // Drift tripwire: the floor must equal REVIEW_SCORE so the two cannot
+      // silently diverge (reversible via GRANTFLOW_DISCOVERY_MIN_SCORE_FLOOR).
+      expect(DISCOVERY_MIN_SCORE_FLOOR).toBe(REVIEW_SCORE)
       expect(DEFAULT_MIN_SCORE).toBeGreaterThanOrEqual(DISCOVERY_MIN_SCORE_FLOOR)
     })
   })
