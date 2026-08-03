@@ -403,22 +403,42 @@ export function slugMatchesFunderName(slug, funderName) {
   return false
 }
 
+// Name TOKENS that make a funder name an INSTITUTION-identity claim. A donor
+// name ("Adams Family Foundation", "Bank of America", "Hoyer Law Group")
+// legitimately lives on a SCHOOL's tenant portal — prod audit 2026-08-03
+// found 118 tenant-platform catalog rows and the donor-sponsored majority are
+// CORRECT links — so a slug mismatch against a donor name proves nothing.
+// Only a funder that names an institution (token-level: 'college',
+// 'university', … — "NursingColleges.com" does NOT tokenize to 'college')
+// can falsify a tenant slug.
+const INSTITUTION_NAME_TOKENS = new Set([
+  'college', 'colleges', 'university', 'universities', 'institute', 'academy', 'seminary', 'conservatory',
+])
+
+/** Does this funder name claim to BE an institution (vs a donor/program)? */
+export function funderNameIsInstitution(funderName) {
+  return funderNameWords(funderName).some((w) => INSTITUTION_NAME_TOKENS.has(w))
+}
+
 /**
  * Does this portal URL plausibly belong to the named funder/institution?
  *
  * Returns 'plausible' | 'implausible' | 'undecidable'.
  *  - 'implausible' ONLY on positive evidence: the URL is a tenant-slug
- *    platform host and the slug cannot be explained by the funder's whole
- *    name (see slugMatchesFunderName).
+ *    platform host, the funder name is itself an INSTITUTION name, and the
+ *    slug cannot be explained by that whole name (see slugMatchesFunderName).
+ *    That is the cpcc-for-Cleveland-State signature: two institution
+ *    identities that disagree.
  *  - Anything else — non-tenant host, bare platform host, missing funder
- *    name — is 'undecidable' (we learned nothing; never treat that as a
- *    denial).
+ *    name, donor-named funder on a school portal — is 'undecidable'
+ *    (we learned nothing; never treat that as a denial).
  */
 export function portalUrlFunderPlausibility(url, funderName) {
   const tenant = tenantPortalSlug(url)
   if (!tenant || !tenant.slug) return 'undecidable'
   if (!String(funderName || '').trim()) return 'undecidable'
-  return slugMatchesFunderName(tenant.slug, funderName) ? 'plausible' : 'implausible'
+  if (slugMatchesFunderName(tenant.slug, funderName)) return 'plausible'
+  return funderNameIsInstitution(funderName) ? 'implausible' : 'undecidable'
 }
 
 /**

@@ -13,6 +13,7 @@ import { computeMissingRequirements } from '../vnext/missingnessService.js'
 import { scoreApplication } from '../vnext/scoringService.js'
 import { writeAuditEvent } from '../vnext/auditEventsService.js'
 import { standardRateLimiter, mutationRateLimiter } from '../middleware/rateLimiting.js'
+import { portalUrlFunderPlausibility } from '../config/urlRules.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:vnextApplications')
@@ -296,10 +297,16 @@ router.get('/:id/finish-packet', standardRateLimiter, async (req, res) => {
   const submission_instructions = []
   const mode = String(opportunity?.application_mode || opportunity?.application_method || 'unknown').toLowerCase()
   const applyUrl = String(opportunity?.apply_url || opportunity?.application_url || '').trim()
+  // Same screen as applyEngine.resolveVerifiedPortalUrl (the
+  // cpcc-for-Cleveland-State class): a tenant-slug portal whose slug the
+  // funder's own institution name cannot explain is never named as the target.
+  const applyUrlImplausible =
+    applyUrl && portalUrlFunderPlausibility(applyUrl, opportunity?.sponsor) === 'implausible'
 
   if (mode === 'portal' || (applyUrl && /^https?:\/\//i.test(applyUrl))) {
     submission_instructions.push('Submit via portal link (open and complete required portal steps).')
-    if (applyUrl) submission_instructions.push(`Portal URL: ${applyUrl}`)
+    if (applyUrl && !applyUrlImplausible) submission_instructions.push(`Portal URL: ${applyUrl}`)
+    if (applyUrlImplausible) submission_instructions.push('Portal URL: unverified — confirm with funder')
   } else {
     submission_instructions.push('Prepare a finish packet for submission (print + sign + assemble required attachments).')
   }

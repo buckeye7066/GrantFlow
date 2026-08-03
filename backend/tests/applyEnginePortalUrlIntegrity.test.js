@@ -202,6 +202,22 @@ describe('portalUrlFunderPlausibility (tenant-slug whole-name rule)', () => {
     expect(portalUrlFunderPlausibility('https://academicworks.com/', 'Cleveland State Community College')).toBe('undecidable')
   })
 
+  it('a DONOR-named funder on a school portal is undecidable, never flagged (prod audit 2026-08-03: the donor-sponsored majority of tenant rows are CORRECT links)', () => {
+    // Real prod row shapes: donor scholarships administered on the school's tenant.
+    expect(portalUrlFunderPlausibility('https://mtsu.scholarships.ngwebsolutions.com/Scholarships/Search', 'Adams Family Foundation')).toBe('undecidable')
+    expect(portalUrlFunderPlausibility('https://uwf.academicworks.com/opportunities/external', 'Hoyer Law Group, PLLC')).toBe('undecidable')
+    expect(portalUrlFunderPlausibility('https://clevelandstatecc.scholarships.ngwebsolutions.com/Scholarships/Search', 'Cleveland State Foundation')).toBe('undecidable')
+    // Token-level institution detection: "NursingColleges.com" is a donor
+    // website, not an institution — 'nursingcolleges' is not the token 'college'.
+    expect(portalUrlFunderPlausibility('https://uwf.academicworks.com/opportunities/external', 'NursingColleges.com')).toBe('undecidable')
+  })
+
+  it('only two DISAGREEING institution identities flag (the cpcc signature requires an institution-named funder)', () => {
+    expect(portalUrlFunderPlausibility(CPCC_URL, 'Cleveland State Community College')).toBe('implausible')
+    // Same slug mismatch, but the funder is a donor — no institution claim, no flag.
+    expect(portalUrlFunderPlausibility(CPCC_URL, 'Bank of America')).toBe('undecidable')
+  })
+
   it('missing funder name is undecidable — silence is not a denial', () => {
     expect(portalUrlFunderPlausibility(CPCC_URL, '')).toBe('undecidable')
     expect(portalUrlFunderPlausibility(CPCC_URL, null)).toBe('undecidable')
