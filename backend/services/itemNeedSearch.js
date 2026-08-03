@@ -119,6 +119,27 @@ function norm(v) {
 }
 
 /**
+ * RANKING: ITEM-PHRASE RELEVANCE DOMINATES; profile affinity only breaks ties.
+ *
+ * The 2026-08-03 audit ran "forensic science lab equipment, laptop, and
+ * textbooks" and the top FOUR results were the profile's disability programs
+ * (hearing aids 36%, amputee 29%, voc-rehab 25%, paralysis 20%) — profile-flag
+ * affinity outranking everything that matched the requested item (the
+ * pre-#1098 route discarded the item entirely and reported a generic profile
+ * crawl, ordered by match_score). This comparator pins the rule structurally:
+ * `need_score` (how well the row states the ITEM) is the primary key on every
+ * result list this lane produces, and the profile-side `match_score` is
+ * consulted only between rows that state the item equally well. A bare
+ * unnamed disability flag contributes nothing even to the tiebreak — the
+ * engine no longer credits it on condition-specific rows (matchEngine, same
+ * audit).
+ */
+function byItemRelevance(a, b) {
+  return (b.need_score ?? 0) - (a.need_score ?? 0) ||
+    (Number(b.match_score ?? -1)) - (Number(a.match_score ?? -1))
+}
+
+/**
  * Stopwords for BIGRAM construction. Kept local and deliberately small: this
  * governs only whether two adjacent words may form an endorsing phrase, and a
  * bigram spanning a filler word is not a phrase anyone wrote.
@@ -226,25 +247,109 @@ export const FUNDING_INTENT_TERMS = Object.freeze([
   'grant', 'grants', 'scholarship', 'scholarships', 'fellowship', 'bursary',
   'fund', 'funds', 'funding', 'financial aid', 'financial assistance',
   'assistance', 'award', 'awards', 'stipend', 'voucher', 'vouchers',
-  'reimburse', 'reimbursement', 'tuition', 'fee', 'fees', 'cost', 'costs',
-  'price', 'pricing', 'pay', 'payment', 'sponsor', 'sponsorship', 'subsidy',
+  'reimburse', 'reimbursement', 'tuition', 'sponsor', 'sponsorship', 'subsidy',
   'subsidized', 'waiver', 'waived', 'no cost', 'free of charge', 'low cost',
-  'eligible', 'eligibility', 'apply', 'application', 'donat', 'charitable',
+  'donat', 'charitable', 'help pay', 'helps pay', 'help paying',
+  'cover the cost', 'covers the cost',
 ])
 
-/** Does this text state any funding/cost intent at all? Returns the hit or null. */
+/**
+ * AMBIGUOUS money-adjacent words. Alone, each is a coincidence magnet measured
+ * against the real 2026-08-03 audit SERP for "forensic science lab equipment,
+ * laptop, and textbooks": 'pay' admitted "Forensic Science Salaries in 2026"
+ * (median annual PAY), 'cost'/'price' admitted a Czech bookstore listing, and
+ * the now-REMOVED 'apply'/'application' admitted Wikipedia and Britannica on
+ * "the APPLICATION of science to criminal law" — an encyclopedia sentence, not
+ * a funding page. A weak term counts ONLY when the page shows no
+ * NON_FUNDING_PAGE_SIGNALS hit; 'apply'/'application'/'price'/'pricing' are
+ * gone outright (every real funding page in the fixtures states a stronger
+ * term as well; job boards and shops state these constantly).
+ */
+export const WEAK_FUNDING_INTENT_TERMS = Object.freeze([
+  'pay', 'payment', 'fee', 'fees', 'cost', 'costs', 'eligible', 'eligibility',
+])
+
+/**
+ * Signatures of an INFORMATIONAL or COMMERCE page — salary/career guides,
+ * encyclopedia/dictionary entries, storefront listings. A page shouting this
+ * vocabulary answers "what is X / what does X earn / buy X", never "who will
+ * pay for X". A STRONG funding term still wins over a signal (a real
+ * "tuition assistance for nursing careers" page mentions careers); a weak
+ * term or a bare dollar figure does not — "$64,940 median salary" is a
+ * statistic, not an award.
+ */
+export const NON_FUNDING_PAGE_SIGNALS = Object.freeze([
+  'salary', 'salaries', 'average pay', 'pay scale', 'career', 'careers',
+  'job outlook', 'job description', 'how to become', 'hiring', 'resume',
+  'what is', 'definition', 'meaning', 'encyclopedia', 'dictionary',
+  'wikipedia', 'britannica', 'buy now', 'add to cart', 'in stock', 'isbn',
+  'bookstore', 'for sale',
+])
+
+/**
+ * Hosts whose pages are informational/commerce BY CONSTRUCTION — an
+ * encyclopedia, a dictionary, a job board, a social network, a marketplace is
+ * never the funder of an item, whatever its snippet says. Registrable-suffix
+ * match on the lead's own URL. Deliberately NOT here: .gov/.edu hosts (NIST
+ * has real grants; an agency page is refused by the intent gate instead when
+ * it states no funding vocabulary).
+ */
+export const NON_FUNDING_LEAD_HOSTS = Object.freeze([
+  'wikipedia.org', 'wiktionary.org', 'britannica.com', 'merriam-webster.com',
+  'dictionary.cambridge.org', 'dictionary.com', 'indeed.com', 'glassdoor.com',
+  'ziprecruiter.com', 'linkedin.com', 'youtube.com', 'reddit.com', 'quora.com',
+  'facebook.com', 'amazon.com', 'ebay.com', 'etsy.com', 'pinterest.com',
+])
+
+/** The NON_FUNDING_PAGE_SIGNALS hit for this text, or null. */
+export function statesNonFundingSignal(text) {
+  const hay = ` ${norm(text)} `
+  for (const s of NON_FUNDING_PAGE_SIGNALS) {
+    const n = norm(s)
+    if (n && hay.includes(` ${n} `)) return n
+  }
+  return null
+}
+
+/** The NON_FUNDING_LEAD_HOSTS entry covering this URL's host, or null. */
+export function nonFundingLeadHost(url) {
+  let host = ''
+  try { host = new URL(String(url ?? '')).hostname.toLowerCase() } catch { return null }
+  for (const h of NON_FUNDING_LEAD_HOSTS) {
+    if (host === h || host.endsWith(`.${h}`)) return h
+  }
+  return null
+}
+
+/**
+ * Does this text state funding intent? Returns the hit or null.
+ *
+ * Three tiers, in order:
+ *   1. a STRONG funding term (FUNDING_INTENT_TERMS) always counts — even on a
+ *      page that also shows informational vocabulary;
+ *   2. a bare dollar figure counts only on a page with NO non-funding signal
+ *      ("$1,875 – Nurses" is an award; "$64,940 median salary" is not);
+ *   3. a WEAK term counts only on a page with NO non-funding signal.
+ */
 export function statesFundingIntent(text) {
   const raw = String(text ?? '')
-  if (/\$\s?\d/.test(raw)) return '$'
   const hay = ` ${norm(raw)} `
   for (const t of FUNDING_INTENT_TERMS) {
     const n = norm(t)
     if (n && hay.includes(` ${n} `)) return n
   }
   // Prefix-style terms ('donat' → donation/donated/donate, 'reimburse' → -ment)
-  for (const t of ['donat', 'reimburse', 'subsid', 'eligib', 'sponsor']) {
+  for (const t of ['donat', 'reimburse', 'subsid', 'sponsor']) {
     if (hay.includes(` ${t}`)) return t
   }
+  const signal = statesNonFundingSignal(raw)
+  if (signal) return null
+  if (/\$\s?\d/.test(raw)) return '$'
+  for (const t of WEAK_FUNDING_INTENT_TERMS) {
+    const n = norm(t)
+    if (n && hay.includes(` ${n} `)) return n
+  }
+  if (hay.includes(' eligib')) return 'eligib'
   return null
 }
 
@@ -424,7 +529,7 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
       record_origin: row.record_origin ?? null,
     })
   }
-  results.sort((a, b) => (b.need_score ?? 0) - (a.need_score ?? 0))
+  results.sort(byItemRelevance)
   return { results, scanned: (rows ?? []).length, terms, refusedNoPhrase, refusedByEngine, liveScored }
 }
 
@@ -440,7 +545,7 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
  */
 async function searchWebLane({ itemText, expanded, profileContext, variant, timeoutMs, phrases }) {
   if (!isWebDiscoveryEnabled()) {
-    return { results: [], attempted: false, queries: [], raw: 0, refusedNoPhrase: 0, refusedNoFundingIntent: 0, disabled: true }
+    return { results: [], attempted: false, queries: [], raw: 0, refusedNoPhrase: 0, refusedNoFundingIntent: 0, refusedNonFundingHost: 0, disabled: true }
   }
   let lane
   try {
@@ -454,13 +559,20 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
       timeoutMs,
     })
   } catch (err) {
-    return { results: [], attempted: true, queries: [], raw: 0, refusedNoPhrase: 0, refusedNoFundingIntent: 0, error: err?.message ?? String(err) }
+    return { results: [], attempted: true, queries: [], raw: 0, refusedNoPhrase: 0, refusedNoFundingIntent: 0, refusedNonFundingHost: 0, error: err?.message ?? String(err) }
   }
 
   const results = []
   let refusedNoPhrase = 0
   let refusedNoFundingIntent = 0
+  let refusedNonFundingHost = 0
   for (const lead of lane.opportunities ?? []) {
+    // An encyclopedia / dictionary / job board / marketplace page is never the
+    // funder of an item — refuse on the lead's own host before spending the
+    // text gates on it (Wikipedia ×2, Britannica, and Indeed career articles
+    // all shipped as "program" leads in the 2026-08-03 forensic-item audit).
+    const junkHost = nonFundingLeadHost(lead.url)
+    if (junkHost) { refusedNonFundingHost += 1; continue }
     const needMatch = scoreNeedMatch(
       { name: lead.title, description: lead.description, categories: lead.categories || [] },
       expanded,
@@ -490,7 +602,7 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
       is_lead: true,
     })
   }
-  results.sort((a, b) => (b.need_score ?? 0) - (a.need_score ?? 0))
+  results.sort(byItemRelevance)
   return {
     results,
     attempted: true,
@@ -498,6 +610,7 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
     raw: lane.debug?.raw ?? 0,
     refusedNoPhrase,
     refusedNoFundingIntent,
+    refusedNonFundingHost,
     error: lane.debug?.error ?? null,
   }
 }
@@ -550,7 +663,7 @@ export async function searchItemNeed(db, {
   })
 
   const merged = [...catalog.results, ...webUnique]
-    .sort((a, b) => (b.need_score ?? 0) - (a.need_score ?? 0))
+    .sort(byItemRelevance)
     .slice(0, Math.max(1, Math.min(Number(maxResults) || ITEM_SEARCH_MAX_RESULTS, 40)))
 
   // AWARDABLE vs POINTER, from the registry (`isPointerKind`), never a
@@ -594,6 +707,7 @@ export async function searchItemNeed(db, {
         matched: web.results.length,
         refused_no_phrase: web.refusedNoPhrase ?? 0,
         refused_no_funding_intent: web.refusedNoFundingIntent ?? 0,
+        refused_non_funding_host: web.refusedNonFundingHost ?? 0,
         error: web.error ?? null,
       },
     },
@@ -660,6 +774,11 @@ export default {
   buildEndorsementPhrases,
   statesEndorsingPhrase,
   statesFundingIntent,
+  statesNonFundingSignal,
+  nonFundingLeadHost,
   FUNDING_INTENT_TERMS,
+  WEAK_FUNDING_INTENT_TERMS,
+  NON_FUNDING_PAGE_SIGNALS,
+  NON_FUNDING_LEAD_HOSTS,
   ITEM_NEED_MIN_SCORE,
 }

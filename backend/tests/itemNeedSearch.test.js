@@ -423,3 +423,263 @@ describe('the whole-request behaviour', () => {
     expect(ITEM_NEED_MIN_SCORE).toBe(10)
   })
 })
+
+/**
+ * THE 2026-08-03 FORENSIC-ITEM AUDIT (Anastasia White, incoming MTSU forensic
+ * science freshman). Her Item Funding search for "forensic science lab
+ * equipment, laptop, and textbooks" returned 12 of 17 results as live-web
+ * "program" leads that were ARTICLES and SHOP LISTINGS: "Forensic Science
+ * Salaries 2026", Indeed career articles, Wikipedia (twice), Britannica, NIST,
+ * and a Czech bookstore listing. The TITLES below are the audit's real rows;
+ * the snippets are representative reconstructions of each page class (the
+ * original SERP snippets were not preserved), and the inline A/B test proves
+ * the OLD funding-intent rule admitted every one of them.
+ */
+describe('the forensic-item audit: informational ARTICLES are refused as program leads', () => {
+  const FORENSIC_ITEM = 'forensic science lab equipment, laptop, and textbooks'
+
+  const AUDIT_JUNK = [
+    {
+      key: 'salaries',
+      title: 'Forensic Science Salaries in 2026',
+      description: 'How much do forensic scientists make? The median annual pay for forensic science technicians was $64,940 per year. Salary ranges by state and experience.',
+      url: 'https://careers-blog.example/forensic-science-salaries-2026',
+    },
+    {
+      key: 'indeed',
+      title: 'What Does a Forensic Scientist Do? - Indeed',
+      description: 'Learn about forensic science careers, job duties, average pay and how to become a forensic scientist. Apply to forensic science jobs near you.',
+      url: 'https://www.indeed.com/career-advice/careers/what-does-a-forensic-scientist-do',
+    },
+    {
+      key: 'wikipedia-1',
+      title: 'Forensic science - Wikipedia',
+      description: 'Forensic science, also known as criminalistics, is the application of science principles and methods to support legal decision-making in matters of criminal and civil law.',
+      url: 'https://en.wikipedia.org/wiki/Forensic_science',
+    },
+    {
+      key: 'wikipedia-2',
+      title: 'Forensic identification - Wikipedia',
+      description: 'Forensic identification is the application of forensic science and technology to identify specific objects from the trace evidence they leave.',
+      url: 'https://en.wikipedia.org/wiki/Forensic_identification',
+    },
+    {
+      key: 'britannica',
+      title: 'Forensic science | Definition, History, & Facts | Britannica',
+      description: 'Forensic science, the application of the methods of the natural and physical sciences to matters of criminal and civil law.',
+      url: 'https://www.britannica.com/science/forensic-science',
+    },
+    {
+      key: 'nist',
+      title: 'Forensic Science | NIST',
+      description: 'NIST advances the application of forensic science through research, rigorous standards and measurement science.',
+      url: 'https://www.nist.gov/forensic-science',
+    },
+    {
+      key: 'bookstore',
+      title: 'Forensic Science: An Introduction to Scientific and Investigative Techniques',
+      description: 'Price 1 249 Kc - in stock. Forensic science textbook for university courses. Hardcover, ISBN 9781498728966.',
+      url: 'https://knihkupectvi.example/kniha/forensic-science-an-introduction',
+    },
+  ]
+
+  // The counterweight: a page that actually answers "who will pay for this".
+  const REAL_FUNDING_LEAD = {
+    key: 'grant',
+    title: 'Forensic Science Student Support Grant - Lab Equipment, Laptop & Textbooks',
+    description: 'Grants up to $1,000 help forensic science students pay for lab equipment, a laptop, and textbooks for their degree program.',
+    url: 'https://forensic-foundation.example/student-grants',
+  }
+
+  it('A/B: the OLD funding-intent rule admitted EVERY audit article', () => {
+    // Verbatim reimplementation of the pre-fix statesFundingIntent (registry +
+    // logic as shipped in #1098): '$' first, then the flat term list that
+    // included 'pay', 'cost', 'price', 'apply', 'application'.
+    const OLD_TERMS = [
+      'grant', 'grants', 'scholarship', 'scholarships', 'fellowship', 'bursary',
+      'fund', 'funds', 'funding', 'financial aid', 'financial assistance',
+      'assistance', 'award', 'awards', 'stipend', 'voucher', 'vouchers',
+      'reimburse', 'reimbursement', 'tuition', 'fee', 'fees', 'cost', 'costs',
+      'price', 'pricing', 'pay', 'payment', 'sponsor', 'sponsorship', 'subsidy',
+      'subsidized', 'waiver', 'waived', 'no cost', 'free of charge', 'low cost',
+      'eligible', 'eligibility', 'apply', 'application', 'donat', 'charitable',
+    ]
+    const normOld = (v) => String(v ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+    const oldStatesFundingIntent = (text) => {
+      const raw = String(text ?? '')
+      if (/\$\s?\d/.test(raw)) return '$'
+      const hay = ` ${normOld(raw)} `
+      for (const t of OLD_TERMS) {
+        const n = normOld(t)
+        if (n && hay.includes(` ${n} `)) return n
+      }
+      for (const t of ['donat', 'reimburse', 'subsid', 'eligib', 'sponsor']) {
+        if (hay.includes(` ${t}`)) return t
+      }
+      return null
+    }
+    for (const row of AUDIT_JUNK) {
+      expect(
+        oldStatesFundingIntent(`${row.title} ${row.description}`),
+        `old rule did NOT admit ${row.key} — the A/B premise is broken`,
+      ).toBeTruthy()
+    }
+  })
+
+  it('the NEW intent gate refuses every audit article by TEXT alone', async () => {
+    const { statesFundingIntent } = await import('../services/itemNeedSearch.js')
+    for (const row of AUDIT_JUNK) {
+      expect(
+        statesFundingIntent(`${row.title} ${row.description}`),
+        `article admitted by the intent gate: ${row.key}`,
+      ).toBeNull()
+    }
+    // Counterweights: strong funding vocabulary always wins.
+    expect(statesFundingIntent(`${REAL_FUNDING_LEAD.title} ${REAL_FUNDING_LEAD.description}`)).toBe('grant')
+    // A strong term wins even on a page that ALSO shows career vocabulary.
+    expect(statesFundingIntent('Tuition assistance for forensic science careers')).toBeTruthy()
+    // A bare dollar figure still counts on a page with NO informational signal
+    // (the real CPEP fixture depends on this).
+    expect(statesFundingIntent('$1,875 – Nurses (RN, LPN), allied health professionals')).toBe('$')
+    // ...but NOT beside a salary signal: a statistic is not an award.
+    expect(statesFundingIntent('Average salary: $64,940 per year')).toBeNull()
+  })
+
+  it('an encyclopedia/job-board/marketplace HOST is refused regardless of snippet', async () => {
+    const { nonFundingLeadHost } = await import('../services/itemNeedSearch.js')
+    expect(nonFundingLeadHost('https://en.wikipedia.org/wiki/Forensic_science')).toBe('wikipedia.org')
+    expect(nonFundingLeadHost('https://www.britannica.com/science/forensic-science')).toBe('britannica.com')
+    expect(nonFundingLeadHost('https://www.indeed.com/career-advice/x')).toBe('indeed.com')
+    // .gov is deliberately NOT host-refused — NIST has real grants; its
+    // informational page dies at the intent gate instead.
+    expect(nonFundingLeadHost('https://www.nist.gov/forensic-science')).toBeNull()
+    // And a suffix match is a HOST match, not a substring match.
+    expect(nonFundingLeadHost('https://notwikipedia.org.example.com/page')).toBeNull()
+  })
+
+  it('END TO END: 7 audit articles in, only the real funding lead out — every refusal attributed', async () => {
+    vi.resetModules()
+    const leads = [...AUDIT_JUNK, REAL_FUNDING_LEAD].map((r, i) => ({
+      id: `web-${i}`,
+      title: r.title,
+      description: r.description,
+      url: r.url,
+      categories: [],
+    }))
+    vi.doMock('../services/shared/liveWebSearch.js', () => ({
+      searchNeedWebLeads: async () => ({ opportunities: leads, debug: { queries: ['q'], raw: leads.length } }),
+    }))
+    const { searchItemNeed } = await import('../services/itemNeedSearch.js')
+    const db = { dialect: 'sqlite', prepare: () => ({ all: async () => [] }) }
+    const out = await searchItemNeed(db, {
+      profileId: 'c4a92724-anastasia',
+      item: FORENSIC_ITEM,
+      profileContext: { profile: { id: 'c4a92724-anastasia', primary_type: 'individual' }, sections: {} },
+    })
+    expect(out.results.map((r) => r.title)).toEqual([REAL_FUNDING_LEAD.title])
+    expect(out.found).toBe(1)
+    // Wikipedia ×2 + Britannica + Indeed die on their HOST; the salaries blog,
+    // NIST and the bookstore survive the host gate and die on funding intent.
+    expect(out.lanes.web.refused_non_funding_host).toBe(4)
+    expect(out.lanes.web.refused_no_funding_intent).toBe(3)
+    expect(out.lanes.web.raw_results).toBe(8)
+    vi.doUnmock('../services/shared/liveWebSearch.js')
+    vi.resetModules()
+  })
+
+  it('the new registries are frozen, deduped and non-blank', async () => {
+    const m = await import('../services/itemNeedSearch.js')
+    for (const reg of [m.FUNDING_INTENT_TERMS, m.WEAK_FUNDING_INTENT_TERMS, m.NON_FUNDING_PAGE_SIGNALS, m.NON_FUNDING_LEAD_HOSTS]) {
+      expect(Object.isFrozen(reg)).toBe(true)
+      expect(new Set(reg).size).toBe(reg.length)
+      for (const t of reg) expect(String(t).trim().length).toBeGreaterThan(2)
+    }
+    // The one-word commerce/encyclopedia magnets are GONE from the intent
+    // vocabulary — 'application' alone is how Wikipedia became a funding lead.
+    for (const gone of ['apply', 'application', 'price', 'pricing']) {
+      expect(m.FUNDING_INTENT_TERMS).not.toContain(gone)
+      expect(m.WEAK_FUNDING_INTENT_TERMS).not.toContain(gone)
+    }
+  })
+})
+
+/**
+ * THE 2026-08-03 RANKING DEFECT: the same audit search's TOP FOUR results were
+ * the profile's DISABILITY programs — hearing aids 36%, amputee 29%, voc-rehab
+ * 25%, paralysis 20% — ranked ABOVE anything matching the requested item.
+ * Item-phrase relevance must dominate ranking; profile-flag affinity may only
+ * break ties between rows that state the item equally well.
+ */
+describe('the forensic-item audit: RANKING — item relevance dominates profile affinity', () => {
+  const FORENSIC_ITEM = 'forensic science lab equipment, laptop, and textbooks'
+
+  // The four real disability rows from her match list, with their real scores.
+  const DISABILITY_ROWS = [
+    { id: 'hlaa', title: 'Hearing Loss Association of America — Financial Assistance for Hearing Aids', description: 'Programs that help pay for hearing aids for people with hearing loss.', match_score: 36 },
+    { id: 'amputee', title: 'Amputee Coalition — Limb Loss Support & Resources', description: 'Support and assistance for people living with limb loss and amputation.', match_score: 29 },
+    { id: 'vocrehab', title: 'State Vocational Rehabilitation Services — Disability Employment Support', description: 'Employment support for people with disabilities.', match_score: 25 },
+    { id: 'reeve', title: 'Christopher & Dana Reeve Foundation — Paralysis Resource Center', description: 'Resources for people living with paralysis and spinal cord injury.', match_score: 20 },
+  ]
+
+  const mkRow = (r) => ({
+    categories: '[]', keywords: '[]', opportunity_kind: null,
+    match_decision: 'REVIEW', matcher_version: 'crawler-os', ...r,
+  })
+
+  it('the disability rows never enter the answer, and the best ITEM match outranks a 90-scoring topical straggler', async () => {
+    vi.resetModules()
+    vi.doMock('../services/shared/liveWebSearch.js', () => ({
+      searchNeedWebLeads: async () => ({ opportunities: [], debug: { queries: [], raw: 0 } }),
+    }))
+    const { searchItemNeed } = await import('../services/itemNeedSearch.js')
+    const rows = [
+      ...DISABILITY_ROWS.map(mkRow),
+      // States only the bare item phrase → lower need score, HIGH profile score.
+      mkRow({ id: 'straggler', title: 'Forensic Science Society Scholarship', description: 'A scholarship recognizing forensic science achievement.', match_score: 90 }),
+      // States the whole request → higher need score, LOW profile score.
+      mkRow({ id: 'item-row', title: 'Forensic Science Student Support Grant - Lab Equipment & Textbooks', description: 'Helps forensic science students pay for lab equipment, a laptop, and textbooks.', match_score: 8 }),
+    ]
+    const db = { dialect: 'sqlite', prepare: () => ({ all: async () => rows }) }
+    const out = await searchItemNeed(db, {
+      profileId: 'c4a92724-anastasia',
+      item: FORENSIC_ITEM,
+      profileContext: { profile: { id: 'c4a92724-anastasia', primary_type: 'individual' }, sections: {} },
+    })
+    const ids = out.results.map((r) => r.id)
+    // The audit's top four never even qualify as answers to THIS item.
+    for (const d of DISABILITY_ROWS) expect(ids).not.toContain(d.id)
+    // Item relevance dominates: the 8-scoring row that states the whole request
+    // beats the 90-scoring row that merely shares the topic phrase. Sorting by
+    // match_score — the audit's failure ordering — fails this assertion.
+    expect(ids[0]).toBe('item-row')
+    expect(ids).toContain('straggler')
+    expect(out.results[0].match_score).toBeLessThan(
+      out.results.find((r) => r.id === 'straggler').match_score,
+    )
+    vi.doUnmock('../services/shared/liveWebSearch.js')
+    vi.resetModules()
+  })
+
+  it('profile affinity is ONLY a tiebreak between equally item-relevant rows', async () => {
+    vi.resetModules()
+    vi.doMock('../services/shared/liveWebSearch.js', () => ({
+      searchNeedWebLeads: async () => ({ opportunities: [], debug: { queries: [], raw: 0 } }),
+    }))
+    const { searchItemNeed } = await import('../services/itemNeedSearch.js')
+    const twin = (id, match_score) => mkRow({
+      id,
+      title: 'Forensic Science Lab Equipment Grant',
+      description: 'Grants for forensic science lab equipment, a laptop, and textbooks.',
+      match_score,
+    })
+    const db = { dialect: 'sqlite', prepare: () => ({ all: async () => [twin('low-affinity', 5), twin('high-affinity', 40)] }) }
+    const out = await searchItemNeed(db, {
+      profileId: 'p1',
+      item: FORENSIC_ITEM,
+      profileContext: { profile: { id: 'p1', primary_type: 'individual' }, sections: {} },
+    })
+    expect(out.results.map((r) => r.id)).toEqual(['high-affinity', 'low-affinity'])
+    vi.doUnmock('../services/shared/liveWebSearch.js')
+    vi.resetModules()
+  })
+})

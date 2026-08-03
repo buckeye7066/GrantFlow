@@ -245,6 +245,17 @@ const DISEASE_SPECIFIC_PATTERNS = [
   'cerebral palsy', 'muscular dystrophy', 'cystic fibrosis', 'sickle cell',
   'rare disease', 'rare disorder', 'specific diagnosis', 'diagnosed with',
   'living with this condition', 'condition-specific', 'disease-specific',
+  // 2026-08-03 (the Anastasia audit): the condition-specific block her bare
+  // "Has disability" flag admitted — Brain Injury Association, Autism Speaks,
+  // Arthritis Foundation, Amputee Coalition, Reeve Foundation (paralysis),
+  // HLAA (hearing loss) — was invisible to this detection, so the engine's
+  // condition gate never even LOOKED at those rows. These are the named
+  // conditions of the shipped disease-specific source lanes
+  // (config/sourceLanes.js); like the entries above, each is a condition
+  // identity, not a support/descriptor word.
+  'autism', 'arthritis', 'brain injury', 'traumatic brain injury',
+  'amputee', 'amputation', 'limb loss', 'paralysis', 'spinal cord injury',
+  'hearing loss', 'kidney disease', 'dialysis', 'hemophilia',
 ]
 
 // ---------------------------------------------------------------------------
