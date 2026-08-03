@@ -222,6 +222,37 @@ describe('profileDerivedFacts — stage of life is DERIVED, never guessed', () =
     expect(deriveStageOfLife({ education: {} })).toBeNull()
     expect(deriveProfileFacts({}, {}).stageOfLife).toBeNull()
   })
+
+  // LIVE INCIDENT 2026-08-03: "College Freshman (incoming) — high school
+  // graduate, May 2026" derived `graduate_student` because GRAD_RX matched the
+  // word "graduate" inside "high school graduate" — which disarmed the
+  // stage-of-life gate and re-admitted UAB-Blazer-class graduate fellowships
+  // for an incoming freshman. A COMPLETED high school education is the
+  // opposite claim from graduate school.
+  it('REGRESSION: "high school graduate" is never a graduate student', () => {
+    expect(deriveStageOfLife({
+      basic_information: { academic_status: { education_level: 'College Freshman (incoming) — high school graduate, May 2026', college_courses: 'Yes' } },
+    }).value).toBe('dual_enrolled_incoming_freshman')
+    expect(deriveStageOfLife({
+      basic_information: { academic_status: { education_level: 'High school graduate' } },
+    }).value).toBe('high_school_student')
+    // "graduated" (the verb) is not graduate school either.
+    expect(deriveStageOfLife({
+      basic_information: { academic_status: { education_level: 'Graduated high school May 2026' } },
+    }).value).toBe('high_school_student')
+    // A "college graduate" holds a bachelor's — undergraduate-class, not grad school.
+    expect(deriveStageOfLife({
+      basic_information: { academic_status: { education_level: 'College graduate' } },
+    }).value).toBe('undergraduate')
+  })
+
+  it('real graduate-school phrasings still derive graduate_student', () => {
+    for (const level of ['Graduate student', 'MBA (graduate)', 'grad school — first year', 'Master of Science', 'PhD candidate', 'Professional degree (JD)']) {
+      expect(deriveStageOfLife({
+        basic_information: { academic_status: { education_level: level } },
+      }).value, level).toBe('graduate_student')
+    }
+  })
 })
 
 describe('profileDerivedFacts — an absent fact is ABSENT', () => {

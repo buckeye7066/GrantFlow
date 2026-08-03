@@ -311,7 +311,14 @@ function firstNumber(sections, fieldId) {
 
 const DUAL_ENROLLED_RX = /^\s*(y|yes|true|1)\s*$/i
 const HS_RX = /high school|secondary|senior|junior|sophomore|freshman \(hs\)/i
-const GRAD_RX = /master|doctor|phd|graduate|professional degree/i
+// "graduate" must not match inside "high school graduate" / "HS graduate" —
+// a COMPLETED high school education is the opposite claim from graduate
+// school. Live incident 2026-08-03: education_level "College Freshman
+// (incoming) — high school graduate, May 2026" derived `graduate_student`,
+// which disarmed the stage gate and re-admitted graduate/professional
+// fellowships (UAB Blazer class) for an incoming freshman. "graduated from
+// X" alone is also NOT graduate school ("graduated high school in May").
+const GRAD_RX = /master|doctor|phd|(?<!high school |hs |college )graduate(?!d)|grad school|professional degree/i
 const UNDERGRAD_RX = /associate|bachelor|undergraduate|some college|college/i
 
 /**
