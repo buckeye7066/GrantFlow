@@ -30,10 +30,22 @@
  * canonicalUsJurisdiction.js and may override that contradictory stored value.
  */
 
-import { correctedCanonicalUsScope } from './canonicalUsJurisdiction.js'
-import { declaredStateFromTitle } from './stateTitleDeclaration.js'
+import {
+  canonicalUsFunderJurisdiction,
+  correctedCanonicalUsScope,
+} from './canonicalUsJurisdiction.js'
+import { declaredStateFromTitle as declaredStateCodeFromTitle } from './stateTitleDeclaration.js'
 
-export { declaredStateFromTitle } from './stateTitleDeclaration.js'
+/**
+ * Existing consumers ask this authority for the row's declared state. Preserve
+ * the exact `Place, XX — ...` parser, but let an objective registered funder
+ * identity/host win first so item search and match scoring cannot replay a
+ * contradictory crawl-stamped state.
+ */
+export function declaredStateFromTitle(rowOrTitle) {
+  const row = typeof rowOrTitle === 'string' ? { title: rowOrTitle } : rowOrTitle
+  return canonicalUsFunderJurisdiction(row)?.state ?? declaredStateCodeFromTitle(rowOrTitle)
+}
 
 /**
  * Country-code TLDs treated as evidence of a non-US jurisdiction.
@@ -206,7 +218,7 @@ export function correctedGeoScopeFromTitle(row) {
 
   const storedState = String(row.state ?? '').trim()
   if (storedState) return null
-  const declared = declaredStateFromTitle(row)
+  const declared = declaredStateCodeFromTitle(row)
   if (!declared) return null
   return { state: declared, is_national: 0 }
 }
