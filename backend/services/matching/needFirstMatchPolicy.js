@@ -111,6 +111,35 @@ function institutionNamedOutsideSponsor(opportunity, requiredInstitution) {
   return short.length >= 2 && new RegExp(`(?:^|\\s)${short}(?:\\s|$)`, 'i').test(body)
 }
 
+/**
+ * Retain an unanchored source instead of hard-rejecting it?
+ *
+ * A missing PURPOSE PHRASE is a missing signal, not an exclusion. Mission rule:
+ * profile attributes reduce score, they do not eliminate results, and a
+ * null/absent signal defaults to neutral, not exclusionary. So a source with no
+ * detected purpose anchor is KEPT as a low-scored REVIEW (below the display
+ * floor, so it never floods Discover, but persisted so recall / zero-result
+ * recovery can surface it) instead of being hard-rejected and deleted from the
+ * rolling match store. The prior behavior silently produced empty Discover
+ * pages — the exact "worse than a Google search" failure — whenever the
+ * purpose-phrase matcher missed a real, relatable source.
+ *
+ * This does NOT override a canonical REJECT (enforceNeedFirstDecision only
+ * demotes/keeps; it never resurrects a source the canonical eligibility gates
+ * already refused), and it does NOT relax an applicant-type CATEGORY ERROR the
+ * source's own shape proves — a student scholarship matched to a non-student
+ * profile stays a hard exclusion so junk does not surface.
+ *
+ * Reversible: NEED_FIRST_RETAIN_UNANCHORED=0 restores the prior hard-reject.
+ */
+function retainUnanchoredSources() {
+  return String(process.env.NEED_FIRST_RETAIN_UNANCHORED ?? '1') !== '0'
+}
+
+function unanchoredIsCategoryError(diagnostics = {}) {
+  return diagnostics?.scholarship === true && diagnostics?.profile_is_student === false
+}
+
 function recomputePolicy(result, {
   hardMismatches,
   reviewOnly,
@@ -119,29 +148,40 @@ function recomputePolicy(result, {
   const originalHard = Array.isArray(result.hardMismatches) ? result.hardMismatches : []
   const retainedHard = Array.isArray(hardMismatches) ? hardMismatches : originalHard
   const removedHard = new Set(originalHard.filter((reason) => !retainedHard.includes(reason)))
-  const reasons = [
-    ...(Array.isArray(result.reasons) ? result.reasons : []).filter((reason) => !removedHard.has(reason)),
-    ...addedReasons,
-  ]
   const hardMismatch = retainedHard.length > 0
+  let effectiveReviewOnly = Boolean(reviewOnly)
   let decision = null
   let scoreCap
+  const extraReasons = []
   if (hardMismatch) {
     decision = 'REJECT'
     scoreCap = SCORE_FLOOR
   } else if (!result.purposeAnchor) {
-    decision = 'REJECT'
-    scoreCap = Math.max(SCORE_FLOOR, REVIEW_SCORE - 1)
-  } else if (reviewOnly) {
+    if (retainUnanchoredSources() && !unanchoredIsCategoryError(result.diagnostics)) {
+      decision = 'REVIEW'
+      effectiveReviewOnly = true
+      scoreCap = Math.max(SCORE_FLOOR, REVIEW_SCORE - 1)
+      extraReasons.push('Retained for review: no explicit profile-purpose phrase matched, but the source is applicant-type compatible — scored low instead of discarded (recall over suppression)')
+    } else {
+      decision = 'REJECT'
+      scoreCap = Math.max(SCORE_FLOOR, REVIEW_SCORE - 1)
+    }
+  } else if (effectiveReviewOnly) {
     decision = 'REVIEW'
     scoreCap = REVIEW_SCORE
   }
+
+  const reasons = [
+    ...(Array.isArray(result.reasons) ? result.reasons : []).filter((reason) => !removedHard.has(reason)),
+    ...addedReasons,
+    ...extraReasons,
+  ]
 
   return {
     ...result,
     hardMismatches: [...new Set(retainedHard)],
     hardMismatch,
-    reviewOnly: Boolean(reviewOnly),
+    reviewOnly: effectiveReviewOnly,
     decision,
     scoreCap,
     reasons: [...new Set(reasons.filter(Boolean))],
