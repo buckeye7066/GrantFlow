@@ -39,6 +39,11 @@ function baseProfile(overrides = {}) {
   return {
     id: 'prof-1',
     display_name: 'Jordan Rivera',
+    // Auto-submit is EXPLICITLY selected: the toggle now defaults OFF when
+    // unset (2026-08-03), and these tests pin what happens once the profile
+    // HAS selected it ("auto submit means auto submit"). The off-state tests
+    // below still override this with an explicit false.
+    automation_preferences: { automations: { hamilton_auto_submit: true } },
     basic_information: {
       first_name: 'Jordan', last_name: 'Rivera', email: 'jordan@example.com',
       city: 'Knoxville', state: 'TN',

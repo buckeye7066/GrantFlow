@@ -686,7 +686,10 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
     selectedSources,
     options: {
       autopilot: true,
-      allow_auto_submit: req.body?.options?.allow_auto_submit !== false,
+      // Per-application authorization is an OPT-IN: an absent flag means the
+      // caller never chose auto-submit, so it must not read as consent
+      // (2026-08-03; was `!== false`, which defaulted every launch to true).
+      allow_auto_submit: req.body?.options?.allow_auto_submit === true,
       documents: Array.isArray(req.body?.options?.documents) ? req.body.options.documents : [],
       storageStatePath: req.body?.options?.storage_state_path || null,
       headless: req.body?.options?.headless !== false,
@@ -744,7 +747,11 @@ router.post('/tasks/:taskId/resolve-blocker', async (req, res) => {
         task_id: ctx.task.id,
         current_stage: ctx.task.current_pipeline_stage || ctx.task.selected_from_stage,
       },
-      options: { autopilot: true, allow_auto_submit: true },
+      // No allow_auto_submit here: resuming after a blocker keeps the TASK's
+      // stored per-application authorization (automateSingleSource leaves the
+      // column untouched when the option is absent). Hardcoding true here let
+      // a blocker-resume grant itself submission authority (2026-08-03).
+      options: { autopilot: true },
     }))
     return res.status(202).json({ ok: true, queued: true, resolved_blockers: resolvedBlockers, task_id: ctx.task.id, message: 'Blocker cleared. Hamilton is resuming in the background.' })
   } catch (err) {
@@ -2007,7 +2014,9 @@ router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
                 task_id: task.id,
                 current_stage: task.current_pipeline_stage || task.selected_from_stage,
               },
-              options: { autopilot: true, allow_auto_submit: true },
+              // Same rule as resolve-blocker: an inline field fix restores the
+              // task's own stored authorization, it never grants a new one.
+              options: { autopilot: true },
             }))
           }
         }
