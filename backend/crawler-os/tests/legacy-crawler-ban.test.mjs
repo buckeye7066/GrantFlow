@@ -104,6 +104,24 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // consult the facts that decide which crawlers are appropriate). Pure data +
   // pure predicates; its only import is this package's own sourceRegistry.
   'backend/config/sourceLanes.js',
+  // The ONE US state/territory code registry (#1094's `isRegionCode`) and the
+  // ONE state data registry (names, capitals, housing agencies, benefit
+  // portals). Both are pure data with zero imports; the county/city directory
+  // adapter and the state-housing-agency adapter mint per-place rows FROM
+  // them, and `sourceRegistry` reads the same data so a state's registry rows
+  // and its adapter rows can never disagree about the state's identity. A
+  // private copy on the OS side is exactly the drift these registries exist
+  // to prevent. (These imports predate this allowlisting — the boundary test
+  // stood red on main; this states the real, intended architecture.)
+  'shared/usStateCodes.js',
+  'backend/services/shared/data/stateRegistry.js',
+  // The ONE placeholder/fabricated-geography detector (#1094). The
+  // county/city adapter must refuse to mint a directory row for a fabricated
+  // place (`isFabricatedGeoSource`) with the SAME rule the boot sweeps and
+  // the live crawl entry point use — a private OS copy would let a
+  // placeholder profile re-grow the junk the sweep purges. Pure predicates
+  // over its own constants; no I/O.
+  'backend/config/placeholderProfileSignals.js',
 ]);
 
 function listFiles(dir) {

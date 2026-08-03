@@ -14,6 +14,7 @@ import {
 } from '../services/matchEngine.js';
 import {
   applyNeedFirstScoring,
+  isAcceptLevelScore,
   NEED_FIRST_SCORING_VERSION,
 } from '../services/matching/needFirstScoringAdapter.js';
 import { MATCH_DECISION, OPPORTUNITY_KIND } from './contract.js';
@@ -136,6 +137,16 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
     decision = MATCH_DECISION.REVIEW;
     warnings.push('directory locator surfaced as a pointer to look through, not a strong match');
   }
+  // The need-first overlay's resource routing usually holds a directory at
+  // REVIEW before this facade ever sees an ACCEPT — but the demotion WARNING
+  // is part of the locator contract ("Recommended ≠ strong match"): an
+  // ACCEPT-LEVEL locator must SAY it is a pointer, whichever layer held it at
+  // REVIEW. Keyed on the canonical accept band via the adapter (this package
+  // is deny-listed from importing the thresholds directly).
+  if (isDirectoryLocator && decision === MATCH_DECISION.REVIEW && isAcceptLevelScore(score) &&
+      !warnings.some((w) => /pointer to look through/i.test(String(w ?? '')))) {
+    warnings.push('directory locator surfaced as a pointer to look through, not a strong match');
+  }
 
   return {
     profile_id: thesis?.profile_id ?? profile?.id ?? null,
@@ -227,13 +238,19 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
     eligibility_bullets: applicantTypes.length
       ? [`Eligible applicants: ${uniqueStrings([...applicantTypes, ...allowedTypes]).join(', ')}`]
       : [],
+    // The sponsor's NAME is deliberately NOT a keyword: keywords feed the
+    // need-first TARGETING text, and a funder identity is not a targeting
+    // statement (#1086 identity-vs-topic). With it in, "U.S. Department of
+    // Agriculture" read as an agriculture/farming PROFESSION restriction and
+    // hard-rejected USDA Community Facilities — a program that serves
+    // nonprofits — for every non-farm profile. The sponsor still reaches the
+    // canonical engine through its own `sponsor`/`funder` fields.
     keywords: uniqueStrings([
       ...needs,
       ...applicantTypes,
       ...allowedTypes,
       opportunity.source_id,
       opportunity.kind,
-      opportunity.sponsor,
     ]),
     state: isNational ? 'nationwide' : (states[0] ?? null),
     is_national: isNational,
