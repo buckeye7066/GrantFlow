@@ -206,6 +206,15 @@ export function detectForeignJurisdiction(row) {
  * MISSING = NEUTRAL: a row with no urls and no matching identity text is never
  * foreign.
  */
+/**
+ * US diplomatic posts abroad, identity fields only, word-bounded. "Mission"
+ * alone is ordinary English ("mission statement", church missions) — the
+ * pattern requires the U.S./US prefix AND either the Embassy/Consulate noun or
+ * "Mission to/in <somewhere>" (the State-Department naming shape).
+ */
+export const US_MISSION_ABROAD_RX =
+  /\bu\.?s\.?\s+(?:embassy|consulate(?:\s+general)?)\b|\bu\.?s\.?\s+mission\s+(?:to|in)\s+\S/i
+
 export function detectForeignOpportunity(row) {
   const byUrl = detectForeignJurisdiction(row)
   if (byUrl.foreign) return { ...byUrl, funder: null }
@@ -242,15 +251,6 @@ export function detectForeignOpportunity(row) {
   }
   return { foreign: false, cctld: null, host: null, funder: null }
 }
-
-/**
- * US diplomatic posts abroad, identity fields only, word-bounded. "Mission"
- * alone is ordinary English ("mission statement", church missions) — the
- * pattern requires the U.S./US prefix AND either the Embassy/Consulate noun or
- * "Mission to/in <somewhere>" (the State-Department naming shape).
- */
-export const US_MISSION_ABROAD_RX =
-  /\bu\.?s\.?\s+(?:embassy|consulate(?:\s+general)?)\b|\bu\.?s\.?\s+mission\s+(?:to|in)\s+\S/i
 
 /**
  * A locator title states its place as `"<Place>, XX — <what it is>"`. Only that

@@ -185,6 +185,23 @@ export const RESULT_BUCKETS = Object.freeze({
 })
 
 /**
+ * "<Org> near <Place>, XX" — the countyCityDirectoryAdapter minting shape.
+ * Requires the two-letter state anchor after the comma; "near" alone is
+ * ordinary English.
+ */
+export const PLACE_LOCATOR_TITLE_RX = /\bnear\s+[A-Za-z][A-Za-z .''-]{1,60},\s*[A-Z]{2}\b/
+
+/**
+ * Resource/data hubs measured leaking into direct matches 2026-08-03 (College
+ * Scorecard linked at score 78): exact lower-cased title identity only.
+ */
+export const RESOURCE_HUB_TITLES = Object.freeze(new Set([
+  'college scorecard',
+  'state higher ed agencies',
+  'united way worldwide',
+]))
+
+/**
  * The chain, in one place. Returns `{ bucket, reasons, stale }`:
  *   - not_a_grant : hidden bucket — regulatory/lead-gen/clearly-expired/
  *                   anonymized-funder records. Never Best matches / Worth
@@ -235,23 +252,6 @@ export function classifyFundingResult(row, { now = new Date() } = {}) {
   }
   return { bucket: RESULT_BUCKETS.FUNDABLE, reasons: [], stale }
 }
-
-/**
- * "<Org> near <Place>, XX" — the countyCityDirectoryAdapter minting shape.
- * Requires the two-letter state anchor after the comma; "near" alone is
- * ordinary English.
- */
-export const PLACE_LOCATOR_TITLE_RX = /\bnear\s+[A-Za-z][A-Za-z .''-]{1,60},\s*[A-Z]{2}\b/
-
-/**
- * Resource/data hubs measured leaking into direct matches 2026-08-03 (College
- * Scorecard linked at score 78): exact lower-cased title identity only.
- */
-export const RESOURCE_HUB_TITLES = Object.freeze(new Set([
-  'college scorecard',
-  'state higher ed agencies',
-  'united way worldwide',
-]))
 
 /** Owner-named predicate #1: may this record enter DIRECT funding results? */
 export function isFundableOpportunity(row, opts) {
