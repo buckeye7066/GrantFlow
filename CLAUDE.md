@@ -156,6 +156,43 @@ rules below win.
   file that still exists) — a dangling `confirmation_screenshot_path` reads as
   NO proof; it reports, never mass-deletes. Guard test:
   `backend/tests/hamiltonConfirmationProof.test.js`.
+- **"SUBMITTED" HAS TWO HONEST MEANINGS, AND A PACKET IS NEVER PROOF** (owner
+  North Star 2026-08-03). Prod read-only audit found **43 `application_tasks`
+  with `status='submitted'` fleet-wide, 0 with any durable external-submission
+  proof** — 25 had `output_document_id` pointing at a
+  `hamilton_generated_application` PACKET (the verbatim case: Robert's task
+  →`66e9f618` "NAEMT EMS Scholarships — PDF", a draft packet from 2026-07-02
+  masquerading as a confirmation), 18 had none; all stamped `submitted_at` by a
+  bulk internal Mark-Submitted, with **no `hamilton_autopilot_runs` row carrying
+  a confirmation reference or durable confirmation doc**. Two states must be
+  DISTINCT and honestly labeled everywhere: (1) **externally submitted, with
+  proof** — a captured portal confirmation (a `hamilton_submission_confirmation`
+  document with bytes, a retrievable run confirmation, or a portal confirmation
+  reference on a `status='submitted'` run); (2) **marked submitted (internal
+  record)** — the flag was set but nothing external was captured. The SINGLE
+  canonical predicate is `assessTaskSubmissionProof(db, task)` /
+  `taskHasVerifiedExternalSubmission(db, task)` in
+  `backend/services/hamilton/submissionProofPredicate.js`; it DELEGATES the
+  proof-reality check to `assessStoredConfirmationProof` (#1114) so the two can
+  never drift, and a packet/draft/proposal `output_document_id` NEVER qualifies
+  (its doc `type` decides — `hamilton_generated_application` = packet;
+  `hamilton_submission_confirmation` = proof). The choke point is the task read
+  path: `applicationTaskStore.getApplicationTask` + `listApplicationTasks`
+  attach a `submission_proof` object to every `submitted` task (default on;
+  non-submitted rows get a cheap `not_submitted` stub — no extra query), so
+  tracker/API/reporting all read the same honest label. UI: `HamiltonTaskDrawer`
+  shows "Externally submitted — portal confirmation on file" (+ an
+  Open-confirmation link) only when `verified_external`, else "Marked submitted
+  (internal record only)"; `HamiltonAutomationQueue` carries an
+  `internal record`/`confirmed` chip. This RE-LABELS on evidence — it never
+  auto-flips or deletes a `submitted` status. Login wall is the actionable next
+  step and is ALREADY wired (do NOT build a new login system): a `login` blocker
+  becomes `waiting_for_login` (`hamiltonAuthBackupPlan`), the `login_required`
+  hard-stop offers the save-a-session action (`hamiltonHardStopResolver`), the
+  waiting-login count + priming toast surface via `hamiltonAuthWatchService`, and
+  saved sessions flow through `hamiltonCloudLogin`. Guard tests:
+  `backend/tests/submissionProofPredicate.test.js` (failing-first on the NAEMT
+  packet shape, mutation-verified; + the store choke-point wiring).
 - **Stage derivation trap** (`profileDerivedFacts.GRAD_RX`): "high school
   graduate" / "graduated high school" / "college graduate" must NEVER derive
   `graduate_student` — a live incident disarmed the stage gate this way and
