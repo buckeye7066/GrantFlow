@@ -297,3 +297,50 @@ describe('assertNoSilentUnsurfacing (reconciliation invariant)', () => {
     expect(unsurfacedAboveFloorNoFit).toEqual([])
   })
 })
+
+describe('SOFT geographic mismatch is relaxed for an authoritative engine decision', () => {
+  // A TN individual. The canonical rule: geography expands outward, and the
+  // matchEngine already applied geo before scoring the row above the floor, so a
+  // plain out-of-state title/state mismatch is a score signal, not a hard drop.
+  const tnIndividual = { primary_type: 'individual', state: 'TN', needs: ['housing'] }
+
+  // An engine-endorsed (REVIEW, score 30) program whose TITLE names another state
+  // (OH) → fires the SOFT geographic_title_state_mismatch / geographic_state_mismatch.
+  // No student-aid / age / demographic pattern in the copy.
+  function outOfStateProgram(overrides = {}) {
+    return {
+      id: 'oh-housing',
+      title: 'Ohio Housing Stability Support',
+      description: 'Rental and housing support for Ohio households facing hardship.',
+      source: 'oh_dev',
+      source_url: 'https://example.org/oh-housing',
+      state: 'OH',
+      match_score: 30,
+      match_decision: 'REVIEW',
+      ...overrides,
+    }
+  }
+
+  it('SURFACES an out-of-state engine-endorsed program (geo expands outward)', () => {
+    const gate = evaluateProfileSpecificGate(tnIndividual, outOfStateProgram(), STORED)
+    expect(gate.pass).toBe(true)
+  })
+
+  it('DROPS the same out-of-state program when it has NO authoritative decision', () => {
+    const gate = evaluateProfileSpecificGate(tnIndividual, outOfStateProgram(), UNSCORED)
+    expect(gate.pass).toBe(false)
+    expect(gate.ruleId.startsWith('geographic_')).toBe(true)
+  })
+
+  it('STILL drops an explicitly residents-only-exclusive program even when authoritative', () => {
+    // hard: true geographic_residents_only_exclusive is NOT in the skip set.
+    const residentsOnly = outOfStateProgram({
+      id: 'oh-residents-only',
+      title: 'Ohio Residents Only Housing Fund',
+      description: 'Open only to residents of Ohio. Must reside in Ohio to apply.',
+    })
+    const gate = evaluateProfileSpecificGate(tnIndividual, residentsOnly, STORED)
+    expect(gate.pass).toBe(false)
+    expect(gate.ruleId).toBe('geographic_residents_only_exclusive')
+  })
+})
