@@ -333,9 +333,19 @@ async function detectButtons(page, patterns) {
  * hard-failing with click_failed misreported "this page has no application
  * form" as an engine failure. Pure function — unit-tested directly.
  */
-function actionableSubmitButtons(submitButtons, { anyFieldFilled = false } = {}) {
+function actionableSubmitButtons(submitButtons, { anyFieldFilled = false, recognizedFieldCount = 0 } = {}) {
   const list = Array.isArray(submitButtons) ? submitButtons : []
   if (anyFieldFilled) return list
+  // Nothing was filled this run. The only legitimate submit here is a
+  // PREFILLED application form (a resumed draft) — and a real application
+  // form still exposes fields the inspector RECOGNIZES. `formFieldCount`
+  // alone counts RAW inputs, which is how a newsletter/search widget's email
+  // box qualified its own "Submit" button on an informational page with ZERO
+  // recognized application fields (TN HOPE, prod 2026-08-03) — Hamilton
+  // attempted to submit a page she never worked, and only the click failing
+  // kept the run honest. No recognized fields + nothing filled = there is no
+  // application being submitted; degrade to the no_application_form path.
+  if (Number(recognizedFieldCount) <= 0) return []
   return list.filter((b) => b && b.inForm && Number(b.formFieldCount) > 0)
 }
 
@@ -777,7 +787,10 @@ export async function runAutopilot({
       // control as an application submit when she actually filled application
       // fields on this run, or the control sits inside a real form with
       // fillable fields.
-      const submitCandidates = actionableSubmitButtons(submitButtons, { anyFieldFilled: filled.length > 0 })
+      const submitCandidates = actionableSubmitButtons(submitButtons, {
+        anyFieldFilled: filled.length > 0,
+        recognizedFieldCount: fields.length,
+      })
       const canSubmit = submitCandidates.length > 0
       const canNext   = nextButtons.length > 0
       const canDraft  = draftButtons.length > 0
