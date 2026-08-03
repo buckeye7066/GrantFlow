@@ -105,6 +105,16 @@ export default function HamiltonAutomationQueue({ profileId }) {
                       {t.automation_type && t.automation_type !== 'unknown' && (
                         <Badge variant="outline" className="border-current-line bg-current-emeraldSoft text-[10px] text-current-emerald">{t.automation_type.replace('_', ' ')}</Badge>
                       )}
+                      {t.status === 'submitted' && t.submission_proof && !t.submission_proof.verified_external && (
+                        <Badge variant="outline" className="border-amber-300 bg-amber-50 text-[10px] text-amber-800" title="Marked submitted — not confirmed sent to the funder; no captured portal confirmation on file.">
+                          internal record
+                        </Badge>
+                      )}
+                      {t.status === 'submitted' && t.submission_proof?.verified_external && (
+                        <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-[10px] text-emerald-800" title="Externally submitted — portal confirmation on file.">
+                          confirmed
+                        </Badge>
+                      )}
                       {t.selected_from_stage && (
                         <span>· from {t.selected_from_stage}</span>
                       )}

@@ -33,6 +33,8 @@ const {
   SUBMISSION_PROOF_STATE,
   _internal,
 } = await import('../services/hamilton/submissionProofPredicate.js')
+const { getApplicationTask, listApplicationTasks, _resetSchemaCache } =
+  await import('../services/hamilton/applicationTaskStore.js')
 
 const CONFIRMATION_TYPE = _internal.CONFIRMATION_DOCUMENT_TYPE // 'hamilton_submission_confirmation'
 const PACKET_TYPE = 'hamilton_generated_application'
@@ -144,5 +146,29 @@ describe('assessTaskSubmissionProof', () => {
     const task = { id: 't-empty', status: 'submitted', output_document_id: 'empty-conf' }
     const res = await assessTaskSubmissionProof(db, task)
     expect(res.verified_external).toBe(false)
+  })
+})
+
+describe('applicationTaskStore attaches submission_proof at the read choke point', () => {
+  beforeEach(() => { _resetSchemaCache() })
+
+  it('getApplicationTask + listApplicationTasks label a NAEMT-packet submitted task as internal-only', async () => {
+    const store = makeDb()
+    await insertDoc(store, { id: 'doc-packet', type: PACKET_TYPE, bytes: Buffer.from('%PDF packet') })
+    // Bootstrap the application_tasks schema, then insert the verbatim prod shape.
+    await getApplicationTask(store, 'bootstrap-nonexistent')
+    await store.prepare(
+      `INSERT INTO application_tasks (id, profile_id, status, output_document_id)
+       VALUES (?, ?, 'submitted', ?)`,
+    ).run('task-naemt', 'p1', 'doc-packet')
+
+    const one = await getApplicationTask(store, 'task-naemt')
+    expect(one.submission_proof.verified_external).toBe(false)
+    expect(one.submission_proof.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
+
+    const list = await listApplicationTasks(store, { profileId: 'p1' })
+    const listed = list.find((t) => t.id === 'task-naemt')
+    expect(listed.submission_proof.verified_external).toBe(false)
+    expect(listed.submission_proof.label).toMatch(/internal record/i)
   })
 })

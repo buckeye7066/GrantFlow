@@ -241,6 +241,40 @@ export default function HamiltonTaskDrawer({ open, onClose, task: initialTask, o
               </div>
             )}
 
+            {task.status === 'submitted' && task.submission_proof && (
+              task.submission_proof.verified_external ? (
+                <div className="text-sm bg-emerald-50 border border-emerald-200 rounded p-3 space-y-1.5">
+                  <div className="flex items-center gap-2 font-medium text-emerald-900">
+                    <CheckCircle2 className="w-4 h-4" /> Externally submitted — portal confirmation on file
+                  </div>
+                  {task.submission_proof.confirmation_reference && (
+                    <div className="text-xs text-emerald-800">Confirmation: {task.submission_proof.confirmation_reference}</div>
+                  )}
+                  {task.submission_proof.proof_document_id && (
+                    <a
+                      href={downloadHref(task.submission_proof.proof_document_id)}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded border border-emerald-300 hover:bg-emerald-100 text-emerald-900"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Download className="w-3 h-3" /> Open confirmation
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div className="text-sm bg-amber-50 border border-amber-200 rounded p-3 space-y-1">
+                  <div className="flex items-center gap-2 font-medium text-amber-900">
+                    <AlertTriangle className="w-4 h-4" /> Marked submitted (internal record only)
+                  </div>
+                  <div className="text-xs text-amber-800">
+                    This records that it was marked submitted — it is <span className="font-semibold">not</span> confirmed sent to the
+                    funder, and no captured portal confirmation is on file. A generated application packet is what would be submitted,
+                    never proof that it was.
+                  </div>
+                </div>
+              )
+            )}
+
             {openBlockers.length > 0 && (
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-amber-900 flex items-center gap-2">
