@@ -44,6 +44,7 @@ import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import path from 'node:path'
 import os from 'node:os'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
+import { triagePage, PAGE_SURFACES } from './listingPageTriage.js'
 
 const NAV_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS) || 25_000
 const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS) || 8_000
@@ -525,6 +526,56 @@ function summarisePageState(page, fields, buttons) {
   }
 }
 
+// Caps for the triage snapshot handed to listingDecomposition. Text is bounded
+// so the enumeration prompt stays in budget; the NGWeb catalog is ~323k chars.
+const TRIAGE_TEXT_CAP = 60_000
+const TRIAGE_LINK_CAP = 200
+
+/**
+ * Collect the page shape listingPageTriage needs at a dead-end: title, visible
+ * anchors (href+text), and innerText — all capped, never throwing. This runs
+ * ONLY where the engine already failed to fill/advance, so it adds no cost to
+ * the normal fill path.
+ */
+async function collectTriageSnapshot(page, fieldCount) {
+  let url = null
+  try { url = page.url() } catch { url = null }
+  let title = ''
+  let links = []
+  let text = ''
+  try {
+    const snap = await page.evaluate((cap) => ({
+      title: document.title || '',
+      text: (document.body?.innerText || '').slice(0, cap),
+      links: Array.from(document.querySelectorAll('a[href]')).map((a) => ({
+        href: a.href,
+        text: (a.textContent || '').trim().slice(0, 200),
+      })),
+    }), TRIAGE_TEXT_CAP)
+    title = String(snap?.title || '').slice(0, 300)
+    text = String(snap?.text || '')
+    links = Array.isArray(snap?.links) ? snap.links.slice(0, TRIAGE_LINK_CAP) : []
+  } catch { /* best-effort; empty snapshot triages as NO_APPLICATION_SURFACE */ }
+  return { url, title, fieldCount: Number(fieldCount) || 0, links, text }
+}
+
+/**
+ * At a dead-end (nothing fillable / no advance button), classify the page. When
+ * it is a LISTING of real awards, return a `listing_page` blocker carrying the
+ * snapshot so the orchestrator can decompose it into per-award candidates;
+ * otherwise return null and let the caller terminate honestly. Conservative
+ * about FORM — a page with real fillable fields is never reclassified here.
+ */
+async function triageDeadEnd(page, fieldCount) {
+  const snapshot = await collectTriageSnapshot(page, fieldCount)
+  const t = triagePage(snapshot)
+  if (t.surface !== PAGE_SURFACES.LISTING) return null
+  return {
+    listing_snapshot: snapshot,
+    triage: { signals: t.signals, award_links: t.award_links },
+  }
+}
+
 function normalizeConfirmationCandidate(value) {
   return String(value || '').trim().replace(/^[#:\s.-]+/, '').replace(/[.,;:)]+$/, '')
 }
@@ -797,10 +848,22 @@ export async function runAutopilot({
 
       if (!canSubmit && !canNext && submitButtons.length > 0) {
         // The page has submit-LOOKING controls but no application form Hamilton
-        // worked (nothing filled; controls are page chrome / nav links). This is
-        // an informational page — degrade to the manual / funder-contact packet
-        // pathway (unknown_application_method) instead of hunting a submit
-        // button and hard-failing with click_failed.
+        // worked (nothing filled; controls are page chrome / nav links). Before
+        // degrading to the manual packet pathway, triage: a LISTING of real
+        // awards (bold.org category, scholarships.com) must be decomposed into
+        // per-award candidates, not treated as one dead informational page.
+        if (filled.length === 0) {
+          const listing = await triageDeadEnd(page, fields.length)
+          if (listing) {
+            trace.push({ step: 'listing_page', detail: { from: 'no_application_form', signals: listing.triage.signals } })
+            return {
+              status: 'blocked', blocker_kind: 'listing_page',
+              blocker_detail: 'This page lists multiple award opportunities rather than a single application form. Hamilton will decompose it into per-award candidates, match each to the profile, and apply for the ones the match engine accepts.',
+              listing_snapshot: listing.listing_snapshot, triage: listing.triage,
+              filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+            }
+          }
+        }
         trace.push({
           step: 'no_application_form',
           detail: { ignored_submit_like_controls: submitButtons.map((b) => b.text).slice(0, 5) },
@@ -894,6 +957,22 @@ export async function runAutopilot({
         return { status: 'completed_draft', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
 
+      // Nothing to advance. Before reporting a hard no_progress, triage: the
+      // NGWeb /Scholarships/Search catalog and other award LISTINGS dead-end
+      // here (a search box + filter, no advance button, hundreds of award rows).
+      // A LISTING decomposes; a genuine no-application-surface page terminates.
+      if (filled.length === 0) {
+        const listing = await triageDeadEnd(page, fields.length)
+        if (listing) {
+          trace.push({ step: 'listing_page', detail: { from: 'no_progress', signals: listing.triage.signals } })
+          return {
+            status: 'blocked', blocker_kind: 'listing_page',
+            blocker_detail: 'This page lists multiple award opportunities rather than a single application form. Hamilton will decompose it into per-award candidates, match each to the profile, and apply for the ones the match engine accepts.',
+            listing_snapshot: listing.listing_snapshot, triage: listing.triage,
+            filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+          }
+        }
+      }
       trace.push({ step: 'no_progress', detail: { reason: 'no advance button found' } })
       return { status: 'blocked', blocker_kind: 'no_progress', blocker_detail: 'Hamilton could not find a Next/Submit button to continue', filled_fields: filled, pages_visited: pagesVisited, trace }
     }

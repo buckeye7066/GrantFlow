@@ -59,6 +59,7 @@ import {
 import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot } from './hamiltonAutopilotEngine.js'
+import { decomposeListing } from './listingDecomposition.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
@@ -1471,6 +1472,10 @@ async function runAutopilotPathway(db, {
     // be captured — a resolver retry could submit the application TWICE.
     // Hand straight to a human to verify receipt on the portal.
     if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'submit_unconfirmed') break
+    // A LISTING page (multiple awards, no single form) is not a blocker to
+    // resolve — it is a decomposition target. Break out and hand it to the
+    // listing-decomposition handler below instead of the auth/resolver ladder.
+    if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'listing_page') break
 
     // ── Signup path (Portal Autopilot Identity) instead of parking ──
     // A login gate with NO usable credential anywhere (profile vault, admin
@@ -1534,6 +1539,49 @@ async function runAutopilotPathway(db, {
     }
     // 'blocked' or 'escalated' — Hamilton will surface the blocker to the user.
     break
+  }
+
+  // ── LISTING DECOMPOSITION (owner directive 2026-08-03) ─────────────────────
+  // The engine dead-ended on a page that lists MULTIPLE awards (triage returned
+  // listing_page). Decompose it: enumerate the awards, admit each through the
+  // canonical inserter, let the match engine decide relevance, and apply for the
+  // ACCEPTs — reusing THIS run's authorizations + auto-submit consent verbatim
+  // (never widened). NGWeb catalogs decompose for visibility only.
+  if (engineResult?.blocker_kind === 'listing_page' && engineResult?.listing_snapshot) {
+    const applyItem = async (item) => runAutopilot({
+      url: item.applyUrl, profile, authorizations,
+      documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
+      headless: options?.headless ?? true, sessionSink, narrativeAnswers,
+    })
+    const decomposition = await decomposeListing(
+      { db, profile, profileSections: profile?.sections || null, listing: engineResult.listing_snapshot },
+      { applyItem, log: (m, d) => { void m; void d } },
+    ).catch((err) => ({ error: err?.message || String(err) }))
+
+    engineResult.listing_decomposition = decomposition
+    const applied = decomposition?.items?.filter((i) => i.outcome === 'applied') || []
+    const summary = decomposition?.error
+      ? `Hamilton found a page listing multiple awards but could not decompose it: ${decomposition.error}`
+      : decomposition?.catalog_only
+        ? `Hamilton catalogued ${decomposition.admitted} award(s) from this listing for matching. These are covered by the school's General Application — no per-item application is possible here.`
+        : `Hamilton decomposed this listing: ${decomposition?.enumerated || 0} award(s) found, ${decomposition?.admitted || 0} admitted to matching, ${applied.length} application(s) attempted for profile-accepted awards.`
+    await appendTaskEvent(db, {
+      taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'listing_decomposition',
+      message: summary, actorUserId: userId, actorRole: 'agent', details: decomposition,
+    }).catch(() => {})
+    await updateAutopilotRun(db, run.id, {
+      status: 'completed',
+      result: { ...engineResult },
+      blockerKind: null,
+      blockerDetail: null,
+      finishedAt: new Date().toISOString(),
+    }).catch(() => {})
+    await updateApplicationTask(db, task.id, {
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      lastAgentMessage: summary,
+    }).catch(() => {})
+    return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: engineResult, listing_decomposition: decomposition }
   }
 
   // Auditable draft-fill record (outsideAwardReporter posture): the run/task
