@@ -147,11 +147,28 @@ export const TOPICAL_EVIDENCE_STRONG_BAR = 75
 
 /**
  * Hard floor for the discovery bar, ON THE DATA-POINT SCALE.
- * 8 keeps the same share of matches pipeline-worthy as the need-anchored 25
- * did (55% of stored prod matches — see the calibration block above). On a
- * typical 100-point profile that is ~8 matched data points with clean gates.
+ *
+ * OWNER DIRECTIVE 2026-08-03 (recall over suppression — GrantFlow must beat a
+ * free Google search by surfacing real, relatable sources): lowered from the
+ * pipeline bar (8) to the engine REVIEW bar (REVIEW_SCORE = 7, "some real
+ * coverage worth a human look"). Every source the engine judges review-worthy
+ * or better now SURFACES in Discover, ranked below ACCEPTs, instead of being
+ * hidden behind the stricter pipeline/auto-add bar (AUTO_ADD_SCORE = 8, which is
+ * UNCHANGED — Discover shows more, but auto-add to the pipeline stays
+ * conservative). Directories already surfaced at REVIEW_SCORE; this aligns
+ * direct sources with them. Junk scored below the review bar (e.g. the
+ * unanchored sources capped at REVIEW_SCORE-1 by needFirstMatchPolicy) still
+ * does not surface here.
+ *
+ * Reversible without a code change: set GRANTFLOW_DISCOVERY_MIN_SCORE_FLOOR=8 to
+ * restore the prior floor (or tighten just the display slider via
+ * GRANTFLOW_DISCOVERY_MIN_SCORE=8). Kept as 7 to equal REVIEW_SCORE; the drift
+ * tripwire in discoveryMinScorePreference.test.js asserts they stay in sync.
  */
-export const DISCOVERY_MIN_SCORE_FLOOR = 8
+export const DISCOVERY_MIN_SCORE_FLOOR = (() => {
+  const raw = Number(process.env.GRANTFLOW_DISCOVERY_MIN_SCORE_FLOOR)
+  return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : 7
+})()
 
 /**
  * Default minimum score for discovery results — the "slider" default.
