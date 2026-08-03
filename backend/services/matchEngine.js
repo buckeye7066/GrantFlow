@@ -36,6 +36,7 @@ import { listPresentProfileSignals } from './profileCoverage.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
 import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { detectForeignOpportunity, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
+import { resolvedUsOpportunityJurisdiction } from '../config/canonicalUsJurisdiction.js'
 import {
   isLeadGenScholarship,
   institutionalPassThroughConflict,
@@ -1765,12 +1766,22 @@ function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
     profileZips.unshift(String(profileZip).trim())
   }
 
-  const oppState = opportunity?.state ?? opportunity?.stateRestriction ?? null
-  const oppZip = opportunity?.geo_zip ?? null
-  const oppCounty = opportunity?.geo_county ?? null
-  const oppIsNational =
-    Boolean(opportunity?.is_national) ||
-    String(oppState || '').toLowerCase() === 'nationwide'
+  // Use the same objective jurisdiction authority as the decision gate. A
+// registered funder/title declaration may repair a crawl-stamped state;
+// ordinary rows retain the legacy stored-state behavior.
+const resolvedOpportunityGeo = resolvedUsOpportunityJurisdiction(opportunity)
+const hasObjectiveResolvedScope =
+  resolvedOpportunityGeo.source === 'canonical_funder' ||
+  resolvedOpportunityGeo.source === 'declared_title'
+const oppState = hasObjectiveResolvedScope
+  ? resolvedOpportunityGeo.state
+  : (opportunity?.state ?? opportunity?.stateRestriction ?? null)
+const oppZip = opportunity?.geo_zip ?? null
+const oppCounty = opportunity?.geo_county ?? null
+const oppIsNational = hasObjectiveResolvedScope
+  ? false
+  : (Boolean(opportunity?.is_national) ||
+    String(oppState || '').toLowerCase() === 'nationwide')
 
   // In-state if the opportunity's state matches ANY of the profile's states.
   // For a single-address profile this is identical to the old singular check.
