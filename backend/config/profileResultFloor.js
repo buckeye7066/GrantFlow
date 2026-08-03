@@ -89,8 +89,21 @@
  *
  * It is deliberately well clear of `MIN_HEALTHY_SURFACED` (3), which stays what
  * it is: the "this profile is BROKEN" alarm, not a target.
+ *
+ * RAISED 10 → 20 (2026-08-03, recall-guardrail audit / owner directive:
+ * "a free Google search gets better results than GrantFlow ever has"). The
+ * competitive bar moved: ScholarshipOwl-class products surface a match list in
+ * the dozens-to-hundreds from one profile, and the owner's rule is that
+ * precision is achieved by classifying junk out, never by declaring a small
+ * number "served". Against the 2026-08-01 measured awardable distribution
+ * (min 0 · p25 7 · median 14 · p75 26 · max 86), 20 sits between the median
+ * and p75: roughly the under-served two-thirds of the fleet gets escalated
+ * SEARCHING (never escalated admission — the trap doc above is unchanged, and
+ * the attempts/cooldown bounds make backfill finite). A profile whose honest
+ * ceiling is lower still converges to an evidenced `exhausted` verdict; the
+ * floor never manufactures a row.
  */
-export const DEFAULT_PROFILE_RESULT_TARGET = 10
+export const DEFAULT_PROFILE_RESULT_TARGET = 20
 
 /** Clamp bounds. A target of 0 disables the floor; >50 is not a real shortlist. */
 export const MIN_PROFILE_RESULT_TARGET = 0

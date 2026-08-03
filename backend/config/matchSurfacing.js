@@ -95,6 +95,18 @@ export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   //                         ACCEPT 100. Same rolling-snapshot reason for its
   //                         own version as the five above.
   'county-crisis-need-link',
+  //   - catalog-rescore-link : the CONTINUOUS catalog-wide re-matching sweep
+  //                         (services/matching/catalogRescoreSweep.js). The
+  //                         rolling snapshot leaves 94% of active non-pointer
+  //                         catalog rows never scored for anyone (measured
+  //                         2026-08-03: 641 of 11,050 rows have EVER matched
+  //                         any profile); this sweep eventually puts every
+  //                         active pair in front of the canonical engine,
+  //                         bounded per pass, ACCEPT-only. Same rolling-
+  //                         snapshot reason for its own version as the six
+  //                         above. Writes are env-gated OFF until the
+  //                         fix/qa-36-profile-junk fundability chain lands.
+  'catalog-rescore-link',
 ])
 
 /**

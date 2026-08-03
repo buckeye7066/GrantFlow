@@ -8692,6 +8692,50 @@ export async function enforceCountyCrisisNeedRecall(db) {
   })
 }
 
+/**
+ * INVARIANT (RECALL, the general case): every ACTIVE non-pointer catalog row is
+ * EVENTUALLY adjudicated by the canonical engine for every real profile — the
+ * "general re-scoring sweep for the rolling snapshot" CLAUDE.md carried as
+ * STILL OPEN WORK. Measured 2026-08-03: 641 of 11,050 active non-pointer rows
+ * (5.8%) have EVER carried a match row for ANY profile; the keyed recall nets
+ * above reach only the slices their keys name.
+ *
+ * Delegates to the canonical sweep (`services/matching/catalogRescoreSweep.js`)
+ * with the boot-scale budgets. ACCEPT-only, cursor-resumable, matcher_version
+ * 'catalog-rescore-link'. WRITES DEFAULT OFF (`ENFORCE_CATALOG_RESCORE=1` to
+ * enable) because a blind pass measurably floods: the engine ACCEPTs 13-20% of
+ * never-scored rows today, including the regulatory-notice/institutional junk
+ * the fix/qa-36-profile-junk classifier chain exists to screen. Until that
+ * chain is consumed at the sweep's `passesFundabilityGate` choke point, every
+ * boot reports the census (`would_link`) so the recall payoff stays measured.
+ */
+export async function enforceCatalogRescoreConvergence(db) {
+  return runInvariant('catalog_rescore_convergence', async () => {
+    let runCatalogRescoreSweep
+    try {
+      ;({ runCatalogRescoreSweep } = await import('../services/matching/catalogRescoreSweep.js'))
+    } catch (err) {
+      log.warn('catalog_rescore_convergence: sweep unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const res = await runCatalogRescoreSweep(db)
+    return {
+      scanned: res.scanned ?? 0,
+      repaired: res.linked ?? 0,
+      wouldRepair: res.would_link ?? 0,
+      adjudicated: res.adjudicated ?? 0,
+      rejectedByEngine: res.rejected_by_engine ?? 0,
+      review: res.review ?? 0,
+      notFundable: res.not_fundable ?? 0,
+      staleRemoved: res.stale_removed ?? 0,
+      profilesCompleted: res.profiles_completed ?? 0,
+      truncated: Boolean(res.truncated),
+      enforced: Boolean(res.write_enabled),
+      examples: res.examples ?? [],
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -8836,6 +8880,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // reaches the person it was written for. Sits with the other linkage gates so
   // the rows it adds are held to the scope/hygiene bars in the SAME boot.
   steps.push(await enforceCountyCrisisNeedRecall(db))
+  // RECALL net, the GENERAL case: the continuous catalog-wide re-matching
+  // census/sweep (rolling-snapshot convergence). Sits with the other linkage
+  // gates so anything it links (writes env-gated) is held to the stage/scope/
+  // hygiene bars below in the SAME boot.
+  steps.push(await enforceCatalogRescoreConvergence(db))
   // ACADEMIC-STAGE scope net: remove surfaced awards the profile's derived stage
   // provably cannot receive (graduate/professional, postdoctoral, adult
   // reentry). Runs immediately AFTER the recall gates so anything they added

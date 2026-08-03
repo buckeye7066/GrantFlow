@@ -1,4 +1,5 @@
 import {
+  ACCEPT_SCORE,
   FIT_EVIDENCE_HALF_CREDIT,
   MIN_CALIBRATED_INVENTORY,
   SCORE_FLOOR,
@@ -9,6 +10,17 @@ import {
 } from './needFirstMatchPolicy.js'
 
 export const NEED_FIRST_SCORING_VERSION = 'need_first_v2'
+
+/**
+ * Does this score sit at/above the canonical ACCEPT band? Exported for the
+ * crawler-os facade, whose locator contract needs the accept bar but whose
+ * package is deny-listed from importing `config/matchThresholds` directly
+ * (this adapter is the facade's one approved bridge to the thresholds).
+ */
+export function isAcceptLevelScore(score) {
+  const parsed = Number(score)
+  return Number.isFinite(parsed) && parsed >= ACCEPT_SCORE
+}
 
 const STUDENT_TYPES = new Set([
   'student',
@@ -307,7 +319,15 @@ export function applyNeedFirstScoring({
     reasons: Array.isArray(canonical?.reasons) ? canonical.reasons : [],
   }, policy)
 
-  if (policy.resource) {
+  if (policy.resource && String(decisionResult.decision ?? '').toUpperCase() !== 'REJECT') {
+    // Resource routing holds a locator at REVIEW so it can never claim ACCEPT
+    // — but it must never RESURRECT a canonical REJECT. A REJECT here is a
+    // positive eligibility denial (veteran-only vs a non-veteran, foreign
+    // jurisdiction, out-of-area place-exclusive row), and `enforceNeedFirstDecision`'s
+    // own contract is that the canonical eligibility gates stay authoritative.
+    // The unconditional overwrite this replaces turned "military-only directory
+    // for a non-military student" from REJECT into REVIEW @ 2 (the crawler-os
+    // matchEngine.test.mjs guard had been red on main since ~#1080).
     decisionResult.decision = 'REVIEW'
     decisionResult.explanation = canonical?.explanation ??
       'Resource retained as a search aid; it is not a direct funding award.'

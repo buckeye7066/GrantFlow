@@ -1143,8 +1143,10 @@ describe('enforceInvariants — runner', () => {
     //   per-state HFA geo scope, cross-profile ACCEPT-only precision, and the
     //   condition-lane match-store scope) here.
     // + the non-grant notice net (2026-08-03 owner QA: regulatory/lead-gen/
-    //   clearly-expired junk purged from the match store).
-    expect(summary.ran).toBe(53)
+    //   clearly-expired junk purged from the match store)
+    // + the catalog-rescore convergence census/sweep (2026-08-03, the general
+    //   re-scoring sweep for the rolling snapshot; writes env-gated OFF).
+    expect(summary.ran).toBe(54)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1207,6 +1209,9 @@ describe('enforceInvariants — runner', () => {
       // The same class for the OTHER half of the fleet: a household in crisis
       // and the local help its own county already holds in the catalog.
       'county_crisis_need_recall',
+      // The GENERAL recall case: continuous catalog-wide re-matching, count-only
+      // until the fundability chain lands (ENFORCE_CATALOG_RESCORE=1 to write).
+      'catalog_rescore_convergence',
       'stage_of_life_match_scope',
       'no_dangling_matches',
       // RESULT FLOOR census (owner rule 2026-08-01, third clause). After every

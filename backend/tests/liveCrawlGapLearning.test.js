@@ -274,14 +274,15 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
     expect(lc.c).toBe(1)
   })
 
-  // "Healthy" now means AT THE PROFILE'S REQUESTED RESULT NUMBER (default 10),
+  // "Healthy" now means AT THE PROFILE'S REQUESTED RESULT NUMBER (default 20
+  // since the 2026-08-03 recall audit; was 10),
   // counting only rows that name money the profile could actually receive.
   // Three real awards used to read as healthy because the old bar was
   // MIN_HEALTHY_SURFACED (3) on a count that also admitted directories.
-  it('counts a healthy crawl (10 real awards) as a call with NO gap and NO brain write', async () => {
+  it('counts a healthy crawl (22 real awards) as a call with NO gap and NO brain write', async () => {
     db.prepare("INSERT INTO profiles (id, display_name, created_by) VALUES (?, ?, ?)")
       .run('healthy', 'Healthy Profile', 'system')
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 22; i++) {
       db.prepare("INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?, ?, 'GRANT', 1)")
         .run(`o${i}`, `Real Award ${i}`)
       db.prepare("INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES (?, ?, ?, 'accept', 'crawler-os')")

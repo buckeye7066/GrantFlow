@@ -605,11 +605,19 @@ export function evaluateNeedFirstMatchPolicy({
   const isStudent = profileIsStudent(profileContext, profileNorm)
   const isBusiness = profileIsBusiness(profileContext, profileNorm)
   const isOrganization = profileIsOrganization(profileContext, profileNorm)
+  // MISSING = NEUTRAL (G4): a hard mismatch is a claim the profile PROVES.
+  // A profile with no resolvable type (a wildcard/broad-discovery thesis, a
+  // bare stub) is UNKNOWN — "not proven org" must not read as "proven
+  // not-org". The canonical engine holds exactly this line for its own
+  // nonprofit/business gates (`profileTypeIsMissingOrGeneric` → REVIEW, not
+  // REJECT); the overlay must not out-reject the engine on silence. A profile
+  // whose type IS known (student, senior, church…) still hard-mismatches.
+  const typeKnown = Boolean(profileType(profileContext, profileNorm))
 
-  if (businessApplicant && !isBusiness) {
+  if (businessApplicant && typeKnown && !isBusiness) {
     hardMismatches.push('Business-only funding requires a business applicant profile')
   }
-  if (organizationApplicant && !isOrganization) {
+  if (organizationApplicant && typeKnown && !isOrganization) {
     hardMismatches.push('Organization-only funding requires an organization applicant profile')
   }
 

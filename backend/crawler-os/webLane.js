@@ -368,9 +368,31 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   // Breadth raised 8/8/20 -> 14/8/26 so the new institution- / employer- /
   // county-specific CORE queries (buildWebQueries) run ALONGSIDE the need /
   // interest / field-of-study queries in one pass, instead of crowding them out.
-  const maxQueries = Number.isFinite(opts.maxQueries) ? opts.maxQueries : 14;
-  const resultsPerQuery = Number.isFinite(opts.resultsPerQuery) ? opts.resultsPerQuery : 8;
-  const maxPages = Number.isFinite(opts.maxPages) ? opts.maxPages : 26;
+  //
+  // Raised again 14/8/26 -> 20/8/32 and made ENV-TUNABLE (2026-08-03, the
+  // recall-guardrail audit). MEASURED on all 34 real prod profiles at
+  // 2026-08-03T16:49Z: buildWebQueries assembled 2,531 profile-keyed queries
+  // fleet-wide and the cap of 14 ran 476 of them — 81% of the topical/
+  // hyperlocal/entity queries the profile's own facts justify NEVER executed
+  // (per-profile truncation p50 61, max 129), and every one of the 34 profiles
+  // was truncated. The pool is deliberately larger than any one run (the seed
+  // rotation samples it across nights), but at 14 with ONE rotating tail slot a
+  // p50 profile needs ~61 nights to see each broadening query once. 20 is a
+  // bounded step, not a floodgate: every extra query still faces the SERP →
+  // fetch → LLM-extract → reality gate → canonical match engine stack, and
+  // maxPages rises with it so the extra queries can actually contribute pages.
+  // The owner rule this serves: precision comes from classifying junk out,
+  // never from starving what is searched.
+  const envInt = (raw, fallback) => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  };
+  const maxQueries = Number.isFinite(opts.maxQueries) ? opts.maxQueries
+    : envInt(process.env.WEB_LANE_MAX_QUERIES, 20);
+  const resultsPerQuery = Number.isFinite(opts.resultsPerQuery) ? opts.resultsPerQuery
+    : envInt(process.env.WEB_LANE_RESULTS_PER_QUERY, 8);
+  const maxPages = Number.isFinite(opts.maxPages) ? opts.maxPages
+    : envInt(process.env.WEB_LANE_MAX_PAGES, 32);
   // Per-run rotation seed: successive discoveries sample DIFFERENT broadening
   // queries (the CORE queries always run) so a profile stops getting the same
   // set every time. Injectable for deterministic tests; defaults to wall-clock.

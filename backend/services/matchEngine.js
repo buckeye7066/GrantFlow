@@ -4047,7 +4047,15 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: `${reasonText}.`, reasons }
   }
   const declaredPlaceState = declaredStateFromTitle(opp)
-  const oppStateRaw = String(opp.state || '').trim() || (declaredPlaceState ?? '')
+  // The DECLARED place outranks the stored column: a title in the canonical
+  // `"<Place>, XX — "` shape makes a claim about ITSELF, while `opp.state` makes
+  // a claim about a CRAWL (it is stamped by whichever profile's run minted the
+  // row — the student-aid-instate-link lesson). Preferring the column REJECTed
+  // "Davidson County, TN — Local assistance programs" for a Davidson County TN
+  // family whenever the row also carried a junk `state:'nationwide'` stamp: the
+  // declared place disarmed the national exemption while the junk column, not
+  // the declared state, was compared against the profile.
+  const oppStateRaw = (declaredPlaceState ?? '') || String(opp.state || '').trim()
   const oppIsNational =
     (Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide') && !declaredPlaceState
   const oNormState = normalizeState(oppStateRaw)

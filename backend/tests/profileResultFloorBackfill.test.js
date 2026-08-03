@@ -103,7 +103,7 @@ describe('the result-floor backfill queue', () => {
       const h = res.healed.find((x) => x.profile_id === 'p1')
       expect(h.before).toBe(2)
       expect(h.after).toBe(5)
-      expect(h.target).toBe(10)
+      expect(h.target).toBe(20)
     } finally { db.close() }
   })
 
@@ -148,7 +148,7 @@ describe('the result-floor backfill queue', () => {
       expect(ledger.profiles.niche.attempts).toBe(RESULT_FLOOR_MAX_ATTEMPTS)
       expect(ledger.profiles.niche.exhausted_at).toBeTruthy()
       expect(ledger.profiles.niche.exhausted_evidence).toMatchObject({
-        target: 10, found: 2, lanes_queried: 3, queries_issued: 2, candidates_extracted: 4, rejected_by_engine: 4,
+        target: 20, found: 2, lanes_queried: 3, queries_issued: 2, candidates_extracted: 4, rejected_by_engine: 4,
       })
 
       // …and the NEXT nightly run does not crawl it again. THIS is the
@@ -160,7 +160,7 @@ describe('the result-floor backfill queue', () => {
       expect(res.result_floor.skipped_by_ledger[0].reason).toBe('exhausted')
       // The verdict is REPORTED, not just silently absent.
       expect(res.result_floor.exhausted.map((e) => e.profile_id)).toContain('niche')
-      expect(res.result_floor.exhausted[0].verdict).toContain('Found 2 of a requested 10')
+      expect(res.result_floor.exhausted[0].verdict).toContain('Found 2 of a requested 20')
     } finally { db.close() }
   })
 
@@ -186,7 +186,7 @@ describe('the result-floor backfill queue', () => {
   it('reaching the target clears an exhausted verdict and stops the crawling', async () => {
     const db = makeDb()
     try {
-      seed(db, 'p1', { awards: 12 })
+      seed(db, 'p1', { awards: 22 })
       await writeFloorLedger(db, { targets: {}, profiles: { p1: { attempts: 3, exhausted_at: '2026-01-01T00:00:00Z' } } })
       const res = await runProfileCoverageSweep(db, { autoheal: true, maxHeal: 5 })
       expect(runLiveMock).not.toHaveBeenCalled()

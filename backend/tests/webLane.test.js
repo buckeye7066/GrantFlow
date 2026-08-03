@@ -98,6 +98,41 @@ describe('runWebDiscoveryLane', () => {
     expect(res.reason).toBe('web_lane_deps_missing')
   })
 
+  it('breadth budgets default to 20 queries and honour the env overrides (2026-08-03 recall audit)', async () => {
+    // Measured 2026-08-03: at the old cap of 14, all 34 real prod profiles
+    // truncated their query pool (2,531 built vs 476 run — 81% suppressed).
+    // The default is now 20 and env-tunable; caller opts still win.
+    const richThesis = {
+      ...thesis,
+      is_student: true,
+      applicant_types: ['student'],
+      schools: ['Middle Tennessee State University', 'Cleveland State Community College'],
+      field_of_study: 'Forensic Science',
+      needs: ['education', 'housing', 'medical', 'food', 'transportation'],
+      interest_terms: ['forensic science', 'criminal justice'],
+      location: { state: 'TN', city: 'Cleveland', county: 'Bradley' },
+    }
+    const run = async () => {
+      const store = createMemoryStore()
+      const res = await runWebDiscoveryLane(
+        { store, fetcher: fakeFetcher({}), searchWeb: vi.fn().mockResolvedValue([]), extractOpportunities: vi.fn() },
+        { thesis: richThesis, runId: 'budget', seed: 0 },
+      )
+      return res.queries.length
+    }
+    try {
+      delete process.env.WEB_LANE_MAX_QUERIES
+      expect(await run()).toBe(20)
+      process.env.WEB_LANE_MAX_QUERIES = '5'
+      expect(await run()).toBe(5)
+      // Garbage never disables the budget (the Number(null)-is-finite class).
+      process.env.WEB_LANE_MAX_QUERIES = 'banana'
+      expect(await run()).toBe(20)
+    } finally {
+      delete process.env.WEB_LANE_MAX_QUERIES
+    }
+  })
+
   describe('seed pages (owner rule: a source found for a profile gets added)', () => {
     const realOpp = {
       title: 'Tennessee Disability Small Grants',
