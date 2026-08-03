@@ -274,6 +274,22 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
         break
       }
     }
+    // Warm-path stage: "answers" ≠ "can serve the app". A dev server that is
+    // still cold-transforming (or about to reload for dependency
+    // re-optimization) passes the listen probe and then drops the journeys'
+    // module requests. Each declared warm path must return an OK, non-empty
+    // body on consecutive polls before the app is called ready.
+    if (ready && baseUrl && Array.isArray(probe.warm_paths) && probe.warm_paths.length) {
+      for (const warmPath of probe.warm_paths) {
+        const warmUrl = safeJoin(baseUrl, warmPath)
+        ready = await waitForWarmPath(warmUrl, { timeoutMs, isDead: allExited })
+        if (!ready) {
+          failedProbeUrl = warmUrl
+          log(`[launcher] ${manifest.app_id || app?.app_id}: listen probe passed but warm path ${warmUrl} never served a stable non-empty response within ${timeoutMs}ms`)
+          break
+        }
+      }
+    }
     // The app's own output outranks the manifest's guess about its port. Only
     // computed on a FAILED probe: a ready app has already proved the declared
     // port right, and reporting "drift" for a frontend port the backend logged
@@ -382,6 +398,46 @@ async function waitForHttp(url, { timeoutMs = 60000, intervalMs = 600, isDead = 
     } catch {
       /* connection refused / reset / abort => not ready yet */
     }
+    await sleep(intervalMs)
+  }
+  return false
+}
+
+// A server that ANSWERS is not necessarily a server that can SERVE THE APP.
+// FSN's compose stack measured 2026-08-03: the web container's Vite answers
+// "/" with index.html seconds after recreate, readiness goes green, and then
+// Vite re-optimizes dependencies ("lockfile has changed") and RELOADS —
+// killing in-flight module requests (ERR_EMPTY_RESPONSE on
+// /src/pages/Login.jsx, ws:// handshake failures) exactly while the journeys
+// run. A manifest may therefore declare `readiness_probe.warm_paths`: extra
+// paths on base_url (e.g. Vite's own /@vite/client) that must return an OK
+// response WITH A NON-EMPTY BODY on `consecutive` polls spaced apart, proving
+// the transform pipeline is warm and stable — not merely listening.
+export async function waitForWarmPath(url, {
+  timeoutMs = 60000,
+  intervalMs = 1200,
+  consecutive = 2,
+  isDead = () => false,
+} = {}) {
+  const deadline = Date.now() + timeoutMs
+  let streak = 0
+  while (Date.now() < deadline) {
+    if (isDead()) return false
+    let ok = false
+    try {
+      const ctrl = new AbortController()
+      const t = setTimeout(() => ctrl.abort(), 5000)
+      const resp = await fetch(url, { signal: ctrl.signal, redirect: 'manual' })
+      clearTimeout(t)
+      if (resp && resp.ok) {
+        const body = await resp.text()
+        ok = body.length > 0
+      }
+    } catch {
+      ok = false
+    }
+    streak = ok ? streak + 1 : 0
+    if (streak >= consecutive) return true
     await sleep(intervalMs)
   }
   return false

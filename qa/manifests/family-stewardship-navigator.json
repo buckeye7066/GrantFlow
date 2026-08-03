@@ -6,7 +6,7 @@
   "runtime_type": "web",
   "start_command": "docker compose up --build",
   "stop_command": "docker compose down",
-  "readiness_probe": { "type": "http", "path": "/api/health", "port": 3001, "timeout_ms": 120000 },
+  "readiness_probe": { "type": "http", "path": "/api/health", "port": 3001, "timeout_ms": 120000, "warm_paths": ["/@vite/client"], "$warm_comment": "Measured 2026-08-03: compose recreates the web container every run; its Vite answers '/' seconds after start (listen probe green) and then RELOADS for dependency re-optimization, dropping the journeys' module requests (ERR_EMPTY_RESPONSE on /src/pages/Login.jsx, ws handshake failures). /@vite/client must serve a non-empty body on consecutive polls before readiness — proves the transform pipeline is warm and stable, not merely listening." },
   "base_url": "http://localhost:5180",
   "test_target": "disposable-local-instance",
   "required_env": ["VITE_API_URL", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "AI_PROVIDER", "OPENAI_API_KEY", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "DB_HOST_PORT"],

@@ -95,3 +95,75 @@ test('a log timestamp is never read as a port', () => {
   assert.deepEqual(detectAnnouncedPorts('listening on port 8501'), [8501])
   assert.deepEqual(detectAnnouncedPorts('http://0.0.0.0:8501'), [8501])
 })
+
+// ── Warm-path readiness (the FSN Vite-reload race, 2026-08-03) ──────────────
+// "Answers" ≠ "can serve the app": FSN's recreated web container serves "/"
+// seconds after start, readiness went green, then Vite reloaded for dependency
+// re-optimization and dropped the journeys' module requests
+// (ERR_EMPTY_RESPONSE on /src/pages/Login.jsx). waitForWarmPath requires an
+// OK, NON-EMPTY body on consecutive polls, so a cold or flapping transform
+// pipeline is not "ready".
+import http from 'node:http'
+import { waitForWarmPath } from '../src/launcher.mjs'
+
+function serveScript(handler) {
+  return new Promise((resolve) => {
+    const srv = http.createServer(handler)
+    srv.listen(0, '127.0.0.1', () => {
+      resolve({ srv, url: `http://127.0.0.1:${srv.address().port}/@vite/client` })
+    })
+  })
+}
+
+test('warm path passes only after consecutive stable non-empty responses', async () => {
+  let hits = 0
+  const { srv, url } = await serveScript((req, res) => {
+    hits += 1
+    if (hits <= 2) {
+      // Cold/reloading Vite: connection answers but the module body is empty
+      // (the ERR_EMPTY_RESPONSE class).
+      res.writeHead(200)
+      res.end()
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/javascript' })
+    res.end('export {}\n')
+  })
+  try {
+    const warm = await waitForWarmPath(url, { timeoutMs: 15000, intervalMs: 50, consecutive: 2 })
+    assert.equal(warm, true)
+    assert.ok(hits >= 4, `needs 2 consecutive good bodies after the cold ones (hits=${hits})`)
+  } finally {
+    srv.close()
+  }
+})
+
+test('a flapping server (reload loop) never reads as warm', async () => {
+  let hits = 0
+  const { srv, url } = await serveScript((req, res) => {
+    hits += 1
+    if (hits % 2 === 1) {
+      res.writeHead(200, { 'content-type': 'text/javascript' })
+      res.end('export {}\n')
+      return
+    }
+    res.writeHead(200)
+    res.end() // every second response drops the body — a reload mid-flight
+  })
+  try {
+    const warm = await waitForWarmPath(url, { timeoutMs: 900, intervalMs: 50, consecutive: 2 })
+    assert.equal(warm, false, 'alternating good/empty must never satisfy consecutive=2')
+  } finally {
+    srv.close()
+  }
+})
+
+test('a dead start_command aborts the warm wait instead of burning the timeout', async () => {
+  const { srv, url } = await serveScript((req, res) => { res.writeHead(200); res.end('x') })
+  try {
+    const warm = await waitForWarmPath(url, { timeoutMs: 5000, intervalMs: 50, consecutive: 3, isDead: () => true })
+    assert.equal(warm, false)
+  } finally {
+    srv.close()
+  }
+})
