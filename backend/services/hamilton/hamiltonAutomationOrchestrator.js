@@ -36,6 +36,7 @@
  */
 
 import { classifyFundingSource } from './hamiltonAutomationClassifier.js'
+import { assessHamiltonFundingSource } from './hamiltonFundingSourcePolicy.js'
 import {
   ensureApplicationTask,
   updateApplicationTask,
@@ -323,6 +324,45 @@ export async function automateSingleSource(db, {
   const opportunity = await loadOpportunity(db, opportunityId)
   const grant = await loadGrant(db, grantId)
   const portalLink = await loadPortalLink(db, resolvedProfileId, { opportunityId, grantId })
+
+  // A source id that resolves to NOTHING must not become a task: the task is
+  // rendered as an application card, and with no opportunity/grant row behind
+  // it the card reads "Untitled application" forever (320 such cards in prod,
+  // 2026-08-03). The ids came from a caller's stale snapshot — refuse loudly
+  // so the caller re-lists, instead of persisting a card nobody can act on.
+  if (!opportunity && !grant) {
+    const err = new Error(
+      `funding source not found (opportunity ${opportunityId || '—'}, grant ${grantId || '—'})`,
+    )
+    err.status = 422
+    err.code = 'unresolvable_funding_source'
+    throw err
+  }
+
+  // 0. Eligibility gate (2026-08-03): a source the canonical engine REJECTS
+  // for this profile (an explicitly-exclusive restriction against a KNOWN
+  // conflicting profile fact — the UNCF-for-a-white-student class) is refused
+  // BEFORE a task exists. The task IS the "In Progress" application card, so
+  // create-then-block still showed the profile an ineligible application.
+  // ONLY the engine's reject refuses creation: review/unknown still admits
+  // (G4 — missing profile facts are neutral), and every other policy stop
+  // (trust, missing match) keeps the existing create-then-preflight-block
+  // behaviour so recoverable stops stay visible and recheckable.
+  const eligibility = await assessHamiltonFundingSource(db, {
+    profileId: resolvedProfileId, opportunity, grant,
+  })
+  if (eligibility?.code === 'funding_source_profile_rejected') {
+    return {
+      task: null,
+      skipped: true,
+      reason: 'ineligible_profile',
+      policy: {
+        code: eligibility.code,
+        reasons: eligibility.reasons || [],
+        message: eligibility.message || null,
+      },
+    }
+  }
 
   const classification = classifyFundingSource({
     opportunity,

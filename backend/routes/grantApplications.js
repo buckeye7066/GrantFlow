@@ -89,8 +89,15 @@ async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId,
          ${where}
         ORDER BY t.updated_at DESC LIMIT ?`,
     ).all(...params, Math.min(500, Number(limit) || 200))
-  } catch {
-    return [] // application_tasks (or a joined table) not present — nothing to merge
+  } catch (err) {
+    // ONLY an absent table (smoke/unit fixtures) is silence-worthy. Any other
+    // failure (dialect drift, transient DB error) must THROW: swallowing it
+    // returned [] here, which made submitHamiltonTask 404 a LIVE task — an
+    // intermittent "Not found" indistinguishable from a genuinely absent row
+    // (2026-08-03). Callers' try/catch turns a rethrow into a loud 500.
+    const msg = String(err?.message || '')
+    if (/no such table|does not exist/i.test(msg)) return []
+    throw err
   }
   return (rows || [])
     .map((r) => ({
