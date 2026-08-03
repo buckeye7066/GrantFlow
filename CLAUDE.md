@@ -69,6 +69,64 @@ npm run opps:ensure-national-minimum  # Ensure national opportunity floor
 - **Deployment**: Frontend → Vercel, Backend → Railway (PostgreSQL).
 - **Canonical product rules + goals**: `docs/canonical_rules.md` is the single source of truth. Read it before changing matching, discovery, pipeline, or tenancy behavior.
 
+## Portal automation chain (2026-08-03) — REQUIRED READING before touching Hamilton portal work
+
+Five merged + deploy-verified PRs (#1103-#1108) changed how portals sync, how
+proposals are drafted, and what auto-submit means. Every agent working in this
+repo MUST know these; the old semantics appear in older comments/tests — the
+rules below win.
+
+- **NGWeb "Scholarship Manager" connector** (`portalSync/connectors/ngwebScholarshipManager.js`)
+  covers every `<school>.scholarships.ngwebsolutions.com` tenant (MTSU +
+  Cleveland State CC live). TRAPS: it must stay AHEAD of `mtsu` in
+  `registry.js` (mtsu's `matchesCredential` greedily claims any "mtsu" label);
+  both tenants collapse to one eTLD+1 key in `portalKeyHost`/
+  `portalStatusKeyHost`; sessions idle out in ~45 min, so
+  warm-sync-on-capture is the only reliable read window; the signed-out
+  signature is a private request answered with the public
+  `/CMXAdmin/Cmx_Content.aspx` landing (content NEVER proves sign-in). The
+  platform's own rule: students canNOT apply to individual scholarships —
+  matching runs Mon/Thu; "Qualified Opportunities 0" is a REAL answer.
+- **"Synced • <date>" tile tag**: `profilePortalIndex.loadSyncSummaryByHost`
+  (one grouped query; process tiles included). Only a `status='completed'`
+  run earns `lastSyncedAt`; a failed run never earns it and never erases one.
+- **Umbrella-application coverage** (`portalSync/generalApplicationCoverage.js`):
+  a VERIFIED general-application submission advances governed grants to
+  `submitted` (dated + provenance note), completes their Hamilton tasks, and
+  marks the portal complete. Governance is URL-STRUCTURAL only
+  (`UMBRELLA_GOVERNED_URLS` — tenant host, legacy portal host, or school path
+  naming scholarships); admissions/housing/work-study on the same host are
+  deliberately out. Never demotes; hard no-op without quote-anchored evidence.
+- **Tracker "Mark Submitted"**: tracker cards are MERGED Hamilton
+  `application_tasks` (`source:'hamilton'`) — the submit route accepts task
+  ids (with `submitted_at`); Edit/Move-Forward/Delete are hidden on those cards.
+- **Draft templates are opportunity-shaped + funder-tailored**
+  (`applyEngine.buildDefaultSectionsForStyle`): scholarship kind →
+  `personal_statement`/`academic_background`/`financial_need_statement`/
+  `activities_leadership`; org grants keep the seven-section shape. Content
+  tailors ONLY from the opportunity row's stored facts (never invented funder
+  priorities) and pulls the appropriate profile's sections (org ministries
+  first-class). Undeclared kind keeps the default — never guess from a title word.
+- **Draft packets ARE the portal fill source**
+  (`portalSync/../draftPacketPortalBridge.js`): wherever a packet exists, its
+  sections feed the autopilot fill (placeholder text like "[review: …]" is
+  REFUSED). The bridge's `ESSAY_SECTION_SOURCES` covers both template shapes —
+  keep that mapping in sync if section keys evolve.
+- **AUTO-SUBMIT MEANS AUTO-SUBMIT (owner rule 2026-08-03: "No more, no
+  less")**: `evaluateAutoSubmitGate` withholds ONLY for `missing_info` (open
+  required questions = completeness) or `automation_off` (the toggle IS the
+  selection). `not_approved`/`not_generated` are RETIRED — approval is
+  optional review, never a gate. Stored task authorization
+  (`allow_auto_submit`) is read on EVERY run (it used to be written and never
+  read — the wired-but-unreachable class). Submission is REPORTED only with
+  captured portal confirmation evidence (`assessSubmissionEvidence`); a
+  submit-click without evidence is a blocker, never "submitted", and
+  `submit_unconfirmed` is never blindly retried. All defaults remain OFF.
+- **Stage derivation trap** (`profileDerivedFacts.GRAD_RX`): "high school
+  graduate" / "graduated high school" / "college graduate" must NEVER derive
+  `graduate_student` — a live incident disarmed the stage gate this way and
+  re-admitted UAB-Blazer-class fellowships for an incoming freshman.
+
 ## MIGRATION PARITY — superseding a system requires proving coverage, not just cutover
 
 The 2026-07 crawler-os cutover silently stranded 12+ discovery lanes: the
