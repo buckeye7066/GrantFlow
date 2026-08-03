@@ -47,6 +47,8 @@ import {
   saveResolvedField,
 } from './hamiltonResolvedFieldStore.js'
 import { isAuthorizationActive } from './hamiltonAuthorizationStore.js'
+import { findOfficialUrlForOpportunity } from '../urlEnrichment.js'
+import { isSearchEngineUrl, portalUrlFunderPlausibility } from '../../config/urlRules.js'
 
 function ok(strategy, payload = {}, detail = null, retry = true) {
   return { outcome: 'resolved', strategy, retry, fallback: null, detail, payload }
@@ -596,11 +598,55 @@ async function resolveDeadline(db, ctx, input) {
     'The application deadline has passed. Hamilton suggests related opportunities and stops on this one.')
 }
 
+/**
+ * Runtime application-URL rescue (owner directive 2026-08-03: "no clear
+ * application URL" is a FINDABLE fact, not a dead end — change the won't
+ * into "figure out a way to do it properly"). This was prod's DOMINANT
+ * auto-submit stall: every recent authorized waiting_for_review task carried
+ * "switched to the manual pathway: No clear application URL or submission
+ * method" (measured 2026-08-03), while the repo already owned a bounded,
+ * honest URL finder that only the BOOT sweep ever called.
+ *
+ * The rescue reuses that exact posture at run time: live web search for the
+ * opportunity's own title+sponsor → token-overlap plausibility →
+ * tenant-slug funder screen (#1113 — a portal on a school-slug platform
+ * host must be explainable by THIS funder's name) → liveness probe. A URL
+ * is NEVER fabricated, a search-results page is never a portal, and a
+ * rescue that would re-serve the SAME page the engine just dead-ended on
+ * degrades honestly instead of looping.
+ *
+ * Exported for tests; `deps` forwards to findOfficialUrlForOpportunity.
+ */
+export async function attemptRuntimeUrlRescue(ctx, input, deps = {}) {
+  const title = String(ctx?.opportunity?.title || '').trim()
+  const sponsor = String(ctx?.opportunity?.sponsor || ctx?.opportunity?.funder || '').trim()
+  if (!title) return { url: null, reason: 'no_title_to_search' }
+  const found = await findOfficialUrlForOpportunity({ title, sponsor }, deps)
+  if (!found?.url) return { url: null, reason: found?.searched === false ? 'search_failed' : 'nothing_verifiable' }
+  if (isSearchEngineUrl(found.url)) return { url: null, reason: 'search_results_page' }
+  const current = String(input?.url || ctx?.portalUrl || '').trim().replace(/\/+$/, '').toLowerCase()
+  const candidate = String(found.url).trim().replace(/\/+$/, '').toLowerCase()
+  if (current && candidate === current) return { url: null, reason: 'same_dead_end_page' }
+  if (sponsor && portalUrlFunderPlausibility(found.url, sponsor) === 'implausible') {
+    return { url: null, reason: 'funder_mismatch', rejected_url: found.url }
+  }
+  return { url: found.url, probe: found.probe || null, hits: found.hits ?? null }
+}
+
 async function resolveUnknownMethod(db, ctx, input) {
-  // Hamilton degrades to a "funder contact packet" so the user always has
-  // something useful to send.
+  // FIRST: try to FIND the funder's real application page and keep going.
+  try {
+    const rescue = await attemptRuntimeUrlRescue(ctx, input, ctx?._urlRescueDeps || {})
+    if (rescue?.url) {
+      return ok('application_url_rescued', { application_url: rescue.url, probe: rescue.probe },
+        `Hamilton found the funder's own application page (${rescue.url}), verified it is live, and is continuing there.`)
+    }
+  } catch { /* best-effort — fall through to the honest packet */ }
+  // Nothing verifiable found: degrade to a "funder contact packet" so the
+  // user always has something useful to send, and say plainly that the
+  // search was tried.
   return degraded('funder_contact_packet', 'manual',
-    'No clear application URL or submission method. Hamilton prepared a funder-contact packet under profile Documents.')
+    'No clear application URL or submission method — Hamilton also searched the web for the funder\'s application page and found nothing verifiable. She prepared a funder-contact packet under profile Documents.')
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────

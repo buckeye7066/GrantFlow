@@ -22,6 +22,7 @@ import {
 import { getHamiltonReadiness } from './hamiltonScheduleService.js'
 import { getMasterVaultStatus } from './hamiltonPortalMasterVault.js'
 import { isSearchEngineUrl } from '../../config/urlRules.js'
+import { buildManualCompletionGuide } from './manualSubmissionGuide.js'
 
 // Canonical task vocabulary lives in applicationTaskStore (TASK_BLOCKED_STATUSES
 // = blocked_* gates that need the owner; TASK_TERMINAL_STATUSES = done/failed/
@@ -43,7 +44,15 @@ function taskNeedsUser(status) {
     NEEDS_USER_TASK_STATUS.has(status) ||
     status.startsWith('blocked') ||
     status.startsWith('waiting') ||
-    status.startsWith('needs')
+    status.startsWith('needs') ||
+    // ready_to_print_mail / ready_to_email / ready_to_fax: the packet is DONE
+    // and the SEND is the human's — listing these under "working on" read as
+    // "Hamilton has it" while nothing was ever going to move again.
+    // (Enumerated, NOT a 'ready_to_' prefix: ready_to_start is the ACTIVE
+    // queue state — 306 live tasks in prod — and must stay out.)
+    status === 'ready_to_print_mail' ||
+    status === 'ready_to_email' ||
+    status === 'ready_to_fax'
   )
 }
 
@@ -152,16 +161,30 @@ export async function buildHamiltonProfileSummary(db, profileId) {
     if (TERMINAL_TASK_STATUS.has(status)) continue
     const title = taskTitleFromMap(t, titleMap)
     if (taskNeedsUser(status)) {
+      // Owner directive 2026-08-03: a stalled submission always ships with a
+      // complete finish-it-yourself plan — why it stopped, the real portal
+      // link (never invented), the prepared packet, and the honest
+      // "Mark submitted" record step.
+      const portalUrl = taskPortalUrl(t, urlMap)
+      let manualGuide = null
+      try {
+        manualGuide = buildManualCompletionGuide(t, {
+          title,
+          portalUrl,
+          missingItems: (missingByTask.get(String(t.id)) || []).filter((m) => !m.resolved),
+        })
+      } catch { manualGuide = null }
       needsYou.push({
         id: `task:${t.id}`,
         kind: 'task_blocked',
-        title: `${title} — needs your input`,
-        detail: t.last_agent_message || t.current_step || 'Open the task to see what Hamilton is waiting on.',
+        title: manualGuide?.headline ? `${title} — ${manualGuide.headline}` : `${title} — needs your input`,
+        detail: manualGuide?.why || t.last_agent_message || t.current_step || 'Open the task to see what Hamilton is waiting on.',
         where: 'action-plan',
         task_id: t.id,
         // The REAL portal/application page for this task, so "Go there" can
         // open the actual destination instead of an internal fallback area.
-        link_url: taskPortalUrl(t, urlMap),
+        link_url: portalUrl,
+        manual_guide: manualGuide,
       })
     } else {
       workingOn.push({
@@ -288,6 +311,20 @@ function todoItemFromNeed(need) {
   } else if (kind === 'vault') {
     base.instructions = `${need.detail || ''}\n\nUse "Go there" to open the portal area — the vault controls are at the top.`.trim()
     base.go_to = { tab: 'pipeline', focus: 'portal-logins' }
+  } else if (need.manual_guide?.steps?.length) {
+    // task_blocked WITH a manual completion guide (owner directive
+    // 2026-08-03): the Action Plan item IS the finish-it-yourself plan —
+    // numbered steps with the real links, ending on the honest
+    // "Mark submitted" record step.
+    if (need.link_url) base.link_url = need.link_url
+    // No external portal link → "Go there" still needs an internal home
+    // (the search-results-page guard: a task whose only URL was a Google
+    // page has link_url null and must fall back to the portal area).
+    else base.go_to = { tab: 'pipeline', focus: 'portal-logins' }
+    const numbered = need.manual_guide.steps
+      .map((s, i) => `${i + 1}. ${s.text}${s.url ? `\n   Link: ${s.url}` : ''}`)
+      .join('\n')
+    base.instructions = `${need.manual_guide.why || need.detail || ''}\n\nHow to finish this yourself:\n${numbered}`.trim()
   } else if (need.link_url) {
     // task_blocked with a KNOWN portal/application page: "Go there" must open
     // the ACTUAL destination (the owner report 2026-07-27: the MTSU off-campus
