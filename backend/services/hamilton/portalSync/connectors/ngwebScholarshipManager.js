@@ -312,7 +312,14 @@ export async function read(page, ctx = {}) {
   }
 
   log(`ngweb read complete (${accessState}): ${fields.length} fields, ${awards.length} awards (${rejected.length} rejected), ${notFound.length} notFound`)
-  return { fields, awards, notFound, rejected, raw, access: accessState, domains }
+  return {
+    fields, awards, notFound, rejected, raw, access: accessState, domains,
+    // First-class umbrella-application fact: the orchestrator reflects a
+    // verified submission onto every governed grant/task (owner rule
+    // 2026-08-02 — generalApplicationCoverage.js). Never dug out of `raw`.
+    generalApplication: appStatus,
+    tenant: tenantSlug(host),
+  }
 }
 
 /**
