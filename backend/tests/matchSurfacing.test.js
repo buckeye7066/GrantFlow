@@ -18,7 +18,18 @@ describe('matchSurfacing — surfaced matcher versions', () => {
       'field-of-study-link',
       'student-aid-instate-link',
       'county-crisis-need-link',
+      'catalog-rescore-link',
     ])
+  })
+
+  it('catalog-rescore-link must be surfaced — the continuous re-matching sweep', () => {
+    // Prod 2026-08-03: 641 of 11,050 active non-pointer catalog rows have EVER
+    // carried a match row for ANY profile — the rolling snapshot erases what a
+    // run does not re-find and nothing ever re-offers the rest. The sweep
+    // persists engine ACCEPTs under its own version precisely so the reconcile
+    // cannot erase them; not reading them back would repeat the web-llm
+    // regression exactly.
+    expect(SURFACED_MATCHER_VERSIONS).toContain('catalog-rescore-link')
   })
 
   it('web-llm must be surfaced — it was persisted-but-never-read before this fix', () => {
@@ -71,7 +82,7 @@ describe('matchSurfacing — surfaced matcher versions', () => {
 
   it('builds a valid SQL IN() fragment from the constant', () => {
     expect(SURFACED_MATCHER_VERSIONS_SQL).toBe(
-      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link','county-crisis-need-link')",
+      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link','county-crisis-need-link','catalog-rescore-link')",
     )
     // Round-trip: fragment lists exactly the same versions, quoted.
     for (const v of SURFACED_MATCHER_VERSIONS) {

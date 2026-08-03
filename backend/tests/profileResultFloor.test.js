@@ -135,8 +135,8 @@ describe('what counts as a RESULT (the pointer-padding defect)', () => {
 
 describe('the requested result number', () => {
   it('has a sane global default so no profile needs hand-configuring', () => {
-    expect(DEFAULT_PROFILE_RESULT_TARGET).toBe(10)
-    expect(resolveFleetResultTarget({})).toBe(10)
+    expect(DEFAULT_PROFILE_RESULT_TARGET).toBe(20)
+    expect(resolveFleetResultTarget({})).toBe(20)
     // Deliberately well clear of the "this profile is BROKEN" alarm.
     expect(DEFAULT_PROFILE_RESULT_TARGET).toBeGreaterThan(MIN_HEALTHY_SURFACED)
   })
@@ -145,7 +145,7 @@ describe('the requested result number', () => {
     expect(resolveFleetResultTarget({ PROFILE_RESULT_TARGET: '25' })).toBe(25)
     expect(resolveFleetResultTarget({ PROFILE_RESULT_TARGET: '9999' })).toBe(50)
     expect(resolveFleetResultTarget({ PROFILE_RESULT_TARGET: '-4' })).toBe(0)
-    expect(resolveFleetResultTarget({ PROFILE_RESULT_TARGET: 'banana' })).toBe(10)
+    expect(resolveFleetResultTarget({ PROFILE_RESULT_TARGET: 'banana' })).toBe(20)
   })
 
   it('honours a per-profile override from the ledger', () => {
@@ -154,9 +154,9 @@ describe('the requested result number', () => {
     // Junk falls BACK to the default; it is never coerced. `Number(null)` is 0
     // and 0 disables the floor — the exact null-coercion class that shipped a
     // "0% confidence" chip and a 0 ms portal-session lifetime.
-    expect(resolveProfileResultTarget('b', ledger, {})).toBe(10)
-    expect(resolveProfileResultTarget('c', ledger, {})).toBe(10)
-    expect(resolveProfileResultTarget('missing', { targets: { missing: null } }, {})).toBe(10)
+    expect(resolveProfileResultTarget('b', ledger, {})).toBe(20)
+    expect(resolveProfileResultTarget('c', ledger, {})).toBe(20)
+    expect(resolveProfileResultTarget('missing', { targets: { missing: null } }, {})).toBe(20)
   })
 })
 
@@ -391,16 +391,16 @@ describe('enforceProfileResultFloor (boot net)', () => {
     const db = makeFloorDb()
     try {
       seed(db, 'melissa', { awards: 0, locators: 25 })   // prod shape: 25 rows, 0 awards
-      seed(db, 'served', { awards: 12, locators: 30 })
+      seed(db, 'served', { awards: 22, locators: 30 })
       const res = await enforceProfileResultFloor(db)
       expect(res.ok).toBe(true)
       expect(res.scanned).toBe(2)
       expect(res.belowTarget).toBe(1)
-      expect(res.fleetTarget).toBe(10)
+      expect(res.fleetTarget).toBe(20)
 
       const ledger = await readFloorLedger(db)
       expect(ledger.profiles.melissa.awardable).toBe(0)
-      expect(ledger.profiles.served.awardable).toBe(12)
+      expect(ledger.profiles.served.awardable).toBe(22)
     } finally { db.close() }
   })
 
@@ -450,7 +450,7 @@ describe('enforceProfileResultFloor (boot net)', () => {
   it('clears a stale EXHAUSTED verdict once the profile actually reaches its target', async () => {
     const db = makeFloorDb()
     try {
-      seed(db, 'p1', { awards: 12 })
+      seed(db, 'p1', { awards: 22 })
       await writeFloorLedger(db, {
         targets: {},
         profiles: { p1: { attempts: 3, exhausted_at: '2026-01-01T00:00:00Z', exhausted_evidence: { found: 1 } } },
@@ -477,8 +477,8 @@ describe('enforceProfileResultFloor (boot net)', () => {
 describe('the floor ledger', () => {
   it('assessProfileFloor reports shortfall, eligibility and escalation together', () => {
     const a = assessProfileFloor({ profileId: 'p', awardable: 4, ledger: { targets: {}, profiles: {} }, activeCatalogCount: 100 })
-    expect(a.target).toBe(10)
-    expect(a.shortfall).toBe(6)
+    expect(a.target).toBe(20)
+    expect(a.shortfall).toBe(16)
     expect(a.below).toBe(true)
     expect(a.eligible).toBe(true)
     expect(a.escalation).toBe(1)
