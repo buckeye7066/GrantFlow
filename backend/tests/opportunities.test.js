@@ -181,5 +181,68 @@ describe("opportunities", () => {
       expect(res.body.similar).toEqual([])
     })
   })
+
+  describe("GET /:id catalog id shapes", () => {
+    // Regression: crawler-minted catalog rows use deterministicOpportunityId()
+    // — a 64-char sha256 hex (backend/crawler-os/contract.js) — but the
+    // in-handler id gate (requireUuidParam) only accepted UUIDs, so every
+    // crawler-minted row 404'd on GET/PUT/DELETE /:id before the DB was even
+    // queried. Production symptom: GrantDetail's Similar Opportunities cards
+    // navigate with the catalog id and the page 404'd
+    // (/api/grants/85e17656d771…, 2026-08-03). The GrantDetail catalog view
+    // now reads this route with exactly those ids.
+    const HASH_ID =
+      "85e17656d7711ced1b3ea72bd0d73ca49e5fefc00e22c6e9545fcfa5551d9654"
+
+    it("serves a crawler-minted 64-hex catalog id (FAILS on the UUID-only gate)", async () => {
+      await db
+        .prepare(
+          `INSERT INTO funding_opportunities (id, title, sponsor, source, source_id, application_url, source_url, is_active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+        )
+        .run(
+          HASH_ID,
+          "Paramedic Continuing Education Scholarship",
+          "Example Foundation",
+          "test",
+          "hash-row",
+          "https://foundation-hash.org/apply",
+          "https://foundation-hash.org/program",
+        )
+
+      const res = await request(app).get(`/api/opportunities/${HASH_ID}`)
+      expect(res.status).toBe(200)
+      expect(res.body.id).toBe(HASH_ID)
+      expect(res.body.title).toBe("Paramedic Continuing Education Scholarship")
+    })
+
+    it("still serves UUID ids and still 404s junk ids", async () => {
+      const seed = await request(app).post("/api/opportunities").set(TEST_ADMIN_AUTH_HEADER).send({
+        title: "Community Emergency Assistance Grant C",
+        sponsor: "Example Foundation",
+        source: "test",
+        source_id: "uuid-row",
+        description: "UUID-shaped row for the id-gate test.",
+        application_url: "https://foundation-c.org/apply",
+        source_url: "https://foundation-c.org/program",
+        is_national: true,
+        opportunity_type: "grant",
+        requires_match: false,
+      })
+      expect(seed.status).toBe(201)
+      const uuidId = seed.body?.id
+      expect(uuidId).toBeTruthy()
+
+      const okRes = await request(app).get(`/api/opportunities/${uuidId}`)
+      expect(okRes.status).toBe(200)
+
+      // Wrong alphabet at the right length, and hex one char short: both
+      // must stay outside the gate.
+      const junkAlphabet = await request(app).get(`/api/opportunities/${"z".repeat(64)}`)
+      expect(junkAlphabet.status).toBe(404)
+      const shortHex = await request(app).get(`/api/opportunities/${"a".repeat(63)}`)
+      expect(shortHex.status).toBe(404)
+    })
+  })
 })
 

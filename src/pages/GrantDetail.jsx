@@ -41,8 +41,17 @@ import { createLogger } from '@/utils/logger';
 import client, { apiFetch } from '@/api/client'
 import PortalLoginButton from '@/components/portal/PortalLoginButton';
 import { safeHttpUrl } from '@/lib/safeUrl';
+import { useAuthStore } from '@/stores/authStore';
 
 const toMessage = (e) => (e instanceof Error ? e.message : String(e ?? ''));
+
+// Crawler-minted funding_opportunities rows use deterministicOpportunityId —
+// a 64-char sha256 hex (backend/crawler-os/contract.js) — while pipeline
+// grants use crypto.randomUUID(). Several surfaces (Similar Opportunities,
+// CoverageEvidence) link here with the CATALOG id; fetching /api/grants/:id
+// with one is a guaranteed 404, so the page must branch on the id shape and
+// read the catalog instead.
+const CATALOG_OPPORTUNITY_ID_RX = /^[0-9a-fA-F]{64}$/;
 
 const VALID_TABS = ['coach', 'workflow', 'checklist', 'budget', 'timelogs', 'compliance'];
 
@@ -223,6 +232,155 @@ function SimilarGrants({ grant }) {
   )
 }
 
+// Read-only view of a CATALOG opportunity (a funding_opportunities row that
+// is not — or not yet — a pipeline grant). Reached when a link hands us a
+// catalog id instead of a grants id (Similar Opportunities cards,
+// CoverageEvidence). Never a dead end: offer the application page, an
+// add-to-pipeline action when a profile is active, and similar opportunities.
+function CatalogOpportunityView({ oppId }) {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const activeProfileId = useAuthStore((state) => state.activeProfileId);
+  const canAddToPipeline = Boolean(activeProfileId) && activeProfileId !== '__admin__';
+
+  const { data: opp, isLoading, isError } = useQuery({
+    queryKey: ['catalog-opportunity', oppId],
+    queryFn: () => apiFetch(`/api/opportunities/${encodeURIComponent(oppId)}`),
+    enabled: Boolean(oppId),
+    retry: false,
+  });
+
+  const addToPipelineMutation = useMutation({
+    mutationFn: () =>
+      apiFetch('/api/grants/from-opportunity', {
+        method: 'POST',
+        body: JSON.stringify({ opportunity_id: oppId, profile_id: activeProfileId }),
+      }),
+    onSuccess: (created) => {
+      if (created?.id) {
+        toast({
+          title: 'Added to pipeline',
+          description: `${opp?.title || 'This opportunity'} is now in your pipeline.`,
+        });
+        navigate(createPageUrl('GrantDetail', { id: created.id }));
+        return;
+      }
+      // Server-side gates can decline the add (below floor, skipped, …) —
+      // report what it said instead of pretending it landed.
+      toast({
+        title: 'Not added to pipeline',
+        description: created?.message || created?.reason || 'The server declined to add this opportunity.',
+      });
+    },
+    onError: (error) => {
+      toast({ variant: 'destructive', title: 'Could not add to pipeline', description: toMessage(error) });
+    },
+  });
+
+  if (isLoading) {
+    return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
+  }
+
+  if (isError || !opp) {
+    return (
+      <div data-testid="grant-not-found" className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
+        <FileText className="h-10 w-10 text-slate-300" aria-hidden="true" />
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">We couldn't find that funding source</h2>
+          <p className="mx-auto mt-1 max-w-md text-sm text-slate-600">
+            It may have been removed, or the link is out of date. Everything you're working on is still in your pipeline.
+          </p>
+        </div>
+        <div className="flex flex-wrap justify-center gap-3">
+          <Button asChild>
+            <Link to={createPageUrl('Pipeline')}>Go to my pipeline</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to={createPageUrl('DiscoverGrants')}>Discover funding</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const applicationUrl =
+    safeHttpUrl(opp.application_url) || safeHttpUrl(opp.source_url) || safeHttpUrl(opp.url);
+  const hasValidDeadline = opp.deadline && !isNaN(Date.parse(opp.deadline));
+  const fmtAmount = (min, max) => {
+    const f = (n) => (n >= 1000000 ? `$${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `$${(n / 1000).toFixed(0)}K` : `$${n}`);
+    if (max && min) return `${f(min)}–${f(max)}`;
+    if (max) return `Up to ${f(max)}`;
+    if (min) return `From ${f(min)}`;
+    return null;
+  };
+  const amountLabel = fmtAmount(opp.amount_min, opp.amount_max);
+  const eligibilityBullets = Array.isArray(opp.eligibility_bullets) ? opp.eligibility_bullets.filter(Boolean) : [];
+
+  return (
+    <div data-testid="catalog-opportunity-view" className="min-h-screen bg-slate-50">
+      <div className="max-w-7xl mx-auto px-4 md:px-6 py-6">
+        <Button variant="ghost" size="sm" className="mb-4" onClick={() => navigate(-1)}>
+          <ArrowLeft className="w-4 h-4 mr-1" /> Back
+        </Button>
+        <div className="rounded-lg border border-slate-200 bg-white p-6">
+          <Badge variant="outline" className="mb-3 text-xs bg-blue-50 text-blue-700 border-blue-200">
+            Funding source — not in your pipeline yet
+          </Badge>
+          <h1 className="text-2xl font-bold text-slate-900">{opp.title}</h1>
+          {opp.sponsor && <p className="mt-1 text-sm text-slate-500">{opp.sponsor}</p>}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {amountLabel && (
+              <Badge variant="outline" className="text-xs">
+                <DollarSign className="w-3 h-3 mr-0.5" /> {amountLabel}
+              </Badge>
+            )}
+            {hasValidDeadline && (
+              <Badge variant="outline" className="text-xs">
+                <Clock className="w-3 h-3 mr-0.5" /> {formatDate(new Date(opp.deadline), 'MMM d, yyyy')}
+              </Badge>
+            )}
+            {opp.link_status === 'broken' && (
+              <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-300">
+                <Link2Off className="w-3 h-3 mr-0.5" /> Link Issue
+              </Badge>
+            )}
+          </div>
+          {opp.description && (
+            <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{opp.description}</p>
+          )}
+          {eligibilityBullets.length > 0 && (
+            <div className="mt-4">
+              <h2 className="text-sm font-semibold text-slate-800">Eligibility</h2>
+              <ul className="mt-1 list-disc pl-5 text-sm text-slate-700">
+                {eligibilityBullets.map((item, i) => (
+                  <li key={i}>{String(item)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="mt-6 flex flex-wrap gap-3">
+            {canAddToPipeline && (
+              <Button onClick={() => addToPipelineMutation.mutate()} disabled={addToPipelineMutation.isPending}>
+                {addToPipelineMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Add to my pipeline
+              </Button>
+            )}
+            {applicationUrl && (
+              <Button asChild variant={canAddToPipeline ? 'outline' : 'default'}>
+                <a href={applicationUrl} target="_blank" rel="noopener noreferrer">Open application page</a>
+              </Button>
+            )}
+            <Button asChild variant="outline">
+              <Link to={createPageUrl('DiscoverGrants')}>Discover funding</Link>
+            </Button>
+          </div>
+        </div>
+      </div>
+      <SimilarGrants grant={{ id: oppId }} />
+    </div>
+  );
+}
+
 const FIELD_NAME_MAP = {
   mission: "Mission Statement",
   primary_goal: "Primary Goal (Q1)",
@@ -248,6 +406,11 @@ export default function GrantDetail() {
   // Read query params reactively so in-place navigation updates the page.
   const [searchParams] = useSearchParams();
   const grantId = searchParams.get('id');
+  // A 64-hex id is a CATALOG opportunity id, never a grants.id (those are
+  // UUIDs) — fetching /api/grants/:id with it is a guaranteed 404, so those
+  // ids branch to the read-only catalog view instead (see the early return
+  // below the hooks).
+  const isCatalogOpportunityId = Boolean(grantId) && CATALOG_OPPORTUNITY_ID_RX.test(grantId);
   const rawTab = searchParams.get('tab');
   const initialTab = VALID_TABS.includes(rawTab) ? rawTab : 'coach';
 
@@ -301,7 +464,7 @@ export default function GrantDetail() {
         if (!grantId) return null;
         return client.entities.Grant.get(grantId);
     },
-    enabled: !!grantId,
+    enabled: !!grantId && !isCatalogOpportunityId,
     refetchInterval: (query) => {
       if (analysisTimedOut) return false;
       const grantData = query.state?.data;
@@ -332,7 +495,7 @@ export default function GrantDetail() {
   const { data: existingChecklistItems = [] } = useQuery({
     queryKey: ['checklistItems', grantId],
     queryFn: () => client.entities.ChecklistItem.filter({ grant_id: grantId }),
-    enabled: !!grantId,
+    enabled: !!grantId && !isCatalogOpportunityId,
   });
 
   const updateGrantMutation = useMutation({
@@ -592,8 +755,14 @@ export default function GrantDetail() {
     }
   };
   
+  // Catalog ids get the read-only opportunity view. This return sits AFTER
+  // every hook above so the hook order stays stable across renders.
+  if (isCatalogOpportunityId) {
+    return <CatalogOpportunityView oppId={grantId} />;
+  }
+
   if (isLoadingGrant) {
-    return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>; 
+    return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   }
   if (isErrorGrant) { return <div className="p-4">Error loading grant: {toMessage(grantError)}</div>; }
   if (isErrorOrg && grant?.organization_id) { return <div className="p-4">Error loading organization: {toMessage(orgError)}</div>; }
