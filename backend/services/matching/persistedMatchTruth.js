@@ -1,4 +1,5 @@
 import { canonicalOpportunityKey } from '../../crawler-os/contract.js'
+import { isRelevantGeo } from '../../config/fundingResultFilters.js'
 import {
   applyNeedFirstScoring,
   NEED_FIRST_SCORING_VERSION,
@@ -124,6 +125,33 @@ function duplicateKeys(row) {
   return [...new Set([canonical, loose].filter((key) => key && key !== 'id:'))]
 }
 
+function asArray(value) {
+  if (Array.isArray(value)) return value
+  if (value instanceof Set) return [...value]
+  if (value === null || value === undefined || value === '') return []
+  return [value]
+}
+
+/**
+ * All states the profile actually declares, primary first. This is used only by
+ * objective geography rules (registered funder / exact title declaration);
+ * missing state remains neutral and a bare catalog state never hard-rejects.
+ */
+function profileStatesForGeo(profileContext) {
+  if (!profileContext) return []
+  const signals = profileContext.signals ?? {}
+  const profile = profileContext.profile ?? profileContext
+  const normalized = profileContext.profileNorm ?? profileContext.normalized ?? {}
+  return [...new Set([
+    ...asArray(signals.states),
+    signals.location?.state,
+    profile.state,
+    profile.geo_state,
+    normalized.state,
+    ...asArray(normalized.states),
+  ].map((value) => String(value ?? '').trim()).filter(Boolean))]
+}
+
 function adjustPersistedRow(persisted, canonical, profileContext, directory) {
   const storedDecision = directory
     ? 'REVIEW'
@@ -172,6 +200,7 @@ function adjustPersistedRow(persisted, canonical, profileContext, directory) {
  */
 export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [], opts = {}) {
   const profileContext = opts?.profileContext ?? null
+  const profileStates = profileStatesForGeo(profileContext)
   const persistedById = new Map()
   for (const row of Array.isArray(persistedRows) ? persistedRows : []) {
     const key = rowKey(row)
@@ -184,6 +213,15 @@ export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [
     if (!persisted) {
       restored.push(canonical)
       continue
+    }
+
+    // Stored decisions can predate the current geography rules. Re-adjudicate
+    // only objective scope evidence before replaying the row, so a historical
+    // ACCEPT cannot resurrect CPCC for a TN student, Ohio RDA as TN, or an
+    // out-of-state machine-minted locator. Missing geography remains neutral.
+    if (profileContext) {
+      const geo = isRelevantGeo(persisted, { states: profileStates })
+      if (!geo.relevant) continue
     }
 
     const directory = isDirectory(canonical) || isDirectory(persisted)
