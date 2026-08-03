@@ -129,7 +129,25 @@ router.post('/', async (req, res) => {
   if (!body.opportunity_id && !body.grant_id) {
     return res.status(400).json({ error: 'opportunity_id or grant_id required' })
   }
+  // The referenced source must actually EXIST (2026-08-03): a task whose ids
+  // resolve to nothing renders as a permanent "Untitled application" card.
+  // A lookup that ERRORS is treated as unverifiable (allow) — only a lookup
+  // that succeeds and finds nothing refuses.
   try {
+    let resolves = false
+    if (body.opportunity_id) {
+      try {
+        resolves = Boolean(await req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(body.opportunity_id)))
+      } catch { resolves = true }
+    }
+    if (!resolves && body.grant_id) {
+      try {
+        resolves = Boolean(await req.db.prepare('SELECT id FROM grants WHERE id = ? LIMIT 1').get(String(body.grant_id)))
+      } catch { resolves = true }
+    }
+    if (!resolves) {
+      return res.status(422).json({ ok: false, error: 'unresolvable_funding_source', detail: 'Neither opportunity_id nor grant_id resolves to an existing funding source.' })
+    }
     const task = await ensureApplicationTask(req.db, {
       profileId,
       userId: getAuthUserId(user),

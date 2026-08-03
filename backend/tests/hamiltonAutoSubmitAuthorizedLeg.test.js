@@ -106,6 +106,12 @@ async function seedFixture(db) {
     .run(PROFILE, 'user-1', 'Focus Forward Ministry')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Focus', last_name: 'Forward', email: 'ffm@example.org' }))
+  // The auto-submit toggle now defaults OFF when unset (2026-08-03). This
+  // suite pins the AUTHORIZED leg — the profile has explicitly selected
+  // auto-submit — so the fixture writes the explicit true a real selection
+  // persists.
+  await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+    .run(PROFILE, 'automation_preferences', JSON.stringify({ automations: { hamilton_auto_submit: true, hamilton_autopilot: true } }))
   await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
     .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://portal.example.org/apply')
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')

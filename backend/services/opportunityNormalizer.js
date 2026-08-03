@@ -756,6 +756,11 @@ export function normalizeOpportunity(rawOpp) {
     // patterns above never see the one field that states who may apply — which
     // is how a universities-only grants.gov notice scored 90+ for a student.
     eligibilityJsonToText(rawOpp.eligibility_json),
+    // Free-text "who may apply" prose written by the crawler-os blind
+    // extractors (2026-08-03). This was the ONE eligibility field the
+    // restriction detectors never read, so a demographic exclusivity stated
+    // only here (and not in title/bullets) was invisible to every gate.
+    typeof rawOpp.eligibility_text === 'string' ? rawOpp.eligibility_text : '',
   ].join(' ')
 
   // -- Entity types allowed --
@@ -953,7 +958,11 @@ export function normalizeOpportunity(rawOpp) {
 
   const requiresWomen =
     Boolean(rawOpp.requires_women) ||
-    matchesAnyPattern(text, [
+    // matchesAnyRegex, NOT matchesAnyPattern (2026-08-03): matchesAnyPattern
+    // stringifies its patterns for phrase search, so a RegExp list passed to
+    // it can NEVER match — these gates were dead since they shipped, which is
+    // how "Society of Women Engineers" reached a male student's task list.
+    matchesAnyRegex(text, [
       /\bfemale\s+students?\b/i,
       /\bwomen(?:'s)?\s+engineers?\b/i,
       /\bwomen\s+only\b/i,
@@ -977,8 +986,8 @@ export function normalizeOpportunity(rawOpp) {
     : null
   if (rawRequiresGender === 'male' || rawRequiresGender === 'men') requiresGender = 'male'
   else if (rawRequiresGender === 'female' || rawRequiresGender === 'women') requiresGender = 'female'
-  else if (matchesAnyPattern(text, MEN_ONLY_PATTERNS)) requiresGender = 'male'
-  else if (requiresWomen || matchesAnyPattern(text, WOMEN_ONLY_RESTRICTION_PATTERNS)) requiresGender = 'female'
+  else if (matchesAnyRegex(text, MEN_ONLY_PATTERNS)) requiresGender = 'male'
+  else if (requiresWomen || matchesAnyRegex(text, WOMEN_ONLY_RESTRICTION_PATTERNS)) requiresGender = 'female'
 
   // -- Has real application URL? --
   const hasApplicationUrl = Boolean(

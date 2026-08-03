@@ -26,7 +26,8 @@ import { useToast } from '@/components/ui/use-toast'
  *   - complete_forms, upload_documents, generate_narratives, save_drafts: ON
  *   - submit_applications: ON (with explicit checkbox confirmation)
  *   - require_human_review: OFF (Autopilot default)
- *   - allow_auto_submit: ON (mirrors submit_applications)
+ *   - allow_auto_submit: OFF (2026-08-03 — unattended submission is a
+ *     per-launch OPT-IN; a pre-checked box is not an authorization)
  *   - use_saved_session, use_saved_credentials_reference: ON
  *   - use_standing_attestation: ON
  */
@@ -50,7 +51,7 @@ const DEFAULTS = Object.freeze({
   use_saved_credentials_reference: true,
   use_standing_attestation: true,
   require_human_review: false,
-  allow_auto_submit: true,
+  allow_auto_submit: false,
 })
 
 export default function HamiltonAutopilotAuthorization({
