@@ -31,6 +31,7 @@ import {
   reconcileDismissedGrants,
   reconcileDismissedMatches,
 } from '../services/pipelineDismissals.js'
+import { cleanExtractedText } from '../utils/htmlTextHygiene.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:funding-sources')
@@ -196,11 +197,23 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       const kind = String(row.opportunity_kind ?? '').toUpperCase()
       sources.push({
         id: row.id,
-        title: row.title,
-        sponsor: row.sponsor,
-        summary: row.description,
+        // Text hygiene at the read path (owner QA 2026-08-03): rows already
+        // persisted with raw feed entities ("&ndash;", "&amp;", "&nbsp;")
+        // render clean without waiting for a re-crawl; the ingest choke point
+        // (opportunityInserter) now decodes new rows at write time.
+        title: cleanExtractedText(row.title),
+        sponsor: cleanExtractedText(row.sponsor),
+        summary: cleanExtractedText(row.description),
         url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
+        // The shared filter chain reads these verbatim fields (an apply URL and
+        // an EXPLICIT rolling deadline are fundable signals; a fabricated
+        // is_rolling is not).
+        application_url: row.application_url ?? row.apply_url ?? null,
+        source_url: row.source_url ?? null,
+        external_id: row.external_id ?? null,
+        source: row.source ?? null,
         deadline: row.deadline ?? null,
+        deadline_type: row.deadline_type ?? null,
         is_rolling: row.deadline_type === 'rolling' || !row.deadline,
         amount_min: row.amount_min ?? null,
         amount_max: row.amount_max ?? null,

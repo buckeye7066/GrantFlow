@@ -35,7 +35,18 @@ import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
 import { isGenericOnly } from '../config/genericTitleVocabulary.js'
-import { detectForeignJurisdiction, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
+import { detectForeignOpportunity, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
+import {
+  isLeadGenScholarship,
+  institutionalPassThroughConflict,
+  agencyOnlyProgramConflict,
+} from '../config/fundingResultFilters.js'
+import {
+  professionSignalTextFromSections,
+  resolveProfileProfessions,
+  assessProfessionEligibility,
+  opportunityLockText,
+} from './eligibility/professionEligibility.js'
 import { isPlaceholderPlaceLabel, placePrefixOfTitle } from '../config/placeholderProfileSignals.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
@@ -3610,6 +3621,22 @@ export function isIndividualLikeProfileType(rawType) {
 }
 
 /**
+ * Government-agency roots, resolved through the SAME registry chain as the
+ * individual check above. Used by the agency-only program gate: a federal
+ * cooperative program for state agencies (Feral Swine Eradication, AIS
+ * interjurisdictional) is REJECTed for a profile whose type is KNOWN and does
+ * not root to a government agency. An unresolvable type returns null (MISSING
+ * = NEUTRAL — the gate then says nothing).
+ */
+const MATCH_AGENCY_ROOT_TYPES = Object.freeze(['public_agency', 'local_government', 'government'])
+export function isPublicAgencyLikeProfileType(rawType) {
+  const id = resolveProfileType(rawType)
+  if (!id) return null
+  const chain = [id, ...getParentChain(id)]
+  return chain.some((t) => MATCH_AGENCY_ROOT_TYPES.includes(t))
+}
+
+/**
  * The `education` section for the aid-type preference, from whichever shape the
  * caller had. `makeDecision` is called both with a bare profiles row and with a
  * `{ profile, sections }` context; a caller that supplies neither gets `{}`,
@@ -3687,11 +3714,19 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // the geo TIER score it as a fully-eligible NATIONWIDE US program. An Irish
   // local-authority housing scheme is not "possibly accessible" to a US
   // applicant; it is categorically unavailable, which is a REJECT, not a REVIEW.
-  const foreignJurisdiction = detectForeignJurisdiction(opp)
+  // detectForeignOpportunity is the SUPERSET: the ccTLD/host rule this gate
+  // always had, PLUS the registered foreign-funder class the owner's 2026-08-03
+  // QA pass caught evading it (Tata Trusts / UK "LA Flex" publish on generic
+  // .org/.com hosts, so the registrable-suffix rule was structurally blind and
+  // "Tata Trusts – Individual Medical Grants" surfaced for US individuals,
+  // mis-tagged "TN" on 4+ profiles).
+  const foreignJurisdiction = detectForeignOpportunity(opp)
   if (foreignJurisdiction.foreign) {
-    const reasonText =
-      `Foreign jurisdiction: this program is published by ${foreignJurisdiction.host} ` +
-      `(.${foreignJurisdiction.cctld}) and is administered outside the United States`
+    const reasonText = foreignJurisdiction.host
+      ? `Foreign jurisdiction: this program is published by ${foreignJurisdiction.host} ` +
+        `(.${foreignJurisdiction.cctld}) and is administered outside the United States`
+      : `Foreign funder: ${foreignJurisdiction.funder ?? 'this program'} administers this program ` +
+        'outside the United States'
     reasons.push(reasonText)
     return {
       decision: 'REJECT',
@@ -3768,6 +3803,72 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return {
       decision: 'REJECT',
       explanation: 'This is a Federal Register paperwork/comment notice about a program, not a funding opportunity anyone can apply to.',
+      reasons,
+    }
+  }
+
+  // Lead-generation "scholarships" (owner denylist 2026-08-03: "Portal Sync",
+  // "Pawsitively Smart", "YouGov Voice of the Future") — marketing funnels, not
+  // funding, for any profile type.
+  const leadGenLabel = isLeadGenScholarship(opp)
+  if (leadGenLabel) {
+    reasons.push(`Lead-generation program (${leadGenLabel}) — a marketing funnel, not a funding opportunity`)
+    return {
+      decision: 'REJECT',
+      explanation: `"${leadGenLabel}" is a lead-generation funnel, not a real funding opportunity.`,
+      reasons,
+    }
+  }
+
+  // Institutional pass-through / formula programs (CDBG, ESG, EDA planning,
+  // State Voc-Rehab formula, WIOA allotments, AARP Community Challenge): funds
+  // flow to states/localities/institutions — an INDIVIDUAL can never be the
+  // applicant, whatever topical score the row earns. Owner QA 2026-08-03:
+  // these surfaced as apply-now matches for individual profiles.
+  if (isIndividualLikeProfileType(profileType)) {
+    const passThroughLabel = institutionalPassThroughConflict(opp)
+    if (passThroughLabel) {
+      reasons.push(`Institutional pass-through program (${passThroughLabel}) — individuals cannot apply directly`)
+      return {
+        decision: 'REJECT',
+        explanation: `${passThroughLabel} funding flows to states, localities, and institutions — an individual or household cannot apply directly.`,
+        reasons,
+      }
+    }
+  }
+
+  // Government-agency cooperative programs (the "Vermilion Church at 100% for
+  // Feral Swine Eradication" class): only a government agency can hold these.
+  // Fires ONLY when the profile's type resolves (MISSING = NEUTRAL).
+  const agencyRoot = isPublicAgencyLikeProfileType(profileType)
+  if (agencyRoot === false) {
+    const agencyLabel = agencyOnlyProgramConflict(opp)
+    if (agencyLabel) {
+      reasons.push(`Government-agency program (${agencyLabel}) — this profile is not a government agency`)
+      return {
+        decision: 'REJECT',
+        explanation: `${agencyLabel} is a federal cooperative program for government agencies; this profile cannot be the applicant.`,
+        reasons,
+      }
+    }
+  }
+
+  // Profession-locked awards (the recurring "Grants to USA Professional
+  // Dancers" for a Kentucky farmer class). Both sides must positively resolve —
+  // the row must be locked to exactly ONE recognised profession in its own
+  // IDENTITY text, and the profile must declare a DIFFERENT recognised
+  // profession in curated fields. Unknown either side → the gate says nothing.
+  const professionSections = fullSections(sections, prof)
+  const professions = resolveProfileProfessions(professionSignalTextFromSections(professionSections))
+  const professionVerdict = assessProfessionEligibility({
+    itemText: opportunityLockText(opp),
+    professions,
+  })
+  if (professionVerdict.ineligible) {
+    reasons.push(`Profession-restricted program — restricted to ${professionVerdict.lock}, which this profile does not practise`)
+    return {
+      decision: 'REJECT',
+      explanation: `This program is restricted to the ${professionVerdict.lock} profession; the profile's declared field is different.`,
       reasons,
     }
   }

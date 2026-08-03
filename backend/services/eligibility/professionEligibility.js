@@ -105,6 +105,22 @@ export const PROFESSION_DEFS = Object.freeze([
     field: /\b(cosmetology|cosmetologist|barber|esthetician)\b/i,
     lock: /\b(cosmetology|cosmetologist|barbering|beauty school)\b/i,
   },
+  // 2026-08-03 owner QA regression fixture: "Grants to USA Professional
+  // Dancers" (funder names "Dancers' Fund" / "Dancers' Resource") recurred for
+  // a Kentucky farmer/senior. Both defs below are needed for the both-sides
+  // rule to fire: the award locks to `dance`, and the profile's curated
+  // occupation ("farmer") must itself resolve to a recognised field — an
+  // unrecognised field is deliberately never rejected.
+  {
+    key: 'dance',
+    field: /\b(dancer|dancers|dance major|dance student|choreographer|choreography|ballet)\b/i,
+    lock: /\b(professional dancers?|dancers?['’]? (?:fund|resource|alliance)|career transitions? for dancers)\b/i,
+  },
+  {
+    key: 'farming',
+    field: /\b(farmer|farming|rancher|ranching|agricultural producer|crop producer|livestock producer)\b/i,
+    lock: /\b(beginning farmers? and ranchers?|young farmers? coalition|farmers?['’]? market promotion|future farmers of america)\b/i,
+  },
 ])
 
 /** Curated profile section fields that legitimately declare a profession/field

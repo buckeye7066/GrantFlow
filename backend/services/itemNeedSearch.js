@@ -62,6 +62,9 @@ import { computeMatchDecision } from './matchEngine.js'
 import { searchNeedWebLeads } from './shared/liveWebSearch.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
 import { isPointerKind } from '../config/opportunityKindClasses.js'
+import { classifyFundingResult, isRelevantGeo, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
+import { declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
+import { cleanExtractedText } from '../utils/htmlTextHygiene.js'
 import { isWebDiscoveryEnabled } from './crawlerOsService.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -456,11 +459,26 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
     return { results: [], scanned: 0, terms, refusedNoPhrase: 0, refusedByEngine: 0, liveScored: 0, error: err?.message ?? String(err) }
   }
 
+  // The SAME junk/country/state chain the crawler results path runs (owner QA
+  // 2026-08-03): a STORED verdict predating the engine gates must not smuggle
+  // an SEC rule change, a lead-gen "scholarship", or a Tata-Trusts row into an
+  // item answer. MISSING = NEUTRAL: a profile with no resolvable states loses
+  // nothing on the geo leg.
+  const profileStates = Array.isArray(profileContext?.signals?.states)
+    ? profileContext.signals.states.filter(Boolean)
+    : null
+
   const results = []
   let refusedNoPhrase = 0
   let refusedByEngine = 0
+  let refusedNotAGrant = 0
+  let refusedGeo = 0
   let liveScored = 0
   for (const row of rows ?? []) {
+    const junkVerdict = classifyFundingResult(row)
+    if (junkVerdict.bucket === RESULT_BUCKETS.NOT_A_GRANT) { refusedNotAGrant += 1; continue }
+    const geoVerdict = isRelevantGeo(row, { states: profileStates })
+    if (!geoVerdict.relevant) { refusedGeo += 1; continue }
     const rowCategories = parseArrayField(row.categories)
     const needMatch = scoreNeedMatch(
       { name: row.title, description: row.description, categories: rowCategories },
@@ -500,11 +518,14 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
     results.push({
       endorsing_phrase: phrase,
       id: row.id,
-      title: row.title,
-      sponsor: row.sponsor,
-      description: row.description,
+      title: cleanExtractedText(row.title),
+      sponsor: cleanExtractedText(row.sponsor),
+      description: cleanExtractedText(row.description),
       url: row.application_url || row.source_url || null,
-      state: row.state,
+      // The row's OWN declared state wins over the crawl-stamped column —
+      // `fo.state` is stamped by whichever profile's crawl found the row (the
+      // "Ohio RDA – TN" / "Tata Trusts – TN" display class).
+      state: declaredStateFromTitle(row) ?? row.state,
       amount_min: row.amount_min,
       amount_max: row.amount_max,
       deadline: row.deadline,
@@ -530,7 +551,16 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
     })
   }
   results.sort(byItemRelevance)
-  return { results, scanned: (rows ?? []).length, terms, refusedNoPhrase, refusedByEngine, liveScored }
+  return {
+    results,
+    scanned: (rows ?? []).length,
+    terms,
+    refusedNoPhrase,
+    refusedByEngine,
+    refusedNotAGrant,
+    refusedGeo,
+    liveScored,
+  }
 }
 
 /**
@@ -566,6 +596,8 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
   let refusedNoPhrase = 0
   let refusedNoFundingIntent = 0
   let refusedNonFundingHost = 0
+  let refusedNotAGrant = 0
+  let refusedGeo = 0
   for (const lead of lane.opportunities ?? []) {
     // An encyclopedia / dictionary / job board / marketplace page is never the
     // funder of an item — refuse on the lead's own host before spending the
@@ -573,6 +605,13 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
     // all shipped as "program" leads in the 2026-08-03 forensic-item audit).
     const junkHost = nonFundingLeadHost(lead.url)
     if (junkHost) { refusedNonFundingHost += 1; continue }
+    // The SAME junk + country chain as the crawler results path: a UK "LA
+    // Flex" energy-grants page or a Federal Register notice found live is not
+    // an item answer for a US profile.
+    const junkVerdict = classifyFundingResult(lead)
+    if (junkVerdict.bucket === RESULT_BUCKETS.NOT_A_GRANT) { refusedNotAGrant += 1; continue }
+    const geoVerdict = isRelevantGeo(lead, { states: null })
+    if (!geoVerdict.relevant) { refusedGeo += 1; continue }
     const needMatch = scoreNeedMatch(
       { name: lead.title, description: lead.description, categories: lead.categories || [] },
       expanded,
@@ -611,6 +650,8 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
     refusedNoPhrase,
     refusedNoFundingIntent,
     refusedNonFundingHost,
+    refusedNotAGrant,
+    refusedGeo,
     error: lane.debug?.error ?? null,
   }
 }

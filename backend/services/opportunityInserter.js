@@ -13,6 +13,7 @@ import { assessReality } from './opportunityRealityGate.js'
 import { enrichOpportunityVerification } from './verification/index.js'
 import { normalizeOpportunity } from './opportunityNormalizer.js'
 import { resolveOpportunityAmounts } from './awardAmountExtractor.js'
+import { cleanExtractedText } from '../utils/htmlTextHygiene.js'
 import { createLogger } from '../utils/logger.js'
 import {
   evaluateProvenance,
@@ -390,6 +391,29 @@ function normalizeDateLikeOrNull(value) {
 }
 
 export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
+  // TEXT HYGIENE at the single ingest choke point (owner QA 2026-08-03):
+  // decode HTML entities ("&ndash;", "&amp;", "&nbsp;"), strip control chars,
+  // collapse whitespace on the identity/display fields BEFORE any gate reads
+  // them — so phrase gates match the words a human sees and no persisted title
+  // ever renders a raw entity again.
+  if (opportunity && typeof opportunity === 'object') {
+    const cleanedTitle = cleanExtractedText(opportunity.title)
+    const cleanedSponsor = cleanExtractedText(opportunity.sponsor)
+    const cleanedDescription = cleanExtractedText(opportunity.description)
+    if (
+      cleanedTitle !== opportunity.title ||
+      cleanedSponsor !== opportunity.sponsor ||
+      cleanedDescription !== opportunity.description
+    ) {
+      opportunity = {
+        ...opportunity,
+        title: cleanedTitle,
+        sponsor: cleanedSponsor,
+        description: cleanedDescription,
+      }
+    }
+  }
+
   // Resolve funder-name drift aliases (funder/funder_name/organization/agency
   // → canonical `sponsor`) BEFORE validation, so a producer that used the
   // "wrong" name neither fails missing_sponsor validation nor persists NULL.
