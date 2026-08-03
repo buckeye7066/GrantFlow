@@ -119,6 +119,24 @@ function pick(obj, paths) {
   return undefined
 }
 
+/**
+ * Org profiles are first-class fill sources (owner addendum 2026-08-03): a
+ * ministry/nonprofit answering a portal's "tell us about your organization /
+ * describe" box should get its OWN narrative — mission + programs — not a
+ * blank because it has no student essay. Composed only when present; the
+ * personal-essay paths below still win for individual profiles.
+ */
+function readOrgNarrative(profile) {
+  const mission = pick(profile, [
+    'narrative.mission_statement', 'organization_details.mission_statement', 'mission_statement',
+  ])
+  const programs = pick(profile, [
+    'narrative.programs_description', 'organization_details.programs_description',
+  ])
+  const joined = [mission, programs].filter(Boolean).join('\n\n')
+  return joined || undefined
+}
+
 function readProfileValues(profile) {
   const apps = pick(profile, ['university_applications.applications']) || []
   const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : {}
@@ -145,7 +163,8 @@ function readProfileValues(profile) {
     household_income: pick(profile, ['financial_information.household_income', 'household.income', 'household_income']),
     household_size:   pick(profile, ['financial_information.household_size', 'household.size', 'household_size']),
     fafsa_efc:        pick(profile, ['financial_information.fafsa_efc', 'financial_information.sai']),
-    essay:            pick(profile, ['essays.primary', 'essays.personal_statement', 'personal_statement']),
+    essay:            pick(profile, ['essays.primary', 'essays.personal_statement', 'personal_statement'])
+                        ?? readOrgNarrative(profile),
     goals:            pick(profile, ['essays.goals', 'goals', 'career_goals']),
   }
 }
@@ -523,6 +542,20 @@ function extractConfirmationReference(text) {
   return null
 }
 
+/**
+ * Truthfulness of a submit click (owner addendum 2026-08-03): "clicked
+ * submit" and "portal confirmed receipt" are different facts. A run may only
+ * claim status=submitted with captured evidence — a portal-issued reference
+ * (confirmed receipt) or at least the final-page screenshot (submit completed,
+ * receipt to be verified). No evidence at all → the caller must report a
+ * blocker, never a submission. Pure function — unit-tested directly.
+ */
+function assessSubmissionEvidence(conf) {
+  if (conf?.reference) return { ok: true, confirmation_evidence: 'portal_reference' }
+  if (conf?.screenshot_path) return { ok: true, confirmation_evidence: 'screenshot_only' }
+  return { ok: false, confirmation_evidence: 'none' }
+}
+
 async function captureConfirmation(page, screenshotsDir) {
   const url = (() => { try { return page.url() } catch { return null } })()
   const bodyText = await page.locator('body').innerText({ timeout: 2500 }).catch(() => '')
@@ -790,9 +823,25 @@ export async function runAutopilot({
           return { status: 'blocked', blocker_kind: 'validation', blocker_detail: errors.slice(0, 5).join(' | '), filled_fields: filled, pages_visited: pagesVisited, trace }
         }
         const conf = await captureConfirmation(page, screenshotsRoot)
-        trace.push({ step: 'submitted', detail: { from: beforeUrl, to: conf.url, confirmation: conf.reference } })
+        const evidence = assessSubmissionEvidence(conf)
+        if (!evidence.ok) {
+          // Submit was clicked but NO evidence could be captured (no
+          // reference, no screenshot). Refuse to claim a submission — hand
+          // the run to a human to verify receipt on the portal.
+          trace.push({ step: 'submit_unconfirmed', detail: { from: beforeUrl, to: conf.url } })
+          return {
+            status: 'blocked',
+            blocker_kind: 'submit_unconfirmed',
+            blocker_detail: 'Hamilton completed the portal\'s submit step, but could not capture any confirmation evidence (no reference number and no final-page screenshot). Verify receipt on the portal before treating this application as submitted.',
+            submit_clicked: true,
+            filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+          }
+        }
+        trace.push({ step: 'submitted', detail: { from: beforeUrl, to: conf.url, confirmation: conf.reference, confirmation_evidence: evidence.confirmation_evidence } })
         return {
           status: 'submitted',
+          submit_clicked: true,
+          confirmation_evidence: evidence.confirmation_evidence,
           confirmation_reference: conf.reference,
           confirmation_screenshot_path: conf.screenshot_path,
           filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
@@ -881,4 +930,5 @@ export const _internal = {
   detectGate, attemptLogin,
   extractConfirmationReference,
   actionableSubmitButtons,
+  assessSubmissionEvidence,
 }
