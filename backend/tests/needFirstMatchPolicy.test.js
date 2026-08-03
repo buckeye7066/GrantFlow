@@ -202,7 +202,11 @@ describe('need-first match policy', () => {
     expect(policy.reasons.join(' ')).toMatch(/child or caregiver/i)
   })
 
-  it('rejects a direct source supported only by geography and applicant type', () => {
+  it('RETAINS (does not discard) an unanchored, applicant-type-compatible direct source as a low-scored REVIEW', () => {
+    // Mission rule: a missing purpose PHRASE is a missing signal, not an
+    // exclusion — attributes reduce score, they do not eliminate results. A
+    // generic national grant the student is plausibly eligible for must survive
+    // as a low REVIEW (recall / zero-result recovery), not be hard-rejected.
     const policy = evaluateNeedFirstMatchPolicy({
       profileContext: studentContext(),
       profileNorm: studentNorm,
@@ -219,8 +223,52 @@ describe('need-first match policy', () => {
     })
 
     expect(policy.purposeAnchor).toBe(false)
-    expect(policy.decision).toBe('REJECT')
+    expect(policy.decision).toBe('REVIEW')
+    expect(policy.reviewOnly).toBe(true)
     expect(policy.scoreCap).toBeLessThan(7)
+  })
+
+  it('STILL hard-rejects an unanchored applicant-type category error (student scholarship for a non-student)', () => {
+    const policy = evaluateNeedFirstMatchPolicy({
+      profileContext: {
+        profile: { id: 'org-1', primary_type: 'public_school' },
+        sections: { organization_details: { organization_type: 'public_school' } },
+      },
+      profileNorm: { entityType: 'public_school', isStudent: false, needCategories: [] },
+      opportunity: {
+        title: 'National Student Merit Scholarship',
+        sponsor: 'Generic Foundation',
+        opportunity_kind: 'SCHOLARSHIP',
+      },
+      dataPointEval: matched({ kind: 'academic', value: 'school', credit: 1 }),
+      matchedNeeds: [],
+    })
+
+    expect(policy.purposeAnchor).toBe(false)
+    expect(policy.decision).toBe('REJECT')
+  })
+
+  it('NEED_FIRST_RETAIN_UNANCHORED=0 restores the prior hard-reject of unanchored sources', () => {
+    const prev = process.env.NEED_FIRST_RETAIN_UNANCHORED
+    process.env.NEED_FIRST_RETAIN_UNANCHORED = '0'
+    try {
+      const policy = evaluateNeedFirstMatchPolicy({
+        profileContext: studentContext(),
+        profileNorm: studentNorm,
+        opportunity: {
+          title: 'National Opportunity Program',
+          sponsor: 'Generic Funder',
+          opportunity_kind: 'DIRECT_GRANT',
+        },
+        dataPointEval: matched({ kind: 'applicant_type', value: 'student', credit: 0.5 }),
+        matchedNeeds: [],
+      })
+      expect(policy.purposeAnchor).toBe(false)
+      expect(policy.decision).toBe('REJECT')
+    } finally {
+      if (prev === undefined) delete process.env.NEED_FIRST_RETAIN_UNANCHORED
+      else process.env.NEED_FIRST_RETAIN_UNANCHORED = prev
+    }
   })
 
   it('allows a scholarship anchored by academic and financial facts', () => {
