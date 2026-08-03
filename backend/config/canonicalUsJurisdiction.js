@@ -8,6 +8,7 @@
  * Missing evidence is neutral.
  */
 
+import { declaredStateFromTitle } from './stateTitleDeclaration.js'
 import { isValidState, normalizeState } from '../utils/stateNormalization.js'
 
 const URL_FIELDS = Object.freeze([
@@ -110,12 +111,12 @@ export function canonicalUsFunderJurisdiction(row = {}) {
 
 /**
  * Resolve the state a user-facing or matching surface should trust.
- * Priority is objective canonical funder evidence, then an optional exact state
- * declaration supplied by the canonical title parser, then the stored state.
- * A canonical funder can therefore repair a crawl-stamped contradiction such as
- * CPCC/OH being tagged Tennessee; ordinary rows preserve their scope unchanged.
+ * Priority is objective canonical funder evidence, then the exact machine-minted
+ * title declaration, then the stored state. A canonical funder can therefore
+ * repair a crawl-stamped contradiction such as CPCC/OH being tagged Tennessee;
+ * ordinary rows preserve their scope unchanged.
  */
-export function resolvedUsOpportunityJurisdiction(row = {}, { declaredState = null } = {}) {
+export function resolvedUsOpportunityJurisdiction(row = {}) {
   const canonical = canonicalUsFunderJurisdiction(row)
   if (canonical) {
     return {
@@ -129,7 +130,7 @@ export function resolvedUsOpportunityJurisdiction(row = {}, { declaredState = nu
     }
   }
 
-  const declared = normalizeState(declaredState)
+  const declared = declaredStateFromTitle(row)
   if (declared && isValidState(declared)) {
     return {
       state: declared,
