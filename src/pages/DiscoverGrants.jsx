@@ -90,6 +90,10 @@ async function fetchCatalogMatches(profileId, minMatchScore) {
     strict: '1',
     allow_relax: '0',
     relax: '0',
+    // Keep pipeline members VISIBLE but flagged (`already_in_pipeline: true`)
+    // instead of silently dropping them — the card renders "Already in
+    // pipeline" so the operator sees why an item isn't addable (#5).
+    pipeline: 'annotate',
   })
   return apiFetch(`/api/matching/profile/${profileId}/opportunities?${params.toString()}`)
 }
@@ -1137,6 +1141,9 @@ export default function DiscoverGrants() {
     let attempted = 0
 
     for (const opp of uniqueOpportunities) {
+      // Server-flagged pipeline members are never re-added (they'd only
+      // round-trip to an `already` answer).
+      if (opp?.already_in_pipeline) { alreadyCount += 1; continue }
       const score = Number(opp.match_score ?? opp.match ?? 0);
       if (Number.isFinite(score) && score >= AUTO_ADD_SCORE) {
         attempted += 1

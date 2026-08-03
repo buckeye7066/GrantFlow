@@ -207,8 +207,13 @@ function tokenSortedKey(value) {
     .join(' ');
 }
 
-/** Strip query/fragment/trailing slash so trivially different URLs collapse. */
-function normalizeUrlForId(url) {
+/**
+ * Strip query/fragment/trailing slash so trivially different URLs collapse.
+ * Exported: this is the canonical identity's URL tier — consumers comparing
+ * "same real-world opportunity by URL" (pipeline-vs-discovery dedupe) must use
+ * THIS normalization, not a second home-grown one.
+ */
+export function normalizeUrlForId(url) {
   if (!url) return '';
   try {
     const u = new URL(String(url));

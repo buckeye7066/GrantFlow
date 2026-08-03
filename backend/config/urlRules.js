@@ -289,6 +289,158 @@ export function isPlaceholderText(text) {
   return PLACEHOLDER_TEXT_PATTERNS.some((p) => p.test(text))
 }
 
+// ── Tenant-slug portal platforms + funder plausibility ──────────────────
+//
+// Multi-tenant scholarship/application platforms where the FIRST hostname
+// label is the INSTITUTION's tenant slug (`<school>.academicworks.com`,
+// `<school>.scholarships.ngwebsolutions.com`). On these hosts the slug IS an
+// identity claim about which institution the portal belongs to — so a portal
+// URL whose slug cannot be explained by the funder's own name is positive
+// evidence of a WRONG-INSTITUTION link (the cpcc-for-Cleveland-State class,
+// live walkthrough 2026-08-03: an opportunity attributed to "Cleveland State
+// Community College" (TN) carried https://cpcc.academicworks.com/ — Central
+// Piedmont Community College, NC).
+//
+// Deliberately conservative: hosts NOT on this list are 'undecidable', never
+// 'implausible' — a funder's own domain routinely shares no letters with its
+// legal name (olemiss.edu / University of Mississippi, tn.gov / Tennessee
+// Student Assistance Corporation), so flagging outside tenant platforms would
+// manufacture false alarms. This is the Yana lead-contact posture: only a
+// POSITIVE mismatch is acted on; silence is not a verdict.
+
+export const TENANT_SLUG_PORTAL_PLATFORMS = Object.freeze([
+  'academicworks.com',
+  'awardspring.com',
+  'communityforce.com',
+  'scholarshipuniverse.com',
+  'smapply.io',
+  'smapply.org',
+  'fluidreview.com',
+  'ngwebsolutions.com',
+])
+
+/**
+ * If `url` lives on a tenant-slug portal platform, return
+ * `{ platform, slug }`; otherwise null. The bare platform host (no tenant
+ * label) returns `{ platform, slug: '' }`.
+ */
+export function tenantPortalSlug(url) {
+  const host = extractHostname(url)
+  if (!host) return null
+  for (const platform of TENANT_SLUG_PORTAL_PLATFORMS) {
+    if (host === platform) return { platform, slug: '' }
+    if (host.endsWith('.' + platform)) {
+      const prefix = host.slice(0, -(platform.length + 1))
+      const slug = prefix.split('.')[0] || ''
+      return { platform, slug }
+    }
+  }
+  return null
+}
+
+/** Words of a funder/institution name, lowercased, order preserved. */
+function funderNameWords(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+/**
+ * Can `slug` be read as an ordered concatenation of PREFIXES of the funder's
+ * own name words (words skippable, each contributing >= 1 leading char)?
+ *
+ * This is the whole-name discipline of the Yana lead-contact rule
+ * (enforceLeadContactPlausibility, CLAUDE.md invariants table) applied to a
+ * tenant slug: identity is argued from the WHOLE name, never from one shared
+ * word. A legitimate tenant slug is an abbreviation of the institution's own
+ * name — an initialism ("mtsu" ← Middle Tennessee State University), a
+ * prefix blend ("clscc" ← CLeveland State Community College), or the name
+ * itself ("clevelandstatecc"). "cpcc" cannot be decomposed from "Cleveland
+ * State Community College" (no word starts with p), which is exactly the
+ * wrong-institution signature. Errs toward 'plausible' on coincidence
+ * (a false "plausible" keeps today's behavior; a false "implausible" would
+ * blank a real link).
+ */
+export function slugMatchesFunderName(slug, funderName) {
+  const s = String(slug || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  if (!s) return false
+  const words = funderNameWords(funderName)
+  if (!words.length) return false
+  // Whole-name containment fast path: slug contains a distinctive full word.
+  // (Kept minimal — the decomposition below already covers whole words.)
+  // dp[i] = set of word indexes usable next, tracked as: can slug[0..i) be
+  // decomposed using words[0..j)? Standard ordered-subsequence prefix DP.
+  const n = s.length
+  const m = words.length
+  // reachable[i][j] = slug[0..i) decomposable consuming words up to index j (exclusive)
+  const reachable = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(false))
+  reachable[0][0] = true
+  for (let i = 0; i <= n; i++) {
+    for (let j = 0; j <= m; j++) {
+      if (!reachable[i][j]) continue
+      // Skip word j entirely.
+      if (j < m) reachable[i][j + 1] = true
+      // Consume a prefix (>= 1 char) of word j at slug position i.
+      if (i < n && j < m) {
+        const w = words[j]
+        const maxLen = Math.min(w.length, n - i)
+        for (let len = 1; len <= maxLen; len++) {
+          if (s.startsWith(w.slice(0, len), i)) {
+            reachable[i + len][j + 1] = true
+          } else {
+            break // prefixes grow char-by-char; first mismatch ends the run
+          }
+        }
+      }
+    }
+  }
+  for (let j = 0; j <= m; j++) {
+    if (reachable[n][j]) return true
+  }
+  return false
+}
+
+// Name TOKENS that make a funder name an INSTITUTION-identity claim. A donor
+// name ("Adams Family Foundation", "Bank of America", "Hoyer Law Group")
+// legitimately lives on a SCHOOL's tenant portal — prod audit 2026-08-03
+// found 118 tenant-platform catalog rows and the donor-sponsored majority are
+// CORRECT links — so a slug mismatch against a donor name proves nothing.
+// Only a funder that names an institution (token-level: 'college',
+// 'university', … — "NursingColleges.com" does NOT tokenize to 'college')
+// can falsify a tenant slug.
+const INSTITUTION_NAME_TOKENS = new Set([
+  'college', 'colleges', 'university', 'universities', 'institute', 'academy', 'seminary', 'conservatory',
+])
+
+/** Does this funder name claim to BE an institution (vs a donor/program)? */
+export function funderNameIsInstitution(funderName) {
+  return funderNameWords(funderName).some((w) => INSTITUTION_NAME_TOKENS.has(w))
+}
+
+/**
+ * Does this portal URL plausibly belong to the named funder/institution?
+ *
+ * Returns 'plausible' | 'implausible' | 'undecidable'.
+ *  - 'implausible' ONLY on positive evidence: the URL is a tenant-slug
+ *    platform host, the funder name is itself an INSTITUTION name, and the
+ *    slug cannot be explained by that whole name (see slugMatchesFunderName).
+ *    That is the cpcc-for-Cleveland-State signature: two institution
+ *    identities that disagree.
+ *  - Anything else — non-tenant host, bare platform host, missing funder
+ *    name, donor-named funder on a school portal — is 'undecidable'
+ *    (we learned nothing; never treat that as a denial).
+ */
+export function portalUrlFunderPlausibility(url, funderName) {
+  const tenant = tenantPortalSlug(url)
+  if (!tenant || !tenant.slug) return 'undecidable'
+  if (!String(funderName || '').trim()) return 'undecidable'
+  if (slugMatchesFunderName(tenant.slug, funderName)) return 'plausible'
+  return funderNameIsInstitution(funderName) ? 'implausible' : 'undecidable'
+}
+
 /**
  * Pick the best real URL from an opportunity's URL fields.
  * Returns null if no valid URL found.

@@ -55,10 +55,10 @@ export function exportPackage(id, format) {
   })
 }
 
-export function submit(id, method, metadata) {
+export function submit(id, method, metadata, { confirmIncomplete = false } = {}) {
   return apiFetch(`/api/applications/${id}/submit`, {
     method: 'POST',
-    body: JSON.stringify({ method, metadata }),
+    body: JSON.stringify({ method, metadata, confirm_incomplete: confirmIncomplete === true }),
   })
 }
 

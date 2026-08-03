@@ -127,6 +127,73 @@ rules below win.
   `graduate_student` — a live incident disarmed the stage gate this way and
   re-admitted UAB-Blazer-class fellowships for an incoming freshman.
 
+### Apply-flow integrity (2026-08-03 operator walkthrough, Robert 6b3c75ec…)
+
+Four defects found by a live discovery→pipeline→submission walkthrough; the
+rules below are now enforced in code + tests and must not be re-weakened.
+
+- **A submission portal target comes ONLY from the row's own verified links,
+  screened for institution identity** (`resolveVerifiedPortalUrl` +
+  `PORTAL_URL_UNVERIFIED_LABEL` in `backend/apply/applyEngine.js`). Live case:
+  auto-populate shipped `https://cpcc.academicworks.com/` (Central Piedmont
+  CC, **North Carolina**) as the portal for a "Cleveland State Community
+  College" (**Tennessee**) opportunity — the URL sat on the grant/catalog row
+  itself, minted upstream by a 2026-07-28 web_search misattribution.
+  Candidates are application_url/url/source_url (+ the linked catalog row's
+  links); `grants.application_method` is a METHOD vocabulary and is never
+  read as a URL again. Each candidate passes `portalUrlFunderPlausibility`
+  (`backend/config/urlRules.js`): on a TENANT-SLUG platform host
+  (`TENANT_SLUG_PORTAL_PLATFORMS` — `<school>.academicworks.com` etc.) the
+  slug must be explainable by the funder's WHOLE name (ordered-prefix
+  decomposition: initialisms `mtsu`, blends `clscc`, whole names — the Yana
+  lead-contact whole-name rule applied to slugs; `cpcc` fails against
+  "Cleveland State Community College" because no word starts with p).
+  Non-tenant hosts are `undecidable`, NEVER flagged (olemiss.edu/tn.gov
+  class — only a positive mismatch acts). No surviving candidate → portal
+  stays BLANK, labeled "unverified — confirm with funder", a previously
+  stored wrong portal_url is CLEARED on re-populate, and `validateApplication`
+  reds `portal_url_flags`. Guard test:
+  `backend/tests/applyEnginePortalUrlIntegrity.test.js`.
+- **"Mark submitted" is a guarded, honestly-labeled INTERNAL record**
+  (`markSubmitted` checklist guard + `SubmissionAssistant.jsx` copy). It used
+  to be one silent click at "Checklist: 0/6 done". Now: incomplete checklist →
+  409 `CHECKLIST_INCOMPLETE` naming the items unless the caller confirms
+  (`confirm_incomplete`, wired to a hard-confirm panel that lists them); the
+  UI says plainly this records that YOU submitted it yourself and transmits
+  nothing to the funder — distinct from Hamilton auto-submit, which is the
+  feature that actually submits on portals. Hamilton's mirror
+  (`metadata.submitted_by === 'hamilton'`) is EXEMPT by design (it records a
+  portal submission that already happened, evidence-gated per #1105/#1107) and
+  the HTTP route strips that provenance claim from clients. Checklist items
+  are now completable in the UI (`setChecklistItem` finally has a consumer).
+  Guard test: `backend/tests/applicationsSubmitChecklistGuard.test.js`.
+- **Discovery dedupes against the pipeline by the CANONICAL identity, and
+  members are SURFACED, not hidden** (`pipelineExclusion.js` canonical tier +
+  `annotatePipelineMembers`; `?pipeline=annotate` on
+  `/api/matching/profile/:id/opportunities`, used by DiscoverGrants). Live
+  case: pipeline grant "Tennessee Promise — Free Community College" vs
+  addable result "TN Promise Scholarship" — no exact title|funder key lined
+  up. The exclusion index now also carries `canonicalOpportunityKey` tiers
+  (`titleIdentityKey` t: keys; `normalizeUrlForId` u: keys, both exported
+  from `backend/crawler-os/contract.js` — do NOT invent a second identity
+  rule). **The u: tier only decides when the URL is unambiguous on BOTH
+  sides** (≤1 distinct identity carries it) — the `enforceGrantCatalogLink`
+  posture, because shared hubs must never collapse distinct programs
+  (measured in prod 2026-08-03: tn.gov/collegepays serves HOPE + Promise +
+  Lottery; grantwatch.com sits on 282 distinct programs). Annotate mode flags
+  rows `already_in_pipeline` so the card shows WHY it isn't addable; the
+  zero-result recovery ladder no longer bypasses the member filter (Tier B
+  re-canonicalized the PRE-filter list). Guard test:
+  `backend/tests/pipelineExclusionCanonical.test.js`.
+- **Discovery cards are keyed by stable opportunity identity, never by list
+  index** (`SearchResults.jsx` `computeOpportunityKeys`). Index-bearing keys +
+  score re-sorts on poll refetch remounted every card and wiped the local
+  "Added" state — the walkthrough's "4 of 5 clicks did nothing". A
+  `{status:'failed'}` return now always produces feedback (destructive toast
+  + a live "Retry add" button); a server-flagged `already_in_pipeline` row
+  renders disabled from first paint. Guard test:
+  `src/components/discovery/SearchResults.test.jsx`.
+
 ## MIGRATION PARITY — superseding a system requires proving coverage, not just cutover
 
 The 2026-07 crawler-os cutover silently stranded 12+ discovery lanes: the

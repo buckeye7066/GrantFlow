@@ -173,9 +173,33 @@ router.post('/:id/export', async (req, res) => {
 router.post('/:id/submit', async (req, res) => {
   const row = await ensureApplicationAccess(req, res, req.params.id)
   if (!row) return
-  const { method, metadata } = req.body ?? {}
-  const updated = await markSubmitted({ db: req.db, applicationId: row.id, method, metadata })
-  return res.json({ ok: true, application: updated })
+  const { method, metadata, confirm_incomplete: confirmIncomplete } = req.body ?? {}
+  // 'hamilton' is a provenance claim reserved for the autopilot's own
+  // server-side mirror call — an HTTP client may not assert it (it would both
+  // fake provenance and bypass the incomplete-checklist confirm).
+  const cleanMetadata =
+    metadata && typeof metadata === 'object' && String(metadata.submitted_by || '').toLowerCase() === 'hamilton'
+      ? { ...metadata, submitted_by: null }
+      : metadata
+  try {
+    const updated = await markSubmitted({
+      db: req.db,
+      applicationId: row.id,
+      method,
+      metadata: cleanMetadata,
+      confirmIncomplete: confirmIncomplete === true,
+    })
+    return res.json({ ok: true, application: updated })
+  } catch (err) {
+    if (err?.code === 'CHECKLIST_INCOMPLETE') {
+      return res.status(409).json({
+        error: 'CHECKLIST_INCOMPLETE',
+        message: err.message,
+        incomplete_checklist: err.details?.incomplete_checklist ?? [],
+      })
+    }
+    throw err
+  }
 })
 
 router.post('/:id/auto-populate', async (req, res) => {
