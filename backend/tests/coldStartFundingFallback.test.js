@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   buildColdStartFundingFallback,
+  COLD_START_CATALOG_SQL,
   classifyColdStartProfile,
   coldStartProgramFamily,
   familyAllowedForColdStart,
@@ -118,9 +119,7 @@ describe('cold-start funding fallback', () => {
   })
 
   it('filters inactive and hidden rows in SQL before the candidate limit', () => {
-    const sql = String(
-      (await import('../services/matching/coldStartFundingFallback.js')).COLD_START_CATALOG_SQL,
-    )
+    const sql = String(COLD_START_CATALOG_SQL)
     expect(sql).toMatch(/COALESCE\(is_active, TRUE\) = TRUE/i)
     expect(sql).toMatch(/COALESCE\(is_hidden, FALSE\) = FALSE/i)
     expect(sql.indexOf('COALESCE(is_active')).toBeLessThan(sql.indexOf('LIMIT ?'))
