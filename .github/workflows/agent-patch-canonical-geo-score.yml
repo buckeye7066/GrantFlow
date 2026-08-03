@@ -22,14 +22,14 @@ jobs:
           ref: fix/canonical-us-jurisdiction
           fetch-depth: 0
 
-      - name: Patch canonical score path and regression
+      - name: Patch canonical score path
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          engine_path = Path('backend/services/matchEngine.js')
-          text = engine_path.read_text(encoding='utf-8')
+          path = Path('backend/services/matchEngine.js')
+          text = path.read_text(encoding='utf-8')
 
           old_import = "import { detectForeignOpportunity, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'\n"
           new_import = old_import + "import { resolvedUsOpportunityJurisdiction } from '../config/canonicalUsJurisdiction.js'\n"
@@ -37,14 +37,13 @@ jobs:
               raise SystemExit(f'expected exactly one jurisdiction import, found {text.count(old_import)}')
           text = text.replace(old_import, new_import, 1)
 
-          old_geo = """  const oppState = opportunity?.state ?? opportunity?.stateRestriction ?? null
-          const oppZip = opportunity?.geo_zip ?? null
-          const oppCounty = opportunity?.geo_county ?? null
-          const oppIsNational =
-            Boolean(opportunity?.is_national) ||
-            String(oppState || '').toLowerCase() === 'nationwide'
-          """
-          new_geo = """  // Use the same objective jurisdiction authority as the decision gate. A
+          function_start = text.index('function scoreGeoComponent(')
+          start_marker = "  const oppState = opportunity?.state ?? opportunity?.stateRestriction ?? null"
+          end_marker = "    String(oppState || '').toLowerCase() === 'nationwide'"
+          start = text.index(start_marker, function_start)
+          end = text.index(end_marker, start) + len(end_marker)
+
+          replacement = """  // Use the same objective jurisdiction authority as the decision gate. A
           // registered funder/title declaration may repair a crawl-stamped state;
           // ordinary rows retain the legacy stored-state behavior.
           const resolvedOpportunityGeo = resolvedUsOpportunityJurisdiction(opportunity)
@@ -59,106 +58,10 @@ jobs:
           const oppIsNational = hasObjectiveResolvedScope
             ? false
             : (Boolean(opportunity?.is_national) ||
-              String(oppState || '').toLowerCase() === 'nationwide')
-          """
-          if text.count(old_geo) != 1:
-              raise SystemExit(f'expected exactly one scoreGeo block, found {text.count(old_geo)}')
-          text = text.replace(old_geo, new_geo, 1)
-          engine_path.write_text(text, encoding='utf-8')
+              String(oppState || '').toLowerCase() === 'nationwide')"""
 
-          test_path = Path('backend/tests/canonicalUsJurisdiction.test.js')
-          test = test_path.read_text(encoding='utf-8')
-          import_anchor = "import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'\n"
-          score_import = "import { scoreOpportunity } from '../services/matchEngine.js'\n"
-          if score_import not in test:
-              if test.count(import_anchor) != 1:
-                  raise SystemExit('persisted truth import anchor missing or duplicated')
-              test = test.replace(import_anchor, import_anchor + score_import, 1)
-
-          marker = "describe('canonical U.S. geography scoring', () => {"
-          if marker not in test:
-              test += r'''
-
-          describe('canonical U.S. geography scoring', () => {
-            const profileContext = (state) => ({
-              profile: {
-                id: `student-${state.toLowerCase()}`,
-                display_name: `${state} Student`,
-                primary_type: 'student',
-                state,
-                needs: ['education'],
-              },
-              sections: {
-                education: { student_status: true, current_college: 'Example College' },
-              },
-              signals: {
-                location: { state },
-                locations: [{ state }],
-                states: [state],
-                needs: new Set(['education']),
-                applicantTypes: ['student'],
-              },
-            })
-
-            const scoreBreakdown = (result) =>
-              result.match_explain?.scoreBreakdown ?? result.match_explain?.score_breakdown ?? {}
-
-            it('scores canonical CPCC scope as NC instead of the stale TN column', () => {
-              const result = scoreOpportunity(profileContext('NC'), {
-                id: 'cpcc-score',
-                title: 'Central Piedmont Community College Foundation Scholarship',
-                sponsor: 'Central Piedmont Community College',
-                description: 'Scholarship assistance for enrolled students.',
-                application_url: 'https://www.cpcc.edu/financial-aid/scholarships',
-                state: 'TN',
-                is_national: 1,
-                opportunity_type: 'scholarship',
-                categories: ['education', 'scholarship'],
-                eligibility_bullets: ['Eligible enrolled students'],
-              })
-
-              expect(scoreBreakdown(result).geo_factor).toBe(1)
-              expect(result.match_explain?.geography_cascade?.tier ?? result.match_explain?.geo?.tier)
-                .not.toBe('mismatch')
-            })
-
-            it('scores canonical Ohio RDA scope as OH instead of the stale TN column', () => {
-              const result = scoreOpportunity(profileContext('OH'), {
-                id: 'ohio-rda-score',
-                title: 'Ohio RDA Home Repair Assistance',
-                sponsor: 'Ohio Rural Development Agency',
-                description: 'Home repair assistance for eligible Ohio residents.',
-                application_url: 'https://example.gov/ohio-rda/apply',
-                state: 'TN',
-                is_national: 1,
-                opportunity_type: 'program',
-                categories: ['housing'],
-                eligibility_bullets: ['Eligible Ohio residents'],
-              })
-
-              expect(scoreBreakdown(result).geo_factor).toBe(1)
-            })
-
-            it('does not reinterpret an unregistered stored state', () => {
-              const result = scoreOpportunity(profileContext('NC'), {
-                id: 'ordinary-stored-state',
-                title: 'Ordinary Tennessee Scholarship',
-                sponsor: 'Example Foundation',
-                description: 'Scholarship assistance for students.',
-                application_url: 'https://example.org/apply',
-                state: 'TN',
-                is_national: 0,
-                opportunity_type: 'scholarship',
-                categories: ['education', 'scholarship'],
-                eligibility_bullets: ['Eligible students'],
-              })
-
-              expect(scoreBreakdown(result).geo_factor).toBeLessThan(1)
-            })
-          })
-          '''
-          test_path.write_text(test, encoding='utf-8')
-
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding='utf-8')
           Path('.github/workflows/agent-patch-canonical-geo-score.yml').unlink()
           PY
 
@@ -167,6 +70,6 @@ jobs:
         run: |
           git config user.name "GrantFlow Repair Bot"
           git config user.email "actions@users.noreply.github.com"
-          git add backend/services/matchEngine.js backend/tests/canonicalUsJurisdiction.test.js .github/workflows/agent-patch-canonical-geo-score.yml
+          git add backend/services/matchEngine.js .github/workflows/agent-patch-canonical-geo-score.yml
           git commit -m "fix(geo): align numeric scoring with canonical jurisdiction"
           git push origin HEAD:fix/canonical-us-jurisdiction
