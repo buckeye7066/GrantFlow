@@ -108,7 +108,15 @@ export async function probeSearchProviderHealth({ fetchImpl = null, cacheTtlMs =
   const searxngUrl = searxngSearchEndpoint(process.env.SEARXNG_URL)
   const braveKey = String(process.env.BRAVE_SEARCH_API_KEY || '').trim()
   if (!searxngUrl && !braveKey) {
-    return { skipped: true, verdict: 'unconfigured', detail: 'no SEARXNG_URL and no BRAVE_SEARCH_API_KEY set', probed_at: new Date(now()).toISOString(), searxng: null, brave: null }
+    // NOT a skip. "No search backend configured at all" is the single most
+    // actionable search finding — the open-web discovery lane returns ZERO on
+    // every crawl (DuckDuckGo is 202-blocked from datacenter IPs), which is the
+    // largest gap vs. a plain Google search for local/state/foundation funding.
+    // Marking it `skipped` (as this once did) made the crawler.searchProviderHealth
+    // check — whose whole job is "is search alive?" — report GREEN precisely when
+    // search was completely dark, so the owner was never told to set a key. The
+    // only TRUE skip is the test-runner `unknown` path above.
+    return { skipped: false, verdict: 'unconfigured', detail: 'no SEARXNG_URL and no BRAVE_SEARCH_API_KEY set — the open-web discovery lane is DARK (0 web results on every crawl)', probed_at: new Date(now()).toISOString(), searxng: null, brave: null }
   }
 
   const result = {
