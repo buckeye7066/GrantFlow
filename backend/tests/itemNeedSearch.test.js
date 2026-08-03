@@ -683,3 +683,53 @@ describe('the forensic-item audit: RANKING — item relevance dominates profile 
     vi.resetModules()
   })
 })
+
+describe('the item scanner runs the SAME junk/country chain as the crawler results path (owner QA 2026-08-03)', () => {
+  // A STORED verdict must not smuggle junk into an item answer: the match
+  // store is a rolling snapshot and stored ACCEPTs predate the engine gates.
+  const row = (r) => ({
+    categories: '[]', keywords: '[]', opportunity_kind: null,
+    match_decision: 'ACCEPT', matcher_version: 'crawler-os', match_score: 95,
+    ...r,
+  })
+
+  it('refuses a stored-ACCEPT regulatory notice and a foreign-funder row; keeps the real grant', async () => {
+    vi.resetModules()
+    vi.doMock('../services/shared/liveWebSearch.js', () => ({
+      searchNeedWebLeads: async () => ({ opportunities: [], debug: { queries: [], raw: 0 } }),
+    }))
+    const { searchItemNeed } = await import('../services/itemNeedSearch.js')
+    const rows = [
+      row({
+        id: 'sec-notice',
+        title: 'Self-Regulatory Organization; Notice of Filing of a Proposed Rule Change',
+        description: 'Accessibility rule change discussing wheelchair ramp requirements at exchange facilities.',
+      }),
+      row({
+        id: 'tata',
+        title: 'Tata Trusts - Individual Medical Grants',
+        sponsor: 'Tata Trusts',
+        description: 'Medical grants that can fund a wheelchair ramp at home.',
+        state: 'TN', // the owner's live crawl-noise mis-tag
+      }),
+      row({
+        id: 'real',
+        title: 'Home Accessibility Grant - Wheelchair Ramp Installation',
+        sponsor: 'State Independent Living Council',
+        description: 'Funding for wheelchair ramp installation for eligible households.',
+        amount_max: 5000,
+      }),
+    ]
+    const db = { dialect: 'sqlite', prepare: () => ({ all: async () => rows }) }
+    const out = await searchItemNeed(db, {
+      profileId: 'p-lisa',
+      item: 'wheelchair ramp',
+      profileContext: { profile: { id: 'p-lisa', primary_type: 'individual' }, sections: {} },
+    })
+    expect(out.results.map((r) => r.id)).toEqual(['real'])
+    expect(out.lanes.catalog.refused_not_a_grant).toBe(1)
+    expect(out.lanes.catalog.refused_geo).toBe(1)
+    vi.doUnmock('../services/shared/liveWebSearch.js')
+    vi.resetModules()
+  })
+})
