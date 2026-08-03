@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { resetFiltersPreservingProfile } from './ItemFunding.jsx'
+import { resetFiltersPreservingProfile } from './itemFundingState.js'
 
 describe('ItemFunding — reset preserves the selected profile', () => {
   it('keeps profileId across a reset (the "Needs a profile" regression)', () => {

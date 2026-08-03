@@ -233,7 +233,10 @@ export const INSTITUTIONAL_PASS_THROUGH_PATTERNS = Object.freeze([
   { rx: /\bcommunity development block grant\b|\bcdbg\b/i, label: 'CDBG' },
   { rx: /\bemergency solutions grants?\b/i, label: 'Emergency Solutions Grants' },
   { rx: /\beconomic development administration\b.{0,60}\bplanning\b|\beda\b.{0,20}\bplanning (?:program|grants?)\b/i, label: 'EDA planning' },
-  { rx: /\bvocational rehabilitation\b.{0,40}\b(?:state grants?|formula)\b|\bstate vocational rehabilitation\b/i, label: 'State Voc-Rehab formula' },
+  // The FORMULA grant to state agencies only — "State Vocational Rehabilitation
+  // SERVICES" is what an individual actually accesses and must never match
+  // (caught by conditionSpecificFlagGate's counterweight fixture).
+  { rx: /\bvocational rehabilitation\b.{0,40}\b(?:state grants?|formula|allotments?)\b|\bstate grants?\b.{0,40}\bvocational rehabilitation\b/i, label: 'State Voc-Rehab formula' },
   { rx: /\bwioa\b.{0,60}\ballotments?\b|\bworkforce innovation and opportunity act\b.{0,60}\ballotments?\b/i, label: 'WIOA allotments' },
   { rx: /\baarp community challenge\b/i, label: 'AARP Community Challenge' },
 ])

@@ -97,7 +97,7 @@ const MUTATIONS = [
   },
   {
     name: 'M8 frontend reset drops the profile again (pre-fix shape)',
-    file: 'src/pages/ItemFunding.jsx',
+    file: 'src/pages/itemFundingState.js',
     segmentAfter: 'export function resetFiltersPreservingProfile',
     from: 'includeNational: true,',
     to: 'includeNational: true,\n    profileId: "all",',

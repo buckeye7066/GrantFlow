@@ -88,6 +88,7 @@ export function decodeHtmlEntities(value) {
 // Control characters (C0 minus tab/newline handling — whitespace collapse
 // swallows tabs/newlines anyway) + DEL. Built via RegExp constructor so no raw
 // control bytes ever sit in this source file (they got mangled once already).
+// eslint-disable-next-line no-control-regex -- the control range IS the target
 const CONTROL_RX = new RegExp('[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]', 'g')
 
 /**

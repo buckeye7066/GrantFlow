@@ -43,6 +43,7 @@ import { formatReasonText } from "@/utils/reasonText"
 import { createPageUrl } from "@/utils"
 import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
 import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
+import { resetFiltersPreservingProfile } from "./itemFundingState.js"
 
 // Human-readable labels for the applicant type the backend detected from the
 // selected profile. This is what makes the search visibly profile-aware: the
@@ -351,24 +352,6 @@ function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
       </DialogContent>
     </Dialog>
   )
-}
-
-/**
- * Reset the search filters WITHOUT dropping the selected profile.
- *
- * Exported for the guard test: the pre-fix reset wrote `profileId: "all"`,
- * and because the zero-result guidance's "Try broader words" action calls the
- * reset, the selected profile silently reverted to "All profiles" after the
- * first fruitless search — every follow-up then returned 0 with the live web
- * lane reporting "Needs a profile" (owner QA pass, 2026-08-03).
- */
-export function resetFiltersPreservingProfile(prev) {
-  return {
-    ...prev,
-    item: "",
-    state: "all",
-    includeNational: true,
-  }
 }
 
 export default function ItemFunding() {
