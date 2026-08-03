@@ -24,7 +24,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { generateApplicationSections } from '../../backend/apply/applyEngine.js'
+import { generateApplicationSections, buildDefaultSectionsForStyle } from '../../backend/apply/applyEngine.js'
 
 const SECTIONS = [
   { section_key: 'cover_letter', title: 'Cover Letter' },
@@ -136,6 +136,93 @@ test('generateApplicationSections: a single failing section does not block the r
       `other sections should still complete; ${s.section_key} did not`,
     )
   }
+})
+
+test('generateApplicationSections: every LLM prompt carries the ORG profile facts AND the funder\'s own program facts', async () => {
+  // Owner rule: proposals are "tailored to the funding source with the
+  // information from the appropriate profile written at an MBA level" — for
+  // ORG profiles (church/ministry) as much as for students. This pins the
+  // WIRING: every generated section's prompt must contain (a) this org's own
+  // profile facts and (b) this funder's own stated program facts, so a draft
+  // for funder A can argue alignment with A's program instead of boilerplate.
+  const capturedPrompts = []
+  let capturedSystem = null
+  const capturingOpenAI = {
+    chat: {
+      completions: {
+        create: async (body) => {
+          const sys = (body?.messages || []).find((m) => m.role === 'system')
+          const user = (body?.messages || []).find((m) => m.role === 'user')
+          capturedSystem = String(sys?.content || '')
+          capturedPrompts.push(String(user?.content || ''))
+          return { choices: [{ message: { content: 'draft' } }] }
+        },
+      },
+    },
+  }
+
+  const orgGrant = {
+    id: 'g-org',
+    title: 'Community Facilities Improvement Grant',
+    funder: 'Sacred Places Preservation Fund',
+    profile_id: 'p-org',
+  }
+  const orgOpportunity = {
+    id: 'o-org',
+    sponsor: 'Sacred Places Preservation Fund',
+    description: 'Capital grants for repairing historic community-serving religious buildings.',
+    eligibility_text: 'Congregations must demonstrate active community programming open to non-members.',
+    categories: JSON.stringify(['historic_preservation', 'community_facilities']),
+    amount_min: 5000,
+    amount_max: 50000,
+  }
+  const orgProfile = {
+    id: 'p-org',
+    display_name: 'Focus Forward Ministry',
+    primary_type: 'ministry',
+    state: 'OH',
+    sections: {
+      organization_information: { organization_name: 'Focus Forward Ministry', year_founded: 1998 },
+      narrative: { mission: 'Deliver building supplies and repairs to under-resourced neighbors' },
+      programs_services: { focus_areas: ['Building supplies', 'Home repair assistance'] },
+    },
+  }
+
+  const sectionDefs = buildDefaultSectionsForStyle('standard').filter(
+    (s) => s.section_key !== 'submission_instructions' && s.section_key !== 'medical_necessity',
+  )
+  const result = await generateApplicationSections(
+    fakeDb, orgGrant, orgOpportunity, orgProfile, sectionDefs,
+    { openaiOverride: capturingOpenAI, totalBudgetMs: 10_000 },
+  )
+
+  assert.equal(capturedPrompts.length, sectionDefs.length, 'every LLM section must produce one prompt')
+  for (const s of sectionDefs) {
+    assert.ok(result[s.section_key], `${s.section_key} must produce content`)
+  }
+  for (const prompt of capturedPrompts) {
+    // (a) the org's own profile facts
+    assert.match(prompt, /Focus Forward Ministry/, 'org name must reach the prompt')
+    assert.match(prompt, /building supplies/i, 'org mission/programs must reach the prompt')
+    // (b) the funder's own stated program facts
+    assert.match(prompt, /Sacred Places Preservation Fund/, 'funder name must reach the prompt')
+    assert.match(prompt, /historic community-serving religious buildings/, "funder's program description must reach the prompt")
+    assert.match(prompt, /active community programming open to non-members/, "funder's stated eligibility must reach the prompt")
+    assert.match(prompt, /historic_preservation/, "funder's focus areas must reach the prompt")
+    assert.match(prompt, /5000\s*-\s*\$50000|5000.*50000/, "funder's stated award range must reach the prompt")
+  }
+  // MBA register + per-funder tailoring rule live in the ONE system prompt and
+  // must not be overridden by a generic tone instruction.
+  assert.match(capturedSystem, /MBA/, 'system prompt must carry the MBA register')
+  assert.match(capturedSystem, /TAILOR TO THE FUNDER/, 'system prompt must carry the tailoring rule')
+  assert.match(capturedSystem, /\[review: confirm funder priority\]/, 'honest placeholder rule must be present')
+})
+
+test('generateApplicationSections: buildDefaultSectionsForStyle import sanity', () => {
+  // The test above filters the standard shape; keep a tripwire that the shape
+  // still holds the seven org sections it filters from.
+  const keys = buildDefaultSectionsForStyle('standard').map((s) => s.section_key)
+  assert.equal(keys.length, 7)
 })
 
 test('generateApplicationSections: hung section is aborted by the wall-clock budget', async () => {

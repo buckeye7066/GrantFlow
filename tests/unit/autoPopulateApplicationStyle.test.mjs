@@ -293,3 +293,219 @@ test('no_application style produces exactly one explanatory section, no LLM call
   assert.equal(Object.keys(result).filter((k) => result[k]).length, 1)
   assert.match(result.no_application_required, /does not accept|no application/i)
 })
+
+// ---------------------------------------------------------------------------
+// scholarship style — the DECLARED opportunity kind drives the section shape
+// ---------------------------------------------------------------------------
+// Operator-reported regression these tests pin (2026-08-03): the HOPE
+// Scholarship and an AAFS scholarship draft on a student profile both received
+// the SAME 7-section ORGANIZATIONAL grant-proposal template (Budget
+// Justification, Evaluation Plan, Project Narrative...). A student scholarship
+// is a different document shape — personal statement/essay, academic
+// background, financial need, activities & leadership — and a funder reading a
+// scholarship essay slot will never read a "Budget Justification".
+//
+// Shape selection keys on the opportunity row's own DECLARED kind
+// (funding_opportunities.opportunity_kind = 'SCHOLARSHIP', the canonical
+// crawler-os kind, or the declared opportunity_type = 'scholarship' column).
+// A row that declares nothing keeps the standard default — silence is not a
+// denial, and a title WORD alone must never flip the shape (the #937
+// one-shared-word class).
+
+test('a declared SCHOLARSHIP opportunity gets the scholarship shape, never the 7-section grant proposal', () => {
+  // The exact operator shape: a state scholarship whose sponsor is not a
+  // university, so none of the auto_fafsa heuristics fire.
+  const grant = {
+    funder: 'Tennessee Student Assistance Corporation',
+    title: 'Tennessee HOPE Scholarship',
+  }
+  const opportunity = { opportunity_kind: 'SCHOLARSHIP' }
+
+  const style = classifyApplicationStyle(grant, opportunity)
+  assert.equal(style, 'scholarship')
+
+  const keys = buildDefaultSectionsForStyle(style).map((s) => s.section_key)
+  assert.ok(
+    !keys.includes('budget_justification'),
+    'a scholarship application must NOT ship a Budget Justification',
+  )
+  assert.ok(!keys.includes('evaluation_plan'), 'no Evaluation Plan for a scholarship')
+  assert.ok(!keys.includes('project_narrative'), 'no Project Narrative for a scholarship')
+  assert.ok(keys.includes('personal_statement'), 'must include a personal statement / essay')
+  assert.ok(keys.includes('academic_background'), 'must include academic background')
+  assert.ok(keys.includes('financial_need_statement'), 'must include a financial need statement')
+  assert.ok(keys.includes('activities_leadership'), 'must include activities & leadership')
+  assert.ok(keys.includes('organization_background'), 'must include applicant background')
+  assert.ok(keys.includes('submission_instructions'), 'must include submission instructions')
+})
+
+test('declared kind is case-insensitive and the declared opportunity_type column also counts', () => {
+  assert.equal(
+    classifyApplicationStyle({}, { opportunity_kind: 'scholarship' }),
+    'scholarship',
+    'lower-case crawler rows must classify identically (prod stores both casings)',
+  )
+  assert.equal(
+    classifyApplicationStyle({}, { opportunity_type: 'scholarship' }),
+    'scholarship',
+    'the declared opportunity_type column is a declaration too',
+  )
+})
+
+test('explicit application_method still wins over a declared scholarship kind', () => {
+  assert.equal(
+    classifyApplicationStyle(
+      { application_method: 'nomination' },
+      { opportunity_kind: 'SCHOLARSHIP' },
+    ),
+    'nomination',
+  )
+})
+
+test('an UNDECLARED kind keeps the standard default — a title word alone never flips the shape', () => {
+  // The AAFS shape: "Scholarship" in the title, non-university sponsor,
+  // nothing declared on the opportunity row. Silence is not a denial: the
+  // shape stays standard until the row declares its kind.
+  const grant = {
+    funder: 'American Academy of Forensic Sciences',
+    title: 'AAFS Forensic Science Scholarship',
+  }
+  assert.equal(classifyApplicationStyle(grant, {}), 'standard')
+  assert.equal(classifyApplicationStyle(grant, null), 'standard')
+
+  const keys = buildDefaultSectionsForStyle('standard').map((s) => s.section_key)
+  assert.ok(keys.includes('budget_justification'), 'org/program grants keep the 7-section shape')
+})
+
+test('a non-scholarship declared kind does not get the scholarship shape', () => {
+  assert.equal(classifyApplicationStyle({}, { opportunity_kind: 'DIRECT_GRANT' }), 'standard')
+  assert.equal(classifyApplicationStyle({}, { opportunity_kind: 'PROGRAM' }), 'standard')
+})
+
+// ---------------------------------------------------------------------------
+// scholarship style — second trigger: individual profile + scholarship-titled
+// opportunity (the operator's two REAL prod rows declare no scholarship kind)
+// ---------------------------------------------------------------------------
+// Measured read-only in prod 2026-08-03: the AAFS draft's linked opportunity
+// declares opportunity_kind '' / opportunity_type 'grant' (a crawler DEFAULT,
+// `opp.opportunity_type || 'grant'`), and the HOPE draft's declares
+// 'DIRECT_GRANT' / ''. Declared-kind alone therefore cannot reach either
+// reported row. The second trigger requires TWO independent conditions (the
+// house two-condition pattern): an INDIVIDUAL-root applying profile
+// (canonical profile-type registry) AND a title the EXISTING
+// aidTypePreferences.classifyAidType classifier names 'scholarship'.
+
+const STUDENT_PROFILE = { primary_type: 'student', display_name: 'Test Student' }
+
+test('the two operator-reported prod rows classify as scholarship for a student profile', () => {
+  // Exact prod shape 1: HOPE draft (kind DIRECT_GRANT, type empty).
+  assert.equal(
+    classifyApplicationStyle(
+      { funder: 'Tennessee Lottery', title: 'HOPE Scholarship' },
+      { opportunity_kind: 'DIRECT_GRANT', opportunity_type: '' },
+      STUDENT_PROFILE,
+    ),
+    'scholarship',
+  )
+  // Exact prod shape 2: AAFS draft (kind empty, type defaulted to 'grant',
+  // PLURAL "Scholarships" in the title).
+  assert.equal(
+    classifyApplicationStyle(
+      {
+        funder: 'American Academy of Forensic Sciences',
+        title: 'American Academy of Forensic Sciences (AAFS) Scholarships',
+      },
+      { opportunity_kind: '', opportunity_type: 'grant' },
+      STUDENT_PROFILE,
+    ),
+    'scholarship',
+  )
+})
+
+test('without a profile, a scholarship-titled but undeclared row keeps the standard default', () => {
+  assert.equal(
+    classifyApplicationStyle(
+      { funder: 'Tennessee Lottery', title: 'HOPE Scholarship' },
+      { opportunity_kind: 'DIRECT_GRANT' },
+    ),
+    'standard',
+  )
+})
+
+test('an ORG profile applying to a scholarship-titled row keeps the org proposal shape', () => {
+  assert.equal(
+    classifyApplicationStyle(
+      { funder: 'Community Fund', title: 'Neighborhood Scholarship Fund Grant' },
+      {},
+      { primary_type: 'nonprofit' },
+    ),
+    'standard',
+  )
+})
+
+test('an ORG profile keeps the org proposal shape even against a DECLARED scholarship kind', () => {
+  // A church/ministry applying against a scholarship-kind row is FUNDING or
+  // administering scholarships — it writes an organizational proposal, not a
+  // personal essay. Owner-named org profiles: Vermilion Church of God of
+  // Prophecy, Focus Forward Ministry.
+  for (const orgType of ['church', 'ministry', 'nonprofit']) {
+    assert.equal(
+      classifyApplicationStyle(
+        { funder: 'Local Funder', title: 'Youth Scholarship Fund' },
+        { opportunity_kind: 'SCHOLARSHIP' },
+        { primary_type: orgType },
+      ),
+      'standard',
+      `${orgType} profile must keep the organizational proposal shape`,
+    )
+  }
+  // A null/unknown profile does not veto the row's own declared contract.
+  assert.equal(
+    classifyApplicationStyle({}, { opportunity_kind: 'SCHOLARSHIP' }, null),
+    'scholarship',
+  )
+})
+
+test('a declared POINTER kind never gets the essay shape, even scholarship-titled + student', () => {
+  // Real prod shape: "Bold.org — Housing & Living Expense Scholarships" is a
+  // DIRECTORY — a pointer, never an award. No personal essay for a locator.
+  assert.equal(
+    classifyApplicationStyle(
+      { title: 'Bold.org — Housing & Living Expense Scholarships' },
+      { opportunity_kind: 'directory' },
+      STUDENT_PROFILE,
+    ),
+    'standard',
+  )
+})
+
+test('a non-scholarship title with a student profile keeps its existing classification', () => {
+  // Generic grant title → standard.
+  assert.equal(
+    classifyApplicationStyle(
+      { funder: 'Acme Foundation', title: 'Emergency Family Assistance' },
+      {},
+      STUDENT_PROFILE,
+    ),
+    'standard',
+  )
+  // University financial aid stays FAFSA-driven — the heuristics win before
+  // the title arm is consulted.
+  assert.equal(
+    classifyApplicationStyle(
+      { funder: 'Middle Tennessee State University', title: 'MTSU Financial Aid' },
+      null,
+      STUDENT_PROFILE,
+    ),
+    'auto_fafsa',
+  )
+})
+
+test('medical_necessity is appended to the scholarship shape only when required', () => {
+  const without = buildDefaultSectionsForStyle('scholarship', { medNecRequired: false })
+    .map((s) => s.section_key)
+  const withIt = buildDefaultSectionsForStyle('scholarship', { medNecRequired: true })
+    .map((s) => s.section_key)
+  assert.ok(!without.includes('medical_necessity'))
+  assert.ok(withIt.includes('medical_necessity'))
+})

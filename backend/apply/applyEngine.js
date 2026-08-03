@@ -5,6 +5,11 @@ import { createOpenAIClient } from '../utils/openaiClient.js'
 import { requiresMedicalNecessity, generateMedicalNecessityDocument, DOCUMENT_TYPES } from '../services/medicalNecessity.js'
 import { assertAllowedKeySet, buildEqualityWhereClause, assertSafeIdentifier } from '../utils/safeSql.js'
 import { getScopedOpportunityForApplication } from '../utils/scopedOpportunity.js'
+import { opportunityKindOf } from '../../shared/opportunityFundability.js'
+import { isNoPerAwardFigureKind } from '../config/opportunityKindClasses.js'
+import { classifyAidType } from '../config/aidTypePreferences.js'
+import { isIndividualLikeProfileType } from '../services/matchEngine.js'
+import { safeParseArrayField } from '../services/profileHelpers.js'
 import { createLogger } from '../utils/logger.js'
 
 const applyLog = createLogger('applyEngine')
@@ -24,6 +29,7 @@ RULES:
 - Every section should demonstrate alignment between the applicant's needs and the funder's mission
 - For submission instructions, provide exact URLs, addresses, fax numbers, and step-by-step guidance
 - ANTI-FABRICATION: never invent dollar amounts, line items, deadlines, addresses, contacts, fax numbers, URLs, or program details that aren't in the user-provided context. If a fact isn't in context, write "not on file" or omit the line — do not guess.
+- TAILOR TO THE FUNDER: name the funder and argue alignment with the SPECIFIC program facts in the GRANT DETAILS (program description, stated eligibility, focus areas, award range). Never produce boilerplate that could be sent to any funder unchanged. If the funder's mission or priorities are NOT stated in the context, write "[review: confirm funder priority]" where an alignment claim would go — do not invent priorities.
 - ANTI-MISMATCH: if the application context indicates a non-discretionary process (FAFSA-driven institutional aid, automatic profile match, nomination-only, invitation-only, or "no application"), do NOT produce a budget justification, project narrative, or evaluation plan. Return a single short note that the section does not apply to this submission style.`
 
 // Hardcoded allowlist of tables + acceptable composite unique key sets used by
@@ -898,7 +904,7 @@ export async function autoPopulate({ db, applicationId }) {
   // hallucinates dollar lines that the funder will never read. We branch on
   // the classifier so each style ships with the sections that actually map
   // 1:1 to what the user has to do in the real world.
-  const applicationStyle = classifyApplicationStyle(grant, opportunity)
+  const applicationStyle = classifyApplicationStyle(grant, opportunity, profileData)
   const defaultSections = buildDefaultSectionsForStyle(applicationStyle, {
     medNecRequired: medNecCheck.required,
   })
@@ -949,6 +955,51 @@ function mapMethodToSubmission(method) {
 }
 
 // ---------------------------------------------------------------------------
+// Declared-kind → application-style registry
+// ---------------------------------------------------------------------------
+// The section template used to be one-size-fits-all: every opportunity —
+// including student scholarships (HOPE, AAFS) — got the 7-section
+// ORGANIZATIONAL grant-proposal shape with a Budget Justification and an
+// Evaluation Plan no scholarship committee will ever read. The registry below
+// maps an opportunity row's own DECLARED kind (funding_opportunities.
+// opportunity_kind — canonical crawler-os vocabulary like 'SCHOLARSHIP', see
+// shared/opportunityFundability.js — or the declared opportunity_type column)
+// to the application style whose sections actually match the real document.
+//
+// Registry rules (CLAUDE.md house pattern):
+//   * keys are UPPER-cased; prod stores BOTH casings, so every lookup
+//     normalizes first (the opportunityKindClasses.js precedent);
+//   * only a DECLARED column value selects a style — a title word alone is
+//     never a declaration (#937 one-shared-word class), and an undeclared
+//     row keeps the 'standard' default (silence is not a denial);
+//   * the explicit application_method still wins over a declared kind — it
+//     describes the real-world submission process, which is more specific
+//     than what kind of money this is.
+export const DECLARED_KIND_APPLICATION_STYLES = Object.freeze({
+  SCHOLARSHIP: 'scholarship',
+})
+
+/**
+ * Resolve an application style from the opportunity row's DECLARED kind
+ * columns only. Returns the mapped style, or null when the row declares
+ * nothing (callers fall through to heuristics / the standard default).
+ */
+export function applicationStyleFromDeclaredKind(opportunity) {
+  if (!opportunity) return null
+  // opportunityKindOf reads opportunity_kind ?? kind, upper-cased — the same
+  // canonical accessor shared/opportunityFundability.js consumers use.
+  const kind = opportunityKindOf(opportunity)
+  if (kind && DECLARED_KIND_APPLICATION_STYLES[kind]) {
+    return DECLARED_KIND_APPLICATION_STYLES[kind]
+  }
+  const declaredType = String(opportunity.opportunity_type ?? '').trim().toUpperCase()
+  if (declaredType && DECLARED_KIND_APPLICATION_STYLES[declaredType]) {
+    return DECLARED_KIND_APPLICATION_STYLES[declaredType]
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
 // Application-style classifier
 // ---------------------------------------------------------------------------
 // The auto-populate engine used to ship the same 7 sections (cover letter,
@@ -962,15 +1013,28 @@ function mapMethodToSubmission(method) {
 //
 // Heuristics intentionally err on the side of "no fabricated narrative":
 //   * an explicit application_method always wins;
+//   * next, the opportunity row's own DECLARED kind (see
+//     DECLARED_KIND_APPLICATION_STYLES below) — a row that says it is a
+//     SCHOLARSHIP gets the scholarship document shape;
 //   * an absent application_method triggers a funder/title scan for
 //     university financial aid patterns (sponsor: "<X> University" /
 //     "<X> College", title contains "financial aid" / "tuition" /
 //     "scholarship" + university match) — those are FAFSA-driven by
-//     default in the U.S. landscape.
+//     default in the U.S. landscape;
+//   * finally, an INDIVIDUAL-root profile applying to a non-pointer row whose
+//     TITLE names a scholarship (existing aidTypePreferences.classifyAidType
+//     classifier) gets the scholarship shape too — the HOPE/AAFS rows in prod
+//     declare no scholarship kind, so declared-kind alone cannot reach them.
 //
 // Returns one of: 'auto_fafsa' | 'auto_profile' | 'nomination' |
-// 'invitation' | 'no_application' | 'standard'.
-export function classifyApplicationStyle(grant, opportunity) {
+// 'invitation' | 'no_application' | 'scholarship' | 'standard'.
+//
+// `profile` (optional, the applying profile row incl. primary_type) enables
+// the second scholarship trigger: an INDIVIDUAL-root profile applying to an
+// opportunity whose own TITLE names a scholarship (per the existing
+// aidTypePreferences.classifyAidType classifier — never a new one-word
+// matcher). Callers that pass no profile keep the exact prior behavior.
+export function classifyApplicationStyle(grant, opportunity, profile = null) {
   const explicit = String(grant?.application_method || opportunity?.application_method || '')
     .trim()
     .toLowerCase()
@@ -982,6 +1046,25 @@ export function classifyApplicationStyle(grant, opportunity) {
     explicit === 'no_application'
   ) {
     return explicit
+  }
+
+  // The opportunity row's own DECLARED kind wins over every heuristic below.
+  // A row that declares nothing falls through — silence is not a denial, and
+  // a title WORD alone must never flip the document shape (the #937
+  // one-shared-word class), so the only title-based arm is the profile-gated
+  // one at the bottom, keyed on an EXISTING classifier.
+  // ORG exception: a church/nonprofit applying against a scholarship-kind row
+  // is FUNDING or administering scholarships, not writing a personal essay —
+  // an org-root profile keeps the organizational proposal shape. A null/
+  // unknown profile does not veto the row's own declared contract.
+  const declaredStyle = applicationStyleFromDeclaredKind(opportunity)
+  const applicantIsIndividual = profile
+    ? isIndividualLikeProfileType(profile.primary_type ?? profile.applicant_type)
+    : null
+  if (declaredStyle === 'scholarship' && applicantIsIndividual === false) {
+    // fall through to the heuristics / standard default below
+  } else if (declaredStyle) {
+    return declaredStyle
   }
 
   const sponsor = String(grant?.funder || opportunity?.sponsor || '').toLowerCase()
@@ -1034,6 +1117,34 @@ export function classifyApplicationStyle(grant, opportunity) {
   if (urlLooksLikeStudentAid && /\b(pell|seog|teach|federal|fafsa)\b/.test(`${title} ${description}`)) {
     return 'auto_fafsa'
   }
+
+  // Second scholarship trigger: an INDIVIDUAL-root profile (student/senior/
+  // veteran/family leaves roll up via the canonical profile-type registry)
+  // applying to an opportunity whose own TITLE names a scholarship. Two
+  // independent conditions, both required (the house two-condition pattern —
+  // one shared word is never enough, #937):
+  //   1. the applying profile is a person, not an org — resolved through
+  //      matchEngine.isIndividualLikeProfileType, never a hand-typed list;
+  //   2. the title classifies as 'scholarship' per the EXISTING
+  //      aidTypePreferences.classifyAidType (title-only by design, #1092) —
+  //      classifyAidType's 'grant'/'unknown' verdicts deliberately do NOT
+  //      trigger this.
+  // Guard: a declared POINTER/BENEFIT kind (directory, referral,
+  // school_portal, past_award_intel, benefit — the opportunityKindClasses
+  // registry) never gets an essay: a locator titled "...Scholarships" is a
+  // pointer, not an award. A declared opportunity_type of 'grant' is NOT a
+  // rebuttal — crawlers default that column to 'grant' when the source said
+  // nothing (`opp.opportunity_type || 'grant'`), so it cannot veto what the
+  // row's own title states.
+  if (applicantIsIndividual === true) {
+    const declaredKindRaw = opportunity?.opportunity_kind ?? opportunity?.kind ?? null
+    const pointerOrBenefit = isNoPerAwardFigureKind(declaredKindRaw)
+    const titleOnly = grant?.title || opportunity?.title || ''
+    if (!pointerOrBenefit && titleOnly && classifyAidType({ title: titleOnly }) === 'scholarship') {
+      return 'scholarship'
+    }
+  }
+
   return 'standard'
 }
 
@@ -1075,6 +1186,22 @@ export function buildDefaultSectionsForStyle(style, opts = {}) {
       ]
     case 'no_application':
       return [{ section_key: 'no_application_required', title: 'No Application Required' }]
+    case 'scholarship':
+      // Student scholarship / student-aid application. The document a
+      // scholarship committee reads is a personal essay + academic record +
+      // financial need + activities — NOT an organizational proposal. No
+      // Budget Justification, no Evaluation Plan, no Project Narrative.
+      // 'organization_background' is reused as "Applicant Background": its
+      // existing prompt already handles individuals.
+      return [
+        { section_key: 'personal_statement', title: 'Personal Statement / Essay' },
+        { section_key: 'academic_background', title: 'Academic Background' },
+        { section_key: 'financial_need_statement', title: 'Financial Need Statement' },
+        { section_key: 'activities_leadership', title: 'Activities & Leadership' },
+        { section_key: 'organization_background', title: 'Applicant Background' },
+        ...(medNec ? [{ section_key: 'medical_necessity', title: 'Medical Necessity Documentation' }] : []),
+        { section_key: 'submission_instructions', title: 'Submission Instructions' },
+      ]
     case 'standard':
     default:
       return [
@@ -1576,17 +1703,35 @@ function buildSubmissionInstructions(grant, opportunity) {
   return parts.join('\n') || 'No specific submission instructions available. Contact the funding organization for details.'
 }
 
+// Every fact here must come from the grant/opportunity ROW — this context is
+// what makes a draft argue alignment with THIS funder's program instead of
+// reading like boilerplate. Do not add derived/guessed facts: the prompts'
+// anti-fabrication rules assume everything below was stated by the source.
 function buildGrantContext(grant, opportunity) {
   const parts = []
   parts.push(`Grant/Opportunity: ${grant?.title || opportunity?.title || 'Unknown'}`)
   parts.push(`Funder: ${grant?.funder || opportunity?.sponsor || 'Unknown'}`)
-  if (grant?.deadline) parts.push(`Deadline: ${grant.deadline}`)
+  if (grant?.deadline || opportunity?.deadline) parts.push(`Deadline: ${grant?.deadline || opportunity.deadline}`)
   if (grant?.amount_requested || grant?.amount_max) parts.push(`Amount: $${grant.amount_requested || grant.amount_max}`)
+  // The funder's own stated award range, when the row carries one.
+  if (!grant?.amount_requested && !grant?.amount_max && (opportunity?.amount_min || opportunity?.amount_max)) {
+    const lo = opportunity.amount_min ? `$${opportunity.amount_min}` : null
+    const hi = opportunity.amount_max ? `$${opportunity.amount_max}` : null
+    parts.push(`Stated award range: ${[lo, hi].filter(Boolean).join(' - ')}`)
+  }
   if (grant?.program_description) parts.push(`Program: ${grant.program_description}`)
   if (grant?.eligibility_summary) parts.push(`Eligibility: ${grant.eligibility_summary}`)
   if (grant?.selection_criteria) parts.push(`Criteria: ${grant.selection_criteria}`)
   if (opportunity?.description) parts.push(`Description: ${opportunity.description}`)
   if (opportunity?.eligibility_bullets) parts.push(`Eligibility: ${opportunity.eligibility_bullets}`)
+  // The funder's own eligibility prose (funding_opportunities.eligibility_text)
+  // — the strongest tailoring signal the row can carry.
+  if (opportunity?.eligibility_text) parts.push(`Funder's stated eligibility: ${opportunity.eligibility_text}`)
+  const focusAreas = safeParseArrayField(opportunity?.categories, [])
+    .slice(0, 8)
+    .map((v) => String(v))
+    .filter(Boolean)
+  if (focusAreas.length > 0) parts.push(`Funder focus areas: ${focusAreas.join(', ')}`)
   return parts.join('\n')
 }
 
@@ -1682,6 +1827,14 @@ function buildSectionPrompt(sectionKey, title, grantContext, profileContext, gra
     }
     case 'organization_background':
       return base + 'Write an applicant background section highlighting relevant qualifications, history, and capacity. For individuals, focus on personal circumstances, education, employment, and community involvement.'
+    case 'personal_statement':
+      return base + 'Write a first-person personal statement / scholarship essay for this applicant. Ground every claim in the applicant\'s real education, activities, circumstances, and goals from the profile — explain why the applicant is pursuing their field of study and how this scholarship advances that path. Never invent schools, GPAs, awards, or experiences that are not in the profile context. 400-600 words.'
+    case 'academic_background':
+      return base + 'Summarize the applicant\'s academic background: current school or enrollment status, degree or program, GPA, relevant coursework, honors, and awards — using ONLY facts present in the applicant profile above. If a detail (e.g. GPA or transcript data) is not on file, write "not on file" rather than inventing it.'
+    case 'financial_need_statement':
+      return base + 'Write a financial need statement grounded ONLY in the real financial data in the applicant profile (household income, household size, employment, benefits received). Do NOT invent dollar figures, costs, or circumstances that are not in the context. If financial data is missing from the profile, state plainly which figures need to be added before this section can be completed.'
+    case 'activities_leadership':
+      return base + 'Describe the applicant\'s extracurricular activities, volunteering, community involvement, employment, and leadership roles using ONLY facts from the profile above, presented as evidence of character and commitment. If none are on file, note that the applicant\'s activities need to be added to the profile — do not fabricate any.'
     case 'evaluation_plan':
       return base + 'Write an evaluation plan explaining how success will be measured, including specific metrics, data collection methods, and reporting timeline.'
     case 'medical_necessity':

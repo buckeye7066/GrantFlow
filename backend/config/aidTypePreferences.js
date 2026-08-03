@@ -56,7 +56,12 @@ const LOAN_NEGATIONS = /\b(loan (forgiveness|repayment|discharge|cancellation|co
 const LOAN_RX = /\b(direct (subsidized|unsubsidized)|subsidized loan|unsubsidized loan|plus loan|parent plus|grad plus|perkins|stafford|private loan|student loan|\bloan\b)/i
 const WORK_STUDY_RX = /\bwork[-\s]?study\b|\bFWS\b/i
 const GRANT_RX = /\b(pell|fseog|seog|grant|tuition assistance|promise|hope scholarship program)\b/i
-const SCHOLARSHIP_RX = /\bscholarship\b|\bmerit award\b/i
+// Plural must match too: real rows are titled "AAFS Scholarships" /
+// "Bold.org — Housing & Living Expense Scholarships", and \bscholarship\b
+// alone reads "Scholarships" as unknown (the trailing 's' is a word char, so
+// the boundary never fires). A page that names "Scholarships" names
+// scholarships.
+const SCHOLARSHIP_RX = /\bscholarships?\b|\bmerit awards?\b/i
 const ENDOWMENT_RX = /\bendow(ed|ment)\b|\bfellowship\b/i
 
 /**
