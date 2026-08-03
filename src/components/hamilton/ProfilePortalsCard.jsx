@@ -430,13 +430,21 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   // an arbitrary host from the URL (open-redirect / phishing guard). An unknown
   // host resolves to null and renders nothing.
   const [cobrowseHost, setCobrowseHost] = React.useState("")
+  // Why the co-browse card is showing: a generic 2FA/CAPTCHA/identity step the
+  // user clears, or a full-page bot-protection dead-end (Cloudflare/anti-bot)
+  // where the site refuses the automated browser and side-by-side is the fix.
+  const [cobrowseReason, setCobrowseReason] = React.useState("")
   const cobrowseRef = React.useRef(null)
   React.useEffect(() => {
     try {
-      const h = new URLSearchParams(window.location.search).get("cobrowse")
+      const params = new URLSearchParams(window.location.search)
+      const h = params.get("cobrowse")
       if (h) setCobrowseHost(h)
+      const reason = params.get("cobrowse_reason")
+      if (reason) setCobrowseReason(reason)
     } catch { /* ignore */ }
   }, [])
+  const cobrowseIsBotWall = cobrowseReason === "bot_protected"
   const cobrowsePortal = cobrowseHost
     ? portals.find((p) => hostMatches(p.portalHost || p.host, cobrowseHost)) || null
     : null
@@ -1338,11 +1346,26 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             <div className="flex items-start gap-3">
               <PanelsTopLeft className="h-5 w-5 shrink-0 text-current-coral" />
               <div className="min-w-0 flex-1">
-                <p className="font-display font-bold text-current-ink">Hamilton needs you to finish signing in</p>
+                <p className="font-display font-bold text-current-ink">
+                  {cobrowseIsBotWall
+                    ? "This site blocks automated submission"
+                    : "Hamilton needs you to finish signing in"}
+                </p>
                 <p className="mt-1 text-[13px] text-current-ink/75">
-                  <span className="money">{cobrowsePortal.label || cobrowseTargetHost}</span> hit a step only you
-                  can clear — a 2FA approval, a CAPTCHA, or identity verification. Open the side-by-side window and
-                  Hamilton will guide you through it, then keep going on its own.
+                  {cobrowseIsBotWall ? (
+                    <>
+                      <span className="money">{cobrowsePortal.label || cobrowseTargetHost}</span> blocks automated
+                      access with bot protection (a Cloudflare / anti-bot security check), so Hamilton can&rsquo;t
+                      submit it on her own. Open side-by-side co-browse and apply from your own browser — or apply
+                      manually.
+                    </>
+                  ) : (
+                    <>
+                      <span className="money">{cobrowsePortal.label || cobrowseTargetHost}</span> hit a step only you
+                      can clear — a 2FA approval, a CAPTCHA, or identity verification. Open the side-by-side window and
+                      Hamilton will guide you through it, then keep going on its own.
+                    </>
+                  )}
                 </p>
                 <button
                   type="button"

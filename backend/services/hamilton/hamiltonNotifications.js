@@ -46,6 +46,10 @@ export const HAMILTON_USER_NOTIFICATION_TYPES = Object.freeze([
   'hamilton_failed',
   'hamilton_2fa_required',
   'hamilton_captcha_required',
+  // A full-page bot-protection interstitial (Cloudflare managed challenge /
+  // Akamai / DataDome) blocked automated access — a dead-end Hamilton cannot
+  // auto-submit. Sent to owner + admins with the side-by-side co-browse CTA.
+  'hamilton_bot_protected',
   // Hamilton created a brand-new portal account but the portal still needs the
   // email verified — the user's ONE step (click the link in the email we
   // triggered). Once verified, Hamilton auto-resumes and finishes.

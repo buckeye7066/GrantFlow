@@ -78,6 +78,7 @@ import { findValidSession, getSessionStorageState, importSession, markSessionExp
 import { createCaptureRequest } from './hamiltonSessionCaptureRequests.js'
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
+import { botProtectedNotice } from './hamiltonBotProtectedNotice.js'
 import { normalizeSchedule, isWithinWindow, nextWindowStart } from './portalAccessSchedule.js'
 import { isAutomationEnabled } from '../../../shared/automationPreferences.js'
 import {
@@ -1782,6 +1783,26 @@ async function runAutopilotPathway(db, {
       actorRole: 'agent',
       details: { autopilot_run_id: run.id },
     })
+  } else if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'bot_protected') {
+    // FULL-PAGE BOT-PROTECTION DEAD-END (owner 2026-08-03: "for the dead-ends,
+    // make sure the user and admin are aware"). The site (Cloudflare managed
+    // challenge / Akamai / DataDome) refused our datacenter browser before the
+    // application loaded. This is NOT proof the saved session is dead — it is
+    // OUR reachability problem (IP/fingerprint) — so we mirror the connectors'
+    // block-vs-signin-wall rule and NEVER expire `usedSessionId` here. Hamilton
+    // cannot auto-submit; the honest workaround is human-driven SIDE-BY-SIDE
+    // co-browse (the existing live-login flow). handleBotProtectedBlock persists
+    // a durable, visible `blocked` state AND notifies the owner + admins with
+    // the co-browse call-to-action. It never touches the saved session.
+    await handleBotProtectedBlock(db, {
+      task,
+      runId: run.id,
+      url,
+      fundingTitle: opportunity?.title || grant?.title || null,
+      usedSessionId,
+      actorUserId: userId,
+      blockerDetail: engineResult.blocker_detail,
+    })
   } else if (engineResult.status === 'blocked') {
     // Automation is king: for authentication blockers (login / 2FA / captcha /
     // SSO) we DON'T dead-end. We defer the task into a waiting_for_* state with
@@ -1979,12 +2000,64 @@ function friendlyEngineFailureMessage(engineResult) {
   return detail || 'See the task audit trail.'
 }
 
+/**
+ * Handle a full-page bot-protection dead-end: persist a durable, visible
+ * `blocked` state on the task and notify the profile owner + admins with the
+ * side-by-side co-browse call-to-action. Deliberately NEVER expires the saved
+ * session — a bot-wall is OUR reachability problem (datacenter IP / fingerprint),
+ * not proof the session is dead (mirrors the portal-sync block-vs-signin-wall
+ * rule). Extracted + exported so the session-preservation + notification
+ * behavior is directly testable.
+ */
+export async function handleBotProtectedBlock(db, {
+  task,
+  runId = null,
+  url,
+  fundingTitle = null,
+  usedSessionId = null,
+  actorUserId = null,
+  blockerDetail = null,
+} = {}) {
+  await updateApplicationTask(db, task.id, {
+    status: 'blocked',
+    nextRetryAt: null,
+    lastAgentMessage:
+      'This site blocks automated submission (bot protection). Use side-by-side co-browse to apply, or apply manually.',
+  })
+  await appendTaskEvent(db, {
+    taskId: task.id,
+    eventType: 'blocked',
+    status: 'blocked',
+    step: 'autopilot',
+    message: blockerDetail || 'Site bot-protection blocked automated access.',
+    actorUserId,
+    actorRole: 'agent',
+    details: { autopilot_run_id: runId, blocker_kind: 'bot_protected', session_preserved: Boolean(usedSessionId) },
+  })
+  const botNotice = botProtectedNotice({
+    profileId: task.profile_id,
+    host: hostOfUrl(url) || url,
+    loginUrl: url,
+    fundingTitle,
+  })
+  await emitHamiltonNotificationToProfileAndAdmins(db, {
+    profileId: task.profile_id,
+    profileUserId: task.user_id,
+    type: botNotice.type,
+    title: botNotice.title,
+    message: botNotice.message,
+    severity: 'warning',
+    data: { ...botNotice.data, task_id: task.id, run_id: runId, portal_url: url },
+  })
+}
+
 function blockerNotificationType(kind) {
   switch (kind) {
     case '2fa':       return 'hamilton_2fa_required'
     case 'captcha':   return 'hamilton_captcha_required'
     case 'login':     return 'hamilton_login_required'
     case 'signature': return 'hamilton_review_required'
+    case 'bot_protected': return 'hamilton_bot_protected'
     default:          return 'hamilton_task_blocked'
   }
 }
@@ -1997,6 +2070,7 @@ function blockerTitle(kind) {
     case 'signature':   return 'Hamilton hit a signature step'
     case 'attestation': return 'Hamilton hit a legal attestation'
     case 'validation':  return 'Hamilton hit a validation error'
+    case 'bot_protected': return 'This site blocks automated submission'
     case 'submit_unconfirmed': return 'Verify portal receipt — submit completed without captured confirmation'
     default:            return 'Hamilton stopped on a blocker'
   }
