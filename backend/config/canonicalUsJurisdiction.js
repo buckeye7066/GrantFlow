@@ -8,7 +8,6 @@
  * Missing evidence is neutral.
  */
 
-import { declaredStateFromTitle, hostnameOf } from './opportunityJurisdiction.js'
 import { isValidState, normalizeState } from '../utils/stateNormalization.js'
 
 const URL_FIELDS = Object.freeze([
@@ -49,6 +48,17 @@ export const CANONICAL_US_JURISDICTION_RULES = Object.freeze([
     ]),
   }),
 ])
+
+function hostnameOf(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  try {
+    const parsed = new URL(raw.includes('://') ? raw : `https://${raw}`)
+    return String(parsed.hostname || '').toLowerCase().replace(/^www\./, '').replace(/\.+$/, '') || null
+  } catch {
+    return null
+  }
+}
 
 function hostMatches(actual, expected) {
   const host = String(actual ?? '').trim().toLowerCase().replace(/^www\./, '')
@@ -100,12 +110,12 @@ export function canonicalUsFunderJurisdiction(row = {}) {
 
 /**
  * Resolve the state a user-facing or matching surface should trust.
- * Priority is objective canonical funder evidence, then the exact machine-minted
- * `Place, XX — ...` declaration, then the stored state. A canonical funder can
- * therefore repair a crawl-stamped contradiction such as CPCC/OH being tagged
- * Tennessee; ordinary rows preserve their stored scope unchanged.
+ * Priority is objective canonical funder evidence, then an optional exact state
+ * declaration supplied by the canonical title parser, then the stored state.
+ * A canonical funder can therefore repair a crawl-stamped contradiction such as
+ * CPCC/OH being tagged Tennessee; ordinary rows preserve their scope unchanged.
  */
-export function resolvedUsOpportunityJurisdiction(row = {}) {
+export function resolvedUsOpportunityJurisdiction(row = {}, { declaredState = null } = {}) {
   const canonical = canonicalUsFunderJurisdiction(row)
   if (canonical) {
     return {
@@ -119,8 +129,8 @@ export function resolvedUsOpportunityJurisdiction(row = {}) {
     }
   }
 
-  const declared = declaredStateFromTitle(row)
-  if (declared) {
+  const declared = normalizeState(declaredState)
+  if (declared && isValidState(declared)) {
     return {
       state: declared,
       is_national: false,
