@@ -1386,9 +1386,17 @@ router.get('/geo/scored', async (req, res) => {
 // is now enforced in-handler. Non-UUID ids return the same 404 the old
 // pattern produced by not matching. Static routes (/meta/*, /geo/*) are
 // registered above, so they still win over `/:id`.
+//
+// funding_opportunities carries TWO id shapes: crypto.randomUUID() for
+// manually-created rows, and deterministicOpportunityId() (a 64-char sha256
+// hex, backend/crawler-os/contract.js) for every crawler-minted row — the
+// vast majority of the catalog. A UUID-only gate made all crawler rows
+// unreachable through GET/PUT/DELETE /:id.
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+const CATALOG_HASH_RE = /^[0-9a-fA-F]{64}$/
 function requireUuidParam(req, res) {
-  if (UUID_RE.test(String(req.params.id || ''))) return true
+  const id = String(req.params.id || '')
+  if (UUID_RE.test(id) || CATALOG_HASH_RE.test(id)) return true
   res.status(404).json({ error: 'Not found' })
   return false
 }
@@ -1399,9 +1407,11 @@ router.get('/:id', async (req, res) => {
   try {
     const isPostgres = req.db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
+    // NOTE: is_active is interpolated (activeVal), not bound — a second `?`
+    // here with only one bound param made this route 500 on EVERY call.
     const opp = await req.db.prepare(`
       SELECT * FROM funding_opportunities
-      WHERE id = ? AND is_active = ?
+      WHERE id = ? AND is_active = ${activeVal}
         AND ${trustedOriginClause()} AND ${trustedSourceClause()}
     `).get(req.params.id);
 
