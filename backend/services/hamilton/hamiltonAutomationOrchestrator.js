@@ -981,7 +981,9 @@ async function runPortalPathway(db, {
 async function runAutopilotPathway(db, {
   task, profile, opportunity, grant, classification, userId, authorizations, options = {},
 }) {
-  const url = classification.resolved_url
+  // Mutable: a resolver application_url_rescued directive redirects the
+  // remaining engine attempts to the funder's FOUND application page.
+  let url = classification.resolved_url
   const run = await createAutopilotRun(db, {
     taskId: task.id,
     profileId: task.profile_id,
@@ -1538,6 +1540,20 @@ async function runAutopilotPathway(db, {
       // Adjust engine inputs based on the resolver payload.
       if (directive.payload?.storage_state_path) storageStatePath = directive.payload.storage_state_path
       if (directive.payload?.document) documents = [...documents, directive.payload.document]
+      // Runtime URL rescue: the resolver FOUND the funder's real application
+      // page (searched, plausibility-screened, liveness-verified — never
+      // fabricated). Redirect the remaining attempts there and persist it on
+      // the task so every owner-facing surface links the real destination.
+      if (directive.payload?.application_url) {
+        url = directive.payload.application_url
+        await updateApplicationTask(db, task.id, { applicationUrl: url }).catch(() => {})
+        await appendTaskEvent(db, {
+          taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'url_rescue',
+          message: `Hamilton found the funder's application page and is continuing there: ${url}`,
+          actorUserId: userId, actorRole: 'agent',
+          details: { autopilot_run_id: run.id, rescued_url: url },
+        }).catch(() => {})
+      }
       continue
     }
     if (directive.outcome === 'degraded') {

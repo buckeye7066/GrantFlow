@@ -153,6 +153,33 @@ export default function HamiltonWorkPanel({ profileId, onNavigate }) {
                               )}
                             </div>
                             {item.detail && <p className="mt-0.5 text-xs text-slate-500 break-words">{item.detail}</p>}
+                            {/* Finish-it-yourself plan (owner directive 2026-08-03):
+                                every stalled submission ships numbered steps +
+                                real links. Links stop row-navigation so a click
+                                opens the portal, not the internal fallback. */}
+                            {Array.isArray(item.manual_guide?.steps) && item.manual_guide.steps.length > 0 && (
+                              <ol className="mt-1.5 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                                {item.manual_guide.steps.map((step, i) => (
+                                  <li key={i} className="break-words">
+                                    {step.text}
+                                    {step.url && (
+                                      <>
+                                        {' '}
+                                        <a
+                                          href={step.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="font-medium text-blue-600 underline hover:text-blue-800"
+                                        >
+                                          Open page
+                                        </a>
+                                      </>
+                                    )}
+                                  </li>
+                                ))}
+                              </ol>
+                            )}
                           </div>
                           <span
                             aria-hidden="true"
