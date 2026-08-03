@@ -1,0 +1,84 @@
+name: Diagnose QA remaining gaps
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'fix/qa-36-remaining-gaps-v2'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/qa-36-remaining-gaps-v2
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Run diagnostic gates
+        shell: bash
+        run: |
+          set +e
+          mkdir -p /tmp/grantflow-diag qa
+          npm ci > /tmp/grantflow-diag/install.log 2>&1
+          INSTALL=$?
+          if [ "$INSTALL" -eq 0 ]; then
+            npm run lint > /tmp/grantflow-diag/lint.log 2>&1
+            LINT=$?
+            npm run typecheck > /tmp/grantflow-diag/typecheck.log 2>&1
+            TYPECHECK=$?
+            npx vitest run \
+              backend/tests/productionProfileMatchingScope.test.js \
+              backend/tests/coldStartFundingFallback.test.js \
+              backend/tests/fundingSourcesColdStartAuditGuard.test.js \
+              src/pages/itemFundingMatch.test.js \
+              backend/tests/fundingSourceQueries.test.js \
+              backend/tests/itemNeedSearch.test.js \
+              > /tmp/grantflow-diag/tests.log 2>&1
+            TESTS=$?
+            npm run build > /tmp/grantflow-diag/build.log 2>&1
+            BUILD=$?
+          else
+            LINT=99
+            TYPECHECK=99
+            TESTS=99
+            BUILD=99
+          fi
+
+          python - "$INSTALL" "$LINT" "$TYPECHECK" "$TESTS" "$BUILD" <<'PY'
+          from pathlib import Path
+          import sys
+
+          names = ['install', 'lint', 'typecheck', 'tests', 'build']
+          codes = dict(zip(names, map(int, sys.argv[1:])))
+          out = ['# PR #1143 one-shot diagnostics', '', '## Exit codes', '']
+          for name in names:
+              out.append(f'- `{name}`: `{codes[name]}`')
+          for name in names:
+              path = Path(f'/tmp/grantflow-diag/{name}.log')
+              text = path.read_text(encoding='utf-8', errors='replace') if path.exists() else '(not run)'
+              lines = text.splitlines()
+              tail = '\n'.join(lines[-220:])
+              out.extend(['', f'## {name}', '', '```text', tail, '```'])
+          Path('qa/agent-diagnostics-1143.md').write_text('\n'.join(out) + '\n', encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/agent-diagnose-qa-1143.yml qa/agent-diagnostics-trigger.txt
+
+      - name: Commit diagnostic report
+        shell: bash
+        run: |
+          git config user.name "GrantFlow Repair Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add qa/agent-diagnostics-1143.md .github/workflows/agent-diagnose-qa-1143.yml qa/agent-diagnostics-trigger.txt
+          git commit -m "chore(qa): record PR 1143 diagnostic gate output"
+          git push origin HEAD:fix/qa-36-remaining-gaps-v2
