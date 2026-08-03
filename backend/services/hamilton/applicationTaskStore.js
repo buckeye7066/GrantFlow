@@ -19,6 +19,7 @@ import crypto from 'crypto'
 import { withProfileScope } from '../../middleware/profileContext.js'
 import { parseFullName } from '../../../shared/nameParsing.js'
 import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
+import { assessTaskSubmissionProof, SUBMISSION_PROOF_STATE } from './submissionProofPredicate.js'
 
 export const TASK_STATUSES = Object.freeze([
   // Legacy task statuses (per-grant Hamilton flow).
@@ -495,7 +496,44 @@ export async function ensureApplicationTask(db, {
   })
 }
 
-export async function getApplicationTask(db, taskId, { profileId = null } = {}) {
+/**
+ * Attach the canonical `submission_proof` label to a task so EVERY surface
+ * (tracker/API/reporting) reads honestly. The single source of truth for
+ * "externally submitted with proof" vs "marked submitted (internal record)" is
+ * `assessTaskSubmissionProof` — a generated packet/draft/proposal
+ * `output_document_id` NEVER reads as proof. Computed only for `submitted`
+ * tasks (the only rows that assert a submission); other statuses get a cheap
+ * NOT_SUBMITTED stub with no extra queries. Best-effort: a lookup failure
+ * degrades to an honest "unknown" that still never over-claims proof.
+ */
+async function attachSubmissionProof(db, task) {
+  if (!task) return task
+  const status = String(task.status || '').trim().toLowerCase()
+  if (status !== 'submitted') {
+    task.submission_proof = {
+      verified_external: false,
+      state: SUBMISSION_PROOF_STATE.NOT_SUBMITTED,
+    }
+    return task
+  }
+  try {
+    task.submission_proof = await assessTaskSubmissionProof(db, task)
+  } catch {
+    // Never over-claim on error: an internal-record label is the safe default.
+    task.submission_proof = {
+      verified_external: false,
+      state: SUBMISSION_PROOF_STATE.INTERNAL_ONLY,
+      label: 'Marked submitted (internal record — not confirmed sent to the funder)',
+      source: 'none',
+      proof_document_id: null,
+      confirmation_reference: null,
+      unverified_reason: 'assessment_error',
+    }
+  }
+  return task
+}
+
+export async function getApplicationTask(db, taskId, { profileId = null, withSubmissionProof = true } = {}) {
   if (!taskId) return null
   await ensureApplicationTaskSchema(db)
   let row
@@ -506,10 +544,12 @@ export async function getApplicationTask(db, taskId, { profileId = null } = {}) 
   } else {
     row = await db.prepare('SELECT * FROM application_tasks WHERE id = ?').get(String(taskId))
   }
-  return row ? rowToTask(row) : null
+  if (!row) return null
+  const task = rowToTask(row)
+  return withSubmissionProof ? attachSubmissionProof(db, task) : task
 }
 
-export async function listApplicationTasks(db, { profileId, status = null, limit = 100 } = {}) {
+export async function listApplicationTasks(db, { profileId, status = null, limit = 100, withSubmissionProof = true } = {}) {
   await ensureApplicationTaskSchema(db)
   const params = []
   let sql = 'SELECT * FROM application_tasks WHERE 1=1 '
@@ -524,7 +564,12 @@ export async function listApplicationTasks(db, { profileId, status = null, limit
   sql += ' ORDER BY updated_at DESC LIMIT ?'
   params.push(Math.max(1, Math.min(500, Number(limit) || 100)))
   const rows = await db.prepare(sql).all(...params)
-  return (rows || []).map(rowToTask)
+  const tasks = (rows || []).map(rowToTask)
+  if (!withSubmissionProof) return tasks
+  // Enrichment only queries for `submitted` tasks (see attachSubmissionProof),
+  // so lists of mostly non-terminal tasks pay ~no extra cost.
+  for (const task of tasks) await attachSubmissionProof(db, task)
+  return tasks
 }
 
 /**
