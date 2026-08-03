@@ -3,6 +3,7 @@
 // profile-facing discovery routes delegate to runProfileDiscoveryLive, and
 // non-profile bulk crawl endpoints return an explicit retired/OS response.
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
+import { classifyProductionProfile } from '../config/productionProfileScope.js'
 
 const SUPERSEDED = Object.freeze({
   retired: true,
@@ -36,6 +37,23 @@ function safeJsonParse(value, fallback) {
 
 export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
   if (!db || !profileId) return []
+
+  // Internal/test records are valid administration fixtures, not applicants.
+  // Keep this read-side guard even after the discovery guard: historical match
+  // rows may predate the exclusion, and a read must never resurrect them. The
+  // profile lookup is deliberately best-effort because small unit-test schemas
+  // may not include `profiles`; the authoritative live guard still runs before
+  // every new discovery write.
+  try {
+    const profile = await db
+      .prepare('SELECT id, display_name FROM profiles WHERE id = ?')
+      .get(String(profileId))
+    if (profile && !classifyProductionProfile(profile).production) return []
+  } catch {
+    // Compatibility/minimal schemas may omit profiles. Do not turn that optional
+    // lookup into an outage for otherwise valid stored-result reads.
+  }
+
   const activeClause = db?.dialect === 'postgres'
     ? 'AND (fo.is_active IS NULL OR fo.is_active = TRUE)'
     : 'AND (fo.is_active IS NULL OR fo.is_active = 1)'
@@ -113,8 +131,8 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, _options = {})
       : []
     return {
       // Historical UI / route contract (DiscoverGrants reads these):
-      jobs_enqueued: 1,
-      crawler_types: sourceTypes.length > 0 ? sourceTypes : ['crawler-os'],
+      jobs_enqueued: run?.skipped ? 0 : 1,
+      crawler_types: run?.skipped ? [] : (sourceTypes.length > 0 ? sourceTypes : ['crawler-os']),
       job_ids: [],
       // OS run details (used by tests + admin diagnostics):
       engine: 'crawler-os',
@@ -126,6 +144,8 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, _options = {})
       opportunities: persisted?.opportunities ?? 0,
       recommendations: Array.isArray(run?.recommendations) ? run.recommendations.length : 0,
       sources: run?.sources ?? [],
+      skipped: Boolean(run?.skipped),
+      skip_reason: run?.reason ?? null,
     }
   } catch (e) {
     return {
@@ -148,7 +168,7 @@ export async function runCrawler(db, profileId, options = {}) {
   const floor = Number.isFinite(Number(options?.minScore)) ? Number(options.minScore) : undefined
   const maxResults = Number(options?.maxResults) || 200
   const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: String(profileId), floor })
-  const results = await loadCrawlerOsProfileResults(db, profileId, maxResults)
+  const results = run?.skipped ? [] : await loadCrawlerOsProfileResults(db, profileId, maxResults)
   return {
     ...SUPERSEDED,
     superseded: false,
@@ -162,6 +182,8 @@ export async function runCrawler(db, profileId, options = {}) {
     rejected: run?.rejected ?? 0,
     pipelinePruned: persisted?.pipelinePruned ?? 0,
     hamiltonCleaned: persisted?.hamiltonCleaned ?? 0,
+    skipped: Boolean(run?.skipped),
+    skip_reason: run?.reason ?? null,
   }
 }
 export const SCHEMA = Object.freeze({})
