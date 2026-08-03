@@ -22,7 +22,20 @@ process.chdir(ROOT)
 // Shell-free on purpose (no exec/execSync): arguments are static literals from
 // this file, and execFileSync passes them as an array so nothing is ever
 // interpreted by a shell.
-const VITEST = path.join(ROOT, 'node_modules', 'vitest', 'vitest.mjs')
+//
+// TRAP (found live): a git WORKTREE has no node_modules of its own — Node
+// resolves vitest from the parent checkout — so a hard-coded
+// `<root>/node_modules/vitest/...` path silently fails with MODULE_NOT_FOUND,
+// failedCount() reads 0 from the error output, and EVERY mutation reports
+// "survived". Resolve the real package location instead, and treat a run that
+// produced no recognizable vitest summary as a HARNESS failure, never as
+// "0 reddened".
+import { createRequire } from 'node:module'
+const require_ = createRequire(path.join(ROOT, 'package.json'))
+const vitestPkgPath = require_.resolve('vitest/package.json')
+const vitestPkg = JSON.parse(fs.readFileSync(vitestPkgPath, 'utf8'))
+const vitestBin = typeof vitestPkg.bin === 'string' ? vitestPkg.bin : vitestPkg.bin.vitest
+const VITEST = path.join(path.dirname(vitestPkgPath), vitestBin)
 
 function runTests(files) {
   try {
@@ -35,9 +48,17 @@ function runTests(files) {
   }
 }
 
+/**
+ * Returns the reddened test count, or null when the output carries NO vitest
+ * summary at all (harness failure — vitest never ran). A null must never be
+ * folded into "0 reddened": that is exactly how a broken runner reports every
+ * mutation as survived.
+ */
 function failedCount(out) {
-  const m = out.match(/Tests\s+(\d+)\s+failed/)
-  return m ? Number(m[1]) : 0
+  const failed = out.match(/Tests\s+(\d+)\s+failed/)
+  if (failed) return Number(failed[1])
+  const passedOnly = out.match(/Tests\s+(\d+)\s+passed/)
+  return passedOnly ? 0 : null
 }
 
 const MUTATIONS = [
@@ -142,12 +163,17 @@ for (const mut of MUTATIONS) {
     continue
   }
   fs.writeFileSync(filePath, mutated)
-  let reddened = 0
+  let reddened = null
   try {
     const { out } = runTests(mut.tests)
     reddened = failedCount(out)
   } finally {
     execFileSync('git', ['checkout', '--', mut.file], { cwd: ROOT })
+  }
+  if (reddened === null) {
+    console.log(`${mut.name}: applied=true killed=UNKNOWN (vitest produced no summary — HARNESS failure)`)
+    allKilled = false
+    continue
   }
   const killed = reddened > 0
   if (!killed) allKilled = false
