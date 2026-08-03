@@ -92,12 +92,22 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
   const days = daysUntilDeadline(app.deadline_date)
   const deadlineUrgent = days !== null && days >= 0 && days < 7
   const deadlinePast = days !== null && days < 0
+  // Rows merged from Hamilton's application_tasks carry the TASK id, not a
+  // grant_applications id — Edit/Delete/Move Forward would PUT/DELETE against
+  // /api/grant-applications/{taskId} and 404. Only "Mark Submitted" is wired
+  // for them (the backend resolves it against application_tasks).
+  const isHamiltonRow = app.source === 'hamilton'
 
   return (
     <Card className="mb-3 shadow-sm hover:shadow-md transition-shadow">
       <CardContent className="pt-4 pb-3 px-4">
         <div className="flex items-start justify-between gap-2 mb-1">
           <p className="text-sm font-semibold text-slate-900 leading-tight line-clamp-2">{app.grant_name || app.grant_title || "Untitled application"}</p>
+          {isHamiltonRow && (
+            <span className="text-[10px] font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-full px-1.5 py-0.5 shrink-0" title="Worked by Hamilton (automated)">
+              Hamilton
+            </span>
+          )}
         </div>
         {app.funder_name && (
           <p className="text-xs text-slate-500 mb-1">{app.funder_name}</p>
@@ -122,11 +132,13 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
 
         {/* Action buttons */}
         <div className="flex flex-wrap gap-1.5 mt-2">
-          <Button size="sm" variant="outline" className="text-xs h-7 px-2" onClick={() => onEdit(app)}>
-            Edit
-          </Button>
+          {!isHamiltonRow && (
+            <Button size="sm" variant="outline" className="text-xs h-7 px-2" onClick={() => onEdit(app)}>
+              Edit
+            </Button>
+          )}
 
-          {NEXT_STATUS[app.status] && (
+          {!isHamiltonRow && NEXT_STATUS[app.status] && (
             <Button
               size="sm"
               variant="outline"
@@ -149,7 +161,7 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
             </Button>
           )}
 
-          {app.status === 'under_review' && (
+          {!isHamiltonRow && app.status === 'under_review' && (
             <>
               <Button
                 size="sm"
@@ -172,7 +184,7 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
             </>
           )}
 
-          {app.status !== 'submitted' && (
+          {!isHamiltonRow && app.status !== 'submitted' && (
             <Button
               size="sm"
               variant="ghost"
