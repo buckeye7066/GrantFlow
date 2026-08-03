@@ -4,13 +4,17 @@ on:
   push:
     branches:
       - fix/canonical-us-jurisdiction
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'fix/canonical-us-jurisdiction'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
