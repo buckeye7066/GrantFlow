@@ -700,14 +700,29 @@ export async function persistRun(db, memStore, run, opts = {}) {
         computed_at: nowIso(), updated_at: nowIso(), evaluated_at: nowIso(),
       });
       matches += 1;
-    } else if (decision === 'reject') {
-      // A REJECT cross-match is not a match — never store it as one.
+    } else if (decision !== 'accept') {
+      // CROSS-MATCH PRECISION (2026-08-03, the Robert White report): a
+      // cross-profile row is stored ONLY on ACCEPT. "An opp this profile didn't
+      // search for but is ELIGIBLE to" means the engine endorsed the pair; a
+      // cross-profile REVIEW is scored against a thesis STUB (no sections, no
+      // signals — see matchCanonicalOpportunity) and is uncertainty, not
+      // eligibility. Measured in prod 2026-08-03: 4,577 of 4,792 xmatch rows
+      // were REVIEW — another state's housing finance agency, disease
+      // directories for profiles with no declared condition, "Goldwater
+      // Scholarship" at score 2 on churches and biolabs. A DIRECTORY can never
+      // reach ACCEPT (the engine downgrades it to REVIEW by design), so no
+      // cross-profile locator is ever stored — a locator lane is the OWN
+      // planner's per-profile decision (servesDeclaredCondition/servesGeo),
+      // and the profile's own crawl still stores its own REVIEW locators.
+      // REJECT was already dropped; REVIEW now is too. Boot net:
+      // enforceCrossProfileMatchPrecision (enforceInvariants.js).
       continue;
     } else {
-      // Cross-match: a profile that did NOT search for this opp but is eligible.
-      // Additive (DO NOTHING) so the profile's own 'crawler-os' match — if it has
-      // one for this opp — always wins. Robert clears 'crawler-os-xmatch' once at
-      // cycle start, so these are rebuilt fresh each cycle (no staleness).
+      // Cross-match: a profile that did NOT search for this opp but is eligible
+      // (engine ACCEPT). Additive (DO NOTHING) so the profile's own 'crawler-os'
+      // match — if it has one for this opp — always wins. Robert clears
+      // 'crawler-os-xmatch' once at cycle start, so these are rebuilt fresh each
+      // cycle (no staleness).
       try {
         await db.prepare(
           `INSERT INTO profile_opportunity_matches

@@ -159,6 +159,81 @@ describe('Crawler OS resource-preserving reconciliation', () => {
     }
   })
 
+  it('CROSS-MATCH PRECISION: a cross-profile row is stored only on ACCEPT (the Robert White class)', async () => {
+    // Prod 2026-08-03: 4,577 of 4,792 xmatch rows were REVIEW — another
+    // state's housing finance agency, disease directories on profiles with no
+    // declared condition, "Goldwater Scholarship" at score 2 on churches.
+    // A cross-profile REVIEW is scored against a thesis STUB and is
+    // uncertainty, not eligibility. FAILING-FIRST: on the pre-fix writer both
+    // other-profile rows below are stored.
+    const db = makeDb()
+    try {
+      db.prepare("INSERT INTO profiles (id) VALUES ('profile-other')").run()
+      seedOpportunity(db, 'opp-shared', 'DIRECTORY')
+      seedOpportunity(db, 'opp-award', 'DIRECT_GRANT')
+
+      await persistRun(
+        db,
+        memStore([
+          // The PRIMARY profile keeps its own REVIEW (the locator rule).
+          {
+            profile_id: PROFILE_ID, opportunity_id: 'opp-shared', match_score: 31,
+            decision: 'review', match_explain_json: '{}',
+          },
+          // A cross-profile REVIEW is NOT a match — never stored.
+          {
+            profile_id: 'profile-other', opportunity_id: 'opp-shared', match_score: 31,
+            decision: 'review', match_explain_json: '{}',
+          },
+          // A cross-profile ACCEPT is an engine endorsement — stored as xmatch.
+          {
+            profile_id: 'profile-other', opportunity_id: 'opp-award', match_score: 82,
+            decision: 'accept', match_explain_json: '{}',
+          },
+        ]),
+        {},
+        { primaryProfileId: PROFILE_ID },
+      )
+
+      const own = currentMatches(db)
+      expect(own.map((r) => r.opportunity_id)).toContain('opp-shared')
+      const others = db.prepare(
+        "SELECT opportunity_id, match_decision, matcher_version FROM profile_opportunity_matches WHERE profile_id = 'profile-other' ORDER BY opportunity_id",
+      ).all()
+      expect(others).toEqual([
+        { opportunity_id: 'opp-award', match_decision: 'accept', matcher_version: 'crawler-os-xmatch' },
+      ])
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a PRE-EXISTING non-ACCEPT xmatch resource is not restored across a reconcile (converges)', async () => {
+    // The resource snapshot preserves the profile's OWN review locators —
+    // omission is not a negative verdict for a lane the run did not crawl —
+    // but a cross-profile REVIEW was never evidence, and restoring it made
+    // the junk rows structurally immortal. FAILING-FIRST: the pre-fix
+    // snapshot restores 'xmatch-review-dir' below.
+    const db = makeDb()
+    try {
+      seedOpportunity(db, 'own-review-dir', 'DIRECTORY')
+      seedMatch(db, { opportunityId: 'own-review-dir', decision: 'review', matcherVersion: 'crawler-os' })
+      seedOpportunity(db, 'xmatch-review-dir', 'DIRECTORY')
+      seedMatch(db, { opportunityId: 'xmatch-review-dir', decision: 'review', matcherVersion: 'crawler-os-xmatch' })
+      seedOpportunity(db, 'xmatch-accept-ref', 'REFERRAL')
+      seedMatch(db, { opportunityId: 'xmatch-accept-ref', decision: 'accept', matcherVersion: 'crawler-os-xmatch' })
+
+      await persistRun(db, memStore([]), {}, { primaryProfileId: PROFILE_ID })
+
+      const ids = currentMatches(db).map((r) => r.opportunity_id)
+      expect(ids).toContain('own-review-dir')       // own locator survives omission
+      expect(ids).toContain('xmatch-accept-ref')    // an endorsed cross-match survives
+      expect(ids).not.toContain('xmatch-review-dir') // a cross-profile REVIEW does not
+    } finally {
+      db.close()
+    }
+  })
+
   it('removes a durable resource when the current run explicitly rejects it', async () => {
     const db = makeDb()
     try {

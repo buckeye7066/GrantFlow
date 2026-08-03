@@ -117,6 +117,29 @@ describe('the state housing finance agency lane is ONE row, resolved per profile
     expect(picked).toEqual([STATE_HOUSING_AGENCY_SOURCE_ID])
   })
 
+  it('a MINTED per-state row DECLARES its state (the Robert White out-of-state-HFA class, 2026-08-03)', async () => {
+    // The first version dropped the state the adapter had just resolved, so
+    // every minted row ("West Virginia Housing Development Fund — …") entered
+    // the catalog as `state NULL, is_national 1` — the state lived only in the
+    // title as a FULL NAME — and cross-matched to every profile in the fleet
+    // (prod 2026-08-03: 18 such rows, 333 match rows; a TN student surfaced
+    // WV/IN/MI/AL/AR/OH agencies). FAILING-FIRST on the pre-fix adapter.
+    const { createStateHousingAgencyAdapter } = await import('../crawler-os/adapters/stateHousingAgencyAdapter.js')
+    const adapter = createStateHousingAgencyAdapter(STATE_HOUSING_AGENCY_SOURCE_ID)
+    const source = allSources().find((s) => s.source_id === STATE_HOUSING_AGENCY_SOURCE_ID)
+
+    const [req] = adapter.buildRequests({ location: { state: 'WV' } }, source, {})
+    const candidate = req.parseCfg.directoryCandidate
+    expect(candidate.geography).toEqual({ national: false, states: ['WV'] })
+    const mapped = adapter.mapCandidate(candidate, { source })
+    expect(mapped.geography).toEqual({ national: false, states: ['WV'] })
+
+    // The UNRESOLVED generic fallback honestly stays national.
+    const [fallbackReq] = adapter.buildRequests({ location: { state: 'USA' } }, source, {})
+    const fallback = adapter.mapCandidate(fallbackReq.parseCfg.directoryCandidate, { source })
+    expect(fallback.geography?.national).toBe(true)
+  })
+
   it('the states list is READ from STATE_REGISTRY, never a hand-typed subset', () => {
     const expected = Object.keys(STATE_REGISTRY).filter((st) => STATE_REGISTRY[st]?.housingUrl).sort()
     expect(STATE_HOUSING_AGENCY_STATES).toEqual(expected)

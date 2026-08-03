@@ -5813,6 +5813,385 @@ export async function enforceDeclaredGeoScope(db) {
 }
 
 /**
+ * INVARIANT: a per-state housing finance agency row IS state-scoped
+ * (2026-08-03, the Robert White out-of-state-HFA class).
+ *
+ * The `state_housing_finance_agency` lane is ONE national registry row whose
+ * adapter resolves the profile's OWN agency from STATE_REGISTRY — but the
+ * adapter dropped the state it had just resolved, so every minted row ("West
+ * Virginia Housing Development Fund — homeowner & renter housing programs")
+ * inherited the national source's geography: `state NULL, is_national 1`, with
+ * the true state visible only in the title as a FULL NAME — a shape
+ * `declaredStateFromTitle` (the `"<Place>, XX — "` rule) deliberately cannot
+ * read. Measured in prod 2026-08-03: 18 catalog rows, ALL `state NULL /
+ * is_national true`, carrying 333 match rows — a TENNESSEE student surfaced
+ * West Virginia / Indiana / Michigan / Alabama / Arkansas / Ohio agencies.
+ *
+ * The repair reads NOTHING new: the sponsor IS the registry's own
+ * `housingName` (the adapter minted it from there), so resolution is an exact
+ * curated-vocabulary lookup — never a fuzzy state-name grep (a bare full-name
+ * rule would call "New York Life Insurance" a geography). The generic fallback
+ * row ("State housing agency — homeowner & renter programs") resolves to
+ * nothing and honestly stays national. After the catalog repair, match rows on
+ * a state-resolved agency row are purged for profiles whose own declared
+ * states do not include it — MISSING = NEUTRAL: a profile with no resolvable
+ * state loses nothing.
+ *
+ * Writer-side twin: stateHousingAgencyAdapter now emits
+ * `geography: { national: false, states: [st] }` for a resolved agency.
+ * Bounded by STATE_AGENCY_GEO_LIMIT (500) / MATCH_SCOPE_PURGE_LIMIT;
+ * ENFORCE_STATE_AGENCY_GEO_SCOPE=0 for count-only.
+ */
+export async function enforceStateAgencyGeoScope(db) {
+  return runInvariant('state_agency_geo_scope', async () => {
+    let STATE_REGISTRY, STATE_HOUSING_AGENCY_SOURCE_ID, normalizeState
+    try {
+      ;({ STATE_REGISTRY } = await import('../services/shared/data/stateRegistry.js'))
+      ;({ STATE_HOUSING_AGENCY_SOURCE_ID } = await import('../crawler-os/sourceRegistry.js'))
+      ;({ normalizeState } = await import('../utils/stateNormalization.js'))
+    } catch (err) {
+      log.warn('state_agency_geo_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const disabled = _parseBoolEnv(process.env.ENFORCE_STATE_AGENCY_GEO_SCOPE) === false
+    const catalogLimit = _boundedLimit('STATE_AGENCY_GEO_LIMIT', DECLARED_GEO_SCOPE_LIMIT_DEFAULT)
+    const purgeLimit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+
+    // Curated lookup: the registry's own housingName, lower-cased, → state code.
+    const stateOfAgencyName = new Map()
+    for (const [code, entry] of Object.entries(STATE_REGISTRY || {})) {
+      const name = String(entry?.housingName || '').trim().toLowerCase()
+      if (name) stateOfAgencyName.set(name, code)
+    }
+
+    // ── Catalog repair. SQL predicate (source id), never a post-LIMIT filter.
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT id, title, sponsor, state, is_national
+             FROM funding_opportunities
+            WHERE source = ?
+              AND (state IS NULL OR TRIM(state) = '')
+            LIMIT ?`,
+        )
+        .all(STATE_HOUSING_AGENCY_SOURCE_ID, catalogLimit)
+    } catch (err) {
+      log.warn('state_agency_geo_scope: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const fixes = []
+    for (const row of rows || []) {
+      const sponsor = String(row.sponsor || '').trim().toLowerCase()
+      const title = String(row.title || '').trim().toLowerCase()
+      let code = stateOfAgencyName.get(sponsor) || null
+      if (!code) {
+        // The minted title is exactly `${housingName} — …` — same curated string.
+        for (const [name, st] of stateOfAgencyName) {
+          if (title.startsWith(`${name} —`) || title.startsWith(`${name} -`)) { code = st; break }
+        }
+      }
+      if (code) fixes.push({ id: row.id, state: code })
+    }
+
+    let repaired = 0
+    if (!disabled) {
+      for (const fix of fixes) {
+        const res = await db
+          .prepare('UPDATE funding_opportunities SET state = ?, is_national = 0 WHERE id = ?')
+          .run(fix.state, fix.id)
+        repaired += changesOf(res) || 1
+      }
+    }
+
+    // ── Match purge: a state-resolved agency row matched to a profile in a
+    // DIFFERENT state. Runs on the post-repair state column so rows repaired
+    // this same boot are already adjudicable. SQL predicate: source id + a
+    // non-empty state.
+    let matchRows
+    try {
+      matchRows = await db
+        .prepare(
+          `SELECT m.id AS match_id, m.profile_id, o.state AS opp_state, o.title
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+            WHERE o.source = ?
+              AND o.state IS NOT NULL AND TRIM(o.state) <> ''
+            LIMIT ?`,
+        )
+        .all(STATE_HOUSING_AGENCY_SOURCE_ID, purgeLimit)
+    } catch {
+      matchRows = []
+    }
+    const profileStates = await loadProfileStates(db, normalizeState)
+    const violating = []
+    for (const row of matchRows || []) {
+      const states = profileStates.get(row.profile_id)
+      if (!states || states.size === 0) continue // UNKNOWN profile state is NEUTRAL
+      const oppState = normalizeState(row.opp_state)
+      if (oppState && !states.has(oppState)) violating.push(row)
+    }
+
+    if (disabled) {
+      if (fixes.length > 0 || violating.length > 0) {
+        log.warn('per-state housing agency rows are mis-scoped as national (repair DISABLED via ENFORCE_STATE_AGENCY_GEO_SCOPE=0)', {
+          wouldRepair: fixes.length,
+          wouldPurge: violating.length,
+          scanned: rows?.length || 0,
+        })
+      }
+      return {
+        scanned: (rows?.length || 0) + (matchRows?.length || 0),
+        repaired: 0,
+        wouldRepair: fixes.length,
+        wouldPurge: violating.length,
+        enforced: false,
+      }
+    }
+
+    let purged = 0
+    const ids = violating.map((v) => v.match_id)
+    const CHUNK = 200
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      purged += changesOf(res) || slice.length
+    }
+    if (repaired > 0 || purged > 0) {
+      log.info('re-scoped per-state housing agency rows and removed out-of-state agency matches', {
+        repaired,
+        purged,
+        profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+        examples: violating.slice(0, 3).map((v) => v.title),
+      })
+    }
+    return {
+      scanned: (rows?.length || 0) + (matchRows?.length || 0),
+      repaired,
+      purged,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: a CROSS-PROFILE match row exists only on the engine's ACCEPT
+ * (2026-08-03, the Robert White report — the global door).
+ *
+ * The xmatch lane ("match every newly stored opportunity against ALL known
+ * profiles") scores every catalog row of every run against every OTHER
+ * profile's thesis STUB — no sections, no signals — and stored every
+ * non-REJECT verdict. A cross-profile REVIEW is uncertainty against a stub,
+ * not eligibility, and because `qualifiesForDisplay` lets any DIRECTORY at or
+ * above the review band surface, those rows went straight to the owner's
+ * Funding Sources list. Measured in prod 2026-08-03: 4,792 xmatch rows across
+ * 38 profiles, of which 4,577 (95.5%) were REVIEW — another state's housing
+ * finance agency, disease directories on profiles with no declared condition,
+ * "Goldwater Scholarship" at score 2 on churches and biolabs.
+ *
+ * A DIRECTORY can never reach ACCEPT (the engine downgrades it by design), so
+ * under this rule NO cross-profile locator is ever stored — a locator lane is
+ * the profile's OWN planner's per-profile decision (servesDeclaredCondition /
+ * servesGeo), and the profile's own crawl still stores its own REVIEW
+ * locators. This does NOT touch `isRecommendable` or the locator/REVIEW
+ * admission (the two forbidden ends of the locator defect).
+ *
+ * Writer-side twin: persistRunCore's xmatch branch now skips every non-ACCEPT;
+ * the resource-preserving snapshot (crawlerOsPersistence.js) holds the same
+ * bar so a reconcile can no longer restore them. Bounded by
+ * MATCH_SCOPE_PURGE_LIMIT (2000/boot; the nightly Robert cycle's xmatch reset
+ * clears any tail the first night); ENFORCE_XMATCH_PRECISION=0 for count-only.
+ */
+export async function enforceCrossProfileMatchPrecision(db) {
+  return runInvariant('cross_profile_match_precision', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('matcher_version') || !matchCols.has('match_decision')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT id, profile_id FROM profile_opportunity_matches
+            WHERE matcher_version = 'crawler-os-xmatch'
+              AND LOWER(COALESCE(match_decision, '')) <> 'accept'
+            LIMIT ?`,
+        )
+        .all(limit)
+    } catch (err) {
+      log.warn('cross_profile_match_precision: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+    if ((rows || []).length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_XMATCH_PRECISION) === false
+    if (disabled) {
+      log.warn('non-ACCEPT cross-profile match rows present (purge DISABLED via ENFORCE_XMATCH_PRECISION=0)', {
+        wouldRepair: rows.length,
+        profilesAffected: new Set(rows.map((r) => r.profile_id)).size,
+      })
+      return { scanned: rows.length, repaired: 0, wouldRepair: rows.length, enforced: false }
+    }
+
+    const ids = rows.map((r) => r.id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed non-ACCEPT cross-profile match rows (a cross-match is a match only on ACCEPT)', {
+      repaired,
+      profilesAffected: new Set(rows.map((r) => r.profile_id)).size,
+    })
+    return {
+      scanned: rows.length,
+      repaired,
+      profilesAffected: new Set(rows.map((r) => r.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: a DISEASE-SPECIFIC lane's rows reach only a profile that DECLARES
+ * the condition (2026-08-03 — the match-store half of #1102's lane-selection
+ * gate, and the door the planner gate could not close).
+ *
+ * `servesDeclaredCondition` (crawler-os/planner.js, 2026-08-02) stops a
+ * profile's OWN crawl from ASKING a condition lane — but the rows already in
+ * the match store predate it, and they are STRUCTURALLY IMMORTAL: the
+ * resource-preserving reconcile (crawlerOsPersistence.js) restores every
+ * DIRECTORY match the run did not explicitly re-score as REJECT, and the
+ * planner gate guarantees those lanes are never re-scored for that profile
+ * again. Robert White's amputee/arthritis/autism/HLAA/Reeve/BIAA rows were
+ * evaluated 2026-08-02T04:10Z (pre-gate) and survived his 2026-08-03 crawl
+ * exactly this way. Measured fleet-wide 2026-08-03: 291 'crawler-os' rows
+ * across 27 profiles + 126 xmatch rows across 28 profiles on disease-specific
+ * sources.
+ *
+ * SAME facts, SAME vocabulary as the planner gate — nothing re-derived:
+ * `DISEASE_SPECIFIC_SOURCE_IDS` + `sourceServesDeclaredCondition`
+ * (config/sourceLanes.js) against the thesis's `declared_health_terms`
+ * (`buildThesisForProfile`, the union of `signals.health_conditions` and
+ * `health_support` — Dr. John Robert White's `arthritis` lives in SUPPORT and
+ * keeps his arthritis lane). MISSING = NEUTRAL: a profile whose thesis cannot
+ * be built, or that carries no `declared_health_terms` ARRAY, loses nothing;
+ * an EMPTY array is a read that found nothing and purges (the planner gate's
+ * exact semantics). Bounded by MATCH_SCOPE_PURGE_LIMIT;
+ * ENFORCE_CONDITION_LANE_SCOPE=0 for count-only.
+ */
+export async function enforceConditionLaneMatchScope(db, { resolveThesis = null } = {}) {
+  return runInvariant('condition_lane_match_scope', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let DISEASE_SPECIFIC_SOURCE_IDS, sourceServesDeclaredCondition, getSource, buildThesisForProfile
+    try {
+      ;({ DISEASE_SPECIFIC_SOURCE_IDS, sourceServesDeclaredCondition } = await import('../config/sourceLanes.js'))
+      ;({ getSource } = await import('../crawler-os/sourceRegistry.js'))
+      if (!resolveThesis) ({ buildThesisForProfile } = await import('../services/crawlerOsService.js'))
+    } catch (err) {
+      log.warn('condition_lane_match_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const thesisOf = resolveThesis || ((d, pid) => buildThesisForProfile(d, pid))
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+
+    // Registry-generated SQL predicate (#944): only disease-lane rows are ever
+    // candidates, so the rest of the store cannot starve them out of the bound.
+    const ph = DISEASE_SPECIFIC_SOURCE_IDS.map(() => '?').join(', ')
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT m.id AS match_id, m.profile_id, o.source AS source_id, o.title
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+            WHERE o.source IN (${ph})
+            LIMIT ?`,
+        )
+        .all(...DISEASE_SPECIFIC_SOURCE_IDS, limit)
+    } catch (err) {
+      log.warn('condition_lane_match_scope: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+    if ((rows || []).length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    const byProfile = new Map()
+    for (const r of rows) {
+      if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
+      byProfile.get(r.profile_id).push(r)
+    }
+
+    const violating = []
+    let profilesSkipped = 0
+    for (const [profileId, profileRows] of byProfile) {
+      let thesis = null
+      try {
+        thesis = await thesisOf(db, profileId)
+      } catch {
+        thesis = null
+      }
+      // MISSING = NEUTRAL: an unreadable profile, or one whose thesis carries
+      // no declared_health_terms ARRAY, adjudicates nothing this boot.
+      if (!thesis || !Array.isArray(thesis.declared_health_terms)) {
+        profilesSkipped += 1
+        continue
+      }
+      const terms = thesis.declared_health_terms
+      for (const row of profileRows) {
+        const source = getSource(row.source_id)
+        if (!source) continue // unknown source — cannot adjudicate, leave alone
+        if (!sourceServesDeclaredCondition(source, terms)) violating.push(row)
+      }
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_CONDITION_LANE_SCOPE) === false
+    if (disabled) {
+      if (violating.length > 0) {
+        log.warn('disease-lane rows are matched to profiles that declare no such condition (purge DISABLED via ENFORCE_CONDITION_LANE_SCOPE=0)', {
+          wouldRepair: violating.length,
+          scanned: rows.length,
+          examples: violating.slice(0, 3).map((v) => v.title),
+        })
+      }
+      return { scanned: rows.length, repaired: 0, wouldRepair: violating.length, profilesSkipped, enforced: false }
+    }
+    if (violating.length === 0) return { scanned: rows.length, repaired: 0, profilesSkipped, enforced: true }
+
+    const ids = violating.map((v) => v.match_id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph2 = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph2})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed disease-lane matches from profiles that declare no such condition', {
+      repaired,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map((v) => v.title),
+    })
+    return {
+      scanned: rows.length,
+      repaired,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      profilesSkipped,
+      enforced: true,
+    }
+  })
+}
+
+/**
  * Every US state / CA province code a profile declares, from its own sections.
  * `profiles` carries no state column in prod, so the truth lives in
  * `profile_sections` (`basic_information.state`, `location_focus.focus_state`).
@@ -8213,6 +8592,13 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // re-scoped from its own title in this step is judged correctly for the rest
   // of the boot instead of one boot late.
   steps.push(await enforceDeclaredGeoScope(db))
+  // A per-state housing finance agency row declares its state as a FULL NAME in
+  // its curated title/sponsor — a shape the "<Place>, XX —" rule above cannot
+  // read. Re-scope those rows from the SAME registry that minted them, and
+  // purge the out-of-state agency matches (the Robert White HFA class). Runs
+  // right after the general geo repair so every later comparison reads the
+  // corrected state this same boot.
+  steps.push(await enforceStateAgencyGeoScope(db))
   // …then remove the out-of-area locators that scope already surfaced (the top
   // of the owner's GeneMac list: an Indiana senior shown Polk County TN).
   steps.push(await enforceDeclaredPlaceScopeMatches(db))
@@ -8230,6 +8616,17 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // catalog is already re-scoped and the ordinary place/foreign/ceiling nets
   // have taken their (profile-agnostic) rows first.
   steps.push(await enforceUnconfiguredProfileGeoMatches(db))
+  // CROSS-PROFILE PRECISION (2026-08-03, the Robert White report): a
+  // cross-profile (xmatch) row is a match only on the engine's ACCEPT. Purges
+  // the stored REVIEW flood (95.5% of all xmatch rows in prod) that the
+  // resource-preserving reconcile would otherwise restore forever. Sits with
+  // the scope purges, before the recall nets add rows under other versions.
+  steps.push(await enforceCrossProfileMatchPrecision(db))
+  // …and the match-store half of the condition-lane gate: a disease-specific
+  // lane's rows reach only a profile that DECLARES the condition. The planner
+  // gate (#1102) stops new selections; this reaches the rows that predate it,
+  // which the resource-preserving reconcile makes structurally immortal.
+  steps.push(await enforceConditionLaneMatchScope(db))
   // Surface-table eligibility net: demote persisted student-aid matches that are
   // surfacing to a NON-student profile (stale ACCEPTs the live engine already
   // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).

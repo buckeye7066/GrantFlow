@@ -16,6 +16,16 @@ import { normalizePersistedMatchDecisionIntegrity } from './matching/matchDecisi
 
 const RESOURCE_KINDS_SQL = "('DIRECTORY', 'PAST_AWARD_INTEL', 'SCHOOL_PORTAL', 'REFERRAL')"
 
+// CROSS-MATCH PRECISION (2026-08-03): a cross-profile row is a match only on
+// ACCEPT (see persistRunCore's xmatch branch). The resource snapshot must hold
+// the same bar, or every pre-existing xmatch REVIEW directory — another
+// state's housing finance agency, a kidney-fund locator on a profile with no
+// declared condition — is preserved across every reconcile FOREVER: omission
+// is not a negative verdict for the profile's OWN resources, but a
+// cross-profile REVIEW was never evidence to begin with.
+const SNAPSHOT_DECISION_SQL =
+  "(m.matcher_version <> 'crawler-os-xmatch' OR LOWER(COALESCE(m.match_decision, '')) = 'accept')"
+
 function reconcileProfileIds(memStore, primaryProfileId) {
   if (primaryProfileId) return [String(primaryProfileId)]
   const rows = memStore?.all?.('profile_opportunity_matches') ?? []
@@ -45,6 +55,7 @@ async function snapshotResourceMatches(db, profileIds) {
       JOIN funding_opportunities o ON o.id = m.opportunity_id
      WHERE m.profile_id = ?
        AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND ${SNAPSHOT_DECISION_SQL}
        AND UPPER(COALESCE(o.opportunity_kind, '')) IN ${RESOURCE_KINDS_SQL}
   `
   // RESOURCE_KINDS_SQL is a frozen code constant, not user input. Profile ids
@@ -58,6 +69,7 @@ async function snapshotResourceMatches(db, profileIds) {
       JOIN funding_opportunities o ON o.id = m.opportunity_id
      WHERE m.profile_id = ?
        AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND ${SNAPSHOT_DECISION_SQL}
        AND UPPER(COALESCE(o.opportunity_kind, '')) IN ${RESOURCE_KINDS_SQL}
   `
 

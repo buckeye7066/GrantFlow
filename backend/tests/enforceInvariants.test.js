@@ -59,6 +59,9 @@ import {
   enforceGrantAmountBackfill,
   enforceAmySyntheticExpiry,
   enforceDeclaredGeoScope,
+  enforceStateAgencyGeoScope,
+  enforceCrossProfileMatchPrecision,
+  enforceConditionLaneMatchScope,
   enforceDeclaredPlaceScopeMatches,
   enforceForeignJurisdictionMatches,
   enforceIndividualMatchAwardCeiling,
@@ -1135,8 +1138,11 @@ describe('enforceInvariants — runner', () => {
     // + the declared-field-of-study RECALL net
     // + the stage-of-life eligibility nets (#1093)
     // + the unconfigured-profile geography net (#1094)
-    // + the county/crisis-need RECALL net (local help that already exists) here.
-    expect(summary.ran).toBe(49)
+    // + the county/crisis-need RECALL net (local help that already exists)
+    // + the 3 global match-scope nets (2026-08-03, the Robert White report:
+    //   per-state HFA geo scope, cross-profile ACCEPT-only precision, and the
+    //   condition-lane match-store scope) here.
+    expect(summary.ran).toBe(52)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1162,6 +1168,11 @@ describe('enforceInvariants — runner', () => {
       // repaired on the CATALOG first, so every later geo comparison — and both
       // match-store purges below — read the corrected state this same boot.
       'declared_geo_scope',
+      // A per-state housing finance agency row declares its state as a FULL
+      // NAME in its curated title/sponsor — invisible to the "<Place>, XX —"
+      // rule above. Re-scoped from the SAME registry that minted it, right
+      // after the general geo repair (the Robert White HFA class).
+      'state_agency_geo_scope',
       'declared_place_scope_matches',
       'foreign_jurisdiction_matches',
       'individual_match_award_ceiling',
@@ -1169,6 +1180,14 @@ describe('enforceInvariants — runner', () => {
       // invented from its placeholder address ("Anytown, SA"). Last in the
       // scope family so the profile-agnostic nets take their rows first.
       'unconfigured_profile_matches',
+      // A cross-profile (xmatch) row is a match only on the engine's ACCEPT
+      // (2026-08-03: 95.5% of prod xmatch rows were REVIEW junk the
+      // resource-preserving reconcile made immortal).
+      'cross_profile_match_precision',
+      // …and the match-store half of the #1102 condition-lane gate: a
+      // disease-specific lane's rows reach only a profile that DECLARES the
+      // condition.
+      'condition_lane_match_scope',
       'student_aid_eligibility',
       // The RECALL direction of the same store: a student's OWN school's aid.
       // Placed before the two hygiene sweeps so the rows it adds are validated
@@ -5256,6 +5275,299 @@ describe('enforce: an out-of-area locator is not surfaced to a profile somewhere
       const res = await enforceDeclaredPlaceScopeMatches(db)
       expect(res.ok).toBe(true)
       expect(res.repaired).toBe(0)
+    } finally { db.close() }
+  })
+})
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * GLOBAL MATCH SCOPE — the 2026-08-03 Robert White report ("the matching
+ * engine casts far too wide a net"). Three sweeps, each on REAL prod shapes.
+ * Every behavioral test below FAILS on a no-op sweep body.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe('enforceStateAgencyGeoScope — a per-state HFA row IS state-scoped', () => {
+  function makeHfaDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, primary_type TEXT, applicant_type TEXT);
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, source TEXT, state TEXT, is_national INTEGER);
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+        match_score REAL, match_decision TEXT, matcher_version TEXT
+      );
+    `)
+    return raw
+  }
+  // REAL prod rows, verbatim: 18 catalog rows, ALL state NULL / is_national 1.
+  const seed = (db) => {
+    db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-tn', 'student')
+    db.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p-nostate', 'individual')
+    db.prepare("INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('p-tn','basic_information',?)")
+      .run(JSON.stringify({ city: 'Cleveland', state: 'TN', county: 'Bradley' }))
+    for (const [id, sponsor] of [
+      ['o-wv', 'West Virginia Housing Development Fund'],
+      ['o-tn', 'Tennessee Housing Development Agency'],
+      ['o-oh', 'Ohio Housing Finance Agency'],
+    ]) {
+      db.prepare(
+        `INSERT INTO funding_opportunities (id, title, sponsor, source, state, is_national)
+         VALUES (?, ?, ?, 'state_housing_finance_agency', NULL, 1)`,
+      ).run(id, `${sponsor} — homeowner & renter housing programs`, sponsor)
+    }
+    // The generic national fallback resolves to NOTHING and stays national.
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, source, state, is_national)
+       VALUES ('o-generic', 'State housing agency — homeowner & renter programs', 'State housing finance agency', 'state_housing_finance_agency', NULL, 1)`,
+    ).run()
+    for (const [mid, pid, oid] of [
+      ['m-tn-wv', 'p-tn', 'o-wv'],       // TENNESSEE student ↔ West Virginia fund: the owner's row
+      ['m-tn-tn', 'p-tn', 'o-tn'],       // his OWN agency: kept
+      ['m-tn-oh', 'p-tn', 'o-oh'],
+      ['m-tn-gen', 'p-tn', 'o-generic'], // generic national row: kept
+      ['m-ns-wv', 'p-nostate', 'o-wv'],  // UNKNOWN profile state: NEUTRAL, kept
+    ]) {
+      db.prepare(
+        `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+         VALUES (?, ?, ?, 17, 'review', 'crawler-os-xmatch')`,
+      ).run(mid, pid, oid)
+    }
+  }
+  const idsOf = (db) =>
+    db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+
+  afterEach(() => { delete process.env.ENFORCE_STATE_AGENCY_GEO_SCOPE })
+
+  it('re-scopes the minted rows from the registry that minted them, and purges out-of-state agency matches', async () => {
+    const db = makeHfaDb()
+    try {
+      seed(db)
+      const res = await enforceStateAgencyGeoScope(db)
+      expect(res.repaired).toBe(3)
+      expect(res.purged).toBe(2) // WV + OH for the TN student
+      const rows = db.prepare('SELECT id, state, is_national FROM funding_opportunities ORDER BY id').all()
+      expect(rows.find((r) => r.id === 'o-wv')).toMatchObject({ state: 'WV', is_national: 0 })
+      expect(rows.find((r) => r.id === 'o-tn')).toMatchObject({ state: 'TN', is_national: 0 })
+      expect(rows.find((r) => r.id === 'o-generic')).toMatchObject({ state: null, is_national: 1 })
+      // His own agency, the generic national row, and the stateless profile's
+      // row all survive (MISSING = NEUTRAL).
+      expect(idsOf(db)).toEqual(['m-ns-wv', 'm-tn-gen', 'm-tn-tn'])
+    } finally { db.close() }
+  })
+
+  it('CONVERGES and is idempotent', async () => {
+    const db = makeHfaDb()
+    try {
+      seed(db)
+      await enforceStateAgencyGeoScope(db)
+      const second = await enforceStateAgencyGeoScope(db)
+      expect(second.repaired).toBe(0)
+      expect(second.purged).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('never touches rows from OTHER sources, even with a state-name title', async () => {
+    const db = makeHfaDb()
+    try {
+      seed(db)
+      // A web_search row whose title merely CONTAINS a state agency name —
+      // not this sweep's row to judge (the source id is the SQL predicate).
+      db.prepare(
+        `INSERT INTO funding_opportunities (id, title, sponsor, source, state, is_national)
+         VALUES ('o-web', 'Guide to the Ohio Housing Finance Agency', 'Some Blog', 'web_search', NULL, 1)`,
+      ).run()
+      await enforceStateAgencyGeoScope(db)
+      expect(db.prepare("SELECT state, is_national FROM funding_opportunities WHERE id = 'o-web'").get())
+        .toMatchObject({ state: null, is_national: 1 })
+    } finally { db.close() }
+  })
+
+  it('ENFORCE_STATE_AGENCY_GEO_SCOPE=0 counts without repairing or purging', async () => {
+    const db = makeHfaDb()
+    try {
+      seed(db)
+      process.env.ENFORCE_STATE_AGENCY_GEO_SCOPE = '0'
+      const off = await enforceStateAgencyGeoScope(db)
+      expect(off.enforced).toBe(false)
+      expect(off.repaired).toBe(0)
+      expect(off.wouldRepair).toBe(3)
+      expect(off.wouldPurge).toBe(0) // purge candidates need the state repaired first
+      expect(idsOf(db)).toHaveLength(5)
+      expect(db.prepare("SELECT state FROM funding_opportunities WHERE id = 'o-wv'").get().state).toBe(null)
+
+      delete process.env.ENFORCE_STATE_AGENCY_GEO_SCOPE
+      const on = await enforceStateAgencyGeoScope(db)
+      expect(on.repaired).toBe(3)
+      expect(on.purged).toBe(2)
+    } finally { db.close() }
+  })
+})
+
+describe('enforceCrossProfileMatchPrecision — a cross-match is a match only on ACCEPT', () => {
+  function makeXmDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+        match_score REAL, match_decision TEXT, matcher_version TEXT
+      );
+    `)
+    return raw
+  }
+  const seedRow = (db, id, pid, decision, version) => {
+    db.prepare(
+      `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+       VALUES (?, ?, ?, 14, ?, ?)`,
+    ).run(id, pid, `opp-${id}`, decision, version)
+  }
+  const idsOf = (db) =>
+    db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+
+  afterEach(() => { delete process.env.ENFORCE_XMATCH_PRECISION })
+
+  it('purges non-ACCEPT xmatch rows and NOTHING else (the 95.5%-REVIEW prod flood)', async () => {
+    const db = makeXmDb()
+    try {
+      seedRow(db, 'xm-review', 'p1', 'review', 'crawler-os-xmatch')   // the flood
+      seedRow(db, 'xm-null', 'p2', null, 'crawler-os-xmatch')         // decision-less xmatch is not evidence either
+      seedRow(db, 'xm-accept', 'p1', 'accept', 'crawler-os-xmatch')   // endorsed — kept
+      seedRow(db, 'own-review', 'p1', 'review', 'crawler-os')         // the profile's OWN locator band — untouchable
+      seedRow(db, 'webllm-review', 'p1', 'review', 'web-llm')         // other versions — not this sweep's rows
+      const res = await enforceCrossProfileMatchPrecision(db)
+      expect(res.repaired).toBe(2)
+      expect(res.profilesAffected).toBe(2)
+      expect(idsOf(db)).toEqual(['own-review', 'webllm-review', 'xm-accept'])
+      // Converges.
+      expect((await enforceCrossProfileMatchPrecision(db)).repaired).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('ENFORCE_XMATCH_PRECISION=0 counts without deleting', async () => {
+    const db = makeXmDb()
+    try {
+      seedRow(db, 'xm-review', 'p1', 'review', 'crawler-os-xmatch')
+      process.env.ENFORCE_XMATCH_PRECISION = '0'
+      const off = await enforceCrossProfileMatchPrecision(db)
+      expect(off.enforced).toBe(false)
+      expect(off.repaired).toBe(0)
+      expect(off.wouldRepair).toBe(1)
+      expect(idsOf(db)).toEqual(['xm-review'])
+
+      delete process.env.ENFORCE_XMATCH_PRECISION
+      expect((await enforceCrossProfileMatchPrecision(db)).repaired).toBe(1)
+    } finally { db.close() }
+  })
+})
+
+describe('enforceConditionLaneMatchScope — a disease lane reaches only a declared condition', () => {
+  function makeCondDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, source TEXT);
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+        match_score REAL, match_decision TEXT, matcher_version TEXT
+      );
+    `)
+    return raw
+  }
+  // REAL prod rows, verbatim (Robert White's surviving pre-gate set + the
+  // xmatch kidney fund; evaluated 2026-08-02T04:10Z, restored across his
+  // 2026-08-03 crawl by the resource-preserving reconcile).
+  const seed = (db) => {
+    for (const [id, source, title] of [
+      ['o-amputee', 'amputee_coalition_resources', 'Amputee Coalition limb loss & limb difference resources'],
+      ['o-kidney', 'american_kidney_fund', 'American Kidney Fund financial assistance (dialysis & kidney disease)'],
+      ['o-arthritis', 'arthritis_foundation_help', 'Arthritis Foundation help line & financial-resource navigation'],
+      ['o-hlaa', 'hlaa_financial_assistance', 'HLAA financial assistance for hearing aids & hearing care'],
+      ['o-ecf', 'tn_ecf_choices', 'Employment and Community First CHOICES (ECF CHOICES)'], // NOT a disease lane
+    ]) {
+      db.prepare('INSERT INTO funding_opportunities (id, title, source) VALUES (?, ?, ?)').run(id, title, source)
+    }
+    for (const [mid, pid, oid, version] of [
+      ['m-r-amputee', 'p-robert', 'o-amputee', 'crawler-os'],
+      ['m-r-kidney', 'p-robert', 'o-kidney', 'crawler-os-xmatch'],
+      ['m-r-arthritis', 'p-robert', 'o-arthritis', 'crawler-os'],
+      ['m-r-ecf', 'p-robert', 'o-ecf', 'crawler-os'],
+      ['m-j-arthritis', 'p-john', 'o-arthritis', 'crawler-os'],
+      ['m-j-hlaa', 'p-john', 'o-hlaa', 'crawler-os'],
+      ['m-u-kidney', 'p-unreadable', 'o-kidney', 'crawler-os'],
+    ]) {
+      db.prepare(
+        `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+         VALUES (?, ?, ?, 31, 'review', ?)`,
+      ).run(mid, pid, oid, version)
+    }
+  }
+  // The SAME shape buildThesisForProfile returns; injectable exactly like
+  // enforceStudentAidEligibility's resolveThesis.
+  const theses = {
+    'p-robert': { declared_health_terms: [] },              // a READ that found nothing → purge
+    'p-john': { declared_health_terms: ['arthritis'] },     // SUPPORT-declared arthritis keeps his lane
+    'p-unreadable': null,                                    // thesis unavailable → NEUTRAL
+  }
+  const resolveThesis = async (db, pid) => {
+    const t = theses[pid]
+    if (t === null) throw new Error('profile unreadable')
+    return t
+  }
+  const idsOf = (db) =>
+    db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+
+  afterEach(() => { delete process.env.ENFORCE_CONDITION_LANE_SCOPE })
+
+  it('purges disease-lane rows for a profile with an EMPTY declared-health read; keeps a declared condition and every non-disease lane', async () => {
+    const db = makeCondDb()
+    try {
+      seed(db)
+      const res = await enforceConditionLaneMatchScope(db, { resolveThesis })
+      // Robert (empty read): amputee + kidney + arthritis purged; ECF CHOICES
+      // (state_programs, not a disease lane) never a candidate.
+      // John (arthritis in SUPPORT): arthritis kept, HLAA (hearing) purged.
+      expect(res.repaired).toBe(4)
+      expect(res.profilesSkipped).toBe(1)
+      expect(idsOf(db)).toEqual(['m-j-arthritis', 'm-r-ecf', 'm-u-kidney'])
+      // Converges.
+      expect((await enforceConditionLaneMatchScope(db, { resolveThesis })).repaired).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('MISSING = NEUTRAL: an unreadable thesis or a non-array declared_health_terms adjudicates nothing', async () => {
+    const db = makeCondDb()
+    try {
+      seed(db)
+      const neutral = async () => ({ declared_health_terms: undefined })
+      const res = await enforceConditionLaneMatchScope(db, { resolveThesis: neutral })
+      expect(res.repaired).toBe(0)
+      expect(idsOf(db)).toHaveLength(7)
+    } finally { db.close() }
+  })
+
+  it('ENFORCE_CONDITION_LANE_SCOPE=0 counts without deleting', async () => {
+    const db = makeCondDb()
+    try {
+      seed(db)
+      process.env.ENFORCE_CONDITION_LANE_SCOPE = '0'
+      const off = await enforceConditionLaneMatchScope(db, { resolveThesis })
+      expect(off.enforced).toBe(false)
+      expect(off.repaired).toBe(0)
+      expect(off.wouldRepair).toBe(4)
+      expect(idsOf(db)).toHaveLength(7)
+
+      delete process.env.ENFORCE_CONDITION_LANE_SCOPE
+      expect((await enforceConditionLaneMatchScope(db, { resolveThesis })).repaired).toBe(4)
+    } finally { db.close() }
+  })
+
+  it('a GENERIC descriptor ("disability") does not keep a named-condition lane (the #937 floor)', async () => {
+    const db = makeCondDb()
+    try {
+      seed(db)
+      const generic = async () => ({ declared_health_terms: ['disability'] })
+      const res = await enforceConditionLaneMatchScope(db, { resolveThesis: generic })
+      // Every disease-lane row goes: `disability` is a category of person,
+      // not a condition (GENERIC_HEALTH_DESCRIPTORS, same rule as the planner).
+      expect(res.repaired).toBe(6)
+      expect(idsOf(db)).toEqual(['m-r-ecf'])
     } finally { db.close() }
   })
 })

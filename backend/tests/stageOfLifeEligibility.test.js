@@ -263,6 +263,10 @@ describe('the stage-of-life registry is TOTAL', () => {
         'School of Medicine', 'medical school', 'resident physicians',
       ],
       postdoctoral: ['postdoctoral', 'postdocs'],
+      dual_enrollment: [
+        'Dual Enrollment Scholarships', 'dual-enrollment grant', 'dual enrolled',
+        'dually enrolled students',
+      ],
       adult_reentry: [
         'Reentry Scholarship', 'nontraditional students', 'non-traditional students',
         'returning adults', 'adult learners', 'adults returning',
@@ -375,6 +379,44 @@ describe('stageOfLifeConflict — the gate refuses, and only on a declaration', 
     expect(stageOfLifeConflict('undergraduate', postdoc)?.classId).toBe('postdoctoral')
     expect(stageOfLifeConflict('graduate_student', postdoc)).toBeNull()
     expect(stageOfLifeConflict('graduate_student', VANDERBILT_MED)).toBeNull()
+  })
+
+  it('a DUAL-ENROLLMENT award is refused for an enrolled college student (the Robert White class)', () => {
+    // REAL prod row, verbatim: institution-link ACCEPT 53 for Robert White,
+    // a full-time enrolled Cleveland State student — dual enrollment is being
+    // IN HIGH SCHOOL while earning college credit, which he provably is not.
+    const dual = row({
+      id: 'row-dual',
+      title: 'Cleveland State Foundation Dual Enrollment Scholarships',
+      sponsor: 'Cleveland State Community College',
+      description: 'Allows high school juniors and seniors to earn college credit.',
+    })
+    expect(stageOfLifeConflict('undergraduate', dual)?.classId).toBe('dual_enrollment')
+    expect(stageOfLifeConflict('graduate_student', dual)?.classId).toBe('dual_enrollment')
+    // The AUDIENCE is untouched: the high-schoolers it exists for.
+    expect(stageOfLifeConflict('high_school_student', dual)).toBeNull()
+    expect(stageOfLifeConflict('dual_enrolled_incoming_freshman', dual)).toBeNull()
+    // Unknown stage stays neutral, as everywhere.
+    expect(stageOfLifeConflict('unclassified', dual)).toBeNull()
+    expect(stageOfLifeConflict(null, dual)).toBeNull()
+  })
+
+  it('dual-enrollment inclusion: "and current college students" proves non-exclusive; "college credit" does not', () => {
+    const inclusive = row({
+      id: 'row-dual-incl',
+      title: 'Dual enrollment and current college students scholarship fund',
+      sponsor: 'A Community Foundation',
+    })
+    expect(stageOfLifeConflict('undergraduate', inclusive)).toBeNull()
+    // "earn college credit" is the phrase every dual-enrollment page contains —
+    // it is about CREDIT, not about admitting college students, and must not
+    // disarm the gate when it appears in the SAME fragment as the declaration.
+    const credit = row({
+      id: 'row-dual-credit',
+      title: 'Dual Enrollment Grant — earn college credit in high school',
+      sponsor: 'TSAC',
+    })
+    expect(stageOfLifeConflict('undergraduate', credit)?.classId).toBe('dual_enrollment')
   })
 
   it('derives the stage from SECTIONS through the canonical deriver', () => {

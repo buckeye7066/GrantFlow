@@ -247,11 +247,25 @@ describe('profileDerivedFacts — stage of life is DERIVED, never guessed', () =
   })
 
   it('real graduate-school phrasings still derive graduate_student', () => {
-    for (const level of ['Graduate student', 'MBA (graduate)', 'grad school — first year', 'Master of Science', 'PhD candidate', 'Professional degree (JD)']) {
+    for (const level of ['Graduate student', 'MBA (graduate)', 'grad school — first year', 'Master of Science', 'PhD candidate', 'Professional degree (JD)', 'Postgraduate diploma', 'post-graduate researcher']) {
       expect(deriveStageOfLife({
         basic_information: { academic_status: { education_level: level } },
       }).value, level).toBe('graduate_student')
     }
+  })
+
+  // SECOND LIVE INSTANCE, same day (2026-08-03): the phrase lookbehind above
+  // still let "graduate" match INSIDE the word "UNDERgraduate". Robert White
+  // (6b3c75ec) derived `graduate_student` from his verbatim
+  // `education.highest_level`, so the dual-enrollment/postdoctoral bars keyed
+  // on the WRONG stage and every stage-ranked lane read him as a grad student.
+  it('REGRESSION: "undergraduate" is never a graduate student (Robert White, verbatim)', () => {
+    expect(deriveStageOfLife({
+      education: { highest_level: 'College Student - Currently in undergraduate program' },
+    }).value).toBe('undergraduate')
+    expect(deriveStageOfLife({
+      basic_information: { academic_status: { education_level: 'UNDERGRADUATE' } },
+    }).value).toBe('undergraduate')
   })
 })
 

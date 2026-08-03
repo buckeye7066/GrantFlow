@@ -318,7 +318,14 @@ const HS_RX = /high school|secondary|senior|junior|sophomore|freshman \(hs\)/i
 // which disarmed the stage gate and re-admitted graduate/professional
 // fellowships (UAB Blazer class) for an incoming freshman. "graduated from
 // X" alone is also NOT graduate school ("graduated high school in May").
-const GRAD_RX = /master|doctor|phd|(?<!high school |hs |college )graduate(?!d)|grad school|professional degree/i
+// SECOND LIVE INSTANCE, same day: the phrase-lookbehind alone still let
+// "graduate" match INSIDE the word "UNDERgraduate" — Robert White's
+// `education.highest_level` is verbatim "College Student - Currently in
+// undergraduate program", and he derived `graduate_student`. A letter
+// lookbehind makes the token a WORD; `post-?graduate` is re-admitted
+// explicitly because the letter rule would otherwise drop bare
+// "postgraduate", which IS graduate school.
+const GRAD_RX = /master|doctor|phd|post-?graduate|(?<!high school |hs |college )(?<![a-z])graduate(?!d)|grad school|professional degree/i
 const UNDERGRAD_RX = /associate|bachelor|undergraduate|some college|college/i
 
 /**
