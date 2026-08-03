@@ -56,7 +56,6 @@ const dockerfile = readText('Dockerfile')
 const dockerignore = readText('.dockerignore')
 const envGenerator = readText('scripts/generate-env-examples.mjs')
 const healthRoutes = readText('backend/routes/health.js')
-const readinessTransform = readText('scripts/source-materialization/apply-readiness-deployment.mjs')
 
 const railwayApi = 'https://grantflow-production.up.railway.app/api/:path*'
 const railwayUploads = 'https://grantflow-production.up.railway.app/uploads/:path*'
@@ -131,36 +130,23 @@ assert(
   'index.html must stay no-store so deploy/promote rollouts are not masked by cache',
 )
 
-// The Docker runtime intentionally contains the already-materialized product, not
-// the build-only scripts directory. `npm start` is therefore unsafe in that image:
-// npm would execute package.json's `prestart` materializer and immediately fail on
-// a missing scripts/materialize-production-source.mjs. Railway must invoke the
-// same direct command declared by the Dockerfile CMD.
-assert(railway?.deploy?.startCommand === 'node backend/start.js', 'Railway must start the materialized runtime directly; npm start would invoke a build-only prestart script')
+// The Docker runtime image contains only product/runtime files, not the
+// build-only scripts directory, so `npm start` (or any npm lifecycle) is the
+// wrong entry point there. Railway must invoke the same direct command declared
+// by the Dockerfile CMD.
+assert(railway?.deploy?.startCommand === 'node backend/start.js', 'Railway must start the runtime directly; the runtime image carries no build scripts for npm lifecycles')
 assert(dockerfile.includes('CMD ["node", "backend/start.js"]'), 'Dockerfile CMD must start backend/start.js directly')
 
-// npm executes the root `prepare` lifecycle during npm ci. The builder therefore
-// has to copy the skip-aware bootstrap before dependency installation and set the
-// skip flag for that lifecycle. Moving either line below npm ci reopens the exact
-// Railway build failure where the lifecycle asks for a script that is not present.
-const bootstrapCopyIndex = dockerfile.indexOf('COPY scripts/materialize-production-source.mjs ./scripts/materialize-production-source.mjs')
 const dependencyInstallIndex = dockerfile.indexOf('npm ci --include=dev --include=optional --legacy-peer-deps')
-assert(bootstrapCopyIndex >= 0, 'Docker builder must copy the skip-aware materializer before npm ci')
 assert(dependencyInstallIndex >= 0, 'Docker builder must use the locked dependency install command')
-assert(bootstrapCopyIndex < dependencyInstallIndex, 'Docker materializer bootstrap must appear before npm ci')
-assert(
-  dockerfile.slice(Math.max(0, dependencyInstallIndex - 120), dependencyInstallIndex).includes('GRANTFLOW_SKIP_SOURCE_MATERIALIZATION=1'),
-  'Docker npm ci must suppress the prepare-time materialization until the full source tree is copied',
-)
 
-// The builder itself runs the materializer after COPY . . . That program imports
-// scripts/source-materialization modules and rewrites regression fixtures, so the
-// Docker context must retain scripts and tests even though the final runtime stage
-// never copies them. Docker also omits .git; the env generator must therefore have
-// a deterministic filesystem fallback rather than unconditionally running git.
-assert(!/^scripts\/?$/m.test(dockerignore), '.dockerignore must not remove the source materializer from the builder context')
-assert(!/^tests\/?$/m.test(dockerignore), '.dockerignore must not remove test fixtures consumed by source materialization')
-assert(!/^\*\.test\.\*$/m.test(dockerignore), '.dockerignore must not blanket-remove backend test fixtures consumed by source materialization')
+// Docker omits .git; the env generator must have a deterministic filesystem
+// fallback rather than unconditionally running git, and its scan reads scripts/
+// and test fixtures, so the build context must retain them even though the
+// final runtime stage never copies them.
+assert(!/^scripts\/?$/m.test(dockerignore), '.dockerignore must not remove scripts/ from the builder context')
+assert(!/^tests\/?$/m.test(dockerignore), '.dockerignore must not remove test fixtures from the builder context')
+assert(!/^\*\.test\.\*$/m.test(dockerignore), '.dockerignore must not blanket-remove backend test fixtures from the builder context')
 assert(envGenerator.includes('enumerateFilesystemSources'), 'env-example generator must support source archives and Docker contexts without .git')
 assert(envGenerator.includes('forceFilesystem'), 'env-example generator no-git fallback must be directly regression-testable')
 
@@ -174,7 +160,7 @@ assert(railway?.deploy?.healthcheckPath === '/healthz', 'Railway healthcheckPath
 assert(healthRoutes.includes("router.get('/healthz'"), 'backend health routes must expose /healthz liveness')
 assert(healthRoutes.includes("router.get('/readyz'"), 'backend health routes must expose /readyz release readiness')
 assert(
-  healthRoutes.includes("reason: 'mission_gate_failed'") || readinessTransform.includes("reason: 'mission_gate_failed'"),
+  healthRoutes.includes("reason: 'mission_gate_failed'"),
   '/readyz must retain the production mission gate even though Railway promotion uses /healthz',
 )
 assert(Number(railway?.deploy?.healthcheckTimeout || 0) >= 120, 'Railway healthcheckTimeout must be long enough for cold boot/migrations')

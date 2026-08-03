@@ -65,9 +65,8 @@ function enumerateFilesystemSources(root = repoRoot) {
  * Enumerate source files deterministically.
  *
  * A normal checkout uses `git ls-files`, which is the most precise definition
- * of repository-owned content. Docker intentionally excludes `.git`, though,
- * and the production builder still runs the source materializer. In that
- * environment we fall back to a sorted filesystem walk with build/output and
+ * of repository-owned content. Docker intentionally excludes `.git`, though.
+ * In that environment we fall back to a sorted filesystem walk with build/output and
  * editor-worktree directories excluded. This keeps the generated env contract
  * reproducible without copying repository history into the image.
  */

@@ -2,11 +2,11 @@ node_modules
 .git
 .github
 
-# The builder runs scripts/materialize-production-source.mjs after COPY . . .
-# Its deterministic transformations read source-materialization modules and
+# The builder needs scripts/ and tests/ in context: the env-example generator
+# has a no-git filesystem fallback that scans them, and build tooling reads
 # regression fixtures under tests/ and backend/**/tests/. Keep those build-time
 # inputs in the context. The final runtime stage still copies only the
-# materialized backend/shared/config/dist assets, so scripts and tests do not ship.
+# backend/shared/config/dist assets, so scripts and tests do not ship.
 
 docs
 *.md

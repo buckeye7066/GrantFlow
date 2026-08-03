@@ -17,7 +17,7 @@ test('env generator has a deterministic no-git filesystem fallback for Docker bu
   try {
     write(root, 'backend/server.js', 'process.env.BACKEND_SAMPLE')
     write(root, 'src/config/env.js', 'import.meta.env.VITE_SAMPLE')
-    write(root, 'scripts/materialize-production-source.mjs', 'process.env.BUILD_SAMPLE')
+    write(root, 'scripts/example-build-tool.mjs', 'process.env.BUILD_SAMPLE')
     write(root, 'tests/unit/example.test.mjs', 'process.env.TEST_SAMPLE')
     write(root, 'node_modules/pkg/index.js', 'process.env.MUST_NOT_SCAN')
     write(root, 'dist/bundle.js', 'process.env.MUST_NOT_SCAN')
@@ -28,7 +28,7 @@ test('env generator has a deterministic no-git filesystem fallback for Docker bu
 
     assert.deepEqual(relative, [
       'backend/server.js',
-      'scripts/materialize-production-source.mjs',
+      'scripts/example-build-tool.mjs',
       'src/config/env.js',
       'tests/unit/example.test.mjs',
     ])
@@ -37,13 +37,12 @@ test('env generator has a deterministic no-git filesystem fallback for Docker bu
   }
 })
 
-test('Docker build context retains every source-materializer input', () => {
+test('Docker build context retains the env-generator scan surface', () => {
   const dockerignore = fs.readFileSync('.dockerignore', 'utf8')
   const dockerfile = fs.readFileSync('Dockerfile', 'utf8')
 
   assert.doesNotMatch(dockerignore, /^scripts\/?$/m)
   assert.doesNotMatch(dockerignore, /^tests\/?$/m)
   assert.doesNotMatch(dockerignore, /^\*\.test\.\*$/m)
-  assert.match(dockerfile, /RUN node scripts\/materialize-production-source\.mjs/)
   assert.match(dockerfile, /COPY \. \./)
 })

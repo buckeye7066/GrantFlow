@@ -12,23 +12,12 @@ RUN apt-get update \
 
 COPY package*.json ./
 
-# npm runs the root `prepare` lifecycle during `npm ci`. Copy the tiny,
-# skip-aware bootstrap before dependency installation so the lifecycle can
-# observe GRANTFLOW_SKIP_SOURCE_MATERIALIZATION instead of failing because the
-# script path does not exist yet. The full generator tree arrives with COPY . .
-# and runs exactly once after the repository is complete.
-COPY scripts/materialize-production-source.mjs ./scripts/materialize-production-source.mjs
-RUN GRANTFLOW_SKIP_SOURCE_MATERIALIZATION=1 \
-  npm ci --include=dev --include=optional --legacy-peer-deps
+RUN npm ci --include=dev --include=optional --legacy-peer-deps
 
 COPY . .
 
-# Materialize and verify the exact product tree that passed the clean-room gate.
-# Generator inputs remain available in the builder for contract verification.
-# The production Docker runtime stage copies only materialized product/runtime
-# files, so the generator inputs and build-only verification scripts never ship.
-RUN node scripts/materialize-production-source.mjs
-
+# The production Docker runtime stage copies only product/runtime files, so
+# build-only scripts and tests never ship in the final image.
 RUN npm run build
 
 # Remove devDependencies so runtime image doesn't ship them
