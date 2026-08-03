@@ -8,6 +8,7 @@ import {
   enforceNeedFirstDecision,
   evaluateNeedFirstMatchPolicy,
 } from './needFirstMatchPolicy.js'
+import { applyEligibilityConfirmationPolicy } from './eligibilityConfirmation.js'
 
 export const NEED_FIRST_SCORING_VERSION = 'need_first_v2'
 
@@ -333,6 +334,21 @@ export function applyNeedFirstScoring({
       'Resource retained as a search aid; it is not a direct funding award.'
   }
 
+  const eligibilityPolicy = applyEligibilityConfirmationPolicy({
+  canonical,
+  score,
+  decision: decisionResult.decision,
+  explanation: decisionResult.explanation,
+  reasons: decisionResult.reasons,
+  resource: policy.resource,
+})
+score = eligibilityPolicy.score
+decisionResult.decision = eligibilityPolicy.decision
+decisionResult.explanation = eligibilityPolicy.explanation
+decisionResult.reasons = eligibilityPolicy.reasons
+const directEligibilityUnconfirmed =
+  eligibilityPolicy.confirmation.unconfirmed && !policy.resource
+
   const previousExplain = canonical?.match_explain ?? {}
   const previousBreakdown = previousExplain.scoreBreakdown ??
     previousExplain.score_breakdown ?? {}
@@ -346,6 +362,17 @@ export function applyNeedFirstScoring({
     ...previousExplain,
     needFirstPolicy: policy,
     scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+    eligibility_confirmation: {
+      confirmed: !directEligibilityUnconfirmed,
+      unconfirmed: directEligibilityUnconfirmed,
+      missing_fields: eligibilityPolicy.confirmation.missingFields,
+      all_missing_fields: eligibilityPolicy.confirmation.allMissingFields,
+      score_cap: directEligibilityUnconfirmed
+        ? eligibilityPolicy.confirmation.scoreCap
+        : null,
+      applied: eligibilityPolicy.applied,
+    },
+    eligibility_unconfirmed: directEligibilityUnconfirmed,
     dataPointEvidence: {
       ...previousEvidence,
       bonus_credit: Math.round(fit.boundedBonus * 10) / 10,
@@ -358,6 +385,11 @@ export function applyNeedFirstScoring({
       need_first_decision: policy.decision,
       need_first_score_cap: policy.scoreCap,
       need_first_hard_mismatch: policy.hardMismatch,
+      eligibility_unconfirmed: directEligibilityUnconfirmed,
+      eligibility_unconfirmed_score_cap: directEligibilityUnconfirmed
+        ? eligibilityPolicy.confirmation.scoreCap
+        : null,
+      eligibility_confirmation_applied: eligibilityPolicy.applied,
       data_point_bonus_credit: Math.round(fit.boundedBonus * 10) / 10,
       data_point_total_credit: Math.round(totalCredit * 10) / 10,
       total_before_need_first: clampScore(canonical?.score),
@@ -387,6 +419,8 @@ export function applyNeedFirstScoring({
     match_explain: matchExplain,
     matcherVersion: canonical?.matcherVersion ?? NEED_FIRST_SCORING_VERSION,
     scoringPolicyVersion: NEED_FIRST_SCORING_VERSION,
+    eligibilityConfirmed: !directEligibilityUnconfirmed,
+      eligibilityUnconfirmed: directEligibilityUnconfirmed,
   }
 }
 
