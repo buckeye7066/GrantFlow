@@ -66,7 +66,9 @@ export function createSamGovAdapter() {
         external_id: num,
         kind: OPPORTUNITY_KIND.PROGRAM,
         title: raw.title ?? null,
-        sponsor: raw.sponsor ?? 'U.S. Federal Agency',
+        // Owner rule 2026-08-03: never anonymize the funder — a missing agency
+        // stays NULL (honest missing) and rides the no-sponsor handling.
+        sponsor: raw.sponsor ?? null,
         summary: raw.summary ?? null,
         deadline: null,
         is_rolling: true, // standing program

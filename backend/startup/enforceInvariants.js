@@ -6354,9 +6354,9 @@ export async function enforceForeignJurisdictionMatches(db) {
     if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
     }
-    let detectForeignJurisdiction, foreignUrlSqlPredicate
+    let detectForeignOpportunity, foreignUrlSqlPredicate, foreignFunderNameSqlPredicate
     try {
-      ;({ detectForeignJurisdiction, foreignUrlSqlPredicate } = await import(
+      ;({ detectForeignOpportunity, foreignUrlSqlPredicate, foreignFunderNameSqlPredicate } = await import(
         '../config/opportunityJurisdiction.js'
       ))
     } catch (err) {
@@ -6383,27 +6383,37 @@ export async function enforceForeignJurisdictionMatches(db) {
       "lower(coalesce(o.source_url,'')) || ' ' || lower(coalesce(o.application_url,'')) || ' ' || " +
       "lower(coalesce(o.evidence_url,'')) || ' '"
     const { clause, params } = foreignUrlSqlPredicate(`(${hay})`)
+    // 2026-08-03 owner QA: foreign FUNDERS on generic .org/.com hosts (Tata
+    // Trusts, UK "LA Flex") evade the ccTLD predicate entirely — their evidence
+    // is the row's own IDENTITY text, so the candidate superset must also scan
+    // title+sponsor. Same posture: the LIKE list is a SUPERSET, the JS detector
+    // adjudicates.
+    const nameHay = "lower(coalesce(o.title,'')) || ' ' || lower(coalesce(o.sponsor,''))"
+    const { clause: nameClause, params: nameParams } = foreignFunderNameSqlPredicate(`(${nameHay})`)
 
     let oppRows
     try {
       oppRows = await db
         .prepare(
-          `SELECT o.id, o.title, o.source_url, o.application_url, o.evidence_url
+          `SELECT o.id, o.title, o.sponsor, o.source_url, o.application_url, o.evidence_url
              FROM funding_opportunities o
-            WHERE ${clause}`,
+            WHERE ${clause} OR ${nameClause}`,
         )
-        .all(...params)
+        .all(...params, ...nameParams)
     } catch (err) {
       log.warn('foreign_jurisdiction_matches: candidate query failed (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
     }
 
-    // The LIKE list is a SUPERSET; detectForeignJurisdiction is the authority
-    // (it re-parses the host and honours JURISDICTION_NEUTRAL_HOSTS).
+    // The LIKE list is a SUPERSET; detectForeignOpportunity is the authority
+    // (it re-parses the host, honours JURISDICTION_NEUTRAL_HOSTS, and holds the
+    // funder-name evidence to word-bounded identity patterns).
     const foreignOpps = new Map()
     for (const row of oppRows || []) {
-      const verdict = detectForeignJurisdiction(row)
-      if (verdict.foreign) foreignOpps.set(row.id, { ...row, cctld: verdict.cctld, host: verdict.host })
+      const verdict = detectForeignOpportunity(row)
+      if (verdict.foreign) {
+        foreignOpps.set(row.id, { ...row, cctld: verdict.cctld, host: verdict.host ?? verdict.funder ?? null })
+      }
     }
     if (foreignOpps.size === 0) return { scanned: oppRows?.length || 0, repaired: 0, enforced: true }
 
@@ -6477,6 +6487,165 @@ export async function enforceForeignJurisdictionMatches(db) {
       scanned: oppRows?.length || 0,
       repaired,
       foreignOpportunities: foreignOpps.size,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: a regulatory/administrative NOTICE, a lead-gen "scholarship", or a
+ * clearly-expired program is never a surfaced funding match (owner QA pass
+ * across all 36 profiles, 2026-08-03).
+ *
+ * The engine's procedural gate (RE_PROCEDURAL_NOTICE_TITLE via makeDecision)
+ * existed but (a) its pattern registry was narrower than the live junk — SEC
+ * "Self-Regulatory Organization; Notice of Filing of Proposed Rule Change",
+ * IRS/OMB "Agency Information Collection Activities; Comment Request", a DOL
+ * "Prohibited Transaction Exemption" for Meta Platforms, DOJ "Proposed Final
+ * Judgment" antitrust filings — and (b) the match store is a rolling snapshot:
+ * stored ACCEPT/REVIEW rows predate any gate and are replayed verbatim by the
+ * funding-sources route's persisted-truth policy. The per-call gate is the
+ * first line of defense; this sweep is the net that converges the store.
+ *
+ * Candidate discovery is a SQL LIKE SUPERSET over the row's OWN title
+ * (`nonGrantTitleSqlPredicate` — predicates before LIMIT, #944/#1080 class);
+ * the shared-chain classifiers adjudicate every candidate in JS. Only MATCH
+ * rows are deleted ("you can apply to this" was the false claim); the CATALOG
+ * row is never touched. A past FIRM DEADLINE alone never deletes here —
+ * deadline data is often the crawler's fault, so that class only re-buckets at
+ * presentation.
+ *
+ * `ENFORCE_NON_GRANT_NOTICE_SCOPE=0` → count-only. Bound: MATCH_SCOPE_PURGE_LIMIT.
+ */
+export async function enforceNonGrantNoticeMatches(db) {
+  return runInvariant('non_grant_notice_matches', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let classifyRegulatoryNotice, isLeadGenScholarship, isClearlyExpiredProgram, nonGrantTitleSqlPredicate
+    try {
+      ;({
+        classifyRegulatoryNotice,
+        isLeadGenScholarship,
+        isClearlyExpiredProgram,
+        nonGrantTitleSqlPredicate,
+      } = await import('../config/fundingResultFilters.js'))
+    } catch (err) {
+      log.warn('non_grant_notice_matches: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+
+    const { clause, params } = nonGrantTitleSqlPredicate("lower(coalesce(o.title,''))")
+    let oppRows
+    try {
+      oppRows = await db
+        .prepare(
+          `SELECT o.id, o.title, o.sponsor, o.deadline, o.deadline_type, o.source, o.source_id
+             FROM funding_opportunities o
+            WHERE ${clause}`,
+        )
+        .all(...params)
+    } catch (err) {
+      log.warn('non_grant_notice_matches: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    // Adjudicate the superset. POSITIVE junk evidence only:
+    //   - regulatory TITLE (the canonical procedural regex — the row's own words),
+    //   - lead-gen funder identity,
+    //   - clearly-expired program SHAPE (COVID rapid response / past PY year).
+    // A Federal-Register SOURCE alone re-buckets at presentation but never
+    // deletes here, and `deadline_long_past` is deliberately excluded.
+    const junkOpps = new Map()
+    for (const row of oppRows || []) {
+      const regulatory = classifyRegulatoryNotice({ title: row.title })
+      if (regulatory === 'regulatory_notice_title') {
+        junkOpps.set(row.id, { ...row, reason: regulatory })
+        continue
+      }
+      const leadGen = isLeadGenScholarship(row)
+      if (leadGen) {
+        junkOpps.set(row.id, { ...row, reason: `lead_gen:${leadGen}` })
+        continue
+      }
+      const expired = isClearlyExpiredProgram(row)
+      if (expired && expired !== 'deadline_long_past') {
+        junkOpps.set(row.id, { ...row, reason: `expired:${expired}` })
+      }
+    }
+    if (junkOpps.size === 0) return { scanned: oppRows?.length || 0, repaired: 0, enforced: true }
+
+    const oppIds = [...junkOpps.keys()]
+    const violating = []
+    const SELECT_CHUNK = 200
+    for (let i = 0; i < oppIds.length && violating.length < limit; i += SELECT_CHUNK) {
+      const slice = oppIds.slice(i, i + SELECT_CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      let rows
+      try {
+        rows = await db
+          .prepare(
+            `SELECT id AS match_id, profile_id, opportunity_id
+               FROM profile_opportunity_matches
+              WHERE opportunity_id IN (${ph})`,
+          )
+          .all(...slice)
+      } catch (err) {
+        log.warn('non_grant_notice_matches: match lookup failed (non-fatal)', { error: String(err?.message || err) })
+        return { scanned: oppRows?.length || 0, repaired: 0, enforced: true, skipped: 'query' }
+      }
+      for (const r of rows || []) {
+        if (violating.length >= limit) break
+        const opp = junkOpps.get(r.opportunity_id) || {}
+        violating.push({ ...r, title: opp.title, reason: opp.reason })
+      }
+    }
+
+    const describe = (v) => `${v.title} [${v.reason}]`
+    const disabled = _parseBoolEnv(process.env.ENFORCE_NON_GRANT_NOTICE_SCOPE) === false
+    if (disabled) {
+      if (violating.length > 0) {
+        log.warn('non-grant notices are matched to profiles (purge DISABLED via ENFORCE_NON_GRANT_NOTICE_SCOPE=0)', {
+          wouldRepair: violating.length,
+          junkOpportunities: junkOpps.size,
+          scanned: oppRows?.length || 0,
+          examples: violating.slice(0, 3).map(describe),
+        })
+      }
+      return {
+        scanned: oppRows?.length || 0,
+        repaired: 0,
+        wouldRepair: violating.length,
+        junkOpportunities: junkOpps.size,
+        enforced: false,
+      }
+    }
+    if (violating.length === 0) {
+      return { scanned: oppRows?.length || 0, repaired: 0, junkOpportunities: junkOpps.size, enforced: true }
+    }
+
+    const ids = violating.map((v) => v.match_id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed matches to non-grant notices (regulatory/lead-gen/clearly-expired)', {
+      repaired,
+      junkOpportunities: junkOpps.size,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map(describe),
+    })
+    return {
+      scanned: oppRows?.length || 0,
+      repaired,
+      junkOpportunities: junkOpps.size,
       profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
       enforced: true,
     }
@@ -8606,6 +8775,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // the US; the geography gate had no country concept at all, so these scored as
   // nationwide-eligible.
   steps.push(await enforceForeignJurisdictionMatches(db))
+  // Non-grant junk (owner QA 2026-08-03): regulatory/administrative notices,
+  // lead-gen "scholarships", and clearly-expired programs carry no claim a
+  // profile can act on. Sits with the scope purges so stored rows predating
+  // the widened procedural registry converge the same boot it ships.
+  steps.push(await enforceNonGrantNoticeMatches(db))
   // The award ceiling an INDIVIDUAL's pipeline has enforced for months, applied
   // to the match store that actually feeds the owner-facing list.
   steps.push(await enforceIndividualMatchAwardCeiling(db))
@@ -8864,6 +9038,7 @@ export const __testables = {
   enforceDeclaredGeoScope,
   enforceDeclaredPlaceScopeMatches,
   enforceForeignJurisdictionMatches,
+  enforceNonGrantNoticeMatches,
   enforceIndividualMatchAwardCeiling,
   enforceStudentAidEligibility,
   enforceProfileEligibility,

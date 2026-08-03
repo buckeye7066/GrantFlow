@@ -43,6 +43,7 @@ import { formatReasonText } from "@/utils/reasonText"
 import { createPageUrl } from "@/utils"
 import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
 import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
+import { resetFiltersPreservingProfile } from "./itemFundingState.js"
 
 // Human-readable labels for the applicant type the backend detected from the
 // selected profile. This is what makes the search visibly profile-aware: the
@@ -550,6 +551,12 @@ export default function ItemFunding() {
     }
     setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
     setSubmittedItem(filters.item.trim())
+    // CLEAR the input after submit (owner QA 2026-08-03). The submitted query
+    // stays visible in the "Showing results for ..." line; leaving the old
+    // text in the box is how a follow-up typed at a mid-string cursor produced
+    // the concatenated query "wheelchair raused pickup truckmp" ("used pickup
+    // truck" typed into the middle of "wheelchair ramp").
+    setFilters((prev) => ({ ...prev, item: "" }))
   }
 
   const applySuggestedItem = (name) => {
@@ -561,12 +568,13 @@ export default function ItemFunding() {
   }
 
   const handleReset = () => {
-    setFilters({
-      item: "",
-      state: "all",
-      includeNational: true,
-      profileId: "all",
-    })
+    // PRESERVE the selected profile (owner QA 2026-08-03). This reset used to
+    // set profileId back to "all", and it is wired to the zero-result
+    // guidance's "Try broader words" action — so after a first search with no
+    // clean results, one click silently dropped the profile and every
+    // follow-up search returned 0 with "Live web search: Needs a profile".
+    // A reset clears WHAT is searched, never WHO it is searched for.
+    setFilters(resetFiltersPreservingProfile)
     setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
     setSubmittedItem("")
   }

@@ -82,6 +82,47 @@ export const JURISDICTION_NEUTRAL_HOSTS = Object.freeze(new Set([
   'youtu.be',
 ]))
 
+/**
+ * Foreign funders that publish on GENERIC TLDs (.org/.com), which the ccTLD
+ * rule can never see. Owner QA pass 2026-08-03: UK "LA Flex"/"Energy Saving
+ * Grants" and India's "Tata Trusts — Individual Medical Grants" surfaced for
+ * US individuals (Lisa Klinger, Vivian Millican; Tata mis-tagged "TN" on 4+
+ * profiles) precisely because their hosts carry no jurisdiction-bearing suffix.
+ *
+ * TWO registries, both narrow by design (this is a funder-identity list, not a
+ * topic denylist — the #937 phrase-decay warning in this file's header still
+ * holds, which is why entries name a FUNDER, never a subject):
+ *   - FOREIGN_FUNDER_HOSTS: hostname (registrable-suffix matched) → ISO country.
+ *     Evidence is still the row's OWN url, same as the ccTLD rule.
+ *   - FOREIGN_FUNDER_NAMES: word-bounded regex over the row's OWN sponsor/title
+ *     (identity fields only — never description prose, #1086). Each entry names
+ *     one real foreign funding organization/scheme.
+ */
+export const FOREIGN_FUNDER_HOSTS = Object.freeze({
+  'tatatrusts.org': 'IN',
+  'energysavinggrants.org': 'GB',
+  'simpleenergyadvice.org.uk': 'GB',
+})
+
+export const FOREIGN_FUNDER_NAMES = Object.freeze([
+  // Tata Trusts (India) — "Tata Trusts – Individual Medical Grants" et al.
+  { rx: /\btata trusts?\b/i, country: 'IN', label: 'Tata Trusts' },
+  // UK Local Authority Flexible Eligibility ("LA Flex") energy schemes.
+  { rx: /\bla flex\b/i, country: 'GB', label: 'LA Flex (UK Local Authority Flexible Eligibility)' },
+  // UK aggregator "Energy Saving Grants" — SPONSOR-anchored shape only: the
+  // bare phrase "energy saving grants" is ordinary English a US program could
+  // use in a title, so the title form requires the ECO/Great British Insulation
+  // qualifier the UK scheme pages actually carry.
+  { rx: /\benergy saving grants\b.{0,60}\b(?:eco4?|great british insulation|uk)\b/i, country: 'GB', label: 'Energy Saving Grants (UK)' },
+])
+
+/** Sponsor-only exact names (lower-cased equality) for funders whose name is
+ * too generic to word-match in a title. */
+export const FOREIGN_FUNDER_SPONSORS = Object.freeze({
+  'energy saving grants': 'GB',
+  'tata trusts': 'IN',
+})
+
 /** Every url field a catalog row may carry, in the order the row prefers them. */
 const URL_FIELDS = Object.freeze([
   'source_url',
@@ -129,6 +170,16 @@ export function foreignCctldOfHost(host) {
  * @param {object} row catalog/opportunity-ish row (any url field shape)
  * @returns {{ foreign: boolean, cctld: string|null, host: string|null }}
  */
+/** The FOREIGN_FUNDER_HOSTS country for a hostname (registrable-suffix match), or null. */
+export function foreignFunderCountryOfHost(host) {
+  const h = String(host ?? '').toLowerCase().trim()
+  if (!h) return null
+  for (const [funderHost, country] of Object.entries(FOREIGN_FUNDER_HOSTS)) {
+    if (h === funderHost || h.endsWith(`.${funderHost}`)) return country
+  }
+  return null
+}
+
 export function detectForeignJurisdiction(row) {
   if (!row || typeof row !== 'object') return { foreign: false, cctld: null, host: null }
   for (const field of URL_FIELDS) {
@@ -136,8 +187,49 @@ export function detectForeignJurisdiction(row) {
     if (!host) continue
     const cctld = foreignCctldOfHost(host)
     if (cctld) return { foreign: true, cctld, host }
+    // Same evidence class (the row's OWN url), different registry: a foreign
+    // funder publishing on a generic TLD (tatatrusts.org) that the ccTLD rule
+    // is structurally blind to.
+    const funderCountry = foreignFunderCountryOfHost(host)
+    if (funderCountry) return { foreign: true, cctld: funderCountry.toLowerCase(), host }
   }
   return { foreign: false, cctld: null, host: null }
+}
+
+/**
+ * The SUPERSET detector for the whole foreign class: jurisdiction from the
+ * row's own url (ccTLD or registered foreign-funder host) OR a registered
+ * foreign FUNDER NAME stated in the row's own identity fields (sponsor/title —
+ * never description prose). Returns the same shape as detectForeignJurisdiction
+ * plus `funder` naming the matched registry entry when the evidence is a name.
+ *
+ * MISSING = NEUTRAL: a row with no urls and no matching identity text is never
+ * foreign.
+ */
+export function detectForeignOpportunity(row) {
+  const byUrl = detectForeignJurisdiction(row)
+  if (byUrl.foreign) return { ...byUrl, funder: null }
+  if (!row || typeof row !== 'object') return { foreign: false, cctld: null, host: null, funder: null }
+  const sponsor = String(row.sponsor ?? row.funder ?? '').trim()
+  const title = String(row.title ?? '').trim()
+  const sponsorKey = sponsor.toLowerCase()
+  if (sponsorKey && FOREIGN_FUNDER_SPONSORS[sponsorKey]) {
+    return {
+      foreign: true,
+      cctld: FOREIGN_FUNDER_SPONSORS[sponsorKey].toLowerCase(),
+      host: null,
+      funder: sponsor,
+    }
+  }
+  const identity = `${title} ${sponsor}`.trim()
+  if (identity) {
+    for (const entry of FOREIGN_FUNDER_NAMES) {
+      if (entry.rx.test(identity)) {
+        return { foreign: true, cctld: entry.country.toLowerCase(), host: null, funder: entry.label }
+      }
+    }
+  }
+  return { foreign: false, cctld: null, host: null, funder: null }
 }
 
 /**
@@ -223,7 +315,28 @@ export function foreignUrlLikePatterns() {
   for (const tld of FOREIGN_CCTLDS) {
     out.push(`%.${tld}/%`, `%.${tld} %`, `%.${tld}:%`, `%.${tld}?%`)
   }
+  // Registered foreign-funder hosts on generic TLDs — a bare substring is a
+  // safe SUPERSET here (the JS detector re-adjudicates by parsed hostname).
+  for (const host of Object.keys(FOREIGN_FUNDER_HOSTS)) {
+    out.push(`%${host}%`)
+  }
   return out
+}
+
+/**
+ * SQL prefilter (superset) for the row's own IDENTITY text naming a registered
+ * foreign funder, as a LIKE list over a lower-cased title+sponsor haystack.
+ * `detectForeignOpportunity` adjudicates each hit — a LIKE match alone never
+ * decides (the "energy saving grants" phrase needs its UK qualifier in JS).
+ */
+export function foreignFunderNameLikePatterns() {
+  return ['%tata trust%', '%la flex%', '%energy saving grants%']
+}
+
+export function foreignFunderNameSqlPredicate(hayExpr) {
+  const params = foreignFunderNameLikePatterns()
+  const clause = params.map(() => `${hayExpr} LIKE ?`).join(' OR ')
+  return { clause: `(${clause})`, params }
 }
 
 /**
@@ -246,12 +359,19 @@ export const DECLARED_STATE_TITLE_LIKE_PATTERNS = Object.freeze([
 export default {
   FOREIGN_CCTLDS,
   JURISDICTION_NEUTRAL_HOSTS,
+  FOREIGN_FUNDER_HOSTS,
+  FOREIGN_FUNDER_NAMES,
+  FOREIGN_FUNDER_SPONSORS,
   hostnameOf,
   foreignCctldOfHost,
+  foreignFunderCountryOfHost,
   detectForeignJurisdiction,
+  detectForeignOpportunity,
   declaredStateFromTitle,
   correctedGeoScopeFromTitle,
   DECLARED_STATE_TITLE_LIKE_PATTERNS,
   foreignUrlLikePatterns,
+  foreignFunderNameLikePatterns,
+  foreignFunderNameSqlPredicate,
   foreignUrlSqlPredicate,
 }

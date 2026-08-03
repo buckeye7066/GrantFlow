@@ -99,7 +99,9 @@ export function createGrantsGovAdapter() {
         external_id: id,
         kind: OPPORTUNITY_KIND.DIRECT_GRANT,
         title: raw.title ?? null,
-        sponsor: raw.sponsor ?? 'U.S. Federal Agency',
+        // Owner rule 2026-08-03: never anonymize the funder — a missing agency
+        // stays NULL (honest missing) and rides the no-sponsor handling.
+        sponsor: raw.sponsor ?? null,
         summary: raw.summary ?? (raw.number ? `Funding opportunity ${raw.number} (${raw.opp_status ?? 'posted'}).` : null),
         deadline: normalizeGrantsDate(raw.deadline),
         is_rolling: false,
