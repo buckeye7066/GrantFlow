@@ -5,7 +5,10 @@ Every entry cites code evidence at the anchor. Status vocabulary: CONFIRMED (tra
 code this audit) / MEASURED (prod numbers, source cited) / OPEN / IN-PR / FIXED (only
 with session-local proof).
 
-## F-01 — Source tree is self-modifying via the materialization patch stack — IN-PR
+## F-01 — Source tree was self-modifying via the materialization patch stack — FIXED (live-verified 2026-08-03)
+Merged as #1149 (`f07b3ffe`); prod image at `fc30ee3f` was built by the
+materializer-free Dockerfile and passes /readyz + mission gate (PRODUCTION_TRUTH.md).
+Stays-removed guard: `tests/unit/deployment-entry-points.test.mjs`.
 - Symptom: 8 npm lifecycle hooks + the Docker build run `scripts/materialize-production-source.mjs`,
   which can rewrite **45 tracked files** (28 product runtime, 11 tests, 3 env examples,
   2 of its own patch modules) via 27 patch modules (~5,100 lines), gated by bare
@@ -88,7 +91,9 @@ boot forever). `system_kv.enforce_invariants_last_run` write is itself in bare c
 - Name collision: two different `isFundableOpportunity` exports
   (`config/fundingResultFilters.js:257` vs `services/matching/qualityGate.js:110`).
 
-## F-07 — packetPdf browser launch drops container args — CONFIRMED, OPEN
+## F-07 — packetPdf browser launch drops container args — FIXED, DEPLOYED (behavior exercised on next prod PDF render)
+Merged as #1151 (`fc30ee3f`, the live prod SHA). Totality tripwire:
+`backend/tests/browserLaunchArgs.test.js` (failing-first verified).
 `services/packetPdf.js:26,:50` — bare `chromium.launch({headless:true})` with no
 `CHROMIUM_CONTAINER_ARGS` (`--disable-dev-shm-usage` omission previously OOM-killed
 the container). `hamiltonApplicationPacketGenerator.js:477-480` keeps args but not
