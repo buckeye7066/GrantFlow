@@ -76,7 +76,14 @@ export function classifyAidType(award = {}) {
   const text = `${award?.title || ''} ${award?.amountDisplay || ''} ${award?.status || ''} ${award?.description || ''}`.trim()
   if (!text) return 'unknown'
   if (WORK_STUDY_RX.test(text)) return 'work_study'
-  if (LOAN_RX.test(text) && !LOAN_NEGATIONS.test(text)) return 'loan'
+  // A MIXED program is not a pure loan. "Community Facilities Direct Loan and
+  // Grant Program" (USDA) names BOTH; classifying it 'loan' let the aid-type
+  // preference gate hard-REJECT a real grant path at the matching choke point
+  // — for profiles that never declared any preference at all. The engine's own
+  // loan normalizer deliberately exempts mixed loan+grant programs for the
+  // same reason; this mirrors it. A PURE loan title still classifies 'loan'.
+  const grantSide = ENDOWMENT_RX.test(text) || SCHOLARSHIP_RX.test(text) || GRANT_RX.test(text)
+  if (LOAN_RX.test(text) && !LOAN_NEGATIONS.test(text) && !grantSide) return 'loan'
   if (ENDOWMENT_RX.test(text)) return 'endowment'
   if (SCHOLARSHIP_RX.test(text)) return 'scholarship'
   if (GRANT_RX.test(text)) return 'grant'
