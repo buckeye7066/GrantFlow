@@ -1,0 +1,16 @@
+---
+description: Cross-assistant session sync briefs — read the latest before working
+alwaysApply: true
+---
+
+Before starting work, read the NEWEST file in `docs/agent-sync/` (dated
+cross-assistant session briefs from Claude Code / Codex / Cursor sessions).
+It records owner directives, in-flight agents and their branches/worktrees,
+uncommitted WIP that is not yours, and prod measurements — so parallel
+assistants do not collide, re-fix already-fixed defects, or contradict an
+owner directive issued in another chat.
+
+Latest as of 2026-08-03: `docs/agent-sync/2026-08-03-claude-session-sync.md`.
+
+When you finish a substantial session, append your own dated brief to
+`docs/agent-sync/` in the same shape (directives, shipped, in-flight, traps).
