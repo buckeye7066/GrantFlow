@@ -384,6 +384,11 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
     } catch { dismissed = false }
     if (dismissed) { out.awardsDismissed += 1; continue }
 
+    // The portal's own status ("under consideration", "awarded", …) is a real
+    // fact the connectors read (types.js PortalReadAward.status) that used to
+    // be dropped right here. funding_opportunities has no status column, so it
+    // rides the description — visible everywhere the row renders, never lost.
+    const portalStatus = String(a?.status || '').trim()
     const award = {
       id: awardId,
       title,
@@ -391,7 +396,7 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
       external_id: a?.externalId || null,
       amount: Number.isFinite(Number(a?.amount)) ? Number(a.amount) : null,
       amount_display: a?.amountDisplay || null,
-      description: `Read from ${portalHost} via Hamilton portal sync`,
+      description: `Read from ${portalHost} via Hamilton portal sync${portalStatus ? ` — portal status: ${portalStatus}` : ''}`,
       portal_url: a?.sourceUrl || connection.portal_url,
       source_url: a?.sourceUrl || connection.portal_url,
     }

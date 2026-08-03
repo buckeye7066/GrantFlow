@@ -362,7 +362,14 @@ export function matchesCredential({ host, username = null, label = null } = {}) 
 }
 
 /** @type {import('../types.js').PortalConnector} */
-const connector = { id, label, hostMatch, requiresSession, matchesCredential, read, write }
+// supportsFullMerge/requiredReadDomains MUST ride the default export: the
+// registry consumes this object, and omitting them made resolveMergeState see
+// `supportsFullMerge === undefined`, so an MTSU sync could never reach the
+// terminal `merged` state no matter how complete the read was.
+const connector = {
+  id, label, hostMatch, requiresSession, supportsFullMerge, requiredReadDomains,
+  matchesCredential, read, write,
+}
 
 // Convenience: does this connector claim the given host?
 export function matchesHost(host) {

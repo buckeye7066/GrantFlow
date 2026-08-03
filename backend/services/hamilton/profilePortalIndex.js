@@ -47,7 +47,6 @@ import {
 } from './hamiltonPortalCredentialService.js'
 import { resolveConnector, getConnectorForHost } from './portalSync/registry.js'
 import { suggestPortalLogin } from './hamiltonPortalLoginSuggester.js'
-import { listRuns } from './portalSync/store.js'
 import { resolveProcessPortals } from './processPortals.js'
 import { loadProfileSignals } from '../profileSignals/index.js'
 import { createLogger } from '../../utils/logger.js'
@@ -162,6 +161,7 @@ const PORTAL_PLATFORM_HOSTS = new Set([
   'fastweb.com', 'scholarsapp.com', 'mykaleidoscope.com', 'cappex.com',
   'salesforce.com', 'force.com', 'fluidreview.com', 'wizehive.com',
   'grantinterface.com', 'grantrequest.com', 'fluxx.io',
+  'ngwebsolutions.com', // NGWeb "Scholarship Manager" tenants (<school>.scholarships.ngwebsolutions.com)
 ])
 
 // Path affordances that indicate a login / application portal rather than an
@@ -500,15 +500,75 @@ async function hasReadyIdentity(db, profileId, host, { credentialDomains } = {})
   return { hasCredential, hasSession }
 }
 
-/** Latest portal_sync_runs row for (profile, host) → compact lastSync shape. */
-async function latestSync(db, profileId, host) {
+/**
+ * ONE query for the whole profile's sync history, folded per host:
+ *  - latest:    the newest run of ANY status (drives "Syncing…"/"Sync failed")
+ *  - completed: the newest status='completed' run (drives the "Synced • <date>"
+ *               tag — a failed run is NOT a sync, the portalSyncStaleness rule:
+ *               prod holds failed runs beside completed ones on the same host)
+ *
+ * Replaces the per-host listRuns(limit:1) N+1, and gives process tiles (which
+ * hardcoded lastSync:null) the same data for free.
+ *
+ * @returns {Promise<Map<string, { latest: object, completed: object|null }>>}
+ */
+async function loadSyncSummaryByHost(db, profileId) {
+  const out = new Map()
   try {
-    const runs = await listRuns(db, { profileId, portalHost: host, limit: 1 })
-    const r = (runs || [])[0]
-    if (!r) return null
-    return { direction: r.direction, status: r.status, at: r.finished_at || r.started_at }
-  } catch {
-    return null
+    const rows = await db.prepare(
+      `SELECT portal_host, direction, status, error, started_at, finished_at
+         FROM portal_sync_runs
+        WHERE profile_id = ?
+        ORDER BY started_at DESC
+        LIMIT 1000`,
+    ).all(String(profileId))
+    for (const r of rows || []) {
+      const host = String(r?.portal_host || '').trim().toLowerCase()
+      if (!host) continue
+      const run = {
+        direction: r.direction,
+        status: r.status,
+        error: r.error || null,
+        at: r.finished_at || r.started_at,
+      }
+      const entry = out.get(host) || { latest: null, completed: null }
+      if (!entry.latest) entry.latest = run
+      if (!entry.completed && String(r.status) === 'completed') entry.completed = run
+      out.set(host, entry)
+    }
+  } catch { /* table absent on an old deploy → every portal reads never-synced */ }
+  return out
+}
+
+/**
+ * The sync fields every tile (derived AND process) carries. `lastSync` keeps
+ * its historical shape ({direction,status,at}) for existing consumers;
+ * `lastSyncedAt`/`lastSyncedDirection` are the completed-only "Synced • <date>"
+ * facts; `syncState` is the compact vocabulary the badge renders from.
+ */
+function syncFieldsForHost(syncByHost, host) {
+  const entry = host ? syncByHost?.get?.(String(host).toLowerCase()) : null
+  const latest = entry?.latest || null
+  const completed = entry?.completed || null
+  let syncState = 'never'
+  if (latest) {
+    const s = String(latest.status || '').toLowerCase()
+    if (s === 'running') syncState = 'running'
+    else if (s === 'failed' || latest.error) syncState = 'failed'
+    else if (completed) syncState = 'synced'
+  } else if (completed) {
+    syncState = 'synced'
+  }
+  const toIso = (v) => {
+    if (!v) return null
+    const t = new Date(v)
+    return Number.isNaN(t.getTime()) ? null : t.toISOString()
+  }
+  return {
+    lastSync: latest ? { direction: latest.direction, status: latest.status, at: latest.at } : null,
+    lastSyncedAt: toIso(completed?.at),
+    lastSyncedDirection: completed?.direction || null,
+    syncState,
   }
 }
 
@@ -570,7 +630,7 @@ async function collectProcessPortals(db, profileId) {
  * live ready/needs_setup status computed exactly like derived portals. A school
  * tile with no resolved host stays renderable (status needs_setup, no host).
  */
-async function buildProcessTile(db, profileId, desc, { credentialDomains } = {}) {
+async function buildProcessTile(db, profileId, desc, { credentialDomains, syncByHost } = {}) {
   const host = desc.portalHost || null
   const connector = host ? getConnectorForHost(host) : null
   const loginUrl = firstNonEmpty(desc.loginUrl) || (host ? `https://${host}` : null)
@@ -596,7 +656,7 @@ async function buildProcessTile(db, profileId, desc, { credentialDomains } = {})
     hasSession,
     connectorId: connector?.id || null,
     supportsTwoWaySync: isRealConnector(connector),
-    lastSync: null,
+    ...syncFieldsForHost(syncByHost, host),
     isProcessPortal: true,
     scope: desc.scope || null,
     state: desc.state || null,
@@ -656,6 +716,9 @@ export async function getProfilePortals(db, profileId, { refresh = true } = {}) 
       }
     } catch { /* no credentials — every host falls back to session lookup */ }
 
+    // One query for the whole profile's sync history (derived + process tiles).
+    const syncByHost = await loadSyncSummaryByHost(db, profileId)
+
     const portals = []
     for (const entry of acc.values()) {
       const host = entry.portalHost
@@ -688,7 +751,6 @@ export async function getProfilePortals(db, profileId, { refresh = true } = {}) 
       const { hasCredential, hasSession } = await hasReadyIdentity(db, profileId, host, { credentialDomains })
       const status = (hasCredential || hasSession) ? 'ready' : 'needs_setup'
       const supportsTwoWaySync = isRealConnector(connector)
-      const lastSync = await latestSync(db, profileId, host)
 
       portals.push({
         portalHost: host,
@@ -701,7 +763,7 @@ export async function getProfilePortals(db, profileId, { refresh = true } = {}) 
         hasSession,
         connectorId,
         supportsTwoWaySync,
-        lastSync,
+        ...syncFieldsForHost(syncByHost, host),
       })
     }
 
@@ -724,7 +786,7 @@ export async function getProfilePortals(db, profileId, { refresh = true } = {}) 
         const school = normalizePortalLabel(desc.label)
         if (school && derivedLabels.some((l) => l === school || l.includes(school) || school.includes(l))) continue
       }
-      const tile = await buildProcessTile(db, profileId, desc, { credentialDomains })
+      const tile = await buildProcessTile(db, profileId, desc, { credentialDomains, syncByHost })
       portals.push(tile)
       if (tile.portalHost) derivedHosts.add(tile.portalHost)
     }

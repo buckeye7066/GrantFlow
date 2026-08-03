@@ -176,6 +176,14 @@ function syncTone(lastSync) {
   return { label: lastSync.status || "Unknown", tone: "muted", Icon: Clock }
 }
 
+// Compact date for the global "Synced • <date>" badge (no time-of-day noise).
+function formatWhenShort(iso) {
+  if (!iso) return ""
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ""
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
 function directionLabel(dir) {
   const d = String(dir || "").toLowerCase()
   if (d === "read") return "pulled from portal"
@@ -901,6 +909,18 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-1.5 self-start">
+            {/* Global "Synced • <date>" tag — rendered for ANY portal whose last
+                COMPLETED sync run exists (failed runs never earn it), regardless
+                of ready/two-way state, so the owner can see at a glance that
+                information moved and when. */}
+            {portal.lastSyncedAt && (
+              <span
+                className="money inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[#bfe0cd] bg-current-emeraldSoft px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-[#0d5536]"
+                title={`Last successful sync ${formatWhen(portal.lastSyncedAt)} (${directionLabel(portal.lastSyncedDirection)})`}
+              >
+                <CheckCircle2 className="h-3 w-3" /> Synced • {formatWhenShort(portal.lastSyncedAt)}
+              </span>
+            )}
             {/* Merge lifecycle badge — the backend annotates every tile with its
                 real merged/complete state (profile_portal_status); render it so
                 the dashboard matches reality instead of silently dropping it. */}

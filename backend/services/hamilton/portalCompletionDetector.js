@@ -49,6 +49,7 @@ const FUNDING_APPLICATION_HOSTS = new Set([
   'bold.org', 'goingmerry.com', 'scholarships.com', 'commonapp.org',
   'fastweb.com', 'mykaleidoscope.com', 'grantinterface.com', 'fluxx.io',
   'grants.gov', 'sam.gov',
+  'ngwebsolutions.com', // NGWeb "Scholarship Manager" tenants
 ])
 
 // Text / filename cues that indicate a COMPLETED (submitted/confirmed) funding
