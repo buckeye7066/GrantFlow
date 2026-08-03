@@ -91,6 +91,7 @@ import {
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isSearchEngineUrl } from '../../config/urlRules.js'
+import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
@@ -1156,7 +1157,27 @@ async function runAutopilotPathway(db, {
 
   let storageStatePath = options?.storageStatePath || null
   let documents = Array.isArray(options?.documents) ? [...options.documents] : []
-  let allowAutoSubmit = options?.allow_auto_submit ?? authorizations.submit_applications
+  // Submission authority (owner addendum 2026-08-03): when auto-submit IS
+  // authorized, the run must carry that authority to the portal's real submit
+  // step on EVERY run — not just the batch that created the task. The task's
+  // STORED authorizations are therefore consulted alongside the live ones:
+  //   - task.allow_auto_submit — the persisted batch option (same authority
+  //     the options flag has on the run that set it);
+  //   - task.auto_submit_enabled — the user's explicit per-task
+  //     "approve auto-submit" toggle (routes/applicationTasks approve-submit),
+  //     which previously only the legacy hamiltonApplicationAgent honored and
+  //     never reached this authoritative path. It keeps the legacy agent's
+  //     rail: the global HAMILTON_ALLOW_AUTOSUBMIT flag must also be on;
+  //   - authorizations.submit_applications — the authorization-store grant.
+  // No new path and no default flip: an explicit batch option still wins in
+  // both directions, all three stored/live sources default false, and every
+  // downstream gate (per-profile toggle, tailored-approval gate) can still
+  // force the run back to filled-not-submitted.
+  let allowAutoSubmit = options?.allow_auto_submit ?? (
+    Boolean(task?.allow_auto_submit)
+    || (Boolean(task?.auto_submit_enabled) && isAutoSubmitGloballyEnabled())
+    || authorizations.submit_applications
+  )
   // Per-profile automation toggle: turning OFF "Hamilton auto-submit" forces a
   // hand-back before submission regardless of the per-application authorization.
   // Absent preference defaults ON (current behaviour).
@@ -1400,6 +1421,11 @@ async function runAutopilotPathway(db, {
     }
     if (engineResult.status === 'submitted' || engineResult.status === 'completed_draft') break
     if (engineResult.status === 'failed' && engineResult.blocker_kind === 'no_browser') break
+    // NEVER re-run the engine after a submit click: submit_unconfirmed means
+    // the submit action already completed but no confirmation evidence could
+    // be captured — a resolver retry could submit the application TWICE.
+    // Hand straight to a human to verify receipt on the portal.
+    if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'submit_unconfirmed') break
 
     // ── Signup path (Portal Autopilot Identity) instead of parking ──
     // A login gate with NO usable credential anywhere (profile vault, admin
@@ -1551,31 +1577,49 @@ async function runAutopilotPathway(db, {
   })
 
   if (engineResult.status === 'submitted') {
+    // Evidence honesty (owner addendum 2026-08-03): "clicked submit" and
+    // "portal confirmed receipt" are different facts — the record says which
+    // one we have. A portal-issued reference is confirmed receipt; a
+    // screenshot-only capture is a completed submit action whose receipt the
+    // owner should verify on the portal. (The engine refuses to return
+    // status=submitted with NO evidence at all — that surfaces as a
+    // submit_unconfirmed blocker instead.)
+    const confirmationEvidence = engineResult.confirmation_evidence
+      || (engineResult.confirmation_reference ? 'portal_reference' : 'screenshot_only')
+    const portalConfirmed = confirmationEvidence === 'portal_reference'
+    const submittedMessage = portalConfirmed
+      ? `Hamilton Autopilot submitted the application and the portal confirmed receipt. Confirmation: ${engineResult.confirmation_reference}.`
+      : 'Hamilton Autopilot completed the portal\'s submit step and captured the final page screenshot; the portal showed no reference number. Verify receipt on the portal.'
     await updateApplicationTask(db, task.id, {
       status: 'submitted',
       submittedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
-      lastAgentMessage:
-        `Hamilton Autopilot submitted the application. Confirmation: ${engineResult.confirmation_reference || 'captured (see screenshot)'}.`,
+      lastAgentMessage: submittedMessage,
     })
     await appendTaskEvent(db, {
       taskId: task.id,
       eventType: 'submitted',
       status: 'submitted',
       step: 'autopilot',
-      message: `Hamilton Autopilot submitted: ${engineResult.confirmation_reference || 'reference captured in run record'}`,
+      message: submittedMessage,
       actorUserId: userId,
       actorRole: 'agent',
-      details: { autopilot_run_id: run.id, confirmation: engineResult.confirmation_reference, screenshot: engineResult.confirmation_screenshot_path },
+      details: {
+        autopilot_run_id: run.id,
+        confirmation: engineResult.confirmation_reference,
+        screenshot: engineResult.confirmation_screenshot_path,
+        confirmation_evidence: confirmationEvidence,
+        submit_clicked: engineResult.submit_clicked !== false,
+      },
     })
     await emitHamiltonNotificationToProfileAndAdmins(db, {
       profileId: task.profile_id,
       profileUserId: task.user_id,
       type: 'hamilton_submitted',
       title: 'Hamilton submitted through portal',
-      message: `Hamilton submitted "${opportunity?.title || grant?.title || 'this application'}" through the funder's portal. Confirmation: ${engineResult.confirmation_reference || 'captured in run record'}.`,
+      message: `Hamilton submitted "${opportunity?.title || grant?.title || 'this application'}" through the funder's portal. ${portalConfirmed ? `Confirmation: ${engineResult.confirmation_reference}.` : 'The portal showed no reference number — final-page screenshot captured; verify receipt on the portal.'}`,
       severity: 'success',
-      data: { task_id: task.id, run_id: run.id, confirmation: engineResult.confirmation_reference },
+      data: { task_id: task.id, run_id: run.id, confirmation: engineResult.confirmation_reference, confirmation_evidence: confirmationEvidence },
     })
     await emitHamiltonLifecycleAlerts(db, {
       profileId: task.profile_id,
@@ -1821,6 +1865,7 @@ function blockerTitle(kind) {
     case 'signature':   return 'Hamilton hit a signature step'
     case 'attestation': return 'Hamilton hit a legal attestation'
     case 'validation':  return 'Hamilton hit a validation error'
+    case 'submit_unconfirmed': return 'Verify portal receipt — submit completed without captured confirmation'
     default:            return 'Hamilton stopped on a blocker'
   }
 }
