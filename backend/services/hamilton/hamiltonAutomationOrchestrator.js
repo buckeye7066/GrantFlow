@@ -61,6 +61,11 @@ import { runAutopilot } from './hamiltonAutopilotEngine.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
+  loadDraftPacketForTask,
+  buildPortalAnswersFromDraftPacket,
+  summarizeDraftFill,
+} from './draftPacketPortalBridge.js'
+import {
   getDecryptedCredentialWithFallback,
   listCredentialedDomains,
   markCredentialUsed,
@@ -1267,6 +1272,45 @@ async function runAutopilotPathway(db, {
     }
   }
 
+  // ── DRAFT-PACKET → PORTAL BRIDGE (owner directive 2026-08-03) ────────
+  // When an internally drafted application packet exists for this funding
+  // source ("Start Proposal" → Auto-populate → applications /
+  // application_sections, possibly user-edited in the Apply page), its
+  // prepared content IS the fill source for the portal's long-form answers —
+  // for EVERY profile and EVERY portal, resolved only by the task's funding
+  // source (no per-school special-casing). It overrides a fresh re-draft
+  // (the packet is what the user saw and edited) but stays BELOW the
+  // APPROVED tailored text merged next. Submission authority is untouched:
+  // the run stays filled-not-submitted unless the existing allow_auto_submit /
+  // household-authorization gates all pass — the bridge never widens them.
+  let draftPacketFill = null
+  try {
+    const draftPacket = await loadDraftPacketForTask(db, {
+      profileId: task.profile_id,
+      grantId: grant?.id || task.grant_id || null,
+      opportunityId: opportunity?.id || task.opportunity_id || null,
+    })
+    if (draftPacket) {
+      const mapped = buildPortalAnswersFromDraftPacket(draftPacket.sections)
+      if (Object.keys(mapped.answers).length > 0) {
+        narrativeAnswers = { ...(narrativeAnswers || {}), ...mapped.answers }
+        draftPacketFill = { applicationId: draftPacket.application_id, sources: mapped.sources }
+        const described = Object.entries(mapped.sources)
+          .map(([key, secs]) => `${key} ← ${secs.join(' + ')}`)
+          .join('; ')
+        await appendTaskEvent(db, {
+          taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'draft_packet_bridge',
+          message: `Hamilton is using the drafted application packet as the portal fill source (${described}). Content is staged as filled-not-submitted; submission still requires the existing authorization gates.`,
+          actorUserId: userId, actorRole: 'agent',
+          details: { application_id: draftPacket.application_id, answer_sources: mapped.sources },
+        }).catch(() => {})
+      }
+    }
+  } catch (err) {
+    // The bridge is additive — a lookup failure must never break the run.
+    console.warn(`[hamiltonOrchestrator] draft-packet bridge failed (non-fatal): ${err?.message || err}`)
+  }
+
   // When the auto-submit gate approved this card, prefer the APPROVED/EDITED
   // tailored text as the portal's essay/goals answers — so what Hamilton
   // submits is exactly what the applicant signed off on, not a fresh
@@ -1419,6 +1463,35 @@ async function runAutopilotPathway(db, {
     }
     // 'blocked' or 'escalated' — Hamilton will surface the blocker to the user.
     break
+  }
+
+  // Auditable draft-fill record (outsideAwardReporter posture): the run/task
+  // record says exactly which portal answers were WRITTEN from which draft
+  // section — and "written" never reads as "sent". Attached to engineResult so
+  // every persistence path below (degraded, submitted, draft, blocked, failed)
+  // carries it into the autopilot run's result_json.
+  if (draftPacketFill && engineResult) {
+    const draftFillSummary = summarizeDraftFill({
+      applicationId: draftPacketFill.applicationId,
+      sources: draftPacketFill.sources,
+      engineResult,
+    })
+    if (draftFillSummary) {
+      engineResult.draft_packet_fill = draftFillSummary
+      if (draftFillSummary.filled_from_draft.length > 0) {
+        const described = draftFillSummary.filled_from_draft
+          .map((f) => `${f.key} ← ${f.draft_sections.join(' + ')}`)
+          .join('; ')
+        await appendTaskEvent(db, {
+          taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'draft_packet_filled',
+          message: draftFillSummary.submitted
+            ? `Hamilton filled portal field(s) from the drafted application packet (${described}); the run then submitted through the existing authorized submit flow.`
+            : `Hamilton filled portal field(s) from the drafted application packet (${described}). Written into the portal form and staged — not submitted.`,
+          actorUserId: userId, actorRole: 'agent',
+          details: draftFillSummary,
+        }).catch(() => {})
+      }
+    }
   }
 
   if (degradedDirective) {
