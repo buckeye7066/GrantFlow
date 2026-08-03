@@ -1,0 +1,74 @@
+name: Rebuild eligibility policy on current main
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'fix/eligibility-unconfirmed-cap'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/eligibility-unconfirmed-cap
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Create, format, and verify clean branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main fix/eligibility-unconfirmed-cap
+          git config user.name "GrantFlow Repair Bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          git switch -C fix/eligibility-unconfirmed-cap-v2 origin/main
+          for path in \
+            backend/services/matching/eligibilityConfirmation.js \
+            backend/services/matching/needFirstScoringAdapter.js \
+            backend/tests/eligibilityConfirmation.test.js \
+            backend/tests/needFirstEligibilityConfirmation.test.js
+          do
+            git checkout origin/fix/eligibility-unconfirmed-cap -- "$path"
+          done
+
+          npm ci
+          npx eslint \
+            backend/services/matching/eligibilityConfirmation.js \
+            backend/services/matching/needFirstScoringAdapter.js \
+            backend/tests/eligibilityConfirmation.test.js \
+            backend/tests/needFirstEligibilityConfirmation.test.js \
+            --fix
+          npx vitest run \
+            backend/tests/eligibilityConfirmation.test.js \
+            backend/tests/needFirstEligibilityConfirmation.test.js \
+            backend/tests/needFirstMatchPolicy.test.js \
+            backend/tests/needFirstPolicyEdgeCases.test.js \
+            backend/tests/persistedMatchTruth.test.js \
+            backend/tests/persistedNeedFirstEdgeCases.test.js
+          npm run typecheck
+          npm run build
+
+          git add \
+            backend/services/matching/eligibilityConfirmation.js \
+            backend/services/matching/needFirstScoringAdapter.js \
+            backend/tests/eligibilityConfirmation.test.js \
+            backend/tests/needFirstEligibilityConfirmation.test.js
+          git commit -m "fix(scoring): cap and label unconfirmed applicant eligibility"
+          git push --force-with-lease origin HEAD:fix/eligibility-unconfirmed-cap-v2
+
+          git switch -C fix/eligibility-unconfirmed-cap origin/fix/eligibility-unconfirmed-cap
+          rm -f .github/workflows/agent-rebuild-eligibility-v2.yml qa/rebuild-eligibility-v2-trigger.txt
+          git add -A
+          git commit -m "chore(scoring): remove one-shot rebuild workflow"
+          git push origin HEAD:fix/eligibility-unconfirmed-cap
