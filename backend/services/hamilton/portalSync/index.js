@@ -384,6 +384,11 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
     } catch { dismissed = false }
     if (dismissed) { out.awardsDismissed += 1; continue }
 
+    // The portal's own status ("under consideration", "awarded", …) is a real
+    // fact the connectors read (types.js PortalReadAward.status) that used to
+    // be dropped right here. funding_opportunities has no status column, so it
+    // rides the description — visible everywhere the row renders, never lost.
+    const portalStatus = String(a?.status || '').trim()
     const award = {
       id: awardId,
       title,
@@ -391,7 +396,7 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
       external_id: a?.externalId || null,
       amount: Number.isFinite(Number(a?.amount)) ? Number(a.amount) : null,
       amount_display: a?.amountDisplay || null,
-      description: `Read from ${portalHost} via Hamilton portal sync`,
+      description: `Read from ${portalHost} via Hamilton portal sync${portalStatus ? ` — portal status: ${portalStatus}` : ''}`,
       portal_url: a?.sourceUrl || connection.portal_url,
       source_url: a?.sourceUrl || connection.portal_url,
     }
@@ -746,6 +751,32 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       result.sync_state = mergeOutcome.state
       summary.merged = mergeOutcome.merged
       summary.sync_state = mergeOutcome.state
+
+      // UMBRELLA-APPLICATION COVERAGE (owner rule 2026-08-02): when the
+      // connector VERIFIED the school's general scholarship application
+      // submitted (quote-anchored), reflect that onto every governed pipeline
+      // grant and Hamilton task — the portal's own rule is that those
+      // scholarships cannot be applied to individually, so leaving them at
+      // pending_review describes work that does not exist. A read that
+      // verified nothing is a hard no-op inside the service.
+      if (readResult?.generalApplication) {
+        try {
+          const { applyGeneralApplicationCoverage } = await import('./generalApplicationCoverage.js')
+          const coverage = await applyGeneralApplicationCoverage(db, {
+            profileId,
+            portalHost: host,
+            tenant: readResult?.tenant || null,
+            generalApplication: readResult.generalApplication,
+            syncRunId: runId,
+          })
+          if (coverage?.applied) {
+            result.general_application_coverage = coverage
+            summary.general_application_coverage = coverage
+          }
+        } catch (err) {
+          log(`general-application coverage failed (non-fatal): ${err?.message}`)
+        }
+      }
     }
 
     if (dir === 'write' || dir === 'both') {

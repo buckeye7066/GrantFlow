@@ -556,3 +556,97 @@ describe('POST /api/profiles/:id/portals/packet → Documents + status shape', (
     expect(pkt.documentId).toBe(saved.body.documentId)
   })
 })
+
+// ── The global "Synced • <date>" tag (2026-08-02, owner rule: "once it is
+// synced, tag it as synced and the date the sync happened … globally for any
+// synced portal") ─────────────────────────────────────────────────────────────
+describe('sync fields on portal tiles', () => {
+  let db
+  beforeEach(async () => {
+    _resetProfilePortalIndexSchemaCache()
+    db = makeDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p1', 'Test Profile')
+    await ensureProfilePortalIndexSchema(db)
+    db.exec(`
+      CREATE TABLE portal_sync_runs (
+        id TEXT PRIMARY KEY, profile_id TEXT, portal_host TEXT, connector_id TEXT,
+        direction TEXT, status TEXT, summary TEXT, error TEXT, actor_user_id TEXT,
+        started_at DATETIME, finished_at DATETIME
+      );
+    `)
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url, application_method) VALUES (?, ?, ?, ?, ?)')
+      .run('g1', 'p1', 'Gates Grant', 'https://apply.gates.org/forms/123', 'portal')
+  })
+
+  it('a portal with no runs reads syncState never and no lastSyncedAt', async () => {
+    const { portals } = await getProfilePortals(db, 'p1')
+    const tile = derivedOnly(portals)[0]
+    expect(tile.syncState).toBe('never')
+    expect(tile.lastSyncedAt).toBeNull()
+    expect(tile.lastSync).toBeNull()
+  })
+
+  it('a COMPLETED run earns the tag: lastSyncedAt + direction + syncState synced', async () => {
+    db.prepare(`INSERT INTO portal_sync_runs (id, profile_id, portal_host, direction, status, started_at, finished_at)
+      VALUES ('r1', 'p1', 'gates.org', 'read', 'completed', '2026-08-01T03:00:00Z', '2026-08-01T03:01:00Z')`).run()
+    const { portals } = await getProfilePortals(db, 'p1')
+    const tile = derivedOnly(portals)[0]
+    expect(tile.syncState).toBe('synced')
+    expect(tile.lastSyncedAt).toBe(new Date('2026-08-01T03:01:00Z').toISOString())
+    expect(tile.lastSyncedDirection).toBe('read')
+  })
+
+  it('a FAILED run never earns the tag — but an EARLIER completed run keeps it (a failure is not a sync, and it does not erase one)', async () => {
+    db.prepare(`INSERT INTO portal_sync_runs (id, profile_id, portal_host, direction, status, started_at, finished_at)
+      VALUES ('r1', 'p1', 'gates.org', 'read', 'completed', '2026-08-01T03:00:00Z', '2026-08-01T03:01:00Z')`).run()
+    db.prepare(`INSERT INTO portal_sync_runs (id, profile_id, portal_host, direction, status, error, started_at, finished_at)
+      VALUES ('r2', 'p1', 'gates.org', 'read', 'failed', 'boom', '2026-08-02T03:00:00Z', '2026-08-02T03:00:30Z')`).run()
+    const { portals } = await getProfilePortals(db, 'p1')
+    const tile = derivedOnly(portals)[0]
+    // The badge fact: last SUCCESSFUL sync stays the completed run's stamp.
+    expect(tile.lastSyncedAt).toBe(new Date('2026-08-01T03:01:00Z').toISOString())
+    // The state fact: the latest run failed, and the tile says so.
+    expect(tile.syncState).toBe('failed')
+    expect(tile.lastSync.status).toBe('failed')
+  })
+
+  it('a failed-only history is failed with NO lastSyncedAt (never invents a sync)', async () => {
+    db.prepare(`INSERT INTO portal_sync_runs (id, profile_id, portal_host, direction, status, error, started_at, finished_at)
+      VALUES ('r1', 'p1', 'gates.org', 'read', 'failed', 'boom', '2026-08-02T03:00:00Z', '2026-08-02T03:00:30Z')`).run()
+    const { portals } = await getProfilePortals(db, 'p1')
+    const tile = derivedOnly(portals)[0]
+    expect(tile.syncState).toBe('failed')
+    expect(tile.lastSyncedAt).toBeNull()
+  })
+
+  it('a RUNNING latest run reads running while keeping the prior synced date', async () => {
+    db.prepare(`INSERT INTO portal_sync_runs (id, profile_id, portal_host, direction, status, started_at, finished_at)
+      VALUES ('r1', 'p1', 'gates.org', 'read', 'completed', '2026-08-01T03:00:00Z', '2026-08-01T03:01:00Z')`).run()
+    db.prepare(`INSERT INTO portal_sync_runs (id, profile_id, portal_host, direction, status, started_at)
+      VALUES ('r2', 'p1', 'gates.org', 'read', 'running', '2026-08-02T04:00:00Z')`).run()
+    const { portals } = await getProfilePortals(db, 'p1')
+    const tile = derivedOnly(portals)[0]
+    expect(tile.syncState).toBe('running')
+    expect(tile.lastSyncedAt).toBe(new Date('2026-08-01T03:01:00Z').toISOString())
+  })
+
+  it('PROCESS tiles carry the same fields (they used to hardcode lastSync:null)', async () => {
+    // A student profile gets the FAFSA process tile for studentaid.gov.
+    db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p1', 'education', JSON.stringify({ current_institution: 'MTSU', fafsa_status: 'submitted' }))
+    db.prepare(`INSERT INTO portal_sync_runs (id, profile_id, portal_host, direction, status, started_at, finished_at)
+      VALUES ('r1', 'p1', 'studentaid.gov', 'read', 'completed', '2026-08-03T03:16:40Z', '2026-08-03T03:17:34Z')`).run()
+    const { portals } = await getProfilePortals(db, 'p1')
+    const fafsa = portals.find((p) => p.portalHost === 'studentaid.gov')
+    if (fafsa) {
+      expect(fafsa.syncState).toBe('synced')
+      expect(fafsa.lastSyncedAt).toBe(new Date('2026-08-03T03:17:34Z').toISOString())
+      expect(fafsa.lastSync).not.toBeNull()
+    } else {
+      // The process-portal resolver did not offer FAFSA for this minimal
+      // profile shape — the derived-tile assertions above still hold; fail
+      // loudly so the fixture gets fixed rather than silently skipping.
+      throw new Error('expected a studentaid.gov process tile for a student profile — fixture needs a stronger student signal')
+    }
+  })
+})

@@ -503,6 +503,10 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
           result.recommendations.push({
             opportunity_id: matchOpp.id,
             title: matchOpp.title,
+            // The engine's generic-only ACCEPT cap evaluates title +
+            // DESCRIPTION; Amy's false_positive detector must read the same
+            // text, so the description travels with the recommendation.
+            description: matchOpp.description ?? null,
             sponsor: matchOpp.sponsor,
             kind: matchOpp.kind ?? null,
             amount_min: matchOpp.funding?.amount_min ?? null,

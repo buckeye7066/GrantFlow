@@ -84,6 +84,19 @@ export default function HamiltonReadinessBanner({ profileId }) {
                     )}
                     <span className="block text-xs opacity-80">
                       {p.reasons.map((reason) => reason.detail).join(" ")}
+                      {/* The payload already carries the last SUCCESSFUL sync
+                          stamp — render it so "needs a sync" always says when
+                          information last actually moved. */}
+                      {p.last_successful_sync_at && (
+                        <>
+                          {" "}Last synced{" "}
+                          {new Date(p.last_successful_sync_at).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                          .
+                        </>
+                      )}
                     </span>
                   </li>
                 ))}

@@ -17,11 +17,18 @@
 import { normalizeHost } from '../hamiltonCredentialSessionService.js'
 import mtsu from './connectors/mtsu.js'
 import studentaid from './connectors/studentaid.js'
+import ngwebScholarshipManager from './connectors/ngwebScholarshipManager.js'
 import genericConnector from './connectors/generic.js'
 
 // Specific connectors. Order matters only for overlapping patterns; keep
 // most-specific first. The generic fallback is intentionally NOT in this list.
-const CONNECTORS = Object.freeze([mtsu, studentaid])
+//
+// ngwebScholarshipManager MUST stay ahead of mtsu: mtsu.matchesCredential
+// claims ANY credential whose username/label says "mtsu" regardless of host,
+// so a credential saved for mtsu.scholarships.ngwebsolutions.com labelled
+// "MTSU Scholarships" would otherwise route to the mtsu.edu connector (which
+// navigates pipelinemt.mtsu.edu, the wrong portal entirely).
+const CONNECTORS = Object.freeze([ngwebScholarshipManager, mtsu, studentaid])
 
 /** @returns user-facing list of the real (non-generic) connectors. */
 export function listConnectors() {
