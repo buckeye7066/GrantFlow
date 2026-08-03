@@ -5,6 +5,10 @@ import {
   ensureProfileAccess,
 } from '../utils/accessControl.js'
 import { mapHamiltonStatus } from '../services/hamilton/applicationStatusPresentation.js'
+import {
+  updateApplicationTask,
+  appendTaskEvent,
+} from '../services/hamilton/applicationTaskStore.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grantApplications')
@@ -64,11 +68,12 @@ function mapRow(row) {
 // Pull Hamilton's automated applications (application_tasks) for this caller,
 // shaped like grant_applications so the tracker can show them alongside manual
 // ones. Read-only; tolerant of the table being absent.
-async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId, filterStatus, limit }) {
+async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId, filterStatus, limit, taskId = null }) {
   const clauses = []
   const params = []
   if (!isAdmin) { clauses.push('t.user_id = ?'); params.push(String(userId)) }
   if (filterProfileId) { clauses.push('t.profile_id = ?'); params.push(String(filterProfileId)) }
+  if (taskId) { clauses.push('t.id = ?'); params.push(String(taskId)) }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
   let rows = []
   try {
@@ -382,6 +387,41 @@ router.delete('/:id', async (req, res) => {
   }
 })
 
+// Mark a Hamilton application_tasks row submitted. The tracker's list endpoint
+// merges Hamilton's tasks into the board (source 'hamilton') under their TASK
+// ids, so "Mark Submitted" on one of those cards posts a task id that has no
+// grant_applications row — it must resolve against application_tasks with the
+// SAME scoping the list used to show the card (non-admins: t.user_id = caller),
+// not 404. Sets BOTH status='submitted' AND submitted_at: mapHamiltonStatus
+// only presents 'submitted' when the timestamp is persisted too (statuses tell
+// the truth), and records the user's attestation as a task event.
+async function submitHamiltonTask(req, res, { userId }) {
+  const taskId = String(req.params.id)
+  const scope = { isAdmin: !!req.ctx?.isAdmin, userId: String(userId), taskId, limit: 1 }
+  const [task] = await fetchHamiltonApplications(req.db, scope)
+  if (!task) return res.status(404).json({ error: 'Not found' })
+
+  const now = new Date().toISOString()
+  await updateApplicationTask(req.db, taskId, { status: 'submitted', submittedAt: now })
+  try {
+    await appendTaskEvent(req.db, {
+      taskId,
+      eventType: 'submitted',
+      status: 'submitted',
+      message: 'User marked this application submitted from the Application Tracker.',
+      actorUserId: String(userId),
+      actorRole: req.user?.role || null,
+      details: { manual_submit: true },
+    })
+  } catch (err) {
+    // The submit itself succeeded — don't turn a missing event row into a 500.
+    routeLogger.warn('[grant-applications] submit task-event append failed:', err?.message)
+  }
+
+  const [updated] = await fetchHamiltonApplications(req.db, scope)
+  return res.json(updated ?? null)
+}
+
 // POST /api/grant-applications/:id/submit — mark as submitted
 router.post('/:id/submit', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
@@ -393,7 +433,7 @@ router.post('/:id/submit', async (req, res) => {
       .prepare('SELECT * FROM grant_applications WHERE id = ?')
       .get(String(req.params.id))
 
-    if (!row) return res.status(404).json({ error: 'Not found' })
+    if (!row) return submitHamiltonTask(req, res, { userId })
 
     if (!req.ctx?.isAdmin && String(row.user_id) !== String(userId)) {
       return res.status(403).json({ error: 'Forbidden' })
