@@ -55,6 +55,8 @@
  * - ON CONFLICT DO NOTHING: a profile's own crawler-os row always wins.
  */
 
+import { isProposalEligibleOpportunity } from '../../../shared/opportunityFundability.js'
+import { isFundableOpportunity } from '../../config/fundingResultFilters.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('catalog-rescore')
@@ -93,12 +95,12 @@ export function isCatalogRescoreWriteEnabled(env = process.env) {
  *     anonymized-funder junk and signal-less rows never reach the engine.
  *     This is exactly the class the 2026-08-03 flood dry-run measured in the
  *     blind ACCEPT set (federal-register notices, embassy program rows).
+ *
+ * Both modules are loaded once at module initialization. This function runs on
+ * every candidate row, so per-row dynamic imports would add thousands of
+ * unnecessary promises to each boot census.
  */
-export async function passesFundabilityGate(opp) {
-  const [{ isProposalEligibleOpportunity }, { isFundableOpportunity }] = await Promise.all([
-    import('../../../shared/opportunityFundability.js'),
-    import('../../config/fundingResultFilters.js'),
-  ])
+export function passesFundabilityGate(opp) {
   return isProposalEligibleOpportunity(opp) && isFundableOpportunity(opp)
 }
 
@@ -161,11 +163,11 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     profiles_skipped_synthetic: 0,
     profiles_skipped_unconfigured: 0,
     profiles_completed: 0,
-    scanned: 0,          // rows pulled from the candidate predicate
-    not_fundable: 0,     // refused by the fundability choke point (never engined)
-    adjudicated: 0,      // real engine calls
-    linked: 0,           // ACCEPT rows written (write mode)
-    would_link: 0,       // ACCEPTs observed (count-only mode)
+    scanned: 0,
+    not_fundable: 0,
+    adjudicated: 0,
+    linked: 0,
+    would_link: 0,
     review: 0,
     rejected_by_engine: 0,
     unscorable: 0,
@@ -182,8 +184,6 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
         ORDER BY created_at, id`,
     ).all()
   } catch {
-    // Older schemas (and some fixtures) carry no created_by; the synthetic
-    // exclusion then keys on nothing and every profile is treated as real.
     try {
       profiles = await db.prepare(
         `SELECT id, NULL AS created_by FROM profiles
@@ -199,9 +199,6 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   const cursor = (writeEnabled ? await kvGetJson(db, CATALOG_RESCORE_KV_KEY) : null) ?? { profiles: {}, last_profile: null }
   if (!cursor.profiles || typeof cursor.profiles !== 'object') cursor.profiles = {}
 
-  // Catalog drift bucket: a completed profile is revisited when the active
-  // catalog has materially grown/changed since it completed (500-row buckets,
-  // the profileResultFloor posture).
   let activeBucket = 0
   try {
     const c = await db.prepare(
@@ -211,7 +208,6 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     activeBucket = Math.floor((Number(c?.c) || 0) / 500)
   } catch { /* bucket stays 0; drift reopening degrades, sweep still runs */ }
 
-  // Round-robin: resume AFTER the profile the last write-mode pass ended on.
   const ordered = [...(profiles || [])]
   if (cursor.last_profile) {
     const i = ordered.findIndex((p) => String(p.id) === String(cursor.last_profile))
@@ -224,8 +220,6 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   for (const p of ordered) {
     if (outOfBudget()) { summary.truncated = true; break }
     const profileId = String(p.id)
-    // Amy synthetics: excluded on positive evidence (created_by), the same
-    // signal every other sweep keys on. Their own lanes score them nightly.
     if (String(p.created_by ?? '') === 'agent:amy') { summary.profiles_skipped_synthetic += 1; continue }
 
     let ctx
@@ -240,7 +234,6 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     const entry = cursor.profiles[profileId] ?? {}
     if (entry.completed_at && entry.active_bucket === activeBucket) continue
     if (entry.completed_at && entry.active_bucket !== activeBucket) {
-      // The world moved: re-open from the top so NEW rows are adjudicated.
       delete entry.completed_at
       delete entry.watermark
     }
@@ -273,7 +266,7 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
       for (const opp of rows || []) {
         summary.scanned += 1
         watermark = { created_at: opp.created_at, id: opp.id }
-        if (!(await passesFundabilityGate(opp))) { summary.not_fundable += 1; continue }
+        if (!passesFundabilityGate(opp)) { summary.not_fundable += 1; continue }
         let decision
         try { decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections }) }
         catch { summary.unscorable += 1; summary.adjudicated += 1; continue }
@@ -328,14 +321,12 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     if (profileDone) summary.profiles_completed += 1
   }
   if (outOfBudget() && !summary.truncated) {
-    // Ran exactly to the bound: report it so `scanned == bound` is never a
-    // silent signature (#1080).
-    summary.truncated = spent() >= pairBudget
+    // Both bounds are truncation. A time-limited pass that happened to finish
+    // the last profile in the list is still incomplete and must not report a
+    // full sweep merely because the pair counter remained below its ceiling.
+    summary.truncated = true
   }
 
-  // CONVERGENCE (write mode only): a row this sweep linked that has since gone
-  // inactive is no longer a claim we may surface. Deleted catalog rows are the
-  // no_dangling_matches sweep's job; inactive ones are ours.
   if (writeEnabled) {
     try {
       const doomed = await db.prepare(
