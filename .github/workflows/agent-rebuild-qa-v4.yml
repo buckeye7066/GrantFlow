@@ -1,0 +1,143 @@
+name: Rebuild QA remaining gaps v4
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'fix/qa-36-remaining-gaps-v3'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/qa-36-remaining-gaps-v3
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Create, patch, and verify clean branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main fix/qa-36-remaining-gaps-v3
+          git config user.name "GrantFlow Repair Bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          git switch -C fix/qa-36-remaining-gaps-v4 origin/main
+          for path in \
+            backend/config/productionProfileScope.js \
+            backend/routes/fundingSources.js \
+            backend/services/crawlerOsCompatibility.js \
+            backend/services/matching/coldStartFundingFallback.js \
+            backend/services/profile/profileConfiguration.js \
+            backend/services/shared/liveWebSearch.js \
+            backend/tests/coldStartFundingFallback.test.js \
+            backend/tests/fundingSourcesColdStartAuditGuard.test.js \
+            backend/tests/productionProfileMatchingScope.test.js \
+            src/pages/ItemFunding.jsx \
+            src/pages/itemFundingMatch.js \
+            src/pages/itemFundingMatch.test.js
+          do
+            git checkout origin/fix/qa-36-remaining-gaps-v3 -- "$path"
+          done
+
+          python - <<'PY'
+          from pathlib import Path
+
+          compatibility = Path('backend/services/crawlerOsCompatibility.js')
+          text = compatibility.read_text(encoding='utf-8')
+          old = "SELECT id, display_name FROM profiles WHERE id = ?"
+          new = "SELECT * FROM profiles WHERE id = ?"
+          if text.count(old) != 1:
+              raise SystemExit(f'compatibility profile projection count={text.count(old)}')
+          compatibility.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('backend/tests/productionProfileMatchingScope.test.js')
+          test = test_path.read_text(encoding='utf-8')
+          marker = "it('does not replay historical stored matches for an explicit test profile'"
+          if marker not in test:
+              insert = r'''
+
+            it('does not replay historical stored matches for an explicit test profile', async () => {
+              const all = vi.fn(() => {
+                throw new Error('match rows must not be queried for a test profile')
+              })
+              const get = vi.fn(async () => ({
+                id: 'test-flagged-1',
+                display_name: 'Ordinary Looking Profile',
+                is_test: true,
+              }))
+              const db = {
+                dialect: 'postgres',
+                prepare(sql) {
+                  if (/FROM profiles/i.test(sql)) return { get }
+                  return { all }
+                },
+              }
+
+              await expect(loadCrawlerOsProfileResults(db, 'test-flagged-1')).resolves.toEqual([])
+              expect(get).toHaveBeenCalledOnce()
+              expect(all).not.toHaveBeenCalled()
+            })
+          '''
+              end = test.rfind('\n})')
+              if end < 0:
+                  raise SystemExit('test suite closing marker missing')
+              test = test[:end] + insert + test[end:]
+              test_path.write_text(test, encoding='utf-8')
+          PY
+
+          npm ci
+          npx eslint \
+            backend/config/productionProfileScope.js \
+            backend/routes/fundingSources.js \
+            backend/services/crawlerOsCompatibility.js \
+            backend/services/matching/coldStartFundingFallback.js \
+            backend/services/profile/profileConfiguration.js \
+            backend/services/shared/liveWebSearch.js \
+            backend/tests/coldStartFundingFallback.test.js \
+            backend/tests/fundingSourcesColdStartAuditGuard.test.js \
+            backend/tests/productionProfileMatchingScope.test.js \
+            src/pages/ItemFunding.jsx \
+            src/pages/itemFundingMatch.js \
+            src/pages/itemFundingMatch.test.js
+          npx vitest run \
+            backend/tests/productionProfileMatchingScope.test.js \
+            backend/tests/coldStartFundingFallback.test.js \
+            backend/tests/fundingSourcesColdStartAuditGuard.test.js \
+            src/pages/itemFundingMatch.test.js \
+            backend/tests/fundingSourceQueries.test.js \
+            backend/tests/itemNeedSearch.test.js
+          npm run typecheck
+          npm run build
+
+          git add \
+            backend/config/productionProfileScope.js \
+            backend/routes/fundingSources.js \
+            backend/services/crawlerOsCompatibility.js \
+            backend/services/matching/coldStartFundingFallback.js \
+            backend/services/profile/profileConfiguration.js \
+            backend/services/shared/liveWebSearch.js \
+            backend/tests/coldStartFundingFallback.test.js \
+            backend/tests/fundingSourcesColdStartAuditGuard.test.js \
+            backend/tests/productionProfileMatchingScope.test.js \
+            src/pages/ItemFunding.jsx \
+            src/pages/itemFundingMatch.js \
+            src/pages/itemFundingMatch.test.js
+          git commit -m "fix(qa): finish cold-start, internal-profile, and item-score gaps"
+          git push --force-with-lease origin HEAD:fix/qa-36-remaining-gaps-v4
+
+          git switch -C fix/qa-36-remaining-gaps-v3 origin/fix/qa-36-remaining-gaps-v3
+          rm -f .github/workflows/agent-rebuild-qa-v4.yml qa/rebuild-qa-v4-trigger.txt
+          git add -A
+          git commit -m "chore(qa): remove one-shot v4 rebuild workflow"
+          git push origin HEAD:fix/qa-36-remaining-gaps-v3
