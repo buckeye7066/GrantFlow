@@ -9,10 +9,15 @@ import { opportunityKindOf } from '../../shared/opportunityFundability.js'
 import { isNoPerAwardFigureKind } from '../config/opportunityKindClasses.js'
 import { classifyAidType } from '../config/aidTypePreferences.js'
 import { isIndividualLikeProfileType } from '../services/matchEngine.js'
+import { portalUrlFunderPlausibility } from '../config/urlRules.js'
 import { safeParseArrayField } from '../services/profileHelpers.js'
 import { createLogger } from '../utils/logger.js'
 
 const applyLog = createLogger('applyEngine')
+
+// UI/label constant for a submission target we could not verify. Exported so
+// route/UI layers render the exact same words instead of re-inventing copy.
+export const PORTAL_URL_UNVERIFIED_LABEL = 'unverified — confirm with funder'
 
 // System prompt used by the auto-populate flow. Hoisted to module top so the
 // async section writer can read it regardless of where the literal sits in
@@ -586,6 +591,23 @@ export async function validateApplication({ db, applicationId }) {
   const sections = await listSections({ db, applicationId })
   const checklist = await listChecklist({ db, applicationId })
 
+  // Portal-target plausibility (the cpcc-for-Cleveland-State class): a stored
+  // portal_url on a tenant-slug platform whose slug the funder's own name
+  // cannot explain is a WRONG-INSTITUTION link and must surface as a blocking
+  // finding, not ship silently in the submission instructions.
+  const grantRow = app?.grant_id
+    ? await db.prepare('SELECT funder FROM grants WHERE id = ?').get(String(app.grant_id))
+    : null
+  const portalUrlFlags = []
+  if (app?.portal_url && portalUrlFunderPlausibility(app.portal_url, grantRow?.funder) === 'implausible') {
+    portalUrlFlags.push({
+      url: String(app.portal_url),
+      reason: 'portal_domain_not_funder',
+      funder: grantRow?.funder ?? null,
+      message: `Portal URL does not plausibly belong to ${grantRow?.funder || 'the funder'} — ${PORTAL_URL_UNVERIFIED_LABEL}`,
+    })
+  }
+
   const missingChecklist = (checklist || [])
     .filter((i) => String(i.status || '').toLowerCase() !== 'done')
     .map((i) => ({
@@ -601,7 +623,11 @@ export async function validateApplication({ db, applicationId }) {
       title: s.title ?? null,
     }))
 
-  const ready = missingChecklist.length === 0 && emptySections.length === 0 && (sections || []).length > 0
+  const ready =
+    missingChecklist.length === 0 &&
+    emptySections.length === 0 &&
+    (sections || []).length > 0 &&
+    portalUrlFlags.length === 0
 
   if (ready && String(app.status || '').toLowerCase() === 'draft') {
     await db
@@ -618,6 +644,7 @@ export async function validateApplication({ db, applicationId }) {
       empty_sections: emptySections,
       no_sections: (sections || []).length === 0,
     },
+    portal_url_flags: portalUrlFlags,
   }
 }
 
@@ -730,13 +757,44 @@ export async function exportApplicationPackage({ db, applicationId, format }) {
   }
 }
 
-export async function markSubmitted({ db, applicationId, method, metadata }) {
+export async function markSubmitted({ db, applicationId, method, metadata, confirmIncomplete = false }) {
   const app = await getApplicationOr404(db, applicationId)
   const m = normalizeMethod(method)
   if (!m) {
     const err = new Error('Invalid submission method')
     err.status = 400
     throw err
+  }
+
+  // GUARD (live walkthrough 2026-08-03): "Mark submitted" was clickable at
+  // "Checklist: 0/6 done" with validation never run — a one-click, no-confirm
+  // internal status flip that LOOKED like sending an application. Marking
+  // submitted with an incomplete checklist now requires the caller to
+  // explicitly acknowledge the named incomplete items (`confirmIncomplete`,
+  // wired to the UI's hard-confirm step).
+  //
+  // Hamilton's autopilot mirror (`metadata.submitted_by === 'hamilton'`) is
+  // exempt BY DESIGN: it records a submission that ALREADY HAPPENED on the
+  // real portal, gated by its own evidence rules (assessSubmissionEvidence,
+  // PRs #1105/#1107) — the checklist here is the manual-flow aid, not that
+  // path's gate. Do not tighten this exemption without re-reading the
+  // "Portal automation chain (2026-08-03)" section of CLAUDE.md.
+  const isHamiltonMirror = String(metadata?.submitted_by || '').toLowerCase() === 'hamilton'
+  if (!isHamiltonMirror && !confirmIncomplete) {
+    const checklist = await listChecklist({ db, applicationId })
+    const incomplete = (checklist || [])
+      .filter((i) => String(i.status || '').toLowerCase() !== 'done')
+      .map((i) => ({ key: i.key, label: i.label ?? null, status: i.status ?? 'pending' }))
+    if (incomplete.length > 0) {
+      const err = new Error(
+        `Checklist incomplete (${incomplete.length} item${incomplete.length === 1 ? '' : 's'} not done). ` +
+          'Confirm you have completed these outside GrantFlow, or finish the checklist first.',
+      )
+      err.status = 409
+      err.code = 'CHECKLIST_INCOMPLETE'
+      err.details = { incomplete_checklist: incomplete }
+      throw err
+    }
   }
 
   // Non-fatal issues encountered during the submission side-effects. Surfaced
@@ -872,27 +930,75 @@ export async function markSubmitted({ db, applicationId, method, metadata }) {
   return finalRow
 }
 
+/**
+ * Resolve the application's submission target from the row's OWN verified
+ * link fields — and nothing else.
+ *
+ * HOUSE PRECEDENT (canonical-program class, CLAUDE.md): an application target
+ * may only come from the opportunity row's own verified links (application_url
+ * / source_url / evidence_url) — never minted by pattern, similarity, or
+ * guess. Live incident 2026-08-03: auto-populate shipped
+ * https://cpcc.academicworks.com/ (Central Piedmont CC, North Carolina) as the
+ * portal for a "Cleveland State Community College" (Tennessee) opportunity.
+ * The URL sat on the grant row, but its tenant slug names a DIFFERENT
+ * institution than the funder — so each candidate is also screened through
+ * portalUrlFunderPlausibility (the Yana whole-name rule applied to tenant
+ * slugs). An implausible candidate is SKIPPED and reported in `flagged`;
+ * when nothing survives, `url` is null and the UI must say
+ * PORTAL_URL_UNVERIFIED_LABEL rather than show a wrong link.
+ *
+ * NOTE: grant.application_method is deliberately NOT a URL source anymore —
+ * it is a method vocabulary field ('portal'|'email'|...), and reading URLs
+ * out of off-vocabulary values was an unaudited side door for exactly this
+ * class of wrong link.
+ */
+export function resolveVerifiedPortalUrl(grant, opportunity) {
+  const funderName = String(grant?.funder || opportunity?.sponsor || '').trim()
+  const candidates = [
+    grant?.application_url,
+    grant?.url,
+    grant?.source_url,
+    opportunity?.application_url,
+    opportunity?.apply_url,
+    opportunity?.source_url,
+    opportunity?.evidence_url,
+  ]
+  const flagged = []
+  const seen = new Set()
+  for (const raw of candidates) {
+    const candidate = String(raw ?? '').trim()
+    if (!candidate || !/^https?:\/\//i.test(candidate)) continue
+    if (seen.has(candidate)) continue
+    seen.add(candidate)
+    const verdict = portalUrlFunderPlausibility(candidate, funderName)
+    if (verdict === 'implausible') {
+      flagged.push({ url: candidate, reason: 'portal_domain_not_funder', funder: funderName || null })
+      continue
+    }
+    return { url: candidate, flagged }
+  }
+  return { url: null, flagged }
+}
+
 export async function autoPopulate({ db, applicationId }) {
   const app = await getApplicationOr404(db, applicationId)
   const grant = await db.prepare('SELECT * FROM grants WHERE id = ?').get(String(app.grant_id))
 
-  const sources = []
-  const sourceUrl = grant?.source_url ?? grant?.url ?? grant?.application_url ?? null
-  if (sourceUrl) sources.push(String(sourceUrl))
+  // Scoped lookup FIRST: resolve opportunity *through* the application→grant
+  // chain rather than trusting a raw opportunity id, so the portal-URL
+  // resolver below can consult the catalog row's own verified links too. If
+  // the chain is intact the opportunity is returned; otherwise we continue
+  // without it so auto-populate still works for free-form grants that were
+  // entered manually.
+  const scoped = await getScopedOpportunityForApplication(db, applicationId)
+  const opportunity = scoped.opportunity
 
-  let portalUrl = null
-  const maybePortal = grant?.application_method ?? null
-  if (maybePortal && /^https?:\/\//i.test(String(maybePortal))) portalUrl = String(maybePortal)
-  if (!portalUrl && sourceUrl && /^https?:\/\//i.test(String(sourceUrl))) portalUrl = String(sourceUrl)
+  const resolved = resolveVerifiedPortalUrl(grant, opportunity)
+  const portalUrl = resolved.url
+  const sources = portalUrl ? [portalUrl] : []
 
   // Gather profile data for AI content generation
   const profileData = await gatherProfileForApplication(db, grant)
-  // Scoped lookup: resolve opportunity *through* the application→grant chain
-  // rather than trusting a raw opportunity id. If the chain is intact the
-  // opportunity is returned; otherwise we continue without it so auto-populate
-  // still works for free-form grants that were entered manually.
-  const scoped = await getScopedOpportunityForApplication(db, applicationId)
-  const opportunity = scoped.opportunity
 
   const medNecCheck = requiresMedicalNecessity(opportunity || {})
 
@@ -915,19 +1021,44 @@ export async function autoPopulate({ db, applicationId }) {
     { key: 'gather_required_docs', label: 'Gather required documents/attachments', status: 'pending' },
     { key: 'review_budget', label: 'Review budget and match requirements', status: 'pending' },
     { key: 'final_review', label: 'Final review and compliance check', status: 'pending' },
-    { key: 'submit_application', label: buildSubmissionChecklistLabel(grant), status: 'pending' },
+    { key: 'submit_application', label: buildSubmissionChecklistLabel(grant, opportunity), status: 'pending' },
   ]
 
   // Generate AI content for each section using profile data
   const aiContent = await generateApplicationSections(db, grant, opportunity, profileData, defaultSections)
 
+  const portalUrlStatus = portalUrl
+    ? 'verified_row_link'
+    : resolved.flagged.length
+      ? 'unverified_flagged'
+      : 'unverified_no_link'
+
   await db.withTransaction(async () => {
     const patch = {
-      snapshot_json: { auto_populate: { sources, portal_url_source: sources[0] ?? null, profile_used: Boolean(profileData) } },
+      snapshot_json: {
+        auto_populate: {
+          sources,
+          portal_url_source: sources[0] ?? null,
+          portal_url_status: portalUrlStatus,
+          portal_url_flags: resolved.flagged,
+          portal_url_unverified_label: portalUrl ? null : PORTAL_URL_UNVERIFIED_LABEL,
+          profile_used: Boolean(profileData),
+        },
+      },
     }
     if (portalUrl) patch.portal_url = portalUrl
     if (grant?.application_method) patch.submission_method = mapMethodToSubmission(grant.application_method)
     await patchApplication({ db, applicationId, patch })
+
+    // A previously stored WRONG portal target must not survive a re-populate:
+    // when no verified link exists, the stored portal_url is cleared (blank +
+    // "unverified — confirm with funder"), never left pointing at another
+    // institution's portal. patchApplication COALESCEs, so this is explicit.
+    if (!portalUrl) {
+      await db
+        .prepare(`UPDATE applications SET portal_url = NULL, updated_at = ${nowSqlLiteral(db)} WHERE id = ?`)
+        .run(String(applicationId))
+    }
 
     for (const s of defaultSections) {
       const content = aiContent[s.section_key] || ''
@@ -941,6 +1072,8 @@ export async function autoPopulate({ db, applicationId }) {
   return {
     ok: true,
     portal_url: portalUrl,
+    portal_url_status: portalUrlStatus,
+    portal_url_flags: resolved.flagged,
     sources,
     sections_seeded: defaultSections.length,
     checklist_seeded: defaultChecklist.length,
@@ -1230,11 +1363,17 @@ const NON_LLM_SECTION_KEYS = new Set([
   'submission_instructions',
 ])
 
-function buildSubmissionChecklistLabel(grant) {
+function buildSubmissionChecklistLabel(grant, opportunity = null) {
   const method = grant?.application_method || ''
   if (method === 'print_and_mail' && grant?.funder_address) return `Print and mail to: ${grant.funder_address}`
   if (method === 'fax' && grant?.funder_fax) return `Fax completed application to: ${grant.funder_fax}`
-  if (method === 'portal' && (grant?.application_url)) return `Submit via online portal: ${grant.application_url}`
+  if (method === 'portal') {
+    // Only a row-verified, funder-plausible link may be named as the target
+    // (the cpcc-for-Cleveland-State class). No verified link → say so.
+    const vetted = resolveVerifiedPortalUrl(grant, opportunity).url
+    if (vetted) return `Submit via online portal: ${vetted}`
+    return `Submit via online portal (portal link ${PORTAL_URL_UNVERIFIED_LABEL})`
+  }
   if (grant?.contact_email) return `Submit via email to: ${grant.contact_email}`
   return 'Submit completed application per funder instructions'
 }
@@ -1671,10 +1810,19 @@ function buildSubmissionInstructions(grant, opportunity) {
   const method = grant?.application_method || ''
   parts.push(`## How to Submit\n`)
 
-  if (method === 'portal' || grant?.application_url) {
+  // Submission target comes ONLY from the row's own verified, funder-plausible
+  // links (canonical-program class precedent) — never straight off a column
+  // that could carry another institution's portal.
+  const vettedPortalUrl = resolveVerifiedPortalUrl(grant, opportunity).url
+  if (method === 'portal' || vettedPortalUrl) {
     parts.push(`**Method:** Online Portal Submission`)
-    if (grant?.application_url) parts.push(`**Portal URL:** ${grant.application_url}`)
-    parts.push(`\nVisit the portal URL above and follow the online instructions to complete your submission.`)
+    if (vettedPortalUrl) {
+      parts.push(`**Portal URL:** ${vettedPortalUrl}`)
+      parts.push(`\nVisit the portal URL above and follow the online instructions to complete your submission.`)
+    } else {
+      parts.push(`**Portal URL:** ${PORTAL_URL_UNVERIFIED_LABEL}`)
+      parts.push(`\nNo verified portal link is on file for this funder. Confirm the correct application portal with the funder before submitting.`)
+    }
   } else if (method === 'print_and_mail') {
     parts.push(`**Method:** Print and Mail`)
     if (grant?.funder_address) parts.push(`**Mailing Address:**\n${grant.funder_address}`)
@@ -1840,7 +1988,7 @@ function buildSectionPrompt(sectionKey, title, grantContext, profileContext, gra
     case 'medical_necessity':
       return base + 'Write a Letter of Medical Necessity (LOMN) for this application. Include: patient information, diagnoses with ICD-10 codes where identifiable, functional limitations, medical justification for the requested service/equipment/funding, and a physician signature block. This must be clinically professional and ready for a physician to review and sign.'
     case 'submission_instructions':
-      return `Based on this grant information, provide clear submission instructions:\n\n${grantContext}\n\nApplication Method: ${grant?.application_method || 'unknown'}\nPortal URL: ${grant?.application_url || 'N/A'}\nFax: ${grant?.funder_fax || 'N/A'}\nMailing Address: ${grant?.funder_address || 'N/A'}\nContact Email: ${grant?.contact_email || 'N/A'}\nContact Phone: ${grant?.contact_phone || 'N/A'}\n\nProvide step-by-step instructions for how to submit this application.`
+      return `Based on this grant information, provide clear submission instructions:\n\n${grantContext}\n\nApplication Method: ${grant?.application_method || 'unknown'}\nPortal URL: ${resolveVerifiedPortalUrl(grant, null).url || 'N/A'}\nFax: ${grant?.funder_fax || 'N/A'}\nMailing Address: ${grant?.funder_address || 'N/A'}\nContact Email: ${grant?.contact_email || 'N/A'}\nContact Phone: ${grant?.contact_phone || 'N/A'}\n\nProvide step-by-step instructions for how to submit this application.`
     default:
       return base + `Write professional content for the "${title}" section.`
   }

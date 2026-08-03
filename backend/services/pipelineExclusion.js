@@ -38,6 +38,7 @@
  */
 
 import { grantFingerprintFromOpportunity, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
+import { titleIdentityKey, normalizeUrlForId } from '../crawler-os/contract.js'
 import { ensurePipelineDismissalsSchema } from './pipelineDismissals.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -115,6 +116,58 @@ function funderOf(opp) {
 }
 
 /**
+ * CANONICAL identity keys for a row (grant- or opportunity-shaped), using the
+ * ONE identity rule the catalog already lives by — `canonicalOpportunityKey`
+ * in backend/crawler-os/contract.js (external_id → token-sorted title+sponsor
+ * → URL). We reuse its exported tiers rather than re-deriving:
+ *   - `titleKey` — `t:` token-sorted title+sponsor (punctuation/word-order
+ *     insensitive) — what the exact lower(title)|lower(funder) key here
+ *     structurally misses (paraphrase variants of the same program);
+ *   - `urlKeys` — `u:` normalized URL for every link field — the tier that
+ *     collapsed the live TN Promise leak (grant url https://www.tnpromise.gov/
+ *     == catalog application_url) where title+sponsor drifted on both axes.
+ * A grants row has no external_id, so the `ext:` tier is structurally
+ * unreachable here (documented, not silently skipped).
+ */
+function canonicalIdentityOf(row) {
+  const t = titleIdentityKey(titleOf(row), funderOf(row))
+  const urlKeys = []
+  const urlFields = [row?.apply_url, row?.application_url, row?.url, row?.source_url, row?.info_url]
+  for (const u of urlFields) {
+    const s = norm(u)
+    // http(s) only: normalizeUrlForId lowercases junk strings verbatim, and a
+    // shared junk value ("N/A") must never become a shared identity.
+    if (!s || !/^https?:\/\//i.test(s)) continue
+    const normalized = normalizeUrlForId(s)
+    if (normalized) urlKeys.push(`u:${normalized}`)
+  }
+  return { titleKey: t ? `t:${t}` : null, urlKeys }
+}
+
+/**
+ * URL-ambiguity map for a set of rows: normalized `u:` key → the set of
+ * distinct canonical title identities that carry it (untitled rows each count
+ * as their own identity). A URL carried by 2+ DISTINCT identities is a shared
+ * portal/directory page (tn.gov/collegepays serves HOPE + Promise + Lottery;
+ * grantwatch.com sits on 282 distinct programs in prod, measured 2026-08-03)
+ * and must never DECIDE identity — the `enforceGrantCatalogLink` posture:
+ * exactly one match links, 2+ is ambiguous and never guessed.
+ */
+function urlOwnersOf(rows) {
+  const owners = new Map()
+  let anon = 0
+  for (const row of rows || []) {
+    const { titleKey, urlKeys } = canonicalIdentityOf(row)
+    const identity = titleKey ?? `anon:${anon++}`
+    for (const u of urlKeys) {
+      if (!owners.has(u)) owners.set(u, new Set())
+      owners.get(u).add(identity)
+    }
+  }
+  return owners
+}
+
+/**
  * Safe fingerprint for an opportunity-shaped object. Returns null on any
  * failure — AND when the row carries no real identity (no title, funder, or
  * url), since the fingerprint of an all-empty tuple is a constant value that
@@ -148,6 +201,10 @@ export async function loadPipelineExclusionIndex(db, profileId) {
   const fingerprints = new Set()
   const titleFunders = new Set()
   const titles = new Set()
+  // Canonical-identity tiers (canonicalOpportunityKey) for every pipeline
+  // grant: `t:` title keys as a set, `u:` url keys as an owners map so a
+  // shared-portal URL on OUR side is recognizably ambiguous too.
+  const canonicalTitleKeys = new Set()
   const pipelineRows = []
   // Bare normalized titles of awards the user has ALREADY secured/imported in
   // their university_applications section. Always checked (unlike `titles`,
@@ -181,6 +238,8 @@ export async function loadPipelineExclusionIndex(db, profileId) {
       if (tf) titleFunders.add(tf)
       const t = lowerKey(row.title)
       if (t) titles.add(t)
+      const canonical = canonicalIdentityOf(row)
+      if (canonical.titleKey) canonicalTitleKeys.add(canonical.titleKey)
     }
   } catch (err) {
     log.error('failed to load profile pipeline grants', {
@@ -273,7 +332,16 @@ export async function loadPipelineExclusionIndex(db, profileId) {
     })
   }
 
-  return { oppIds, fingerprints, titleFunders, titles, sectionTitles, pipelineRows }
+  return {
+    oppIds,
+    fingerprints,
+    titleFunders,
+    titles,
+    sectionTitles,
+    canonicalTitleKeys,
+    canonicalUrlOwners: urlOwnersOf(pipelineRows),
+    pipelineRows,
+  }
 }
 
 /**
@@ -295,7 +363,7 @@ export async function loadPipelineExclusionIndex(db, profileId) {
  *      only for dismissal tombstones whose funder/URL drifted. Off by default
  *      because exact title collisions across unrelated programs are common.
  */
-function isExcluded(opp, index, { matchTitle = false } = {}) {
+function isExcluded(opp, index, { matchTitle = false, listUrlOwners = null } = {}) {
   if (!index) return false
   const oppId = norm(opp?.id ?? opp?.opportunity_id ?? opp?.funding_opportunity_id)
   if (oppId && index.oppIds.has(oppId)) return true
@@ -303,6 +371,31 @@ function isExcluded(opp, index, { matchTitle = false } = {}) {
   if (fp && index.fingerprints.has(fp)) return true
   const tf = titleFunderKey(titleOf(opp), funderOf(opp))
   if (tf && index.titleFunders.has(tf)) return true
+  // Canonical identity (the ONE rule — canonicalOpportunityKey tiers, #5):
+  //  t: a paraphrased title+sponsor is the same real-world program;
+  //  u: a shared normalized link is the same program ONLY when the URL is
+  //     unambiguous on BOTH sides (≤1 distinct identity carries it in the
+  //     pipeline AND in the candidate list) — the enforceGrantCatalogLink
+  //     "exactly one, 2+ never guessed" posture, because shared portal hubs
+  //     (tn.gov/collegepays = HOPE + Promise + Lottery) must never collapse
+  //     distinct programs. The live TN Promise leak passes: one pipeline grant
+  //     and one discovery row carry https://www.tnpromise.gov/.
+  {
+    const canonical = canonicalIdentityOf(opp)
+    if (canonical.titleKey && index.canonicalTitleKeys && index.canonicalTitleKeys.has(canonical.titleKey)) {
+      return true
+    }
+    const indexOwners = index.canonicalUrlOwners
+    if (indexOwners && indexOwners.size > 0) {
+      for (const u of canonical.urlKeys) {
+        const pipelineSide = indexOwners.get(u)
+        if (!pipelineSide || pipelineSide.size !== 1) continue
+        const listSide = listUrlOwners?.get(u)
+        if (listSide && listSide.size > 1) continue
+        return true
+      }
+    }
+  }
   if (Array.isArray(index.pipelineRows) && index.pipelineRows.some((row) => likelySameGrantOpportunity(opp, row))) return true
   // User-secured/imported section awards: matched on bare normalized title
   // regardless of `matchTitle`, because their funder label drifts from the
@@ -331,23 +424,16 @@ export async function filterOutPipelineMembers(db, profileId, opportunities, opt
   if (list.length === 0) return { results: list, excluded: 0, total: 0 }
 
   const index = await loadPipelineExclusionIndex(db, profileId)
-  if (
-    !index ||
-    (index.oppIds.size === 0 &&
-      index.fingerprints.size === 0 &&
-      index.titleFunders.size === 0 &&
-      index.titles.size === 0 &&
-      (index.pipelineRows?.length ?? 0) === 0 &&
-      (index.sectionTitles?.size ?? 0) === 0)
-  ) {
+  if (emptyIndex(index)) {
     // Nothing to exclude (or load failed) — pass through untouched.
     return { results: list, excluded: 0, total: list.length }
   }
 
+  const callOpts = { ...opts, listUrlOwners: urlOwnersOf(list) }
   const results = []
   let excluded = 0
   for (const opp of list) {
-    if (isExcluded(opp, index, opts)) {
+    if (isExcluded(opp, index, callOpts)) {
       excluded += 1
       continue
     }
@@ -363,6 +449,61 @@ export async function filterOutPipelineMembers(db, profileId, opportunities, opt
   }
 
   return { results, excluded, total: list.length }
+}
+
+/** True when the index has nothing to match against (or failed to load). */
+function emptyIndex(index) {
+  return (
+    !index ||
+    (index.oppIds.size === 0 &&
+      index.fingerprints.size === 0 &&
+      index.titleFunders.size === 0 &&
+      index.titles.size === 0 &&
+      (index.pipelineRows?.length ?? 0) === 0 &&
+      (index.sectionTitles?.size ?? 0) === 0 &&
+      (index.canonicalTitleKeys?.size ?? 0) === 0)
+  )
+}
+
+/**
+ * ANNOTATE instead of drop (#5, walkthrough 2026-08-03): mark every result
+ * that resolves to this profile's existing pipeline/applications with
+ * `already_in_pipeline: true` and KEEP it in the list, so the discovery UI
+ * can show "Already in pipeline" on the card instead of silently hiding the
+ * row (or worse, rendering an addable button whose only possible answer is
+ * "already"). Same index + same identity ladder as filterOutPipelineMembers —
+ * one notion of "same opportunity", two presentations.
+ *
+ * @returns {Promise<{ results: Array<object>, flagged: number, total: number }>}
+ */
+export async function annotatePipelineMembers(db, profileId, opportunities, opts = {}) {
+  const list = Array.isArray(opportunities) ? opportunities : []
+  if (list.length === 0) return { results: list, flagged: 0, total: 0 }
+
+  const index = await loadPipelineExclusionIndex(db, profileId)
+  if (emptyIndex(index)) {
+    return { results: list, flagged: 0, total: list.length }
+  }
+
+  const callOpts = { ...opts, listUrlOwners: urlOwnersOf(list) }
+  let flagged = 0
+  const results = list.map((opp) => {
+    if (isExcluded(opp, index, callOpts)) {
+      flagged += 1
+      return { ...opp, already_in_pipeline: true }
+    }
+    return opp
+  })
+
+  if (flagged > 0) {
+    log.info('annotated opportunities already in pipeline/dismissed', {
+      profileId: norm(profileId),
+      flagged,
+      total: list.length,
+    })
+  }
+
+  return { results, flagged, total: list.length }
 }
 
 /**

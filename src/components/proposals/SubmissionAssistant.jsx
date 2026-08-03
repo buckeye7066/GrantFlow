@@ -15,12 +15,13 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { CheckCircle, Download, FileText, Loader2, Send, Sparkles, AlertTriangle } from 'lucide-react'
-import { 
+import {
   autoPopulate,
   exportPackage,
   getApplication,
   listChecklist,
   listSections,
+  setChecklistItem,
   submit,
   validate,
 } from '@/api/applicationsApi'
@@ -37,6 +38,10 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
   const [recipientFax, setRecipientFax] = useState('')
   const [recipientAddress, setRecipientAddress] = useState('')
   const [notes, setNotes] = useState('')
+  // Hard-confirm step: "Mark submitted" with an incomplete checklist first
+  // shows the incomplete items and requires an explicit acknowledgment
+  // (walkthrough 2026-08-03: it was one silent click at "Checklist: 0/6 done").
+  const [confirmingIncomplete, setConfirmingIncomplete] = useState(false)
 
   const { data: application } = useQuery({
     queryKey: ['application', applicationId],
@@ -80,15 +85,31 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
   })
 
   const submitMutation = useMutation({
-    mutationFn: ({ method, metadata }) => submit(applicationId, method, metadata),
+    mutationFn: ({ method, metadata, confirmIncomplete }) =>
+      submit(applicationId, method, metadata, { confirmIncomplete: Boolean(confirmIncomplete) }),
     onSuccess: () => {
+      setConfirmingIncomplete(false)
       queryClient.invalidateQueries({ queryKey: ['grant', grant?.id] })
       queryClient.invalidateQueries({ queryKey: ['grants'] })
       queryClient.invalidateQueries({ queryKey: ['application', applicationId] })
       onClose?.()
     },
     onError: (err) => {
+      // The server guard (409 CHECKLIST_INCOMPLETE) is the net for callers
+      // that skipped the client-side confirm — route it into the same
+      // hard-confirm panel instead of failing silently.
+      if (err?.errorCode === 'CHECKLIST_INCOMPLETE' || err?.status === 409) {
+        setConfirmingIncomplete(true)
+        return
+      }
       console.error('[SubmissionAssistant] submit failed', err)
+    },
+  })
+
+  const checklistToggleMutation = useMutation({
+    mutationFn: ({ key, status }) => setChecklistItem(applicationId, key, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['applicationChecklist', applicationId] })
     },
   })
 
@@ -120,6 +141,11 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
     [checklist],
   )
 
+  const incompleteChecklist = useMemo(
+    () => (checklist || []).filter((i) => String(i.status || '').toLowerCase() !== 'done'),
+    [checklist],
+  )
+
   const canSubmit =
     Boolean(applicationId) &&
     Boolean(submissionMethod) &&
@@ -130,6 +156,28 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
       if (submissionMethod === 'mail') return Boolean(recipientAddress)
       return false
     })()
+
+  const buildSubmitPayload = (confirmIncomplete) => ({
+    method: submissionMethod,
+    metadata: {
+      recipient_email: recipientEmail || null,
+      recipient_fax: recipientFax || null,
+      recipient_address: recipientAddress || null,
+      notes: notes || null,
+      org_name: organization?.name ?? null,
+    },
+    confirmIncomplete,
+  })
+
+  const handleMarkSubmitted = () => {
+    if (incompleteChecklist.length > 0) {
+      // Hard-confirm first: name the incomplete items instead of silently
+      // recording a "submitted" status past a 0/6 checklist.
+      setConfirmingIncomplete(true)
+      return
+    }
+    submitMutation.mutate(buildSubmitPayload(false))
+  }
 
   const busy = validateMutation.isPending || exportMutation.isPending || submitMutation.isPending || autoPopulateMutation.isPending
 
@@ -144,6 +192,12 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
           <DialogDescription>
             Prepare → validate → export → mark submitted for {grant?.title || 'this grant'}
           </DialogDescription>
+          <p className="text-xs text-slate-500 mt-1">
+            "Mark submitted" records in GrantFlow that <span className="font-medium">you submitted this application
+            yourself</span> — it is internal status only and transmits nothing to the funder. Automatic portal
+            submission is a separate feature (Hamilton auto-submit), which fills and submits on the funder's portal
+            for you when enabled.
+          </p>
         </DialogHeader>
 
         <div className="space-y-5 py-4">
@@ -244,6 +298,34 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
               </AlertDescription>
             </Alert>
 
+          {(checklist || []).length > 0 ? (
+            <div>
+              <Label className="text-base font-semibold mb-2 block">Checklist</Label>
+              <ul className="space-y-1">
+                {(checklist || []).map((item) => {
+                  const done = String(item.status || '').toLowerCase() === 'done'
+                  return (
+                    <li key={item.key} className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        id={`checklist-${item.key}`}
+                        className="mt-0.5"
+                        checked={done}
+                        disabled={checklistToggleMutation.isPending}
+                        onChange={() =>
+                          checklistToggleMutation.mutate({ key: item.key, status: done ? 'pending' : 'done' })
+                        }
+                      />
+                      <label htmlFor={`checklist-${item.key}`} className={done ? 'text-slate-500 line-through' : ''}>
+                        {item.label || item.key}
+                      </label>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ) : null}
+
           <div>
             <Label className="text-base font-semibold mb-3 block">Submission Method</Label>
             <RadioGroup value={submissionMethod} onValueChange={setSubmissionMethod}>
@@ -298,7 +380,7 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
                         Portal URL on file: <span className="font-mono">{String(application.portal_url).slice(0, 48)}…</span>
                       </>
                     ) : (
-                      'No portal URL on file (use Auto-populate).'
+                      'No verified portal URL on file — unverified — confirm with funder.'
                     )}
                   </p>
                 </Label>
@@ -334,6 +416,45 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
             </div>
           ) : null}
 
+          {confirmingIncomplete ? (
+            <Alert className="bg-red-50 border-red-200">
+              <AlertTitle className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-600" />
+                Checklist is not complete — really record as submitted?
+              </AlertTitle>
+              <AlertDescription className="text-sm mt-2 space-y-2">
+                <p>
+                  These {incompleteChecklist.length} checklist item{incompleteChecklist.length === 1 ? ' is' : 's are'} not
+                  done:
+                </p>
+                <ul className="list-disc ml-5 space-y-0.5">
+                  {incompleteChecklist.slice(0, 10).map((i) => (
+                    <li key={i.key}>{i.label || i.key}</li>
+                  ))}
+                  {incompleteChecklist.length > 10 ? <li>+{incompleteChecklist.length - 10} more</li> : null}
+                </ul>
+                <p>
+                  This records <span className="font-semibold">internal status only</span> — it does not transmit
+                  anything to the funder. Only continue if you already submitted this application to the funder
+                  yourself.
+                </p>
+                <div className="flex items-center gap-2 pt-1">
+                  <Button variant="outline" size="sm" onClick={() => setConfirmingIncomplete(false)} disabled={submitMutation.isPending}>
+                    Go back
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="bg-red-600 hover:bg-red-700"
+                    onClick={() => submitMutation.mutate(buildSubmitPayload(true))}
+                    disabled={submitMutation.isPending}
+                  >
+                    {submitMutation.isPending ? 'Saving…' : 'I already submitted it myself — record as submitted'}
+                  </Button>
+                </div>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
           <div className="flex items-center justify-end gap-2 pt-2 border-t">
             <Button variant="outline" onClick={onClose} disabled={busy}>
               Close
@@ -367,19 +488,9 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
             </Button>
             <Button
               className="bg-green-600 hover:bg-green-700"
-              onClick={() =>
-                submitMutation.mutate({
-                  method: submissionMethod,
-                  metadata: {
-                    recipient_email: recipientEmail || null,
-                    recipient_fax: recipientFax || null,
-                    recipient_address: recipientAddress || null,
-                    notes: notes || null,
-                    org_name: organization?.name ?? null,
-                  },
-                })
-              }
-              disabled={!canSubmit || submitMutation.isPending}
+              onClick={handleMarkSubmitted}
+              disabled={!canSubmit || submitMutation.isPending || confirmingIncomplete}
+              title="Records internal status only — transmits nothing to the funder"
             >
               {submitMutation.isPending ? (
                 <>
@@ -389,7 +500,7 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
             ) : (
               <>
                 <Send className="w-4 h-4 mr-2" />
-                  Mark submitted
+                  Mark submitted (record only)
               </>
             )}
           </Button>

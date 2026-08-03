@@ -20,7 +20,7 @@ import {
   MIN_SCORE_SLIDER_MAX,
 } from '../config/matchThresholds.js'
 import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
-import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
+import { filterOutPipelineMembers, annotatePipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
@@ -519,8 +519,16 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
 
       const deduped = dedupeOpportunityList(mapped)
       mapped = deduped.results
+      // Pipeline-membership handling (#5):
+      //   default            → EXCLUDE members from the list (legacy behavior);
+      //   ?pipeline=annotate → KEEP members, flagged `already_in_pipeline`, so
+      //                        the discovery UI can show WHY a row isn't
+      //                        addable instead of silently hiding it;
+      //   ?include_pipeline=1 → raw pass-through (debug).
+      const pipelineMode =
+        req.query.pipeline === 'annotate' ? 'annotate' : req.query.include_pipeline === '1' ? 'include' : 'exclude'
       let pipelineExcludedCount = 0
-      if (req.query.include_pipeline !== '1') {
+      if (pipelineMode === 'exclude') {
         const filtered = await filterOutPipelineMembers(req.db, profileId, mapped)
         pipelineExcludedCount = filtered.excluded
         mapped = filtered.results
@@ -645,6 +653,21 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           o.eligibility_relaxed !== true,
       )
 
+      // Pipeline-membership, applied to the FINAL surfaced set (#5). This also
+      // closes the zero-result-ladder bypass: Tier B re-canonicalizes rawMapped
+      // (the PRE-filter list), so recovered rows skipped the member filter at
+      // the mapping stage and a pipeline grant could re-enter the response
+      // through recovery.
+      if (pipelineMode === 'annotate') {
+        const annotated = await annotatePipelineMembers(req.db, profileId, qualified)
+        qualified = annotated.results
+        pipelineExcludedCount = annotated.flagged
+      } else if (pipelineMode === 'exclude' && relaxation) {
+        const refiltered = await filterOutPipelineMembers(req.db, profileId, qualified)
+        pipelineExcludedCount += refiltered.excluded
+        qualified = refiltered.results
+      }
+
       const qualifiedCount = qualified.filter((o) => Number(o.match_score) >= osMin).length
       const zeroResult = qualified.length === 0
       if (zeroResult && rawMapped.length > 0) {
@@ -713,7 +736,8 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         referrals: [],
         diagnostics: {
           duplicate_results_collapsed: deduped.removed || undefined,
-          excluded_already_in_pipeline: pipelineExcludedCount || undefined,
+          excluded_already_in_pipeline: pipelineMode === 'annotate' ? undefined : pipelineExcludedCount || undefined,
+          annotated_already_in_pipeline: pipelineMode === 'annotate' ? pipelineExcludedCount || undefined : undefined,
           dropped_reasons: canonical.dropped && Object.keys(canonical.dropped).length > 0 ? canonical.dropped : undefined,
           unsurfaced_above_floor_nofit: unsurfacedAboveFloorNoFit.length || undefined,
           relaxation_applied: relaxation ? true : undefined,

@@ -145,7 +145,7 @@ function truncateLabel(s, max = 52) {
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`
 }
 
-function getOpportunityKey(opp, idx) {
+function getOpportunityRawKey(opp) {
   const raw =
     opp?.id ??
     opp?.source_id ??
@@ -153,8 +153,27 @@ function getOpportunityKey(opp, idx) {
     opp?.application_url ??
     opp?.source_url ??
     `${opp?.title || 'untitled'}|${opp?.sponsor || opp?.funder || ''}`;
-  // Ensure uniqueness even when upstream data has duplicates/missing ids.
-  return `${String(raw)}|${idx}`;
+  return String(raw);
+}
+
+/**
+ * Stable per-result React keys. The key must NOT embed the list index: the
+ * discovery list re-sorts by score on every catalog refetch (staleTime 0 +
+ * explicit refetchQueries during crawl polling), and an index-bearing key
+ * remounts every card downstream of any reorder — wiping the
+ * AddToPipelineButton's local "Added" state so a just-added card silently
+ * reverts to an addable "Add to Pipeline" (the 4-of-5-clicks-did-nothing
+ * walkthrough class, 2026-08-03). Only genuine raw-key collisions (upstream
+ * duplicates with no id) get a positional disambiguator.
+ */
+function computeOpportunityKeys(list) {
+  const seen = new Map();
+  return (list || []).map((opp) => {
+    const raw = getOpportunityRawKey(opp);
+    const n = seen.get(raw) || 0;
+    seen.set(raw, n + 1);
+    return n === 0 ? raw : `${raw}#dup${n}`;
+  });
 }
 
 export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organizationName, disabledReason = null }) => {
@@ -175,6 +194,10 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
     mutationFn: (opp) => onAddToPipeline(opp, { silent: true }),
     onSuccess: (result, opp) => {
       queryClient.invalidateQueries({ queryKey: ['grants'] });
+      // Refresh the discovery catalog so the server-side already_in_pipeline
+      // flag (#5) reflects this add on the next fetch — the button no longer
+      // depends solely on remount-fragile local state.
+      queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
       const status = result?.status || (result?.already_exists ? 'already' : 'added');
       setLastStatus(status);
 
@@ -204,6 +227,22 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
         });
         return;
       }
+
+      // Anything else — including the page handler's swallowed-error
+      // `{ status: 'failed' }` return — is a FAILURE and must say so. This
+      // used to fall through every branch above: no toast, no state change,
+      // the button just sat there (the silent 4-of-5-clicks walkthrough bug).
+      setLastStatus('failed');
+      toast({
+        variant: 'destructive',
+        title: 'Could not add to pipeline',
+        description:
+          result?.message ||
+          (typeof result?.error === 'string'
+            ? `Not added — ${result.error.replace(/_/g, ' ')}.`
+            : `"${opp?.title || opportunity?.title || 'This item'}" was not added. Try again.`),
+        duration: 4500,
+      });
     },
     onError: (error) => {
       setLastStatus('failed');
@@ -254,7 +293,11 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
     );
   }
 
-  if (lastStatus === 'already') {
+  // Server-declared duplicate (#5): the discovery route now annotates results
+  // that resolve to an existing pipeline/application row via the canonical
+  // opportunity identity. Surface WHY it isn't addable instead of hiding it
+  // or rendering an addable button that can only ever answer "already".
+  if (lastStatus === 'already' || (!lastStatus && opportunity?.already_in_pipeline)) {
     return (
       <Button variant="outline" className="w-full bg-slate-50 text-slate-700 border-slate-200" disabled>
         <Check className="w-4 h-4 mr-2" /> Already in pipeline
@@ -266,6 +309,17 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
     return (
       <Button variant="outline" className="w-full bg-amber-50 text-amber-800 border-amber-200" disabled>
         <Check className="w-4 h-4 mr-2" /> Kept out
+      </Button>
+    );
+  }
+
+  if (lastStatus === 'failed') {
+    // A failed add stays actionable: the toast said why, the button offers a
+    // retry instead of silently reverting to a state that looks untouched.
+    return (
+      <Button onClick={handleClick} variant="outline" className="w-full bg-red-50 text-red-700 border-red-200 hover:bg-red-100">
+        <Plus className="w-4 h-4 mr-2" />
+        Retry add
       </Button>
     );
   }
@@ -300,19 +354,22 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     [uniqueResults]
   );
 
-  // Keys that correspond to the currently displayed results. When the housing
-  // filter changes, the index-based keys shift, so selection state must be
-  // reconciled against displayResults to avoid stale/incorrect selections.
+  // Keys that correspond to the currently displayed results. Stable across
+  // re-sorts (no index component); selection state is still reconciled against
+  // displayResults so filter toggles drop keys that left the view.
   const displayKeys = React.useMemo(
-    () => displayResults.map((opp, idx) => getOpportunityKey(opp, idx)),
+    () => computeOpportunityKeys(displayResults),
     [displayResults]
   );
   const addableDisplayKeys = React.useMemo(
     () => displayResults
-      .map((opp, idx) => ({ key: getOpportunityKey(opp, idx), blocked: Boolean(getPipelineAddBlockReason(opp)) }))
+      .map((opp, idx) => ({
+        key: displayKeys[idx],
+        blocked: Boolean(getPipelineAddBlockReason(opp)) || Boolean(opp?.already_in_pipeline),
+      }))
       .filter((item) => !item.blocked)
       .map((item) => item.key),
-    [displayResults]
+    [displayResults, displayKeys]
   );
 
   // Reconcile selection whenever the displayed set changes (e.g. filter toggle).
@@ -381,10 +438,12 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   };
 
   const handleBulkAdd = async () => {
-    // Use displayResults so the index used to compute keys matches the index
-    // used when keys were created (handleSelectAll / render iterate displayResults).
+    // displayKeys is computed from displayResults in render order, so the
+    // parallel index lookup here always matches the keys the checkboxes used.
     const selectedOpps = displayResults.filter((opp, idx) =>
-      selectedOpportunities.has(getOpportunityKey(opp, idx)) && !getPipelineAddBlockReason(opp)
+      selectedOpportunities.has(displayKeys[idx]) &&
+      !getPipelineAddBlockReason(opp) &&
+      !opp?.already_in_pipeline
     );
     
     if (selectedOpps.length === 0) return;
@@ -653,14 +712,15 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {displayResults.map((opp, idx) => {
-          const oppKey = getOpportunityKey(opp, idx);
+          const oppKey = displayKeys[idx];
           const isSelected = selectedOpportunities.has(oppKey);
           const savedId = opp.id ?? opp.source_id;
           const pipelineBlockReason = getPipelineAddBlockReason(opp);
-          
+          const alreadyInPipeline = Boolean(opp?.already_in_pipeline);
+
           return (
-            <div 
-              key={oppKey} 
+            <div
+              key={oppKey}
               className={`flex flex-col bg-white rounded-xl shadow-sm border overflow-hidden transition-all ${
                 isSelected ? 'ring-2 ring-blue-500 border-blue-500' : ''
               }`}
@@ -670,15 +730,20 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                   checked={isSelected}
                   onCheckedChange={() => handleToggleSelection(oppKey)}
                   id={`select-${oppKey}`}
-                  disabled={Boolean(pipelineBlockReason)}
+                  disabled={Boolean(pipelineBlockReason) || alreadyInPipeline}
                 />
                 <label
                   htmlFor={`select-${oppKey}`}
-                  className={`text-sm font-medium flex-1 min-w-0 ${pipelineBlockReason ? 'cursor-not-allowed text-slate-500' : 'cursor-pointer'}`}
-                  title={pipelineBlockReason || undefined}
+                  className={`text-sm font-medium flex-1 min-w-0 ${(pipelineBlockReason || alreadyInPipeline) ? 'cursor-not-allowed text-slate-500' : 'cursor-pointer'}`}
+                  title={pipelineBlockReason || (alreadyInPipeline ? 'This opportunity is already in the pipeline for this profile.' : undefined)}
                 >
-                  {pipelineBlockReason ? 'Source only' : 'Select'}
+                  {alreadyInPipeline ? 'In pipeline' : pipelineBlockReason ? 'Source only' : 'Select'}
                 </label>
+                {alreadyInPipeline && (
+                  <Badge variant="outline" className="text-xs shrink-0 border-slate-300 text-slate-700 bg-slate-100">
+                    Already in pipeline
+                  </Badge>
+                )}
                 {/* Save / star bookmark */}
                 {savedId !== null && savedId !== undefined && (
                   <button
