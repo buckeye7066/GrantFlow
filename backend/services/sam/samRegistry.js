@@ -1146,15 +1146,24 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       if (health.verdict === 'healthy') {
         return { ok: true, summary: `Search backend healthy: ${health.detail}`, evidence: { verdict: health.verdict, searxng: health.searxng, brave: health.brave } }
       }
+      // "unconfigured" (no SEARXNG_URL and no BRAVE_SEARCH_API_KEY) is a
+      // provisioning gap with a different, one-step fix than a degraded/down
+      // backend — name the exact lever so the open-web lane can be turned on.
+      const unconfiguredFix =
+        'Set a search backend so the open-web discovery lane can run: add BRAVE_SEARCH_API_KEY ' +
+        '(Brave Search has a free tier), or point SEARXNG_URL at a healthy self-hosted SearXNG ' +
+        '(docs/SEARXNG_SELF_HOST.md). Until one is set, the lane returns ZERO web results on every ' +
+        'crawl — the single biggest gap vs. a plain Google search for local/state/foundation funding.'
+      const degradedFix =
+        'Environment repair, not code: restart/redeploy the searxng-search Railway service to clear engine suspensions (CAPTCHA suspensions self-clear in ~1h, quota suspensions in ~5m); ' +
+        'keep SEARXNG_FALLBACK_ENGINES pointed at currently-alive engines (measured 2026-07-28: yandex, seznam, yahoo); ' +
+        'Brave HTTP 402 means the $5/mo cap is exhausted — it self-resets on the 1st, or raise the plan (owner action). ' +
+        'While degraded, treat same-night recall/parity regressions as environment-caused before changing crawler code.'
       return {
         ok: false,
         summary: `Search backend ${health.verdict.toUpperCase()}: ${health.detail}`,
         evidence: { verdict: health.verdict, searxng: health.searxng, brave: health.brave, probed_at: health.probed_at },
-        recommended_fix:
-          'Environment repair, not code: restart/redeploy the searxng-search Railway service to clear engine suspensions (CAPTCHA suspensions self-clear in ~1h, quota suspensions in ~5m); ' +
-          'keep SEARXNG_FALLBACK_ENGINES pointed at currently-alive engines (measured 2026-07-28: yandex, seznam, yahoo); ' +
-          'Brave HTTP 402 means the $5/mo cap is exhausted — it self-resets on the 1st, or raise the plan (owner action). ' +
-          'While degraded, treat same-night recall/parity regressions as environment-caused before changing crawler code.',
+        recommended_fix: health.verdict === 'unconfigured' ? unconfiguredFix : degradedFix,
         confidence: 0.95,
       }
     },
