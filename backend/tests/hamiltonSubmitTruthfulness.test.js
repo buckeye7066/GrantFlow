@@ -14,8 +14,17 @@ describe('submit-hunt truthfulness gate (actionableSubmitButtons)', () => {
     expect(actionableSubmitButtons([chrome, navLink], { anyFieldFilled: false })).toEqual([])
   })
 
-  it('keeps a control inside a real form with fillable fields', () => {
-    expect(actionableSubmitButtons([chrome, formButton], { anyFieldFilled: false })).toEqual([formButton])
+  it('keeps a control inside a real form when the page carries RECOGNIZED fields (prefilled resume)', () => {
+    expect(actionableSubmitButtons([chrome, formButton], { anyFieldFilled: false, recognizedFieldCount: 6 })).toEqual([formButton])
+  })
+
+  it('REFUSES an in-form control when the page has ZERO recognized fields and nothing was filled (the TN HOPE newsletter-widget class, prod 2026-08-03)', () => {
+    // The real shape: an informational page (inspect field_count: 0) whose
+    // only "Submit" sits in a search/newsletter form counting its own raw
+    // email input. formFieldCount > 0 alone must not authorize a submit of a
+    // page Hamilton never worked.
+    const widgetSubmit = { bid: 'b3', text: 'Submit', inForm: true, formFieldCount: 1 }
+    expect(actionableSubmitButtons([widgetSubmit], { anyFieldFilled: false, recognizedFieldCount: 0 })).toEqual([])
   })
 
   it('keeps everything when Hamilton actually filled fields this run', () => {
