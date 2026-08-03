@@ -100,6 +100,9 @@ import {
   verificationMatchAdjustment,
   opportunityTargetsOrganizations as verificationTargetsOrganizations,
 } from './verification/index.js'
+// Condition-specific opportunities vs the profile's NAMED conditions (the
+// bare-"Has disability"-flag gate — see config/conditionSpecificity.js).
+import { conditionSpecificAlignment } from '../config/conditionSpecificity.js'
 
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
@@ -353,6 +356,26 @@ const LOCAL_AWARD_NOUN_RX = /\b(scholarships?|grants?|awards?|fund)\b/i
 const COUNTY_SERVICE_AGENCY_RX =
   /\b(community action|action agency|health department|department of|human services|social services|sheriff|clerk|trustee|commission|county government|library|food bank|housing authority)\b/i
 
+/**
+ * A research organization applies for condition-targeted RESEARCH funding as
+ * its core business (NIH Parent SBIR/STTR, disease-area announcements), so the
+ * condition-specific profile gates exempt it. Shared by evaluateEligibility and
+ * the condition-gate score neutralization in scoreOpportunity — the 2026-07-06
+ * Axiom-class false-rejection must not be reintroduced by either.
+ */
+function isResearchOrgProfile(profileNorm) {
+  if (!profileNorm) return false
+  return /\b(research|biotech\w*|life[\s_-]?sciences?|biomedical|bioscience|laborator\w*|institute|r&d)\b/i
+    .test(`${profileNorm.organizationType ?? ''} ${profileNorm.entityType ?? ''}`)
+}
+
+/**
+ * The needs a bare unnamed disability flag mints. When a condition-specific
+ * opportunity meets a profile whose only condition evidence is that flag,
+ * these needs are withheld from the need scorers so the flag buys no score.
+ */
+const CONDITION_GATE_SUPPRESSED_NEEDS = Object.freeze(new Set(['disability']))
+
 function titleNamesLocalDistrict(title) {
   const t = String(title || '').trim()
   if (!t) return false
@@ -525,11 +548,24 @@ export function evaluateEligibility(profileNorm, oppNorm) {
   // program announcements). Blocking Axiom-class biotechs here was the
   // 2026-07-06 false-rejection class ("medical condition not indicated") —
   // the crawler-os engine ACCEPTed@71 while this gate refused the pipeline add.
-  const profileIsResearchOrg =
-    /\b(research|biotech\w*|life[\s_-]?sciences?|biomedical|bioscience|laborator\w*|institute|r&d)\b/i
-      .test(`${profileNorm.organizationType ?? ''} ${profileNorm.entityType ?? ''}`)
-  if (oppNorm.diseaseSpecific && !profileIsResearchOrg && !profileNorm.hasChronicIllness && !profileNorm.hasDisabilityNeed) {
-    ineligibilityReasons.push('Opportunity targets a specific medical condition not indicated in profile')
+  const profileIsResearchOrg = isResearchOrgProfile(profileNorm)
+  if (oppNorm.diseaseSpecific && !profileIsResearchOrg) {
+    // Three-way, per the 2026-08-03 audit (a bare "Has disability" flag used to
+    // EXEMPT this gate entirely, admitting Autism Speaks / Arthritis Foundation
+    // / Brain Injury Association for a profile whose health sections state "No
+    // confirmed medical conditions"):
+    //   'named'   — profile names a condition this row states → keep the boost;
+    //   'unnamed' — disability/chronic signal with no matching NAMED condition
+    //               → MISSING field (REVIEW + eligibility 'maybe'), never a new
+    //               hard reject — these programs may still serve general
+    //               disability;
+    //   'none'    — no health signal at all → the pre-existing ineligibility.
+    const conditionAlignment = conditionSpecificAlignment({ profileNorm, oppNorm })
+    if (conditionAlignment === 'unnamed') {
+      missingFields.push('condition_specific_condition_not_named')
+    } else if (conditionAlignment === 'none') {
+      ineligibilityReasons.push('Opportunity targets a specific medical condition not indicated in profile')
+    }
   }
   if (oppNorm.requiresDisasterContext && !profileNorm.hasEmergencyNeed) {
     ineligibilityReasons.push('Opportunity requires disaster or emergency context not present in profile')
@@ -1862,13 +1898,16 @@ function _zipDistanceMiles(zip1, zip2) {
  * matchedNeeds / needAlignment) — see the two-metric contract documented there.
  * Missing needs → baseline from profile depth. Never returns 0 for partial data.
  */
-function scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm) {
+function scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm, suppressNeeds = null) {
   const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.toLowerCase()
   const reasons = []
   let subscale = 0
 
   // 1. Need-synonym matching (0-45 of subscale)
+  // `suppressNeeds` withholds specific needs from credit for THIS opportunity
+  // (the condition-specific × unnamed-disability gate) — never a general prune.
   const rawNeeds = collectProfileNeeds(effectiveProfile, effectiveSignals, profileNorm)
+    .filter((n) => !(suppressNeeds instanceof Set && suppressNeeds.has(String(n).toLowerCase())))
   const oppKws = safeParseArrayField(opportunity?.keywords, [])
   const oppCats = safeParseArrayField(opportunity?.categories, [])
   const allOppSignals = [...oppKws, ...oppCats].map((t) => String(t).toLowerCase())
@@ -2429,9 +2468,37 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   const reasons = []
   const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.toLowerCase()
 
+  // Infer housing classification for legacy rows lacking explicit columns, then
+  // normalize the opportunity ONCE for the whole function (hoisted above the
+  // component scorers so the condition-specific assessment below can read it —
+  // the population caps, org×individual-assistance guard, and need-anchored
+  // coverage further down all reuse this same `oppNorm`).
+  const housingClass = inferHousingClassification(opportunity)
+  const effectiveOpp = (housingClass.fundingCategory && !opportunity.funding_category)
+    ? { ...opportunity, funding_category: housingClass.fundingCategory,
+        usable_for_housing: housingClass.usableForHousing ? 1 : 0,
+        refund_potential: housingClass.refundPotential ? 1 : 0 }
+    : opportunity
+  const oppNorm = normalizeOpportunity(effectiveOpp)
+
+  // Condition-specific × unnamed disability (the Anastasia audit, 2026-08-03):
+  // a bare "Has disability" flag mints a 'disability' need, and that need used
+  // to earn full need-alignment credit against Autism Speaks-class rows. A
+  // NAMED matching condition keeps the credit; an unnamed flag contributes
+  // NOTHING to a condition-specific row (neutral — the row itself is still
+  // scored on its other evidence, and never newly rejected). Research orgs are
+  // exempt exactly as in evaluateEligibility (they apply for condition-targeted
+  // RESEARCH funding as their core business).
+  const conditionAlignment = isResearchOrgProfile(profileNorm)
+    ? null
+    : conditionSpecificAlignment({ profileNorm, signals: effectiveSignals, oppNorm, oppText })
+  const suppressNeedsForConditionGate = conditionAlignment === 'unnamed'
+    ? CONDITION_GATE_SUPPRESSED_NEEDS
+    : null
+
   // ── Score each component (0-100 subscale) ──
   const geo = scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity)
-  const need = scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm)
+  const need = scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm, suppressNeedsForConditionGate)
   const elig = scoreEligibilityComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm)
   const cat = scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity)
 
@@ -2461,20 +2528,8 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // without distorting the base component model.
   const housingBonusReasons = []
 
-  // Infer housing classification for legacy rows lacking explicit columns, then
-  // normalize the opportunity ONCE for the whole function. The student-aid cap,
-  // need-alignment explain, and confidence all reuse `oppNorm` instead of each
-  // re-running normalizeOpportunity (was 3× per scored opportunity).
-  const housingClass = inferHousingClassification(opportunity)
-  const effectiveOpp = (housingClass.fundingCategory && !opportunity.funding_category)
-    ? { ...opportunity, funding_category: housingClass.fundingCategory,
-        usable_for_housing: housingClass.usableForHousing ? 1 : 0,
-        refund_potential: housingClass.refundPotential ? 1 : 0 }
-    : opportunity
-  // Computed UNCONDITIONALLY (not only when a full profileContext was passed):
-  // the population caps, org×individual-assistance guard, and need-anchored
-  // coverage all read oppNorm, and they must hold for plain-profile callers too.
-  const oppNorm = normalizeOpportunity(effectiveOpp)
+  // (housingClass / effectiveOpp / oppNorm were computed once at the top of
+  // this function, ahead of the component scorers.)
 
   // Explicit population/recipient mismatches collected here become the
   // ELIG_MISMATCH_FACTOR gate in the need-anchored formula below (the legacy
@@ -2525,10 +2580,17 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // alignment. It does NOT relax the surfacing bar; competitive grants are
   // untouched. Facets are data-derived (see profileNormalizer.effectiveFacets).
   {
-    const facets = Array.isArray(profileNorm?.effectiveFacets) ? profileNorm.effectiveFacets : []
+    // The condition-gate suppression also withholds the flag-derived 'disabled'
+    // facet and 'disability' need from THIS boost — a condition-specific row
+    // must not gain benefit-alignment points from a bare unnamed flag. Other
+    // real needs (housing/senior/food) still qualify the profile.
+    const suppressedHere = suppressNeedsForConditionGate
+    const facets = (Array.isArray(profileNorm?.effectiveFacets) ? profileNorm.effectiveFacets : [])
+      .filter((f) => !(suppressedHere && f === 'disabled'))
     const benefitNeeds = ['disability', 'housing', 'food', 'energy', 'utility', 'medical', 'health', 'emergency', 'basic_needs', 'aging', 'senior']
-    const profileNeedList = Array.isArray(profileNorm?.needCategories)
-      ? profileNorm.needCategories.map((n) => String(n).toLowerCase()) : []
+    const profileNeedList = (Array.isArray(profileNorm?.needCategories)
+      ? profileNorm.needCategories.map((n) => String(n).toLowerCase()) : [])
+      .filter((n) => !(suppressedHere instanceof Set && suppressedHere.has(n)))
     const profileIsIndividualBenefit = facets.includes('individual') &&
       (facets.includes('disabled') || facets.includes('senior') || facets.includes('caregiver') ||
         profileNeedList.some((n) => benefitNeeds.some((b) => n.includes(b))))
@@ -3794,9 +3856,31 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity is for research institutions only; profile has no organization credentials.', reasons }
   }
 
-  if (on.diseaseSpecific && !profNeeds.includes('disability') && !profNeeds.includes('health_medical')) {
-    reasons.push('Disease-specific program; profile has no matching condition')
-    return { decision: 'REJECT', explanation: 'Opportunity is disease-specific; profile has no matching condition.', reasons }
+  // Condition-specific programs (Autism Speaks / Arthritis Foundation class).
+  // Pre-2026-08-03, ANY 'disability'/'health_medical' need — including the one
+  // minted by a bare demographics "Has disability" flag — bought FULL admission
+  // here, up to ACCEPT. Now only a NAMED matching condition does; an unnamed
+  // disability/chronic signal is NEUTRAL: it avoids the REJECT (these programs
+  // may still serve general disability) but is capped at REVIEW at the end of
+  // this function, and it no longer earns disability-need score upstream
+  // (computeMatchDecision / scoreOpportunity neutralize that contribution).
+  // No health signal at all keeps the pre-existing REJECT. The flag (not an
+  // early return) preserves every later gate — geography exclusivity after
+  // this point must still be able to REJECT.
+  let conditionUnnamedDisability = false
+  if (on.diseaseSpecific) {
+    const conditionAlignment = conditionSpecificAlignment({
+      profileNorm: np, signals, oppNorm: on, oppText,
+    })
+    const hasCoarseHealthNeed = profNeeds.includes('disability') || profNeeds.includes('health_medical')
+    if (conditionAlignment !== 'named') {
+      if (!hasCoarseHealthNeed && conditionAlignment !== 'unnamed') {
+        reasons.push('Disease-specific program; profile has no matching condition')
+        return { decision: 'REJECT', explanation: 'Opportunity is disease-specific; profile has no matching condition.', reasons }
+      }
+      conditionUnnamedDisability = true
+      reasons.push('Condition-specific program; profile declares a disability but names no matching condition')
+    }
   }
 
   if (on.requiresDisasterContext && !profNeeds.includes('emergency') && !prof.disaster_affected) {
@@ -3946,6 +4030,17 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     }
   }
 
+  // A condition-specific program never ACCEPTs on an UNNAMED disability — the
+  // profile may still be served (general-disability case), so it stays visible
+  // at REVIEW, but admission-as-a-strong-match requires the named condition.
+  if (conditionUnnamedDisability && score >= ACCEPT_SCORE) {
+    return {
+      decision: 'REVIEW',
+      explanation: 'Condition-specific program: the profile declares a disability but names no matching condition — confirm the condition before pursuing.',
+      reasons,
+    }
+  }
+
   if (score >= ACCEPT_SCORE) {
     reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — covers at least half of the profile's main needs`)
     return { decision: 'ACCEPT', explanation: `Covers about ${score}% of this profile's main needs (eligibility and location check out).`, reasons }
@@ -4090,8 +4185,24 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     preferenceSignals: opts.preferenceSignals,
   })
 
-  // Need alignment from normalised objects (uses calculateNeedAlignment for consistency)
-  const { score: needAlignment, matchedNeeds } = calculateNeedAlignment(profileNorm, oppNorm)
+  // Need alignment from normalised objects (uses calculateNeedAlignment for consistency).
+  // Condition-specific × unnamed disability (2026-08-03): the bare flag's
+  // 'disability' need is withheld from the DISPLAYED alignment too — the same
+  // neutralization scoreOpportunity applies internally — so `matchedNeeds`
+  // never tells the owner a condition-specific program matched on a condition
+  // the profile never named. A NAMED matching condition keeps the credit.
+  const conditionAlignmentForDisplay = isResearchOrgProfile(profileNorm)
+    ? null
+    : conditionSpecificAlignment({
+        profileNorm,
+        signals: signalsForScoring ?? signals,
+        oppNorm,
+        oppText: `${rawOpportunity?.title ?? ''} ${rawOpportunity?.description ?? ''} ${rawOpportunity?.sponsor ?? ''}`.toLowerCase(),
+      })
+  const alignmentProfileNorm = conditionAlignmentForDisplay === 'unnamed'
+    ? { ...profileNorm, needCategories: (profileNorm.needCategories ?? []).filter((n) => String(n).toLowerCase() !== 'disability') }
+    : profileNorm
+  const { score: needAlignment, matchedNeeds } = calculateNeedAlignment(alignmentProfileNorm, oppNorm)
 
   let finalScore = score
   const scoreCaps = []

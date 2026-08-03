@@ -8,6 +8,7 @@
 
 import { createHash } from 'crypto'
 import { resolveApplicantType } from './profileHelpers.js'
+import { NAMED_CONDITION_FLAGS } from '../config/conditionSpecificity.js'
 
 const FALSEY_TEXT_VALUES = new Set([
   '',
@@ -916,6 +917,21 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
 
   // -- Disability / chronic illness / DME --
   let hasChronicIllnessFromSections = false
+  // NAMED conditions the profile actually declares ("autism", "type 2
+  // diabetes"), as distinct from the boolean/descriptor flags above. Consumed
+  // by config/conditionSpecificity.js so a condition-SPECIFIC opportunity
+  // (Autism Speaks, Arthritis Foundation) keeps its boost ONLY for a profile
+  // that names a matching condition — a bare "Has disability" flag mints no
+  // entry here by construction, and negated prose ("No confirmed medical
+  // conditions") is filtered by that module's negation guard.
+  const namedHealthConditions = []
+  const collectNamedCondition = (value) => {
+    if (Array.isArray(value)) { value.forEach(collectNamedCondition); return }
+    for (const part of String(value ?? '').split(/[,;\n/]+/)) {
+      const t = part.trim()
+      if (t) namedHealthConditions.push(t)
+    }
+  }
   const healthSection =
     profileSections?.health_medical ??
     profileSections?.health_information ??
@@ -938,6 +954,15 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
         String(ha.chronic_illness_type ?? '').length > 0 ||
         String(ha.disability_type ?? '').length > 0 ||
         safeParseArray(ha.diagnoses).length > 0
+      collectNamedCondition(ha.conditions)
+      collectNamedCondition(ha.chronic_illness_type)
+      collectNamedCondition(ha.disability_type)
+      collectNamedCondition(safeParseArray(ha.diagnoses))
+      // Canonical boolean flags that NAME a condition (hearing_impairment,
+      // visual_impairment, …) — the registry lives in conditionSpecificity.js.
+      for (const [flag, term] of Object.entries(NAMED_CONDITION_FLAGS)) {
+        if (ha[flag] === true) namedHealthConditions.push(term)
+      }
     }
   }
 
@@ -1843,6 +1868,9 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     hasFosterIndicator,
     hasChronicIllness,
     hasDisabilityNeed,
+    // NAMED conditions only (never bare flags/descriptors) — see the health
+    // section read above and config/conditionSpecificity.js.
+    namedHealthConditions,
     hasEmergencyNeed,
     hasHousingNeed,
     hasEmploymentNeed,
