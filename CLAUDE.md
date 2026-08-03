@@ -126,6 +126,45 @@ rules below win.
   graduate" / "graduated high school" / "college graduate" must NEVER derive
   `graduate_student` — a live incident disarmed the stage gate this way and
   re-admitted UAB-Blazer-class fellowships for an incoming freshman.
+- **LISTING DECOMPOSITION — a page of several awards is not a dead end**
+  (owner directive 2026-08-03). The fleet was stalling on pages that list many
+  awards (bold.org category, scholarships.com, fastweb, the NGWeb catalog):
+  field_count 0-2, no advance button → "nothing done". Three layers now mine
+  them, and every layer defers to an EXISTING authority — no shortcut verdicts:
+  1. `listingPageTriage.triagePage` (pure) classifies a page the engine already
+     dead-ended on as FORM / LISTING / NO_APPLICATION_SURFACE from deterministic
+     signals only (field count, award-link density, the shared `isListingSurface`
+     URL/title shape, and award-phrase TEXT density — the last is what catches
+     the NGWeb catalog's 557 text rows behind 5 nav links). The LLM is NEVER the
+     surface classifier. It runs ONLY where the engine failed to fill/advance and
+     is conservative about FORM, so real multi-step forms keep their flow.
+  2. `hamiltonAutopilotEngine` returns `blocker_kind:'listing_page'` (with a
+     capped snapshot) at those dead-ends; `runAutopilotPathway` intercepts it
+     (NOT the auth/resolver ladder) and calls `listingDecomposition.decomposeListing`.
+     That enumerates awards via `llmPageExtract.extractListingAwardItems`
+     (fabrication-guarded: an item's title MUST be present in the page text; an
+     applyUrl is kept only if it is one of the page's OWN links, else null →
+     catalog-only), admits each through the CANONICAL
+     `opportunityInserter.upsertFundingOpportunity` (reality gate + dedup — the
+     ONLY admission gate), lets `matchEngine.computeMatchDecision` (the SOLE
+     relevance authority) decide, and for ACCEPTs with a real link re-enters the
+     EXISTING `runAutopilot` fill/submit flow. Auto-submit is NEVER widened —
+     the parent run's consent is forwarded verbatim. Fan-out is env-bounded:
+     `HAMILTON_LISTING_MAX_ITEMS` (25), `HAMILTON_LISTING_MAX_APPLIES` (5).
+  3. The classifier (`hamiltonAutomationClassifier`) routes a POINTER-kind row
+     (`opportunityKindClasses.isPointerKind`: directory/referral/school_portal/
+     past_award_intel) that carries a usable web URL to the portal engine for
+     decomposition instead of a static `no_application` packet.
+     `HAMILTON_DECOMPOSE_POINTER_LISTINGS` (default on) toggles it. This COMPOSES
+     with #1110: decomposition is a DISTINCT outcome from the eligibility REJECT
+     — a pointer/listing row is not engine-rejected, so #1110's gate passes it,
+     and the pointer row's OWN match stays a pointer (locator rule: recommendable
+     at REVIEW, never ACCEPT). Decomposition mints NEW opportunity rows.
+  - **NGWeb EXCEPTION**: `<school>.scholarships.ngwebsolutions.com`
+    (`isNgWebCatalogHost`) decomposes for VISIBILITY only — every award admitted
+    to matching, but NEVER a per-item application attempt. Students cannot apply
+    individually there; the General Application (`generalApplicationCoverage.js`)
+    covers them.
 
 ### Apply-flow integrity (2026-08-03 operator walkthrough, Robert 6b3c75ec…)
 

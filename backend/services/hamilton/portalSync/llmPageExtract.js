@@ -429,6 +429,169 @@ export async function extractPortalDataWithLLM(page, opts = {}) {
   return { awards, fields, notFound, rejected, raw }
 }
 
-export const _internal = { partitionAwards, awardHasUserEvidence, describeLlmFailure, errToText }
+// ── Listing ENUMERATION (the opposite direction from extractPortalDataWithLLM) ─
+//
+// extractPortalDataWithLLM answers "what aid was granted TO THIS USER" and
+// REJECTS anything from a listing surface. extractListingAwardItems answers the
+// deliberately opposite question the owner asked (2026-08-03): "what individual
+// AWARD OPPORTUNITIES are listed on this page that a student could pursue?" —
+// used ONLY after listingPageTriage has already classified the page LISTING and
+// the engine dead-ended. The two never blur: enumeration output is a set of
+// candidate OPPORTUNITIES bound for the canonical inserter reality gate +
+// matchEngine, never a user-award record.
+//
+// Fabrication guard here is symmetric to the award guard: an enumerated item is
+// dropped unless its title is demonstrably present in the page text (the model
+// may not invent awards), and an applyUrl is kept only when that exact URL is
+// present among the page's own links/text (the model may not invent apply
+// links). NGWeb-style text-row catalogs legitimately yield items with a null
+// applyUrl — the decomposition layer treats those as catalog visibility only.
 
-export default { extractPortalDataWithLLM, isListingSurface }
+const LISTING_SYSTEM = [
+  'You enumerate the individual scholarship/grant/fellowship AWARD OPPORTUNITIES',
+  'that are LISTED on a page (a category page, search-results page, or catalog).',
+  'These are awards a student could pursue — NOT aid already granted to anyone.',
+  'You return STRICT JSON only — no markdown, no prose, no code fences.',
+  'List each DISTINCT award exactly once, using the award name as written on the',
+  'page. Do NOT invent awards, amounts, deadlines, or links. If the page lists no',
+  'individual awards (it is a pure info/finder page), return an empty array.',
+].join(' ')
+
+const LISTING_SCHEMA_INSTRUCTIONS = [
+  'Return JSON of exactly this shape:',
+  '{ "items": [',
+  '  { "title": string, "amount": number|null, "sponsor": string|null,',
+  '    "deadline": string|null, "applyUrl": string|null, "evidence": string|null }',
+  '] }',
+  '',
+  'Rules:',
+  '- "title" = the award name EXACTLY as written on the page (verbatim).',
+  '- "amount" = the dollar figure as a NUMBER (no $ or commas), or null.',
+  '- "sponsor" = the awarding org if written, else null.',
+  '- "deadline" = the application deadline text if written, else null.',
+  '- "applyUrl" = the page\'s OWN link to THAT award if one is present in the',
+  '  links list below; otherwise null. NEVER fabricate or guess a URL.',
+  '- "evidence" = a short verbatim quote (max 160 chars) from the page text',
+  '  naming this award. REQUIRED — omit any item you cannot quote.',
+].join('\n')
+
+/** Normalise for presence checks: lowercase, strip punctuation, collapse space. */
+function normForPresence(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Is `title` demonstrably present in the page text? Tolerates truncation and
+ * punctuation differences by falling back to the first few words.
+ */
+function titlePresentInText(title, normText) {
+  const nt = normForPresence(title)
+  if (!nt) return false
+  if (nt.length >= 8 && normText.includes(nt)) return true
+  const firstWords = nt.split(' ').slice(0, 4).join(' ')
+  return firstWords.length >= 8 && normText.includes(firstWords)
+}
+
+/**
+ * Enumerate the award OPPORTUNITIES listed on a page, fabrication-guarded.
+ *
+ * PURE of Playwright/DB: the caller passes the already-captured snapshot (the
+ * engine has it in hand at the dead-end). The AI wrapper is injectable via
+ * `opts._invoke` for tests; production uses invokeJsonWithFallback.
+ *
+ * @param {object} snapshot
+ * @param {string} snapshot.text            visible page text (capped upstream)
+ * @param {string|null} [snapshot.url]      the listing page URL (item fallback)
+ * @param {string|null} [snapshot.title]
+ * @param {Array<{href:string,text:string}>} [snapshot.links]  page anchors
+ * @param {object} [opts]
+ * @param {(args:object)=>Promise<object>} [opts._invoke]  test seam
+ * @param {(msg:string,detail?:object)=>void} [opts.log]
+ * @param {number} [opts.maxItems]          hard cap on returned items
+ * @returns {Promise<{ items:Array, notFound:string[], rejected:Array<{title:string,reason:string}>, raw:object }>}
+ */
+export async function extractListingAwardItems(snapshot = {}, opts = {}) {
+  const log = opts.log || (() => {})
+  const text = String(snapshot?.text || '')
+  const url = snapshot?.url || null
+  const title = snapshot?.title || null
+  const links = Array.isArray(snapshot?.links) ? snapshot.links : []
+  const maxItems = Number.isFinite(opts.maxItems) ? opts.maxItems : 50
+  const raw = { provider: null, attempted: true }
+
+  if (!envFlagOn('PORTAL_SYNC_LLM_EXTRACT', true)) {
+    return { items: [], notFound: ['LLM extraction disabled (PORTAL_SYNC_LLM_EXTRACT=false)'], rejected: [], raw: { ...raw, attempted: false } }
+  }
+  if (!opts._invoke && !anthropicKeyConfigured() && !getOpenAIOptional()) {
+    return { items: [], notFound: ['no AI provider configured (ANTHROPIC_API_KEY / OPENAI_API_KEY)'], rejected: [], raw: { ...raw, attempted: false } }
+  }
+  if (!text.trim()) {
+    return { items: [], notFound: ['no page text to enumerate'], rejected: [], raw }
+  }
+
+  const linkList = links
+    .filter((l) => l?.href && l?.text)
+    .slice(0, 200)
+    .map((l, i) => `[${i}] ${String(l.text).slice(0, 120)} -> ${l.href}`)
+    .join('\n')
+  const prompt = `${LISTING_SCHEMA_INSTRUCTIONS}\n\nPAGE URL: ${url || '(unknown)'}${title ? `\nPAGE TITLE: ${title}` : ''}\n\nPAGE LINKS (only these hrefs may be used as applyUrl):\n${linkList || '(none)'}\n\nPAGE TEXT (enumerate ONLY awards written below):\n\n${text.slice(0, 60_000)}`
+
+  const invoke = opts._invoke || ((args) => invokeJsonWithFallback(args))
+  let result
+  try {
+    result = await invoke({ openai: getOpenAIOptional(), system: LISTING_SYSTEM, prompt, temperature: 0, maxTokens: 2000 })
+  } catch (err) {
+    return { items: [], notFound: [`LLM enumeration call failed: ${err?.message || err}`], rejected: [], raw }
+  }
+  if (!result?.ok || !result?.json) {
+    return { items: [], notFound: [`LLM returned no parseable JSON (${describeLlmFailure(result)})`], rejected: [], raw }
+  }
+  raw.provider = result.provider || null
+
+  // Deterministic fabrication guard.
+  const normText = normForPresence(text)
+  const allowedHrefs = new Set(links.map((l) => String(l?.href || '')).filter(Boolean))
+  const items = []
+  const rejected = []
+  const seen = new Set()
+  const rawItems = Array.isArray(result.json?.items) ? result.json.items : []
+  for (const it of rawItems) {
+    const t = String(it?.title || '').trim()
+    if (!t) continue
+    const dedupeKey = normForPresence(t)
+    if (!dedupeKey || seen.has(dedupeKey)) continue
+    if (!titlePresentInText(t, normText)) {
+      rejected.push({ title: t.slice(0, 120), reason: 'title_not_on_page: enumerated award title is not present in the page text (possible fabrication)' })
+      continue
+    }
+    // applyUrl kept ONLY if it is one of the page's own links.
+    let applyUrl = it?.applyUrl ? String(it.applyUrl) : null
+    if (applyUrl && !allowedHrefs.has(applyUrl)) {
+      rejected.push({ title: t.slice(0, 120), reason: 'apply_url_not_on_page: enumerated applyUrl is not among the page links — dropped the link, kept the item as catalog-only' })
+      applyUrl = null
+    }
+    seen.add(dedupeKey)
+    items.push({
+      title: t.slice(0, 200),
+      amount: toNumberOrNull(it?.amount),
+      sponsor: it?.sponsor ? String(it.sponsor).trim().slice(0, 200) : null,
+      deadline: it?.deadline ? String(it.deadline).trim().slice(0, 120) : null,
+      applyUrl,
+      evidence: it?.evidence ? String(it.evidence).trim().slice(0, 200) : null,
+      source: 'llm_listing_enumerate',
+    })
+    if (items.length >= maxItems) break
+  }
+  const notFound = []
+  if (items.length === 0) notFound.push('no individual award opportunities enumerated from the listing text')
+  log(`extractListingAwardItems: ${items.length} items (${rejected.length} rejected) from ${url || 'listing'} via ${raw.provider}`)
+  return { items, notFound, rejected, raw }
+}
+
+export const _internal = { partitionAwards, awardHasUserEvidence, describeLlmFailure, errToText, titlePresentInText, normForPresence }
+
+export default { extractPortalDataWithLLM, isListingSurface, extractListingAwardItems }

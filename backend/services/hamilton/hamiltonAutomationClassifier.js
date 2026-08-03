@@ -47,6 +47,13 @@
  */
 
 import { isSearchEngineUrl } from '../../config/urlRules.js'
+import { isPointerKind } from '../../config/opportunityKindClasses.js'
+
+// Owner directive 2026-08-03: a POINTER row that carries a usable web URL is a
+// PAGE OF several awards — route it to the portal engine so listing triage can
+// decompose it, instead of a static no_application packet. Env-flaggable so the
+// behaviour can be toggled without a redeploy if it ever misbehaves in prod.
+const DECOMPOSE_POINTER_LISTINGS = String(process.env.HAMILTON_DECOMPOSE_POINTER_LISTINGS ?? 'true').toLowerCase() !== 'false'
 
 const PORTAL_RESULT_KINDS = new Set(['application', 'portal', 'apply'])
 const AUTO_PROFILE_RESULT_KINDS = new Set(['auto_match', 'institutional_match', 'nomination'])
@@ -262,6 +269,18 @@ export function classifyFundingSource({ opportunity = null, grant = null, profil
   if (FAFSA_RX.test(text)) return setAndReturn('auto_profile', 0.8, 'text.fafsa', 'matched FAFSA pattern')
   if (NOMINATION_RX.test(text)) return setAndReturn('auto_profile', 0.7, 'text.nomination', 'matched nomination pattern')
   if (INSTITUTIONAL_RX.test(text)) return setAndReturn('auto_profile', 0.7, 'text.institutional_aid', 'matched institutional aid pattern')
+
+  // 2b. Pointer-kind DECOMPOSITION (owner directive 2026-08-03). A directory /
+  // referral / school_portal / past_award_intel row that carries a usable web
+  // URL is a page listing several awards. Send it to the portal engine so
+  // listing triage decomposes it into per-award candidates, rather than a
+  // static no_application packet that turns the whole page down. Takes
+  // precedence over the no_application routes below. The pointer row's OWN match
+  // stays a pointer (locator rule: recommendable at REVIEW, never ACCEPT) —
+  // decomposition mints NEW opportunity rows through the canonical inserter.
+  if (DECOMPOSE_POINTER_LISTINGS && isPointerKind(opportunityKind) && nonEmpty(url) && /^https?:/i.test(url)) {
+    return setAndReturn('portal', 0.6, 'pointer_kind.decompose', opportunityKind)
+  }
 
   // 3. No-application signals.
   if (NO_APPLICATION_RESULT_KINDS.has(resultKind)) {
