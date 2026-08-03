@@ -125,7 +125,13 @@ export function partitionFundingSources(sources = []) {
       notAGrant.push({ ...source, not_a_grant_reasons: verdict.reasons })
       continue
     }
-    if (isFundingResource(source) || verdict.bucket === RESULT_BUCKETS.RESOURCE) {
+    // A stored engine ACCEPT is a strong certification (matchSurfacing: hiding
+    // the engine's own accepts is incoherence) — absence of a stated signal is
+    // SILENCE, and silence is not a denial, so the no-fundable-signal routing
+    // applies only to rows the engine did NOT certify. Positive junk evidence
+    // (the not_a_grant classes above) still overrides a stored ACCEPT.
+    const isStoredAccept = String(source?.match_decision || '').toLowerCase() === 'accept'
+    if (isFundingResource(source) || (verdict.bucket === RESULT_BUCKETS.RESOURCE && !isStoredAccept)) {
       directories.push(
         verdict.bucket === RESULT_BUCKETS.RESOURCE && !isFundingResource(source)
           ? { ...source, resource_reasons: verdict.reasons }
