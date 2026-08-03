@@ -29,6 +29,7 @@ import {
 import { buildApprovalQueue, proposeCoverageOverrides } from '../services/amy/crawlerTuner.js'
 import { POINTER_KINDS } from '../config/opportunityKindClasses.js'
 import { evaluateDiscovery } from '../services/amy/amyReport.js'
+import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 
 const D1 = '2026-07-25T04:00:00.000Z' // ET 2026-07-25
 const D2 = '2026-07-26T04:00:00.000Z'
@@ -364,5 +365,103 @@ describe('locator-only weak matches are a COVERAGE gap, not a scoring-weights ga
       { liveOverrides: first.next },
     )
     expect(second.change).toBe(false)
+  })
+})
+
+// ── false_positive reads the CAP'S text, not a narrower one (2026-08-02) ────
+//
+// The engine's generic-only ACCEPT cap (matchEngine computeMatchDecision)
+// evaluates `title + description`: a concrete anchor in the DESCRIPTION
+// ("rent") deliberately rescues a generically-titled row and the ACCEPT
+// stands. Amy's false_positive detector used to test the TITLE alone, so it
+// flagged exactly the rows the cap had deliberately rescued — and minted an
+// approval item (`false_positive:veteran`, the El Paso County General
+// Assistance Program item, 3 active TX rows) that NO approval could close:
+// the baseline vocabulary already matched "general assistance", so the only
+// approvable additions were a no-op or an over-block. These guards pin the
+// detector to the cap's own text.
+//
+// MUTATION-VERIFIED: revert amyReport's `genericOnly: isGenericOnly(capTextOf(r))`
+// to `isGenericOnly(r.title)` and the El Paso tests below go red.
+describe('false_positive — the detector evaluates the SAME text as the generic-title cap', () => {
+  const scenario = { scenario_id: 'veteran-v1', category: 'veteran', label: 'Veteran Household' }
+  const runWith = (recommendations) => ({
+    run: { run_id: 'r-fp-cap-text', stored: recommendations.length, recommendations, sources: [] },
+    persisted: { opportunities: recommendations.length },
+    thesis: {},
+  })
+
+  // The live prod shape this fix retires: generic TITLE ("general assistance"
+  // is baseline vocabulary), concrete anchors ONLY in the description.
+  const elPaso = {
+    opportunity_id: 'opp-el-paso',
+    title: 'El Paso County General Assistance Program',
+    description:
+      'Emergency help for El Paso County residents with rent, utility bills, and food for eligible households.',
+    sponsor: 'El Paso County',
+    kind: 'PROGRAM',
+    match_score: 21,
+    decision: 'ACCEPT',
+  }
+
+  it('a row the cap deliberately RESCUED (concrete anchor in the description) is NOT a false positive', () => {
+    const ev = evaluateDiscovery(scenario, 'p-veteran', runWith([elPaso]))
+    expect(ev.false_positives).toBe(0)
+    expect(ev.false_positive_titles).toEqual([])
+    expect(ev.findings.some((f) => f.type === 'false_positive')).toBe(false)
+    // The candidate record agrees: generic by TITLE (naming convention), but
+    // not generic-only on the cap's text.
+    expect(ev.candidates[0].generic).toBe(true)
+    expect(ev.candidates[0].genericOnly).toBe(false)
+  })
+
+  it('…and produces NO false_positive approval item — the unfillable owner ask is retired', () => {
+    const ev = evaluateDiscovery(scenario, 'p-veteran', runWith([elPaso]))
+    const items = buildApprovalQueue([ev])
+    expect(items.filter((i) => String(i.id).startsWith('false_positive:'))).toEqual([])
+  })
+
+  it('a row generic across title AND description that still cleared ACCEPT is a CAP LEAK and STILL flags', () => {
+    // No CONCRETE_RE anchor anywhere: if this is ACCEPT, the cap leaked.
+    const leak = {
+      opportunity_id: 'opp-leak',
+      title: 'Statewide Funding Finder',
+      description: 'A search portal with a list of programs and other ways to find funding in your area.',
+      sponsor: 'State Office',
+      kind: 'PROGRAM',
+      match_score: 20,
+      decision: 'ACCEPT',
+    }
+    const ev = evaluateDiscovery(scenario, 'p-veteran', runWith([leak]))
+    expect(ev.false_positives).toBe(1)
+    expect(ev.false_positive_titles).toEqual(['Statewide Funding Finder'])
+    const finding = ev.findings.find((f) => f.type === 'false_positive')
+    expect(finding).toBeTruthy()
+    expect(finding.evidence.false_positive_titles).toEqual(['Statewide Funding Finder'])
+    // The detector keeps its actor: the leak still reaches the approval queue.
+    const items = buildApprovalQueue([ev])
+    const item = items.find((i) => i.id === 'false_positive:veteran')
+    expect(item).toBeTruthy()
+    expect(item.lever).toBe('relevance_precision')
+  })
+
+  it('a legacy recommendation with NO description field keeps the old title-only behavior (fail-noisy, never fail-silent)', () => {
+    const legacy = {
+      opportunity_id: 'opp-legacy',
+      title: 'Funding Finder',
+      sponsor: 'Somewhere',
+      kind: 'PROGRAM',
+      match_score: 20,
+      decision: 'ACCEPT',
+    }
+    const ev = evaluateDiscovery(scenario, 'p-veteran', runWith([legacy]))
+    expect(ev.false_positives).toBe(1)
+  })
+
+  it('the cap and the detector cannot disagree about the El Paso text (same predicate, same text)', () => {
+    // The exact construction matchEngine uses for its cap check.
+    const capText = `${elPaso.title || ''} ${elPaso.description || ''}`.toLowerCase()
+    expect(isGenericOnly(capText)).toBe(false) // the cap rescues it…
+    expect(isGenericOnly(elPaso.title)).toBe(true) // …while a TITLE-ONLY reading (the old detector) flags it
   })
 })

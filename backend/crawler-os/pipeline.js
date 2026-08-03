@@ -106,7 +106,12 @@ export async function runDiscovery(deps, opts = {}) {
         // kind travels with the recommendation so downstream honesty checks
         // (Amy's amount-recall evaluator) can tell a DIRECTORY locator — which
         // never carries a per-award dollar amount by design — from a grant row.
-        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, sponsor: canonicalOpp.sponsor, kind: canonicalOpp.kind ?? null, amount_min: canonicalOpp.funding?.amount_min ?? null, amount_max: canonicalOpp.funding?.amount_max ?? null, amount_status: canonicalOpp.funding?.amount_status ?? null, match_score: decision.match_score, decision: decision.decision, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
+        // description travels too: the engine's generic-only ACCEPT cap
+        // (computeMatchDecision) evaluates `title + description`, so Amy's
+        // false_positive detector must be able to read the SAME text — a
+        // concrete anchor in the description ("rent", "utility") is exactly
+        // what rescues a generically-titled row from the cap.
+        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, description: canonicalOpp.description ?? null, sponsor: canonicalOpp.sponsor, kind: canonicalOpp.kind ?? null, amount_min: canonicalOpp.funding?.amount_min ?? null, amount_max: canonicalOpp.funding?.amount_max ?? null, amount_status: canonicalOpp.funding?.amount_status ?? null, match_score: decision.match_score, decision: decision.decision, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
       }
     }
   }

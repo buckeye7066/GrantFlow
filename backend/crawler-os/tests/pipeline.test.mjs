@@ -224,3 +224,18 @@ test('existing canonical rows are still matched on a later crawl (no false zero)
   assert.equal(r.zero_result, null, 'matching an existing real opportunity is not a zero-result crawl');
   assert.ok(r.sources.some((s) => s.existing > 0), 'source telemetry records existing canonical rows');
 });
+
+test('recommendations carry the DESCRIPTION — the text the generic-only cap evaluated (Amy reads the same text)', async () => {
+  // The engine's generic-only ACCEPT cap tests isGenericOnly(title + description);
+  // Amy's false_positive detector must evaluate the SAME text. If the rec row
+  // drops the description, Amy degrades to title-only and re-flags rows the cap
+  // deliberately rescued via a concrete description anchor (the El Paso County
+  // General Assistance shape, 2026-08-02).
+  const d = deps();
+  const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+  const r = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'run_desc' });
+  assert.ok(r.recommendations.length >= 1, 'fixture run must recommend something for this guard to bite');
+  for (const rec of r.recommendations) {
+    assert.ok('description' in rec, `recommendation "${rec.title}" must carry a description field (may be null, never absent)`);
+  }
+});

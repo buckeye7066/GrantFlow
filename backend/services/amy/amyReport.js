@@ -303,6 +303,19 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
       r?.match_explain?.score_breakdown?.topical_evidence
     return Number.isFinite(Number(v)) ? Number(v) : num(r?.match_score)
   }
+  // The SAME text the engine's generic-only ACCEPT cap evaluates.
+  // computeMatchDecision builds `oppText = title + description` and tests
+  // isGenericOnly(oppText) — so a generically-TITLED row whose DESCRIPTION
+  // carries a concrete anchor ("El Paso County General Assistance Program"
+  // whose description says "rent") is DELIBERATELY rescued by the cap and its
+  // ACCEPT stands. This detector used to test the TITLE alone, so it flagged
+  // exactly the rows the cap had deliberately rescued — an unfixable
+  // "false positive" no vocabulary approval could ever close (the
+  // false_positive:veteran / El Paso queue item, 2026-08-02). Mirror the
+  // cap's text construction EXACTLY (matchEngine.js `oppText`). Rec rows
+  // from producers that predate the description field degrade to title-only,
+  // which is the old behavior, never a silent un-flag.
+  const capTextOf = (r) => `${r.title || ''} ${r.description || ''}`.toLowerCase()
   const candidates = recommendations.map((r) => ({
     score: num(r.match_score),
     topical: topicalEvidenceOf(r),
@@ -310,22 +323,28 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     title: r.title ?? null,
     locator: isLocatorKind(r.kind),
     generic: isGenericTitle(r.title),
-    // generic AND no concrete anchor — "Cancer Resource Directory" is generic
-    // by title but is genuinely a cancer row, so it is not genericOnly.
-    genericOnly: isGenericOnly(r.title),
+    // generic AND no concrete anchor ACROSS TITLE+DESCRIPTION — the cap's own
+    // predicate on the cap's own text. "Cancer Resource Directory" is generic
+    // by title but is genuinely a cancer row, so it is not genericOnly; a
+    // generic title with "rent" in the description is not genericOnly either.
+    genericOnly: isGenericOnly(capTextOf(r)),
   }))
 
   // False positives: a generic-ONLY listing (no concrete anchor) that the engine
   // still ACCEPTED as a strong match for a SPECIFIC profile.
   //
-  // Two deliberate narrowings:
+  // Three deliberate narrowings:
   //  - DIRECTORY locators are excluded: they are pointers admitted at REVIEW by
   //    the locator rule, so a high score on one is topical fit, not an over-claim.
   //  - the DECISION is what counts, not the raw score. matchEngine's generic-only
   //    cap holds these at REVIEW while their topical score legitimately stays at
   //    or above ACCEPT_SCORE — firing on `score >= ACCEPT_SCORE` would report a
   //    false positive the engine had already prevented.
-  // Post-cap this should be structurally impossible; if it fires, the cap leaked.
+  //  - the TEXT is the cap's text (title + description via capTextOf above), so
+  //    a row the cap deliberately rescued via a concrete description anchor is
+  //    not re-flagged against a narrower reading of the same rule.
+  // Post-cap this should be structurally impossible; if it fires, the cap leaked
+  // — genuinely generic across title AND description, yet certified ACCEPT.
   const falsePositives = candidates.filter(
     (c) => c.genericOnly && !c.locator && c.decision === 'ACCEPT',
   )
