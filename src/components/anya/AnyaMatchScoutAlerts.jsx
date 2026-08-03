@@ -3,6 +3,7 @@ import { toast } from '@/components/ui/use-toast'
 import { Button } from '@/components/ui/button'
 import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
+import { fitPercent } from '@/lib/matchDisplayThresholds'
 
 /**
  * AnyaMatchScoutAlerts
@@ -76,7 +77,7 @@ export default function AnyaMatchScoutAlerts() {
 }
 
 function showSuggestionToast(suggestion) {
-  const score = Math.round(Number(suggestion.match_score) || 0)
+  const score = fitPercent(suggestion.match_score)
   const title = suggestion.title || 'a funding opportunity'
   const profileLabel = formatProfileLabel(suggestion)
 

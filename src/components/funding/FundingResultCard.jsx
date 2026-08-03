@@ -25,6 +25,7 @@ import React from 'react'
 import PropTypes from 'prop-types'
 import { humanizeMatchReason } from '@/utils/reasonText'
 import { amountTextFallback } from '@/lib/amountDisplay'
+import { fitPercent, scoreToMatchLabel } from '@/lib/matchDisplayThresholds'
 
 // canonicalResultShape() lives in ./canonicalResultShape.js so this file
 // can stay components-only (Vite Fast Refresh requirement).
@@ -184,11 +185,12 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
           <div
             className="text-right"
             data-testid="funding-result-card-score"
-            aria-label={`Match score ${score} out of 100`}
+            aria-label={`${fitPercent(score)}% fit — ${scoreToMatchLabel(score)} (data-point match score ${score})`}
+            title={`${scoreToMatchLabel(score)} · matches ${score} of this profile's data points`}
           >
-            <div className="text-2xl font-bold text-slate-900">{score}</div>
+            <div className="text-2xl font-bold text-slate-900">{fitPercent(score)}%</div>
             <div className="text-xs text-slate-500">
-              match{confidence !== null ? ` · ${confidence}% conf` : ''}
+              fit{confidence !== null ? ` · ${confidence}% conf` : ''}
             </div>
           </div>
         )}

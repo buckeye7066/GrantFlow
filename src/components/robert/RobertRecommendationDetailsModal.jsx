@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { toast } from '@/components/ui/use-toast'
 import { apiFetch } from '@/api/client'
 import { humanizeMatchReason } from '@/utils/reasonText'
+import { fitPercent } from '@/lib/matchDisplayThresholds'
 
 /**
  * RobertRecommendationDetailsModal
@@ -47,7 +48,7 @@ export default function RobertRecommendationDetailsModal({ open, recommendation,
 
   if (!recommendation) return null
 
-  const score = Math.round(Number(recommendation.match_score) || 0)
+  const score = fitPercent(recommendation.match_score)
   const decision = String(recommendation.match_decision || '').toUpperCase()
   const reasons = Array.isArray(recommendation.match_reasons) ? recommendation.match_reasons : []
 

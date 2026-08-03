@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { getGeoSummary, getGeoScored } from "@/api/opportunities"
 import { formatReasonList } from "@/utils/reasonText"
-import { scoreToMatchTier } from "@/lib/matchDisplayThresholds"
+import { scoreToMatchTier, fitPercent } from "@/lib/matchDisplayThresholds"
 
 const STATE_NAMES = {
   AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",
@@ -54,7 +54,7 @@ function ScoreBadge({ score }) {
       scoreBadgeColor(score),
     )}>
       <Target className="w-3 h-3" />
-      {Math.round(score)}%
+      {fitPercent(score)}%
     </span>
   )
 }

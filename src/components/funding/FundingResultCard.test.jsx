@@ -27,12 +27,17 @@ describe('FundingResultCard', () => {
     expect(screen.getByText(/Source: grants.gov/)).toBeTruthy()
   })
 
-  it('shows the match score and confidence', () => {
+  it('shows the fit percentage and confidence', () => {
     render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'verified' }} />)
     const scoreEl = screen.getByTestId('funding-result-card-score')
     expect(scoreEl).toBeTruthy()
-    expect(scoreEl.textContent).toContain('78')
+    // A strong match (data-point score 78) reads as a high fit %, not the raw
+    // compressed integer — the "Excellent match looked like 17%" fix.
+    expect(scoreEl.textContent).toContain('99%')
+    expect(scoreEl.textContent).toContain('fit')
     expect(scoreEl.textContent).toContain('80% conf')
+    // The raw data-point score stays available for transparency (aria/title).
+    expect(scoreEl.getAttribute('aria-label')).toContain('score 78')
   })
 
   it('shows "why this matched" with matched_profile_facts (Phase 2 mission rule)', () => {
