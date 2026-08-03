@@ -191,6 +191,28 @@ export const STAGE_REQUIREMENT_CLASSES = Object.freeze([
     barredStages: Object.freeze([...PRE_BACCALAUREATE, 'undergraduate']),
   }),
   Object.freeze({
+    id: 'dual_enrollment',
+    label: 'dual-enrolled high-school students',
+    // Dual enrollment is BEING IN HIGH SCHOOL while taking college classes —
+    // an enrolled undergraduate or graduate student structurally cannot be one
+    // (2026-08-03: "Cleveland State Foundation Dual Enrollment Scholarships"
+    // surfaced ACCEPT 53 to Robert White, a full-time enrolled college
+    // student, through the institution-attendance recall net — the engine had
+    // no notion that a dual-enrollment award's audience excludes him).
+    // `high_school_student` and `dual_enrolled_incoming_freshman` are the
+    // audience and stay untouched; `unclassified` stays neutral as always.
+    patterns: Object.freeze([
+      /\bdual[\s-]enroll(?:ment|ed)\b/i,
+      /\bdually[\s-]enrolled\b/i,
+    ]),
+    // "for dual enrollment AND current college students" proves the audience
+    // is not exclusive. `college\s+students?` requires the noun — "earn
+    // college credit", the phrase every dual-enrollment page contains, must
+    // NOT trip the guard.
+    inclusionGuard: /\b(?:current(?:ly)?[\s-]enrolled\s+college|college\s+students?|undergraduates?|graduate\s+students?|all\s+students?)\b/i,
+    barredStages: Object.freeze(['undergraduate', 'graduate_student']),
+  }),
+  Object.freeze({
     id: 'adult_reentry',
     label: 'adult / returning-student reentry',
     // The reentry vocabulary must sit next to a STUDENT-AID word. Bare
@@ -254,6 +276,7 @@ export const STAGE_DECLARATION_LIKE_PATTERNS = Object.freeze([
   '%returning adult%', '%adults returning%', '%adult learner%',
   '%returning to college%', '%returning to school%', '%returning to education%',
   '%reenroll%', '%re-enroll%',
+  '%dual enroll%', '%dual-enroll%', '%dually enrolled%', '%dually-enrolled%',
 ])
 
 /**

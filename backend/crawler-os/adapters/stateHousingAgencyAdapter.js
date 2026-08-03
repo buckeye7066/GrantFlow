@@ -71,6 +71,20 @@ export function createStateHousingAgencyAdapter(sourceId) {
             summary,
             info_url: url,
             apply_url: null,
+            // THE STATE THE ADAPTER JUST RESOLVED IS A FACT ABOUT THE ROW
+            // (2026-08-03, the Robert White out-of-state-HFA class). The first
+            // version dropped it here, so every minted per-state row ("West
+            // Virginia Housing Development Fund — …") inherited the NATIONAL
+            // source's geography, was stamped `is_national = 1, state NULL`,
+            // and cross-matched to every profile in the fleet — the state
+            // lived only in the title, as a FULL NAME the `"<Place>, XX — "`
+            // gates cannot read. A resolved agency is state-exclusive by
+            // construction; only the unresolved generic fallback stays
+            // national. Boot net for the rows already minted wrong:
+            // enforceStateAgencyGeoScope (enforceInvariants.js).
+            geography: agency.state
+              ? { national: false, states: [agency.state] }
+              : undefined,
           },
         },
       }];
@@ -87,7 +101,10 @@ export function createStateHousingAgencyAdapter(sourceId) {
         is_directory: true,
         applicant_types: source.applicant_types ?? ['*'],
         need_categories: source.need_categories ?? ['*'],
-        geography: source.geography ?? { national: true, states: [] },
+        // Prefer the per-state geography the request carried (a resolved
+        // agency); fall back to the source's own (national) scope only when
+        // the state could not be resolved.
+        geography: raw.geography ?? source.geography ?? { national: true, states: [] },
         is_loan: false,
         requires_cost_share: false,
         raw,
