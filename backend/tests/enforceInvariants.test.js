@@ -1142,7 +1142,9 @@ describe('enforceInvariants — runner', () => {
     // + the 3 global match-scope nets (2026-08-03, the Robert White report:
     //   per-state HFA geo scope, cross-profile ACCEPT-only precision, and the
     //   condition-lane match-store scope) here.
-    expect(summary.ran).toBe(52)
+    // + the non-grant notice net (2026-08-03 owner QA: regulatory/lead-gen/
+    //   clearly-expired junk purged from the match store).
+    expect(summary.ran).toBe(53)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1175,6 +1177,9 @@ describe('enforceInvariants — runner', () => {
       'state_agency_geo_scope',
       'declared_place_scope_matches',
       'foreign_jurisdiction_matches',
+      // Non-grant junk net (2026-08-03 owner QA): regulatory notices, lead-gen
+      // "scholarships", clearly-expired programs — purged from the match store.
+      'non_grant_notice_matches',
       'individual_match_award_ceiling',
       // A profile that was NEVER FILLED IN is not shown geography the system
       // invented from its placeholder address ("Anytown, SA"). Last in the

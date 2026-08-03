@@ -73,7 +73,7 @@ function hasFederalRegisterFundingSignal(...parts) {
 // drift tripwire in backend/tests/matchEngineResearchProgramGuard.test.js
 // asserts the two regexes stay identical.
 export const RE_PROCEDURAL_NOTICE_TITLE =
-  /\b(?:30|60)[- ]day notice\b|\bnotice of proposed information collection\b|\bproposed information collection\b|\bpaperwork reduction act\b|\brequest for (?:comments?|information)\b|\bnotice of a federal advisory\b|\bnotice of re[sc]+ission\b|\bregulatory waiver requests?\b|\bmodification of .{0,80}(?:eligibility|guidelines)\b|\bagency information collection activities\b|\binformation collection\b|\bself-regulatory organizations?\b|\bnotice of filing\b|\bproposed rule change\b|\bprivacy act of 1974\b|\bsystems? of records\b|\bproposed final judgment\b|\bpublic hearing\b|\bprohibited transaction exemptions?\b|\bsolicitation of nominations?\b/i;
+  /\b(?:30|60)[- ]day notice\b|\bnotice of proposed information collection\b|\bproposed information collection\b|\bpaperwork reduction act\b|\brequest for (?:comments?|information)\b|\bnotice of a federal advisory\b|\bnotice of re[sc]+ission\b|\bregulatory waiver requests?\b|\bmodification of .{0,80}(?:eligibility|guidelines)\b|\bagency information collection activities\b|\binformation collection\b|\bself-regulatory organizations?\b|\bnotice of filing\b|\bproposed rule change\b|\bprivacy act of 1974\b|\bsystems? of records\b|\bproposed final judgment\b|\bpublic hearing\b|\bprohibited transactions?\b|\bsolicitation of nominations?\b/i;
 
 export function federalRegisterParseCfg() {
   return {

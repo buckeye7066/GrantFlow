@@ -342,7 +342,7 @@ export function nonGrantTitleLikePatterns() {
     '%systems of records%',
     '%proposed final judgment%',
     '%public hearing%',
-    '%prohibited transaction exemption%',
+    '%prohibited transaction%',
     '%solicitation of nomination%',
     '%request for comment%',
     '%request for information%',

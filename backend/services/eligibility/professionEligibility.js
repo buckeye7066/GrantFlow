@@ -132,9 +132,13 @@ const PROFESSION_FIELD_KEYS = Object.freeze([
   'profession', 'job_title', 'current_role', 'desired_field', 'concentration',
 ])
 
-/** Sections whose curated fields we consult (identity/field-of-study bearing). */
+/** Sections whose curated fields we consult (identity/field-of-study bearing).
+ * `occupation` added 2026-08-03: real profiles store `occupation.occupation`
+ * ("Farmer"), and without the section the dancer-grant-for-a-farmer regression
+ * fixture could never resolve the profile side of the both-sides rule. */
 const PROFESSION_SECTION_KEYS = Object.freeze([
   'basic_information', 'education', 'employment', 'career', 'professional',
+  'occupation',
 ])
 
 function coerceObject(data) {
