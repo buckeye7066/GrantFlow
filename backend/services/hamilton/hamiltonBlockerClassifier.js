@@ -76,6 +76,11 @@ const ENGINE_KIND_MAP = Object.freeze({
   no_application_form: 'unknown_application_method',
   too_many_pages: 'portal_anti_bot_block',
   click_failed: 'portal_anti_bot_block',
+  // Full-page bot-protection interstitial (Cloudflare managed challenge / Akamai
+  // / DataDome) that replaced the app before it loaded. Distinct from `captcha`
+  // (an embedded widget on a real page): the whole site is refusing our
+  // datacenter browser, so the resolution is human-driven side-by-side co-browse.
+  bot_protected: 'portal_anti_bot_block',
   preflight: 'missing_required_information',
   portal_unreachable: 'portal_unreachable',
 })

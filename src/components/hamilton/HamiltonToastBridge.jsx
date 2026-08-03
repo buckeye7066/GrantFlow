@@ -48,10 +48,14 @@ function resolveNotificationTarget(n) {
   // proofing) → deep-link to the profile's Portals tab and flag the exact portal
   // so it surfaces a clickable "Open side-by-side login" card. `cobrowse=<host>`
   // is read by ProfilePortalsCard to render + scroll to that card.
-  if (/2fa_required|captcha_required|identity_proof/.test(type)) {
+  if (/2fa_required|captcha_required|identity_proof|bot_protected/.test(type)) {
     const host = hostFromNotification(d)
     const params = { id: profileId, tab: 'pipeline' }
     if (host) params.cobrowse = host
+    // A bot-protection dead-end is not a login/CAPTCHA the user clears — the site
+    // refuses the automated browser, and side-by-side co-browse is the workaround.
+    // Carry the reason so the co-browse card shows the honest bot-protection copy.
+    if (/bot_protected/.test(type)) params.cobrowse_reason = 'bot_protected'
     return { navigateTo: createPageUrl('ProfileDetail', params), flash: 'portal-cobrowse' }
   }
   // Login needed → the profile's Saved portal logins card (Pipeline tab) so the
@@ -121,6 +125,7 @@ const HAMILTON_TYPES = new Set([
   'hamilton_failed',
   'hamilton_2fa_required',
   'hamilton_captcha_required',
+  'hamilton_bot_protected',
   'hamilton_email_verification_required',
 ])
 
@@ -176,6 +181,7 @@ function severityForType(type) {
     case 'hamilton_attestation_required':
     case 'hamilton_2fa_required':
     case 'hamilton_captcha_required':
+    case 'hamilton_bot_protected':
     case 'hamilton_email_verification_required':
     case 'hamilton_admin_missing_info':
     case 'hamilton_admin_login_required':

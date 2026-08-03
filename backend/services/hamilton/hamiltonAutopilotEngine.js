@@ -434,7 +434,64 @@ async function attemptLogin(page, credential) {
   }
 }
 
+// Full-page bot-protection interstitial signatures. This is the WHOLE-PAGE
+// challenge (Cloudflare "managed challenge", Akamai/DataDome/PerimeterX bot
+// walls) that REPLACES the application before it loads — distinct from an
+// embedded captcha WIDGET on an otherwise-real page (that stays `captcha`).
+// Vendor-agnostic on purpose (owner's standing rule): these phrasings and the
+// low-content shape generalize across bot-protection vendors, so a NEW vendor
+// still classifies as bot_protected instead of dead-ending as login/no_progress.
+//
+// STRONG phrases are specific enough to a bot-wall that they never appear in a
+// real scholarship application, so they classify on their own. BRAND signals
+// ("Ray ID", "Cloudflare", "Attention Required") are weaker — a real page could
+// mention them in a footer — so they only classify when the page is also
+// low-content (an interstitial has essentially no application on it).
+const BOT_WALL_STRONG_RX = /performing security verification|verifying you are (a human|not a bot)|checking (your|the) browser before (you )?(access|continue|proceed)|this website uses a security service to protect|needs to review the security of your connection|enable javascript and cookies to continue|verify you are a human by completing|additional security check is required to access/i
+const BOT_WALL_BRAND_RX = /\bray id:?\b|\bcf-ray\b|\bcloudflare\b|attention required!|\b(akamai|datadome|perimeterx|imperva incapsula)\b/i
+// An interstitial that has replaced the app is short — a real application page,
+// even a login screen, carries far more visible text than a challenge shell.
+const BOT_WALL_LOW_CONTENT_CHARS = 2000
+
+async function readBotWallSignals(page) {
+  // Guarded so a minimal fake `page` (tests, or a partially-torn-down context)
+  // that lacks title()/$eval never throws — optional-call + reject-safe.
+  let title = ''
+  let bodyText = ''
+  try { title = String((await Promise.resolve(page.title?.())) || '') } catch { /* ignore */ }
+  try {
+    bodyText = String((await Promise.resolve(
+      page.$eval?.('body', (el) => (el && (el.innerText || el.textContent)) || ''),
+    )) || '')
+  } catch { /* ignore */ }
+  const url = (() => { try { return page.url() } catch { return '' } })()
+  return { title, bodyText, url }
+}
+
+// Full-page bot-protection interstitial? Returns a gate or null. Exported via
+// _internal for direct testing against the verbatim challenge text.
+async function detectBotWall(page) {
+  const { title, bodyText, url } = await readBotWallSignals(page)
+  const hay = `${title} ${bodyText} ${url}`
+  if (BOT_WALL_STRONG_RX.test(hay)) {
+    return { kind: 'bot_protected', detail: 'Site bot-protection (e.g. Cloudflare) blocked automated access' }
+  }
+  // Brand-only signal must be corroborated by the low-content interstitial shape
+  // so a real page mentioning a vendor in its footer is not misclassified.
+  if (BOT_WALL_BRAND_RX.test(hay) && bodyText.trim().length > 0 && bodyText.trim().length < BOT_WALL_LOW_CONTENT_CHARS) {
+    return { kind: 'bot_protected', detail: 'Site bot-protection (e.g. Cloudflare) blocked automated access' }
+  }
+  return null
+}
+
 async function detectGate(page) {
+  // Full-page bot-protection interstitial FIRST — it replaces the whole app, so
+  // a bot-wall must win over the login/captcha/field heuristics (a challenge
+  // shell can otherwise look like "no progress" or a bare login). This is OUR
+  // reachability problem (datacenter IP / fingerprint), so the orchestrator must
+  // NOT expire a saved session on it — see the bot_protected handling there.
+  const botWall = await detectBotWall(page)
+  if (botWall) return botWall
   // Login: a visible password field, OR a URL containing /login|/signin.
   //
   // We ALWAYS surface a detected login as a gate and let the main loop decide
@@ -1123,7 +1180,7 @@ export const _internal = {
   FIELD_RULES, STANDING_ATTESTATION_PATTERNS, HARD_ATTESTATION_PATTERNS,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
-  detectGate, attemptLogin,
+  detectGate, detectBotWall, attemptLogin,
   extractConfirmationReference,
   extractConfirmationReferenceFromUrl,
   detectReceiptAcknowledgement,

@@ -236,6 +236,39 @@ rules below win.
     to matching, but NEVER a per-item application attempt. Students cannot apply
     individually there; the General Application (`generalApplicationCoverage.js`)
     covers them.
+- **BOT-PROTECTION DEAD-ENDS ARE NAMED, AND THE FIX IS SIDE-BY-SIDE CO-BROWSE**
+  (owner 2026-08-03: "for the dead-ends, make sure the user and admin are
+  aware"). scholarships.com serves a FULL-PAGE Cloudflare "managed challenge"
+  interstitial ("Performing security verification… Ray ID… Cloudflare") that
+  REPLACES the app before it loads, from the datacenter IP the autopilot runs on
+  — and it used to collapse into a generic `login` blocker that told the owner
+  nothing. `hamiltonAutopilotEngine.detectBotWall` (called FIRST in `detectGate`)
+  now catches the WHOLE-PAGE interstitial — distinct from the embedded captcha
+  WIDGET `detectGate` already caught — and returns `{kind:'bot_protected'}`.
+  Signals are vendor-agnostic: STRONG body phrases (`performing security
+  verification`, `verifying you are (a human|not a bot)`, `checking your browser
+  before…`, `this website uses a security service to protect`) classify alone; a
+  BRAND signal (Ray ID / Cloudflare / Akamai / DataDome / PerimeterX) classifies
+  only when the page is ALSO low-content (an interstitial has no app on it), so a
+  real page mentioning a vendor in its footer is never misclassified.
+  `bot_protected` maps to `portal_anti_bot_block` in `hamiltonBlockerClassifier`.
+  The orchestrator's run-path calls `handleBotProtectedBlock` (exported), which
+  (1) sets a DURABLE, visible `blocked` task state ("This site blocks automated
+  submission (bot protection). Use side-by-side co-browse to apply, or apply
+  manually."), (2) notifies the profile owner AND admins
+  (`hamilton_bot_protected`) with a `?cobrowse=<host>&cobrowse_reason=bot_protected`
+  deep-link (`hamiltonBotProtectedNotice.js`) that surfaces the existing
+  side-by-side co-browse card (`ProfilePortalsCard`; `HamiltonToastBridge` routes
+  it), and (3) — critically — NEVER expires `usedSessionId`: a bot-wall is OUR
+  reachability problem (IP/fingerprint), NOT proof the session is dead (mirrors
+  the portal-sync block-vs-signin-wall rule; only `login`/`2fa` expire a
+  session). Do NOT build a new co-browse system — this only points at the
+  existing live-login flow. Guard tests:
+  `backend/tests/hamiltonBotProtectedDetection.test.js` (verbatim Cloudflare text
+  → bot_protected not login; real page not misclassified; footer-mention guard;
+  embedded widget still captcha) + `backend/tests/hamiltonBotProtectedBlock.test.js`
+  (durable blocked state, owner+admin side-by-side notification, session NEVER
+  expired — mutation-verified).
 
 ### Apply-flow integrity (2026-08-03 operator walkthrough, Robert 6b3c75ec…)
 
