@@ -232,7 +232,11 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
   })
 
-  it('the tailored-approval gate (default ON) still forces filled-not-submitted for an unapproved card', async () => {
+  // OWNER RULE 2026-08-03: "auto submit should mean auto submit. No more, no
+  // less." An unapproved (or absent) tailored record no longer withholds an
+  // authorized submit; only genuine incompleteness (missing required
+  // questions) still does.
+  it('an authorized card with NO approved tailored record now SUBMITS (gate default ON)', async () => {
     // No HAMILTON_TAILORED_APPROVAL_GATE override → gate enforced.
     const db = makeDb()
     await seedFixture(db)
@@ -240,9 +244,29 @@ describe('stored auto-submit authorization reaches the submit step', () => {
 
     const result = await runSource(db)
 
+    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
+    const events = await listTaskEvents(db, result.task.id)
+    expect(events.find((e) => e.step === 'auto_submit_gate')).toBeFalsy()
+  })
+
+  it('the gate STILL withholds for missing required questions (completeness, not approval)', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    await seedTaskWith(db, { allowAutoSubmit: true })
+    const { ensureTailoredApplicationsTable } = await import('../services/hamilton/tailoredApplicationStore.js')
+    await ensureTailoredApplicationsTable(db)
+    await db.prepare(
+      `INSERT INTO tailored_applications (id, profile_id, grant_id, status, fields_json, missing_questions_json, funder_requirements_json)
+       VALUES ('ta-1', ?, 'g-1', 'pending', '{}', ?, '[]')`,
+    ).run(PROFILE, JSON.stringify([{ question: 'Requires a nomination letter — who is the nominator?' }]))
+
+    const result = await runSource(db)
+
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
     const events = await listTaskEvents(db, result.task.id)
-    expect(events.find((e) => e.step === 'auto_submit_gate')).toBeTruthy()
+    const gateEvent = events.find((e) => e.step === 'auto_submit_gate')
+    expect(gateEvent).toBeTruthy()
+    expect(gateEvent.message).toMatch(/missing_info/)
   })
 })
 

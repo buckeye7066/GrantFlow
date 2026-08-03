@@ -338,19 +338,26 @@ export async function reconcileTailoredApplication(db, { profileId, grantId, pro
  * THE auto-submit gate. Hamilton's autopilot consults this — and only this —
  * before it is allowed to click Submit on a portal card.
  *
- * submit === true ONLY when ALL hold:
- *   1. a tailored application exists AND its status ∈ {approved, edited}
- *   2. its missing_questions is empty
- *   3. the profile's `hamilton_auto_submit` automation toggle is ON
+ * OWNER RULE (2026-08-03): "auto submit should mean auto submit. No more, no
+ * less." Selecting auto-submit IS the review decision — Hamilton must not
+ * park a completed application behind a second human-approval step. The gate
+ * therefore withholds ONLY for facts that make the submission itself wrong:
  *
- * Any failing condition returns submit=false with a machine-readable reason
- * ('not_generated' | 'not_approved' | 'missing_info' | 'automation_off') the UI
- * + preflight blocker surface. NEVER returns true for an unapproved or
- * gap-blocked card, regardless of the toggle.
+ *   - 'missing_info': the tailored application has open required questions
+ *     Hamilton could not answer from the profile. Auto-submitting a form with
+ *     known-unanswered required questions is not automation, it is filing a
+ *     broken application — this is a COMPLETENESS bar, not a review bar.
+ *   - 'automation_off': the profile's `hamilton_auto_submit` toggle is OFF —
+ *     i.e. auto-submit was NOT selected. (The toggle is the selection.)
+ *
+ * A tailored record that exists but was never human-approved no longer
+ * withholds (`not_approved` is not a reason this gate can return anymore),
+ * and a card with NO tailored record submits on the strength of the fill
+ * machinery's own missing-required handling — the orchestrator never reaches
+ * the submit step when required fields could not be filled.
  *
  * When the gate is disabled by env (HAMILTON_TAILORED_APPROVAL_GATE=0) it
- * returns { submit:true, reason:null, enforced:false } so existing behavior is
- * preserved for operators who opt out.
+ * returns { submit:true, reason:null, enforced:false } — full opt-out.
  *
  * @returns {Promise<{submit:boolean, reason:string|null, status?:string,
  *                     missing_questions?:Array, enforced:boolean}>}
@@ -359,29 +366,34 @@ export async function evaluateAutoSubmitGate(db, {
   profileId, grantId, profile = null, opportunity = null, grant = null,
 }) {
   if (!gateEnabled()) return { submit: true, reason: null, enforced: false }
+
+  // The toggle is the auto-submit SELECTION itself — check it first so a
+  // profile that never selected auto-submit is withheld regardless of card
+  // state, exactly as before.
+  const prefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
+  if (!isAutomationEnabled(prefs, 'hamilton_auto_submit')) {
+    return { submit: false, reason: 'automation_off', enforced: true }
+  }
+
   if (!profileId || !grantId) {
-    // No portal-card key to consult — cannot prove approval, so do NOT submit.
-    return { submit: false, reason: 'not_generated', enforced: true }
+    // No portal-card key — nothing to check completeness against; the fill
+    // machinery's own missing-required handling is the remaining net.
+    return { submit: true, reason: null, enforced: true }
   }
 
   const record = await reconcileTailoredApplication(db, {
     profileId, grantId, profile, opportunity, grant,
   })
   if (!record) {
-    return { submit: false, reason: 'not_generated', enforced: true }
+    // No tailored record exists. Auto-submit was selected; the orchestrator
+    // only reaches the submit step when the form actually filled.
+    return { submit: true, reason: null, enforced: true }
   }
 
   const missing = Array.isArray(record.missing_questions) ? record.missing_questions : []
   if (missing.length > 0) {
+    // Known-unanswered required questions: completeness, not approval.
     return { submit: false, reason: 'missing_info', status: record.status, missing_questions: missing, enforced: true }
-  }
-  if (record.status !== 'approved' && record.status !== 'edited') {
-    return { submit: false, reason: 'not_approved', status: record.status, missing_questions: missing, enforced: true }
-  }
-
-  const prefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
-  if (!isAutomationEnabled(prefs, 'hamilton_auto_submit')) {
-    return { submit: false, reason: 'automation_off', status: record.status, missing_questions: missing, enforced: true }
   }
 
   return { submit: true, reason: null, status: record.status, missing_questions: missing, enforced: true }

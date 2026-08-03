@@ -1193,10 +1193,11 @@ async function runAutopilotPathway(db, {
   // per-funder tailored narrative is APPROVED (or approved-as-edited), has NO
   // outstanding missing questions, and the profile's auto-submit toggle is on.
   // This is the ONE place the autopilot consults before it is permitted to
-  // submit — it NEVER submits an unapproved or gap-blocked card, regardless of
-  // the per-application authorization or the toggle. When the gate blocks, we
-  // force allowAutoSubmit=false (Hamilton still fills + saves a draft) and
-  // record the reason so the UI + preflight blocker can explain it.
+  // submit — owner rule 2026-08-03 ("auto submit should mean auto submit"):
+  // the gate withholds ONLY for genuine incompleteness (missing required
+  // questions) or the auto-submit toggle being off; human approval is no
+  // longer a precondition. When it blocks, we force allowAutoSubmit=false
+  // (Hamilton still fills + saves a draft) and record the reason.
   let autoSubmitGate = null
   if (allowAutoSubmit && grant?.id) {
     try {
@@ -1215,7 +1216,11 @@ async function runAutopilotPathway(db, {
       allowAutoSubmit = false
       await appendTaskEvent(db, {
         taskId: task.id, eventType: 'note', status: 'filling_portal', step: 'auto_submit_gate',
-        message: `Auto-submit withheld (${autoSubmitGate.reason}): Hamilton will fill and save a draft but not submit until the tailored application is approved.`,
+        message: autoSubmitGate.reason === 'missing_info'
+          ? 'Auto-submit withheld (missing_info): the application still has required questions Hamilton could not answer from the profile. She filled and saved a draft; answer the flagged questions and she submits on the next run.'
+          : autoSubmitGate.reason === 'automation_off'
+            ? 'Auto-submit withheld (automation_off): this profile\'s Hamilton auto-submit toggle is off. She filled and saved a draft.'
+            : `Auto-submit withheld (${autoSubmitGate.reason}): Hamilton filled and saved a draft but did not submit.`,
         actorUserId: userId, actorRole: 'agent',
         details: { gate_reason: autoSubmitGate.reason, tailored_status: autoSubmitGate.status || null },
       }).catch(() => {})

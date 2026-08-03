@@ -196,11 +196,14 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
         linkText: 'Turn on automation',
       }
     }
-    // not_approved (or unknown) → the remaining step is approval.
+    // Owner rule 2026-08-03: auto-submit means auto-submit — approval is no
+    // longer a gate the backend can report ('not_approved' is retired).
+    // Anything else here is a legacy/unknown reason: say what is true (ready)
+    // without inventing a required approval step.
     return {
       icon: <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />,
       cls: 'text-slate-600',
-      text: 'Approve to enable auto-submit.',
+      text: 'Ready — Hamilton will submit on its next authorized run. Approving is optional review, not a requirement.',
       link: null,
     }
   }

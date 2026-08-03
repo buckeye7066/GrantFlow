@@ -222,15 +222,19 @@ describe('auto-submit gate', () => {
     await approveTailoredApplication(db, { profileId: 'prof-1', grantId: 'grant-1', approvedBy: 'user-1' })
   }
 
-  it('false when no tailored application exists (not_generated)', async () => {
+  // OWNER RULE 2026-08-03: "auto submit should mean auto submit. No more, no
+  // less." Selecting auto-submit IS the review decision — a missing or
+  // unapproved tailored record no longer withholds. Only genuine
+  // incompleteness (missing required questions) or the toggle being off can.
+  it('submits when no tailored application exists (auto-submit selected is the decision)', async () => {
     const db = makeDb()
     await ensureTailoredApplicationsTable(db)
     const gate = await evaluateAutoSubmitGate(db, { profileId: 'prof-1', grantId: 'grant-1', profile: baseProfile() })
-    expect(gate.submit).toBe(false)
-    expect(gate.reason).toBe('not_generated')
+    expect(gate.submit).toBe(true)
+    expect(gate.reason).toBeNull()
   })
 
-  it('false when generated but not approved (not_approved)', async () => {
+  it('submits when generated but never human-approved (not_approved is no longer a withhold)', async () => {
     const db = makeDb()
     await generateTailoredNarrative(db, {
       profileId: 'prof-1', grantId: 'grant-1',
@@ -240,8 +244,8 @@ describe('auto-submit gate', () => {
     const gate = await evaluateAutoSubmitGate(db, {
       profileId: 'prof-1', grantId: 'grant-1', profile: baseProfile(), opportunity: CLEAN_OPP, grant: CLEAN_GRANT,
     })
-    expect(gate.submit).toBe(false)
-    expect(gate.reason).toBe('not_approved')
+    expect(gate.submit).toBe(true)
+    expect(gate.reason).toBeNull()
   })
 
   it('false when approved but the auto-submit toggle is OFF (automation_off)', async () => {
