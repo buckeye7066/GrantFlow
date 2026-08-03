@@ -664,6 +664,11 @@ export function evaluateNeedFirstMatchPolicy({
 
   const hardMismatch = hardMismatches.length > 0
   const reviewOnly = !hardMismatch && institutionUnconfirmed
+  // NOTE: the LIVE decision for the `!purposeAnchor` case is re-derived by
+  // needFirstMatchPolicy.recomputePolicy, which RETAINS an applicant-type-
+  // compatible unanchored source as a low-scored REVIEW (recall over
+  // suppression) instead of the hard REJECT computed here. This value is only
+  // consumed by V2-direct callers that assert on hardMismatches, not decision.
   const decision = hardMismatch || !purposeAnchor ? 'REJECT' : (reviewOnly ? 'REVIEW' : null)
   const scoreCap = hardMismatch
     ? SCORE_FLOOR
