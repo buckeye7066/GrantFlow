@@ -5,8 +5,8 @@ until their PR merges.
 
 | Item | Lines | Status | Evidence |
 |---|---|---|---|
-| Source-materialization stack (`scripts/source-materialization/` 28 files + driver + 8 npm hooks + 2 Docker steps + lock tests) | ~5,100 removed | IN-PR (`recovery/remove-source-materialization`) | Equivalence proven: driver run at anchor → zero content diff; F-01 in FAILURE_REGISTER |
-| `tests/unit/materialize-lock.test.mjs`, `source-materialization-contract.test.mjs` → replaced by `deployment-entry-points.test.mjs` (stays-removed guard) | ~140 removed / +40 | IN-PR | same branch |
+| Source-materialization stack (`scripts/source-materialization/` 28 files + driver + 8 npm hooks + 2 Docker steps + lock tests) | ~5,100 removed | **DONE — merged #1149, prod image live-verified at fc30ee3f** | Equivalence proven pre-merge (zero content diff); F-01 FIXED |
+| `tests/unit/materialize-lock.test.mjs`, `source-materialization-contract.test.mjs` → replaced by `deployment-entry-points.test.mjs` (stays-removed guard) | ~140 removed / +40 | **DONE — merged #1149** | failing-first proven |
 | Dead schedulers: `backgroundServices.js` (749), `queueRecovery.js`, `crawler-os/scheduler.js`, `anyaBootstrap.js`, `bootstrap.js` (594) | ~1,800 | CANDIDATE — decide emailGrantScheduler fate first (only consumer is dead code) | F-06 |
 | Unreachable item crawlers: `itemFundingCrawler.js` (1,148), `itemCrawler.js` (326), `itemGiftCrawler.js` (213) | ~1,690 | CANDIDATE — superseded by itemNeedSearch; on check-runtime-imports legacy list | F-06 |
 | Dormant rival engines: `profileIntelligence/relevanceScorer.js` + `eligibilityFilter.js` | ~1,000 est | CANDIDATE — delete or fold behind engine; live landmine if imported | F-02/HZ-15 |
