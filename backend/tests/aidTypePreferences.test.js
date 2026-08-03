@@ -66,6 +66,17 @@ describe('classifyAidType', () => {
     expect(classifyAidType({ title: 'Award 2026-27' })).toBe('unknown')
     expect(classifyAidType({})).toBe('unknown')
   })
+
+  it('matches the PLURAL a real row is titled with (the AAFS Scholarships shape)', () => {
+    // \bscholarship\b alone reads "Scholarships" as unknown — the trailing
+    // 's' is a word char, so the boundary never fires. Prod rows are titled
+    // exactly this way (measured 2026-08-03), and the auto-populate style
+    // classifier keys on this verdict.
+    expect(
+      classifyAidType({ title: 'American Academy of Forensic Sciences (AAFS) Scholarships' }),
+    ).toBe('scholarship')
+    expect(classifyAidType({ title: 'Housing & Living Expense Scholarships' })).toBe('scholarship')
+  })
 })
 
 describe('resolveAcceptedAidTypes', () => {
