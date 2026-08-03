@@ -76,16 +76,19 @@ function addOpp(db, over = {}) {
     title: `Real Scholarship ${oppSeq}`,
     sponsor: 'Real Sponsor',
     opportunity_kind: 'SCHOLARSHIP',
+    // A fundable SIGNAL (the #1133 chain refuses signal-less rows): real
+    // fixtures carry an apply URL unless a test removes it on purpose.
+    application_url: 'https://example.org/apply',
     is_active: 1,
     created_at: `2026-02-01T00:00:${String(oppSeq % 60).padStart(2, '0')}Z`,
     ...over,
   }
   db.prepare(
     `INSERT INTO funding_opportunities
-      (id, title, sponsor, opportunity_kind, is_active, created_at, is_directory_resource, excluded_from_grant_scoring)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(o.id, o.title, o.sponsor, o.opportunity_kind, o.is_active, o.created_at,
-    o.is_directory_resource ?? null, o.excluded_from_grant_scoring ?? null)
+      (id, title, sponsor, opportunity_kind, application_url, source_url, is_active, created_at, is_directory_resource, excluded_from_grant_scoring)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(o.id, o.title, o.sponsor, o.opportunity_kind, o.application_url ?? null, o.source_url ?? null,
+    o.is_active, o.created_at, o.is_directory_resource ?? null, o.excluded_from_grant_scoring ?? null)
   return o
 }
 
@@ -213,6 +216,34 @@ describe('what never reaches the engine', () => {
     expect(res.not_fundable).toBe(2)
     expect(engineCalls).toBe(1)
     expect(res.linked).toBe(1)
+    db.close()
+  })
+
+  it('consumes the #1133 junk chain: regulatory notices, lead-gen "scholarships" and signal-less rows never reach the engine', async () => {
+    // These are the EXACT classes the 2026-08-03 flood dry-run measured inside
+    // the blind ACCEPT set (federal-register rows in every profile sample).
+    // The sweep must consult the shared classifyFundingResult chain, never a
+    // private copy of it.
+    const db = makeDb()
+    addProfile(db, 'p1')
+    addOpp(db, {
+      title: 'Privacy Act of 1974; System of Records',
+      sponsor: 'Office of the Secretary',
+      source_url: 'https://www.federalregister.gov/documents/2026/01/01/privacy-act',
+      application_url: 'https://www.federalregister.gov/documents/2026/01/01/privacy-act',
+      opportunity_kind: null,
+    })
+    addOpp(db, { title: 'Signal-less row', application_url: null })
+    addOpp(db, { title: 'HOPE Scholarship' })
+    let engineCalls = 0
+    const deps = { computeMatchDecision: () => { engineCalls += 1; return { decision: 'accept', score: 90 } } }
+    const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
+    expect(res.not_fundable).toBe(2)
+    expect(engineCalls).toBe(1)
+    expect(res.linked).toBe(1)
+    const rows = matches(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].opportunity_id).toBe('opp-003')
     db.close()
   })
 

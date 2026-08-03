@@ -84,15 +84,22 @@ export function isCatalogRescoreWriteEnabled(env = process.env) {
 
 /**
  * THE FUNDABILITY CHOKE POINT. Every candidate passes here BEFORE the engine
- * is consulted. Today it consumes the shared kind-based predicate
- * (`shared/opportunityFundability.js`); when the fix/qa-36-profile-junk
- * branch's junk classifier chain (`is_fundable_opportunity()` /
- * regulatory-notice screen) lands, it is consumed HERE — one hook, not
- * scattered call-site checks.
+ * is consulted. It consumes BOTH shared chains — one hook, not scattered
+ * call-site checks:
+ *   - `shared/opportunityFundability.js` (kind classes: never a proposal
+ *     surface for DIRECTORY/BENEFIT-as-proposal/PAST_AWARD_INTEL legacy rows),
+ *   - `config/fundingResultFilters.classifyFundingResult` (#1133, the
+ *     fix/qa-36-profile-junk chain): regulatory/lead-gen/clearly-expired/
+ *     anonymized-funder junk and signal-less rows never reach the engine.
+ *     This is exactly the class the 2026-08-03 flood dry-run measured in the
+ *     blind ACCEPT set (federal-register notices, embassy program rows).
  */
 export async function passesFundabilityGate(opp) {
-  const { isProposalEligibleOpportunity } = await import('../../../shared/opportunityFundability.js')
-  return isProposalEligibleOpportunity(opp)
+  const [{ isProposalEligibleOpportunity }, { isFundableOpportunity }] = await Promise.all([
+    import('../../../shared/opportunityFundability.js'),
+    import('../../config/fundingResultFilters.js'),
+  ])
+  return isProposalEligibleOpportunity(opp) && isFundableOpportunity(opp)
 }
 
 async function kvSet(db, key, value) {
