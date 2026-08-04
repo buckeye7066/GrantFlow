@@ -13,6 +13,9 @@ const braveSearchFn = vi.fn()
 const makeBraveMock = vi.fn(() => braveSearchFn)
 const searxngSearchFn = vi.fn()
 const makeSearxngMock = vi.fn(() => searxngSearchFn)
+const googleSearchFn = vi.fn()
+const makeGoogleMock = vi.fn(() => googleSearchFn)
+const tryConsumeGoogleMock = vi.fn()
 
 vi.mock('../services/shared/httpClient.js', () => ({
   getWithRetry: (...a) => getWithRetryMock(...a),
@@ -22,6 +25,12 @@ vi.mock('../services/yana/webSearchProvider.js', () => ({
 }))
 vi.mock('../services/shared/searxngProvider.js', () => ({
   makeSearxngProvider: (...a) => makeSearxngMock(...a),
+}))
+vi.mock('../services/shared/googleCseProvider.js', () => ({
+  makeGoogleCseProvider: (...a) => makeGoogleMock(...a),
+}))
+vi.mock('../services/shared/googleBudget.js', () => ({
+  tryConsumeGoogleQuery: (...a) => tryConsumeGoogleMock(...a),
 }))
 const cacheGetMock = vi.fn()
 const cachePutMock = vi.fn()
@@ -53,12 +62,18 @@ beforeEach(() => {
   makeBraveMock.mockClear()
   searxngSearchFn.mockReset()
   makeSearxngMock.mockClear()
+  googleSearchFn.mockReset()
+  makeGoogleMock.mockClear()
+  tryConsumeGoogleMock.mockReset()
+  tryConsumeGoogleMock.mockResolvedValue({ allowed: true })
   cacheGetMock.mockReset()
   cacheGetMock.mockResolvedValue(null)
   cachePutMock.mockReset()
   cachePutMock.mockResolvedValue(true)
   delete process.env.BRAVE_SEARCH_API_KEY
   delete process.env.SEARXNG_URL
+  delete process.env.GOOGLE_CSE_KEY
+  delete process.env.GOOGLE_CSE_CX
   // vitest.setup.js sets GRANTFLOW_TEST_RUNNER=1 so no test hits live web
   // search as a side effect. THIS file is the dedicated engine test — it
   // fully mocks the network (httpClient + both providers), so it opts back
@@ -70,6 +85,8 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.BRAVE_SEARCH_API_KEY
   delete process.env.SEARXNG_URL
+  delete process.env.GOOGLE_CSE_KEY
+  delete process.env.GOOGLE_CSE_CX
   delete process.env.GRANTFLOW_ALLOW_LIVE_WEB_IN_TESTS
   _resetWebSearchEngineForTests()
 })
@@ -526,5 +543,166 @@ describe('the empty-default rung (all engines suspended, Brave paused)', () => {
     const results = await searchWeb('local grant')
     expect(searxngSearchFn).toHaveBeenCalledTimes(1) // no second call at the same dead endpoint
     expect(results[0].url).toBe('https://bradleyfoundation.org/grants') // DDG still ran
+  })
+})
+
+describe('the Google CSE rung (rung 0.5 — official API above SearXNG, 2026-08-04)', () => {
+  const GOOGLE_HIT = [
+    { url: 'https://tn.gov/collegepays', title: 'TN HOPE Scholarship', snippet: 'state aid' },
+  ]
+  const SEARX_HIT = [
+    { url: 'https://county.gov/scholarship', title: 'Bradley County Scholarship', snippet: 'apply' },
+  ]
+  const QUERY = '"Bradley County" scholarship'
+
+  function keyGoogle() {
+    process.env.GOOGLE_CSE_KEY = 'g-key'
+    process.env.GOOGLE_CSE_CX = 'g-cx'
+  }
+
+  it('answers FIRST when keyed and budget-allowed — SearXNG never consulted — and the SERP is cached', async () => {
+    keyGoogle()
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    googleSearchFn.mockResolvedValue(GOOGLE_HIT)
+
+    const results = await searchWeb(QUERY)
+    expect(makeGoogleMock).toHaveBeenCalled()
+    expect(tryConsumeGoogleMock).toHaveBeenCalledTimes(1)
+    expect(results).toEqual(GOOGLE_HIT)
+    expect(searxngSearchFn).not.toHaveBeenCalled()
+    expect(getWithRetryMock).not.toHaveBeenCalled() // no DDG
+    expect(cachePutMock).toHaveBeenCalledTimes(1)
+    expect(cachePutMock.mock.calls[0][0]).toBe(QUERY)
+    expect(cachePutMock.mock.calls[0][1]).toEqual(GOOGLE_HIT)
+  })
+
+  it('a cache hit never reaches the budget OR Google — no quota spend on a cached query', async () => {
+    keyGoogle()
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    // Seed the cache: this is the "second call of the day" for this query.
+    cacheGetMock.mockResolvedValue(SEARX_HIT)
+
+    const results = await searchWeb(QUERY)
+    expect(results).toEqual(SEARX_HIT)
+    expect(tryConsumeGoogleMock).not.toHaveBeenCalled() // budget never consulted
+    expect(googleSearchFn).not.toHaveBeenCalled()
+    expect(searxngSearchFn).not.toHaveBeenCalled()
+  })
+
+  it('the first Google answer serves the second identical query from cache (one budget spend total)', async () => {
+    keyGoogle()
+    _resetWebSearchEngineForTests()
+    googleSearchFn.mockResolvedValue(GOOGLE_HIT)
+
+    const first = await searchWeb(QUERY)
+    expect(first).toEqual(GOOGLE_HIT)
+    expect(cachePutMock).toHaveBeenCalledTimes(1)
+    // Simulate the cache layer now holding what searchWeb stored.
+    cacheGetMock.mockResolvedValue(cachePutMock.mock.calls[0][1])
+
+    const second = await searchWeb(QUERY)
+    expect(second).toEqual(GOOGLE_HIT)
+    expect(googleSearchFn).toHaveBeenCalledTimes(1) // ONE real Google query
+    expect(tryConsumeGoogleMock).toHaveBeenCalledTimes(1) // ONE budget spend
+  })
+
+  it('a budget denial falls through to SearXNG with NO error and NO Google call', async () => {
+    keyGoogle()
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    tryConsumeGoogleMock.mockResolvedValue({ allowed: false, reason: 'daily_budget_exhausted' })
+    searxngSearchFn.mockResolvedValue(SEARX_HIT)
+
+    const results = await searchWeb(QUERY)
+    expect(googleSearchFn).not.toHaveBeenCalled() // denied → network never paid
+    expect(searxngSearchFn).toHaveBeenCalled()
+    expect(results.map((r) => r.url)).toEqual(SEARX_HIT.map((r) => r.url))
+  })
+
+  it('a google_quota throw degrades the rung: later queries skip Google (and its budget) entirely, SearXNG still answers', async () => {
+    keyGoogle()
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    googleSearchFn.mockRejectedValue(Object.assign(new Error('quota exceeded'), { code: 'google_quota' }))
+    searxngSearchFn.mockResolvedValue(SEARX_HIT)
+
+    // First call: budget spent, Google refuses with the quota signal, ladder continues.
+    const first = await searchWeb(QUERY)
+    expect(first.map((r) => r.url)).toEqual(SEARX_HIT.map((r) => r.url))
+    expect(googleSearchFn).toHaveBeenCalledTimes(1)
+    expect(tryConsumeGoogleMock).toHaveBeenCalledTimes(1)
+
+    // Same-process follow-ups: the rung is degraded until the next UTC
+    // midnight — no Google call AND no budget consult (a dead rung must not
+    // keep spending pacer slots).
+    const second = await searchWeb(QUERY)
+    expect(second.map((r) => r.url)).toEqual(SEARX_HIT.map((r) => r.url))
+    expect(googleSearchFn).toHaveBeenCalledTimes(1)
+    expect(tryConsumeGoogleMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a NON-quota Google failure does NOT degrade the rung (next query retries Google)', async () => {
+    keyGoogle()
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    googleSearchFn.mockRejectedValue(new Error('socket hang up'))
+    searxngSearchFn.mockResolvedValue(SEARX_HIT)
+
+    await searchWeb(QUERY)
+    await searchWeb(QUERY)
+    expect(googleSearchFn).toHaveBeenCalledTimes(2) // transient failure → still consulted
+  })
+
+  it('an EMPTY Google answer falls through to SearXNG, and the empty set is NEVER cached as the answer', async () => {
+    keyGoogle()
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    googleSearchFn.mockResolvedValue([]) // site-restricted CX / thin SERP
+    searxngSearchFn.mockResolvedValue(SEARX_HIT)
+
+    const results = await searchWeb(QUERY)
+    expect(results.map((r) => r.url)).toEqual(SEARX_HIT.map((r) => r.url))
+    // Exactly one cache write, and it is the SearXNG set — not Google's [].
+    expect(cachePutMock).toHaveBeenCalledTimes(1)
+    expect(cachePutMock.mock.calls[0][1].map((r) => r.url)).toEqual(SEARX_HIT.map((r) => r.url))
+  })
+
+  it('a Google answer of ONLY skip-host junk falls through instead of being returned or cached', async () => {
+    keyGoogle()
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    googleSearchFn.mockResolvedValue([{ url: 'https://facebook.com/somepage', title: 'social', snippet: '' }])
+    searxngSearchFn.mockResolvedValue(SEARX_HIT)
+
+    const results = await searchWeb(QUERY)
+    expect(results.map((r) => r.url)).toEqual(SEARX_HIT.map((r) => r.url))
+    expect(cachePutMock).toHaveBeenCalledTimes(1)
+    expect(cachePutMock.mock.calls[0][1].map((r) => r.url)).toEqual(SEARX_HIT.map((r) => r.url))
+  })
+
+  it('Google results are hygiened like every other rung (skip hosts filtered, count capped)', async () => {
+    keyGoogle()
+    _resetWebSearchEngineForTests()
+    googleSearchFn.mockResolvedValue([
+      ...GOOGLE_HIT,
+      { url: 'https://facebook.com/x', title: 'social', snippet: '' }, // filtered
+    ])
+
+    const results = await searchWeb(QUERY)
+    expect(results.map((r) => r.url)).toEqual(['https://tn.gov/collegepays'])
+  })
+
+  it('unconfigured (no GOOGLE_CSE_* env) → Google is never constructed and the budget is never consulted', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue(SEARX_HIT)
+
+    const results = await searchWeb(QUERY)
+    expect(results.map((r) => r.url)).toEqual(SEARX_HIT.map((r) => r.url))
+    expect(makeGoogleMock).not.toHaveBeenCalled()
+    expect(tryConsumeGoogleMock).not.toHaveBeenCalled()
+    expect(googleSearchFn).not.toHaveBeenCalled()
   })
 })

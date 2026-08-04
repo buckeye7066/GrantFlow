@@ -72,11 +72,26 @@ function compareStatuses(current, next) {
 // The AI prompt already instructs it to choose the correct submission stage
 // (portal, submitted, or pending_review) based on funding source requirements.
 // We only prevent backward movement unless the AI explicitly recommends it.
-function validateAdvance(current, suggested) {
+// A funder's decision is an EXTERNAL fact. It can only enter the system from
+// captured evidence (a portal read) or from the profile owner recording it —
+// never from a model inferring it off application text. Letting automation write
+// these would poison the one number that answers "did this profile actually get
+// money", which is the product's whole bar.
+const EXTERNAL_OUTCOME_STATUSES = new Set(['awarded', 'declined'])
+
+export function isExternalOutcomeStatus(status) {
+    return EXTERNAL_OUTCOME_STATUSES.has(mapLegacyStatus(status))
+}
+
+export function validateAdvance(current, suggested) {
     const currentMapped = mapLegacyStatus(current)
     const suggestedMapped = mapLegacyStatus(suggested)
     // Ensure the suggested status is a known canonical status before accepting it
     if (!PIPELINE_ALLOWED_STATUSES.includes(suggestedMapped)) return currentMapped
+    // Never let automation declare an award or a rejection; hand it to a human.
+    if (EXTERNAL_OUTCOME_STATUSES.has(suggestedMapped) && suggestedMapped !== currentMapped) {
+      return currentMapped
+    }
     const delta = compareStatuses(currentMapped, suggestedMapped)
     // If AI suggests moving backward, keep current
     if (delta < 0) return currentMapped
@@ -558,11 +573,18 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
               const suggestedStatus = normalizeStatus(parsed.suggested_status) ?? currentStatus
               const validatedStatus = validateAdvance(currentStatus, suggestedStatus)
 
-      const handoffRequired = Boolean(parsed.handoff_required)
+      // If the model wanted to declare an outcome, validateAdvance refused it.
+      // Surface that as work for the owner instead of dropping it silently.
+      const withheldOutcome = isExternalOutcomeStatus(suggestedStatus)
+        && suggestedStatus !== validatedStatus
+
+      const handoffRequired = Boolean(parsed.handoff_required) || withheldOutcome
               const handoffReason =
                       typeof parsed.handoff_reason === 'string' && parsed.handoff_reason.trim().length > 0
                   ? parsed.handoff_reason.trim()
-                        : null
+                        : (withheldOutcome
+                          ? `Automation read this as "${suggestedStatus}". A funder decision is only recorded from portal evidence or by you — confirm it, then record the outcome.`
+                          : null)
 
       let appliedStatus = validatedStatus
 

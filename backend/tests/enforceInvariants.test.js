@@ -64,6 +64,9 @@ import {
   enforceConditionLaneMatchScope,
   enforceDeclaredPlaceScopeMatches,
   enforceForeignJurisdictionMatches,
+  enforceNonGrantNoticePipeline,
+  enforcePointerTaskReclassification,
+  enforceGrantScoreBackfill,
   enforceIndividualMatchAwardCeiling,
   getRelevanceFloor,
   __resetFloorCache,
@@ -1144,9 +1147,13 @@ describe('enforceInvariants — runner', () => {
     //   condition-lane match-store scope) here.
     // + the non-grant notice net (2026-08-03 owner QA: regulatory/lead-gen/
     //   clearly-expired junk purged from the match store)
+    // + the non-grant notice PIPELINE net (2026-08-04: the grants-table twin —
+    //   pre-gate writers left regulatory notices in pipelines as work items)
+    // + the pointer-task reclassification net (2026-08-04: a URL-less pointer
+    //   task is a research lead with handoff instructions, never a silent one)
     // + the catalog-rescore convergence census/sweep (2026-08-03, the general
     //   re-scoring sweep for the rolling snapshot; writes env-gated OFF).
-    expect(summary.ran).toBe(54)
+    expect(summary.ran).toBe(56)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1182,6 +1189,7 @@ describe('enforceInvariants — runner', () => {
       // Non-grant junk net (2026-08-03 owner QA): regulatory notices, lead-gen
       // "scholarships", clearly-expired programs — purged from the match store.
       'non_grant_notice_matches',
+      'non_grant_notice_pipeline',
       'individual_match_award_ceiling',
       // A profile that was NEVER FILLED IN is not shown geography the system
       // invented from its placeholder address ("Anytown, SA"). Last in the
@@ -1231,6 +1239,9 @@ describe('enforceInvariants — runner', () => {
       // System-side stops re-checked with the producer's own code; zombie
       // tasks for purged sources closed (the Robert White 41-stop class).
       'hamilton_stop_recheck',
+      // A pointer task decomposition cannot reach is a research lead with
+      // owner handoff instructions, never a silently-dying application task.
+      'pointer_task_reclassification',
       'no_search_engine_application_targets',
       // Right after URL hygiene: a registered canonical program's application
       // target is repointed to its official URL (the "TN Promise opens a
@@ -2882,6 +2893,419 @@ describe('profession eligibility invariant', () => {
     } finally {
       delete process.env.ENFORCE_PROFESSION_ELIGIBILITY
     }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: a non-grant notice is never a profile PIPELINE row (2026-08-04 —
+// the grants-table twin of enforceNonGrantNoticeMatches). Pre-gate writers
+// left Federal Register notices sitting in pipelines as live work items (the
+// prod HRSA "Agency Information Collection … Public Comment Request" at 82).
+// Mirrors enforceProfileEligibility's conservatism: purge ONLY on positive
+// junk evidence + early status + no protected name + no recorded award;
+// FR-source-only rows are FLAGGED (counted), never auto-purged.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforceNonGrantNoticePipeline', () => {
+  let db
+  beforeEach(async () => {
+    db = makeDb()
+    // The invariant's candidate SELECT + repair paths read columns the shared
+    // minimal schema omits (real schema has both).
+    db.exec(`ALTER TABLE grants ADD COLUMN deadline TEXT`)
+    db.exec(`ALTER TABLE grants ADD COLUMN eligibility_status TEXT`)
+    _resetSchemaCache()
+    await ensureApplicationTaskSchema(db) // real application_tasks/events schema
+  })
+  afterEach(() => {
+    delete process.env.ENFORCE_NON_GRANT_PIPELINE
+    delete process.env.NON_GRANT_PIPELINE_LIMIT
+  })
+
+  const insertTask = (id, profileId, grantId, status) =>
+    db.prepare('INSERT INTO application_tasks (id, profile_id, grant_id, status) VALUES (?, ?, ?, ?)')
+      .run(id, profileId, grantId, status)
+  const grantExists = (id) => Boolean(db.prepare('SELECT id FROM grants WHERE id = ?').get(id))
+  const taskStatus = (id) => db.prepare('SELECT status FROM application_tasks WHERE id = ?').get(id)?.status
+  const grantRow = (id) => db.prepare('SELECT * FROM grants WHERE id = ?').get(id)
+  const tombstones = (profileId) => {
+    try {
+      return db.prepare('SELECT * FROM pipeline_dismissals WHERE profile_id = ?').all(profileId)
+    } catch { return [] }
+  }
+
+  // The real prod titles the net exists for (2026-08-04, Axiom BioLabs).
+  const REGULATORY_TITLE = 'Agency Information Collection Activities: Proposed Collection: Public Comment Request'
+  const FR_BENIGN_TITLE = 'Innovation Challenge: Alternatives to Conventional Pesticides for Crop Desiccation; Notice of Availability'
+
+  it('PURGES a discovered-status regulatory notice: tombstone recorded, row deleted, non-terminal task cancelled; a real grant is untouched', async () => {
+    insertProfile(db, { id: 'p1', orgId: 'o1' })
+    const junk = insertGrant(db, { profile_id: 'p1', title: REGULATORY_TITLE, funder: 'HRSA', status: 'discovered' })
+    const real = insertGrant(db, {
+      profile_id: 'p1', title: 'HOPE Scholarship', funder: 'TSAC', status: 'discovered',
+      amount_requested: 5000,
+    })
+    insertTask('t-junk', 'p1', junk, 'ready_to_start')
+    insertTask('t-real', 'p1', real, 'ready_to_start')
+
+    const res = await enforceNonGrantNoticePipeline(db)
+    expect(res.ok).toBe(true)
+    expect(res.enforced).toBe(true)
+    expect(res.purged).toBe(1)
+    expect(res.repaired).toBe(1)
+    expect(res.tasksCancelled).toBe(1)
+    expect(res.profilesAffected).toBe(1)
+
+    // The deletion is REAL (mutation posture: a no-op body fails here).
+    expect(grantExists(junk)).toBe(false)
+    expect(taskStatus('t-junk')).toBe('cancelled')
+    // The purge left a sticky-delete tombstone so no writer re-inserts it.
+    const stones = tombstones('p1')
+    expect(stones).toHaveLength(1)
+    expect(String(stones[0].reason)).toMatch(/^non_grant_notice: regulatory_notice_title/)
+    // The clean fundable grant + its task are untouched.
+    expect(grantExists(real)).toBe(true)
+    expect(taskStatus('t-real')).toBe('ready_to_start')
+  })
+
+  it('an FR-source-only row (benign title) is COUNTED frSourceFlagged and NEVER deleted', async () => {
+    insertProfile(db, { id: 'p1', orgId: 'o1' })
+    const frOnly = insertGrant(db, { profile_id: 'p1', title: FR_BENIGN_TITLE, funder: 'EPA', status: 'discovered' })
+    // insertGrant's shared column set omits application_url — set the FR
+    // provenance explicitly (it is the row's ONLY junk evidence, by design).
+    db.prepare('UPDATE grants SET application_url = ? WHERE id = ?')
+      .run('https://www.federalregister.gov/documents/2026/07/02/x', frOnly)
+
+    const res = await enforceNonGrantNoticePipeline(db)
+    expect(res.ok).toBe(true)
+    expect(res.scanned).toBe(1)
+    expect(res.frSourceFlagged).toBe(1)
+    expect(res.purged).toBe(0)
+    expect(res.repaired).toBe(0)
+    expect(grantExists(frOnly)).toBe(true)
+    expect(tombstones('p1')).toHaveLength(0)
+  })
+
+  it('a protected-status junk row is NEVER deleted — eligibility_status becomes ineligible', async () => {
+    insertProfile(db, { id: 'p1', orgId: 'o1' })
+    const submitted = insertGrant(db, {
+      profile_id: 'p1', status: 'submitted',
+      title: 'Self-Regulatory Organization; Notice of Filing of a Proposed Rule Change',
+    })
+    const awarded = insertGrant(db, {
+      profile_id: 'p1', status: 'discovered', amount_awarded: 500,
+      title: REGULATORY_TITLE,
+    })
+
+    const res = await enforceNonGrantNoticePipeline(db)
+    expect(res.purged).toBe(0)
+    expect(res.flaggedProtected).toBe(2)
+    expect(grantExists(submitted)).toBe(true)
+    expect(grantExists(awarded)).toBe(true)
+    expect(grantRow(submitted).eligibility_status).toBe('ineligible')
+    expect(grantRow(awarded).eligibility_status).toBe('ineligible')
+  })
+
+  it('count-only (ENFORCE_NON_GRANT_PIPELINE=0): wouldRepair counted, ZERO writes', async () => {
+    insertProfile(db, { id: 'p1', orgId: 'o1' })
+    const junk = insertGrant(db, { profile_id: 'p1', title: REGULATORY_TITLE, status: 'discovered' })
+    insertTask('t-junk', 'p1', junk, 'ready_to_start')
+    process.env.ENFORCE_NON_GRANT_PIPELINE = '0'
+
+    const res = await enforceNonGrantNoticePipeline(db)
+    expect(res.enforced).toBe(false)
+    expect(res.wouldRepair).toBe(1)
+    expect(res.repaired).toBe(0)
+    expect(grantExists(junk)).toBe(true)
+    expect(taskStatus('t-junk')).toBe('ready_to_start')
+    expect(tombstones('p1')).toHaveLength(0)
+  })
+
+  it('CONVERGES: a second run repairs 0', async () => {
+    insertProfile(db, { id: 'p1', orgId: 'o1' })
+    insertGrant(db, { profile_id: 'p1', title: REGULATORY_TITLE, status: 'discovered' })
+    const first = await enforceNonGrantNoticePipeline(db)
+    const second = await enforceNonGrantNoticePipeline(db)
+    expect(first.repaired).toBe(1)
+    expect(second.repaired).toBe(0)
+  })
+
+  it('the bound limits DELETES, never DISCOVERY: scanned reflects the full superset (#944 posture)', async () => {
+    insertProfile(db, { id: 'p1', orgId: 'o1' })
+    insertGrant(db, { id: 'g-a', profile_id: 'p1', title: REGULATORY_TITLE, status: 'discovered' })
+    insertGrant(db, { id: 'g-b', profile_id: 'p1', title: 'Privacy Act of 1974; System of Records', status: 'discovered' })
+    insertGrant(db, { id: 'g-c', profile_id: 'p1', title: 'Notice of Public Hearing and Request for Comments', status: 'discovered' })
+    process.env.NON_GRANT_PIPELINE_LIMIT = '1'
+
+    const res = await enforceNonGrantNoticePipeline(db)
+    // Discovery is NOT starved by the bound: every candidate was scanned…
+    expect(res.scanned).toBe(3)
+    // …while deletes stay bounded.
+    expect(res.purged).toBe(1)
+    expect(count(db)).toBe(2)
+    // And a follow-up run converges on the remainder rather than stalling.
+    const again = await enforceNonGrantNoticePipeline(db)
+    expect(again.purged).toBe(1)
+    expect(count(db)).toBe(1)
+  })
+
+  it('a clean fundable grant never even enters the candidate superset', async () => {
+    insertProfile(db, { id: 'p1', orgId: 'o1' })
+    const real = insertGrant(db, {
+      profile_id: 'p1', title: 'Coca-Cola Scholars Program Scholarship',
+      funder: 'Coca-Cola Scholars Foundation', status: 'interested',
+      amount_requested: 20000, url: 'https://www.coca-colascholarsfoundation.org/apply',
+    })
+    const res = await enforceNonGrantNoticePipeline(db)
+    expect(res.scanned).toBe(0)
+    expect(res.repaired).toBe(0)
+    expect(grantExists(real)).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: a pointer-kind source that decomposition cannot reach is a
+// RESEARCH LEAD, never a silently-dying application task (2026-08-04, the
+// manual-handoff rule). The create-time policy gate refuses NEW tasks; this
+// boot net converges the ones every pre-gate writer already minted.
+// Adjudication is the policy gate's own assessPointerResearchLead, so the two
+// can never drift.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforcePointerTaskReclassification', () => {
+  let db
+  beforeEach(async () => {
+    db = makeDb()
+    // The sweep JOINs the catalog; the shared minimal schema has no
+    // funding_opportunities table (real schema does; fo.url deliberately
+    // absent — the #946/#954 SQLite/Postgres drift the sweep must not read).
+    db.exec(`CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY, title TEXT, opportunity_kind TEXT,
+      application_url TEXT, source_url TEXT, evidence_url TEXT
+    )`)
+    _resetSchemaCache()
+    await ensureApplicationTaskSchema(db) // real application_tasks schema
+  })
+  afterEach(() => {
+    delete process.env.ENFORCE_POINTER_TASK_RECLASS
+    delete process.env.POINTER_TASK_RECLASS_LIMIT
+    delete process.env.HAMILTON_DECOMPOSE_POINTER_LISTINGS
+  })
+
+  const insertOpp = (id, kind, { title = 'Local scholarship directory', application_url = null, source_url = null, evidence_url = null } = {}) =>
+    db.prepare('INSERT INTO funding_opportunities (id, title, opportunity_kind, application_url, source_url, evidence_url) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, title, kind, application_url, source_url, evidence_url)
+  const insertTask = (id, oppId, { status = 'ready_to_start', automationType = 'portal', portalUrl = null } = {}) =>
+    db.prepare('INSERT INTO application_tasks (id, profile_id, opportunity_id, status, automation_type, portal_url) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, 'p1', oppId, status, automationType, portalUrl)
+  const task = (id) => db.prepare('SELECT * FROM application_tasks WHERE id = ?').get(id)
+
+  it('RECLASSIFIES a URL-less pointer task to a research lead carrying the handoff instructions (uppercase prod kind included)', async () => {
+    insertOpp('opp-dir', 'DIRECTORY', { title: 'Bradley County assistance programs' })
+    insertTask('t-dir', 'opp-dir')
+
+    const res = await enforcePointerTaskReclassification(db)
+    expect(res.ok).toBe(true)
+    expect(res.enforced).toBe(true)
+    expect(res.repaired).toBe(1)
+
+    const t = task('t-dir')
+    expect(t.automation_type).toBe('research_lead')
+    expect(t.status).toBe('blocked')
+    // The message is the policy gate's OWN generated handoff — it names the
+    // source and tells the owner what to do (research, then add via Discovery).
+    expect(t.last_agent_message).toContain('Bradley County assistance programs')
+    expect(t.last_agent_message).toContain('Discovery')
+  })
+
+  it('LEAVES ALONE a pointer whose catalog row has a usable URL — decomposition reaches it', async () => {
+    insertOpp('opp-listing', 'directory', { source_url: 'https://bold.org/scholarships/' })
+    insertTask('t-listing', 'opp-listing')
+
+    const res = await enforcePointerTaskReclassification(db)
+    expect(res.repaired).toBe(0)
+    expect(res.scanned).toBe(1) // it WAS a candidate; the URL is what saved it
+    expect(task('t-listing').automation_type).toBe('portal')
+    expect(task('t-listing').status).toBe('ready_to_start')
+  })
+
+  it("LEAVES ALONE a pointer whose TASK carries the portal URL even when the catalog row has none — the engine can still reach it", async () => {
+    insertOpp('opp-bare', 'referral')
+    insertTask('t-bare', 'opp-bare', { portalUrl: 'https://apply.example.org/portal' })
+
+    const res = await enforcePointerTaskReclassification(db)
+    expect(res.repaired).toBe(0)
+    expect(task('t-bare').status).toBe('ready_to_start')
+  })
+
+  it('never touches a NON-pointer task or a TERMINAL pointer task (history is not rewritten)', async () => {
+    insertOpp('opp-grant', 'direct_grant')
+    insertTask('t-grant', 'opp-grant')
+    insertOpp('opp-done', 'directory')
+    insertTask('t-done', 'opp-done', { status: 'submitted' })
+
+    const res = await enforcePointerTaskReclassification(db)
+    expect(res.repaired).toBe(0)
+    expect(task('t-grant').automation_type).toBe('portal')
+    expect(task('t-done').status).toBe('submitted')
+    expect(task('t-done').automation_type).toBe('portal')
+  })
+
+  it('COUNT-ONLY mode reports wouldRepair and writes nothing', async () => {
+    process.env.ENFORCE_POINTER_TASK_RECLASS = '0'
+    insertOpp('opp-dir', 'directory')
+    insertTask('t-dir', 'opp-dir')
+
+    const res = await enforcePointerTaskReclassification(db)
+    expect(res.enforced).toBe(false)
+    expect(res.repaired).toBe(0)
+    expect(res.wouldRepair).toBe(1)
+    expect(task('t-dir').automation_type).toBe('portal')
+    expect(task('t-dir').status).toBe('ready_to_start')
+  })
+
+  it('is IDEMPOTENT: a reclassified task leaves the candidate set on the next boot', async () => {
+    insertOpp('opp-dir', 'directory')
+    insertTask('t-dir', 'opp-dir')
+
+    const first = await enforcePointerTaskReclassification(db)
+    expect(first.repaired).toBe(1)
+    const second = await enforcePointerTaskReclassification(db)
+    expect(second.repaired).toBe(0)
+    expect(second.scanned).toBe(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: grant_score_backfill — a NULL-score row is re-scored through the
+// canonical engine, and the fresh decision is written UNCONDITIONALLY (the
+// migration-stamped 'review' + '["general funding support"]' rows, 2026-08-04:
+// COALESCE froze the cosmetic stamp forever even when the fresh canonical
+// decision is REJECT).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforceGrantScoreBackfill', () => {
+  // The invariant's candidate SELECT + write touch columns the shared minimal
+  // schema omits; the real grants schema has all of them.
+  function makeScoreDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE grants (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT,
+        funding_opportunity_id TEXT,
+        title TEXT,
+        description TEXT,
+        funder TEXT,
+        deadline TEXT,
+        amount_min NUMERIC,
+        amount_max NUMERIC,
+        match_score INTEGER,
+        match_decision TEXT,
+        matcher_version TEXT,
+        matched_needs TEXT
+      );
+      CREATE TABLE profiles (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT,
+        display_name TEXT,
+        primary_type TEXT,
+        state TEXT,
+        status TEXT
+      );
+    `)
+    raw.prepare(`INSERT INTO profiles (id, organization_id, primary_type, state) VALUES ('p1', 'o1', 'individual', 'TN')`).run()
+    return raw
+  }
+
+  const insertScoreGrant = (db, g) => {
+    const id = g.id || crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO grants (id, profile_id, title, funder, match_score, match_decision, matcher_version, matched_needs)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, g.profile_id ?? 'p1', g.title, g.funder ?? null, g.match_score ?? null,
+      g.match_decision ?? null, g.matcher_version ?? null, g.matched_needs ?? null)
+    return id
+  }
+  const row = (db, id) => db.prepare('SELECT * FROM grants WHERE id = ?').get(id)
+
+  it('OVERWRITES a migration-stamped review with the FRESH engine decision (REJECT reads REJECT; the needs stamp is replaced with the fresh JSON)', async () => {
+    const db = makeScoreDb()
+    try {
+      // A regulatory notice: the canonical engine's junk chain REJECTs it for
+      // any profile, so the fresh decision is deterministically REJECT — the
+      // exact class the COALESCE froze as 'review' in prod.
+      const id = insertScoreGrant(db, {
+        title: 'Agency Information Collection Activities: Proposed Collection: Public Comment Request',
+        funder: 'HRSA',
+        match_decision: 'review', // cosmetic migration stamp, never a verdict
+        matched_needs: '["general funding support"]', // the migration stamp
+      })
+
+      const res = await enforceGrantScoreBackfill(db)
+      expect(res.ok).toBe(true)
+      expect(res.repaired).toBe(1)
+
+      const g = row(db, id)
+      // The stamp did NOT survive via COALESCE — the fresh verdict is stored.
+      expect(g.match_decision).toBe('REJECT')
+      // SQLite is typeless: assert the persisted score's TYPE, not just truthiness.
+      expect(typeof g.match_score).toBe('number')
+      expect(Number.isInteger(g.match_score)).toBe(true)
+      // The migration-stamped needs are replaced with the fresh decision's needs
+      // JSON (computed by the same canonical engine on the same inputs).
+      const { computeMatchDecision } = await import('../services/matchEngine.js')
+      const fresh = computeMatchDecision(
+        db.prepare(`SELECT * FROM profiles WHERE id = 'p1'`).get(),
+        { id, title: g.title, description: null, sponsor: g.funder, deadline: null, amount_min: null, amount_max: null },
+        { profileSections: {} },
+      )
+      expect(g.matched_needs).not.toBe('["general funding support"]')
+      expect(g.matched_needs).toBe(JSON.stringify(fresh.matchedNeeds ?? []))
+    } finally { db.close() }
+  })
+
+  it('any OTHER stored matched_needs value is left alone', async () => {
+    const db = makeScoreDb()
+    try {
+      const id = insertScoreGrant(db, {
+        title: 'Community Housing Assistance Grant',
+        funder: 'Example Foundation',
+        matched_needs: '["housing"]',
+      })
+      const res = await enforceGrantScoreBackfill(db)
+      expect(res.repaired).toBe(1)
+      const g = row(db, id)
+      expect(typeof g.match_score).toBe('number')
+      expect(g.matched_needs).toBe('["housing"]') // untouched — not the stamp
+      expect(typeof g.match_decision).toBe('string') // fresh decision still written
+    } finally { db.close() }
+  })
+
+  it('matcher_version backfills to score-backfill ONLY when NULL', async () => {
+    const db = makeScoreDb()
+    try {
+      const wasNull = insertScoreGrant(db, { title: 'Community Arts Grant', funder: 'Arts Council' })
+      const wasSet = insertScoreGrant(db, {
+        title: 'Community Garden Grant', funder: 'Garden Trust', matcher_version: 'crawler-os',
+      })
+      const res = await enforceGrantScoreBackfill(db)
+      expect(res.repaired).toBe(2)
+      expect(row(db, wasNull).matcher_version).toBe('score-backfill')
+      expect(row(db, wasSet).matcher_version).toBe('crawler-os') // never overwritten
+    } finally { db.close() }
+  })
+
+  it('a row that already carries a score is never a candidate (scored rows untouched)', async () => {
+    const db = makeScoreDb()
+    try {
+      const scored = insertScoreGrant(db, {
+        title: 'Agency Information Collection Activities: Proposed Collection: Public Comment Request',
+        match_score: 82, match_decision: 'review', matched_needs: '["general funding support"]',
+      })
+      const res = await enforceGrantScoreBackfill(db)
+      expect(res.scanned).toBe(0)
+      const g = row(db, scored)
+      expect(g.match_decision).toBe('review')
+      expect(g.matched_needs).toBe('["general funding support"]')
+    } finally { db.close() }
   })
 })
 

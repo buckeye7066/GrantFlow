@@ -38,6 +38,13 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
         funder_fax: grant?.funder_fax || '',
         funder_address: grant?.funder_address || '',
         status: grant?.status || 'discovered', // New field
+        // Outcome fields. Until these existed there was no way for a user to
+        // tell the product an application actually resulted in money, so the
+        // find -> apply -> submit -> confirmed chain had no terminal record and
+        // "funds secured" could never move off zero.
+        submitted_date: grant?.submitted_date || '',
+        award_date: grant?.award_date || '',
+        amount_awarded: grant?.amount_awarded ?? '',
     });
     
     const [isAutofilling, setIsAutofilling] = useState(false);
@@ -85,11 +92,20 @@ if (!trimmedUrl && urlRequired) {
 }
 if (!trimmedUrl && !urlRequired) {
     toast({
-        title: 'No URL â method noted',
-        description: `This opportunity uses "${formData.application_method}" â no URL required. Instructions field will guide applicants.`
+        title: 'No URL — method noted',
+        description: `This opportunity uses "${formData.application_method}" — no URL required. Instructions field will guide applicants.`
     });
 }
-onSubmit({ ...formData, application_url: trimmedUrl || null });
+// Outcome fields are optional: send an explicit null for blanks so a cleared
+// value actually clears, and never send '' into a DATE/REAL column.
+const parsedAward = String(formData.amount_awarded ?? '').trim();
+onSubmit({
+    ...formData,
+    application_url: trimmedUrl || null,
+    submitted_date: formData.submitted_date || null,
+    award_date: formData.award_date || null,
+    amount_awarded: parsedAward === '' ? null : Number(parsedAward),
+});
     };
 
     const handleAutofillContact = async () => {
@@ -260,6 +276,59 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                         />
                         <p className="text-xs text-slate-500">Direct link where applicants can apply. Required for the opportunity to be matched.</p>
                     </div>
+
+                    {/* Outcome — only meaningful once the grant exists and has been pursued. */}
+                    {grant?.id && (
+                        <Card className="border-emerald-200 bg-emerald-50/50">
+                            <CardContent className="p-4 space-y-4">
+                                <div>
+                                    <h3 className="font-semibold text-slate-900">Outcome</h3>
+                                    <p className="text-sm text-slate-600">
+                                        Record what actually happened. This is what proves the opportunity
+                                        turned into money — leave blank until you hear back.
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="submitted_date">Submitted On</Label>
+                                        <Input
+                                            id="submitted_date"
+                                            name="submitted_date"
+                                            type="date"
+                                            value={formData.submitted_date}
+                                            onChange={handleChange}
+                                        />
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <Label htmlFor="award_date">Award Date</Label>
+                                        <Input
+                                            id="award_date"
+                                            name="award_date"
+                                            type="date"
+                                            value={formData.award_date}
+                                            onChange={handleChange}
+                                        />
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <Label htmlFor="amount_awarded">Amount Awarded ($)</Label>
+                                        <Input
+                                            id="amount_awarded"
+                                            name="amount_awarded"
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            placeholder="0.00"
+                                            value={formData.amount_awarded}
+                                            onChange={handleChange}
+                                        />
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
 
                     {/* AI-Powered Contact Information Section - Retained */}
                     <Card className="bg-gradient-to-br from-purple-50 to-blue-50 border-purple-200">

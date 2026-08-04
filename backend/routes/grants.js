@@ -20,6 +20,7 @@ import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { loadProfileContext, mergeOpportunitySignals } from '../services/profileHelpers.js'
 import { decorateOpportunityFreshness, saveToProfilePipeline } from '../services/opportunityMatcher.js'
+import { computeMatchDecision } from '../services/matchEngine.js'
 import {
   gateOpportunityForPipeline,
   buildTrustMetadata,
@@ -120,9 +121,23 @@ function normalizeGrantFields(data) {
 
 // Whitelist of allowed columns for UPDATE operations
 const ALLOWED_GRANT_COLUMNS = new Set([
+  // profile_id was MISSING here, so sanitizeColumns silently STRIPPED it from
+  // every manual create — the route's own dismissal gate, duplicate guard, and
+  // canonical-scoring block all key on sanitizedData.profile_id and were dead
+  // code (the wired-but-unreachable class), and every "profile-scoped" manual
+  // grant landed org-only with profile_id NULL (structurally invisible to the
+  // amount nets — the unanswered_no_catalog_row shape). The POST handler pairs
+  // this with a profile↔organization consistency guard (G4/G8).
+  'profile_id',
   'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
   'status', 'priority', 'amount_requested', 'amount_awarded', 'amount_min', 'amount_max',
   'application_url',
+  // Outcome dates. `amount_awarded` was already writable but these were not, so
+  // an award could never be dated and "time to award" analytics read from two
+  // columns nothing could populate. The whole find->apply->submit->confirmed
+  // chain terminates here; without them the product cannot record that a
+  // profile actually received money.
+  'submitted_date', 'award_date',
   'match_score', 'match_reasons', 'notes', 'requirements', 'eligibility',
   'application_steps', 'contact_name', 'contact_email', 'contact_phone',
   'funder_fax', 'funder_address', 'application_method',
@@ -1083,6 +1098,31 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     // Normalize frontend aliases → canonical column names, then sanitize
     const sanitizedData = sanitizeColumns(normalizeGrantFields(data), ALLOWED_GRANT_COLUMNS);
 
+    // Profile-scoped create: the profile must exist and belong to the SAME
+    // organization the caller was just authorized for — a grant's org must
+    // match its profile's org (G4/G8; enforceNoCrossProfileBleed is the boot
+    // net, this is the per-call gate). A blank profile_id is treated as
+    // absent, never persisted as ''. A probe failure keeps the legacy
+    // org-scoped behavior rather than blocking the create.
+    if (sanitizedData.profile_id !== undefined && !String(sanitizedData.profile_id ?? '').trim()) {
+      delete sanitizedData.profile_id
+    }
+    if (sanitizedData.profile_id) {
+      try {
+        const profileRow = await req.db
+          .prepare('SELECT id, organization_id FROM profiles WHERE id = ? LIMIT 1')
+          .get(String(sanitizedData.profile_id))
+        if (!profileRow) {
+          return res.status(422).json({ error: 'unknown_profile', message: 'profile_id does not resolve to an existing profile.' })
+        }
+        if (profileRow.organization_id && String(profileRow.organization_id) !== String(data.organization_id)) {
+          return res.status(403).json({ error: 'profile_not_in_organization', message: 'The profile belongs to a different organization.' })
+        }
+      } catch (profileErr) {
+        routeLogger.warn('[grants/create] profile consistency probe failed (non-fatal)', { error: profileErr?.message })
+      }
+    }
+
     // Stringify JSON fields
     if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
       sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
@@ -1198,6 +1238,48 @@ router.post('/', mutationRateLimiter, async (req, res) => {
       } catch (dupErr) {
         routeLogger.warn('[grants/create] duplicate check failed (non-fatal)', { error: dupErr?.message })
       }
+
+      // A manual create is never BLOCKED on match quality (user-created rows
+      // are protected; NULL score is never junk), but a profile-scoped row must
+      // not enter the pipeline UNSCORED when a canonical score is computable —
+      // unscored manual/import rows are exactly what migrations 063/064/0056/
+      // 0057 later stamped with matched_needs '["general funding support"]'
+      // (the prod junk signature, 2026-08-04). Caller-supplied scores win;
+      // a scoring failure leaves the row unscored for the boot backfill net.
+      if (sanitizedData.match_score === undefined || sanitizedData.match_score === null) {
+        try {
+          const profileContext = await loadProfileContext(req.db, String(sanitizedData.profile_id))
+          const opportunityShape = {
+            id: sanitizedData.funding_opportunity_id ?? null,
+            title: sanitizedData.title ?? data.title ?? null,
+            sponsor: sanitizedData.funder ?? null,
+            application_url: sanitizedData.application_url ?? null,
+            url: sanitizedData.url ?? sanitizedData.application_url ?? null,
+            deadline: sanitizedData.deadline ?? null,
+            amount_min: sanitizedData.amount_min ?? null,
+            amount_max: sanitizedData.amount_max ?? null,
+            description: sanitizedData.program_description ?? sanitizedData.notes ?? null,
+          }
+          const decision = computeMatchDecision(
+            profileContext?.profile ?? { id: String(sanitizedData.profile_id) },
+            opportunityShape,
+            { profileSections: profileContext?.sections ?? null },
+          )
+          if (decision && Number.isFinite(Number(decision.score))) {
+            sanitizedData.match_score = Number(decision.score)
+            sanitizedData.match_decision = decision.decision ?? null
+            sanitizedData.matched_needs = JSON.stringify(decision.matchedNeeds ?? [])
+            sanitizedData.match_explanation = decision.explanation ?? null
+            sanitizedData.matcher_version = 'manual-create-scored'
+            sanitizedData.evaluated_at = new Date().toISOString()
+          }
+        } catch (scoreErr) {
+          routeLogger.warn('[grants/create] canonical scoring failed; row stays unscored for the boot backfill net', {
+            profile_id: sanitizedData.profile_id,
+            error: scoreErr?.message || String(scoreErr),
+          })
+        }
+      }
     }
 
     const columns = ['id', ...Object.keys(sanitizedData)]
@@ -1253,10 +1335,16 @@ router.put('/:id', mutationRateLimiter, async (req, res) => {
     if (!grantAccess) return
 
     const data = req.body;
-    
+
     // Normalize frontend aliases → canonical column names, then sanitize
     const sanitizedData = sanitizeColumns(normalizeGrantFields(data), ALLOWED_GRANT_COLUMNS);
-    
+
+    // profile_id is CREATE-time identity only (whitelisted for POST, where a
+    // profile↔organization guard vets it). On UPDATE it would re-parent the
+    // grant across profiles — exactly the cross-profile bleed G4/G8 forbids —
+    // so it is stripped here regardless of what the caller sent.
+    delete sanitizedData.profile_id
+
     if (Object.keys(sanitizedData).length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
     }

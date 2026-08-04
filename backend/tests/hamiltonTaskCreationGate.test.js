@@ -73,7 +73,9 @@ function makeDb() {
       title TEXT,
       description TEXT,
       application_url TEXT,
-      source_url TEXT
+      source_url TEXT,
+      evidence_url TEXT,
+      opportunity_kind TEXT
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -110,6 +112,12 @@ async function seedFixture(db) {
     .run('opp-restricted', 'UNCF Scholarship', 'Apply through the portal.', 'https://portal.uncf-fixture.org/apply')
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title, application_url) VALUES (?, ?, ?, ?, ?)')
     .run('g-restricted', PROFILE, 'opp-restricted', 'UNCF Scholarship', 'https://portal.uncf-fixture.org/apply')
+  // A pointer-kind row with NO usable URL anywhere: not an application at
+  // all — a research lead (owner directive 2026-08-04).
+  await db.prepare('INSERT INTO funding_opportunities (id, title, opportunity_kind) VALUES (?, ?, ?)')
+    .run('opp-pointer', 'Eldercare Locator', 'referral')
+  await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')
+    .run('g-pointer', PROFILE, 'opp-pointer', 'Eldercare Locator')
 }
 
 async function taskCount(db) {
@@ -149,6 +157,21 @@ describe('Hamilton task-creation eligibility gate', () => {
     expect(r.reason).toBe('ineligible_profile')
     expect(r.task).toBeNull()
     expect(r.policy?.code).toBe('funding_source_profile_rejected')
+    expect(await taskCount(db)).toBe(0)
+  })
+
+  it('REFUSES a URL-less pointer as a research lead WITH the handoff instructions — the batch flow mints no silent task', async () => {
+    const r = await automateSingleSource(db, {
+      profileId: PROFILE,
+      source: { grant_id: 'g-pointer' },
+    })
+    expect(r.skipped).toBe(true)
+    expect(r.reason).toBe('pointer_research_lead')
+    expect(r.task).toBeNull()
+    expect(r.policy?.code).toBe('pointer_research_lead')
+    // The handoff is what makes this a LEAD instead of a dead end: it names
+    // the source and routes the owner through Discovery.
+    expect(r.policy?.handoff?.instructions).toContain('Eldercare Locator')
     expect(await taskCount(db)).toBe(0)
   })
 

@@ -366,6 +366,25 @@ export async function automateSingleSource(db, {
       },
     }
   }
+  // A pointer-kind source decomposition cannot reach (no usable URL) is a
+  // RESEARCH LEAD, never an application task (owner directive 2026-08-04).
+  // Without this branch the batch flow fell through to classification and
+  // minted a task that could only die silently — the same hole the
+  // /api/application-tasks POST gate closes for raw creates. The handoff
+  // instructions ride along so the caller can surface WHAT to research.
+  if (eligibility?.code === 'pointer_research_lead') {
+    return {
+      task: null,
+      skipped: true,
+      reason: 'pointer_research_lead',
+      policy: {
+        code: eligibility.code,
+        reasons: eligibility.reasons || [],
+        message: eligibility.message || null,
+        handoff: eligibility.handoff || null,
+      },
+    }
+  }
 
   const classification = classifyFundingSource({
     opportunity,
