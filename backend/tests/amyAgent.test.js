@@ -903,6 +903,61 @@ describe('Amy end-of-run expired sweep + crawled-signal rescue', () => {
     }
   })
 
+  it('PROD LEAK b9ca2567: an EXPIRED synthetic re-crawled nightly cannot ride the 6h grace past the starvation bound', async () => {
+    const db = createDb()
+    try {
+      // The exact prod shape (2026-08-04): created 100h ago (> the 96h bound),
+      // TTL 48h → expired ~52h ago — but SOME discovery path re-crawled it 1h
+      // ago, so the old rule skipped it `crawled_too_recently` on every sweep,
+      // forever ("starved by perpetual re-discovery").
+      const starved = await seedExpiredLeftover(db, { hoursAgo: 100, ttlHours: 48, runId: 'amy-starved' })
+      await markProfileCrawled(db, starved, { now: new Date(Date.now() - 1 * HOUR) })
+
+      // Control: expired and ALSO crawled 1h ago, but only 30h old — well
+      // inside the starvation bound, so the mid-flight grace must still hold.
+      const graceHeld = await seedExpiredLeftover(db, { hoursAgo: 30, ttlHours: 24, runId: 'amy-grace' })
+      await markProfileCrawled(db, graceHeld, { now: new Date(Date.now() - 1 * HOUR) })
+
+      const res = await cleanupExpiredAmyProfiles(db)
+      expect(res.ids).toContain(starved)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(starved)).toBeFalsy()
+      // The younger expired row keeps its grace — the escalation is narrow.
+      expect(res.skipped_ids.some((s) => s.id === graceHeld && s.reasons.includes('crawled_too_recently'))).toBe(true)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(graceHeld)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('starvation escalation never reaches an UNEXPIRED row, whatever its age', async () => {
+    const db = createDb()
+    try {
+      // 100h old but with a FUTURE expires_at (crafted directly — TTL hours are
+      // clamped to 72h by buildAmyMetadata, so no created profile can be this
+      // old and unexpired); crawled 1h ago. Both the expiry gate and the grace
+      // must hold it — age alone can never reap.
+      const past = new Date(Date.now() - 100 * HOUR)
+      const profileId = 'amy-test-unexpired-old'
+      db.prepare(
+        `INSERT INTO profiles (id, display_name, primary_type, status, tags, created_by, created_at, updated_at)
+         VALUES (?, 'Unexpired Old Synthetic', 'individual', 'active', '[]', 'agent:amy', ?, ?)`,
+      ).run(profileId, past.toISOString(), past.toISOString())
+      const meta = buildAmyMetadata({ runId: 'amy-longttl', scenarioId: 's', ttlHours: 48, now: past })
+      meta.expires_at = new Date(Date.now() + 24 * HOUR).toISOString() // future
+      meta.crawled_at = new Date(Date.now() - 1 * HOUR).toISOString()
+      meta.last_crawled_at = meta.crawled_at
+      db.prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)`,
+      ).run(profileId, METADATA_SECTION_KEY, JSON.stringify(meta))
+
+      const res = await cleanupExpiredAmyProfiles(db)
+      expect(res.deleted).toBe(0)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
   it('cleanupExpiredAmyProfiles: never-crawled leftovers survive until the TTL escape window, then reap', async () => {
     const db = createDb()
     try {
