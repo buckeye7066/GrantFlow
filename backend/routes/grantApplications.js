@@ -508,11 +508,53 @@ router.post('/:id/outcome', async (req, res) => {
         String(req.params.id),
       )
 
+    // Propagate to the linked pipeline grant. Without this the award is
+    // recorded only on grant_applications, so the pipeline card, the "funds
+    // secured" rollup (which sums grants.amount_awarded) and every
+    // find->apply->submit->confirmed report stay blank even though the user
+    // just told us they were funded. Failure here must not lose the outcome we
+    // already committed above, so it is reported rather than thrown.
+    let pipelineGrantUpdated = false
+    let pipelineGrantError = null
+    if (row.pipeline_grant_id) {
+      const grantStatus = outcome === 'awarded' ? 'awarded' : 'declined'
+      const awardedAmount = (data.amount_awarded !== null && data.amount_awarded !== undefined)
+        ? Number(data.amount_awarded)
+        : row.amount_awarded
+      const awardDate = outcome === 'awarded' ? now.slice(0, 10) : null
+      try {
+        const result = await req.db
+          .prepare(
+            `UPDATE grants SET
+              status = ?,
+              amount_awarded = COALESCE(?, amount_awarded),
+              award_date = COALESCE(?, award_date),
+              updated_at = ?
+            WHERE id = ?`,
+          )
+          .run(
+            grantStatus,
+            outcome === 'awarded' && Number.isFinite(awardedAmount) ? awardedAmount : null,
+            awardDate,
+            now,
+            String(row.pipeline_grant_id),
+          )
+        pipelineGrantUpdated = Number(result?.changes ?? 0) > 0
+      } catch (grantError) {
+        pipelineGrantError = grantError?.message || String(grantError)
+        routeLogger.error('[grant-applications] outcome grant sync failed:', grantError)
+      }
+    }
+
     const updated = await req.db
       .prepare('SELECT * FROM grant_applications WHERE id = ?')
       .get(String(req.params.id))
 
-    return res.json(mapRow(updated))
+    return res.json({
+      ...mapRow(updated),
+      pipeline_grant_updated: pipelineGrantUpdated,
+      pipeline_grant_error: pipelineGrantError,
+    })
   } catch (error) {
     routeLogger.error('[grant-applications] outcome error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
