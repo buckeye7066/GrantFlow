@@ -121,3 +121,46 @@ describe('live_crawl re-ingest must not wipe an amount it knows nothing about', 
     expect(row.amount_max, 'amounts still preserved').toBe(10_000_000)
   })
 })
+
+describe('a re-crawl through the CURRENT extractor upgrades a stale amount_status (the NM tuition class)', () => {
+  // THE CONVERGENCE CHANNEL for Amy amount_recall_miss:high_school_student
+  // (2026-08-03). The RE_TUITION_COVERAGE phrasing shipped on 08-03, but the
+  // prod NM Lottery/Opportunity rows were ingested BEFORE it, so they still
+  // carry amount_status='not_listed' beside descriptions the extractor can now
+  // classify. The refresh path is the dedup re-upsert: the next crawl that
+  // re-finds the row re-runs resolveOpportunityAmounts, the varies+text result
+  // counts as an amount ASSERTION (assertsAmounts), and the stored stale
+  // status is upgraded. This test pins that channel with the verbatim prod row
+  // so a future "COALESCE keeps the old status" refactor cannot silently
+  // strand every pre-fix row at not_listed forever.
+  const nmLotteryStale = {
+    title: 'New Mexico Lottery Scholarship',
+    sponsor: 'New Mexico Higher Education Department',
+    description: 'Scholarship support for recent New Mexico high school graduates.', // pre-fix ingest: no coverage phrase captured
+    source: 'web_search',
+    source_url: 'https://www.reachhighernm.com/',
+    application_url: 'https://www.reachhighernm.com/',
+    record_origin: 'live_crawl',
+  }
+  const nmLotteryRecrawl = {
+    ...nmLotteryStale,
+    // The funder's own copy, as prod holds it today (read-only, 2026-08-04):
+    description:
+      'The Lottery Scholarship covers 100% of tuition for recent New Mexico high school graduates who enroll full time at a New Mexico public college or university.',
+  }
+
+  it('not_listed → varies when the re-crawled description states tuition coverage (never a number)', async () => {
+    const first = await upsertFundingOpportunity(db, nmLotteryStale, { verifyUrl: false })
+    expect(first.skipped, `seed upsert was gated: ${first.reason}`).toBeFalsy()
+    const before = readAmounts(first.id)
+    expect(before.amount_status ?? 'not_listed').not.toBe('varies')
+
+    const again = await upsertFundingOpportunity(db, nmLotteryRecrawl, { verifyUrl: false })
+    const after = readAmounts(again.id ?? first.id)
+    expect(after.amount_status).toBe('varies')
+    expect(after.amount_text).toMatch(/covers 100% of tuition/i)
+    // Precision doctrine holds: tuition coverage is a status, never a figure.
+    expect(after.amount_min).toBeNull()
+    expect(after.amount_max).toBeNull()
+  })
+})

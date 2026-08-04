@@ -413,8 +413,25 @@ function formatUsd(n) {
  * (per-award figure genuinely unknown → status 'not_listed').
  */
 export function resolveOpportunityAmounts(opportunity) {
-  const structuredMin = typeof opportunity?.amount_min === 'number' ? opportunity.amount_min : null
-  const structuredMax = typeof opportunity?.amount_max === 'number' ? opportunity.amount_max : null
+  // A structured 0 (or negative) is NOT a per-award figure — it is an
+  // extraction artifact meaning "no amount", and treating it as a number
+  // short-circuits text extraction entirely (`typeof 0 === 'number'`), so a
+  // row whose own description states a real per-award semantic never gets
+  // read. Live class (Amy `amount_recall_miss:high_school_student`,
+  // 2026-08-03): prod NM Opportunity Scholarship rows carried
+  // `amount_min: 0` beside "covers 100% of tuition and course-specific fees"
+  // — the structured branch demoted the zero to "$0 (program funding level)"
+  // text and the tuition-coverage phrasing was never consulted. Non-positive
+  // structured values are treated as ABSENT so extraction can run; a genuine
+  // floor of $0 carries no information a null does not.
+  const structuredMin =
+    typeof opportunity?.amount_min === 'number' && opportunity.amount_min > 0
+      ? opportunity.amount_min
+      : null
+  const structuredMax =
+    typeof opportunity?.amount_max === 'number' && opportunity.amount_max > 0
+      ? opportunity.amount_max
+      : null
   if (structuredMin !== null || structuredMax !== null) {
     const ceiling = structuredMax ?? structuredMin
     const floor = structuredMin ?? structuredMax
