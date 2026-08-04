@@ -213,6 +213,31 @@ describe('amount_recall_miss counts only amounts that were KNOWABLE', () => {
     ])
     expect(fired(ev)).toBe(true)
   })
+
+  it('the finding NAMES the measurable candidates under the canonical `subjects` key (never a count)', () => {
+    // PROD DEFECT (amy_approval_queue, run amy-2026-08-03T09-20): the code
+    // brief for amount_recall_miss:high_school_student read
+    // "Concrete subject(s): 8." — the registry's evidence_key pointed at
+    // `grant_shaped`, a NUMBER, so collectEvidenceSubjects turned the count
+    // into the only "subject" and no candidate was ever named. Same canonical
+    // key defect as the institution_recall_miss `missed_subjects` incident:
+    // the brief's consumer reads `evidence.subjects` and nothing else.
+    const ev = run([
+      rec(0, { title: 'New Mexico Lottery Scholarship', amount_status: 'not_listed' }),
+      rec(1, { title: 'TheDream.US Scholarship', amount_status: 'not_listed' }),
+      rec(2, { title: 'UAlbany Alumni Association Scholarships', amount_status: 'not_listed' }),
+      rec(3, { title: 'Legislative Lottery Scholarship', amount_status: 'not_listed' }),
+      rec(4, { title: 'Opportunity Scholarship', amount_status: 'not_listed' }),
+      // An unknowable row must NOT be named — it is not a miss.
+      rec(5, { title: 'NM Opportunity Scholarship (tuition varies)', amount_status: 'varies' }),
+    ])
+    const finding = ev.findings.find((f) => f.type === 'amount_recall_miss')
+    expect(finding).toBeTruthy()
+    expect(finding.evidence.subjects).toContain('New Mexico Lottery Scholarship')
+    expect(finding.evidence.subjects).toContain('UAlbany Alumni Association Scholarships')
+    expect(finding.evidence.subjects).not.toContain('NM Opportunity Scholarship (tuition varies)')
+    expect(finding.evidence.subjects.every((s) => typeof s === 'string' && /[a-z]/i.test(s))).toBe(true)
+  })
 })
 
 describe('Amy evaluation + Anya handoff', () => {

@@ -206,8 +206,13 @@ export const FINDING_ACTORS = Object.freeze({
   [FINDING_TYPES.AMOUNT_RECALL_MISS]: {
     lever: 'amount_adapter',
     emitted: true,
-    evidence_key: 'grant_shaped',
-    note: 'Needs an adapter or an extractor phrasing. Amy cannot write either — reported as a code brief naming the hosts.',
+    // `subjects` is the canonical evidence key: the finding names the
+    // MEASURABLE candidate titles. It used to be `grant_shaped` — a COUNT —
+    // so the owner's code brief read "Concrete subject(s): 8" (verbatim in
+    // prod amy_approval_queue, 2026-08-03) while the note below promised
+    // hosts. A brief that names no candidate is the write-only-queue shape.
+    evidence_key: 'subjects',
+    note: 'Needs an adapter or an extractor phrasing. Amy cannot write either — reported as a code brief naming the candidates that carried no amount.',
   },
   [FINDING_TYPES.PROFILE_FIELD_MAPPING_MISS]: {
     lever: 'profile_field_mapping',
