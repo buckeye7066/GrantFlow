@@ -53,6 +53,7 @@ import {
   isNonActionableUrl,
   extractHostname,
 } from '../config/urlRules.js'
+import { detectForeignOpportunity } from '../config/opportunityJurisdiction.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('services:webParityBenchmark')
@@ -280,6 +281,17 @@ function applicantMatchesHit(hit, applicantTypes = []) {
 export function isBenchmarkRelevantHit(hit, { needs = [], applicantTypes = [] } = {}) {
   if (!isRealFundingHit(hit)) return false
   if (isForeignGovernmentHit(hit?.url)) return false
+  // A registered FOREIGN FUNDER is junk on BOTH sides of the parity ledger.
+  // `isForeignGovernmentHit` sees only gov-style ccTLD shapes, so Tata Trusts
+  // on .org sailed through ("the ccTLD rule is structurally blind to a foreign
+  // funder on .org/.com" — the exact class the 2026-08-03 QA chain registered
+  // in FOREIGN_FUNDER_HOSTS/NAMES and purged from the MATCH store). The purge
+  // then flipped those rows from "overlap" to "web-only find" here, and the
+  // 2026-08-04 run scored the cleanup as a −24.9 parity REGRESSION with
+  // tatatrusts.org sitting in web_only_top for BOTH golden profiles. Measure
+  // the web side with the SAME canonical detector the product side uses, so a
+  // foreign funder can never read as a GrantFlow recall miss.
+  if (detectForeignOpportunity({ title: hit?.title, url: hit?.url }).foreign) return false
 
   const title = String(hit?.title || '').trim()
   const text = normalizedHitText(hit)
