@@ -123,6 +123,12 @@ const ALLOWED_GRANT_COLUMNS = new Set([
   'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
   'status', 'priority', 'amount_requested', 'amount_awarded', 'amount_min', 'amount_max',
   'application_url',
+  // Outcome dates. `amount_awarded` was already writable but these were not, so
+  // an award could never be dated and "time to award" analytics read from two
+  // columns nothing could populate. The whole find->apply->submit->confirmed
+  // chain terminates here; without them the product cannot record that a
+  // profile actually received money.
+  'submitted_date', 'award_date',
   'match_score', 'match_reasons', 'notes', 'requirements', 'eligibility',
   'application_steps', 'contact_name', 'contact_email', 'contact_phone',
   'funder_fax', 'funder_address', 'application_method',
