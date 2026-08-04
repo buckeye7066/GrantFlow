@@ -39,6 +39,7 @@ import {
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { evaluateApplicantTypeEligibility } from './applicantTypeGate.js'
+import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
 import { createLogger } from '../utils/logger.js'
 
 // Directory-style / referral resources must ALWAYS survive filtering (mission
@@ -301,6 +302,27 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
           dismissErr?.message || dismissErr,
         )
       }
+    }
+
+    // Gate 1.75: Funding-result junk chain (config/fundingResultFilters.js).
+    // The 2026-08-03 owner QA chain classified regulatory notices, lead-gen
+    // scholarships, clearly-expired programs, and anonymized-funder records —
+    // but only the MATCHES surfaces consulted it. The pipeline WRITER was the
+    // one path that skipped it, so Federal Register comment requests reached
+    // profile pipelines as grants (the "HRSA information-collection at 82"
+    // class, prod 2026-08-04). Only `not_a_grant` is refused here: `resource`
+    // (pointer kinds, signal-less rows) stays admissible per the locator rule.
+    const fundingResult = classifyFundingResult(opportunity)
+    if (fundingResult.bucket === RESULT_BUCKETS.NOT_A_GRANT) {
+      if (!quiet) log.info(`[opportunityMatcher] Gate:FUNDING_RESULT suppressed "${opportunity?.title}" — ${fundingResult.reasons.join('; ')}`)
+      return denied(`not_a_grant:${fundingResult.reasons[0] ?? 'unclassified'}`, {
+        saved: false,
+        reason: `Not a fundable opportunity: ${fundingResult.reasons.join('; ')}`,
+        gate: 'FUNDING_RESULT',
+        matchPercentage: null,
+        threshold,
+        decision: 'REJECT',
+      }, decision?.score ?? null)
     }
 
     // Run the full decision engine

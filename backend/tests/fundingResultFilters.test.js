@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import Database from 'better-sqlite3'
 import {
   classifyRegulatoryNotice,
   isLeadGenScholarship,
@@ -28,6 +29,8 @@ import {
   institutionalPassThroughConflict,
   agencyOnlyProgramConflict,
   nonGrantTitleLikePatterns,
+  federalRegisterSourceLikePatterns,
+  nonGrantCandidateSqlPredicate,
   RESULT_BUCKETS,
 } from '../config/fundingResultFilters.js'
 import {
@@ -414,6 +417,79 @@ describe('partitionFundingSources — the hidden "Not a grant" bucket + canonica
       { id: 'old', title: 'Some Old Grant', sponsor: 'X Foundation', deadline: '2024-01-01', deadline_type: 'fixed', amount_max: 500, match_decision: 'accept' },
     ])
     expect(out.not_a_grant.map((s) => s.id)).toEqual(['old'])
+  })
+})
+
+// ── The PIPELINE boot net's candidate superset (2026-08-04 grants-table twin) ─
+describe('nonGrantCandidateSqlPredicate — title superset OR Federal Register provenance', () => {
+  it('params carry every title pattern PLUS every FR pattern per url expression (and per sourceExpr)', () => {
+    const urlExprs = ["lower(coalesce(application_url,''))", "lower(coalesce(url,''))"]
+    const { clause, params } = nonGrantCandidateSqlPredicate({
+      hayExpr: "lower(coalesce(title,''))",
+      urlExprs,
+      sourceExpr: "lower(coalesce(source,''))",
+    })
+    const titlePatterns = nonGrantTitleLikePatterns()
+    const frPatterns = federalRegisterSourceLikePatterns()
+    // Shape: one param per LIKE — the title patterns once, the FR patterns for
+    // each url expression and once more for the source expression.
+    expect(params.length).toBe(titlePatterns.length + frPatterns.length * (urlExprs.length + 1))
+    for (const p of titlePatterns) expect(params).toContain(p)
+    expect(frPatterns).toContain('%federalregister.gov%')
+    // Every urlExpr carries the FR host pattern (the benign-title live class).
+    for (const expr of urlExprs) {
+      expect(clause).toContain(`${expr} LIKE ?`)
+      const occurrences = params.filter((p) => p === '%federalregister.gov%').length
+      expect(occurrences).toBe(urlExprs.length + 1) // + the sourceExpr copy
+    }
+    expect(clause.startsWith('(')).toBe(true)
+    expect(clause.endsWith(')')).toBe(true)
+  })
+
+  it('finds junk-title AND FR-hosted-benign-title rows via real SQL — and does NOT sweep a clean row', () => {
+    const db = new Database(':memory:')
+    try {
+      db.exec(`CREATE TABLE grants (id TEXT PRIMARY KEY, title TEXT, application_url TEXT, url TEXT)`)
+      const insert = db.prepare('INSERT INTO grants (id, title, application_url, url) VALUES (?, ?, ?, ?)')
+      insert.run('g-title', 'Agency Information Collection Activities: Proposed Collection: Public Comment Request', null, null)
+      insert.run('g-fr', 'Innovation Challenge: Alternatives to Conventional Pesticides for Crop Desiccation; Notice of Availability',
+        'https://www.federalregister.gov/documents/2026/07/02/2026-13458/x', null)
+      insert.run('g-clean', 'HOPE Scholarship', 'https://www.tn.gov/collegepays', null)
+
+      const { clause, params } = nonGrantCandidateSqlPredicate({
+        hayExpr: "lower(coalesce(title,''))",
+        urlExprs: ["lower(coalesce(application_url,''))", "lower(coalesce(url,''))"],
+      })
+      const hits = db.prepare(`SELECT id FROM grants WHERE ${clause} ORDER BY id`).all(...params).map((r) => r.id)
+      // The FAILURE MODE this superset exists for: the benign-title FR row is
+      // unreachable by the title patterns alone — only the url leg finds it.
+      const titleOnly = nonGrantTitleSqlPredicateHits(db)
+      expect(titleOnly).toEqual(['g-title'])
+      expect(hits).toEqual(['g-fr', 'g-title'])
+    } finally { db.close() }
+  })
+
+  function nonGrantTitleSqlPredicateHits(db) {
+    const { clause, params } = nonGrantCandidateSqlPredicate({ hayExpr: "lower(coalesce(title,''))" })
+    return db.prepare(`SELECT id FROM grants WHERE ${clause} ORDER BY id`).all(...params).map((r) => r.id)
+  }
+
+  it('classifyFundingResult buckets the two real prod pipeline rows as not_a_grant', () => {
+    // Prod 2026-08-04 (Axiom BioLabs pipeline): the HRSA comment request at 82…
+    const byTitle = classifyFundingResult({
+      title: 'Agency Information Collection Activities: Proposed Collection: Public Comment Request',
+      url: 'https://www.federalregister.gov/documents/2026/06/30/y',
+    })
+    expect(byTitle.bucket).toBe(RESULT_BUCKETS.NOT_A_GRANT)
+    expect(byTitle.reasons).toContain('regulatory_notice_title')
+    // …and the EPA Notice of Availability at 76, whose ONLY junk evidence is
+    // the federalregister.gov host (the title is benign).
+    const bySource = classifyFundingResult({
+      title: 'Innovation Challenge: Alternatives to Conventional Pesticides for Crop Desiccation; Notice of Availability',
+      url: 'https://www.federalregister.gov/documents/2026/07/02/2026-13458/x',
+    })
+    expect(bySource.bucket).toBe(RESULT_BUCKETS.NOT_A_GRANT)
+    expect(bySource.reasons).toEqual(['federal_register_source'])
   })
 })
 
