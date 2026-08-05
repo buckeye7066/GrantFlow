@@ -118,14 +118,24 @@ export async function extractOpportunitiesFromPage(
       const kind = blindKind === 'AGGREGATOR_INDEX'
         ? OPPORTUNITY_KIND.DIRECTORY
         : candidate.kind;
+      const isDirectory = kind === OPPORTUNITY_KIND.DIRECTORY;
+      const pageInfoUrl = candidate.raw?.page_url || candidate.info_url || null;
       return {
         ...candidate,
         kind,
-        is_directory: kind === OPPORTUNITY_KIND.DIRECTORY,
+        is_directory: isDirectory,
+        // A list/index can contain child application links. Those links belong to
+        // child opportunities, not to the directory itself, so the directory
+        // record must never expose one as its own application action.
+        apply_url: isDirectory ? null : candidate.apply_url,
+        info_url: isDirectory ? pageInfoUrl : candidate.info_url,
         raw: {
           ...(candidate.raw || {}),
           blind_kind: blindKind,
           blind_trust: blindTrust,
+          ...(isDirectory && candidate.apply_url
+            ? { directory_child_apply_url: candidate.apply_url }
+            : {}),
         },
       };
     });
