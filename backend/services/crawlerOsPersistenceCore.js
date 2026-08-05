@@ -29,6 +29,7 @@ import {
   MAX_ATTENDED_INSTITUTIONS,
 } from '../config/profileInstitutions.js';
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js';
+import { stampMatchConfidenceProvenance } from './matching/matchConfidenceProvenance.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -682,6 +683,11 @@ export async function persistRun(db, memStore, run, opts = {}) {
   let crossMatches = 0;
   for (const m of matchRows) {
     const explain = jparse(m.match_explain_json, {});
+    const persistedExplainJson = JSON.stringify(stampMatchConfidenceProvenance(explain, {
+      match_score: m.match_score,
+      match_confidence: m.match_confidence,
+      match_decision: m.decision,
+    }));
     const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id; // follow cross-run dedup remap
     const isPrimary = !primaryProfileId || m.profile_id === primaryProfileId;
     const decision = String(m.decision ?? '').toLowerCase();
@@ -695,7 +701,7 @@ export async function persistRun(db, memStore, run, opts = {}) {
         match_decision: m.decision ?? null,
         match_explanation: explain.why ?? null,
         match_reasons: JSON.stringify(explain.matched_needs ?? []),
-        match_explain_json: m.match_explain_json ?? '{}',
+        match_explain_json: persistedExplainJson,
         matcher_version: 'crawler-os',
         source_query: m.source_query ?? null,
         discovered_via: m.discovered_via ?? null,
@@ -734,7 +740,7 @@ export async function persistRun(db, memStore, run, opts = {}) {
         ).run(
           `xm:${m.profile_id}:${oppId}`, m.profile_id, oppId,
           m.match_score, m.match_confidence ?? null, m.decision ?? null, explain.why ?? null,
-          JSON.stringify(explain.matched_needs ?? []), m.match_explain_json ?? '{}',
+          JSON.stringify(explain.matched_needs ?? []), persistedExplainJson,
           m.source_query ?? null, m.discovered_via ?? null,
         );
         crossMatches += 1;
