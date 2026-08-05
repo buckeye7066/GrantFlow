@@ -1,13 +1,17 @@
 // crawler-os/adapters/officialDirectoryAdapter.js
 //
-// Generic source adapter for real official or reputable directory/program pages
-// that do not expose a structured API. It emits one honest candidate pointing
-// at the source itself. When the registry row is marked directory, the row is a
-// DIRECTORY only; otherwise it may be a standing PROGRAM/IN_KIND/etc. page with
-// the page URL as its application/instructions URL.
+// Generic adapter for official/reputable program and locator pages that do not
+// expose a structured API. It emits one honest pointer to the registered source.
+// The profile may select this lane, but it never changes the source's title,
+// applicant facts, geography, or application path.
 
 import { createBaseAdapter } from './baseAdapter.js';
 import { OPPORTUNITY_KIND } from '../contract.js';
+
+function resolvedKind(source = {}, raw = {}) {
+  if (source.directory === true) return OPPORTUNITY_KIND.DIRECTORY;
+  return raw.kind ?? source.default_kinds?.[0] ?? OPPORTUNITY_KIND.PROGRAM;
+}
 
 export function createOfficialDirectoryAdapter(sourceId) {
   if (!sourceId) throw new Error('createOfficialDirectoryAdapter: sourceId required');
@@ -16,37 +20,41 @@ export function createOfficialDirectoryAdapter(sourceId) {
     source_id: sourceId,
     family: 'directory',
     requiredEnv: [],
-    buildRequests(thesis, source) {
+    buildRequests(_thesis, source) {
       const url = source.application_url || source.base_url;
-      const topNeed = (thesis.needs ?? [])[0] ?? null;
-      const kind = source.directory ? OPPORTUNITY_KIND.DIRECTORY : (source.default_kinds?.[0] ?? OPPORTUNITY_KIND.DIRECTORY);
+      const kind = resolvedKind(source);
       const title = source.resource_title || source.name || source.source_id;
       return [{
         url,
         parseCfg: {
           directoryCandidate: {
             kind,
-            title: topNeed && source.title_prefix
-              ? `${source.title_prefix} - ${topNeed}`
-              : title,
+            title,
             sponsor: source.sponsor_name || source.name || title,
             summary: source.resource_summary || source.description || null,
-            info_url: source.base_url,
-            apply_url: kind === OPPORTUNITY_KIND.DIRECTORY ? null : url,
+            info_url: source.base_url || url || null,
+            // A base/info page is not silently promoted to an application. Only
+            // an explicit registry application_url may occupy apply_url.
+            apply_url: kind === OPPORTUNITY_KIND.DIRECTORY
+              ? null
+              : (source.application_url || null),
           },
         },
       }];
     },
     mapCandidate(raw, { source } = {}) {
       if (!raw || !source) return null;
-      const kind = source.directory ? OPPORTUNITY_KIND.DIRECTORY : (raw.kind ?? source.default_kinds?.[0] ?? OPPORTUNITY_KIND.DIRECTORY);
+      const kind = resolvedKind(source, raw);
+      const applicationUrl = kind === OPPORTUNITY_KIND.DIRECTORY
+        ? null
+        : (raw.apply_url ?? source.application_url ?? null);
       return {
         kind,
         title: raw.title ?? source.resource_title ?? source.name ?? null,
         sponsor: raw.sponsor ?? source.sponsor_name ?? source.name ?? null,
         summary: raw.summary ?? source.resource_summary ?? source.description ?? null,
-        info_url: raw.info_url ?? source.base_url ?? null,
-        apply_url: kind === OPPORTUNITY_KIND.DIRECTORY ? null : (raw.apply_url ?? source.application_url ?? source.base_url ?? null),
+        info_url: raw.info_url ?? source.base_url ?? applicationUrl ?? null,
+        apply_url: applicationUrl,
         is_directory: kind === OPPORTUNITY_KIND.DIRECTORY,
         applicant_types: source.applicant_types ?? ['*'],
         need_categories: source.need_categories ?? ['*'],
