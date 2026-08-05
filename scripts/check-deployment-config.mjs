@@ -56,6 +56,7 @@ const dockerfile = readText('Dockerfile')
 const dockerignore = readText('.dockerignore')
 const envGenerator = readText('scripts/generate-env-examples.mjs')
 const healthRoutes = readText('backend/routes/health.js')
+const nvmrc = readText('.nvmrc').trim()
 
 const railwayApi = 'https://grantflow-production.up.railway.app/api/:path*'
 const railwayUploads = 'https://grantflow-production.up.railway.app/uploads/:path*'
@@ -81,12 +82,28 @@ assert(
 )
 assert(vercel.installCommand === 'npm ci --include=dev --include=optional', 'Vercel must use npm ci')
 assert(
+  hasRewrite(vercel, '/welcome', '/welcome.html'),
+  'the crawlable /welcome route must use its canonical acquisition document',
+)
+assert(
+  hasRewrite(vercel, '/privacy', '/privacy.html'),
+  'the crawlable /privacy route must use its distinct privacy document',
+)
+assert(
   hasRewrite(vercel, '/grantflow/((?!assets/).*)', '/index.html'),
   'vercel.json must keep the /grantflow SPA fallback so deep links do not 404',
 )
 assert(
   hasRewrite(vercel, '/((?!assets/).*)', '/index.html'),
   'vercel.json must keep the root SPA fallback so deep links do not 404',
+)
+assert(
+  Array.isArray(vercel.redirects) && vercel.redirects.some((redirect) =>
+    redirect?.source === '/grantflow/welcome' &&
+    redirect?.destination === '/welcome' &&
+    redirect?.permanent === true
+  ),
+  'legacy /grantflow/welcome must permanently redirect to the canonical public /welcome route',
 )
 
 const globalHeaderBlock = Array.isArray(vercel.headers)
@@ -129,6 +146,15 @@ assert(
   byKey(indexHeaderBlock?.headers).get('cache-control') === 'no-cache, no-store, must-revalidate',
   'index.html must stay no-store so deploy/promote rollouts are not masked by cache',
 )
+for (const publicRoute of ['/welcome', '/privacy']) {
+  const routeHeaderBlock = Array.isArray(vercel.headers)
+    ? vercel.headers.find((entry) => entry?.source === publicRoute)
+    : null
+  assert(
+    byKey(routeHeaderBlock?.headers).get('cache-control') === 'no-cache, no-store, must-revalidate',
+    `${publicRoute} HTML must stay no-store so canonical metadata changes deploy immediately`,
+  )
+}
 
 // The Docker runtime image contains only product/runtime files, not the
 // build-only scripts directory, so `npm start` (or any npm lifecycle) is the
@@ -167,8 +193,10 @@ assert(Number(railway?.deploy?.healthcheckTimeout || 0) >= 120, 'Railway healthc
 assert(railway?.deploy?.restartPolicyType === 'ALWAYS', 'Railway restart policy must stay ALWAYS')
 assert(Number(railway?.deploy?.restartPolicyMaxRetries || 0) >= 3, 'Railway restart retries must be configured')
 
-assert(pkg?.engines?.node === '>=20 <25', 'package.json must declare the supported production Node range (>=20 <25)')
+assert(pkg?.engines?.node === '20.x', 'package.json must pin the production runtime to Node 20.x')
 assert(lock?.packages?.['']?.engines?.node === pkg?.engines?.node, 'package-lock root engine must match package.json')
+assert(nvmrc === '20', '.nvmrc must remain pinned to Node 20')
+assert((dockerfile.match(/FROM node:20-slim/g) || []).length === 2, 'both Docker build and runtime stages must use Node 20')
 
 if (failures.length) {
   console.error('[deployment-config] FAIL')

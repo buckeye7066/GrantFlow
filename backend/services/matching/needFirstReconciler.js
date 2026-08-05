@@ -6,6 +6,11 @@ import {
 import { NEED_FIRST_RECONCILIATION_ROWS_SQL } from './fundingSourceQueries.js'
 import { normalizePersistedMatchDecisionIntegrity } from './matchDecisionIntegrity.js'
 import { SURFACED_MATCHER_VERSIONS } from '../../config/matchSurfacing.js'
+import {
+  hasMatchConfidenceProvenance,
+  stripMatchConfidenceProvenance,
+  trustedPersistedMatchConfidence,
+} from './matchConfidenceProvenance.js'
 
 const log = createLogger('needFirstReconciler')
 /**
@@ -93,6 +98,7 @@ export async function reconcileNeedFirstProfileMatches(db, {
   let rejected = 0
   let demoted = 0
   let scoreLowered = 0
+  let confidenceCleared = 0
   const failures = []
 
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -100,7 +106,48 @@ export async function reconcileNeedFirstProfileMatches(db, {
     scanned += 1
     const explain = parseJson(row.match_explain_json, {}) || {}
     if (isCurrent(explain)) {
-      current += 1
+      const confidenceIsTrusted = trustedPersistedMatchConfidence(row) !== null
+      const hasProvenance = hasMatchConfidenceProvenance(explain)
+      const confidenceIsAbsent = row.match_confidence === null || row.match_confidence === undefined
+      if (confidenceIsTrusted || (confidenceIsAbsent && !hasProvenance)) {
+        current += 1
+        continue
+      }
+
+      // A current policy marker alone does not bind confidence to the row. A
+      // later integrity/audit writer may have changed score or decision without
+      // re-measuring confidence. Clear both the untrusted value and any stale
+      // marker while preserving the writer's current score/decision.
+      try {
+        const result = await db.prepare(
+          `UPDATE profile_opportunity_matches
+              SET match_confidence = NULL,
+                  match_explain_json = ?,
+                  updated_at = CURRENT_TIMESTAMP,
+                  evaluated_at = CURRENT_TIMESTAMP
+            WHERE profile_id = ? AND opportunity_id = ?`,
+        ).run(
+          JSON.stringify(stripMatchConfidenceProvenance(explain)),
+          String(profileId),
+          String(row.opportunity_id),
+        )
+        const changes = Number(result?.changes ?? result?.rowCount ?? 0)
+        if (changes <= 0) {
+          failures.push({
+            opportunity_id: row.opportunity_id,
+            error: 'selected current-policy match confidence was not cleared',
+          })
+        } else {
+          current += changes
+          updated += changes
+          confidenceCleared += changes
+        }
+      } catch (error) {
+        failures.push({
+          opportunity_id: row.opportunity_id,
+          error: `untrusted confidence cleanup failed: ${error?.message || String(error)}`,
+        })
+      }
       continue
     }
 
@@ -113,9 +160,14 @@ export async function reconcileNeedFirstProfileMatches(db, {
       const newDecision = String(adjusted.decision || 'REVIEW').toUpperCase()
       const newScore = Math.round(Number(adjusted.score) || 0)
 
+      // Confidence was measured against the crawler's original score/decision.
+      // Once this policy replaces that contract, retaining the old percentage
+      // would pair one measurement with a different outcome. Null is the honest
+      // value until a fresh canonical match run measures confidence again.
       const result = await db.prepare(
         `UPDATE profile_opportunity_matches
             SET match_score = ?,
+                match_confidence = NULL,
                 match_decision = ?,
                 match_explanation = ?,
                 match_reasons = ?,
@@ -128,7 +180,7 @@ export async function reconcileNeedFirstProfileMatches(db, {
         newDecision.toLowerCase(),
         adjusted.explanation ?? null,
         JSON.stringify(adjusted.reasons ?? []),
-        JSON.stringify(adjusted.match_explain ?? {}),
+        JSON.stringify(stripMatchConfidenceProvenance(adjusted.match_explain ?? {})),
         String(profileId),
         String(row.opportunity_id),
       )
@@ -142,6 +194,7 @@ export async function reconcileNeedFirstProfileMatches(db, {
       }
 
       updated += changes
+      if (row.match_confidence !== null && row.match_confidence !== undefined) confidenceCleared += changes
       if (newDecision === 'REJECT') rejected += changes
       if (String(row.match_decision || '').toUpperCase() === 'ACCEPT' && newDecision !== 'ACCEPT') {
         demoted += changes
@@ -178,6 +231,7 @@ export async function reconcileNeedFirstProfileMatches(db, {
     rejected,
     demoted,
     score_lowered: scoreLowered,
+    confidence_cleared: confidenceCleared,
     match_decision_integrity: matchDecisionIntegrity,
     failures,
   }

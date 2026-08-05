@@ -59,6 +59,14 @@ export default defineConfig(({ mode }) => {
       minify: 'esbuild',
       target: 'es2020',
       rollupOptions: {
+        // Route-specific HTML documents keep crawler metadata truthful at the
+        // HTTP boundary. Protected SPA routes use index.html (noindex), while
+        // the two sitemap routes get their own canonical document heads.
+        input: {
+          app: path.resolve(__dirname, 'index.html'),
+          welcome: path.resolve(__dirname, 'welcome.html'),
+          privacy: path.resolve(__dirname, 'privacy.html'),
+        },
         output: {
           // Rolldown-native chunk grouping. The previous function-form
           // manualChunks ran through rolldown's legacy compat shim, which

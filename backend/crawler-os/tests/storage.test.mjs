@@ -32,20 +32,23 @@ test('a real opportunity is stored and retrievable from the global catalog', () 
   assert.equal(storage.countOpportunities(store), 1);
 });
 
-test('match score is stored PER (profile, opportunity) and isolated between profiles', () => {
+test('match score and confidence are stored PER (profile, opportunity) and isolated between profiles', () => {
   const store = createMemoryStore();
   storage.upsertOpportunity(store, opp('o1'));
-  storage.upsertMatch(store, { profile_id: 'A', opportunity_id: 'o1', match_score: 90, decision: 'accept', match_explain: {} });
-  storage.upsertMatch(store, { profile_id: 'B', opportunity_id: 'o1', match_score: 40, decision: 'reject', match_explain: {} });
+  storage.upsertMatch(store, { profile_id: 'A', opportunity_id: 'o1', match_score: 90, match_confidence: 88, decision: 'accept', match_explain: {} });
+  storage.upsertMatch(store, { profile_id: 'B', opportunity_id: 'o1', match_score: 40, match_confidence: 55, decision: 'reject', match_explain: {} });
 
   const aMatches = storage.getMatchesForProfile(store, 'A');
   const bMatches = storage.getMatchesForProfile(store, 'B');
   assert.equal(aMatches.length, 1);
   assert.equal(aMatches[0].match_score, 90);
+  assert.equal(aMatches[0].match_confidence, 88);
   assert.equal(bMatches[0].match_score, 40);
+  assert.equal(bMatches[0].match_confidence, 55);
   // the global opportunity row itself never carries a profile-specific score
   const row = storage.getOpportunity(store, 'o1');
   assert.equal('match_score' in row, false);
+  assert.equal('match_confidence' in row, false);
 });
 
 test('getMatchesForProfile can filter by minimum score', () => {

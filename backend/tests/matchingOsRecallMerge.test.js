@@ -72,6 +72,8 @@ function createSchema(db) {
       profile_id TEXT,
       opportunity_id TEXT,
       match_score REAL,
+      match_confidence REAL,
+      match_explain_json TEXT,
       match_decision TEXT,
       match_explanation TEXT,
       match_reasons TEXT DEFAULT '[]',

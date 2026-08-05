@@ -4,6 +4,10 @@
   "buildCommand": "npm run release:gates",
   "outputDirectory": "dist",
   "trailingSlash": false,
+  "redirects": [
+    { "source": "/grantflow/welcome", "destination": "/welcome", "permanent": true },
+    { "source": "/grantflow/privacy", "destination": "/privacy", "permanent": true }
+  ],
   "rewrites": [
     {
       "source": "/grantflow/api/:path*",
@@ -29,6 +33,8 @@
     { "source": "/api/:path((?!preview-backend-disabled$).*)", "destination": "/api/preview-backend-disabled" },
     { "source": "/grantflow/uploads/:path*", "destination": "/api/preview-backend-disabled" },
     { "source": "/uploads/:path*", "destination": "/api/preview-backend-disabled" },
+    { "source": "/welcome", "destination": "/welcome.html" },
+    { "source": "/privacy", "destination": "/privacy.html" },
     { "source": "/grantflow/((?!assets/).*)", "destination": "/index.html" },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
   ],
@@ -64,6 +70,14 @@
     },
     {
       "source": "/index.html",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+    },
+    {
+      "source": "/welcome",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+    },
+    {
+      "source": "/privacy",
       "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
     }
   ]

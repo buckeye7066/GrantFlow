@@ -15,7 +15,7 @@
 import { test, expect } from 'playwright/test'
 import { basePath, baseURL } from './playwright.config.mjs'
 
-const appBase = String(basePath || '').replace(/\/$/, '') || '/grantflow'
+const appBase = String(basePath || '').replace(/\/+$/, '')
 // Doctor / CI runs pass the per-run admin token via SMOKE_ADMIN_TOKEN; standalone
 // runs may set ADMIN_TOKEN directly. Either is accepted; fall back to the legacy
 // 'test-admin-token' default for backwards compatibility with older harnesses.

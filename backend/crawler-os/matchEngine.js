@@ -152,6 +152,12 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
     profile_id: thesis?.profile_id ?? profile?.id ?? null,
     opportunity_id: opportunity?.id ?? opp?.id ?? null,
     match_score: score,
+    // The canonical engine already computes confidence from evidence
+    // completeness. Keep it profile-scoped beside the score so persistence and
+    // read paths can distinguish a measured value from an unknown one.
+    match_confidence: typeof canonical?.confidence === 'number' && Number.isFinite(canonical.confidence)
+      ? Math.round(canonical.confidence)
+      : null,
     decision,
     match_explain: {
       matched_profile_type: Boolean(canonical?.match_explain?.matchedSignals?.includes?.('applicant_type')),

@@ -1,6 +1,7 @@
 import request from "supertest"
 import { describe, it, expect, beforeAll, beforeEach } from "vitest"
 import { getAppAndDb, resetDb, TEST_ADMIN_AUTH_HEADER } from "./testServer.js"
+import { stampMatchConfidenceProvenance } from "../services/matching/matchConfidenceProvenance.js"
 
 /**
  * Integration tests for the matching pipeline — the core flow that
@@ -21,6 +22,7 @@ function ensureCrawlerOsMatchTable(db) {
       profile_id TEXT NOT NULL,
       opportunity_id TEXT NOT NULL,
       match_score REAL,
+      match_confidence REAL,
       match_decision TEXT,
       match_explanation TEXT,
       match_reasons TEXT DEFAULT '[]',
@@ -114,6 +116,7 @@ function seedOpportunity(db, overrides = {}) {
   if (overrides.os_match !== false) {
     seedCrawlerOsMatch(db, overrides.profileId || currentProfileId, id, {
       score: overrides.match_score ?? 72,
+      confidence: overrides.match_confidence ?? null,
       decision: overrides.match_decision || "review",
       reasons: overrides.match_reasons || ["profile_need_match"],
       explanation: overrides.match_explanation || "Crawler OS matched this opportunity for the profile.",
@@ -124,16 +127,38 @@ function seedOpportunity(db, overrides = {}) {
 
 function seedCrawlerOsMatch(db, profileId, opportunityId, {
   score = 72,
+  confidence = null,
   decision = "review",
   reasons = ["profile_need_match"],
   explanation = "Crawler OS matched this opportunity for the profile.",
 } = {}) {
   if (!profileId || !opportunityId) return
+  const explainJson = confidence === null
+    ? null
+    : stampMatchConfidenceProvenance(
+        { scoring_policy_version: 'need_first_v2' },
+        {
+          match_score: score,
+          match_confidence: confidence,
+          match_decision: decision,
+        },
+      )
   db.prepare(`
     INSERT OR REPLACE INTO profile_opportunity_matches
-      (id, profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version, computed_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-  `).run(crypto.randomUUID(), profileId, opportunityId, score, decision, explanation, JSON.stringify(reasons))
+      (id, profile_id, opportunity_id, match_score, match_confidence, match_decision,
+       match_explanation, match_reasons, match_explain_json, matcher_version, computed_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(
+    crypto.randomUUID(),
+    profileId,
+    opportunityId,
+    score,
+    confidence,
+    decision,
+    explanation,
+    JSON.stringify(reasons),
+    explainJson ? JSON.stringify(explainJson) : null,
+  )
 }
 
 describe("Matching Pipeline", () => {
@@ -214,6 +239,39 @@ describe("Matching Pipeline", () => {
 
     expect(res.status).toBe(200)
     expect(res.body.returned).toBeGreaterThan(0)
+  })
+
+  it("projects exact confidence provenance through the matching route", async () => {
+    const userId = seedUser(db)
+    const orgId = seedOrg(db)
+    const profileId = seedProfile(db, userId, orgId, { state: "TN" })
+    seedSection(db, profileId, "needs", {
+      needs: ["emergency assistance"],
+      situation: "Tennessee resident seeking emergency assistance",
+    })
+
+    seedOpportunity(db, {
+      title: "National Emergency Assistance Program",
+      description: "Verified emergency assistance for eligible households.",
+      is_national: true,
+      match_score: 88,
+      match_confidence: 74,
+      match_decision: "accept",
+      match_reasons: ["need_alignment", "applicant_type_match"],
+    })
+
+    const res = await request(app)
+      .get(`/api/matching/profile/${profileId}/opportunities?min_score=0&skip_readiness_check=1`)
+      .set(TEST_ADMIN_AUTH_HEADER)
+
+    expect(res.status).toBe(200)
+    const opportunity = res.body.opportunities.find(
+      (row) => row.title === "National Emergency Assistance Program",
+    )
+    expect(opportunity).toBeDefined()
+    expect(opportunity.match_score).toBe(88)
+    expect(String(opportunity.match_decision).toLowerCase()).toBe("accept")
+    expect(opportunity.match_confidence).toBe(74)
   })
 
   // ─── TRUST FILTERS: synthetic/untrusted opps are excluded ────────────

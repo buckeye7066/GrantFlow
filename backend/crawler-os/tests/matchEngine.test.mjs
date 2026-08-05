@@ -93,6 +93,8 @@ test('a strong, well-matched grant ACCEPTs with a high score (full profile conte
   assert.ok(Number(matched) <= Number(total), sentence);
   assert.equal(m.opportunity_id, studentOpp().id);
   assert.equal(m.profile_id, STUDENT_THESIS.profile_id);
+  assert.ok(Number.isFinite(m.match_confidence), 'canonical confidence must survive the OS facade');
+  assert.ok(m.match_confidence >= 0 && m.match_confidence <= 100);
 });
 
 test('a context-less thesis stub can never mint a calibrated ACCEPT (topical cap)', () => {

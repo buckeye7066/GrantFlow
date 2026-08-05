@@ -149,6 +149,7 @@ export function upsertMatch(store, match) {
   return store.upsert('profile_opportunity_matches', ['profile_id', 'opportunity_id'], {
     profile_id: match.profile_id, opportunity_id: match.opportunity_id,
     match_score: match.match_score, decision: match.decision,
+    match_confidence: match.match_confidence ?? null,
     match_explain_json: JSON.stringify(match.match_explain ?? {}),
     // Crawler-doctor provenance: which query/lane produced this match (null
     // when the lane doesn't supply it — e.g. registry adapters keyed by source).
@@ -412,7 +413,7 @@ CREATE TABLE IF NOT EXISTS opportunity_evidence (
 -- PROFILE-SCOPED. Match score lives ONLY here.
 CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
   profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL, match_score INTEGER NOT NULL,
-  decision TEXT NOT NULL, match_explain_json TEXT,
+  match_confidence REAL, decision TEXT NOT NULL, match_explain_json TEXT,
   source_query TEXT, discovered_via TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   PRIMARY KEY (profile_id, opportunity_id)

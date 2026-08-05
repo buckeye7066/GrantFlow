@@ -86,6 +86,7 @@ import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
 import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { spaEntryDocument } from './utils/spaEntryDocument.js';
 import { reportErrorToOwner } from './services/errorReporter.js';
 import { profileContextMiddleware } from './middleware/profileContext.js';
 import { attachRequestContext, isSyntheticServiceAdmin } from './middleware/requestContext.js';
@@ -2932,7 +2933,14 @@ app.get('/{*splat}', spaFallbackLimiter, (req, res, next) => {
   if (req.path.startsWith('/api/')) {
     return next();
   }
-  res.sendFile(join(distPath, 'index.html'));
+  const entryDocument = spaEntryDocument(req.path, APP_BASE_PATH)
+  if (entryDocument === 'index.html') {
+    // Defense in depth for protected/authenticated SPA routes. The document's
+    // own robots meta is authoritative even when this header is stripped by a
+    // proxy; the header prevents indexing by crawlers that honor HTTP policy.
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
+  }
+  res.sendFile(join(distPath, entryDocument));
 });
 
 // Use centralized error handler middleware

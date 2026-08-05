@@ -11,7 +11,7 @@ import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
 import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
-import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
+import { canonicalizeOpportunityList, isFiniteNumberLike } from '../services/matching/resultEnricher.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -124,7 +124,8 @@ async function loadProfileOsResults(req, profileId, {
 
   const osRows = await req.db
     .prepare(
-      `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
+      `SELECT o.*, m.match_score AS os_match_score, m.match_confidence AS os_match_confidence,
+              m.match_explain_json AS os_match_explain_json, m.match_decision AS os_match_decision,
               m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
          FROM profile_opportunity_matches m
          JOIN funding_opportunities o ON o.id = m.opportunity_id
@@ -141,6 +142,8 @@ async function loadProfileOsResults(req, profileId, {
     return {
       ...o,
       match_score: Number(o.os_match_score ?? 0),
+      match_confidence: isFiniteNumberLike(o.os_match_confidence) ? Number(o.os_match_confidence) : null,
+      match_explain_json: o.os_match_explain_json,
       match_decision: o.os_match_decision,
       match_explanation: o.os_match_explanation,
       match_reasons: parseJsonArray(o.os_match_reasons),
@@ -409,7 +412,8 @@ router.post('/comprehensiveMatch', async (req, res) => {
       try {
         osRows = await req.db
           .prepare(
-            `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
+            `SELECT o.*, m.match_score AS os_match_score, m.match_confidence AS os_match_confidence,
+                    m.match_explain_json AS os_match_explain_json, m.match_decision AS os_match_decision,
                     m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
                FROM profile_opportunity_matches m
                JOIN funding_opportunities o ON o.id = m.opportunity_id
@@ -438,6 +442,8 @@ router.post('/comprehensiveMatch', async (req, res) => {
         return {
           ...o,
           match_score: Number(o.os_match_score ?? 0),
+          match_confidence: isFiniteNumberLike(o.os_match_confidence) ? Number(o.os_match_confidence) : null,
+          match_explain_json: o.os_match_explain_json,
           match_decision: o.os_match_decision,
           match_explanation: o.os_match_explanation,
           match_reasons: reasons,

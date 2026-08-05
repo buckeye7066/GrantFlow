@@ -24,6 +24,7 @@ function makeDb() {
       profile_id TEXT NOT NULL,
       opportunity_id TEXT NOT NULL,
       match_score REAL,
+      match_confidence REAL,
       match_decision TEXT,
       match_explanation TEXT,
       match_reasons TEXT,
@@ -88,20 +89,22 @@ function seedOpportunity(db, id, kind) {
 function seedMatch(db, {
   opportunityId,
   score = 9,
+  confidence = 64,
   decision = 'review',
   matcherVersion = 'crawler-os',
 }) {
   db.prepare(`
     INSERT INTO profile_opportunity_matches (
-      id, profile_id, opportunity_id, match_score, match_decision,
+      id, profile_id, opportunity_id, match_score, match_confidence, match_decision,
       match_explanation, match_reasons, match_explain_json, matcher_version,
       computed_at, updated_at, evaluated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, '[]', '{}', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '{}', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `).run(
     `${PROFILE_ID}:${opportunityId}`,
     PROFILE_ID,
     opportunityId,
     score,
+    confidence,
     decision,
     `Seeded ${decision} match`,
     matcherVersion,
@@ -110,7 +113,7 @@ function seedMatch(db, {
 
 function currentMatches(db) {
   return db.prepare(`
-    SELECT opportunity_id, match_score, match_decision, matcher_version
+    SELECT opportunity_id, match_score, match_confidence, match_decision, matcher_version
       FROM profile_opportunity_matches
      WHERE profile_id = ?
      ORDER BY opportunity_id
@@ -138,8 +141,13 @@ describe('Crawler OS resource-preserving reconciliation', () => {
           profile_id: PROFILE_ID,
           opportunity_id: 'direct-current',
           match_score: 22,
+          match_confidence: 81,
           decision: 'review',
-          match_explain_json: JSON.stringify({ why: 'Current direct match', matched_needs: ['housing'] }),
+          match_explain_json: JSON.stringify({
+            why: 'Current direct match',
+            matched_needs: ['housing'],
+            scoring_policy_version: 'need_first_v2',
+          }),
         }]),
         {},
         { primaryProfileId: PROFILE_ID },
@@ -150,10 +158,151 @@ describe('Crawler OS resource-preserving reconciliation', () => {
 
       expect(ids).toContain('direct-current')
       expect(ids).not.toContain('direct-stale')
+      expect(matches.find((row) => row.opportunity_id === 'direct-current')?.match_confidence).toBe(81)
+      const directExplain = JSON.parse(db.prepare(
+        'SELECT match_explain_json FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id = ?',
+      ).get(PROFILE_ID, 'direct-current').match_explain_json)
+      expect(directExplain.match_confidence_provenance).toEqual({
+        contract_version: 'crawler-os-confidence-v1',
+        scoring_policy_version: 'need_first_v2',
+        match_score: 22,
+        match_decision: 'review',
+        match_confidence: 81,
+      })
       for (const kind of resourceKinds) {
         expect(ids).toContain(`resource-${kind.toLowerCase()}`)
       }
       expect(matches.filter((row) => row.opportunity_id.startsWith('resource-'))).toHaveLength(4)
+      expect(matches.find((row) => row.opportunity_id === 'resource-directory')?.match_confidence).toBe(64)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('preserves resource confidence when crawler provenance columns are not installed yet', async () => {
+    const db = makeDb()
+    try {
+      db.exec(`
+        ALTER TABLE profile_opportunity_matches DROP COLUMN source_query;
+        ALTER TABLE profile_opportunity_matches DROP COLUMN discovered_via;
+      `)
+      seedOpportunity(db, 'legacy-resource', 'DIRECTORY')
+      seedMatch(db, {
+        opportunityId: 'legacy-resource',
+        score: 41,
+        confidence: 67,
+        decision: 'review',
+      })
+
+      await persistRun(db, memStore([]), {}, { primaryProfileId: PROFILE_ID })
+
+      const preserved = currentMatches(db).find(
+        (row) => row.opportunity_id === 'legacy-resource',
+      )
+      expect(preserved).toMatchObject({
+        match_score: 41,
+        match_confidence: 67,
+        match_decision: 'review',
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('preserves ACCEPT confidence through the kind-free intermediate-schema fallback', async () => {
+    const db = makeDb()
+    try {
+      db.exec(`
+        ALTER TABLE profile_opportunity_matches DROP COLUMN source_query;
+        ALTER TABLE profile_opportunity_matches DROP COLUMN discovered_via;
+        ALTER TABLE funding_opportunities DROP COLUMN opportunity_kind;
+      `)
+      db.prepare(
+        'INSERT INTO funding_opportunities (id, title) VALUES (?, ?)',
+      ).run('legacy-accept', 'Legacy accepted award')
+      seedMatch(db, {
+        opportunityId: 'legacy-accept',
+        score: 89,
+        confidence: 92,
+        decision: 'accept',
+      })
+
+      await persistRun(db, memStore([]), {}, { primaryProfileId: PROFILE_ID })
+
+      const preserved = currentMatches(db).find(
+        (row) => row.opportunity_id === 'legacy-accept',
+      )
+      expect(preserved).toMatchObject({
+        match_score: 89,
+        match_confidence: 92,
+        match_decision: 'accept',
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps pointer filtering while falling back around missing crawler provenance columns', async () => {
+    const db = makeDb()
+    try {
+      db.exec(`
+        ALTER TABLE profile_opportunity_matches DROP COLUMN source_query;
+        ALTER TABLE profile_opportunity_matches DROP COLUMN discovered_via;
+      `)
+      seedOpportunity(db, 'filtered-pointer-accept', 'DIRECTORY')
+      seedMatch(db, {
+        opportunityId: 'filtered-pointer-accept',
+        score: 52,
+        confidence: 71,
+        decision: 'accept',
+      })
+      seedOpportunity(db, 'durable-direct-accept', 'DIRECT_GRANT')
+      seedMatch(db, {
+        opportunityId: 'durable-direct-accept',
+        score: 87,
+        confidence: 90,
+        decision: 'accept',
+      })
+
+      const preparedSql = []
+      const tracedDb = {
+        dialect: db.dialect,
+        prepare(sql) {
+          preparedSql.push(String(sql))
+          return db.prepare(sql)
+        },
+      }
+
+      const result = await persistRun(
+        tracedDb,
+        memStore([]),
+        {},
+        { primaryProfileId: PROFILE_ID },
+      )
+
+      const durableFallbackIndex = preparedSql.findIndex((sql) => (
+        sql.includes('m.match_confidence') &&
+        !sql.includes('m.source_query') &&
+        sql.includes('NOT IN')
+      ))
+      const firstKindFreeIndex = preparedSql.findIndex((sql) => (
+        sql.includes("LOWER(COALESCE(m.match_decision, '')) = 'accept'") &&
+        !sql.includes('JOIN funding_opportunities')
+      ))
+
+      expect(durableFallbackIndex).toBeGreaterThanOrEqual(0)
+      expect(firstKindFreeIndex).toBe(-1)
+      expect(result.acceptsPreserved).toBe(1)
+      expect(currentMatches(db)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          opportunity_id: 'filtered-pointer-accept',
+          match_confidence: 71,
+        }),
+        expect.objectContaining({
+          opportunity_id: 'durable-direct-accept',
+          match_confidence: 90,
+        }),
+      ]))
     } finally {
       db.close()
     }
@@ -178,17 +327,18 @@ describe('Crawler OS resource-preserving reconciliation', () => {
           // The PRIMARY profile keeps its own REVIEW (the locator rule).
           {
             profile_id: PROFILE_ID, opportunity_id: 'opp-shared', match_score: 31,
-            decision: 'review', match_explain_json: '{}',
+            match_confidence: 70, decision: 'review', match_explain_json: '{}',
           },
           // A cross-profile REVIEW is NOT a match — never stored.
           {
             profile_id: 'profile-other', opportunity_id: 'opp-shared', match_score: 31,
-            decision: 'review', match_explain_json: '{}',
+            match_confidence: 70, decision: 'review', match_explain_json: '{}',
           },
           // A cross-profile ACCEPT is an engine endorsement — stored as xmatch.
           {
             profile_id: 'profile-other', opportunity_id: 'opp-award', match_score: 82,
-            decision: 'accept', match_explain_json: '{}',
+            match_confidence: 93, decision: 'accept',
+            match_explain_json: JSON.stringify({ scoring_policy_version: 'need_first_v2' }),
           },
         ]),
         {},
@@ -198,11 +348,19 @@ describe('Crawler OS resource-preserving reconciliation', () => {
       const own = currentMatches(db)
       expect(own.map((r) => r.opportunity_id)).toContain('opp-shared')
       const others = db.prepare(
-        "SELECT opportunity_id, match_decision, matcher_version FROM profile_opportunity_matches WHERE profile_id = 'profile-other' ORDER BY opportunity_id",
+        "SELECT opportunity_id, match_confidence, match_decision, matcher_version FROM profile_opportunity_matches WHERE profile_id = 'profile-other' ORDER BY opportunity_id",
       ).all()
       expect(others).toEqual([
-        { opportunity_id: 'opp-award', match_decision: 'accept', matcher_version: 'crawler-os-xmatch' },
+        { opportunity_id: 'opp-award', match_confidence: 93, match_decision: 'accept', matcher_version: 'crawler-os-xmatch' },
       ])
+      const crossExplain = JSON.parse(db.prepare(
+        "SELECT match_explain_json FROM profile_opportunity_matches WHERE profile_id = 'profile-other' AND opportunity_id = 'opp-award'",
+      ).get().match_explain_json)
+      expect(crossExplain.match_confidence_provenance).toMatchObject({
+        match_score: 82,
+        match_decision: 'accept',
+        match_confidence: 93,
+      })
     } finally {
       db.close()
     }

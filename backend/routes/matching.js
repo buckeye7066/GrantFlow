@@ -21,7 +21,7 @@ import {
 } from '../config/matchThresholds.js'
 import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
 import { filterOutPipelineMembers, annotatePipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
-import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
+import { canonicalizeOpportunityList, isFiniteNumberLike } from '../services/matching/resultEnricher.js'
 import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
@@ -448,7 +448,8 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       try {
         osRows = await req.db
           .prepare(
-            `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
+            `SELECT o.*, m.match_score AS os_match_score, m.match_confidence AS os_match_confidence,
+                    m.match_explain_json AS os_match_explain_json, m.match_decision AS os_match_decision,
                     m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
                FROM profile_opportunity_matches m
                JOIN funding_opportunities o ON o.id = m.opportunity_id
@@ -481,6 +482,8 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         return {
           ...o,
           match_score: Number(o.os_match_score ?? 0),
+          match_confidence: isFiniteNumberLike(o.os_match_confidence) ? Number(o.os_match_confidence) : null,
+          match_explain_json: o.os_match_explain_json,
           match_decision: o.os_match_decision,
           match_explanation: o.os_match_explanation,
           match_reasons: reasons,
