@@ -32,6 +32,8 @@ test('app deep route loads under basePath (refresh safe)', async ({ page }) => {
   const target = `${basePath.replace(/\/$/, '')}/login`
   const response = await page.goto(target, { waitUntil: 'networkidle' })
   expect(response && response.ok()).toBeTruthy()
+  const responseHtml = await response.text()
+  expect(responseHtml).toContain('content="noindex,nofollow,noarchive"')
 
   // Should not be a static 404 or blank screen.
   const html = await page.content()
@@ -43,6 +45,8 @@ test('app deep route loads under basePath (refresh safe)', async ({ page }) => {
   const scriptUrl = new URL(scriptMatch[1], page.url()).toString()
   const scriptResp = await page.request.get(scriptUrl)
   expect(scriptResp.ok()).toBeTruthy()
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex,nofollow,noarchive')
+  await expect(page.locator('link[rel="canonical"]')).toHaveCount(0)
 })
 
 test('public acquisition route renders without authentication', async ({ page, baseURL }) => {
@@ -51,7 +55,28 @@ test('public acquisition route renders without authentication', async ({ page, b
   // all and redirected to /login while /welcome remained the real public route.
   const response = await page.goto(`${baseURL}/welcome`, { waitUntil: 'networkidle' })
   expect(response && response.ok()).toBeTruthy()
+  const responseHtml = await response.text()
+  expect(responseHtml).toContain('rel="canonical" href="https://app.axiombiolabs.org/welcome"')
+  expect(responseHtml).toContain('property="og:url" content="https://app.axiombiolabs.org/welcome"')
   await expect(page).toHaveURL(/\/welcome(?:[?#].*)?$/)
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'index,follow,max-image-preview:large')
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://app.axiombiolabs.org/welcome')
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://app.axiombiolabs.org/welcome')
   await expect(page.getByRole('heading', { level: 1, name: /find funding that fits the whole profile/i })).toBeVisible()
   await expect(page.getByText(/sign in to grantflow/i)).toHaveCount(0)
+})
+
+test('privacy route has its own crawlable HTTP and browser document head', async ({ page, baseURL }) => {
+  const response = await page.goto(`${baseURL}/privacy`, { waitUntil: 'networkidle' })
+  expect(response && response.ok()).toBeTruthy()
+  const responseHtml = await response.text()
+  expect(responseHtml).toContain('rel="canonical" href="https://app.axiombiolabs.org/privacy"')
+  expect(responseHtml).toContain('property="og:url" content="https://app.axiombiolabs.org/privacy"')
+  expect(responseHtml).not.toContain('rel="canonical" href="https://app.axiombiolabs.org/welcome"')
+
+  await expect(page).toHaveURL(/\/privacy(?:[?#].*)?$/)
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'index,follow,max-image-preview:large')
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://app.axiombiolabs.org/privacy')
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://app.axiombiolabs.org/privacy')
+  await expect(page.getByRole('heading', { level: 1, name: /grantflow — privacy policy/i })).toBeVisible()
 })

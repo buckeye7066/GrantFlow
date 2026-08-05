@@ -82,6 +82,14 @@ assert(
 )
 assert(vercel.installCommand === 'npm ci --include=dev --include=optional', 'Vercel must use npm ci')
 assert(
+  hasRewrite(vercel, '/welcome', '/welcome.html'),
+  'the crawlable /welcome route must use its canonical acquisition document',
+)
+assert(
+  hasRewrite(vercel, '/privacy', '/privacy.html'),
+  'the crawlable /privacy route must use its distinct privacy document',
+)
+assert(
   hasRewrite(vercel, '/grantflow/((?!assets/).*)', '/index.html'),
   'vercel.json must keep the /grantflow SPA fallback so deep links do not 404',
 )
@@ -138,6 +146,15 @@ assert(
   byKey(indexHeaderBlock?.headers).get('cache-control') === 'no-cache, no-store, must-revalidate',
   'index.html must stay no-store so deploy/promote rollouts are not masked by cache',
 )
+for (const publicRoute of ['/welcome', '/privacy']) {
+  const routeHeaderBlock = Array.isArray(vercel.headers)
+    ? vercel.headers.find((entry) => entry?.source === publicRoute)
+    : null
+  assert(
+    byKey(routeHeaderBlock?.headers).get('cache-control') === 'no-cache, no-store, must-revalidate',
+    `${publicRoute} HTML must stay no-store so canonical metadata changes deploy immediately`,
+  )
+}
 
 // The Docker runtime image contains only product/runtime files, not the
 // build-only scripts directory, so `npm start` (or any npm lifecycle) is the

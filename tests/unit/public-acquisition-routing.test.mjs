@@ -6,17 +6,37 @@ import { joinAppPath, normalizeBasePath } from '../../scripts/smoke-prod-readonl
 const read = (path) => fs.readFileSync(path, 'utf8')
 
 test('public acquisition metadata names the route that production actually serves', () => {
-  const html = read('index.html')
+  const html = read('welcome.html')
+  const privacyHtml = read('privacy.html')
+  const protectedHtml = read('index.html')
   const robots = read('public/robots.txt')
   const sitemap = read('public/sitemap-grantflow.xml')
 
   assert.match(html, /rel="canonical" href="https:\/\/app\.axiombiolabs\.org\/welcome"/)
   assert.match(html, /property="og:url" content="https:\/\/app\.axiombiolabs\.org\/welcome"/)
   assert.doesNotMatch(html, /axiombiolabs\.org\/grantflow\/(?:welcome|assets)/)
+  assert.match(privacyHtml, /rel="canonical" href="https:\/\/app\.axiombiolabs\.org\/privacy"/)
+  assert.match(privacyHtml, /property="og:url" content="https:\/\/app\.axiombiolabs\.org\/privacy"/)
+  assert.doesNotMatch(privacyHtml, /rel="canonical" href="https:\/\/app\.axiombiolabs\.org\/welcome"/)
+  assert.match(protectedHtml, /name="robots" content="noindex,nofollow,noarchive"/)
+  assert.doesNotMatch(protectedHtml, /rel="canonical"/)
+  assert.doesNotMatch(protectedHtml, /property="og:url"/)
   assert.match(robots, /^Allow: \/welcome$/m)
+  assert.match(robots, /^Allow: \/privacy$/m)
   assert.match(robots, /^Disallow: \/$/m)
   assert.match(sitemap, /<loc>https:\/\/app\.axiombiolabs\.org\/welcome<\/loc>/)
+  assert.match(sitemap, /<loc>https:\/\/app\.axiombiolabs\.org\/privacy<\/loc>/)
   assert.doesNotMatch(sitemap, /\/grantflow\//)
+})
+
+test('Vercel serves public sitemap routes from distinct HTML documents', () => {
+  const vercel = JSON.parse(read('vercel.json'))
+  const rewrites = new Map((vercel.rewrites || []).map((entry) => [entry.source, entry.destination]))
+
+  assert.equal(rewrites.get('/welcome'), '/welcome.html')
+  assert.equal(rewrites.get('/privacy'), '/privacy.html')
+  assert.equal(rewrites.get('/((?!assets/).*)'), '/index.html')
+  assert.notEqual(rewrites.get('/welcome'), rewrites.get('/privacy'))
 })
 
 test('legacy prefixed public URLs redirect to canonical root routes', () => {

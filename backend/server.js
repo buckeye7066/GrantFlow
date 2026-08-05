@@ -2927,12 +2927,33 @@ const spaFallbackLimiter = rateLimit({
 // Serve React app for all non-API routes (SPA fallback).
 // Express 5 / path-to-regexp v8: '*' is no longer a valid path — the named
 // wildcard '/{*splat}' is the v5 equivalent (braces so it matches '/' too).
+function spaEntryDocument(requestPath) {
+  const normalizedBase = APP_BASE_PATH && APP_BASE_PATH !== '/'
+    ? `/${String(APP_BASE_PATH).replace(/^\/+|\/+$/g, '')}`
+    : '/'
+  let routePath = String(requestPath || '/').replace(/\/+$/, '') || '/'
+  if (normalizedBase !== '/' && (routePath === normalizedBase || routePath.startsWith(`${normalizedBase}/`))) {
+    routePath = routePath.slice(normalizedBase.length) || '/'
+  }
+
+  if (routePath.toLowerCase() === '/welcome') return 'welcome.html'
+  if (routePath.toLowerCase() === '/privacy') return 'privacy.html'
+  return 'index.html'
+}
+
 app.get('/{*splat}', spaFallbackLimiter, (req, res, next) => {
   // Skip API routes - let them fall through to 404 handler
   if (req.path.startsWith('/api/')) {
     return next();
   }
-  res.sendFile(join(distPath, 'index.html'));
+  const entryDocument = spaEntryDocument(req.path)
+  if (entryDocument === 'index.html') {
+    // Defense in depth for protected/authenticated SPA routes. The document's
+    // own robots meta is authoritative even when this header is stripped by a
+    // proxy; the header prevents indexing by crawlers that honor HTTP policy.
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
+  }
+  res.sendFile(join(distPath, entryDocument));
 });
 
 // Use centralized error handler middleware

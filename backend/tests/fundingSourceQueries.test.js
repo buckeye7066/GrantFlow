@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import {
   FUNDING_SOURCE_QUERY_CONTRACT,
   FUNDING_SOURCES_BY_PROFILE_SQL,
@@ -7,7 +9,42 @@ import {
   readFundingSourceRows,
 } from '../services/matching/fundingSourceQueries.js'
 
-function createCanonicalDb({ withDismissals = true } = {}) {
+const SQLITE_CANONICAL_MIGRATION = fs.readFileSync(
+  path.resolve('backend/db/migrations/122_profile_opportunity_matches.sql'),
+  'utf8',
+)
+const SQLITE_FORWARD_MIGRATION = fs.readFileSync(
+  path.resolve('backend/db/migrations/162_profile_opportunity_match_confidence.sql'),
+  'utf8',
+)
+const POSTGRES_CANONICAL_MIGRATION = fs.readFileSync(
+  path.resolve('backend/db/postgres/migrations/0123_profile_opportunity_matches.sql'),
+  'utf8',
+)
+const POSTGRES_FORWARD_MIGRATION = fs.readFileSync(
+  path.resolve('backend/db/postgres/migrations/0166_profile_opportunity_match_confidence.sql'),
+  'utf8',
+)
+
+function applySqliteMarkerMigration(db, sql) {
+  const statements = sql
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter(Boolean)
+
+  for (const statement of statements) {
+    try {
+      db.exec(`${statement};`)
+    } catch (error) {
+      if (!/duplicate column name/i.test(String(error?.message || error))) throw error
+    }
+  }
+}
+
+function createCanonicalDb({ withDismissals = true, withMatchConfidence = true } = {}) {
   const db = new Database(':memory:')
   db.exec(`
     CREATE TABLE funding_opportunities (
@@ -43,7 +80,7 @@ function createCanonicalDb({ withDismissals = true } = {}) {
       profile_id TEXT NOT NULL,
       opportunity_id TEXT NOT NULL,
       match_score REAL,
-      match_confidence REAL,
+      ${withMatchConfidence ? 'match_confidence REAL,' : ''}
       match_decision TEXT,
       match_explanation TEXT,
       match_reasons TEXT,
@@ -89,15 +126,15 @@ function createCanonicalDb({ withDismissals = true } = {}) {
 
     INSERT INTO profile_opportunity_matches (
       id, profile_id, opportunity_id, match_score, match_decision,
-      match_confidence, match_explanation, match_reasons, match_explain_json, matcher_version,
+      ${withMatchConfidence ? 'match_confidence,' : ''} match_explanation, match_reasons, match_explain_json, matcher_version,
       updated_at, evaluated_at
     ) VALUES
-      ('m-1', 'p-1', 'opp-1', 82, 'accept', 89, 'Persisted direct match',
+      ('m-1', 'p-1', 'opp-1', 82, 'accept', ${withMatchConfidence ? '89,' : ''} 'Persisted direct match',
        '["medical need"]', '{"scoring_policy_version":"need-first-v2"}',
        'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-      ('m-2', 'p-1', 'opp-2', 61, 'accept', 72, 'Persisted resource match',
+      ('m-2', 'p-1', 'opp-2', 61, 'accept', ${withMatchConfidence ? '72,' : ''} 'Persisted resource match',
        '["resource"]', '{}', 'crawler-os-xmatch', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-      ('m-3', 'p-1', 'opp-dismissed', 90, 'accept', NULL, 'Dismissed',
+      ('m-3', 'p-1', 'opp-dismissed', 90, 'accept', ${withMatchConfidence ? 'NULL,' : ''} 'Dismissed',
        '[]', '{}', 'web-llm', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
     ${withDismissals ? `
       INSERT INTO pipeline_dismissals (id, profile_id, opportunity_id, title)
@@ -108,6 +145,30 @@ function createCanonicalDb({ withDismissals = true } = {}) {
 }
 
 describe('canonical funding-source query projection', () => {
+  it('owns match_confidence in canonical and forward SQLite/Postgres migrations', () => {
+    const fresh = new Database(':memory:')
+    applySqliteMarkerMigration(fresh, SQLITE_CANONICAL_MIGRATION)
+
+    const columns = fresh.prepare('PRAGMA table_info(profile_opportunity_matches)').all()
+    expect(columns.filter((column) => column.name === 'match_confidence')).toHaveLength(1)
+    expect(columns.find((column) => column.name === 'match_confidence')?.type).toBe('REAL')
+    expect(SQLITE_FORWARD_MIGRATION).toMatch(/ADD COLUMN match_confidence REAL/i)
+    expect(POSTGRES_CANONICAL_MIGRATION).toMatch(/match_confidence DOUBLE PRECISION/i)
+    expect(POSTGRES_FORWARD_MIGRATION).toMatch(/ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION/i)
+  })
+
+  it('can migrate then read legacy matches before any Crawler OS persistence path runs', async () => {
+    const db = createCanonicalDb({ withMatchConfidence: false })
+
+    // Apply the actual forward migration directly to an already-stamped legacy
+    // shape. No ensureOsTables(), persistRun(), or write-side helper runs first.
+    db.exec(SQLITE_FORWARD_MIGRATION)
+    const result = await readFundingSourceRows(db, 'p-1')
+
+    expect(result.rows).toHaveLength(2)
+    expect(result.rows.every((row) => row.match_confidence === null)).toBe(true)
+  })
+
   it('uses the live PostgreSQL column contract rather than Crawler OS memory names', async () => {
     const db = createCanonicalDb()
     const result = await readFundingSourceRows(db, 'p-1')

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
   profile_id TEXT NOT NULL,
   opportunity_id TEXT NOT NULL,
   match_score REAL,
+  match_confidence DOUBLE PRECISION,
   match_decision TEXT,
   match_explanation TEXT,
   match_reasons TEXT,
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
 ALTER TABLE profile_opportunity_matches ADD COLUMN IF NOT EXISTS match_explanation TEXT;
 ALTER TABLE profile_opportunity_matches ADD COLUMN IF NOT EXISTS match_reasons TEXT;
 ALTER TABLE profile_opportunity_matches ADD COLUMN IF NOT EXISTS match_explain_json TEXT;
+ALTER TABLE profile_opportunity_matches ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION;
 ALTER TABLE profile_opportunity_matches ADD COLUMN IF NOT EXISTS computed_at TIMESTAMPTZ DEFAULT now();
 ALTER TABLE profile_opportunity_matches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
