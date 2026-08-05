@@ -592,6 +592,13 @@ export const SECTION_METADATA = {
         "help": "List specific things you need — equipment, a vehicle, a class, a certification, supplies — in your own words (e.g. \"PROBE ethics class for nursing licensure\", \"15 passenger van\"). GrantFlow searches for each one on demand. Not used for match scoring: this is what you want, not what you qualify for."
       },
       {
+        "name": "assistance_needs",
+        "label": "What kind of help do you need?",
+        "format": "string_array",
+        "scored": false,
+        "help": "Categories of assistance — housing, food, utilities, medical bills, education, childcare, transportation, etc. Used to find the right programs. Separate from the dollar-range estimate above and from specific items. Not used for match scoring."
+      },
+      {
         "name": "receives_assistance",
         "label": "Receives assistance (list)",
         "format": "boolean_tri",

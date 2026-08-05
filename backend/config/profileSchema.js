@@ -242,6 +242,16 @@ export const PROFILE_SCHEMA = {
         description:
           'Specific items, equipment, classes, or services this profile needs funding for, in the owner\'s own words (e.g. "PROBE ethics class for nursing licensure", "15 passenger van"). Owner or admin editable; used as the subject of an on-demand item search. NOT scored — this is a request, not an eligibility fact.',
       },
+      // STRUCTURED NEED CATEGORIES (2026-08-04). `funding_needs` is a dollar
+      // RANGE string; crisis/recall gates need CATEGORY tags. Deliberately
+      // `scored: false` — same deploy-denominator trap as item_needs (#1067).
+      assistance_needs: {
+        type: 'array<string>',
+        scored: false,
+        default: [],
+        description:
+          'Categories of help this profile needs (housing, food, utilities, medical, education, etc.) in plain words or canonical need ids. Read by declaredCrisisNeeds / matching gates. NOT scored — a request list, not an eligibility fact. Distinct from funding_needs (dollar range) and item_needs (purchasable items).',
+      },
       notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Concise context about income/need. DRAFTING ONLY; not scored or mined.' },
     },
   },

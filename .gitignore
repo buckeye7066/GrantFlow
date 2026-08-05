@@ -137,3 +137,6 @@ backend/config/designatedProfiles.local.json
 # FlexFactor audit scratch lists (intermediate tooling output, not app content)
 grantflow_critical_files.txt
 grantflow_files_with_defects.txt
+
+# Personal Claude Code overrides (not shared)
+CLAUDE.local.md

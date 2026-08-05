@@ -344,3 +344,67 @@ describe('SOFT geographic mismatch is relaxed for an authoritative engine decisi
     expect(gate.ruleId).toBe('geographic_residents_only_exclusive')
   })
 })
+
+describe('the funnel treats a stored above-floor decision as authoritative BY DEFAULT (discovery.js parity)', () => {
+  // ROOT-CAUSE GUARD for the central architectural defect: backend/routes/
+  // discovery.js reads stored profile_opportunity_matches (carrying the
+  // matchEngine's match_score/match_decision) and calls canonicalizeOpportunityList
+  // WITHOUT useStoredDecision:true, so the display gate ran its category/geo/no-fit
+  // heuristics as a SECOND eligibility trial and silently overturned engine
+  // decisions — while computeMatchDecision re-ran and rewrote the stored score
+  // (parity drift). The presence of a stored above-floor decision on the row IS
+  // the authority; only an EXPLICIT useStoredDecision:false may opt out. These
+  // tests call the funnel the way discovery.js does (flag OMITTED).
+  const tnIndividual = { primary_type: 'individual', state: 'TN', needs: ['healthcare', 'disability'], disability_status: true }
+
+  // An engine-ACCEPTED program (score 40) whose copy names veterans/military —
+  // fires the CATEGORY veteran_military_without_profile_signal rule (this profile
+  // has no military signal). It is NOT a directory/web-lead and has a real URL,
+  // so the ONLY thing that can drop it is that population keyword net.
+  function veteranTextProgram(overrides = {}) {
+    return {
+      id: 'vet-family-grant',
+      title: 'Veterans and Military Family Assistance Grant',
+      description: 'Assistance grants supporting veterans and military families with essential needs.',
+      source: 'crawler-os',
+      source_url: 'https://va.gov/family-assistance-grant',
+      application_url: 'https://va.gov/family-assistance-grant/apply',
+      state: 'TN',
+      is_active: 1,
+      categories: '["assistance"]',
+      keywords: '["family assistance", "essential needs"]',
+      match_score: 40,
+      match_decision: 'ACCEPT',
+      ...overrides,
+    }
+  }
+
+  it('KEEPS a stored above-floor row a CATEGORY rule would drop, with the flag OMITTED', () => {
+    const { kept, dropped } = canonicalizeOpportunityList(tnIndividual, [veteranTextProgram()], {
+      preserveDirectories: true,
+      rejectHardIneligible: true,
+      // useStoredDecision intentionally OMITTED — exactly how discovery.js called it.
+    })
+    expect(dropped.veteran_military_without_profile_signal ?? 0).toBe(0)
+    expect(kept).toHaveLength(1)
+  })
+
+  it('REUSES the stored score instead of recomputing it (no parity drift)', () => {
+    const { kept } = canonicalizeOpportunityList(tnIndividual, [veteranTextProgram({ match_score: 40 })], {
+      preserveDirectories: true,
+      rejectHardIneligible: true,
+    })
+    expect(kept).toHaveLength(1)
+    expect(kept[0].match_score).toBe(40)
+  })
+
+  it('an EXPLICIT useStoredDecision:false still opts out (strict second-trial preserved)', () => {
+    const { kept, dropped } = canonicalizeOpportunityList(tnIndividual, [veteranTextProgram()], {
+      preserveDirectories: true,
+      rejectHardIneligible: true,
+      useStoredDecision: false,
+    })
+    expect(kept).toHaveLength(0)
+    expect(dropped.veteran_military_without_profile_signal).toBe(1)
+  })
+})
