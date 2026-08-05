@@ -2,10 +2,11 @@
  * Robert charter: "match every newly stored opportunity against ALL known
  * profiles". runProfileDiscoveryLive, given matchProfiles = multiple theses,
  * matches each discovered opp against all of them: the DISCOVERING profile is
- * PRIMARY (authoritative 'crawler-os'), every OTHER eligible profile gets an
- * additive 'crawler-os-xmatch' row (ON CONFLICT DO NOTHING — its own match
- * always wins; the primary reconcile never wipes it). A single-profile call is
- * unchanged (no xmatch).
+ * PRIMARY (authoritative 'crawler-os'), every OTHER engine-ACCEPTED profile gets
+ * an additive 'crawler-os-xmatch' row (ON CONFLICT DO NOTHING — its own match
+ * always wins; the primary reconcile never wipes it). REVIEW is deliberately
+ * not cross-persisted because a context-light cross-profile thesis cannot prove
+ * eligibility. A single-profile call is unchanged (no xmatch).
  */
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
@@ -18,6 +19,7 @@ function makeDb() {
       id TEXT PRIMARY KEY, organization_id TEXT, display_name TEXT,
       primary_type TEXT, applicant_type TEXT, state TEXT, county TEXT,
       city TEXT, postal_code TEXT, zip_code TEXT, tags TEXT, interests TEXT,
+      needs TEXT,
       status TEXT DEFAULT 'active', last_discovery_at DATETIME,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -60,12 +62,15 @@ function makeStubFetcher() {
   }
 }
 
-function seedTwoNonprofits(db) {
+function seedTwoNonprofits(db, {
+  pANeeds = ['equipment', 'capital'],
+  pBNeeds = ['equipment', 'capital'],
+} = {}) {
   for (const id of ['p-a', 'p-b']) {
     db.prepare(
-      `INSERT INTO profiles (id, primary_type, applicant_type, state, county, city, tags)
-       VALUES (?, 'nonprofit', 'nonprofit', 'TN', 'Bradley', 'Cleveland', '["community"]')`,
-    ).run(id)
+      `INSERT INTO profiles (id, primary_type, applicant_type, state, county, city, tags, needs)
+       VALUES (?, 'nonprofit', 'nonprofit', 'TN', 'Bradley', 'Cleveland', '["community"]', ?)`,
+    ).run(id, JSON.stringify(id === 'p-a' ? pANeeds : pBNeeds))
   }
 }
 
@@ -79,14 +84,46 @@ describe('cross-profile matching (Robert charter)', () => {
     await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), matchProfiles: [thA, thB] })
 
     const rows = db.prepare(
-      `SELECT profile_id, matcher_version FROM profile_opportunity_matches ORDER BY profile_id`,
+      `SELECT m.profile_id, m.matcher_version, m.match_decision
+         FROM profile_opportunity_matches m
+         JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+        WHERE fo.title = 'Rural Community Facilities Grant'
+        ORDER BY m.profile_id`,
     ).all()
-    const byProfile = Object.fromEntries(rows.map((r) => [r.profile_id, r.matcher_version]))
+    const byProfile = Object.fromEntries(rows.map((r) => [r.profile_id, r]))
     // p-a discovered it → authoritative own match.
-    expect(byProfile['p-a']).toBe('crawler-os')
-    // p-b never searched for it but is an eligible nonprofit → cross-match.
-    expect(byProfile['p-b']).toBe('crawler-os-xmatch')
+    expect(byProfile['p-a']?.matcher_version).toBe('crawler-os')
+    // p-b explicitly needs both equipment and capital; the canonical matcher
+    // ACCEPTs this direct, national nonprofit grant, so cross-persistence is
+    // warranted under the ACCEPT-only precision policy.
+    expect(byProfile['p-b']).toMatchObject({
+      matcher_version: 'crawler-os-xmatch',
+      match_decision: 'accept',
+    })
   }, 20000) // live discovery + cold lazy-imports (zipcodes/matchEngine) can exceed the 5s default under load
+
+  it('does not cross-persist a REVIEW scored from a context-light thesis', async () => {
+    const db = makeDb()
+    seedTwoNonprofits(db, {
+      pBNeeds: ['operations', 'programs', 'capacity_building', 'capital'],
+    })
+    const thA = await buildThesisForProfile(db, 'p-a')
+    const thB = await buildThesisForProfile(db, 'p-b')
+
+    await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), matchProfiles: [thA, thB] })
+
+    const targetRows = db.prepare(
+      `SELECT m.profile_id, m.matcher_version
+         FROM profile_opportunity_matches m
+         JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+        WHERE fo.title = 'Rural Community Facilities Grant'
+        ORDER BY m.profile_id`,
+    ).all()
+
+    expect(targetRows).toEqual([
+      expect.objectContaining({ profile_id: 'p-a', matcher_version: 'crawler-os' }),
+    ])
+  }, 20000)
 
   it('a single-profile call writes NO cross-matches (back-compat)', async () => {
     const db = makeDb()
