@@ -45,6 +45,7 @@ import {
   selectVisibleCatalog,
   mergeDiscoveryResults,
   buildResultsReconciliation,
+  partitionDiscoverResults,
 } from '@/pages/discoverResultsMerge';
 
 // Discovery is now asynchronous: a click dispatches the profile-aware crawler
@@ -605,7 +606,9 @@ export default function DiscoverGrants() {
       Boolean(
         opp?.is_directory ||
           opp?.is_directory_resource ||
-          String(opp?.opportunity_kind ?? '').toUpperCase() === 'DIRECTORY',
+          ['DIRECTORY', 'REFERRAL', 'SCHOOL_PORTAL', 'PAST_AWARD_INTEL'].includes(
+            String(opp?.opportunity_kind ?? '').toUpperCase(),
+          ),
       )
     return dedupeFundingResults(rows
       .filter((opp) => {
@@ -635,6 +638,8 @@ export default function DiscoverGrants() {
         descriptionMd: opp.description,
         match_score: opp.match_score,
         match: opp.match_score,
+        match_decision: opp.match_decision ?? opp.decision ?? null,
+        opportunity_kind: opp.opportunity_kind ?? opp.kind ?? null,
         matched_fields: opp.match_reasons ?? [],
         matchReasons: opp.match_reasons ?? [],
         source: opp.source || 'catalog',
@@ -642,7 +647,7 @@ export default function DiscoverGrants() {
         usable_for_housing: opp.usable_for_housing ?? false,
         refund_potential: opp.refund_potential ?? false,
         funding_category: opp.funding_category ?? null,
-        is_directory: opp.is_directory ?? false,
+        is_directory: Boolean(opp.is_directory) || isDirectoryRow(opp),
         threshold_relaxed: opp.threshold_relaxed ?? false,
         eligibility_relaxed: opp.eligibility_relaxed ?? false,
         geo_expanded: opp.geo_expanded ?? false,
@@ -738,18 +743,32 @@ export default function DiscoverGrants() {
     [visibleCatalogOpportunities, searchResults],
   )
 
+  const discoverPartition = useMemo(
+    () => partitionDiscoverResults(combinedOpportunities),
+    [combinedOpportunities],
+  )
+
+  // Awardable first, directories second — same honesty as ProfileFundingSourcesCard.
+  const displayOpportunities = useMemo(
+    () => [...discoverPartition.awardable, ...discoverPartition.directories],
+    [discoverPartition],
+  )
+
   // Honest reconciliation between the coverage panel's "N sources with matches"
   // and what is actually on screen, so a silent "20 matched / 2 shown" can't
   // recur. Below-floor count comes from the score histogram (subThresholdHint).
+  // Headline "shown" is AWARDABLE only — directories never inflate apply-to counts.
   const resultsReconciliation = useMemo(
     () =>
       buildResultsReconciliation({
-        shownCount: combinedOpportunities.length,
+        shownCount: discoverPartition.awardableCount,
         matchedSourceCount,
         belowFloorCount: subThresholdHint?.belowCount ?? 0,
         minScore: minMatchScore,
+        awardableCount: discoverPartition.awardableCount,
+        directoryCount: discoverPartition.directoryCount,
       }),
-    [combinedOpportunities.length, matchedSourceCount, subThresholdHint, minMatchScore],
+    [discoverPartition, matchedSourceCount, subThresholdHint, minMatchScore],
   )
 
   // Guided first-cycle tour: advance past the 'discover-crawl' step the
@@ -787,17 +806,17 @@ export default function DiscoverGrants() {
       profileId: profileIdForStore,
       organizationName: selectedProfile?.display_name ?? null,
       organizationId: selectedProfile?.organization_id ?? null,
-      returned: combinedOpportunities.length,
-      // Use the deduped merged length as the authoritative total \u2014 summing the
-      // two source totals double-counts the heavily-overlapping catalog and
-      // crawler results.
-      totalFound: combinedOpportunities.length,
+      // Apply-to count maps 1:1 to awardable; directories stay in results but do
+      // not inflate returned/totalFound (locator rule + assessment item 6).
+      returned: discoverPartition.awardableCount,
+      totalFound: discoverPartition.awardableCount,
+      directoryCount: discoverPartition.directoryCount,
       totalScored: catalogResultMeta?.totalScored ?? null,
       truncated: Boolean(catalogResultMeta?.truncated || crawlerResultMeta?.truncated),
       thresholdFallbackMessage: crawlerResultMeta?.thresholdFallbackMessage ?? null,
       diagnostics: catalogResultMeta?.diagnostics ?? crawlerResultMeta?.diagnostics ?? null,
     })
-  }, [combinedOpportunities, catalogResultMeta, crawlerResultMeta, effectiveProfileId, selectedProfileId, selectedProfile, setFundingResults])
+  }, [combinedOpportunities, discoverPartition, catalogResultMeta, crawlerResultMeta, effectiveProfileId, selectedProfileId, selectedProfile, setFundingResults])
 
   const isECFProfile =
     (profileForSearch?.medicaid_enrolled || selectedOrg?.medicaid_enrolled) &&
@@ -1169,10 +1188,14 @@ export default function DiscoverGrants() {
         description: buildZeroResultDescription(profileGaps),
       })
     } else {
+      const partition = partitionDiscoverResults(uniqueOpportunities)
       const collapseNote = collapsedCount > 0 ? ` Collapsed ${collapsedCount} duplicate variant${collapsedCount === 1 ? '' : 's'}.` : ''
+      const dirNote = partition.directoryCount > 0
+        ? ` Plus ${partition.directoryCount} director${partition.directoryCount === 1 ? 'y' : 'ies'} to search.`
+        : ''
       toast({
         title: 'Search complete',
-        description: `Found ${uniqueOpportunities.length} opportunities.${collapseNote} ${
+        description: `Found ${partition.awardableCount} opportunit${partition.awardableCount === 1 ? 'y' : 'ies'} you can apply to.${dirNote}${collapseNote} ${
           attempted > 0
             ? `Auto-added the ${attempted} strongest (score ${AUTO_ADD_SCORE}+): ${addedCount} added, ${alreadyCount} already in pipeline, ${skippedCount} kept out, ${failedCount} failed.`
             : `None reached the score-${AUTO_ADD_SCORE} auto-add bar — browse the results below and add any you want.`
@@ -2136,16 +2159,21 @@ export default function DiscoverGrants() {
             "20 matched / 2 shown" can't recur. Profile-type-agnostic. Also
             surfaces a subtle "updating" state so a mid-crawl catalog refetch
             never reads as an empty search. */}
-        {combinedOpportunities.length > 0 && resultsReconciliation && (resultsReconciliation.hidden || resultsReconciliation.matched > 0) && (
+        {/* Count reconciliation: awardable apply-to count maps 1:1; directories
+            are named separately so they never inflate "what can I apply to". */}
+        {combinedOpportunities.length > 0 && (
           <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
             <span>
-              Showing <strong>{combinedOpportunities.length}</strong> match{combinedOpportunities.length === 1 ? '' : 'es'}
-              {resultsReconciliation.matched > 0 && (
+              Showing <strong>{discoverPartition.awardableCount}</strong> opportunit{discoverPartition.awardableCount === 1 ? 'y' : 'ies'} you can apply to
+              {discoverPartition.directoryCount > 0 && (
+                <> · <strong>{discoverPartition.directoryCount}</strong> director{discoverPartition.directoryCount === 1 ? 'y' : 'ies'} to search</>
+              )}
+              {resultsReconciliation?.matched > 0 && (
                 <> · <strong>{resultsReconciliation.matched}</strong> of your searched sources {resultsReconciliation.matched === 1 ? 'has' : 'have'} matches</>
               )}
               {catalogIsFetching && <span className="ml-1 text-xs text-slate-400">(updating…)</span>}
             </span>
-            {resultsReconciliation.hidden && (
+            {resultsReconciliation?.hidden && (
               <span className="text-slate-600">
                 {resultsReconciliation.belowFloorCount} more scored below your filter (≥{resultsReconciliation.minScore}).{' '}
                 <button
@@ -2160,11 +2188,11 @@ export default function DiscoverGrants() {
           </div>
         )}
 
-        {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
+        {/* Results Display: awardable first, directories second */}
         {combinedOpportunities.length > 0 && (
           <div ref={resultsRef}>
             <SearchResults
-              results={combinedOpportunities}
+              results={displayOpportunities}
               profileId={effectiveProfileId ?? selectedProfileId}
               onAddToPipeline={handleAddToPipeline}
               organizationName={selectedProfile?.display_name}

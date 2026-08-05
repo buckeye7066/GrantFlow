@@ -148,6 +148,11 @@ function normalizeText(value) {
     .replace(/\s+/g, ' ')
     .trim()
 }
+
+// Must be declared before normalizeTextPreservingFragmentSeparator / signalText
+// (eslint no-use-before-define). Pipe is not a word character — see joinTextFragments.
+export const TEXT_FRAGMENT_SEPARATOR = ' | '
+
 function normalizeTextPreservingFragmentSeparator(value) {
   return String(value ?? '')
     .toLowerCase()
@@ -219,8 +224,6 @@ function signalText(value, depth = 0) {
  * per-fragment normalization and its own evidence, so it is deliberately left
  * alone rather than changed blind.
  */
-export const TEXT_FRAGMENT_SEPARATOR = ' | '
-
 function joinTextFragments(parts) {
   return parts
     .map((part) => String(part ?? '').trim())
