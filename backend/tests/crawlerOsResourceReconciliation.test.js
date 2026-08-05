@@ -143,7 +143,11 @@ describe('Crawler OS resource-preserving reconciliation', () => {
           match_score: 22,
           match_confidence: 81,
           decision: 'review',
-          match_explain_json: JSON.stringify({ why: 'Current direct match', matched_needs: ['housing'] }),
+          match_explain_json: JSON.stringify({
+            why: 'Current direct match',
+            matched_needs: ['housing'],
+            scoring_policy_version: 'need_first_v2',
+          }),
         }]),
         {},
         { primaryProfileId: PROFILE_ID },
@@ -155,6 +159,16 @@ describe('Crawler OS resource-preserving reconciliation', () => {
       expect(ids).toContain('direct-current')
       expect(ids).not.toContain('direct-stale')
       expect(matches.find((row) => row.opportunity_id === 'direct-current')?.match_confidence).toBe(81)
+      const directExplain = JSON.parse(db.prepare(
+        'SELECT match_explain_json FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id = ?',
+      ).get(PROFILE_ID, 'direct-current').match_explain_json)
+      expect(directExplain.match_confidence_provenance).toEqual({
+        contract_version: 'crawler-os-confidence-v1',
+        scoring_policy_version: 'need_first_v2',
+        match_score: 22,
+        match_decision: 'review',
+        match_confidence: 81,
+      })
       for (const kind of resourceKinds) {
         expect(ids).toContain(`resource-${kind.toLowerCase()}`)
       }
@@ -194,7 +208,8 @@ describe('Crawler OS resource-preserving reconciliation', () => {
           // A cross-profile ACCEPT is an engine endorsement — stored as xmatch.
           {
             profile_id: 'profile-other', opportunity_id: 'opp-award', match_score: 82,
-            match_confidence: 93, decision: 'accept', match_explain_json: '{}',
+            match_confidence: 93, decision: 'accept',
+            match_explain_json: JSON.stringify({ scoring_policy_version: 'need_first_v2' }),
           },
         ]),
         {},
@@ -209,6 +224,14 @@ describe('Crawler OS resource-preserving reconciliation', () => {
       expect(others).toEqual([
         { opportunity_id: 'opp-award', match_confidence: 93, match_decision: 'accept', matcher_version: 'crawler-os-xmatch' },
       ])
+      const crossExplain = JSON.parse(db.prepare(
+        "SELECT match_explain_json FROM profile_opportunity_matches WHERE profile_id = 'profile-other' AND opportunity_id = 'opp-award'",
+      ).get().match_explain_json)
+      expect(crossExplain.match_confidence_provenance).toMatchObject({
+        match_score: 82,
+        match_decision: 'accept',
+        match_confidence: 93,
+      })
     } finally {
       db.close()
     }
