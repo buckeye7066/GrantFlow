@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { assessOpportunityTrust } from '../opportunityTrust.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
+import { isPointerKind } from '../../config/opportunityKindClasses.js'
 
 const ALLOWED_MATCH_DECISIONS = new Set(['accept', 'review'])
 const PROFILE_MATCH_REQUIRED_ORIGINS = new Set(['live_crawl', 'geo_crawl', 'discovered'])
@@ -100,6 +101,57 @@ function requiresProfileMatch(subject) {
 }
 
 /**
+ * Pointer-kind rows and the application queue (owner directive 2026-08-04,
+ * building on the 2026-08-03 decomposition work):
+ *
+ *   - A pointer WITH a usable web URL stays ALLOWED — the classifier routes it
+ *     to portal listing-decomposition (`HAMILTON_DECOMPOSE_POINTER_LISTINGS`),
+ *     which mints real per-award candidates through the canonical inserter.
+ *   - A pointer WITHOUT one can never become an application: there is nothing
+ *     to fill and nothing to submit, so a task minted for it dies silently —
+ *     exactly the failure the manual-handoff directive names. It is refused
+ *     here as a RESEARCH LEAD with generated handoff instructions the caller
+ *     surfaces to the profile owner.
+ *
+ * The kind is read from the CATALOG row only (grants carry no kind column);
+ * a grant-only subject is never refused by this gate.
+ */
+function decomposePointerListingsEnabled() {
+  return String(process.env.HAMILTON_DECOMPOSE_POINTER_LISTINGS ?? 'true').toLowerCase() !== 'false'
+}
+
+function usableWebUrl(subject) {
+  const candidates = [subject?.application_url, subject?.apply_url, subject?.source_url, subject?.url, subject?.evidence_url]
+  for (const c of candidates) {
+    const url = String(c || '').trim()
+    if (/^https?:\/\//i.test(url)) return url
+  }
+  return null
+}
+
+export function assessPointerResearchLead(subject, { profileNeeds = [] } = {}) {
+  const kind = subject?.opportunity_kind
+  if (!isPointerKind(kind)) return null
+  const url = usableWebUrl(subject)
+  if (url && decomposePointerListingsEnabled()) return null
+  const needsLine = (Array.isArray(profileNeeds) ? profileNeeds : [])
+    .filter(Boolean)
+    .slice(0, 6)
+    .join(', ')
+  return {
+    kind: String(kind).toLowerCase(),
+    url,
+    title: subject?.title ?? null,
+    instructions: [
+      `"${subject?.title ?? 'This source'}" is a ${String(kind).toLowerCase().replace('_', ' ')} — a page that lists or points at funding programs, not a program you can apply to directly.`,
+      url
+        ? `Open ${url} and identify specific programs${needsLine ? ` matching: ${needsLine}` : ''}, then add each one from Discovery so it can be applied to individually.`
+        : `No working link is stored for it. Search for the source by name, identify specific programs${needsLine ? ` matching: ${needsLine}` : ''}, and add each one from Discovery.`,
+    ].join(' '),
+  }
+}
+
+/**
  * LIVE canonical engine verdict for a (profile, subject) pair — the fallback
  * when no STORED match row exists (the TSAA class, 2026-07-27).
  *
@@ -149,6 +201,22 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
       code: 'missing_funding_source',
       reasons: ['missing_funding_source'],
       message: 'Funding source could not be found for Hamilton automation.',
+    }
+  }
+
+  // Pointer rows that decomposition cannot reach are RESEARCH LEADS, never
+  // applications — refuse with owner-facing handoff instructions instead of
+  // minting a task that can only die silently. Runs BEFORE the trust gate:
+  // a URL-less pointer would otherwise be refused as generic `no_real_url`
+  // and the handoff (the actionable part) would never surface.
+  const researchLead = assessPointerResearchLead(policyOpportunity)
+  if (researchLead) {
+    return {
+      ok: false,
+      code: 'pointer_research_lead',
+      reasons: ['pointer_research_lead'],
+      handoff: researchLead,
+      message: researchLead.instructions,
     }
   }
 

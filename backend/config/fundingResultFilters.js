@@ -430,6 +430,45 @@ export function nonGrantTitleSqlPredicate(hayExpr) {
   return { clause: `(${clause})`, params }
 }
 
+/**
+ * SQL LIKE superset for FEDERAL REGISTER provenance. The title superset above
+ * cannot find an FR record wearing a benign title (the live class: EPA
+ * "Innovation Challenge … Notice of Availability" scored 76 into a pipeline —
+ * its only junk evidence is the federalregister.gov URL). One pattern per
+ * registered regulatory host + the source-label shape; the JS classifier
+ * (`classifyRegulatoryNotice`) adjudicates every candidate, so an FR-hosted
+ * record is condemned by the SAME rule the matches net already applies.
+ */
+export function federalRegisterSourceLikePatterns() {
+  const hostPatterns = REGULATORY_SOURCE_HOSTS.map((host) => `%${host}%`)
+  return [...hostPatterns, '%federal_register%', '%federal register%']
+}
+
+/**
+ * Combined boot-net candidate predicate: title superset OR Federal Register
+ * provenance (url/source expressions supplied by the caller, lower-cased).
+ * Superset only — adjudication stays with the JS classifiers (#944 posture).
+ */
+export function nonGrantCandidateSqlPredicate({ hayExpr, urlExprs = [], sourceExpr = null }) {
+  const title = nonGrantTitleSqlPredicate(hayExpr)
+  const clauses = [title.clause]
+  const params = [...title.params]
+  const frPatterns = federalRegisterSourceLikePatterns()
+  for (const expr of urlExprs) {
+    for (const pattern of frPatterns) {
+      clauses.push(`${expr} LIKE ?`)
+      params.push(pattern)
+    }
+  }
+  if (sourceExpr) {
+    for (const pattern of frPatterns) {
+      clauses.push(`${sourceExpr} LIKE ?`)
+      params.push(pattern)
+    }
+  }
+  return { clause: `(${clauses.join(' OR ')})`, params }
+}
+
 export default {
   REGULATORY_SOURCE_HOSTS,
   isFederalRegisterSource,

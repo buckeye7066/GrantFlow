@@ -5219,9 +5219,22 @@ export async function enforceGrantScoreBackfill(db) {
         const decision = computeMatchDecision(ctx.profile, scoreTarget, { profileSections: ctx.sections })
         const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
         if (score === null) { unscorable++; continue }
+        // The decision write is UNCONDITIONAL, not COALESCE: every candidate
+        // here had match_score IS NULL, so any pre-existing match_decision is a
+        // cosmetic migration stamp (063/064/0056/0057 wrote 'review' over
+        // never-scored rows), never an engine or human verdict — keeping it via
+        // COALESCE froze a stamped 'review' forever even when the fresh
+        // canonical decision is REJECT (the prod "general funding support"
+        // class, 2026-08-04). matched_needs is repaired ONLY when it carries
+        // exactly that migration stamp; any other stored value is left alone.
         await db
-          .prepare(`UPDATE grants SET match_score = ?, match_decision = COALESCE(match_decision, ?) WHERE id = ?`)
-          .run(score, String(decision?.decision ?? 'REVIEW'), g.id)
+          .prepare(
+            `UPDATE grants SET match_score = ?, match_decision = ?,
+                    matcher_version = COALESCE(matcher_version, 'score-backfill'),
+                    matched_needs = CASE WHEN matched_needs = '["general funding support"]' THEN ? ELSE matched_needs END
+             WHERE id = ?`,
+          )
+          .run(score, String(decision?.decision ?? 'REVIEW'), JSON.stringify(decision?.matchedNeeds ?? []), g.id)
         repaired++
       } catch (err) {
         unscorable++
@@ -6647,6 +6660,197 @@ export async function enforceNonGrantNoticeMatches(db) {
       repaired,
       junkOpportunities: junkOpps.size,
       profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: a non-grant notice is never a profile PIPELINE row.
+ *
+ * `enforceNonGrantNoticeMatches` above converges the MATCH store, but the
+ * `grants` table — the pipeline the owner actually works — had no equivalent
+ * net, and the per-call junk gate landed in `admitToPipeline` only on
+ * 2026-08-04: every non-canonical writer that ran before it (manual creates,
+ * imports, the admin-schema-repair migrations) left regulatory notices sitting
+ * in pipelines as work items. Prod 2026-08-04: an HRSA "Agency Information
+ * Collection … Public Comment Request" (score 82) and an EPA Federal-Register
+ * "Notice of Availability" (76) on Axiom BioLabs' pipeline, both with
+ * ready_to_start application tasks.
+ *
+ * Candidate discovery is a SQL LIKE SUPERSET (`nonGrantCandidateSqlPredicate`:
+ * title patterns + Federal-Register provenance over the grant's OWN urls —
+ * predicates before LIMIT, #944/#1080 class); `classifyFundingResult`
+ * adjudicates every candidate in JS.
+ *
+ * REPAIR (mirrors enforceProfileEligibility's conservatism):
+ *   - PURGE (tombstone via pipelineDismissals, then delete) ONLY on the same
+ *     positive evidence the matches net purges on — regulatory TITLE, lead-gen
+ *     identity, clearly-expired program SHAPE — and only rows in an
+ *     early/discovery status with no protected name and no recorded award.
+ *   - A Federal-Register SOURCE alone (benign title) is FLAGGED, never purged
+ *     here — an FR url can be a real NOFO's announcement link; those rows are
+ *     counted (`frSourceFlagged`) for the owner-gated repair script.
+ *   - A protected/user-progressed junk row is marked
+ *     eligibility_status='ineligible', never deleted.
+ *   - Non-terminal application tasks on purged grants are CANCELLED.
+ *
+ * `ENFORCE_NON_GRANT_PIPELINE=0` → count-only. Bound: NON_GRANT_PIPELINE_LIMIT
+ * (500) limits DELETES, never discovery.
+ */
+export async function enforceNonGrantNoticePipeline(db) {
+  return runInvariant('non_grant_notice_pipeline', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('profile_id') || !grantCols.has('title')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let classifyFundingResult, RESULT_BUCKETS, nonGrantCandidateSqlPredicate
+    try {
+      ;({ classifyFundingResult, RESULT_BUCKETS, nonGrantCandidateSqlPredicate } =
+        await import('../config/fundingResultFilters.js'))
+    } catch (err) {
+      log.warn('non_grant_notice_pipeline: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    let cancelApplicationTask = null
+    let recordDismissalFn = null
+    try { ({ cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')) } catch { cancelApplicationTask = null }
+    try { ({ recordDismissal: recordDismissalFn } = await import('../services/pipelineDismissals.js')) } catch { recordDismissalFn = null }
+
+    const limit = _boundedLimit('NON_GRANT_PIPELINE_LIMIT', 500)
+    const hasFunder = grantCols.has('funder')
+    const hasAwarded = grantCols.has('amount_awarded')
+    const hasEligStatus = grantCols.has('eligibility_status')
+    const hasUrl = grantCols.has('url')
+
+    const urlExprs = ["lower(coalesce(g.application_url,''))"]
+    if (hasUrl) urlExprs.push("lower(coalesce(g.url,''))")
+    const { clause, params } = nonGrantCandidateSqlPredicate({
+      hayExpr: "lower(coalesce(g.title,''))",
+      urlExprs,
+    })
+
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT g.id, g.profile_id, g.title, ${hasFunder ? 'g.funder' : 'NULL AS funder'}, g.status,
+                  g.deadline, g.application_url${hasUrl ? ', g.url' : ''}${hasAwarded ? ', g.amount_awarded' : ''}
+             FROM grants g
+            WHERE g.profile_id IS NOT NULL AND ${clause}`,
+        )
+        .all(...params)
+    } catch (err) {
+      log.warn('non_grant_notice_pipeline: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+    if (!rows || rows.length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    // Adjudicate the superset. `sponsor` is the classifier's field name; the
+    // pipeline column is `funder` (#725 naming drift).
+    const PURGE_REASON_RX = /^(regulatory_notice_title|lead_gen:|expired:(?!deadline_long_past))/
+    const purgeable = []
+    let frSourceFlagged = 0
+    for (const g of rows) {
+      const verdictRow = { ...g, sponsor: g.funder }
+      const verdict = classifyFundingResult(verdictRow)
+      if (verdict.bucket !== RESULT_BUCKETS.NOT_A_GRANT) continue
+      const positive = verdict.reasons.some((r) => PURGE_REASON_RX.test(r))
+      if (!positive) {
+        // federal_register_source-only (or unresolvable_funder-only) — flag for
+        // the owner-gated repair, never auto-purge.
+        frSourceFlagged += 1
+        continue
+      }
+      purgeable.push({ ...g, reasons: verdict.reasons })
+    }
+    if (purgeable.length === 0 && frSourceFlagged === 0) {
+      return { scanned: rows.length, repaired: 0, enforced: true }
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_NON_GRANT_PIPELINE) === false
+    const describe = (v) => `${v.title} [${(v.reasons || []).join(',')}]`
+    if (disabled) {
+      if (purgeable.length > 0 || frSourceFlagged > 0) {
+        log.warn('non-grant notices present in profile pipelines (purge DISABLED via ENFORCE_NON_GRANT_PIPELINE=0)', {
+          wouldRepair: purgeable.length,
+          frSourceFlagged,
+          scanned: rows.length,
+          examples: purgeable.slice(0, 3).map(describe),
+        })
+      }
+      return { scanned: rows.length, repaired: 0, wouldRepair: purgeable.length, frSourceFlagged, enforced: false }
+    }
+
+    let hasTasks = false
+    try { await db.prepare('SELECT id FROM application_tasks LIMIT 1').get(); hasTasks = true } catch { hasTasks = false }
+
+    let purged = 0
+    let flaggedProtected = 0
+    let tasksCancelled = 0
+    const affectedProfiles = new Set()
+    for (const g of purgeable) {
+      if (purged >= limit) break
+      const status = g.status === null || g.status === undefined ? null : String(g.status)
+      const isEarly = status === null || PURGEABLE_DISCOVERY_STATUSES.includes(status)
+      const protectedName = PROTECTED_NAME_PATTERN.test(`${g.title ?? ''} ${g.funder ?? ''}`)
+      const hasAward = hasAwarded && Number(g.amount_awarded) > 0
+
+      if (isEarly && !protectedName && !hasAward) {
+        if (hasTasks && cancelApplicationTask) {
+          let taskRows = []
+          try {
+            const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
+            taskRows = await db
+              .prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND grant_id = ? AND (status IS NULL OR status NOT IN (${ph}))`)
+              .all(g.profile_id, g.id, ...TERMINAL_TASK_STATUSES)
+          } catch { taskRows = [] }
+          for (const t of taskRows || []) {
+            try {
+              await cancelApplicationTask(db, t.id, { actorRole: 'system', reason: `Not a fundable opportunity — ${(g.reasons || []).join('; ')}` })
+              tasksCancelled += 1
+            } catch (err) {
+              log.warn('non_grant_notice_pipeline: task cancel failed (non-fatal)', { task: t.id, error: String(err?.message || err) })
+            }
+          }
+        }
+        if (recordDismissalFn) {
+          try { await recordDismissalFn(db, { profileId: g.profile_id, grantRow: g, reason: `non_grant_notice: ${(g.reasons || []).join('; ')}` }) } catch { /* tombstone best-effort */ }
+        }
+        try {
+          const res = await db.prepare('DELETE FROM grants WHERE id = ?').run(g.id)
+          purged += changesOf(res) || 1
+          affectedProfiles.add(g.profile_id)
+        } catch (err) {
+          log.warn('non_grant_notice_pipeline: grant delete failed (non-fatal)', { grant: g.id, error: String(err?.message || err) })
+        }
+      } else if (hasEligStatus) {
+        try {
+          await db.prepare('UPDATE grants SET eligibility_status = ? WHERE id = ?').run('ineligible', g.id)
+          flaggedProtected += 1
+          affectedProfiles.add(g.profile_id)
+        } catch { /* audit-only */ }
+      }
+    }
+
+    if (purged > 0 || flaggedProtected > 0 || frSourceFlagged > 0) {
+      log.info('converged non-grant notices out of profile pipelines', {
+        purged,
+        flaggedProtected,
+        frSourceFlagged,
+        tasksCancelled,
+        profilesAffected: affectedProfiles.size,
+        examples: purgeable.slice(0, 3).map(describe),
+      })
+    }
+    return {
+      scanned: rows.length,
+      repaired: purged + flaggedProtected,
+      purged,
+      flaggedProtected,
+      frSourceFlagged,
+      tasksCancelled,
+      profilesAffected: affectedProfiles.size,
       enforced: true,
     }
   })
@@ -8702,12 +8906,11 @@ export async function enforceCountyCrisisNeedRecall(db) {
  *
  * Delegates to the canonical sweep (`services/matching/catalogRescoreSweep.js`)
  * with the boot-scale budgets. ACCEPT-only, cursor-resumable, matcher_version
- * 'catalog-rescore-link'. WRITES DEFAULT OFF (`ENFORCE_CATALOG_RESCORE=1` to
- * enable) because a blind pass measurably floods: the engine ACCEPTs 13-20% of
- * never-scored rows today, including the regulatory-notice/institutional junk
- * the fix/qa-36-profile-junk classifier chain exists to screen. Until that
- * chain is consumed at the sweep's `passesFundabilityGate` choke point, every
- * boot reports the census (`would_link`) so the recall payoff stays measured.
+ * 'catalog-rescore-link'. WRITES DEFAULT ON (`ENFORCE_CATALOG_RESCORE=0` for
+ * count-only). The fundability junk gate (`passesFundabilityGate`) consumes
+ * `fundingResultFilters` so writes no longer wait on an unset opt-in. Every
+ * boot still reports the census (`would_link` / `linked`) so recall stays
+ * measured.
  */
 export async function enforceCatalogRescoreConvergence(db) {
   return runInvariant('catalog_rescore_convergence', async () => {
@@ -8732,6 +8935,346 @@ export async function enforceCatalogRescoreConvergence(db) {
       truncated: Boolean(res.truncated),
       enforced: Boolean(res.write_enabled),
       examples: res.examples ?? [],
+    }
+  })
+}
+
+/**
+ * INVARIANT: A FUNDER THE CATALOG HOLDS HAS ITS DEMONSTRATED GIVING READ
+ * (the funder-behavior graph, 2026-08-05).
+ *
+ * The `propublica_990` lane discovers grantmakers but stored NOTHING about
+ * what they fund — the row text is an NTEE letter and a city, so the engine
+ * scores foundations against silence while commercial products (Candid/FDO)
+ * match against the itemized grant lists funders FILE (990-PF Part XV,
+ * 990 Schedule I — public, keyless e-file data). This net ingests those
+ * lists into `grant_transactions`, bounded per boot, and enriches each
+ * funder row with an honest one-line giving summary (marker-idempotent) plus
+ * the canonical needs its stated purposes evidence.
+ *
+ * Chain (each link live-verified 2026-08-05): ProPublica org page → e-file
+ * object ids → GivingTuesday 990 data lake → raw IRS XML → parse. Burn/retry
+ * discipline is enforceAmountEnrichment's, funder-scoped — see
+ * services/funderIntel/funder990Ingest.js. ENFORCE_FUNDER_990_INGEST=0 for
+ * count-only.
+ */
+export async function enforceFunder990Ingest(db) {
+  return runInvariant('funder_990_ingest', async () => {
+    let runFunder990Ingest
+    try {
+      ;({ runFunder990Ingest } = await import('../services/funderIntel/funder990Ingest.js'))
+    } catch (err) {
+      log.warn('funder_990_ingest: service unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const res = await runFunder990Ingest(db)
+    if ((res.ingested ?? 0) > 0) {
+      log.info('ingested itemized 990 grants for catalog funders', {
+        ingested: res.ingested, transactions: res.transactions, enriched: res.enriched, examples: res.examples,
+      })
+    }
+    return {
+      scanned: res.scanned ?? 0,
+      repaired: res.ingested ?? 0,
+      transactions: res.transactions ?? 0,
+      enriched: res.enriched ?? 0,
+      burnedStable: res.burnedStable ?? 0,
+      environment: res.environment ?? 0,
+      transient: res.transient ?? 0,
+      truncated: Boolean(res.truncated),
+      ...(res.skipped ? { skipped: res.skipped } : {}),
+      ...(res.remaining !== undefined ? { remaining: res.remaining } : {}),
+      enforced: res.enforced !== false,
+    }
+  })
+}
+
+/**
+ * INVARIANT (RECALL net): A FUNDER WITH A DEMONSTRATED HISTORY OF FUNDING THE
+ * PROFILE'S DECLARED NEED, IN THE PROFILE'S STATE, REACHES THAT PROFILE.
+ *
+ * The key is DEMONSTRATED BEHAVIOR, not row text: a funder qualifies for a
+ * look only when its OWN filed grant list (`grant_transactions`) shows at
+ * least one grant to a recipient in the profile's state whose stated purpose
+ * evidences a need the profile DECLARES (structured declaration only — the
+ * `DECLARED_NEED_FIELDS` registry; prose is never read, the three-times-
+ * shipped denial class). Both conjuncts are the flood guards: bare in-state
+ * was measured at 5,393/6,210/218 links across three earlier recall attempts
+ * and rejected every time (#1090/#1091), and a purpose term is whole-word
+ * from a conservative registry (PURPOSE_NEED_TERMS), never one shared token.
+ *
+ * The gate authorizes a LOOK; `computeMatchDecision` still decides, and only
+ * the engine's ACCEPT or REVIEW is written (the student-aid-instate posture,
+ * NOT the county-crisis ACCEPT-only bar — deliberately, because a funder row
+ * structurally cannot reach ACCEPT: the 990 lane NEVER invents an apply_url
+ * (the funder is approached directly), and the engine downgrades an
+ * otherwise-ACCEPT row to REVIEW for exactly that missing URL. Measured on
+ * the real engine 2026-08-05: a TN housing nonprofit vs a funder with filed
+ * TN housing giving scores REVIEW 11, "Downgraded from ACCEPT — missing
+ * application URL". An ACCEPT-only bar here is a net that can never fire.
+ * Display is still governed by qualifiesForDisplay; a REJECT is never
+ * written). Rows land
+ * as matcher_version 'funder-behavior-link' (registered in
+ * SURFACED_MATCHER_VERSIONS; the crawler-os reconcile's DELETE deliberately
+ * does not name it, the web-llm survival reason). Candidate discovery is a
+ * SQL predicate (EXISTS over grant_transactions + a LIKE superset the JS
+ * whole-word rule re-adjudicates) — never a post-LIMIT filter. MISSING =
+ * NEUTRAL: no resolvable state or no structured declared need ⇒ the profile
+ * is examined for convergence but gains no key. Bounded by
+ * FUNDER_BEHAVIOR_LINK_LIMIT (500); ENFORCE_FUNDER_BEHAVIOR_RECALL=0 for
+ * count-only; convergence (need withdrawn / row deactivated / behavior no
+ * longer evidenced) is skipped on a truncated pass so a bound-limited boot
+ * never deletes what it never re-derived.
+ */
+export async function enforceFunderBehaviorRecall(db) {
+  return runInvariant('funder_behavior_recall', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id') || !matchCols.has('matcher_version')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    try {
+      await db.prepare('SELECT 1 FROM grant_transactions LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let declaredNeedsOf, needsEvidencedByPurpose, purposeLikePatternsForNeeds
+    let normalizeNeedCategory, NEED_ALIAS_MAP, deriveProfileFacts
+    try {
+      ;({ declaredNeedsOf, needsEvidencedByPurpose, purposeLikePatternsForNeeds } = await import('../config/funderBehavior.js'))
+      ;({ normalizeNeedCategory, NEED_ALIAS_MAP } = await import('../services/profileNormalizer.js'))
+      ;({ deriveProfileFacts } = await import('../config/profileDerivedFacts.js'))
+    } catch (err) {
+      log.warn('funder_behavior_recall: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+
+    const isPg = (db?.dialect || 'sqlite') === 'postgres'
+    const trueLit = isPg ? 'TRUE' : '1'
+    const nowFn = isPg ? 'now()' : 'CURRENT_TIMESTAMP'
+    const writeLimit = _boundedLimit('FUNDER_BEHAVIOR_LINK_LIMIT', 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_FUNDER_BEHAVIOR_RECALL) === false
+
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('funder_behavior_recall: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    let scanned = 0
+    let linked = 0
+    let rejectedByEngine = 0
+    let adjudicatedOut = 0
+    let unscorable = 0
+    let profilesEligible = 0
+    let truncated = false
+    const wouldLink = []
+    const examples = []
+    // profileId → { state, needs:Set } | null, for convergence against the
+    // profile's CURRENT facts (never against the candidate set — the
+    // idempotence-deletes-everything class).
+    const anchorByProfile = new Map()
+
+    for (const row of profileIds || []) {
+      if (linked + wouldLink.length >= writeLimit) { truncated = true; break }
+      const profileId = row.id
+      const ctx = await _loadProfileContextForInvariant(db, profileId)
+      if (!ctx) continue
+      let state = null
+      try {
+        const facts = deriveProfileFacts(ctx.profile, ctx.sections)
+        state = String(facts?.place?.state || '').toUpperCase() || null
+      } catch { state = null }
+      let needs
+      try {
+        needs = declaredNeedsOf(ctx.profile, ctx.sections, normalizeNeedCategory, NEED_ALIAS_MAP)
+      } catch { needs = new Set() }
+      const qualifies = Boolean(state) && needs.size > 0
+      anchorByProfile.set(profileId, qualifies ? { state, needs } : null)
+      if (!qualifies) continue
+      profilesEligible += 1
+
+      const likePatterns = purposeLikePatternsForNeeds([...needs])
+      if (!likePatterns.length) continue
+      const likeSql = likePatterns.map(() => "LOWER(COALESCE(t.purpose,'')) LIKE ?").join(' OR ')
+
+      let candidates
+      try {
+        candidates = await db
+          .prepare(
+            `SELECT fo.* FROM funding_opportunities fo
+              WHERE fo.source = 'propublica_990'
+                AND (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+                AND EXISTS (
+                  SELECT 1 FROM grant_transactions t
+                   WHERE t.funder_ein = fo.source_id
+                     AND UPPER(COALESCE(t.recipient_state,'')) = ?
+                     AND (${likeSql})
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM profile_opportunity_matches m
+                   WHERE m.profile_id = ? AND m.opportunity_id = fo.id
+                )
+              ORDER BY fo.created_at
+              LIMIT ?`,
+          )
+          .all(state, ...likePatterns, profileId, writeLimit)
+      } catch (err) {
+        log.warn('funder_behavior_recall: candidate query failed (non-fatal)', {
+          profile: profileId, error: String(err?.message || err),
+        })
+        continue
+      }
+
+      for (const opp of candidates || []) {
+        // Whole-word adjudication of the LIKE superset: at least one of this
+        // funder's in-state grants must EVIDENCE a declared need.
+        let txs
+        try {
+          txs = await db
+            .prepare(
+              `SELECT recipient_name, recipient_state, amount, purpose FROM grant_transactions
+                WHERE funder_ein = ? AND UPPER(COALESCE(recipient_state,'')) = ? LIMIT 25`,
+            )
+            .all(opp.source_id, state)
+        } catch { continue }
+        const evidence = (txs || []).filter((t) =>
+          needsEvidencedByPurpose(t.purpose).some((n) => needs.has(n)),
+        )
+        if (!evidence.length) { adjudicatedOut += 1; continue }
+        scanned += 1
+
+        let decision
+        try {
+          decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections })
+        } catch (err) {
+          unscorable += 1
+          log.warn('funder_behavior_recall: scoring failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+          continue
+        }
+        const verdict = String(decision?.decision ?? '').toUpperCase()
+        if (verdict !== 'ACCEPT' && verdict !== 'REVIEW') { rejectedByEngine += 1; continue }
+        const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
+        if (score === null) { unscorable += 1; continue }
+
+        if (countOnly) {
+          wouldLink.push({ profileId, opportunityId: opp.id })
+          if (examples.length < 3) examples.push(`${opp.sponsor ?? opp.title} (${state}, ${verdict} ${score})`)
+          continue
+        }
+        try {
+          const res = await db
+            .prepare(
+              `INSERT INTO profile_opportunity_matches
+                 (id, profile_id, opportunity_id, match_score, match_decision, match_explanation,
+                  match_reasons, match_explain_json, source_query, discovered_via, matcher_version,
+                  computed_at, updated_at, evaluated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'funder-behavior-link', ${nowFn}, ${nowFn}, ${nowFn})
+               ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+            )
+            .run(
+              `fb:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
+              decision?.explanation ?? null,
+              JSON.stringify(decision?.matchedNeeds ?? []),
+              JSON.stringify({
+                gate: 'funder_behavior',
+                state,
+                needs: [...needs].slice(0, 8),
+                // The evidence IS the claim: the funder's own filed grants.
+                evidence: evidence.slice(0, 3).map((t) => ({
+                  recipient: t.recipient_name,
+                  state: t.recipient_state,
+                  amount: t.amount,
+                  purpose: String(t.purpose ?? '').slice(0, 140),
+                })),
+              }),
+              null, 'funder_behavior',
+            )
+          const wrote = changesOf(res)
+          if (wrote > 0) {
+            linked += 1
+            if (examples.length < 3) examples.push(`${opp.sponsor ?? opp.title} (${state}, ${verdict} ${score})`)
+          }
+        } catch (err) {
+          log.warn('funder_behavior_recall: insert failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+        }
+      }
+    }
+
+    // CONVERGENCE: the profile withdrew the need / moved state, the row was
+    // deactivated, or the funder's stored behavior no longer evidences any
+    // currently-declared need. Skipped on a truncated pass.
+    let stale = 0
+    if (!countOnly && !truncated) {
+      for (const [profileId, anchor] of anchorByProfile) {
+        try {
+          const existing = await db
+            .prepare(
+              `SELECT m.id, fo.id AS opp_id, fo.source_id AS funder_ein, fo.is_active
+                 FROM profile_opportunity_matches m
+                 LEFT JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+                WHERE m.profile_id = ? AND m.matcher_version = 'funder-behavior-link'`,
+            )
+            .all(profileId)
+          const doomed = []
+          for (const r of existing || []) {
+            if (!anchor) { doomed.push(r.id); continue }
+            if (!r.opp_id) { doomed.push(r.id); continue }
+            if (!(r.is_active === null || r.is_active === undefined || r.is_active === 1 || r.is_active === true)) {
+              doomed.push(r.id)
+              continue
+            }
+            let txs
+            try {
+              txs = await db
+                .prepare(
+                  `SELECT purpose FROM grant_transactions
+                    WHERE funder_ein = ? AND UPPER(COALESCE(recipient_state,'')) = ? LIMIT 25`,
+                )
+                .all(r.funder_ein, anchor.state)
+            } catch { continue }
+            const stillEvidenced = (txs || []).some((t) =>
+              needsEvidencedByPurpose(t.purpose).some((n) => anchor.needs.has(n)),
+            )
+            if (!stillEvidenced) doomed.push(r.id)
+          }
+          for (let i = 0; i < doomed.length; i += 200) {
+            const slice = doomed.slice(i, i + 200)
+            const ph = slice.map(() => '?').join(', ')
+            const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+            stale += changesOf(res) || slice.length
+          }
+        } catch { /* convergence is best-effort; never fails the sweep */ }
+      }
+    }
+
+    if (countOnly) {
+      if (wouldLink.length > 0) {
+        log.warn('funders with demonstrated in-state need-matched giving are not reaching profiles (linking DISABLED via ENFORCE_FUNDER_BEHAVIOR_RECALL=0)', {
+          wouldLink: wouldLink.length, scanned, profilesEligible, examples,
+        })
+      }
+      return {
+        scanned, repaired: 0, wouldRepair: wouldLink.length, profilesEligible,
+        rejectedByEngine, adjudicatedOut, truncated, enforced: false,
+      }
+    }
+    if (linked > 0 || stale > 0) {
+      log.info('linked profiles to funders with demonstrated matching giving', {
+        linked, stale, scanned, profilesEligible, rejectedByEngine, adjudicatedOut, unscorable, examples,
+      })
+    }
+    return {
+      scanned, repaired: linked, stale, profilesEligible,
+      rejectedByEngine, adjudicatedOut, unscorable, truncated, enforced: true,
     }
   })
 }
@@ -8824,6 +9367,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // profile can act on. Sits with the scope purges so stored rows predating
   // the widened procedural registry converge the same boot it ships.
   steps.push(await enforceNonGrantNoticeMatches(db))
+  // …and the PIPELINE half of the same rule: the grants table is what the
+  // owner works, and every pre-gate writer (manual creates, imports, the
+  // admin-schema-repair migrations) left regulatory notices there as work
+  // items with live application tasks. Purges only on positive junk evidence;
+  // FR-source-alone rows are flagged for the owner-gated repair.
+  steps.push(await enforceNonGrantNoticePipeline(db))
   // The award ceiling an INDIVIDUAL's pipeline has enforced for months, applied
   // to the match store that actually feeds the owner-facing list.
   steps.push(await enforceIndividualMatchAwardCeiling(db))
@@ -8880,6 +9429,16 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // reaches the person it was written for. Sits with the other linkage gates so
   // the rows it adds are held to the scope/hygiene bars in the SAME boot.
   steps.push(await enforceCountyCrisisNeedRecall(db))
+  // FUNDER-BEHAVIOR ingest (the Candid-gap closer): read the itemized 990
+  // grant lists for funders the catalog already holds, bounded per boot, so
+  // the recall net right below — and every later sweep — scores foundations
+  // against DEMONSTRATED giving instead of an NTEE letter and silence.
+  steps.push(await enforceFunder990Ingest(db))
+  // RECALL net keyed on that demonstrated behavior: a funder whose own filed
+  // grants show in-state giving for a need the profile DECLARES is put in
+  // front of the canonical engine (ACCEPT only). Sits with the other linkage
+  // gates so its rows are held to the scope/hygiene bars the SAME boot.
+  steps.push(await enforceFunderBehaviorRecall(db))
   // RECALL net, the GENERAL case: the continuous catalog-wide re-matching
   // census/sweep (rolling-snapshot convergence). Sits with the other linkage
   // gates so anything it links (writes env-gated) is held to the stage/scope/
@@ -9088,6 +9647,7 @@ export const __testables = {
   enforceDeclaredPlaceScopeMatches,
   enforceForeignJurisdictionMatches,
   enforceNonGrantNoticeMatches,
+  enforceNonGrantNoticePipeline,
   enforceIndividualMatchAwardCeiling,
   enforceStudentAidEligibility,
   enforceProfileEligibility,

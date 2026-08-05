@@ -431,6 +431,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         portal_url,
         assigned_to,
         priority,
+        matcher_version,
         updated_at
       ) VALUES (
         @id,
@@ -453,6 +454,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         @portal_url,
         @assigned_to,
         @priority,
+        'baseline-seed',
         CURRENT_TIMESTAMP
       )
       ON CONFLICT(id) DO UPDATE SET
@@ -475,6 +477,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         portal_url = excluded.portal_url,
         assigned_to = excluded.assigned_to,
         priority = excluded.priority,
+        matcher_version = excluded.matcher_version,
         updated_at = CURRENT_TIMESTAMP
     `)
 

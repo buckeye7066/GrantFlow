@@ -148,6 +148,45 @@ router.post('/', async (req, res) => {
     if (!resolves) {
       return res.status(422).json({ ok: false, error: 'unresolvable_funding_source', detail: 'Neither opportunity_id nor grant_id resolves to an existing funding source.' })
     }
+    // Funding-source policy gate (2026-08-04) — the same rule the Hamilton
+    // orchestrator applies. This raw create was the ONE writer with no gate.
+    // A pointer research lead is refused with the owner handoff instructions
+    // so the caller can surface them instead of minting a task that can only
+    // die silently; a policy lookup ERROR stays fail-open (allow), matching
+    // the existence check's posture above.
+    try {
+      const { assessHamiltonFundingSource } = await import('../services/hamilton/hamiltonFundingSourcePolicy.js')
+      let opportunityRow = null
+      if (body.opportunity_id) {
+        try {
+          opportunityRow = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(body.opportunity_id))
+        } catch { opportunityRow = null }
+      }
+      let grantRow = null
+      if (body.grant_id) {
+        try {
+          grantRow = await req.db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(String(body.grant_id))
+        } catch { grantRow = null }
+      }
+      const assessment = await assessHamiltonFundingSource(req.db, {
+        profileId,
+        opportunity: opportunityRow,
+        grant: grantRow,
+      })
+      if (!assessment.ok && assessment.code === 'pointer_research_lead') {
+        return res.status(422).json({
+          ok: false,
+          error: 'pointer_research_lead',
+          handoff: assessment.handoff,
+          detail: assessment.message,
+        })
+      }
+      if (!assessment.ok && assessment.code === 'funding_source_profile_rejected') {
+        return res.status(422).json({ ok: false, error: assessment.code, detail: assessment.message })
+      }
+    } catch (policyErr) {
+      log.warn('task-create policy check unavailable (fail-open)', { error: policyErr?.message })
+    }
     const task = await ensureApplicationTask(req.db, {
       profileId,
       userId: getAuthUserId(user),

@@ -441,9 +441,18 @@ router.post('/run', ensureAuth, async (req, res) => {
     // crawl is abandoned by the REQUEST but keeps running + persists, and we
     // return whatever matches are already persisted (partial) instead of a 504.
     const startTime = Date.now()
+    const pipelineBudgetMs = remainingBudget(startTime, { reserve: CRAWL_FALLBACK_RESERVE_MS })
     const outcome = await withCrawlBudget(
-      () => runProfileDiscoveryLive({ db, profileId: String(profile_id), floor: min_match_score, crawlerType: crawler_type }),
-      remainingBudget(startTime, { reserve: CRAWL_FALLBACK_RESERVE_MS }),
+      () => runProfileDiscoveryLive({
+        db,
+        profileId: String(profile_id),
+        floor: min_match_score,
+        crawlerType: crawler_type,
+        // Cooperative stop between sources (tier order already topic→stage→default)
+        // so the HTTP race does not abandon mid-loop with no skip telemetry.
+        timeBudgetMs: pipelineBudgetMs,
+      }),
+      pipelineBudgetMs,
     )
     const timedOut = outcome === CRAWL_TIMEOUT
     const run = timedOut ? null : outcome?.run
