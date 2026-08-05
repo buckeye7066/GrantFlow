@@ -13,9 +13,21 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { isFiniteNumberLike, canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
 import { stampMatchConfidenceProvenance } from '../services/matching/matchConfidenceProvenance.js'
+
+describe('route projections — confidence always travels with provenance', () => {
+  it.each([
+    ['discovery', new URL('../routes/discovery.js', import.meta.url), 2],
+    ['matching', new URL('../routes/matching.js', import.meta.url), 1],
+  ])('%s projects provenance for every stored-confidence query', (_name, sourceUrl, expected) => {
+    const source = readFileSync(sourceUrl, 'utf8')
+    expect(source.match(/m\.match_explain_json AS os_match_explain_json/g) || []).toHaveLength(expected)
+    expect(source.match(/match_explain_json: o\.os_match_explain_json/g) || []).toHaveLength(expected)
+  })
+})
 
 describe('isFiniteNumberLike — absent is not zero', () => {
   it('rejects every value that Number() silently coerces to 0', () => {
