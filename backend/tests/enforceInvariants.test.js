@@ -1150,7 +1150,10 @@ describe('enforceInvariants — runner', () => {
     //   pre-gate writers left regulatory notices in pipelines as work items)
     // + the catalog-rescore convergence census/sweep (2026-08-03, the general
     //   re-scoring sweep for the rolling snapshot; writes env-gated OFF).
-    expect(summary.ran).toBe(55)
+    // + the non-grant-notice PIPELINE net (#1148 merge, 2026-08-05)
+    // + the funder-behavior pair (2026-08-05): the bounded 990 itemized-grant
+    //   ingest and the demonstrated-giving RECALL net it feeds.
+    expect(summary.ran).toBe(57)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1214,6 +1217,13 @@ describe('enforceInvariants — runner', () => {
       // The same class for the OTHER half of the fleet: a household in crisis
       // and the local help its own county already holds in the catalog.
       'county_crisis_need_recall',
+      // FUNDER-BEHAVIOR ingest (2026-08-05): bounded read of the itemized 990
+      // grant lists for funders the catalog already holds, so the recall net
+      // right below scores foundations against DEMONSTRATED giving.
+      'funder_990_ingest',
+      // …and the recall net that key feeds: in-state, need-evidenced filed
+      // giving puts the funder in front of the canonical engine.
+      'funder_behavior_recall',
       // The GENERAL recall case: continuous catalog-wide re-matching, count-only
       // until the fundability chain lands (ENFORCE_CATALOG_RESCORE=1 to write).
       'catalog_rescore_convergence',
