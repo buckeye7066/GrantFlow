@@ -104,7 +104,7 @@ describe('funding-sources profile access gate', () => {
   })
 })
 
-describe('funding-sources read-only audit mode', () => {
+describe('funding-sources read-only audit labeling', () => {
   it('is enabled only for a resolved admin plus the explicit audit header', () => {
     expect(isFundingSourcesReadOnlyAudit(makeReq({
       isAdmin: true,
@@ -122,10 +122,12 @@ describe('funding-sources read-only audit mode', () => {
     }))).toBe(false)
   })
 
-  it('pins both write-capable reconciliation calls behind the read-only guard', () => {
+  it('pins every GET path as mutation-free presentation', () => {
     const source = fs.readFileSync('backend/routes/fundingSources.js', 'utf8')
-    expect(source).toContain('if (!readOnlyAudit) await ensurePipelineDismissalsSchema(req.db)')
-    expect(source).toMatch(/if \(!readOnlyAudit\) \{[\s\S]*reconcileNeedFirstProfileMatches/)
+    expect(source).not.toContain('ensurePipelineDismissalsSchema')
+    expect(source).not.toContain('reconcileNeedFirstProfileMatches')
+    expect(source).toContain('read_only: true')
+    expect(source).toContain('deferred_to_background: true')
     expect(source).toContain('read_only_audit: readOnlyAudit')
   })
 })
