@@ -84,6 +84,7 @@ function createDb() {
       profile_id TEXT NOT NULL,
       opportunity_id TEXT NOT NULL,
       match_score REAL,
+      match_confidence REAL,
       match_decision TEXT,
       match_explanation TEXT,
       match_reasons TEXT DEFAULT '[]',
