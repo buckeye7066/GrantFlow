@@ -54,6 +54,35 @@ function isMissingSnapshotTable(error) {
   )
 }
 
+function isMissingOpportunityKindColumn(error) {
+  return /(?:no such column|column)[^\n]*opportunity_kind/i.test(
+    String(error?.message ?? error ?? ''),
+  )
+}
+
+async function readSnapshotRows(db, profileId, sqlCandidates, {
+  errorCode,
+  errorLabel,
+  missingOpportunityKindIsEmpty = false,
+}) {
+  let lastError = null
+  for (const sql of sqlCandidates) {
+    try {
+      return await db.prepare(sql).all(profileId)
+    } catch (error) {
+      if (isMissingSnapshotTable(error)) return []
+      if (missingOpportunityKindIsEmpty && isMissingOpportunityKindColumn(error)) return []
+      lastError = error
+    }
+  }
+
+  const wrapped = new Error(
+    `${errorLabel}; refusing a destructive match refresh: ${lastError?.message || lastError}`,
+  )
+  wrapped.code = errorCode
+  throw wrapped
+}
+
 async function snapshotResourceMatches(db, profileIds) {
   if (!db || profileIds.length === 0) return []
 
@@ -73,7 +102,32 @@ async function snapshotResourceMatches(db, profileIds) {
   `
   // RESOURCE_KINDS_SQL is a frozen code constant, not user input. Profile ids
   // remain bound parameters. audit:allow dynamic-sql
-  const coreSql = `
+  const confidenceCoreSql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_confidence, m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version,
+           m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities o ON o.id = m.opportunity_id
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND ${SNAPSHOT_DECISION_SQL}
+       AND UPPER(COALESCE(o.opportunity_kind, '')) IN ${RESOURCE_KINDS_SQL}
+  `
+  const legacyFullSql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version, m.source_query,
+           m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities o ON o.id = m.opportunity_id
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND ${SNAPSHOT_DECISION_SQL}
+       AND UPPER(COALESCE(o.opportunity_kind, '')) IN ${RESOURCE_KINDS_SQL}
+  `
+  // Final legacy projection for schemas that predate match_confidence itself.
+  const legacyCoreSql = `
     SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
            m.match_decision, m.match_explanation, m.match_reasons,
            m.match_explain_json, m.matcher_version,
@@ -88,27 +142,18 @@ async function snapshotResourceMatches(db, profileIds) {
 
   const snapshots = []
   for (const profileId of profileIds) {
-    try {
-      snapshots.push(...(await db.prepare(fullSql).all(profileId)))
-    } catch (error) {
-      // A completely fresh database has nothing to preserve. The core adapter
-      // creates the match table before writing the first run, so missing-table
-      // is the one snapshot failure that is safely equivalent to an empty set.
-      if (isMissingSnapshotTable(error)) continue
-
-      // Older/minimal schemas can predate crawler-doctor provenance columns. The
-      // resource contract still applies, so retry with the canonical match fields.
-      try {
-        snapshots.push(...(await db.prepare(coreSql).all(profileId)))
-      } catch (fallbackError) {
-        if (isMissingSnapshotTable(fallbackError)) continue
-        const wrapped = new Error(
-          `Resource reconciliation snapshot failed; refusing a destructive match refresh: ${fallbackError?.message || error?.message || fallbackError}`,
-        )
-        wrapped.code = 'RESOURCE_RECONCILIATION_SNAPSHOT_FAILED'
-        throw wrapped
-      }
-    }
+    snapshots.push(...(await readSnapshotRows(
+      db,
+      profileId,
+      [fullSql, confidenceCoreSql, legacyFullSql, legacyCoreSql],
+      {
+        errorCode: 'RESOURCE_RECONCILIATION_SNAPSHOT_FAILED',
+        errorLabel: 'Resource reconciliation snapshot failed',
+        // A schema with no opportunity_kind cannot identify resource rows.
+        // Durable ACCEPTs still use their kind-free fallbacks below.
+        missingOpportunityKindIsEmpty: true,
+      },
+    )))
   }
   return snapshots
 }
@@ -134,36 +179,64 @@ async function snapshotDurableAccepts(db, profileIds) {
        AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
        AND UPPER(COALESCE(o.opportunity_kind, '')) NOT IN ${POINTER_KINDS_SQL}
   `
+  const kindFreeFullSql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_confidence, m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version, m.source_query,
+           m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+  `
+  const kindFreeConfidenceCoreSql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_confidence, m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version,
+           m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+  `
+  const kindFreeLegacyFullSql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version, m.source_query,
+           m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+  `
+  const kindFreeLegacySql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version,
+           m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+  `
 
   const snapshots = []
   for (const profileId of profileIds) {
-    try {
-      snapshots.push(...(await db.prepare(sql).all(profileId)))
-    } catch (error) {
-      if (isMissingSnapshotTable(error)) continue
-      // Older schemas without opportunity_kind: keep ACCEPT durability by
-      // snapshotting all ACCEPTs (resource restore is a separate path).
-      try {
-        const fallback = `
-          SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
-                 m.match_decision, m.match_explanation, m.match_reasons,
-                 m.match_explain_json, m.matcher_version, m.source_query,
-                 m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
-            FROM profile_opportunity_matches m
-           WHERE m.profile_id = ?
-             AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
-             AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
-        `
-        snapshots.push(...(await db.prepare(fallback).all(profileId)))
-      } catch (fallbackError) {
-        if (isMissingSnapshotTable(fallbackError)) continue
-        const wrapped = new Error(
-          `Accept durability snapshot failed; refusing a destructive match refresh: ${fallbackError?.message || error?.message || fallbackError}`,
-        )
-        wrapped.code = 'ACCEPT_DURABILITY_SNAPSHOT_FAILED'
-        throw wrapped
-      }
-    }
+    snapshots.push(...(await readSnapshotRows(
+      db,
+      profileId,
+      [
+        sql,
+        kindFreeFullSql,
+        kindFreeConfidenceCoreSql,
+        kindFreeLegacyFullSql,
+        kindFreeLegacySql,
+      ],
+      {
+        errorCode: 'ACCEPT_DURABILITY_SNAPSHOT_FAILED',
+        errorLabel: 'Accept durability snapshot failed',
+      },
+    )))
   }
   return snapshots
 }
