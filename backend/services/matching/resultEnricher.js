@@ -12,6 +12,7 @@ import {
   hasAuthoritativeStoredDecision,
   SUPPRESSIBLE_NO_FIT_RULE_IDS,
 } from './profileSpecificGate.js'
+import { trustedPersistedMatchConfidence } from './matchConfidenceProvenance.js'
 
 /**
  * True only for a value that is genuinely a finite number (or the string form of
@@ -177,7 +178,7 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
         decision: opportunity.match_decision ?? 'REVIEW',
         score: Number(opportunity.match_score ?? 0),
         explanation: opportunity.match_explanation ?? null,
-        confidence: isFiniteNumberLike(opportunity.match_confidence) ? Number(opportunity.match_confidence) : null,
+        confidence: trustedPersistedMatchConfidence(opportunity),
         matched_profile_facts: Array.isArray(opportunity.match_reasons) ? opportunity.match_reasons : [],
         matchedNeeds: Array.isArray(opportunity.matched_needs) ? opportunity.matched_needs : [],
         ineligibilityReasons: Array.isArray(opportunity.ineligibility_reasons) ? opportunity.ineligibility_reasons : [],
@@ -234,15 +235,15 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     decision: decision?.decision ?? 'REVIEW',
     match_explanation: decision?.explanation ?? null,
     match_decision_explanation: decision?.explanation ?? null,
-    // UNKNOWN CONFIDENCE MUST STAY UNKNOWN. `Number(null)` is 0 and
-    // `Number.isFinite(0)` is true, so the old guard converted "we have no
-    // confidence for this pair" into a hard, published `0` — which the card
-    // renders as "· 0% conf" (FundingResultCard.jsx: a null renders NO chip at
-    // all). The 2026-08-01 production audit found every stored row NULL, so the
-    // bug printed "0% conf" on every card. New crawler-os rows now persist a
-    // measured value, while historical and non-measuring lanes may still be
-    // NULL. Reject null/''/NaN BEFORE coercing.
-    match_confidence: isFiniteNumberLike(decision?.confidence) ? Number(decision.confidence) : null,
+    // Stored confidence is publishable only while its persistence-time policy,
+    // score, and decision still equal the final displayed row. Live recomputes
+    // remain measured in the same call and do not need persisted provenance.
+    match_confidence: hasStoredDecision
+      ? trustedPersistedMatchConfidence(opportunity, {
+          matchScore: score,
+          matchDecision: decision?.decision,
+        })
+      : (isFiniteNumberLike(decision?.confidence) ? Number(decision.confidence) : null),
     matched_needs: Array.isArray(decision?.matchedNeeds)
       ? decision.matchedNeeds
       : [],
