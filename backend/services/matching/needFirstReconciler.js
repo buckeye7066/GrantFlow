@@ -113,9 +113,14 @@ export async function reconcileNeedFirstProfileMatches(db, {
       const newDecision = String(adjusted.decision || 'REVIEW').toUpperCase()
       const newScore = Math.round(Number(adjusted.score) || 0)
 
+      // Confidence was measured against the crawler's original score/decision.
+      // Once this policy replaces that contract, retaining the old percentage
+      // would pair one measurement with a different outcome. Null is the honest
+      // value until a fresh canonical match run measures confidence again.
       const result = await db.prepare(
         `UPDATE profile_opportunity_matches
             SET match_score = ?,
+                match_confidence = NULL,
                 match_decision = ?,
                 match_explanation = ?,
                 match_reasons = ?,
