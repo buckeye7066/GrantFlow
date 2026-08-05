@@ -78,6 +78,14 @@ jobs:
       - name: Commit verified main sync
         run: |
           git rm .github/workflows/agent-funding-truth-sync.yml
+          # Main #1148 introduced a second trailing blank line in .gitignore.
+          # Normalize to exactly one newline so the repository whitespace gate
+          # validates the merge instead of rejecting inherited noise.
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.gitignore')
+          p.write_text(p.read_text().rstrip('\n') + '\n')
+          PY
           git add -A
           git diff --cached --check
           git commit -m "Merge main into funding truth pipeline"
