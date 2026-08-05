@@ -27,6 +27,12 @@ jobs:
       - name: Apply deterministic funding-truth patches
         run: node scripts/agent/apply-funding-truth-pipeline.mjs
 
+      - name: Restore temporary driver for tracked-file scanners
+        run: |
+          git checkout -- \
+            scripts/agent/apply-funding-truth-pipeline.mjs \
+            .github/workflows/agent-funding-truth-apply.yml
+
       - name: Install locked dependencies
         run: npm ci --include=optional
 
@@ -51,6 +57,9 @@ jobs:
         run: |
           git config user.name "GrantFlow Truth Pipeline"
           git config user.email "actions@users.noreply.github.com"
+          rm -f \
+            scripts/agent/apply-funding-truth-pipeline.mjs \
+            .github/workflows/agent-funding-truth-apply.yml
           git add -A
           git diff --cached --check
           if git diff --cached --quiet; then
