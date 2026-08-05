@@ -258,4 +258,101 @@ describe('Crawler OS resource-preserving reconciliation', () => {
       db.close()
     }
   })
+
+  it('ACCEPT DURABILITY: an omitted awardable ACCEPT survives a later crawl that does not re-find it', async () => {
+    // Google-bar failure mode: HOPE ACCEPT 100 vanishes when the next
+    // registry-only crawl omits it. FAILING-FIRST on pre-fix facade.
+    const db = makeDb()
+    try {
+      seedOpportunity(db, 'hope-accept', 'DIRECT_GRANT')
+      seedMatch(db, {
+        opportunityId: 'hope-accept',
+        score: 100,
+        decision: 'accept',
+        matcherVersion: 'crawler-os',
+      })
+      seedOpportunity(db, 'stale-review', 'DIRECT_GRANT')
+      seedMatch(db, {
+        opportunityId: 'stale-review',
+        score: 17,
+        decision: 'review',
+        matcherVersion: 'crawler-os',
+      })
+      seedOpportunity(db, 'fresh-accept', 'DIRECT_GRANT')
+
+      const result = await persistRun(
+        db,
+        memStore([{
+          profile_id: PROFILE_ID,
+          opportunity_id: 'fresh-accept',
+          match_score: 91,
+          decision: 'accept',
+          match_explain_json: '{}',
+        }]),
+        {},
+        { primaryProfileId: PROFILE_ID },
+      )
+
+      expect(result.acceptsPreserved).toBeGreaterThanOrEqual(1)
+      const ids = currentMatches(db).map((r) => r.opportunity_id)
+      expect(ids).toContain('hope-accept')
+      expect(ids).toContain('fresh-accept')
+      expect(ids).not.toContain('stale-review')
+      const hope = currentMatches(db).find((r) => r.opportunity_id === 'hope-accept')
+      expect(hope.match_decision).toBe('accept')
+      expect(hope.match_score).toBe(100)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('ACCEPT DURABILITY: an explicit REJECT in the current run clears a prior ACCEPT', async () => {
+    const db = makeDb()
+    try {
+      seedOpportunity(db, 'was-accept', 'DIRECT_GRANT')
+      seedMatch(db, {
+        opportunityId: 'was-accept',
+        score: 83,
+        decision: 'accept',
+        matcherVersion: 'crawler-os',
+      })
+
+      await persistRun(
+        db,
+        memStore([{
+          profile_id: PROFILE_ID,
+          opportunity_id: 'was-accept',
+          match_score: 0,
+          decision: 'reject',
+          match_explain_json: '{}',
+        }]),
+        {},
+        { primaryProfileId: PROFILE_ID },
+      )
+
+      expect(currentMatches(db).map((r) => r.opportunity_id)).not.toContain('was-accept')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('ACCEPT DURABILITY: pointer ACCEPTs ride the resource path, not double-write noise', async () => {
+    // Directories never ACCEPT under the locator rule in live traffic, but if
+    // a legacy row exists, resource restore already covers it — awardable
+    // durability must not require a pointer kind.
+    const db = makeDb()
+    try {
+      seedOpportunity(db, 'dir-legacy', 'DIRECTORY')
+      seedMatch(db, {
+        opportunityId: 'dir-legacy',
+        score: 40,
+        decision: 'review',
+        matcherVersion: 'crawler-os',
+      })
+      await persistRun(db, memStore([]), {}, { primaryProfileId: PROFILE_ID })
+      expect(currentMatches(db).map((r) => r.opportunity_id)).toContain('dir-legacy')
+    } finally {
+      db.close()
+    }
+  })
 })

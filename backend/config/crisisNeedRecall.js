@@ -248,6 +248,8 @@ export const DECLARED_NEED_FIELDS = Object.freeze([
   Object.freeze({ id: 'section.primary_needs', array: true, key: 'primary_needs' }),
   Object.freeze({ id: 'section.support_needs', array: true, key: 'support_needs' }),
   Object.freeze({ id: 'section.funding_needs', array: true, key: 'funding_needs' }),
+  // Structured category tags (distinct from funding_needs dollar-range text).
+  Object.freeze({ id: 'section.assistance_needs', array: true, key: 'assistance_needs' }),
   Object.freeze({ id: 'section_key_is_a_need', sectionKey: true }),
 ])
 

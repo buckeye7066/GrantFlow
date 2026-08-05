@@ -20,23 +20,17 @@
  * canonical engine stays the SOLE authority, and this module only decides
  * WHICH pairs get put in front of it, bounded per run, resumable via a cursor.
  *
- * ── WHY WRITES ARE OFF BY DEFAULT (the flood, measured the same day) ────────
- * A blind engine-adjudication of a 2,500-row deterministic sample of each
- * golden profile's never-scored rows (read-only, prod, 2026-08-03T16:51Z)
- * ACCEPTed 13.3–20.2% — ~1,400–2,200 new matches per profile — and the ACCEPT
- * sample includes exactly the junk classes the fix/qa-36-profile-junk branch
- * is building classifiers for: "U.S. Embassy Luanda Small Grants" ACCEPT 11
- * for a TN individual, NIH P30 center announcements, federal-register notices.
- * Real recall is in there too ("Adams Family Foundation Scholarship" ACCEPT
- * 76, "Nursing Scholarship Program" ACCEPT 81) — but shipping the flood to
- * reach it is the exact anti-pattern the owner rejected (#886).
+ * ── WHY WRITES DEFAULT ON (after the junk chain landed) ─────────────────────
+ * A blind engine-adjudication of a 2,500-row sample once ACCEPTed 13.3–20.2%
+ * including junk (embassy notices, federal-register). That is why writes
+ * shipped OFF. The shared fundability choke point now consumes
+ * `fundingResultFilters.isFundableOpportunity` + proposal-eligible kinds
+ * (`passesFundabilityGate`) — the fix/qa-36-profile-junk chain. With that
+ * gate live, leaving writes OFF forever is the write-only-queue anti-pattern:
+ * the census reports `wouldLink` every boot while profiles stay empty.
  *
- * So: `ENFORCE_CATALOG_RESCORE` DEFAULTS OFF (count-only census). Flip it to
- * `1` ONLY after the shared junk/fundability chain from fix/qa-36-profile-junk
- * lands and is consumed at `passesFundabilityGate` below — that hook is the
- * single named choke point where their `is_fundable_opportunity()` chain
- * belongs. Until then every boot reports `wouldLink` so the recall payoff and
- * the junk ratio stay measured, never guessed.
+ * Default ON. `ENFORCE_CATALOG_RESCORE=0` (or false/off/no) for count-only —
+ * the same convention as the older sweeps.
  *
  * ── RULES HONORED ───────────────────────────────────────────────────────────
  * - ACCEPT-ONLY writes (REVIEW is the locator band; a REJECT is never stored).
@@ -75,13 +69,13 @@ function envInt(raw, fallback) {
 }
 
 /**
- * Writes are enabled ONLY by an explicit `ENFORCE_CATALOG_RESCORE=1` (or
- * true/yes/on). Unset/anything else = count-only. This is deliberately the
- * INVERSE of the "=0 for count-only" convention the older sweeps use, because
- * this sweep's flood risk is measured, not hypothetical (see header).
+ * Writes DEFAULT ON once the fundability gate is wired. Opt out with
+ * `ENFORCE_CATALOG_RESCORE=0` (or false/off/no) for a count-only census.
  */
 export function isCatalogRescoreWriteEnabled(env = process.env) {
-  return /^(1|true|yes|on)$/i.test(String(env.ENFORCE_CATALOG_RESCORE ?? '').trim())
+  const raw = String(env.ENFORCE_CATALOG_RESCORE ?? '1').trim()
+  if (raw === '') return true
+  return !/^(0|false|no|off)$/i.test(raw)
 }
 
 /**
@@ -348,7 +342,7 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
 
   summary.elapsed_ms = Date.now() - startedAt
   if (!writeEnabled && summary.would_link > 0) {
-    log.info('catalog rescore census: engine ACCEPTs are waiting (writes DISABLED until the junk chain lands — ENFORCE_CATALOG_RESCORE=1 to enable)', {
+    log.info('catalog rescore census: writes DISABLED (ENFORCE_CATALOG_RESCORE=0) — engine ACCEPTs waiting', {
       would_link: summary.would_link, adjudicated: summary.adjudicated, examples: summary.examples,
     })
   }
