@@ -14,6 +14,8 @@
 
 import { describe, it, expect } from 'vitest'
 import { isFiniteNumberLike, canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
+import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
+import { stampMatchConfidenceProvenance } from '../services/matching/matchConfidenceProvenance.js'
 
 describe('isFiniteNumberLike — absent is not zero', () => {
   it('rejects every value that Number() silently coerces to 0', () => {
@@ -49,6 +51,15 @@ describe('canonicalizeOpportunityList — an unmeasured confidence stays null', 
     match_reasons: ['housing', 'health_medical'],
   }
 
+  function measuredRow(confidence, overrides = {}) {
+    const row = { ...baseRow, match_confidence: confidence, ...overrides }
+    const explain = stampMatchConfidenceProvenance(
+      { scoring_policy_version: 'need_first_v2' },
+      row,
+    )
+    return { ...row, match_explain_json: JSON.stringify(explain) }
+  }
+
   it('publishes NULL — not 0 — when the stored row has no confidence (the live prod shape)', () => {
     const out = canonicalizeOpportunityList(profileContext, [{ ...baseRow, match_confidence: null }], {
       preserveDirectories: true,
@@ -69,14 +80,51 @@ describe('canonicalizeOpportunityList — an unmeasured confidence stays null', 
     expect(out.kept[0].match_confidence).toBeNull()
   })
 
-  it('a REAL stored confidence still round-trips, including a real 0', () => {
+  it('does not publish a numeric confidence without persistence provenance', () => {
+    const out = canonicalizeOpportunityList(profileContext, [{ ...baseRow, match_confidence: 55 }], {
+      preserveDirectories: true,
+      rejectHardIneligible: true,
+      useStoredDecision: true,
+    })
+    expect(out.kept[0].match_confidence).toBeNull()
+  })
+
+  it('an exactly bound confidence round-trips, including a genuine 0', () => {
     for (const stored of [0, 55, 95]) {
-      const out = canonicalizeOpportunityList(profileContext, [{ ...baseRow, match_confidence: stored }], {
+      const out = canonicalizeOpportunityList(profileContext, [measuredRow(stored)], {
         preserveDirectories: true,
         rejectHardIneligible: true,
         useStoredDecision: true,
       })
       expect(out.kept[0].match_confidence, String(stored)).toBe(stored)
     }
+  })
+
+  it('suppresses confidence after score, decision, or policy provenance drifts', () => {
+    const measured = measuredRow(55)
+    const explain = JSON.parse(measured.match_explain_json)
+    const cases = [
+      { ...measured, match_score: 14 },
+      { ...measured, match_decision: 'accept' },
+      { ...measured, match_explain_json: JSON.stringify({ ...explain, scoring_policy_version: 'need_first_v3' }) },
+    ]
+    for (const row of cases) {
+      const out = canonicalizeOpportunityList(profileContext, [row], {
+        preserveDirectories: true,
+        rejectHardIneligible: true,
+        useStoredDecision: true,
+      })
+      expect(out.kept[0].match_confidence).toBeNull()
+    }
+  })
+
+  it('revalidates provenance after persisted-truth read-time adjustments', () => {
+    const measured = measuredRow(55)
+    const valid = restorePersistedMatchTruth([measured], [measured])
+    expect(valid[0].match_confidence).toBe(55)
+
+    const mutated = { ...measured, match_score: 14 }
+    const invalid = restorePersistedMatchTruth([mutated], [mutated])
+    expect(invalid[0].match_confidence).toBeNull()
   })
 })
