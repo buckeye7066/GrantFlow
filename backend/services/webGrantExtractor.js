@@ -5,7 +5,8 @@
 // pages GrantFlow fetches, never what facts those pages contain. Every
 // load-bearing fact comes from the fetched page, every application/info URL is
 // selected from that page's actual link inventory, and unsupported facts are
-// neutralized before the canonical matcher sees the candidate.
+// neutralized before the canonical matcher sees the candidate. Search-query
+// provenance is attached later by webLane as non-scoring diagnostic metadata.
 //
 // Strictly best-effort: any failure (no LLM key, malformed JSON, thin/junk page,
 // timeout, or unsupported evidence) yields []. No caller-supplied thesis/query is
