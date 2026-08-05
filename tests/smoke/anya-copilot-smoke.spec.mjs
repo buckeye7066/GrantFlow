@@ -6,7 +6,7 @@
 import { test, expect } from 'playwright/test'
 import { basePath, baseURL } from './playwright.config.mjs'
 
-const appBase = String(basePath || '').replace(/\/$/, '') || '/grantflow'
+const appBase = String(basePath || '').replace(/\/+$/, '')
 
 test('app root loads (no blank screen)', async ({ page }) => {
   await page.goto(baseURL + appBase, { waitUntil: 'networkidle' })

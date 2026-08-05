@@ -220,6 +220,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         geography: row.is_national ? 'National' : (row.state || null),
         categories: jparse(row.categories, []),
         match_score: row.match_score,
+        match_confidence: row.match_confidence ?? null,
         match_decision: row.match_decision,
         why: row.match_explanation,
         opportunity_kind: kind || null,

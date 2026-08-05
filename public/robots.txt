@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /welcome
+Allow: /privacy
+Allow: /assets/
+Disallow: /
+
+Sitemap: https://app.axiombiolabs.org/sitemap-grantflow.xml

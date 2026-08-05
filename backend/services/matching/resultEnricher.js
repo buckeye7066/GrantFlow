@@ -238,10 +238,10 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     // `Number.isFinite(0)` is true, so the old guard converted "we have no
     // confidence for this pair" into a hard, published `0` — which the card
     // renders as "· 0% conf" (FundingResultCard.jsx: a null renders NO chip at
-    // all). Every stored match row in prod carries match_confidence NULL, so
-    // this printed "0% conf" on 100% of cards: a number that looks measured and
-    // says the engine is certain the match is worthless. Reject null/''/NaN
-    // BEFORE coercing.
+    // all). The 2026-08-01 production audit found every stored row NULL, so the
+    // bug printed "0% conf" on every card. New crawler-os rows now persist a
+    // measured value, while historical and non-measuring lanes may still be
+    // NULL. Reject null/''/NaN BEFORE coercing.
     match_confidence: isFiniteNumberLike(decision?.confidence) ? Number(decision.confidence) : null,
     matched_needs: Array.isArray(decision?.matchedNeeds)
       ? decision.matchedNeeds

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "engines": {
-    "node": ">=20 <25"
+    "node": "20.x"
   },
   "overrides": {
     "fast-xml-parser": "$fast-xml-parser",

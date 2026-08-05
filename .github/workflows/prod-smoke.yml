@@ -8,9 +8,9 @@ on:
         required: true
         default: "https://app.axiombiolabs.org"
       base_path:
-        description: "App base path (e.g. /grantflow)"
+        description: "App base path (production is served at /)"
         required: true
-        default: "/grantflow"
+        default: "/"
 
 jobs:
   smoke:
@@ -34,4 +34,3 @@ jobs:
           SMOKE_BASE_URL: ${{ inputs.base_url }}
           SMOKE_BASE_PATH: ${{ inputs.base_path }}
         run: node scripts/smoke-prod-readonly.mjs
-

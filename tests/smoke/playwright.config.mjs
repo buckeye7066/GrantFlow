@@ -2,7 +2,7 @@ import { defineConfig } from 'playwright/test'
 import path from 'node:path'
 
 const baseURL = process.env.SMOKE_BASE_URL || process.env.API_BASE_URL || 'http://127.0.0.1:8080'
-const basePath = process.env.SMOKE_BASE_PATH || process.env.VITE_APP_BASE || '/grantflow'
+const basePath = process.env.SMOKE_BASE_PATH || process.env.VITE_APP_BASE || '/'
 
 export default defineConfig({
   testDir: path.resolve(process.cwd(), 'tests', 'smoke'),

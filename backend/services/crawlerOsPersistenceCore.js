@@ -569,7 +569,7 @@ async function ensureOsTables(db) {
        PRIMARY KEY (opportunity_id, source_id))`,
     `CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
        id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
-       match_score REAL, match_decision TEXT, match_explanation TEXT, match_reasons TEXT,
+       match_score REAL, match_confidence REAL, match_decision TEXT, match_explanation TEXT, match_reasons TEXT,
        match_explain_json TEXT, matcher_version TEXT, computed_at ${ts}, updated_at ${ts}, evaluated_at ${ts})`,
   ];
   for (const sql of stmts) { try { await db.prepare(sql).run(); } catch { /* exists */ } }
@@ -581,6 +581,7 @@ async function ensureOsTables(db) {
     ['funding_opportunities', 'amount_status', 'TEXT'],
     ['funding_opportunities', 'amount_confidence', 'REAL'],
     ['profile_opportunity_matches', 'match_explanation', 'TEXT'],
+    ['profile_opportunity_matches', 'match_confidence', 'REAL'],
     ['profile_opportunity_matches', 'match_reasons', 'TEXT'],
     ['profile_opportunity_matches', 'match_explain_json', 'TEXT'],
     ['profile_opportunity_matches', 'matcher_version', 'TEXT'],
@@ -690,6 +691,7 @@ export async function persistRun(db, memStore, run, opts = {}) {
         id: `${m.profile_id}:${oppId}`, // deterministic PK (table PK is id)
         profile_id: m.profile_id, opportunity_id: oppId,
         match_score: m.match_score,
+        match_confidence: m.match_confidence ?? null,
         match_decision: m.decision ?? null,
         match_explanation: explain.why ?? null,
         match_reasons: JSON.stringify(explain.matched_needs ?? []),
@@ -726,12 +728,12 @@ export async function persistRun(db, memStore, run, opts = {}) {
       try {
         await db.prepare(
           `INSERT INTO profile_opportunity_matches
-             (id, profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, match_explain_json, source_query, discovered_via, matcher_version, computed_at, updated_at, evaluated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'crawler-os-xmatch', ${nowFn}, ${nowFn}, ${nowFn})
+             (id, profile_id, opportunity_id, match_score, match_confidence, match_decision, match_explanation, match_reasons, match_explain_json, source_query, discovered_via, matcher_version, computed_at, updated_at, evaluated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'crawler-os-xmatch', ${nowFn}, ${nowFn}, ${nowFn})
            ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
         ).run(
           `xm:${m.profile_id}:${oppId}`, m.profile_id, oppId,
-          m.match_score, m.decision ?? null, explain.why ?? null,
+          m.match_score, m.match_confidence ?? null, m.decision ?? null, explain.why ?? null,
           JSON.stringify(explain.matched_needs ?? []), m.match_explain_json ?? '{}',
           m.source_query ?? null, m.discovered_via ?? null,
         );

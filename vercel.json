@@ -4,6 +4,10 @@
   "buildCommand": "npm run release:gates",
   "outputDirectory": "dist",
   "trailingSlash": false,
+  "redirects": [
+    { "source": "/grantflow/welcome", "destination": "/welcome", "permanent": true },
+    { "source": "/grantflow/privacy", "destination": "/privacy", "permanent": true }
+  ],
   "rewrites": [
     {
       "source": "/grantflow/api/:path*",

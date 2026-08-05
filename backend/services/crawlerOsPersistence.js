@@ -61,7 +61,7 @@ async function snapshotResourceMatches(db, profileIds) {
   // remain bound parameters. audit:allow dynamic-sql
   const fullSql = `
     SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
-           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_confidence, m.match_decision, m.match_explanation, m.match_reasons,
            m.match_explain_json, m.matcher_version, m.source_query,
            m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
       FROM profile_opportunity_matches m
@@ -124,7 +124,7 @@ async function snapshotDurableAccepts(db, profileIds) {
   // POINTER_KINDS_SQL is a frozen registry constant. audit:allow dynamic-sql
   const sql = `
     SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
-           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_confidence, m.match_decision, m.match_explanation, m.match_reasons,
            m.match_explain_json, m.matcher_version, m.source_query,
            m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
       FROM profile_opportunity_matches m
@@ -187,18 +187,18 @@ async function restoreResourceMatches(db, snapshots, explicitRejects) {
 
   const insertFull = db.prepare(`
     INSERT INTO profile_opportunity_matches (
-      id, profile_id, opportunity_id, match_score, match_decision,
+      id, profile_id, opportunity_id, match_score, match_confidence, match_decision,
       match_explanation, match_reasons, match_explain_json, matcher_version,
       source_query, discovered_via, computed_at, updated_at, evaluated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (profile_id, opportunity_id) DO NOTHING
   `)
   const insertCore = db.prepare(`
     INSERT INTO profile_opportunity_matches (
-      id, profile_id, opportunity_id, match_score, match_decision,
+      id, profile_id, opportunity_id, match_score, match_confidence, match_decision,
       match_explanation, match_reasons, match_explain_json, matcher_version,
       computed_at, updated_at, evaluated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (profile_id, opportunity_id) DO NOTHING
   `)
 
@@ -214,6 +214,7 @@ async function restoreResourceMatches(db, snapshots, explicitRejects) {
           row.profile_id,
           row.opportunity_id,
           row.match_score,
+          row.match_confidence ?? null,
           row.match_decision,
           row.match_explanation,
           row.match_reasons,
@@ -230,6 +231,7 @@ async function restoreResourceMatches(db, snapshots, explicitRejects) {
           row.profile_id,
           row.opportunity_id,
           row.match_score,
+          row.match_confidence ?? null,
           row.match_decision,
           row.match_explanation,
           row.match_reasons,

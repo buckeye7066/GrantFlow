@@ -1,9 +1,10 @@
 /**
  * "0% conf" on every card was not a measurement — it was `Number(null)`.
  *
- * Prod 2026-08-01: `profile_opportunity_matches.match_confidence` is NULL on
- * 4,397 of 4,397 rows across all 39 profiles (the crawler-os persist path never
- * writes the column). resultEnricher then published that unknown as a hard 0,
+ * The 2026-08-01 production audit found `match_confidence` NULL on every stored
+ * row because the crawler-os persist path did not write the column. Historical
+ * rows and non-canonical producers can still be NULL, so resultEnricher must
+ * never publish unknown as a hard 0,
  * because `Number(null)` is 0 and `Number.isFinite(0)` is true — so
  * FundingResultCard rendered "· 0% conf" on 100% of cards. A null renders NO
  * confidence chip at all, which is the honest presentation of "not measured".

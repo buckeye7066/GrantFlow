@@ -43,6 +43,7 @@ function createCanonicalDb({ withDismissals = true } = {}) {
       profile_id TEXT NOT NULL,
       opportunity_id TEXT NOT NULL,
       match_score REAL,
+      match_confidence REAL,
       match_decision TEXT,
       match_explanation TEXT,
       match_reasons TEXT,
@@ -88,15 +89,15 @@ function createCanonicalDb({ withDismissals = true } = {}) {
 
     INSERT INTO profile_opportunity_matches (
       id, profile_id, opportunity_id, match_score, match_decision,
-      match_explanation, match_reasons, match_explain_json, matcher_version,
+      match_confidence, match_explanation, match_reasons, match_explain_json, matcher_version,
       updated_at, evaluated_at
     ) VALUES
-      ('m-1', 'p-1', 'opp-1', 82, 'accept', 'Persisted direct match',
+      ('m-1', 'p-1', 'opp-1', 82, 'accept', 89, 'Persisted direct match',
        '["medical need"]', '{"scoring_policy_version":"need-first-v2"}',
        'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-      ('m-2', 'p-1', 'opp-2', 61, 'accept', 'Persisted resource match',
+      ('m-2', 'p-1', 'opp-2', 61, 'accept', 72, 'Persisted resource match',
        '["resource"]', '{}', 'crawler-os-xmatch', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-      ('m-3', 'p-1', 'opp-dismissed', 90, 'accept', 'Dismissed',
+      ('m-3', 'p-1', 'opp-dismissed', 90, 'accept', NULL, 'Dismissed',
        '[]', '{}', 'web-llm', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
     ${withDismissals ? `
       INSERT INTO pipeline_dismissals (id, profile_id, opportunity_id, title)
@@ -127,6 +128,7 @@ describe('canonical funding-source query projection', () => {
       funding_type: 'grant',
       ineligibility_reasons: null,
       match_score: 82,
+      match_confidence: 89,
       match_decision: 'accept',
       matcher_version: 'crawler-os',
     })
@@ -145,6 +147,7 @@ describe('canonical funding-source query projection', () => {
     expect(rows).toHaveLength(3)
     expect(rows[0]).toHaveProperty('summary')
     expect(rows[0]).toHaveProperty('eligibility')
+    expect(rows[0]).toHaveProperty('match_confidence')
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.summary\b/)
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.eligibility\b/)
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.eligibility_criteria\b/)

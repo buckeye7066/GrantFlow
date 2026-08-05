@@ -44,3 +44,14 @@ test('app deep route loads under basePath (refresh safe)', async ({ page }) => {
   const scriptResp = await page.request.get(scriptUrl)
   expect(scriptResp.ok()).toBeTruthy()
 })
+
+test('public acquisition route renders without authentication', async ({ page, baseURL }) => {
+  // Production is mounted at the host root. This exact browser journey catches
+  // the regression where /grantflow/welcome fell into the authenticated catch-
+  // all and redirected to /login while /welcome remained the real public route.
+  const response = await page.goto(`${baseURL}/welcome`, { waitUntil: 'networkidle' })
+  expect(response && response.ok()).toBeTruthy()
+  await expect(page).toHaveURL(/\/welcome(?:[?#].*)?$/)
+  await expect(page.getByRole('heading', { level: 1, name: /find funding that fits the whole profile/i })).toBeVisible()
+  await expect(page.getByText(/sign in to grantflow/i)).toHaveCount(0)
+})

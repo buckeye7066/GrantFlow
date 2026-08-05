@@ -59,7 +59,7 @@ export function applySchema(db) {
   db.exec(SCHEMA_DDL);
   // Heal pre-existing DBs that predate additive columns (CREATE IF NOT EXISTS
   // above never alters an existing table). Tolerant: errors mean "exists".
-  for (const col of ['source_query TEXT', 'discovered_via TEXT']) {
+  for (const col of ['match_confidence REAL', 'source_query TEXT', 'discovered_via TEXT']) {
     // audit:allow dynamic-sql — col comes from the hardcoded list above
     try { db.exec(`ALTER TABLE profile_opportunity_matches ADD COLUMN ${col}`); } catch { /* exists */ }
   }
