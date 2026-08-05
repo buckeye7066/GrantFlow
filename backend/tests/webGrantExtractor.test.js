@@ -121,11 +121,11 @@ describe('extractOpportunitiesFromPage', () => {
     expect(out.info_url).toBe('https://nyf.org/grant')
   })
 
-  it('classifies an index page as a directory rather than direct funding', async () => {
+  it('classifies an index page as a directory and strips a selected child apply link', async () => {
     const indexHtml = `<body><main>
       <h1>Community Scholarship Directory</h1>
       <p>Community Scholarship Directory lists many scholarship opportunities. Browse scholarships and view all scholarships below.</p>
-      ${Array.from({ length: 12 }, (_, i) => `<a href="/award-${i}">Scholarship ${i}</a>`).join('')}
+      ${Array.from({ length: 12 }, (_, i) => `<a href="/award-${i}">Apply for Scholarship ${i}</a>`).join('')}
     </main></body>`
     const invoke = vi.fn().mockResolvedValue({
       ok: true,
@@ -143,7 +143,9 @@ describe('extractOpportunitiesFromPage', () => {
         states: [],
         is_loan: null,
         requires_cost_share: null,
-        apply_link_id: null,
+        // A directory may contain child apply links. Selecting one must not make
+        // that child link the application URL of the directory record itself.
+        apply_link_id: 'L1',
         info_link_id: null,
         evidence: {},
       }] },
@@ -155,6 +157,8 @@ describe('extractOpportunitiesFromPage', () => {
     expect(out.kind).toBe(OPPORTUNITY_KIND.DIRECTORY)
     expect(out.is_directory).toBe(true)
     expect(out.apply_url).toBeNull()
+    expect(out.info_url).toBe('https://directory.org/scholarships')
+    expect(out.raw.directory_child_apply_url).toBe('https://directory.org/award-0')
   })
 
   it('returns [] for a too-short page without an LLM call', async () => {
