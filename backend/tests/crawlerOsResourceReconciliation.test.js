@@ -242,6 +242,72 @@ describe('Crawler OS resource-preserving reconciliation', () => {
     }
   })
 
+  it('keeps pointer filtering while falling back around missing crawler provenance columns', async () => {
+    const db = makeDb()
+    try {
+      db.exec(`
+        ALTER TABLE profile_opportunity_matches DROP COLUMN source_query;
+        ALTER TABLE profile_opportunity_matches DROP COLUMN discovered_via;
+      `)
+      seedOpportunity(db, 'filtered-pointer-accept', 'DIRECTORY')
+      seedMatch(db, {
+        opportunityId: 'filtered-pointer-accept',
+        score: 52,
+        confidence: 71,
+        decision: 'accept',
+      })
+      seedOpportunity(db, 'durable-direct-accept', 'DIRECT_GRANT')
+      seedMatch(db, {
+        opportunityId: 'durable-direct-accept',
+        score: 87,
+        confidence: 90,
+        decision: 'accept',
+      })
+
+      const preparedSql = []
+      const tracedDb = {
+        dialect: db.dialect,
+        prepare(sql) {
+          preparedSql.push(String(sql))
+          return db.prepare(sql)
+        },
+      }
+
+      const result = await persistRun(
+        tracedDb,
+        memStore([]),
+        {},
+        { primaryProfileId: PROFILE_ID },
+      )
+
+      const durableFallbackIndex = preparedSql.findIndex((sql) => (
+        sql.includes('m.match_confidence') &&
+        !sql.includes('m.source_query') &&
+        sql.includes('NOT IN')
+      ))
+      const firstKindFreeIndex = preparedSql.findIndex((sql) => (
+        sql.includes("LOWER(COALESCE(m.match_decision, '')) = 'accept'") &&
+        !sql.includes('JOIN funding_opportunities')
+      ))
+
+      expect(durableFallbackIndex).toBeGreaterThanOrEqual(0)
+      expect(firstKindFreeIndex).toBe(-1)
+      expect(result.acceptsPreserved).toBe(1)
+      expect(currentMatches(db)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          opportunity_id: 'filtered-pointer-accept',
+          match_confidence: 71,
+        }),
+        expect.objectContaining({
+          opportunity_id: 'durable-direct-accept',
+          match_confidence: 90,
+        }),
+      ]))
+    } finally {
+      db.close()
+    }
+  })
+
   it('CROSS-MATCH PRECISION: a cross-profile row is stored only on ACCEPT (the Robert White class)', async () => {
     // Prod 2026-08-03: 4,577 of 4,792 xmatch rows were REVIEW — another
     // state's housing finance agency, disease directories on profiles with no
