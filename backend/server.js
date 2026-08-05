@@ -86,6 +86,7 @@ import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
 import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { spaEntryDocument } from './utils/spaEntryDocument.js';
 import { reportErrorToOwner } from './services/errorReporter.js';
 import { profileContextMiddleware } from './middleware/profileContext.js';
 import { attachRequestContext, isSyntheticServiceAdmin } from './middleware/requestContext.js';
@@ -2927,26 +2928,12 @@ const spaFallbackLimiter = rateLimit({
 // Serve React app for all non-API routes (SPA fallback).
 // Express 5 / path-to-regexp v8: '*' is no longer a valid path — the named
 // wildcard '/{*splat}' is the v5 equivalent (braces so it matches '/' too).
-function spaEntryDocument(requestPath) {
-  const normalizedBase = APP_BASE_PATH && APP_BASE_PATH !== '/'
-    ? `/${String(APP_BASE_PATH).replace(/^\/+|\/+$/g, '')}`
-    : '/'
-  let routePath = String(requestPath || '/').replace(/\/+$/, '') || '/'
-  if (normalizedBase !== '/' && (routePath === normalizedBase || routePath.startsWith(`${normalizedBase}/`))) {
-    routePath = routePath.slice(normalizedBase.length) || '/'
-  }
-
-  if (routePath.toLowerCase() === '/welcome') return 'welcome.html'
-  if (routePath.toLowerCase() === '/privacy') return 'privacy.html'
-  return 'index.html'
-}
-
 app.get('/{*splat}', spaFallbackLimiter, (req, res, next) => {
   // Skip API routes - let them fall through to 404 handler
   if (req.path.startsWith('/api/')) {
     return next();
   }
-  const entryDocument = spaEntryDocument(req.path)
+  const entryDocument = spaEntryDocument(req.path, APP_BASE_PATH)
   if (entryDocument === 'index.html') {
     // Defense in depth for protected/authenticated SPA routes. The document's
     // own robots meta is authoritative even when this header is stripped by a

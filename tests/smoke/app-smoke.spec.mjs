@@ -80,3 +80,20 @@ test('privacy route has its own crawlable HTTP and browser document head', async
   await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://app.axiombiolabs.org/privacy')
   await expect(page.getByRole('heading', { level: 1, name: /grantflow — privacy policy/i })).toBeVisible()
 })
+
+test('SPA navigation swaps public metadata and clears it on protected routes', async ({ page, baseURL }) => {
+  await page.goto(`${baseURL}/welcome`, { waitUntil: 'networkidle' })
+
+  await page.getByRole('link', { name: 'Privacy' }).click()
+  await expect(page).toHaveURL(/\/privacy(?:[?#].*)?$/)
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://app.axiombiolabs.org/privacy')
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://app.axiombiolabs.org/privacy')
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'index,follow,max-image-preview:large')
+
+  await page.goto(`${baseURL}/welcome`, { waitUntil: 'networkidle' })
+  await page.getByRole('link', { name: /set up your profile/i }).first().click()
+  await expect(page).toHaveURL(/\/start(?:[?#].*)?$/)
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex,nofollow,noarchive')
+  await expect(page.locator('link[rel="canonical"]')).toHaveCount(0)
+  await expect(page.locator('meta[property="og:url"]')).toHaveCount(0)
+})

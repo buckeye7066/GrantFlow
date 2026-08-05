@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { joinAppPath, normalizeBasePath } from '../../scripts/smoke-prod-readonly.mjs'
+import { spaEntryDocument } from '../../backend/utils/spaEntryDocument.js'
 
 const read = (path) => fs.readFileSync(path, 'utf8')
 
@@ -53,6 +54,16 @@ test('legacy prefixed public URLs redirect to canonical root routes', () => {
     destination: '/privacy',
     permanent: true,
   })
+})
+
+test('standalone SPA fallback serves public documents for root and prefixed mounts', () => {
+  assert.equal(spaEntryDocument('/welcome', '/'), 'welcome.html')
+  assert.equal(spaEntryDocument('/privacy', '/'), 'privacy.html')
+  assert.equal(spaEntryDocument('/grantflow/welcome', '/'), 'welcome.html')
+  assert.equal(spaEntryDocument('/grantflow/privacy', '/'), 'privacy.html')
+  assert.equal(spaEntryDocument('/grantflow/welcome', '/grantflow'), 'welcome.html')
+  assert.equal(spaEntryDocument('/grantflow/privacy', '/grantflow/'), 'privacy.html')
+  assert.equal(spaEntryDocument('/grantflow/Dashboard', '/'), 'index.html')
 })
 
 test('production smoke builds root-mounted URLs without changing the hostname', () => {

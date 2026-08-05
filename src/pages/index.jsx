@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 import RouteErrorBoundary from '@/components/shared/RouteErrorBoundary'
 import { RequirePaidAccess } from '@/components/auth/RequirePaidAccess'
 import AdminPricingToastListener from '@/components/admin/AdminPricingToastListener'
+import RouteDocumentMetadata from '@/components/shared/RouteDocumentMetadata.jsx'
 import { hasFullAdminWorkspace } from '@/lib/workspaceAccess'
 import Layout from './Layout.jsx'
 
@@ -238,17 +239,22 @@ function LayoutRoutes() {
 
 export default function Pages() {
   return (
-    <Routes>
-      <Route path="/privacy" element={withBoundary(<PrivacyPolicy />, 'PrivacyPolicy')} />
-      <Route path="/Privacy" element={withBoundary(<PrivacyPolicy />, 'PrivacyPolicy')} />
-      <Route path="/welcome" element={withBoundary(<Landing />, 'Landing')} />
-      <Route path="/start" element={withBoundary(<Start />, 'Start')} />
-      <Route path="/login" element={withBoundary(<Login />, 'Login')} />
-      <Route path="/HamiltonLiveLogin" element={withBoundary(<HamiltonLiveLogin />, 'HamiltonLiveLogin')} />
-      <Route path="/set-password" element={withBoundary(<SetPassword />, 'SetPassword')} />
-      <Route path="/ServiceApplication" element={withBoundary(<ServiceApplication />, 'ServiceApplication')} />
-      <Route path="/auth/callback" element={withBoundary(<AuthCallback />, 'AuthCallback')} />
-      <Route path="/*" element={withBoundary(<LayoutRoutes />, 'Layout')} />
-    </Routes>
+    <>
+      <RouteDocumentMetadata />
+      <Routes>
+        <Route path="/grantflow/welcome" element={<Navigate to="/welcome" replace />} />
+        <Route path="/grantflow/privacy" element={<Navigate to="/privacy" replace />} />
+        <Route path="/privacy" element={withBoundary(<PrivacyPolicy />, 'PrivacyPolicy')} />
+        <Route path="/Privacy" element={withBoundary(<PrivacyPolicy />, 'PrivacyPolicy')} />
+        <Route path="/welcome" element={withBoundary(<Landing />, 'Landing')} />
+        <Route path="/start" element={withBoundary(<Start />, 'Start')} />
+        <Route path="/login" element={withBoundary(<Login />, 'Login')} />
+        <Route path="/HamiltonLiveLogin" element={withBoundary(<HamiltonLiveLogin />, 'HamiltonLiveLogin')} />
+        <Route path="/set-password" element={withBoundary(<SetPassword />, 'SetPassword')} />
+        <Route path="/ServiceApplication" element={withBoundary(<ServiceApplication />, 'ServiceApplication')} />
+        <Route path="/auth/callback" element={withBoundary(<AuthCallback />, 'AuthCallback')} />
+        <Route path="/*" element={withBoundary(<LayoutRoutes />, 'Layout')} />
+      </Routes>
+    </>
   )
 }
