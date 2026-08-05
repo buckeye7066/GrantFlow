@@ -456,11 +456,12 @@ describe('nonGrantCandidateSqlPredicate — title superset OR Federal Register p
         'https://www.federalregister.gov/documents/2026/07/02/2026-13458/x', null)
       insert.run('g-clean', 'HOPE Scholarship', 'https://www.tn.gov/collegepays', null)
 
-      const { clause, params } = nonGrantCandidateSqlPredicate({
+      const { clause: safeClause, params } = nonGrantCandidateSqlPredicate({
         hayExpr: "lower(coalesce(title,''))",
         urlExprs: ["lower(coalesce(application_url,''))", "lower(coalesce(url,''))"],
       })
-      const hits = db.prepare(`SELECT id FROM grants WHERE ${clause} ORDER BY id`).all(...params).map((r) => r.id)
+      // safeClause is a compile-time registry fragment (no user input)
+      const hits = db.prepare(`SELECT id FROM grants WHERE ${safeClause} ORDER BY id`).all(...params).map((r) => r.id)
       // The FAILURE MODE this superset exists for: the benign-title FR row is
       // unreachable by the title patterns alone — only the url leg finds it.
       const titleOnly = nonGrantTitleSqlPredicateHits(db)
@@ -470,8 +471,8 @@ describe('nonGrantCandidateSqlPredicate — title superset OR Federal Register p
   })
 
   function nonGrantTitleSqlPredicateHits(db) {
-    const { clause, params } = nonGrantCandidateSqlPredicate({ hayExpr: "lower(coalesce(title,''))" })
-    return db.prepare(`SELECT id FROM grants WHERE ${clause} ORDER BY id`).all(...params).map((r) => r.id)
+    const { clause: safeClause, params } = nonGrantCandidateSqlPredicate({ hayExpr: "lower(coalesce(title,''))" })
+    return db.prepare(`SELECT id FROM grants WHERE ${safeClause} ORDER BY id`).all(...params).map((r) => r.id)
   }
 
   it('classifyFundingResult buckets the two real prod pipeline rows as not_a_grant', () => {

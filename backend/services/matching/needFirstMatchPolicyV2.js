@@ -149,11 +149,25 @@ function normalizeText(value) {
     .trim()
 }
 
+// Must be declared before normalizeTextPreservingFragmentSeparator / signalText
+// (eslint no-use-before-define). Pipe is not a word character — see joinTextFragments.
+export const TEXT_FRAGMENT_SEPARATOR = ' | '
+
+function normalizeTextPreservingFragmentSeparator(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9|]+/g, ' ')
+    .replace(/\s*\|\s*/g, TEXT_FRAGMENT_SEPARATOR)
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function signalText(value, depth = 0) {
   if (depth > 4 || value === null || value === undefined || value === false) return ''
   if (value === true) return 'true'
   if (typeof value === 'string' || typeof value === 'number') return String(value)
-  if (Array.isArray(value)) return value.map((entry) => signalText(entry, depth + 1)).filter(Boolean).join(' ')
+  if (Array.isArray(value)) return value.map((entry) => signalText(entry, depth + 1)).filter(Boolean).join(TEXT_FRAGMENT_SEPARATOR)
   if (typeof value === 'object') {
     const source = value.answers && typeof value.answers === 'object' ? value.answers : value
     const parts = []
@@ -164,7 +178,7 @@ function signalText(value, depth = 0) {
         if (text) parts.push(text)
       }
     }
-    return parts.join(' ')
+    return parts.join(TEXT_FRAGMENT_SEPARATOR)
   }
   return ''
 }
@@ -177,7 +191,7 @@ function signalText(value, depth = 0) {
  * that gates on a MULTI-WORD phrase (`family caregiver`, `respite care`,
  * `child care`, `foster youth`, `international students only`, the PROFESSION
  * and death-survivor patterns) is `.test()`ed against ONE string built by
- * `[...scalars, ...categories, ...keywords].join(' ')`. A space join makes the
+ * joining independent fragments — a bare-space join makes the
  * boundary between two INDEPENDENT list members indistinguishable from the
  * space inside a real phrase, so any two adjacent tokens silently fabricate a
  * phrase no source ever wrote.
@@ -195,7 +209,7 @@ function signalText(value, depth = 0) {
  * reporting `failed:false, found:13` minutes earlier; all 13 candidates score
  * REJECT with "Caregiver-only program requires a caregiver signal", and every
  * one of them is a Tennessee Medicaid-waiver page for the exact profiles that
- * lost it. Bisected: ACCEPT at 23dc30d3^, REJECT at 23dc30d3 (#1034).
+ * the lane exists to serve.
  *
  * A `|` cannot appear inside any pattern here and is not a `\w` character, so
  * `\b` anchors either side of a real phrase still behave exactly as before —
@@ -210,8 +224,6 @@ function signalText(value, depth = 0) {
  * per-fragment normalization and its own evidence, so it is deliberately left
  * alone rather than changed blind.
  */
-export const TEXT_FRAGMENT_SEPARATOR = ' | '
-
 function joinTextFragments(parts) {
   return parts
     .map((part) => String(part ?? '').trim())

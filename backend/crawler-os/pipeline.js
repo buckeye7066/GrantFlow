@@ -36,13 +36,17 @@ import {
  * stored opportunity against one or more profile theses.
  *
  * @param {{ store:object, fetcher:{fetch:Function}, env?:object, clock?:Function }} deps
- * @param {{ profile?:object, thesis?:object, matchProfiles?:object[], runId?:string, floor?:number, onlySourceIds?:string[] }} [opts]
+ * @param {{ profile?:object, thesis?:object, matchProfiles?:object[], runId?:string, floor?:number, onlySourceIds?:string[], deadlineMs?:number|null }} [opts]
  *   `onlySourceIds`, when given a non-empty array, narrows the planner's selection
  *   down to that intersection — used by the admin "re-crawl this one stale
  *   source" action (CrawlCoverage dashboard) so a targeted trigger never fans
  *   out into a full multi-source crawl. Sources dropped by the narrowing are
  *   re-recorded as excluded (reason `not_requested_in_single_source_run`) so
  *   the run's telemetry stays honest about what actually ran.
+ *   `deadlineMs` — wall-clock deadline (Date.now()-compatible). When set, sources
+ *   not yet started after the deadline are SKIPPED as `time_budget_exhausted`.
+ *   The planner already sorts topic → stage → default, so truncation keeps the
+ *   highest-signal lanes. Unset = run every selected source (nightly/boot).
  * @returns {Promise<object>} run summary incl. recommendations + zero_result ladder
  */
 export async function runDiscovery(deps, opts = {}) {
@@ -125,6 +129,16 @@ export async function runDiscovery(deps, opts = {}) {
   }
 
   for (const sourceId of thePlan.selected_source_ids) {
+    // Cooperative time budget: planner order is already topic → stage → default,
+    // so skipping the remainder under pressure keeps the highest-signal lanes.
+    // An in-flight source is never aborted mid-fetch — only sources not yet
+    // started are skipped (honest SKIPPED, not a silent drop).
+    if (Number.isFinite(opts.deadlineMs) && clock() >= opts.deadlineMs) {
+      const srStartedAt = new Date(clock()).toISOString();
+      const sr = { source_id: sourceId, fetched: 0, parsed_candidates: 0, rejected: 0, stored: 0, existing: 0, deduped: 0, queries: [], started_at: srStartedAt };
+      finishSource(store, runId, sr, CRAWLER_OUTCOME.SKIPPED, 'time_budget_exhausted', clock, sourceSummaries);
+      continue;
+    }
     const source = getSource(sourceId);
     if (!source) continue;
     upsertSource(store, source); // keep the funding_sources catalog current

@@ -263,6 +263,72 @@ describe('resolveOpportunityAmounts — structured wins, extraction fills', () =
       amount_text: null, amount_status: 'not_listed', amount_confidence: null,
     })
   })
+
+  // THE STRUCTURED-ZERO ARTIFACT (Amy amount_recall_miss:high_school_student,
+  // prod rows read 2026-08-04). Two live NM Opportunity Scholarship rows carry
+  // `amount_min: 0` (one also `amount_max: 0`) beside descriptions that state a
+  // REAL per-award semantic ("covers 100% of tuition and course-specific
+  // fees"). `typeof 0 === 'number'` took the structured branch, demoted the
+  // zero to "$0 (program funding level)" text, and the tuition-coverage
+  // phrasing was NEVER consulted — the row stayed an unanswerable miss.
+  describe('a structured ZERO is an absence, not an amount', () => {
+    it('PROD ROW (reachhighernm.com): amount_min 0 / amount_max 0 + tuition coverage text → varies, never $0', () => {
+      const r = resolveOpportunityAmounts({
+        source: 'web_search',
+        amount_min: 0,
+        amount_max: 0,
+        title: 'New Mexico Opportunity Scholarship',
+        description:
+          'The Opportunity Scholarship covers 100% of tuition and course-specific fees at New Mexico public colleges and universities for eligible students.',
+      })
+      expect(r.amount_min).toBe(null)
+      expect(r.amount_max).toBe(null)
+      expect(r.amount_status).toBe('varies')
+      expect(r.amount_text).toMatch(/covers 100% of tuition/i)
+    })
+
+    it('PROD ROW (gallup.unm.edu): amount_min 0 alone must not block extraction', () => {
+      const r = resolveOpportunityAmounts({
+        source: 'web_search',
+        amount_min: 0,
+        amount_max: null,
+        title: 'New Mexico Opportunity Scholarship',
+        description:
+          'The Opportunity Scholarship covers tuition and required fees for eligible New Mexico residents pursuing career training certificates, associate degrees, and bachelor’s degrees at New Mexico public colleges and universities.',
+      })
+      expect(r.amount_status).toBe('varies')
+      expect(r.amount_min).toBe(null)
+    })
+
+    it('does NOT over-reach: a zero floor beside a REAL ceiling keeps the structured ceiling', () => {
+      // {0, 5000} means "no floor stated, ceiling $5,000" — the zero is
+      // dropped, the real number stays structured, and extraction never runs.
+      const r = resolveOpportunityAmounts({
+        amount_min: 0,
+        amount_max: 5000,
+        description: 'up to $50,000', // must still NOT override structured
+      })
+      expect(r.amount_min).toBe(null)
+      expect(r.amount_max).toBe(5000)
+      expect(r.amount_status).toBe('range')
+      expect(r.extracted).toBe(false)
+    })
+
+    it('does NOT invent a figure when the zero-amount row has no per-award text (stays not_listed)', () => {
+      // The negative case: a zero artifact on a row whose text states nothing
+      // must stay honest silence — never a number, never a fabricated status.
+      const r = resolveOpportunityAmounts({
+        source: 'web_search',
+        amount_min: 0,
+        title: 'Opportunity Scholarship',
+        description:
+          'The Opportunity Scholarship is available to New Mexico residents to help pay for college, with eligibility based on established need and academic performance.',
+      })
+      expect(r.amount_min).toBe(null)
+      expect(r.amount_max).toBe(null)
+      expect(r.amount_status).toBe('not_listed')
+    })
+  })
 })
 
 describe('resolveOpportunityAmounts — untrusted-source plausibility guard (the HUD Section 4 class)', () => {

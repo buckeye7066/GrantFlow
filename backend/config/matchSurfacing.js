@@ -107,6 +107,17 @@ export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   //                         above. Writes are env-gated OFF until the
   //                         fix/qa-36-profile-junk fundability chain lands.
   'catalog-rescore-link',
+  //   - funder-behavior-link : a `propublica_990` funder row whose OWN filed
+  //                         grant list (IRS 990-PF Part XV / 990 Schedule I,
+  //                         ingested into `grant_transactions`) demonstrates
+  //                         in-state giving for a need the profile DECLARES,
+  //                         scored by the canonical engine (ACCEPT/REVIEW —
+  //                         a funder row structurally lacks an apply_url, so
+  //                         an ACCEPT is systematically downgraded to REVIEW;
+  //                         enforceFunderBehaviorRecall). Persisted
+  //                         under its own version for the SAME rolling-
+  //                         snapshot reason as the seven above.
+  'funder-behavior-link',
 ])
 
 /**

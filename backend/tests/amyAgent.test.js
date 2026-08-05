@@ -213,6 +213,31 @@ describe('amount_recall_miss counts only amounts that were KNOWABLE', () => {
     ])
     expect(fired(ev)).toBe(true)
   })
+
+  it('the finding NAMES the measurable candidates under the canonical `subjects` key (never a count)', () => {
+    // PROD DEFECT (amy_approval_queue, run amy-2026-08-03T09-20): the code
+    // brief for amount_recall_miss:high_school_student read
+    // "Concrete subject(s): 8." — the registry's evidence_key pointed at
+    // `grant_shaped`, a NUMBER, so collectEvidenceSubjects turned the count
+    // into the only "subject" and no candidate was ever named. Same canonical
+    // key defect as the institution_recall_miss `missed_subjects` incident:
+    // the brief's consumer reads `evidence.subjects` and nothing else.
+    const ev = run([
+      rec(0, { title: 'New Mexico Lottery Scholarship', amount_status: 'not_listed' }),
+      rec(1, { title: 'TheDream.US Scholarship', amount_status: 'not_listed' }),
+      rec(2, { title: 'UAlbany Alumni Association Scholarships', amount_status: 'not_listed' }),
+      rec(3, { title: 'Legislative Lottery Scholarship', amount_status: 'not_listed' }),
+      rec(4, { title: 'Opportunity Scholarship', amount_status: 'not_listed' }),
+      // An unknowable row must NOT be named — it is not a miss.
+      rec(5, { title: 'NM Opportunity Scholarship (tuition varies)', amount_status: 'varies' }),
+    ])
+    const finding = ev.findings.find((f) => f.type === 'amount_recall_miss')
+    expect(finding).toBeTruthy()
+    expect(finding.evidence.subjects).toContain('New Mexico Lottery Scholarship')
+    expect(finding.evidence.subjects).toContain('UAlbany Alumni Association Scholarships')
+    expect(finding.evidence.subjects).not.toContain('NM Opportunity Scholarship (tuition varies)')
+    expect(finding.evidence.subjects.every((s) => typeof s === 'string' && /[a-z]/i.test(s))).toBe(true)
+  })
 })
 
 describe('Amy evaluation + Anya handoff', () => {
@@ -898,6 +923,61 @@ describe('Amy end-of-run expired sweep + crawled-signal rescue', () => {
       // Idempotent: nothing new to reap on an immediate second pass.
       const second = await cleanupExpiredAmyProfiles(db)
       expect(second.deleted).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('PROD LEAK b9ca2567: an EXPIRED synthetic re-crawled nightly cannot ride the 6h grace past the starvation bound', async () => {
+    const db = createDb()
+    try {
+      // The exact prod shape (2026-08-04): created 100h ago (> the 96h bound),
+      // TTL 48h → expired ~52h ago — but SOME discovery path re-crawled it 1h
+      // ago, so the old rule skipped it `crawled_too_recently` on every sweep,
+      // forever ("starved by perpetual re-discovery").
+      const starved = await seedExpiredLeftover(db, { hoursAgo: 100, ttlHours: 48, runId: 'amy-starved' })
+      await markProfileCrawled(db, starved, { now: new Date(Date.now() - 1 * HOUR) })
+
+      // Control: expired and ALSO crawled 1h ago, but only 30h old — well
+      // inside the starvation bound, so the mid-flight grace must still hold.
+      const graceHeld = await seedExpiredLeftover(db, { hoursAgo: 30, ttlHours: 24, runId: 'amy-grace' })
+      await markProfileCrawled(db, graceHeld, { now: new Date(Date.now() - 1 * HOUR) })
+
+      const res = await cleanupExpiredAmyProfiles(db)
+      expect(res.ids).toContain(starved)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(starved)).toBeFalsy()
+      // The younger expired row keeps its grace — the escalation is narrow.
+      expect(res.skipped_ids.some((s) => s.id === graceHeld && s.reasons.includes('crawled_too_recently'))).toBe(true)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(graceHeld)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('starvation escalation never reaches an UNEXPIRED row, whatever its age', async () => {
+    const db = createDb()
+    try {
+      // 100h old but with a FUTURE expires_at (crafted directly — TTL hours are
+      // clamped to 72h by buildAmyMetadata, so no created profile can be this
+      // old and unexpired); crawled 1h ago. Both the expiry gate and the grace
+      // must hold it — age alone can never reap.
+      const past = new Date(Date.now() - 100 * HOUR)
+      const profileId = 'amy-test-unexpired-old'
+      db.prepare(
+        `INSERT INTO profiles (id, display_name, primary_type, status, tags, created_by, created_at, updated_at)
+         VALUES (?, 'Unexpired Old Synthetic', 'individual', 'active', '[]', 'agent:amy', ?, ?)`,
+      ).run(profileId, past.toISOString(), past.toISOString())
+      const meta = buildAmyMetadata({ runId: 'amy-longttl', scenarioId: 's', ttlHours: 48, now: past })
+      meta.expires_at = new Date(Date.now() + 24 * HOUR).toISOString() // future
+      meta.crawled_at = new Date(Date.now() - 1 * HOUR).toISOString()
+      meta.last_crawled_at = meta.crawled_at
+      db.prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)`,
+      ).run(profileId, METADATA_SECTION_KEY, JSON.stringify(meta))
+
+      const res = await cleanupExpiredAmyProfiles(db)
+      expect(res.deleted).toBe(0)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)).toBeTruthy()
     } finally {
       db.close()
     }

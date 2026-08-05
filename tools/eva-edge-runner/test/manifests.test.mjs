@@ -81,6 +81,39 @@ for (const { file, manifest } of manifests) {
   })
 }
 
+// THE PER-REPO MANIFEST IS THE ONE THE RUNNER ACTUALLY READS (2026-08-04).
+// loadManifest (src/config.mjs) PREFERS <local_path>/qa/user-journeys.json over
+// the qa/manifests bundle — so grantflow's 2026-08-01 readiness fix (#1087:
+// probe the backend's own 8080, 120s timeout) landed in a file the runner
+// never consulted, while the per-repo copy kept `port_env` (a field the runner
+// has never understood) + 60s. Readiness silently degraded to
+// GET http://localhost:5173/api/health@60s and grantflow reported
+// startup_failed on 2026-08-01 and 2026-08-04 (recorded blocker: that exact
+// URL, duration 67.9s) whenever a cold `dev:full` took >60s. Two files that
+// both claim to be the manifest must not be allowed to drift.
+test('grantflow per-repo qa/user-journeys.json agrees with the bundle manifest and uses fields the runner understands', () => {
+  const perRepo = JSON.parse(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'qa', 'user-journeys.json'), 'utf8'),
+  )
+  const bundle = manifests.find((m) => m.file === 'grantflow.json')?.manifest
+  assert.ok(bundle, 'the grantflow bundle manifest exists')
+  const probe = perRepo.readiness_probe || {}
+  assert.equal(probe.port_env, undefined, '`port_env` is not a field the runner reads — declare `port`')
+  assert.equal(Number(probe.port), Number(bundle.readiness_probe?.port), 'probe port must match the bundle')
+  assert.equal(probe.path, bundle.readiness_probe?.path, 'probe path must match the bundle')
+  assert.equal(
+    Number(probe.timeout_ms),
+    Number(bundle.readiness_probe?.timeout_ms),
+    'probe timeout must match the bundle',
+  )
+  // The declared probe port must be on the app's own allowlist (same rule the
+  // bundle loop above enforces).
+  const allowed = new Set((perRepo.allowlist?.ports || []).map(Number))
+  if (allowed.size && probe.port) {
+    assert.ok(allowed.has(Number(probe.port)), `probe port ${probe.port} missing from allowlist.ports`)
+  }
+})
+
 test('an explicitly declared wait state still wins, and a real element still needs to be VISIBLE', () => {
   assert.equal(resolveWaitState({ selector: 'body' }), 'attached')
   assert.equal(resolveWaitState({ selector: 'body', state: 'visible' }), 'visible', 'an explicit state is honored')
