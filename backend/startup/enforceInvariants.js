@@ -8906,12 +8906,11 @@ export async function enforceCountyCrisisNeedRecall(db) {
  *
  * Delegates to the canonical sweep (`services/matching/catalogRescoreSweep.js`)
  * with the boot-scale budgets. ACCEPT-only, cursor-resumable, matcher_version
- * 'catalog-rescore-link'. WRITES DEFAULT OFF (`ENFORCE_CATALOG_RESCORE=1` to
- * enable) because a blind pass measurably floods: the engine ACCEPTs 13-20% of
- * never-scored rows today, including the regulatory-notice/institutional junk
- * the fix/qa-36-profile-junk classifier chain exists to screen. Until that
- * chain is consumed at the sweep's `passesFundabilityGate` choke point, every
- * boot reports the census (`would_link`) so the recall payoff stays measured.
+ * 'catalog-rescore-link'. WRITES DEFAULT ON (`ENFORCE_CATALOG_RESCORE=0` for
+ * count-only). The fundability junk gate (`passesFundabilityGate`) consumes
+ * `fundingResultFilters` so writes no longer wait on an unset opt-in. Every
+ * boot still reports the census (`would_link` / `linked`) so recall stays
+ * measured.
  */
 export async function enforceCatalogRescoreConvergence(db) {
   return runInvariant('catalog_rescore_convergence', async () => {

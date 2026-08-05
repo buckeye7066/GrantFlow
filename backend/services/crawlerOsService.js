@@ -494,7 +494,7 @@ export async function overlayLiveAmountKnowledge(db, recommendations, idRemap) {
   return { checked: recs.length, enriched };
 }
 
-export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null } = {}) {
+export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null, deadlineMs = null, timeBudgetMs = null } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
   const ctx = await loadProfileContext(db, profileId);
   // Lifecycle guard: never crawl a deleted/archived/merged profile (no-op, no writes).
@@ -574,9 +574,14 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     if (urlOverrides.length > 0) liveFetcher = makeOverrideRewritingFetcher(liveFetcher, urlOverrides);
   } catch { /* overrides are an enhancement, never a crawl blocker */ }
   const onlySources = Array.isArray(onlySourceIds) && onlySourceIds.length > 0 ? onlySourceIds : null;
+  const resolvedDeadline = Number.isFinite(Number(deadlineMs))
+    ? Number(deadlineMs)
+    : (Number.isFinite(Number(timeBudgetMs)) && Number(timeBudgetMs) > 0
+      ? Date.now() + Number(timeBudgetMs)
+      : null);
   const run = await runDiscovery(
     { store, fetcher: liveFetcher },
-    { thesis, matchProfiles: effMatchProfiles, floor, onlySourceIds: onlySources },
+    { thesis, matchProfiles: effMatchProfiles, floor, onlySourceIds: onlySources, deadlineMs: resolvedDeadline },
   );
 
   // Open-web discovery lane — the bridge to state/local/foundation/community

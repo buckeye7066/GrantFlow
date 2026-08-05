@@ -239,3 +239,29 @@ test('recommendations carry the DESCRIPTION — the text the generic-only cap ev
     assert.ok('description' in rec, `recommendation "${rec.title}" must carry a description field (may be null, never absent)`);
   }
 });
+
+test('deadlineMs skips remaining sources as time_budget_exhausted (tier order keeps early lanes)', async () => {
+  // Planner already sorts topic→stage→default. Under a past deadline every
+  // selected source is SKIPPED before fetch — cooperative stop, not a hang.
+  let now = 1_000_000;
+  const d = {
+    store: createMemoryStore(),
+    fetcher: makeOfflineFetcher(),
+    env: {},
+    clock: () => now,
+  };
+  const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+  const r = await runDiscovery(d, {
+    thesis,
+    matchProfiles: [thesis],
+    runId: 'run_budget',
+    deadlineMs: now, // already expired before the first source starts
+  });
+  assert.ok(r.planned >= 1, 'plan must select at least one source');
+  assert.ok(r.sources.length >= 1, 'every planned source must be recorded');
+  for (const s of r.sources) {
+    assert.equal(s.outcome, 'skipped', `source ${s.source_id} must be skipped under an expired deadline`);
+    assert.equal(s.reason, 'time_budget_exhausted');
+    assert.equal(s.fetched, 0);
+  }
+});
