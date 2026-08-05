@@ -191,7 +191,7 @@ function signalText(value, depth = 0) {
  * that gates on a MULTI-WORD phrase (`family caregiver`, `respite care`,
  * `child care`, `foster youth`, `international students only`, the PROFESSION
  * and death-survivor patterns) is `.test()`ed against ONE string built by
-      return parts.join(TEXT_FRAGMENT_SEPARATOR)
+ * joining independent fragments — a bare-space join makes the
  * boundary between two INDEPENDENT list members indistinguishable from the
  * space inside a real phrase, so any two adjacent tokens silently fabricate a
  * phrase no source ever wrote.
@@ -209,7 +209,7 @@ function signalText(value, depth = 0) {
  * reporting `failed:false, found:13` minutes earlier; all 13 candidates score
  * REJECT with "Caregiver-only program requires a caregiver signal", and every
  * one of them is a Tennessee Medicaid-waiver page for the exact profiles that
-    return normalizeTextPreservingFragmentSeparator([
+ * the lane exists to serve.
  *
  * A `|` cannot appear inside any pattern here and is not a `\w` character, so
  * `\b` anchors either side of a real phrase still behave exactly as before —

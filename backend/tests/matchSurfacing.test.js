@@ -19,7 +19,17 @@ describe('matchSurfacing — surfaced matcher versions', () => {
       'student-aid-instate-link',
       'county-crisis-need-link',
       'catalog-rescore-link',
+      'funder-behavior-link',
     ])
+  })
+
+  it('funder-behavior-link must be surfaced — the funder\'s own filed giving', () => {
+    // The funder-behavior recall net (enforceFunderBehaviorRecall) links a
+    // profile to a `propublica_990` funder whose itemized 990 grant list
+    // demonstrates in-state giving for a declared need, engine-ACCEPT only.
+    // Persisting under a reconcile-surviving version and then not reading it
+    // back would repeat the web-llm regression exactly.
+    expect(SURFACED_MATCHER_VERSIONS).toContain('funder-behavior-link')
   })
 
   it('catalog-rescore-link must be surfaced — the continuous re-matching sweep', () => {
@@ -82,7 +92,7 @@ describe('matchSurfacing — surfaced matcher versions', () => {
 
   it('builds a valid SQL IN() fragment from the constant', () => {
     expect(SURFACED_MATCHER_VERSIONS_SQL).toBe(
-      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link','county-crisis-need-link','catalog-rescore-link')",
+      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link','county-crisis-need-link','catalog-rescore-link','funder-behavior-link')",
     )
     // Round-trip: fragment lists exactly the same versions, quoted.
     for (const v of SURFACED_MATCHER_VERSIONS) {
