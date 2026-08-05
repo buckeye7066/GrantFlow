@@ -365,6 +365,8 @@ describe('the need conjunct is a DECLARATION, not an inference', () => {
 
   it('reads the STRUCTURED declarations, which free text cannot fake', () => {
     expect(d(FAM, { financial: { funding_needs: ['housing'] } })).toEqual(['housing'])
+    expect(d(FAM, { financial_information: { assistance_needs: ['housing', 'food'] } }).sort())
+      .toEqual(['food', 'housing'])
     expect(d({ ...FAM, needs: '["food","education"]' }, {})).toEqual(['food'])
     expect(d(FAM, { health_medical: { support_needs: ['transportation'] } })).toEqual(['transportation'])
     // A section whose KEY is itself a canonical need, with real content.
