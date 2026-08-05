@@ -1,0 +1,84 @@
+name: Sync funding-truth branch with main
+
+on:
+  push:
+    branches:
+      - agent/funding-truth-pipeline
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Merge current main and resolve the known overlap
+        run: |
+          git config user.name "GrantFlow Truth Pipeline"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin main
+          set +e
+          git merge --no-commit --no-ff origin/main
+          merge_status=$?
+          set -e
+          if [ "$merge_status" -ne 0 ]; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            echo "Conflicts:"
+            echo "$conflicts"
+            unexpected="$(printf '%s\n' "$conflicts" | grep -v '^backend/services/matching/resultEnricher.js$' || true)"
+            if [ -n "$unexpected" ]; then
+              echo "Unexpected merge conflicts remain:"
+              echo "$unexpected"
+              exit 1
+            fi
+            # Main already merged the same stored-decision authority fix in #1148.
+            # Use that reviewed version and keep this PR's independent regression test.
+            git checkout --theirs -- backend/services/matching/resultEnricher.js
+            git add backend/services/matching/resultEnricher.js
+          fi
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            echo "Unresolved conflicts remain."
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+      - name: Install locked dependencies
+        run: npm ci --include=optional
+
+      - name: Focused overlap and funding-truth tests
+        run: |
+          npx vitest run \
+            backend/tests/webGrantExtractor.test.js \
+            backend/tests/blindExtractorNotWired.test.js \
+            backend/tests/resultEnricherStoredDecisionDefault.test.js \
+            backend/tests/fundingSourcesReadOnly.test.js \
+            backend/tests/profileSpecificGateSurfacing.test.js \
+            src/components/funding/FundingResultCard.test.jsx \
+            src/lib/__tests__/matchDisplayThresholds.test.js
+          node --test \
+            backend/crawler-os/tests/officialDirectoryAdapterTruth.test.mjs \
+            backend/crawler-os/tests/blindPageFactExtractor.test.mjs \
+            backend/crawler-os/tests/pageFactProvenance.test.mjs
+
+      - name: Repository pre-push gates on merged tree
+        run: npm run check:prepush
+
+      - name: Commit verified main sync
+        run: |
+          git rm .github/workflows/agent-funding-truth-sync.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "Merge main into funding truth pipeline"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
