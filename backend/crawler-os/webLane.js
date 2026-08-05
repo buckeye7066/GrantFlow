@@ -59,15 +59,46 @@ function firstHttps(...urls) {
   return null;
 }
 
-// Derive honest need tags: the opp's own text intersected with the profile's
-// needs (never blind-inherit the whole profile — that would inflate matching).
-function deriveNeeds(ex, thesisNeeds = []) {
-  const blob = `${ex.title || ''} ${ex.summary || ''} ${ex.eligibility || ''} ${ex.relevance_reason || ''}`.toLowerCase();
-  return (thesisNeeds || []).filter((n) => n && blob.includes(String(n).toLowerCase())).slice(0, 6);
+function cleanStringArray(value, max = 12) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const text = item.replace(/\s+/g, ' ').trim();
+    if (!text || out.includes(text)) continue;
+    out.push(text);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
-/** Map one LLM-extracted opportunity to the OS candidate contract. */
-function toCandidate(ex, evidence, thesis, page) {
+function cleanState(value) {
+  const code = String(value || '').trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(code) ? code : null;
+}
+
+/** Map one PAGE-DERIVED extraction to the OS candidate contract. */
+function toCandidate(ex, evidence, _thesis, page) {
+  if (!ex || typeof ex !== 'object') return null;
+
+  // The live extractor now returns the profile-blind mapper's canonical
+  // candidate. Preserve it byte-for-byte except for run provenance. Most
+  // importantly, do not overwrite its empty/unknown applicant and geo facts
+  // with the searching profile's answers.
+  if (ex.raw?.blind_extraction === true) {
+    return {
+      ...ex,
+      source_id: WEB_SOURCE.source_id,
+      raw: {
+        ...(ex.raw || {}),
+        query: page.query,
+        page_url: ex.raw?.page_url ?? evidence.url,
+      },
+    };
+  }
+
+  // Compatibility path for injected tests or older source-specific extractors.
+  // It remains page-only: categorical facts come from ex, never the profile.
   const sponsor = String(ex.funder || ex.sponsor || '').trim();
   const title = String(ex.title || '').trim();
   if (!sponsor || sponsor.length < 2 || !title) return null;
@@ -76,38 +107,41 @@ function toCandidate(ex, evidence, thesis, page) {
   const deadline = !isRolling && /^\d{4}-\d{2}-\d{2}/.test(String(ex.deadline || ''))
     ? String(ex.deadline).slice(0, 10)
     : null;
-
-  // Geography: prefer the opportunity's own scope; fall back to the profile's
-  // state (we searched by that geo, so a local result is presumed in-scope).
-  const exState = ex.state ? String(ex.state).toUpperCase().slice(0, 2) : null;
-  const profState = thesis.location?.state ? String(thesis.location.state).toUpperCase().slice(0, 2) : null;
-  const national = ex.national === true;
-  const states = national ? [] : [exState || profState].filter(Boolean);
-
-  const applyUrl = firstHttps(ex.apply_url, evidence.url, page.url);
+  const explicitKind = Object.values(OPPORTUNITY_KIND).includes(ex.kind) ? ex.kind : null;
+  const kind = explicitKind ?? (isRolling ? OPPORTUNITY_KIND.PROGRAM : OPPORTUNITY_KIND.DIRECT_GRANT);
+  const national = ex.national === true || ex.geography?.national === true;
+  const statedStates = Array.isArray(ex.geography?.states)
+    ? ex.geography.states
+    : (Array.isArray(ex.states) ? ex.states : [ex.state]);
+  const states = national
+    ? []
+    : cleanStringArray(statedStates, 25).map(cleanState).filter(Boolean);
+  const applyUrl = kind === OPPORTUNITY_KIND.DIRECTORY ? null : firstHttps(ex.apply_url);
+  const infoUrl = firstHttps(ex.info_url, evidence.url, page.url);
 
   return {
     external_id: null,
     source_id: WEB_SOURCE.source_id,
-    kind: isRolling ? OPPORTUNITY_KIND.PROGRAM : OPPORTUNITY_KIND.DIRECT_GRANT,
+    kind,
     title,
     sponsor,
-    summary: (String(ex.summary || ex.eligibility || '').replace(/\s+/g, ' ').trim() || null)?.slice(0, 800) ?? null,
+    summary: (String(ex.summary || ex.eligibility || ex.eligibility_text || '').replace(/\s+/g, ' ').trim() || null)?.slice(0, 800) ?? null,
     deadline,
     is_rolling: isRolling,
     apply_url: applyUrl,
-    info_url: applyUrl || evidence.url,
-    // The LLM already judged this opp applyable for THIS applicant; tag the
-    // profile's types so eligibility scores honestly. Cross-profile matches are
-    // still filtered by geo + need, so this does not pollute other profiles.
-    applicant_types: Array.isArray(thesis.applicant_types) ? thesis.applicant_types.filter((t) => t && t !== '*') : [],
-    need_categories: deriveNeeds(ex, thesis.needs),
+    info_url: infoUrl,
+    applicant_types: [],
+    need_categories: cleanStringArray(ex.need_categories, 12),
     geography: { national, states },
     amount_min: numOrNull(ex.amount_min),
     amount_max: numOrNull(ex.amount_max),
     is_loan: ex.is_loan === true,
     requires_cost_share: ex.requires_cost_share === true || ex.requires_match === true,
-    raw: { extracted: ex, query: page.query, page_url: page.url },
+    eligibility_text: typeof ex.eligibility_text === 'string' ? ex.eligibility_text : null,
+    eligibility_bullets: cleanStringArray(ex.eligibility_bullets, 20),
+    page_fact_schema_version: ex.page_fact_schema_version ?? null,
+    field_provenance: ex.field_provenance ?? null,
+    raw: { extracted: ex, query: page.query, page_url: evidence.url },
   };
 }
 
@@ -467,7 +501,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     if (fetchedSourceKeys) { fetchedSourceKeys.add(targetDedupKey(page.url)); fetchedSourceKeys.add(targetDedupKey(evidence.url)); }
 
     let extracted = [];
-    try { extracted = await extractOpportunities({ pageUrl: evidence.url, html: resp.body, thesis, query: page.query }); }
+    try { extracted = await extractOpportunities({ pageUrl: evidence.url, html: resp.body }); }
     catch { extracted = []; }
 
     // Count the current (profile-conditioned) path's candidates for THIS page so

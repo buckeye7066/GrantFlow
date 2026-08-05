@@ -44,9 +44,9 @@ import { validateEvidenceSpans, normalizeForEvidence } from './blindEvidenceVali
 // Version tags — these become content-addressing components for the Phase-0.2
 // page-fact cache (services/pageFactCache.js) when this module is wired in a
 // later sub-PR. Bump when the prompt or output shape changes.
-export const EXTRACTOR_VERSION = 'blind-v1';
-export const PROMPT_VERSION = 'blind-prompt-v1';
-export const PAGE_FACT_SCHEMA_VERSION = 1;
+export const EXTRACTOR_VERSION = 'blind-v2';
+export const PROMPT_VERSION = 'blind-prompt-v2';
+export const PAGE_FACT_SCHEMA_VERSION = 2;
 
 // The feature flag that a LATER sub-PR will gate the live wiring on. Defined here
 // (default OFF) so the name is registered, but NOTHING reads it in this PR — this
@@ -58,6 +58,7 @@ export const MAX_OPPORTUNITIES_PER_PAGE = 25;
 export const MAX_TITLE_CHARS = 300;
 export const MAX_SPONSOR_CHARS = 300;
 export const MAX_SUMMARY_CHARS = 800;
+export const MAX_DEADLINE_CHARS = 40;
 export const MAX_ELIGIBILITY_CHARS = 4000;
 export const MAX_ELIGIBILITY_BULLETS = 20;
 export const MAX_BULLET_CHARS = 400;
@@ -157,6 +158,16 @@ function boolOrNull(v) {
   return null;
 }
 
+function cleanDeadline(v) {
+  if (typeof v !== 'string') return null;
+  const text = v.trim().toLowerCase();
+  if (text === 'rolling' || text === 'ongoing') return 'rolling';
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return null;
+  const date = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : text;
+}
+
 /** A non-blank single-line string of a raw value, capped, or '' for non-strings. */
 function str(v, max) {
   if (typeof v !== 'string') return ''; // never String(object) => "[object Object]"
@@ -245,6 +256,9 @@ function buildFacts(rawOpp, { pageUrlCanon, linkInventory, hayNorm }) {
   const states = cleanStates(rawOpp.states);
   const is_loan = boolOrNull(rawOpp.is_loan);
   const requires_cost_share = boolOrNull(rawOpp.requires_cost_share);
+  const normalizedDeadline = cleanDeadline(rawOpp.deadline);
+  const is_rolling = normalizedDeadline === 'rolling' || rawOpp.is_rolling === true;
+  const deadline = is_rolling ? null : normalizedDeadline;
   const need_categories = cleanNeeds(rawOpp.need_categories, hayNorm);
 
   // field_provenance: canonical keys, each recorded ONLY with a cited snippet.
@@ -257,6 +271,9 @@ function buildFacts(rawOpp, { pageUrlCanon, linkInventory, hayNorm }) {
   }
   addProvenance(field_provenance, 'is_loan', is_loan, ev.is_loan, pageUrlCanon);
   addProvenance(field_provenance, 'requires_cost_share', requires_cost_share, ev.requires_cost_share, pageUrlCanon);
+  if (deadline || is_rolling) {
+    addProvenance(field_provenance, 'deadline', is_rolling ? 'rolling' : deadline, ev.deadline, pageUrlCanon);
+  }
   addProvenance(field_provenance, 'national', national, ev.national, pageUrlCanon);
   if (states.length) {
     addProvenance(field_provenance, 'geography', states, ev.geography ?? ev.states, pageUrlCanon);
@@ -266,6 +283,8 @@ function buildFacts(rawOpp, { pageUrlCanon, linkInventory, hayNorm }) {
     title,
     sponsor,
     summary: str(rawOpp.summary, MAX_SUMMARY_CHARS) || null,
+    deadline,
+    is_rolling,
     eligibility_text,
     eligibility_bullets,
     need_categories,
@@ -387,10 +406,11 @@ export async function extractPageFactsBlind(input, deps) {
       '  "eligibility_text": string, "eligibility_bullets": string[],',
       '  "need_categories": string[],',
       '  "amount_min": number|null, "amount_max": number|null,',
+      '  "deadline": "YYYY-MM-DD"|"rolling"|null,',
       '  "national": boolean|null, "states": string[],',
       '  "is_loan": boolean|null, "requires_cost_share": boolean|null,',
       '  "apply_link_id": string|null, "info_link_id": string|null,',
-      '  "evidence": { "eligibility": string, "amount": string, "is_loan": string, "requires_cost_share": string, "national": string, "geography": string }',
+      '  "evidence": { "eligibility": string, "amount": string, "deadline": string, "is_loan": string, "requires_cost_share": string, "national": string, "geography": string }',
       '}]}',
       'If the page describes no funding opportunity, return {"opportunities":[]}.',
     ].join('\n');

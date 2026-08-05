@@ -100,6 +100,11 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     rejectHardIneligible = true,
   } = opts
 
+  // A stored profile↔opportunity decision is the canonical adjudication. Display
+  // code may explicitly opt out for unscored/raw leads, but omission must never
+  // trigger a second eligibility trial or score rewrite.
+  const useStoredDecision = opts.useStoredDecision !== false
+
   if (!opportunity || typeof opportunity !== 'object') {
     return {
       display: false,
@@ -121,7 +126,7 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     // Propagate the authoritative-stored-decision context so the gate can
     // suppress the NO-FIT (content-shape) rule family for rows the matchEngine
     // already scored above the surfacing floor (type-agnostic).
-    useStoredDecision: opts.useStoredDecision === true,
+    useStoredDecision,
   })
   if (!profileGate.pass) {
     return {
@@ -157,7 +162,7 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
   // redundant — the stored score is what we sort by. Reuse it; only fall back to
   // a live recompute when no stored decision is present.
   const hasStoredDecision =
-    opts.useStoredDecision === true &&
+    useStoredDecision &&
     (Boolean(opportunity.match_decision) || Number.isFinite(Number(opportunity.match_score)))
   let decision = hasStoredDecision
     ? {
@@ -276,6 +281,7 @@ export function canonicalizeOpportunityList(profileContext, opportunities = [], 
   // has to notice. Legitimate drops (eligibility mismatch, trust, dedup,
   // pipeline) are NOT counted here.
   const unsurfacedAboveFloorNoFit = []
+  const sentinelOpts = { ...opts, useStoredDecision: opts.useStoredDecision !== false }
 
   for (const opp of Array.isArray(opportunities) ? opportunities : []) {
     const result = canonicalResultForProfile(profileContext, opp, opts)
@@ -286,7 +292,7 @@ export function canonicalizeOpportunityList(profileContext, opportunities = [], 
       dropped[key] = (dropped[key] || 0) + 1
       if (
         SUPPRESSIBLE_NO_FIT_RULE_IDS.has(key) &&
-        hasAuthoritativeStoredDecision(opp, opts)
+        hasAuthoritativeStoredDecision(opp, sentinelOpts)
       ) {
         unsurfacedAboveFloorNoFit.push({
           opportunity_id: opp?.id ?? opp?.opportunity_id ?? null,

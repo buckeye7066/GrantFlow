@@ -3,7 +3,7 @@ import { toast } from '@/components/ui/use-toast'
 import { Button } from '@/components/ui/button'
 import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
-import { fitPercent } from '@/lib/matchDisplayThresholds'
+import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds'
 
 /**
  * AnyaMatchScoutAlerts
@@ -77,14 +77,16 @@ export default function AnyaMatchScoutAlerts() {
 }
 
 function showSuggestionToast(suggestion) {
-  const score = fitPercent(suggestion.match_score)
+  const rawScore = Number(suggestion.match_score)
+  const hasScore = Number.isFinite(rawScore)
+  const matchLabel = hasScore ? scoreToMatchLabel(rawScore) : 'Potential Match'
   const title = suggestion.title || 'a funding opportunity'
   const profileLabel = formatProfileLabel(suggestion)
 
   toast({
     id: `anya-match-${suggestion.id}`,
     title: 'Anya found a strong funding match',
-    description: `${title} looks like a ${score}% fit for ${profileLabel}. Want to add it to the pipeline?`,
+    description: `${title} is a ${matchLabel} for ${profileLabel}${hasScore ? ` (evidence score ${Math.round(rawScore)})` : ""}. Want to add it to the pipeline?`,
     duration: 15000,
     action: (
       <div className="flex gap-2">

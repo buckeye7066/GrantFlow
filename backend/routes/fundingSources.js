@@ -17,7 +17,6 @@ import {
   partitionFundingSources,
 } from '../services/matching/fundingSourcePresentation.js'
 import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
-import { reconcileNeedFirstProfileMatches } from '../services/matching/needFirstReconciler.js'
 import {
   FUNDING_SOURCE_QUERY_CONTRACT,
   readFundingSourceRows,
@@ -26,7 +25,6 @@ import { NEED_FIRST_SCORING_VERSION } from '../services/matching/needFirstScorin
 import { qualifiesForDisplay } from '../config/matchSurfacing.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
-  ensurePipelineDismissalsSchema,
   recordDismissal,
   reconcileDismissedGrants,
   reconcileDismissedMatches,
@@ -73,17 +71,6 @@ function jparse(value, fallback) {
   if (value === null || value === undefined) return fallback
   if (typeof value !== 'string') return value
   try { return JSON.parse(value) } catch { return fallback }
-}
-
-function emptyReconciliation() {
-  return {
-    scanned: 0,
-    updated: 0,
-    rejected: 0,
-    demoted: 0,
-    score_lowered: 0,
-    failures: [],
-  }
 }
 
 /**
@@ -133,31 +120,8 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     // normalization so presentation and discovery use the same facts.
     profileContext.profileNorm = loadedContext.profileNorm ?? null
 
-    // The production audit deliberately performs SELECT-only comparison. In
-    // ordinary product traffic, keep the existing self-heal + reconciliation.
-    if (!readOnlyAudit) await ensurePipelineDismissalsSchema(req.db)
-
-    // Persisted rows converge in bounded slices, but a reconciliation failure
-    // never empties the user's list. restorePersistedMatchTruth below applies the
-    // same policy at read time, so owner-facing correctness does not depend on a
-    // successful write-back during this request.
-    let reconciliation = emptyReconciliation()
-    if (!readOnlyAudit) {
-      try {
-        reconciliation = await reconcileNeedFirstProfileMatches(req.db, {
-          profileId,
-          profileContext,
-          limit: 100,
-        })
-      } catch (error) {
-        reconciliation.failures.push({ error: error?.message || String(error) })
-        log.warn('funding_sources.need_first_reconcile_failed', {
-          profileId,
-          error: error?.message || String(error),
-        })
-      }
-    }
-
+    // Every GET is SELECT-only presentation. Match write-back belongs to the
+    // versioned background reconciliation/sweep path, never an ordinary read.
     const loadedRows = await readFundingSourceRows(req.db, profileId)
     const rows = loadedRows.rows
 
@@ -245,12 +209,8 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       ...presented,
       geo_stubs_hidden: geoStubsHidden,
       need_first_reconciliation: {
-        scanned: reconciliation.scanned,
-        updated: reconciliation.updated,
-        rejected: reconciliation.rejected,
-        demoted: reconciliation.demoted,
-        score_lowered: reconciliation.score_lowered,
-        failures: reconciliation.failures?.length ?? 0,
+        read_only: true,
+        deferred_to_background: true,
         read_only_audit: readOnlyAudit,
       },
     })
@@ -278,6 +238,8 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       resource_count: 0,
       scoring_policy_version: NEED_FIRST_SCORING_VERSION,
       need_first_reconciliation: {
+        read_only: true,
+        deferred_to_background: true,
         read_only_audit: readOnlyAudit,
       },
     })

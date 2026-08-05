@@ -37,6 +37,11 @@ const LOAD_BEARING_FACTS = [
     neutralize: (f) => { f.eligibility_text = null; f.eligibility_bullets = []; },
   },
   {
+    key: 'deadline',
+    isSet: (f) => (typeof f.deadline === 'string' && f.deadline.trim() !== '') || f.is_rolling === true,
+    neutralize: (f) => { f.deadline = null; f.is_rolling = false; },
+  },
+  {
     key: 'amount',
     isSet: (f) => f.amount_min != null || f.amount_max != null,
     neutralize: (f) => { f.amount_min = null; f.amount_max = null; },
