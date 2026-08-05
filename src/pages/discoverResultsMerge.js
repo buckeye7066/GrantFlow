@@ -50,6 +50,43 @@ export function mergeDiscoveryResults(catalog, live) {
   return merged.sort((a, b) => scoreOf(b) - scoreOf(a))
 }
 
+// Keep in sync with backend/config/opportunityKindClasses.js POINTER_KINDS
+// (tripwire in discoverResultsMerge.test.js). Benefit programs are NOT pointers.
+const POINTER_KINDS = Object.freeze([
+  'directory',
+  'past_award_intel',
+  'school_portal',
+  'referral',
+])
+
+/** True when the row is a directory/referral pointer, never an apply-now award. */
+export function isDiscoverPointer(opp) {
+  const kind = String(opp?.opportunity_kind ?? opp?.kind ?? '').trim().toLowerCase()
+  if (POINTER_KINDS.includes(kind)) return true
+  return Boolean(opp?.is_directory || opp?.is_directory_resource)
+}
+
+/**
+ * Split Discover results into awardable (apply-to) vs directory pointers.
+ * Locators stay visible — they just never inflate the apply-to headline count.
+ */
+export function partitionDiscoverResults(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  const awardable = []
+  const directories = []
+  for (const row of list) {
+    if (isDiscoverPointer(row)) directories.push(row)
+    else awardable.push(row)
+  }
+  return {
+    awardable,
+    directories,
+    awardableCount: awardable.length,
+    directoryCount: directories.length,
+    totalCount: list.length,
+  }
+}
+
 /**
  * Reconcile the coverage panel's "N sources with matches" against the count
  * actually rendered, so a silent "20 matched / 2 shown" can't recur. Returns a
@@ -61,21 +98,27 @@ export function mergeDiscoveryResults(catalog, live) {
  * contextual ("N of your searched sources have matches"). Units differ
  * deliberately — sources vs opportunities — so the copy never conflates them.
  *
- * @param {{ shownCount: number, matchedSourceCount: number, belowFloorCount: number, minScore: number }} args
- * @returns {null | { shown: number, matched: number, belowFloorCount: number, minScore: number, hidden: boolean }}
+ * When `awardableCount` is provided, `shown` maps 1:1 to apply-able rows
+ * (directories are counted separately and never inflate "what can I apply to").
+ *
+ * @param {{ shownCount: number, matchedSourceCount: number, belowFloorCount: number, minScore: number, awardableCount?: number, directoryCount?: number }} args
+ * @returns {null | { shown: number, matched: number, belowFloorCount: number, minScore: number, hidden: boolean, awardable?: number, directories?: number }}
  */
-export function buildResultsReconciliation({ shownCount, matchedSourceCount, belowFloorCount, minScore }) {
+export function buildResultsReconciliation({ shownCount, matchedSourceCount, belowFloorCount, minScore, awardableCount, directoryCount }) {
   const shown = Number(shownCount) || 0
   const matched = Number(matchedSourceCount) || 0
   const below = Number(belowFloorCount) || 0
   if (matched <= 0 && below <= 0) return null
   // Matches exist below the user's score filter -> some are provably hidden.
   const hidden = below > 0
-  return {
+  const out = {
     shown,
     matched,
     belowFloorCount: below,
     minScore: Number(minScore) || 0,
     hidden,
   }
+  if (Number.isFinite(Number(awardableCount))) out.awardable = Number(awardableCount) || 0
+  if (Number.isFinite(Number(directoryCount))) out.directories = Number(directoryCount) || 0
+  return out
 }

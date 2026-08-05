@@ -6,6 +6,13 @@
 // past-award intelligence pointer. Snapshot those durable resource matches before
 // the core reconcile, then restore only the rows the current run did not
 // explicitly reject.
+//
+// ACCEPT DURABILITY (2026-08-04, Instrumentl-class recall): engine ACCEPTs on
+// awardable (non-pointer) rows are also snapshotted and restored. The rolling
+// snapshot DELETE in persistRunCore wipes crawler-os rows every run; without
+// this, a real ACCEPT (HOPE 100, AFTE 83) vanishes the moment a later crawl
+// does not re-find it — the measured Google-bar failure mode. An explicit
+// REJECT in the current run still clears the prior ACCEPT (restore skips it).
 
 import {
   persistRun as persistRunCore,
@@ -13,8 +20,14 @@ import {
   sectionSignalText,
 } from './crawlerOsPersistenceCore.js'
 import { normalizePersistedMatchDecisionIntegrity } from './matching/matchDecisionIntegrity.js'
+import { POINTER_KINDS } from '../config/opportunityKindClasses.js'
 
 const RESOURCE_KINDS_SQL = "('DIRECTORY', 'PAST_AWARD_INTEL', 'SCHOOL_PORTAL', 'REFERRAL')"
+
+// Pointer kinds that must NOT ride the awardable-ACCEPT durability path —
+// directories already use snapshotResourceMatches. Quoted UPPER for SQL IN lists
+// (prod stores mixed case; predicates use UPPER(...)).
+const POINTER_KINDS_SQL = `(${POINTER_KINDS.map((k) => `'${String(k).toUpperCase()}'`).join(', ')})`
 
 // CROSS-MATCH PRECISION (2026-08-03): a cross-profile row is a match only on
 // ACCEPT (see persistRunCore's xmatch branch). The resource snapshot must hold
@@ -93,6 +106,61 @@ async function snapshotResourceMatches(db, profileIds) {
           `Resource reconciliation snapshot failed; refusing a destructive match refresh: ${fallbackError?.message || error?.message || fallbackError}`,
         )
         wrapped.code = 'RESOURCE_RECONCILIATION_SNAPSHOT_FAILED'
+        throw wrapped
+      }
+    }
+  }
+  return snapshots
+}
+
+/**
+ * Snapshot engine ACCEPTs on awardable (non-pointer) opportunities so a later
+ * crawl that does not re-find them cannot erase a live endorsement. Pointers
+ * stay on the resource path. Explicit REJECT in the new run still clears.
+ */
+async function snapshotDurableAccepts(db, profileIds) {
+  if (!db || profileIds.length === 0) return []
+
+  // POINTER_KINDS_SQL is a frozen registry constant. audit:allow dynamic-sql
+  const sql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version, m.source_query,
+           m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities o ON o.id = m.opportunity_id
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+       AND UPPER(COALESCE(o.opportunity_kind, '')) NOT IN ${POINTER_KINDS_SQL}
+  `
+
+  const snapshots = []
+  for (const profileId of profileIds) {
+    try {
+      snapshots.push(...(await db.prepare(sql).all(profileId)))
+    } catch (error) {
+      if (isMissingSnapshotTable(error)) continue
+      // Older schemas without opportunity_kind: keep ACCEPT durability by
+      // snapshotting all ACCEPTs (resource restore is a separate path).
+      try {
+        const fallback = `
+          SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+                 m.match_decision, m.match_explanation, m.match_reasons,
+                 m.match_explain_json, m.matcher_version, m.source_query,
+                 m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
+            FROM profile_opportunity_matches m
+           WHERE m.profile_id = ?
+             AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+             AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+        `
+        snapshots.push(...(await db.prepare(fallback).all(profileId)))
+      } catch (fallbackError) {
+        if (isMissingSnapshotTable(fallbackError)) continue
+        const wrapped = new Error(
+          `Accept durability snapshot failed; refusing a destructive match refresh: ${fallbackError?.message || error?.message || fallbackError}`,
+        )
+        wrapped.code = 'ACCEPT_DURABILITY_SNAPSHOT_FAILED'
         throw wrapped
       }
     }
@@ -182,14 +250,18 @@ export { profileContextToThesisInput, sectionSignalText }
 export async function persistRun(db, memStore, run, opts = {}) {
   const profileIds = reconcileProfileIds(memStore, opts?.primaryProfileId ?? null)
   const durableResources = await snapshotResourceMatches(db, profileIds)
+  const durableAccepts = await snapshotDurableAccepts(db, profileIds)
   const persisted = await persistRunCore(db, memStore, run, opts)
   const explicitRejects = currentExplicitRejects(memStore, persisted?.idRemap)
+  // Restores use ON CONFLICT DO NOTHING — this run's fresh insert always wins.
   const resourcesPreserved = await restoreResourceMatches(db, durableResources, explicitRejects)
+  const acceptsPreserved = await restoreResourceMatches(db, durableAccepts, explicitRejects)
   const matchDecisionIntegrity = await normalizePersistedMatchDecisionIntegrity(db, { profileIds })
 
   return {
     ...persisted,
     resourcesPreserved,
+    acceptsPreserved,
     matchDecisionIntegrity,
   }
 }

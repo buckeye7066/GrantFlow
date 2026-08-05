@@ -20,6 +20,7 @@ import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { loadProfileContext, mergeOpportunitySignals } from '../services/profileHelpers.js'
 import { decorateOpportunityFreshness, saveToProfilePipeline } from '../services/opportunityMatcher.js'
+import { computeMatchDecision } from '../services/matchEngine.js'
 import {
   gateOpportunityForPipeline,
   buildTrustMetadata,
@@ -123,6 +124,12 @@ const ALLOWED_GRANT_COLUMNS = new Set([
   'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
   'status', 'priority', 'amount_requested', 'amount_awarded', 'amount_min', 'amount_max',
   'application_url',
+  // Outcome dates. `amount_awarded` was already writable but these were not, so
+  // an award could never be dated and "time to award" analytics read from two
+  // columns nothing could populate. The whole find->apply->submit->confirmed
+  // chain terminates here; without them the product cannot record that a
+  // profile actually received money.
+  'submitted_date', 'award_date',
   'match_score', 'match_reasons', 'notes', 'requirements', 'eligibility',
   'application_steps', 'contact_name', 'contact_email', 'contact_phone',
   'funder_fax', 'funder_address', 'application_method',
@@ -1197,6 +1204,48 @@ router.post('/', mutationRateLimiter, async (req, res) => {
         }
       } catch (dupErr) {
         routeLogger.warn('[grants/create] duplicate check failed (non-fatal)', { error: dupErr?.message })
+      }
+
+      // A manual create is never BLOCKED on match quality (user-created rows
+      // are protected; NULL score is never junk), but a profile-scoped row must
+      // not enter the pipeline UNSCORED when a canonical score is computable —
+      // unscored manual/import rows are exactly what migrations 063/064/0056/
+      // 0057 later stamped with matched_needs '["general funding support"]'
+      // (the prod junk signature, 2026-08-04). Caller-supplied scores win;
+      // a scoring failure leaves the row unscored for the boot backfill net.
+      if (sanitizedData.match_score === undefined || sanitizedData.match_score === null) {
+        try {
+          const profileContext = await loadProfileContext(req.db, String(sanitizedData.profile_id))
+          const opportunityShape = {
+            id: sanitizedData.funding_opportunity_id ?? null,
+            title: sanitizedData.title ?? data.title ?? null,
+            sponsor: sanitizedData.funder ?? null,
+            application_url: sanitizedData.application_url ?? null,
+            url: sanitizedData.url ?? sanitizedData.application_url ?? null,
+            deadline: sanitizedData.deadline ?? null,
+            amount_min: sanitizedData.amount_min ?? null,
+            amount_max: sanitizedData.amount_max ?? null,
+            description: sanitizedData.program_description ?? sanitizedData.notes ?? null,
+          }
+          const decision = computeMatchDecision(
+            profileContext?.profile ?? { id: String(sanitizedData.profile_id) },
+            opportunityShape,
+            { profileSections: profileContext?.sections ?? null },
+          )
+          if (decision && Number.isFinite(Number(decision.score))) {
+            sanitizedData.match_score = Number(decision.score)
+            sanitizedData.match_decision = decision.decision ?? null
+            sanitizedData.matched_needs = JSON.stringify(decision.matchedNeeds ?? [])
+            sanitizedData.match_explanation = decision.explanation ?? null
+            sanitizedData.matcher_version = 'manual-create-scored'
+            sanitizedData.evaluated_at = new Date().toISOString()
+          }
+        } catch (scoreErr) {
+          routeLogger.warn('[grants/create] canonical scoring failed; row stays unscored for the boot backfill net', {
+            profile_id: sanitizedData.profile_id,
+            error: scoreErr?.message || String(scoreErr),
+          })
+        }
       }
     }
 

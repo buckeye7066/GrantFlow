@@ -272,11 +272,37 @@ export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false
       if (!reapNeverCrawled) reasonsToSkip.push('not_crawled')
     }
     // Guard 4b (race safety): don't reap a profile crawled so recently its run
-    // could still be mid-flight / pre-learning. Expiry-independent.
+    // could still be mid-flight / pre-learning. Expiry-independent — EXCEPT for
+    // the starvation escalation below.
+    //
+    // STARVATION ESCALATION (2026-08-04, the b9ca2567 leak): every discovery
+    // path refreshes the crawl signal (cross-profile matching, Robert's cycle,
+    // the web-lane fleet sweep), so an EXPIRED synthetic that keeps being
+    // re-discovered rides a fresh 6h grace on every nightly sweep and is never
+    // reaped — prod row b9ca2567 (created 07-31, TTL expired 08-02) was still
+    // live on 08-04, skipped `crawled_too_recently` night after night.
+    // `classifySurvivorHold` (amyDeletionProof.js) already refuses to call that
+    // hold legitimate past `neverCrawledMaxAgeMs` ("a synthetic still riding 6h
+    // graces at that age is being starved by perpetual re-discovery, not
+    // protected mid-flight") — this is the reaper-side mirror of that rule, so
+    // the detector and the sweep agree. Narrow by construction: it fires only
+    // when the row is BOTH past its TTL (isMetadataExpired) AND older than the
+    // far-past-TTL bound (default 96h vs the 72h max TTL), and only for callers
+    // that pass neverCrawledMaxAgeMs (the expired sweep / boot invariant);
+    // an unexpired or younger row keeps the full mid-flight grace.
     if (minCrawledAgeMs > 0 && crawledSignalIso) {
       const crawledMs = Date.parse(crawledSignalIso)
       if (Number.isFinite(crawledMs) && Number.isFinite(nowMs) && (nowMs - crawledMs) < minCrawledAgeMs) {
-        reasonsToSkip.push('crawled_too_recently')
+        const maxAge = Number(neverCrawledMaxAgeMs) || 0
+        const createdIso = meta?.created_at || meta?.expires_at || row.created_at
+        const createdMs = createdIso ? Date.parse(createdIso) : NaN
+        const starved =
+          maxAge > 0 &&
+          Number.isFinite(createdMs) &&
+          Number.isFinite(nowMs) &&
+          (nowMs - createdMs) >= maxAge &&
+          isMetadataExpired(meta, now)
+        if (!starved) reasonsToSkip.push('crawled_too_recently')
       }
     }
     // Optional scope: a specific id set (e.g. profiles crawled this run).

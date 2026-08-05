@@ -86,6 +86,7 @@ describe('eligibility confirmation policy', () => {
   })
 
   it('never resurrects a canonical rejection', () => {
+    const reasons = ['Applicant type mismatch']
     const result = applyEligibilityConfirmationPolicy({
       canonical: {
         score: 18,
@@ -96,10 +97,14 @@ describe('eligibility confirmation policy', () => {
       score: 18,
       decision: 'REJECT',
       explanation: 'Explicitly ineligible.',
+      reasons,
     })
 
+    expect(result.score).toBe(18)
     expect(result.decision).toBe('REJECT')
     expect(result.explanation).toBe('Explicitly ineligible.')
+    expect(result.reasons).toEqual(reasons)
+    expect(result.applied).toBe(false)
   })
 
   it('leaves pointer/resource scoring to the resource policy', () => {

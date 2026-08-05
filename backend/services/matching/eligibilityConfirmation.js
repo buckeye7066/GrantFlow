@@ -112,7 +112,7 @@ export function applyEligibilityConfirmationPolicy({
   const normalizedDecision = String(decision ?? canonical?.decision ?? 'REVIEW').toUpperCase()
   const initialScore = numericScore(score ?? canonical?.score)
 
-  if (!confirmation.unconfirmed || resource) {
+  if (!confirmation.unconfirmed || resource || normalizedDecision === 'REJECT') {
     return {
       score: initialScore,
       decision: normalizedDecision,
@@ -124,7 +124,7 @@ export function applyEligibilityConfirmationPolicy({
   }
 
   const cappedScore = Math.min(initialScore, confirmation.scoreCap)
-  const nextDecision = normalizedDecision === 'REJECT' ? 'REJECT' : 'REVIEW'
+  const nextDecision = 'REVIEW'
   const missingText = confirmation.missingFields.map(humanize).join(', ')
   const label = `Eligibility unconfirmed: ${missingText}. Score capped at ${confirmation.scoreCap} pending confirmation.`
   const nextReasons = [...new Set([
@@ -132,11 +132,12 @@ export function applyEligibilityConfirmationPolicy({
     label,
   ].filter(Boolean))]
   const baseExplanation = String(explanation ?? canonical?.explanation ?? '').trim()
-  const nextExplanation = nextDecision === 'REJECT'
-    ? baseExplanation
-    : [baseExplanation, `Eligibility is unconfirmed (${missingText}); review the program criteria before pursuing.`]
-        .filter(Boolean)
-        .join(' ')
+  const nextExplanation = [
+    baseExplanation,
+    `Eligibility is unconfirmed (${missingText}); review the program criteria before pursuing.`,
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return {
     score: cappedScore,

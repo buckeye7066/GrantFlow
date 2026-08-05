@@ -100,6 +100,19 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     rejectHardIneligible = true,
   } = opts
 
+  // A row that already carries a stored above-floor engine decision IS the
+  // authority — the matchEngine (the sole decision engine) evaluated it against
+  // the FULL profile. Treat it as authoritative BY DEFAULT so display code never
+  // silently re-adjudicates it (a second eligibility trial) or recomputes and
+  // rewrites its stored score (parity drift). Only an EXPLICIT
+  // useStoredDecision:false opts out (kept for the strict/unscored-lead path and
+  // its guard test). This closes the discovery.js class: two production read
+  // routes (fundingSources.js, matching.js) passed useStoredDecision:true but
+  // discovery.js OMITTED it, so the primary Discover surface silently overturned
+  // engine decisions. Fixing the default at this choke point fixes every caller
+  // at once instead of relying on each caller to remember the flag.
+  const useStoredDecision = opts.useStoredDecision !== false
+
   if (!opportunity || typeof opportunity !== 'object') {
     return {
       display: false,
@@ -121,7 +134,7 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     // Propagate the authoritative-stored-decision context so the gate can
     // suppress the NO-FIT (content-shape) rule family for rows the matchEngine
     // already scored above the surfacing floor (type-agnostic).
-    useStoredDecision: opts.useStoredDecision === true,
+    useStoredDecision,
   })
   if (!profileGate.pass) {
     return {
@@ -157,7 +170,7 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
   // redundant — the stored score is what we sort by. Reuse it; only fall back to
   // a live recompute when no stored decision is present.
   const hasStoredDecision =
-    opts.useStoredDecision === true &&
+    useStoredDecision &&
     (Boolean(opportunity.match_decision) || Number.isFinite(Number(opportunity.match_score)))
   let decision = hasStoredDecision
     ? {
@@ -276,6 +289,11 @@ export function canonicalizeOpportunityList(profileContext, opportunities = [], 
   // has to notice. Legitimate drops (eligibility mismatch, trust, dedup,
   // pipeline) are NOT counted here.
   const unsurfacedAboveFloorNoFit = []
+  // Mirror the funnel's authoritative-by-default rule so the sentinel recognizes
+  // a stored above-floor row even when the caller omitted the flag (the exact
+  // discovery.js blind spot — the sentinel used to read the same broken opts and
+  // report green while dropping engine-endorsed rows).
+  const sentinelOpts = { ...opts, useStoredDecision: opts.useStoredDecision !== false }
 
   for (const opp of Array.isArray(opportunities) ? opportunities : []) {
     const result = canonicalResultForProfile(profileContext, opp, opts)
@@ -286,7 +304,7 @@ export function canonicalizeOpportunityList(profileContext, opportunities = [], 
       dropped[key] = (dropped[key] || 0) + 1
       if (
         SUPPRESSIBLE_NO_FIT_RULE_IDS.has(key) &&
-        hasAuthoritativeStoredDecision(opp, opts)
+        hasAuthoritativeStoredDecision(opp, sentinelOpts)
       ) {
         unsurfacedAboveFloorNoFit.push({
           opportunity_id: opp?.id ?? opp?.opportunity_id ?? null,

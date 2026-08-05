@@ -463,6 +463,20 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   )
   const measurable = grantShaped.length - amountUnknowable.length
   if (measurable >= 5 && withAmount.length === 0) {
+    // The MEASURABLE candidates are the concrete misses — name them. `subjects`
+    // is the CANONICAL evidence key the code-brief pipeline reads
+    // (buildCodeBrief reads `evidence.subjects`; the registry-driven totality
+    // pass reads `evidence[actor.evidence_key]`). This finding used to point
+    // its evidence_key at `grant_shaped` — a COUNT — so the owner's brief said
+    // "Concrete subject(s): 8" and never named a single title (the same
+    // canonical-key defect that once left institution_recall_miss briefs with
+    // no school ever named).
+    const unknowableSet = new Set(amountUnknowable)
+    const subjects = grantShaped
+      .filter((r) => !unknowableSet.has(r))
+      .map((r) => String(r.title || '').trim())
+      .filter(Boolean)
+      .slice(0, 6)
     findings.push(
       makeFinding(FINDING_TYPES.AMOUNT_RECALL_MISS, {
         message: `${scenario.label}: 0 of ${measurable} grant-shaped stored candidates whose funder could state an award amount carry one — this profile shape's pipeline value will display ~$0 (amount extraction/adapter gap, not a recall gap).`,
@@ -474,6 +488,7 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
           measurable,
           amount_unknowable: amountUnknowable.length,
           with_amount: 0,
+          subjects,
         },
       }),
     )

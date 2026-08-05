@@ -3,6 +3,7 @@ import {
   selectVisibleCatalog,
   mergeDiscoveryResults,
   buildResultsReconciliation,
+  partitionDiscoverResults,
 } from './discoverResultsMerge.js'
 
 // Build a distinct opportunity (unique title + url so dedupe never collapses
@@ -132,5 +133,47 @@ describe('buildResultsReconciliation — honest displayed-vs-matched line', () =
     expect(
       buildResultsReconciliation({ shownCount: 0, matchedSourceCount: 0, belowFloorCount: 0, minScore: 8 }),
     ).toBeNull()
+  })
+})
+
+describe('partitionDiscoverResults — awardable vs directories', () => {
+  it('keeps POINTER_KINDS in sync with the backend registry', async () => {
+    const { POINTER_KINDS: backend } = await import('../../backend/config/opportunityKindClasses.js')
+    const { isDiscoverPointer } = await import('./discoverResultsMerge.js')
+    for (const kind of backend) {
+      expect(isDiscoverPointer({ opportunity_kind: kind })).toBe(true)
+      expect(isDiscoverPointer({ opportunity_kind: kind.toUpperCase() })).toBe(true)
+    }
+    expect(isDiscoverPointer({ opportunity_kind: 'benefit' })).toBe(false)
+    expect(isDiscoverPointer({ opportunity_kind: 'DIRECT_GRANT' })).toBe(false)
+  })
+
+  it('splits awardable from directories and never lets directories inflate awardableCount', () => {
+    const rows = [
+      { id: 'a', title: 'HOPE Scholarship', opportunity_kind: 'PROGRAM', match_decision: 'accept' },
+      { id: 'b', title: 'Findhelp directory', opportunity_kind: 'directory', match_decision: 'review' },
+      { id: 'c', title: 'School portal', opportunity_kind: 'school_portal', is_directory: true },
+      { id: 'd', title: 'Pell Grant', opportunity_kind: 'benefit', match_decision: 'accept' },
+    ]
+    const p = partitionDiscoverResults(rows)
+    expect(p.awardableCount).toBe(2)
+    expect(p.directoryCount).toBe(2)
+    expect(p.totalCount).toBe(4)
+    expect(p.awardable.map((r) => r.id).sort()).toEqual(['a', 'd'])
+    expect(p.directories.map((r) => r.id).sort()).toEqual(['b', 'c'])
+  })
+
+  it('carries awardable/directory counts on reconciliation when provided', () => {
+    const rec = buildResultsReconciliation({
+      shownCount: 2,
+      matchedSourceCount: 5,
+      belowFloorCount: 0,
+      minScore: 8,
+      awardableCount: 2,
+      directoryCount: 7,
+    })
+    expect(rec.shown).toBe(2)
+    expect(rec.awardable).toBe(2)
+    expect(rec.directories).toBe(7)
   })
 })

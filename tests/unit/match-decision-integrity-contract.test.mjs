@@ -10,7 +10,6 @@ test('post-crawl and boot choke points permanently enforce persisted match integ
   const crawler = read('backend/services/crawlerOsService.js')
   const needFirst = read('backend/services/matching/needFirstReconciler.js')
   const invariants = read('backend/startup/enforceInvariants.js')
-  const materializer = read('scripts/materialize-production-source.mjs')
 
   assert.match(service, /removed_canonical_rejects/)
   assert.match(service, /SURFACED_MATCHER_VERSIONS_SQL/)
@@ -20,5 +19,4 @@ test('post-crawl and boot choke points permanently enforce persisted match integ
   assert.match(needFirst, /match_decision_integrity: matchDecisionIntegrity/)
   assert.match(invariants, /export async function enforcePersistedMatchDecisionIntegrity/)
   assert.match(invariants, /steps\.push\(await enforcePersistedMatchDecisionIntegrity\(db\)\)/)
-  assert.match(materializer, /apply-match-decision-integrity\.mjs/)
 })

@@ -182,6 +182,47 @@ describe('pure helpers', () => {
     expect(web_real).toBe(1)
   })
 
+  it('a registered FOREIGN FUNDER on .org is junk on the WEB side too (the 2026-08-04 −24.9 parity regression)', () => {
+    // Verbatim hit from the 2026-08-04T08:15Z run's web_only_top (BOTH golden
+    // profiles): Tata Trusts (India) on a .org host. The 2026-08-03 QA chain
+    // purged its rows from the MATCH store (FOREIGN_FUNDER_HOSTS/NAMES), which
+    // flipped it here from "overlap" to "web-only find" — the benchmark scored
+    // the cleanup as a recall regression. The web side must consult the SAME
+    // canonical foreign-funder detector the product side uses.
+    const tata = {
+      url: 'https://www.tatatrusts.org/our-work/individual-grants-programme/medical-grants',
+      title: 'Medical Financial Aid for Critical Care | Tata Trusts',
+      snippet: 'financial aid grants for critical care treatment',
+    }
+    const { web_only, web_real } = classifyWebResults([tata], [], { needs: ['medical'] })
+    expect(web_only).toHaveLength(0)
+    expect(web_real).toBe(0)
+
+    // The gate is the registry, not a nationality vibe: a US .org funder with
+    // the same shape still counts as a real web-only find.
+    const us = {
+      url: 'https://neighborfund.org/apply',
+      title: 'Neighbor Emergency Assistance Grant',
+      snippet: 'grants for medical bills in Tennessee',
+    }
+    const kept = classifyWebResults([us], [], { needs: ['medical bills'] })
+    expect(kept.web_only).toHaveLength(1)
+  })
+
+  it('a stored (not-yet-purged) foreign row still counts as overlap — the gate only screens purported NEW misses', () => {
+    // classifyWebResults exempts identity-confirmed overlaps from the
+    // relevance gate by design; the foreign screen must not change that.
+    const stored = [{ id: 'ot', title: 'Tata Trusts Medical Grants', sponsor: 'Tata Trusts', application_url: 'https://www.tatatrusts.org/our-work/individual-grants-programme/medical-grants' }]
+    const hit = {
+      url: 'https://www.tatatrusts.org/our-work/individual-grants-programme/medical-grants',
+      title: 'Medical Financial Aid for Critical Care | Tata Trusts',
+      snippet: 'financial aid grants',
+    }
+    const { overlap, web_only } = classifyWebResults([hit], stored, { needs: ['medical'] })
+    expect(overlap).toHaveLength(1)
+    expect(web_only).toHaveLength(0)
+  })
+
   it('classifyWebResults: title identity and domain fallback both count as overlap', () => {
     const stored = [{ id: 'o3', title: 'The Riverside Teacher Fund', sponsor: 'Riverside CF', application_url: 'https://riversidecf.org/programs' }]
     // Same title, re-punctuated + reordered host page → title-identity overlap.

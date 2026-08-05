@@ -10,7 +10,9 @@
  *   • A blind engine pass over a 2,500-row sample per golden profile ACCEPTs
  *     13.3–20.2% — including junk classes ("U.S. Embassy Luanda Small Grants"
  *     ACCEPT 11 for a TN individual) the fix/qa-36-profile-junk chain screens.
- *     THAT is why writes default OFF and the fundability choke point exists.
+ *     THAT is why writes once defaulted OFF behind the fundability choke point.
+ *     The junk chain (`passesFundabilityGate`) now lands; writes DEFAULT ON
+ *     (`ENFORCE_CATALOG_RESCORE=0` for count-only).
  *
  * The engine here is INJECTED (deps.computeMatchDecision) so each test controls
  * verdicts exactly; the write/refusal mechanics under test are the sweep's own.
@@ -112,13 +114,25 @@ beforeEach(() => { delete process.env.ENFORCE_CATALOG_RESCORE; oppSeq = 0 })
 afterEach(() => { delete process.env.ENFORCE_CATALOG_RESCORE })
 
 describe('the write switch (the flood gate)', () => {
-  it('defaults OFF: an unset env is a count-only census', () => {
-    expect(isCatalogRescoreWriteEnabled({})).toBe(false)
-    expect(isCatalogRescoreWriteEnabled({ ENFORCE_CATALOG_RESCORE: '' })).toBe(false)
+  it('defaults ON: unset env writes; ENFORCE_CATALOG_RESCORE=0 is count-only', () => {
+    expect(isCatalogRescoreWriteEnabled({})).toBe(true)
+    expect(isCatalogRescoreWriteEnabled({ ENFORCE_CATALOG_RESCORE: '' })).toBe(true)
     expect(isCatalogRescoreWriteEnabled({ ENFORCE_CATALOG_RESCORE: '0' })).toBe(false)
     expect(isCatalogRescoreWriteEnabled({ ENFORCE_CATALOG_RESCORE: 'false' })).toBe(false)
     expect(isCatalogRescoreWriteEnabled({ ENFORCE_CATALOG_RESCORE: '1' })).toBe(true)
     expect(isCatalogRescoreWriteEnabled({ ENFORCE_CATALOG_RESCORE: 'true' })).toBe(true)
+  })
+
+  it('default ON writes an ACCEPT when ENFORCE_CATALOG_RESCORE is unset', async () => {
+    delete process.env.ENFORCE_CATALOG_RESCORE
+    const db = makeDb()
+    addProfile(db, 'p1')
+    addOpp(db, { title: 'HOPE Scholarship' })
+    const res = await runCatalogRescoreSweep(db, { deps: baseDeps() })
+    expect(res.write_enabled).toBe(true)
+    expect(res.linked).toBe(1)
+    expect(matches(db)).toHaveLength(1)
+    db.close()
   })
 
   it('count-only mode adjudicates and REPORTS but writes nothing at all', async () => {
@@ -126,7 +140,7 @@ describe('the write switch (the flood gate)', () => {
     addProfile(db, 'p1')
     addOpp(db, { title: 'HOPE Scholarship' })
     addOpp(db, { title: 'JUNK Embassy Luanda Small Grants' })
-    const res = await runCatalogRescoreSweep(db, { deps: baseDeps() })
+    const res = await runCatalogRescoreSweep(db, { writeEnabled: false, deps: baseDeps() })
     expect(res.write_enabled).toBe(false)
     expect(res.would_link).toBe(2) // both ACCEPTs observed…
     expect(res.linked).toBe(0)

@@ -1,0 +1,9 @@
+{
+  "appId": "com.grantflow.app",
+  "appName": "GrantFlow",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "https"
+  }
+}

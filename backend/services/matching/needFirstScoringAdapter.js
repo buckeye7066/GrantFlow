@@ -335,19 +335,18 @@ export function applyNeedFirstScoring({
   }
 
   const eligibilityPolicy = applyEligibilityConfirmationPolicy({
-  canonical,
-  score,
-  decision: decisionResult.decision,
-  explanation: decisionResult.explanation,
-  reasons: decisionResult.reasons,
-  resource: policy.resource,
-})
-score = eligibilityPolicy.score
-decisionResult.decision = eligibilityPolicy.decision
-decisionResult.explanation = eligibilityPolicy.explanation
-decisionResult.reasons = eligibilityPolicy.reasons
-const directEligibilityUnconfirmed =
-  eligibilityPolicy.confirmation.unconfirmed && !policy.resource
+    canonical,
+    score,
+    decision: decisionResult.decision,
+    explanation: decisionResult.explanation,
+    reasons: decisionResult.reasons,
+    resource: policy.resource,
+  })
+  score = eligibilityPolicy.score
+  decisionResult.decision = eligibilityPolicy.decision
+  decisionResult.explanation = eligibilityPolicy.explanation
+  decisionResult.reasons = eligibilityPolicy.reasons
+  const eligibilityUnconfirmed = eligibilityPolicy.confirmation.unconfirmed
 
   const previousExplain = canonical?.match_explain ?? {}
   const previousBreakdown = previousExplain.scoreBreakdown ??
@@ -363,16 +362,16 @@ const directEligibilityUnconfirmed =
     needFirstPolicy: policy,
     scoring_policy_version: NEED_FIRST_SCORING_VERSION,
     eligibility_confirmation: {
-      confirmed: !directEligibilityUnconfirmed,
-      unconfirmed: directEligibilityUnconfirmed,
+      confirmed: eligibilityPolicy.confirmation.confirmed,
+      unconfirmed: eligibilityUnconfirmed,
       missing_fields: eligibilityPolicy.confirmation.missingFields,
       all_missing_fields: eligibilityPolicy.confirmation.allMissingFields,
-      score_cap: directEligibilityUnconfirmed
+      score_cap: eligibilityUnconfirmed
         ? eligibilityPolicy.confirmation.scoreCap
         : null,
       applied: eligibilityPolicy.applied,
     },
-    eligibility_unconfirmed: directEligibilityUnconfirmed,
+    eligibility_unconfirmed: eligibilityUnconfirmed,
     dataPointEvidence: {
       ...previousEvidence,
       bonus_credit: Math.round(fit.boundedBonus * 10) / 10,
@@ -385,8 +384,8 @@ const directEligibilityUnconfirmed =
       need_first_decision: policy.decision,
       need_first_score_cap: policy.scoreCap,
       need_first_hard_mismatch: policy.hardMismatch,
-      eligibility_unconfirmed: directEligibilityUnconfirmed,
-      eligibility_unconfirmed_score_cap: directEligibilityUnconfirmed
+      eligibility_unconfirmed: eligibilityUnconfirmed,
+      eligibility_unconfirmed_score_cap: eligibilityUnconfirmed
         ? eligibilityPolicy.confirmation.scoreCap
         : null,
       eligibility_confirmation_applied: eligibilityPolicy.applied,
@@ -419,8 +418,8 @@ const directEligibilityUnconfirmed =
     match_explain: matchExplain,
     matcherVersion: canonical?.matcherVersion ?? NEED_FIRST_SCORING_VERSION,
     scoringPolicyVersion: NEED_FIRST_SCORING_VERSION,
-    eligibilityConfirmed: !directEligibilityUnconfirmed,
-      eligibilityUnconfirmed: directEligibilityUnconfirmed,
+    eligibilityConfirmed: eligibilityPolicy.confirmation.confirmed,
+    eligibilityUnconfirmed,
   }
 }
 

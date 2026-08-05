@@ -110,6 +110,42 @@ describe('need-first eligibility confirmation integration', () => {
     expect(result.match_explain.eligibility_unconfirmed).toBe(false)
   })
 
+  it('reports missing applicant eligibility on a resource without applying score policy', () => {
+    const result = applyNeedFirstScoring({
+      canonical: {
+        score: 22,
+        decision: 'REVIEW',
+        eligible: 'maybe',
+        explanation: 'Directory retained as a search aid.',
+        reasons: [],
+        missingEligibilityFields: ['income_eligibility'],
+        matchedNeeds: ['healthcare'],
+        match_explain: {},
+      },
+      profileContext: profileContext(),
+      opportunity: {
+        ...directOpportunity(),
+        title: 'Healthcare Assistance Directory',
+        opportunity_kind: 'DIRECTORY',
+        is_directory: true,
+      },
+    })
+
+    expect(result.score).toBe(22)
+    expect(result.decision).toBe('REVIEW')
+    expect(result.eligibilityConfirmed).toBe(false)
+    expect(result.eligibilityUnconfirmed).toBe(true)
+    expect(result.match_explain).toMatchObject({
+      eligibility_unconfirmed: true,
+      eligibility_confirmation: {
+        confirmed: false,
+        unconfirmed: true,
+        missing_fields: ['income_eligibility'],
+        applied: false,
+      },
+    })
+  })
+
   it('keeps a canonical rejection rejected', () => {
     const result = applyNeedFirstScoring({
       canonical: {
