@@ -265,3 +265,20 @@ test('deadlineMs skips remaining sources as time_budget_exhausted (tier order ke
     assert.equal(s.fetched, 0);
   }
 });
+
+test('null deadlineMs does NOT skip sources (Number(null)===0 trap)', async () => {
+  // crawlerOsService must pass null (no deadline), never coerce null→0.
+  // Number.isFinite(opts.deadlineMs) is false for null — sources run normally.
+  const d = deps();
+  const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+  const r = await runDiscovery(d, {
+    thesis,
+    matchProfiles: [thesis],
+    runId: 'run_no_deadline',
+    deadlineMs: null,
+  });
+  assert.ok(r.planned >= 1);
+  const exhausted = r.sources.filter((s) => s.reason === 'time_budget_exhausted');
+  assert.equal(exhausted.length, 0, 'null deadline must not exhaust the budget');
+  assert.ok(r.sources.some((s) => s.outcome !== 'skipped' || s.reason !== 'time_budget_exhausted'));
+});

@@ -574,7 +574,10 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     if (urlOverrides.length > 0) liveFetcher = makeOverrideRewritingFetcher(liveFetcher, urlOverrides);
   } catch { /* overrides are an enhancement, never a crawl blocker */ }
   const onlySources = Array.isArray(onlySourceIds) && onlySourceIds.length > 0 ? onlySourceIds : null;
-  const resolvedDeadline = Number.isFinite(Number(deadlineMs))
+  // TRAP: Number(null) === 0 and Number.isFinite(0) — treating a missing
+  // deadline as epoch would skip EVERY source as time_budget_exhausted.
+  // Null/undefined means "no cooperative deadline" (nightly / unit paths).
+  const resolvedDeadline = (deadlineMs != null && Number.isFinite(Number(deadlineMs)))
     ? Number(deadlineMs)
     : (Number.isFinite(Number(timeBudgetMs)) && Number(timeBudgetMs) > 0
       ? Date.now() + Number(timeBudgetMs)
