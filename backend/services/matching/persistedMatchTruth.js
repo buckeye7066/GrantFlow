@@ -4,6 +4,7 @@ import {
   applyNeedFirstScoring,
   NEED_FIRST_SCORING_VERSION,
 } from './needFirstScoringAdapter.js'
+import { trustedPersistedMatchConfidence } from './matchConfidenceProvenance.js'
 
 function parseJson(value, fallback = null) {
   if (value === null || value === undefined || value === '') return fallback
@@ -238,6 +239,10 @@ export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [
     restored.push({
       ...canonical,
       match_score: score,
+      match_confidence: trustedPersistedMatchConfidence(persisted, {
+        matchScore: score,
+        matchDecision: decision,
+      }),
       match_decision: decision,
       decision,
       match_explanation: explanation,
