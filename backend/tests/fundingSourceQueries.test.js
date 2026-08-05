@@ -9,6 +9,7 @@ import {
   readFundingSourceRows,
 } from '../services/matching/fundingSourceQueries.js'
 import { reconcileNeedFirstProfileMatches } from '../services/matching/needFirstReconciler.js'
+import { stampMatchConfidenceProvenance } from '../services/matching/matchConfidenceProvenance.js'
 
 const SQLITE_CANONICAL_MIGRATION = fs.readFileSync(
   path.resolve('backend/db/migrations/122_profile_opportunity_matches.sql'),
@@ -238,7 +239,7 @@ describe('canonical funding-source query projection', () => {
     expect(JSON.parse(reconciled.match_explain_json).scoring_policy_version).toBe('need_first_v2')
   })
 
-  it('preserves confidence already measured under the current need-first contract', async () => {
+  it('does not treat a current policy label as confidence provenance', async () => {
     const db = createCanonicalDb()
     db.prepare(
       `UPDATE profile_opportunity_matches
@@ -260,12 +261,73 @@ describe('canonical funding-source query projection', () => {
     })
 
     expect(result.already_current).toBeGreaterThan(0)
+    expect(result.confidence_cleared).toBeGreaterThan(0)
     const current = db.prepare(
-      `SELECT match_confidence
+      `SELECT match_score, match_confidence, match_decision, match_explain_json
          FROM profile_opportunity_matches
         WHERE profile_id = ? AND opportunity_id = ?`,
     ).get('p-1', 'opp-1')
-    expect(current.match_confidence).toBe(89)
+    expect(current).toMatchObject({ match_score: 82, match_confidence: null, match_decision: 'accept' })
+    expect(JSON.parse(current.match_explain_json)).not.toHaveProperty('match_confidence_provenance')
+  })
+
+  it('preserves confidence only with exact persistence-time provenance', async () => {
+    const db = createCanonicalDb()
+    const explain = stampMatchConfidenceProvenance(
+      { scoring_policy_version: 'need_first_v2' },
+      { match_score: 82, match_decision: 'accept', match_confidence: 89 },
+    )
+    db.prepare(
+      `UPDATE profile_opportunity_matches
+          SET match_explain_json = ?, match_confidence = ?
+        WHERE profile_id = ? AND opportunity_id = ?`,
+    ).run(JSON.stringify(explain), 89, 'p-1', 'opp-1')
+
+    const result = await reconcileNeedFirstProfileMatches(db, {
+      profileId: 'p-1',
+      profileContext: {
+        profile: { applicant_type: 'individual', needs: ['medical'] },
+        sections: {},
+      },
+    })
+
+    expect(result.already_current).toBeGreaterThan(0)
+    const current = db.prepare(
+      `SELECT match_score, match_confidence, match_decision
+         FROM profile_opportunity_matches
+        WHERE profile_id = ? AND opportunity_id = ?`,
+    ).get('p-1', 'opp-1')
+    expect(current).toMatchObject({ match_score: 82, match_confidence: 89, match_decision: 'accept' })
+  })
+
+  it('clears confidence when a later writer changes a stamped score', async () => {
+    const db = createCanonicalDb()
+    const explain = stampMatchConfidenceProvenance(
+      { scoring_policy_version: 'need_first_v2' },
+      { match_score: 82, match_decision: 'accept', match_confidence: 89 },
+    )
+    db.prepare(
+      `UPDATE profile_opportunity_matches
+          SET match_score = ?, match_explain_json = ?, match_confidence = ?
+        WHERE profile_id = ? AND opportunity_id = ?`,
+    ).run(41, JSON.stringify(explain), 89, 'p-1', 'opp-1')
+
+    const result = await reconcileNeedFirstProfileMatches(db, {
+      profileId: 'p-1',
+      profileContext: {
+        profile: { applicant_type: 'individual', needs: ['medical'] },
+        sections: {},
+      },
+    })
+
+    expect(result.confidence_cleared).toBeGreaterThan(0)
+    const current = db.prepare(
+      `SELECT match_score, match_confidence, match_decision, match_explain_json
+         FROM profile_opportunity_matches
+        WHERE profile_id = ? AND opportunity_id = ?`,
+    ).get('p-1', 'opp-1')
+    expect(current).toMatchObject({ match_score: 41, match_confidence: null, match_decision: 'accept' })
+    expect(JSON.parse(current.match_explain_json)).not.toHaveProperty('match_confidence_provenance')
   })
 
   it('falls back SELECT-only when the optional dismissal table is absent', async () => {
