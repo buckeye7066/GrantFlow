@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { BROWSER_FETCH_HEADERS, fetchWithTimeout } from '../services/crawlerOsService.js'
+import { BROWSER_FETCH_HEADERS, fetchWithTimeout, makeProductionFetcher } from '../services/crawlerOsService.js'
 
 /**
  * makeProductionFetcher is "the ONE network entry for live discovery". Native
@@ -78,5 +78,59 @@ describe('crawler fetchWithTimeout', () => {
     const h = new Headers(seen.headers ?? {})
     expect(h.get('user-agent')).toBeNull()
     expect(h.get('x-only')).toBe('yes')
+  })
+
+  it('production enables one bounded retry for an idempotent transient response', async () => {
+    vi.stubEnv('FEATURE_CRAWLER_RETRIES', 'true')
+    let calls = 0
+    globalThis.fetch = async (url) => {
+      calls += 1
+      const status = calls === 1 ? 503 : 200
+      return {
+        ok: status === 200,
+        status,
+        url,
+        headers: { get: () => null },
+        async text() { return status === 200 ? 'recovered' : 'busy' },
+      }
+    }
+    const fetcher = makeProductionFetcher({
+      resolve: async () => ['8.8.8.8'],
+      rateMs: 0,
+      retryBaseMs: 0,
+    })
+
+    const result = await fetcher.fetch('https://example.org/transient')
+    expect(result.ok).toBe(true)
+    expect(result.attempts).toBe(2)
+    expect(result.retries).toBe(1)
+    expect(calls).toBe(2)
+  })
+
+  it('FEATURE_CRAWLER_RETRIES=false disables the production retry kill switch', async () => {
+    vi.stubEnv('FEATURE_CRAWLER_RETRIES', 'false')
+    let calls = 0
+    globalThis.fetch = async (url) => {
+      calls += 1
+      return {
+        ok: false,
+        status: 503,
+        url,
+        headers: { get: () => null },
+        async text() { return 'busy' },
+      }
+    }
+    const fetcher = makeProductionFetcher({
+      resolve: async () => ['8.8.8.8'],
+      rateMs: 0,
+      retryBaseMs: 0,
+    })
+
+    const result = await fetcher.fetch('https://example.org/transient')
+    expect(result.ok).toBe(false)
+    expect(result.attempts).toBe(1)
+    expect(result.retries).toBe(0)
+    expect(result.retrySuppressed).toBe('retry_limit_reached')
+    expect(calls).toBe(1)
   })
 })
