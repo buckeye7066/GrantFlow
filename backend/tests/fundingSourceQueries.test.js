@@ -8,6 +8,7 @@ import {
   NEED_FIRST_RECONCILIATION_ROWS_SQL,
   readFundingSourceRows,
 } from '../services/matching/fundingSourceQueries.js'
+import { reconcileNeedFirstProfileMatches } from '../services/matching/needFirstReconciler.js'
 
 const SQLITE_CANONICAL_MIGRATION = fs.readFileSync(
   path.resolve('backend/db/migrations/122_profile_opportunity_matches.sql'),
@@ -213,6 +214,28 @@ describe('canonical funding-source query projection', () => {
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.eligibility\b/)
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.eligibility_criteria\b/)
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.restrictions\b/)
+  })
+
+  it('clears crawler confidence when need-first reconciliation replaces its score contract', async () => {
+    const db = createCanonicalDb()
+
+    const result = await reconcileNeedFirstProfileMatches(db, {
+      profileId: 'p-1',
+      profileContext: {
+        profile: { applicant_type: 'individual', needs: ['medical'] },
+        sections: {},
+      },
+    })
+
+    expect(result.updated).toBeGreaterThan(0)
+    const reconciled = db.prepare(
+      `SELECT match_score, match_confidence, match_decision, match_explain_json
+         FROM profile_opportunity_matches
+        WHERE profile_id = ? AND opportunity_id = ?`,
+    ).get('p-1', 'opp-1')
+    expect(reconciled.match_score).not.toBe(82)
+    expect(reconciled.match_confidence).toBeNull()
+    expect(JSON.parse(reconciled.match_explain_json).scoring_policy_version).toBe('need_first_v2')
   })
 
   it('falls back SELECT-only when the optional dismissal table is absent', async () => {
