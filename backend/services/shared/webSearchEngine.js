@@ -4,6 +4,10 @@
  * One `searchWeb(query)` entry point that returns normalized
  * `[{ url, title, snippet }]` results. Provider chain, in order:
  *
+ *   0. Google CSE (official Custom Search JSON API, TOP RUNG when keyed) —
+ *      the "basic google search" (owner 2026-08-04). Daily-budget-gated
+ *      (googleBudget.js) and quota-degraded to the next UTC midnight on
+ *      403/429; unconfigured/exhausted, it silently yields to the ladder.
  *   1. SearXNG (self-hosted metasearch, PRIMARY) — keyless, unlimited, and
  *      reliable from a datacenter IP. Active when SEARXNG_URL is set. This is
  *      GrantFlow's "own Brave"; see docs/SEARXNG_SELF_HOST.md for the runbook.
@@ -25,6 +29,8 @@ import * as cheerio from 'cheerio'
 import { getWithRetry } from './httpClient.js'
 import { makeBraveSearchProvider } from '../yana/webSearchProvider.js'
 import { makeSearxngProvider } from './searxngProvider.js'
+import { makeGoogleCseProvider } from './googleCseProvider.js'
+import { tryConsumeGoogleQuery } from './googleBudget.js'
 import { distinctiveTerms, coveredTerms } from './queryRelevance.js'
 import { getCachedSearch, putCachedSearch } from './webSearchCache.js'
 import { createLogger } from '../../utils/logger.js'
@@ -50,6 +56,33 @@ function isLiveSearchDisabledInTests() {
 
 // Providers are created once (each throws without its config). Cache the attempt
 // so we don't re-check the env / re-construct on every query.
+// Google CSE (official API) sits ABOVE SearXNG: the "basic google search"
+// rung (owner directive 2026-08-04). Budget-gated (googleBudget.js, daily
+// quota) and quota-degraded until the next UTC midnight on a 403/429, so an
+// unconfigured or exhausted key silently yields to the rest of the ladder.
+let _google = null
+let _googleResolved = false
+let _googleDegradedUntil = 0
+function getGoogleProvider() {
+  if (_googleResolved) return _google
+  _googleResolved = true
+  if (process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX) {
+    try {
+      _google = makeGoogleCseProvider({ count: 8 })
+      log.info('[webSearchEngine] Google CSE search provider active (top rung)')
+    } catch (err) {
+      log.warn(`[webSearchEngine] Google CSE provider unavailable: ${err?.message ?? err}`)
+      _google = null
+    }
+  }
+  return _google
+}
+
+function nextUtcMidnight(now = Date.now()) {
+  const d = new Date(now)
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)
+}
+
 let _searxng = null
 let _searxngResolved = false
 function getSearxngProvider() {
@@ -125,6 +158,9 @@ function tripsCrossQueryIdentity(q, results) {
 
 /** Reset cached provider state — test seam only. */
 export function _resetWebSearchEngineForTests() {
+  _google = null
+  _googleResolved = false
+  _googleDegradedUntil = 0
   _searxng = null
   _searxngResolved = false
   _brave = null
@@ -299,6 +335,36 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   const cacheAndReturn = async (results) => {
     await putCachedSearch(q, results)
     return results
+  }
+
+  // 0.5. Google CSE (official API, top rung — the "basic google search" the
+  // owner asked for, 2026-08-04). A cache hit above never spends budget; a
+  // budget refusal or quota degradation silently yields to SearXNG, so this
+  // rung can only ADD result quality, never cost the ladder a query. An EMPTY
+  // Google answer also falls through — a site-restricted CX or thin SERP must
+  // not become the cached answer for the day.
+  const google = getGoogleProvider()
+  if (google && Date.now() >= _googleDegradedUntil) {
+    const budget = await tryConsumeGoogleQuery({})
+    if (budget.allowed) {
+      try {
+        const results = await google({ query: q, count, timeoutMs })
+        if (Array.isArray(results) && results.length) {
+          const cleaned = results
+            .filter((r) => r?.url && !shouldSkip(r.url))
+            .slice(0, count)
+            .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
+          if (cleaned.length) return cacheAndReturn(cleaned)
+        }
+      } catch (err) {
+        if (err?.code === 'google_quota') {
+          _googleDegradedUntil = nextUtcMidnight()
+          log.warn(`[webSearchEngine] Google CSE quota refused — skipping the Google rung until the UTC reset (${new Date(_googleDegradedUntil).toISOString()})`)
+        } else {
+          log.warn(`[webSearchEngine] Google CSE search failed for "${q}": ${err?.message ?? err}`)
+        }
+      }
+    }
   }
 
   // 1. SearXNG (self-hosted, primary): keyless, unlimited, datacenter-reliable.

@@ -280,6 +280,80 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
   })
 })
 
+describe('saveToProfilePipeline — FUNDING_RESULT gate (Gate 1.75, the 2026-08-04 pipeline-writer hole)', () => {
+  let db
+  beforeEach(() => {
+    db = makeDb()
+  })
+
+  it('refuses a not_a_grant regulatory notice with gate FUNDING_RESULT (the prod "HRSA information-collection at 82" class)', async () => {
+    const notice = {
+      id: 'opp-notice',
+      title: 'Agency Information Collection Activities: Proposed Collection: Public Comment Request',
+      sponsor: 'Health Resources and Services Administration',
+      url: 'https://www.federalregister.gov/documents/2026/06/30/y',
+      // NOT 'federal_register': that string is refused by the earlier
+      // SOURCE_ALLOWLIST gate — this test must reach Gate 1.75 to prove it.
+      source: 'grants_gov',
+    }
+    // A high explicit score + threshold 0 must not smuggle it past the gate.
+    const res = await saveToProfilePipeline(db, notice, 'p1', profileContext, 90, 0)
+    expect(res.saved).toBe(false)
+    expect(res.gate).toBe('FUNDING_RESULT')
+    expect(res.decision).toBe('REJECT')
+    expect(res.reason).toMatch(/not a fundable opportunity/i)
+    expect(res.reason).toMatch(/regulatory_notice_title/)
+    expect(countGrants(db)).toBe(0)
+  })
+
+  it('refuses a benign-title Federal-Register-hosted row (the EPA "Notice of Availability" at 76)', async () => {
+    const frRow = {
+      id: 'opp-fr',
+      title: 'Innovation Challenge: Alternatives to Conventional Pesticides for Crop Desiccation; Notice of Availability',
+      sponsor: 'Environmental Protection Agency',
+      url: 'https://www.federalregister.gov/documents/2026/07/02/2026-13458/x',
+      source: 'web_search',
+    }
+    const res = await saveToProfilePipeline(db, frRow, 'p1', profileContext, 90, 0)
+    expect(res.saved).toBe(false)
+    expect(res.gate).toBe('FUNDING_RESULT')
+    expect(res.reason).toMatch(/federal_register_source/)
+    expect(countGrants(db)).toBe(0)
+  })
+
+  it('a RESOURCE-bucket pointer row is NOT refused by the funding-result gate (locator rule: only not_a_grant is)', async () => {
+    const directory = {
+      id: 'opp-dir',
+      title: 'findhelp — Local assistance programs',
+      sponsor: 'findhelp',
+      opportunity_kind: 'DIRECTORY',
+      url: 'https://www.findhelp.org',
+      source: 'web_search',
+    }
+    const res = await saveToProfilePipeline(db, directory, 'p1', profileContext, 90, 55)
+    // Whatever the later gates decide, Gate 1.75 must not be the refusal —
+    // `resource` stays admissible per the locator rule.
+    expect(res.gate).not.toBe('FUNDING_RESULT')
+  })
+
+  it('still never writes a NULL match_score on a successful save', async () => {
+    const goodOpp = {
+      id: 'opp-good-score',
+      title: 'Strong Match Program',
+      sponsor: 'Good Funder',
+      url: 'https://grants.example.gov/good',
+      source: 'grants_gov',
+    }
+    const res = await saveToProfilePipeline(db, goodOpp, 'p1', profileContext, 90, 55)
+    expect(res.saved).toBe(true)
+    expect(countGrants(db)).toBe(1)
+    const row = db.prepare('SELECT match_score FROM grants').get()
+    // SQLite is typeless — assert the persisted TYPE, not just non-nullness.
+    expect(row.match_score).not.toBeNull()
+    expect(typeof row.match_score).toBe('number')
+  })
+})
+
 describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
   let db
   beforeEach(() => {

@@ -78,6 +78,12 @@ export const AUTOMATION_TYPES = Object.freeze([
   'email',
   'no_application',
   'auto_profile',
+  // A pointer-kind source that decomposition cannot reach (no usable URL):
+  // not an application at all — a labeled research lead carrying owner
+  // handoff instructions (owner directive 2026-08-04; the manual-handoff
+  // rule). Reclassified by the enforcePointerTaskReclassification boot net;
+  // new creates are refused at the policy gate instead.
+  'research_lead',
   'unknown',
 ])
 
@@ -412,7 +418,7 @@ export async function ensureApplicationTask(db, {
   await ensureApplicationTaskSchema(db)
 
   return await withProfileScope({ bypass: true }, async () => {
-    const existing = await db
+    let existing = await db
       .prepare(
         `SELECT * FROM application_tasks
           WHERE profile_id = ? AND COALESCE(opportunity_id,'') = ? AND COALESCE(grant_id,'') = ?
@@ -423,6 +429,42 @@ export async function ensureApplicationTask(db, {
         opportunityId ? String(opportunityId) : '',
         grantId ? String(grantId) : '',
       )
+    // A GRANT-backed task's identity is (profile, grant) — the grant IS the
+    // pipeline identity; opportunity_id only differentiates grantless
+    // (portal/university) tasks. The exact-key lookup above treated
+    // (grant, NULL-opp) and (grant, opp) as DIFFERENT tasks, so the 2026-07-21
+    // batch minted duplicates for grants whose earlier task predated
+    // opportunity linking (prod: one grant with a 'completed' 07-21 task AND a
+    // 'ready_to_start' 07-01 task). When no exact-key row exists, ADOPT a
+    // live same-grant task instead of duplicating it — and backfill its
+    // opportunity_id when the found row has none. A TERMINAL same-grant task
+    // is deliberately not adopted: cancel-then-recreate stays possible.
+    if (!existing && grantId) {
+      const grantMatch = await db
+        .prepare(
+          `SELECT * FROM application_tasks
+            WHERE profile_id = ? AND grant_id = ?
+              AND (status IS NULL OR status NOT IN (${TASK_TERMINAL_STATUSES.map(() => '?').join(', ')}))
+            ORDER BY created_at DESC
+            LIMIT 1`,
+        )
+        .get(String(profileId), String(grantId), ...TASK_TERMINAL_STATUSES)
+      if (grantMatch) {
+        if (opportunityId && !grantMatch.opportunity_id) {
+          try {
+            await db
+              .prepare(`UPDATE application_tasks SET opportunity_id = ?, updated_at = ${nowSqlLiteral(db)} WHERE id = ?`)
+              .run(String(opportunityId), grantMatch.id)
+            grantMatch.opportunity_id = String(opportunityId)
+          } catch {
+            // A unique-key collision here means the exact-key row appeared
+            // concurrently — fall through with the un-backfilled row, which
+            // still prevents a duplicate create.
+          }
+        }
+        existing = grantMatch
+      }
+    }
     if (existing) {
       // Re-bump the automation metadata when the user re-selects the
       // same source from a different stage so the task picks up the

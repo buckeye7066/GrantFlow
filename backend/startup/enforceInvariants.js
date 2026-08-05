@@ -5219,9 +5219,22 @@ export async function enforceGrantScoreBackfill(db) {
         const decision = computeMatchDecision(ctx.profile, scoreTarget, { profileSections: ctx.sections })
         const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
         if (score === null) { unscorable++; continue }
+        // The decision write is UNCONDITIONAL, not COALESCE: every candidate
+        // here had match_score IS NULL, so any pre-existing match_decision is a
+        // cosmetic migration stamp (063/064/0056/0057 wrote 'review' over
+        // never-scored rows), never an engine or human verdict — keeping it via
+        // COALESCE froze a stamped 'review' forever even when the fresh
+        // canonical decision is REJECT (the prod "general funding support"
+        // class, 2026-08-04). matched_needs is repaired ONLY when it carries
+        // exactly that migration stamp; any other stored value is left alone.
         await db
-          .prepare(`UPDATE grants SET match_score = ?, match_decision = COALESCE(match_decision, ?) WHERE id = ?`)
-          .run(score, String(decision?.decision ?? 'REVIEW'), g.id)
+          .prepare(
+            `UPDATE grants SET match_score = ?, match_decision = ?,
+                    matcher_version = COALESCE(matcher_version, 'score-backfill'),
+                    matched_needs = CASE WHEN matched_needs = '["general funding support"]' THEN ? ELSE matched_needs END
+             WHERE id = ?`,
+          )
+          .run(score, String(decision?.decision ?? 'REVIEW'), JSON.stringify(decision?.matchedNeeds ?? []), g.id)
         repaired++
       } catch (err) {
         unscorable++
@@ -6647,6 +6660,197 @@ export async function enforceNonGrantNoticeMatches(db) {
       repaired,
       junkOpportunities: junkOpps.size,
       profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: a non-grant notice is never a profile PIPELINE row.
+ *
+ * `enforceNonGrantNoticeMatches` above converges the MATCH store, but the
+ * `grants` table — the pipeline the owner actually works — had no equivalent
+ * net, and the per-call junk gate landed in `admitToPipeline` only on
+ * 2026-08-04: every non-canonical writer that ran before it (manual creates,
+ * imports, the admin-schema-repair migrations) left regulatory notices sitting
+ * in pipelines as work items. Prod 2026-08-04: an HRSA "Agency Information
+ * Collection … Public Comment Request" (score 82) and an EPA Federal-Register
+ * "Notice of Availability" (76) on Axiom BioLabs' pipeline, both with
+ * ready_to_start application tasks.
+ *
+ * Candidate discovery is a SQL LIKE SUPERSET (`nonGrantCandidateSqlPredicate`:
+ * title patterns + Federal-Register provenance over the grant's OWN urls —
+ * predicates before LIMIT, #944/#1080 class); `classifyFundingResult`
+ * adjudicates every candidate in JS.
+ *
+ * REPAIR (mirrors enforceProfileEligibility's conservatism):
+ *   - PURGE (tombstone via pipelineDismissals, then delete) ONLY on the same
+ *     positive evidence the matches net purges on — regulatory TITLE, lead-gen
+ *     identity, clearly-expired program SHAPE — and only rows in an
+ *     early/discovery status with no protected name and no recorded award.
+ *   - A Federal-Register SOURCE alone (benign title) is FLAGGED, never purged
+ *     here — an FR url can be a real NOFO's announcement link; those rows are
+ *     counted (`frSourceFlagged`) for the owner-gated repair script.
+ *   - A protected/user-progressed junk row is marked
+ *     eligibility_status='ineligible', never deleted.
+ *   - Non-terminal application tasks on purged grants are CANCELLED.
+ *
+ * `ENFORCE_NON_GRANT_PIPELINE=0` → count-only. Bound: NON_GRANT_PIPELINE_LIMIT
+ * (500) limits DELETES, never discovery.
+ */
+export async function enforceNonGrantNoticePipeline(db) {
+  return runInvariant('non_grant_notice_pipeline', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('profile_id') || !grantCols.has('title')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let classifyFundingResult, RESULT_BUCKETS, nonGrantCandidateSqlPredicate
+    try {
+      ;({ classifyFundingResult, RESULT_BUCKETS, nonGrantCandidateSqlPredicate } =
+        await import('../config/fundingResultFilters.js'))
+    } catch (err) {
+      log.warn('non_grant_notice_pipeline: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    let cancelApplicationTask = null
+    let recordDismissalFn = null
+    try { ({ cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')) } catch { cancelApplicationTask = null }
+    try { ({ recordDismissal: recordDismissalFn } = await import('../services/pipelineDismissals.js')) } catch { recordDismissalFn = null }
+
+    const limit = _boundedLimit('NON_GRANT_PIPELINE_LIMIT', 500)
+    const hasFunder = grantCols.has('funder')
+    const hasAwarded = grantCols.has('amount_awarded')
+    const hasEligStatus = grantCols.has('eligibility_status')
+    const hasUrl = grantCols.has('url')
+
+    const urlExprs = ["lower(coalesce(g.application_url,''))"]
+    if (hasUrl) urlExprs.push("lower(coalesce(g.url,''))")
+    const { clause, params } = nonGrantCandidateSqlPredicate({
+      hayExpr: "lower(coalesce(g.title,''))",
+      urlExprs,
+    })
+
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT g.id, g.profile_id, g.title, ${hasFunder ? 'g.funder' : 'NULL AS funder'}, g.status,
+                  g.deadline, g.application_url${hasUrl ? ', g.url' : ''}${hasAwarded ? ', g.amount_awarded' : ''}
+             FROM grants g
+            WHERE g.profile_id IS NOT NULL AND ${clause}`,
+        )
+        .all(...params)
+    } catch (err) {
+      log.warn('non_grant_notice_pipeline: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+    if (!rows || rows.length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    // Adjudicate the superset. `sponsor` is the classifier's field name; the
+    // pipeline column is `funder` (#725 naming drift).
+    const PURGE_REASON_RX = /^(regulatory_notice_title|lead_gen:|expired:(?!deadline_long_past))/
+    const purgeable = []
+    let frSourceFlagged = 0
+    for (const g of rows) {
+      const verdictRow = { ...g, sponsor: g.funder }
+      const verdict = classifyFundingResult(verdictRow)
+      if (verdict.bucket !== RESULT_BUCKETS.NOT_A_GRANT) continue
+      const positive = verdict.reasons.some((r) => PURGE_REASON_RX.test(r))
+      if (!positive) {
+        // federal_register_source-only (or unresolvable_funder-only) — flag for
+        // the owner-gated repair, never auto-purge.
+        frSourceFlagged += 1
+        continue
+      }
+      purgeable.push({ ...g, reasons: verdict.reasons })
+    }
+    if (purgeable.length === 0 && frSourceFlagged === 0) {
+      return { scanned: rows.length, repaired: 0, enforced: true }
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_NON_GRANT_PIPELINE) === false
+    const describe = (v) => `${v.title} [${(v.reasons || []).join(',')}]`
+    if (disabled) {
+      if (purgeable.length > 0 || frSourceFlagged > 0) {
+        log.warn('non-grant notices present in profile pipelines (purge DISABLED via ENFORCE_NON_GRANT_PIPELINE=0)', {
+          wouldRepair: purgeable.length,
+          frSourceFlagged,
+          scanned: rows.length,
+          examples: purgeable.slice(0, 3).map(describe),
+        })
+      }
+      return { scanned: rows.length, repaired: 0, wouldRepair: purgeable.length, frSourceFlagged, enforced: false }
+    }
+
+    let hasTasks = false
+    try { await db.prepare('SELECT id FROM application_tasks LIMIT 1').get(); hasTasks = true } catch { hasTasks = false }
+
+    let purged = 0
+    let flaggedProtected = 0
+    let tasksCancelled = 0
+    const affectedProfiles = new Set()
+    for (const g of purgeable) {
+      if (purged >= limit) break
+      const status = g.status === null || g.status === undefined ? null : String(g.status)
+      const isEarly = status === null || PURGEABLE_DISCOVERY_STATUSES.includes(status)
+      const protectedName = PROTECTED_NAME_PATTERN.test(`${g.title ?? ''} ${g.funder ?? ''}`)
+      const hasAward = hasAwarded && Number(g.amount_awarded) > 0
+
+      if (isEarly && !protectedName && !hasAward) {
+        if (hasTasks && cancelApplicationTask) {
+          let taskRows = []
+          try {
+            const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
+            taskRows = await db
+              .prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND grant_id = ? AND (status IS NULL OR status NOT IN (${ph}))`)
+              .all(g.profile_id, g.id, ...TERMINAL_TASK_STATUSES)
+          } catch { taskRows = [] }
+          for (const t of taskRows || []) {
+            try {
+              await cancelApplicationTask(db, t.id, { actorRole: 'system', reason: `Not a fundable opportunity — ${(g.reasons || []).join('; ')}` })
+              tasksCancelled += 1
+            } catch (err) {
+              log.warn('non_grant_notice_pipeline: task cancel failed (non-fatal)', { task: t.id, error: String(err?.message || err) })
+            }
+          }
+        }
+        if (recordDismissalFn) {
+          try { await recordDismissalFn(db, { profileId: g.profile_id, grantRow: g, reason: `non_grant_notice: ${(g.reasons || []).join('; ')}` }) } catch { /* tombstone best-effort */ }
+        }
+        try {
+          const res = await db.prepare('DELETE FROM grants WHERE id = ?').run(g.id)
+          purged += changesOf(res) || 1
+          affectedProfiles.add(g.profile_id)
+        } catch (err) {
+          log.warn('non_grant_notice_pipeline: grant delete failed (non-fatal)', { grant: g.id, error: String(err?.message || err) })
+        }
+      } else if (hasEligStatus) {
+        try {
+          await db.prepare('UPDATE grants SET eligibility_status = ? WHERE id = ?').run('ineligible', g.id)
+          flaggedProtected += 1
+          affectedProfiles.add(g.profile_id)
+        } catch { /* audit-only */ }
+      }
+    }
+
+    if (purged > 0 || flaggedProtected > 0 || frSourceFlagged > 0) {
+      log.info('converged non-grant notices out of profile pipelines', {
+        purged,
+        flaggedProtected,
+        frSourceFlagged,
+        tasksCancelled,
+        profilesAffected: affectedProfiles.size,
+        examples: purgeable.slice(0, 3).map(describe),
+      })
+    }
+    return {
+      scanned: rows.length,
+      repaired: purged + flaggedProtected,
+      purged,
+      flaggedProtected,
+      frSourceFlagged,
+      tasksCancelled,
+      profilesAffected: affectedProfiles.size,
       enforced: true,
     }
   })
@@ -8824,6 +9028,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // profile can act on. Sits with the scope purges so stored rows predating
   // the widened procedural registry converge the same boot it ships.
   steps.push(await enforceNonGrantNoticeMatches(db))
+  // …and the PIPELINE half of the same rule: the grants table is what the
+  // owner works, and every pre-gate writer (manual creates, imports, the
+  // admin-schema-repair migrations) left regulatory notices there as work
+  // items with live application tasks. Purges only on positive junk evidence;
+  // FR-source-alone rows are flagged for the owner-gated repair.
+  steps.push(await enforceNonGrantNoticePipeline(db))
   // The award ceiling an INDIVIDUAL's pipeline has enforced for months, applied
   // to the match store that actually feeds the owner-facing list.
   steps.push(await enforceIndividualMatchAwardCeiling(db))
@@ -9088,6 +9298,7 @@ export const __testables = {
   enforceDeclaredPlaceScopeMatches,
   enforceForeignJurisdictionMatches,
   enforceNonGrantNoticeMatches,
+  enforceNonGrantNoticePipeline,
   enforceIndividualMatchAwardCeiling,
   enforceStudentAidEligibility,
   enforceProfileEligibility,

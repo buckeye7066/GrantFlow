@@ -959,6 +959,48 @@ export const SOURCES = Object.freeze([
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
   },
   {
+    // The largest Native-led grantmaker to Native-controlled nonprofits — the
+    // philanthropic complement to the federal ANA/BIA lanes above (a ministry
+    // serving Pine Ridge is exactly its applicant pool; the 2026-08-04 audit
+    // found zero indigenous funders on such a profile's pipeline). base_url
+    // fetch-verified live 2026-08-04 (HTTP 200).
+    source_id: 'first_nations_dev_institute',
+    name: 'First Nations Development Institute grantmaking',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.firstnations.org/grantmaking/',
+    sponsor_name: 'First Nations Development Institute',
+    resource_title: 'First Nations Development Institute grant programs',
+    resource_summary: 'Native-led grantmaker funding Native-controlled nonprofits and tribal programs: community economic development, food systems, youth, language/culture, and stewardship.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['nonprofit', 'tribal', 'school'],
+    need_categories: ['operations', 'programs', 'capital', 'agriculture', 'education', 'economic_development', 'food'],
+    geography: { national: true, states: [] },
+    keywords: ['native american', 'indigenous', 'tribal', 'first nations', 'native-led', 'reservation', 'native community'],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    // Charitable trust from the Keepseagle v. Vilsack settlement — grants to
+    // orgs serving Native farmers and ranchers (nonprofits, educational orgs,
+    // CDFIs, tribal orgs). base_url fetch-verified live 2026-08-04 (HTTP 200).
+    source_id: 'native_american_ag_fund',
+    name: 'Native American Agriculture Fund',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://nativeamericanagriculturefund.org/',
+    sponsor_name: 'Native American Agriculture Fund',
+    resource_title: 'Native American Agriculture Fund grants',
+    resource_summary: 'Grants to nonprofits, educational organizations, CDFIs, and tribal organizations serving Native American farmers and ranchers.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['nonprofit', 'tribal', 'school'],
+    need_categories: ['agriculture', 'economic_development', 'education', 'food'],
+    geography: { national: true, states: [] },
+    keywords: ['native american', 'indigenous', 'tribal', 'farmer', 'rancher', 'agriculture', 'reservation'],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
+  },
+  {
     source_id: 'imls_library_museum',
     name: 'Institute of Museum and Library Services grants',
     source_type: 'directory',

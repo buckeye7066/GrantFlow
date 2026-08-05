@@ -159,6 +159,8 @@ export const LANE_OF_SOURCE = Object.freeze({
   // ── Congregation / sacred-places lane (2026-08-02).
   national_fund_sacred_places: 'private_charities',
   partners_sacred_places: 'private_charities',
+  first_nations_dev_institute: 'private_charities',
+  native_american_ag_fund: 'private_charities',
   nthp_preservation_grants: 'private_charities',
   // ── VA benefits hub (2026-08-02).
   va_veteran_benefits: 'federal_benefits',
