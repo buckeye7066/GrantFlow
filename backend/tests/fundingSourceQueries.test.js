@@ -238,6 +238,36 @@ describe('canonical funding-source query projection', () => {
     expect(JSON.parse(reconciled.match_explain_json).scoring_policy_version).toBe('need_first_v2')
   })
 
+  it('preserves confidence already measured under the current need-first contract', async () => {
+    const db = createCanonicalDb()
+    db.prepare(
+      `UPDATE profile_opportunity_matches
+          SET match_explain_json = ?, match_confidence = ?
+        WHERE profile_id = ? AND opportunity_id = ?`,
+    ).run(
+      JSON.stringify({ scoring_policy_version: 'need_first_v2' }),
+      89,
+      'p-1',
+      'opp-1',
+    )
+
+    const result = await reconcileNeedFirstProfileMatches(db, {
+      profileId: 'p-1',
+      profileContext: {
+        profile: { applicant_type: 'individual', needs: ['medical'] },
+        sections: {},
+      },
+    })
+
+    expect(result.already_current).toBeGreaterThan(0)
+    const current = db.prepare(
+      `SELECT match_confidence
+         FROM profile_opportunity_matches
+        WHERE profile_id = ? AND opportunity_id = ?`,
+    ).get('p-1', 'opp-1')
+    expect(current.match_confidence).toBe(89)
+  })
+
   it('falls back SELECT-only when the optional dismissal table is absent', async () => {
     const db = createCanonicalDb({ withDismissals: false })
     const result = await readFundingSourceRows(db, 'p-1')

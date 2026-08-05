@@ -100,6 +100,11 @@ export async function reconcileNeedFirstProfileMatches(db, {
     scanned += 1
     const explain = parseJson(row.match_explain_json, {}) || {}
     if (isCurrent(explain)) {
+      // Current rows were already scored by the Crawler OS facade *after* it
+      // applied this policy, so their confidence was measured for the current
+      // score contract and must survive. Before match-confidence persistence
+      // existed, production rows were NULL; there is no legacy non-null value
+      // to scrub here. Only the stale-policy update below invalidates confidence.
       current += 1
       continue
     }
