@@ -179,6 +179,69 @@ describe('Crawler OS resource-preserving reconciliation', () => {
     }
   })
 
+  it('preserves resource confidence when crawler provenance columns are not installed yet', async () => {
+    const db = makeDb()
+    try {
+      db.exec(`
+        ALTER TABLE profile_opportunity_matches DROP COLUMN source_query;
+        ALTER TABLE profile_opportunity_matches DROP COLUMN discovered_via;
+      `)
+      seedOpportunity(db, 'legacy-resource', 'DIRECTORY')
+      seedMatch(db, {
+        opportunityId: 'legacy-resource',
+        score: 41,
+        confidence: 67,
+        decision: 'review',
+      })
+
+      await persistRun(db, memStore([]), {}, { primaryProfileId: PROFILE_ID })
+
+      const preserved = currentMatches(db).find(
+        (row) => row.opportunity_id === 'legacy-resource',
+      )
+      expect(preserved).toMatchObject({
+        match_score: 41,
+        match_confidence: 67,
+        match_decision: 'review',
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('preserves ACCEPT confidence through the kind-free intermediate-schema fallback', async () => {
+    const db = makeDb()
+    try {
+      db.exec(`
+        ALTER TABLE profile_opportunity_matches DROP COLUMN source_query;
+        ALTER TABLE profile_opportunity_matches DROP COLUMN discovered_via;
+        ALTER TABLE funding_opportunities DROP COLUMN opportunity_kind;
+      `)
+      db.prepare(
+        'INSERT INTO funding_opportunities (id, title) VALUES (?, ?)',
+      ).run('legacy-accept', 'Legacy accepted award')
+      seedMatch(db, {
+        opportunityId: 'legacy-accept',
+        score: 89,
+        confidence: 92,
+        decision: 'accept',
+      })
+
+      await persistRun(db, memStore([]), {}, { primaryProfileId: PROFILE_ID })
+
+      const preserved = currentMatches(db).find(
+        (row) => row.opportunity_id === 'legacy-accept',
+      )
+      expect(preserved).toMatchObject({
+        match_score: 89,
+        match_confidence: 92,
+        match_decision: 'accept',
+      })
+    } finally {
+      db.close()
+    }
+  })
+
   it('CROSS-MATCH PRECISION: a cross-profile row is stored only on ACCEPT (the Robert White class)', async () => {
     // Prod 2026-08-03: 4,577 of 4,792 xmatch rows were REVIEW — another
     // state's housing finance agency, disease directories on profiles with no
