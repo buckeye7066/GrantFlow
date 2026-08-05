@@ -577,7 +577,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // TRAP: Number(null) === 0 and Number.isFinite(0) — treating a missing
   // deadline as epoch would skip EVERY source as time_budget_exhausted.
   // Null/undefined means "no cooperative deadline" (nightly / unit paths).
-  const resolvedDeadline = (deadlineMs != null && Number.isFinite(Number(deadlineMs)))
+  const resolvedDeadline = (deadlineMs !== null && deadlineMs !== undefined && Number.isFinite(Number(deadlineMs)))
     ? Number(deadlineMs)
     : (Number.isFinite(Number(timeBudgetMs)) && Number(timeBudgetMs) > 0
       ? Date.now() + Number(timeBudgetMs)
