@@ -2919,6 +2919,13 @@ describe('enforceNonGrantNoticePipeline', () => {
     db.exec(`ALTER TABLE grants ADD COLUMN eligibility_status TEXT`)
     _resetSchemaCache()
     await ensureApplicationTaskSchema(db) // real application_tasks/events schema
+    // HERMETICITY: deployment environments carry the count-only rollout preset
+    // (ENFORCE_NON_GRANT_PIPELINE=0 — Vercel's build env, measured 2026-08-05:
+    // every Vercel deploy incl. main's production failed on the enforced:true
+    // assertions below while GitHub CI passed). Ambient env must never decide
+    // these tests; the count-only test sets '0' explicitly for itself.
+    delete process.env.ENFORCE_NON_GRANT_PIPELINE
+    delete process.env.NON_GRANT_PIPELINE_LIMIT
   })
   afterEach(() => {
     delete process.env.ENFORCE_NON_GRANT_PIPELINE
