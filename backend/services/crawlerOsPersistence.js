@@ -179,6 +179,45 @@ async function snapshotDurableAccepts(db, profileIds) {
        AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
        AND UPPER(COALESCE(o.opportunity_kind, '')) NOT IN ${POINTER_KINDS_SQL}
   `
+  // Preserve the pointer-kind exclusion when only crawler provenance columns
+  // are missing. Kind-free projections are reserved for schemas that genuinely
+  // predate funding_opportunities.opportunity_kind.
+  const confidenceCoreSql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_confidence, m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version,
+           m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities o ON o.id = m.opportunity_id
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+       AND UPPER(COALESCE(o.opportunity_kind, '')) NOT IN ${POINTER_KINDS_SQL}
+  `
+  const legacyFullSql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version, m.source_query,
+           m.discovered_via, m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities o ON o.id = m.opportunity_id
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+       AND UPPER(COALESCE(o.opportunity_kind, '')) NOT IN ${POINTER_KINDS_SQL}
+  `
+  const legacyCoreSql = `
+    SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
+           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version,
+           m.computed_at, m.updated_at, m.evaluated_at
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities o ON o.id = m.opportunity_id
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND LOWER(COALESCE(m.match_decision, '')) = 'accept'
+       AND UPPER(COALESCE(o.opportunity_kind, '')) NOT IN ${POINTER_KINDS_SQL}
+  `
   const kindFreeFullSql = `
     SELECT m.id, m.profile_id, m.opportunity_id, m.match_score,
            m.match_confidence, m.match_decision, m.match_explanation, m.match_reasons,
@@ -227,6 +266,9 @@ async function snapshotDurableAccepts(db, profileIds) {
       profileId,
       [
         sql,
+        confidenceCoreSql,
+        legacyFullSql,
+        legacyCoreSql,
         kindFreeFullSql,
         kindFreeConfidenceCoreSql,
         kindFreeLegacyFullSql,
