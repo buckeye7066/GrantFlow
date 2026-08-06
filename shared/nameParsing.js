@@ -204,7 +204,8 @@ export function dedupeProfileDisplayName(name) {
     if (right[0] !== firstTok) continue
     if (left[left.length - 1] !== lastTok || right[right.length - 1] !== lastTok) continue
     // One half must be a token-subsequence of the other (same person, one fuller
-    // form). isTokenSubsequence keeps order, so "robert white" ⊆ "robert michael white".
+    // form). isTokenSubsequence keeps order, so "alex rivera" is a
+    // subsequence of "alex jordan rivera".
     const shortHalf = left.length <= right.length ? left : right
     const longHalf = left.length <= right.length ? right : left
     if (!isTokenSubsequence(shortHalf, longHalf)) continue

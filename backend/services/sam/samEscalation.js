@@ -2,7 +2,7 @@
  * samEscalation.js
  *
  * Active admin escalation for Sam (charter §3/§6: "report critical issues to the
- * single admin — buckeye7066@gmail.com"). Sam already persists every run to an
+ * single admin — configured-admin@example.invalid"). Sam already persists every run to an
  * append-only audit trail; this adds a PUSH so a critical finding actually
  * reaches the admin (persistent notification + toast bridge) instead of waiting
  * to be discovered.

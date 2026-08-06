@@ -1,9 +1,3 @@
-export const OWNER_ADMIN_EMAIL = 'buckeye7066@gmail.com'
-
-function normalizedEmail(user) {
-  return String(user?.primary_email || user?.email || '').trim().toLowerCase()
-}
-
 /**
  * GET /api/auth/me answers with an envelope ({ user, profiles,
  * active_profile_id }) for every DB-backed login; only the legacy synthetic
@@ -32,8 +26,7 @@ export function hasFullAdminWorkspace(candidate) {
       user.is_admin === 1 ||
       user.isAdmin === true ||
       user.role === 'admin' ||
-      (Array.isArray(user.roles) && user.roles.includes('admin')) ||
-      normalizedEmail(user) === OWNER_ADMIN_EMAIL,
+      (Array.isArray(user.roles) && user.roles.includes('admin')),
   )
 }
 

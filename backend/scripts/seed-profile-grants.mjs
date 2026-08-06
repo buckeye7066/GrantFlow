@@ -6,8 +6,6 @@ import path from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-import { applyRelevanceFilter } from '../services/relevanceFilter.js';
-import { buildProfileSignals } from '../services/profileHelpers.js';
 import {
   computeMatchDecision,
   normalizeProfile,
@@ -22,6 +20,11 @@ const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
 const disableSeeding = String(process.env.DISABLE_SEEDING || '').trim().toLowerCase()
 if (nodeEnv === 'production' || disableSeeding === 'true' || disableSeeding === '1') {
   console.error('[seed-profile-grants] Refusing to run in production environment. Seeding disabled.')
+  process.exit(1)
+}
+
+if (/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL || '')) {
+  console.error('[seed-profile-grants] Refusing to seed a PostgreSQL target; this helper is SQLite-only.')
   process.exit(1)
 }
 
@@ -70,171 +73,91 @@ for (const profile of profiles) {
     try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch { sections[row.section_key] = {}; }
   }
 
-  // Build canonical signals using profileHelpers
-  let signals;
-  try {
-    signals = buildProfileSignals({ profile, sections });
-  } catch (e) {
-    console.warn(`  ⚠ buildProfileSignals failed: ${e.message}`);
-    continue;
-  }
-
-  const demographics = sections.demographics || {};
-  const military = sections.military_service || {};
-  const health = sections.health_medical || {};
-  const family = sections.family_life || {};
-  const basic = sections.basic_information || {};
-  const locFocus = sections.location_focus || {};
-  const addr = basic.address;
-  let stateFromAddr = null;
-  if (typeof addr === 'string') {
-    stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
-  } else if (addr && typeof addr === 'object') {
-    stateFromAddr = addr.state || null;
-  }
-  const profileData = {
-    primary_type: profile.primary_type || null,
-    veteran_status: military.veteran || demographics.veteran_status || null,
-    immigrant_status: demographics.immigrant_status || null,
-    disability_status: health.disability_type || demographics.disability_status || null,
-    state: basic.state || locFocus.state || stateFromAddr || null,
-    tags: [],
-    gender: basic.gender || demographics.gender || null,
-    age: basic.age || demographics.age || null,
-    foster_youth: family.foster_youth || null,
-    first_responder: null,
-  };
-
-  // Determine profile type keywords
-  const type = profile.primary_type || 'individual';
-  
-  // Find matching opportunities using canonical signals (not broad hardcoded keywords)
-  let matchedOpps = 0;
-  
+  // Adjudicate the complete query-bounded set before ranking. The canonical
+  // ACCEPT state is the only automatic pipeline admission state.
+  const acceptedCandidates = [];
   for (const opp of opportunities) {
-    // Apply relevance filter first
-    const oppForFilter = {
-      ...opp,
-      keywords: (() => { try { return JSON.parse(opp.keywords || '[]'); } catch { return []; } })(),
-      categories: (() => { try { return JSON.parse(opp.categories || '[]'); } catch { return []; } })(),
-    };
-    const filterResult = applyRelevanceFilter(oppForFilter, profileData);
-    if (!filterResult.pass) continue;
-
-    // Score based on canonical signals (used as pre-filter heuristic only)
-    const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase();
-    const oppKws = new Set(oppForFilter.keywords.map(k => k.toLowerCase()));
-    let heuristicScore = 0;
-
-    // Geographic
-    const oppState = (opp.state || '').toLowerCase();
-    const profState = (profileData.state || '').toLowerCase();
-    if (!oppState || oppState === 'nationwide' || opp.is_national) {
-      heuristicScore += 8;
-    } else if (profState && oppState === profState) {
-      heuristicScore += 18;
-    } else if (profState && oppState && oppState !== profState) {
-      heuristicScore -= 20;
+    try {
+      const decision = computeMatchDecision(profile, opp, { profileSections: sections });
+      if (decision.decision === 'ACCEPT') acceptedCandidates.push({ opp, decision });
+    } catch (error) {
+      console.warn(
+        `  Canonical adjudication failed for ${opp.id || opp.title || 'unknown'}:`,
+        error?.message || error,
+      );
     }
+  }
+  acceptedCandidates.sort(
+    (a, b) => Number(b.decision.score || 0) - Number(a.decision.score || 0),
+  );
+  console.log(
+    `  Canonically adjudicated ${opportunities.length} candidates; ` +
+    `${acceptedCandidates.length} ACCEPT`,
+  );
 
-    // Intent phrases (5 pts each)
-    if (signals.intentPhraseSet) {
-      for (const phrase of signals.intentPhraseSet) {
-        const p = String(phrase).toLowerCase();
-        if (p.length >= 4 && (oppText.includes(p) || oppKws.has(p))) {
-          heuristicScore += 5;
-        }
-      }
-    }
+  const profileFingerprint = _hasDecisionCols
+    ? computeProfileFingerprint(normalizeProfile(profile, sections)) ?? null
+    : null;
 
-    // Keywords from profile signals (1.5 pts in opp keywords, 0.5 in text)
-    const kwSet = signals.keywordSet || signals.keywords || new Set();
-    for (const kw of kwSet) {
-      const k = String(kw).toLowerCase();
-      if (k.length < 3 || k.includes(' ')) continue;
-      if (oppKws.has(k)) { heuristicScore += 1.5; }
-      else if (oppText.includes(k)) { heuristicScore += 0.5; }
-    }
-
-    heuristicScore = Math.max(0, Math.min(100, Math.floor(heuristicScore)));
-
-    // Stage 1 (junk filter): skip clear garbage (score < 5) to avoid unnecessary canonical calls.
-    // The canonical decision engine is the final acceptance authority — do not raise this threshold.
-    if (heuristicScore < 5) continue;
-
-    // --- CANONICAL DECISION ENGINE: final acceptance authority ---
-    const decision = computeMatchDecision(profile, opp, { profileSections: sections });
-
-    // Hard reject: never insert into profile pipeline
-    if (decision.decision === 'REJECT') continue;
-
-    // Use canonical score as the stored match score
+  for (const { opp, decision } of acceptedCandidates) {
     const score = decision.score;
-
-    // Only save if canonical score meets the ACCEPT threshold (>= 40).
-    // Canonical ACCEPT requires score >= 40, needAlignment > 0, confidence >= 50.
-    if (score < 40) continue;
-
-    {
-      const grantId = crypto.randomUUID();
-      // Ensure org exists
-      let orgId = profile.organization_id;
-      if (!orgId) {
-        const existingOrg = db.prepare('SELECT id FROM organizations WHERE name = ?').get(profile.display_name || '');
-        orgId = existingOrg?.id || crypto.randomUUID();
-        if (!existingOrg) {
-          db.prepare(`INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(orgId, profile.display_name || 'Default Org');
-          db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
-        }
+    const grantId = crypto.randomUUID();
+    // Ensure org exists
+    let orgId = profile.organization_id;
+    if (!orgId) {
+      const existingOrg = db.prepare('SELECT id FROM organizations WHERE name = ?').get(profile.display_name || '');
+      orgId = existingOrg?.id || crypto.randomUUID();
+      if (!existingOrg) {
+        db.prepare(`INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(orgId, profile.display_name || 'Default Org');
       }
-      try {
-        if (_hasDecisionCols) {
-          const profileFingerprint = computeProfileFingerprint(normalizeProfile(profile, sections)) ?? null;
-          const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(opp)) ?? null;
-          insertGrant.run(
-            grantId,
-            orgId,
-            profile.id,
-            opp.id,
-            opp.title,
-            opp.sponsor || opp.source,
-            opp.amount_max || opp.amount_min || null,
-            score,
-            JSON.stringify(decision.matchedNeeds ?? []),
-            `Auto-matched for ${profile.display_name}`,
-            decision.decision,
-            decision.explanation ?? null,
-            JSON.stringify(decision.matchedNeeds ?? []),
-            String(decision.eligible),
-            JSON.stringify(decision.ineligibilityReasons ?? []),
-            profileFingerprint,
-            opportunityFingerprint,
-            MATCHER_VERSION,
-            decision.evaluatedAt ?? new Date().toISOString(),
-            decision.confidence ?? null,
-          );
-        } else {
-          insertGrant.run(
-            grantId,
-            orgId,
-            profile.id,
-            opp.id,
-            opp.title,
-            opp.sponsor || opp.source,
-            opp.amount_max || opp.amount_min || null,
-            score,
-            JSON.stringify(decision.matchedNeeds ?? []),
-            `Auto-matched for ${profile.display_name}`,
-          );
-        }
-        console.log(`  ✓ ${opp.title.substring(0, 50)}... (${score}% canonical:${decision.decision})`);
-        matchedOpps++;
-        totalGrantsCreated++;
-      } catch (err) {
-        // Skip duplicates
-        if (!err.message.includes('UNIQUE')) {
-          console.log(`  ✗ ${err.message.substring(0, 50)}`);
-        }
+      db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
+      profile.organization_id = orgId;
+    }
+    try {
+      if (_hasDecisionCols) {
+        const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(opp)) ?? null;
+        insertGrant.run(
+          grantId,
+          orgId,
+          profile.id,
+          opp.id,
+          opp.title,
+          opp.sponsor || opp.source,
+          opp.amount_max || opp.amount_min || null,
+          score,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          `Auto-matched for ${profile.display_name}`,
+          decision.decision,
+          decision.explanation ?? null,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          String(decision.eligible),
+          JSON.stringify(decision.ineligibilityReasons ?? []),
+          profileFingerprint,
+          opportunityFingerprint,
+          decision.matcherVersion ?? MATCHER_VERSION,
+          decision.evaluatedAt ?? new Date().toISOString(),
+          decision.confidence ?? null,
+        );
+      } else {
+        insertGrant.run(
+          grantId,
+          orgId,
+          profile.id,
+          opp.id,
+          opp.title,
+          opp.sponsor || opp.source,
+          opp.amount_max || opp.amount_min || null,
+          score,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          `Auto-matched for ${profile.display_name}`,
+        );
+      }
+      console.log(`  ✓ ${opp.title.substring(0, 50)}... (canonical score ${score}; ${decision.decision})`);
+      totalGrantsCreated++;
+    } catch (err) {
+      // Skip duplicates
+      if (!err.message.includes('UNIQUE')) {
+        console.log(`  ✗ ${err.message.substring(0, 50)}`);
       }
     }
   }

@@ -169,7 +169,7 @@ Rules:
 - **Payment Methods**:
   - Check - Make payable to: John White
   - Venmo: @John-White-1384
-  - CashApp: $jwhiternmba
+  - CashApp: $example-payment-handle
   - ACH / Bank Transfer
   - Credit Card (processing fee may apply)
   - Bill-to-Grant (when allowed by funder)

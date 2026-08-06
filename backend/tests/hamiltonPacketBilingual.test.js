@@ -33,9 +33,9 @@ const fakeTranslate = async (packet, lang) => ({
 })
 
 const profile = {
-  id: 'p-liubov',
-  display_name: 'Liubov Samoylenko',
-  basic_information: { first_name: 'Liubov', last_name: 'Samoylenko', email: 'anyawhite@rocketmail.com' },
+  id: 'p-demo_senior_family',
+  display_name: 'Demo Senior Medical Persona',
+  basic_information: { first_name: 'demo_senior_family', last_name: 'Samoylenko', email: 'demo.senior-medical@example.invalid' },
   essays: { primary: 'My personal statement.' },
 }
 const opportunity = { id: 'opp1', title: 'HOPE Scholarship', sponsor: 'TSAC', deadline: '2026-09-01' }
@@ -57,7 +57,7 @@ function docNames(db) {
 describe('Hamilton bilingual-documents rule', () => {
   it('English-only profile: no translated copy, no behavior change', async () => {
     const db = makeDb()
-    db.prepare('INSERT INTO profiles (id, display_name, preferred_language) VALUES (?,?,?)').run('p-liubov', 'Liubov', null)
+    db.prepare('INSERT INTO profiles (id, display_name, preferred_language) VALUES (?,?,?)').run('p-demo_senior_family', 'demo_senior_family', null)
     const res = await generateAndSavePacket(db, { profile, opportunity, automationType: 'mail', translateContent: fakeTranslate })
 
     expect(res.docx_document_id).toBeTruthy()
@@ -69,7 +69,7 @@ describe('Hamilton bilingual-documents rule', () => {
 
   it('Russian profile (read from DB column): saves an additional translated DOCX copy', async () => {
     const db = makeDb()
-    db.prepare('INSERT INTO profiles (id, display_name, preferred_language) VALUES (?,?,?)').run('p-liubov', 'Liubov', 'ru')
+    db.prepare('INSERT INTO profiles (id, display_name, preferred_language) VALUES (?,?,?)').run('p-demo_senior_family', 'demo_senior_family', 'ru')
     const res = await generateAndSavePacket(db, { profile, opportunity, automationType: 'mail', translateContent: fakeTranslate })
 
     expect(res.translation.language).toBe('ru')
@@ -88,7 +88,7 @@ describe('Hamilton bilingual-documents rule', () => {
 
   it('preferredLanguage override wins over the profile/DB value', async () => {
     const db = makeDb()
-    db.prepare('INSERT INTO profiles (id, display_name, preferred_language) VALUES (?,?,?)').run('p-liubov', 'Liubov', null)
+    db.prepare('INSERT INTO profiles (id, display_name, preferred_language) VALUES (?,?,?)').run('p-demo_senior_family', 'demo_senior_family', null)
     const res = await generateAndSavePacket(db, { profile, opportunity, automationType: 'mail', preferredLanguage: 'es', translateContent: fakeTranslate })
     expect(res.translation.language).toBe('es')
     expect(docNames(db)).toContain(`HOPE Scholarship — DOCX (${languageNativeLabel('es')})`)
@@ -96,7 +96,7 @@ describe('Hamilton bilingual-documents rule', () => {
 
   it('translation failure is non-fatal: English packet still saved, error surfaced', async () => {
     const db = makeDb()
-    db.prepare('INSERT INTO profiles (id, display_name, preferred_language) VALUES (?,?,?)').run('p-liubov', 'Liubov', 'ru')
+    db.prepare('INSERT INTO profiles (id, display_name, preferred_language) VALUES (?,?,?)').run('p-demo_senior_family', 'demo_senior_family', 'ru')
     const boom = async () => { throw new Error('provider down') }
     const res = await generateAndSavePacket(db, { profile, opportunity, automationType: 'mail', translateContent: boom })
 

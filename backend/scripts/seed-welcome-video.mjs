@@ -12,7 +12,7 @@
  *
  *   node backend/scripts/seed-welcome-video.mjs \
  *     --file ./welcome-anita.mp4 \
- *     --email nitaboatdrink@hotmail.com \
+ *     --email demo.service-applicant@example.invalid \
  *     --profile 1cb89324-de44-49de-889c-9cd61f8aa370 \
  *     --label "A welcome from your team" \
  *     --media-key welcome-anita-v1

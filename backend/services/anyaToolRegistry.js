@@ -39,11 +39,12 @@ import {
 } from './anyaBrainService.js'
 import { getSystemDiagnostics, analyzeSystemHealth } from './diagnosticsService.js'
 import { ADMIN_EMAIL } from '../config/constants.js'
+import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 
 /**
  * HARD owner gate for Anya's most powerful tools (running other agents, editing
  * data, crawling). Stricter than requiresAdmin: ONLY the owner account
- * (ADMIN_EMAIL = buckeye7066@gmail.com) passes — no other admin, tier, or seat.
+ * (ADMIN_EMAIL = configured-admin@example.invalid) passes — no other admin, tier, or seat.
  */
 function callerEmail(context) {
   const c = context?.ctx || {}
@@ -4233,7 +4234,9 @@ registerTool({
     const db = context?.db
     if (!db) throw new Error('Database connection required')
     const port = params?.port || process.env.PORT || 3001
-    const baseUrl = `http://localhost:${port}`
+    const internalBase = resolveInternalSelfBaseUrl({ configured: '', port })
+    if (!internalBase.ok) throw new Error(`Internal endpoint probe unavailable: ${internalBase.reason}`)
+    const baseUrl = internalBase.baseUrl
     const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
     return cgTestEndpoints(db, baseUrl, token)
   },
@@ -4271,7 +4274,11 @@ registerTool({
   handler: async (_params, context) => {
     const db = context?.db
     if (!db) throw new Error('Database connection required')
-    const baseUrl = context?.internalBaseUrl || (process.env.PORT ? `http://localhost:${process.env.PORT}` : null)
+    const internalBase = resolveInternalSelfBaseUrl({
+      configured: context?.internalBaseUrl || process.env.ANYA_SELF_BASE_URL,
+      port: process.env.PORT || 8080,
+    })
+    const baseUrl = internalBase.ok ? internalBase.baseUrl : null
     const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
     const [endpointResult, matchResult, missionResult] = await Promise.allSettled([
       baseUrl ? cgTestEndpoints(db, baseUrl, token) : Promise.resolve(null),
@@ -4406,7 +4413,9 @@ registerTool({
     const db = context?.db
     if (!db) throw new Error('Database connection required')
     const port = process.env.PORT || 3001
-    const baseUrl = `http://localhost:${port}`
+    const internalBase = resolveInternalSelfBaseUrl({ configured: '', port })
+    if (!internalBase.ok) throw new Error(`Internal endpoint probe unavailable: ${internalBase.reason}`)
+    const baseUrl = internalBase.baseUrl
     const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
 
     const [endpoints, matchQuality, mission] = await Promise.allSettled([
@@ -4427,7 +4436,7 @@ registerTool({
 // ─────────────────────────────────────────────────────────────────────────────
 // OWNER-ONLY super-tools — let Anya act with the owner's full reach: run any
 // agent, edit/save profile data, and crawl. HARD-gated to the owner account
-// (buckeye7066@gmail.com) via requiresOwner; no other admin/tier/seat can invoke
+// (configured-admin@example.invalid) via requiresOwner; no other admin/tier/seat can invoke
 // them, enforced server-side in invokeTool().
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -5012,7 +5021,7 @@ registerTool({
 // portal session (Hamilton acts inside the real account using a saved login). That
 // is the same class of power as owner.run_agent / owner.run_crawler — it makes an
 // agent act on a portal on someone's behalf — so it is gated requiresOwner:true
-// (owner account buckeye7066@gmail.com only), enforced in invokeTool BEFORE the
+// (owner account configured-admin@example.invalid only), enforced in invokeTool BEFORE the
 // handler runs. The status reader is read-only but is kept owner-scoped too, for
 // consistency with the other owner.* read-status tools (e.g. owner.email_grants_status).
 registerTool({
@@ -5344,25 +5353,79 @@ registerTool({
   },
 })
 
+async function grantCanonicalMatchColumns(db) {
+  try {
+    if (db?.dialect === 'postgres') {
+      const rows = await db.prepare(`
+        SELECT column_name
+          FROM information_schema.columns
+         WHERE table_schema = current_schema()
+           AND table_name = 'grants'
+      `).all()
+      return new Set((rows || []).map((row) => row.column_name).filter(Boolean))
+    }
+    const rows = await db.prepare('PRAGMA table_info(grants)').all()
+    return new Set((rows || []).map((row) => row.name).filter(Boolean))
+  } catch {
+    // The pre-existing tool required these two legacy columns. Keep that
+    // narrow compatibility path if a test/fake adapter cannot introspect.
+    return new Set(['match_score', 'updated_at'])
+  }
+}
+
+async function persistCanonicalGrantMatch(db, { grantId, profileId, decision = null }) {
+  const columns = await grantCanonicalMatchColumns(db)
+  const score = decision && Number.isFinite(Number(decision.score)) ? Number(decision.score) : null
+  const confidence = decision && Number.isFinite(Number(decision.confidence)) ? Number(decision.confidence) : null
+  const values = {
+    match_score: score,
+    match_decision: decision?.decision ?? null,
+    match_explanation: decision?.explanation ?? null,
+    match_reasons: decision ? JSON.stringify(decision.reasons ?? []) : null,
+    matched_needs: decision ? JSON.stringify(decision.matchedNeeds ?? []) : null,
+    eligibility_status: decision?.eligible === undefined ? null : String(decision.eligible),
+    ineligibility_reasons: decision ? JSON.stringify(decision.ineligibilityReasons ?? []) : null,
+    matcher_version: decision?.matcherVersion ?? null,
+    evaluated_at: decision?.evaluatedAt ?? null,
+    match_confidence: confidence,
+  }
+  const entries = Object.entries(values).filter(([column]) => columns.has(column))
+  if (entries.length === 0) throw new Error('grants table has no canonical match columns')
+  const assignments = entries.map(([column]) => `${column} = ?`)
+  if (columns.has('updated_at')) assignments.push('updated_at = CURRENT_TIMESTAMP')
+  // audit:allow dynamic-sql — every assignment comes from the fixed `values`
+  // allowlist above after schema introspection; no request value becomes SQL.
+  const result = await db.prepare(`
+    UPDATE grants
+       SET ${assignments.join(', ')}
+     WHERE id = ? AND profile_id = ?
+  `).run(...entries.map(([, value]) => value), grantId, profileId)
+  return {
+    changed: Number(result?.changes ?? result?.rowCount ?? 0),
+    score,
+    confidence,
+    persisted_fields: entries.map(([column]) => column),
+  }
+}
+
 // ── Anya moderates matches directly (owner-gated) ─────────────────────────────
-// Before this tool the owner had to hand-edit the DB to promote/demote a match
-// score or dismiss/restore a pipeline grant — Anya could only explain matches,
-// not act on them. Dismiss/restore reuse the SAME choke points the human UI
-// uses (grants DELETE route semantics + pipelineDismissals tombstones), so
-// sticky-delete invariants hold no matter which path performed the edit.
+// Scores/decisions are never owner- or model-authored. The historical
+// promote/demote action names remain as deprecated aliases for a fresh
+// canonical recomputation. Dismiss/restore reuse the SAME choke points the
+// human UI uses, so sticky-delete invariants remain intact.
 registerTool({
   name: 'owner.moderate_match',
   description:
-    'OWNER ONLY. Moderate a pipeline match for a profile: "promote"/"demote" set a new match_score (0-100); "dismiss" removes the grant from the pipeline WITH a sticky pipeline_dismissals tombstone (so the matcher never re-adds it); "restore" clears the tombstone for a funding opportunity so the matcher may re-add it on the next run. Use when the owner asks Anya to boost, bury, remove, or bring back a match.',
+    'OWNER ONLY. Recompute a pipeline match with the canonical decision engine, dismiss it with a sticky tombstone, or restore a tombstone. Historical "promote"/"demote" actions are deprecated aliases for "recompute" and cannot override score or qualification.',
   requiresOwner: true,
   schema: {
     type: 'object',
     properties: {
       profileId: { type: 'string', description: 'Profile that owns the match' },
-      action: { type: 'string', enum: ['promote', 'demote', 'dismiss', 'restore'], description: 'What to do' },
-      grantId: { type: 'string', description: 'grants.id — required for promote/demote/dismiss' },
+      action: { type: 'string', enum: ['recompute', 'promote', 'demote', 'dismiss', 'restore'], description: 'What to do; promote/demote are deprecated recompute aliases' },
+      grantId: { type: 'string', description: 'grants.id — required for recompute/promote/demote/dismiss' },
       opportunityId: { type: 'string', description: 'funding_opportunities.id — required for restore' },
-      score: { type: 'integer', minimum: 0, maximum: 100, description: 'New match_score for promote/demote (defaults: promote 85, demote 55)' },
+      score: { type: 'integer', deprecated: true, description: 'Deprecated compatibility field. Ignored; only the canonical decision engine may author match_score.' },
       force: { type: 'boolean', description: 'Allow dismissing a user-progressed grant (submitted/awarded). Default false.' },
     },
     required: ['profileId', 'action'],
@@ -5374,25 +5437,67 @@ registerTool({
     const action = String(params.action || '').toLowerCase()
     const userId = context?.ctx?.userId ?? context?.user?.id ?? null
 
-    if (action === 'promote' || action === 'demote') {
-      if (!params.grantId) throw new Error('grantId is required for promote/demote')
+    if (action === 'recompute' || action === 'promote' || action === 'demote') {
+      if (!params.grantId) throw new Error('grantId is required for recompute')
       const grantId = String(params.grantId)
-      const row = await db.prepare('SELECT id, title, status, match_score FROM grants WHERE id = ? AND profile_id = ?').get(grantId, profileId)
+      const row = await db.prepare(`
+        SELECT id, title, status, funding_opportunity_id
+          FROM grants
+         WHERE id = ? AND profile_id = ?
+      `).get(grantId, profileId)
       if (!row) throw new Error(`Grant ${grantId} not found for profile ${profileId}`)
-      const fallback = action === 'promote' ? 85 : 55
-      const requested = Number.isFinite(Number(params.score)) ? Math.round(Number(params.score)) : fallback
-      const newScore = Math.max(0, Math.min(100, requested))
-      await db
-        .prepare('UPDATE grants SET match_score = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND profile_id = ?')
-        .run(newScore, grantId, profileId)
+
+      const opportunity = row.funding_opportunity_id
+        ? await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(row.funding_opportunity_id)
+        : null
+      if (!opportunity) {
+        const persisted = await persistCanonicalGrantMatch(db, { grantId, profileId, decision: null })
+        return {
+          ok: true,
+          action: 'recompute',
+          deprecated_action: action === 'recompute' ? null : action,
+          score_override_ignored: Object.prototype.hasOwnProperty.call(params, 'score'),
+          grant_id: grantId,
+          profile_id: profileId,
+          title: row.title,
+          rated: false,
+          previous_score: null,
+          new_score: null,
+          match_score: null,
+          match_decision: null,
+          reason: 'canonical_profile_opportunity_pair_unavailable',
+          persisted_fields: persisted.persisted_fields,
+        }
+      }
+
+      const profileContext = await loadProfileContext(db, profileId)
+      const decision = computeMatchDecision(
+        profileContext.profile,
+        opportunity,
+        { profileSections: profileContext.sections, signals: profileContext.signals },
+      )
+      const persisted = await persistCanonicalGrantMatch(db, { grantId, profileId, decision })
       return {
         ok: true,
-        action,
+        action: 'recompute',
+        deprecated_action: action === 'recompute' ? null : action,
+        score_override_ignored: Object.prototype.hasOwnProperty.call(params, 'score'),
         grant_id: grantId,
         profile_id: profileId,
         title: row.title,
-        previous_score: row.match_score ?? null,
-        new_score: newScore,
+        rated: persisted.score !== null && Boolean(decision?.decision),
+        // Kept only for response-shape compatibility. Never expose the stale
+        // owner-authored value as if it were current match truth.
+        previous_score: null,
+        new_score: persisted.score,
+        match_score: persisted.score,
+        match_decision: decision?.decision ?? null,
+        match_explanation: decision?.explanation ?? null,
+        match_confidence: persisted.confidence,
+        matcher_version: decision?.matcherVersion ?? null,
+        score_scale_id: decision?.scoreScaleId ?? null,
+        evaluated_at: decision?.evaluatedAt ?? null,
+        persisted_fields: persisted.persisted_fields,
       }
     }
 

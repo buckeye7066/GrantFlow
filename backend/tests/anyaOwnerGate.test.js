@@ -1,16 +1,18 @@
 /**
- * Anya owner-only tool gate — the hard gate to buckeye7066@gmail.com.
+ * Anya owner-only tool gate — the hard gate to the configured admin identity.
  */
 import { describe, it, expect } from 'vitest'
 import { isOwnerCaller, invokeTool, listToolMetadata } from '../services/anyaToolRegistry.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
-const OWNER = 'buckeye7066@gmail.com'
+const OWNER = ADMIN_EMAIL
 
 describe('isOwnerCaller', () => {
   it('only the owner email passes (case-insensitive); other admins do not', () => {
     expect(isOwnerCaller({ ctx: { email: OWNER } })).toBe(true)
-    expect(isOwnerCaller({ ctx: { email: 'BUCKEYE7066@gmail.com' } })).toBe(true)
+    expect(isOwnerCaller({ ctx: { email: OWNER.toUpperCase() } })).toBe(true)
     expect(isOwnerCaller({ user: { primary_email: OWNER } })).toBe(true)
+    expect(isOwnerCaller({ ctx: { email: 'owner@example.invalid', isAdmin: true } })).toBe(false)
     expect(isOwnerCaller({ ctx: { email: 'other-admin@example.com', isAdmin: true } })).toBe(false)
     expect(isOwnerCaller({})).toBe(false)
   })

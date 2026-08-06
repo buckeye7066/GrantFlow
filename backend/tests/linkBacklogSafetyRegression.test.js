@@ -46,7 +46,9 @@ function makeDb() {
       http_status INTEGER,
       is_hidden INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
-      status TEXT DEFAULT 'active'
+      status TEXT DEFAULT 'active',
+      deadline TEXT,
+      deadline_type TEXT
     );
     CREATE TABLE verification_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -295,6 +297,136 @@ describe('link backlog safety regression', () => {
     })
 
     expect(await brokenDirectSummary(db)).toMatchObject({ retired: 1 })
+    db.close()
+  })
+
+  it('never selects a direct row whose fixed deadline has already passed', async () => {
+    const db = makeDb()
+    insert(db, {
+      id: 'deadline-expired-direct',
+      application_url: 'https://8.8.8.8/old-program',
+      link_status: 'broken',
+      status: 'active',
+      is_hidden: 1,
+      is_active: 0,
+    })
+    db.prepare(`
+      UPDATE funding_opportunities
+         SET deadline='2020-01-01', deadline_type='fixed'
+       WHERE id='deadline-expired-direct'
+    `).run()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const result = await repairBrokenDirectBatch(db, {
+      limit: 1,
+      concurrency: 1,
+      timeoutMs: 3000,
+      findOfficialUrlImpl: async () => ({ url: null, searched: true, hits: 0 }),
+    })
+
+    expect(result).toMatchObject({ selected: 0, claimed: 0, restored: 0 })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(db.prepare('SELECT status,link_status,is_hidden,is_active FROM funding_opportunities WHERE id=?')
+      .get('deadline-expired-direct')).toMatchObject({
+      status: 'active',
+      link_status: 'broken',
+      is_hidden: 1,
+      is_active: 0,
+    })
+    db.close()
+  })
+
+  it('never selects quarantined or permanently retired rows for backlog restoration', async () => {
+    const db = makeDb()
+    insert(db, {
+      id: 'independently-quarantined',
+      application_url: 'https://8.8.8.8/quarantined',
+      link_status: 'broken',
+      status: 'quarantined',
+      is_hidden: 1,
+      is_active: 0,
+    })
+    insert(db, {
+      id: 'permanently-retired-status',
+      application_url: 'https://8.8.8.8/retired',
+      link_status: 'broken',
+      status: 'permanently_retired',
+      is_hidden: 1,
+      is_active: 0,
+    })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const result = await repairBrokenDirectBatch(db, {
+      limit: 10,
+      concurrency: 1,
+      timeoutMs: 3000,
+      findOfficialUrlImpl: async () => ({ url: null, searched: true, hits: 0 }),
+    })
+
+    expect(result).toMatchObject({ selected: 0, claimed: 0, restored: 0 })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(db.prepare('SELECT status,link_status,is_hidden,is_active FROM funding_opportunities ORDER BY id')
+      .all()).toEqual([
+      {
+        status: 'quarantined',
+        link_status: 'broken',
+        is_hidden: 1,
+        is_active: 0,
+      },
+      {
+        status: 'permanently_retired',
+        link_status: 'broken',
+        is_hidden: 1,
+        is_active: 0,
+      },
+    ])
+    db.close()
+  })
+
+  it('a concurrent expiry wins the race against a successful official-URL rescue', async () => {
+    const db = makeDb()
+    insert(db, {
+      id: 'expires-during-repair',
+      title: 'Race-safe grant',
+      application_url: 'https://8.8.8.8/old-page',
+      link_status: 'broken',
+      status: 'active',
+      is_hidden: 1,
+      is_active: 0,
+    })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ status: 404, url: 'https://8.8.8.8/old-page' })
+    const officialUrl = 'https://official.example.org/current-page'
+
+    const result = await repairBrokenDirectBatch(db, {
+      limit: 1,
+      concurrency: 1,
+      timeoutMs: 3000,
+      findOfficialUrlImpl: async () => {
+        // The row was selected and claimed, then the deadline lifecycle won.
+        db.prepare(`
+          UPDATE funding_opportunities
+             SET status='expired', deadline='2020-01-01', deadline_type='fixed',
+                 is_hidden=1, is_active=0
+           WHERE id='expires-during-repair'
+        `).run()
+        return {
+          url: officialUrl,
+          searched: true,
+          hits: 1,
+          probe: { status: 'ok', code: 200, method: 'get', finalUrl: officialUrl },
+        }
+      },
+    })
+    const row = db.prepare('SELECT * FROM funding_opportunities WHERE id=?').get('expires-during-repair')
+
+    expect(result).toMatchObject({ selected: 1, claimed: 1, restored: 0 })
+    expect(row).toMatchObject({
+      status: 'expired',
+      link_status: 'broken',
+      application_url: 'https://8.8.8.8/old-page',
+      is_hidden: 1,
+      is_active: 0,
+    })
     db.close()
   })
 

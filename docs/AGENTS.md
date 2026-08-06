@@ -6,7 +6,7 @@ owner-ratified product thesis and the measured Google-bar live in
 [canonical_rules.md](./canonical_rules.md) ("The product thesis"). Where this
 page and a per-agent doc disagree on ROLE, this page and the charter win._
 
-Last reviewed: 2026-07-07 · Owner/admin: `buckeye7066@gmail.com`
+Last reviewed: 2026-07-07 · Owner/admin: `owner@example.invalid`
 
 ## The loop (in prose)
 

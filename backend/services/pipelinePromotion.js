@@ -167,6 +167,13 @@ async function listEligibleCandidates(db, profileContext, profileId, nowMs = Dat
        LEFT JOIN pipeline_promotion_outcomes po
          ON po.profile_id = m.profile_id AND po.opportunity_id = m.opportunity_id AND po.mode = 'live'
       WHERE m.profile_id = ?
+        AND COALESCE(o.is_active, 1) = 1
+        AND COALESCE(o.is_hidden, 0) = 0
+        AND LOWER(COALESCE(o.status, 'active')) NOT IN
+            ('expired', 'retired', 'permanently_retired', 'quarantined')
+        AND LOWER(COALESCE(o.link_status, 'unverified')) NOT IN
+            ('broken', 'retired', 'permanently_retired', 'quarantined')
+        AND LOWER(COALESCE(o.reality_status, 'allowed')) <> 'rejected'
         AND NOT EXISTS (
           SELECT 1 FROM grants g
            WHERE g.profile_id = m.profile_id AND g.funding_opportunity_id = m.opportunity_id
@@ -211,6 +218,13 @@ async function remainingFromDb(db, profiles) {
           AND po.opportunity_id = m.opportunity_id
           AND po.mode = 'live'
         WHERE m.profile_id = ?
+          AND COALESCE(o.is_active, 1) = 1
+          AND COALESCE(o.is_hidden, 0) = 0
+          AND LOWER(COALESCE(o.status, 'active')) NOT IN
+              ('expired', 'retired', 'permanently_retired', 'quarantined')
+          AND LOWER(COALESCE(o.link_status, 'unverified')) NOT IN
+              ('broken', 'retired', 'permanently_retired', 'quarantined')
+          AND LOWER(COALESCE(o.reality_status, 'allowed')) <> 'rejected'
           AND NOT EXISTS (
             SELECT 1 FROM grants g
              WHERE g.profile_id = m.profile_id

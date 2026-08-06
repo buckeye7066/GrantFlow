@@ -72,10 +72,11 @@ function attachCorpusMetadata(opp, config) {
  * (admin nationwide sweep) ALL corpora are crawled exactly as before.
  *
  * @param {Object} db - Database instance
- * @param {Object} options - { skipVerification, geoRunId, profileContext, signals, domainIds }
+ * @param {Object} options - { skipVerification, geoRunId, profileContext, signals, domainIds, headForVerification }
  * @returns {Promise<Object>} Stats
  */
 export async function runDomainCorpusCrawl(db, options = {}) {
+  const verifyHead = options.headForVerification ?? headForVerification
   // Resolve the profile signals (dispatcher passes profileContext.signals).
   const signals = options.signals ?? options.profileContext?.signals ?? null
   const profileForCrawl = signals ? { signals } : MINIMAL_PROFILE
@@ -280,7 +281,7 @@ export async function runDomainCorpusCrawl(db, options = {}) {
       if (!url || !String(url).startsWith('http')) continue
       const now = new Date().toISOString()
       try {
-        const probe = await headForVerification(url, { timeoutMs: 4000 })
+        const probe = await verifyHead(url, { timeoutMs: 4000 })
         if (probe.ok) {
           await update.run(
             verVal,

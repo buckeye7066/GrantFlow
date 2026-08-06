@@ -22,7 +22,7 @@ You asked to scan *all of C: and G:*. Those drives hold regulated and privileged
 
 1. `cp tools/laptop-connector/config.example.json tools/laptop-connector/config.json` and edit:
    - `apiBaseUrl` → your backend URL (or set `LAPTOP_CONNECTOR_API`)
-   - `roots` → folders to scan (defaults to `C:\Users\firer` and `G:\`)
+   - `roots` → folders to scan (defaults to `C:\Users\example_user` and `G:\`)
 2. Export the admin token so the connector can authenticate:
    ```bash
    export LAPTOP_CONNECTOR_TOKEN="<the backend ADMIN_TOKEN>"

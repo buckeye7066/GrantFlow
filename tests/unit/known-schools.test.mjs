@@ -1,7 +1,7 @@
 /**
  * Known schools registry — unit tests.
  *
- * Origin bug: profile "Anastasia" listed Middle Tennessee State University
+ * Origin bug: profile "Demo Student" listed Middle Tennessee State University
  * (and 18 other colleges) in `university_applications.applications[]` as
  * `{ name, status }` only, with no `portals`. The crawler's school-card
  * generator therefore handed the user a Google search URL when she asked
@@ -51,7 +51,7 @@ describe('knownSchools registry — getKnownSchool', () => {
     }
   })
 
-  it('matches all of Anastasia\'s 19 target schools', () => {
+  it('matches all of Demo Student\'s 19 target schools', () => {
     const targets = [
       'Middle Tennessee State University',
       'University of Central Florida',
@@ -133,10 +133,10 @@ describe('knownSchools — enrichSchool', () => {
   })
 })
 
-describe('crawlerManager.generateSchoolCards — Anastasia / MTSU end-to-end', () => {
-  // Mirrors the Anastasia profile (see backend/config/profile-anastasia.json)
+describe('crawlerManager.generateSchoolCards — Demo Student / MTSU end-to-end', () => {
+  // Mirrors the Demo Student profile (see backend/config/profile-demo-tennessee-stem-student.json)
   // — TN, female, high-school senior, applying to MTSU + 18 other colleges.
-  const anastasiaAnalysis = {
+  const demoStudentAnalysis = {
     applicantType: 'student',
     demographics: new Set(['female']),
     interests: new Set(['forensic science', 'criminal justice', 'stem']),
@@ -149,7 +149,7 @@ describe('crawlerManager.generateSchoolCards — Anastasia / MTSU end-to-end', (
     ],
   }
 
-  const cards = generateSchoolCards(anastasiaAnalysis)
+  const cards = generateSchoolCards(demoStudentAnalysis)
 
   it('emits at least 4 cards per known school (finaid, housing, off-campus, scholarships)', () => {
     const mtsuCards = cards.filter((c) => c.schoolName === 'Middle Tennessee State University')
@@ -243,4 +243,3 @@ describe('crawlerManager.generateSchoolCards — Anastasia / MTSU end-to-end', (
     }
   })
 })
-

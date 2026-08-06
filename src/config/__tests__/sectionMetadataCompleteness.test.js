@@ -34,10 +34,10 @@ describe("SECTION_METADATA completeness", () => {
   it("declares every saved key in designated seed profiles", () => {
     const failures = []
     for (const profile of DESIGNATED_PROFILES) collect(profile, failures)
-    const anastasia = JSON.parse(
-      readFileSync(path.join(process.cwd(), "backend", "config", "profile-anastasia.json"), "utf8"),
+    const demo_stem_student = JSON.parse(
+      readFileSync(path.join(process.cwd(), "backend", "config", "profile-demo-tennessee-stem-student.json"), "utf8"),
     )
-    collect(anastasia, failures)
+    collect(demo_stem_student, failures)
     expect(failures.sort()).toEqual([])
   })
 

@@ -10,7 +10,7 @@ import { ACCESS_STATUS } from '../../backend/services/pricing/pricingTypes.js'
 
 test('admin user always has access regardless of pricing state', () => {
   const r = decideAccess({
-    user: { id: 'a', email: 'buckeye7066@gmail.com', is_admin: true },
+    principal: { userId: 'a', identityResolved: true, isAdmin: true },
     pricing: null,
     agreement: null,
   })
@@ -19,19 +19,27 @@ test('admin user always has access regardless of pricing state', () => {
   assert.equal(r.payment_required, false)
 })
 
-test('configured admin email is_admin=false but configured email is still admin', () => {
+test('an admin-looking email without DB admin authority remains payment-gated', () => {
   const r = decideAccess({
-    user: { id: 'a', email: 'BuckEye7066@gmail.com', is_admin: false },
+    principal: {
+      userId: 'a',
+      identityResolved: true,
+      isAdmin: false,
+      email: 'admin@grantflow.local',
+      role: 'admin',
+      is_admin: true,
+    },
     pricing: { access_status: ACCESS_STATUS.PENDING_PAYMENT },
     agreement: null,
   })
-  assert.equal(r.access_granted, true)
-  assert.equal(r.is_admin, true)
+  assert.equal(r.access_granted, false)
+  assert.equal(r.is_admin, false)
+  assert.equal(r.blocking_reason, 'payment_required')
 })
 
 test('non-admin without pricing is blocked', () => {
   const r = decideAccess({
-    user: { id: 'u', email: 'jane@example.com' },
+    principal: { userId: 'u', identityResolved: true, isAdmin: false },
     pricing: null,
     agreement: null,
   })
@@ -41,7 +49,7 @@ test('non-admin without pricing is blocked', () => {
 
 test('PENDING_AGREEMENT requires agreement, no checkout yet', () => {
   const r = decideAccess({
-    user: { id: 'u', email: 'jane@example.com' },
+    principal: { userId: 'u', identityResolved: true, isAdmin: false },
     pricing: { access_status: ACCESS_STATUS.PENDING_AGREEMENT },
     agreement: null,
   })
@@ -53,7 +61,7 @@ test('PENDING_AGREEMENT requires agreement, no checkout yet', () => {
 
 test('PENDING_PAYMENT exposes checkout', () => {
   const r = decideAccess({
-    user: { id: 'u', email: 'jane@example.com' },
+    principal: { userId: 'u', identityResolved: true, isAdmin: false },
     pricing: { access_status: ACCESS_STATUS.PENDING_PAYMENT },
     agreement: { accepted: 1 },
   })
@@ -65,7 +73,7 @@ test('PENDING_PAYMENT exposes checkout', () => {
 
 test('ACTIVE_PAID grants access', () => {
   const r = decideAccess({
-    user: { id: 'u', email: 'jane@example.com' },
+    principal: { userId: 'u', identityResolved: true, isAdmin: false },
     pricing: { access_status: ACCESS_STATUS.ACTIVE_PAID },
     agreement: { accepted: 1 },
   })
@@ -75,7 +83,7 @@ test('ACTIVE_PAID grants access', () => {
 
 test('ADMIN_WAIVED grants access', () => {
   const r = decideAccess({
-    user: { id: 'u', email: 'jane@example.com' },
+    principal: { userId: 'u', identityResolved: true, isAdmin: false },
     pricing: { access_status: ACCESS_STATUS.ADMIN_WAIVED },
     agreement: null,
   })
@@ -85,7 +93,7 @@ test('ADMIN_WAIVED grants access', () => {
 
 test('admin-review-required (PENDING_PRICING) blocks the user with the right reason', () => {
   const r = decideAccess({
-    user: { id: 'u', email: 'jane@example.com' },
+    principal: { userId: 'u', identityResolved: true, isAdmin: false },
     pricing: { access_status: ACCESS_STATUS.PENDING_PRICING },
     agreement: null,
   })
@@ -98,6 +106,41 @@ test('unauthenticated request returns access_granted=false with not_authenticate
   assert.equal(r.access_granted, false)
   assert.equal(r.blocking_reason, 'not_authenticated')
   assert.equal(r.authenticated, false)
+})
+
+test('raw JWT authority fields are ignored without a trusted principal projection', () => {
+  const r = decideAccess({
+    user: { id: 'stale-admin', role: 'admin', is_admin: true, email: 'admin@grantflow.local' },
+    pricing: { access_status: ACCESS_STATUS.ACTIVE_PAID },
+    agreement: { accepted: 1 },
+  })
+  assert.equal(r.authenticated, false)
+  assert.equal(r.is_admin, false)
+  assert.equal(r.access_granted, false)
+  assert.equal(r.blocking_reason, 'not_authenticated')
+})
+
+test('an unresolved principal cannot use an isAdmin projection', () => {
+  const r = decideAccess({
+    principal: { userId: 'deleted-user', identityResolved: false, isAdmin: true },
+    pricing: { access_status: ACCESS_STATUS.ACTIVE_PAID },
+    agreement: { accepted: 1 },
+  })
+  assert.equal(r.authenticated, false)
+  assert.equal(r.is_admin, false)
+  assert.equal(r.access_granted, false)
+})
+
+test('a validated synthetic service principal retains the canonical admin bypass', () => {
+  const r = decideAccess({
+    principal: { userId: 'system_admin_token', identityResolved: true, isAdmin: true },
+    pricing: null,
+    agreement: null,
+  })
+  assert.equal(r.authenticated, true)
+  assert.equal(r.is_admin, true)
+  assert.equal(r.access_granted, true)
+  assert.equal(r.payment_status, 'admin_bypass')
 })
 
 test('isAlwaysAllowedPath admits the gate-bypass routes', () => {

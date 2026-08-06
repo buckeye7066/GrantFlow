@@ -76,7 +76,7 @@ export function humanizeFieldKey(fieldKey) {
 // `normalizeDisplayString` the global trap-door so a regression in any
 // downstream renderer can never leak the raw stringification to the
 // user. Mission goal 9 (explainable) + goal 10 (UI must not show raw
-// stringification) — applies to every profile, not just Anastasia.
+// stringification) — applies to every profile, not just Demo Student.
 const RAW_OBJECT_TOSTRING_RE = /^\[object [A-Za-z][A-Za-z0-9_$]*\]$/
 
 export function looksLikeObjectStringification(value) {

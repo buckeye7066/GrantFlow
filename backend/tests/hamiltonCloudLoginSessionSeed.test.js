@@ -36,18 +36,21 @@ const {
 const { startCloudLogin, completeCloudLogin, cancelCloudLogin } =
   await import('../services/hamilton/hamiltonCloudLogin.js')
 
+const FIXTURE_HOST = 'hamilton-submit-fixture.invalid'
+const FIXTURE_ORIGIN = `https://${FIXTURE_HOST}`
+
 function makeDb() { return new Database(':memory:') }
 
 // The agent's working, authenticated session for the portal.
 const AGENT_STATE = {
-  cookies: [{ name: 'sid', value: 'agent-authenticated', domain: 'mtsu.edu', path: '/' }],
+  cookies: [{ name: 'sid', value: 'agent-authenticated', domain: FIXTURE_HOST, path: '/' }],
   origins: [],
 }
 // What a COLD (signed-out) visit to a real portal yields: never empty — portals
 // always set tracker/CSRF cookies, which is exactly why the empty_session guard
 // could not catch the old overwrite.
 const COLD_JAR = {
-  cookies: [{ name: 'csrf', value: 'anonymous-visitor', domain: 'mtsu.edu', path: '/' }],
+  cookies: [{ name: 'csrf', value: 'anonymous-visitor', domain: FIXTURE_HOST, path: '/' }],
   origins: [],
 }
 
@@ -60,9 +63,10 @@ function makeFakeLaunch() {
   const newContext = vi.fn(async (opts = {}) => {
     const ctx = {
       opts,
+      route: vi.fn(async () => {}),
       newPage: async () => ({
         goto: vi.fn(async () => {}),
-        url: () => 'https://mtsu.edu/landing',
+        url: () => `${FIXTURE_ORIGIN}/landing`,
         viewportSize: () => ({ width: 1280, height: 900 }),
         context: () => ctx,
       }),
@@ -80,9 +84,9 @@ async function startWatched(db, launchBrowser, overrides = {}) {
   const res = await startCloudLogin({
     userId: 'u1',
     profileId: 'pA',
-    portalHost: 'mtsu.edu',
-    loginUrl: 'https://mtsu.edu/login',
-    label: 'MTSU',
+    portalHost: FIXTURE_HOST,
+    loginUrl: `${FIXTURE_ORIGIN}/login`,
+    label: 'Synthetic portal fixture',
     db,
     launchBrowser,
     ...overrides,
@@ -102,7 +106,7 @@ describe('startCloudLogin seeds the live context from the saved session', () => 
 
   it('a watched open of a portal with an EXISTING valid session launches SIGNED IN (storageState seeded)', async () => {
     await importSession(db, {
-      userId: 'u1', profileId: 'pA', portalHost: 'mtsu.edu', storageState: AGENT_STATE,
+      userId: 'u1', profileId: 'pA', portalHost: FIXTURE_HOST, storageState: AGENT_STATE,
     })
     const { launchBrowser, newContext } = makeFakeLaunch()
 
@@ -118,7 +122,7 @@ describe('startCloudLogin seeds the live context from the saved session', () => 
 
   it('"Done" after a seeded watched open REFRESHES the saved session — the agent cookie survives (the offline-portal regression)', async () => {
     await importSession(db, {
-      userId: 'u1', profileId: 'pA', portalHost: 'mtsu.edu', storageState: AGENT_STATE,
+      userId: 'u1', profileId: 'pA', portalHost: FIXTURE_HOST, storageState: AGENT_STATE,
     })
     const { launchBrowser } = makeFakeLaunch()
     const res = await startWatched(db, launchBrowser)
@@ -129,7 +133,7 @@ describe('startCloudLogin seeds the live context from the saved session', () => 
     const captured = await completeCloudLogin(res.liveSessionId)
     expect(captured.ok).toBe(true)
     await importSession(db, {
-      userId: 'u1', profileId: 'pA', portalHost: 'mtsu.edu',
+      userId: 'u1', profileId: 'pA', portalHost: FIXTURE_HOST,
       storageState: captured.storageState,
       metadata: { imported_via: 'cloud_interactive_login' },
     })
@@ -155,7 +159,7 @@ describe('startCloudLogin seeds the live context from the saved session', () => 
 
   it('another profile\'s session for the same host is NEVER seeded (profile-scoped lookup)', async () => {
     await importSession(db, {
-      userId: 'u2', profileId: 'pOTHER', portalHost: 'mtsu.edu', storageState: AGENT_STATE,
+      userId: 'u2', profileId: 'pOTHER', portalHost: FIXTURE_HOST, storageState: AGENT_STATE,
     })
     const { launchBrowser, newContext } = makeFakeLaunch()
     const res = await startWatched(db, launchBrowser)

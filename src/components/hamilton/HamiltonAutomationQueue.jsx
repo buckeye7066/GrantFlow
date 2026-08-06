@@ -67,7 +67,7 @@ export default function HamiltonAutomationQueue({ profileId }) {
   return (
     <Card className="border-current-line">
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="flex items-center gap-2 font-display text-current-ink">
+        <CardTitle className="flex items-center gap-2 font-display text-current-ink dark:text-slate-100">
           <Sparkles className="h-4 w-4 text-current-emerald" />
           Hamilton Autopilot queue
           <Badge variant="outline" className="money ml-1 border-current-line text-[10px] text-current-ink/70">{tasks.length}</Badge>
@@ -78,8 +78,8 @@ export default function HamiltonAutomationQueue({ profileId }) {
       </CardHeader>
       <CardContent>
         {tasks.length === 0 ? (
-          <div className="text-xs text-current-ink/60">
-            Nothing here yet. Select funding sources from the pipeline and click <span className="font-semibold">Automate with Hamilton</span>.
+          <div className="text-xs text-current-ink/75 dark:text-slate-300">
+            Nothing here yet. Select a funding source and choose its <span className="font-semibold">Prepare with Hamilton</span> action. Hamilton prepares the draft; you review it and complete the final portal submission.
           </div>
         ) : (
           <ul className="space-y-2">

@@ -34,18 +34,9 @@ function App() {
 
     hydrateFromStorage()
 
-    const accessToken = client.getToken?.()
-    if (!accessToken) {
-      // No token present, clear any stale state and mark as bootstrapped
-      clearState()
-      setBootstrapped(true)
-      return
-    }
-
-    // Token exists, validate it with the server.
-    // auth.me() handles proactive token refresh via the single-flight
-    // refreshTokens() path, so any concurrent refresh timer from
-    // hydrateFromStorage's scheduleSessionRefresh shares the same promise.
+    // Access tokens are memory-only. auth.me() first exchanges the HttpOnly
+    // refresh cookie when this is a reload, then validates the resulting access
+    // token against the canonical identity endpoint.
     client.auth
       .me()
       .then((response) => {

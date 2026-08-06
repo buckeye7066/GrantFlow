@@ -26,6 +26,8 @@ import {
  * @param {string} props.placeholder - Placeholder text
  * @param {string} props.className - Additional CSS classes
  * @param {boolean} props.disabled - Whether the select is disabled
+ * @param {string} props.triggerId - Optional id used by an external label
+ * @param {string} props.ariaLabel - Accessible name when there is no external label
  */
 export default function ProfileSelect({
   value,
@@ -34,6 +36,8 @@ export default function ProfileSelect({
   placeholder = 'Select a profile...',
   className = '',
   disabled = false,
+  triggerId,
+  ariaLabel,
 }) {
   const user = useAuthStore((state) => state.user)
   // Canonical admin truth is server-backed (/api/auth/me).
@@ -62,7 +66,7 @@ export default function ProfileSelect({
   if (isLoading) {
     return (
       <Select disabled>
-        <SelectTrigger className={className}>
+        <SelectTrigger id={triggerId} aria-label={ariaLabel} className={className}>
           <SelectValue placeholder="Loading profiles..." />
         </SelectTrigger>
       </Select>
@@ -70,12 +74,17 @@ export default function ProfileSelect({
   }
 
   if (!Array.isArray(availableProfiles) || availableProfiles.length === 0) {
-    // Log so developers can spot envelope mismatch or auth issues in production.
-    console.warn('[ProfileSelect] No profiles available â rawProfiles shape:', rawProfiles)
+    // Log only structure, never profile records or personal data.
+    console.warn('[ProfileSelect] No profiles available', {
+      responseType: Array.isArray(rawProfiles) ? 'array' : typeof rawProfiles,
+      responseKeys: rawProfiles && typeof rawProfiles === 'object' && !Array.isArray(rawProfiles)
+        ? Object.keys(rawProfiles)
+        : [],
+    })
     return (
       <Select disabled>
-        <SelectTrigger className={className}>
-          <SelectValue placeholder="No profiles available â create a profile to begin matching" />
+        <SelectTrigger id={triggerId} aria-label={ariaLabel} className={className}>
+          <SelectValue placeholder="No profiles available — ask Anya what is needed next" />
         </SelectTrigger>
       </Select>
     )
@@ -89,7 +98,7 @@ export default function ProfileSelect({
       onValueChange={(v) => onValueChange?.(v ?? '')}
       disabled={disabled}
     >
-      <SelectTrigger className={className}>
+      <SelectTrigger id={triggerId} aria-label={ariaLabel} className={className}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>

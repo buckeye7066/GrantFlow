@@ -41,7 +41,7 @@ node scripts/anya-autonomous.mjs --write --fix-empty-catch
 
 ## Getting started
 
-The backend service requires **Node.js 20+** and **PostgreSQL**.  See `docs/ENVIRONMENT.md` for environment variables and `docs/VERCEL_RAILWAY_DEPLOYMENT.md` or `docs/DEPLOYMENT_DO.md` for deployment options.
+The verified backend/release runtime is **Node.js 20.20.2** and production uses **PostgreSQL**. Android/iOS tooling is the explicit Node 22 exception. See `docs/ENVIRONMENT.md` for environment variables and `docs/VERCEL_RAILWAY_DEPLOYMENT.md` or `docs/DEPLOYMENT_DO.md` for deployment options.
 
 To set up a development environment:
 

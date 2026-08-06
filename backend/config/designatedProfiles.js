@@ -57,7 +57,7 @@ function loadPrivateDesignatedProfiles(filePath) {
 
 const PUBLIC_FIXTURE_PROFILES = [
   profile({
-    id: 'profile-john-doe',
+    id: 'profile-demo-individual',
     display_name: 'Demo Individual',
     primary_type: 'individual',
     tags: ['individual', 'demo'],
@@ -71,7 +71,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-axiom-biolabs-2',
+    id: 'profile-demo-research-organization',
     display_name: 'Demo Research Organization',
     primary_type: 'organization',
     tags: ['organization', 'research'],
@@ -85,7 +85,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-olivia-beltran',
+    id: 'profile-demo-wellness-business',
     display_name: 'Demo Wellness Business',
     primary_type: 'small_business',
     tags: ['wellness', 'small_business'],
@@ -103,13 +103,10 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-avanell-leamon',
-    // CORRECTED 2026-07-06 (owner): this person is DISABLED (mobility
-    // impairment, senior), NOT a family caregiver. The original seed typed her
-    // 'family' + caregiver from a Base44 import that read "household with
-    // caregiving responsibilities" and inverted the relationship — she is the
-    // one RECEIVING care. The boot seeder re-asserts primary_type/tags from
-    // this config on every deploy, so this file is the source of truth to fix.
+    id: 'profile-demo-senior-accessibility',
+    // Fictional test persona: the applicant receives accessibility support and
+    // is not a caregiver. This distinction protects the eligibility-direction
+    // regression without encoding a real person's correction history.
     display_name: 'Designated Disability & Senior Support Profile',
     primary_type: 'individual',
     tags: ['disability', 'senior', 'appalachian'],
@@ -132,7 +129,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-gilbert-mccosh',
+    id: 'profile-demo-assistive-technology',
     display_name: 'Designated Disability Support Profile',
     primary_type: 'individual',
     tags: ['disability', 'assistive_technology', 'appalachian'],
@@ -151,7 +148,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-hollie-knox',
+    id: 'profile-demo-caregiver-household',
     display_name: 'Designated Caregiver Household Profile',
     primary_type: 'family',
     tags: ['caregiver', 'family_assistance'],
@@ -166,7 +163,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-brian-client',
+    id: 'profile-demo-veteran-community',
     display_name: 'Designated Veteran Community Profile',
     primary_type: 'individual',
     tags: ['veteran', 'community_service'],
@@ -182,7 +179,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-focus-forward-ministries',
+    id: 'profile-demo-faith-nonprofit',
     display_name: 'Demo Faith-Based Nonprofit',
     primary_type: 'nonprofit',
     tags: ['faith_based', 'human_services', 'food_security'],
@@ -196,7 +193,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-john-white',
+    id: 'profile-demo-health-education',
     display_name: 'Demo Health Education Profile',
     primary_type: 'individual',
     tags: ['health_education', 'food_security', 'community_health'],
@@ -212,7 +209,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-paul-jason-dasher',
+    id: 'profile-demo-workforce-training',
     display_name: 'Designated Workforce Profile',
     primary_type: 'individual',
     tags: ['workforce', 'training'],
@@ -220,7 +217,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     goal: 'Find workforce training, emergency assistance, and credential-support funding.',
   }),
   profile({
-    id: 'profile-angelika-ptak',
+    id: 'profile-demo-healthcare-workforce',
     display_name: 'Designated Healthcare Workforce Profile',
     primary_type: 'individual',
     tags: ['healthcare_worker', 'training'],
@@ -231,7 +228,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-rachel-miller',
+    id: 'profile-demo-education-support',
     display_name: 'Designated Education Support Profile',
     primary_type: 'individual',
     tags: ['education', 'career_training'],
@@ -239,7 +236,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     goal: 'Find education, career training, and household-stability resources.',
   }),
   profile({
-    id: 'profile-anastasia-white',
+    id: 'profile-demo-tennessee-stem-student',
     display_name: 'Demo Tennessee STEM Student',
     primary_type: 'high_school_student',
     tags: ['student', 'student_aid', 'stem', 'forensic_science', 'appalachian'],
@@ -313,7 +310,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-kathy-daniel',
+    id: 'profile-demo-basic-needs',
     display_name: 'Designated Basic Needs Profile',
     primary_type: 'individual',
     tags: ['basic_needs', 'emergency_assistance'],
@@ -321,7 +318,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     goal: 'Find emergency assistance, health support, and household-stability resources.',
   }),
   profile({
-    id: 'profile-kimberly-botts',
+    id: 'profile-demo-hcbs-support',
     display_name: 'Designated HCBS Support Profile',
     primary_type: 'individual',
     tags: ['disability', 'hcbs_waiver', 'medical_assistance'],
@@ -346,7 +343,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-luibov-samoylenko',
+    id: 'profile-demo-senior-medical',
     display_name: 'Designated Senior Medical Profile',
     primary_type: 'individual',
     tags: ['senior', 'medical_assistance'],
@@ -361,7 +358,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-robert-white',
+    id: 'profile-demo-tennessee-college-student',
     display_name: 'Demo Tennessee College Student',
     primary_type: 'college_student',
     tags: ['student', 'ems', 'healthcare_training'],
@@ -377,7 +374,7 @@ const PUBLIC_FIXTURE_PROFILES = [
     },
   }),
   profile({
-    id: 'profile-josh-dasher',
+    id: 'profile-demo-career-support',
     display_name: 'Designated Career Support Profile',
     primary_type: 'individual',
     tags: ['career_training', 'basic_needs'],
@@ -385,16 +382,16 @@ const PUBLIC_FIXTURE_PROFILES = [
     goal: 'Find career training, household-stability, and emergency-assistance resources.',
   }),
   profile({
-    id: 'profile-melissa-justus',
+    id: 'profile-demo-general-support',
     display_name: 'Designated General Support Profile',
     primary_type: 'individual',
     tags: ['general_support'],
     cityState: 'United States',
-    owner_email: 'client.melissa@example.invalid',
+    owner_email: 'demo.general-support@example.invalid',
     goal: 'Find eligible benefits, grants, and community programs without exposing private details in source.',
   }),
   profile({
-    id: 'profile-william',
+    id: 'profile-demo-general-funding',
     display_name: 'Designated General Funding Profile',
     primary_type: 'individual',
     tags: ['general_support'],
@@ -403,5 +400,33 @@ const PUBLIC_FIXTURE_PROFILES = [
   }),
 ]
 
-export const DESIGNATED_PROFILES =
-  loadPrivateDesignatedProfiles(process.env.DESIGNATED_PROFILES_FILE) || PUBLIC_FIXTURE_PROFILES
+function isDeployedRuntime(env = process.env) {
+  return (
+    String(env.NODE_ENV || '').trim().toLowerCase() === 'production' ||
+    Boolean(String(env.RAILWAY_ENVIRONMENT_ID || '').trim()) ||
+    Boolean(String(env.RAILWAY_DEPLOYMENT_ID || '').trim())
+  )
+}
+
+const privateDesignatedProfiles = loadPrivateDesignatedProfiles(process.env.DESIGNATED_PROFILES_FILE)
+const deployedRuntime = isDeployedRuntime()
+
+// Public fixtures are for local development and tests only. A deployed runtime
+// must receive its legacy ids and any real client facts from a private mounted
+// file. If that file is absent or invalid, fail closed with an empty roster:
+// boot may continue against existing database rows, but source fixtures cannot
+// create or mutate a real-person profile.
+export const DESIGNATED_PROFILES_SOURCE = privateDesignatedProfiles
+  ? 'private_file'
+  : deployedRuntime
+    ? 'disabled_missing_private_file'
+    : 'public_fixture'
+
+export const DESIGNATED_PROFILES = privateDesignatedProfiles || (deployedRuntime ? [] : PUBLIC_FIXTURE_PROFILES)
+
+if (DESIGNATED_PROFILES_SOURCE === 'disabled_missing_private_file') {
+  console.error(
+    '[designatedProfiles] Private designated-profile configuration is unavailable in a deployed runtime. ' +
+      'Designated seeding and alias repair are disabled; configure a readable DESIGNATED_PROFILES_FILE.',
+  )
+}

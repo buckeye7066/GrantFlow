@@ -170,15 +170,16 @@ describe('reportOutsideAwards — the GLOBAL write path', () => {
     expect(res.skipped[0].reason).toMatch(/no accepted funding sources/i)
   })
 
-  it('submits ONLY when the authorized path explicitly allows it', async () => {
+  it('fails closed when a legacy caller passes allowSubmit', async () => {
     const page = makeFormPage()
     const res = await reportOutsideAwards(page, {
       sources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
       allowSubmit: true,
     })
-    expect(res.submitted).toBe(true)
-    expect(res.written[0].state).toBe('submitted')
-    expect(page.clicked.length).toBeGreaterThan(0)
+    expect(res.submitted).toBe(false)
+    expect(res.written[0].state).toBe('filled_not_submitted')
+    expect(page.clicked).toHaveLength(0)
+    expect(res.skipped.some((s) => /automatic final submission is disabled/i.test(s.reason))).toBe(true)
   })
 })
 
@@ -199,10 +200,8 @@ describe('generic connector — every portal now has a real write', () => {
   })
 })
 
-describe('one-click submit — the owner/admin authorization path', () => {
-  it('an ordinary write NEVER submits; only allowSubmit does', async () => {
-    // This separation is the whole safety model: autonomous syncs stage values,
-    // a human click sends them.
+describe('manual final-submit boundary', () => {
+  it('an ordinary write and a legacy allowSubmit caller both stop after staging', async () => {
     const generic = (await import('../services/hamilton/portalSync/connectors/generic.js')).default
     const page = makeFormPage()
     page.goto = async () => {}
@@ -216,15 +215,17 @@ describe('one-click submit — the owner/admin authorization path', () => {
 
     const authorizedPage = makeFormPage()
     authorizedPage.goto = async () => {}
-    const sent = await generic.write(authorizedPage, { portalHost: 'x.edu', log: () => {} }, {
+    const legacy = await generic.write(authorizedPage, { portalHost: 'x.edu', log: () => {} }, {
       fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
       allowSubmit: true,
     })
-    expect(sent.submitted).toBe(true)
-    expect(authorizedPage.clicked.length).toBeGreaterThan(0)
+    expect(legacy.submitted).toBe(false)
+    expect(legacy.written[0].state).toBe('filled_not_submitted')
+    expect(authorizedPage.clicked).toHaveLength(0)
+    expect(legacy.skipped.some((s) => /automatic final submission is disabled/i.test(s.reason))).toBe(true)
   })
 
-  it('an authorized submit with NO submit control reports NOT submitted — never a false send', async () => {
+  it('a legacy submit request with no submit control reports NOT submitted — never a false send', async () => {
     // A portal that accepts outside awards by email has no submit button. The
     // owner must not be told their awards were reported when they were not.
     const page = makeFormPage()
@@ -237,6 +238,6 @@ describe('one-click submit — the owner/admin authorization path', () => {
 
     expect(res.submitted).toBe(false)
     expect(res.written[0].state).toBe('filled_not_submitted')
-    expect(res.skipped.some((s) => /no submit control/i.test(s.reason))).toBe(true)
+    expect(res.skipped.some((s) => /automatic final submission is disabled/i.test(s.reason))).toBe(true)
   })
 })

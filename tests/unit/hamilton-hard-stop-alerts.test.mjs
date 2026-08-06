@@ -7,7 +7,7 @@
  *   - Every unresolved hard stop creates a per-category user
  *     notification AND a per-category admin notification.
  *   - The admin notification ALWAYS goes to the single canonical
- *     operator (buckeye7066@gmail.com); multi-admin fan-out is not
+ *     operator (admin@grantflow.local); multi-admin fan-out is not
  *     the primary path.
  *   - If no admin row exists yet, resolveAdminUserId creates one.
  *   - Per-category type derivation works for every blocker family.
@@ -51,7 +51,7 @@ import {
   HAMILTON_ADMIN_EMAIL,
 } from '../../backend/services/hamilton/hamiltonAdminAccount.js'
 
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+const ADMIN_EMAIL = 'admin@grantflow.local'
 
 function makeDb({ seedAdmin = true } = {}) {
   const sqlite = new Database(':memory:')
@@ -89,7 +89,7 @@ function resetCaches() {
 }
 
 async function seedProfile(db) {
-  await db.prepare("INSERT INTO profiles (id, user_id, name) VALUES ('p1', 'u_owner', 'Anastasia')").run()
+  await db.prepare("INSERT INTO profiles (id, user_id, name) VALUES ('p1', 'u_owner', 'Demo Student')").run()
   await db.prepare("INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u_owner', 'owner@example.com', 0, 'user')").run()
 }
 
@@ -98,7 +98,7 @@ function ctx(overrides = {}) {
     taskId: 't1', profileId: 'p1', userId: null,
     portalUrl: 'https://aid.mtsu.edu/apply',
     opportunity: { id: 'op1', title: 'MTSU Tuition Aid', deadline: '2099-12-31' },
-    profile: { id: 'p1', name: 'Anastasia' },
+    profile: { id: 'p1', name: 'Demo Student' },
     classification: { automation_type: 'portal' },
     ...overrides,
   }
@@ -151,7 +151,7 @@ describe('hamilton hard-stop alerting (single canonical admin)', () => {
     assert.equal(userNotifs[0].user_id, 'u_owner')
     assert.match(userNotifs[0].title, /Hamilton needs help/)
     assert.equal(userNotifs[0].data.blocker_type, 'two_factor_required')
-    assert.equal(userNotifs[0].data.profile_name, 'Anastasia')
+    assert.equal(userNotifs[0].data.profile_name, 'Demo Student')
     assert.equal(userNotifs[0].data.funding_source_title, 'MTSU Tuition Aid')
     assert.equal(userNotifs[0].data.blocker_id, b.id)
     assert.equal(userNotifs[0].data.task_id, 't1')
@@ -162,13 +162,13 @@ describe('hamilton hard-stop alerting (single canonical admin)', () => {
     assert.equal(adminNotifs.length, 1, 'admin alerts go to single canonical operator only')
     assert.equal(adminNotifs[0].user_id, 'u_admin')
     assert.match(adminNotifs[0].title, /Hamilton hard stop/)
-    assert.match(adminNotifs[0].title, /Anastasia/)
+    assert.match(adminNotifs[0].title, /Demo Student/)
     assert.equal(adminNotifs[0].data.admin_email, ADMIN_EMAIL)
     assert.equal(adminNotifs[0].data.admin_required, true)
-    assert.equal(adminNotifs[0].data.profile_name, 'Anastasia')
+    assert.equal(adminNotifs[0].data.profile_name, 'Demo Student')
   })
 
-  it('admin notification is routed to buckeye7066@gmail.com regardless of how many admins exist', async () => {
+  it('admin notification is routed to admin@grantflow.local regardless of how many admins exist', async () => {
     const db = makeDb()
     await seedProfile(db)
     // Seed a second is_admin=1 user that is NOT the canonical operator.
@@ -190,7 +190,7 @@ describe('hamilton hard-stop alerting (single canonical admin)', () => {
     assert.equal(others.n, 0)
   })
 
-  it('auto-creates the admin user if no row exists for buckeye7066@gmail.com', async () => {
+  it('auto-creates the admin user if no row exists for admin@grantflow.local', async () => {
     const db = makeDb({ seedAdmin: false }) // intentionally no admin row
     await seedProfile(db)
 
@@ -238,7 +238,7 @@ describe('hamilton hard-stop alerting (single canonical admin)', () => {
 
   it('isAdminUser returns true for canonical email even without is_admin flag', () => {
     assert.equal(isAdminUser({ email: ADMIN_EMAIL }), true)
-    assert.equal(isAdminUser({ primary_email: 'BUCKEYE7066@GMAIL.com' }), true)
+    assert.equal(isAdminUser({ primary_email: 'ADMIN@GRANTFLOW.LOCAL' }), true)
     assert.equal(isAdminUser({ is_admin: true }), true)
     assert.equal(isAdminUser({ role: 'admin' }), true)
     assert.equal(isAdminUser({ email: 'someone@example.com' }), false)

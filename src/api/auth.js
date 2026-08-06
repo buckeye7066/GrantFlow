@@ -84,22 +84,28 @@ export async function verifyPhoneCode({ phone, code, profileId }) {
   })
 }
 
-export async function refreshSession(refreshToken) {
+const cookieAuthHeaders = { 'X-Requested-With': 'XMLHttpRequest' }
+
+export async function refreshSession() {
   return apiFetch('/api/auth/refresh', {
     method: 'POST',
-    body: JSON.stringify({ refreshToken }),
+    headers: cookieAuthHeaders,
+    body: '{}',
   })
 }
 
-export async function logout(refreshToken) {
+export async function completeOAuthSession(handoff) {
+  return apiFetch('/api/auth/oauth/complete', {
+    method: 'POST',
+    headers: cookieAuthHeaders,
+    body: JSON.stringify({ handoff }),
+  })
+}
+
+export async function logout() {
   return apiFetch('/api/auth/logout', {
     method: 'POST',
-    body: JSON.stringify(
-      refreshToken
-        ? {
-            refreshToken,
-          }
-        : {},
-    ),
+    headers: cookieAuthHeaders,
+    body: '{}',
   })
 }

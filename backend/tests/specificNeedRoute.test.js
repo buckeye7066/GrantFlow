@@ -161,6 +161,11 @@ describe('POST /api/real-crawlers/specific-need', () => {
         expect(lead.record_origin).toBe('web_search')
         expect(VAN_WEB_HITS.map((h) => h.url)).toContain(lead.url)
         expect(lead.need_match.matchedTerms.length).toBeGreaterThan(0)
+        expect(lead.item_relevance_score).toBeGreaterThan(0)
+        expect(lead.item_relevance_scale_id).toBe('item_query_relevance_v1')
+        expect(lead.match_score).toBeNull()
+        expect(lead.match_decision).toBeNull()
+        expect(lead).not.toHaveProperty('combined_score')
         // A lead never invents an application target, amount, or deadline.
         expect(lead.application_url).toBeNull()
         expect(lead.amount_min ?? null).toBeNull()
@@ -202,6 +207,12 @@ describe('POST /api/real-crawlers/specific-need', () => {
       expect(curated[0].title).toBe(PROBE_CURATED_RESULT.name)
       expect(res.body.opportunities[0].result_source).toBe('curated')
       expect(curated[0].need_match.score).toBeGreaterThanOrEqual(15)
+      expect(curated[0].item_relevance_score).toBe(curated[0].need_match.score)
+      expect(curated[0].item_relevance_scale_id).toBe('item_query_relevance_v1')
+      expect(curated[0]).not.toHaveProperty('combined_score')
+      expect(res.body.item_relevance_semantics).toBe(
+        'query_ranking_only_not_eligibility_or_qualification',
+      )
 
       // The live web lead (the actual PROBE course page) is appended + labeled.
       const leads = res.body.opportunities.filter((o) => o.result_source === 'web_search')

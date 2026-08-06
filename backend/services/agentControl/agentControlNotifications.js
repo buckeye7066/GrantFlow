@@ -4,7 +4,7 @@
  * Lifecycle notifications for the Admin Agent Control Center. Every
  * start / stop / pause / resume / fail / complete event creates ONE
  * persistent notification on the `notifications` table addressed to
- * the canonical admin/operator (buckeye7066@gmail.com).
+ * the canonical admin/operator (configured-admin@example.invalid).
  *
  * If the admin is logged in, the existing NotificationBell + toast
  * bridge picks the row up on its next poll. The notification persists

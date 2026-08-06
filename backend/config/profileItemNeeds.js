@@ -41,7 +41,7 @@
  * ["physical"]` AND an imported `housing.broadband_speed: "low"` — both of
  * sections the schema declares `applies_to: ALL_PERSON_TYPES`. Deriving a
  * mobility aid or a household internet plan for a ministry off an import
- * artifact is the Kimberly-Botts class one level down. Each rule therefore
+ * artifact is the organization/person-shape class one level down. Each rule therefore
  * names its SECTION and is gated by that section's own
  * `PROFILE_SCHEMA[section].applies_to` — a hand-typed person/org flag on the
  * rule would be a second copy of a rule that already has one owner, and the
@@ -150,7 +150,7 @@ export const HEALTH_FLAG_ITEMS = Object.freeze({
  * LICENSED / CREDENTIALED ROLES → the recurring purchases that role carries.
  * A licensed professional's real item needs are credential costs: continuing
  * education, board-required coursework, renewal and exam fees. This is the rule
- * that makes "Dr. John White needs a PROBE ethics class for nursing licensure"
+ * that makes "a demo health-education profile needs a PROBE ethics class for nursing licensure"
  * a COHERENT ask rather than an unexplained one — his profile declares
  * `occupation.healthcare_worker_type = "RN"`.
  */

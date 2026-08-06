@@ -18,8 +18,9 @@ import {
 } from '../services/coverageAudit/profileResultCoverageAudit.js'
 import { getCheckById } from '../services/sam/samRegistry.js'
 import { listToolMetadata } from '../services/anyaToolRegistry.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
-const OWNER = 'buckeye7066@gmail.com'
+const OWNER = ADMIN_EMAIL
 
 function createSweepDb() {
   const db = new Database(':memory:')

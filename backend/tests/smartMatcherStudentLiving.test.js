@@ -9,8 +9,8 @@
  *   - Original failure: "off-campus living expenses at MTSU" returned only
  *     adult homelessness / Section 8 rows because the intent module didn't
  *     recognize "off-campus", "MTSU", or "living expenses" as student aid.
- *   - These changes are global / permanent so any student profile (Robert
- *     White at CSCC, Anastasia at MTSU, future students at any school)
+ *   - These changes are global / permanent so any student profile (a demo
+ *     college student, Demo Student at MTSU, future students at any school)
  *     benefits.
  *   - Acceptance: ≥10 representative student-aid queries that classify as
  *     primary_category='student_aid' AND emit student-aid search terms.
@@ -190,7 +190,7 @@ describe('Smart Matcher — Student Living / Cost of Attendance', () => {
 })
 
 // ---------------------------------------------------------------------------
-// End-to-end smoke test for the original Anastasia / MTSU regression.
+// End-to-end smoke test for the original Demo Student / MTSU regression.
 //
 // This test exercises the SAME pipeline that runs in the route handler and
 // asserts that:
@@ -203,17 +203,17 @@ describe('Smart Matcher — Student Living / Cost of Attendance', () => {
 import { NATIONAL_PROGRAMS } from '../services/shared/data/nationalPrograms.js'
 import { SCHOLARSHIPS } from '../services/shared/data/scholarships.js'
 
-describe('Anastasia / MTSU end-to-end smoke (regression)', () => {
-  const ANASTASIA_QUERY = 'Help me find funding for off-campus living expenses at MTSU'
+describe('Demo Student / MTSU end-to-end smoke (regression)', () => {
+  const DEMO_STUDENT_QUERY = 'Help me find funding for off-campus living expenses at MTSU'
 
-  it('classifies the Anastasia query as student_aid', () => {
-    const result = interpretFundingIntentRules(ANASTASIA_QUERY)
+  it('classifies the Demo Student query as student_aid', () => {
+    const result = interpretFundingIntentRules(DEMO_STUDENT_QUERY)
     expect(result.primary_category).toBe('student_aid')
     expect(result.summary.toLowerCase()).toContain('student aid')
   })
 
   it('emits student-aid terms that hit Pell / FSEOG / Tennessee HOPE seed rows', () => {
-    const result = interpretFundingIntentRules(ANASTASIA_QUERY)
+    const result = interpretFundingIntentRules(DEMO_STUDENT_QUERY)
     const haystack = result.search_terms.join(' ').toLowerCase()
     expect(haystack).toMatch(/pell/)
     expect(haystack).toMatch(/fseog|fafsa/)
@@ -230,7 +230,7 @@ describe('Anastasia / MTSU end-to-end smoke (regression)', () => {
     expect(ids.has('np-tn-tsaa')).toBe(true)
     expect(ids.has('np-tn-step-up')).toBe(true)
     expect(ids.has('np-tn-promise')).toBe(true)
-    // Anastasia-specific identity fits: Polish heritage + female STEM +
+    // Demo Student-specific identity fits: Polish heritage + female STEM +
     // forensic-science + rural Appalachian + low-income + SSDI dependent.
     expect(ids.has('np-aafs-forensic')).toBe(true)
     expect(ids.has('np-society-women-engineers')).toBe(true)
@@ -259,11 +259,11 @@ describe('Anastasia / MTSU end-to-end smoke (regression)', () => {
     expect(ids.has('sch-forensic-sci-foundation')).toBe(true)
   })
 
-  it('produces ≥15 distinct funder candidates between NATIONAL_PROGRAMS and SCHOLARSHIPS for the Anastasia query', () => {
+  it('produces ≥15 distinct funder candidates between NATIONAL_PROGRAMS and SCHOLARSHIPS for the Demo Student query', () => {
     // Sanity: at least 15 rows in our seed pool match a substring of the
     // expanded search terms. This is the catalog-side guarantee that the
     // SQL `LIKE` filter in routes/matching.js will return real funders.
-    const result = interpretFundingIntentRules(ANASTASIA_QUERY)
+    const result = interpretFundingIntentRules(DEMO_STUDENT_QUERY)
     const terms = result.search_terms.map((t) => String(t).toLowerCase())
     const allRows = [...NATIONAL_PROGRAMS, ...SCHOLARSHIPS]
     let hitCount = 0
@@ -281,8 +281,8 @@ describe('Anastasia / MTSU end-to-end smoke (regression)', () => {
     expect(hitCount).toBeGreaterThanOrEqual(15)
   })
 
-  it('does NOT classify Anastasia query as professional_development (no credentials)', () => {
-    const result = interpretFundingIntentRules(ANASTASIA_QUERY)
+  it('does NOT classify Demo Student query as professional_development (no credentials)', () => {
+    const result = interpretFundingIntentRules(DEMO_STUDENT_QUERY)
     expect(result.primary_category).not.toBe('professional_development')
     expect(result.credentials_detected).toEqual([])
   })

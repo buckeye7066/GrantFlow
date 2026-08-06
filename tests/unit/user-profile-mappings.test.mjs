@@ -4,16 +4,16 @@ import assert from 'node:assert/strict'
 import { getDesignatedProfileForEmail } from '../../backend/config/userProfileMappings.js'
 
 test('userProfileMappings: known user emails map to expected profile ids', () => {
-  assert.equal(getDesignatedProfileForEmail('client.avanell@example.invalid'), 'profile-avanell-leamon')
-  assert.equal(getDesignatedProfileForEmail('client.olivia@example.invalid'), 'profile-olivia-beltran')
-  assert.equal(getDesignatedProfileForEmail('client.brian@example.invalid'), 'profile-brian-client')
-  assert.equal(getDesignatedProfileForEmail('client.hollie@example.invalid'), 'profile-hollie-knox')
-  assert.equal(getDesignatedProfileForEmail('client.angelika@example.invalid'), 'profile-angelika-ptak')
-  assert.equal(getDesignatedProfileForEmail('client.paul@example.invalid'), 'profile-paul-jason-dasher')
-  assert.equal(getDesignatedProfileForEmail('client.rachel@example.invalid'), 'profile-rachel-miller')
-  assert.equal(getDesignatedProfileForEmail('client.melissa@example.invalid'), 'profile-melissa-justus')
+  assert.equal(getDesignatedProfileForEmail('demo.senior-accessibility@example.invalid'), 'profile-demo-senior-accessibility')
+  assert.equal(getDesignatedProfileForEmail('demo.wellness-business@example.invalid'), 'profile-demo-wellness-business')
+  assert.equal(getDesignatedProfileForEmail('demo.veteran-community@example.invalid'), 'profile-demo-veteran-community')
+  assert.equal(getDesignatedProfileForEmail('demo.caregiver-household@example.invalid'), 'profile-demo-caregiver-household')
+  assert.equal(getDesignatedProfileForEmail('demo.healthcare-workforce@example.invalid'), 'profile-demo-healthcare-workforce')
+  assert.equal(getDesignatedProfileForEmail('demo.workforce-training@example.invalid'), 'profile-demo-workforce-training')
+  assert.equal(getDesignatedProfileForEmail('demo.education-support@example.invalid'), 'profile-demo-education-support')
+  assert.equal(getDesignatedProfileForEmail('demo.general-support@example.invalid'), 'profile-demo-general-support')
 })
 
 test('userProfileMappings: mapping is case-insensitive and trims whitespace', () => {
-  assert.equal(getDesignatedProfileForEmail('  CLIENT.ANGELIKA@example.invalid '), 'profile-angelika-ptak')
+  assert.equal(getDesignatedProfileForEmail('  DEMO.HEALTHCARE-WORKFORCE@example.invalid '), 'profile-demo-healthcare-workforce')
 })

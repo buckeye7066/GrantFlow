@@ -33,15 +33,21 @@ import {
   listTaskEvents,
   TASK_TERMINAL_STATUSES,
 } from '../services/hamilton/applicationTaskStore.js'
-import {
-  startHamiltonForOpportunity,
-  continueHamiltonTask,
-} from '../services/hamiltonApplicationAgent.js'
+import { automateSingleSource } from '../services/hamilton/hamiltonAutomationOrchestrator.js'
 import { createLogger } from '../utils/logger.js'
+import { revokeTargetAuthorizations } from '../services/hamilton/hamiltonAuthorizationStore.js'
+import { cancelActiveHamiltonTaskRun } from '../services/hamilton/hamiltonRunCancellation.js'
+import { readAuthorizations } from '../services/hamilton/hamiltonPreflight.js'
 
 const log = createLogger('route:application-tasks')
 
 const router = express.Router()
+
+const SUBMISSION_MAY_BE_IN_FLIGHT_STATUSES = new Set([
+  'submit_attempt_started',
+  'submit_evidence_pending',
+  'submission_verification_required',
+])
 
 const hamiltonRunLimiter = rateLimit({
   windowMs: 60_000,
@@ -62,6 +68,33 @@ async function userMayAccessTask(req, user, task) {
   const accessible = await resolveAccessibleProfileIds(req, user)
   if (accessible === null) return true
   return accessible.has(String(task.profile_id))
+}
+
+/**
+ * Re-enter the canonical Hamilton orchestrator from an existing task without
+ * minting a second source identity or losing its pipeline-stage hint.
+ *
+ * Deliberately excludes all submit flags. Start/Continue are execution
+ * requests, not submission-authority grants; the orchestrator resolves any
+ * stored, versioned authority itself.
+ */
+export function sourceForHamiltonTask(task = {}) {
+  return {
+    opportunity_id: task.opportunity_id || null,
+    grant_id: task.grant_id || null,
+    task_id: task.id || null,
+    current_stage: task.current_pipeline_stage || task.selected_from_stage || null,
+    kind: 'application_task',
+  }
+}
+
+async function runCanonicalHamiltonTask(req, user, task) {
+  const result = await automateSingleSource(req.db, {
+    profileId: task.profile_id,
+    userId: getAuthUserId(user),
+    source: sourceForHamiltonTask(task),
+  })
+  return result?.ok === undefined ? { ok: true, ...result } : result
 }
 
 router.get('/', async (req, res) => {
@@ -102,6 +135,12 @@ router.get('/:taskId', async (req, res) => {
     const task = await getApplicationTask(req.db, taskId)
     if (!task) return res.status(404).json({ error: 'task_not_found' })
     if (!(await userMayAccessTask(req, user, task))) return res.status(403).json({ error: 'Forbidden' })
+    if (task.submission_proof?.source === 'owner_attested_manual_receipt') {
+      return res.status(409).json({
+        error: 'manual_submission_receipt_active',
+        message: 'Revoke the active portal receipt before cancelling this submitted task.',
+      })
+    }
     const [events, missingInfo] = await Promise.all([
       listTaskEvents(req.db, taskId),
       listMissingInfo(req.db, taskId),
@@ -213,14 +252,7 @@ async function handleHamiltonStart(req, res) {
     if (!task) return res.status(404).json({ error: 'task_not_found' })
     if (!(await userMayAccessTask(req, user, task))) return res.status(403).json({ error: 'Forbidden' })
 
-    const result = await startHamiltonForOpportunity(req.db, {
-      profileId: task.profile_id,
-      userId: getAuthUserId(user),
-      opportunityId: task.opportunity_id,
-      grantId: task.grant_id,
-      mode: 'execute',
-      trigger: req.body?.trigger || 'manual',
-    })
+    const result = await runCanonicalHamiltonTask(req, user, task)
     return res.json(result)
   } catch (err) {
     log.error('hamilton start failed', { error: err?.message, taskId })
@@ -239,11 +271,9 @@ async function handleHamiltonContinue(req, res) {
     if (TASK_TERMINAL_STATUSES.includes(task.status)) {
       return res.status(400).json({ error: 'task_in_terminal_state', status: task.status })
     }
-    const result = await continueHamiltonTask(req.db, {
-      taskId,
-      actorUserId: getAuthUserId(user),
-      actorRole: user.role || null,
-    })
+    // Never forward req.body options here. In particular, a client-provided
+    // allow_auto_submit value must not become submission authority on resume.
+    const result = await runCanonicalHamiltonTask(req, user, task)
     return res.json(result)
   } catch (err) {
     log.error('hamilton continue failed', { error: err?.message, taskId })
@@ -330,18 +360,65 @@ router.post('/:taskId/approve-submit', async (req, res) => {
     const task = await getApplicationTask(req.db, taskId)
     if (!task) return res.status(404).json({ error: 'task_not_found' })
     if (!(await userMayAccessTask(req, user, task))) return res.status(403).json({ error: 'Forbidden' })
-    await updateApplicationTask(req.db, taskId, { autoSubmitEnabled: enable })
+    if (enable && SUBMISSION_MAY_BE_IN_FLIGHT_STATUSES.has(task.status)) {
+      return res.status(409).json({
+        error: 'submission_verification_required',
+        message: 'Auto-submit cannot be re-enabled while an external submission attempt is unresolved. Check the funder portal and reconcile the confirmation evidence first.',
+      })
+    }
+    const warning = !enable && SUBMISSION_MAY_BE_IN_FLIGHT_STATUSES.has(task.status)
+      ? {
+          code: 'submission_action_may_be_in_progress',
+          message: 'Future auto-submit authority was revoked, but a portal action may already be in progress or awaiting verification. This does not stop or undo an external action; verify the portal before retrying.',
+        }
+      : null
+    if (enable) {
+      const authorization = await readAuthorizations(req.db, {
+        profileId: task.profile_id,
+        fundingSourceId: task.opportunity_id || task.grant_id || null,
+        taskId,
+      })
+      if (!authorization.submit_applications || authorization.require_human_review) {
+        return res.status(409).json({
+          error: authorization.require_human_review ? 'human_review_required' : 'submit_authorization_required',
+          message: authorization.require_human_review
+            ? 'Final human review is required for this application. Change the versioned authorization before enabling auto-submit.'
+            : 'Authorize submit_applications for this application before enabling auto-submit.',
+        })
+      }
+    }
+    await updateApplicationTask(req.db, taskId, {
+      autoSubmitEnabled: enable,
+      allowAutoSubmit: enable,
+    })
+    if (!enable) {
+      await revokeTargetAuthorizations(req.db, {
+        profileId: task.profile_id,
+        fundingSourceId: task.opportunity_id || task.grant_id || null,
+        taskId,
+        authorizationType: 'submit_applications',
+        reason: 'task_auto_submit_disabled',
+      })
+    }
     await appendTaskEvent(req.db, {
       taskId,
       eventType: 'note',
       message: enable
         ? 'User approved auto-submit for this task.'
-        : 'User revoked auto-submit for this task.',
+        : warning?.message || 'User revoked auto-submit for this task.',
       actorUserId: getAuthUserId(user),
       actorRole: user.role || null,
-      details: { auto_submit_enabled: enable },
+      details: {
+        auto_submit_enabled: enable,
+        allow_auto_submit: enable,
+        warning_code: warning?.code || null,
+      },
     })
-    return res.json({ ok: true, task: await getApplicationTask(req.db, taskId) })
+    return res.json({
+      ok: true,
+      task: await getApplicationTask(req.db, taskId),
+      ...(warning ? { warning } : {}),
+    })
   } catch (err) {
     log.error('approve-submit failed', { error: err?.message, taskId })
     return res.status(500).json({ ok: false, error: err?.message || 'approve_submit_failed' })
@@ -356,6 +433,7 @@ router.post('/:taskId/cancel', async (req, res) => {
     const task = await getApplicationTask(req.db, taskId)
     if (!task) return res.status(404).json({ error: 'task_not_found' })
     if (!(await userMayAccessTask(req, user, task))) return res.status(403).json({ error: 'Forbidden' })
+    cancelActiveHamiltonTaskRun(taskId, req.body?.reason || 'cancelled by user')
     const updated = await cancelApplicationTask(req.db, taskId, {
       actorUserId: getAuthUserId(user),
       actorRole: user.role || null,
@@ -364,6 +442,9 @@ router.post('/:taskId/cancel', async (req, res) => {
     return res.json({ ok: true, task: updated })
   } catch (err) {
     log.error('cancel failed', { error: err?.message, taskId })
+    if (err?.code === 'manual_submission_receipt_active') {
+      return res.status(409).json({ ok: false, error: err.code, message: err.message })
+    }
     return res.status(500).json({ ok: false, error: err?.message || 'cancel_failed' })
   }
 })

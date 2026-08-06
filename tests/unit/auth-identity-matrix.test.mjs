@@ -136,11 +136,13 @@ async function signJwt(payload, secret) {
 
 let sharedSrv
 let sharedPort
+let sharedDbPath
 
 test('auth identity matrix — setup shared server', { timeout: 120_000 }, async () => {
   sharedSrv = startServer()
-  const { port } = await sharedSrv.ready
+  const { port, dbPath } = await sharedSrv.ready
   sharedPort = port
+  sharedDbPath = dbPath
   assert.ok(port > 0, 'server should bind to a random port')
 })
 
@@ -207,6 +209,31 @@ test('auth/me: signed JWT with admin role but NO backing user is NOT auto-elevat
   )
 })
 
+test('auth/me: a non-HS256 token is rejected even for a valid backing user', { timeout: 15_000 }, async () => {
+  const { default: Database } = await import('better-sqlite3')
+  const db = new Database(sharedDbPath)
+  try {
+    db.prepare(`
+      INSERT INTO users (id, primary_email, display_name, is_admin)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO NOTHING
+    `).run('jwt-hs384-user', 'jwt-hs384-user@example.invalid', 'JWT Algorithm Fixture', 0)
+  } finally {
+    db.close()
+  }
+
+  const { default: jwt } = await import('jsonwebtoken')
+  const token = jwt.sign(
+    { sub: 'jwt-hs384-user', email: 'jwt-hs384-user@example.invalid', roles: [] },
+    TEST_JWT_SECRET,
+    { expiresIn: '1h', algorithm: 'HS384' },
+  )
+  const res = await fetch(`http://127.0.0.1:${sharedPort}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  assert.strictEqual(res.status, 401, 'the live parser must accept only HS256 JWTs')
+})
+
 test('admin route: signed JWT whose sub COLLIDES with a synthetic service id is NOT admin (403)', { timeout: 15_000 }, async () => {
   // SECURITY: synthetic-admin authority is bound to service-token PROVENANCE
   // (a serviceToken flag set only inside a safeTokenEqual branch), NOT to the id
@@ -263,5 +290,19 @@ test('server.js uses ANYA_ADMIN_TOKEN as fallback for ADMIN_TOKEN', () => {
   assert.ok(
     /ADMIN_TOKEN.*\|\|.*ANYA_ADMIN_TOKEN|ANYA_ADMIN_TOKEN.*\|\|.*ADMIN_TOKEN/.test(src),
     'server.js should fall back to ANYA_ADMIN_TOKEN when ADMIN_TOKEN is not set',
+  )
+})
+
+test('wired server parser pins HS256 and has no duplicate raw ADMIN_TOKEN bearer branch', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'backend/server.js'), 'utf8')
+  assert.match(
+    src,
+    /jwt\.verify\(token, EFFECTIVE_JWT_SECRET, \{ algorithms: \['HS256'\] \}\)/,
+    'the wired JWT verifier must pin HS256',
+  )
+  assert.doesNotMatch(
+    src,
+    /safeTokenEqual\(token, ADMIN_TOKEN\)/,
+    'the second raw ADMIN_TOKEN bearer branch must not return',
   )
 })

@@ -12,6 +12,7 @@ export default function ResumeWhereYouLeftOff({
   urgentDeadlines = [],
   activeGrants = [],
   hasGrants = false,
+  isSimplified = false,
 }) {
   const firstUrgent = urgentDeadlines[0];
   const draftingOrInterested = activeGrants.filter((g) =>
@@ -19,14 +20,16 @@ export default function ResumeWhereYouLeftOff({
   );
   const firstInProgress = draftingOrInterested[0];
 
-  let label = "Find your first grant";
-  let to = createPageUrl("DiscoverGrants");
-  let Icon = Search;
-  let description = "Search for grants that match your organization.";
+  let label = isSimplified ? "Ask Anya about funding" : "Find your first grant";
+  let to = createPageUrl(isSimplified ? "Help" : "DiscoverGrants");
+  let Icon = isSimplified ? Play : Search;
+  let description = isSimplified
+    ? "Anya can explain what your profile needs before the first source enters your pipeline."
+    : "Search for grants that match your organization.";
 
   if (firstUrgent && firstUrgent.deadline !== "Rolling") {
     label = "View upcoming deadline";
-    to = createPageUrl("GrantDeadline");
+    to = createPageUrl(isSimplified ? "Calendar" : "GrantDeadline");
     Icon = Calendar;
     description = `${firstUrgent.title || "Grant"} — deadline soon.`;
   } else if (firstInProgress) {

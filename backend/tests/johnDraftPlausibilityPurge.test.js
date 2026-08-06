@@ -6,7 +6,7 @@
  * it. 113 of 190 lead-linked drafts (59%) carried an implausible recipient —
  * rcfh@robertsoncountyfuneralhome.com for "Robertson Community Health
  * Foundation", claimsinquiry@allianzassistance.com for an arts council,
- * your@gmail.com scraped off a template. The owner had hand-deleted 95.
+ * person@gmail.com scraped off a template. The owner had hand-deleted 95.
  *
  * The enrichment gate (#937) stops new ones; this removes the residue. These
  * tests pin the safety properties that make an automated mailbox deletion
@@ -61,7 +61,7 @@ function fakeProvider(overrides = {}) {
 describe('draftRecipientIsImplausible', () => {
   it('flags the real prod mismatches', () => {
     expect(draftRecipientIsImplausible(WRONG)).toBe(true)
-    expect(draftRecipientIsImplausible({ organization_name: 'Holliday Education Foundation', recipient_email: 'your@gmail.com' })).toBe(true)
+    expect(draftRecipientIsImplausible({ organization_name: 'Holliday Education Foundation', recipient_email: 'person@gmail.com' })).toBe(true)
     expect(draftRecipientIsImplausible({ organization_name: 'Weakley County Education Foundation', recipient_email: 'x@crash2.zhihu.com' })).toBe(true)
     expect(draftRecipientIsImplausible({ organization_name: 'Rockbridge Community Health Foundation', recipient_email: 'info@bookwidgets.com' })).toBe(true)
   })

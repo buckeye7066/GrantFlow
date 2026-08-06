@@ -1,9 +1,9 @@
 /**
- * Hamilton browser-automation host guard — profile-aware allowlist.
+ * Hamilton controlled-beta browser guard — synthetic fixture only.
  *
  * Covers browserAutomationPermittedForUrl + deriveProfilePortalHosts: the logic
- * that lets Hamilton drive any portal a profile actually requires (declared
- * portals or owner-credentialed hosts) without opening her to arbitrary hosts.
+ * Environment allowlists and profile/credential-derived hosts must never widen
+ * the release boundary to a real domain.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
@@ -26,30 +26,33 @@ afterEach(() => {
 describe('browserAutomationPermittedForUrl', () => {
   it('refuses when browser automation is disabled', () => {
     process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'false'
-    expect(browserAutomationPermittedForUrl('https://www.tn.gov/x')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid/x')).toBe(false)
   })
 
-  it('permits hosts on the static allowlist (incl. subdomains)', () => {
-    expect(browserAutomationPermittedForUrl('https://www.tn.gov/apply')).toBe(true)
-    expect(browserAutomationPermittedForUrl('https://benefits.tn.gov/apply')).toBe(true)
+  it('permits only the exact reserved synthetic fixture origin', () => {
+    expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid/apply')).toBe(true)
+    expect(browserAutomationPermittedForUrl('http://hamilton-submit-fixture.invalid/apply')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://sub.hamilton-submit-fixture.invalid/apply')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid:8443/apply')).toBe(false)
   })
 
-  it('refuses an off-allowlist host with no profile authorization', () => {
-    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/financial-aid/')).toBe(false)
+  it('refuses a real host even when the static allowlist names it', () => {
+    expect(browserAutomationPermittedForUrl('https://www.tn.gov/apply')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://benefits.tn.gov/apply')).toBe(false)
   })
 
-  it('permits an off-allowlist host the profile is authorized for (declared portal or credential)', () => {
+  it('refuses a real host even when profile data or a saved credential names it', () => {
     const extra = ['mtsu.edu']
-    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/financial-aid/', { extraAllowedHosts: extra })).toBe(true)
-    // registrable-domain match: a login subdomain is covered by the eTLD+1.
-    expect(browserAutomationPermittedForUrl('https://login.mtsu.edu/', { extraAllowedHosts: extra })).toBe(true)
-    // but an unrelated host is still refused.
+    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/financial-aid/', { extraAllowedHosts: extra })).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://login.mtsu.edu/', { extraAllowedHosts: extra })).toBe(false)
     expect(browserAutomationPermittedForUrl('https://evil.example.com/', { extraAllowedHosts: extra })).toBe(false)
   })
 
-  it('an empty static allowlist preserves fleet-wide behavior', () => {
+  it('an empty static allowlist cannot enable fleet-wide behavior', () => {
     process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = ''
-    expect(browserAutomationPermittedForUrl('https://anything.example.org/')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://anything.example.org/')).toBe(false)
+    expect(browserAutomationPermittedForUrl('http://127.0.0.1:3000/')).toBe(false)
+    expect(browserAutomationPermittedForUrl('http://10.0.0.1/')).toBe(false)
   })
 })
 

@@ -26,7 +26,7 @@ const contactsNoEmail = () => async () => ({ primary_email: null, has_usable_ema
 
 describe('draftGapEmailsForIncompleteProfiles', () => {
   it('is OFF by default — creates nothing without the flag or force', async () => {
-    const db = makeDb([{ id: 'kathy', display_name: 'Kathy Daniel' }])
+    const db = makeDb([{ id: 'kathy', display_name: 'Demo Basic Needs Persona' }])
     const provider = { createDraft: vi.fn() }
     const res = await draftGapEmailsForIncompleteProfiles(db, { provider, resolveContacts: contactsWithEmail(), normalize: normalizeProfile })
     expect(res.enabled).toBe(false)
@@ -34,7 +34,7 @@ describe('draftGapEmailsForIncompleteProfiles', () => {
   })
 
   it('drafts (never sends) a gap email into the mailbox for an incomplete profile with a usable email', async () => {
-    const db = makeDb([{ id: 'kathy', display_name: 'Kathy Daniel' }])
+    const db = makeDb([{ id: 'kathy', display_name: 'Demo Basic Needs Persona' }])
     const provider = { createDraft: vi.fn(async () => ({ provider_draft_id: 'AAMk-DRAFT-1' })) }
     const res = await draftGapEmailsForIncompleteProfiles(db, { force: true, provider, resolveContacts: contactsWithEmail(), normalize: normalizeProfile })
     expect(res.drafted).toBe(1)
@@ -46,7 +46,7 @@ describe('draftGapEmailsForIncompleteProfiles', () => {
   })
 
   it('is idempotent — a second run does not re-draft the same profile', async () => {
-    const db = makeDb([{ id: 'kathy', display_name: 'Kathy Daniel' }])
+    const db = makeDb([{ id: 'kathy', display_name: 'Demo Basic Needs Persona' }])
     const provider = { createDraft: vi.fn(async () => ({ provider_draft_id: 'AAMk-DRAFT-1' })) }
     const opts = { force: true, provider, resolveContacts: contactsWithEmail(), normalize: normalizeProfile }
     await draftGapEmailsForIncompleteProfiles(db, opts)
@@ -66,7 +66,7 @@ describe('draftGapEmailsForIncompleteProfiles', () => {
   })
 
   it('dry-run counts would-be drafts but creates none', async () => {
-    const db = makeDb([{ id: 'kathy', display_name: 'Kathy Daniel' }])
+    const db = makeDb([{ id: 'kathy', display_name: 'Demo Basic Needs Persona' }])
     const provider = { createDraft: vi.fn() }
     const res = await draftGapEmailsForIncompleteProfiles(db, { force: true, dryRun: true, provider, resolveContacts: contactsWithEmail(), normalize: normalizeProfile })
     expect(res.dry_run).toBe(true)

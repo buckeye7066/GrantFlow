@@ -3,7 +3,7 @@
  * scripts/admin-purge-loan-grants.mjs
  *
  * Mission rule: GrantFlow never recommends funding sources that require
- * repayment. Earlier work (anastasia-add-offcampus-living-funding.mjs and
+ * repayment. Earlier work (demo_stem_student-add-offcampus-living-funding.mjs and
  * the first cut of the studentBridgeFunding catalog) accidentally added
  * the Federal Direct Subsidized Loan (and possibly other loan-shaped
  * entries) to profile pipelines.

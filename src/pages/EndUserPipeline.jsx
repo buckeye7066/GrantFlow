@@ -20,6 +20,7 @@ import PortalLoginButton from '@/components/portal/PortalLoginButton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { parseLocalDate } from '@/components/shared/dateUtils'
 import { useAuthStore } from '@/stores/authStore'
 
 const HIDDEN_GRANT_STATUSES = new Set(['rejected', 'withdrawn', 'deleted', 'archived', 'expired'])
@@ -43,7 +44,14 @@ function grantValue(grant) {
 }
 
 function grantUrl(grant) {
-  return grant?.application_url || grant?.url || grant?.source_url || null
+  const rawUrl = grant?.application_url || grant?.url || grant?.source_url || null
+  if (!rawUrl) return null
+  try {
+    const parsed = new URL(rawUrl)
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null
+  } catch {
+    return null
+  }
 }
 
 function grantSponsor(grant) {
@@ -62,11 +70,11 @@ function methodLabel(grant) {
   }
 }
 
-function safeDeadline(grant) {
+function formatPipelineDeadline(grant) {
   if (!grant?.deadline) return 'No fixed deadline'
   if (String(grant.deadline).toLowerCase() === 'rolling') return 'Rolling deadline'
-  const parsed = new Date(grant.deadline)
-  return Number.isNaN(parsed.getTime()) ? String(grant.deadline) : parsed.toLocaleDateString()
+  const parsed = parseLocalDate(grant.deadline)
+  return parsed ? parsed.toLocaleDateString() : String(grant.deadline)
 }
 
 function statusLabel(status) {
@@ -182,7 +190,8 @@ export default function EndUserPipeline() {
     navigate(`/Pipeline?${params.toString()}`, { replace: true })
   }
 
-  const launchBlocked = Boolean(activeTask)
+  const taskStatusUnknown = tasksQuery.isLoading || tasksQuery.isError
+  const launchBlocked = Boolean(activeTask) || taskStatusUnknown
 
   if (!profileId) {
     return (
@@ -192,6 +201,7 @@ export default function EndUserPipeline() {
             <Sparkles className="mx-auto h-8 w-8 text-primary" />
             <h1 className="mt-4 text-xl font-semibold">Anya is finishing your funding profile</h1>
             <p className="mt-2 text-sm text-muted-foreground">Once your profile is ready, accepted funding sources will appear here automatically.</p>
+            <Button type="button" className="mt-5" onClick={() => navigate('/Help')}>Ask Anya what is needed</Button>
           </CardContent>
         </Card>
       </div>
@@ -199,7 +209,12 @@ export default function EndUserPipeline() {
   }
 
   if (grantsQuery.isLoading) {
-    return <div className="flex min-h-[60vh] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+    return (
+      <div role="status" aria-live="polite" className="flex min-h-[60vh] items-center justify-center gap-3 px-4 text-sm text-muted-foreground">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden="true" />
+        Loading your funding pipeline…
+      </div>
+    )
   }
 
   return (
@@ -207,84 +222,101 @@ export default function EndUserPipeline() {
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
+            <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200">
               <CircleDollarSign className="h-3.5 w-3.5" />
               One source at a time
             </div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground">Your funding pipeline</h1>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground md:text-base">
-              Choose one funding source. Hamilton advances it until he finishes or reaches a true hard stop that needs you.
+              Choose one funding source. Hamilton prepares supported fields and documents until the packet is ready or a hard stop needs you.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:min-w-[360px]">
+          <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 sm:min-w-[360px]">
             <SummaryTile label="Funding sources" value={String(grants.length)} />
             <SummaryTile label="Potential funding" value={currency.format(potentialTotal)} />
           </div>
         </div>
 
-        {grants.length === 0 ? (
+        {grantsQuery.isError ? (
+          <Card role="alert" className="border-red-300 dark:border-red-800">
+            <CardContent className="p-8 text-center">
+              <h2 className="text-xl font-semibold text-foreground">Your pipeline could not be loaded</h2>
+              <p className="mt-2 text-sm text-muted-foreground">Check your connection, then retry. No source is being treated as missing or complete.</p>
+              <Button type="button" variant="outline" className="mt-5" onClick={() => grantsQuery.refetch()}>Try again</Button>
+            </CardContent>
+          </Card>
+        ) : grants.length === 0 ? (
           <Card>
             <CardContent className="p-10 text-center">
               <FileCheck2 className="mx-auto h-9 w-9 text-muted-foreground" />
               <h2 className="mt-4 text-xl font-semibold text-foreground">No accepted funding sources yet</h2>
               <p className="mt-2 text-sm text-muted-foreground">GrantFlow will place accepted matches here and prepare them for Hamilton.</p>
+              <Button type="button" variant="outline" className="mt-5" onClick={() => navigate('/Help')}>Ask Anya about your next match</Button>
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
-            <div className="space-y-5">
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+            <div className="min-w-0 space-y-5">
               {activeTask ? (
                 <Card className="border-emerald-300 bg-emerald-50/60">
                   <CardContent className="flex items-start gap-3 p-4 text-sm text-emerald-900">
                     <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
                     <div>
                       <p className="font-semibold">Hamilton is already working on one funding source.</p>
-                      <p className="mt-1">Open the live task below to watch, provide information, change auto-submit, or cancel before starting another source.</p>
+                      <p className="mt-1">Open the live task below to watch preparation, provide missing information, review the human portal handoff, or cancel before starting another source.</p>
                     </div>
                   </CardContent>
                 </Card>
               ) : null}
 
+              {tasksQuery.isError ? (
+                <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                  <p className="font-semibold">Hamilton's live task status is unavailable.</p>
+                  <p className="mt-1">Do not start another task until the status reloads.</p>
+                  <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => tasksQuery.refetch()}>Reload task status</Button>
+                </div>
+              ) : null}
+
               {selectedGrant ? (
-                <Card className="overflow-hidden border-primary/20">
+                <Card className="min-w-0 overflow-hidden border-primary/20">
                   <CardHeader className="border-b border-border bg-muted/30">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <Badge variant="outline" className="mb-2 capitalize">{statusLabel(selectedGrant.status)}</Badge>
-                        <CardTitle className="text-2xl leading-tight">{selectedGrant.title || 'Funding source'}</CardTitle>
+                        <CardTitle className="break-words text-2xl leading-tight">{selectedGrant.title || 'Funding source'}</CardTitle>
                         <p className="mt-2 text-sm text-muted-foreground">{grantSponsor(selectedGrant)}</p>
                       </div>
-                      <div className="rounded-xl border border-border bg-background px-4 py-3 text-right">
+                      <div className="w-full rounded-xl border border-border bg-background px-4 py-3 text-left sm:w-auto sm:text-right">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Potential amount</p>
                         <p className="mt-1 text-xl font-bold text-foreground">{grantValue(selectedGrant) ? currency.format(grantValue(selectedGrant)) : 'Not listed'}</p>
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="space-y-5 p-5 md:p-6">
+                  <CardContent className="min-w-0 space-y-5 p-4 sm:p-5 md:p-6">
                     <div className="grid gap-3 sm:grid-cols-3">
-                      <Detail label="Deadline" value={safeDeadline(selectedGrant)} icon={CalendarClock} />
+                      <Detail label="Deadline" value={formatPipelineDeadline(selectedGrant)} icon={CalendarClock} />
                       <Detail label="Application method" value={methodLabel(selectedGrant)} icon={ExternalLink} />
                       <Detail label="Hamilton mode" value={activeTask ? 'Working now' : 'Ready when you are'} icon={Sparkles} />
                     </div>
 
                     <div className="rounded-xl border border-border bg-muted/30 p-4 text-sm text-foreground">
                       <p className="font-semibold">What happens next</p>
-                      <ol className="mt-3 space-y-2 text-muted-foreground">
-                        <li>1. Hamilton checks the requirements, profile facts, documents, portal, and deadlines.</li>
-                        <li>2. He writes and completes everything he can at an experienced MBA grant-writer standard.</li>
-                        <li>3. He stops only for missing information, credentials, CAPTCHA, 2FA, payment, signature, or a required personal attestation.</li>
-                        <li>4. With auto-submit enabled he submits when permitted. Otherwise, he preserves the finished work for your review and submission.</li>
+                      <ol className="mt-3 list-decimal space-y-2 pl-5 text-muted-foreground">
+                        <li>Hamilton checks the stored requirements, profile facts, documents, portal, and deadlines.</li>
+                        <li>He prepares the fields and documents supported by the available source information.</li>
+                        <li>He pauses for missing information, login, CAPTCHA, 2FA, payment, signature, owner approval, or a personal attestation. GrantFlow cannot bypass those steps.</li>
+                        <li>In the controlled beta, Hamilton preserves the finished work and shows the manual handoff. You complete the final external submission and retain its confirmation.</li>
                       </ol>
                     </div>
 
                     {selectedUrl ? (
-                      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
+                      <div className="flex min-w-0 flex-col items-stretch gap-3 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4 dark:border-indigo-800 dark:bg-indigo-950/40 sm:flex-row sm:flex-wrap sm:items-center">
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-indigo-950">Application portal</p>
-                          <p className="truncate text-xs text-indigo-800">{selectedUrl}</p>
+                          <p className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">Application portal</p>
+                          <p className="break-all text-xs text-indigo-800 dark:text-indigo-200 sm:truncate">{selectedUrl}</p>
                         </div>
-                        <PortalLoginButton profileId={profileId} url={selectedUrl} />
-                        <Button asChild size="sm" variant="outline">
+                        <PortalLoginButton profileId={profileId} url={selectedUrl} className="w-full min-w-0 flex-col items-stretch dark:[&_a]:text-indigo-200 sm:w-auto sm:flex-row sm:items-center" />
+                        <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
                           <a href={selectedUrl} target="_blank" rel="noopener noreferrer">
                             Open portal <ExternalLink className="ml-2 h-3.5 w-3.5" />
                           </a>
@@ -292,7 +324,7 @@ export default function EndUserPipeline() {
                       </div>
                     ) : (
                       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-                        No online portal is stored. Hamilton will prepare a downloadable application packet and submission instructions when the source supports mail, email, fax, or document delivery.
+                        No verified online portal is stored. Hamilton can prepare a packet and handoff instructions only when the official source provides a supported submission method.
                       </div>
                     )}
 
@@ -300,16 +332,20 @@ export default function EndUserPipeline() {
 
                     <div className="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
                       <p className="text-xs text-muted-foreground">
-                        You can watch Hamilton, edit missing information, disable auto-submit, or cancel from the live task drawer.
+                        You can watch preparation, edit missing information, review the final portal handoff, or cancel from the live task drawer.
                       </p>
                       <Button
                         size="lg"
-                        className="gap-2"
+                        className="h-auto min-h-11 w-full gap-2 whitespace-normal py-3 text-center sm:w-auto"
                         disabled={launchBlocked}
                         onClick={() => setAuthorizationOpen(true)}
                       >
                         {launchBlocked ? <LockKeyhole className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-                        {launchBlocked ? 'Finish current Hamilton task first' : 'Continue this source with Hamilton'}
+                        {activeTask
+                          ? 'Finish current Hamilton task first'
+                          : taskStatusUnknown
+                            ? 'Waiting for Hamilton task status'
+                            : 'Prepare this source with Hamilton'}
                       </Button>
                     </div>
                   </CardContent>
@@ -319,12 +355,12 @@ export default function EndUserPipeline() {
               <HamiltonAutomationQueue profileId={profileId} />
             </div>
 
-            <Card className="h-fit">
+            <Card className="h-fit min-w-0">
               <CardHeader>
                 <CardTitle className="text-lg">Funding sources</CardTitle>
                 <p className="text-sm text-muted-foreground">Only one source opens for work at a time.</p>
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="space-y-2" role="group" aria-label="Choose a funding source">
                 {grants.map((grant) => {
                   const selected = String(grant.id) === String(selectedGrantId)
                   const locked = Boolean(workingGrantId) && String(grant.id) !== workingGrantId
@@ -334,7 +370,9 @@ export default function EndUserPipeline() {
                       type="button"
                       disabled={locked}
                       onClick={() => chooseGrant(grant.id)}
-                      className={`w-full rounded-xl border p-3 text-left transition ${
+                      aria-pressed={selected}
+                      aria-label={`${grant.title || 'Funding source'}, ${statusLabel(grant.status)}, ${formatPipelineDeadline(grant)}${locked ? ', unavailable while Hamilton works on another source' : ''}`}
+                      className={`w-full rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 ${
                         selected
                           ? 'border-primary bg-primary/5 shadow-sm'
                           : 'border-border bg-background hover:border-primary/30 hover:bg-muted/40'
@@ -350,7 +388,7 @@ export default function EndUserPipeline() {
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         <span className="capitalize">{statusLabel(grant.status)}</span>
                         <span>·</span>
-                        <span>{safeDeadline(grant)}</span>
+                        <span>{formatPipelineDeadline(grant)}</span>
                         {grantValue(grant) ? <><span>·</span><span>{currency.format(grantValue(grant))}</span></> : null}
                       </div>
                     </button>
@@ -389,7 +427,7 @@ function Detail({ label, value, icon: Icon }) {
   return (
     <div className="rounded-xl border border-border bg-background p-3">
       <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
         {label}
       </div>
       <p className="mt-2 text-sm font-semibold text-foreground">{value}</p>

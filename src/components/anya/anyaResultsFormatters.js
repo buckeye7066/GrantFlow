@@ -18,7 +18,12 @@ export function formatMatchAmount(match) {
 
 export function formatMatchDeadline(match) {
   const value = match?.deadline || match?.application_deadline
-  if (!value) return null
+  const deadlineType = String(match?.deadline_type || '').trim().toLowerCase()
+  if (!value) {
+    return match?.is_rolling === true || deadlineType === 'rolling' || deadlineType === 'ongoing'
+      ? 'Rolling / ongoing'
+      : null
+  }
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return String(value)
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -32,16 +37,20 @@ export function formatMatchDeadline(match) {
  * contribute to the totals.
  */
 export function buildPotentialFundingSummary(matches = []) {
-  let strong_matches = 0
+  let accepted_matches = 0
   let review_matches = 0
+  let rejected_matches = 0
+  let unrated_matches = 0
   let potential_low_total = 0
   let potential_high_total = 0
   let amount_unknown_count = 0
 
   for (const m of matches) {
-    const score = Number(m?.match_score ?? m?.score ?? 0)
-    if (score >= 0.7) strong_matches += 1
-    else review_matches += 1
+    const decision = String(m?.match_decision ?? m?.decision ?? '').trim().toUpperCase()
+    if (decision === 'ACCEPT') accepted_matches += 1
+    else if (decision === 'REVIEW') review_matches += 1
+    else if (decision === 'REJECT') rejected_matches += 1
+    else unrated_matches += 1
 
     const min = Number(m?.amount_min ?? m?.amount_low ?? 0)
     const max = Number(m?.amount_max ?? m?.amount_high ?? 0)
@@ -52,8 +61,10 @@ export function buildPotentialFundingSummary(matches = []) {
 
   return {
     total_matches: matches.length,
-    strong_matches,
+    accepted_matches,
     review_matches,
+    rejected_matches,
+    unrated_matches,
     potential_low_total: Math.round(potential_low_total),
     potential_high_total: Math.round(potential_high_total),
     amount_unknown_count,

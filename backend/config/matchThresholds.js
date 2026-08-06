@@ -77,7 +77,7 @@ export const DATA_POINT_MIN_TERM_LENGTH = 3
  * empirically calibrated against REAL profiles carrying 50–150 data points;
  * the crawler-os lane scored against thesis STUB profiles carrying ~6 (needs
  * list only), so any topically broad directory trivially "covered" 50–100%
- * of every profile — Anita (KY, individual) and Anastasia (TN, student) got
+ * of every profile — Anita (KY, individual) and Demo Student (TN, student) got
  * the SAME registry-directory-dominated list, labeled "Excellent Match".
  * An inventory below this floor cannot support a percentage claim on the
  * calibrated scale: the engine falls back to the bounded topical path

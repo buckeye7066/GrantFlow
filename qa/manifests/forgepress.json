@@ -2,7 +2,7 @@
   "app_id": "forgepress",
   "display_name": "ForgePress",
   "repo": "local-git",
-  "local_path": "C:/Users/firer/ForgePress",
+  "local_path": "C:/Users/example_user/ForgePress",
   "runtime_type": "electron",
   "start_command": "electron . --user-data-dir=.eva-tmp/forgepress/profile (launch the packaged app tree with a disposable userData dir)",
   "stop_command": "close window",

@@ -60,7 +60,8 @@ describe('/email/verify is atomic under concurrency', () => {
     // never a second session.
     expect(ok.length).toBe(1)
     expect(ok[0].body.accessToken).toBeTruthy()
-    expect(ok[0].body.refreshToken).toBeTruthy()
+    expect(ok[0].body.refreshToken).toBeUndefined()
+    expect((ok[0].headers['set-cookie'] || []).some((cookie) => cookie.startsWith('grantflow_refresh='))).toBe(true)
     expect(rejected.length).toBe(4)
     for (const r of rejected) {
       expect(r.status).toBe(400)

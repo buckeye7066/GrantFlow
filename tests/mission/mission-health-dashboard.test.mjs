@@ -28,10 +28,15 @@ function createDb() {
       source TEXT,
       record_origin TEXT,
       opportunity_kind TEXT,
+      result_kind TEXT,
+      opportunity_type TEXT,
+      type TEXT,
       link_status TEXT,
       last_verified_at TIMESTAMP,
       is_active INTEGER DEFAULT 1,
       is_hidden INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      verification_error TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE verification_events (
@@ -70,19 +75,40 @@ function seedRow(db, {
   source = 'grants.gov',
   record_origin = 'live_crawl',
   kind = 'direct',
+  result_kind = 'direct',
+  opportunity_type = 'grant',
+  type = 'OPPORTUNITY',
   link_status = 'verified',
   last_verified_at = new Date().toISOString(),
   is_active = 1,
   is_hidden = 0,
+  lifecycle_status = 'active',
+  verification_error = null,
 } = {}) {
   db.raw
     .prepare(
       `INSERT INTO funding_opportunities
-        (id, title, source, record_origin, opportunity_kind, link_status,
-         last_verified_at, is_active, is_hidden)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, title, source, record_origin, opportunity_kind, result_kind,
+         opportunity_type, type, link_status, last_verified_at, is_active,
+         is_hidden, status, verification_error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(id, title, source, record_origin, kind, link_status, last_verified_at, is_active, is_hidden)
+    .run(
+      id,
+      title,
+      source,
+      record_origin,
+      kind,
+      result_kind,
+      opportunity_type,
+      type,
+      link_status,
+      last_verified_at,
+      is_active,
+      is_hidden,
+      lifecycle_status,
+      verification_error,
+    )
 }
 
 test('mission-health: empty DB returns ok=true and zero counts', async () => {
@@ -150,6 +176,125 @@ test('mission-health: directory opportunities counted separately', async () => {
   assert.equal(h.counts.direct_opportunities_total, 0)
 })
 
+test('mission-health: canonical six-kind denominator is case-insensitive, trimmed, and explicit about legacy defaults', async () => {
+  const db = createDb()
+  const kinds = [' direct ', ' direct_grant ', 'Program', 'SCHOLARSHIP', ' in_kind ', 'benefit']
+  for (const [index, kind] of kinds.entries()) {
+    seedRow(db, { id: `kind-${index}`, kind })
+  }
+  seedRow(db, { id: 'legacy-null', kind: null })
+  seedRow(db, { id: 'legacy-blank', kind: '   ' })
+  seedRow(db, { id: 'pointer-kind', kind: 'DIRECTORY', result_kind: 'directory', type: 'DIRECTORY' })
+  seedRow(db, { id: 'pointer-result', kind: null, result_kind: ' referral ' })
+  seedRow(db, { id: 'pointer-type', kind: 'DIRECT', type: 'SCHOOL_PORTAL' })
+  seedRow(db, { id: 'pointer-action', kind: 'DIRECT', result_kind: ' action_step ' })
+  seedRow(db, { id: 'unknown-kind', kind: 'OTHER' })
+
+  const h = await buildMissionHealth(db)
+
+  assert.equal(h.link_lifecycle.denominator_total, 8)
+  assert.equal(h.link_lifecycle.visible_total, 8)
+  assert.equal(h.link_lifecycle.legacy_defaulted, 2)
+  assert.equal(h.link_lifecycle.buckets.verified_visible, 8)
+  assert.equal(h.link_lifecycle.partition_total, 8)
+  assert.equal(h.link_lifecycle.partition_reconciles, true)
+  assert.equal(h.counts.directory_opportunities_total, 4)
+  assert.equal(h.rates.verified_fresh_visible_pct, 100)
+})
+
+test('mission-health: lifecycle buckets are mutually exclusive and reconcile to the denominator', async () => {
+  const db = createDb()
+  const staleVerifiedAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString()
+  seedRow(db, { id: 'verified-visible', kind: 'DIRECT', link_status: 'ok' })
+  seedRow(db, { id: 'broken-visible', kind: 'DIRECT_GRANT', link_status: 'broken' })
+  seedRow(db, {
+    id: 'unverified-visible',
+    kind: 'PROGRAM',
+    link_status: 'verified',
+    last_verified_at: staleVerifiedAt,
+  })
+  seedRow(db, {
+    id: 'active-quarantine',
+    kind: 'SCHOLARSHIP',
+    link_status: 'broken',
+    is_hidden: 1,
+  })
+  seedRow(db, {
+    id: 'repair-pending',
+    kind: 'IN_KIND',
+    link_status: 'broken',
+    is_hidden: 1,
+    is_active: 0,
+    lifecycle_status: 'paused',
+  })
+  seedRow(db, {
+    id: 'scheduled-retry',
+    kind: 'BENEFIT',
+    link_status: 'skipped',
+    is_hidden: 1,
+    is_active: 0,
+    lifecycle_status: 'paused',
+    verification_error: 'retry_scheduled_after_bounded_recheck:attempts=2',
+  })
+  seedRow(db, {
+    id: 'permanently-retired',
+    kind: 'DIRECT',
+    link_status: 'skipped',
+    is_hidden: 1,
+    is_active: 0,
+    lifecycle_status: 'expired',
+    verification_error: 'retired_after_definitive_recheck:permanent_http_gone',
+  })
+  seedRow(db, {
+    id: 'other-nonvisible',
+    kind: 'PROGRAM',
+    link_status: 'ok',
+    is_hidden: 1,
+    lifecycle_status: 'quarantined',
+  })
+
+  const h = await buildMissionHealth(db)
+
+  assert.deepEqual(h.link_lifecycle.buckets, {
+    verified_visible: 1,
+    broken_visible: 1,
+    unverified_visible: 1,
+    active_quarantine: 1,
+    repair_pending: 1,
+    scheduled_retry: 1,
+    permanently_retired: 1,
+    other_nonvisible: 1,
+  })
+  assert.equal(h.link_lifecycle.denominator_total, 8)
+  assert.equal(h.link_lifecycle.partition_total, 8)
+  assert.equal(h.link_lifecycle.partition_reconciles, true)
+  assert.equal(h.counts.direct_opportunities_total, 3)
+  assert.equal(h.counts.direct_opportunities_verified, 1)
+  assert.equal(h.rates.verified_pct, 33.3)
+  assert.equal('restored' in h.link_lifecycle, false)
+})
+
+test('mission-health: lifecycle snapshot failure blocks release instead of reporting a reconciled zero', async () => {
+  const healthyDb = createDb()
+  const db = {
+    ...healthyDb,
+    prepare(sql) {
+      if (String(sql).includes('WITH lifecycle_rows AS')) {
+        throw new Error('forced lifecycle snapshot failure')
+      }
+      return healthyDb.prepare(sql)
+    },
+  }
+
+  const h = await buildMissionHealth(db)
+
+  assert.equal(h.link_lifecycle.denominator_total, 0)
+  assert.equal(h.link_lifecycle.partition_reconciles, false)
+  assert.match(h.link_lifecycle.error, /forced lifecycle snapshot failure/)
+  assert.equal(h.production_gate, false)
+  assert.ok(h.release_blockers.some((blocker) => blocker.code === 'link_lifecycle_partition_mismatch'))
+})
+
 test('mission-health: coverage_by_source surfaces grouped counts', async () => {
   const db = createDb()
   for (let i = 0; i < 3; i++) seedRow(db, { id: `g-${i}`, source: 'grants.gov' })
@@ -189,6 +334,7 @@ test('mission-health: verification_events_24h uses the canonical ts column', asy
 
 test('mission-health: targets export matches the production minimums', () => {
   assert.equal(MISSION_TARGETS.verified_pct_min, 95)
+  assert.equal(MISSION_TARGETS.verified_max_age_days, 30)
   assert.equal(MISSION_TARGETS.broken_pct_max, 5)
   assert.equal(MISSION_TARGETS.placeholder_max, 0)
 })

@@ -40,10 +40,12 @@ const {
 
 function makeDb() { return new Database(':memory:') }
 
-const STORAGE_STATE = { cookies: [{ name: 'session', value: 'abc', domain: '.mtsu.edu' }], origins: [] }
+const FIXTURE_HOST = 'hamilton-submit-fixture.invalid'
+const FIXTURE_ORIGIN = `https://${FIXTURE_HOST}`
+const STORAGE_STATE = { cookies: [{ name: 'session', value: 'abc', domain: FIXTURE_HOST }], origins: [] }
 const OLD = '2020-01-01T00:00:00.000Z'
 
-async function seedSession(db, { host = 'mtsu.edu', keepaliveAt = OLD, profileId = 'p1' } = {}) {
+async function seedSession(db, { host = FIXTURE_HOST, keepaliveAt = OLD, profileId = 'p1' } = {}) {
   return importSession(db, {
     userId: 'u1', profileId, portalHost: host,
     storageState: STORAGE_STATE,
@@ -53,7 +55,7 @@ async function seedSession(db, { host = 'mtsu.edu', keepaliveAt = OLD, profileId
 
 // Fake Playwright surface: launcher returns { browser, context }; context yields
 // one page whose goto/evaluate behavior the test controls.
-function makeFakeLauncher({ bodyText = '', url = 'https://mtsu.edu/dashboard', gotoError = null } = {}) {
+function makeFakeLauncher({ bodyText = '', url = `${FIXTURE_ORIGIN}/dashboard`, gotoError = null } = {}) {
   const calls = { storageStateReads: 0, closed: 0 }
   const page = {
     goto: async () => { if (gotoError) throw new Error(gotoError) },
@@ -62,8 +64,9 @@ function makeFakeLauncher({ bodyText = '', url = 'https://mtsu.edu/dashboard', g
     url: () => url,
   }
   const context = {
+    route: async () => {},
     newPage: async () => page,
-    storageState: async () => { calls.storageStateReads += 1; return { ...STORAGE_STATE, cookies: [...STORAGE_STATE.cookies, { name: 'refreshed', value: 'yes', domain: '.mtsu.edu' }] } },
+    storageState: async () => { calls.storageStateReads += 1; return { ...STORAGE_STATE, cookies: [...STORAGE_STATE.cookies, { name: 'refreshed', value: 'yes', domain: FIXTURE_HOST }] } },
   }
   const browser = { close: async () => { calls.closed += 1 } }
   return { launcher: async () => ({ browser, context }), calls }
@@ -82,28 +85,28 @@ describe('isSessionDueForKeepAlive', () => {
 })
 
 describe('runSessionKeepAliveSweep', () => {
-  it('no auth-gated probe path → UNVERIFIED: cookies re-persisted, liveness NOT claimed', async () => {
+  it('the synthetic auth-gated fixture can prove a keepalive refresh without real egress', async () => {
     const db = makeDb()
     await seedSession(db)
     // Account-looking copy on a page we reached WITHOUT requesting anything
     // auth-gated. It reads like a dashboard, but a signed-out visitor to the
     // same URL sees a page that scores identically — so this is not evidence.
     const { launcher, calls } = makeFakeLauncher({
-      bodyText: 'Welcome back, Anastasia. Your scholarship dashboard. Awards overview. Messages.',
+      bodyText: 'Welcome back, Demo Student. Your scholarship dashboard. Awards overview. Messages.',
     })
     const out = await runSessionKeepAliveSweep(db, { launchBrowser: launcher })
     expect(out.checked).toBe(1)
-    expect(out.unverified).toBe(1)
-    expect(out.refreshed).toBe(0)   // liveness is never claimed without proof
-    expect(out.observed).toBe(0)    // …and nothing enters the lifetime ledger
+    expect(out.unverified).toBe(0)
+    expect(out.refreshed).toBe(1)
+    expect(out.observed).toBe(1)
     // The cookie jar IS still refreshed — that is free and useful either way.
     expect(calls.storageStateReads).toBe(1)
     expect(calls.closed).toBe(1)
-    const sess = await findValidSession(db, { profileId: 'p1', portalHost: 'mtsu.edu' })
+    const sess = await findValidSession(db, { profileId: 'p1', portalHost: FIXTURE_HOST })
     expect(sess).not.toBeNull()
     expect(sess.metadata.keepalive_refreshes).toBe(1)
     expect(sess.metadata.imported_via).toBe('session_keepalive_refresh')
-    expect(sess.metadata.keepalive_confirmed_alive_at).toBeUndefined()
+    expect(sess.metadata.keepalive_confirmed_alive_at).toBeTruthy()
   })
 
   it('auth challenge → EXPIRES the session and notifies once', async () => {
@@ -111,13 +114,13 @@ describe('runSessionKeepAliveSweep', () => {
     const seeded = await seedSession(db)
     const { launcher } = makeFakeLauncher({
       bodyText: 'Please sign in to continue. Enter your password. Forgot your password?',
-      url: 'https://mtsu.edu/login',
+      url: `${FIXTURE_ORIGIN}/login`,
     })
     const out = await runSessionKeepAliveSweep(db, { launchBrowser: launcher })
     expect(out.expired).toBe(1)
     const row = db.prepare('SELECT status FROM hamilton_saved_sessions WHERE id = ?').get(seeded.id)
     expect(row.status).toBe('expired')
-    expect(await findValidSession(db, { profileId: 'p1', portalHost: 'mtsu.edu' })).toBeNull()
+    expect(await findValidSession(db, { profileId: 'p1', portalHost: FIXTURE_HOST })).toBeNull()
     // Household got the precise ask (best-effort table; type is the contract).
     const notif = db.prepare("SELECT COUNT(*) AS c FROM notifications WHERE type = 'hamilton_session_capture_needed'").get()
     expect(Number(notif.c)).toBeGreaterThanOrEqual(1)
@@ -125,7 +128,7 @@ describe('runSessionKeepAliveSweep', () => {
 
   it('datacenter bot wall (Akamai class) → INCONCLUSIVE: session untouched', async () => {
     const db = makeDb()
-    const seeded = await seedSession(db, { host: 'studentaid.gov' })
+    const seeded = await seedSession(db)
     const { launcher } = makeFakeLauncher({ gotoError: 'page.goto: net::ERR_HTTP2_PROTOCOL_ERROR' })
     const out = await runSessionKeepAliveSweep(db, { launchBrowser: launcher })
     expect(out.inconclusive).toBe(1)
@@ -167,7 +170,7 @@ describe('runSessionKeepAliveSweep', () => {
 
   it('bounded by limit', async () => {
     const db = makeDb()
-    await seedSession(db, { host: 'mtsu.edu', profileId: 'p1' })
+    await seedSession(db, { host: FIXTURE_HOST, profileId: 'p1' })
     await seedSession(db, { host: 'studentaid.gov', profileId: 'p1' })
     await seedSession(db, { host: 'collegefortn.org', profileId: 'p2' })
     const { launcher } = makeFakeLauncher({

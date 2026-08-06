@@ -11,11 +11,12 @@ function read(relPath) {
 test('admin geo crawl: primary/secondary actions have explicit contrast classes', () => {
   const src = read('src/components/admin/AdminGeoCrawl.jsx')
 
-  // Primary action should be visually distinct and readable
-  assert.ok(src.includes('Start crawl'), 'Start crawl button missing')
+  // The retired primary action remains visually explicit and readable.
+  assert.ok(src.includes('Crawl start retired'), 'retired crawl status is missing')
+  assert.ok(src.includes('disabled={GEO_CRAWL_START_RETIRED}'), 'retired crawl control must remain disabled')
   assert.ok(
     src.includes('bg-blue-600') && src.includes('text-white'),
-    'Start crawl should use high-contrast blue background with white text',
+    'retired crawl status should retain high-contrast styling',
   )
 
   // Secondary action should be distinct from primary
@@ -31,4 +32,3 @@ test('admin geo crawl: primary/secondary actions have explicit contrast classes'
     'Inputs/SelectTrigger should have visible focus ring on dark containers',
   )
 })
-

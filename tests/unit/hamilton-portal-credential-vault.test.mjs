@@ -82,7 +82,7 @@ describe('saveGeneratedCredential', () => {
       userId: 'u-1',
       profileId: 'p-1',
       portalHost: 'mtsu.edu',
-      username: 'anastasia@example.com',
+      username: 'demo_stem_student@example.com',
       reason: 'no_saved_login_at_login_gate',
     })
     assert.equal(result.already_existed, false)
@@ -93,7 +93,7 @@ describe('saveGeneratedCredential', () => {
     assert.equal(result.credential.has_password, true)
     assert.ok(result.credential.username_masked)
     // Username is masked in the response — never leak the real value.
-    assert.notEqual(result.credential.username_masked, 'anastasia@example.com')
+    assert.notEqual(result.credential.username_masked, 'demo_stem_student@example.com')
   })
 
   it('is idempotent on (profileId, portalHost) — does NOT rotate an existing password', async () => {

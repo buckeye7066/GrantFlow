@@ -41,7 +41,7 @@ describe("profile section applicability", () => {
     const profile = {
       primary_type: "nonprofit",
       sections: [
-        { section_key: "basic_information", data: { full_name: "Focus Forward Ministries" } },
+        { section_key: "basic_information", data: { full_name: "Demo Faith-Based Nonprofit" } },
         { section_key: "narrative", data: { mission: "Serve the community" } },
       ],
     }

@@ -9,21 +9,38 @@ import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
-const {
-  buildCohortUpdate,
-  isCleanEvaluation,
-  recordFlywheelCohort,
-  getFlywheelCohort,
-  KV_KEY,
-} = await import('../services/amy/flywheelCohort.js')
+const cohortModule = await import('../services/amy/flywheelCohort.js')
+const { isCleanEvaluation, getFlywheelCohort, KV_KEY, buildRunCohortReceipt } = cohortModule
 const { summarizeAmyFlywheel, buildOwnerReport } = await import('../services/anya/anyaDailyOwnerReport.js')
 
-const clean = (i) => ({ scenario_id: `s${i}`, label: `Clean ${i}`, category: 'student', status: 'ok', findings: [] })
+const checkedOracle = (accepted = 1) => ({
+  status: 'checked', complete: true, accepted_claims: accepted, checked_accepts: accepted,
+  unknown_accepts: 0, known_conflicts: 0, exception_classes: {}, qualification_proven: false,
+})
+const clean = (i) => ({
+  scenario_id: `s${i}`, cohort_member_id: `s${i}`, label: `Clean ${i}`, category: 'student',
+  status: 'ok', accepted: 1, opportunity_oracle: checkedOracle(), findings: [],
+})
 const gappy = (i, type = 'hyperlocal_recall_miss') => ({
-  scenario_id: `g${i}`, label: `Gappy ${i}`, category: 'veteran', status: 'ok',
+  scenario_id: `g${i}`, cohort_member_id: `g${i}`, label: `Gappy ${i}`, category: 'veteran', status: 'ok',
+  accepted: 1, opportunity_oracle: checkedOracle(),
   findings: [{ type, message: 'gap' }],
 })
-const errored = (i) => ({ scenario_id: `e${i}`, label: `Err ${i}`, category: 'nonprofit', status: 'error', findings: [{ type: 'crawler_exception' }] })
+const errored = (i) => ({ scenario_id: `e${i}`, cohort_member_id: `e${i}`, label: `Err ${i}`, category: 'nonprofit', status: 'error', findings: [{ type: 'crawler_exception' }] })
+
+let generatedRun = 0
+function receiptArgs(args = {}) {
+  const runId = args.runId || `test-run-${++generatedRun}`
+  const evaluations = (args.evaluations || []).map((evaluation) => ({ ...evaluation, cohort_run_id: runId }))
+  return {
+    ...args,
+    runId,
+    evaluations,
+    expectedMembers: args.expectedMembers || evaluations.map((evaluation) => evaluation.cohort_member_id || evaluation.scenario_id),
+  }
+}
+const buildCohortUpdate = (prev, args) => cohortModule.buildCohortUpdate(prev, receiptArgs(args))
+const recordFlywheelCohort = (db, args) => cohortModule.recordFlywheelCohort(db, receiptArgs(args))
 
 function freshDb() {
   return wrapSqlite(new Database(':memory:'))
@@ -37,16 +54,18 @@ describe('isCleanEvaluation', () => {
     expect(isCleanEvaluation({ status: 'zero', findings: [] })).toBe(false)
     expect(isCleanEvaluation({ status: 'skipped', findings: [] })).toBe(false)
     expect(isCleanEvaluation(null)).toBe(false)
+    expect(isCleanEvaluation({ ...clean(2), opportunity_oracle: { ...checkedOracle(), status: 'unknown', unknown_accepts: 1 } })).toBe(false)
+    expect(isCleanEvaluation({ ...clean(3), opportunity_oracle: null })).toBe(false)
   })
 })
 
 describe('buildCohortUpdate (pure fold)', () => {
-  it('accumulates clean/issue counts and finding types within an ET day', () => {
+  it('keeps runs isolated instead of accumulating unrelated profiles to the target', () => {
     const r1 = buildCohortUpdate(null, {
-      dayKey: '2026-07-06', target: 4, runId: 'run-a', at: 't1',
+      dayKey: '2026-07-06', target: 3, runId: 'run-a', at: 't1',
       evaluations: [clean(1), gappy(1), errored(1)],
     })
-    expect(r1.day.evaluated).toBe(3)
+    expect(r1.day.evaluated).toBe(2)
     expect(r1.day.clean).toBe(1)
     expect(r1.day.issues).toBe(2)
     expect(r1.day.finding_types.hyperlocal_recall_miss).toBe(1)
@@ -54,23 +73,29 @@ describe('buildCohortUpdate (pure fold)', () => {
     expect(r1.goal_reached_now).toBe(false)
 
     const r2 = buildCohortUpdate(r1.store, {
-      dayKey: '2026-07-06', target: 4, runId: 'run-b', at: 't2',
+      dayKey: '2026-07-06', target: 1, runId: 'run-b', at: 't2',
       evaluations: [clean(2)],
     })
-    expect(r2.day.evaluated).toBe(4)
+    expect(r2.day.evaluated).toBe(1)
     expect(r2.day.complete).toBe(true)
-    expect(r2.day.all_clean).toBe(false)
+    expect(r2.day.all_clean).toBe(true)
     expect(r2.day.runs).toEqual(['run-a', 'run-b'])
-    expect(r2.goal_reached_now).toBe(false)
+    expect(r2.goal_reached_now).toBe(true)
+    expect(r2.day.run_receipts[0].run_id).toBe('run-a')
+    expect(r2.day.run_receipts[0].outcomes.errored).toBe(1)
   })
 
-  it('goal fires only when the day is complete AND fully clean', () => {
+  it('goal fires only when one exact run is complete and fully clean', () => {
     const partial = buildCohortUpdate(null, {
       dayKey: '2026-07-06', target: 3, runId: 'r1', evaluations: [clean(1), clean(2)],
     })
     expect(partial.goal_reached_now).toBe(false)
-    const full = buildCohortUpdate(partial.store, {
+    const stillPartial = buildCohortUpdate(partial.store, {
       dayKey: '2026-07-06', target: 3, runId: 'r2', evaluations: [clean(3)],
+    })
+    expect(stillPartial.goal_reached_now).toBe(false)
+    const full = buildCohortUpdate(stillPartial.store, {
+      dayKey: '2026-07-06', target: 3, runId: 'r3', evaluations: [clean(4), clean(5), clean(6)],
     })
     expect(full.goal_reached_now).toBe(true)
     expect(full.day.all_clean).toBe(true)
@@ -92,7 +117,7 @@ describe('buildCohortUpdate (pure fold)', () => {
     // Counters untouched — the old fold double-counted these.
     expect(dup.day.evaluated).toBe(2)
     expect(dup.day.clean).toBe(1)
-    expect(dup.day.issues).toBe(1)
+    expect(dup.day.issues).toBe(3)
     expect(dup.day.finding_types).toEqual(r1.day.finding_types)
     expect(dup.day.issue_examples.length).toBe(r1.day.issue_examples.length)
     expect(dup.day.runs).toEqual(['run-a'])
@@ -152,6 +177,79 @@ describe('buildCohortUpdate (pure fold)', () => {
     expect(long.day.issue_examples[0].findings[0].excerpt.length).toBeLessThanOrEqual(240)
   })
 
+  it('produces an exact-50 isolated receipt with reconciled membership', () => {
+    const runId = 'fresh-50'
+    const evaluations = Array.from({ length: 50 }, (_, index) => ({
+      ...clean(index + 1),
+      cohort_run_id: runId,
+    }))
+    const receipt = buildRunCohortReceipt({
+      runId,
+      target: 50,
+      expectedMembers: evaluations.map((evaluation) => evaluation.cohort_member_id),
+      evaluations,
+      at: '2026-08-06T12:00:00.000Z',
+    })
+    expect(receipt).toMatchObject({
+      run_id: runId,
+      requested_target: 50,
+      planned_members: 50,
+      evaluation_rows: 50,
+      evaluated_profiles: 50,
+      clean: 50,
+      issues: 0,
+      membership_isolated: true,
+      complete: true,
+      all_clean: true,
+      qualification_proven: false,
+    })
+    expect(receipt.reconciliation.membership_total).toBe(50)
+    expect(receipt.outcomes).toEqual({ clean: 50, issue: 0, errored: 0, skipped: 0, unevaluable: 0, missing: 0, duplicate: 0 })
+    expect(receipt.members).toHaveLength(50)
+  })
+
+  it('reconciles missing, errored, oracle-unknown, duplicate, and foreign-run rows as not clean', () => {
+    const runId = 'truth-run'
+    const unknown = {
+      ...clean(3),
+      opportunity_oracle: {
+        ...checkedOracle(),
+        status: 'unknown',
+        complete: false,
+        checked_accepts: 0,
+        unknown_accepts: 1,
+        exception_classes: { missing_opportunity_kind: 1 },
+      },
+    }
+    const rows = [
+      clean(1),
+      errored(2),
+      unknown,
+      clean(4),
+      clean(4),
+      { ...clean(99), cohort_run_id: 'another-run' },
+    ].map((evaluation) => evaluation.cohort_run_id ? evaluation : { ...evaluation, cohort_run_id: runId })
+    const receipt = buildRunCohortReceipt({
+      runId,
+      target: 5,
+      expectedMembers: ['s1', 'e2', 's3', 's4', 's5'],
+      evaluations: rows,
+    })
+    expect(receipt.complete).toBe(false)
+    expect(receipt.all_clean).toBe(false)
+    expect(receipt.evaluated_profiles).toBe(1)
+    expect(receipt.outcomes).toEqual({ clean: 1, issue: 0, errored: 1, skipped: 0, unevaluable: 1, missing: 1, duplicate: 1 })
+    expect(receipt.exception_classes).toMatchObject({
+      crawler_error: 1,
+      oracle_unevaluable: 1,
+      missing_evaluation: 1,
+      duplicate_evaluation: 1,
+      cohort_run_mismatch: 1,
+      missing_opportunity_kind: 1,
+    })
+    expect(receipt.reconciliation.membership_total).toBe(5)
+  })
+
   it('retains only the most recent day buckets', () => {
     let store = null
     for (let d = 1; d <= 30; d += 1) {
@@ -185,13 +283,41 @@ describe('recordFlywheelCohort (store + one-shot goal notification)', () => {
     const r2 = await recordFlywheelCohort(db, {
       evaluations: [clean(3)], runId: 'run-2', now, target: 2, send,
     })
-    expect(r2.goal_reached).toBe(true)
+    expect(r2.goal_reached).toBe(false)
     expect(r2.notified).toBe(false)
     expect(sent.length).toBe(1)
 
     const store = await getFlywheelCohort(db)
     expect(store.goal_notified_at).toBeTruthy()
     expect(Object.keys(store.days).length).toBe(1)
+    expect(store.goal_notified_receipt_version).toBe(1)
+    expect(store.goal_notified_run_id).toBe('run-1')
+  })
+
+  it('does not let a legacy aggregate-goal flag suppress the first truthful run receipt', async () => {
+    const db = freshDb()
+    const oldStore = {
+      days: {},
+      goal_notified_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    }
+    await db.prepare('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+      .run(KV_KEY, JSON.stringify(oldStore), oldStore.updated_at)
+    const sent = []
+    const result = await recordFlywheelCohort(db, {
+      evaluations: [clean(1)],
+      runId: 'receipt-v1',
+      target: 1,
+      now: new Date('2026-07-06T15:00:00Z'),
+      send: async (message) => { sent.push(message); return { ok: true } },
+    })
+
+    expect(result.notified).toBe(true)
+    expect(sent).toHaveLength(1)
+    const store = await getFlywheelCohort(db)
+    expect(store.goal_notified_receipt_version).toBe(1)
+    expect(store.goal_notified_run_id).toBe('receipt-v1')
   })
 
   it('does not notify while the cohort has issues or is incomplete', async () => {
@@ -229,7 +355,7 @@ describe('recordFlywheelCohort (store + one-shot goal notification)', () => {
     const day = store.days['2026-07-06']
     expect(day.evaluated).toBe(1)
     expect(day.clean).toBe(1)
-    expect(day.issues).toBe(0)
+    expect(day.issues).toBe(1)
     expect(day.runs).toEqual(['run-1'])
     expect(store.goal_notified_at).toBe(null)
   })

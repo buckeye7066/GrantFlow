@@ -59,7 +59,7 @@ const {
 const { runAutopilot } = await import('../services/hamilton/hamiltonAutopilotEngine.js')
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
 const { listTaskEvents, _resetSchemaCache } = await import('../services/hamilton/applicationTaskStore.js')
-const { _resetAuthSchemaCache } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
+const { _resetAuthSchemaCache, recordAuthorizations } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
 
 const PROFILE = 'profile-draft-bridge'
 const OTHER_PROFILE = 'profile-someone-else'
@@ -119,7 +119,7 @@ function makeDb() {
 
 async function seedProfile(db, profileId = PROFILE) {
   await db.prepare('INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, ?)')
-    .run(profileId, 'user-1', 'Robert White')
+    .run(profileId, 'user-1', 'Demo College Student Persona')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(profileId, 'basic_information', JSON.stringify({
       first_name: 'Robert', last_name: 'White', email: 'r@example.com',
@@ -272,27 +272,29 @@ describe('summarizeDraftFill', () => {
 
 // ── 3. WIRING through the autopilot pathway ──────────────────────────────────
 
-const AUTHORIZATIONS = {
-  complete_forms: true,
-  save_drafts: false,
-  generate_narratives: false,
-  submit_applications: false,
-  use_saved_credentials_reference: false,
-  use_saved_session: false,
-  upload_documents: false,
-  use_standing_attestation: false,
-}
-
 const OPPORTUNITY = {
   id: 'opp-1',
   title: 'Bridge Test Scholarship',
   description: 'Apply through the portal.',
-  application_url: 'https://portal.example.edu/apply',
+  application_url: 'https://hamilton-submit-fixture.invalid/apply',
 }
 
 async function seedOpportunity(db, opp = OPPORTUNITY) {
   await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
     .run(opp.id, opp.title, opp.description, opp.application_url)
+}
+
+async function authorizeFormCompletion(db) {
+  await recordAuthorizations(db, {
+    userId: 'user-1',
+    profileId: PROFILE,
+    scope: 'funding_source',
+    fundingSourceIds: ['opp-1'],
+    authorizationTypes: ['complete_forms'],
+    authorizationText: 'Test form-completion authorization',
+    authorizationVersion: 'hamilton-autopilot-test-v1',
+    replaceOmittedTypes: true,
+  })
 }
 
 const savedEnv = {}
@@ -312,13 +314,14 @@ describe('autopilot pathway — draft packet is the fill source', () => {
     const db = makeDb()
     await seedProfile(db)
     await seedOpportunity(db)
+    await authorizeFormCompletion(db)
     await seedDraftPacket(db)
 
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
       userId: 'user-1',
       source: { opportunity_id: 'opp-1', grant_id: 'g-1' },
-      options: { authorizations: AUTHORIZATIONS },
+      options: {},
     })
 
     // The engine ran once, with the draft packet as the essay fill source.
@@ -356,6 +359,7 @@ describe('autopilot pathway — draft packet is the fill source', () => {
     const db = makeDb()
     await seedProfile(db)
     await seedOpportunity(db)
+    await authorizeFormCompletion(db)
     // grant exists but no applications/application_sections rows
     await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')
       .run('g-1', PROFILE, 'opp-1', 'Test Grant')
@@ -364,7 +368,7 @@ describe('autopilot pathway — draft packet is the fill source', () => {
       profileId: PROFILE,
       userId: 'user-1',
       source: { opportunity_id: 'opp-1', grant_id: 'g-1' },
-      options: { authorizations: AUTHORIZATIONS },
+      options: {},
     })
 
     expect(runAutopilot).toHaveBeenCalledTimes(1)
@@ -374,19 +378,23 @@ describe('autopilot pathway — draft packet is the fill source', () => {
     expect(events.find((e) => e.step === 'draft_packet_filled')).toBeUndefined()
   })
 
-  it('another profile\'s draft for the same grant id never leaks into the run', async () => {
+  it('rejects another profile\'s grant before its draft or automation can be reached', async () => {
     const db = makeDb()
     await seedProfile(db)
     await seedOpportunity(db)
+    await authorizeFormCompletion(db)
     await seedDraftPacket(db, { profileId: OTHER_PROFILE })
 
-    await automateSingleSource(db, {
+    await expect(automateSingleSource(db, {
       profileId: PROFILE,
       userId: 'user-1',
       source: { opportunity_id: 'opp-1', grant_id: 'g-1' },
-      options: { authorizations: AUTHORIZATIONS },
+      options: {},
+    })).rejects.toMatchObject({
+      code: 'application_task_source_scope_mismatch',
+      status: 403,
     })
 
-    expect(runAutopilot.mock.calls[0][0].narrativeAnswers).toBeNull()
+    expect(runAutopilot).not.toHaveBeenCalled()
   })
 })

@@ -1,6 +1,7 @@
 /**
  * hamiltonWatchedOpen — THE one way to open a portal / application URL from a
- * profile surface, with Hamilton watching.
+ * profile surface. Controlled beta opens real portals directly for manual
+ * work; Hamilton's watched-browser path is reserved for the synthetic fixture.
  *
  * THE BUG THIS FIXES (globally + permanently): "Open" controls across the
  * Portals & pipeline surfaces (Funding Sources rows, PortalLoginButton, the
@@ -10,10 +11,9 @@
  * login — even though the whole point of the portal system is that Hamilton
  * watches and learns every portal the applicant touches.
  *
- * WHAT THIS DOES instead: the same secure cloud-login co-browse flow the
- * Portals tiles and Admin Portal Assist already use, generalized to ANY http(s)
- * URL (host derived from the URL, exactly like AdminPortalAssist's "Launch any
- * portal"):
+ * Real portal URLs never call the cloud-login API. They open in the user's own
+ * browser with a truthful manual-handoff notice. The reserved synthetic fixture
+ * retains the live-view path for regression testing.
  *
  *   1. Open the popup SYNCHRONOUSLY in the click gesture (openPendingLoginWindow
  *      — after an await the browser blocks it; see liveLoginWindow.js).
@@ -36,7 +36,7 @@
 import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
 import { startCloudLogin } from "@/api/hamilton"
 import { safeHttpUrl, hostFromUrl } from "@/lib/safeUrl"
-import { showErrorToast } from "@/components/shared/toastHelpers"
+import { showErrorToast, showSuccessToast } from "@/components/shared/toastHelpers"
 import { useGuidedTourStore } from "@/stores/guidedTourStore"
 
 /**
@@ -58,9 +58,16 @@ function reportTourPortalOpened() {
   }
 }
 
-/** True when this URL can be opened with Hamilton watching for this profile. */
+const SYNTHETIC_FIXTURE_ORIGIN = "https://hamilton-submit-fixture.invalid"
+
+function isSyntheticFixtureUrl(url) {
+  try { return new URL(url).origin === SYNTHETIC_FIXTURE_ORIGIN } catch { return false }
+}
+
+/** True only for the reserved fixture; real portals are manual in controlled beta. */
 export function canHamiltonWatch({ profileId, url } = {}) {
-  return Boolean(profileId) && Boolean(safeHttpUrl(url)) && Boolean(hostFromUrl(url))
+  const href = safeHttpUrl(url)
+  return Boolean(profileId) && Boolean(href) && Boolean(hostFromUrl(href)) && isSyntheticFixtureUrl(href)
 }
 
 /**
@@ -80,6 +87,19 @@ export async function openWithHamiltonWatching({ profileId, url, label = null, t
   if (!href) return { opened: false, watched: false, blocked: false }
 
   const host = hostFromUrl(href)
+
+  if (!isSyntheticFixtureUrl(href)) {
+    if (typeof window !== "undefined") window.open(href, "_blank", "noopener,noreferrer")
+    if (toast) {
+      showSuccessToast(
+        toast,
+        "Portal opened for manual work",
+        "Controlled beta does not run a server browser on real portal sites. Sign in, review, and submit in the portal yourself.",
+      )
+    }
+    reportTourPortalOpened()
+    return { opened: true, watched: false, blocked: false }
+  }
 
   // No profile to bind a session to (or unparsable host) → honest direct open.
   // window.open here is still inside the user gesture, so it isn't blocked.

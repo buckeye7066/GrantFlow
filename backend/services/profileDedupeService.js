@@ -50,7 +50,7 @@ export function profilesHaveSimilarNames(nameA, nameB) {
 
   const [short, long] = a.length <= b.length ? [a, b] : [b, a]
 
-  // Token prefix: "luibov" is a prefix of "luibov s samoylenko".
+  // Token prefix: "demo_senior_family" is a prefix of "demo_senior_family s samoylenko".
   if (short.length < long.length && short.every((token, index) => long[index] === token)) {
     return true
   }

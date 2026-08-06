@@ -2,7 +2,7 @@
   "app_id": "scout-a-program",
   "display_name": "Scout a Program",
   "repo": "local-only",
-  "local_path": "C:/Users/firer/flexfactor",
+  "local_path": "C:/Users/example_user/flexfactor",
   "surface_of": "flexfactor",
   "launch_mode": "scout",
   "runtime_type": "python-cli",

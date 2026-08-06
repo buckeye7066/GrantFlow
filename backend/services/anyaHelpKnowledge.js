@@ -6,6 +6,9 @@
  * with accurate, up-to-date structured data.
  */
 
+import { MATCHER_VERSION } from './matchEngine.js'
+import { ACCEPT_SCORE, REVIEW_SCORE, SCORE_SCALE_ID } from '../config/matchThresholds.js'
+
 export const CURRENT_TOUR_VERSION = 1
 export const CURRENT_MANUAL_VERSION = 1
 
@@ -239,9 +242,9 @@ export const HELP_REGISTRY = [
     title: 'Funding Results',
     description: 'Browse all funding opportunities in one place. Filter and sort.',
     purpose:
-      'Review all crawled and matched funding results for your active profile. Two rules shape the list: the match-percentage slider is a HARD floor (set it to 80% and nothing scored below 80% appears — it is filtered out, not just sorted down), and anything already in this profile\'s pipeline (saved or dismissed) is never shown again. Results include the newer funding categories GrantFlow now discovers — corporate matching-gift and corporate-foundation grants for nonprofits, re-entry / justice-involved funding, patient and disease-specific copay and assistance foundations, and school endowments — alongside the existing federal, state, foundation and scholarship sources. Apply advanced filters to narrow to your best-fit opportunities.',
+      'Review all crawled and matched funding results for your active profile. Two rules shape the list: the minimum evidence-score control is a hard floor (rows below it are filtered out, not merely sorted down), and anything already in this profile\'s pipeline (saved or dismissed) is never shown again. Results include the newer funding categories GrantFlow now discovers — corporate matching-gift and corporate-foundation grants for nonprofits, re-entry / justice-involved funding, patient and disease-specific copay and assistance foundations, and school endowments — alongside the existing federal, state, foundation and scholarship sources. Apply advanced filters to narrow to your best-fit opportunities.',
     whoCanUse: 'all',
-    mainActions: ['Set the match-% slider as a hard minimum', 'Filter by score, type, deadline', 'Sort by relevance or deadline', 'Add to pipeline'],
+    mainActions: ['Set the evidence-score control as a hard minimum', 'Filter by score, type, deadline', 'Sort by relevance or deadline', 'Add to pipeline'],
     relatedFeatures: ['DiscoverGrants', 'SmartMatcher', 'Pipeline'],
     affectsMatching: false,
     fields: [],
@@ -254,7 +257,7 @@ export const HELP_REGISTRY = [
     description:
       'Find grants that fit your profile automatically, with plain-language explanations for every result. You can also type what you need in your own words and use Understand & search.',
     purpose:
-      'GrantFlow uses a single matching engine (matchEngine.js v3.0.0) that scores each opportunity 0-100 based on: geographic match (state/county/city/ZIP), applicant type match, keyword overlap, category alignment, and eligibility checks. Every result includes a reasons[] array explaining why it matched. The canonical decision engine assigns ACCEPT (score ≥ 60), REVIEW (30-59), or REJECT (< 30 or hard ineligible). The Describe what you need area plus Understand & search expands plain language into several catalog search terms (OR-style) so related programs are not missed. The more complete your profile, the better the matches.', // Keep version in sync with MATCHER_VERSION in matchEngine.js
+      `GrantFlow's canonical matching engine (${MATCHER_VERSION}, score scale ${SCORE_SCALE_ID}) measures how much of the whole profile has supporting evidence in an opportunity, with geography and eligibility gates. Typical scores are much lower than ordinary percentages, so the configured decision bars matter: ACCEPT begins at ${ACCEPT_SCORE}, REVIEW begins at ${REVIEW_SCORE}, and a hard eligibility conflict can REJECT at any score. Every result carries the persisted decision and evidence explaining why it matched. The Describe what you need area plus Understand & search expands plain language into several catalog search terms so related programs are not missed. A more complete profile makes the evidence more specific; no score guarantees eligibility or an award.`,
     whoCanUse: 'all',
     mainActions: [
       'Describe your need in plain language (Understand & search)',

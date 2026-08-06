@@ -108,11 +108,11 @@ describe('finding lifecycle', () => {
 
 describe('heartbeat', () => {
   it('records and reads back a heartbeat, redacting the note', async () => {
-    await recordHeartbeat(db, { runnerId: 'r1', status: 'ok', version: '1.0', note: 'path C:\\Users\\firer\\x secret' })
+    await recordHeartbeat(db, { runnerId: 'r1', status: 'ok', version: '1.0', note: 'path C:\\Users\\example_user\\x secret' })
     const hb = await latestHeartbeat(db)
     expect(hb.runner_id).toBe('r1')
     expect(hb.status).toBe('ok')
-    expect(hb.note).not.toMatch(/firer/)
+    expect(hb.note).not.toMatch(/example_user/)
   })
 })
 

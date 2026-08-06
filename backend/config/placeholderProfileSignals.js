@@ -7,11 +7,11 @@
  * the database returns that fall below the profile's requested result number."
  * If the crawlers truly read the profile first, they would NOTICE THERE IS
  * NOTHING IN IT. They did not. Measured read-only in prod 2026-08-02T02:40Z,
- * `profile-melissa-justus` carries
+ * `profile-demo-general-support` carries
  *
  *   basic_information.address = { street:'123 Main St', city:'Anytown',
  *                                 state:'USA', zip_code:'12345' }
- *   basic_information.email   = 'melissa.justus@example.com'  phone '555-1234'
+ *   basic_information.email   = 'demo.general-support@example.com'  phone '555-1234'
  *   basic_information.notes   = 'Designated roster profile. Add the owner login
  *                                email here and in userProfileMappings.js …'
  *   location_focus.notes      = 'Synthetic location signal for crawler and
@@ -48,7 +48,7 @@
  * every individual signal has a real-world false positive:
  *
  *   • `location_focus.notes = 'Synthetic location signal for crawler and
- *     matcher coverage.'` is carried by REAL prod profiles. `Angelika Ptak`
+ *     matcher coverage.'` is carried by REAL prod profiles. `Demo Healthcare Workforce Persona`
  *     (prod, 2 matches) has it — and a real gmail address, an empty address
  *     block, and `occupation.healthcare_worker = true`. Substance fires, so
  *     (A) fails and she is never flagged. Measured: her `signals.occupation`
@@ -305,10 +305,10 @@ export const SUBSTANCE_PROBES = Object.freeze([
     //   • it is NEVER empty — `buildProfileSignals` injects a type-shaped
     //     fallback, which is where John Doe's whole need list
     //     (utilities/housing/food/healthcare/cash_assistance) came from;
-    //   • on `profile-melissa-justus` its only two entries (`cash_assistance`,
+    //   • on `profile-demo-general-support` its only two entries (`cash_assistance`,
     //     `internet`) come from `organization_details` boolean flags
     //     (`broadband_unserved`, …) on a profile whose `primary_type` is
-    //     `individual` — the documented Kimberly-Botts hallucination class
+    //     `individual` — the documented organization/person-shape hallucination class
     //     (`enforceIndividualOrgSectionConflict`), i.e. an AI-enrichment
     //     artifact derived from an address reading "Anytown, USA".
     // `needsDefaulted` is still consulted so the fallback can never count, but
@@ -417,13 +417,13 @@ export const SUBSTANCE_PROBES = Object.freeze([
   {
     // A REAL registration identifier is substance for an org profile. It is
     // read STRUCTURALLY (a well-formed EIN/UEI), never by presence: prod's
-    // `profile-melissa-justus` carries an `ein` that is a paragraph of prose
+    // `profile-demo-general-support` carries an `ein` that is a paragraph of prose
     // ("EIN (Tax ID) is not applicable as this application is submitted by an
     // individual…") and `uei: 'N/A'`.
     //
     // Deliberately NOT substance: `organization_details`' boolean flags and
     // `annual_budget` / `staff_count`. On a PERSON-type profile that whole
-    // section is the documented Kimberly-Botts hallucination class
+    // section is the documented organization/person-shape hallucination class
     // (`enforceIndividualOrgSectionConflict`) — an AI-enrichment artifact, not
     // a declaration — and on the placeholder profiles those flags
     // (`in_appalachian_region`, `in_usda_persistent_poverty_county`, …) are
@@ -502,7 +502,7 @@ export function detectUnconfiguredProfile({ profile = {}, sections = {}, signals
  * THIS EXISTS BECAUSE FIXING ONE FABRICATION UNMASKED A WORSE ONE. Once the
  * address-inference regex stopped minting `"SA"` from `state:'USA'`,
  * `buildProfileSignals`' ZIP rescue (`if (location.zip && !location.state)`)
- * became reachable for `profile-melissa-justus` and resolved her placeholder
+ * became reachable for `profile-demo-general-support` and resolved her placeholder
  * ZIP `12345` to **Schenectady, NY** — a real, plausible-looking place she has
  * no connection to, which would then have titled `Schenectady County, NY —
  * Local assistance programs near you`. "Anytown, SA" at least LOOKED wrong.

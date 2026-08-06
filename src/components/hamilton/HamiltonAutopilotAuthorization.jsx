@@ -22,22 +22,20 @@ import { useToast } from '@/components/ui/use-toast'
  *      → if blockers exist, surface them inline; user can fix and retry.
  *   4. POST /api/hamilton/automation/start-autopilot (launches unattended run)
  *
- * Default toggles match Phase A spec:
+ * Default toggles match the fail-closed preparation contract:
  *   - complete_forms, upload_documents, generate_narratives, save_drafts: ON
- *   - submit_applications: ON (with explicit checkbox confirmation)
- *   - require_human_review: OFF (Autopilot default)
- *   - allow_auto_submit: OFF (2026-08-03 — unattended submission is a
- *     per-launch OPT-IN; a pre-checked box is not an authorization)
+ *   - submit_applications / allow_auto_submit: OFF and not exposed while no
+ *     independently reviewed real-portal executor exists
+ *   - require_human_review: ON
  *   - use_saved_session, use_saved_credentials_reference: ON
  *   - use_standing_attestation: ON
  */
 export const AUTOPILOT_TEXT = (
-  'Hamilton will attempt to complete and submit the selected application(s) '
-  + 'automatically using the profile information and authorized documents on file. '
-  + 'Hamilton may open portals, fill forms, upload documents, save drafts, and submit '
-  + 'applications when allowed. Hamilton will only stop if required information, '
-  + 'documents, credentials, CAPTCHA, 2FA, payment, or a legally personal '
-  + 'attestation is required and not already authorized.'
+  'Hamilton will prepare the selected application(s) using the profile information '
+  + 'and authorized documents on file. Hamilton may open portals, fill forms, upload '
+  + 'documents, generate narratives, and save drafts. Final portal Submit and portal '
+  + 'account creation remain visible human handoffs. Hamilton never bypasses login, '
+  + 'CAPTCHA, 2FA, payment, signatures, attestations, or owner approval.'
 )
 export const AUTOPILOT_VERSION = 'hamilton-autopilot-v1'
 
@@ -46,11 +44,11 @@ const DEFAULTS = Object.freeze({
   upload_documents: true,
   generate_narratives: true,
   save_drafts: true,
-  submit_applications: true,
+  submit_applications: false,
   use_saved_session: true,
   use_saved_credentials_reference: true,
   use_standing_attestation: true,
-  require_human_review: false,
+  require_human_review: true,
   allow_auto_submit: false,
 })
 
@@ -72,7 +70,9 @@ export default function HamiltonAutopilotAuthorization({
     }
   }, [open])
 
-  function set(key, value) { setOpts((s) => ({ ...s, [key]: value })) }
+  function set(key, value) {
+    setOpts((current) => ({ ...current, [key]: value }))
+  }
 
   const fundingSourceIds = selectedSources
     .map((s) => s.opportunity_id || s.grant_id)
@@ -98,7 +98,6 @@ export default function HamiltonAutopilotAuthorization({
     if (opts.upload_documents)             types.push('upload_documents')
     if (opts.generate_narratives)          types.push('generate_narratives')
     if (opts.save_drafts)                  types.push('save_drafts')
-    if (opts.submit_applications && opts.allow_auto_submit) types.push('submit_applications')
     if (opts.use_saved_session)            types.push('use_saved_session')
     if (opts.use_saved_credentials_reference) types.push('use_saved_credentials_reference')
     if (opts.use_standing_attestation)     types.push('use_standing_attestation')
@@ -136,15 +135,15 @@ export default function HamiltonAutopilotAuthorization({
         profile_id: profileId,
         selected_sources: selectedSources,
         options: {
-          allow_auto_submit: opts.submit_applications && opts.allow_auto_submit,
+          allow_auto_submit: false,
           headless: true,
         },
       })
       setPhase('done')
       onLaunched?.(launch)
       toast({
-        title: 'Hamilton Autopilot launched',
-        description: 'Hamilton is running unattended. You will only be alerted on a hard blocker.',
+        title: 'Hamilton preparation launched',
+        description: 'Hamilton will prepare drafts and stop for any required human or portal handoff.',
       })
       onOpenChange?.(false)
     } catch (err) {
@@ -170,10 +169,10 @@ export default function HamiltonAutopilotAuthorization({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-indigo-600" />
-            Authorize Hamilton Autopilot
+            Authorize Hamilton preparation
           </DialogTitle>
           <DialogDescription className="text-slate-600">
-            User-authorized unattended completion. After you click <span className="font-semibold">Run to completion</span>, Hamilton runs by herself until she finishes or hits a hard blocker.
+            User-authorized draft preparation. Hamilton can work unattended, but final portal Submit remains a visible human handoff.
           </DialogDescription>
         </DialogHeader>
 
@@ -187,12 +186,12 @@ export default function HamiltonAutopilotAuthorization({
             <Toggle id="opt_uploads"      label="Upload profile documents"               checked={opts.upload_documents}       onChange={(v) => set('upload_documents', v)} />
             <Toggle id="opt_narratives"   label="Generate missing narratives from profile" checked={opts.generate_narratives}    onChange={(v) => set('generate_narratives', v)} />
             <Toggle id="opt_drafts"       label="Save drafts"                            checked={opts.save_drafts}            onChange={(v) => set('save_drafts', v)} />
-            <Toggle id="opt_submit"       label="Submit applications when complete"      checked={opts.submit_applications}    onChange={(v) => set('submit_applications', v)} />
-            <Toggle id="opt_autosubmit"   label="Allow auto-submit (no human review)"    checked={opts.allow_auto_submit}      onChange={(v) => set('allow_auto_submit', v)} highlight />
             <Toggle id="opt_session"      label="Use saved browser session if available" checked={opts.use_saved_session}      onChange={(v) => set('use_saved_session', v)} />
             <Toggle id="opt_creds"        label="Use saved portal logins to sign in"     checked={opts.use_saved_credentials_reference} onChange={(v) => set('use_saved_credentials_reference', v)} />
             <Toggle id="opt_attest"       label="Use standing attestation language"      checked={opts.use_standing_attestation} onChange={(v) => set('use_standing_attestation', v)} />
-            <Toggle id="opt_review"       label="Require final human review before submit" checked={opts.require_human_review}   onChange={(v) => set('require_human_review', v)} />
+            <div role="status" className="md:col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-950">
+              Final portal Submit and new-account creation are not automated. Hamilton will stop with a clear handoff.
+            </div>
           </div>
 
           {phase === 'preflight' && preflight ? (
@@ -213,7 +212,7 @@ export default function HamiltonAutopilotAuthorization({
         <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:justify-between">
           <div className="text-xs text-slate-500 flex items-center gap-1">
             <ShieldCheck className="w-4 h-4" />
-            Hamilton never bypasses CAPTCHA, 2FA, payment, or signatures.
+            Hamilton never bypasses login, CAPTCHA, 2FA, payment, signatures, or attestations.
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => onOpenChange?.(false)} disabled={phase === 'launching'}>
@@ -225,7 +224,7 @@ export default function HamiltonAutopilotAuthorization({
               disabled={phase === 'launching'}
             >
               {phase === 'launching' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-              Run Hamilton to completion
+              Run Hamilton to prepare drafts
             </Button>
           </div>
         </DialogFooter>
@@ -302,7 +301,6 @@ function SourceReadiness({ result }) {
   const cs  = r.credentials_session || {}
   const py  = r.payment || {}
   const at  = r.attestation || {}
-  const as  = r.auto_submit || {}
   const policy = ap.policy || {}
   return (
     <div className="text-xs text-slate-700 bg-white border border-slate-200 rounded p-2 space-y-1">
@@ -318,7 +316,7 @@ function SourceReadiness({ result }) {
         <Pill ok={cs.session_present || cs.authorized?.use_saved_session} label={`Session ${cs.session_present ? '✓' : (cs.authorized?.use_saved_session ? 'auth' : '!')}`} />
         <Pill ok={!py.needed || py.allowed} label={`Payment ${!py.needed ? 'n/a' : py.allowed ? '✓' : '!'}`} />
         <Pill ok={at.use_standing_attestation_flag} label={`Attestation ${at.use_standing_attestation_flag ? '✓' : 'manual'}`} />
-        <Pill ok={as.submit_applications_authorized} label={`Auto-submit ${as.submit_applications_authorized ? '✓' : 'off'}`} />
+        <Pill ok label="Final submit: human" />
       </div>
       {policy.automation_allowed === false ? (
         <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded p-1">

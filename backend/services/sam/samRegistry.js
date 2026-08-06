@@ -1786,7 +1786,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     path: '/api/hamilton/automation/admin/hard-stops',
     expectStatus: 200,
     severityOnFailure: SEVERITY.HIGH,
-    description: 'Confirms the canonical-admin (buckeye7066@gmail.com) hard-stop dashboard is reachable so dual user/admin alerts have a consumer.',
+    description: 'Confirms the canonical-admin (configured-admin@example.invalid) hard-stop dashboard is reachable so dual user/admin alerts have a consumer.',
   },
   {
     id: 'agent.hamilton.blockers',

@@ -19,7 +19,7 @@
  *    `education.*`), not through prose — prose is what `profileContextToThesis`
  *    demonstrably drops.
  *  - INDIVIDUAL vs ORG shape is derived from `entityClass`, so a person never
- *    carries `organization_details` (the Kimberly-Botts invariant would have to
+ *    carries `organization_details` (the organization/person-shape invariant would have to
  *    repair it) and an org never asserts a household income.
  *  - HARD RULE, unchanged: no real PII. Names/emails/phones follow the same
  *    reserved-fiction conventions as the catalog (`.invalid`, `555-01xx`).

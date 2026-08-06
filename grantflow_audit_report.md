@@ -1,6 +1,6 @@
 # FlexFactor audit — GrantFlow
 
-- **Project:** `C:\Users\firer\GrantFlow`
+- **Project:** `C:\Users\Example\GrantFlow`
 - **Branch:** `flexfactor/audit-grantflow`
 - **Files reviewed:** 4
 - **Defects found:** 69

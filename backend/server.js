@@ -96,6 +96,7 @@ import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor
 import { requestTimeout } from './middleware/requestTimeout.js';
 import { responseCache } from './middleware/responseCache.js';
 import { MAX_JSON_BODY_SIZE, GRANT_STATUSES } from './config/constants.js';
+import { DEFAULT_MIN_SCORE, SCORE_SCALE_ID } from './config/matchThresholds.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
@@ -188,18 +189,23 @@ const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
 // The synthetic user materialised when a request authenticates with ADMIN_TOKEN /
 // ANYA_ADMIN_TOKEN must carry the canonical operator email so it can pass the
 // canonical-admin gate on routers like /api/admin/agent-control/* and any other
-// place that uses isControlCenterAdmin() (which compares user.email against
-// AGENT_CONTROL_ADMIN_EMAIL || ADMIN_EMAIL || CANONICAL_ADMIN_EMAIL_DEFAULT).
+// place that uses isControlCenterAdmin(). Deployed environments must configure
+// ADMIN_EMAIL; the source-safe default is local/test only.
 // Without this, server-internal probes (Sam's httpProbe, codeGuard.endpointHealth,
 // Hamilton automation checks) presented a valid service token but were still
 // rejected with 403 because their synthetic email was the throwaway
 // 'admin@grantflow.app' default that nothing else recognises. Trust here is
 // unchanged: ADMIN_TOKEN was already accepted as `role:admin, is_admin:true`;
 // we are only aligning the email so the canonical-admin check passes.
-const ADMIN_EMAIL =
-  process.env.AGENT_CONTROL_ADMIN_EMAIL ||
-  process.env.ADMIN_EMAIL ||
-  CANONICAL_ADMIN_EMAIL_DEFAULT;
+const SERVER_DEPLOYED_RUNTIME = ENV?.isProd === true
+  || String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production'
+  || Boolean(String(process.env.RAILWAY_ENVIRONMENT_ID || '').trim())
+  || Boolean(String(process.env.RAILWAY_DEPLOYMENT_ID || '').trim())
+const ADMIN_EMAIL = String(
+  process.env.AGENT_CONTROL_ADMIN_EMAIL
+  || process.env.ADMIN_EMAIL
+  || (SERVER_DEPLOYED_RUNTIME ? '' : CANONICAL_ADMIN_EMAIL_DEFAULT),
+).trim().toLowerCase()
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -456,7 +462,7 @@ const corsOptions = {
   origin: [...new Set([...(configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins), ...capacitorOrigins])],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token', 'X-Profile-Id', 'X-Request-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Admin-Token', 'X-Anya-Token', 'X-Profile-Id', 'X-Request-Id'],
 };
 
 app.use(cors(corsOptions));
@@ -937,11 +943,21 @@ if (shouldAutoMigrate) {
 // to reason about SMOKE_MODE / explicit opt-in/out tokens itself again.
 const { shouldMigrateOnBoot: _shouldMigrateOnBoot } = await import('./startup/bootPolicy.js')
 const shouldMigrateOnBoot = _shouldMigrateOnBoot(process.env)
+app.locals.migrate_boot_attempted = false
+app.locals.migrate_boot_complete = false
+app.locals.migrate_boot_failed_migrations = []
+app.locals.migrate_boot_error = null
 if (shouldMigrateOnBoot && !app.locals.db_startup_error) {
+  app.locals.migrate_boot_attempted = true
   try {
     const { runPendingMigrationsOnBoot } = await import('./db/migrate.js')
-    await runPendingMigrationsOnBoot({ logger: console })
+    const migrationResult = await runPendingMigrationsOnBoot({ logger: console })
+    app.locals.migrate_boot_failed_migrations = Array.isArray(migrationResult?.failed)
+      ? migrationResult.failed
+      : []
+    app.locals.migrate_boot_complete = true
   } catch (bootMigrateErr) {
+    app.locals.migrate_boot_error = 'boot_migration_failed'
     console.error('[migrate:boot] failed:', bootMigrateErr?.message || bootMigrateErr)
   }
 }
@@ -1688,7 +1704,10 @@ app.use(async (req, res, next) => {
 
       if (!handled) {
         try {
-          const payload = jwt.verify(token, EFFECTIVE_JWT_SECRET);
+          // GrantFlow issues only symmetric HS256 access tokens. Pin the
+          // accepted algorithm so a future key/config change cannot turn this
+          // verifier into an algorithm-confusion boundary.
+          const payload = jwt.verify(token, EFFECTIVE_JWT_SECRET, { algorithms: ['HS256'] });
         // Stateless JWT acceptance (important for multi-instance deployments where SQLite session storage
         // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
         // We still try to validate against DB sessions when available, but we do not require it.
@@ -1755,18 +1774,6 @@ app.use(async (req, res, next) => {
           // fall through to legacy handling
         }
       }
-    }
-
-    if (!handled && token && safeTokenEqual(token, ADMIN_TOKEN)) {
-      user = {
-        role: 'admin',
-        is_admin: true,
-        userId: 'system_admin_token',
-        profileId: null,
-        full_name: ADMIN_NAME,
-        email: ADMIN_EMAIL,
-      };
-      handled = true;
     }
 
     // Legacy "profile-id bearer token" is unsafe; allow only in non-prod with explicit opt-in.
@@ -2519,7 +2526,12 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
         comprehensiveJobId,
         'comprehensive',
         profileId,
-        JSON.stringify({ max_results: 1, match_threshold: 80, save_to_database: false }),
+        JSON.stringify({
+          max_results: 1,
+          match_threshold: DEFAULT_MIN_SCORE,
+          score_scale_id: SCORE_SCALE_ID,
+          save_to_database: false,
+        }),
         'system-smoke',
       )
 
@@ -2846,7 +2858,7 @@ app.use('/api/admin/agent-telemetry', lazyRouter('./routes/agentTelemetry.js'));
 app.use('/api/admin/portal-sync', lazyRouter('./routes/portalSyncHealth.js'));
 // Admin Agent Control Center — start/stop/pause/resume/emergency-stop the
 // whole agent process. Restricted to the canonical operator
-// (buckeye7066@gmail.com or AGENT_CONTROL_ADMIN_EMAIL env override).
+// (configured-admin@example.invalid or AGENT_CONTROL_ADMIN_EMAIL env override).
 app.use('/api/admin/agent-control', lazyRouter('./routes/adminAgentControl.js'));
 // Admin-only, read-only crawl coverage & health dashboard (architecture #13):
 // "did the crawler know where to look, did it query, what failed, what was

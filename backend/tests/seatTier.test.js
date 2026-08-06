@@ -28,9 +28,9 @@ describe('countSeats', () => {
     const rows = [
       { email: 'Owner@org.com' }, { email: 'owner@org.com' }, // dup
       { email: 'staff@org.com' },
-      { email: 'buckeye7066@gmail.com' }, // platform admin — excluded
+      { email: 'owner@example.invalid' }, // platform admin — excluded
     ]
-    expect(countSeats(rows, ['buckeye7066@gmail.com'])).toBe(2)
+    expect(countSeats(rows, ['owner@example.invalid'])).toBe(2)
   })
   it('accepts plain strings too', () => {
     expect(countSeats(['a@x.com', 'b@x.com'], [])).toBe(2)
@@ -82,13 +82,13 @@ describe('thresholds derive from the canonical catalog (SoT — no drift)', () =
 })
 
 describe('billableSeatEmails — list == count (the off-by-one fix)', () => {
-  const ADMIN = ['buckeye7066@gmail.com']
+  const ADMIN = ['owner@example.invalid']
 
   it('the rendered list excludes the platform-admin login, so its length equals the seat count', () => {
     // Dr. John: 2 profile_emails rows, one of which is the platform operator.
     const rows = [
       { id: 'r1', email: 'john@axiombiolabs.org' },
-      { id: 'r2', email: 'buckeye7066@gmail.com' }, // operator — not a paid seat
+      { id: 'r2', email: 'owner@example.invalid' }, // operator — not a paid seat
     ]
     const list = billableSeatEmails(rows, ADMIN)
     expect(list.map((r) => r.email)).toEqual(['john@axiombiolabs.org'])
@@ -99,7 +99,7 @@ describe('billableSeatEmails — list == count (the off-by-one fix)', () => {
   it('Dr. John (1 real org login) → 1 seat → Small, "1 more login → Mid-sized"', () => {
     const rows = [
       { id: 'r1', email: 'john@axiombiolabs.org' },
-      { id: 'r2', email: 'buckeye7066@gmail.com' },
+      { id: 'r2', email: 'owner@example.invalid' },
     ]
     const list = billableSeatEmails(rows, ADMIN)
     const seats = list.length
@@ -119,7 +119,7 @@ describe('billableSeatEmails — list == count (the off-by-one fix)', () => {
     const rows = [
       { id: 'r1', email: 'john@axiombiolabs.org' },
       { id: 'r2', email: 'coworker@axiombiolabs.org' },
-      { id: 'r3', email: 'buckeye7066@gmail.com' }, // operator excluded
+      { id: 'r3', email: 'owner@example.invalid' }, // operator excluded
     ]
     const list = billableSeatEmails(rows, ADMIN)
     expect(list.length).toBe(2)
@@ -133,7 +133,7 @@ describe('billableSeatEmails — list == count (the off-by-one fix)', () => {
   })
 
   it('Focus Forward (only the operator login) → empty list → 0 seats, consistent', () => {
-    const rows = [{ id: 'r1', email: 'buckeye7066@gmail.com' }]
+    const rows = [{ id: 'r1', email: 'owner@example.invalid' }]
     const list = billableSeatEmails(rows, ADMIN)
     expect(list).toEqual([])
     expect(list.length).toBe(countSeats(rows, ADMIN))

@@ -64,8 +64,9 @@ function enumerateFilesystemSources(root = repoRoot) {
 /**
  * Enumerate source files deterministically.
  *
- * A normal checkout uses `git ls-files`, which is the most precise definition
- * of repository-owned content. Docker intentionally excludes `.git`, though.
+ * A normal checkout uses tracked plus non-ignored untracked `git ls-files`
+ * output so a newly added source file cannot introduce an undocumented env
+ * contract before it is staged. Docker intentionally excludes `.git`, though.
  * In that environment we fall back to a sorted filesystem walk with build/output and
  * editor-worktree directories excluded. This keeps the generated env contract
  * reproducible without copying repository history into the image.
@@ -73,12 +74,16 @@ function enumerateFilesystemSources(root = repoRoot) {
 export function enumerateSourceFiles({ forceFilesystem = false, root = repoRoot } = {}) {
   if (!forceFilesystem) {
     try {
-      return execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
+      return execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: root, encoding: 'utf8' })
         .split('\n')
         .filter(Boolean)
         .filter((rel) => !rel.startsWith('.cursor/') && !rel.startsWith('.claude/'))
         .filter(isTextFile)
         .map((rel) => path.join(root, rel))
+        // `git ls-files` still lists an unstaged deletion. Release preparation
+        // must be able to regenerate/check examples before the deletion is
+        // staged, so ignore paths that no longer exist in the working tree.
+        .filter((absolute) => fs.existsSync(absolute))
         .sort()
     } catch {
       // Docker builders and source archives deliberately have no .git metadata.
@@ -92,19 +97,46 @@ function walk() {
   return enumerateSourceFiles()
 }
 
-function extractEnvVars(source) {
-  const vars = new Set()
+export function extractEnvReferences(source) {
+  const references = []
   const patterns = [
-    /process\.env\.([A-Z0-9_]+)/g,
-    /process\.env\[['"]([A-Z0-9_]+)['"]\]/g,
-    /import\.meta\.env\.([A-Z0-9_]+)/g,
-    /readEnv(?:Bool|Int|String)\(\s*['"]([A-Z0-9_]+)['"]/g,
+    { kind: 'process.env', re: /\bprocess\.env\.([A-Za-z_][A-Za-z0-9_]*)\b/g },
+    { kind: 'process.env', re: /\bprocess\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g },
+    { kind: 'import.meta.env', re: /\bimport\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)\b/g },
+    {
+      kind: 'env helper',
+      re: /\b(?:readEnv(?:Bool|Int|String|Flag|Number)?|requireEnv|requiredEnv|reqEnv|boolEnv(?:Disabled)?|intEnv|boundedIntEnv|parseEnvList)\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]/g,
+    },
   ]
-  for (const re of patterns) {
-    let m
-    while ((m = re.exec(source))) vars.add(m[1])
+  for (const { kind, re } of patterns) {
+    let match
+    while ((match = re.exec(String(source || '')))) {
+      references.push({ varName: match[1], kind, index: match.index })
+    }
   }
-  return vars
+
+  // A small number of runtime readers intentionally use a canonical *_ENV_KEYS
+  // registry and then index process.env dynamically. Preserve those statically
+  // declared keys without treating arbitrary uppercase strings as env names.
+  const registryRe = /\b(?:const|let|var)\s+[A-Z0-9_]*ENV_KEYS[A-Z0-9_]*\s*=\s*(?:Object\.freeze\(\s*)?\{([\s\S]*?)\}\s*\)?/g
+  let registry
+  while ((registry = registryRe.exec(String(source || '')))) {
+    const body = registry[1]
+    const valueRe = /:\s*['"]([A-Z][A-Z0-9_]*)['"]/g
+    let value
+    while ((value = valueRe.exec(body))) {
+      references.push({
+        varName: value[1],
+        kind: 'env key registry',
+        index: registry.index + value.index,
+      })
+    }
+  }
+  return references
+}
+
+export function extractEnvVars(source) {
+  return new Set(extractEnvReferences(source).map((reference) => reference.varName))
 }
 
 function placeholderFor(name) {
@@ -198,7 +230,7 @@ export function buildOutputs() {
     const vars = extractEnvVars(src)
 
     for (const v of vars) {
-      if (rel.startsWith('src/')) {
+      if (v.startsWith('VITE_') || rel.startsWith('src/')) {
         frontendVars.add(v)
       } else if (rel.startsWith('backend/')) {
         backendVars.add(v)
@@ -303,8 +335,8 @@ function main() {
 }
 
 // Only run main() when invoked as a script — not when imported.
-const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` ||
-  import.meta.url.endsWith(path.basename(process.argv[1] || ''))
+const isMain = Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) {
   main()
 }

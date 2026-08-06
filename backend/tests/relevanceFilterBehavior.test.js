@@ -159,21 +159,49 @@ describe('content_pi_institution_restricted rule', () => {
     expect(result.ruleId).toBe('content_pi_institution_restricted')
   })
 
-  it.skip('passes PI/institution opportunities for nonprofit profiles' /* PRE-EXISTING drift vs content_pi_institution_restricted rule (commit 428f8d26); needs owner relevance-policy decision */, () => {
+  it('rejects PI/institution opportunities for generic nonprofit profiles', () => {
     const nonprofitProfile = { ...BASE_PROFILE, primary_type: 'nonprofit' }
     const opp = makeOpp({
       description: 'Applicants must have a principal investigator on file',
     })
     const result = applyRelevanceFilter(opp, nonprofitProfile)
-    expect(result.pass).toBe(true)
+    expect(result.pass).toBe(false)
+    expect(result.ruleId).toBe('research_institution_only')
   })
 
-  it.skip('passes PI/institution opportunities for student profiles' /* PRE-EXISTING drift; needs owner relevance-policy decision */, () => {
+  it('rejects PI/institution opportunities for generic student profiles', () => {
     const studentProfile = { ...BASE_PROFILE, primary_type: 'student' }
     const opp = makeOpp({
       description: 'Applicants must have a principal investigator on file',
     })
     const result = applyRelevanceFilter(opp, studentProfile)
+    expect(result.pass).toBe(false)
+    expect(result.ruleId).toBe('research_institution_only')
+  })
+
+  it('passes a declared research-capable nonprofit profile', () => {
+    const nonprofitResearchProfile = {
+      ...BASE_PROFILE,
+      primary_type: 'nonprofit',
+      organization_type: 'Biotechnology / research organization',
+    }
+    const opp = makeOpp({
+      description: 'Applicants must have a principal investigator on file',
+    })
+    const result = applyRelevanceFilter(opp, nonprofitResearchProfile)
+    expect(result.pass).toBe(true)
+  })
+
+  it('passes a student profile with a declared research-institution identity', () => {
+    const affiliatedStudentProfile = {
+      ...BASE_PROFILE,
+      primary_type: 'student',
+      organization_type: 'University research laboratory',
+    }
+    const opp = makeOpp({
+      description: 'Applicants must have a principal investigator on file',
+    })
+    const result = applyRelevanceFilter(opp, affiliatedStudentProfile)
     expect(result.pass).toBe(true)
   })
 

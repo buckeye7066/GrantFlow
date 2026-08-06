@@ -20,8 +20,9 @@ import {
   __testing__,
 } from '../services/anyaCodeFixDispatch.js'
 import { invokeTool } from '../services/anyaToolRegistry.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
-const OWNER = 'buckeye7066@gmail.com'
+const OWNER = ADMIN_EMAIL
 const REPO_ROOT = path.resolve(process.cwd())
 
 function goodDiff(file = 'backend/services/example.js') {

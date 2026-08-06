@@ -209,7 +209,7 @@ describe('Crawler OS resource-preserving reconciliation', () => {
     }
   })
 
-  it('preserves ACCEPT confidence through the kind-free intermediate-schema fallback', async () => {
+  it('fails closed when an old schema cannot identify pointer kinds', async () => {
     const db = makeDb()
     try {
       db.exec(`
@@ -227,22 +227,17 @@ describe('Crawler OS resource-preserving reconciliation', () => {
         decision: 'accept',
       })
 
-      await persistRun(db, memStore([]), {}, { primaryProfileId: PROFILE_ID })
+      const result = await persistRun(db, memStore([]), {}, { primaryProfileId: PROFILE_ID })
 
-      const preserved = currentMatches(db).find(
-        (row) => row.opportunity_id === 'legacy-accept',
-      )
-      expect(preserved).toMatchObject({
-        match_score: 89,
-        match_confidence: 92,
-        match_decision: 'accept',
-      })
+      expect(result.resourcesPreserved).toBe(0)
+      expect(result.acceptsPreserved).toBe(0)
+      expect(currentMatches(db)).toEqual([])
     } finally {
       db.close()
     }
   })
 
-  it('keeps pointer filtering while falling back around missing crawler provenance columns', async () => {
+  it('preserves only a classified pointer when crawler provenance columns are missing', async () => {
     const db = makeDb()
     try {
       db.exec(`
@@ -280,35 +275,32 @@ describe('Crawler OS resource-preserving reconciliation', () => {
         { primaryProfileId: PROFILE_ID },
       )
 
-      const durableFallbackIndex = preparedSql.findIndex((sql) => (
+      const resourceFallbackIndex = preparedSql.findIndex((sql) => (
         sql.includes('m.match_confidence') &&
         !sql.includes('m.source_query') &&
-        sql.includes('NOT IN')
+        sql.includes("LOWER(COALESCE(o.opportunity_kind, '')) IN")
       ))
       const firstKindFreeIndex = preparedSql.findIndex((sql) => (
         sql.includes("LOWER(COALESCE(m.match_decision, '')) = 'accept'") &&
         !sql.includes('JOIN funding_opportunities')
       ))
 
-      expect(durableFallbackIndex).toBeGreaterThanOrEqual(0)
+      expect(resourceFallbackIndex).toBeGreaterThanOrEqual(0)
       expect(firstKindFreeIndex).toBe(-1)
-      expect(result.acceptsPreserved).toBe(1)
-      expect(currentMatches(db)).toEqual(expect.arrayContaining([
+      expect(result.resourcesPreserved).toBe(1)
+      expect(result.acceptsPreserved).toBe(0)
+      expect(currentMatches(db)).toEqual([
         expect.objectContaining({
           opportunity_id: 'filtered-pointer-accept',
           match_confidence: 71,
         }),
-        expect.objectContaining({
-          opportunity_id: 'durable-direct-accept',
-          match_confidence: 90,
-        }),
-      ]))
+      ])
     } finally {
       db.close()
     }
   })
 
-  it('CROSS-MATCH PRECISION: a cross-profile row is stored only on ACCEPT (the Robert White class)', async () => {
+  it('CROSS-MATCH PRECISION: a cross-profile row is stored only on ACCEPT (the Demo College Student Persona class)', async () => {
     // Prod 2026-08-03: 4,577 of 4,792 xmatch rows were REVIEW — another
     // state's housing finance agency, disease directories on profiles with no
     // declared condition, "Goldwater Scholarship" at score 2 on churches.
@@ -417,9 +409,7 @@ describe('Crawler OS resource-preserving reconciliation', () => {
     }
   })
 
-  it('ACCEPT DURABILITY: an omitted awardable ACCEPT survives a later crawl that does not re-find it', async () => {
-    // Google-bar failure mode: HOPE ACCEPT 100 vanishes when the next
-    // registry-only crawl omits it. FAILING-FIRST on pre-fix facade.
+  it('removes an omitted prior direct ACCEPT instead of resurrecting stale truth', async () => {
     const db = makeDb()
     try {
       seedOpportunity(db, 'hope-accept', 'DIRECT_GRANT')
@@ -451,20 +441,17 @@ describe('Crawler OS resource-preserving reconciliation', () => {
         { primaryProfileId: PROFILE_ID },
       )
 
-      expect(result.acceptsPreserved).toBeGreaterThanOrEqual(1)
+      expect(result.acceptsPreserved).toBe(0)
       const ids = currentMatches(db).map((r) => r.opportunity_id)
-      expect(ids).toContain('hope-accept')
+      expect(ids).not.toContain('hope-accept')
       expect(ids).toContain('fresh-accept')
       expect(ids).not.toContain('stale-review')
-      const hope = currentMatches(db).find((r) => r.opportunity_id === 'hope-accept')
-      expect(hope.match_decision).toBe('accept')
-      expect(hope.match_score).toBe(100)
     } finally {
       db.close()
     }
   })
 
-  it('ACCEPT DURABILITY: an explicit REJECT in the current run clears a prior ACCEPT', async () => {
+  it('an explicit REJECT in the current run clears a prior direct ACCEPT', async () => {
     const db = makeDb()
     try {
       seedOpportunity(db, 'was-accept', 'DIRECT_GRANT')
@@ -494,10 +481,10 @@ describe('Crawler OS resource-preserving reconciliation', () => {
     }
   })
 
-  it('ACCEPT DURABILITY: pointer ACCEPTs ride the resource path, not double-write noise', async () => {
+  it('pointer rows ride the deliberate resource path, not direct-ACCEPT durability', async () => {
     // Directories never ACCEPT under the locator rule in live traffic, but if
     // a legacy row exists, resource restore already covers it — awardable
-    // durability must not require a pointer kind.
+    // preservation must require a pointer kind.
     const db = makeDb()
     try {
       seedOpportunity(db, 'dir-legacy', 'DIRECTORY')

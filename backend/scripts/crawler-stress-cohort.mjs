@@ -18,7 +18,8 @@
  *     gap-weighted training, Sam's coverage.gapScoreboard check, and Anya's
  *     morning "Coverage gaps" section.
  * They are still clearly synthetic: tagged + stress_cohort_metadata section +
- * "SYNTHETIC" notes; emails are owner plus-addresses; phones are 555-01xx.
+ * "SYNTHETIC" notes; emails use the reserved non-deliverable example domain;
+ * phones are 555-01xx.
  *
  * In-container usage (Railway: railway ssh "node backend/scripts/crawler-stress-cohort.mjs ..."):
  *   --create               create/refresh the 10 personas (idempotent upsert)
@@ -399,7 +400,7 @@ const val = (p) => {
 }
 
 function personaEmail(slug) {
-  return `buckeye7066+stress-${slug}@gmail.com`
+  return `stress-${slug}@example.invalid`
 }
 
 async function upsertSection(db, profileId, sectionKey, data, nowIso) {

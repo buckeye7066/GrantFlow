@@ -9,7 +9,7 @@
  * ---------------
  * Some people ended up with two profiles: a UUID profile holding all their
  * real data, and an empty "designated"/slug profile (e.g.
- * `profile-anastasia-white`, `profile-robert-white`) that boot-time seeding
+ * `profile-demo-tennessee-stem-student`, `profile-demo-tennessee-college-student`) that boot-time seeding
  * keeps re-creating. We want one profile per person.
  *
  * What it does
@@ -46,8 +46,8 @@
  * Usage
  * -----
  *   node backend/scripts/dedupe-profiles.mjs \
- *     --keeper c4a92724-9cee-416f-ba30-e91b9b5cd885 --duplicate profile-anastasia-white \
- *     --keeper 6b3c75ec-dc56-46f9-b380-394172688175 --duplicate profile-robert-white
+ *     --keeper 00000000-0000-4000-8000-000000000001 --duplicate profile-demo-tennessee-stem-student \
+ *     --keeper 6b3c75ec-dc56-46f9-b380-394172688175 --duplicate profile-demo-tennessee-college-student
  *   # ^ dry run. Add --apply to execute.
  *
  * In-container (Railway) run pattern:
@@ -87,10 +87,10 @@ const pairs = collectPairs(argv)
 // Sane default for the known case if invoked with no flags.
 if (pairs.length === 0) {
   pairs.push(
-    { keeper: 'c4a92724-9cee-416f-ba30-e91b9b5cd885', duplicate: 'profile-anastasia-white' },
-    { keeper: '6b3c75ec-dc56-46f9-b380-394172688175', duplicate: 'profile-robert-white' },
+    { keeper: '00000000-0000-4000-8000-000000000001', duplicate: 'profile-demo-tennessee-stem-student' },
+    { keeper: '6b3c75ec-dc56-46f9-b380-394172688175', duplicate: 'profile-demo-tennessee-college-student' },
   )
-  console.warn('[dedupe] No --keeper/--duplicate flags supplied; using built-in Anastasia + Robert pairs.')
+  console.warn('[dedupe] No --keeper/--duplicate flags supplied; using built-in Demo Student + Robert pairs.')
 }
 
 const isPostgres = db.dialect === 'postgres'

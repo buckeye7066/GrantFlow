@@ -195,6 +195,11 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     category: scenario?.category,
     label: scenario?.label,
     profile_id: profileId,
+    // The Amy run is the cohort boundary. The crawler run below is a separate
+    // execution id and may differ per profile, so retaining only `run_id`
+    // cannot prove that fifty evaluations belong to the same cohort.
+    cohort_run_id: opts.runId || null,
+    cohort_member_id: scenario?.scenario_id || null,
     run_id: result?.run?.run_id || opts.runId || null,
     // Archetype key (crawler-os/archetypes.js) — the aggregation unit the
     // archetype-learning flywheel generalizes this profile's lessons under.
@@ -384,6 +389,114 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
         evidence: { ...baseEvidence, ineligible_titles: ineligibleAccepts.map((r) => r.title).slice(0, 6), is_student: Boolean(thesis.is_student), thesis_needs: thesisNeeds },
       }),
     )
+  }
+
+  // ── BOUNDED OPPORTUNITY ORACLE ──────────────────────────────────────────
+  // An engine ACCEPT is a decision, not independent proof that the applicant
+  // qualifies. Amy's synthetic fixtures do, however, give us enough truth to
+  // run a small, defensible opportunity-level oracle over every ACCEPT:
+  //   * the row has a stable opportunity id, title, and declared kind;
+  //   * a pointer/directory never masquerades as a direct award;
+  //   * known student-aid programs never pass for a known non-student who did
+  //     not request student aid.
+  // Anything outside that evidence is UNKNOWN, never silently clean. This is
+  // intentionally narrower than the canonical matcher and explicitly does not
+  // claim award eligibility, qualification, or likely success.
+  const oracleUnknowns = []
+  const oracleIneligible = []
+  const oracleChecks = accepted.map((opportunity, index) => {
+    const title = String(opportunity?.title || '').trim()
+    const kind = String(opportunity?.kind || '').trim()
+    const opportunityId = String(opportunity?.opportunity_id ?? opportunity?.id ?? '').trim()
+    const check = {
+      index,
+      opportunity_id: opportunityId || null,
+      title: title || null,
+      kind: kind || null,
+      decision: canonicalRecommendationDecision(opportunity),
+      outcome: 'checked_no_known_conflict',
+      reason: null,
+    }
+
+    if (!title) {
+      check.outcome = 'unknown'
+      check.reason = 'missing_opportunity_identity'
+      oracleUnknowns.push(check)
+      return check
+    }
+    if (!kind) {
+      check.outcome = 'unknown'
+      check.reason = 'missing_opportunity_kind'
+      oracleUnknowns.push(check)
+      return check
+    }
+    if (!opportunityId) {
+      check.outcome = 'unknown'
+      check.reason = 'missing_opportunity_id'
+      oracleUnknowns.push(check)
+      return check
+    }
+    if (isPointerKind(kind)) {
+      check.outcome = 'known_conflict'
+      check.reason = 'pointer_claimed_accept'
+      oracleIneligible.push(check)
+      return check
+    }
+
+    const studentAid = isStudentAidOpportunity(
+      {
+        title,
+        description: `${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.trim(),
+      },
+      null,
+    )
+    if (studentAid && typeof thesis.is_student !== 'boolean' && !wantsStudentAid) {
+      check.outcome = 'unknown'
+      check.reason = 'student_status_unknown'
+      oracleUnknowns.push(check)
+      return check
+    }
+    if (studentAid && !thesis.is_student && !wantsStudentAid) {
+      check.outcome = 'known_conflict'
+      check.reason = 'student_aid_for_known_nonstudent'
+      oracleIneligible.push(check)
+    }
+    return check
+  })
+  const opportunityOracle = {
+    version: 'amy-bounded-ineligibility-v1',
+    scope: [
+      'canonical_accept_decision',
+      'stable_opportunity_id',
+      'opportunity_identity_present',
+      'direct_award_kind',
+      'known_nonstudent_student_aid_conflict',
+    ],
+    accepted_claims: accepted.length,
+    checked_accepts: oracleChecks.length - oracleUnknowns.length,
+    unknown_accepts: oracleUnknowns.length,
+    known_conflicts: oracleIneligible.length,
+    complete: accepted.length > 0 && oracleUnknowns.length === 0,
+    status: accepted.length === 0
+      ? 'not_applicable'
+      : oracleUnknowns.length > 0
+        ? 'unknown'
+        : oracleIneligible.length > 0
+          ? 'conflict'
+          : 'checked',
+    qualification_proven: false,
+    limitation: 'Checks only contradictions supported by current synthetic fixtures; it does not prove full eligibility, qualification, or an award.',
+    exception_classes: {
+      ...oracleUnknowns.reduce((out, check) => {
+        out[check.reason] = (out[check.reason] || 0) + 1
+        return out
+      }, {}),
+      ...oracleIneligible.reduce((out, check) => {
+        out[check.reason] = (out[check.reason] || 0) + 1
+        return out
+      }, {}),
+    },
+    checks: oracleChecks.slice(0, 25),
   }
   if (
     scenario?.expected &&
@@ -631,6 +744,7 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     // a number with no remedy attached.
     false_positive_titles: falsePositives.map((c) => c.title).filter(Boolean),
     ineligible_accepts: ineligibleAccepts.length,
+    opportunity_oracle: opportunityOracle,
     findings,
   }
 }
@@ -669,6 +783,12 @@ export function buildAnyaHandoff({ runId, evaluations = [], meta = {} }) {
   const recommendedFocus = Object.entries(byFile)
     .sort((a, b) => b[1] - a[1])
     .map(([file, count]) => ({ file, findings: count }))
+  const oracleExceptions = {}
+  for (const evaluation of evaluations) {
+    for (const [exceptionClass, count] of Object.entries(evaluation?.opportunity_oracle?.exception_classes || {})) {
+      oracleExceptions[exceptionClass] = (oracleExceptions[exceptionClass] || 0) + Number(count || 0)
+    }
+  }
 
   const amySummary = {
     scenarios_total: evaluations.length,
@@ -678,6 +798,18 @@ export function buildAnyaHandoff({ runId, evaluations = [], meta = {} }) {
     by_severity: tally(allFindings, (f) => f.severity),
     source_health: {
       scenarios_with_source_failures: evaluations.filter((e) => num(e.sources_failed) > 0).length,
+    },
+    opportunity_oracle: {
+      version: 'amy-bounded-ineligibility-v1',
+      checked_profiles: evaluations.filter((evaluation) => evaluation?.opportunity_oracle?.status === 'checked').length,
+      conflict_profiles: evaluations.filter((evaluation) => evaluation?.opportunity_oracle?.status === 'conflict').length,
+      unknown_profiles: evaluations.filter((evaluation) => evaluation?.opportunity_oracle?.status === 'unknown').length,
+      unavailable_profiles: evaluations.filter((evaluation) => !evaluation?.opportunity_oracle).length,
+      accepted_claims: evaluations.reduce((sum, evaluation) => sum + num(evaluation?.opportunity_oracle?.accepted_claims), 0),
+      unknown_accepts: evaluations.reduce((sum, evaluation) => sum + num(evaluation?.opportunity_oracle?.unknown_accepts), 0),
+      known_conflicts: evaluations.reduce((sum, evaluation) => sum + num(evaluation?.opportunity_oracle?.known_conflicts), 0),
+      exception_classes: oracleExceptions,
+      qualification_proven: false,
     },
     recommended_focus: recommendedFocus,
   }
@@ -724,6 +856,10 @@ export function summarizeEvaluations(evaluations = []) {
     zero: evaluations.filter((e) => e.status === 'zero').length,
     skipped: evaluations.filter((e) => e.status === 'skipped').length,
     error: evaluations.filter((e) => e.status === 'error').length,
+    oracle_checked: evaluations.filter((e) => e?.opportunity_oracle?.status === 'checked').length,
+    oracle_conflict: evaluations.filter((e) => e?.opportunity_oracle?.status === 'conflict').length,
+    oracle_unknown: evaluations.filter((e) => e?.opportunity_oracle?.status === 'unknown').length,
+    oracle_unavailable: evaluations.filter((e) => !e?.opportunity_oracle).length,
     total_findings: evaluations.reduce((n, e) => n + (e.findings?.length || 0), 0),
   }
 }

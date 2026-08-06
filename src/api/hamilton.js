@@ -109,6 +109,34 @@ export function cancelApplicationTask(taskId, reason = null) {
   })
 }
 
+export function uploadManualSubmissionReceipt(taskId, {
+  file,
+  submittedAt,
+  confirmationReference = '',
+  idempotencyKey,
+} = {}) {
+  if (!taskId) return Promise.reject(new Error('taskId required'))
+  if (!(file instanceof File)) return Promise.reject(new Error('receipt file required'))
+  if (!submittedAt) return Promise.reject(new Error('submittedAt required'))
+  if (!idempotencyKey) return Promise.reject(new Error('idempotencyKey required'))
+
+  const body = new FormData()
+  body.append('receipt', file)
+  body.append('submitted_at', submittedAt)
+  body.append('confirmation_reference', confirmationReference || '')
+  body.append('attested', 'true')
+  body.append('attestation_version', 'hamilton-manual-submit-v1')
+
+  return apiFetch(
+    `/api/hamilton/automation/tasks/${encodeURIComponent(taskId)}/manual-submission-receipt`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body,
+    },
+  )
+}
+
 export const TASK_STATUS_LABELS = Object.freeze({
   queued: 'Queued',
   ready: 'Ready',
@@ -121,6 +149,7 @@ export const TASK_STATUS_LABELS = Object.freeze({
   blocked_terms_or_policy: 'Blocked: terms',
   in_progress: 'Hamilton is completing this application',
   draft_completed: 'Draft ready',
+  submission_verification_required: 'Verify external submission',
   submitted: 'Submitted',
   failed: 'Failed',
   cancelled: 'Cancelled',
@@ -325,8 +354,8 @@ export function expirePortalSession(sessionId) {
   })
 }
 
-// Mint a short-lived capture token + api base so the user can run the
-// session-capture tool without copying a bearer token out of DevTools.
+// Legacy compatibility call. The backend intentionally returns 410 and never
+// reflects a browser access token; use capture requests or cloud login instead.
 export function getPortalSessionCaptureToken(profileId) {
   if (!profileId) return Promise.reject(new Error('profileId required'))
   return apiFetch(`/api/hamilton/automation/sessions/capture-token`, {
@@ -692,13 +721,10 @@ export function runPortalSyncBoth(profileId, portalHost) {
   })
 }
 
-// ONE-CLICK SUBMIT: complete the outside-award report on the portal.
-// An ordinary push FILLS the form and stops (submitting on a real
-// financial-aid account is hard to reverse). This is the profile owner's or an
-// admin's explicit "yes, send it" — GrantFlow re-fills and submits in one live
-// session, and records who authorized it. Returns the run result, including
-// `write.submitted` — which is false, honestly, when the portal had no submit
-// control or the form could not be reached.
+// Legacy compatibility call. The backend intentionally returns 409 because
+// portal sync has no reviewed final-submit adapter or canonical durable
+// authorization/lease/proof chain. Use the ordinary write path to prepare
+// fields, then complete final submission manually in the portal.
 export function submitPortalAwards(profileId, portalHost) {
   if (!profileId) return Promise.reject(new Error('profileId required'))
   if (!portalHost) return Promise.reject(new Error('portalHost required'))

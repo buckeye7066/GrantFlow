@@ -1,5 +1,9 @@
 # EXECUTING SYSTEM MAP — GrantFlow
 
+> **Historical code-trace snapshot.** This map is anchored to the commit below;
+> use `PRODUCTION_TRUTH.md` and the current release manifest for deployed/runtime
+> facts. Re-trace changed paths before relying on a line or image reference.
+
 Audit anchor: `9dfbfaff7189746ed354ea06181799cda4e88db4` (origin/main, 2026-08-03).
 Method: read-only code trace of the files cited below at the anchor SHA. Every claim
 here is a claim about the COMMITTED code; live-environment convergence (which SHA

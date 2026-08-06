@@ -6,7 +6,7 @@
  *   • `Middle Tennessee State University` sponsors **52 active catalog rows**
  *     ("Peggy Perry Belcher Scholarship Fund", "MTSU Guaranteed Scholarship",
  *     "Buchanan Fellowship", …) and **not one of them carries a match row for
- *     any profile** — while Anastasia White's `education.current_institution`
+ *     any profile** — while Demo Tennessee STEM Student's `education.current_institution`
  *     IS "Middle Tennessee State University".
  *   • Her only university-sponsored matches are SEVEN
  *     `Wayne County Community College District` / `Wayne State University`
@@ -40,7 +40,7 @@ import { enforceInstitutionAidLinkage } from '../startup/enforceInvariants.js'
 
 const MTSU = 'Middle Tennessee State University'
 
-/** Anastasia White's real education section (trimmed to the school fields). */
+/** Demo Tennessee STEM Student's real education section (trimmed to the school fields). */
 const ATTENDING_MTSU = {
   education: {
     current_institution: MTSU,
@@ -50,7 +50,7 @@ const ATTENDING_MTSU = {
     target_colleges: ['Ohio State University', 'University of Alabama', 'Harvard University'],
   },
   basic_information: {
-    first_name: 'Anastasia',
+    first_name: 'Demo Student',
     location: { city: 'Cleveland', state: 'TN', county: 'Bradley County', zip_code: '37311' },
   },
 }
@@ -236,7 +236,7 @@ describe('enforceInstitutionAidLinkage — the sweep', () => {
   let db
   beforeEach(() => {
     db = makeDb()
-    addProfile(db, 'p-anastasia', ATTENDING_MTSU)
+    addProfile(db, 'p-demo_stem_student', ATTENDING_MTSU)
     addOpp(db, PEGGY)
     addOpp(db, WCCCD)
     addOpp(db, OSU_NURSING)
@@ -249,7 +249,7 @@ describe('enforceInstitutionAidLinkage — the sweep', () => {
   it("reaches the student's OWN school — the 52-rows-0-matches prod class", async () => {
     const res = await enforceInstitutionAidLinkage(db)
     expect(res.ok).not.toBe(false)
-    const rows = linkRows(db, 'p-anastasia')
+    const rows = linkRows(db, 'p-demo_stem_student')
     expect(rows.map((r) => r.opportunity_id)).toEqual([PEGGY.id])
     expect(Number(rows[0].match_score)).toBeGreaterThan(0)
     expect(['accept', 'review']).toContain(String(rows[0].match_decision).toLowerCase())
@@ -257,7 +257,7 @@ describe('enforceInstitutionAidLinkage — the sweep', () => {
 
   it('does NOT open a free-for-all: no other school rides along', async () => {
     await enforceInstitutionAidLinkage(db)
-    const ids = linkRows(db, 'p-anastasia').map((r) => r.opportunity_id)
+    const ids = linkRows(db, 'p-demo_stem_student').map((r) => r.opportunity_id)
     // The Michigan community college that really did reach 28 prod profiles.
     expect(ids).not.toContain(WCCCD.id)
     // …and a school she only TARGETS is not a school she attends.
@@ -283,14 +283,14 @@ describe('enforceInstitutionAidLinkage — the sweep', () => {
       is_national: 1,
     })
     const res = await enforceInstitutionAidLinkage(db)
-    expect(linkRows(db, 'p-anastasia').map((r) => r.opportunity_id)).not.toContain('mtsu-foreign')
+    expect(linkRows(db, 'p-demo_stem_student').map((r) => r.opportunity_id)).not.toContain('mtsu-foreign')
     expect(res.rejectedByEngine).toBeGreaterThan(0)
   })
 
   it("never overwrites the profile's OWN crawler-os match for the same pair", async () => {
     db.prepare(
       `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
-       VALUES ('own', 'p-anastasia', ?, 88, 'accept', 'crawler-os')`,
+       VALUES ('own', 'p-demo_stem_student', ?, 88, 'accept', 'crawler-os')`,
     ).run(PEGGY.id)
     await enforceInstitutionAidLinkage(db)
     const all = db.prepare('SELECT * FROM profile_opportunity_matches WHERE opportunity_id = ?').all(PEGGY.id)
@@ -301,31 +301,31 @@ describe('enforceInstitutionAidLinkage — the sweep', () => {
 
   it('SURVIVES the crawler-os reconcile that erased it in prod', async () => {
     await enforceInstitutionAidLinkage(db)
-    expect(linkRows(db, 'p-anastasia')).toHaveLength(1)
+    expect(linkRows(db, 'p-demo_stem_student')).toHaveLength(1)
     // Verbatim reconcile from crawlerOsPersistenceCore.persistRun — the exact
     // statement that wipes a profile's institution set on any registry-only run.
     db.prepare(
       `DELETE FROM profile_opportunity_matches
         WHERE profile_id = ? AND matcher_version IN ('crawler-os', 'crawler-os-xmatch')`,
-    ).run('p-anastasia')
-    expect(linkRows(db, 'p-anastasia')).toHaveLength(1)
+    ).run('p-demo_stem_student')
+    expect(linkRows(db, 'p-demo_stem_student')).toHaveLength(1)
   })
 
   it('is idempotent', async () => {
     await enforceInstitutionAidLinkage(db)
     const second = await enforceInstitutionAidLinkage(db)
     expect(second.repaired).toBe(0)
-    expect(linkRows(db, 'p-anastasia')).toHaveLength(1)
+    expect(linkRows(db, 'p-demo_stem_student')).toHaveLength(1)
   })
 
   it('CONVERGES when the student changes schools', async () => {
     await enforceInstitutionAidLinkage(db)
-    expect(linkRows(db, 'p-anastasia')).toHaveLength(1)
+    expect(linkRows(db, 'p-demo_stem_student')).toHaveLength(1)
     db.prepare('UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = ?')
       .run(JSON.stringify({ ...ATTENDING_MTSU.education, current_institution: 'Ohio State University' }),
-        'p-anastasia', 'education')
+        'p-demo_stem_student', 'education')
     await enforceInstitutionAidLinkage(db)
-    const ids = linkRows(db, 'p-anastasia').map((r) => r.opportunity_id)
+    const ids = linkRows(db, 'p-demo_stem_student').map((r) => r.opportunity_id)
     expect(ids).not.toContain(PEGGY.id)
   })
 
@@ -334,7 +334,7 @@ describe('enforceInstitutionAidLinkage — the sweep', () => {
     const res = await enforceInstitutionAidLinkage(db)
     expect(res.enforced).toBe(false)
     expect(res.wouldRepair).toBeGreaterThan(0)
-    expect(linkRows(db, 'p-anastasia')).toHaveLength(0)
+    expect(linkRows(db, 'p-demo_stem_student')).toHaveLength(0)
   })
 
   it('never throws on a DB without the tables', async () => {

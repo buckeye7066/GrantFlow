@@ -297,7 +297,7 @@ describe('portal sync staleness rule', () => {
     }
     // Real people / owner-driven edits observed in the same table.
     for (const w of [
-      'buckeye7066@gmail.com', 'owner_directive_no_loans', 'system_admin_token',
+      'owner@example.invalid', 'owner_directive_no_loans', 'system_admin_token',
       null, undefined, '',
     ]) {
       expect(isMachineWriter(w), `${JSON.stringify(w)} must count as human`).toBe(false)
@@ -378,7 +378,7 @@ describe('resolveProfileSyncNeeds', () => {
 
     // The owner edits a section — that IS a reason to re-sync.
     db.prepare('INSERT INTO profile_sections (id, profile_id, section_key, updated_by, updated_at) VALUES (?,?,?,?,?)')
-      .run('s2', 'p1', 'education', 'buckeye7066@gmail.com', new Date(now - 500).toISOString())
+      .run('s2', 'p1', 'education', 'owner@example.invalid', new Date(now - 500).toISOString())
 
     res = await resolveProfileSyncNeeds(db, {
       profileId: 'p1', nowMs: now, loadPortals: portalsStub([portals[0]]),
@@ -467,7 +467,7 @@ describe('sync prompts are scoped to ONE profile', () => {
 
   it('CAPS the prompt list but never hides the remainder (the real prod flood)', async () => {
     const now = Date.now()
-    // Anastasia's real shape on 2026-08-01: 4 portals synced 3 days ago (all
+    // Demo Student's real shape on 2026-08-01: 4 portals synced 3 days ago (all
     // syncable now) and 10 one-off portals last touched by a bulk run on
     // 2026-07-02 with no valid session. 14 prompts at login is the flood.
     const fresh = ['studentaid.gov', 'collegefortn.org', 'leic.tennessee.edu', 'scholarships.com']

@@ -2,7 +2,7 @@
   "app_id": "promopilot",
   "display_name": "PromoPilot",
   "repo": "buckeye7066/promopilot",
-  "local_path": "C:/Users/firer/promopilot",
+  "local_path": "C:/Users/example_user/promopilot",
   "runtime_type": "web",
   "start_command": "npm start",
   "stop_command": "taskkill-by-port",

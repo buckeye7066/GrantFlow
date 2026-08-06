@@ -49,6 +49,12 @@
 
 import fs from 'node:fs'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import {
+  controlledBetaBrowserContextOptions,
+  controlledBetaBrowserRefusal,
+  installControlledBetaBrowserEgressGuard,
+  isControlledBetaSyntheticBrowserUrl,
+} from './controlledBetaBrowserPolicy.js'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { browserAutomationPermittedForUrl, isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
 import { isIdentityProofedHost, getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
@@ -65,6 +71,13 @@ const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_SIGNUP_STEP_TIMEOUT_MS) || 8
 // user). Kept short so the adapter never blocks indefinitely.
 const VERIFY_WAIT_MS = Number(process.env.HAMILTON_SIGNUP_VERIFY_WAIT_MS) || 45_000
 const VERIFY_POLL_MS = Number(process.env.HAMILTON_SIGNUP_VERIFY_POLL_MS) || 7_000
+
+// No real host-specific account-creation executor has completed an independent
+// reviewed adapter contract in this release. Keep the legacy parser/driver
+// testable as isolated helpers, but never let a production entry point launch
+// it until that contract exists.
+export function reviewedPortalSignupExecutionEnabled() { return false }
+export function automaticMailboxVerificationEnabled() { return false }
 
 // ── Result helpers ────────────────────────────────────────────────────────────
 
@@ -453,6 +466,14 @@ export async function completeEmailVerification({
   // re-check, where the email may have landed hours ago.
   lookbackMs = 10 * 60 * 1000,
 } = {}) {
+  if (!automaticMailboxVerificationEnabled()) {
+    void identityEmail; void portalHost; void browserContext; void outlookProvider
+    void now; void waitMs; void pollMs; void lookbackMs
+    return ok('verification_pending', {
+      message: 'Email activation requires owner action. Hamilton does not read the mailbox or open activation links.',
+      blocker_kind: 'manual_email_verification_required',
+    })
+  }
   if (!identityEmail) {
     return ok('verification_pending', { message: 'No autopilot identity email to verify.' })
   }
@@ -536,13 +557,24 @@ export async function completeEmailVerification({
  * registerOnPortal and recheckEmailVerification so the launch/guard logic lives
  * in one place.
  */
-async function openBrowserContext(launchBrowser) {
+async function openBrowserContext(launchBrowser, targetUrl) {
+  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
+    const refusal = controlledBetaBrowserRefusal()
+    return { error: ok('failed', {
+      blocker_kind: refusal.code,
+      blocker_detail: refusal.message,
+      automation_disabled: true,
+      requires_human_handoff: true,
+    }) }
+  }
   let browser = null
   let context = null
   if (typeof launchBrowser === 'function') {
     const launched = await launchBrowser()
     browser = launched?.browser || launched || null
-    context = launched?.context || (browser?.newContext ? await browser.newContext() : null)
+    context = launched?.context || (browser?.newContext
+      ? await browser.newContext(controlledBetaBrowserContextOptions({ userAgent: REALISTIC_PORTAL_UA }))
+      : null)
   } else {
     let chromium
     try { ({ chromium } = await import('playwright')) }
@@ -553,12 +585,13 @@ async function openBrowserContext(launchBrowser) {
     if (!exe || !fs.existsSync(exe)) {
       return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', automation_disabled: true }) }
     }
-    ;({ browser } = await launchPortalBrowser(chromium))
-    context = await browser.newContext({ userAgent: REALISTIC_PORTAL_UA })
+    ;({ browser } = await launchPortalBrowser(chromium, { targetUrl }))
+    context = await browser.newContext(controlledBetaBrowserContextOptions({ userAgent: REALISTIC_PORTAL_UA }))
   }
   if (!context) {
     return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'No browser context available' }) }
   }
+  await installControlledBetaBrowserEgressGuard(context)
   return { browser, context }
 }
 
@@ -588,6 +621,13 @@ export async function recheckEmailVerification(db, {
   const host = registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase()
   const url = loginUrl || (host ? `https://${host}` : null)
   if (!identityEmail) return ok('verification_pending', { message: 'No autopilot identity email to verify.' })
+  if (!reviewedPortalSignupExecutionEnabled()) {
+    void db; void launchBrowser; void outlookProvider; void waitMs; void pollMs; void lookbackMs
+    return ok('verification_pending', {
+      blocker_kind: 'create_portal_account',
+      message: 'Open the portal verification email yourself; Hamilton does not read your mailbox or visit account-activation links.',
+    })
+  }
   // Identity-proofed hosts are never auto-driven.
   if (isIdentityProofedHost(host)) {
     return ok('verification_pending', { message: 'Identity-proofed portal — verification is not auto-driven.' })
@@ -610,7 +650,7 @@ export async function recheckEmailVerification(db, {
   }
   let handle = null
   try {
-    handle = await openBrowserContext(launchBrowser)
+    handle = await openBrowserContext(launchBrowser, url)
     if (handle.error) return handle.error
     const verify = await completeEmailVerification({
       identityEmail, portalHost: host,
@@ -685,6 +725,17 @@ export async function registerOnPortal(db, {
     }
   } catch { /* permissive default — continue to the browser gate */ }
 
+  if (!reviewedPortalSignupExecutionEnabled()) {
+    void profile; void dryRun; void launchBrowser; void outlookProvider
+    void verifyWaitMs; void verifyPollMs; void identity
+    return blocked('create_portal_account', {
+      blockerKind: 'create_portal_account',
+      detail: 'No reviewed portal-account creation adapter is enabled for this host.',
+      evidence: { host, signal: 'reviewed_signup_adapter_required' },
+      message: 'Create the portal account yourself, then Hamilton can use the saved login.',
+    })
+  }
+
   // 3. Browser-automation gate (global flag + host allowlist). Defense in depth:
   // the brain already authorized this host (a profile-declared portal is treated
   // as implicitly allowed at the brain's gate). Here we honor the RAW allowlist
@@ -727,7 +778,7 @@ export async function registerOnPortal(db, {
   let browser = null
   let context = null
   try {
-    const handle = await openBrowserContext(launchBrowser)
+    const handle = await openBrowserContext(launchBrowser, url)
     if (handle.error) return handle.error
     browser = handle.browser
     context = handle.context

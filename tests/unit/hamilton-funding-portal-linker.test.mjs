@@ -32,7 +32,7 @@ function makeMemoryDb() {
       user_id TEXT,
       display_name TEXT
     );
-    INSERT INTO profiles (id, display_name) VALUES ('p-mtsu', 'Anastasia');
+    INSERT INTO profiles (id, display_name) VALUES ('p-mtsu', 'Demo Student');
     INSERT INTO profiles (id, display_name) VALUES ('p-other', 'Other Student');
   `)
   // Wrap better-sqlite3 to match the "prepare(...).get/all/run" + .exec API.

@@ -55,8 +55,8 @@ describe('buildManualCompletionGuide', () => {
     // The #1113 copy rule: Mark submitted records — it never transmits.
     expect(last.text).toMatch(/transmits nothing to the funder/i)
     expect(allText(guide)).toMatch(/click Submit/i)
-    // It also tells the owner how to make Hamilton take the click next time.
-    expect(allText(guide)).toMatch(/auto-submit/i)
+    expect(allText(guide)).toMatch(/final portal review.*submit.*remain your visible handoff/i)
+    expect(allText(guide)).not.toMatch(/auto-submit|submits herself/i)
   })
 
   it('NEVER invents a portal URL: no verified link → find_portal honesty step, zero http links', () => {

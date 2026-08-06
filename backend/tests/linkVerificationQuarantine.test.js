@@ -4,6 +4,7 @@ import Database from 'better-sqlite3'
 import {
   quarantineUnverifiedDirectOpportunities,
   runLinkVerification,
+  verifyOpportunityLinkNow,
 } from '../services/linkVerificationService.js'
 
 function makeDb() {
@@ -28,6 +29,9 @@ function makeDb() {
       http_status INTEGER,
       is_hidden INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
+      status TEXT DEFAULT 'active',
+      deadline TEXT,
+      deadline_type TEXT,
       discovered_at TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
@@ -64,7 +68,8 @@ function insertOpportunity(db, {
 function readRow(db, id) {
   return db.prepare(`
     SELECT id, link_status, last_verified_at, is_hidden, is_active,
-           link_status_code, verification_method
+           link_status_code, verification_method, verification_error,
+           status, deadline, deadline_type
       FROM funding_opportunities
      WHERE id = ?
   `).get(id)
@@ -143,10 +148,157 @@ describe('link verification quarantine', () => {
       db.close()
     }
   })
+
+  it('never probes or rewrites a permanently retired row', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    try {
+      insertOpportunity(db, {
+        id: 'permanently-retired',
+        url: 'https://8.8.8.8/retired',
+        status: 'skipped',
+        hidden: 1,
+        active: 0,
+      })
+      db.prepare(`
+        UPDATE funding_opportunities
+           SET status='expired',
+               verification_error='retired_after_definitive_recheck:permanent_http_gone:HTTP 410'
+         WHERE id='permanently-retired'
+      `).run()
+
+      const result = await verifyOpportunityLinkNow(db, readRow(db, 'permanently-retired'))
+
+      expect(result).toEqual({ status: 'skipped', code: null, updated: false })
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(readRow(db, 'permanently-retired')).toMatchObject({
+        status: 'expired',
+        link_status: 'skipped',
+        is_hidden: 1,
+        is_active: 0,
+      })
+      expect(readRow(db, 'permanently-retired').verification_error).toMatch(/^retired_after_definitive_recheck:/)
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+
+  it('does not let link success resurrect a deadline-expired direct row', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    try {
+      insertOpportunity(db, {
+        id: 'deadline-expired',
+        url: 'https://8.8.8.8/old-award',
+        status: 'broken',
+        hidden: 1,
+        active: 0,
+      })
+      db.prepare(`
+        UPDATE funding_opportunities
+           SET status='expired', deadline='2020-01-01', deadline_type='fixed'
+         WHERE id='deadline-expired'
+      `).run()
+
+      const stats = await runLinkVerification(db, { limit: 10, verifiedBy: 'deadline-race-test' })
+
+      expect(stats.checked).toBe(0)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(readRow(db, 'deadline-expired')).toMatchObject({
+        status: 'expired',
+        link_status: 'broken',
+        is_hidden: 1,
+        is_active: 0,
+      })
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+
+  it('never probes or restores a row quarantined by an independent lifecycle decision', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    try {
+      insertOpportunity(db, {
+        id: 'independent-quarantine',
+        url: 'https://8.8.8.8/quarantined',
+        status: 'broken',
+        hidden: 1,
+        active: 0,
+      })
+      db.prepare(`
+        UPDATE funding_opportunities
+           SET status='quarantined'
+         WHERE id='independent-quarantine'
+      `).run()
+
+      const result = await verifyOpportunityLinkNow(db, readRow(db, 'independent-quarantine'))
+
+      expect(result).toEqual({ status: 'skipped', code: null, updated: false })
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(readRow(db, 'independent-quarantine')).toMatchObject({
+        status: 'quarantined',
+        link_status: 'broken',
+        is_hidden: 1,
+        is_active: 0,
+      })
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
 })
 
 
 describe('startup SQL-only link quarantine', () => {
+  it('quarantines every lifecycle kind plus NULL/blank legacy rows and excludes pointers', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const lifecycleRows = [
+      ['legacy-direct', ' direct '],
+      ['direct-grant', ' direct_grant '],
+      ['program', 'Program'],
+      ['scholarship', ' scholarship '],
+      ['in-kind', 'IN_KIND'],
+      ['benefit', ' benefit '],
+      ['legacy-null', null],
+      ['legacy-blank', '   '],
+    ]
+
+    try {
+      for (const [id, kind] of lifecycleRows) {
+        insertOpportunity(db, { id, kind, status: 'broken' })
+      }
+      insertOpportunity(db, { id: 'pointer-kind', kind: 'directory', status: 'broken' })
+      insertOpportunity(db, { id: 'pointer-result', kind: null, status: 'broken' })
+      insertOpportunity(db, { id: 'pointer-type', kind: 'DIRECT', status: 'broken' })
+      insertOpportunity(db, { id: 'pointer-action', kind: 'DIRECT', status: 'broken' })
+      insertOpportunity(db, { id: 'unknown-kind', kind: 'OTHER', status: 'broken' })
+      db.prepare("UPDATE funding_opportunities SET result_kind=' referral ' WHERE id='pointer-result'").run()
+      db.prepare("UPDATE funding_opportunities SET type='SCHOOL_PORTAL' WHERE id='pointer-type'").run()
+      db.prepare("UPDATE funding_opportunities SET result_kind=' action_step ' WHERE id='pointer-action'").run()
+
+      const stats = await quarantineUnverifiedDirectOpportunities(db)
+
+      expect(stats).toMatchObject({ ok: true, quarantined: 8, deactivated: 8, restored: 0 })
+      expect(fetchSpy).not.toHaveBeenCalled()
+      for (const [id] of lifecycleRows) {
+        expect(readRow(db, id)).toMatchObject({ is_hidden: 1, is_active: 0 })
+      }
+      for (const id of ['pointer-kind', 'pointer-result', 'pointer-type', 'pointer-action', 'unknown-kind']) {
+        expect(readRow(db, id)).toMatchObject({ is_hidden: 0, is_active: 1 })
+      }
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+
   it('fails closed without fetching, preserves resources, and restores proven rows', async () => {
     const db = makeDb()
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
@@ -162,14 +314,14 @@ describe('startup SQL-only link quarantine', () => {
 
       const stats = await quarantineUnverifiedDirectOpportunities(db)
 
-      expect(stats).toMatchObject({ ok: true, quarantined: 3, deactivated: 1, restored: 1 })
+      expect(stats).toMatchObject({ ok: true, quarantined: 3, deactivated: 1, restored: 0 })
       expect(fetchSpy).not.toHaveBeenCalled()
 
       expect(readRow(db, 'unverified-direct')).toMatchObject({ is_hidden: 1, is_active: 1 })
       expect(readRow(db, 'broken-direct')).toMatchObject({ is_hidden: 1, is_active: 0 })
       expect(readRow(db, 'skipped-direct')).toMatchObject({ is_hidden: 1, is_active: 1 })
       expect(readRow(db, 'directory-resource')).toMatchObject({ is_hidden: 0, is_active: 1 })
-      expect(readRow(db, 'proven-hidden')).toMatchObject({ is_hidden: 0, is_active: 1, link_status: 'ok' })
+      expect(readRow(db, 'proven-hidden')).toMatchObject({ is_hidden: 1, is_active: 1, link_status: 'ok' })
     } finally {
       fetchSpy.mockRestore()
       db.close()

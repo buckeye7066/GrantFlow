@@ -24,7 +24,13 @@
  */
 
 import crypto from 'node:crypto'
-import { ALL_AGENTS, RUN_TYPES, RUN_STATUSES, STEP_STATUSES } from './agentControlTypes.js'
+import {
+  ALL_AGENTS,
+  CANONICAL_ADMIN_EMAIL_DEFAULT,
+  RUN_TYPES,
+  RUN_STATUSES,
+  STEP_STATUSES,
+} from './agentControlTypes.js'
 
 const ID = () => crypto.randomUUID()
 const NOW = () => new Date().toISOString()
@@ -51,7 +57,7 @@ export async function ensureSchema(db) {
       status TEXT NOT NULL DEFAULT 'queued',
       started_by_user_id TEXT,
       started_by_email TEXT,
-      admin_email TEXT NOT NULL DEFAULT 'buckeye7066@gmail.com',
+      admin_email TEXT NOT NULL DEFAULT '${CANONICAL_ADMIN_EMAIL_DEFAULT}',
       requested_agents_json TEXT NOT NULL DEFAULT '[]',
       options_json TEXT NOT NULL DEFAULT '{}',
       cancellation_requested_at ${tsType},
@@ -266,7 +272,7 @@ export async function createRun(db, {
   runName = null,
   startedByUserId = null,
   startedByEmail = null,
-  adminEmail = 'buckeye7066@gmail.com',
+  adminEmail = CANONICAL_ADMIN_EMAIL_DEFAULT,
   requestedAgents = [],
   options = {},
   status = 'queued',
@@ -297,7 +303,7 @@ export async function createRun(db, {
       status,
       startedByUserId || null,
       (startedByEmail || '').toLowerCase() || null,
-      String(adminEmail || 'buckeye7066@gmail.com').toLowerCase(),
+      String(adminEmail || CANONICAL_ADMIN_EMAIL_DEFAULT).toLowerCase(),
       safeStringify(agents) || '[]',
       safeStringify(options) || '{}',
       now,

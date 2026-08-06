@@ -87,14 +87,14 @@ describe("formatFieldLabel", () => {
     warn.mockRestore()
   })
 
-  it("never leaks raw `[object Object]` for any profile's university_applications shape (Anastasia + Robert regression guard)", () => {
+  it("never leaks raw `[object Object]` for any profile's university_applications shape (Demo Student + Robert regression guard)", () => {
     // Real production shape we observed on student profiles. Both
-    // Anastasia (student profile) and Robert (also a student profile in
+    // Demo Student (student profile) and Robert (also a student profile in
     // this account) had the same university_applications.applications
     // payload of nested `portals` / `costs` objects that the legacy
     // formatter rendered as the literal string "[object Object]".
     // This test pins down formatFieldValue so the regression cannot
-    // come back for ANY profile, not just Anastasia.
+    // come back for ANY profile, not just Demo Student.
     const application = {
       id: "6b8a89b1-a26b-41db-834a-8e39dc1c23bf",
       name: "Middle Tennessee State University",

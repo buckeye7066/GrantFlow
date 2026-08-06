@@ -21,10 +21,10 @@ const ORG_BRANCH_MATCHING_SQL = `
   ORDER BY g.updated_at DESC, g.created_at DESC`
 
 const TENANT_CTX = {
-  profileId: 'profile-josh-dasher',
+  profileId: 'profile-demo-career-support',
   userId: 'user-1',
   actorRole: 'enduser',
-  route: 'GET /api/matching/profile/profile-josh-dasher/grants',
+  route: 'GET /api/matching/profile/profile-demo-career-support/grants',
 }
 
 function assertUnderTenant(sql) {

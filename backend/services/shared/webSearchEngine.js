@@ -2,7 +2,10 @@
  * Shared live web-search engine.
  *
  * One `searchWeb(query)` entry point that returns normalized
- * `[{ url, title, snippet }]` results. Provider chain, in order:
+ * `[{ url, title, snippet }]` results. The returned array also carries a
+ * non-enumerable `searchMeta` provenance object, so measurement callers can
+ * distinguish cache/live/empty/unavailable outcomes without changing the
+ * long-standing result-array contract. Provider chain, in order:
  *
  *   0. Google CSE (official Custom Search JSON API, TOP RUNG when keyed) —
  *      the "basic google search" (owner 2026-08-04). Daily-budget-gated
@@ -170,6 +173,25 @@ export function _resetWebSearchEngineForTests() {
   _searxngDegradedUntil = 0
 }
 
+function withSearchMeta(results, meta = {}) {
+  const out = Array.isArray(results) ? results : []
+  Object.defineProperty(out, 'searchMeta', {
+    value: Object.freeze({
+      provider: String(meta.provider || 'unknown'),
+      provenance: String(meta.provenance || 'unknown'),
+      status: String(meta.status || (out.length ? 'ok' : 'empty')),
+      cache_age_ms: meta.cache_age_ms ?? null,
+      cache_age_available: meta.cache_age_ms !== null && meta.cache_age_ms !== undefined,
+      provider_mode: meta.provider_mode ?? null,
+      cache_write_succeeded: meta.cache_write_succeeded ?? null,
+      reason: meta.reason ?? null,
+    }),
+    enumerable: false,
+    configurable: true,
+  })
+  return out
+}
+
 function shouldSkip(url) {
   const u = String(url || '').toLowerCase()
   if (!/^https?:\/\//.test(u)) return true
@@ -318,10 +340,10 @@ async function duckDuckGoSearch(query, count, timeoutMs) {
  */
 export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   const q = String(query || '').trim()
-  if (!q) return []
+  if (!q) return withSearchMeta([], { provider: 'none', provenance: 'none', status: 'not_attempted', reason: 'empty_query' })
 
   if (isLiveSearchDisabledInTests()) {
-    return []
+    return withSearchMeta([], { provider: 'none', provenance: 'none', status: 'not_attempted', reason: 'live_search_disabled_in_tests' })
   }
 
   // 0. Persistent SERP cache: nightly fan-outs repeat many queries verbatim
@@ -331,10 +353,20 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   // engine. Only HEALTHY sets are ever cached (below), so junk from a bad
   // night cannot be replayed. Best-effort: no DB → plain miss.
   const cached = await getCachedSearch(q, { count })
-  if (cached) return cached
-  const cacheAndReturn = async (results) => {
-    await putCachedSearch(q, results)
-    return results
+  if (cached) {
+    // webSearchCache's current contract does not return created_at, so age is
+    // explicitly unknown rather than guessed from the configured TTL.
+    return withSearchMeta(cached, {
+      provider: 'cache',
+      provenance: 'cache',
+      status: 'ok',
+      cache_age_ms: null,
+      reason: 'cache_age_not_exposed_by_cache_contract',
+    })
+  }
+  const cacheAndReturn = async (results, meta) => {
+    const cacheWriteSucceeded = await putCachedSearch(q, results)
+    return withSearchMeta(results, { ...meta, cache_write_succeeded: cacheWriteSucceeded === true })
   }
 
   // 0.5. Google CSE (official API, top rung — the "basic google search" the
@@ -354,7 +386,14 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
             .filter((r) => r?.url && !shouldSkip(r.url))
             .slice(0, count)
             .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
-          if (cleaned.length) return cacheAndReturn(cleaned)
+          if (cleaned.length) {
+            return cacheAndReturn(cleaned, {
+              provider: 'google_cse',
+              provenance: 'live',
+              status: 'ok',
+              provider_mode: 'official_api',
+            })
+          }
         }
       } catch (err) {
         if (err?.code === 'google_quota') {
@@ -418,7 +457,12 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
           const suspended = (cleaned.searxngMeta.unresponsive_engines || []).map((u) => `${u.engine}:${u.reason || 'unresponsive'}`).join(', ')
           log.warn(`[webSearchEngine] SearXNG engine fleet collapsed to bing-only for "${q}" (suspended: ${suspended}) — trying fallback engines`)
         } else if (!looksDegenerateSerp(q, cleaned)) {
-          return cacheAndReturn(cleaned)
+          return cacheAndReturn(cleaned, {
+            provider: 'searxng',
+            provenance: 'live',
+            status: 'ok',
+            provider_mode: 'default_engines',
+          })
         } else {
           heldDegenerate = cleaned
           log.warn(`[webSearchEngine] SearXNG returned a degenerate first-word SERP for "${q}" — trying fallback engines`)
@@ -453,7 +497,14 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     if (fallbackEngines) {
       try {
         const cleaned = await searxngClean(fallbackEngines)
-        if (cleaned && !looksDegenerateSerp(q, cleaned)) return cacheAndReturn(cleaned)
+        if (cleaned && !looksDegenerateSerp(q, cleaned)) {
+          return cacheAndReturn(cleaned, {
+            provider: 'searxng',
+            provenance: 'live',
+            status: 'ok',
+            provider_mode: 'fallback_engines',
+          })
+        }
         if (cleaned && !heldDegenerate) heldDegenerate = cleaned
       } catch (err) {
         log.warn(`[webSearchEngine] SearXNG fallback-engines search failed for "${q}": ${err?.message ?? err}`)
@@ -472,8 +523,20 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
           .filter((r) => r?.url && !shouldSkip(r.url))
           .slice(0, count)
           .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
-        if (cleaned.length) return cacheAndReturn(cleaned)
-        return cleaned
+        if (cleaned.length) {
+          return cacheAndReturn(cleaned, {
+            provider: 'brave',
+            provenance: 'live',
+            status: 'ok',
+            provider_mode: 'api_fallback',
+          })
+        }
+        return withSearchMeta(cleaned, {
+          provider: 'brave',
+          provenance: 'live',
+          status: 'empty',
+          provider_mode: 'api_fallback',
+        })
       }
     } catch (err) {
       log.warn(`[webSearchEngine] Brave search failed for "${q}": ${err?.message ?? err}`)
@@ -482,14 +545,36 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
 
   // Brave could not improve on a held degenerate set — return it unchanged
   // (status quo ante: the gate must never LOSE results, only reroute).
-  if (heldDegenerate) return heldDegenerate
+  if (heldDegenerate) {
+    return withSearchMeta(heldDegenerate, {
+      provider: 'searxng',
+      provenance: 'live',
+      status: 'degraded_results',
+      provider_mode: 'held_degenerate',
+    })
+  }
 
   // 3. DuckDuckGo HTML (last resort, no key): dead from cloud IPs, kept for dev.
   // Once the block is observed once, every later query no-ops instantly so a
   // full discovery run never burns its budget re-probing a dead backend.
-  if (_ddgBlocked) return []
+  if (_ddgBlocked) {
+    return withSearchMeta([], {
+      provider: 'duckduckgo',
+      provenance: 'live',
+      status: 'unavailable',
+      provider_mode: 'html_fallback',
+      reason: 'process_breaker_open',
+    })
+  }
   try {
-    return await duckDuckGoSearch(q, count, timeoutMs)
+    const results = await duckDuckGoSearch(q, count, timeoutMs)
+    return withSearchMeta(results, {
+      provider: 'duckduckgo',
+      provenance: 'live',
+      status: results.length ? 'ok' : (_ddgBlocked ? 'unavailable' : 'empty'),
+      provider_mode: 'html_fallback',
+      reason: _ddgBlocked ? 'provider_blocked' : null,
+    })
   } catch (err) {
     // A THROW here (almost always a timeout from a datacenter IP that DDG never
     // answers) is the block manifesting as a hang instead of a 202. Trip the
@@ -499,7 +584,13 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     // right trade vs. starving the gateway-safe crawl budget. A restart re-probes.
     _ddgBlocked = true
     log.warn(`[webSearchEngine] DuckDuckGo search failed for "${q}" (${err?.message ?? err}) — disabling DuckDuckGo for this process. Set BRAVE_SEARCH_API_KEY or SEARXNG_URL for reliable server-side web search.`)
-    return []
+    return withSearchMeta([], {
+      provider: 'duckduckgo',
+      provenance: 'live',
+      status: 'unavailable',
+      provider_mode: 'html_fallback',
+      reason: 'request_failed',
+    })
   }
 }
 

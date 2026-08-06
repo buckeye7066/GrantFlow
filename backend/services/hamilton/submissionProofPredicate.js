@@ -28,6 +28,7 @@ import {
   assessStoredConfirmationProof,
   _internal as confirmationInternal,
 } from './hamiltonConfirmationArtifacts.js'
+import { assessManualSubmissionReceiptProof } from './manualSubmissionReceiptStore.js'
 
 const CONFIRMATION_DOCUMENT_TYPE = confirmationInternal.CONFIRMATION_DOCUMENT_TYPE
 
@@ -125,7 +126,10 @@ async function outputDocumentIsConfirmation(db, documentId) {
  *   label: string,
  *   source: string,
  *   proof_document_id: string|null,
+ *   proof_receipt_id: string|null,
  *   confirmation_reference: string|null,
+ *   evidence_authority: string|null,
+ *   independently_verified: boolean,
  *   unverified_reason: string|null,
  *   output_document_kind: string|null,
  * }>}
@@ -137,7 +141,10 @@ export async function assessTaskSubmissionProof(db, task, opts = {}) {
     label: SUBMISSION_PROOF_LABELS[SUBMISSION_PROOF_STATE.NOT_SUBMITTED],
     source: 'none',
     proof_document_id: null,
+    proof_receipt_id: null,
     confirmation_reference: null,
+    evidence_authority: null,
+    independently_verified: false,
     unverified_reason: null,
     output_document_kind: null,
   }
@@ -168,31 +175,58 @@ export async function assessTaskSubmissionProof(db, task, opts = {}) {
       })
     }
     const ref = String(run.confirmation_reference || '').trim()
-    if (ref) {
+    const result = run && typeof run.result === 'object' && run.result ? run.result : {}
+    const evidenceKind = String(result.confirmation_evidence || '').trim()
+    const referenceClassifiedAsConfirmation = evidenceKind === 'portal_reference'
+      && result.confirmation_reference_is_new === true
+    if (
+      ref
+      && referenceClassifiedAsConfirmation
+    ) {
       // A portal-issued confirmation reference stored on a submitted run is
       // itself a durable, captured portal fact (survives a filesystem wipe).
+      // Only explicit modern metadata qualifies. An unclassified legacy ID, an
+      // unchanged pre-submit ID, screenshot, or URL change can never be promoted
+      // merely because the run row also has a reference.
       return verified({ source: 'confirmation_reference', confirmation_reference: ref })
     }
   }
 
-  // 2) The task's output_document_id — ONLY a confirmation-kind document counts.
+  // 2) A real human can complete a portal handoff outside GrantFlow and upload
+  //    the portal-issued receipt. The confirmation document alone is still not
+  //    authority: it must have a valid, active, task/profile-scoped binding in
+  //    hamilton_manual_submission_receipts. Rolling deploys without that table
+  //    fail closed inside the adapter and remain internal-only.
+  const manualReceipt = await assessManualSubmissionReceiptProof(db, task)
+  if (manualReceipt) {
+    return verified({
+      label: 'Externally submitted — owner-attested portal confirmation on file',
+      source: 'owner_attested_manual_receipt',
+      proof_document_id: manualReceipt.document_id,
+      proof_receipt_id: manualReceipt.receipt_id,
+      confirmation_reference: manualReceipt.confirmation_reference,
+      evidence_authority: manualReceipt.evidence_authority,
+      independently_verified: manualReceipt.independently_verified,
+    })
+  }
+
+  // 3) The task's output_document_id — ONLY a confirmation-kind document counts.
   //    A packet/draft/proposal (`hamilton_generated_application`, etc.) is the
   //    thing we would submit, never proof that we did.
   if (task.output_document_id) {
     const { isConfirmation, type } = await outputDocumentIsConfirmation(db, task.output_document_id)
-    if (isConfirmation) {
-      return verified({ source: 'output_confirmation_doc', proof_document_id: String(task.output_document_id), output_document_kind: type })
-    }
     return {
       ...base,
       state: SUBMISSION_PROOF_STATE.INTERNAL_ONLY,
       label: SUBMISSION_PROOF_LABELS[SUBMISSION_PROOF_STATE.INTERNAL_ONLY],
-      unverified_reason: type ? `output_document_is_${type}` : 'output_document_not_confirmation',
+      unverified_reason: isConfirmation
+        ? 'confirmation_document_not_bound_to_submitted_run'
+        : (type ? `output_document_is_${type}` : 'output_document_not_confirmation'),
       output_document_kind: type,
     }
   }
 
-  // 3) Submitted, but nothing retrievable: an internal record only.
+  // 4) Submitted, but nothing retrievable: an internal record only.
   return {
     ...base,
     state: SUBMISSION_PROOF_STATE.INTERNAL_ONLY,

@@ -40,11 +40,19 @@
  */
 
 import fs from 'node:fs'
+import crypto from 'node:crypto'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import {
+  controlledBetaBrowserContextOptions,
+  controlledBetaBrowserRefusal,
+  installControlledBetaBrowserEgressGuard,
+  isControlledBetaSyntheticBrowserUrl,
+} from './controlledBetaBrowserPolicy.js'
 import path from 'node:path'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { triagePage, PAGE_SURFACES } from './listingPageTriage.js'
 import { resolveConfirmationCaptureDir } from './hamiltonConfirmationArtifacts.js'
+import { resolveUploadsDir } from '../../utils/uploadsDir.js'
 
 const NAV_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS) || 25_000
 const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS) || 8_000
@@ -575,6 +583,23 @@ async function detectValidationErrors(page) {
   }).catch(() => [])
 }
 
+async function detectNativeValidationErrors(page, buttonId) {
+  if (!buttonId) return []
+  return await page.$eval(`[data-hamilton-btn="${buttonId}"]`, (button) => {
+    const form = button.form || button.closest('form')
+    if (!form) return []
+    return Array.from(form.elements || [])
+      .filter((field) => typeof field.checkValidity === 'function' && !field.checkValidity())
+      .slice(0, 10)
+      .map((field) => {
+        const label = field.labels?.[0]?.textContent || field.getAttribute('aria-label')
+          || field.getAttribute('name') || field.getAttribute('id') || 'required field'
+        const message = field.validationMessage || 'invalid value'
+        return `${String(label).trim()}: ${String(message).trim()}`.slice(0, 300)
+      })
+  }).catch(() => [])
+}
+
 function summarisePageState(page, fields, buttons) {
   return {
     url: (() => { try { return page.url() } catch { return null } })(),
@@ -587,6 +612,32 @@ function summarisePageState(page, fields, buttons) {
 // so the enumeration prompt stays in budget; the NGWeb catalog is ~323k chars.
 const TRIAGE_TEXT_CAP = 60_000
 const TRIAGE_LINK_CAP = 200
+
+/**
+ * Raw listing text and links are ephemeral browser input and may contain names,
+ * balances, or bearer-like URLs. Persist only a value-free shape after the
+ * decomposition step consumes the raw snapshot in memory.
+ */
+export function sanitizeListingSnapshotForPersistence(snapshot = {}) {
+  let portalOrigin = null
+  try {
+    const parsed = new URL(String(snapshot?.url || ''))
+    if (parsed.protocol === 'https:') portalOrigin = parsed.origin
+  } catch { portalOrigin = null }
+  const text = String(snapshot?.text || '')
+  const title = String(snapshot?.title || '')
+  const links = Array.isArray(snapshot?.links) ? snapshot.links : []
+  const digest = (value) => crypto.createHash('sha256').update(value).digest('hex')
+  return Object.freeze({
+    portal_origin: portalOrigin,
+    field_count: Math.max(0, Number(snapshot?.fieldCount) || 0),
+    link_count: links.length,
+    text_length: text.length,
+    text_sha256: text ? digest(text) : null,
+    title_sha256: title ? digest(title) : null,
+    content_retained: false,
+  })
+}
 
 /**
  * Collect the page shape listingPageTriage needs at a dead-end: title, visible
@@ -727,19 +778,79 @@ function detectReceiptAcknowledgement(text) {
   return RECEIPT_ACK_RX.test(String(text || ''))
 }
 
+function normalizedReference(value) {
+  return String(value || '').trim().toUpperCase()
+}
+
 /**
  * Truthfulness of a submit click (owner addendum 2026-08-03): "clicked
  * submit" and "portal confirmed receipt" are different facts. A run may only
- * claim status=submitted with captured evidence — a portal-issued reference
- * (confirmed receipt) or at least the final-page screenshot (submit completed,
- * receipt to be verified). No evidence at all → the caller must report a
- * blocker, never a submission. Pure function — unit-tested directly.
+ * claim status=submitted only when the portal emits a genuinely new reference
+ * or a newly-appearing explicit receipt acknowledgement. A URL change,
+ * screenshot, or saved page alone corroborates that a click occurred but
+ * remains attempt evidence, never receipt proof. Pure function — unit-tested
+ * directly.
  */
-function assessSubmissionEvidence(conf) {
-  if (conf?.reference) return { ok: true, confirmation_evidence: 'portal_reference' }
-  if (conf?.screenshot_path) return { ok: true, confirmation_evidence: 'screenshot_only' }
-  return { ok: false, confirmation_evidence: 'none' }
+function assessSubmissionEvidence(conf, before = {}) {
+  const afterReference = normalizedReference(conf?.reference)
+  const beforeReference = normalizedReference(before?.reference)
+  const referenceChanged = Boolean(afterReference && afterReference !== beforeReference)
+  if (referenceChanged) {
+    return { ok: true, confirmation_evidence: 'portal_reference' }
+  }
+  const acknowledgementChanged = conf?.received_acknowledgement === true
+    && before?.received_acknowledgement !== true
+  if (acknowledgementChanged) {
+    return { ok: true, confirmation_evidence: 'portal_acknowledgement' }
+  }
+  const attemptCaptured = Boolean(
+    conf?.screenshot_path
+    || conf?.page_html_path
+    || conf?.reference
+    || conf?.received_acknowledgement
+    || (before?.url && conf?.url && before.url !== conf.url),
+  )
+  return {
+    ok: false,
+    confirmation_evidence: attemptCaptured ? 'attempt_evidence' : 'none',
+  }
 }
+
+function configuredUploadRoots() {
+  const explicit = String(process.env.UPLOADS_DIR || '').trim()
+  if (process.env.NODE_ENV === 'production' && !explicit) return []
+  const { uploadsDir, legacyUploadsDir } = resolveUploadsDir({
+    baseDir: path.resolve(process.cwd(), 'backend'),
+  })
+  return [...new Set([uploadsDir, legacyUploadsDir].filter(Boolean).map((root) => path.resolve(root)))]
+}
+
+function pathInsideRoot(candidate, root) {
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`)
+}
+
+function resolveSafeUploadDocument(document) {
+  if (!document?.path) return null
+  try {
+    const requested = path.resolve(String(document.path))
+    const statBefore = fs.lstatSync(requested)
+    if (!statBefore.isFile() || statBefore.isSymbolicLink()) return null
+    const real = fs.realpathSync(requested)
+    const roots = configuredUploadRoots().map((root) => {
+      try { return fs.realpathSync(root) } catch { return root }
+    })
+    if (!roots.some((root) => pathInsideRoot(real, root))) return null
+    const stat = fs.statSync(real)
+    if (!stat.isFile() || stat.size > 25 * 1024 * 1024) return null
+    const extension = path.extname(real).toLowerCase()
+    if (!new Set(['.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.jpg', '.jpeg', '.png']).has(extension)) return null
+    return { ...document, path: real }
+  } catch {
+    return null
+  }
+}
+
+let confirmationCaptureSequence = 0
 
 async function captureConfirmation(page, screenshotsDir) {
   const url = (() => { try { return page.url() } catch { return null } })()
@@ -751,13 +862,13 @@ async function captureConfirmation(page, screenshotsDir) {
   // That avoids old false positives like "Application designed..." while still
   // accepting real all-letter IDs when the page says "Confirmation #:",
   // "Reference code:", or the URL carries ?confirmationId=…. A saved page + a
-  // screenshot are captured EVEN WHEN no reference matches, so proof survives a
-  // portal that prints no reference number.
+  // screenshot are captured EVEN WHEN no reference matches, so the click attempt
+  // remains reviewable without being mislabeled as confirmation proof.
   const reference = extractConfirmationReference(bodyText)
     || extractConfirmationReference(html)
     || extractConfirmationReferenceFromUrl(url)
   const receivedAcknowledgement = detectReceiptAcknowledgement(bodyText) || detectReceiptAcknowledgement(html)
-  const stamp = Date.now()
+  const stamp = `${Date.now()}_${confirmationCaptureSequence += 1}`
   let screenshotPath = null
   let pageHtmlPath = null
   try {
@@ -786,6 +897,63 @@ async function captureConfirmation(page, screenshotsDir) {
   }
 }
 
+function mergeSubmitCapture(previous, next) {
+  if (!previous) return next || null
+  if (!next) return previous
+  return {
+    url: next.url || previous.url || null,
+    reference: next.reference || previous.reference || null,
+    screenshot_path: next.screenshot_path || previous.screenshot_path || null,
+    page_html_path: next.page_html_path || previous.page_html_path || null,
+    page_text: next.page_text || previous.page_text || '',
+    received_acknowledgement: Boolean(
+      next.received_acknowledgement || previous.received_acknowledgement,
+    ),
+  }
+}
+
+function submitCaptureResult(conf, before = {}, evidence = assessSubmissionEvidence(conf, before)) {
+  const capture = conf || {}
+  return {
+    submit_clicked: true,
+    confirmation_evidence: evidence.confirmation_evidence,
+    submission_evidence_classification: evidence.ok ? 'confirmation_proof' : 'attempt_evidence',
+    confirmation_reference: capture.reference || null,
+    confirmation_reference_is_new: Boolean(
+      normalizedReference(capture.reference)
+      && normalizedReference(capture.reference) !== normalizedReference(before?.reference),
+    ),
+    confirmation_screenshot_path: capture.screenshot_path || null,
+    confirmation_page_html_path: capture.page_html_path || null,
+    confirmation_page_text: capture.page_text || '',
+    confirmation_received_acknowledgement: capture.received_acknowledgement === true,
+    confirmation_received_acknowledgement_is_new: Boolean(
+      capture.received_acknowledgement === true
+      && before?.received_acknowledgement !== true,
+    ),
+    confirmation_url: capture.url || null,
+    confirmation_url_changed: Boolean(
+      before?.url && capture.url && before.url !== capture.url,
+    ),
+  }
+}
+
+function submitCaptureHistoryResult(captures, before = {}) {
+  const history = Array.isArray(captures) ? captures.filter(Boolean) : []
+  const merged = history.reduce((current, capture) => mergeSubmitCapture(current, capture), null)
+  return {
+    ...submitCaptureResult(merged, before),
+    submission_attempt_captures: history.map((capture) => ({
+      url: capture.url || null,
+      reference: capture.reference || null,
+      screenshot_path: capture.screenshot_path || null,
+      page_html_path: capture.page_html_path || null,
+      page_text: capture.page_text || '',
+      received_acknowledgement: capture.received_acknowledgement === true,
+    })),
+  }
+}
+
 // ── Main loop ────────────────────────────────────────────────────────
 
 /**
@@ -796,7 +964,6 @@ async function captureConfirmation(page, screenshotsDir) {
  * @param {object} arg.profile           pre-loaded profile bundle
  * @param {object} arg.authorizations    boolean flags from hamiltonPreflight.readAuthorizations
  * @param {Array<{path:string,kind:string}>} [arg.documents]  authorized uploads
- * @param {string} [arg.storageStatePath] optional saved Playwright storage state
  * @param {boolean} [arg.allowAutoSubmit] defaults to authorizations.submit_applications
  * @returns {Promise<{
  *   status: 'submitted'|'completed_draft'|'blocked'|'failed',
@@ -817,13 +984,14 @@ export async function runAutopilot({
   profile,
   authorizations,
   documents = [],
-  storageStatePath = null,
   storageState = null,
   allowAutoSubmit = null,
   loginCredential = null,
   headless = true,
   screenshotsDir = null,
   sessionSink = null,
+  signal = null,
+  beforeSubmit = null,
   // MBA-level long-form answers drafted by hamiltonFullProposalGenerator
   // (buildPortalNarrativeAnswers). Only the narrative keys below may be
   // overridden — short factual fields (name, address, …) always come from
@@ -833,12 +1001,29 @@ export async function runAutopilot({
   if (!url) throw new Error('url required')
   if (!profile) throw new Error('profile required')
   if (!authorizations) throw new Error('authorizations required')
-  const finalAllowSubmit = allowAutoSubmit === null ? Boolean(authorizations.submit_applications) : Boolean(allowAutoSubmit)
+  const finalAllowSubmit = Boolean(authorizations.submit_applications)
+    && (allowAutoSubmit === null ? true : Boolean(allowAutoSubmit))
 
   const trace = []
   const filled = []
   let loggedIn = false
   let loginAttempted = false
+  if (signal?.aborted) {
+    return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before browser launch.', filled_fields: filled, pages_visited: 0, trace }
+  }
+
+  if (!isControlledBetaSyntheticBrowserUrl(url)) {
+    const refusal = controlledBetaBrowserRefusal()
+    return {
+      status: 'blocked',
+      blocker_kind: refusal.code,
+      blocker_detail: refusal.message,
+      requires_human_handoff: true,
+      filled_fields: filled,
+      pages_visited: 0,
+      trace,
+    }
+  }
 
   let chromium
   try {
@@ -851,17 +1036,15 @@ export async function runAutopilot({
     return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  const { browser } = await launchPortalBrowser(chromium, { headless })
-  // Prefer an in-memory storageState OBJECT (the durable, DB-backed session a
-  // user imported after clearing 2FA themselves) — it survives Railway's
-  // ephemeral filesystem, unlike an on-disk path. Fall back to a path if given.
+  const { browser } = await launchPortalBrowser(chromium, { headless, targetUrl: url })
+  // Only an in-memory storageState OBJECT from the profile-owned encrypted
+  // session store is accepted. Request-supplied filesystem paths are never
+  // passed to Playwright.
   // UA matches the capture-time fingerprint (REALISTIC_PORTAL_UA) so a WAF that
   // bound the session cookies to it accepts the replay.
-  const contextOptions = { userAgent: REALISTIC_PORTAL_UA }
+  const contextOptions = controlledBetaBrowserContextOptions({ userAgent: REALISTIC_PORTAL_UA })
   if (storageState && typeof storageState === 'object') {
     contextOptions.storageState = storageState
-  } else if (storageStatePath && fs.existsSync(storageStatePath)) {
-    contextOptions.storageState = storageStatePath
   }
   // Guard the setup path: if newContext/newPage throws (e.g. /dev/shm memory
   // pressure), the already-launched Chromium must not leak — the main
@@ -870,6 +1053,7 @@ export async function runAutopilot({
   let page
   try {
     context = await browser.newContext(contextOptions)
+    await installControlledBetaBrowserEgressGuard(context)
     page = await context.newPage()
   } catch (setupErr) {
     await browser.close().catch(() => {})
@@ -880,13 +1064,59 @@ export async function runAutopilot({
   // confirmation screenshot/page survives Railway restarts; the orchestrator
   // also passes an explicit durable dir. Direct callers/tests fall back to tmp.
   const screenshotsRoot = screenshotsDir || resolveConfirmationCaptureDir()
+  let pagesVisited = 0
+  let submissionAttemptStarted = false
+  let submitClicked = false
+  let beforeSubmitCapture = {}
+  let submitCapture = null
+  const submitCaptureHistory = []
+  let submitCaptureInFlight = null
+  const retainSubmitCapture = async () => {
+    if (!submitClicked || !page) return submitCapture
+    if (submitCaptureInFlight) return submitCaptureInFlight
+    submitCaptureInFlight = (async () => {
+      try {
+        const captured = await captureConfirmation(page, screenshotsRoot)
+        submitCaptureHistory.push(captured)
+        submitCapture = mergeSubmitCapture(
+          submitCapture,
+          captured,
+        )
+      } catch {
+        // The click is still a recorded attempt even if the portal/browser died
+        // before a fresh screenshot or page snapshot could be captured.
+      }
+      return submitCapture
+    })()
+    try {
+      return await submitCaptureInFlight
+    } finally {
+      submitCaptureInFlight = null
+    }
+  }
+  const retainedSubmitFields = () => {
+    if (!submissionAttemptStarted) return {}
+    if (!submitClicked) return { submission_attempt_started: true }
+    return {
+      submission_attempt_started: true,
+      ...submitCaptureHistoryResult(submitCaptureHistory, beforeSubmitCapture),
+    }
+  }
+  const abortBrowser = () => {
+    // Before a submit click, close immediately. After a click, leave the page
+    // alive long enough for the catch/cancel path to retain attempt evidence.
+    if (!submitClicked) void browser.close().catch(() => {})
+  }
+  signal?.addEventListener('abort', abortBrowser, { once: true })
 
   try {
     trace.push({ step: 'navigate', detail: { url } })
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
 
-    let pagesVisited = 0
     while (pagesVisited < MAX_PAGES) {
+      if (signal?.aborted) {
+        return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+      }
       pagesVisited += 1
       trace.push({ step: 'page', detail: { index: pagesVisited, url: (() => { try { return page.url() } catch { return null } })() } })
 
@@ -978,12 +1208,15 @@ export async function runAutopilot({
 
       // Authorized document uploads.
       if (authorizations.upload_documents && Array.isArray(documents) && documents.length > 0) {
+        if (signal?.aborted) {
+          return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before document upload.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
         const fileInputs = fields.filter((f) => f.type === 'file')
         for (const inp of fileInputs) {
-          const wanted = documents.find((d) => {
+          const wanted = documents.map(resolveSafeUploadDocument).filter(Boolean).find((d) => {
             const text = `${inp.name} ${inp.label} ${inp.id} ${inp.placeholder}`.toLowerCase()
             return text.includes((d.kind || '').toLowerCase())
-          }) || documents[0]
+          })
           if (!wanted?.path) continue
           const ok = await fillFieldByFid(page, inp.fid, wanted.path)
           if (ok) trace.push({ step: 'upload', detail: { kind: wanted.kind, fid: inp.fid } })
@@ -1034,12 +1267,57 @@ export async function runAutopilot({
       }
 
       if (canSubmit && finalAllowSubmit) {
+        const nativeErrors = await detectNativeValidationErrors(page, submitCandidates[0].bid)
+        if (nativeErrors.length > 0) {
+          trace.push({ step: 'submit_native_validation_failed', detail: { errors: nativeErrors.slice(0, 5) } })
+          return { status: 'blocked', blocker_kind: 'validation', blocker_detail: nativeErrors.slice(0, 5).join(' | '), filled_fields: filled, pages_visited: pagesVisited, trace }
+        }
+        const boundary = typeof beforeSubmit === 'function'
+          ? await beforeSubmit()
+          : { allow: false, reason: 'missing_submit_boundary_check' }
+        if (signal?.aborted || boundary?.cancelled) {
+          return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before submission.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
+        if (boundary?.allow !== true) {
+          trace.push({ step: 'completed_draft', detail: { reason: boundary?.reason || 'submit_authority_revoked' } })
+          return { status: 'completed_draft', submit_withheld_reason: boundary?.reason || 'submit_authority_revoked', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
+        submissionAttemptStarted = true
         // Submit the application.
         trace.push({ step: 'submit_attempt', detail: { button: submitCandidates[0].text } })
         const beforeUrl = (() => { try { return page.url() } catch { return null } })()
+        const beforeText = await page.locator('body').innerText({ timeout: 2500 }).catch(() => '')
+        const beforeHtml = await page.content().catch(() => '')
+        const beforeConfirmation = {
+          url: beforeUrl,
+          reference: extractConfirmationReference(beforeText)
+            || extractConfirmationReference(beforeHtml)
+            || extractConfirmationReferenceFromUrl(beforeUrl),
+          received_acknowledgement: detectReceiptAcknowledgement(beforeText)
+            || detectReceiptAcknowledgement(beforeHtml),
+        }
+        beforeSubmitCapture = beforeConfirmation
         const clicked = await clickButtonByBid(page, submitCandidates[0].bid)
         if (!clicked) {
-          return { status: 'failed', blocker_kind: 'click_failed', blocker_detail: 'Submit button could not be clicked', filled_fields: filled, pages_visited: pagesVisited, trace }
+          return {
+            status: 'failed', blocker_kind: 'click_failed',
+            blocker_detail: 'Submit button could not be clicked after the durable submission boundary was acquired.',
+            ...retainedSubmitFields(),
+            filled_fields: filled, pages_visited: pagesVisited, trace,
+          }
+        }
+        submitClicked = true
+        // Capture immediately. If navigation, cancellation, or a browser error
+        // happens next, the run still retains an honest submit-attempt record.
+        await retainSubmitCapture()
+        if (signal?.aborted) {
+          return {
+            status: 'cancelled',
+            blocker_kind: 'cancelled',
+            blocker_detail: 'Hamilton task was cancelled after the portal submit control was clicked. Retained captures are attempt evidence unless a genuinely new portal reference or receipt acknowledgement was observed.',
+            ...retainedSubmitFields(),
+            filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+          }
         }
         // Wait for navigation/state-change. A submit usually navigates to a
         // confirmation page (classic form POST) but may update in place (SPA).
@@ -1050,13 +1328,28 @@ export async function runAutopilot({
         // confirmation render actually settle before we read the page.
         await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
         await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+        await retainSubmitCapture()
+        if (signal?.aborted) {
+          return {
+            status: 'cancelled',
+            blocker_kind: 'cancelled',
+            blocker_detail: 'Hamilton task was cancelled after the portal submit control was clicked. Retained captures are attempt evidence unless a genuinely new portal reference or receipt acknowledgement was observed.',
+            ...retainedSubmitFields(),
+            filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+          }
+        }
         const errors = await detectValidationErrors(page)
         if (errors.length > 0) {
           trace.push({ step: 'submit_validation_failed', detail: { errors: errors.slice(0, 5) } })
-          return { status: 'blocked', blocker_kind: 'validation', blocker_detail: errors.slice(0, 5).join(' | '), filled_fields: filled, pages_visited: pagesVisited, trace }
+          return {
+            status: 'blocked', blocker_kind: 'validation',
+            blocker_detail: errors.slice(0, 5).join(' | '),
+            ...retainedSubmitFields(),
+            filled_fields: filled, pages_visited: pagesVisited, trace,
+          }
         }
-        const conf = await captureConfirmation(page, screenshotsRoot)
-        const evidence = assessSubmissionEvidence(conf)
+        const conf = submitCapture
+        const evidence = assessSubmissionEvidence(conf, beforeConfirmation)
         if (!evidence.ok) {
           // Submit was clicked but NO evidence could be captured (no
           // reference, no screenshot). Refuse to claim a submission — hand
@@ -1065,22 +1358,15 @@ export async function runAutopilot({
           return {
             status: 'blocked',
             blocker_kind: 'submit_unconfirmed',
-            blocker_detail: 'Hamilton completed the portal\'s submit step, but could not capture any confirmation evidence (no reference number and no final-page screenshot). Verify receipt on the portal before treating this application as submitted.',
-            submit_clicked: true,
+            blocker_detail: 'Hamilton clicked the portal submit control, but the portal produced neither a genuinely new portal reference nor a newly appearing receipt acknowledgement. URL changes, screenshots, and saved pages were retained as attempt evidence only. Verify receipt on the portal before treating this application as submitted.',
+            ...retainedSubmitFields(),
             filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
           }
         }
         trace.push({ step: 'submitted', detail: { from: beforeUrl, to: conf.url, confirmation: conf.reference, confirmation_evidence: evidence.confirmation_evidence, received_acknowledgement: conf.received_acknowledgement } })
         return {
           status: 'submitted',
-          submit_clicked: true,
-          confirmation_evidence: evidence.confirmation_evidence,
-          confirmation_reference: conf.reference,
-          confirmation_screenshot_path: conf.screenshot_path,
-          confirmation_page_html_path: conf.page_html_path,
-          confirmation_page_text: conf.page_text,
-          confirmation_received_acknowledgement: conf.received_acknowledgement,
-          confirmation_url: conf.url,
+          ...retainedSubmitFields(),
           filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
         }
       }
@@ -1097,6 +1383,9 @@ export async function runAutopilot({
       }
 
       if (canNext) {
+        if (signal?.aborted) {
+          return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before continuing.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
         const clicked = await clickButtonByBid(page, nextButtons[0].bid)
         if (!clicked) {
           return { status: 'failed', blocker_kind: 'click_failed', blocker_detail: 'Next button could not be clicked', filled_fields: filled, pages_visited: pagesVisited, trace }
@@ -1141,6 +1430,17 @@ export async function runAutopilot({
     return { status: 'blocked', blocker_kind: 'too_many_pages', blocker_detail: `Hit ${MAX_PAGES} page cap`, filled_fields: filled, pages_visited: pagesVisited, trace }
   } catch (err) {
     const raw = err?.message || String(err)
+    if (submitClicked) await retainSubmitCapture()
+    if (signal?.aborted) {
+      return {
+        status: 'cancelled', blocker_kind: 'cancelled',
+        blocker_detail: submitClicked
+          ? 'Hamilton task was cancelled after the portal submit control was clicked. Retained captures are attempt evidence unless a genuinely new portal reference or receipt acknowledgement was observed.'
+          : 'Hamilton task was cancelled.',
+        ...retainedSubmitFields(),
+        filled_fields: filled, pages_visited: pagesVisited, trace,
+      }
+    }
     // DNS / connection / navigation-timeout failures are a distinct,
     // user-explainable blocker (dead link or site down). Without this branch
     // they fell into the generic engine_error bucket and users saw raw
@@ -1154,13 +1454,19 @@ export async function runAutopilot({
         blocker_kind: 'portal_unreachable',
         blocker_detail: `Hamilton could not reach ${host || "the funder's website"} — the site may be down or the saved portal link may be outdated.`,
         blocker_raw: raw.split('\n')[0].slice(0, 300),
+        ...retainedSubmitFields(),
         filled_fields: filled,
-        pages_visited: 0,
+        pages_visited: pagesVisited,
         trace,
       }
     }
-    return { status: 'failed', blocker_kind: 'engine_error', blocker_detail: raw, filled_fields: filled, pages_visited: 0, trace }
+    return {
+      status: 'failed', blocker_kind: 'engine_error', blocker_detail: raw,
+      ...retainedSubmitFields(),
+      filled_fields: filled, pages_visited: pagesVisited, trace,
+    }
   } finally {
+    signal?.removeEventListener('abort', abortBrowser)
     // Persist the authenticated session so the NEXT run reuses it instead of
     // re-logging-in. Portal logins must survive across runs AND container
     // restarts; the orchestrator encrypts this storageState into the DB. Only
@@ -1184,7 +1490,13 @@ export const _internal = {
   extractConfirmationReference,
   extractConfirmationReferenceFromUrl,
   detectReceiptAcknowledgement,
+  normalizedReference,
   captureConfirmation,
+  mergeSubmitCapture,
+  submitCaptureResult,
+  submitCaptureHistoryResult,
   actionableSubmitButtons,
   assessSubmissionEvidence,
+  detectNativeValidationErrors,
+  resolveSafeUploadDocument,
 }

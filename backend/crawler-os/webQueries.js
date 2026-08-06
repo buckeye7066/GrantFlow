@@ -266,7 +266,7 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // EXTRA pool, and the final cap truncates from the END — a student with two
   // schools builds 8+ CORE queries before the first topical one, so on the
   // live cap (maxQueries 14) not a single interest query ever ran. Measured on
-  // Anastasia White 2026-08-02: all 14 executed queries were school/geo CORE,
+  // Demo Tennessee STEM Student 2026-08-02: all 14 executed queries were school/geo CORE,
   // zero topical. Two slots is the bound — enough to reach the declared major
   // and its nearest declared neighbour, small enough that the school and
   // county queries #1089/#886 fought for are never displaced. Placed AFTER the

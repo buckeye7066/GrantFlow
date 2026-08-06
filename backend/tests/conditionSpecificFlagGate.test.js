@@ -1,6 +1,6 @@
 /**
  * A CONDITION-SPECIFIC program is never admitted or scored on a BARE
- * "Has disability" flag — the 2026-08-03 Anastasia White audit.
+ * "Has disability" flag — the 2026-08-03 Demo Tennessee STEM Student audit.
  *
  * Her profile carries `demographics.disability_status = "Has disability"`
  * while her own health sections state "No confirmed medical conditions" — a
@@ -53,7 +53,7 @@ const REEVE = {
   description: 'Resources and assistance for people living with paralysis and spinal cord injury; support for people with a physical disability.',
 }
 
-const BASE_PROFILE = { id: 'p-anastasia', primary_type: 'individual', state: 'TN' }
+const BASE_PROFILE = { id: 'p-demo_stem_student', primary_type: 'individual', state: 'TN' }
 
 /** Sections for the three profile variants. */
 const sectionsWith = ({ conditions = '', disabilityStatus = null, extraHealth = {} } = {}) => ({

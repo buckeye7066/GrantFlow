@@ -124,7 +124,7 @@ function isActionableRow(row, nowMs = Date.now()) {
  * only honest denominator for "is this person served". A locator promises a
  * place to look, never an award — CLAUDE.md's locator rule — so a profile whose
  * whole list is locators has been given directions, not funding. Measured in
- * prod 2026-08-01: `Melissa Justus` and `William` each carry 25 and 24
+ * prod 2026-08-01: `Demo General Support Persona` and `William` each carry 25 and 24
  * ACTIONABLE rows and **zero** awardable ones, and both read as healthy against
  * `MIN_HEALTHY_SURFACED`.
  *
@@ -157,7 +157,7 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   // ACTIONABLE = qualifying rows a client could still apply to: not a templated
   // geo-stub and not past deadline. Acquisition gaps (institution / hyperlocal /
   // low_results) are judged against these, so expired or geo-stub padding can no
-  // longer mask an empty result set (the exact way Avanell's 12 deadline_passed
+  // longer mask an empty result set (the exact way demo_senior_applicant's 12 deadline_passed
   // geo-stubs made her look "covered").
   const actionable = qualifying.filter((r) => isActionableRow(r, nowMs))
   // AWARDABLE = the per-profile RESULT FLOOR's denominator (see isAwardableRow).
@@ -205,8 +205,8 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   //     quota, the exact trap the floor was warned about. It is reported as
   //     `unconfigured`, with the missing prerequisites NAMED, and excluded
   //     from the floor and from `needs_rediscovery`. Measured in prod
-  //     2026-08-02: `profile-melissa-justus` (27 matches, 0 awardable) and
-  //     `profile-william` were both in the below-target set.
+  //     2026-08-02: `profile-demo-general-support` (27 matches, 0 awardable) and
+  //     `profile-demo-general-funding` were both in the below-target set.
   const unconfigured = configuration?.unconfigured === true
   const missing_prerequisites = unconfigured ? (configuration.missing_prerequisites || []) : []
   if (unconfigured) gaps.push(`unconfigured_profile:${missing_prerequisites.length}_prerequisites_unmet`)
@@ -580,7 +580,7 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
   //      `institution_gap:Lewiston High School` — a high school that sponsors
   //      no catalog aid) was a permanent nightly retry.
   //   2. IT RANKED BY THE PADDED COUNT. Ordering by `surfaced_actionable` put
-  //      Melissa Justus (25 actionable, **0 awardable**) behind profiles that
+  //      Demo General Support Persona (25 actionable, **0 awardable**) behind profiles that
   //      already had real awards.
   //
   // Now: the queue is gated by the floor ledger (exhausted / cooling-down

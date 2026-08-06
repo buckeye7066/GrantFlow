@@ -242,10 +242,10 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
 
   it('records a low_results gap into the store AND Anya brain', async () => {
     db.prepare("INSERT INTO profiles (id, display_name, created_by) VALUES (?, ?, ?)")
-      .run('kathy', 'Kathy Marie Daniel', 'system')
+      .run('kathy', 'Demo Basic Needs Persona', 'system')
     // No matches → 0 qualifying < MIN_HEALTHY_SURFACED → low_results gap.
 
-    const res = await learnFromCrawlGaps(db, { profileId: 'kathy', thesis: emptyThesis, displayName: 'Kathy Marie Daniel' })
+    const res = await learnFromCrawlGaps(db, { profileId: 'kathy', thesis: emptyThesis, displayName: 'Demo Basic Needs Persona' })
     expect(res.ok).toBe(true)
     expect(res.has_gap).toBe(true)
     expect(res.classes).toContain('low_results')
@@ -304,7 +304,7 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
 
   it('a profile with only THREE real awards is now a gap — it is below its requested result number', async () => {
     // The old bar called this healthy. It is the same shape as prod's
-    // "Josh Dasher / Caleb Hart / Tasha Reynolds" cohort: 39–103 stored matches,
+    // "Demo Career Support Persona / Caleb Hart / Tasha Reynolds" cohort: 39–103 stored matches,
     // 4 that name money. This test FAILS on the pre-floor classifier.
     db.prepare("INSERT INTO profiles (id, display_name, created_by) VALUES (?, ?, ?)")
       .run('thin', 'Thin Profile', 'system')
@@ -319,7 +319,7 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
     expect(res.classes).toContain('result_floor_shortfall')
   })
 
-  it('a profile padded with TWENTY-FIVE directories and zero awards is a gap — the Melissa Justus shape', async () => {
+  it('a profile padded with TWENTY-FIVE directories and zero awards is a gap — the Demo General Support Persona shape', async () => {
     db.prepare("INSERT INTO profiles (id, display_name, created_by) VALUES (?, ?, ?)")
       .run('padded', 'Padded Profile', 'system')
     for (let i = 0; i < 25; i++) {

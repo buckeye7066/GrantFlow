@@ -31,13 +31,13 @@ describe('buildProfileGapPlan', () => {
 
   it('does NOT re-ask a facet question the data already answers', () => {
     const n = normalizeProfile(
-      { id: 'avanell', primary_type: 'family', state: 'TN', city: 'Cleveland' },
+      { id: 'demo_senior_applicant', primary_type: 'family', state: 'TN', city: 'Cleveland' },
       { demographics: { disability_status: 'Has disability', age_group: 'Senior 62+' }, family_life: { caregiver: true } },
     )
     const plan = buildProfileGapPlan(n, {
       demographics: { disability_status: 'Has disability', age_group: 'Senior 62+' },
       family_life: { caregiver: true },
-    }, { displayName: 'Avanell' })
+    }, { displayName: 'demo_senior_applicant' })
     const ids = plan.questions.map((q) => q.id)
     // disability / senior / caregiver are already known — don't ask again.
     expect(ids).not.toContain('has_disability')

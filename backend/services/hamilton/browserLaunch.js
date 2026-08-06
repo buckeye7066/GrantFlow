@@ -1,3 +1,5 @@
+import { isControlledBetaSyntheticBrowserUrl } from './controlledBetaBrowserPolicy.js'
+
 /**
  * browserLaunch.js — the single source of truth for Chromium launch args used by
  * every Hamilton browser flow.
@@ -27,9 +29,11 @@ export const REALISTIC_PORTAL_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
 /**
- * launchPortalBrowser — the one launcher for flows that visit REAL external
- * portals (cloud login, autopilot, signup, portal sync). PDF/print flows that
- * only render local HTML should keep using plain `chromium.launch` + args.
+ * launchPortalBrowser — the one launcher for Hamilton portal-facing flows.
+ * Controlled beta permits only the reserved synthetic fixture origin. Real
+ * portals use packet preparation plus a visible manual browser handoff.
+ * PDF/print flows that only render local HTML should keep using plain
+ * `chromium.launch` + args.
  *
  * WHY: Playwright's default headless engine is the stripped `headless-shell`
  * build, and Akamai-class bot walls kill it at the CONNECTION level — measured
@@ -44,7 +48,12 @@ export const REALISTIC_PORTAL_UA =
  * previously-working deployment worse. Returns { browser, engine } so callers
  * can log which engine actually served the session.
  */
-export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [] } = {}) {
+export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null } = {}) {
+  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
+    const err = new Error('controlled_beta_manual_handoff')
+    err.code = 'controlled_beta_manual_handoff'
+    throw err
+  }
   const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...extraArgs]
   try {
     const browser = await chromium.launch({ headless, channel: 'chromium', args })

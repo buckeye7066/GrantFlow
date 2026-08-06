@@ -23,7 +23,7 @@ const proposalWith = (content, key = 'need_statement') => ({
 
 // Evidence pack with NO identity signals (the Robert incident shape).
 const PLAIN_EVIDENCE = {
-  applicant_name: 'Robert White',
+  applicant_name: 'Demo College Student Persona',
   location: 'Cleveland, TN',
   annual_income: '28000',
   education: '{"school":"Cleveland State Community College"}',
@@ -115,7 +115,7 @@ describe('generateMbaProposal — guard is wired into the generation path', () =
     })
     const profile = {
       id: 'prof-guard-1',
-      display_name: 'Robert White',
+      display_name: 'Demo College Student Persona',
       basic_information: { first_name: 'Robert', last_name: 'White', city: 'Cleveland', state: 'TN' },
       essays: { personal_statement: 'AEMT committed to emergency medical services.' },
     }

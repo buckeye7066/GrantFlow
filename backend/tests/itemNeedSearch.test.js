@@ -2,7 +2,7 @@
  * An item search answers "WHO WILL PAY FOR THIS" — precisely, or not at all.
  *
  * EVERY FIXTURE BELOW IS A REAL PROD OBSERVATION from 2026-08-02, running the
- * live lane for `profile-john-white` on the item "PROBE Ethics class for
+ * live lane for `profile-demo-health-education` on the item "PROBE Ethics class for
  * nursing licensure":
  *
  *   BEFORE the gates in this file, the lane returned 10 rows, of which these
@@ -332,9 +332,9 @@ describe('the whole-request behaviour', () => {
     const { searchItemNeed } = await import('../services/itemNeedSearch.js')
     const db = { dialect: 'sqlite', prepare: () => ({ all: async () => [] }) }
     const out = await searchItemNeed(db, {
-      profileId: 'profile-john-white',
+      profileId: 'profile-demo-health-education',
       item: ITEM,
-      profileContext: { profile: { id: 'profile-john-white', primary_type: 'individual' }, sections: {} },
+      profileContext: { profile: { id: 'profile-demo-health-education', primary_type: 'individual' }, sections: {} },
     })
     expect(out.results.map((r) => r.title)).toEqual([REAL_CPEP.title])
     expect(out.found).toBe(1)
@@ -383,9 +383,9 @@ describe('the whole-request behaviour', () => {
     let seenSql = ''
     const db = { dialect: 'postgres', prepare: (sql) => { seenSql = sql; return { all: async () => rows } } }
     const out = await searchItemNeed(db, {
-      profileId: 'profile-john-white',
+      profileId: 'profile-demo-health-education',
       item: ITEM,
-      profileContext: { profile: { id: 'profile-john-white', primary_type: 'individual' }, sections: {} },
+      profileContext: { profile: { id: 'profile-demo-health-education', primary_type: 'individual' }, sections: {} },
     })
 
     const titles = out.results.map((r) => r.title)
@@ -425,7 +425,7 @@ describe('the whole-request behaviour', () => {
 })
 
 /**
- * THE 2026-08-03 FORENSIC-ITEM AUDIT (Anastasia White, incoming MTSU forensic
+ * THE 2026-08-03 FORENSIC-ITEM AUDIT (Demo Tennessee STEM Student, incoming MTSU forensic
  * science freshman). Her Item Funding search for "forensic science lab
  * equipment, laptop, and textbooks" returned 12 of 17 results as live-web
  * "program" leads that were ARTICLES and SHOP LISTINGS: "Forensic Science
@@ -572,9 +572,9 @@ describe('the forensic-item audit: informational ARTICLES are refused as program
     const { searchItemNeed } = await import('../services/itemNeedSearch.js')
     const db = { dialect: 'sqlite', prepare: () => ({ all: async () => [] }) }
     const out = await searchItemNeed(db, {
-      profileId: 'c4a92724-anastasia',
+      profileId: 'c4a92724-demo_stem_student',
       item: FORENSIC_ITEM,
-      profileContext: { profile: { id: 'c4a92724-anastasia', primary_type: 'individual' }, sections: {} },
+      profileContext: { profile: { id: 'c4a92724-demo_stem_student', primary_type: 'individual' }, sections: {} },
     })
     expect(out.results.map((r) => r.title)).toEqual([REAL_FUNDING_LEAD.title])
     expect(out.found).toBe(1)
@@ -641,9 +641,9 @@ describe('the forensic-item audit: RANKING — item relevance dominates profile 
     ]
     const db = { dialect: 'sqlite', prepare: () => ({ all: async () => rows }) }
     const out = await searchItemNeed(db, {
-      profileId: 'c4a92724-anastasia',
+      profileId: 'c4a92724-demo_stem_student',
       item: FORENSIC_ITEM,
-      profileContext: { profile: { id: 'c4a92724-anastasia', primary_type: 'individual' }, sections: {} },
+      profileContext: { profile: { id: 'c4a92724-demo_stem_student', primary_type: 'individual' }, sections: {} },
     })
     const ids = out.results.map((r) => r.id)
     // The audit's top four never even qualify as answers to THIS item.

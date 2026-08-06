@@ -16,7 +16,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
-    \"profile_id\": \"profile-anastasia\",
+    \"profile_id\": \"profile-demo-tennessee-stem-student\",
     \"opportunity_data\": {
       \"title\": \"Test Valid $(date +%s)\",
       \"sponsor\": \"Test\",
@@ -46,7 +46,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "profile_id": "profile-anastasia",
+    "profile_id": "profile-demo-tennessee-stem-student",
     "opportunity_data": "invalid string"
   }' \
   "$BASE_URL/api/grants/from-opportunity" | jq -c '{status: .error, message: .message}'
@@ -58,7 +58,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "profile_id": "profile-anastasia",
+    "profile_id": "profile-demo-tennessee-stem-student",
     "opportunity_data": {
       "sponsor": "Test"
     }
@@ -72,7 +72,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "profile_id": "profile-anastasia",
+    "profile_id": "profile-demo-tennessee-stem-student",
     "opportunity_data": {
       "title": "",
       "sponsor": "Test"
@@ -103,7 +103,7 @@ curl -s -X POST \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
     "profile_id": null,
-    "organization_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+    "organization_id": "00000000-0000-4000-8000-000000000001",
     "opportunity_data": {
       "title": "Test Org Only",
       "sponsor": "Test"
@@ -118,7 +118,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "profile_id": "profile-anastasia",
+    "profile_id": "profile-demo-tennessee-stem-student",
     "opportunity_data": {
       "title": "Test Expired",
       "sponsor": "Test",
@@ -134,7 +134,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "profile_id": "profile-anastasia"
+    "profile_id": "profile-demo-tennessee-stem-student"
   }' \
   "$BASE_URL/api/grants/from-opportunity" | jq -c '{status: .error, message: .message}'
 echo ""
@@ -145,7 +145,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "profile_id": "profile-anastasia",
+    "profile_id": "profile-demo-tennessee-stem-student",
     "opportunity_data": []
   }' \
   "$BASE_URL/api/grants/from-opportunity" | jq -c '{status: .error, message: .message}'
@@ -157,7 +157,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "profile_id": "profile-anastasia",
+    "profile_id": "profile-demo-tennessee-stem-student",
     "opportunity_data": {
       "title": "   ",
       "sponsor": "Test"
@@ -182,7 +182,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
-    \"profile_id\": \"profile-anastasia\",
+    \"profile_id\": \"profile-demo-tennessee-stem-student\",
     \"opportunity_data\": {
       \"title\": \"$LONG_TITLE\",
       \"sponsor\": \"Test\"
@@ -197,7 +197,7 @@ curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "profile_id": "profile-anastasia",
+    "profile_id": "profile-demo-tennessee-stem-student",
     "opportunity_id": "some-id",
     "opportunity_data": {
       "title": "Test Both",

@@ -140,7 +140,7 @@ describe('importCredentialsFromCsv', () => {
   const baseCsv = `name,url,username,password,note
 Example,https://example.com/login,a@example.com,Vermilion1!,
 Login Twice,https://example.com/,a@example.com,Vermilion1!,
-"Chewy: Pet Shopping","android://hash==@com.chewy.android/",buckeye7066@gmail.com,Tennessee93!,
+"Chewy: Pet Shopping","android://hash==@com.chewy.android/",owner@example.invalid,fixture-password-not-a-secret,
 Bare Host,mtsu.edu,student@mtsu.edu,p4ssw0rd!,
 Empty Username,https://no-user.example/,,nopass,
 Bad URL,not a url,user@x.com,Vermilion1!,
@@ -168,7 +168,7 @@ Bad URL,not a url,user@x.com,Vermilion1!,
     // Server-side rows are encrypted; the response NEVER includes plaintext.
     const json = JSON.stringify(result)
     assert.ok(!json.includes('Vermilion1!'), 'response must NEVER echo plaintext passwords')
-    assert.ok(!json.includes('Tennessee93!'), 'response must NEVER echo plaintext passwords')
+    assert.ok(!json.includes('fixture-password-not-a-secret'), 'response must NEVER echo plaintext passwords')
   })
 
   it('round-trips through saveCredential — Hamilton can decrypt the imported password', async () => {

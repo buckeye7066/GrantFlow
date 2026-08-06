@@ -102,6 +102,7 @@ describe('email OTP token exposes no brute-forceable verifier', () => {
     const res = await request(app).post('/api/auth/email/verify').send({ email, code: body.previewCode })
     expect(res.status).toBe(200)
     expect(res.body.accessToken).toBeTruthy()
-    expect(res.body.refreshToken).toBeTruthy()
+    expect(res.body.refreshToken).toBeUndefined()
+    expect((res.headers['set-cookie'] || []).some((cookie) => cookie.startsWith('grantflow_refresh='))).toBe(true)
   })
 })

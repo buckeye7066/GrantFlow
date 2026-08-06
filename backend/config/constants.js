@@ -4,17 +4,22 @@
  * Centralized constants used across the backend application
  */
 
-// Admin Configuration
-// Keep a stable default so production doesn't lock out the operator when ADMIN_EMAIL
-// is misconfigured. Additional admins can be added via ADMIN_EMAILS (comma-separated).
-const DEFAULT_ADMIN_EMAIL = 'buckeye7066@gmail.com'
-export const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL)
+// Admin configuration. Deployed runtimes never inherit a source-controlled
+// privileged identity: `assertEnv` requires ADMIN_EMAIL and this module fails
+// closed with an empty value if it is absent. Local/test runs retain a clearly
+// non-routable fixture address for deterministic tests.
+const DEPLOYED_RUNTIME = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production'
+  || Boolean(String(process.env.RAILWAY_ENVIRONMENT_ID || '').trim())
+  || Boolean(String(process.env.RAILWAY_DEPLOYMENT_ID || '').trim())
+export const LOCAL_ADMIN_EMAIL = 'admin@grantflow.local'
+export const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || (DEPLOYED_RUNTIME ? '' : LOCAL_ADMIN_EMAIL))
+  .trim()
+  .toLowerCase()
 export const ADMIN_EMAILS = Object.freeze(
   Array.from(
     new Set(
       [
         ADMIN_EMAIL,
-        DEFAULT_ADMIN_EMAIL,
         ...(String(process.env.ADMIN_EMAILS || '')
           .split(',')
           .map((v) => v.trim())

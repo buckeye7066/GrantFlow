@@ -2,14 +2,45 @@
 /**
  * Comprehensive GrantFlow Application Test Suite
  * Tests all buttons, functions, crawlers, and features
+ *
+ * This suite mutates profiles, pipelines, crawler jobs, and Anya sessions.
+ * It requires an explicit API URL, expected admin email, admin token, matching
+ * host confirmation, and COMPREHENSIVE_TEST_CONFIRM=RUN_MUTATING_SUITE.
  */
 
 import axios from 'axios'
 import chalk from 'chalk'
 import { promises as fs } from 'fs'
+import process from 'node:process'
 
-const API_BASE = 'http://localhost:4000'
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+function requiredEnv(name) {
+  const value = String(process.env[name] || '').trim()
+  if (!value) throw new Error(`${name} is required; this mutating suite has no live defaults`)
+  return value
+}
+
+const apiUrl = new URL(requiredEnv('COMPREHENSIVE_TEST_API_BASE'))
+const isLoopback = ['127.0.0.1', '::1', 'localhost'].includes(apiUrl.hostname.toLowerCase())
+if (apiUrl.protocol !== 'https:' && !(apiUrl.protocol === 'http:' && isLoopback)) {
+  throw new Error('COMPREHENSIVE_TEST_API_BASE must use HTTPS unless it targets loopback')
+}
+if (apiUrl.username || apiUrl.password || apiUrl.search || apiUrl.hash) {
+  throw new Error('COMPREHENSIVE_TEST_API_BASE must not contain credentials, query parameters, or a fragment')
+}
+const confirmedHost = requiredEnv('COMPREHENSIVE_TEST_CONFIRM_MUTATING_HOST').toLowerCase()
+if (confirmedHost !== apiUrl.hostname.toLowerCase()) {
+  throw new Error('COMPREHENSIVE_TEST_CONFIRM_MUTATING_HOST must exactly match the API hostname')
+}
+if (requiredEnv('COMPREHENSIVE_TEST_CONFIRM') !== 'RUN_MUTATING_SUITE') {
+  throw new Error('COMPREHENSIVE_TEST_CONFIRM must equal RUN_MUTATING_SUITE')
+}
+
+const API_BASE = apiUrl.toString().replace(/\/$/, '')
+const ADMIN_TOKEN = requiredEnv('COMPREHENSIVE_TEST_ADMIN_TOKEN')
+const ADMIN_EMAIL = requiredEnv('COMPREHENSIVE_TEST_ADMIN_EMAIL').toLowerCase()
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ADMIN_EMAIL)) {
+  throw new Error('COMPREHENSIVE_TEST_ADMIN_EMAIL must be a valid email address')
+}
 
 // Test results tracking
 const results = {
@@ -35,29 +66,24 @@ async function apiCall(method, path, data = null, token = null) {
 // Get auth token
 async function authenticate() {
   try {
-    console.log(chalk.yellow('\n📝 Testing Authentication...'))
-    
-    // Start email auth
-    const startRes = await apiCall('POST', '/api/auth/email/start', { email: ADMIN_EMAIL })
-    const code = startRes.data.previewCode
-    
-    if (!code) {
-      throw new Error('No preview code returned')
+    console.log(chalk.yellow('\n📝 Verifying canonical admin authority...'))
+
+    const authMe = await apiCall('GET', '/api/auth/me', null, ADMIN_TOKEN)
+    const authenticatedUser = authMe.data?.user || authMe.data || {}
+    const authenticatedEmail = String(
+      authenticatedUser.primary_email || authenticatedUser.email || '',
+    ).trim().toLowerCase()
+    const isAdmin = authenticatedUser.is_admin === true || authMe.data?.role === 'admin'
+    if (!isAdmin) {
+      throw new Error('COMPREHENSIVE_TEST_ADMIN_TOKEN did not resolve to a canonical server admin')
     }
-    
-    // Verify code
-    const verifyRes = await apiCall('POST', '/api/auth/email/verify', {
-      email: ADMIN_EMAIL,
-      code: code
-    })
-    
-    if (!verifyRes.data.accessToken) {
-      throw new Error('No access token returned')
+    if (!authenticatedEmail || authenticatedEmail !== ADMIN_EMAIL) {
+      throw new Error('admin token identity does not match COMPREHENSIVE_TEST_ADMIN_EMAIL')
     }
-    
-    console.log(chalk.green('✅ Authentication working'))
+
+    console.log(chalk.green('✅ Canonical admin authority verified'))
     results.passed.push('Authentication')
-    return verifyRes.data.accessToken
+    return ADMIN_TOKEN
   } catch (error) {
     console.log(chalk.red('❌ Authentication failed:', error.message))
     results.failed.push({ test: 'Authentication', error: error.message })
@@ -396,6 +422,7 @@ async function runAllTests() {
     
   } catch (error) {
     console.log(chalk.red('\n⚠️ Critical error:', error.message))
+    process.exitCode = 1
   }
   
   // Display results summary
@@ -449,7 +476,11 @@ async function runAllTests() {
     JSON.stringify(report, null, 2)
   )
   console.log(chalk.gray('Test results saved to test-results.json'))
+  if (results.failed.length > 0) process.exitCode = 1
 }
 
 // Run tests
-runAllTests().catch(console.error)
+runAllTests().catch((error) => {
+  console.error(error)
+  process.exitCode = 1
+})

@@ -18,8 +18,9 @@ import {
   CONFIG_KV_KEY,
 } from '../services/adversarialRepairSettings.js'
 import { resolveDirectLandSecret, DIRECT_LAND_SECRET_KV_KEY } from '../services/anyaDirectLandToken.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
-const OWNER = 'buckeye7066@gmail.com'
+const OWNER = ADMIN_EMAIL
 
 /** In-memory system_kv fake: supports the exact SQL the settings/secret/nonce use. */
 function makeFakeDb() {
@@ -184,7 +185,9 @@ describe('GET/PUT /api/admin/agent-control/adversarial-repair (owner-gated)', ()
     app.use((r, _res, next) => {
       const email = r.headers['x-test-user']
       r.user = { userId: 'u1', email, role: 'admin', is_admin: true }
-      r.ctx = { user: r.user, isAdmin: true }
+      // Mirror requestContext's trusted DB-resolved identity. Token/user claims
+      // alone must never authorize this control-center route.
+      r.ctx = { userId: 'u1', email, identityResolved: true, isAdmin: true }
       r.db = db
       next()
     })

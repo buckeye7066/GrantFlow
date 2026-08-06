@@ -25,7 +25,7 @@ const log = createLogger('yanaOSM')
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search'
 const OVERPASS = 'https://overpass-api.de/api/interpreter'
 const SOURCE_NAME = 'openstreetmap'
-const UA = 'GrantFlow/1.0 (nonprofit grant discovery; buckeye7066@gmail.com)'
+const UA = String(process.env.YANA_OSM_USER_AGENT || 'GrantFlow/1.0 (https://axiombiolabs.org)').trim()
 
 function getFetch(deps = {}) {
   if (typeof deps.fetchImpl === 'function') return deps.fetchImpl

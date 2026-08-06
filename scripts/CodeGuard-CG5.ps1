@@ -269,7 +269,7 @@ function Build-SystemContext{
 
   return @"
 You are CodeGuard v$($script:M.V), an expert code auditor for GrantFlow (github.com/buckeye7066/GrantFlow).
-Architecture: Express+Node20 backend (Railway), React18+Vite frontend (Vercel), SQLite database.
+Architecture: Express+Node20.20.2 backend (Railway), React18+Vite frontend (Vercel), SQLite database.
 Codebase: $routeCount route files, $serviceCount service files, $componentCount frontend components, $crawlerCount crawlers.
 Key services: matchEngine.js (scoring+decisions), relevanceFilter.js (hard disqualification), opportunityMatcher.js (pipeline insert with 5 gates), comprehensiveCrawlerOptimized.js (discovery), profileHelpers.js (signal extraction), anyaOrchestrator.js (Anya AI).
 

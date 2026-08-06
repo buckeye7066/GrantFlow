@@ -7,8 +7,7 @@
  *      and creates a recommendation (using the canonical matcher via injection,
  *      pipelineExclusion, and the relevance floor).
  *   2. It EXCLUDES a catalog row that is already in the profile's pipeline.
- *   3. The email feeder is invoked in Robert's normal cycle (mocked) — proving
- *      email-sourced opportunities flow into the same match+recommend path.
+ *   3. The legacy email feeder bridge honors its explicit enablement boundary.
  *
  * Uses better-sqlite3 in-memory (the enforceInvariants.test.js pattern): the
  * raw synchronous handle stands in for the async prod wrapper because awaiting
@@ -25,7 +24,6 @@ import {
   fetchCatalogForProfile,
 } from '../services/robert/robertCatalogMiner.js'
 import { runEmailFeedForRobert } from '../services/robert/robertEmailFeedBridge.js'
-import { runRobert } from '../services/robert/robertAgent.js'
 import { RELEVANCE_FLOOR, TRUSTED_RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
 
 // ---------------------------------------------------------------------------
@@ -180,7 +178,13 @@ function fakeMatcher(profile, opportunity) {
     return { score: 0, decision: 'REJECT', reasons: ['not eligible'], eligible: false, missingEligibilityFields: [] }
   }
   if (/weak/i.test(title)) {
-    return { score: 30, decision: 'REVIEW', reasons: ['marginal'], eligible: 'maybe', missingEligibilityFields: [] }
+    return {
+      score: RELEVANCE_FLOOR - 1,
+      decision: 'REVIEW',
+      reasons: ['marginal'],
+      eligible: 'maybe',
+      missingEligibilityFields: [],
+    }
   }
   return { score: 88, decision: 'ACCEPT', reasons: ['strong fit on needs'], eligible: true, missingEligibilityFields: [] }
 }
@@ -289,7 +293,7 @@ describe('robertCatalogMiner — mineCatalogForProfiles', () => {
   })
 
   it('drops below-floor and REJECT rows, never fabricating recommendations', async () => {
-    insertOpp(db, { id: 'o-weak', title: 'TN Weak Match Grant', state: 'TN', record_origin: 'live_crawl' }) // REVIEW 30 — below the recommendation review threshold
+    insertOpp(db, { id: 'o-weak', title: 'TN Weak Match Grant', state: 'TN', record_origin: 'live_crawl' }) // REVIEW below the current-scale recommendation floor
     insertOpp(db, { id: 'o-reject', title: 'TN Reject Grant', state: 'TN' })                                  // REJECT
     insertOpp(db, { id: 'o-good', title: 'TN Good Grant', state: 'TN' })                                      // ACCEPT 88
 
@@ -342,44 +346,6 @@ describe('robertEmailFeedBridge — runEmailFeedForRobert', () => {
   })
 })
 
-describe('runRobert cycle — email feed invoked + catalog mined', () => {
-  let db
-  beforeEach(() => {
-    db = makeDb()
-    insertProfile(db, { id: 'p1', display_name: 'Hope House', state: 'TN' })
-    insertOpp(db, { id: 'o-good', title: 'TN Good Grant', state: 'TN', record_origin: 'curated_catalog' })
-  })
-
-  it.skip('invokes the (mocked) email feeder during a recommend-mode cycle and produces catalog-mined recommendations' /* CUTOVER: Robert catalog-miner superseded by Crawler OS */, async () => {
-    let feedCalls = 0
-    const fakeFeed = async () => {
-      feedCalls += 1
-      return { ok: true, candidates: 1, summary: { imported: 1 } }
-    }
-
-    const result = await runRobert({
-      db,
-      mode: 'recommend',
-      trigger: 'manual',
-      deps: {
-        configOverride: { enabled: true, persistCandidates: false },
-        loadProfileContext: async (_d, id) => {
-          const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(id)
-          return profile ? { profile, sections: {}, signals: { state: profile.state } } : null
-        },
-        listActiveProfileIds: async () => ['p1'],
-        computeMatchDecision: fakeMatcher,
-        runOutlookGrantFeed: fakeFeed,
-      },
-    })
-
-    expect(result.status).toBe('completed')
-    // Email feed was invoked in the cycle.
-    expect(feedCalls).toBe(1)
-    expect(result.summary.email_feed?.ran).toBe(true)
-    // Catalog mining produced a real recommendation for the existing row.
-    expect(result.summary.catalog_mine?.recommendations_created).toBe(1)
-    const rec = db.prepare('SELECT * FROM robert_profile_recommendations WHERE profile_id = ?').get('p1')
-    expect(rec?.opportunity_id).toBe('o-good')
-  })
-})
+// Robert's active recommendation-cycle coverage now lives in
+// backend/crawler-os/tests/robert.test.mjs and pipeline.test.mjs. The removed
+// runRobert integration asserted an unreachable pre-Crawler-OS catalog-miner path.

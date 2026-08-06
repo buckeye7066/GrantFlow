@@ -13,6 +13,7 @@ import {
   SUPPRESSIBLE_NO_FIT_RULE_IDS,
 } from './profileSpecificGate.js'
 import { trustedPersistedMatchConfidence } from './matchConfidenceProvenance.js'
+import { opportunityLifecycleVisibility } from '../../config/matchSurfacing.js'
 
 /**
  * True only for a value that is genuinely a finite number (or the string form of
@@ -28,6 +29,19 @@ export function isFiniteNumberLike(value) {
   if (typeof value !== 'string') return false
   if (value.trim() === '') return false
   return Number.isFinite(Number(value))
+}
+
+const PERSISTED_CANONICAL_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
+
+/**
+ * A reusable stored decision requires both halves of the persisted artifact.
+ * A score without a decision (or a decision without a measured score) is
+ * incomplete and must never be silently promoted to an invented REVIEW.
+ */
+export function hasPersistedCanonicalDecision(opportunity, opts = {}) {
+  if (opts.useStoredDecision === false) return false
+  const decision = String(opportunity?.match_decision ?? '').trim().toUpperCase()
+  return PERSISTED_CANONICAL_DECISIONS.has(decision) && isFiniteNumberLike(opportunity?.match_score)
 }
 
 export function isDirectoryRecord(opp) {
@@ -124,19 +138,39 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     }
   }
 
+  // Lifecycle quarantine is independent of scoring and structural kind. A
+  // stored ACCEPT cannot resurrect it, and pointer/directory preservation only
+  // applies to an otherwise visible row.
+  const lifecycle = opportunityLifecycleVisibility(opportunity)
+  if (!lifecycle.visible) {
+    return {
+      display: false,
+      dropReason: lifecycle.reason,
+      opportunity,
+      decision: null,
+      trust: null,
+      lifecycle,
+    }
+  }
+
   const rawProfile = profileContext?.profile ?? profileContext
   const profileSections = profileContext?.sections ?? null
   const signals = profileContext?.signals ?? null
   const directory = isDirectoryRecord(opportunity)
 
-  const profileGate = evaluateProfileSpecificGate(profileContext, opportunity, {
-    mode: opts.profileGateMode || 'display',
-    allowUnmatchedDirectoryFallback: opts.allowUnmatchedDirectoryFallback === true,
-    // Propagate the authoritative-stored-decision context so the gate can
-    // suppress the NO-FIT (content-shape) rule family for rows the matchEngine
-    // already scored above the surfacing floor (type-agnostic).
-    useStoredDecision,
-  })
+  const hasStoredDecision = hasPersistedCanonicalDecision(opportunity, { useStoredDecision })
+
+  // A persisted decision is the complete profile-specific eligibility result.
+  // Re-running the legacy profile gate here is a hidden second trial: it can
+  // overturn the stored artifact without persisting its alternate verdict.
+  // Raw/unrated leads still use the strict gate before canonical scoring.
+  const profileGate = hasStoredDecision
+    ? { pass: true, ruleId: 'persisted_canonical_decision', matchedRules: [] }
+    : evaluateProfileSpecificGate(profileContext, opportunity, {
+        mode: opts.profileGateMode || 'display',
+        allowUnmatchedDirectoryFallback: opts.allowUnmatchedDirectoryFallback === true,
+        useStoredDecision: false,
+      })
   if (!profileGate.pass) {
     return {
       display: false,
@@ -170,19 +204,17 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
   // row at query time is the dominant cost of a slow search (~24s) AND is
   // redundant — the stored score is what we sort by. Reuse it; only fall back to
   // a live recompute when no stored decision is present.
-  const hasStoredDecision =
-    useStoredDecision &&
-    (Boolean(opportunity.match_decision) || Number.isFinite(Number(opportunity.match_score)))
   let decision = hasStoredDecision
     ? {
-        decision: opportunity.match_decision ?? 'REVIEW',
-        score: Number(opportunity.match_score ?? 0),
+        decision: String(opportunity.match_decision).trim().toUpperCase(),
+        score: Number(opportunity.match_score),
         explanation: opportunity.match_explanation ?? null,
         confidence: trustedPersistedMatchConfidence(opportunity),
         matched_profile_facts: Array.isArray(opportunity.match_reasons) ? opportunity.match_reasons : [],
         matchedNeeds: Array.isArray(opportunity.matched_needs) ? opportunity.matched_needs : [],
         ineligibilityReasons: Array.isArray(opportunity.ineligibility_reasons) ? opportunity.ineligibility_reasons : [],
-        matcherVersion: opportunity.matcher_version ?? 'crawler-os',
+        matcherVersion: opportunity.matcher_version ?? null,
+        evaluatedAt: opportunity.evaluated_at ?? null,
       }
     : computeMatchDecision(rawProfile, opportunity, {
         profileSections,
@@ -190,6 +222,15 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
       })
 
   if (decision?.decision === 'REJECT') {
+    if (hasStoredDecision) {
+      return {
+        display: false,
+        dropReason: 'decision',
+        opportunity,
+        decision,
+        trust,
+      }
+    }
     if (directory && preserveDirectories) {
       decision = {
         ...decision,
@@ -351,4 +392,5 @@ export default {
   canonicalizeOpportunityList,
   assertNoSilentUnsurfacing,
   isDirectoryRecord,
+  hasPersistedCanonicalDecision,
 }

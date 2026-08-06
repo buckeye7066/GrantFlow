@@ -41,9 +41,6 @@ import React from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   listProfilePortals,
-  startCloudLogin,
-  runPortalSyncRead,
-  runPortalSyncWrite,
   saveApplicationPacket,
   saveApplicationPackets,
   packetDownloadUrl,
@@ -51,12 +48,10 @@ import {
   unlockPortalAutopilot,
   lockPortalAutopilot,
   setPortalAutopilotIdentity,
-  runPortalAutopilot,
   setPortalMergeStatus,
 } from "@/api/hamilton"
 import { deleteGrant } from "@/api/grants"
 import { openApplicationPacket } from "@/components/hamilton/applicationPacketPrint"
-import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
 import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -69,8 +64,6 @@ import {
   GraduationCap,
   Landmark,
   Globe,
-  Download,
-  Upload,
   RefreshCw,
   CheckCircle2,
   AlertTriangle,
@@ -87,10 +80,7 @@ import {
   Unlock,
   KeyRound,
   UserCheck,
-  Wand2,
   PanelsTopLeft,
-  Copy,
-  X,
   Trash2,
 } from "lucide-react"
 
@@ -99,7 +89,7 @@ import {
 // in lockstep with AUTOPILOT_STATE in hamiltonPortalAutopilotIdentity.js.
 const AUTOPILOT_LABELS = {
   auto_provisioned: {
-    text: "Auto setup ✓ (Hamilton manages this login)",
+    text: "Saved login available",
     Icon: ShieldCheck,
     tone: "ok",
   },
@@ -109,22 +99,22 @@ const AUTOPILOT_LABELS = {
     tone: "ok",
   },
   identity_proof_required: {
-    text: "Needs your ID verification — open side-by-side",
+    text: "Needs your ID verification in the official portal",
     Icon: UserCheck,
     tone: "warn",
   },
   needs_user: {
-    text: "Can't auto-merge — open side-by-side login",
+    text: "Manual portal login required",
     Icon: PanelsTopLeft,
     tone: "warn",
   },
   vault_locked: {
-    text: "Vault locked — unlock to let Hamilton set this up",
+    text: "Vault locked — unlock to reuse a saved login",
     Icon: Lock,
     tone: "warn",
   },
   automation_disabled: {
-    text: "Automation off",
+    text: "Preparation automation off",
     Icon: AlertTriangle,
     tone: "muted",
   },
@@ -216,68 +206,6 @@ const BTN_CORAL =
   "inline-flex items-center gap-1.5 rounded-[10px] border border-transparent bg-current-coral px-3.5 py-2 text-sm font-semibold text-white transition-transform hover:-translate-y-px disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
 const BTN_EMERALD =
   "inline-flex items-center gap-1.5 rounded-[10px] border border-transparent bg-current-emerald px-3.5 py-2 text-sm font-semibold text-white transition-transform hover:-translate-y-px disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
-
-// Dedicated one-time-password modal. The secret is shown explicitly, with a
-// copy action and a clear warning, never logged, and dismissible by the user.
-function OneTimePasswordModal({ value, onClose }) {
-  const [copied, setCopied] = React.useState(false)
-  if (!value) return null
-  const handleCopy = async () => {
-    try {
-      if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-      }
-    } catch {
-      // Clipboard unavailable — the user can still read + copy manually.
-    }
-  }
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="One-time login password"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-2xl border border-current-line bg-current-card p-6 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="font-display text-[18px] font-bold text-current-ink">Login provisioned</h3>
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-[10px] border border-current-line bg-transparent p-1.5 text-current-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <p className="mt-2 text-sm text-current-ink/70">
-          Hamilton created a login. This one-time password is shown <strong>only now</strong> — copy and
-          store it somewhere safe. It will not be shown again.
-        </p>
-        <div className="mt-4 flex items-center gap-2">
-          <code className="money flex-1 select-all break-all rounded-[10px] border border-current-line bg-transparent px-3 py-2 text-sm text-current-ink">
-            {value}
-          </code>
-          <button type="button" className={BTN_BASE} onClick={handleCopy}>
-            <Copy className="h-4 w-4" />
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
-        <div className="mt-5 flex justify-end">
-          <button type="button" className={BTN_EMERALD} onClick={onClose}>
-            I&rsquo;ve saved it
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 // Strict host match for the ?cobrowse deep-link: equal, or a true subdomain on a
 // dot boundary (so "mtsu.edu.evil.com" never matches "mtsu.edu"). Used to gate a
@@ -373,7 +301,7 @@ function AddSchoolLoginInline({ schoolLabel, busy, onStart }) {
           onClick={submit}
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Globe className="h-4 w-4" />}
-          Log in once &rarr;
+          Open portal manually &rarr;
         </button>
         <button
           type="button"
@@ -395,10 +323,6 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
 
-  // One-time provisioned password shown in a dedicated, dismissible modal
-  // (never via an ephemeral toast, never logged).
-  const [oneTimePassword, setOneTimePassword] = React.useState(null)
-
   const { data, isLoading, isError } = useQuery({
     queryKey: ["hamilton-profile-portals", profileId],
     queryFn: () => listProfilePortals(profileId),
@@ -417,7 +341,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   // in-process cache — after a backend restart it reads false even when the
   // owner enabled AUTONOMOUS UNLOCK (escrowed key), which the server opens on
   // its own at run time. Gate capabilities on the effective state so a restart
-  // doesn't hide the "Set up with Hamilton" actions behind a phantom lock.
+  // doesn't hide saved-login controls behind a phantom lock.
   const vaultUsable = Boolean(vaultStatus.is_unlocked || vaultStatus.autonomous_unlock)
 
   const refetchPortals = () =>
@@ -455,123 +379,21 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     }
   }, [cobrowseTargetHost])
 
-  // Track the popup-close poll so we never leak it / accumulate multiple.
-  const loginPollRef = React.useRef(null)
-  React.useEffect(() => {
-    return () => {
-      if (loginPollRef.current) {
-        clearInterval(loginPollRef.current)
-        loginPollRef.current = null
-      }
-    }
-  }, [])
-
-  // Watch the popup for close/completion and refetch ONCE when it closes — this
-  // avoids refetching on unrelated tab returns and avoids leaking/accumulating
-  // window focus listeners.
-  const watchPopupClose = (popup) => {
-    if (!popup || typeof popup.closed !== "function" && typeof popup.closed !== "boolean") {
-      // Fall back: if popup exposes no close info, refetch shortly after.
-      refetchPortals()
-      return
-    }
-    if (loginPollRef.current) {
-      clearInterval(loginPollRef.current)
-      loginPollRef.current = null
-    }
-    const isClosed = () => {
-      try {
-        if (typeof popup.isClosed === "function") return popup.isClosed()
-        if (typeof popup.closed === "function") return popup.closed()
-        return Boolean(popup.closed)
-      } catch {
-        return true
-      }
-    }
-    loginPollRef.current = setInterval(() => {
-      if (isClosed()) {
-        clearInterval(loginPollRef.current)
-        loginPollRef.current = null
-        refetchPortals()
-      }
-    }, 1000)
-  }
-
-  // Click a RED tile → start a cloud login and open the prefilled secure window.
-  // The popup is opened SYNCHRONOUSLY in the click handler (see startLogin) and
-  // threaded through as a mutation variable, then navigated here once the async
-  // start resolves — opening it after the await would be popup-blocked (dead
-  // window). See liveLoginWindow.js for the full rationale.
+  // Controlled beta opens real portals in the user's browser. The shared helper
+  // never calls cloud login for a real origin and states the manual handoff.
   const loginMutation = useMutation({
-    mutationFn: ({ portal }) =>
-      startCloudLogin(profileId, {
-        portalHost: portal.portalHost,
-        loginUrl: portal.loginUrl || null,
-        label: portal.label || `${portal.portalHost} session`,
-      }),
-    onSuccess: (res, { popup }) => {
-      const url = resolveLiveLoginUrl(res)
-      if (!url) {
-        popup?.fail?.("We couldn't open the secure login. Please try again.")
-        showErrorToast(toast, "Could not start the secure login", "No login window link was returned. Please try again.")
-        return
-      }
-      popup?.navigate?.(url)
-      showSuccessToast(
-        toast,
-        "Secure login window opened",
-        "Sign in + approve 2FA in the new window, then click “Done” there. We’ll update this list automatically.",
-      )
-      // Refetch when the secure login window closes — not on arbitrary tab focus.
-      watchPopupClose(popup)
-    },
-    onError: (err, { popup }) => {
-      popup?.fail?.(err?.message || "Could not start the secure login. Please try again.")
-      showErrorToast(toast, "Could not start the secure login", err?.message || "Please try again.")
-    },
+    mutationFn: (portal) => openWithHamiltonWatching({
+      profileId,
+      url: portal.loginUrl || (portal.portalHost ? `https://${portal.portalHost}/` : null),
+      label: portal.label || portal.portalHost,
+      toast,
+    }),
+    onSettled: () => refetchPortals(),
   })
 
-  // Open the secure-login popup WHILE the click gesture is live, then kick off
-  // the async start. If the browser blocked the popup, tell the user instead of
-  // silently starting a session they can't see.
   const startLogin = (portal) => {
-    const popup = openPendingLoginWindow()
-    if (!popup || popup.blocked) {
-      showErrorToast(
-        toast,
-        "Allow pop-ups to sign in",
-        "Your browser blocked the secure login window. Allow pop-ups for GrantFlow, then click again.",
-      )
-      return
-    }
-    loginMutation.mutate({ portal, popup })
+    loginMutation.mutate(portal)
   }
-
-  const readMutation = useMutation({
-    mutationFn: (portal) => runPortalSyncRead(profileId, portal.portalHost),
-    onSuccess: (res, portal) => {
-      refetchPortals()
-      if (res?.ok === false) {
-        showErrorToast(toast, "Pull failed", res?.error || res?.detail || "See the status line for details.")
-      } else {
-        showSuccessToast(toast, "Pull started", `Pulling data from ${portal.portalHost}. Watch the status line for the result.`)
-      }
-    },
-    onError: (err) => showErrorToast(toast, "Could not start pull", err?.message || "Please try again."),
-  })
-
-  const writeMutation = useMutation({
-    mutationFn: (portal) => runPortalSyncWrite(profileId, portal.portalHost),
-    onSuccess: (res, portal) => {
-      refetchPortals()
-      if (res?.ok === false) {
-        showErrorToast(toast, "Push failed", res?.error || res?.detail || "See the status line for details.")
-      } else {
-        showSuccessToast(toast, "Push started", `Pushing this profile’s data to ${portal.portalHost}. Watch the status line for the result.`)
-      }
-    },
-    onError: (err) => showErrorToast(toast, "Could not start push", err?.message || "Please try again."),
-  })
 
   // Human "I merged this" confirmation — the ONLY manual path to the terminal
   // `merged` state (which ends the weekly unmerged-portals reminder). The
@@ -719,7 +541,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   }
 
   // ── Portal Autopilot vault controls ───────────────────────────────────────
-  // The master passphrase is a PASSWORD field, consumed on submit and cleared —
+  // The saved-login master passphrase is a PASSWORD field, consumed on submit and cleared —
   // never stored in component state beyond the moment of submission, never echoed.
   const [passInput, setPassInput] = React.useState("")
   // RECOVERY PATH: once a passphrase is set the vault only offers "unlock". If the
@@ -727,8 +549,8 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   // — a dead-end failure state. `resetMode` flips the password field into
   // "set a NEW passphrase" mode so they can recover. The backend's
   // setMasterPassphrase already UPDATEs the salt+verifier (a true rotation), and
-  // previously auto-provisioned secrets degrade gracefully (reveal returns
-  // vault_locked rather than throwing) and are regenerated on the next run.
+  // previously saved secrets degrade gracefully (reveal returns vault_locked
+  // rather than throwing). Account recovery remains a human portal step.
   const [resetMode, setResetMode] = React.useState(false)
   const [identityInput, setIdentityInput] = React.useState(vaultStatus.identity_email || "")
   React.useEffect(() => {
@@ -742,7 +564,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       setPassInput("")
       setResetMode(false)
       refetchPortals()
-      showSuccessToast(toast, "Master passphrase saved", "Hamilton can now provision logins under it. The passphrase is never stored or shown.")
+      showSuccessToast(toast, "Master passphrase saved", "The saved-login vault is protected. The passphrase is never stored or shown.")
     },
     onError: (err) => showErrorToast(toast, "Could not set the passphrase", err?.message || "Please try again."),
   })
@@ -771,78 +593,36 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     onSuccess: (_res, vars) => {
       refetchPortals()
       if (vars?.identityEmail) {
-        showSuccessToast(toast, "Autopilot identity saved", "Hamilton will register new portal accounts with this email.")
+        showSuccessToast(toast, "Portal contact email saved", "New portal accounts and required verification remain your handoff.")
       } else {
-        showSuccessToast(toast, "Identity email cleared", "Hamilton has no email on file to register new portal accounts.")
+        showSuccessToast(toast, "Portal contact email cleared", "Hamilton will not use a saved contact email in portal drafts.")
       }
     },
     onError: (err) => showErrorToast(toast, "Could not save the identity email", err?.message || "Please try again."),
   })
 
-  // Run autopilot for the whole profile, or one portal. A single-portal run may
-  // return a one-time generated password to show once; we surface it in a
-  // dedicated dismissible modal (never a toast / log).
-  const autopilotRunMutation = useMutation({
-    mutationFn: ({ portalHost = null, loginUrl = null } = {}) =>
-      runPortalAutopilot(profileId, { portalHost, loginUrl }),
-    onSuccess: (res) => {
-      refetchPortals()
-      const onetime = res?.result?.password_one_time_view
-      if (onetime) {
-        setOneTimePassword(onetime)
-      } else if (res?.summary) {
-        const provisioned = res.summary.auto_provisioned || 0
-        showSuccessToast(toast, "Autopilot finished", `${provisioned} login(s) provisioned. See each tile for its state.`)
-      } else {
-        showSuccessToast(toast, "Autopilot ran", res?.result?.detail || "See each tile for its state.")
-      }
-    },
-    onError: (err) => showErrorToast(toast, "Autopilot run failed", err?.message || "Please try again."),
-  })
-
-  const busyAutopilotHost = autopilotRunMutation.isPending ? autopilotRunMutation.variables?.portalHost : null
-
   // ── One button: start Hamilton on EVERYTHING for this profile ──────────────
-  // "Do all of this profile's portals and packets." Fans out to the two bulk
-  // primitives already wired above:
-  //   • Portal Autopilot for the WHOLE profile (every login Hamilton can set up)
-  //   • an application packet for EVERY mail/fax funder (no manual selection)
-  // Portal autopilot needs the vault unlocked (it wraps the generated logins);
-  // packets don't. So we run whatever is possible and tell the owner plainly if
-  // the vault must be unlocked to include the portal logins. Co-browse-only
-  // portals (2FA/CAPTCHA/ID) still need the human — those keep their own
-  // "Open side-by-side login" tiles.
-  const startingEverything = autopilotRunMutation.isPending || bulkPacketMutation.isPending
-  const startHamiltonEverything = () => {
-    const canPortals = vaultUsable
-    const hasPackets = mailFaxSources.length > 0
-
-    if (!canPortals && !hasPackets) {
+  // Packets can be prepared in bulk. Portal account creation, login, identity
+  // checks, and final submission remain visible human handoffs.
+  const startingPackets = bulkPacketMutation.isPending
+  const startAllPackets = () => {
+    if (mailFaxSources.length === 0) {
       showErrorToast(
         toast,
-        "Unlock the vault to start",
-        "Set or unlock Hamilton's master passphrase under Advanced below so he can sign in to the portals, then press this again.",
+        "No mail or fax packets to prepare",
+        "Use each portal tile for the required login and manual handoff.",
       )
       return
     }
-
-    if (canPortals) autopilotRunMutation.mutate({})
-    if (hasPackets) bulkPacketMutation.mutate(mailFaxSources)
-
-    const parts = []
-    if (canPortals) parts.push("setting up every portal login he can")
-    if (hasPackets) parts.push(`making ${mailFaxSources.length} application packet${mailFaxSources.length === 1 ? "" : "s"}`)
-    const tail = canPortals ? "" : " Unlock the vault under Advanced to include the portal logins."
+    bulkPacketMutation.mutate(mailFaxSources)
     showSuccessToast(
       toast,
-      "Hamilton is on it",
-      `${parts.join(" and ")}. Watch each tile and this profile's Documents for results.${tail}`,
+      "Packet preparation started",
+      `Making ${mailFaxSources.length} application packet${mailFaxSources.length === 1 ? "" : "s"}. Portal login and submission remain your handoff.`,
     )
   }
 
-  const busyLoginHost = loginMutation.isPending ? loginMutation.variables?.portal?.portalHost : null
-  const busyReadHost = readMutation.isPending ? readMutation.variables?.portalHost : null
-  const busyWriteHost = writeMutation.isPending ? writeMutation.variables?.portalHost : null
+  const busyLoginHost = loginMutation.isPending ? loginMutation.variables?.portalHost : null
 
   const renderTile = (portal) => {
     const ready = portal.status === "ready"
@@ -851,9 +631,6 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     const sync = syncTone(portal.lastSync)
     const SyncIcon = sync.Icon
     const isLoggingIn = busyLoginHost === host
-    const isReading = busyReadHost === host
-    const isWriting = busyWriteHost === host
-    const syncBusy = isReading || isWriting
 
     const tileKey = host || portal.label || portal.connectorId || "tile"
 
@@ -862,15 +639,6 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     // A portal Hamilton can't auto-merge is plainly labeled and routed to the
     // LAST-RESORT side-by-side co-browse (Hamilton helps the user answer live).
     const offerCobrowse = Boolean(portal.cantAutoMerge && host)
-    const isAutopiloting = busyAutopilotHost === host
-    // Hamilton can auto-provision when the vault is unlocked and there's no
-    // existing login yet (the "ready to auto-provision" describe state).
-    const canRunAutopilot =
-      host &&
-      !ready &&
-      vaultUsable &&
-      !offerCobrowse &&
-      portal.autopilotState !== "identity_proof_required"
 
     // Build the served-sources text as a single, robust string (no fragile
     // inline index/comma logic, no empty string nodes).
@@ -980,26 +748,9 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
           {ready ? (
             <>
               {portal.supportsTwoWaySync && (
-                <>
-                  <button
-                    type="button"
-                    className={BTN_BASE}
-                    disabled={syncBusy}
-                    onClick={() => readMutation.mutate(portal)}
-                  >
-                    {isReading ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Download className="h-4 w-4" />}
-                    Pull from portal
-                  </button>
-                  <button
-                    type="button"
-                    className={BTN_BASE}
-                    disabled={syncBusy}
-                    onClick={() => writeMutation.mutate(portal)}
-                  >
-                    {isWriting ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Upload className="h-4 w-4" />}
-                    Push to portal
-                  </button>
-                </>
+                <span className="money rounded-full border border-current-line px-2.5 py-1 text-[11.5px] text-current-ink/75 dark:text-slate-300">
+                  Controlled beta: update portal data manually
+                </span>
               )}
               {/* A portal that's signed in but that Hamilton still can't auto-merge
                   (2FA/CAPTCHA/identity-proof each visit) must offer the live
@@ -1013,10 +764,10 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   className={BTN_CORAL}
                   disabled={isLoggingIn}
                   onClick={() => startLogin(portal)}
-                  title="Open the side-by-side login — Hamilton helps you answer the portal's questions live"
+                  title="Open the official portal for manual login and required checks"
                 >
                   {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <PanelsTopLeft className="h-4 w-4" />}
-                  Open side-by-side login
+                  Open portal manually
                 </button>
               )}
               <button
@@ -1024,7 +775,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 className={BTN_BASE}
                 disabled={isLoggingIn}
                 onClick={() => startLogin(portal)}
-                title="Re-open the secure login window to refresh this session"
+                title="Open the official portal for manual login or review"
               >
                 {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <RefreshCw className="h-4 w-4" />}
                 Refresh sign-in
@@ -1055,7 +806,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   className={BTN_BASE}
                   disabled={isLoggingIn}
                   onClick={() => startLogin(portal)}
-                  title="Open this portal in Hamilton's watched window"
+                  title="Open the official portal for manual work"
                 >
                   {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <ExternalLink className="h-4 w-4" />}
                   Open portal
@@ -1064,29 +815,14 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             </>
           ) : host ? (
             <>
-              {/* Hamilton can auto-provision this login (vault unlocked, no
-                  existing account, automation allowed) → offer the automated
-                  setup FIRST. Co-browse is only the fallback below. */}
-              {canRunAutopilot && (
-                <button
-                  type="button"
-                  className={BTN_EMERALD}
-                  disabled={isAutopiloting}
-                  onClick={() => autopilotRunMutation.mutate({ portalHost: host, loginUrl: portal.loginUrl || null })}
-                  title="Let Hamilton create + manage this login under your master passphrase"
-                >
-                  {isAutopiloting ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Wand2 className="h-4 w-4" />}
-                  Set up with Hamilton
-                </button>
-              )}
               <button
                 type="button"
                 className={offerCobrowse ? BTN_CORAL : BTN_BASE}
                 disabled={isLoggingIn}
                 onClick={() => startLogin(portal)}
                 title={offerCobrowse
-                  ? "Open the side-by-side login — Hamilton helps you answer the portal's questions live"
-                  : "Open the secure login window"}
+                  ? "Open the official portal for manual login and required checks"
+                  : "Open the official portal"}
               >
                 {isLoggingIn ? (
                   <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
@@ -1095,7 +831,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 ) : (
                   <Globe className="h-4 w-4" />
                 )}
-                {offerCobrowse ? "Open side-by-side login" : "Log in once →"}
+                Open portal manually
               </button>
             </>
           ) : portal.loginUrl ? (
@@ -1107,7 +843,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               type="button"
               className={BTN_BASE}
               onClick={() => openWithHamiltonWatching({ profileId, url: portal.loginUrl, label: portal.label, toast })}
-              title="Open with Hamilton watching"
+              title="Open the official portal for manual work"
             >
               <ExternalLink className="h-4 w-4" /> Open
             </button>
@@ -1128,7 +864,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
         {ready && portal.supportsTwoWaySync && (
           <p className="money flex items-start gap-1.5 text-[11.5px] text-current-ink/70">
             <ArrowLeftRight className="mt-0.5 h-3 w-3 shrink-0" />
-            two-way: shares this profile&rsquo;s scholarships ↔ updates from the portal&rsquo;s award info
+            Controlled beta keeps portal comparison and profile updates manual.
           </p>
         )}
       </li>
@@ -1309,31 +1045,25 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       </CardHeader>
 
       <CardContent className="space-y-7">
-        {/* One-time provisioned password modal (secret never goes through a toast). */}
-        <OneTimePasswordModal value={oneTimePassword} onClose={() => setOneTimePassword(null)} />
-
-        {/* ONE button to start Hamilton on everything for this profile: every
-            portal login he can auto-set-up + a packet for every mail/fax funder. */}
-        {!isLoading && !isError && (portals.length > 0 || mailFaxSources.length > 0) && (
+        {!isLoading && !isError && mailFaxSources.length > 0 && (
           <div className="flex flex-col gap-3 rounded-2xl border border-[#bfe0cd] bg-current-emeraldSoft p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <p className="font-display text-[15px] font-bold text-current-ink">
-                Let Hamilton do it all for {profileName || "this profile"}
+                Prepare every mail/fax packet for {profileName || "this profile"}
               </p>
               <p className="mt-0.5 text-[13px] text-current-ink/70">
-                One click: sets up every portal login Hamilton can, and makes an application packet for each mail/fax funder.
-                {!vaultUsable && " Unlock the vault below to include the portal logins."}
+                Hamilton prepares the packets. Portal accounts, login, required human checks, and final submission remain your handoff.
               </p>
             </div>
             <button
               type="button"
               className={`${BTN_EMERALD} shrink-0`}
-              disabled={startingEverything}
-              onClick={startHamiltonEverything}
-              title="Start Hamilton on every portal and packet for this profile"
+              disabled={startingPackets}
+              onClick={startAllPackets}
+              title="Prepare every mail and fax application packet for this profile"
             >
-              {startingEverything ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Wand2 className="h-4 w-4" />}
-              {startingEverything ? "Hamilton is working…" : "Do all portals & packets"}
+              {startingPackets ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Printer className="h-4 w-4" />}
+              {startingPackets ? "Preparing packets…" : "Prepare all packets"}
             </button>
           </div>
         )}
@@ -1348,22 +1078,21 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               <div className="min-w-0 flex-1">
                 <p className="font-display font-bold text-current-ink">
                   {cobrowseIsBotWall
-                    ? "This site blocks automated submission"
+                    ? "This site requires your browser"
                     : "Hamilton needs you to finish signing in"}
                 </p>
                 <p className="mt-1 text-[13px] text-current-ink/75">
                   {cobrowseIsBotWall ? (
                     <>
                       <span className="money">{cobrowsePortal.label || cobrowseTargetHost}</span> blocks automated
-                      access with bot protection (a Cloudflare / anti-bot security check), so Hamilton can&rsquo;t
-                      submit it on her own. Open side-by-side co-browse and apply from your own browser — or apply
-                      manually.
+                      access with bot protection (a Cloudflare / anti-bot security check). Open the official
+                      portal and complete the work in your own browser.
                     </>
                   ) : (
                     <>
                       <span className="money">{cobrowsePortal.label || cobrowseTargetHost}</span> hit a step only you
-                      can clear — a 2FA approval, a CAPTCHA, or identity verification. Open the side-by-side window and
-                      Hamilton will guide you through it, then keep going on its own.
+                      can clear — a 2FA approval, a CAPTCHA, or identity verification. Open the official portal and
+                      complete the required work yourself. Final Submit remains yours.
                     </>
                   )}
                 </p>
@@ -1378,7 +1107,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   ) : (
                     <PanelsTopLeft className="h-4 w-4" />
                   )}
-                  Open side-by-side login
+                  Open portal manually
                 </button>
               </div>
               <button
@@ -1394,14 +1123,12 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
         )}
 
         {/* ── Portal Autopilot (master vault) controls ──────────────────────
-            ONE master passphrase + an identity email let Hamilton self-provision
-            a unique login per portal. The passphrase is a password field, sent
-            once and never stored/echoed. */}
+            This vault protects saved logins; it never creates portal accounts. */}
         {!isLoading && !isError && (
           <details className="rounded-2xl border border-current-line bg-current-card px-4 py-1 [&_summary]:list-none" open={!vaultStatus.has_passphrase}>
             <summary className="flex cursor-pointer items-center justify-between gap-3 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber focus-visible:ring-offset-2">
               <span className="inline-flex items-center gap-2 font-display text-[15px] font-bold text-current-ink">
-                <KeyRound className="h-4 w-4" /> Portal Autopilot
+                <KeyRound className="h-4 w-4" /> Saved-login vault
               </span>
               <span
                 className={`money inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] ${vaultBadge.cls}`}
@@ -1411,15 +1138,15 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             </summary>
             <div className="space-y-4 pb-4 pt-1">
               <p className="text-sm text-current-ink/70">
-                Set one master passphrase and Hamilton creates + manages a unique, strong password for each
-                portal you don&rsquo;t already have an account on — you never type or remember those.
-                The passphrase is never stored or shown; you enter it to unlock for this session.
+                Protect existing or imported saved logins with one master passphrase. Hamilton can reuse a
+                saved login for draft preparation after you establish the account; it does not create new
+                portal accounts. The passphrase is never stored or shown.
               </p>
 
-              {/* Identity email Hamilton registers new accounts with. */}
+              {/* Optional contact email used while preparing portal drafts. */}
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                 <label className="flex-1 space-y-1">
-                  <span className="money text-[11.5px] font-bold uppercase tracking-[0.06em] text-current-ink/60">Autopilot identity email</span>
+                  <span className="money text-[11.5px] font-bold uppercase tracking-[0.06em] text-current-ink/60">Portal contact email</span>
                   <input
                     type="email"
                     autoComplete="email"
@@ -1436,7 +1163,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   onClick={() => identityMutation.mutate({ identityEmail: identityInput.trim() || null })}
                 >
                   {identityMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <UserCheck className="h-4 w-4" />}
-                  {identityInput.trim() ? "Save identity" : "Clear identity"}
+                  {identityInput.trim() ? "Save contact email" : "Clear contact email"}
                 </button>
               </div>
 
@@ -1506,9 +1233,8 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                     )}
                     {vaultStatus.has_passphrase && resetMode && (
                       <p className="money text-[11px] text-current-amber">
-                        Resetting replaces the passphrase. Logins Hamilton already
-                        generated under the old one can't be read back and will be
-                        regenerated on the next autopilot run.
+                        Resetting replaces the passphrase. Saved credentials encrypted
+                        under the old passphrase may need to be imported again.
                       </p>
                     )}
                   </div>
@@ -1516,16 +1242,6 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               })()}
 
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className={BTN_EMERALD}
-                  disabled={autopilotRunMutation.isPending || !vaultUsable}
-                  onClick={() => autopilotRunMutation.mutate({})}
-                  title={vaultUsable ? "Let Hamilton set up logins for every portal it can" : "Unlock the vault first"}
-                >
-                  {autopilotRunMutation.isPending && !busyAutopilotHost ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Wand2 className="h-4 w-4" />}
-                  Run Autopilot (whole profile)
-                </button>
                 {vaultStatus.has_passphrase && vaultUsable && (
                   <button
                     type="button"
@@ -1538,9 +1254,13 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   </button>
                 )}
               </div>
+              <p role="status" className="text-sm text-current-ink/70">
+                Create new portal accounts yourself and complete login, verification, signatures, and final Submit.
+                Afterward, Hamilton can reuse an authorized saved login to prepare and save drafts.
+              </p>
               {vaultStatus.has_passphrase && vaultStatus.identity_email && (
                 <p className="money text-[11.5px] text-current-ink/55">
-                  Registering new accounts as <strong className="text-current-ink/75">{vaultStatus.identity_email}</strong>.
+                  Saved portal contact email: <strong className="text-current-ink/75">{vaultStatus.identity_email}</strong>.
                 </p>
               )}
             </div>

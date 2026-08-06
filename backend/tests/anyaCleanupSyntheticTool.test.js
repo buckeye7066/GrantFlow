@@ -8,8 +8,9 @@ import Database from 'better-sqlite3'
 import { invokeTool } from '../services/anyaToolRegistry.js'
 import { createAmyProfile, markProfileCrawled, listAmyProfiles } from '../services/amy/amyProfileStore.js'
 import { generateScenarios } from '../services/amy/syntheticProfileCatalog.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
-const OWNER = 'buckeye7066@gmail.com'
+const OWNER = ADMIN_EMAIL
 
 function createDb() {
   const db = new Database(':memory:')

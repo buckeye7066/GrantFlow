@@ -14,12 +14,13 @@
  *   1. `resolveConfirmationCaptureDir` resolves a PERSISTENT capture directory
  *      under UPLOADS_DIR (the same volume that holds the runtime-secrets key),
  *      never `os.tmpdir()` in production.
- *   2. `registerConfirmationArtifact` registers the captured confirmation
+ *   2. `registerConfirmationArtifact` registers the captured portal outcome
  *      (screenshot + saved page HTML/text) as retrievable `documents` rows via
  *      the SAME `insertDocumentRecord` helper the mail/fax packet and proposal
  *      PDF paths use — bytes land in `documents.file_bytes` (BYTEA), so the
- *      owner can open the proof at `/api/documents/<id>/download` even after the
- *      ephemeral on-disk copy is gone.
+ *      owner can open the evidence at `/api/documents/<id>/download` even after
+ *      the ephemeral on-disk copy is gone. Captures without a genuinely new
+ *      portal reference use an attempt-evidence document type, never proof.
  *   3. `assessStoredConfirmationProof` is the read/verify helper: it reports
  *      proof as PRESENT only when it is ACTUALLY retrievable (durable document
  *      bytes, or an on-disk file that still exists) — so a run whose
@@ -41,6 +42,7 @@ const DEFAULT_PRODUCTION_UPLOADS_DIR = '/data/uploads'
 const EPHEMERAL_DIR_NAME = 'hamilton-autopilot-screens'
 
 const CONFIRMATION_DOCUMENT_TYPE = 'hamilton_submission_confirmation'
+const ATTEMPT_EVIDENCE_DOCUMENT_TYPE = 'hamilton_submission_attempt_evidence'
 
 function isProduction(env = process.env) {
   return String(env.NODE_ENV || '').trim().toLowerCase() === 'production'
@@ -103,13 +105,13 @@ function readFileBytesSafe(filePath) {
 }
 
 /**
- * Register the captured confirmation as owner-retrievable `documents` rows.
+ * Register the captured portal outcome as owner-retrievable `documents` rows.
  * Reuses the packet generator's `insertDocumentRecord` (bytes → BYTEA), so the
  * proof survives an ephemeral-filesystem wipe and serves at
  * `/api/documents/<id>/download`. Best-effort: a registration failure NEVER
  * fails the run — the caller keeps the filesystem-path fields regardless.
  *
- * @returns {Promise<{screenshot_document_id: string|null, page_document_id: string|null}>}
+ * @returns {Promise<{screenshot_document_id: string|null, page_document_id: string|null, evidence_classification: 'confirmation_proof'|'attempt_evidence'}>}
  */
 export async function registerConfirmationArtifact(db, {
   profileId,
@@ -121,9 +123,24 @@ export async function registerConfirmationArtifact(db, {
   pageHtmlPath = null,
   pageText = null,
   reference = null,
+  referenceIsNew = null,
+  receivedAcknowledgement = false,
+  receivedAcknowledgementIsNew = false,
   capturedUrl = null,
 } = {}) {
-  const out = { screenshot_document_id: null, page_document_id: null }
+  const confirmedReference = Boolean(reference) && referenceIsNew === true
+  const confirmedAcknowledgement = receivedAcknowledgement === true
+    && receivedAcknowledgementIsNew === true
+  const confirmedReceipt = confirmedReference || confirmedAcknowledgement
+  const evidenceClassification = confirmedReceipt ? 'confirmation_proof' : 'attempt_evidence'
+  const documentType = confirmedReceipt
+    ? CONFIRMATION_DOCUMENT_TYPE
+    : ATTEMPT_EVIDENCE_DOCUMENT_TYPE
+  const out = {
+    screenshot_document_id: null,
+    page_document_id: null,
+    evidence_classification: evidenceClassification,
+  }
   if (!db || !profileId) return out
 
   let insertDocumentRecord
@@ -137,7 +154,11 @@ export async function registerConfirmationArtifact(db, {
   const safeTitle = String(title || 'Application').slice(0, 120).trim() || 'Application'
   const extracted = pageText ? String(pageText).slice(0, 20000) : null
   const notes = [
-    'External portal submission confirmation.',
+    confirmedReceipt
+      ? confirmedReference
+        ? 'External portal submission confirmation with a new portal reference.'
+        : 'External portal submission confirmation with a newly appearing receipt acknowledgement.'
+      : 'External portal submit-attempt evidence; receipt is not confirmed.',
     taskId ? `task_id=${taskId}.` : '',
     reference ? `reference=${reference}.` : '',
     capturedUrl ? `url=${capturedUrl}` : '',
@@ -150,8 +171,10 @@ export async function registerConfirmationArtifact(db, {
         profileId,
         grantId,
         opportunityId,
-        name: `${safeTitle} — Portal submission confirmation (screenshot)`,
-        type: CONFIRMATION_DOCUMENT_TYPE,
+        name: confirmedReceipt
+          ? `${safeTitle} — Portal submission confirmation (screenshot)`
+          : `${safeTitle} — Portal submit attempt (screenshot)`,
+        type: documentType,
         filePath: screenshotPath,
         mimeType: 'image/png',
         fileSize: shotBytes.length,
@@ -169,8 +192,10 @@ export async function registerConfirmationArtifact(db, {
         profileId,
         grantId,
         opportunityId,
-        name: `${safeTitle} — Portal submission confirmation (page)`,
-        type: CONFIRMATION_DOCUMENT_TYPE,
+        name: confirmedReceipt
+          ? `${safeTitle} — Portal submission confirmation (page)`
+          : `${safeTitle} — Portal submit attempt (page)`,
+        type: documentType,
         filePath: pageHtmlPath,
         mimeType: 'text/html',
         fileSize: htmlBytes.length,
@@ -185,9 +210,10 @@ export async function registerConfirmationArtifact(db, {
 }
 
 /**
- * Read/verify helper (backfill honesty): report proof PRESENT only when it is
- * ACTUALLY retrievable. A durable `documents` row with bytes is the strongest
- * evidence; an on-disk screenshot that still exists is next; a
+ * Read/verify helper (backfill honesty): report proof PRESENT only when a run
+ * records a genuinely new portal reference or receipt acknowledgement and its
+ * confirmation artifact is ACTUALLY retrievable. Ambiguous screenshots/pages
+ * remain attempt evidence. A
  * `confirmation_screenshot_path` pointing at a now-missing file is NOT proof.
  * Reports; never deletes.
  *
@@ -198,25 +224,53 @@ export async function registerConfirmationArtifact(db, {
 export async function assessStoredConfirmationProof(db, run) {
   const result = (run && typeof run.result === 'object' && run.result) || {}
   const docIds = [result.confirmation_document_id, result.confirmation_page_document_id].filter(Boolean)
+  const reference = String(
+    result.confirmation_reference || run?.confirmation_reference || '',
+  ).trim()
+  const referenceIsNew = result.confirmation_reference_is_new === true
+    && result.confirmation_evidence === 'portal_reference'
+  const acknowledgementIsNew = result.confirmation_received_acknowledgement_is_new === true
+    && result.confirmation_received_acknowledgement === true
+    && result.confirmation_evidence === 'portal_acknowledgement'
+  const classifiedAsProof = Boolean((reference && referenceIsNew) || acknowledgementIsNew)
+  let attemptDocumentId = null
 
   if (db && docIds.length > 0) {
     for (const docId of docIds) {
       try {
-        const doc = await db.prepare('SELECT id, file_bytes, file_path FROM documents WHERE id = ?').get(docId)
+        const doc = await db.prepare('SELECT id, type, file_bytes, file_path FROM documents WHERE id = ?').get(docId)
         if (!doc) continue
         const bytes = doc.file_bytes
         const hasBytes = Buffer.isBuffer(bytes) ? bytes.length > 0 : Boolean(bytes)
-        if (hasBytes) return { proof_retrievable: true, source: 'document', document_id: String(doc.id) }
-        if (doc.file_path && fs.existsSync(doc.file_path)) {
+        const retrievable = hasBytes || Boolean(doc.file_path && fs.existsSync(doc.file_path))
+        if (!retrievable) continue
+        if (classifiedAsProof && doc.type === CONFIRMATION_DOCUMENT_TYPE) {
+          if (hasBytes) return { proof_retrievable: true, source: 'document', document_id: String(doc.id) }
           return { proof_retrievable: true, source: 'document_disk', document_id: String(doc.id) }
         }
+        attemptDocumentId ||= String(doc.id)
       } catch { /* fall through to disk check */ }
     }
   }
 
   const screenshotPath = run?.confirmation_screenshot_path || result.confirmation_screenshot_path || null
-  if (screenshotPath && fs.existsSync(screenshotPath)) {
+  const pageHtmlPath = result.confirmation_page_html_path || null
+  const screenshotExists = Boolean(screenshotPath && fs.existsSync(screenshotPath))
+  const pageExists = Boolean(pageHtmlPath && fs.existsSync(pageHtmlPath))
+  if (classifiedAsProof && screenshotExists) {
     return { proof_retrievable: true, source: 'disk', screenshot_path: screenshotPath }
+  }
+
+  if (attemptDocumentId || screenshotExists || pageExists) {
+    return {
+      proof_retrievable: false,
+      attempt_evidence_retrievable: true,
+      source: attemptDocumentId ? 'attempt_document' : 'attempt_disk',
+      document_id: attemptDocumentId,
+      screenshot_path: screenshotPath || null,
+      page_html_path: pageHtmlPath || null,
+      reason: 'attempt_evidence_is_not_confirmation_proof',
+    }
   }
 
   return {
@@ -230,6 +284,7 @@ export async function assessStoredConfirmationProof(db, run) {
 export const _internal = {
   CONFIRMATION_DIR_NAME,
   CONFIRMATION_DOCUMENT_TYPE,
+  ATTEMPT_EVIDENCE_DOCUMENT_TYPE,
   EPHEMERAL_DIR_NAME,
   DEFAULT_PRODUCTION_UPLOADS_DIR,
   readFileBytesSafe,

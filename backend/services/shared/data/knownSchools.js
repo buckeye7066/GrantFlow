@@ -13,7 +13,7 @@
  *   - Avoid zero-result UX: the system was previously emitting Google search
  *     URLs as the off-campus housing "result" for every target school.
  *     That qualifies as a placeholder result and was failing students like
- *     Anastasia who applied to MTSU and got handed a Google search instead
+ *     Demo Student who applied to MTSU and got handed a Google search instead
  *     of MTSU Financial Aid + MTSU Housing.
  *
  * Entries are matched case-insensitively against an alias list. Adding a

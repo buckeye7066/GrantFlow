@@ -128,7 +128,7 @@ Assistant: I've run a system health check. Here's what I found:
 ✅ Database: Up (SQLite)
 ✅ Crawlers: Up (0 running jobs)
 ✅ Environment: Healthy
-   - Node version: v20.x.x
+   - Node version: v20.20.2
    - Uptime: 3,600 seconds
    - Memory: 256 MB
 

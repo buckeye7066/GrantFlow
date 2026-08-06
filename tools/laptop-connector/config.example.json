@@ -4,7 +4,7 @@
   "apiBaseUrl": "https://YOUR-GRANTFLOW-BACKEND.up.railway.app",
   "_apiBaseUrl_note": "Or set env LAPTOP_CONNECTOR_API. Use http://localhost:8080 against a local backend.",
 
-  "roots": ["C:\\Users\\firer", "G:\\"],
+  "roots": ["C:\\Users\\example_user", "G:\\"],
   "_roots_note": "Owner asked for all of C: and G:. Narrow these if you want a faster, tighter scan. C:\\ root works too but is slower.",
 
   "extraDenylist": [],

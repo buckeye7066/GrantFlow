@@ -18,11 +18,12 @@
  *   6. Records a `hamilton_runs` row so the agent telemetry / Mission
  *      Control surfaces Hamilton's activity.
  *
- * Hamilton NEVER:
+ * This legacy compatibility agent NEVER:
  *   - bypasses CAPTCHA, 2FA, SSO, paywalls, terms-of-service, signatures,
- *     legal attestations, consent boxes, or final-submit confirmation
- *     unless the caller explicitly opts in via task.auto_submit_enabled
- *     === true AND the adapter agrees the portal allows it.
+ *     legal attestations, consent boxes, or final-submit confirmation.
+ *   - submits externally. The canonical Hamilton automation orchestrator is
+ *     the only path allowed to resolve stored authorization and attempt an
+ *     external submission; this compatibility path is permanently draft-only.
  *   - invents missing answers — every "filled" field is verified to exist
  *     on the profile or in an attached document.
  *   - logs raw passwords or secrets — credentials are referenced by a
@@ -49,7 +50,7 @@ import {
   cleanupDisallowedHamiltonTraces,
 } from './hamilton/hamiltonFundingSourcePolicy.js'
 import { withProfileScope } from '../middleware/profileContext.js'
-import { prepareApplication, autoPopulate, validateApplication, markSubmitted } from '../apply/applyEngine.js'
+import { prepareApplication, autoPopulate, validateApplication } from '../apply/applyEngine.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 
 export const HAMILTON_AGENT_NAME = 'hamilton'
@@ -64,6 +65,25 @@ export function isBrowserAutomationEnabled() {
 
 export function isAutoSubmitGloballyEnabled() {
   return String(ENV.HAMILTON_ALLOW_AUTOSUBMIT || 'false').toLowerCase() === 'true'
+}
+
+/**
+ * Permanent compatibility boundary: even if a legacy adapter incorrectly
+ * reports SUBMITTED, persist only a draft that requires the canonical
+ * orchestrator. Overwrite submission-shaped fields so callers cannot mistake
+ * an adapter claim for external confirmation evidence.
+ */
+export function draftGateLegacyAdapterResult(result) {
+  if (!result || result.outcome !== ADAPTER_OUTCOMES.SUBMITTED) return result
+  return {
+    ...result,
+    outcome: ADAPTER_OUTCOMES.DRAFT_COMPLETED,
+    message: 'Hamilton prepared a draft. External submission must run through the canonical Hamilton orchestrator and retain verified confirmation evidence.',
+    submission_method: null,
+    submission_reference: null,
+    blocking_reason: 'canonical_submission_required',
+    safe_to_proceed: false,
+  }
 }
 
 // ── Outcome → task-status mapping ─────────────────────────────────
@@ -436,7 +456,9 @@ export async function runHamiltonCycle(db, {
     knownSchool: null,
     documents,
     options: {
-      allowSubmit: Boolean(task.auto_submit_enabled) && isAutoSubmitGloballyEnabled(),
+      // The legacy adapter path is permanently draft-only. Submission intent
+      // and authority are resolved only inside the canonical orchestrator.
+      allowSubmit: false,
       browserAutomation: isBrowserAutomationEnabled(),
     },
   })
@@ -481,30 +503,10 @@ export async function runHamiltonCycle(db, {
     }
   }
 
-  // If the adapter says we can submit AND the task explicitly enabled
-  // auto-submit, ask the adapter to attempt submission. Adapters
-  // themselves enforce the safety rules.
-  if (
-    result.outcome === ADAPTER_OUTCOMES.DRAFT_COMPLETED
-    && task.auto_submit_enabled
-    && isAutoSubmitGloballyEnabled()
-  ) {
-    try {
-      const submitResult = adapter.submitApplication(ctx)
-      if (submitResult) result = submitResult
-    } catch (err) {
-      result = {
-        outcome: ADAPTER_OUTCOMES.FAILED,
-        message: `submitApplication failed: ${err?.message || err}`,
-        requirements: [],
-        filled_fields: {},
-        submission_method: null,
-        submission_reference: null,
-        blocking_reason: 'submit_failed',
-        safe_to_proceed: false,
-      }
-    }
-  }
+  // Defense in depth for old/custom adapters: a SUBMITTED claim is demoted to
+  // draft before any task state, event, notification, telemetry, or apply row
+  // can record it. This compatibility agent has no external-submit call site.
+  result = draftGateLegacyAdapterResult(result)
 
   // Optional: integrate with the apply-engine when the portal type is
   // amenable to a draft package (scholarship/external). We use the apply
@@ -552,33 +554,6 @@ export async function runHamiltonCycle(db, {
   })
   if (result.requirements?.length) {
     await setMissingInfo(db, taskId, result.requirements)
-  }
-
-  // If the adapter signalled SUBMITTED and we have an apply-engine row,
-  // mirror the submission so the rest of the system knows.
-  if (result.outcome === ADAPTER_OUTCOMES.SUBMITTED && applicationId) {
-    let mirrored = false
-    try {
-      await markSubmitted({
-        db,
-        applicationId,
-        method: result.submission_method || 'portal',
-        metadata: {
-          submitted_by: 'hamilton',
-          submission_reference: result.submission_reference || null,
-          task_id: taskId,
-        },
-      })
-      mirrored = true
-    } catch (err) {
-      // Never claim a submission we did not actually record. If the
-      // apply-engine mirror fails, log it and DO NOT mark the task submitted —
-      // leave it for review instead of falsely showing "submitted".
-      console.warn(`[hamilton] markSubmitted failed for task ${taskId}; not marking submitted: ${err?.message || err}`)
-    }
-    if (mirrored) {
-      await updateApplicationTask(db, taskId, { submittedAt: new Date().toISOString() })
-    }
   }
 
   await appendTaskEvent(db, {

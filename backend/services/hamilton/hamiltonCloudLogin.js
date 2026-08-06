@@ -1,11 +1,9 @@
 /**
  * Hamilton cloud interactive login (Option B).
  *
- * Goal: let a user on ANY device (including a phone), independent of the owner,
- * log into a portal once and have Hamilton capture the resulting session — so
- * future runs skip both login AND 2FA, even for push-2FA portals. Hamilton
- * never sees the password or the 2FA code; she only reuses the resulting
- * (AES-256-GCM-encrypted, profile-bound, revocable) Playwright storageState.
+ * The live-login machinery remains testable against GrantFlow's reserved
+ * synthetic fixture. Controlled beta never launches it against a real portal;
+ * users sign in and submit in their own browser.
  *
  * PROVIDERS (HAMILTON_CLOUD_LOGIN_PROVIDER):
  *
@@ -43,6 +41,13 @@
 
 import http from 'node:http'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import {
+  CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
+  controlledBetaBrowserContextOptions,
+  controlledBetaBrowserRefusal,
+  installControlledBetaBrowserEgressGuard,
+  isControlledBetaSyntheticBrowserUrl,
+} from './controlledBetaBrowserPolicy.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
 import { findValidSession, getSessionStorageState } from './hamiltonCredentialSessionService.js'
@@ -267,6 +272,17 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
   sweepExpired()
   const target = loginUrl || (portalHost ? `https://${portalHost}/` : null)
   if (!profileId || !portalHost || !target) return { ok: false, reason: 'missing_params' }
+  const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
+  if (!isControlledBetaSyntheticBrowserUrl(target)
+      || normalizedPortalHost !== CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST) {
+    const refusal = controlledBetaBrowserRefusal()
+    return {
+      ok: false,
+      reason: refusal.code,
+      detail: refusal.message,
+      requires_human_handoff: true,
+    }
+  }
 
   let chromium = null
   if (!launchBrowser) {
@@ -283,7 +299,9 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     if (provider === 'cdp' && chromium) {
       // Hosted interactive Chrome (Browserless / Browserbase).
       browser = await chromium.connectOverCDP(cdpEndpoint())
-      const context = browser.contexts()[0] || (await browser.newContext())
+      const context = browser.contexts()[0]
+        || (await browser.newContext(controlledBetaBrowserContextOptions()))
+      await installControlledBetaBrowserEgressGuard(context)
       const page = context.pages()[0] || (await context.newPage())
       const nav = await navigateOrFail(page, target)
       if (!nav.ok) {
@@ -313,7 +331,7 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     const seed = await loadSeedSession(db, { profileId, portalHost })
     const launched = launchBrowser
       ? await launchBrowser({ storageState: seed?.storageState || null })
-      : await launchPortalBrowser(chromium)
+      : await launchPortalBrowser(chromium, { targetUrl: target })
     browser = launched.browser ?? launched
     log.info('cloud login browser launched', {
       engine: launched.engine || 'injected', portalHost, seeded: Boolean(seed),
@@ -324,12 +342,13 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     // stay REALISTIC_PORTAL_UA — Akamai-class WAFs bind captured cookies to the
     // fingerprint, so a seeded session presented under a different UA silently
     // reads as signed out (see browserLaunch.js / hamiltonSessionKeepAlive.js).
-    const context = await browser.newContext({
+    const context = await browser.newContext(controlledBetaBrowserContextOptions({
       viewport: { width: 1280, height: 900 },
       userAgent: REALISTIC_PORTAL_UA,
       locale: 'en-US',
       ...(seed?.storageState ? { storageState: seed.storageState } : {}),
-    })
+    }))
+    await installControlledBetaBrowserEgressGuard(context)
     const page = await context.newPage()
     const nav = await navigateOrFail(page, target)
     if (!nav.ok) {
@@ -368,6 +387,9 @@ async function navigateOrFail(page, target) {
     navError = err
   }
   const landedUrl = (() => { try { return page.url() } catch { return null } })()
+  if (landedUrl && landedUrl !== 'about:blank' && !isControlledBetaSyntheticBrowserUrl(landedUrl)) {
+    return { ok: false, reason: 'controlled_beta_redirect_blocked', detail: `Blocked off-fixture redirect (${landedUrl})` }
+  }
   if (navError || !landedUrl || landedUrl === 'about:blank') {
     return { ok: false, reason: 'navigation_failed', detail: navError?.message || `stayed_on_blank_page (target: ${target})` }
   }
@@ -595,7 +617,14 @@ async function attachScreencastToCurrentPage(s) {
  * it against the new s.page).
  */
 export async function retargetLivePage(s, page) {
-  if (!s || !page || s.page === page) return
+  if (!s || !page || s.page === page) return false
+  const candidateUrl = (() => { try { return page.url() } catch { return null } })()
+  if (candidateUrl && candidateUrl !== 'about:blank'
+      && !isControlledBetaSyntheticBrowserUrl(candidateUrl)) {
+    try { await page.close?.() } catch { /* best-effort quarantine */ }
+    log.warn('cloud login blocked off-fixture popup', { candidateUrl })
+    return false
+  }
   s.page = page
   // Frame metadata belongs to the OLD page's compositor; input scaling must not
   // map coordinates through it while the new page's first frame is in flight.
@@ -605,6 +634,7 @@ export async function retargetLivePage(s, page) {
   if (s.activeViewer) {
     await attachScreencastToCurrentPage(s)
   }
+  return true
 }
 
 /**
@@ -935,18 +965,20 @@ export async function cancelCloudLogin(liveSessionId) {
 }
 
 export function cloudLoginStatus() {
-  const configured = isCloudLoginConfigured()
-  const provider = cloudLoginProvider()
+  const infrastructureConfigured = isCloudLoginConfigured()
   return {
-    configured,
-    provider,
+    // Product-facing truth: real-portal cloud login is intentionally disabled
+    // in controlled beta even if the synthetic test infrastructure is present.
+    configured: false,
+    provider: 'controlled_beta_manual_handoff',
+    infrastructure_configured: infrastructureConfigured,
+    synthetic_fixture_only: true,
+    real_portal_navigation: false,
     active_sessions: sessions.size,
     // self_hosted now serves the interactive view from GrantFlow itself (a
     // same-origin SSE screencast + POST input), so it needs NO public devtools
     // base and works on a single-port PaaS out of the box.
     requires_public_base: false,
-    reason: configured
-      ? null
-      : 'Cloud login is disabled (HAMILTON_CLOUD_LOGIN_PROVIDER=disabled). Use Saved Login, or set HAMILTON_CLOUD_LOGIN_PROVIDER=self_hosted (default) / =cdp with HAMILTON_CLOUD_LOGIN_CDP_ENDPOINT.',
+    reason: 'Controlled beta does not launch a server browser on real portal domains. Open the official portal in your own browser for login, review, and final submission.',
   }
 }

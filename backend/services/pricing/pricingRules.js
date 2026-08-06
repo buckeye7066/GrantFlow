@@ -24,6 +24,7 @@ import {
   orgCategoryForBudget,
   parseAnnualBudget,
 } from '../../../shared/profileTypeToClientCategory.js'
+import { STRONG_MATCH_SCORE } from '../../config/matchThresholds.js'
 
 const { INDIVIDUAL, SMALL, MID_SIZE, LARGE } = CLIENT_CATEGORIES
 const { HIGH, ESTIMATED, NEEDS_ADMIN_REVIEW } = CLIENT_CATEGORY_CONFIDENCE
@@ -214,7 +215,11 @@ export function recommendServices({
   let adminReviewRequired = false
 
   const matchCount = Array.isArray(matches) ? matches.length : 0
-  const strongMatches = (matches || []).filter((m) => Number(m.match_score || 0) >= 0.7)
+  const strongMatches = (matches || []).filter((m) => {
+    const decision = String(m.match_decision ?? m.decision ?? '').trim().toUpperCase()
+    const score = Number(m.match_score ?? m.score)
+    return decision === 'ACCEPT' && Number.isFinite(score) && score >= STRONG_MATCH_SCORE
+  })
   const profileType = String(profile.primary_type || profile.profile_type || intakeAnswers.profile_type || '').toLowerCase()
   const wantsResearchOnly = Boolean(
     intakeAnswers.wants_research_only ||

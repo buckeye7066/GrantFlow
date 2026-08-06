@@ -87,6 +87,19 @@ function statusIcon(kind) {
   return Clock3
 }
 
+function describeCalendarDay(day, items = []) {
+  const dateLabel = format(day, 'EEEE, MMMM d, yyyy')
+  if (!Array.isArray(items) || items.length === 0) return `${dateLabel}. Nothing scheduled.`
+  const details = items
+    .map((item) => `${statusLabel(item.kind)}: ${item.title} for ${item.grantTitle}`)
+    .join('. ')
+  return `${dateLabel}. ${items.length} scheduled ${items.length === 1 ? 'item' : 'items'}. ${details}.`
+}
+
+function distinctKinds(items = []) {
+  return [...new Set(items.map((item) => item.kind).filter(Boolean))]
+}
+
 export default function EndUserCalendar() {
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [selectedDay, setSelectedDay] = useState(null)
@@ -96,21 +109,26 @@ export default function EndUserCalendar() {
     ? activeProfileId
     : profiles?.[0]?.id ?? null
 
-  const { data: grants = [], isLoading: grantsLoading } = useQuery({
+  const grantsQuery = useQuery({
     queryKey: ['grants', 'end-user-calendar', profileId],
     queryFn: () => client.entities.Grant.list(
       '-created_date',
       2000,
       profileId ? { profile_id: profileId } : {},
     ),
+    enabled: Boolean(profileId),
     staleTime: 30_000,
   })
 
-  const { data: milestones = [], isLoading: milestonesLoading } = useQuery({
-    queryKey: ['milestones'],
+  const milestonesQuery = useQuery({
+    queryKey: ['milestones', 'end-user-calendar', profileId],
     queryFn: () => client.entities.Milestone.list(),
+    enabled: Boolean(profileId),
     staleTime: 30_000,
   })
+
+  const grants = grantsQuery.data ?? []
+  const milestones = milestonesQuery.data ?? []
 
   const pipelineGrants = useMemo(
     () => (Array.isArray(grants) ? grants : []).filter((grant) => {
@@ -191,13 +209,33 @@ export default function EndUserCalendar() {
       .slice(0, 12)
   }, [calendarItems])
 
-  const isLoading = grantsLoading || milestonesLoading
+  const isLoading = grantsQuery.isLoading || milestonesQuery.isLoading
+  const hasError = grantsQuery.isError || milestonesQuery.isError
+
+  if (!profileId) {
+    return (
+      <section className="px-4 pb-12 pt-6 md:px-6 lg:px-10">
+        <Card className="mx-auto max-w-lg">
+          <CardContent className="p-8 text-center">
+            <CalendarDays className="mx-auto h-9 w-9 text-primary" aria-hidden="true" />
+            <h1 className="mt-4 text-xl font-semibold text-foreground">Your calendar will appear here</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Anya is still connecting your funding profile. Ask her what is needed next.
+            </p>
+            <Button asChild className="mt-5">
+              <Link to="/Help">Ask Anya</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </section>
+    )
+  }
 
   return (
     <section className="px-4 pb-12 pt-6 md:px-6 lg:px-10">
       <div className="mx-auto max-w-7xl space-y-6">
         <div>
-          <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
+          <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200">
             <CalendarDays className="h-3.5 w-3.5" />
             Pipeline schedule
           </div>
@@ -207,62 +245,94 @@ export default function EndUserCalendar() {
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-3 text-xs font-medium text-foreground">
-          <Legend color={ITEM_COLORS.completed} label="Completed" />
-          <Legend color={ITEM_COLORS.needed} label="Needed by this date" />
-          <Legend color={ITEM_COLORS.submission} label="Submission deadline" />
+          <div className="flex flex-wrap gap-3 text-xs font-medium text-foreground" role="group" aria-label="Calendar status key">
+          <Legend kind="completed" color={ITEM_COLORS.completed} label="Completed" />
+          <Legend kind="needed" color={ITEM_COLORS.needed} label="Needed by this date" />
+          <Legend kind="submission" color={ITEM_COLORS.submission} label="Submission deadline" />
           <span className="self-center text-muted-foreground">Split squares mean more than one item shares that date.</span>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+        {hasError ? (
+          <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100">
+            <p className="font-semibold">We could not load every calendar date.</p>
+            <p className="mt-1">Check your connection, then try again. No missing date is being treated as complete.</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => {
+                grantsQuery.refetch()
+                milestonesQuery.refetch()
+              }}
+            >
+              Try again
+            </Button>
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
           <Card className="min-w-0">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
                 <Button variant="ghost" size="icon" onClick={() => setCurrentMonth((month) => subMonths(month, 1))} aria-label="Previous month">
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <CardTitle>{format(currentMonth, 'MMMM yyyy')}</CardTitle>
+                <CardTitle id="calendar-month-heading">{format(currentMonth, 'MMMM yyyy')}</CardTitle>
                 <Button variant="ghost" size="icon" onClick={() => setCurrentMonth((month) => addMonths(month, 1))} aria-label="Next month">
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="px-2 pb-6 sm:px-6">
               {isLoading ? (
-                <div className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground">Loading your pipeline schedule…</div>
+                <div role="status" aria-live="polite" className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground">
+                  Loading your pipeline schedule…
+                </div>
+              ) : hasError ? (
+                <div className="flex min-h-[240px] items-center justify-center px-4 text-center text-sm text-muted-foreground">
+                  Calendar dates are unavailable until the retry succeeds.
+                </div>
               ) : (
                 <>
                   <div className="mb-1 grid grid-cols-7 gap-px">
                     {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => (
-                      <div key={label} className="py-1 text-center text-xs font-medium text-muted-foreground">{label}</div>
+                      <div key={label} className="py-1 text-center text-[10px] font-medium text-muted-foreground sm:text-xs">{label}</div>
                     ))}
                   </div>
-                  <div className="grid grid-cols-7 gap-px overflow-hidden rounded-xl bg-border">
+                  <div className="grid grid-cols-7 gap-px overflow-hidden rounded-xl bg-border" role="group" aria-labelledby="calendar-month-heading">
                     {Array.from({ length: leadingBlanks }).map((_, index) => (
-                      <div key={`blank-${index}`} className="min-h-[94px] bg-muted/40" />
+                      <div key={`blank-${index}`} className="min-h-[68px] bg-muted/40 sm:min-h-[94px]" aria-hidden="true" />
                     ))}
                     {monthDays.map((day) => {
                       const key = dayKey(day)
                       const items = itemsByDay.get(key) || []
                       const selected = selectedDay && isSameDay(day, selectedDay)
                       const today = isToday(day)
+                      const kinds = distinctKinds(items)
                       return (
                         <button
                           key={key}
                           type="button"
                           onClick={() => setSelectedDay(day)}
                           style={segmentedBackground(items)}
-                          className={`relative min-h-[94px] min-w-0 bg-card p-2 text-left transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-inset ${
+                          aria-label={describeCalendarDay(day, items)}
+                          aria-pressed={Boolean(selected)}
+                          aria-current={today ? 'date' : undefined}
+                          className={`relative min-h-[68px] !min-w-0 bg-card p-1 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset sm:min-h-[94px] sm:p-2 ${
                             selected ? 'z-[1] ring-2 ring-primary ring-inset' : ''
                           } ${items.length === 0 ? 'hover:bg-muted/60' : 'hover:brightness-[0.98]'} `}
-                          title={items.length ? items.map((item) => `${statusLabel(item.kind)}: ${item.title} — ${item.grantTitle}`).join('\n') : undefined}
                         >
-                          <span className={`inline-flex h-7 min-w-7 items-center justify-center rounded-md bg-background/85 px-1.5 text-sm font-semibold shadow-sm ${today ? 'text-primary ring-1 ring-primary/40' : 'text-foreground'}`}>
+                          <span className={`inline-flex h-7 min-w-7 items-center justify-center rounded-md bg-background/90 px-1 text-sm font-semibold shadow-sm ${today ? 'text-blue-800 ring-1 ring-blue-700/40 dark:text-blue-200' : 'text-foreground'}`}>
                             {format(day, 'd')}
                           </span>
                           {items.length > 0 ? (
-                            <span className="absolute bottom-1.5 right-1.5 rounded-full bg-background/90 px-1.5 py-0.5 text-[10px] font-bold text-foreground shadow-sm">
-                              {items.length}
+                            <span className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-md bg-background/95 px-1 py-0.5 text-foreground shadow-sm sm:bottom-1.5 sm:right-1.5">
+                              {kinds.map((kind) => {
+                                const Icon = statusIcon(kind)
+                                return <Icon key={kind} className="h-3 w-3" aria-hidden="true" />
+                              })}
+                              <span className="sr-only">{items.length} scheduled</span>
                             </span>
                           ) : null}
                         </button>
@@ -271,7 +341,7 @@ export default function EndUserCalendar() {
                   </div>
 
                   {selectedDay ? (
-                    <div className="mt-5 border-t border-border pt-4">
+                    <div className="mt-5 border-t border-border pt-4" aria-live="polite">
                       <h2 className="font-semibold text-foreground">{format(selectedDay, 'MMMM d, yyyy')}</h2>
                       {selectedItems.length === 0 ? (
                         <p className="mt-2 text-sm text-muted-foreground">Nothing is scheduled for this date.</p>
@@ -295,8 +365,17 @@ export default function EndUserCalendar() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {upcomingItems.length === 0 ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">No upcoming pipeline deadlines.</p>
+              {isLoading ? (
+                <p role="status" className="py-8 text-center text-sm text-muted-foreground">Loading upcoming dates…</p>
+              ) : hasError ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">Upcoming dates are unavailable until the calendar reloads.</p>
+              ) : upcomingItems.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  <p>No upcoming pipeline deadlines.</p>
+                  <Button asChild variant="outline" size="sm" className="mt-4">
+                    <Link to="/Pipeline">Open your pipeline</Link>
+                  </Button>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {upcomingItems.map((item) => (
@@ -326,10 +405,12 @@ export default function EndUserCalendar() {
   )
 }
 
-function Legend({ color, label }) {
+function Legend({ kind, color, label }) {
+  const Icon = statusIcon(kind)
   return (
     <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5">
       <span className="h-3 w-3 rounded-sm border border-black/10" style={{ backgroundColor: color }} />
+      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {label}
     </span>
   )

@@ -4,7 +4,7 @@
 // scoring penalty (eligibilityPenalty -= 25) when an opportunity's stated
 // applicant types disagreed with the profile's resolved applicant_type. That
 // meant Discover Grants surfaced things like "NSF CyberTraining" or
-// "USDA AFRI Workforce Development" for an INDIVIDUAL profile (Luibov),
+// "USDA AFRI Workforce Development" for an INDIVIDUAL profile (demo_senior_family),
 // which the pipeline insert path then rejected with 400. Symptom: the UI
 // shows results that explode on add-to-pipeline.
 //
@@ -115,7 +115,7 @@ const INSTITUTION_ONLY_PATTERNS = [
   /\bembassy\s+(?:program|grant|fund)\b/,
   // High-precision FEDERAL INSTITUTIONAL mechanisms (terms of art whose applicant
   // is always an institution / state / consortium — an individual literally
-  // cannot apply). These caught Anastasia's bad pipeline rows (OSEP personnel
+  // cannot apply). These caught Demo Student's bad pipeline rows (OSEP personnel
   // preparation, NRSA institutional training grants, OESE comprehensive centers,
   // NSF Space Grant). Deliberately narrow so they never hit an individual
   // scholarship or CE program ("training scholarship", "safety training", etc.).

@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
 import { recordSuccessfulLogin } from '../services/firstLoginNotifier.js'
 import { ensureUsersLastLoginAtColumn } from '../startup/ensureSchemaInvariants.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
 function makeDb({ withColumn = true } = {}) {
   const raw = new Database(':memory:')
@@ -69,7 +70,7 @@ describe('firstLoginNotifier.recordSuccessfulLogin', () => {
     expect(db.prepare('SELECT last_login_at FROM users WHERE id = ?').get('u1').last_login_at).toBeTruthy()
     expect(sendEmail).toHaveBeenCalledTimes(1)
     const args = sendEmail.mock.calls[0][0]
-    expect(args.to).toBe('dr.johnwhite@axiombiolabs.org')
+    expect(args.to).toBe(ADMIN_EMAIL)
     expect(args.subject).toContain('newbie@example.com')
     expect(args.subject).toContain('GrantFlow')
 
@@ -80,8 +81,7 @@ describe('firstLoginNotifier.recordSuccessfulLogin', () => {
   })
 
   it('admin and owner sign-ins are stamped but never notify', async () => {
-    // isAdminEmail's hardcoded default includes buckeye7066@gmail.com.
-    const admin = seedUser(db, { id: 'a1', email: 'buckeye7066@gmail.com' })
+    const admin = seedUser(db, { id: 'a1', email: ADMIN_EMAIL })
     const res = await call(admin)
     expect(res).toMatchObject({ ok: true, firstLogin: true, notified: false })
     expect(sendEmail).not.toHaveBeenCalled()

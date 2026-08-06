@@ -14,6 +14,8 @@
  * Adding a new rule: append a rule object here — no other file changes required.
  */
 
+import { PROCUREMENT_CONTRACT_PATTERN } from './matching/contentEligibilityPolicy.js'
+
 // ── Shared helpers (local copies to avoid circular deps with relevanceFilter.js) ─
 
 const _STATE_ABBREVIATIONS = {
@@ -157,7 +159,7 @@ function _isStudentProfile(pd) {
 // cooperative agreements do not apply to them.
 function _isResearchInstitution(pd) {
   const t = (pd.primary_type || '').toLowerCase()
-  if (['university', 'college_institution', 'research_institution', 'hospital', 'medical_center', 'academic_medical_center'].includes(t)) {
+  if (['researcher', 'university', 'college_institution', 'research_institution', 'hospital', 'medical_center', 'academic_medical_center'].includes(t)) {
     return true
   }
   // A profile can DECLARE research capability via its organization type
@@ -1044,7 +1046,8 @@ export const RELEVANCE_RULES = [
     id: 'content_procurement_contract',
     category: 'content_type',
     description: 'Procurement and contract solicitations are not grant opportunities for individuals',
-    oppPattern: /\b(contract opportunity|statement of work|bidder|vendor)\b/i,
+    hard: true,
+    oppPattern: PROCUREMENT_CONTRACT_PATTERN,
     profileCheck: (pd) => {
       const t = (pd.primary_type || '').toLowerCase()
       return ['individual', 'individual_need', 'family', 'student', 'college_student', 'high_school_student', 'medical_assistance', 'caregiver'].includes(t)

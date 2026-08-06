@@ -59,7 +59,7 @@ describe('Amy canonical recommendation decisions', () => {
   it('does not relabel an explicit REVIEW as ACCEPT merely because its raw score is high', () => {
     const evaluation = evaluateHomeschool([
       { title: 'Tennessee HOPE Scholarship', sponsor: 'TSAC', match_score: 88, decision: 'REVIEW' },
-      { title: 'Homeschool Curriculum Mini-Grant', sponsor: 'Community Foundation', match_score: 82, decision: 'ACCEPT' },
+      { opportunity_id: 'opp-kind-unknown', title: 'Homeschool Curriculum Mini-Grant', sponsor: 'Community Foundation', match_score: 82, decision: 'ACCEPT' },
     ])
 
     expect(evaluation.accepted).toBe(1)
@@ -97,6 +97,48 @@ describe('Amy canonical recommendation decisions', () => {
     expect(evaluation.accepted).toBe(0)
     expect(evaluation.review).toBe(0)
     expect(evaluation.ineligible_accepts).toBe(0)
+  })
+
+  it('does not call an ACCEPT clean when the opportunity kind is unknown', () => {
+    const evaluation = evaluateHomeschool([
+      { title: 'Homeschool Curriculum Mini-Grant', sponsor: 'Community Foundation', match_score: 82, decision: 'ACCEPT' },
+    ])
+
+    expect(evaluation.opportunity_oracle).toMatchObject({
+      status: 'unknown',
+      complete: false,
+      accepted_claims: 1,
+      checked_accepts: 0,
+      unknown_accepts: 1,
+      qualification_proven: false,
+    })
+    expect(evaluation.opportunity_oracle.exception_classes.missing_opportunity_kind).toBe(1)
+  })
+
+  it('checks every identified direct ACCEPT against the bounded fixture oracle without claiming qualification', () => {
+    const evaluation = evaluateHomeschool([
+      { opportunity_id: 'opp-homeschool', title: 'Homeschool Curriculum Mini-Grant', sponsor: 'Community Foundation', kind: 'PROGRAM', match_score: 82, decision: 'ACCEPT' },
+    ])
+
+    expect(evaluation.opportunity_oracle).toMatchObject({
+      status: 'checked',
+      complete: true,
+      accepted_claims: 1,
+      checked_accepts: 1,
+      unknown_accepts: 0,
+      known_conflicts: 0,
+      qualification_proven: false,
+    })
+  })
+
+  it('records a pointer that claims ACCEPT as a known opportunity-level conflict', () => {
+    const evaluation = evaluateHomeschool([
+      { opportunity_id: 'opp-directory', title: 'State Funding Directory', sponsor: 'State Agency', kind: 'directory', match_score: 82, decision: 'ACCEPT' },
+    ])
+
+    expect(evaluation.opportunity_oracle.status).toBe('conflict')
+    expect(evaluation.opportunity_oracle.known_conflicts).toBe(1)
+    expect(evaluation.opportunity_oracle.exception_classes.pointer_claimed_accept).toBe(1)
   })
 })
 

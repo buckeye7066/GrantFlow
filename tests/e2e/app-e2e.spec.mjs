@@ -1,5 +1,5 @@
 import { test, expect } from 'playwright/test'
-import { basePath } from './playwright.config.mjs'
+import { basePath, e2eAdminEmail } from './playwright.config.mjs'
 
 function stripTrailingSlash(value) {
   return String(value || '').replace(/\/$/, '')
@@ -67,7 +67,6 @@ async function dismissBlockingOverlay(page) {
 
     // Escape closes most Radix dialogs/popovers.
     await page.keyboard.press('Escape').catch(() => {})
-    // eslint-disable-next-line no-await-in-loop
     await page.waitForTimeout(200)
   }
 }
@@ -116,7 +115,6 @@ async function loginWithPreviewOtp({ page, email }) {
       return
     }
 
-    // eslint-disable-next-line no-await-in-loop
     await page.waitForTimeout(500)
   }
 
@@ -132,7 +130,7 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
   const errors = attachConsoleFailureHooks(page)
   const appBase = stripTrailingSlash(basePath)
 
-  await loginWithPreviewOtp({ page, email: 'buckeye7066@gmail.com' })
+  await loginWithPreviewOtp({ page, email: e2eAdminEmail })
   // Some dialogs mount right after navigation; give the UI a beat, then dismiss.
   await page.waitForTimeout(250)
   await dismissBlockingOverlay(page)
@@ -209,7 +207,6 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
     }
 
     await page.keyboard.press('Escape').catch(() => {})
-    // eslint-disable-next-line no-await-in-loop
     await page.waitForTimeout(500)
   }
 
@@ -270,4 +267,3 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
 
   expect(errors, 'no console/page/request errors during e2e flow').toEqual([])
 })
-

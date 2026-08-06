@@ -12,7 +12,7 @@ import {
   translateLegacyMinScore,
   scoreToMatchTier,
   scoreToMatchLabel,
-  fitPercent,
+  canonicalMatchDisplay,
 } from "../matchDisplayThresholds.js"
 
 import * as backendThresholds from "../../../backend/config/matchThresholds.js"
@@ -104,51 +104,29 @@ describe("scoreToMatchTier (badge color bands)", () => {
   })
 })
 
-describe("fitPercent (Instrumentl-style user-facing fit gauge)", () => {
-  // The defect this fixes: an Excellent match (score 17) rendered as the raw
-  // "17%" reads like a terrible match. The gauge must lift it to ~90% and stay
-  // consistent with the tier labels.
-  it("reads an Excellent match as a high percentage (never looks poor)", () => {
-    expect(fitPercent(STRONG_MATCH_SCORE)).toBeGreaterThanOrEqual(90)
-    expect(fitPercent(23)).toBeGreaterThanOrEqual(90) // prod p95
+describe("canonicalMatchDisplay", () => {
+  it("uses the persisted decision before applying any display tier", () => {
+    expect(canonicalMatchDisplay({ score: 17, decision: "ACCEPT" })).toMatchObject({
+      label: "Excellent Match", tier: "excellent", decision: "ACCEPT", score: 17,
+    })
+    expect(canonicalMatchDisplay({ score: 85, decision: "REVIEW" })).toMatchObject({
+      label: "Needs review", tier: "review", decision: "REVIEW", score: 85,
+    })
+    expect(canonicalMatchDisplay({ score: 85, decision: "REJECT" })).toMatchObject({
+      label: "Not eligible", tier: "rejected", decision: "REJECT", score: 85,
+    })
   })
 
-  it("anchors the tiers to intuitive percentages", () => {
-    expect(fitPercent(MODERATE_MATCH_SCORE)).toBe(60) // Potential
-    expect(fitPercent(GOOD_MATCH_SCORE)).toBe(75) // Good
-    expect(fitPercent(STRONG_MATCH_SCORE)).toBe(90) // Excellent
-  })
-
-  it("keeps the percentage ordered the same way as the tiers", () => {
-    const { excellent, good, fair, potential } = MATCH_DISPLAY_TIERS
-    expect(fitPercent(excellent)).toBeGreaterThan(fitPercent(good))
-    expect(fitPercent(good)).toBeGreaterThan(fitPercent(fair))
-    expect(fitPercent(fair)).toBeGreaterThan(fitPercent(potential))
-  })
-
-  it("is monotonic non-decreasing across the whole scale", () => {
-    let prev = -1
-    for (let s = 0; s <= 40; s++) {
-      const p = fitPercent(s)
-      expect(p).toBeGreaterThanOrEqual(prev)
-      prev = p
-    }
-  })
-
-  it("clamps to [0, 99] and never claims a perfect 100", () => {
-    expect(fitPercent(0)).toBe(0)
-    expect(fitPercent(-5)).toBe(0)
-    expect(fitPercent(null)).toBe(0)
-    expect(fitPercent(undefined)).toBe(0)
-    expect(fitPercent(NaN)).toBe(0)
-    expect(fitPercent(1000)).toBe(99)
-    for (let s = 0; s <= 200; s++) {
-      const p = fitPercent(s)
-      expect(p).toBeGreaterThanOrEqual(0)
-      expect(p).toBeLessThanOrEqual(99)
-    }
+  it("preserves missing decisions and scores as unrated", () => {
+    expect(canonicalMatchDisplay({ score: 17 })).toMatchObject({
+      label: "Unrated", tier: "unrated", decision: null, score: 17,
+    })
+    expect(canonicalMatchDisplay({ decision: "ACCEPT", score: null })).toMatchObject({
+      label: "Unrated", tier: "unrated", decision: "ACCEPT", score: null,
+    })
   })
 })
+
 
 describe("translateLegacyMinScore (stored min-score preference migration)", () => {
   // The dead-slider class: a persisted need-anchored value (25/50/75/85 stops)

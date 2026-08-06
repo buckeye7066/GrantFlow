@@ -3,7 +3,7 @@
  * APPLICATION TARGET is a fixed, officially-owned URL.
  *
  * THE DEFECT CLASS THIS CLOSES (the "TN Promise opens a paramedic program
- * page" report, 2026-07-31, Anastasia's profile): the web lane reads a page
+ * page" report, 2026-07-31, Demo Student's profile): the web lane reads a page
  * that merely MENTIONS a famous program ("this program is TN Promise
  * eligible") and emits an opportunity TITLED by the mention with the PAGE's
  * URL as source/application URL. The title is a real program; the URL is

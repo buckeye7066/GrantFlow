@@ -1,16 +1,38 @@
+/**
+ * Read-only verification of profile reattachment in an explicit SQLite DB.
+ *
+ * Required env: VERIFY_REATTACH_DB_PATH, VERIFY_REATTACH_ADMIN_USER_ID, and
+ * VERIFY_REATTACH_OUTPUT_PATH.
+ */
 import Database from 'better-sqlite3';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { existsSync, writeFileSync } from 'fs';
+import { resolve } from 'path';
+import process from 'node:process';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const dbPath = join(__dirname, '..', 'backend', 'data', 'grantflow.db');
+function requiredEnv(name) {
+  const value = String(process.env[name] || '').trim();
+  if (!value) throw new Error(`${name} is required; verification has no database defaults`);
+  return value;
+}
+
+const dbPath = resolve(process.cwd(), requiredEnv('VERIFY_REATTACH_DB_PATH'));
+const adminUserId = requiredEnv('VERIFY_REATTACH_ADMIN_USER_ID');
+const outputPath = resolve(process.cwd(), requiredEnv('VERIFY_REATTACH_OUTPUT_PATH'));
+if (!existsSync(dbPath)) throw new Error(`VERIFY_REATTACH_DB_PATH does not exist: ${dbPath}`);
 
 console.log('=== VERIFYING REATTACH RESULTS ===\n');
 console.log(`Database: ${dbPath}\n`);
 
 try {
-  const db = new Database(dbPath);
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+
+  const adminUser = db.prepare(`
+    SELECT id
+    FROM users
+    WHERE id = ? AND COALESCE(is_admin, 0) = 1
+    LIMIT 1
+  `).get(adminUserId);
+  if (!adminUser) throw new Error('VERIFY_REATTACH_ADMIN_USER_ID is not a DB-authorized admin');
   
   // Get all profiles with their linked users
   const profiles = db.prepare(`
@@ -45,37 +67,14 @@ try {
   console.log(`Linked profiles: ${linkedProfiles.length}`);
   console.log(`Unlinked profiles: ${unlinkedProfiles.length}`);
   
-  // Check specific users
-  console.log(`\n=== CHECKING TARGET USERS ===`);
-  const targetUsers = ['Rachel', 'Josh', 'Olivia', 'Avanell', 'Hollie', 'Brian'];
-  
-  for (const userName of targetUsers) {
-    const userProfiles = db.prepare(`
-      SELECT p.display_name, u.display_name as user_name, u.primary_email
-      FROM profiles p
-      JOIN users u ON p.user_id = u.id
-      WHERE LOWER(p.display_name) LIKE LOWER(?)
-      AND (LOWER(u.display_name) LIKE LOWER(?) OR LOWER(u.primary_email) LIKE LOWER(?))
-    `).all(`%${userName}%`, `%${userName}%`, `%${userName}%`);
-    
-    if (userProfiles.length > 0) {
-      console.log(`\n${userName}:`);
-      userProfiles.forEach(p => {
-        console.log(`  ✓ ${p.display_name} → ${p.user_name} (${p.primary_email})`);
-      });
-    } else {
-      console.log(`\n${userName}: No linked profiles found`);
-    }
-  }
-  
   // Check admin
   console.log(`\n=== CHECKING ADMIN ===`);
   const adminProfiles = db.prepare(`
     SELECT p.display_name, u.display_name as user_name, u.primary_email
     FROM profiles p
     JOIN users u ON p.user_id = u.id
-    WHERE LOWER(u.primary_email) LIKE '%buckeye7066%' OR u.is_admin = 1
-  `).all();
+    WHERE u.id = ? AND COALESCE(u.is_admin, 0) = 1
+  `).all(adminUserId);
   
   console.log(`Admin has ${adminProfiles.length} linked profiles`);
   if (adminProfiles.length > 0) {
@@ -91,31 +90,22 @@ try {
   db.close();
   console.log('\n=== VERIFICATION COMPLETE ===');
   
-  // Write results to file
-  import('fs').then(({ writeFileSync }) => {
-    const results = {
-      total: profiles.length,
-      linked: linkedProfiles.length,
-      unlinked: unlinkedProfiles.length,
-      profiles: profiles.map(p => ({
-        profile: p.profile_name,
-        userId: p.user_id,
-        userName: p.user_name,
-        email: p.primary_email
-      })),
-      verified: new Date().toISOString()
-    };
-    writeFileSync(join(__dirname, '..', 'verify-reattach-results.json'), JSON.stringify(results, null, 2));
-    console.log('\nResults written to verify-reattach-results.json');
-  });
+  const results = {
+    total: profiles.length,
+    linked: linkedProfiles.length,
+    unlinked: unlinkedProfiles.length,
+    profiles: profiles.map(p => ({
+      profile: p.profile_name,
+      userId: p.user_id,
+      userName: p.user_name,
+      email: p.primary_email
+    })),
+    verified: new Date().toISOString()
+  };
+  writeFileSync(outputPath, JSON.stringify(results, null, 2));
+  console.log(`\nResults written to ${outputPath}`);
 } catch (error) {
   console.error('ERROR:', error.message);
   console.error(error.stack);
-  
-  // Write error to file
-  import('fs').then(({ writeFileSync }) => {
-    writeFileSync(join(__dirname, '..', 'verify-reattach-error.txt'), error.message + '\n' + error.stack);
-  });
-  
-  process.exit(1);
+  process.exitCode = 1;
 }

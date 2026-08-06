@@ -102,7 +102,7 @@ test('classifyEmail flags disposable, role, and generic providers', () => {
   assert.deepEqual(classifyEmail('throwaway@mailinator.com').is_disposable, true)
   assert.deepEqual(classifyEmail('info@grantflow.app').is_role, true)
   assert.deepEqual(classifyEmail('exec@grantflow.app').is_org_email, true)
-  assert.deepEqual(classifyEmail('exec@gmail.com').is_generic_provider, true)
+  assert.deepEqual(classifyEmail('person@gmail.com').is_generic_provider, true)
   assert.equal(classifyEmail('not-an-email').valid, false)
 })
 

@@ -4,7 +4,7 @@
  * Every fixture below is a REAL prod row or profile field, read read-only on
  * 2026-08-02T04:59Z:
  *
- *   • Hollie Machelle Knox (`profile-hollie-knox`, family) states city
+ *   • Demo Caregiver Household Persona (`profile-demo-caregiver-household`, family) states city
  *     "North Ridgeville", zip "44039", and NO state and NO county at all. The
  *     ZIP resolves to Lorain County, OH — so every state-keyed gate in the
  *     product misses her by construction.
@@ -273,7 +273,7 @@ describe('the place anchor', () => {
   })
 
   it('gives NOTHING to a PLACEHOLDER address (#1094 — "Anytown, USA 12345")', () => {
-    // `profile-melissa-justus`, verbatim. Without the fabricated-geo refusal
+    // `profile-demo-general-support`, verbatim. Without the fabricated-geo refusal
     // this ZIP resolves to a real, plausible Schenectady NY the applicant has
     // no connection to — worse than an obviously-wrong place.
     expect(resolveProfileCountyAnchor({ city: 'Anytown', state: 'USA', zip: '12345' })).toBeNull()
@@ -407,7 +407,7 @@ describe('the need conjunct is a DECLARATION, not an inference', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('the engine\'s own verdict on the real prod pair', () => {
   it('ACCEPTs Love INC Lorain County for Hollie — the pair that was NEVER SCORED', () => {
-    const profile = { id: 'p-hollie', display_name: 'Hollie Machelle Knox', primary_type: 'family', applicant_type: 'individual' }
+    const profile = { id: 'p-hollie', display_name: 'Demo Caregiver Household Persona', primary_type: 'family', applicant_type: 'individual' }
     const d = computeMatchDecision(profile, LOVE_INC, { profileSections: HOLLIE })
     // The VERDICT is the load-bearing fact and it is the engine's, not this
     // gate's. (Against her FULL prod profile — 11 sections — the same call
@@ -422,7 +422,7 @@ describe('the engine\'s own verdict on the real prod pair', () => {
 describe('enforceCountyCrisisNeedRecall', () => {
   it('links the Lorain County household to the local rent help she could never see', async () => {
     const db = makeDb()
-    addProfile(db, 'p-hollie', HOLLIE, { display_name: 'Hollie Machelle Knox' })
+    addProfile(db, 'p-hollie', HOLLIE, { display_name: 'Demo Caregiver Household Persona' })
     for (const o of [LOVE_INC, HEAP]) addOpp(db, o)
     const res = await enforceCountyCrisisNeedRecall(wrap(db))
     expect(res.repaired).toBeGreaterThanOrEqual(1)

@@ -130,7 +130,7 @@ async function main() {
         env: {
           ...process.env,
           PORT: String(backendPort),
-          // Match `backend/env.example` so local smoke flows work without a copied backend/.env
+          // Match the generated root `.env.example` contract without requiring a copied `.env`.
           ADMIN_TOKEN: adminToken,
         },
       })

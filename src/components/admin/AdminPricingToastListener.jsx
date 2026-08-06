@@ -5,11 +5,10 @@ import { useAuthStore } from '@/stores/authStore'
 import { pricingApi } from '@/api/pricing'
 
 const POLL_INTERVAL_MS = 30_000
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
 
 function isAdminTarget(user) {
   if (!user) return false
-  return String(user.email || '').toLowerCase().trim() === ADMIN_EMAIL
+  return user.is_admin === true || user.is_admin === 1 || user.role === 'admin'
 }
 
 /**
@@ -17,8 +16,9 @@ function isAdminTarget(user) {
  * polls /api/pricing/admin-notifications and shows browser-level
  * notifications + toasts.
  *
- * On the FIRST mount after login we also call the flush-queued endpoint
- * so the admin sees notifications that arrived while they were offline.
+ * The server first confirms the DB-backed account is the configured queue
+ * recipient. On the first eligible mount we flush notifications that arrived
+ * while that operator was offline.
  */
 export function AdminPricingToastListener({ toast }) {
   const user = useAuthStore((s) => s.user)
@@ -38,6 +38,7 @@ export function AdminPricingToastListener({ toast }) {
     if (!isAdminTarget(user)) return undefined
 
     let cancelled = false
+    let pollTimer = null
 
     async function flushQueued() {
       if (flushedRef.current) return
@@ -82,11 +83,20 @@ export function AdminPricingToastListener({ toast }) {
       pricingApi.markAdminNotificationDelivered(n.id, mode).catch(() => {})
     }
 
-    flushQueued().then(poll).catch(() => {})
-    const id = setInterval(poll, POLL_INTERVAL_MS)
+    async function beginIfEligible() {
+      try {
+        const capability = await pricingApi.adminNotificationCapability()
+        if (cancelled || capability?.can_receive_pricing_notifications !== true) return
+        await flushQueued()
+        await poll()
+        if (!cancelled) pollTimer = setInterval(poll, POLL_INTERVAL_MS)
+      } catch {/* fail closed: do not poll a queue the server did not authorize */}
+    }
+
+    beginIfEligible().catch(() => {})
     return () => {
       cancelled = true
-      clearInterval(id)
+      if (pollTimer) clearInterval(pollTimer)
     }
   }, [user, navigate, toastFn])
 

@@ -394,7 +394,7 @@ export function buildItemLikeTerms(itemText, expanded) {
  * carries a real verdict. Measured read-only against prod on 2026-08-02, that
  * reasoning fails on exactly the case this feature exists for:
  *
- *   Dr. John Robert White (`profile-john-white`) declares
+ *   Demo Health Education Persona (`profile-demo-health-education`) declares
  *   `occupation.healthcare_worker_type = "RN"` and carries 212 surfaced
  *   matches. NOT ONE of them mentions nursing licensure. Meanwhile the catalog
  *   holds a purpose-built, curated license-reinstatement set created

@@ -38,7 +38,7 @@ async function run() {
     await page.screenshot({ path: path.join(OUT_DIR, 'admin-myprofiles-axiom.png'), fullPage: true })
 
     await search.fill('Focus Forward')
-    await page.getByText('Focus Forward Ministries', { exact: false }).waitFor({ timeout: 30_000 })
+    await page.getByText('Demo Faith-Based Nonprofit', { exact: false }).waitFor({ timeout: 30_000 })
     await page.screenshot({ path: path.join(OUT_DIR, 'admin-myprofiles-focus-forward.png'), fullPage: true })
 
     console.log(

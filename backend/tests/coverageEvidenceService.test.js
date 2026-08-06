@@ -567,7 +567,7 @@ describe('by-design lane exclusions stay out of gaps (reason-form independent)',
     // geographic scope, so the geographic statement is the honest one — the
     // in-scope-exclusions rule must not suppress it.
     const id = 'junk-state-1'
-    insertProfile(db, { id, displayName: 'Melissa Justus', primaryType: 'individual', state: 'USA' })
+    insertProfile(db, { id, displayName: 'Demo General Support Persona', primaryType: 'individual', state: 'USA' })
     insertSection(db, id, 'basic_information', { address: { street: '123 Main St', city: 'Anytown', state: 'USA', zip_code: '12345' } })
     insertSection(db, id, 'narrative', { primary_goal: 'help paying for housing' })
     const result = await buildCoverageEvidence(db, id)

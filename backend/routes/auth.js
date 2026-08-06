@@ -165,6 +165,11 @@ function parseSeconds(value, fallback) {
 
 const ACCESS_TOKEN_TTL = parseSeconds(process.env.AUTH_ACCESS_TOKEN_TTL, 10800) // Default: 3 hours (10800 seconds)
 const REFRESH_TOKEN_TTL = parseSeconds(process.env.AUTH_REFRESH_TOKEN_TTL, 30 * 24 * 60 * 60) // seconds
+const REFRESH_COOKIE_NAME = 'grantflow_refresh'
+const REFRESH_RACE_GRACE_MS = Math.max(
+  1_000,
+  Number.parseInt(process.env.AUTH_REFRESH_RACE_GRACE_MS || '15000', 10) || 15_000,
+)
 const EMAIL_CODE_TTL = parseSeconds(process.env.AUTH_EMAIL_CODE_TTL, 600) // seconds
 const EMAIL_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_EMAIL_RESEND_SECONDS, 45) // seconds
 // Max wrong /email/verify guesses against a single active code before it is
@@ -197,6 +202,117 @@ const AUTH_PUBLIC_URL = process.env.AUTH_PUBLIC_URL || process.env.PUBLIC_URL ||
 const FRONTEND_BASE_URL = process.env.AUTH_FRONTEND_URL || process.env.FRONTEND_BASE_URL || null
 const FRONTEND_APP_BASE =
   process.env.AUTH_FRONTEND_APP_BASE || process.env.APP_BASE_PATH || process.env.VITE_APP_BASE || '/'
+
+function refreshCookiePaths() {
+  const paths = new Set(['/api/auth'])
+  const appBase = normalizeBasePath(FRONTEND_APP_BASE)
+  if (appBase) paths.add(`${appBase}/api/auth`)
+  return [...paths]
+}
+
+function isNativeAppOrigin(origin) {
+  return origin === 'https://localhost' || origin === 'capacitor://localhost'
+}
+
+function refreshCookieOptions(path, req) {
+  const nativeOrigin = isNativeAppOrigin(req?.get?.('origin'))
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production' || nativeOrigin,
+    // Native Capacitor requests are genuinely cross-site to Railway and require
+    // None; the web app's Vercel rewrite is same-origin and stays Strict.
+    sameSite: nativeOrigin ? 'none' : 'strict',
+    path,
+    maxAge: REFRESH_TOKEN_TTL * 1000,
+  }
+}
+
+function setRefreshCookie(req, res, refreshToken) {
+  for (const path of refreshCookiePaths()) {
+    res.cookie(REFRESH_COOKIE_NAME, refreshToken, refreshCookieOptions(path, req))
+  }
+  res.setHeader('Cache-Control', 'no-store')
+}
+
+function clearRefreshCookie(req, res) {
+  for (const path of refreshCookiePaths()) {
+    const { maxAge: _maxAge, ...options } = refreshCookieOptions(path, req)
+    res.clearCookie(REFRESH_COOKIE_NAME, options)
+  }
+  res.setHeader('Cache-Control', 'no-store')
+}
+
+function readCookie(req, name) {
+  const raw = typeof req.headers?.cookie === 'string' ? req.headers.cookie : ''
+  for (const part of raw.split(';')) {
+    const separator = part.indexOf('=')
+    if (separator < 0) continue
+    const key = part.slice(0, separator).trim()
+    if (key !== name) continue
+    try {
+      return decodeURIComponent(part.slice(separator + 1).trim())
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function getRefreshCookie(req) {
+  const value = readCookie(req, REFRESH_COOKIE_NAME)
+  return typeof value === 'string' && value.length >= 20 ? value : null
+}
+
+function configuredAuthOrigins(req) {
+  const origins = new Set([
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://app.axiombiolabs.org',
+    'https://www.axiombiolabs.org',
+    'https://localhost',
+    'capacitor://localhost',
+  ])
+  for (const candidate of [FRONTEND_BASE_URL, AUTH_PUBLIC_URL]) {
+    if (!candidate) continue
+    try { origins.add(new URL(candidate).origin) } catch { /* invalid env is handled elsewhere */ }
+  }
+  for (const candidate of String(process.env.CORS_ORIGIN || '').split(',')) {
+    if (!candidate.trim()) continue
+    try { origins.add(new URL(candidate.trim()).origin) } catch { /* ignore malformed optional entry */ }
+  }
+  try { origins.add(new URL(getServerBaseUrl(req)).origin) } catch { /* request host unavailable */ }
+  return origins
+}
+
+/**
+ * Refresh and logout are authorized by an ambient cookie, so they must reject
+ * cross-site browser requests even when the response would be unreadable by
+ * CORS. The custom header also excludes HTML form submissions. Non-browser
+ * clients may omit Origin/Sec-Fetch-Site, but must still opt in with the header.
+ */
+function requireRefreshRequestIntegrity(req, res, next) {
+  if (req.get('x-requested-with') !== 'XMLHttpRequest') {
+    return res.status(403).json({ error: 'csrf_check_failed' })
+  }
+
+  const origin = req.get('origin')
+  const nativeOrigin = isNativeAppOrigin(origin)
+  const fetchSite = String(req.get('sec-fetch-site') || '').toLowerCase()
+  if (!nativeOrigin && fetchSite && !['same-origin', 'same-site', 'none'].includes(fetchSite)) {
+    return res.status(403).json({ error: 'csrf_check_failed' })
+  }
+
+  if (origin) {
+    if (nativeOrigin) return next()
+    let normalized = null
+    try { normalized = new URL(origin).origin } catch { /* rejected below */ }
+    if (!normalized || !configuredAuthOrigins(req).has(normalized)) {
+      return res.status(403).json({ error: 'csrf_check_failed' })
+    }
+  }
+
+  return next()
+}
 
 const OAUTH_PROVIDERS = {
   google: {
@@ -1214,6 +1330,20 @@ async function ensurePasswordAuthSchema(db) {
 }
 
 async function cleanupExpiredOAuthStates(db) {
+  const expiredHandoffs = await db.prepare(
+    `
+      SELECT code_verifier AS session_id
+      FROM oauth_states
+      WHERE provider = ?
+        AND expires_at <= CURRENT_TIMESTAMP
+    `,
+  ).all('grantflow-session')
+  for (const row of expiredHandoffs) {
+    if (!row?.session_id) continue
+    await db.prepare(
+      `UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?`,
+    ).run(nowISOString(), row.session_id)
+  }
   await db
     .prepare(
       `
@@ -1272,6 +1402,50 @@ async function consumeOAuthState(db, provider, state) {
   }
 
   return row
+}
+
+async function createOAuthSessionHandoff(db, { sessionId, redirectTo }) {
+  await cleanupExpiredOAuthStates(db)
+  const handoff = base64UrlEncode(crypto.randomBytes(32))
+  const handoffHash = hashValue(handoff)
+  const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL * 1000).toISOString()
+  await db.prepare(
+    `
+      INSERT INTO oauth_states (provider, state, code_verifier, redirect_to, metadata, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `,
+  ).run(
+    'grantflow-session',
+    handoffHash,
+    sessionId,
+    redirectTo ?? null,
+    JSON.stringify({ purpose: 'oauth_session_handoff' }),
+    expiresAt,
+  )
+  return handoff
+}
+
+async function consumeOAuthSessionHandoff(db, handoff) {
+  const handoffHash = hashValue(handoff)
+  const now = nowISOString()
+  return db.withTransaction(async (tx) => {
+    const row = await tx.prepare(
+      `
+        SELECT id, code_verifier, redirect_to
+        FROM oauth_states
+        WHERE provider = ?
+          AND state = ?
+          AND expires_at > ?
+      `,
+    ).get('grantflow-session', handoffHash, now)
+    if (!row) return null
+
+    const consumed = await tx.prepare(
+      `DELETE FROM oauth_states WHERE id = ? AND provider = ? AND state = ?`,
+    ).run(row.id, 'grantflow-session', handoffHash)
+    if (Number(consumed?.changes ?? consumed?.rowCount ?? 0) !== 1) return null
+    return { sessionId: row.code_verifier, redirectTo: row.redirect_to ?? null }
+  })
 }
 
 function getProviderConfig(provider, req) {
@@ -2050,6 +2224,7 @@ async function rotateSessionTokens(db, {
   sessionId,
   user,
   profileId,
+  expectedRefreshHash,
   // Login-tracker context (all optional; only the /refresh route passes them):
   priorAccessExpiresAt = null,
   ipAddress = null,
@@ -2061,24 +2236,57 @@ async function rotateSessionTokens(db, {
   const accessToken = signAccessToken(user, sessionId, profileId)
   const accessExpires = new Date(Date.now() + ACCESS_TOKEN_TTL * 1000).toISOString()
   const refreshExpires = new Date(Date.now() + REFRESH_TOKEN_TTL * 1000).toISOString()
+  const rotatedAt = nowISOString()
 
-  await db.prepare(
-    `
-      UPDATE user_sessions
-      SET refresh_token_hash = ?,
-          access_expires_at = ?,
-          refresh_expires_at = ?,
-          profile_id = COALESCE(?, profile_id),
-          revoked_at = NULL
-      WHERE id = ?
-    `,
-  ).run(refreshHash, accessExpires, refreshExpires, profileId ?? null, sessionId)
+  const rotate = async (tx) => {
+    const result = await tx.prepare(
+      `
+        UPDATE user_sessions
+        SET refresh_token_hash = ?,
+            access_expires_at = ?,
+            refresh_expires_at = ?,
+            profile_id = COALESCE(?, profile_id),
+            revoked_at = NULL
+        WHERE id = ?
+          AND refresh_token_hash = ?
+          AND revoked_at IS NULL
+      `,
+    ).run(
+      refreshHash,
+      accessExpires,
+      refreshExpires,
+      profileId ?? null,
+      sessionId,
+      expectedRefreshHash,
+    )
+
+    if (Number(result?.changes ?? result?.rowCount ?? 0) !== 1) {
+      const error = new Error('Refresh token was already rotated')
+      error.code = 'AUTH_REFRESH_ROTATION_CONFLICT'
+      throw error
+    }
+
+    await tx.prepare(
+      `
+        INSERT INTO auth_refresh_token_history (
+          token_hash, session_id, replaced_at, expires_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(token_hash) DO NOTHING
+      `,
+    ).run(expectedRefreshHash, sessionId, rotatedAt, refreshExpires)
+  }
+
+  if (typeof db.withTransaction === 'function') {
+    await db.withTransaction(rotate)
+  } else {
+    await rotate(db)
+  }
 
   // -------------------------------------------------------------------------
   // SESSION-RESUME login tracking (the admin "Logins" panel was stale).
   //
-  // The frontend persists the refresh token in localStorage and this rotation
-  // slides the 30-day refresh window forward every time, so a RETURNING user
+  // The frontend persists the refresh session in an HttpOnly cookie and this
+  // rotation slides the 30-day refresh window forward every time, so a RETURNING user
   // can use the app for months without ever hitting a session-mint path —
   // meaning createSessionAndTokens (the choke point that stamps
   // users.last_login_at and appends the durable client_sign_in audit the
@@ -2529,7 +2737,6 @@ router.post('/email/verify', emailVerifyLimiter, async (req, res) => {
 
   const response = {
     accessToken: session.accessToken,
-    refreshToken: session.refreshToken,
     expiresIn: session.expiresIn,
     accessExpires: session.accessExpires,
     refreshExpires: session.refreshExpires,
@@ -2588,6 +2795,7 @@ router.post('/email/verify', emailVerifyLimiter, async (req, res) => {
   // Sign-in is recorded durably at the session-mint choke point
   // (createSessionAndTokens), so the admin login tracker can never drift.
 
+  setRefreshCookie(req, res, session.refreshToken)
   return res.json(response)
 })
 
@@ -2812,7 +3020,6 @@ router.post('/phone/verify', async (req, res) => {
 
   const response = {
     accessToken: session.accessToken,
-    refreshToken: session.refreshToken,
     expiresIn: session.expiresIn,
     accessExpires: session.accessExpires,
     refreshExpires: session.refreshExpires,
@@ -2854,6 +3061,7 @@ router.post('/phone/verify', async (req, res) => {
 
   // Sign-in recorded durably at the session-mint choke point (createSessionAndTokens).
 
+  setRefreshCookie(req, res, session.refreshToken)
   return res.json(response)
 })
 
@@ -3290,9 +3498,9 @@ router.post('/password/setup/complete', passwordRateLimiter, async (req, res) =>
       identifier: user?.primary_email ?? null,
     })
 
+    setRefreshCookie(req, res, session.refreshToken)
     return res.json({
       accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
       expiresIn: session.expiresIn,
       accessExpires: session.accessExpires,
       refreshExpires: session.refreshExpires,
@@ -3388,9 +3596,9 @@ router.post('/password/login', passwordRateLimiter, async (req, res) => {
       }).catch((err) => console.error('[auth/password/login] admin geo crawl scheduler:', err))
     }
 
+    setRefreshCookie(req, res, session.refreshToken)
     return res.json({
       accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
       expiresIn: session.expiresIn,
       accessExpires: session.accessExpires,
       refreshExpires: session.refreshExpires,
@@ -3453,6 +3661,56 @@ router.get('/:provider/start', async (req, res) => {
       details: undefined // Never expose internal error details
     })
   }
+})
+
+router.post('/oauth/complete', requireRefreshRequestIntegrity, async (req, res) => {
+  const handoff = typeof req.body?.handoff === 'string' ? req.body.handoff.trim() : ''
+  if (handoff.length < 32 || handoff.length > 256) {
+    return res.status(400).json({ error: 'oauth_handoff_required' })
+  }
+
+  const consumed = await consumeOAuthSessionHandoff(req.db, handoff)
+  if (!consumed?.sessionId) {
+    return res.status(401).json({ error: 'oauth_handoff_invalid_or_expired' })
+  }
+
+  const sessionRow = await req.db.prepare(
+    `
+      SELECT s.*
+      FROM user_sessions s
+      WHERE s.id = ?
+    `,
+  ).get(consumed.sessionId)
+  if (!sessionRow || sessionRow.revoked_at) {
+    return res.status(401).json({ error: 'oauth_session_invalid' })
+  }
+
+  const user = await getUserById(req.db, sessionRow.user_id)
+  if (!user) {
+    return res.status(401).json({ error: 'User no longer exists' })
+  }
+
+  const profiles = await getUserProfiles(req.db, user.id)
+  const tokens = await rotateSessionTokens(req.db, {
+    sessionId: sessionRow.id,
+    user,
+    profileId: sessionRow.profile_id,
+    expectedRefreshHash: sessionRow.refresh_token_hash,
+    priorAccessExpiresAt: sessionRow.access_expires_at ?? null,
+    ipAddress: req.ip,
+    userAgent: req.headers['user-agent'],
+    identifier: user?.primary_email ?? null,
+  })
+
+  setRefreshCookie(req, res, tokens.refreshToken)
+  return res.json({
+    accessToken: tokens.accessToken,
+    expiresIn: tokens.expiresIn,
+    accessExpires: tokens.accessExpires,
+    refreshExpires: tokens.refreshExpires,
+    tokenType: 'Bearer',
+    user: await buildUserPayload(req.db, user, profiles, sessionRow.profile_id),
+  })
 })
 
 router.get('/:provider/callback', async (req, res) => {
@@ -3548,14 +3806,20 @@ router.get('/:provider/callback', async (req, res) => {
       })
     }
 
-    return redirectWithParams({
-      accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
-      expiresIn: session.expiresIn,
-      accessExpires: session.accessExpires,
-      refreshExpires: session.refreshExpires,
-      activeProfileId: activeProfileId ?? undefined,
+    const handoff = await createOAuthSessionHandoff(req.db, {
+      sessionId: session.sessionId,
+      redirectTo: redirectBase,
     })
+
+    // Put the one-time handoff in the URL fragment. Fragments are not sent in
+    // HTTP requests or Referer headers, so Vercel/Railway access logs and static
+    // asset requests never receive the bearer capability.
+    const completedRedirect = new URL(buildRedirectUrl(redirectBase, {
+      provider,
+      activeProfileId: activeProfileId ?? undefined,
+    }))
+    completedRedirect.hash = new URLSearchParams({ handoff }).toString()
+    return res.redirect(completedRedirect.toString())
   } catch (oauthError) {
     console.error(`[auth] ${provider} oauth callback failed:`, oauthError)
     return redirectWithParams({ error: 'oauth_exchange_failed' })
@@ -3682,11 +3946,20 @@ router.patch('/onboarding-state', async (req, res) => {
   }
 })
 
-router.post('/refresh', async (req, res) => {
-  const refreshToken = req.body?.refreshToken
-  if (typeof refreshToken !== 'string' || refreshToken.length < 20) {
-    return res.status(400).json({ error: 'refreshToken is required' })
+router.post('/refresh', requireRefreshRequestIntegrity, async (req, res) => {
+  if (typeof req.body?.refreshToken === 'string') {
+    return res.status(400).json({ error: 'refresh_token_body_not_allowed' })
   }
+
+  const refreshToken = getRefreshCookie(req)
+  if (!refreshToken) {
+    clearRefreshCookie(req, res)
+    return res.status(401).json({ error: 'refresh_cookie_required' })
+  }
+
+  await req.db.prepare(
+    `DELETE FROM auth_refresh_token_history WHERE expires_at <= ?`,
+  ).run(nowISOString())
 
   const refreshHash = hashValue(refreshToken)
   const sessionRow = await req.db
@@ -3701,9 +3974,44 @@ router.post('/refresh', async (req, res) => {
     .get(refreshHash)
 
   if (!sessionRow) {
+    const history = await req.db.prepare(
+      `
+        SELECT token_hash, session_id, replaced_at
+        FROM auth_refresh_token_history
+        WHERE token_hash = ?
+      `,
+    ).get(refreshHash)
+
+    if (history) {
+      const replacedAtMs = Date.parse(history.replaced_at)
+      const isLikelyConcurrentRotation =
+        Number.isFinite(replacedAtMs) && Date.now() - replacedAtMs <= REFRESH_RACE_GRACE_MS
+
+      if (isLikelyConcurrentRotation) {
+        return res.status(409).json({
+          error: 'refresh_in_progress',
+          retryable: true,
+        })
+      }
+
+      const detectedAt = nowISOString()
+      await req.db.withTransaction(async (tx) => {
+        await tx.prepare(
+          `UPDATE auth_refresh_token_history SET reuse_detected_at = COALESCE(reuse_detected_at, ?) WHERE token_hash = ?`,
+        ).run(detectedAt, refreshHash)
+        await tx.prepare(
+          `UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?`,
+        ).run(detectedAt, history.session_id)
+      })
+      clearRefreshCookie(req, res)
+      return res.status(401).json({ error: 'refresh_token_reuse_detected' })
+    }
+
+    clearRefreshCookie(req, res)
     return res.status(401).json({ error: 'Invalid refresh token' })
   }
   if (sessionRow.revoked_at) {
+    clearRefreshCookie(req, res)
     return res.status(401).json({ error: 'Session has been revoked' })
   }
   if (sessionRow.refresh_expires_at && new Date(sessionRow.refresh_expires_at) < new Date()) {
@@ -3716,38 +4024,57 @@ router.post('/refresh', async (req, res) => {
         `,
       )
       .run(nowISOString(), sessionRow.id)
+    clearRefreshCookie(req, res)
     return res.status(401).json({ error: 'Refresh token has expired' })
   }
 
   const user = await getUserById(req.db, sessionRow.user_id)
   if (!user) {
+    clearRefreshCookie(req, res)
     return res.status(401).json({ error: 'User no longer exists' })
   }
 
   const profiles = await getUserProfiles(req.db, user.id)
-  const tokens = await rotateSessionTokens(req.db, {
-    sessionId: sessionRow.id,
-    user,
-    profileId: sessionRow.profile_id,
-    // Pre-rotation expiry: lets the rotate choke point distinguish an
-    // in-session token refresh (not a login; records nothing) from a RESUME
-    // of a remembered session after the access token lapsed (a returning
-    // sign-in; stamps last_login_at + client_sign_in for the admin panel).
-    priorAccessExpiresAt: sessionRow.access_expires_at ?? null,
-    ipAddress: req.ip,
-    userAgent: req.headers['user-agent'],
-    identifier: user?.primary_email ?? null,
-  })
+  let tokens
+  try {
+    tokens = await rotateSessionTokens(req.db, {
+      sessionId: sessionRow.id,
+      user,
+      profileId: sessionRow.profile_id,
+      expectedRefreshHash: refreshHash,
+      // Pre-rotation expiry: lets the rotate choke point distinguish an
+      // in-session token refresh (not a login; records nothing) from a RESUME
+      // of a remembered session after the access token lapsed (a returning
+      // sign-in; stamps last_login_at + client_sign_in for the admin panel).
+      priorAccessExpiresAt: sessionRow.access_expires_at ?? null,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      identifier: user?.primary_email ?? null,
+    })
+  } catch (error) {
+    if (error?.code === 'AUTH_REFRESH_ROTATION_CONFLICT') {
+      return res.status(409).json({ error: 'refresh_in_progress', retryable: true })
+    }
+    throw error
+  }
 
+  setRefreshCookie(req, res, tokens.refreshToken)
   return res.json({
-    ...tokens,
+    accessToken: tokens.accessToken,
+    expiresIn: tokens.expiresIn,
+    accessExpires: tokens.accessExpires,
+    refreshExpires: tokens.refreshExpires,
     tokenType: 'Bearer',
     user: await buildUserPayload(req.db, user, profiles, sessionRow.profile_id),
   })
 })
 
-router.post('/logout', async (req, res) => {
-  const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : null
+router.post('/logout', requireRefreshRequestIntegrity, async (req, res) => {
+  if (typeof req.body?.refreshToken === 'string') {
+    return res.status(400).json({ error: 'refresh_token_body_not_allowed' })
+  }
+
+  const refreshToken = getRefreshCookie(req)
   if (refreshToken) {
     const refreshHash = hashValue(refreshToken)
     await req.db
@@ -3759,6 +4086,7 @@ router.post('/logout', async (req, res) => {
         `,
       )
       .run(nowISOString(), refreshHash)
+    clearRefreshCookie(req, res)
     return res.status(204).send()
   }
 
@@ -3774,6 +4102,7 @@ router.post('/logout', async (req, res) => {
       .run(nowISOString(), req.user.sessionId)
   }
 
+  clearRefreshCookie(req, res)
   return res.status(204).send()
 })
 

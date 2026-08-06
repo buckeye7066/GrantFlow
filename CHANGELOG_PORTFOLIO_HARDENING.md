@@ -1,6 +1,30 @@
 # Changelog — Portfolio Security & Integrity Hardening
 
-Branch `claude/portfolio-hardening-2026-07-18` (off `93d271c0`). Six confirmed contract violations fixed; all changes are backward-compatible. No schema/data migrations. No public API shape changes.
+## 2026-08-06 — Browser session-storage boundary (pending release)
+
+- Access tokens are memory-only. Refresh tokens rotate in a host-only, path-scoped `HttpOnly` cookie and are never exposed to browser JavaScript.
+- **One-time user impact:** sessions created by an older build that exist only in `localStorage` are deliberately not migrated. On first load after this release, those legacy token values are deleted without being read or transmitted, and the user must sign in once. Server-side legacy session rows expire normally because the browser no longer has or sends their credentials.
+- There is intentionally no JavaScript-readable compatibility bridge. After the one-time sign-in, reload and multi-tab bootstrap use the refresh cookie.
+- Release ordering is backend database migration and backend first, then the frontend promptly. Deploying the new frontend against the old backend cannot establish the cookie-backed session contract.
+
+**Release status:** present only in the current uncommitted working tree, based on
+the deployed `ac578a7c24f07a5613ac518276dd6ffe04da9559` baseline. It has no merge
+SHA or deployment evidence yet.
+
+**Migration:** additive refresh-history migrations
+`backend/db/migrations/164_auth_refresh_token_history.sql` and
+`backend/db/postgres/migrations/0169_auth_refresh_token_history.sql` must precede
+the new backend route behavior.
+
+**Rollback:** the additive table may remain, but rolling back to the older
+JavaScript-readable-token client forces affected users to sign in again; the
+HttpOnly credential cannot be recovered by that client.
+
+## 2026-07-18–19 — Historical hardening series
+
+### Initial round
+
+Branch `claude/portfolio-hardening-2026-07-18` (off `93d271c0`). Six confirmed contract violations fixed; all changes are backward-compatible. The statements below that say “no migrations” or “no API changes” apply only to this initial round; later rounds document their own migrations and contract changes.
 
 ## Security fixes (user-visible where noted)
 
@@ -277,7 +301,10 @@ Compat: behavior-preserving; strictly delivers the already-earned broadening to 
 
 **OTP identity/verification + phone-dedup migration surface: CLOSED** — no known open finding remains across rounds 17–32.
 
-## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
+This is source/test closure recorded for the historical hardening series, not
+evidence that every migration ran successfully in production.
+
+## Not changed by the historical hardening series; revalidate for the current release
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).
 - U3 No per-user LLM cost/rate quota on the Anya messages route.

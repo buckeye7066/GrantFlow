@@ -5,10 +5,11 @@
  * I/O, no env reads. Safe to import from anywhere (frontend, backend,
  * tests, scripts).
  *
- * Single canonical admin / operator: buckeye7066@gmail.com.
+ * The server resolves the operator from environment configuration. This
+ * source-safe default exists only for local/test attribution.
  */
 
-export const CANONICAL_ADMIN_EMAIL_DEFAULT = 'buckeye7066@gmail.com'
+export const CANONICAL_ADMIN_EMAIL_DEFAULT = 'admin@grantflow.local'
 
 /**
  * The five canonical agents the Control Center coordinates. Yana =

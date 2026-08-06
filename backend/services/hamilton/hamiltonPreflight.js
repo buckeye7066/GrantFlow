@@ -537,11 +537,19 @@ export async function readAuthorizations(db, { profileId, fundingSourceId = null
     use_saved_session: false,
     use_saved_credentials_reference: false,
     use_standing_attestation: false,
+    require_human_review: false,
+    submit_authorization_id: null,
+    submit_authorization_version: null,
   }
   if (!db || !profileId) return out
   const list = await listActiveAuthorizations(db, { profileId, fundingSourceId, taskId })
   for (const a of list) {
     if (a.authorization_type in out) out[a.authorization_type] = true
+    if (a.options?.require_human_review === true) out.require_human_review = true
+    if (a.authorization_type === 'submit_applications' && !out.submit_authorization_id) {
+      out.submit_authorization_id = a.id
+      out.submit_authorization_version = a.authorization_version || null
+    }
   }
   void isAuthorizationActive // keep import for future single-flag lookup convenience
   return out

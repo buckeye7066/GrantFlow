@@ -117,7 +117,7 @@ describe('the state housing finance agency lane is ONE row, resolved per profile
     expect(picked).toEqual([STATE_HOUSING_AGENCY_SOURCE_ID])
   })
 
-  it('a MINTED per-state row DECLARES its state (the Robert White out-of-state-HFA class, 2026-08-03)', async () => {
+  it('a MINTED per-state row DECLARES its state (the Demo College Student Persona out-of-state-HFA class, 2026-08-03)', async () => {
     // The first version dropped the state the adapter had just resolved, so
     // every minted row ("West Virginia Housing Development Fund — …") entered
     // the catalog as `state NULL, is_national 1` — the state lived only in the

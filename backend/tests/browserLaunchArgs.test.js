@@ -17,6 +17,10 @@ function backendLaunchSites() {
     .toString()
     .split('\n')
     .filter(Boolean)
+    // `git ls-files` includes tracked paths deleted in the current worktree.
+    // The tripwire audits source that can actually launch in this checkout; it
+    // must not resurrect or try to read a deliberately removed test fixture.
+    .filter((rel) => fs.existsSync(path.join(repoRoot, rel)))
   const sites = []
   for (const rel of files) {
     const text = fs.readFileSync(path.join(repoRoot, rel), 'utf8')

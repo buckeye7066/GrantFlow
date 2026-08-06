@@ -24,10 +24,8 @@
  */
 
 import { sendEmail as sendEmailReal } from './email.js'
-import { isAdminEmail } from '../config/constants.js'
+import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 
-const OWNER_EMAIL = 'dr.johnwhite@axiombiolabs.org'
-const CANONICAL_ADMIN = 'buckeye7066@gmail.com'
 const APP_NAME = 'GrantFlow'
 
 function escapeHtml(v) {
@@ -66,13 +64,16 @@ export async function recordSuccessfulLogin({ db, user, method = 'session', iden
     }
 
     const email = String(user.primary_email || '').trim().toLowerCase()
-    if (email && (isAdminEmail(email) || email === CANONICAL_ADMIN)) {
+    if (email && isAdminEmail(email)) {
       return { ok: true, firstLogin: true, notified: false }
     }
 
     const to = process.env.FIRST_LOGIN_REPORT_EMAIL
       || process.env.ERROR_REPORT_EMAIL
-      || OWNER_EMAIL
+      || ADMIN_EMAIL
+    if (!to) {
+      return { ok: true, firstLogin: true, notified: false, reason: 'owner_email_not_configured' }
+    }
     const when = new Date().toISOString()
     const who = email || identifier || '(no email on file)'
     const name = user.display_name || '(no name)'

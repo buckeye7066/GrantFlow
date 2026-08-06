@@ -172,7 +172,7 @@ export const GOLDEN_PROFILES = Object.freeze([
     summary: 'TN HS senior committed to MTSU Nursing — Pell-eligible, off-campus housing',
     profile: {
       id: 'golden-mtsu-student',
-      display_name: 'Anastasia (MTSU Nursing)',
+      display_name: 'Demo Student (MTSU Nursing)',
       applicant_type: 'student',
       primary_type: 'high_school_student',
       organization_type: null,
@@ -184,7 +184,7 @@ export const GOLDEN_PROFILES = Object.freeze([
     },
     sections: {
       basic_information: {
-        first_name: 'Anastasia',
+        first_name: 'Demo Student',
         last_name: 'Test',
         date_of_birth: '2008-06-12',
         state: 'TN',

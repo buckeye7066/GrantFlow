@@ -16,7 +16,7 @@
  * convergent gap — never a guess and never silence).
  *
  * The profile fixtures below are the REAL prod sections of
- * `profile-focus-forward-ministries` and `profile-john-white`, read read-only
+ * `profile-demo-faith-nonprofit` and `profile-demo-health-education`, read read-only
  * on 2026-08-02.
  */
 import { describe, it, expect } from 'vitest'
@@ -55,7 +55,7 @@ const readCode = () =>
 // ── Real prod fixtures ──────────────────────────────────────────────────────
 
 const FOCUS_FORWARD = {
-  profile: { id: 'profile-focus-forward-ministries', primary_type: 'nonprofit' },
+  profile: { id: 'profile-demo-faith-nonprofit', primary_type: 'nonprofit' },
   sections: {
     programs_services: {
       focus_areas: [
@@ -72,8 +72,8 @@ const FOCUS_FORWARD = {
   },
 }
 
-const JOHN_WHITE = {
-  profile: { id: 'profile-john-white', primary_type: 'individual' },
+const DEMO_HEALTH_EDUCATION = {
+  profile: { id: 'profile-demo-health-education', primary_type: 'individual' },
   sections: {
     occupation: { healthcare_worker_type: 'RN', ems_worker: false, firefighter: false, farmer: false },
     health_medical: {
@@ -204,7 +204,7 @@ describe('profileItemNeeds — the registry', () => {
 
 describe('profileItemNeeds — provenance', () => {
   it('every derived need carries the registry field id it came from', () => {
-    const out = deriveProfileItemNeeds(JOHN_WHITE.profile, JOHN_WHITE.sections)
+    const out = deriveProfileItemNeeds(DEMO_HEALTH_EDUCATION.profile, DEMO_HEALTH_EDUCATION.sections)
     expect(out.needs.length).toBeGreaterThan(0)
     const ruleIds = new Set(ITEM_NEED_RULES.map((r) => r.id))
     for (const need of out.needs) {
@@ -215,14 +215,14 @@ describe('profileItemNeeds — provenance', () => {
   })
 
   it("Dr. White's RN declaration is what makes a licensure item appear", () => {
-    const withRn = deriveProfileItemNeeds(JOHN_WHITE.profile, JOHN_WHITE.sections)
+    const withRn = deriveProfileItemNeeds(DEMO_HEALTH_EDUCATION.profile, DEMO_HEALTH_EDUCATION.sections)
     const licence = withRn.needs.find((n) => n.evidence === 'occupation.credentialed_role')
     expect(licence).toBeTruthy()
     expect(licence.need_text).toMatch(/nursing/i)
 
     // MUTATION: remove the single declared fact and the item must vanish.
-    const sections = { ...JOHN_WHITE.sections, occupation: { healthcare_worker_type: '' } }
-    const without = deriveProfileItemNeeds(JOHN_WHITE.profile, sections)
+    const sections = { ...DEMO_HEALTH_EDUCATION.sections, occupation: { healthcare_worker_type: '' } }
+    const without = deriveProfileItemNeeds(DEMO_HEALTH_EDUCATION.profile, sections)
     expect(without.needs.find((n) => n.evidence === 'occupation.credentialed_role')).toBeUndefined()
   })
 
@@ -310,7 +310,7 @@ describe('profileItemNeeds — applicability is read from the schema', () => {
 
 describe('profileItemNeeds — precision', () => {
   it('a declared value that names no item becomes a CONVERGENT gap, not a guess', () => {
-    const out = deriveProfileItemNeeds(JOHN_WHITE.profile, JOHN_WHITE.sections)
+    const out = deriveProfileItemNeeds(DEMO_HEALTH_EDUCATION.profile, DEMO_HEALTH_EDUCATION.sections)
     const values = out.unmapped.map((u) => u.value)
     expect(values).toContain('CIPN')
     expect(values).toContain('unsteady gait')

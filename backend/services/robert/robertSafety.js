@@ -15,6 +15,13 @@
  *   - rateLimitGuard helpers for an injected DB-backed bucket
  */
 
+import {
+  MIN_SCORE_SLIDER_MAX,
+  SCORE_SCALE_ID,
+  STRONG_MATCH_SCORE,
+  translateLegacyMinScore,
+} from '../../config/matchThresholds.js'
+
 // ---------------------------------------------------------------------------
 // Env helpers
 // ---------------------------------------------------------------------------
@@ -41,6 +48,12 @@ export function readEnvString(name, fallback = '') {
  * defaults to the SAFEST possible value.
  */
 export function getRobertConfig() {
+  const configuredToastThreshold = readEnvInt(
+    'ROBERT_MIN_TOAST_MATCH_SCORE',
+    STRONG_MATCH_SCORE,
+  )
+  const minToastMatchScore = translateLegacyMinScore(configuredToastThreshold)
+
   return {
     enabled: readEnvBool('ROBERT_ENABLED', false),
     runOnStartup: readEnvBool('ROBERT_RUN_ON_STARTUP', false),
@@ -77,7 +90,14 @@ export function getRobertConfig() {
     // Recommendation / toast knobs
     recommendationToastsEnabled: readEnvBool('ROBERT_RECOMMENDATION_TOASTS_ENABLED', true),
     maxToastsPerProfilePerDay: readEnvInt('ROBERT_MAX_TOASTS_PER_PROFILE_PER_DAY', 5),
-    minToastMatchScore: readEnvInt('ROBERT_MIN_TOAST_MATCH_SCORE', 70),
+    // Values above the current slider range came from the retired 0-100
+    // preference scale. Translate them once and stamp the effective scale so a
+    // downstream consumer never reinterprets (for example) legacy 70 as a
+    // data-point score.
+    minToastMatchScore,
+    minToastMatchScoreConfigured: configuredToastThreshold,
+    minToastMatchScoreTranslated: configuredToastThreshold > MIN_SCORE_SLIDER_MAX,
+    minToastMatchScoreScaleId: SCORE_SCALE_ID,
     allowReviewMatchToasts: readEnvBool('ROBERT_ALLOW_REVIEW_MATCH_TOASTS', true),
     batchLowPriorityRecommendations: readEnvBool('ROBERT_BATCH_LOW_PRIORITY_RECOMMENDATIONS', true),
     recommendationPollIntervalMs: readEnvInt('ROBERT_RECOMMENDATION_POLL_INTERVAL_MS', 30_000),

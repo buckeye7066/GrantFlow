@@ -11,7 +11,7 @@ const log = createLogger('service:schoolPortalImport')
 // provider catalogue with automation_supported / session_reuse / etc.
 // Manual-import providers exposed to the user's school-portal merge UI.
 // Mirrors the institutional providers in
-// backend/services/hamilton/hamiltonPortalProviders.js so an Anastasia-shape
+// backend/services/hamilton/hamiltonPortalProviders.js so an Demo Student-shape
 // student can manually merge institutional aid (MTSU True Blue, MTSU
 // Centennial, etc.) into her pipeline even before Hamilton Autopilot is
 // granted SSO/2FA access. New providers should be added here AND in

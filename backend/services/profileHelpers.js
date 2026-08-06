@@ -3239,7 +3239,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // Inject generic needs when no needs could be derived from profile sections,
   // assistance programs, health signals, or existing profile.needs.
   // Previously this also required keywordSet.size === 0, but display-name-derived
-  // keywords (e.g. "melissa", "justus") are not meaningful needs signals and were
+  // display-name keywords are not meaningful needs signals and were
   // preventing the fallback from firing for sparse individual profiles.
   //
   // The fallback is TYPE-SHAPED (2026-07-06): the person-benefit set

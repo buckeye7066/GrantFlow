@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { Button, Input, Select, Table, Modal, message, Spin, Tag } from 'antd';
 import { UploadOutlined, EditOutlined, CheckOutlined } from '@ant-design/icons';
+import client from '@/api/client';
 import './BulkGrantEligibilityUpdater.css';
 
 const BulkGrantEligibilityUpdater = () => {
@@ -25,17 +26,7 @@ const BulkGrantEligibilityUpdater = () => {
     const fetchGrants = async () => {
           setLoading(true);
           try {
-                  const response = await fetch('/api/grants?limit=1000', {
-  headers: {
-    'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-    'Content-Type': 'application/json'
-  }
-});
-if (!response.ok) {
-  const errText = await response.text();
-  throw new Error(`Failed to load grants (HTTP ${response.status}): ${errText}`);
-}
-const data = await response.json();
+                  const data = await client.get('/api/grants?limit=1000');
 if (!Array.isArray(data.grants)) {
   throw new Error('Unexpected response shape: data.grants is not an array');
 }
@@ -71,23 +62,11 @@ message.success(`Grants loaded successfully (${data.grants.length} records)`);
           setLoading(true);
           try {
                   const updatePromises = selectedGrants.map(async (grantId) => {
-  const res = await fetch(`/api/grants/${grantId}`, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
+  return client.put(`/api/grants/${grantId}`, {
       ...bulkEditData,
       updated_date: new Date().toISOString(),
       updated_by: localStorage.getItem('user:email')
-    })
-  });
-  if (!res.ok) {
-    const errBody = await res.text();
-    throw new Error(`Grant ${grantId} update failed (${res.status}): ${errBody}`);
-  }
-  return res.json();
+    });
 });
 
 const results = await Promise.allSettled(updatePromises);

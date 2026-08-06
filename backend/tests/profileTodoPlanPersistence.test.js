@@ -50,13 +50,13 @@ describe('profile_todo_plans persistence', () => {
     const db = makeDb()
     const pid = 'p1'
     // First generate.
-    db.prepare(UPSERT_PLAN).run(pid, JSON.stringify({ categories: [], total_items: 1 }), 'Anastasia')
+    db.prepare(UPSERT_PLAN).run(pid, JSON.stringify({ categories: [], total_items: 1 }), 'Demo Student')
     // User checks an item off.
     const map = { 'document gathering::gather identification documents': { done: true, doc_id: null, at: 'x' } }
     db.prepare(`UPDATE profile_todo_plans SET completions = ?, updated_at = datetime('now') WHERE profile_id = ?`)
       .run(JSON.stringify(map), pid)
     // Regenerate (new plan body) — completions must survive.
-    db.prepare(UPSERT_PLAN).run(pid, JSON.stringify({ categories: [{ name: 'X' }], total_items: 2 }), 'Anastasia')
+    db.prepare(UPSERT_PLAN).run(pid, JSON.stringify({ categories: [{ name: 'X' }], total_items: 2 }), 'Demo Student')
 
     const row = getRow(db, pid)
     expect(JSON.parse(row.plan).total_items).toBe(2) // plan updated

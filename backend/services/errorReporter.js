@@ -12,10 +12,7 @@
  */
 
 import { sendEmail } from './email.js'
-import { isAdminEmail } from '../config/constants.js'
-
-const OWNER_EMAIL = 'dr.johnwhite@axiombiolabs.org'
-const CANONICAL_ADMIN = 'buckeye7066@gmail.com'
+import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 
 // Per-signature throttle: don't re-send the same error within this window.
 const THROTTLE_MS = 600000 // 10 minutes
@@ -297,7 +294,7 @@ export function reportErrorToOwner({ error, source = 'backend', user, route, met
       const userEmail = user?.email || null
 
       // HARD RULE: never email when the admin/owner is the logged-in user.
-      if (userEmail && (isAdminEmail(userEmail) || userEmail.toLowerCase() === CANONICAL_ADMIN)) {
+      if (userEmail && isAdminEmail(userEmail)) {
         return
       }
 
@@ -330,8 +327,10 @@ export function reportErrorToOwner({ error, source = 'backend', user, route, met
         analysis,
       })
 
+      const recipient = process.env.ERROR_REPORT_EMAIL || ADMIN_EMAIL
+      if (!recipient) return
       const result = await sendEmail({
-        to: process.env.ERROR_REPORT_EMAIL || OWNER_EMAIL,
+        to: recipient,
         subject,
         html,
         text,

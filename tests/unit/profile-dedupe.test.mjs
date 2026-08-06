@@ -72,7 +72,7 @@ function makeTestDb() {
 }
 
 test('normalizeProfileNameKey: lowercases, strips punctuation, collapses spaces', () => {
-  assert.equal(normalizeProfileNameKey('  Liúbov  A.  '), 'liubov a')
+  assert.equal(normalizeProfileNameKey('  Démó  Applicant.  '), 'demo applicant')
   assert.equal(normalizeProfileNameKey('Robert!!!'), 'robert')
 })
 
@@ -105,8 +105,8 @@ test('findDuplicateProfileGroups picks the most complete profile as winner', asy
 test('mergeProfiles repoints references and deletes loser', async () => {
   const db = makeTestDb()
 
-  db.prepare('INSERT INTO profiles (id, display_name, status, updated_at) VALUES (?, ?, ?, ?)').run('winner', 'Liubov', 'active', '2026-01-01')
-  db.prepare('INSERT INTO profiles (id, display_name, status, updated_at) VALUES (?, ?, ?, ?)').run('loser', 'Liubov', 'active', '2026-01-02')
+  db.prepare('INSERT INTO profiles (id, display_name, status, updated_at) VALUES (?, ?, ?, ?)').run('winner', 'demo_senior_family', 'active', '2026-01-01')
+  db.prepare('INSERT INTO profiles (id, display_name, status, updated_at) VALUES (?, ?, ?, ?)').run('loser', 'demo_senior_family', 'active', '2026-01-02')
 
   db.prepare('INSERT INTO profile_sections (id, profile_id, section_key, data) VALUES (?, ?, ?, ?)').run(
     'ws1',
@@ -118,7 +118,7 @@ test('mergeProfiles repoints references and deletes loser', async () => {
     'ls1',
     'loser',
     'basic_information',
-    JSON.stringify({ email: 'liubov@example.com' }),
+    JSON.stringify({ email: 'demo_senior_family@example.com' }),
   )
 
   db.prepare('INSERT INTO documents (id, profile_id, name) VALUES (?, ?, ?)').run('d1', 'loser', 'doc')
@@ -158,7 +158,7 @@ test('mergeProfiles repoints references and deletes loser', async () => {
     .get('winner', 'basic_information')
   const parsed = JSON.parse(mergedSection.data)
   assert.equal(parsed.city, 'Cleveland')
-  assert.equal(parsed.email, 'liubov@example.com')
+  assert.equal(parsed.email, 'demo_senior_family@example.com')
 })
 
 test('mergeProfiles tolerates missing optional tables/columns (production schema drift safety)', async () => {
@@ -179,4 +179,3 @@ test('mergeProfiles tolerates missing optional tables/columns (production schema
   const doc = db.prepare('SELECT profile_id FROM documents WHERE id = ?').get('d2')
   assert.equal(doc.profile_id, 'winner2')
 })
-

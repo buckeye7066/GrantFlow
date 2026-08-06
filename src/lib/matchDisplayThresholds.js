@@ -80,6 +80,40 @@ export function scoreToMatchTier(score) {
   return 'low'
 }
 
+/**
+ * Render a persisted canonical match outcome without running a second
+ * eligibility or admission trial in the browser. A numeric score is only a
+ * display tier after the backend decision is known. Missing/unknown decisions
+ * remain visibly unrated instead of being promoted from their score alone.
+ */
+export function canonicalMatchDisplay({ score, decision } = {}) {
+  const normalizedDecision = String(decision || '').trim().toUpperCase()
+  const hasScore = score !== null && score !== undefined && score !== ''
+    && Number.isFinite(Number(score))
+  const numericScore = hasScore ? Number(score) : null
+
+  if (normalizedDecision === 'REJECT') {
+    return { label: 'Not eligible', tier: 'rejected', decision: 'REJECT', score: numericScore }
+  }
+  if (normalizedDecision === 'REVIEW') {
+    return { label: 'Needs review', tier: 'review', decision: 'REVIEW', score: numericScore }
+  }
+  if (normalizedDecision !== 'ACCEPT' || numericScore === null) {
+    return {
+      label: 'Unrated',
+      tier: 'unrated',
+      decision: normalizedDecision || null,
+      score: numericScore,
+    }
+  }
+  return {
+    label: scoreToMatchLabel(numericScore),
+    tier: scoreToMatchTier(numericScore),
+    decision: 'ACCEPT',
+    score: numericScore,
+  }
+}
+
 // ── Minimum-match-score slider (data-point scale) ────────────────────────
 //
 // Track upper bound for every "Minimum match score" control. 30 sits above
@@ -87,46 +121,6 @@ export function scoreToMatchTier(score) {
 // best". The retired 0–100 track (with 25/50/75/85 stops) is DEAD on this
 // scale — a slider at 85 could never return anything (max real score ≈ 58).
 export const MIN_SCORE_SLIDER_MAX = 30
-
-/**
- * Instrumentl-style FIT PERCENTAGE (0–99) for user-facing display.
- *
- * The raw match_score is the share of the profile's data-point inventory a
- * source matches (see the DATA-POINT SCALE note above). Because real profiles
- * carry 50–150 data points, real scores compress to ~5–25 — so rendering the
- * raw integer as "17%" makes an EXCELLENT match read like a terrible one, the
- * "GrantFlow looks worse than a Google search" defect. This maps the score onto
- * an intuitive 0–99 fit gauge (the way Instrumentl/Bold present a fit score),
- * anchored to the SAME display tiers so the percentage always AGREES with the
- * tier label:
- *   Potential (7) ≈ 60%   Good (11) ≈ 75%   Excellent (17) ≈ 90%   top ≈ 99%
- *
- * Anchored to the tier constants, so a recalibration moves this gauge with the
- * labels — there is no second hand-tuned scale to drift. Monotonic. Never
- * returns 100 (no match is a guaranteed win) and never below 0.
- */
-export function fitPercent(score) {
-  const s = Number(score)
-  if (!Number.isFinite(s) || s <= 0) return 0
-  if (s >= MIN_SCORE_SLIDER_MAX) return 99
-  // Piecewise-linear through tier anchors (ascending by score).
-  const anchors = [
-    [0, 0],
-    [MODERATE_MATCH_SCORE, 60], // potential / "worth a look"
-    [GOOD_MATCH_SCORE, 75],     // good
-    [STRONG_MATCH_SCORE, 90],   // excellent
-    [MIN_SCORE_SLIDER_MAX, 99], // top of the live scale
-  ]
-  for (let i = 1; i < anchors.length; i++) {
-    const [x0, y0] = anchors[i - 1]
-    const [x1, y1] = anchors[i]
-    if (s <= x1) {
-      const t = (s - x0) / (x1 - x0)
-      return Math.round(y0 + t * (y1 - y0))
-    }
-  }
-  return 99
-}
 
 /** Shared helper copy under every min-score slider. */
 export const MIN_SCORE_SLIDER_HELP =

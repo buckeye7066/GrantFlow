@@ -29,7 +29,7 @@ const SAM_ADMIN_CTX = {
   role: 'admin',
   userId: 'agent:sam',
   id: 'agent:sam',
-  email: 'buckeye7066@gmail.com',
+  email: 'owner@example.invalid',
 }
 
 function makeDb() {

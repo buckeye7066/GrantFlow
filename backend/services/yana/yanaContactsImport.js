@@ -109,10 +109,25 @@ export function parseContactsCsv(text) {
   return out
 }
 
-/** The owner's own email addresses, seeded as the first contacts/leads. */
-export const OWNER_SEED_CONTACTS = Object.freeze([
-  'firerookie_74@yahoo.com',
-  'buckeye7066@gmail.com',
-  'jwhiternmba@yahoo.com',
-  'dr.johnwhite@axiombiolabs.org',
-])
+function ownerSeedContactsFromEnv(env = process.env) {
+  // Environment contract: process.env.OWNER_CONTACT_EMAILS
+  const configured = String(env.OWNER_CONTACT_EMAILS || '')
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(value => EMAIL_RE.test(value))
+  if (configured.length > 0) return [...new Set(configured)]
+
+  const deployed = String(env.NODE_ENV || '').trim().toLowerCase() === 'production'
+    || Boolean(String(env.RAILWAY_ENVIRONMENT_ID || '').trim())
+    || Boolean(String(env.RAILWAY_DEPLOYMENT_ID || '').trim())
+  if (deployed) return []
+  return [
+    'demo.owner-gmail@example.invalid',
+    'demo.owner-yahoo-primary@example.invalid',
+    'demo.owner-yahoo-secondary@example.invalid',
+    'demo.owner-graph@example.invalid',
+  ]
+}
+
+/** Owner self-addresses are private configuration; production has no defaults. */
+export const OWNER_SEED_CONTACTS = Object.freeze(ownerSeedContactsFromEnv())

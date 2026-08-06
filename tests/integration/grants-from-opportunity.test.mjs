@@ -44,7 +44,7 @@ test('POST /api/grants/from-opportunity - production bug regression', async (t) 
 
   await t.test('[CRITICAL] returns 201 for valid opportunity_data, not 500', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia', // Use known profile from seed data
+      profile_id: 'profile-demo-tennessee-stem-student', // Use known profile from seed data
       opportunity_data: {
         title: 'Production Bug Regression Test Grant',
         sponsor: 'Test Foundation',
@@ -88,7 +88,7 @@ test('POST /api/grants/from-opportunity - production bug regression', async (t) 
 
   await t.test('validates input before processing', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia',
+      profile_id: 'profile-demo-tennessee-stem-student',
       opportunity_data: 'this should be an object', // Invalid type
     })
 
@@ -99,7 +99,7 @@ test('POST /api/grants/from-opportunity - production bug regression', async (t) 
 
   await t.test('handles missing title gracefully', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia',
+      profile_id: 'profile-demo-tennessee-stem-student',
       opportunity_data: {
         sponsor: 'Test',
         // missing title

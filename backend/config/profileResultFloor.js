@@ -23,7 +23,7 @@
  * Counting them as results is how a profile with nothing it can apply to reads
  * as fully served:
  *
- *   Melissa Justus — 25 qualifying, 25 actionable, **0 awardable**
+ *   Demo General Support Persona — 25 qualifying, 25 actionable, **0 awardable**
  *   William        — 24 qualifying, 24 actionable, **0 awardable**
  *
  * Both sit above `MIN_HEALTHY_SURFACED`. Melissa was in fact "healed" by the

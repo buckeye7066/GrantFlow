@@ -7,7 +7,7 @@
  * 5) Logout
  */
 import { test, expect } from 'playwright/test'
-import { basePath } from './playwright.config.mjs'
+import { basePath, e2eAdminEmail } from './playwright.config.mjs'
 
 function stripTrailingSlash(value) {
   return String(value || '').replace(/\/$/, '')
@@ -31,7 +31,7 @@ async function loginAsAdmin(page, appBase) {
     } catch {}
   })
   await page.goto(`${appBase}/login`, { waitUntil: 'networkidle' })
-  await page.locator('#auth-email').fill('buckeye7066@gmail.com')
+  await page.locator('#auth-email').fill(e2eAdminEmail)
   await page.getByRole('button', { name: /continue with email/i }).click()
   const strongPassword = 'PlaywrightE2E-Pass123!'
   const passwordInput = page.locator('#auth-password')

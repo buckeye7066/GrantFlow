@@ -8,7 +8,7 @@ import { isRegionCode } from '../../shared/usStateCodes.js'
  * AN UNPARSEABLE LOCATION PRODUCES NO STATE — never a wrong one (2026-08-02).
  * The state pattern used to be `/,?\s*([A-Za-z]{2})\s+(\d{5})…$/`, with NO left
  * word boundary, so it matched the last two letters of a longer token: prod's
- * `profile-melissa-justus` carries `{ city:'Anytown', state:'USA',
+ * `profile-demo-general-support` carries `{ city:'Anytown', state:'USA',
  * zip_code:'12345' }`, whose address blob "…Anytown USA 12345" yielded the
  * state **"SA"**. Nothing downstream caught it — `zipcodes.lookup` only fires
  * when the state is EMPTY, and the county resolver just returned null on the

@@ -17,6 +17,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { scoreOpportunity } from './matchEngine.js'
+import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, SCORE_SCALE_ID } from '../config/matchThresholds.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('itemGiftCrawler')
 
@@ -103,10 +104,14 @@ export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
     .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
   // Do not allow "0 results" when we have any candidates; relax threshold automatically.
-  const requestedThreshold = Number(parameters.match_threshold ?? 55)
-  const thresholds = Array.from(new Set([requestedThreshold, 70, 60, 55, 45, 35, 0]))
-    .filter((n) => Number.isFinite(n))
-    .sort((a, b) => b - a)
+  const parsedThreshold = Number(parameters.match_threshold ?? DEFAULT_MIN_SCORE)
+  const requestedThreshold = Number.isFinite(parsedThreshold)
+    ? Math.max(0, Math.min(100, parsedThreshold))
+    : DEFAULT_MIN_SCORE
+  const thresholds = Array.from(new Set([
+    requestedThreshold,
+    ...RELAX_THRESHOLDS.filter((threshold) => threshold < requestedThreshold),
+  ]))
 
   let thresholdUsed = requestedThreshold
   let filtered = candidates.filter((c) => (c.match_score ?? 0) >= thresholdUsed)
@@ -161,7 +166,7 @@ export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
       keywords: Array.from(new Set([item, ...tokens, ...(src.item_tags || [])].map((v) => String(v)))).slice(0, 50),
       match_reasons: [
         `Item query: ${item}`,
-        `Match score: ${src.match_score}%`,
+        `Crawler rank score: ${src.match_score} (${SCORE_SCALE_ID} fit plus contact availability)`,
         src.contact_url ? 'Has contact page' : null,
         src.contact_email ? 'Has contact email' : null,
         src.contact_phone ? 'Has contact phone' : null,
@@ -200,6 +205,7 @@ export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
     inserted: upserted,
     result_meta: {
       item,
+      score_scale: SCORE_SCALE_ID,
       match_threshold_requested: requestedThreshold,
       match_threshold_used: thresholdUsed,
       sources_considered: candidates.length,
@@ -210,4 +216,3 @@ export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
 }
 
 export default processItemGiftCrawlerJob
-

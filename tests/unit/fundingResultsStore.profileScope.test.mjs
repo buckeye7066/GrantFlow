@@ -42,8 +42,8 @@ test('fundingResultsStore — getResultsForProfile returns the empty view on pro
     const { useFundingResultsStore } = await import('../../src/stores/fundingResultsStore.js?case=mismatch')
     useFundingResultsStore.getState().setResults({
       results: [{ id: 'opp-1', title: 'Test grant', match_score: 80 }],
-      profileId: 'profile-luibov',
-      organizationName: 'Luibov',
+      profileId: 'profile-demo_senior_family',
+      organizationName: 'demo_senior_family',
       returned: 1,
       totalFound: 1,
     })
@@ -63,15 +63,15 @@ test('fundingResultsStore — getResultsForProfile returns the stored view on ex
     const { useFundingResultsStore } = await import('../../src/stores/fundingResultsStore.js?case=match')
     useFundingResultsStore.getState().setResults({
       results: [{ id: 'opp-1', title: 'Test grant', match_score: 80 }],
-      profileId: 'profile-luibov',
-      organizationName: 'Luibov',
+      profileId: 'profile-demo_senior_family',
+      organizationName: 'demo_senior_family',
       returned: 1,
       totalFound: 1,
     })
-    const view = useFundingResultsStore.getState().getResultsForProfile('profile-luibov')
+    const view = useFundingResultsStore.getState().getResultsForProfile('profile-demo_senior_family')
     assert.equal(view.results.length, 1)
     assert.equal(view.results[0].id, 'opp-1')
-    assert.equal(view.profileId, 'profile-luibov')
+    assert.equal(view.profileId, 'profile-demo_senior_family')
   } finally {
     teardownStorage()
   }

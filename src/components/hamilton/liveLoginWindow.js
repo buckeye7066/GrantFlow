@@ -150,13 +150,10 @@ export function openPendingLoginWindow({ title = "Secure login" } = {}) {
  *
  * CRITICAL — the popup MUST open on THIS app's origin. The live-login page reads
  * the signed-in GrantFlow session from localStorage, which the browser
- * partitions per origin. The backend builds its `liveUrl` from req.get('host'),
- * which behind the Vercel→Railway proxy is the API/proxy host — a DIFFERENT
- * origin. Because the backend also serves the SPA, that URL still renders the
- * overlay, but on an origin whose localStorage has NO session, so the live-view
- * SSE stream 401s immediately (stream_http_401) and the page prompts a fresh
- * GrantFlow sign-in. So we IGNORE the backend origin and always anchor to
- * window.location.origin + the app base.
+ * partitions per origin. The backend now returns only a configured trusted
+ * origin or a relative route, but the browser still treats its own current
+ * origin as authoritative. We therefore reconstruct the URL from the opaque
+ * liveSessionId and anchor it to window.location.origin + the app base.
  *
  * The URL must be ABSOLUTE (not relative): the popup starts on about:blank, so a
  * relative URL passed to window.location.replace() wouldn't resolve. Returns

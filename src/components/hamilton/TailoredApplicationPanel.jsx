@@ -8,9 +8,9 @@
  *   - EDIT the text (editing == approved-as-edited → status 'edited').
  * If the funder asks for information not in the profile, a blocking QUESTION is
  * shown and approval is disabled until it's answered (each question deep-links
- * to the exact profile section to fill). Once approved AND the profile's
- * automation toggle is on, the backend autopilot auto-submits — this panel only
- * REFLECTS that gate (can_auto_submit + gate_reason); it never submits.
+ * to the exact profile section to fill). Approval means the draft is ready for
+ * the owner's visible portal handoff; this panel never implies that a real
+ * final Submit is executed automatically.
  *
  * Graceful pre-backend behavior: the endpoint is shipped by a sibling backend
  * agent. If the GET 404s (not deployed yet) the panel hides itself entirely so
@@ -64,12 +64,6 @@ function questionDeepLink(profileId, question) {
   })
 }
 
-// Link to the profile's automation toggles (where auto-submit is turned on).
-function automationSettingsLink(profileId) {
-  if (!profileId) return null
-  return createPageUrl('ProfileDetail', { id: profileId, tab: 'profile', focus: 'profile-automations' })
-}
-
 function StatusBadge({ status }) {
   const label = hamiltonApi.tailoredStatusLabel(status)
   const cls =
@@ -120,8 +114,6 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
   const fieldKeys = Object.keys(fields)
   const missingQuestions = Array.isArray(data?.missing_questions) ? data.missing_questions : []
   const funderRequirements = Array.isArray(data?.funder_requirements) ? data.funder_requirements : []
-  const canAutoSubmit = Boolean(data?.can_auto_submit)
-  const gateReason = data?.gate_reason || null
   const hasBlockingQuestions = missingQuestions.length > 0
   const isApproved = status === 'approved' || status === 'edited'
 
@@ -133,7 +125,7 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
     try {
       await hamiltonApi.approveTailoredApplication(profileId, grantId)
       await refresh()
-      showSuccessToast(toast, 'Application approved', 'Hamilton will submit it once automation is on.')
+      showSuccessToast(toast, 'Draft approved', 'Final portal review and Submit remain your visible handoff.')
     } catch (err) {
       showErrorToast(toast, 'Could not approve', err?.message || 'Please try again.')
     } finally {
@@ -169,42 +161,25 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
     }
   }
 
-  // Truthful auto-submit state line (backend enforces the gate; we mirror it).
-  function autoSubmitState() {
-    if (canAutoSubmit) {
-      return {
-        icon: <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />,
-        cls: 'text-emerald-700',
-        text: 'Approved — Hamilton will auto-submit this on the next run.',
-        link: null,
-      }
-    }
-    if (gateReason === 'missing_info' || hasBlockingQuestions) {
+  function submissionHandoffState() {
+    if (hasBlockingQuestions) {
       return {
         icon: <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />,
         cls: 'text-amber-700',
-        text: 'Answer the funder’s questions above before this can be submitted.',
-        link: null,
+        text: 'Answer the funder’s questions above before the draft is ready for your portal handoff.',
       }
     }
-    if (gateReason === 'automation_off') {
+    if (isApproved) {
       return {
-        icon: <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />,
-        cls: 'text-slate-600',
-        text: 'Approved — will auto-submit when you turn on automation.',
-        link: automationSettingsLink(profileId),
-        linkText: 'Turn on automation',
+        icon: <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />,
+        cls: 'text-emerald-700',
+        text: 'Approved draft — review it in the portal, complete required human steps, and submit it yourself.',
       }
     }
-    // Owner rule 2026-08-03: auto-submit means auto-submit — approval is no
-    // longer a gate the backend can report ('not_approved' is retired).
-    // Anything else here is a legacy/unknown reason: say what is true (ready)
-    // without inventing a required approval step.
     return {
       icon: <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />,
       cls: 'text-slate-600',
-      text: 'Ready — Hamilton will submit on its next authorized run. Approving is optional review, not a requirement.',
-      link: null,
+      text: 'Draft ready for review. Final portal Submit remains a human handoff.',
     }
   }
 
@@ -395,18 +370,13 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
             )}
           </div>
 
-          {/* Auto-submit gate state — truthful reflection of the backend gate. */}
+          {/* Real-portal final submission remains a visible human handoff. */}
           {(() => {
-            const s = autoSubmitState()
+            const s = submissionHandoffState()
             return (
               <div className={`flex items-center gap-1.5 text-xs ${s.cls}`}>
                 {s.icon}
                 <span>{s.text}</span>
-                {s.link ? (
-                  <Link to={s.link} className="font-medium text-blue-700 hover:text-blue-800 underline">
-                    {s.linkText || 'Settings'}
-                  </Link>
-                ) : null}
               </div>
             )
           })()}

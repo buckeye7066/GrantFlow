@@ -6,7 +6,7 @@
  * one general application, and that general application is complete, then that
  * should be reflected in those related portals."
  *
- * THE REAL SHAPE OF THE PROBLEM (measured in prod on Anastasia's profile):
+ * THE REAL SHAPE OF THE PROBLEM (measured in prod on Demo Student's profile):
  * MTSU's Scholarship Manager portal says, in its own words, "you can NOT apply
  * individually to scholarships … you apply by completing the scholarship
  * application(s)" — yet the pipeline held SIX individual MTSU scholarships

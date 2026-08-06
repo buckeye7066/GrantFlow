@@ -599,7 +599,12 @@ export async function getSamStatus({ db } = {}) {
   const failOnCritical = readEnvBool('SAM_FAIL_ON_CRITICAL', true)
   // SAM_EMAIL_REPORTS defaults ON; only an explicit off-value disables it.
   const emailReports = !/^(0|false|no|off)$/i.test(String(process.env.SAM_EMAIL_REPORTS ?? '').trim())
-  const reportEmail = (process.env.SAM_REPORT_EMAIL || process.env.ADMIN_OPS_EMAIL || 'dr.johnwhite@axiombiolabs.org').trim()
+  const reportEmail = String(
+    process.env.SAM_REPORT_EMAIL
+    || process.env.ADMIN_OPS_EMAIL
+    || process.env.ADMIN_EMAIL
+    || '',
+  ).trim() || null
 
   const status = {
     agent: 'Sam',
@@ -612,6 +617,7 @@ export async function getSamStatus({ db } = {}) {
     schedule_autofix: scheduleAutofix,
     schedule,
     email_reports: emailReports,
+    email_reports_configured: Boolean(reportEmail),
     report_email: reportEmail,
     max_fixes_per_run: maxFixes,
     fail_on_critical: failOnCritical,

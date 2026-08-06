@@ -5,7 +5,9 @@ discovered match has reached the "ready for application" stage in the
 pipeline. She links the opportunity to the right student-portal record,
 drafts the application from profile + document data, detects missing
 information, and either prepares a final review or, when explicitly
-authorised, submits.
+authorised in the reserved synthetic fixture, exercises the submit state
+machine. In the current controlled beta, every real-domain final submission is
+completed by the owner in the official portal.
 
 This document is the contract for what Hamilton **will** and **will not**
 do, and how to extend her safely.
@@ -51,14 +53,14 @@ Hamilton **never**:
 - logs into a school portal on behalf of the student — institutional
   portals always require either a stored credential reference (no plain
   passwords are ever stored) or a manual user-initiated login;
-- submits an application unless **all** of these are true:
-  1. `application_tasks.auto_submit_enabled = TRUE` for that task,
-  2. the global flag `HAMILTON_ENABLE_AUTO_SUBMIT=true` is set,
-  3. the portal does not require a student-only attestation,
-  4. there is no CAPTCHA / 2FA / manual security challenge,
-  5. all required information is grounded in the profile or documents.
+- launches a server browser or performs final submission on a real portal
+  domain during controlled beta. Saved submit intent, environment flags,
+  provider metadata, and host allow-lists do not expand this boundary;
+- treats login, 2FA, CAPTCHA, a signature, an attestation, an owner approval, or
+  portal confirmation as bypassable. The owner completes those steps directly
+  in the official portal.
 
-If any of these conditions fail Hamilton stops in
+When Hamilton reaches a required human boundary, it stops in
 `waiting_for_user`, `waiting_for_admin`, `blocked_login_required`,
 `blocked_missing_info`, `blocked_2fa`, `blocked_captcha`, or
 `blocked_terms_or_policy` and emits the matching notification.
@@ -79,6 +81,7 @@ Tables:
 | `application_task_events` | Append-only audit log for each task. |
 | `application_missing_info` | Missing fields / documents / logins / consents Hamilton detected. |
 | `hamilton_runs` | Per-cycle telemetry row. |
+| `hamilton_manual_submission_receipts` | Append-only task/profile binding for a genuine owner-uploaded portal confirmation. |
 
 All tables enforce profile scoping: every read is filtered by
 `profile_id`, every write requires it.
@@ -185,7 +188,8 @@ Frontend:
 - `src/components/hamilton/HamiltonTaskBadge.jsx` — compact pipeline badge with
   Hamilton status + "Let Hamilton help / Continue / Review" buttons.
 - `src/components/hamilton/HamiltonTaskDrawer.jsx` — full task panel with
-  audit timeline, missing-info form, and submit-approval toggle.
+  audit timeline, missing-info form, real-portal handoff, and owner-attested
+  receipt retention.
 - `src/components/hamilton/HamiltonPortalsPanel.jsx` — surfaces portal
   connections + funding-link explanations inside `StudentPortalsCard`.
 
@@ -216,9 +220,40 @@ opt in. The flag is read inside `hamiltonApplicationAgent.js`
 (`isBrowserAutomationEnabled()`) and is passed to adapters via
 `ctx.options.browserAutomation`. The current adapters never trigger
 real browser automation — they call `applyEngine.js` for drafting and
-defer all interactive steps to the user. Live Playwright integration
-should be added behind this flag and behind a per-adapter
-allow-list.
+defer all interactive steps to the user. Controlled-beta policy also rejects
+real-domain browser launch even when flags or allow-lists are present. The only
+executable browser path is the reserved synthetic fixture; changing that
+boundary requires a separately reviewed release, not configuration alone.
+
+## Manual submission evidence
+
+For a real portal, Hamilton's handoff ends before login/2FA/signature/
+attestation/final Submit. After the owner completes those steps in their own
+browser, the task drawer accepts a genuine PDF, PNG, or JPEG portal
+confirmation (maximum 10 MiB) together with the owner's explicit attestation.
+The API requires an idempotency key and derives the real HTTPS portal origin
+from the server-recorded task.
+
+Only a valid, active `hamilton_manual_submission_receipts` binding can promote
+the canonical submission proof. A confirmation-like document by itself cannot.
+The resulting label is **“Externally submitted — owner-attested portal
+confirmation on file.”** Its authority is `owner_attestation`, with
+`independently_verified=false`; it is not a funder API verification, an award,
+or proof of eligibility. A legacy `submitted` row that lacks proof may be
+reconciled through this same explicit owner flow.
+
+Revocation preserves the binding and bytes as append-only audit evidence while
+removing proof authority and returning the task to
+`submission_verification_required`. Active and revoked receipt documents remain
+profile-scoped and cannot be edited or deleted through the document API. Their
+authenticated download response uses `private, no-store`, `Pragma: no-cache`,
+and `X-Content-Type-Options: nosniff`; document JSON never serializes
+`file_bytes`.
+
+The schema change is additive in SQLite migration 165 and Postgres migration
+0170. A safe rollback reverts the application readers/writers while retaining
+the table and immutable audit evidence. There is intentionally no destructive
+down-migration for submitted evidence.
 
 ## Testing with mock portals
 
@@ -277,6 +312,7 @@ registry for a mock adapter implementing the same contract.
    audit log in `application_task_events` matches.
 7. As a different user (or different profile), confirm the data is
    not visible — profile scoping is enforced at the API layer.
-8. Toggle the "Allow auto-submit" switch only after reviewing the
-   draft; confirm the global flag and per-task flag must both be on
-   before any submission attempt.
+8. For a real portal, confirm GrantFlow opens a visible manual handoff and does
+   not launch a server browser or cross login/2FA/signature/attestation gates.
+9. Complete the final steps yourself, retain the genuine receipt, and confirm
+   the task says owner-attested and not independently verified by a funder API.

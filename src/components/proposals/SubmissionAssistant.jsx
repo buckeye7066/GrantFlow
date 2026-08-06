@@ -194,9 +194,9 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
           </DialogDescription>
           <p className="text-xs text-slate-500 mt-1">
             "Mark submitted" records in GrantFlow that <span className="font-medium">you submitted this application
-            yourself</span> — it is internal status only and transmits nothing to the funder. Automatic portal
-            submission is a separate feature (Hamilton auto-submit), which fills and submits on the funder's portal
-            for you when enabled.
+            yourself</span> — it is internal status only and transmits nothing to the funder. Hamilton can prepare,
+            fill, and save a portal draft; final portal review, login or 2FA, signatures, Submit, and confirmation
+            remain your visible handoff.
           </p>
         </DialogHeader>
 

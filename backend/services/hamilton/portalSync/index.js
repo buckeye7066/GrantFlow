@@ -32,6 +32,12 @@ import fs from 'node:fs'
 
 import { normalizeHost, findValidSession, getSessionStorageState } from '../hamiltonCredentialSessionService.js'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from '../browserLaunch.js'
+import {
+  controlledBetaBrowserContextOptions,
+  controlledBetaBrowserRefusal,
+  installControlledBetaBrowserEgressGuard,
+  isControlledBetaSyntheticBrowserUrl,
+} from '../controlledBetaBrowserPolicy.js'
 import { getDecryptedCredentialWithFallback, listCredentialedDomains, registrableDomain } from '../hamiltonPortalCredentialService.js'
 import {
   browserAutomationPermittedForUrl,
@@ -551,15 +557,9 @@ const inFlightSyncs = new Map()
 
 export async function runPortalSync(db, {
   profileId, portalHost, direction = 'read', actorUserId = null,
-  // ONE-CLICK SUBMIT (owner rule, 2026-08-01): an ordinary sync fills the
-  // portal's outside-award form and stops. When the profile owner or an admin
-  // explicitly clicks "Submit", the route passes allowSubmit:true and GrantFlow
-  // completes the submission in the SAME live session.
-  //
-  // Why it re-fills rather than resuming: the browser (and the portal's form
-  // state) is destroyed when a sync ends, so there is no half-filled page
-  // waiting anywhere. A click that pretended to "resume" a staged form would be
-  // fiction. The human click IS the authorization, and it is recorded on the run.
+  // Compatibility input only. Portal sync is intentionally outside Hamilton's
+  // canonical task authorization/lease/proof protocol, so it must never become
+  // a second final-submit authority.
   allowSubmit = false,
 } = {}) {
   if (!db) return { ok: false, direction, connectorId: null, runId: null, error: 'db required' }
@@ -567,6 +567,35 @@ export async function runPortalSync(db, {
   const host = normalizeHost(portalHost)
   if (!host) return { ok: false, direction, connectorId: null, runId: null, error: 'portalHost required' }
   const dir = VALID_DIRECTIONS.has(direction) ? direction : 'read'
+  const controlledBetaUrl = `https://${host}/`
+
+  // Defense in depth for direct service callers and stale clients. A final
+  // external submit may be reintroduced only through a reviewed adapter joined
+  // to the canonical durable task authorization, final-review veto, submission
+  // lease, and confirmation-proof protocol.
+  if (allowSubmit === true) {
+    return {
+      ok: false,
+      direction: dir,
+      connectorId: null,
+      runId: null,
+      error: 'reviewed_submission_adapter_required',
+      requires_human_submission: true,
+    }
+  }
+
+  if (!isControlledBetaSyntheticBrowserUrl(controlledBetaUrl)) {
+    const refusal = controlledBetaBrowserRefusal()
+    return {
+      ok: false,
+      direction: dir,
+      connectorId: null,
+      runId: null,
+      error: refusal.code,
+      detail: refusal.message,
+      requires_human_handoff: true,
+    }
+  }
 
   // IN-FLIGHT GUARD: a sync can outlive the HTTP edge timeout (the client sees
   // a 504 while the server-side run keeps going and persists). A blind retry
@@ -583,13 +612,13 @@ export async function runPortalSync(db, {
   }
   inFlightSyncs.set(flightKey, { runId: null, connectorId: null, startedAt: Date.now() })
   try {
-    return await runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey, allowSubmit })
+    return await runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey })
   } finally {
     inFlightSyncs.delete(flightKey)
   }
 }
 
-async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey, allowSubmit = false }) {
+async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey }) {
 
   // Load the saved login up front so connector resolution is credential-aware:
   // an MTSU account saved under login.microsoftonline.com must route to the MTSU
@@ -628,7 +657,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
   if (!browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
     const reason = !isBrowserAutomationEnabled()
       ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
-      : 'portal host is not on the allowlist and the profile has no saved credential/session for it'
+      : 'controlled beta permits only the reserved synthetic fixture origin'
     return fail(`browser automation not permitted: ${reason}`)
   }
 
@@ -677,11 +706,12 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
     // Hardened shared launcher: container-safe args (this call site had drifted
     // to a bare launch — the /dev/shm OOM class) + the full-Chromium engine +
     // the capture-time UA so WAF-bound sessions replay (see browserLaunch.js).
-    ;({ browser } = await launchPortalBrowser(chromium))
-    const context = await browser.newContext({
+    ;({ browser } = await launchPortalBrowser(chromium, { targetUrl: url }))
+    const context = await browser.newContext(controlledBetaBrowserContextOptions({
       userAgent: REALISTIC_PORTAL_UA,
       ...(storageState && typeof storageState === 'object' ? { storageState } : {}),
-    })
+    }))
+    await installControlledBetaBrowserEgressGuard(context)
     const page = await context.newPage()
 
     const ctx = {
@@ -789,7 +819,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       const fundingSources = accepted.sources.length > 0
         ? accepted.sources
         : profileToFundingSources(profile)
-      const writeResult = await connector.write(page, ctx, { fundingSources, allowSubmit })
+      const writeResult = await connector.write(page, ctx, { fundingSources, allowSubmit: false })
       if (writeResult?.reached === false && dir === 'write') {
         return await fail(`portal unreachable: ${writeResult?.error || 'navigation failed'}`, { unreachable: true })
       }
@@ -802,11 +832,11 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
         declined_by_preference: accepted.declinedByPreference,
         ...(accepted.truncated > 0 ? { truncated: accepted.truncated } : {}),
         skipped: writeResult?.skipped || [],
-        // Did GrantFlow actually SEND it, and who authorized that?
+        // Portal sync prepares values only; the user completes the irreversible
+        // final submission in the portal.
         submitted: writeResult?.submitted === true,
-        submit_authorized_by: allowSubmit ? (actorUserId || 'unknown') : null,
-        // The UI's cue for the one-click Submit button: values are staged on the
-        // portal's form but nothing was sent yet.
+        submit_authorized_by: null,
+        // Values may be staged for the user's manual portal handoff.
         submittable: writeResult?.submitted !== true
           && (writeResult?.written || []).some((w) => w?.state === 'filled_not_submitted'),
       }

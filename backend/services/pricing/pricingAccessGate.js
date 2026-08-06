@@ -1,7 +1,7 @@
 /**
  * pricingAccessGate.js
  *
- * Single source of truth for "should this (user, profile) be allowed
+ * Single source of truth for "should this (principal, profile) be allowed
  * past the agreement+payment gate?". Used by:
  *
  *   - GET /api/access-gate/status   (frontend uses this to decide
@@ -9,7 +9,7 @@
  *   - <RequirePaidAccess>          (HOC that calls the same endpoint)
  *   - samPricingGateAuditor        (audits leaks + admin blocks)
  *
- * Pure decision function `decideAccess({ user, pricing, agreement })`
+ * Pure decision function `decideAccess({ principal, pricing, agreement })`
  * has no IO. The DB-backed `getAccessStatus(db, …)` adds the lookup +
  * agreement check and is what the route uses.
  */
@@ -18,7 +18,6 @@ import { withProfileScope } from '../../middleware/profileContext.js'
 import {
   ACCESS_STATUS,
   PRICING_ENV_KEYS,
-  isAdminNotificationTarget,
   readEnvFlag,
 } from './pricingTypes.js'
 import {
@@ -100,16 +99,24 @@ export function isPaymentGatedPath(pathname) {
   return PAYMENT_GATED_ROUTES.some((p) => path === p || path.startsWith(`${p}/`))
 }
 
-function isAdminUserOrEmail(user) {
-  return Boolean(user?.is_admin || isAdminNotificationTarget(user?.email))
+function isTrustedPrincipal(principal) {
+  return principal?.identityResolved === true
+}
+
+function isCanonicalAdmin(principal) {
+  return isTrustedPrincipal(principal) && principal?.isAdmin === true
 }
 
 /**
- * Pure decision: takes a user + the persisted profile_pricing + the
- * latest service_agreements row. No IO.
+ * Pure decision: takes a canonical, server-projected request principal + the
+ * persisted profile_pricing + the latest service_agreements row. No IO.
+ *
+ * Callers must not pass raw JWT/user claims here. `identityResolved` and
+ * `isAdmin` are projections of req.ctx, whose authority was resolved by the
+ * backend request-context middleware.
  */
-export function decideAccess({ user, pricing, agreement } = {}) {
-  if (!user) {
+export function decideAccess({ principal, pricing, agreement } = {}) {
+  if (!isTrustedPrincipal(principal)) {
     return {
       authenticated: false,
       is_admin: false,
@@ -122,7 +129,7 @@ export function decideAccess({ user, pricing, agreement } = {}) {
       checkout_available: false,
     }
   }
-  const isAdmin = isAdminUserOrEmail(user)
+  const isAdmin = isCanonicalAdmin(principal)
   if (isAdmin) {
     return {
       authenticated: true,
@@ -258,11 +265,11 @@ async function tableExists(db, table) {
  * Loads pricing + latest agreement from the DB and runs `decideAccess`.
  * Used by /api/access-gate/status.
  */
-export async function getAccessStatus(db, { user, profileId }) {
+export async function getAccessStatus(db, { principal, profileId } = {}) {
   // No DB or migrations not run → admin always allowed; non-admin blocked.
   if (!db || !(await tableExists(db, PROFILE_PRICING_TABLE))) {
-    const isAdmin = isAdminUserOrEmail(user)
-    if (!user) {
+    const isAdmin = isCanonicalAdmin(principal)
+    if (!isTrustedPrincipal(principal)) {
       return {
         authenticated: false,
         is_admin: false,
@@ -311,7 +318,7 @@ export async function getAccessStatus(db, { user, profileId }) {
         ).get(profileId),
       )
     : null
-  const decision = decideAccess({ user, pricing, agreement })
+  const decision = decideAccess({ principal, pricing, agreement })
   return {
     ...decision,
     profile_id: profileId || null,

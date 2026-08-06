@@ -6,7 +6,7 @@
  * credential vault with OWNER ROUTING:
  *
  *   - EVERY credential is saved into a central ADMIN vault profile, so the
- *     admin (buckeye7066@gmail.com) can assist any profile from one place.
+ *     admin (configured-admin@example.invalid) can assist any profile from one place.
  *   - Where a credential's owner can be confidently identified from its login
  *     identifiers, a copy is ALSO saved into that individual / org profile's
  *     vault, so Hamilton picks it up automatically when working their portals.

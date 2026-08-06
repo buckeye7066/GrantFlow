@@ -29,7 +29,7 @@ const { setMasterPassphrase, _resetMasterVaultSchemaCache, _resetUnlockCache } =
   '../services/hamilton/hamiltonPortalMasterVault.js'
 )
 
-const PROFILE_ID = 'c4a92724-9cee-416f-ba30-e91b9b5cd885'
+const PROFILE_ID = '00000000-0000-4000-8000-000000000001'
 
 // Build an app whose injected user is an admin. Admin access is DB-backed
 // (req.ctx.isAdmin), resolved by the real attachRequestContext middleware, so

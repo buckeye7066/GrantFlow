@@ -16,11 +16,11 @@ import { PROFILE_INSTITUTION_FIELDS } from '../config/profileInstitutions.js'
 import { AID_TYPE_KEYS } from '../config/aidTypePreferences.js'
 
 /**
- * ANASTASIA WHITE — the real prod profile this module exists for
- * (`c4a92724-9cee-416f-ba30-e91b9b5cd885`), read read-only 2026-08-02. Trimmed
- * to the fields under test; every value below is verbatim from prod.
+ * Fictional Tennessee STEM-student fixture. It retains only the synthetic
+ * signals needed to exercise topical-term, institution, and stage-of-life
+ * boundaries; it is not copied from a production profile.
  */
-const ANASTASIA_SECTIONS = {
+const DEMO_STUDENT_SECTIONS = {
   basic_information: {
     current_school: 'Middle Tennessee State University',
     location: { city: 'Cleveland', state: 'TN', county: 'Bradley County', zip_code: '37312' },
@@ -29,7 +29,7 @@ const ANASTASIA_SECTIONS = {
     interests: [
       'Academic achievement',
       'college readiness',
-      'and community engagement are key interests for Anastasia Nicole White. As a high school senior enrolled in college-level courses at Cleveland State Community College',
+      'and community engagement are key interests for Demo Tennessee STEM Student. As a high school senior enrolled in college-level courses at Cleveland State Community College',
     ],
   },
   education: {
@@ -51,7 +51,7 @@ const ANASTASIA_SECTIONS = {
 
 describe('profileDerivedFacts — the REGISTRY is total', () => {
   it('every registry entry is consulted by deriveProfileFacts and carries a fact kind', () => {
-    const facts = deriveProfileFacts({}, ANASTASIA_SECTIONS)
+    const facts = deriveProfileFacts({}, DEMO_STUDENT_SECTIONS)
     const consumedFactKinds = new Set([
       ...facts.topicalTerms.map((t) => t.fact),
       facts.stageOfLife ? 'stage_of_life' : null,
@@ -81,22 +81,21 @@ describe('profileDerivedFacts — the REGISTRY is total', () => {
     for (const field of DERIVED_FACT_FIELDS) {
       expect(institutionFieldIds.has(field.id), `${field.id} duplicates a profileInstitutions field`).toBe(false)
     }
-    const facts = deriveProfileFacts({}, ANASTASIA_SECTIONS)
+    const facts = deriveProfileFacts({}, DEMO_STUDENT_SECTIONS)
     expect(facts.institutions.evidence).toContain('profileInstitutions')
   })
 
   it('accepted aid types are DELEGATED to aidTypePreferences and stay in its taxonomy', () => {
-    const facts = deriveProfileFacts({}, ANASTASIA_SECTIONS)
+    const facts = deriveProfileFacts({}, DEMO_STUDENT_SECTIONS)
     for (const key of facts.acceptedAidTypes.value) expect(AID_TYPE_KEYS).toContain(key)
   })
 })
 
-describe('profileDerivedFacts — the Anastasia regression (the defect this exists for)', () => {
-  it('the topical budget is spent on her FIELD, not on her name and gender', () => {
-    const terms = searchTermsFromFacts(deriveProfileFacts({ display_name: 'Anastasia Nicole White' }, ANASTASIA_SECTIONS))
-    // The shipped-before behavior, measured in prod: `buildThesis` resolved
-    // interest_terms to her first/middle/last name plus gender synonyms.
-    for (const junk of ['anastasia', 'nicole', 'white', 'female', 'woman', 'women', 'girl', 'female identifying']) {
+describe('profileDerivedFacts — the Demo Student regression (the defect this exists for)', () => {
+  it('the topical budget is spent on the declared FIELD, not a name or gender', () => {
+    const terms = searchTermsFromFacts(deriveProfileFacts({ display_name: 'Demo Tennessee STEM Student' }, DEMO_STUDENT_SECTIONS))
+    // Names and demographic labels are never topical search terms.
+    for (const junk of ['alex', 'quinn', 'sampleperson', 'female', 'woman', 'women', 'girl', 'female identifying']) {
       expect(terms, `"${junk}" must never be a topical term`).not.toContain(junk)
     }
     expect(terms[0]).toBe('forensic science')
@@ -106,7 +105,7 @@ describe('profileDerivedFacts — the Anastasia regression (the defect this exis
   })
 
   it('the declared MAJOR outranks every mined keyword — the bound truncates the weakest evidence', () => {
-    const facts = deriveProfileFacts({}, ANASTASIA_SECTIONS)
+    const facts = deriveProfileFacts({}, DEMO_STUDENT_SECTIONS)
     expect(facts.topicalTerms.length).toBeLessThanOrEqual(MAX_TOPICAL_TERMS)
     expect(facts.topicalTerms[0].evidence).toBe('education.intended_major')
     const majorIdx = facts.topicalTerms.findIndex((t) => t.evidence === 'education.intended_major')
@@ -115,7 +114,7 @@ describe('profileDerivedFacts — the Anastasia regression (the defect this exis
   })
 
   it('every derived fact names the FIELD it came from', () => {
-    const facts = deriveProfileFacts({}, ANASTASIA_SECTIONS)
+    const facts = deriveProfileFacts({}, DEMO_STUDENT_SECTIONS)
     const registryIds = new Set(DERIVED_FACT_FIELDS.map((f) => f.id))
     for (const t of facts.topicalTerms) expect(registryIds.has(t.evidence), `${t.term} has no registry provenance`).toBe(true)
     expect(facts.acceptedAidTypes.evidence).toBe('education.aid_types_accepted')
@@ -124,16 +123,15 @@ describe('profileDerivedFacts — the Anastasia regression (the defect this exis
   })
 
   it('prose masquerading as an interest never becomes a term', () => {
-    // basic_information.interests holds a SENTENCE split on commas in prod. It
-    // is not in the registry at all, and even if it were the length bound and
-    // the stoplist refuse it.
-    const terms = searchTermsFromFacts(deriveProfileFacts({}, ANASTASIA_SECTIONS))
+    // basic_information.interests holds a sentence split on commas. It is not
+    // in the registry, and the length bound and stoplist would refuse it.
+    const terms = searchTermsFromFacts(deriveProfileFacts({}, DEMO_STUDENT_SECTIONS))
     for (const t of terms) expect(t.length).toBeLessThanOrEqual(40)
-    expect(terms.some((t) => t.includes('anastasia nicole white'))).toBe(false)
+    expect(terms.some((t) => t.includes('alex quinn sampleperson'))).toBe(false)
   })
 
   it('only DECLARED education fields may authorize a catalog look', () => {
-    const facts = deriveProfileFacts({}, ANASTASIA_SECTIONS)
+    const facts = deriveProfileFacts({}, DEMO_STUDENT_SECTIONS)
     const allowed = new Set(['education.intended_major', 'education.major', 'student_portal_plan.major', 'education.interests'])
     expect(facts.recallTerms.length).toBeGreaterThan(0)
     for (const t of facts.recallTerms) expect(allowed.has(t.evidence), `${t.evidence} must not be recall-safe`).toBe(true)
@@ -202,7 +200,7 @@ describe('profileDerivedFacts — the precision rules (each was measured)', () =
 
 describe('profileDerivedFacts — stage of life is DERIVED, never guessed', () => {
   it('High School Senior + college courses => dual-enrolled incoming freshman', () => {
-    const stage = deriveStageOfLife(ANASTASIA_SECTIONS)
+    const stage = deriveStageOfLife(DEMO_STUDENT_SECTIONS)
     expect(stage.value).toBe('dual_enrolled_incoming_freshman')
     expect(stage.evidence).toContain('basic_information.academic_status.college_courses')
   })
@@ -255,11 +253,11 @@ describe('profileDerivedFacts — stage of life is DERIVED, never guessed', () =
   })
 
   // SECOND LIVE INSTANCE, same day (2026-08-03): the phrase lookbehind above
-  // still let "graduate" match INSIDE the word "UNDERgraduate". Robert White
+  // still let "graduate" match INSIDE the word "UNDERgraduate". Demo College Student Persona
   // (6b3c75ec) derived `graduate_student` from his verbatim
   // `education.highest_level`, so the dual-enrollment/postdoctoral bars keyed
   // on the WRONG stage and every stage-ranked lane read him as a grad student.
-  it('REGRESSION: "undergraduate" is never a graduate student (Robert White, verbatim)', () => {
+  it('REGRESSION: "undergraduate" is never a graduate student (Demo College Student Persona, verbatim)', () => {
     expect(deriveStageOfLife({
       education: { highest_level: 'College Student - Currently in undergraduate program' },
     }).value).toBe('undergraduate')

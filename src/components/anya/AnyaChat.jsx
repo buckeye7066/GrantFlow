@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { v4 as uuid } from "uuid"
 import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor, Trash2, RotateCcw, MapPin, CheckSquare, Square } from "lucide-react"
@@ -460,6 +460,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
   // createSession loop → `isLoading` stays true → the Admin Tools button
   // stays disabled (Anya goals 4, 6, 8).
   const effectiveProfileId = profileId && profileId !== '__admin__' ? profileId : null
+  const accessibilityId = useId()
+  const headingId = `anya-heading-${accessibilityId}`
+  const tasksPanelId = `anya-tasks-${accessibilityId}`
+  const composerHelpId = `anya-composer-help-${accessibilityId}`
   const [isUnavailable, setIsUnavailable] = useState(false)
   const queryClient = useQueryClient()
 
@@ -1276,7 +1280,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
 
   if (isUnavailable) {
     return (
-      <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 p-4 text-sm text-slate-700 dark:text-slate-300 shadow-sm">
+      <div role="alert" className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 p-4 text-sm text-slate-700 dark:text-slate-300 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600">
             <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
@@ -1736,6 +1740,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
 
   return (
     <div
+      role="region"
+      aria-labelledby={headingId}
       className={cn(
         "flex h-full min-w-0 flex-col overflow-x-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/90 shadow-sm",
         // Custom appearance opts the whole panel OUT of the app light/dark
@@ -1770,7 +1776,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     className="h-full w-full object-cover"
                   />
                 </div>
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100" style={chatAppearance ? { color: chatAppearance.bodyText } : undefined}>Anya, your GrantFlow copilot</h2>
+                <h2 id={headingId} className="text-sm font-semibold text-slate-800 dark:text-slate-100" style={chatAppearance ? { color: chatAppearance.bodyText } : undefined}>Anya, your GrantFlow copilot</h2>
                 {isAdmin && (
                   <Badge variant="default" className="gap-1 text-[11px] bg-purple-600">
                     <Shield className="h-3 w-3" />
@@ -1785,6 +1791,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     onClick={handleClearConversation}
                     disabled={isClearingConversation || messages.length === 0}
                     title="Clear conversation (keeps same session)"
+                    aria-label="Clear visible conversation; server history is preserved"
                   >
                     {isClearingConversation ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1799,6 +1806,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     onClick={handleStartNewConversation}
                     disabled={isClearingConversation}
                     title="Start new conversation"
+                    aria-label="Start a new conversation"
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
                   </Button>
@@ -1920,6 +1928,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   type="button"
                   className="flex items-center gap-2 text-left"
                   onClick={() => setIsTasksExpanded((prev) => !prev)}
+                  aria-expanded={isTasksExpanded}
+                  aria-controls={tasksPanelId}
                 >
                   {isTasksExpanded ? (
                     <ChevronDown className="h-3 w-3 text-slate-500 dark:text-slate-400 shrink-0" />
@@ -1940,7 +1950,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                 </Badge>
               </div>
               {isTasksExpanded && (
-                <>
+                <div id={tasksPanelId}>
                   <div className="mt-3 space-y-2">
                 {isLoadingTasks ? (
                   <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
@@ -1966,7 +1976,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                         className="flex items-start gap-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 shadow-sm"
                       >
                         <Checkbox
-                          id={`anya-task-${task.id}`}
+                          id={`anya-task-${accessibilityId}-${task.id}`}
                           checked={isCompleted}
                           onCheckedChange={(checked) =>
                             handleTaskStatusChange(task, checked === true)
@@ -1975,14 +1985,15 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                           className="mt-1"
                         />
                         <div className="flex flex-1 flex-col gap-1">
-                          <span
+                          <label
+                            htmlFor={`anya-task-${accessibilityId}-${task.id}`}
                             className={cn(
                               "text-sm font-medium text-slate-700",
                               isCompleted && "line-through text-slate-400",
                             )}
                           >
                             {task.title}
-                          </span>
+                          </label>
                           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                             {dueLabel ? <span>{dueLabel}</span> : null}
                             {task.priority && task.priority !== "normal" ? (
@@ -2043,14 +2054,20 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   </Button>
                 </div>
               </form>
-                </>
+                </div>
               )}
             </div>
           ) : null}
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-[200px] px-4 py-4">
+      <ScrollArea
+        className="flex-1 min-h-[200px] px-4 py-4"
+        role="log"
+        aria-label="Conversation with Anya"
+        aria-live="polite"
+        aria-relevant="additions text"
+      >
         {/* Onboarding flow — shown in-panel instead of normal chat */}
         {onboardingStep !== null ? (
           <OnboardingFlow
@@ -2214,7 +2231,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           handleSend()
         }}
       >
+        <Label htmlFor={`anya-message-${accessibilityId}`} className="sr-only">Message Anya</Label>
         <Textarea
+          id={`anya-message-${accessibilityId}`}
+          aria-describedby={composerHelpId}
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {
@@ -2229,7 +2249,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           disabled={isDisabled}
         />
         <div className="mt-3 flex items-center justify-between">
-          <span className="text-xs text-slate-600 dark:text-slate-400" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
+          <span id={composerHelpId} className="text-xs text-slate-600 dark:text-slate-400" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
             Anya keeps all actions scoped to this profile.
           </span>
           <Button

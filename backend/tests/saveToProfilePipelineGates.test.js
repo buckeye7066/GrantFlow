@@ -24,6 +24,32 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
+
+vi.mock('../services/matchEngine.js', async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    computeMatchDecision: (_profile, opportunity) => {
+      const decision = opportunity.test_decision ?? 'ACCEPT'
+      const score = decision === 'REJECT' ? 0 : Number(opportunity.test_score ?? 90)
+      return {
+        decision,
+        eligible: decision === 'ACCEPT',
+        score,
+        reasons: ['focused pipeline-gate fixture'],
+        ineligibilityReasons: decision === 'REJECT' ? ['focused fixture rejection'] : [],
+        explanation: 'Focused pipeline-gate fixture decision.',
+        matchedNeeds: ['community'],
+        matcherVersion: 'pipeline-gate-test',
+        evaluatedAt: '2026-08-06T00:00:00.000Z',
+        confidence: 80,
+        match_explain: { score_scale_id: 'data_point_v1' },
+        scoreScaleId: 'data_point_v1',
+      }
+    },
+  }
+})
+
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import { RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
 
@@ -361,17 +387,18 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
   })
 
   it('does not insert a below-floor opportunity even when caller passes threshold=0', async () => {
+    const belowFloor = RELEVANCE_FLOOR - 1
     const lowScoreOpp = {
       id: 'opp-low',
       title: 'Barely Relevant Program',
       sponsor: 'Some Funder',
       url: 'https://grants.example.gov/low',
       source: 'grants_gov',
+      test_score: belowFloor,
     }
 
     // Caller tries to lower the bar to 0 (the crawler-relaxed-threshold bug).
     // Explicit score is below the canonical floor.
-    const belowFloor = RELEVANCE_FLOOR - 1
     const res = await saveToProfilePipeline(db, lowScoreOpp, 'p1', profileContext, belowFloor, 0)
 
     expect(res.saved).toBe(false)
@@ -401,6 +428,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
       eligibility: 'nonprofits',
       url: 'https://grants.example.gov/reject',
       source: 'grants_gov',
+      test_decision: 'REJECT',
     }
     const res = await saveToProfilePipeline(db, rejectOpp, 'p1', ineligibleProfile, 99, 0)
     expect(res.saved).toBe(false)
@@ -416,6 +444,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
       sponsor: 'Good Funder',
       url: 'https://grants.example.gov/good',
       source: 'grants_gov',
+      test_score: RELEVANCE_FLOOR,
     }
     const res = await saveToProfilePipeline(db, goodOpp, 'p1', profileContext, RELEVANCE_FLOOR, 0)
     expect(res.saved).toBe(true)

@@ -80,17 +80,20 @@ function relativeLuminanceFromHex(hex) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
-function pickReadableForegroundHex(backgroundHex, { highContrast = false } = {}) {
+export function pickReadableForegroundHex(backgroundHex) {
   const lum = relativeLuminanceFromHex(backgroundHex)
   if (lum === null) return '#ffffff'
 
-  // Prefer strict black/white in high-contrast mode.
-  if (highContrast) {
-    return lum > 0.35 ? '#0a0a0a' : '#ffffff'
-  }
+  // Compare the actual WCAG contrast ratios instead of using a luminance
+  // threshold. The old 0.55 heuristic chose white for the default blue accent
+  // even though that pair is only ~3.6:1; the dark candidate is > 4.5:1.
+  const darkHex = '#0a0a0a'
+  const lightHex = '#ffffff'
+  const darkLum = relativeLuminanceFromHex(darkHex)
+  const lightLum = relativeLuminanceFromHex(lightHex)
+  const contrast = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
 
-  // Heuristic threshold: brighter accents need dark text, darker accents need white text.
-  return lum > 0.55 ? '#0a0a0a' : '#ffffff'
+  return contrast(lum, darkLum) >= contrast(lum, lightLum) ? darkHex : lightHex
 }
 
 // ── Single-source-of-truth persistence ──────────────────────────────────────
@@ -280,7 +283,7 @@ export const useSettingsStore = create((set, get) => ({
     }
 
     // Ensure button text stays readable against the chosen accent.
-    const fgHex = pickReadableForegroundHex(accentHex, { highContrast: high_contrast })
+    const fgHex = pickReadableForegroundHex(accentHex)
     const fgHsl = hexToHsl(fgHex)
     if (fgHsl) {
       root.style.setProperty('--primary-foreground', fgHsl)

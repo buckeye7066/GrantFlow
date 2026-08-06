@@ -31,7 +31,7 @@ The session uploads and Hamilton can immediately reuse it.
 
 | Profile   | `--portal-host`        | `--login-url`                          |
 |-----------|------------------------|----------------------------------------|
-| Anastasia | `mtsu.edu`             | `https://login.microsoftonline.com/`   |
+| Demo Student | `mtsu.edu`             | `https://login.microsoftonline.com/`   |
 | Robert    | `clevelandstatecc.edu` | `https://www.clevelandstatecc.edu/`    |
 
 > The captured `storageState` is multi-domain — one capture covers the SSO

@@ -13,7 +13,6 @@ import {
   MATCHER_VERSION,
 } from '../services/matchEngine.js';
 import {
-  applyNeedFirstScoring,
   isAcceptLevelScore,
   NEED_FIRST_SCORING_VERSION,
 } from '../services/matching/needFirstScoringAdapter.js';
@@ -101,20 +100,10 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   const sections = opts.profileSections ?? opts.sections ?? null;
   const signals = opts.signals ?? null;
 
-  const canonicalBase = computeCanonicalMatchDecision(profile, opp, {
+  const canonical = computeCanonicalMatchDecision(profile, opp, {
     profileSections: sections,
     signals,
     preferenceSignals: opts.preferenceSignals,
-  });
-  const canonical = applyNeedFirstScoring({
-    canonical: canonicalBase,
-    profileContext: {
-      profile,
-      sections: sections ?? {},
-      signals,
-      profileNorm: opts.profileNorm ?? null,
-    },
-    opportunity: opp,
   });
 
   const score = Number.isFinite(Number(canonical?.score))

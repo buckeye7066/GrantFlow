@@ -1,4 +1,12 @@
-import { checkUrl, recordVerificationEvent } from './linkVerificationService.js'
+import {
+  checkUrl,
+  mutableLinkLifecycleSql,
+  recordVerificationEvent,
+} from './linkVerificationService.js'
+import {
+  linkLifecycleKindSql,
+  linkLifecycleOpportunitySql,
+} from '../config/linkLifecycleKinds.js'
 import { findOfficialUrlForOpportunity } from './urlEnrichment.js'
 
 const SUCCESS = new Set(['ok', 'redirect', 'verified'])
@@ -173,7 +181,7 @@ export async function reclassifyBrokenResources(db) {
     SELECT id, source_id, application_url, source_url, final_url, contact_info
       FROM funding_opportunities
      WHERE LOWER(COALESCE(source, '')) = 'osm_overpass'
-       AND COALESCE(opportunity_kind, 'direct') IN ('direct', 'benefit')
+       AND ${linkLifecycleKindSql('opportunity_kind')}
   `).all()
   const updateOsm = db.prepare(`
     UPDATE funding_opportunities
@@ -186,7 +194,7 @@ export async function reclassifyBrokenResources(db) {
            last_verified_at = NULL, verification_method = NULL,
            verified_by = 'link-repair:osm-resource', verification_error = NULL,
            http_status = NULL, is_hidden = ?, is_active = ?, status = 'active'
-     WHERE id = ?
+     WHERE id = ? AND ${mutableLinkLifecycleSql()}
   `)
   for (const row of osmRows || []) {
     const url = osmElementUrl(row.source_id)
@@ -198,7 +206,7 @@ export async function reclassifyBrokenResources(db) {
   const rows = await db.prepare(`
     SELECT id, result_kind
       FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind, 'direct') IN ('direct', 'benefit')
+     WHERE ${linkLifecycleKindSql('opportunity_kind')}
        AND LOWER(COALESCE(result_kind, '')) IN
            ('action_step','directory','referral','school_portal','past_award_intel')
   `).all()
@@ -306,7 +314,7 @@ export async function brokenDirectSummary(db) {
       SUM(CASE WHEN link_status='skipped' AND status='paused'
                     AND verification_error LIKE ? THEN 1 ELSE 0 END) scheduled_retry
       FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'direct') IN ('direct','benefit')
+     WHERE ${linkLifecycleOpportunitySql()}
   `).get(`${RETIRED_MARKER}%`, `${SCHEDULED_RETRY_MARKER}%`)
   return {
     visible: Number(row?.visible || 0),
@@ -352,11 +360,12 @@ export async function scheduleRetryableBrokenRows(db, options = {}) {
          WHERE link_status='broken' AND verified_by LIKE ?
          GROUP BY opportunity_id
       ) attempts ON attempts.opportunity_id = fo.id
-     WHERE COALESCE(fo.opportunity_kind,'direct') IN ('direct','benefit')
+     WHERE ${linkLifecycleOpportunitySql('fo')}
        AND fo.link_status='broken' AND fo.status='paused'
        AND COALESCE(fo.is_hidden,TRUE)=TRUE
        AND COALESCE(fo.is_active,FALSE)=FALSE
        AND attempts.attempt_count >= ?
+       AND ${mutableLinkLifecycleSql('fo')}
      -- scheduled_retry_portable_order: explicit CASE works on both SQLite and Postgres.
      ORDER BY CASE WHEN fo.last_verified_at IS NULL THEN 0 ELSE 1 END,
               fo.last_verified_at ASC, fo.id ASC
@@ -370,6 +379,7 @@ export async function scheduleRetryableBrokenRows(db, options = {}) {
            verification_error=?, last_verified_at=?,
            is_hidden=?, is_active=?
      WHERE id=? AND link_status='broken' AND status='paused'
+       AND ${mutableLinkLifecycleSql()}
   `)
 
   let scheduled = 0
@@ -428,8 +438,8 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   await db.prepare(`
     UPDATE funding_opportunities
        SET is_hidden=?, is_active=?
-     WHERE COALESCE(opportunity_kind,'direct') IN ('direct','benefit')
-       AND link_status='broken' AND COALESCE(status,'active') <> 'expired'
+     WHERE ${linkLifecycleOpportunitySql()}
+       AND link_status='broken' AND ${mutableLinkLifecycleSql()}
   `).run(yes, no)
 
   // link_backlog_selected_row_claim: active quarantine drains first. Fresh
@@ -439,8 +449,9 @@ export async function repairBrokenDirectBatch(db, options = {}) {
            apply_guidelines_url, source_url, evidence_url, final_url,
            status, last_verified_at
       FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'direct') IN ('direct','benefit')
+     WHERE ${linkLifecycleOpportunitySql()}
        AND link_status='broken'
+       AND ${mutableLinkLifecycleSql()}
        AND (
          COALESCE(status,'active')='active'
          OR (status='paused' AND (last_verified_at IS NULL OR last_verified_at < ?))
@@ -469,7 +480,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   const claimSelected = db.prepare(`
     UPDATE funding_opportunities
        SET is_hidden=?, is_active=?, status='paused'
-     WHERE id=? AND link_status='broken' AND COALESCE(status,'active') <> 'expired'
+     WHERE id=? AND link_status='broken' AND ${mutableLinkLifecycleSql()}
   `)
   const claimedRows = []
   for (const row of rows || []) {
@@ -490,7 +501,8 @@ export async function repairBrokenDirectBatch(db, options = {}) {
            source_url=?, evidence_url=?, final_url=?, last_verified_at=?, link_status=?,
            link_status_code=?, verification_method=?, verified_by=?, verification_error=NULL,
            http_status=?, is_hidden=?, is_active=?, status='active'
-     WHERE id=?
+     WHERE id=? AND link_status='broken' AND status='paused'
+       AND ${mutableLinkLifecycleSql()}
   `)
   const retire = db.prepare(`
     UPDATE funding_opportunities
@@ -498,7 +510,8 @@ export async function repairBrokenDirectBatch(db, options = {}) {
            verification_method=?, verified_by=?, verification_error=?,
            final_url=COALESCE(?,final_url), http_status=?,
            is_hidden=?, is_active=?, status='expired'
-     WHERE id=?
+     WHERE id=? AND link_status='broken' AND status='paused'
+       AND ${mutableLinkLifecycleSql()}
   `)
   const keepPending = db.prepare(`
     UPDATE funding_opportunities
@@ -506,7 +519,8 @@ export async function repairBrokenDirectBatch(db, options = {}) {
            verification_method=?, verified_by=?, verification_error=?,
            final_url=COALESCE(?,final_url), http_status=?,
            is_hidden=?, is_active=?, status='paused'
-     WHERE id=?
+     WHERE id=? AND link_status='broken' AND status='paused'
+       AND ${mutableLinkLifecycleSql()}
   `)
 
   // link_backlog_row_error_isolation: one provider, probe, or DB failure

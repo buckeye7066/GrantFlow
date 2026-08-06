@@ -28,7 +28,7 @@ npm run unit
 ADMIN_TOKEN=test-admin-token node test-from-opportunity-comprehensive.mjs
 
 # Run the verification script
-PROFILE_ID=profile-anastasia ADMIN_TOKEN=test-admin-token \
+PROFILE_ID=profile-demo-tennessee-stem-student ADMIN_TOKEN=test-admin-token \
   node scripts/verify-add-to-pipeline-from-opportunity.mjs http://localhost:8080
 ```
 

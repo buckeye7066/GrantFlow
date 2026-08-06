@@ -7,7 +7,7 @@
  * read-only in prod 2026-08-01: the catalog held **52 active Middle Tennessee
  * State University rows** (Peggy Perry Belcher Scholarship Fund, MTSU Guaranteed
  * Scholarship, Buchanan Fellowship, …) and **ZERO of them carried a match row
- * for ANY profile** — including Anastasia White, whose
+ * for ANY profile** — including Demo Tennessee STEM Student, whose
  * `education.current_institution` IS "Middle Tennessee State University".
  * Meanwhile Wayne County Community College District (MICHIGAN) scholarships were
  * cross-matched onto **28 profiles** at scores 3–4, including nonprofits and a
@@ -16,7 +16,7 @@
  *
  * THE ENGINE WAS NEVER THE PROBLEM. Replaying the REAL canonical engine
  * (`services/matchEngine.computeMatchDecision`) on the real prod pair
- * (Anastasia + "Peggy Perry Belcher Scholarship Fund") returns
+ * (Demo Student + "Peggy Perry Belcher Scholarship Fund") returns
  * **ACCEPT, score 100, "Matches 70 of the profile's 70 data points"**. The pair
  * is never SCORED, because `profile_opportunity_matches` is a ROLLING SNAPSHOT:
  * `crawlerOsPersistenceCore.persistRun` DELETEs a profile's
@@ -35,7 +35,7 @@
  *
  *   1. ATTENDANCE, NOT ASPIRATION. Only fields that assert the profile is (or
  *      has committed to) BEING at the school count — `ATTENDANCE_FIELDS`.
- *      `education.target_colleges` is deliberately ASPIRATION: Anastasia lists
+ *      `education.target_colleges` is deliberately ASPIRATION: Demo Student lists
  *      NINETEEN target colleges, and admitting all nineteen schools' aid is the
  *      flood. Aspiration fields still seed discovery QUERIES (that is what
  *      `crawlerOsPersistenceCore.extractEducationEmployment` uses them for) —
@@ -122,7 +122,7 @@ export const MAX_ATTENDED_INSTITUTIONS = 3
  * Max ASPIRATION institutions read per profile. Deliberately much larger than
  * `MAX_ATTENDED_INSTITUTIONS`: this set is only ever used to REFUSE a link, so
  * truncating it would silently let an aspiration row through the very guard it
- * exists to enforce. Anastasia White lists NINETEEN target colleges in prod.
+ * exists to enforce. Demo Tennessee STEM Student lists NINETEEN target colleges in prod.
  */
 export const MAX_ASPIRATIONAL_INSTITUTIONS = 60
 

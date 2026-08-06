@@ -39,7 +39,7 @@ describe('extractContactEmails', () => {
 describe('pickBestOrgEmail', () => {
   it('prefers same-domain, then role addresses', () => {
     const best = pickBestOrgEmail(
-      ['jane.doe@gmail.com', 'info@helpinghands.org', 'bob@helpinghands.org'],
+      ['person@gmail.com', 'info@helpinghands.org', 'bob@helpinghands.org'],
       { domain: 'helpinghands.org' },
     )
     expect(best).toBe('info@helpinghands.org')

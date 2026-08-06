@@ -12,7 +12,7 @@
  *   foreclosure / mortgage          95 rows →  30
  *
  * The concrete pair, run through the REAL engine against the REAL profile:
- * Hollie Machelle Knox (family, North Ridgeville OH 44039 — Lorain County),
+ * Demo Caregiver Household Persona (family, North Ridgeville OH 44039 — Lorain County),
  * profile need `housing`, vs "Love INC Lorain County – Emergency Housing & Rent
  * Assistance". `computeMatchDecision` returns **ACCEPT 100**, and
  * `profile_opportunity_matches` held **no row at all**. Eight of her county's
@@ -235,9 +235,9 @@ export function crisisNeedsOf(needCategories) {
  * cannot drift. A totality test pins the field list and asserts no entry reads
  * free text.
  *
- * Measured effect on the real fleet: it keeps the flagship (Hollie Knox really
+ * Measured effect on the real fleet: it keeps the flagship (Demo Caregiver Household Persona really
  * does declare `housing`) and drops the imprecision this PR had honestly flagged
- * — Vermilion Church, Focus Forward and Anastasia never declared a housing need
+ * — Vermilion Church, Focus Forward and Demo Student never declared a housing need
  * at all; the normalizer inferred it.
  */
 export const DECLARED_NEED_FIELDS = Object.freeze([

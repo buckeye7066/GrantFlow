@@ -392,7 +392,7 @@ never "didn't qualify" (the locator rule).
 - The plans' own in-file citations to line numbers (e.g. `webLane.js ~304-348`)
   are from a base 24+ commits behind `origin/main` — re-verify the cited ranges
   against current main before resuming any build.
-- `fix/portal-card-session-mask` (worktree `C:/Users/firer/gf-portal-session`;
+- `fix/portal-card-session-mask` (worktree `C:/Users/example_user/gf-portal-session`;
   NOT one of the three plans — adjacent portal-identity work) — **found dangling
   via the 2026-07-25 finish-unfinished-work pass**: 2 modified files
   (`backend/services/hamilton/profilePortalIndex.js` + its test), last edit

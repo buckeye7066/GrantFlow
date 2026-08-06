@@ -63,6 +63,7 @@ describe('POST /api/admin/anya/runAutonomous', () => {
     )
 
     app = express()
+    app.locals.trustedRepoRoot = tmpDir
     app.use(express.json())
     // Pretend the user is authenticated + admin so ensureAuth / ensureAdmin pass.
     app.use((req, _res, next) => {
@@ -125,7 +126,7 @@ describe('POST /api/admin/anya/runAutonomous', () => {
     }
   })
 
-  it('honors dry_run=false without an environment permission gate', async () => {
+  it('honors dry_run=false outside production while preserving audit evidence', async () => {
     const before = await fs.readFile(path.join(tmpDir, 'src/x.js'), 'utf8')
 
     const result = await postJson(`${baseUrl}/api/admin/anya/runAutonomous`, { dry_run: false })
@@ -139,5 +140,32 @@ describe('POST /api/admin/anya/runAutonomous', () => {
     expect(after).not.toBe(before)
     expect(after).toMatch(/console\.error\('\[AnyaAudit\] Suppressed error/)
     expect(after).toMatch(/throw err/)
+  })
+
+  it('rejects an admin-supplied directory outside the server-owned repository root', async () => {
+    const result = await postJson(`${baseUrl}/api/admin/anya/runAutonomous`, {
+      directory: os.tmpdir(),
+      dry_run: true,
+    })
+    expect(result.status).toBe(400)
+    expect(result.json.output.success).toBe(false)
+    expect(result.json.output.error).toMatch(/outside the trusted repository root/i)
+  })
+
+  it('rejects production writes unless the explicit operator gate is enabled', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    const previousGate = process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES
+    process.env.NODE_ENV = 'production'
+    delete process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES
+    try {
+      const result = await postJson(`${baseUrl}/api/admin/anya/runAutonomous`, { dry_run: false })
+      expect(result.status).toBe(403)
+      expect(result.json.output.code).toBe('ANYA_PRODUCTION_WRITES_DISABLED')
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = previousNodeEnv
+      if (previousGate === undefined) delete process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES
+      else process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES = previousGate
+    }
   })
 })

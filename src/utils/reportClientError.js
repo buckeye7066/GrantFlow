@@ -1,4 +1,5 @@
 import { getApiBasePrefixForFetch } from '@/config/env.js'
+import client from '@/api/client'
 
 // Fire-and-forget client-error beacon. POSTs crash details to the backend, which
 // analyzes them and emails the owner (self-skipping for admins, server-side).
@@ -41,12 +42,7 @@ export function reportClientError(error, info = {}) {
       route: window.location?.pathname || null,
     }
 
-    let token = null
-    try {
-      token = window.localStorage?.getItem('grantflow:access-token') || null
-    } catch {
-      /* storage unavailable — report anonymously */
-    }
+    const token = client.getToken?.() || null
 
     const base = getApiBasePrefixForFetch() || ''
     const url = `${base}/api/report-client-error`

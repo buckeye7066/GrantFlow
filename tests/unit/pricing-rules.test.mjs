@@ -164,6 +164,25 @@ test('many matches or wants_calendar → Grant Calendar', () => {
   assert.ok(keys.includes(SERVICE_KEYS.GRANT_CALENDAR))
 })
 
+test('service strategy treats only canonical high-scoring ACCEPT rows as strong', () => {
+  const rejectedHighScore = recommendServices({
+    clientCategory: 'small',
+    matches: [{ id: 1, match_score: 85, match_decision: 'REJECT' }],
+  })
+  const legacyNoDecision = recommendServices({
+    clientCategory: 'small',
+    matches: [{ id: 2, match_score: 85 }],
+  })
+  const acceptedStrong = recommendServices({
+    clientCategory: 'small',
+    matches: [{ id: 3, match_score: 17, match_decision: 'ACCEPT' }],
+  })
+
+  assert.ok(!rejectedHighScore.line_items.some((item) => item.service_key === SERVICE_KEYS.APPLICATION_STRATEGY_SESSION))
+  assert.ok(!legacyNoDecision.line_items.some((item) => item.service_key === SERVICE_KEYS.APPLICATION_STRATEGY_SESSION))
+  assert.ok(acceptedStrong.line_items.some((item) => item.service_key === SERVICE_KEYS.APPLICATION_STRATEGY_SESSION))
+})
+
 test('post-award user → Compliance Reporting & Management', () => {
   const r = recommendServices({
     clientCategory: 'small',

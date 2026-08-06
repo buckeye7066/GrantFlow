@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react"
+import React, { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
   Boxes,
@@ -33,7 +33,7 @@ import { getItemSuggestions } from "@/api/items"
 import NeedsDiscoveryPanel from "@/components/ai/NeedsDiscoveryPanel"
 
 const NOT_AVAILABLE = 'N/A'
-import { listProfiles, getProfile } from "@/api/profiles"
+import { getProfile } from "@/api/profiles"
 import { searchSpecificNeed } from "@/api/crawlers"
 import { MODERATE_MATCH_SCORE, SCORE_FLOOR } from "@/lib/matchDisplayThresholds"
 import { cn } from "@/lib/utils"
@@ -44,6 +44,7 @@ import { createPageUrl } from "@/utils"
 import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
 import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
 import { resetFiltersPreservingProfile } from "./itemFundingState.js"
+import { parseLocalDate } from "@/components/shared/dateUtils"
 
 // Human-readable labels for the applicant type the backend detected from the
 // selected profile. This is what makes the search visibly profile-aware: the
@@ -58,6 +59,16 @@ const APPLICANT_TYPE_LABELS = {
 function safeArray(value) {
   if (!value) return []
   return Array.isArray(value) ? value : [value]
+}
+
+function safeExternalUrl(value) {
+  if (!value) return null
+  try {
+    const parsed = new URL(value)
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null
+  } catch {
+    return null
+  }
 }
 
 function toNumberOrNull(value) {
@@ -80,8 +91,8 @@ function formatAmount(min, max) {
 function formatDeadline(deadline, type) {
   if (!deadline) return type === "rolling" ? "Rolling deadline" : "Deadline TBD"
   try {
-    const parsed = new Date(deadline)
-    if (Number.isNaN(parsed.getTime())) {
+    const parsed = parseLocalDate(deadline)
+    if (!parsed) {
       throw new Error("Invalid date value")
     }
     return format(parsed, "PPP")
@@ -156,23 +167,22 @@ function scoreItemMatch(opportunity, itemQuery, profileDetail) {
     reasons.push("Rolling deadline suitable for procurement")
   }
 
-  const isNonRepayable =
-    !opportunity.requires_match &&
-    (opportunity.opportunity_type ? !/loan|debt|matching/i.test(opportunity.opportunity_type) : true) &&
-    (opportunity.match_percentage === null || opportunity.match_percentage === undefined)
+  const requiresMatch = opportunity.requires_match === true || toNumberOrNull(opportunity.match_percentage) > 0
+  const requiresRepayment = /loan|debt|lease|matching/i.test(opportunity.opportunity_type || "")
+  const isDisqualified = requiresMatch || requiresRepayment
 
-  if (!isNonRepayable) {
+  if (isDisqualified) {
     score = Math.max(10, score - 25)
     reasons.push("This opportunity requires match funding or repayment")
   } else {
-    reasons.push("Compliant: no match requirement, no loans")
+    reasons.push("This record does not indicate a match or repayment requirement; verify the official source")
   }
 
   return {
     score: Math.min(100, Math.round(score)),
     reasons,
     overlap,
-    disqualified: !isNonRepayable,
+    disqualified: isDisqualified,
   }
 }
 
@@ -180,10 +190,9 @@ function ItemResultCard({ opportunity, match, onSelect }) {
   return (
     <Card
       className={cn(
-        "border border-slate-200 bg-white/80 backdrop-blur hover:shadow-lg transition cursor-pointer flex flex-col",
+        "border border-slate-200 bg-white/80 backdrop-blur hover:shadow-lg transition flex flex-col",
         match?.disqualified ? "opacity-60" : "",
       )}
-      onClick={() => onSelect(opportunity)}
     >
       <CardHeader className="pb-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
@@ -212,20 +221,21 @@ function ItemResultCard({ opportunity, match, onSelect }) {
           </div>
         </div>
         <p className="text-sm text-slate-600 line-clamp-3">{opportunity.description || "No summary available yet."}</p>
-        {match ? (
+        {match?.score !== null && match?.score !== undefined ? (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs text-slate-500">
-              <span className="uppercase font-semibold tracking-wide">Item match score</span>
+              <span className="uppercase font-semibold tracking-wide">Item relevance estimate</span>
               <span>{match.score}%</span>
             </div>
-            <Progress value={match.score} className="h-2" />
+            <Progress value={match.score} className="h-2" aria-label={`Item relevance estimate: ${match.score}%`} />
+            <p className="text-xs text-slate-500">Ranks this item wording only; it is not an eligibility or award decision.</p>
             {match.disqualified ? (
               <p className="text-xs text-red-600">Requires matching funds or repayment.</p>
             ) : null}
           </div>
         ) : (
           <div className="rounded-md bg-slate-50 border border-dashed border-slate-200 p-2 text-xs text-slate-500">
-            Enter the item and select a profile to generate a match score.
+            Item relevance has not been scored. Review the official source before relying on this lead.
           </div>
         )}
       </CardContent>
@@ -240,6 +250,7 @@ function ItemResultCard({ opportunity, match, onSelect }) {
 
 function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
   if (!opportunity) return null
+  const applicationUrl = safeExternalUrl(opportunity.application_url)
   const detailReasons =
     match?.reasons?.length > 0
       ? match.reasons
@@ -283,20 +294,22 @@ function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
             opportunity={opportunity}
             match={match}
             profileName={profileName}
+            scoreSemantics="item_relevance"
           />
 
-          {match ? (
+          {match?.score !== null && match?.score !== undefined ? (
             <section className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold text-blue-900 flex items-center gap-2">
                   <Target className="w-4 h-4" />
-                  Item Match Score
+                  Item relevance estimate
                 </p>
                 <Badge className={match.disqualified ? "bg-red-600 text-white" : "bg-blue-600 text-white"}>
                   {match.score}%
                 </Badge>
               </div>
-              <Progress value={match.score} className="h-2" />
+              <Progress value={match.score} className="h-2" aria-label={`Item relevance estimate: ${match.score}%`} />
+              <p className="text-xs text-blue-900">This ranks item wording and profile context. It does not determine eligibility or predict an award.</p>
               <ul className="list-disc list-inside text-xs text-blue-900 space-y-1">
                 {detailReasons.length > 0 ? (
                   detailReasons.map((reason, index) => {
@@ -328,18 +341,16 @@ function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
             </section>
           ) : null}
 
-          {opportunity.application_url ? (
+          {applicationUrl ? (
             <section className="space-y-2">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-900">
                 {opportunity.record_origin === "web_search" ? "Source Page (verify before applying)" : "Application Portal"}
               </h3>
-              <Button
-                variant="default"
-                className="gap-2"
-                onClick={() => window.open(opportunity.application_url, "_blank", "noopener,noreferrer")}
-              >
-                {opportunity.record_origin === "web_search" ? "Visit source" : "Visit portal"}
-                <ExternalLink className="w-4 h-4" />
+              <Button asChild variant="default" className="gap-2">
+                <a href={applicationUrl} target="_blank" rel="noopener noreferrer">
+                  {opportunity.record_origin === "web_search" ? "Visit source" : "Visit portal"}
+                  <ExternalLink className="w-4 h-4" aria-hidden="true" />
+                </a>
               </Button>
             </section>
           ) : null}
@@ -357,21 +368,26 @@ function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
 export default function ItemFunding() {
   const { toast } = useToast()
   const user = useAuthStore((state) => state.user)
+  const activeProfileId = useAuthStore((state) => state.activeProfileId)
+  const availableProfiles = useAuthStore((state) => state.profiles)
   const isAdmin = Boolean(user?.is_admin || user?.role === "admin" || user?.id === "admin")
+  const defaultProfileId = activeProfileId && activeProfileId !== '__admin__'
+    ? activeProfileId
+    : user?.active_profile_id || user?.profile_id || availableProfiles?.[0]?.id || 'all'
   const [filters, setFilters] = useState({
     item: "",
     state: "all",
     includeNational: true,
-    profileId: "all",
+    profileId: defaultProfileId,
   })
   const [includeDisqualified, setIncludeDisqualified] = useState(false)
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [submittedItem, setSubmittedItem] = useState("")
-  // Live-search options: the "deeper sweep" action lowers the need-match floor,
+  // Live-search options: the "deeper sweep" action lowers the item-relevance floor,
   // the "donation or gift programs" action flips the web-query variant. Both
   // re-run the SAME live endpoint (the old item_search/item_gift_search crawler
   // jobs were retired with the legacy crawlers and no longer exist server-side).
-  const [liveOptions, setLiveOptions] = useState({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
+  const [liveOptions, setLiveOptions] = useState({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
 
   const statesQuery = useQuery({
     queryKey: ["opportunity-states"],
@@ -379,11 +395,11 @@ export default function ItemFunding() {
     staleTime: 5 * 60_000,
   })
 
-  const profilesQuery = useQuery({
-    queryKey: ["profiles"],
-    queryFn: listProfiles,
-    staleTime: 60_000,
-  })
+  useEffect(() => {
+    if (!isAdmin && filters.profileId === 'all' && defaultProfileId !== 'all') {
+      setFilters((previous) => ({ ...previous, profileId: defaultProfileId }))
+    }
+  }, [defaultProfileId, filters.profileId, isAdmin])
 
   const selectedProfileQuery = useQuery({
     queryKey: ["profile-detail", filters.profileId],
@@ -411,12 +427,12 @@ export default function ItemFunding() {
 
   // Live web + curated search via /specific-need (only when profile selected)
   const liveSearchQuery = useQuery({
-    queryKey: ["item-live-search", submittedItem, filters.profileId, liveOptions.minMatchScore, liveOptions.variant],
+    queryKey: ["item-live-search", submittedItem, filters.profileId, liveOptions.minItemRelevance, liveOptions.variant],
     queryFn: () =>
       searchSpecificNeed({
         profileId: filters.profileId,
         needText: submittedItem,
-        minMatchScore: liveOptions.minMatchScore,
+        minItemRelevance: liveOptions.minItemRelevance,
         maxResults: 40,
         variant: liveOptions.variant,
       }),
@@ -429,7 +445,6 @@ export default function ItemFunding() {
   const itemEntitlements = useTierEntitlements(
     filters.profileId && filters.profileId !== "all" ? filters.profileId : null,
   )
-  const selectedTier = itemEntitlements.tier ?? selectedProfile?.billing?.tier ?? null
   const canItemFunding = itemEntitlements.capabilities.itemFunding
   const hasSelectedProfile = Boolean(filters.profileId && filters.profileId !== "all")
   const opportunitiesResponse = opportunitiesQuery.data ?? null
@@ -451,13 +466,18 @@ export default function ItemFunding() {
     const seenUrls = new Set()
     const merged = []
 
-    // Live results first (already scored by backend)
+    // Live results first. The endpoint may provide a separate item/query
+    // relevance estimate; it is never treated as the canonical eligibility score.
     for (const opp of liveResults) {
       const urlKey = (opp.url || opp.application_url || '').toLowerCase().replace(/\/$/, '')
       if (urlKey && seenUrls.has(urlKey)) continue
       if (urlKey) seenUrls.add(urlKey)
       const isNationalValue =
         opp.is_national === undefined || opp.is_national === null ? false : Boolean(opp.is_national)
+      const itemRelevanceScore = toNumberOrNull(opp.item_relevance_score)
+      const disqualified = opp.requires_match === true ||
+        toNumberOrNull(opp.match_percentage) > 0 ||
+        /loan|debt|lease|matching/i.test(opp.opportunity_type || opp.type || '')
       merged.push({
         opportunity: {
           id: opp.id,
@@ -471,15 +491,17 @@ export default function ItemFunding() {
           amount_min: toNumberOrNull(opp.amount_min),
           amount_max: toNumberOrNull(opp.amount_max),
           deadline: opp.deadline,
-          deadline_type: opp.deadline_type || 'rolling',
+          deadline_type: opp.deadline_type || null,
           state: opp.state,
           is_national: isNationalValue,
           opportunity_type: opp.opportunity_type || opp.type || 'program',
+          requires_match: opp.requires_match,
+          match_percentage: opp.match_percentage,
           sponsor: opp.sponsor || opp.source,
           record_origin: opp.record_origin || null,
         },
         match: {
-          score: opp.combined_score || opp.match_score || 50,
+          score: itemRelevanceScore,
           reasons: [
             ...(opp.need_match?.matchedTerms || []),
             opp.result_source === 'web_search' ? 'Found via live web search' :
@@ -487,7 +509,7 @@ export default function ItemFunding() {
             'Matched from curated data',
           ],
           overlap: [],
-          disqualified: false,
+          disqualified,
         },
       })
     }
@@ -510,7 +532,7 @@ export default function ItemFunding() {
       })
     }
 
-    return merged.sort((a, b) => b.match.score - a.match.score)
+    return merged.sort((a, b) => (b.match.score ?? -1) - (a.match.score ?? -1))
   }, [liveResults, opportunities, submittedItem, selectedProfile])
 
   const results = useMemo(() => {
@@ -539,6 +561,9 @@ export default function ItemFunding() {
   }, [selectedOpportunity, submittedItem, scoredResults, selectedProfile])
 
   const isLoading = (opportunitiesQuery.isLoading || liveSearchQuery.isLoading) && submittedItem
+  const hasSearchError = Boolean(
+    opportunitiesQuery.isError || (hasSelectedProfile && liveSearchQuery.isError),
+  )
 
   const handleSearch = () => {
     if (!filters.item.trim()) {
@@ -549,7 +574,7 @@ export default function ItemFunding() {
       })
       return
     }
-    setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
+    setLiveOptions({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
     setSubmittedItem(filters.item.trim())
     // CLEAR the input after submit (owner QA 2026-08-03). The submitted query
     // stays visible in the "Showing results for ..." line; leaving the old
@@ -563,7 +588,7 @@ export default function ItemFunding() {
     const next = String(name || "").trim()
     if (!next) return
     setFilters((prev) => ({ ...prev, item: next }))
-    setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
+    setLiveOptions({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
     setSubmittedItem(next)
   }
 
@@ -575,7 +600,7 @@ export default function ItemFunding() {
     // follow-up search returned 0 with "Live web search: Needs a profile".
     // A reset clears WHAT is searched, never WHO it is searched for.
     setFilters(resetFiltersPreservingProfile)
-    setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
+    setLiveOptions({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
     setSubmittedItem("")
   }
 
@@ -625,10 +650,10 @@ export default function ItemFunding() {
   // pretending to queue a job that would never run.
   const handleRequestItemCrawler = () => {
     if (!canRunDeeperSearch("running a deeper sweep")) return
-    setLiveOptions((prev) => ({ ...prev, minMatchScore: SCORE_FLOOR }))
+    setLiveOptions((prev) => ({ ...prev, minItemRelevance: SCORE_FLOOR }))
     toast({
       title: "Deeper live search running",
-      description: `Searching more sources for ${submittedItem} with a lower match floor.`,
+      description: `Searching more sources for ${submittedItem} with a broader item-relevance threshold.`,
     })
   }
 
@@ -642,7 +667,7 @@ export default function ItemFunding() {
   }
 
   return (
-    <div className="p-6 md:p-8 space-y-8">
+    <div className="space-y-8 px-4 py-6 md:p-8">
       <header className="space-y-6">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div className="space-y-2">
@@ -652,25 +677,25 @@ export default function ItemFunding() {
             </div>
             <h1 className="text-3xl md:text-4xl font-bold text-slate-900">Find funding for a specific item</h1>
             <p className="text-sm md:text-base text-slate-600 max-w-3xl">
-              Tell us exactly what you need and we will search curated databases AND the live web to find grants, donations,
-              and programs that fund it. Works for anything: vehicles, equipment, training classes, adaptive devices, scholarships,
-              license fees, and more. Select a profile to unlock real-time web search.
+              Tell us exactly what you need. GrantFlow searches the stored catalog and, when available, the live web for grants,
+              donations, and assistance programs related to that item. Select a profile for profile-aware results.
             </p>
           </div>
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4 shadow-sm space-y-2 text-sm text-emerald-800 max-w-md">
             <p className="font-semibold text-emerald-900 flex items-center gap-2">
               <Shield className="w-4 h-4" />
-              Grant-only guardrails
+              Funding-result guardrails
             </p>
             <ul className="list-disc list-inside space-y-1 text-xs">
               <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle &ldquo;Show match/loan results&rdquo; to review them).</li>
-              <li>Curated matches come from your profile&apos;s verified crawler results, re-ranked for this exact item.</li>
+              <li>Stored catalog results are re-ranked for the item wording and profile context; that ranking is not an eligibility decision.</li>
               <li>Live web results are labeled as leads &mdash; real pages found right now; always verify the source before applying.</li>
             </ul>
           </div>
         </div>
 
         <Card className="border border-slate-200 bg-white/80 backdrop-blur shadow-sm">
+          <form onSubmit={(event) => { event.preventDefault(); handleSearch() }}>
           <CardContent className="pt-6 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
               <div className="md:col-span-2 space-y-2">
@@ -685,7 +710,7 @@ export default function ItemFunding() {
                   onChange={(event) => setFilters((prev) => ({ ...prev, item: event.target.value }))}
                 />
                 {filters.profileId && filters.profileId !== "all" && suggestionsQuery.data?.suggestions?.length ? (
-                  <div className="flex flex-wrap gap-2 pt-2">
+                  <div className="flex flex-wrap gap-2 pt-2" role="group" aria-label="Suggested item searches">
                     <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mr-1">
                       Suggested
                     </span>
@@ -705,12 +730,12 @@ export default function ItemFunding() {
               </div>
 
               <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-wide text-slate-500">State</Label>
+                <Label htmlFor="item-state" className="text-xs uppercase tracking-wide text-slate-500">State</Label>
                 <Select
                   value={filters.state}
                   onValueChange={(value) => setFilters((prev) => ({ ...prev, state: value }))}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="item-state" aria-label="Filter by state">
                     <SelectValue placeholder="All states" />
                   </SelectTrigger>
                   <SelectContent>
@@ -722,27 +747,32 @@ export default function ItemFunding() {
                     ))}
                   </SelectContent>
                 </Select>
+                {statesQuery.isError ? <p role="alert" className="text-xs text-red-700">State options could not be loaded. “All states” is still selected.</p> : null}
               </div>
 
               <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-wide text-slate-500">Profile</Label>
+                <Label htmlFor="item-profile" className="text-xs uppercase tracking-wide text-slate-500">Profile</Label>
                 <ProfileSelect
+                  triggerId="item-profile"
+                  ariaLabel="Profile for item funding search"
                   value={filters.profileId}
                   onValueChange={(value) => setFilters((prev) => ({ ...prev, profileId: value }))}
-                  showAllOption={true}
+                  showAllOption={isAdmin}
                   placeholder="Select profile"
                 />
                 {filters.profileId && filters.profileId !== "all" && selectedProfileQuery.isLoading ? (
-                  <p className="text-[11px] text-slate-400">Loading profile signals...</p>
+                  <p role="status" className="text-[11px] text-slate-500">Loading profile signals…</p>
                 ) : null}
+                {selectedProfileQuery.isError ? <p role="alert" className="text-xs text-red-700">This profile could not be loaded. Retry before relying on profile-aware results.</p> : null}
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
-              <div className="flex flex-col md:flex-row md:items-center md:gap-6 gap-3">
+            <div className="flex flex-col items-stretch gap-4 border-t border-slate-100 pt-4 sm:flex-row sm:items-end sm:justify-between">
+              <div className="flex w-full flex-col gap-3 min-[420px]:flex-row min-[420px]:flex-wrap min-[420px]:items-center md:gap-6">
                 <div className="flex items-center gap-2">
                   <Switch
                     id="national-only"
+                    className="h-6 w-10 [&>span]:h-5 [&>span]:w-5"
                     checked={filters.includeNational}
                     onCheckedChange={(checked) => setFilters((prev) => ({ ...prev, includeNational: checked }))}
                   />
@@ -753,6 +783,7 @@ export default function ItemFunding() {
                 <div className="flex items-center gap-2">
                   <Switch
                     id="include-disqualified"
+                    className="h-6 w-10 [&>span]:h-5 [&>span]:w-5"
                     checked={includeDisqualified}
                     onCheckedChange={(checked) => setIncludeDisqualified(Boolean(checked))}
                   />
@@ -760,21 +791,21 @@ export default function ItemFunding() {
                     Show match/loan results
                   </Label>
                 </div>
-                <Button variant="default" className="gap-2" onClick={handleSearch}>
+                <Button type="submit" variant="default" className="w-full gap-2 min-[420px]:w-auto">
                   <ShoppingCart className="w-4 h-4" />
                   Find funding
                 </Button>
-                <Button variant="ghost" size="sm" onClick={handleReset}>
+                <Button type="button" variant="ghost" size="sm" className="w-full min-[420px]:w-auto" onClick={handleReset}>
                   Reset
                 </Button>
               </div>
               {submittedItem ? (
-                <div className="text-xs text-slate-500 space-y-1 text-right">
+                <div className="space-y-1 text-left text-xs text-slate-500 sm:text-right" aria-live="polite">
                   <p>
                     Showing {results.length} result{results.length === 1 ? "" : "s"} for{" "}
                     <span className="font-semibold text-slate-700">{submittedItem}</span>
                     {liveWebCount > 0 ? (
-                      <span className="text-emerald-600 ml-1">({liveWebCount} from live web search)</span>
+                      <span className="ml-1 text-emerald-700 dark:text-emerald-300">({liveWebCount} from live web search)</span>
                     ) : null}
                     {liveSearchQuery.isLoading ? (
                       <span className="text-blue-500 ml-1 inline-flex items-center gap-1">
@@ -799,6 +830,7 @@ export default function ItemFunding() {
               ) : null}
             </div>
           </CardContent>
+          </form>
         </Card>
       </header>
 
@@ -808,14 +840,37 @@ export default function ItemFunding() {
           profileId={filters.profileId}
           onSearchItem={(searchText) => {
             setFilters((prev) => ({ ...prev, item: searchText }))
-            setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
+            setLiveOptions({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
             setSubmittedItem(searchText)
           }}
         />
       )}
 
+      {submittedItem && hasSearchError ? (
+        <Card role="alert" className="border-red-300 bg-red-50/70 dark:border-red-800 dark:bg-red-950/30">
+          <CardContent className="p-5 text-sm text-red-950 dark:text-red-100">
+            <p className="font-semibold">Part of the item search could not be completed.</p>
+            <p className="mt-1">Any results below are partial. An unavailable source is not being counted as “no results.”</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => {
+                opportunitiesQuery.refetch()
+                if (hasSelectedProfile) liveSearchQuery.refetch()
+              }}
+            >
+              Retry search
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <div role="status" aria-live="polite">
+          <p className="sr-only">Searching stored and live item funding sources…</p>
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3" aria-hidden="true">
           {Array.from({ length: 6 }).map((_, index) => (
             <Card key={`item-skeleton-${index}`} className="border border-slate-200 bg-white/60 backdrop-blur">
               <CardHeader className="space-y-2">
@@ -833,9 +888,10 @@ export default function ItemFunding() {
               </CardFooter>
             </Card>
           ))}
+          </div>
         </div>
       ) : submittedItem && results.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3" role="region" aria-label={`Item funding results for ${submittedItem}`}>
           {results.map(({ opportunity, match }, index) => (
             <ItemResultCard
               key={opportunity.id || opportunity.url || opportunity.application_url || `${opportunity.title}-${index}`}
@@ -845,7 +901,7 @@ export default function ItemFunding() {
             />
           ))}
         </div>
-      ) : submittedItem ? (
+      ) : submittedItem && hasSearchError ? null : submittedItem ? (
         <Card className="border border-slate-200 bg-white/70 backdrop-blur">
           <CardContent className="p-6 sm:p-10">
             <ZeroResultGuidance
@@ -867,9 +923,11 @@ export default function ItemFunding() {
               actions={[
                 {
                   kind: "profile",
-                  label: hasSelectedProfile ? "Review profile details" : "Select a profile",
+                  label: isAdmin
+                    ? hasSelectedProfile ? "Review profile details" : "Select a profile"
+                    : "Ask Anya about your profile",
                   description: "Item funding works best when GrantFlow knows who needs the item and where.",
-                  href: createPageUrl("MyProfiles"),
+                  href: createPageUrl(isAdmin ? "MyProfiles" : "Help"),
                 },
                 {
                   kind: "review",
@@ -881,7 +939,7 @@ export default function ItemFunding() {
                 {
                   kind: "crawler",
                   label: "Run a deeper live search",
-                  description: "Lower the match floor and re-search curated sources plus the live web for this exact item.",
+                  description: "Broaden the item-relevance threshold and re-search stored sources plus the live web for this exact item.",
                   onClick: handleRequestItemCrawler,
                   disabled: !hasSelectedProfile || liveSearchQuery.isLoading,
                   variant: hasSelectedProfile ? "default" : "outline",
@@ -905,7 +963,7 @@ export default function ItemFunding() {
         </Card>
       ) : (
         <Card className="border border-slate-200 bg-white/70 backdrop-blur">
-          <CardContent className="p-12 text-center space-y-4">
+          <CardContent className="space-y-4 p-6 text-center sm:p-12">
             <Sparkles className="w-12 h-12 mx-auto text-slate-300" />
             <h3 className="text-xl font-semibold text-slate-900">Search for a specific item or equipment</h3>
             <p className="text-sm text-slate-600">

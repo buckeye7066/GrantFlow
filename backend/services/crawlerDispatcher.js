@@ -241,7 +241,7 @@ async function ensureJobSnapshot(db, job) {
   const asOf = normalizeIso(job.created_at) || null
 
   // Self-heal stale profile_ids before building the snapshot. A job may carry a
-  // designated-profile slug (e.g. `profile-anastasia-white`) while the live row
+  // designated-profile slug (e.g. `profile-demo-tennessee-stem-student`) while the live row
   // is keyed by UUID (or vice-versa) — we must not mark the job non-retryable
   // when an alias resolution would succeed.
   let snapshotProfileId = job.profile_id

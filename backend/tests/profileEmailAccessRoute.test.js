@@ -1,6 +1,7 @@
 import express from 'express'
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
 const profilesRouter = (await import('../routes/profiles.js')).default
 
@@ -26,7 +27,7 @@ function createDbStub() {
     {
       id: 'email-admin',
       profile_id: 'profile-shared',
-      email: 'buckeye7066@gmail.com',
+      email: ADMIN_EMAIL,
       added_by: 'owner-user',
       created_at: '2026-01-01T00:00:02.000Z',
     },
@@ -96,7 +97,7 @@ describe('profile email access routes', () => {
     expect(res.status).toBe(200)
     const visibleEmails = res.body.emails.map((row) => row.email)
     expect(visibleEmails).toEqual(expect.arrayContaining(['owner@example.test', 'shared@example.test']))
-    expect(visibleEmails).not.toContain('buckeye7066@gmail.com')
+    expect(visibleEmails).not.toContain(ADMIN_EMAIL)
     expect(visibleEmails).toHaveLength(2)
   })
 

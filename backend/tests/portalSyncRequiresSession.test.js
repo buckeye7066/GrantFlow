@@ -22,14 +22,14 @@ const { runPortalSync, listRuns, ensurePortalSyncSchema, resolveConnector } =
 
 function makeDb() { return new Database(':memory:') }
 
-describe('runPortalSync — requiresSession honesty gate', () => {
+describe('runPortalSync — controlled-beta real-portal boundary', () => {
   let db
   beforeEach(() => {
     db = makeDb()
     _resetCredentialSchemaCache()
   })
 
-  it('MTSU with only a saved password (no session) fails honestly — never a misleading empty sync', async () => {
+  it('MTSU fails closed to manual handoff before a browser or run can start', async () => {
     // A saved login exists, but NO captured session.
     await saveCredential(db, {
       userId: 'u1', profileId: 'pA', portalHost: 'mtsu.edu',
@@ -39,17 +39,15 @@ describe('runPortalSync — requiresSession honesty gate', () => {
     const r = await runPortalSync(db, { profileId: 'pA', portalHost: 'mtsu.edu', direction: 'read', actorUserId: 'u1' })
 
     expect(r.ok).toBe(false)
-    expect(r.needs_session).toBe(true)
-    expect(r.connectorId).toBe('mtsu')
-    expect(r.error).toMatch(/captured login session|side-by-side/i)
-    // It must NOT report any read results (it never authenticated).
+    expect(r.requires_human_handoff).toBe(true)
+    expect(r.connectorId).toBeNull()
+    expect(r.error).toBe('controlled_beta_manual_handoff')
     expect(r.read).toBeUndefined()
 
-    // The run is recorded as failed, not completed — observability stays honest.
+    // No automation run is created for a browser operation we refused.
     await ensurePortalSyncSchema(db).catch(() => {})
     const runs = await listRuns(db, { profileId: 'pA', portalHost: 'mtsu.edu' }).catch(() => [])
-    expect(runs.length).toBeGreaterThan(0)
-    expect(runs[0].status).toBe('failed')
+    expect(runs).toHaveLength(0)
   })
 
   it('EVERY connector without a real login workflow requires a captured session', () => {
@@ -67,7 +65,7 @@ describe('runPortalSync — requiresSession honesty gate', () => {
     expect(genericC.requiresSession).toBe(true)
   })
 
-  it('a generic-portal sync with only a saved password fails honestly (needs_session)', async () => {
+  it('a generic real portal also fails closed before connector/browser work', async () => {
     await saveCredential(db, {
       userId: 'u1', profileId: 'pB', portalHost: 'someportal.example.org',
       username: 'student@example.org', password: 'pw-cannot-log-in-by-itself',
@@ -76,8 +74,9 @@ describe('runPortalSync — requiresSession honesty gate', () => {
     const r = await runPortalSync(db, { profileId: 'pB', portalHost: 'someportal.example.org', direction: 'read', actorUserId: 'u1' })
 
     expect(r.ok).toBe(false)
-    expect(r.needs_session).toBe(true)
-    expect(r.connectorId).toBe('generic')
+    expect(r.requires_human_handoff).toBe(true)
+    expect(r.error).toBe('controlled_beta_manual_handoff')
+    expect(r.connectorId).toBeNull()
     expect(r.read).toBeUndefined()
   })
 })

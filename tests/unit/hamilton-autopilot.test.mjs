@@ -4,17 +4,13 @@
  * Covers:
  *   - hamiltonAuthorizationStore.recordAuthorizations / readAuthorizations
  *   - hamiltonPreflight.preflightSingleSource (blocker + ok cases)
- *   - hamiltonAutopilotEngine.runAutopilot against a local mock portal
- *     that walks two pages, validates a required field, and submits.
- *
- * If Playwright's chromium binary is unavailable the engine test is
- * skipped (the module test still runs).
+ *   - hamiltonAutopilotEngine.runAutopilot refuses a loopback mock portal
+ *     before Playwright can navigate or submit.
  */
 
 import { describe, it, before, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -277,15 +273,8 @@ function startMockPortal({ requireSubmitField = true } = {}) {
 
 describe('Hamilton Autopilot — unattended mock-portal completion', () => {
   let portal = null
-  let chromiumAvailable = true
 
   before(async () => {
-    try {
-      const { chromium } = await import('playwright')
-      const exe = chromium.executablePath?.()
-      chromiumAvailable = exe && fs.existsSync(exe)
-    } catch { chromiumAvailable = false }
-    if (!chromiumAvailable) return
     portal = await startMockPortal()
   })
 
@@ -293,11 +282,7 @@ describe('Hamilton Autopilot — unattended mock-portal completion', () => {
     if (portal) await new Promise((r) => portal.server.close(r))
   })
 
-  it('walks step 1 → step 2 → submit and captures confirmation', async (t) => {
-    if (!chromiumAvailable) {
-      t.skip('Playwright chromium not installed in this environment')
-      return
-    }
+  it('refuses loopback before launch even when submit is authorized', async () => {
     const profile = {
       id: 'p-auto',
       basic_information: { first_name: 'Anya', last_name: 'Kim', email: 'anya@example.com' },
@@ -322,16 +307,13 @@ describe('Hamilton Autopilot — unattended mock-portal completion', () => {
       headless: true,
       screenshotsDir: path.join(os.tmpdir(), 'hamilton-autopilot-test-shots'),
     })
-    assert.equal(result.status, 'submitted', `expected submitted, got ${result.status} (${result.blocker_kind || ''}: ${result.blocker_detail || ''})`)
-    assert.ok(result.confirmation_reference || /MOCK-/.test(JSON.stringify(result)), 'confirmation reference captured')
-    assert.ok(result.filled_fields.some((f) => f.key === 'first_name'))
-    assert.ok(result.filled_fields.some((f) => f.key === 'email'))
-    assert.ok(result.filled_fields.some((f) => f.key === 'school'))
-    assert.ok(result.pages_visited >= 2, 'at least 2 pages visited')
+    assert.equal(result.status, 'blocked')
+    assert.equal(result.blocker_kind, 'controlled_beta_manual_handoff')
+    assert.equal(result.pages_visited, 0)
+    assert.equal(portal.getSubmitted(), null)
   })
 
-  it('stops when submit_applications is NOT authorized but draft saving is', async (t) => {
-    if (!chromiumAvailable) { t.skip('no chromium'); return }
+  it('also refuses loopback when only draft saving is authorized', async () => {
     const profile = {
       id: 'p-noauto',
       basic_information: { first_name: 'B', last_name: 'C', email: 'b@c.com' },
@@ -349,7 +331,9 @@ describe('Hamilton Autopilot — unattended mock-portal completion', () => {
       allowAutoSubmit: false,
       headless: true,
     })
-    assert.equal(['completed_draft', 'blocked'].includes(result.status), true,
-      `expected completed_draft or blocked, got ${result.status}`)
+    assert.equal(result.status, 'blocked')
+    assert.equal(result.blocker_kind, 'controlled_beta_manual_handoff')
+    assert.equal(result.pages_visited, 0)
+    assert.equal(portal.getSubmitted(), null)
   })
 })

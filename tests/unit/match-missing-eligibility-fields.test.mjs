@@ -17,25 +17,28 @@ import {
 } from '../../backend/services/matchDecisionEngine.js'
 
 // Clearly-eligible individual with a housing need and a location, against a
-// national housing grant whose ONLY gap is a missing application_url. That gap
-// is a caveat (ACCEPT→REVIEW), not a hard reject — so the decision is non-REJECT
-// and missingEligibilityFields must still be populated.
+// women-only national housing grant. The profile does not declare gender, so
+// eligibility is honestly unknown (REVIEW), not a hard reject, and the missing
+// field must remain visible. Missing all source/action URLs is intentionally not
+// used here because the canonical source-quality contract rejects that unsafe
+// direct-opportunity state.
 const RAW_PROFILE = {
   id: 'p-test',
   entity_type: 'individual',
+  primary_type: 'individual',
   state: 'TN',
   zip: '37013',
   needs: ['housing'],
 }
 const RAW_OPP = {
   id: 'o-test',
-  title: 'National Housing Assistance Grant',
-  description: 'Direct grant funding for housing and rent assistance for individuals nationwide.',
+  title: 'Women Only National Housing Assistance Grant',
+  description: 'Direct grant funding for housing and rent assistance for women nationwide.',
   funding_type: 'grant',
   is_national: 1,
   need_types_supported: ['housing'],
   entity_types_allowed: ['individual'],
-  // NOTE: deliberately no application_url / source_url
+  application_url: 'https://example.org/apply',
 }
 
 test('missingEligibilityFields is populated on a non-REJECT decision', () => {
@@ -48,8 +51,8 @@ test('missingEligibilityFields is populated on a non-REJECT decision', () => {
     'expected missing fields to be surfaced on the ACCEPT/REVIEW path',
   )
   assert.ok(
-    decision.missingEligibilityFields.includes('application_url'),
-    `expected application_url among missing fields, got ${JSON.stringify(decision.missingEligibilityFields)}`,
+    decision.missingEligibilityFields.includes('gender'),
+    `expected gender among missing fields, got ${JSON.stringify(decision.missingEligibilityFields)}`,
   )
 })
 

@@ -22,6 +22,7 @@ import { createLogger } from '../utils/logger.js'
 import {
   PRICING_ENV_KEYS,
   QUOTE_STATUS,
+  isAdminNotificationTarget,
   readEnvFlag,
 } from '../services/pricing/pricingTypes.js'
 import { buildRecommendedQuote, buildClientEstimateMessage } from '../services/pricing/pricingEngine.js'
@@ -44,7 +45,6 @@ import {
   dismiss,
   flushQueuedOnLogin,
 } from '../services/pricing/pricingNotificationService.js'
-import { isAdminNotificationTarget } from '../services/pricing/pricingTypes.js'
 
 const routeLogger = createLogger('route:pricing')
 const router = express.Router()
@@ -55,6 +55,13 @@ const requireAdmin = (req, res, next) => {
   if (req.ctx?.isAdmin !== true) return res.status(403).json({ ok: false, error: 'admin_only' })
   return next()
 }
+
+const adminServiceUser = (req) => ({
+  ...(req.user || {}),
+  email: req.ctx?.email || null,
+  identityResolved: req.ctx?.identityResolved === true,
+  is_admin: req.ctx?.isAdmin === true,
+})
 
 // ── User-facing endpoints (auth required, no admin) ────────────────────────
 router.get('/my-estimate/:profileId', requireAuthenticatedUserMiddleware, async (req, res) => {
@@ -280,41 +287,49 @@ router.post('/recommend', async (req, res) => {
 
 // ── Admin pricing notifications ─────────────────────────────────────────────
 
-router.get('/admin-notifications', async (req, res) => {
+router.get('/admin-notifications/capability', requireAdmin, (req, res) => {
+  return res.status(200).json({
+    ok: true,
+    can_receive_pricing_notifications: Boolean(
+      req.ctx?.identityResolved === true
+      && req.ctx?.isAdmin === true
+      && isAdminNotificationTarget(req.ctx?.email),
+    ),
+  })
+})
+
+router.get('/admin-notifications', requireAdmin, async (req, res) => {
   try {
-    if (!isAdminNotificationTarget(req.user?.email)) {
-      return res.status(200).json({ ok: true, items: [], not_admin_target: true })
-    }
     const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100)
     const status = req.query.status || null
-    const r = await listForAdmin(req.db, { user: req.user, limit, status })
+    const r = await listForAdmin(req.db, { user: adminServiceUser(req), limit, status })
     return res.status(200).json(r)
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || String(err) })
   }
 })
 
-router.post('/admin-notifications/flush-queued', async (req, res) => {
+router.post('/admin-notifications/flush-queued', requireAdmin, async (req, res) => {
   try {
-    const r = await flushQueuedOnLogin(req.db, { user: req.user })
+    const r = await flushQueuedOnLogin(req.db, { user: adminServiceUser(req) })
     return res.status(r?.ok ? 200 : 400).json(r)
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || String(err) })
   }
 })
 
-router.post('/admin-notifications/:id/delivered', async (req, res) => {
+router.post('/admin-notifications/:id/delivered', requireAdmin, async (req, res) => {
   try {
-    const r = await markDelivered(req.db, { user: req.user, id: req.params.id, mode: req.body?.mode })
+    const r = await markDelivered(req.db, { user: adminServiceUser(req), id: req.params.id, mode: req.body?.mode })
     return res.status(r?.ok ? 200 : 400).json(r)
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || String(err) })
   }
 })
 
-router.post('/admin-notifications/:id/dismiss', async (req, res) => {
+router.post('/admin-notifications/:id/dismiss', requireAdmin, async (req, res) => {
   try {
-    const r = await dismiss(req.db, { user: req.user, id: req.params.id })
+    const r = await dismiss(req.db, { user: adminServiceUser(req), id: req.params.id })
     return res.status(r?.ok ? 200 : 400).json(r)
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || String(err) })

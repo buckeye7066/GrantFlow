@@ -32,7 +32,7 @@ const {
   _resetCredentialSchemaCache,
 } = await import('../services/hamilton/hamiltonPortalCredentialService.js')
 
-const PROFILE_ID = 'c4a92724-9cee-416f-ba30-e91b9b5cd885'
+const PROFILE_ID = '00000000-0000-4000-8000-000000000001'
 
 function createApp(db) {
   const app = express()

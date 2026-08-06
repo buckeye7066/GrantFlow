@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { extractListingAwardItems, _internal } from '../services/hamilton/portalSync/llmPageExtract.js'
+import { sanitizeListingSnapshotForPersistence } from '../services/hamilton/hamiltonAutopilotEngine.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ngweb = JSON.parse(
@@ -14,6 +15,24 @@ const ngweb = JSON.parse(
 const fakeInvoke = (json) => async () => ({ ok: true, json, provider: 'test' })
 
 describe('extractListingAwardItems (listing enumeration + fabrication guard)', () => {
+  it('persists only a value-free listing summary after in-memory decomposition', () => {
+    const safe = sanitizeListingSnapshotForPersistence({
+      url: 'https://portal.example.org/awards?session=bearer-secret',
+      title: 'Welcome Taylor — account 12345',
+      text: 'Private balance $4,200 and applicant Taylor',
+      fieldCount: 2,
+      links: [{ href: 'https://portal.example.org/apply?token=secret', text: 'Apply' }],
+    })
+    expect(safe).toMatchObject({
+      portal_origin: 'https://portal.example.org',
+      field_count: 2,
+      link_count: 1,
+      content_retained: false,
+    })
+    expect(JSON.stringify(safe)).not.toMatch(/Taylor|4,200|bearer-secret|token=secret/)
+    expect(safe.text_sha256).toMatch(/^[a-f0-9]{64}$/)
+  })
+
   it('keeps items whose titles are present in the real NGWeb catalog text', async () => {
     // These names are verbatim from the trimmed real fixture.
     const present = ngweb.text.match(/Aaron & Clara Todd[^\n]*/)?.[0]?.trim()

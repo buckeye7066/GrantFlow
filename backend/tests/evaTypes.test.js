@@ -160,19 +160,19 @@ describe('normalizeErrorSignature', () => {
 
 describe('redaction', () => {
   it('redacts keys, emails, SSNs, cards, and private windows paths', () => {
-    const dirty = 'key sk-ABCDEF0123456789 zzz email a@b.com ssn 123-45-6789 card 4111 1111 1111 1111 path C:\\Users\\firer\\secret.txt'
+    const dirty = 'key sk-ABCDEF0123456789 zzz email a@b.com ssn 123-45-6789 card 4111 1111 1111 1111 path C:\\Users\\example_user\\secret.txt'
     const clean = redactText(dirty)
     expect(clean).not.toMatch(/sk-ABCDEF/)
     expect(clean).toMatch(/REDACTED_EMAIL/)
     expect(clean).toMatch(/REDACTED_SSN/)
     expect(clean).toMatch(/REDACTED_CARD/)
     expect(clean).toMatch(/USER_HOME/)
-    expect(clean).not.toMatch(/firer/)
+    expect(clean).not.toMatch(/example_user/)
   })
 
   it('deep-redacts nested structures', () => {
-    const out = redactDeep({ a: 'token TOKEN=abcdef[secret]', b: ['C:\\Users\\firer\\x'], c: 3 })
-    expect(JSON.stringify(out)).not.toMatch(/firer/)
+    const out = redactDeep({ a: 'token TOKEN=abcdef[secret]', b: ['C:\\Users\\example_user\\x'], c: 3 })
+    expect(JSON.stringify(out)).not.toMatch(/example_user/)
     expect(out.c).toBe(3)
   })
 })

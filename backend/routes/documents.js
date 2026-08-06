@@ -2,14 +2,12 @@ import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
-import net from 'net';
-import { dirname, join, resolve, sep } from 'path';
+import { dirname, isAbsolute, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 import { createOpenAIClient } from '../utils/openaiClient.js';
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
-import fetch from 'node-fetch';
 import * as cheerio from 'cheerio';
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
 import { supportedSectionKeys } from '../prompts/profileSections.js'
@@ -20,6 +18,7 @@ import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { getTrustedUserEmails } from '../utils/accessControl.js'
+import { fetchPublicResource, publicFetchFailureStatus } from '../utils/safeRemoteFetch.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:documents')
@@ -30,6 +29,22 @@ function getOpenAI() {
 }
 
 const router = express.Router();
+
+// Metadata routes must never materialize durable receipt/document blobs. The
+// derived marker preserves an authenticated download URL without selecting the
+// bytes themselves (important when a scoped list contains multiple 10 MiB
+// receipts).
+const DOCUMENT_METADATA_SELECT = `
+  id, created_at, updated_at,
+  organization_id, grant_id, profile_id,
+  university_application_id, university_application_name,
+  name, type, file_url, file_path, file_size, mime_type,
+  extracted_text, extracted_structured, ai_summary, ai_sections,
+  processing_status, processing_error, status, version,
+  vnext_application_id, storage_uri, content_hash, notes,
+  CASE WHEN file_bytes IS NOT NULL AND length(file_bytes) > 0
+       THEN 1 ELSE 0 END AS has_durable_bytes
+`
 
 // Require authentication for all document routes
 router.use((req, res, next) => {
@@ -71,12 +86,55 @@ function requireUploadsWritable(req, res, next) {
   return next()
 }
 
-function addDownloadUrl(doc) {
+function serializeDocument(doc) {
   if (!doc || !doc.id) return doc
-  // Only add download_url if the document has a local file (not just extracted text from a URL import)
-  const hasLocalFile = doc.file_path || (doc.file_url && String(doc.file_url).startsWith('/uploads/'))
-  if (!hasLocalFile) return doc
-  return { ...doc, download_url: `/api/documents/${String(doc.id)}/download` }
+  // Durable receipt/packet blobs belong only on the authenticated download
+  // route. Never let SELECT * JSON responses serialize file_bytes.
+  const { file_bytes: fileBytes, has_durable_bytes: hasDurableMarker, ...safe } = doc
+  const hasDurableBytes = Boolean(hasDurableMarker) ||
+    (Buffer.isBuffer(fileBytes) ? fileBytes.length > 0 : Boolean(fileBytes))
+  const hasLocalFile = safe.file_path || (safe.file_url && String(safe.file_url).startsWith('/uploads/'))
+  return (hasLocalFile || hasDurableBytes)
+    ? { ...safe, download_url: `/api/documents/${String(safe.id)}/download` }
+    : safe
+}
+
+async function manualSubmissionReceiptBinding(db, documentId) {
+  if (!db || !documentId) return null
+  try {
+    return await db.prepare(
+      `SELECT id, task_id, profile_id
+         FROM hamilton_manual_submission_receipts
+        WHERE document_id = ?
+        LIMIT 1`,
+    ).get(String(documentId))
+  } catch (error) {
+    const message = String(error?.message || '').toLowerCase()
+    // Additive migration rollout: a missing table means this deployment cannot
+    // yet hold a receipt binding. Other DB failures stay visible/fail closed.
+    if (message.includes('no such table') || message.includes('does not exist')) return null
+    throw error
+  }
+}
+
+function applyPrivateDocumentDownloadHeaders(res, doc) {
+  if (String(doc?.type || '') !== 'hamilton_submission_confirmation') return
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+}
+
+function attachmentContentDisposition(value) {
+  // Node rejects non-Latin-1/control characters in header values. Document
+  // names are user-visible Unicode, so emit a bounded ASCII fallback rather
+  // than turning a valid authenticated download into a 500 response.
+  const safeName = String(value || 'document')
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7e]/g, '-')
+    .replace(/["\\/\r\n]/g, '_')
+    .trim()
+    .slice(0, 180) || 'document'
+  return `attachment; filename="${safeName}"`
 }
 
 function extractUploadsFilenameFromUrl(rawUrl) {
@@ -96,22 +154,56 @@ function extractUploadsFilenameFromUrl(rawUrl) {
   return baseName ? baseName.replace(/[^a-zA-Z0-9._-]/g, '') : null
 }
 
+function realServerOwnedUploadRoots(req) {
+  const configured = [getUploadsDir(req), getLegacyUploadsDir(req)]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  const roots = []
+  for (const configuredRoot of configured) {
+    try {
+      if (!isAbsolute(configuredRoot)) continue
+      const rootPath = resolve(configuredRoot)
+      const stat = fs.statSync(rootPath)
+      if (!stat.isDirectory()) continue
+      roots.push(fs.realpathSync(rootPath))
+    } catch {
+      // Missing/unresolvable roots are not safe download authorities.
+    }
+  }
+  return [...new Set(roots)]
+}
+
+function resolveRegularUploadFile(candidate, roots) {
+  const raw = String(candidate || '').trim()
+  if (!raw || !isAbsolute(raw) || roots.length === 0) return null
+  try {
+    const requested = resolve(raw)
+    const linkStat = fs.lstatSync(requested)
+    if (!linkStat.isFile() || linkStat.isSymbolicLink()) return null
+    const realPath = fs.realpathSync(requested)
+    const insideOwnedRoot = roots.some((root) => (
+      realPath === root || realPath.startsWith(`${root}${sep}`)
+    ))
+    if (!insideOwnedRoot) return null
+    if (!fs.statSync(realPath).isFile()) return null
+    return realPath
+  } catch {
+    return null
+  }
+}
+
 function resolveDocumentFilePath({ req, doc }) {
   const uploadsDir = getUploadsDir(req)
   const legacyUploadsDir = getLegacyUploadsDir(req)
+  const roots = realServerOwnedUploadRoots(req)
 
   const tried = []
 
   const filePath = doc?.file_path ? String(doc.file_path) : ''
   if (filePath) {
     tried.push(filePath)
-    try {
-      if (fs.existsSync(filePath)) {
-        return { ok: true, path: filePath, tried }
-      }
-    } catch {
-      // ignore
-    }
+    const safePath = resolveRegularUploadFile(filePath, roots)
+    if (safePath) return { ok: true, path: safePath, tried }
   }
 
   const fileName =
@@ -123,20 +215,14 @@ function resolveDocumentFilePath({ req, doc }) {
   if (fileName) {
     const primary = join(uploadsDir, fileName)
     tried.push(primary)
-    try {
-      if (fs.existsSync(primary)) return { ok: true, path: primary, tried }
-    } catch {
-      // ignore
-    }
+    const safePrimary = resolveRegularUploadFile(primary, roots)
+    if (safePrimary) return { ok: true, path: safePrimary, tried }
 
     if (legacyUploadsDir && legacyUploadsDir !== uploadsDir) {
       const legacy = join(legacyUploadsDir, fileName)
       tried.push(legacy)
-      try {
-        if (fs.existsSync(legacy)) return { ok: true, path: legacy, tried }
-      } catch (error) {
-        console.error('File access error:', error);
-      }
+      const safeLegacy = resolveRegularUploadFile(legacy, roots)
+      if (safeLegacy) return { ok: true, path: safeLegacy, tried }
     }
   }
 
@@ -169,28 +255,28 @@ const ALLOWED_MIME_TYPES = new Set([
   'image/heic',
   'image/heif',
 ]);
+const ALLOWED_FILE_EXTENSIONS = new Set([
+  'pdf',
+  'doc',
+  'docx',
+  'txt',
+  'rtf',
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'gif',
+  'bmp',
+  'tif',
+  'tiff',
+  'heic',
+  'heif',
+]);
 
 function multerFileFilter(_req, file, cb) {
   // Allow empty mimetype if extension suggests a supported type.
   const extension = (file?.originalname?.split('.').pop() || '').toLowerCase();
-  const allowedExt = new Set([
-    'pdf',
-    'doc',
-    'docx',
-    'txt',
-    'rtf',
-    'jpg',
-    'jpeg',
-    'png',
-    'webp',
-    'gif',
-    'bmp',
-    'tif',
-    'tiff',
-    'heic',
-    'heif',
-  ]);
-  const ok = ALLOWED_MIME_TYPES.has(file.mimetype) || allowedExt.has(extension);
+  const ok = ALLOWED_MIME_TYPES.has(file.mimetype) || ALLOWED_FILE_EXTENSIONS.has(extension);
   if (!ok) {
     return cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', file?.fieldname || 'file'));
   }
@@ -240,189 +326,112 @@ function runUploadSingle(fieldName) {
   };
 }
 
-function isPrivateIpAddress(ip) {
-  // IPv4 private ranges: 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16
-  const v = net.isIP(ip);
-  if (v === 4) {
-    const parts = ip.split('.').map((n) => Number(n));
-    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
-    const [a, b] = parts;
-    if (a === 10) return true;
-    if (a === 127) return true;
-    if (a === 0) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    return false;
-  }
-
-  // IPv6 loopback/link-local/ULA
-  if (v === 6) {
-    const lower = ip.toLowerCase();
-    if (lower === '::1') return true; // loopback
-    if (lower.startsWith('fe80:')) return true; // link-local
-    if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // unique local
-    return false;
-  }
-
-  return true;
-}
-
-function assertRemoteUrlAllowed(rawUrl) {
-  let parsed;
-  try {
-    parsed = new URL(String(rawUrl));
-  } catch {
-    throw new Error('Invalid URL');
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Only http(s) URLs are supported');
-  }
-
-  const hostname = (parsed.hostname || '').toLowerCase().trim();
-  if (!hostname) throw new Error('Invalid URL host');
-  const BLOCKED_HOSTNAMES = new Set([
-    'localhost',
-    '0.0.0.0',
-    'metadata.google.internal',
-    'metadata.goog',
-    'instance-data',
-    'instance-metadata',
-  ]);
-  if (BLOCKED_HOSTNAMES.has(hostname) || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
-    throw new Error('URL host is not allowed');
-  }
-  if (net.isIP(hostname)) {
-    if (isPrivateIpAddress(hostname)) {
-      throw new Error('URL host is not allowed');
-    }
-  }
-
-  return parsed;
-}
-
 async function downloadRemoteFileToUploads({ url, req }) {
-  // Prevent obvious SSRF targets. (We intentionally do not resolve DNS here.)
-  const initial = assertRemoteUrlAllowed(url);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
-  try {
-    const resp = await fetch(initial.toString(), {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; GrantFlow/1.0; +https://grantflow.app)',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-      redirect: 'follow',
-    });
-    if (!resp.ok) {
-      throw new Error(`Unable to download file (${resp.status})`);
-    }
-    // If redirects occurred, validate the final URL too.
-    if (resp.url) {
-      try {
-        const finalUrl = new URL(resp.url);
-        // Normalise: strip trailing dot from hostname (DNS FQDN form).
-        const normalisedFinalUrl = new URL(resp.url);
-        normalisedFinalUrl.hostname = finalUrl.hostname.replace(/\.$/, '');
-        // Always validate the final URL regardless of whether hostname changed.
-        assertRemoteUrlAllowed(normalisedFinalUrl.toString());
-        // Belt-and-suspenders: also block raw IP redirects to private ranges.
-        if (net.isIP(normalisedFinalUrl.hostname) && isPrivateIpAddress(normalisedFinalUrl.hostname)) {
-          throw new Error('Redirect to private network not allowed');
-        }
-      } catch (redirectErr) {
-        throw new Error(`Final URL host is not allowed: ${redirectErr.message}`);
-      }
-    }
-    const contentType = resp.headers.get('content-type') || 'application/octet-stream';
-    const contentLength = Number(resp.headers.get('content-length') || '0');
-    if (contentLength && contentLength > 50 * 1024 * 1024) {
-      throw new Error('Remote file is too large (max 50MB).');
-    }
-
-    const fileNameFromUrl = (() => {
-      try {
-        const parsed = new URL(url);
-        const base = parsed.pathname.split('/').pop() || 'remote-upload';
-        return base;
-      } catch {
-        return 'remote-upload';
-      }
-    })();
-
-    // Use multer storage logic for filename uniqueness.
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : '';
-    const filename = `${unique}${extension}`;
-    // Validate filename to prevent directory traversal
-    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-      throw new Error('Invalid filename');
-    }
-    const absPath = join(getUploadsDir(req), filename);
-
-    const chunks = [];
-    let totalSize = 0;
-    const maxSize = 50 * 1024 * 1024;
-    
-    for await (const chunk of resp.body) {
-      totalSize += chunk.length;
-      if (totalSize > maxSize) {
-        throw new Error('Remote file is too large (max 50MB).');
-      }
-      chunks.push(chunk);
-    }
-    const buf = Buffer.concat(chunks);
-    if (buf.length > 50 * 1024 * 1024) {
-      throw new Error('Remote file is too large (max 50MB).');
-    }
-    // Detect HTML content (webpage URL rather than direct file link)
-    const ct = (contentType || '').toLowerCase();
-    const isHtml = ct.includes('text/html') || ct.includes('application/xhtml');
-    if (isHtml) {
-      const html = buf.toString('utf-8');
-      const $ = cheerio.load(html);
-      $('script, style, nav, footer, header, iframe, noscript, svg').remove();
-      const pageTitle = $('title').first().text().trim() || $('h1').first().text().trim() || '';
-      let bodyText = '';
-      const mainEl = $('main, article, [role="main"]').first();
-      if (mainEl.length) {
-        bodyText = mainEl.text();
-      } else {
-        bodyText = $('body').text();
-      }
-      const extractedText = bodyText.replace(/[ \t]+/g, ' ').replace(/(\n\s*){3,}/g, '\n\n').trim();
-      if (!extractedText) {
-        throw new Error('URL points to a webpage but no readable text could be extracted.');
-      }
-      const finalUrl = resp.url || url;
-      return {
-        file: null,
-        publicUrl: null,
-        htmlExtracted: true,
-        extractedText,
-        pageTitle: pageTitle || null,
-        source: { downloaded: true, url, finalUrl, contentType, isHtml: true },
-      };
-    }
-
-    await fs.promises.writeFile(absPath, buf);
-
-    const publicUrl = `/uploads/${filename}`;
-    return {
-      file: {
-        path: absPath,
-        size: buf.length,
-        mimetype: contentType,
-        originalname: fileNameFromUrl,
-        filename,
-      },
-      publicUrl,
-      source: { downloaded: true, url, contentType },
-    };
-  } finally {
-    clearTimeout(timeout);
+  const remote = await fetchPublicResource(url, {
+    timeoutMs: 20_000,
+    maxBytes: 50 * 1024 * 1024,
+    allowedContentTypes: [
+      ...ALLOWED_MIME_TYPES,
+      'text/html',
+      'application/xhtml+xml',
+      'application/xml',
+      'text/xml',
+      'application/octet-stream',
+    ],
+    userAgent: 'Mozilla/5.0 (compatible; GrantFlow/1.0; +https://app.axiombiolabs.org)',
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  });
+  if (!remote.ok) {
+    const status = remote.status ? ` (${remote.status})` : '';
+    const error = new Error(`Unable to download public HTTPS resource${status}: ${remote.reason}`);
+    error.status = publicFetchFailureStatus(remote);
+    error.code = `REMOTE_FETCH_${String(remote.reason || 'FAILED').toUpperCase()}`;
+    throw error;
   }
+
+  let contentType = remote.contentType || 'application/octet-stream';
+  const buf = remote.body;
+  if (contentType === 'application/octet-stream') {
+    if (buf.length < 5 || buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
+      const error = new Error('Remote server returned an unverified binary document type.');
+      error.status = 415;
+      error.code = 'REMOTE_DOCUMENT_TYPE_UNVERIFIED';
+      throw error;
+    }
+    contentType = 'application/pdf';
+  }
+
+  const fileNameFromUrl = (() => {
+    try {
+      const parsed = new URL(remote.finalUrl || url);
+      const base = parsed.pathname.split('/').pop() || 'remote-upload';
+      return base;
+    } catch {
+      return 'remote-upload';
+    }
+  })();
+
+  // Use multer storage logic for filename uniqueness.
+  const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+  const candidateExtension = fileNameFromUrl.includes('.')
+    ? fileNameFromUrl.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '')
+    : '';
+  const safeExtension = ALLOWED_FILE_EXTENSIONS.has(candidateExtension)
+    ? candidateExtension
+    : contentType === 'application/pdf'
+      ? 'pdf'
+      : '';
+  const extension = safeExtension ? `.${safeExtension}` : '';
+  const filename = `${unique}${extension}`;
+  // Validate filename to prevent directory traversal
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    throw new Error('Invalid filename');
+  }
+  const absPath = join(getUploadsDir(req), filename);
+
+  // Detect HTML content (webpage URL rather than direct file link)
+  const ct = (contentType || '').toLowerCase();
+  const isHtml = ct.includes('text/html') || ct.includes('application/xhtml');
+  if (isHtml) {
+    const html = buf.toString('utf-8');
+    const $ = cheerio.load(html);
+    $('script, style, nav, footer, header, iframe, noscript, svg').remove();
+    const pageTitle = $('title').first().text().trim() || $('h1').first().text().trim() || '';
+    let bodyText = '';
+    const mainEl = $('main, article, [role="main"]').first();
+    if (mainEl.length) {
+      bodyText = mainEl.text();
+    } else {
+      bodyText = $('body').text();
+    }
+    const extractedText = bodyText.replace(/[ \t]+/g, ' ').replace(/(\n\s*){3,}/g, '\n\n').trim();
+    if (!extractedText) {
+      throw new Error('URL points to a webpage but no readable text could be extracted.');
+    }
+    return {
+      file: null,
+      publicUrl: null,
+      htmlExtracted: true,
+      extractedText,
+      pageTitle: pageTitle || null,
+      source: { downloaded: true, url, finalUrl: remote.finalUrl, contentType, isHtml: true },
+    };
+  }
+
+  await fs.promises.writeFile(absPath, buf);
+
+  const publicUrl = `/uploads/${filename}`;
+  return {
+    file: {
+      path: absPath,
+      size: buf.length,
+      mimetype: contentType,
+      originalname: fileNameFromUrl,
+      filename,
+    },
+    publicUrl,
+    source: { downloaded: true, url, finalUrl: remote.finalUrl, contentType },
+  };
 }
 
 async function buildAccessContext(req) {
@@ -689,12 +698,12 @@ router.get('/', async (req, res, next) => {
       }
     }
 
-    let query = 'SELECT * FROM documents';
+    let query = `SELECT ${DOCUMENT_METADATA_SELECT} FROM documents`;
     if (filters.length > 0) query += ` WHERE ${filters.join(' AND ')}`;
     query += ' ORDER BY created_at DESC';
 
     const rows = await req.db.prepare(query).all(...params)
-    res.json((rows || []).map(addDownloadUrl));
+    res.json((rows || []).map(serializeDocument));
   } catch (error) {
     return next(error)
   }
@@ -706,10 +715,12 @@ router.get('/:id', async (req, res) => {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const doc = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const doc = await req.db
+      .prepare(`SELECT ${DOCUMENT_METADATA_SELECT} FROM documents WHERE id = ?`)
+      .get(req.params.id);
     if (!ensureDocumentAccess(res, context, doc)) return;
     
-    res.json(addDownloadUrl(doc));
+    res.json(serializeDocument(doc));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -724,6 +735,7 @@ router.get('/:id/download', async (req, res) => {
 
     const doc = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
     if (!ensureDocumentAccess(res, context, doc)) return
+    applyPrivateDocumentDownloadHeaders(res, doc)
 
     const resolved = resolveDocumentFilePath({ req, doc })
     if (!resolved.ok) {
@@ -737,7 +749,7 @@ router.get('/:id/download', async (req, res) => {
           const fileName = String(doc?.file_name || doc?.name || '').trim() || 'document'
           const mimeType = String(doc?.mime_type || '').trim() || 'application/octet-stream'
           res.setHeader('Content-Type', mimeType)
-          res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`)
+          res.setHeader('Content-Disposition', attachmentContentDisposition(fileName))
           return res.send(buf)
         }
       }
@@ -761,7 +773,7 @@ router.get('/:id/download', async (req, res) => {
     const fileName = String(doc?.file_name || doc?.name || '').trim() || 'document'
     const mimeType = String(doc?.mime_type || '').trim() || 'application/octet-stream'
     res.setHeader('Content-Type', mimeType)
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`)
+    res.setHeader('Content-Disposition', attachmentContentDisposition(fileName))
     return fs.createReadStream(resolved.path).pipe(res)
   } catch (error) {
     return res.status(500).json({ error: error?.message || String(error) })
@@ -1193,7 +1205,7 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
         // Best-effort cleanup; ignore unlink errors.
       }
     }
-    res.status(500).json({ error: error.message });
+    res.status(Number(error?.status) || 500).json({ error: error.message, code: error?.code || undefined });
   }
 });
 
@@ -1215,6 +1227,14 @@ router.put('/:id', async (req, res) => {
     const DOCUMENT_MUTABLE_COLUMNS = new Set(['name', 'type', 'notes', 'status', 'processing_status'])
     const safeFields = fields.filter((f) => DOCUMENT_MUTABLE_COLUMNS.has(f))
     if (safeFields.length === 0) return res.status(400).json({ error: 'No valid fields provided' });
+    // A revoked binding remains append-only audit evidence. Revocation removes
+    // its proof authority; it does not make the underlying document editable.
+    if (await manualSubmissionReceiptBinding(req.db, existing.id)) {
+      return res.status(409).json({
+        error: 'manual_submission_receipt_immutable',
+        message: 'Manual submission receipt evidence remains immutable, including after revocation.',
+      })
+    }
     // Run each column name through ident() with the exact per-call-site
     // allowlist. This is defence in depth — a future refactor to the
     // filter above still can't smuggle a column name through the SQL.
@@ -1225,9 +1245,9 @@ router.put('/:id', async (req, res) => {
     await req.db
       .prepare(`UPDATE documents SET ${safeSetClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)`)
       .run(...safeValues, req.params.id, existing.profile_id ?? null);
-    res.json(await req.db
-      .prepare('SELECT * FROM documents WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)')
-      .get(req.params.id, existing.profile_id ?? null));
+    res.json(serializeDocument(await req.db
+      .prepare(`SELECT ${DOCUMENT_METADATA_SELECT} FROM documents WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)`)
+      .get(req.params.id, existing.profile_id ?? null)));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1242,6 +1262,12 @@ router.delete('/:id', async (req, res) => {
     const existing = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
     if (!ensureDocumentAccess(res, context, existing)) return;
     if (!(await ensureDocumentDeleteAccess(req, res, context, existing))) return
+    if (await manualSubmissionReceiptBinding(req.db, existing.id)) {
+      return res.status(409).json({
+        error: 'manual_submission_receipt_immutable',
+        message: 'Manual submission receipt evidence remains immutable, including after revocation.',
+      })
+    }
 
     await req.db.prepare('DELETE FROM profile_documents WHERE document_id = ?').run(req.params.id);
     await req.db

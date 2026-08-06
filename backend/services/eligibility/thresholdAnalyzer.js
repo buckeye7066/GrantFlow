@@ -4,7 +4,7 @@
  * Owner rule (2026-07-03): GrantFlow must tell each user what they DO qualify
  * for, what they ALMOST qualify for, exactly what closes the gap (e.g. "needs
  * ACT 29 — you have 28"), and link them to where to act. The motivating case:
- * MTSU's Honors Centennial wants a 29 ACT; Anastasia has a 28 — that near-miss
+ * MTSU's Honors Centennial wants a 29 ACT; Demo Student has a 28 — that near-miss
  * (and the "retake by Dec 1" move that fixes it) must be visible in the
  * profile, not discovered by a human reading scholarship pages.
  *

@@ -628,7 +628,7 @@ export default function SavedLoginsCard({ profileId }) {
             </div>
             <div className="space-y-1">
               <Label htmlFor="gen-user">Username, email, or handle</Label>
-              <Input id="gen-user" autoComplete="off" placeholder="anastasia@example.com"
+              <Input id="gen-user" autoComplete="off" placeholder="demo_stem_student@example.com"
                 value={genForm.username} onChange={(e) => setGen("username", e.target.value)} />
             </div>
             <div className="space-y-1">

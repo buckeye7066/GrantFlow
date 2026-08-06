@@ -14,18 +14,14 @@
  * outward-facing, hard-to-reverse act with consequences the agent cannot see —
  * a mis-reported outside scholarship can trigger a revised aid package or a
  * repayment demand. So this stages the values and STOPS, reporting exactly what
- * it filled. Submission stays where it already lives: the authorized autopilot
- * path, behind explicit household authorization. `allowSubmit` exists so that
- * path can pass it, and defaults to FALSE for every ordinary sync.
+ * it filled. Final submission stays with the user in the portal. The legacy
+ * `allowSubmit` input is accepted only so stale internal callers fail safely;
+ * it never causes a click.
  *
  * Selector strategy: role/label/placeholder locators only — never a guessed CSS
  * path. If the form is not found we SKIP with a reason. A portal that has no
  * reporting form is a fact about the portal, not a failure to hide.
  */
-
-import { createLogger } from '../../../utils/logger.js'
-
-const log = createLogger('service:outsideAwardReporter')
 
 const FIND_TIMEOUT_MS = 4000
 
@@ -72,8 +68,8 @@ async function reachReportingForm(page, log_) {
  * @param {import('playwright').Page} page  authenticated page
  * @param {object} opts
  * @param {Array<{name:string, amount?:number, sponsor?:string}>} opts.sources
- * @param {boolean} [opts.allowSubmit=false]  ONLY the authorized autopilot path
- *        may pass true. Ordinary syncs never submit.
+ * @param {boolean} [opts.allowSubmit=false] Deprecated compatibility input;
+ *        final submission is always a manual portal handoff.
  * @param {(msg:string, detail?:object)=>void} [opts.log]
  * @returns {Promise<{written:Array, skipped:Array, submitted:boolean}>}
  */
@@ -135,21 +131,10 @@ export async function reportOutsideAwards(page, { sources = [], allowSubmit = fa
   }
 
   if (allowSubmit && written.length > 0) {
-    // Reserved for the authorized autopilot path. Even here we require a real
-    // submit control and report the outcome truthfully.
-    try {
-      const submit = page.getByRole('button', { name: /submit|save|add/i }).first()
-      if (await visible(submit)) {
-        await submit.click({ timeout: FIND_TIMEOUT_MS })
-        await page.waitForLoadState?.('domcontentloaded', { timeout: 10000 }).catch(() => {})
-        for (const w of written) w.state = 'submitted'
-        log.info('outside awards submitted', { count: written.length })
-        return { written, skipped, submitted: true }
-      }
-      skipped.push({ target: 'submit', reason: 'submission was authorized but no submit control was found — values remain filled, not submitted' })
-    } catch (err) {
-      skipped.push({ target: 'submit', reason: `submit failed: ${err?.message || err} — values remain filled, not submitted` })
-    }
+    skipped.push({
+      target: 'submit',
+      reason: 'automatic final submission is disabled; values remain filled, not submitted, for the user to review and send in the portal',
+    })
   }
 
   return { written, skipped, submitted: false }

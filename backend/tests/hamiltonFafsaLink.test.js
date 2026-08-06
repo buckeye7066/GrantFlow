@@ -1,6 +1,6 @@
 /**
  * FAFSA-linkage recognition + fulfillment (owner request 2026-07-27):
- * "A lot of the portals on Anastasia's profile only require linking to her
+ * "A lot of the portals on Demo Student's profile only require linking to her
  * FAFSA. Give Hamilton the ability to recognize this and to link the two."
  *
  * Pins the whole loop, PROFILE-GENERIC (two distinct student profiles):
@@ -51,9 +51,9 @@ const { _resetMasterVaultSchemaCache } = await import('../services/hamilton/hami
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
 // Two DISTINCT student profiles (owner clarification 2026-07-27: detection and
-// fulfillment must be generic — Anastasia AND Robert both have FAFSAs).
-const ANASTASIA = 'profile-anastasia-mtsu'
-const ROBERT = 'profile-robert-white-mtsu'
+// fulfillment must be generic — Demo Student AND Robert both have FAFSAs).
+const demo_stem_student = 'profile-demo-tennessee-stem-student-mtsu'
+const ROBERT = 'profile-demo-tennessee-college-student-mtsu'
 
 const LINK_ONLY_OPP = {
   id: 'opp-tsaa',
@@ -191,12 +191,12 @@ describe('profileFafsaCompleted + preflight fafsa_link ask', () => {
   it('preflight raises ONE structured fafsa_link ask only while the FAFSA is not filed', async () => {
     const db = makeDb()
     const profileNoFafsa = {
-      id: ANASTASIA,
-      basic_information: { first_name: 'Anastasia', last_name: 'Steele', email: 'a@example.com' },
+      id: demo_stem_student,
+      basic_information: { first_name: 'Demo Student', last_name: 'Steele', email: 'a@example.com' },
       education: { fafsa_completed: false },
     }
     const r1 = await preflightSingleSource(db, {
-      profile: profileNoFafsa, profileId: ANASTASIA,
+      profile: profileNoFafsa, profileId: demo_stem_student,
       source: { opportunity_id: LINK_ONLY_OPP.id }, opportunity: LINK_ONLY_OPP, grant: null,
     })
     expect(r1.classification.fafsa_link).toBe(true)
@@ -204,14 +204,14 @@ describe('profileFafsaCompleted + preflight fafsa_link ask', () => {
 
     const profileFiled = { ...profileNoFafsa, education: { fafsa_completed: true } }
     const r2 = await preflightSingleSource(db, {
-      profile: profileFiled, profileId: ANASTASIA,
+      profile: profileFiled, profileId: demo_stem_student,
       source: { opportunity_id: LINK_ONLY_OPP.id }, opportunity: LINK_ONLY_OPP, grant: null,
     })
     expect(r2.blockers.some((b) => b.key === FAFSA_LINK_FIELD_KEY)).toBe(false)
 
     // A non-FAFSA source never raises the ask, filed or not.
     const r3 = await preflightSingleSource(db, {
-      profile: profileNoFafsa, profileId: ANASTASIA,
+      profile: profileNoFafsa, profileId: demo_stem_student,
       source: { opportunity_id: MENTION_ONLY_OPP.id }, opportunity: MENTION_ONLY_OPP, grant: null,
     })
     expect(r3.blockers.some((b) => b.key === FAFSA_LINK_FIELD_KEY)).toBe(false)
@@ -228,25 +228,25 @@ describe('profileFafsaCompleted + preflight fafsa_link ask', () => {
 
 // ── 3. The full loop, profile-generic (two students) ────────────────────────
 
-describe('FAFSA-link fulfillment loop (Anastasia + Robert — profile-generic)', () => {
+describe('FAFSA-link fulfillment loop (Demo Student + Robert — profile-generic)', () => {
   let db
   beforeEach(async () => {
     db = makeDb()
-    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-ana', 'Anastasia Steele')").run(ANASTASIA)
+    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-ana', 'Demo Student Steele')").run(demo_stem_student)
     await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-rob', 'Robert Michael White')").run(ROBERT)
     await insertOpp(db, LINK_ONLY_OPP)
     await insertOpp(db, IMPORT_OPP)
   })
 
   it('parks a FAFSA-linked task on ONE honest ask, resolves it profile-wide when the FAFSA is filed, and completes without inventing a linkage', async () => {
-    // Anastasia: FAFSA not filed yet (legacy boolean shape).
-    await setSection(db, ANASTASIA, 'education', { fafsa_completed: false })
+    // Demo Student: FAFSA not filed yet (legacy boolean shape).
+    await setSection(db, demo_stem_student, 'education', { fafsa_completed: false })
 
     const r1 = await automateSingleSource(db, {
-      profileId: ANASTASIA, userId: 'u-ana', source: { opportunity_id: LINK_ONLY_OPP.id },
+      profileId: demo_stem_student, userId: 'u-ana', source: { opportunity_id: LINK_ONLY_OPP.id },
     })
     const r2 = await automateSingleSource(db, {
-      profileId: ANASTASIA, userId: 'u-ana', source: { opportunity_id: IMPORT_OPP.id },
+      profileId: demo_stem_student, userId: 'u-ana', source: { opportunity_id: IMPORT_OPP.id },
     })
     expect(r1.waiting_on_fafsa).toBe(true)
     expect(r1.task.status).toBe('waiting_for_missing_info')
@@ -258,14 +258,14 @@ describe('FAFSA-link fulfillment loop (Anastasia + Robert — profile-generic)',
     expect(r1.task.last_agent_message).toMatch(/can't file it for you/i)
 
     // A reconcile while the FAFSA is still NOT filed resolves nothing.
-    const noop = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    const noop = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(noop.fieldsResolved).toBe(0)
     expect((await getApplicationTask(db, r1.task.id)).status).toBe('waiting_for_missing_info')
 
     // Owner marks the FAFSA submitted ONCE on the profile → both portal tasks
     // clear and resume ("add it once, it clears everywhere").
-    await setSection(db, ANASTASIA, 'education', { fafsa_completed: true })
-    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    await setSection(db, demo_stem_student, 'education', { fafsa_completed: true })
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(rec.fieldsResolved).toBe(2)
     expect(rec.tasksResumed).toBe(2)
     for (const taskId of [r1.task.id, r2.task.id]) {
@@ -279,7 +279,7 @@ describe('FAFSA-link fulfillment loop (Anastasia + Robert — profile-generic)',
 
     // The runner re-picks the ready task: it now completes honestly.
     const r1b = await automateSingleSource(db, {
-      profileId: ANASTASIA, userId: 'u-ana', source: { opportunity_id: LINK_ONLY_OPP.id },
+      profileId: demo_stem_student, userId: 'u-ana', source: { opportunity_id: LINK_ONLY_OPP.id },
     })
     expect(r1b.task.status).toBe('completed')
     expect(r1b.task.audit_summary?.fafsa_link).toEqual({ required: true, fafsa_on_file: true })
@@ -307,12 +307,12 @@ describe('FAFSA-link fulfillment loop (Anastasia + Robert — profile-generic)',
     expect(done.task.status).toBe('completed')
     expect(done.task.audit_summary?.fafsa_link?.fafsa_on_file).toBe(true)
 
-    // Cross-profile isolation: Robert's filing never touched Anastasia.
-    await setSection(db, ANASTASIA, 'education', { fafsa_completed: false })
-    const t = await ensureApplicationTask(db, { profileId: ANASTASIA, opportunityId: IMPORT_OPP.id, automationType: 'auto_profile' })
+    // Cross-profile isolation: Robert's filing never touched Demo Student.
+    await setSection(db, demo_stem_student, 'education', { fafsa_completed: false })
+    const t = await ensureApplicationTask(db, { profileId: demo_stem_student, opportunityId: IMPORT_OPP.id, automationType: 'auto_profile' })
     await updateApplicationTask(db, t.id, { status: 'waiting_for_missing_info' })
     await setMissingInfo(db, t.id, [{ kind: 'field', key: FAFSA_LINK_FIELD_KEY, label: 'Complete and submit your FAFSA', required: true }])
-    const recAna = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    const recAna = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(recAna.fieldsResolved).toBe(0)
     expect((await getApplicationTask(db, t.id)).status).toBe('waiting_for_missing_info')
   })
@@ -329,14 +329,14 @@ describe('FAFSA-link fulfillment loop (Anastasia + Robert — profile-generic)',
   })
 
   it('NO invented data: a junk profile field literally named fafsa_link can never answer the ask', async () => {
-    await setSection(db, ANASTASIA, 'education', { fafsa_completed: false })
+    await setSection(db, demo_stem_student, 'education', { fafsa_completed: false })
     // A stray/imported field named fafsa_link with a non-empty junk value.
-    await setSection(db, ANASTASIA, 'imported_misc', { fafsa_link: 'no / not sure' })
-    const t = await ensureApplicationTask(db, { profileId: ANASTASIA, opportunityId: LINK_ONLY_OPP.id, automationType: 'auto_profile' })
+    await setSection(db, demo_stem_student, 'imported_misc', { fafsa_link: 'no / not sure' })
+    const t = await ensureApplicationTask(db, { profileId: demo_stem_student, opportunityId: LINK_ONLY_OPP.id, automationType: 'auto_profile' })
     await updateApplicationTask(db, t.id, { status: 'waiting_for_missing_info' })
     await setMissingInfo(db, t.id, [{ kind: 'field', key: FAFSA_LINK_FIELD_KEY, label: 'Complete and submit your FAFSA', required: true }])
 
-    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(rec.fieldsResolved).toBe(0)
     expect((await getApplicationTask(db, t.id)).status).toBe('waiting_for_missing_info')
   })
@@ -348,33 +348,33 @@ describe('reconcile resolves aliased field keys and never guesses across nested 
   let db
   beforeEach(async () => {
     db = makeDb()
-    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-a', 'Applicant')").run(ANASTASIA)
+    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-a', 'Applicant')").run(demo_stem_student)
   })
 
   const flagField = async (key) => {
-    const t = await ensureApplicationTask(db, { profileId: ANASTASIA, opportunityId: LINK_ONLY_OPP.id, automationType: 'auto_profile' })
+    const t = await ensureApplicationTask(db, { profileId: demo_stem_student, opportunityId: LINK_ONLY_OPP.id, automationType: 'auto_profile' })
     await updateApplicationTask(db, t.id, { status: 'waiting_for_missing_info' })
     await setMissingInfo(db, t.id, [{ kind: 'field', key, label: key, required: true }])
     return t
   }
 
   it('a portal flag named "given_name" is answered by the profile\'s first_name', async () => {
-    await setSection(db, ANASTASIA, 'basic_information', { first_name: 'Anastasia' })
+    await setSection(db, demo_stem_student, 'basic_information', { first_name: 'Demo Student' })
     const t = await flagField('given_name')
-    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(rec.fieldsResolved).toBe(1)
     const resolved = (await listMissingInfo(db, t.id)).find((m) => m.key === 'given_name')
     expect(resolved.resolved).toBe(true)
-    expect(String(resolved.resolved_value)).toBe('Anastasia')
+    expect(String(resolved.resolved_value)).toBe('Demo Student')
   })
 
   it('other spellings resolve too: firstName / legal_first_name / postal_code / phone_number', async () => {
-    await setSection(db, ANASTASIA, 'basic_information', { firstName: 'Ana', legal_last_name: 'Steele' })
-    await setSection(db, ANASTASIA, 'contact', { postal_code: '37311', phone_number: '555-0100' })
+    await setSection(db, demo_stem_student, 'basic_information', { firstName: 'Ana', legal_last_name: 'Steele' })
+    await setSection(db, demo_stem_student, 'contact', { postal_code: '37311', phone_number: '555-0100' })
     const tFirst = await flagField('first_name')
     const tZip = await flagField('zip_code')
     const tPhone = await flagField('telephone')
-    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(rec.fieldsResolved).toBe(3)
     const val = async (t, k) => String((await listMissingInfo(db, t.id)).find((m) => m.key === k).resolved_value)
     expect(await val(tFirst, 'first_name')).toBe('Ana')
@@ -383,36 +383,36 @@ describe('reconcile resolves aliased field keys and never guesses across nested 
   })
 
   it('the APPLICANT\'s section-root first_name wins over a nested guardian.first_name', async () => {
-    await setSection(db, ANASTASIA, 'basic_information', {
-      first_name: 'Anastasia',
+    await setSection(db, demo_stem_student, 'basic_information', {
+      first_name: 'Demo Student',
       guardian: { first_name: 'Margaret' },
     })
     const t = await flagField('first_name')
-    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(rec.fieldsResolved).toBe(1)
     const resolved = (await listMissingInfo(db, t.id)).find((m) => m.key === 'first_name')
-    expect(String(resolved.resolved_value)).toBe('Anastasia') // never the guardian's
+    expect(String(resolved.resolved_value)).toBe('Demo Student') // never the guardian's
   })
 
   it('a genuinely ambiguous bare leaf (two nested parties, no root) resolves NOTHING — no wrong guess', async () => {
     // phone is not derivable from display_name, so this isolates the nested
     // ambiguity: two parties carry a phone, neither at section root.
-    await setSection(db, ANASTASIA, 'household', {
+    await setSection(db, demo_stem_student, 'household', {
       guardian: { phone: '555-1111' },
       sibling: { phone: '555-2222' },
     })
     await flagField('phone') // bare, ambiguous
-    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(rec.fieldsResolved).toBe(0)
   })
 
   it('an explicit nested path still resolves exactly its own value', async () => {
-    await setSection(db, ANASTASIA, 'household', {
+    await setSection(db, demo_stem_student, 'household', {
       guardian: { first_name: 'Margaret' },
       sibling: { first_name: 'Elyria' },
     })
     const t = await flagField('household.guardian.first_name')
-    const rec = await reconcileProfileFieldsToTasks(db, { profileId: ANASTASIA })
+    const rec = await reconcileProfileFieldsToTasks(db, { profileId: demo_stem_student })
     expect(rec.fieldsResolved).toBe(1)
     const resolved = (await listMissingInfo(db, t.id)).find((m) => m.key === 'household.guardian.first_name')
     expect(String(resolved.resolved_value)).toBe('Margaret')
@@ -424,10 +424,10 @@ describe('reconcile resolves aliased field keys and never guesses across nested 
 describe('one honest FAFSA ask across N portals (summary/action plan)', () => {
   it('collapses N per-task fafsa_link asks into ONE needs_you entry naming N portals', async () => {
     const db = makeDb()
-    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-ana', 'Anastasia Steele')").run(ANASTASIA)
+    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-ana', 'Demo Student Steele')").run(demo_stem_student)
     const mk = async (grantId, title) => {
-      await db.prepare('INSERT INTO grants (id, profile_id, title) VALUES (?, ?, ?)').run(grantId, ANASTASIA, title)
-      const t = await ensureApplicationTask(db, { profileId: ANASTASIA, grantId, automationType: 'auto_profile' })
+      await db.prepare('INSERT INTO grants (id, profile_id, title) VALUES (?, ?, ?)').run(grantId, demo_stem_student, title)
+      const t = await ensureApplicationTask(db, { profileId: demo_stem_student, grantId, automationType: 'auto_profile' })
       await updateApplicationTask(db, t.id, { status: 'waiting_for_missing_info' })
       await setMissingInfo(db, t.id, [{ kind: 'field', key: FAFSA_LINK_FIELD_KEY, label: 'Complete and submit your FAFSA', required: true }])
       return t
@@ -436,7 +436,7 @@ describe('one honest FAFSA ask across N portals (summary/action plan)', () => {
     await mk('g-pell', 'Federal Pell Grant')
     await mk('g-mtsu', 'MTSU Need-Based Aid')
 
-    const summary = await buildHamiltonProfileSummary(db, ANASTASIA)
+    const summary = await buildHamiltonProfileSummary(db, demo_stem_student)
     const fafsaNeeds = summary.needs_you.filter((n) => n.id === 'fafsa:link')
     expect(fafsaNeeds).toHaveLength(1)
     expect(fafsaNeeds[0].task_count).toBe(3)
@@ -446,7 +446,7 @@ describe('one honest FAFSA ask across N portals (summary/action plan)', () => {
     const perTask = summary.needs_you.filter((n) => n.kind === 'missing_field' && n.field_key === FAFSA_LINK_FIELD_KEY)
     expect(perTask).toHaveLength(0)
 
-    const category = await buildHamiltonTodoCategory(db, ANASTASIA)
+    const category = await buildHamiltonTodoCategory(db, demo_stem_student)
     const fafsaItems = category.items.filter((i) => i.title === 'Complete and submit your FAFSA')
     expect(fafsaItems).toHaveLength(1)
   })

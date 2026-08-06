@@ -35,14 +35,33 @@ const router = express.Router()
 
 router.get('/status', async (req, res) => {
   try {
-    const user = req.user || null
-    const profileId =
-      req.query.profileId ||
-      req.query.profile_id ||
-      user?.activeProfileId ||
-      user?.profile_id ||
+    const ctx = req.ctx
+    const principal = ctx?.identityResolved === true
+      ? {
+          identityResolved: true,
+          isAdmin: ctx.isAdmin === true,
+          userId: ctx.userId || null,
+        }
+      : null
+
+    const requestedProfileId =
+      (typeof req.query.profileId === 'string' && req.query.profileId.trim()) ||
+      (typeof req.query.profile_id === 'string' && req.query.profile_id.trim()) ||
       null
-    const status = await getAccessStatus(req.db, { user, profileId })
+    // An unresolved/deleted identity must not be able to probe another
+    // profile's pricing metadata through a token- or query-supplied profile id.
+    const profileId = principal ? requestedProfileId || ctx?.activeProfileId || null : null
+
+    if (
+      principal &&
+      principal.isAdmin !== true &&
+      profileId &&
+      (!(ctx.accessibleProfileIds instanceof Set) || !ctx.accessibleProfileIds.has(String(profileId)))
+    ) {
+      return res.status(403).json({ ok: false, error: 'profile_access_denied' })
+    }
+
+    const status = await getAccessStatus(req.db, { principal, profileId })
     return res.status(200).json({ ok: true, ...status })
   } catch (err) {
     routeLogger.error('access_status_failed', { err: err?.message })

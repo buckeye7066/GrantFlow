@@ -130,7 +130,7 @@ const BLOCKED_RE = /\b(access denied|reference #[0-9a-f.]+|unusual activity|requ
  * 'blocked', or 'unknown'. Pure + exported so it is testable without a browser.
  */
 // The strongest possible proof we are inside the student's own account: the
-// portal greets them BY NAME ("Welcome, Anastasia, to the FAFSA® Form").
+// portal greets them BY NAME ("Welcome, Demo Student, to the FAFSA® Form").
 // Marketing pages cannot produce this.
 const PUBLIC_HOME_RE = /^\/(index\.html)?$/i
 

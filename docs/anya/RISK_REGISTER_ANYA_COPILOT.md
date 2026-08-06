@@ -5,7 +5,7 @@
 ### CI pipeline (package.json)
 - **`npm test`**: lint → typecheck → unit → build
 - **`npm run release:gates`** (CI): rollup-native, quality+build (npm test), ui-contrast, auth/downloads, uploads, discover-local-funding, pipeline-add
-- **GitHub Actions** (`.github/workflows/ci.yml`): checkout, Node 20, npm ci, audit (high+), release:gates
+- **GitHub Actions** (`.github/workflows/ci.yml`): checkout, Node 20.20.2, npm ci, audit (high+), release:gates
 - **Smoke**: `npm run smoke` — Playwright, backend on 8080, basePath /grantflow
 - **E2E**: `npm run e2e` — full Playwright suite
 

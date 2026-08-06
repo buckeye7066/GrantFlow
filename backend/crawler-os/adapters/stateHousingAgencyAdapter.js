@@ -72,7 +72,7 @@ export function createStateHousingAgencyAdapter(sourceId) {
             info_url: url,
             apply_url: null,
             // THE STATE THE ADAPTER JUST RESOLVED IS A FACT ABOUT THE ROW
-            // (2026-08-03, the Robert White out-of-state-HFA class). The first
+            // (2026-08-03, the Demo College Student Persona out-of-state-HFA class). The first
             // version dropped it here, so every minted per-state row ("West
             // Virginia Housing Development Fund — …") inherited the NATIONAL
             // source's geography, was stamped `is_national = 1, state NULL`,

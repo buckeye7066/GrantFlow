@@ -62,7 +62,7 @@ Read-only audit of `backend/` core infrastructure: entry points, middleware, con
 
 ### backend/middleware/requestContext.js
 
-- **[important]** `requestContext.js:194-203` — Auto-upgrades any user whose email matches `isAdminEmail()` to `is_admin = TRUE` in the DB. This is a persistent privilege-escalation path keyed entirely on email match; safe **only** if `isAdminEmail` is a strict exact allowlist (note `config/constants.js` hardcodes `buckeye7066@gmail.com` as a permanent admin — see below).
+- **[important]** `requestContext.js:194-203` — Auto-upgrades any user whose email matches `isAdminEmail()` to `is_admin = TRUE` in the DB. This is a persistent privilege-escalation path keyed entirely on email match; safe **only** if `isAdminEmail` is a strict exact allowlist (note `config/constants.js` hardcodes `owner@example.invalid` as a permanent admin — see below).
 - **[important]** `requestContext.js:27-28,79-81` — `lastAdminSelfHealAtMs` module-global throttle mutated without a lock; concurrent admin requests can both pass the time check before either updates it, running the heavy self-heal multiple times. Best-effort, racy.
 - **[nit]** `requestContext.js:205-212` — Falls back to token-claimed admin (`Boolean(user.is_admin || user.role === 'admin')`) when the DB row is missing or the query throws, re-trusting token claims the file header says never to trust. Acceptable degraded fallback but contradicts the stated invariant.
 
@@ -113,7 +113,7 @@ Read-only audit of `backend/` core infrastructure: entry points, middleware, con
 
 ### backend/config/constants.js
 
-- **[important]** `constants.js:10,16-17` — `DEFAULT_ADMIN_EMAIL = 'buckeye7066@gmail.com'` is hardcoded and **unconditionally** injected into `ADMIN_EMAILS` even when the operator sets a different `ADMIN_EMAIL`. The developer's personal email is therefore a permanent admin in every deployment, removable only by editing source. Combined with `requestContext.js:194` (email-match → persistent `is_admin = TRUE`), this is standing production admin access for a fixed external account.
+- **[important]** `constants.js:10,16-17` — `DEFAULT_ADMIN_EMAIL = 'owner@example.invalid'` is hardcoded and **unconditionally** injected into `ADMIN_EMAILS` even when the operator sets a different `ADMIN_EMAIL`. The developer's personal email is therefore a permanent admin in every deployment, removable only by editing source. Combined with `requestContext.js:194` (email-match → persistent `is_admin = TRUE`), this is standing production admin access for a fixed external account.
 - **[nit]** `constants.js:52` — `DEFAULT_OPENAI_MODEL` reads `process.env.OPENAI_MODEL` at module-load time; if env is restored later (server.js restores secrets at boot) this captures the pre-restore value.
 
 ### backend/config/pipelineAllowedSources.js
@@ -131,12 +131,12 @@ Read-only audit of `backend/` core infrastructure: entry points, middleware, con
 ### backend/config/designatedProfiles.js
 
 - **[critical]** `designatedProfiles.js:74,184,189-200` — Real PII for real individuals is embedded directly in source and checked into git: full names, personal emails, phone numbers, home addresses, DOBs, EIN (`'88-4291655'`), a Medicaid number (`'Medicaid number: ZECM15043724.'`), VA disability ratings, and detailed medical diagnoses/ICD codes. `missionGoals.js` Goal 11 explicitly prohibits sensitive identifiers (Medicaid ID, medical identifiers) from leaving the system — committing them to the repo is a direct privacy/compliance violation regardless of crawler behavior.
-- **[important]** `designatedProfiles.js:67` vs `userProfileMappings.js:23` — Email mismatch: profile email `'Oliviadbeltran@gmail.com'` vs mapping key `'oliviabeltran@gmail.com'` (different local-part, missing `d`). The designated-profile auto-link for Olivia will never match.
-- **[important]** `designatedProfiles.js:899` — `owner_email: 'melissa.justus@example.com'` ships a placeholder `example.com` address (also in the urlRules denylist) as production data; this owner can never authenticate.
+- **[historical, sanitized]** A designated-profile email-mapping mismatch was recorded in the prior audit; the public fixture identities and mappings have since been replaced with synthetic examples.
+- **[historical, sanitized]** `designatedProfiles.js` previously shipped a non-routable profile-owner placeholder; the public fixture now uses a reserved synthetic address.
 
 ### backend/config/userProfileMappings.js
 
-- **[important]** `userProfileMappings.js:33` — `anyawhite@rocketmail.com → profile-luibov-samoylenko` maps an "anyawhite" email to Luibov Samoylenko's profile. If that is a different real person (John White's wife is named Anya per designatedProfiles:486), this mis-assigns one user to another person's sensitive medical-assistance profile — a serious access-control/privacy risk worth verifying.
+- **[important]** `userProfileMappings.js:33` — `demo.senior-medical@example.invalid → profile-demo-senior-medical` maps a legacy personal mailbox to Demo Senior Medical Persona's profile. If that mailbox belongs to a different person, this mis-assigns one user to another person's sensitive medical-assistance profile — a serious access-control/privacy risk worth verifying.
 - **[nit]** `userProfileMappings.js:20` — `[ADMIN_EMAIL]: null` computed key; if `ADMIN_EMAIL` collides with another mapping key, order-dependent override.
 
 ### backend/config/profileSchema.js

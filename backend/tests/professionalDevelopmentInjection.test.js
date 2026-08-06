@@ -4,7 +4,7 @@ import {
   recordMatchesProfile,
 } from '../services/matching/professionalDevelopmentPolicy.js'
 
-// A White/Polish TN student (mirrors the Anastasia case that surfaced this bug).
+// A White/Polish TN student (mirrors the Demo Student case that surfaced this bug).
 const tnPolishStudent = buildProfileTargeting({
   profile: { primary_type: 'student' },
   signals: { location: { state: 'TN' }, states: ['TN'], occupation: new Set(), interests: new Set() },

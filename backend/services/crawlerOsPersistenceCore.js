@@ -150,6 +150,62 @@ function asList(v) {
   return [String(v)];
 }
 
+/**
+ * Parse an OS structured-list column without turning malformed objects into
+ * applicant/need facts. Blank, malformed, or unknown input stays unknown.
+ */
+function structuredList(v) {
+  let value = v;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+    try { value = JSON.parse(text); } catch { return []; }
+  }
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((item) => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean))];
+}
+
+function structuredGeography(v) {
+  const raw = jparse(v, {});
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const states = structuredList(raw.states);
+  const counties = structuredList(raw.counties);
+  const zips = structuredList(raw.zips);
+  const cities = structuredList(raw.cities);
+  const regions = structuredList(raw.regions);
+  // `national:false` with no scoped values is the OS contract's default, not a
+  // source statement. Treat it as UNKNOWN so a blank recrawl cannot erase a
+  // previously learned geography.
+  const national = raw.national === true;
+  if (!national && states.length === 0 && counties.length === 0 && zips.length === 0 && cities.length === 0 && regions.length === 0) {
+    return null;
+  }
+  return { national, states, counties, zips, cities, regions };
+}
+
+async function fundingOpportunityColumns(db) {
+  try {
+    if (db?.dialect === 'postgres') {
+      const rows = await db.prepare(
+        `SELECT column_name
+           FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'funding_opportunities'`,
+      ).all();
+      return new Set((rows || []).map((row) => row.column_name).filter(Boolean));
+    }
+    const rows = await db.prepare('PRAGMA table_info(funding_opportunities)').all();
+    return new Set((rows || []).map((row) => row.name).filter(Boolean));
+  } catch {
+    // Narrow legacy/fake DB adapters may not expose schema introspection. Core
+    // columns still follow the existing path; optional columns are omitted.
+    return new Set();
+  }
+}
+
 /** Coerce a section's data to a plain object (it may be an object or JSON string). */
 function sectionObj(v) {
   if (!v) return {};
@@ -280,11 +336,11 @@ export function profileContextToThesisInput(ctx = {}) {
   // WHY THIS IS EXPLICIT AND NOT LEFT TO `tags`. `buildThesis` used to build its
   // `interest_terms` (the ONLY topical seed the open-web query builder consumes)
   // by taking `.slice(0, 12)` of `tags` — which is `signals.keywords`, an
-  // UNRANKED bag. Measured on Anastasia White's live prod profile 2026-08-02
+  // UNRANKED bag. Measured on Demo Tennessee STEM Student's live prod profile 2026-08-02
   // that bag holds 453 entries: display-name tokens, gender synonyms, prose
   // fragments and bare stopwords first, her actual field vocabulary at index
   // 127+. The twelve slots resolved to
-  //   ['anastasia','nicole','white','female','woman','women','girl','girls',
+  //   ['demo_stem_student','nicole','white','female','woman','women','girl','girls',
   //    'female-led','led','female identifying','identifying']
   // for a student whose `education.intended_major` is "Forensic Science". The
   // system held the fact and did not reason from it.
@@ -328,7 +384,7 @@ export function profileContextToThesisInput(ctx = {}) {
     // `health_support` are the provenance-split sets `profileHelpers` already
     // records (a diagnosis vs a support need); the union is used because a
     // support need can legitimately name the very thing a lane serves —
-    // Dr. John Robert White carries `arthritis` in SUPPORT, not conditions,
+    // Demo Health Education Persona carries `arthritis` in SUPPORT, not conditions,
     // and dropping arthritis_foundation_help for him would be a real loss.
     // `signals.health` (the UNION with free text and flags) is deliberately
     // NOT used: ~14 consumers test canonical tokens on it and it is exactly
@@ -361,10 +417,13 @@ export function profileContextToThesisInput(ctx = {}) {
 }
 
 /** Map one OS catalog row (memory-store shape) to live funding_opportunities columns. */
-function osOppToLiveRow(o) {
-  const geo = jparse(o.geography_json, {});
-  const needCats = jparse(o.need_categories_json, []);
-  const state = Array.isArray(geo.states) && geo.states.length ? geo.states[0] : null;
+function osOppToLiveRow(o, supportedColumns = new Set()) {
+  const geo = structuredGeography(o.geography_json);
+  const applicantTypes = structuredList(o.applicant_types_json);
+  const needCats = structuredList(o.need_categories_json);
+  const state = geo?.states?.[0] ?? null;
+  const rollingText = String(o.is_rolling ?? '').toLowerCase();
+  const isRolling = o.is_rolling === true || o.is_rolling === 1 || rollingText === 'true' || rollingText === '1';
   // Amount visibility: structured OS amounts win; otherwise conservatively
   // extract per-award dollars / status ("varies", "contact funder") from the
   // title+summary text so web-lane rows never land amount-blank when the page
@@ -407,10 +466,9 @@ function osOppToLiveRow(o) {
     amount_confidence: amounts.amount_confidence,
     is_loan: o.is_loan ? 1 : 0,
     requires_match: o.requires_cost_share ? 1 : 0,
-    is_national: geo.national ? 1 : 0,
-    state,
-    // (geo scope is corrected below, once the whole row exists)
-    categories: JSON.stringify(needCats),
+    // Structured eligibility and geography are appended below only when this
+    // crawl actually stated a fact. (Geo scope is corrected after the whole
+    // row exists.)
     opportunity_kind: structuralKind?.kind ?? o.kind ?? null,
     source_trust_tier: o.trust_tier ?? null,
     reality_status: o.reality_status ?? null,
@@ -432,6 +490,45 @@ function osOppToLiveRow(o) {
     discovered_at: o.created_at ?? nowIso(),
     updated_at: nowIso(),
   };
+
+  // LIVE structured eligibility. Empty arrays mean "unknown", so they are
+  // omitted on recrawl and can never wipe a prior sourced answer.
+  if (needCats.length > 0) row.categories = JSON.stringify(needCats);
+  if (applicantTypes.length > 0 && supportedColumns.has('entity_types_allowed')) {
+    row.entity_types_allowed = JSON.stringify(applicantTypes);
+  }
+  if (needCats.length > 0 && supportedColumns.has('need_types_supported')) {
+    row.need_types_supported = JSON.stringify(needCats);
+  }
+
+  // A missing deadline and a rolling deadline are different facts. The live
+  // DATE column has no `is_rolling`, so deadline_type is the lossless bridge.
+  if (supportedColumns.has('deadline_type')) {
+    row.deadline_type = isRolling ? 'rolling' : (o.deadline ? 'fixed' : 'unknown');
+  }
+  if (supportedColumns.has('deadline_status')) {
+    row.deadline_status = isRolling ? 'rolling' : (o.deadline ? null : 'unknown');
+  }
+
+  if (geo) {
+    const liveRegions = [...new Set([...geo.states, ...geo.regions])];
+    row.is_national = geo.national ? 1 : 0;
+    row.state = state;
+    if (supportedColumns.has('regions')) row.regions = JSON.stringify(liveRegions);
+    if (supportedColumns.has('geo_county') && (geo.national || geo.counties.length > 0)) {
+      row.geo_county = geo.counties[0] ?? null;
+    }
+    if (supportedColumns.has('geo_zip') && (geo.national || geo.zips.length > 0)) {
+      row.geo_zip = geo.zips[0] ?? null;
+    }
+    if (supportedColumns.has('geo_scope')) {
+      row.geo_scope = geo.national ? 'national'
+        : (geo.zips.length ? 'zip' : (geo.counties.length ? 'county' : 'state'));
+    }
+    // Preserve every stated geography member in the existing JSON field; the
+    // scalar columns remain indexed compatibility projections.
+    if (supportedColumns.has('geo_eligibility')) row.geo_eligibility = JSON.stringify(geo);
+  }
 
   // Page-fact provenance (Phase 0.1) — additive, NULL-default plumbing so a
   // later profile-blind extractor can carry per-field evidence into the catalog.
@@ -501,7 +598,7 @@ async function upsertRow(db, table, keyCols, row, { conflictExpr = {} } = {}) {
  * all incoming keys (incoming wins) — via json_group_object, with json(value) so
  * nested objects keep their type. Both are one atomic UPSERT expression.
  */
-function fundingOpportunityConflictExpr(db) {
+function fundingOpportunityConflictExpr(db, supportedColumns = new Set(), incomingRow = {}) {
   const provExpr = db?.dialect === 'postgres'
     ? "(COALESCE(funding_opportunities.field_provenance, '{}')::jsonb || excluded.field_provenance::jsonb)::text"
     : `(
@@ -537,15 +634,104 @@ function fundingOpportunityConflictExpr(db) {
   // exact COALESCE guards all along; this bridge — the highest-volume writer —
   // never got them. A crawl that DID extract a real amount still updates.
   const keep = (col) => `COALESCE(excluded.${col}, funding_opportunities.${col})`;
-  return {
+  const keepNonemptyArray = (col) => `CASE
+        WHEN excluded.${col} IS NULL OR TRIM(excluded.${col}) IN ('', '[]')
+        THEN funding_opportunities.${col}
+        ELSE excluded.${col}
+      END`;
+  const falseSql = db?.dialect === 'postgres' ? 'FALSE' : '0';
+  const trueSql = db?.dialect === 'postgres' ? 'TRUE' : '1';
+  const terminalParts = [];
+  if (supportedColumns.has('status')) {
+    terminalParts.push(`LOWER(COALESCE(funding_opportunities.status, 'active')) IN
+      ('expired', 'deadline_expired', 'deadline_passed', 'retired', 'permanently_retired', 'quarantined')`);
+  }
+  if (supportedColumns.has('link_status')) {
+    terminalParts.push(`LOWER(COALESCE(funding_opportunities.link_status, 'unverified')) IN
+      ('expired', 'deadline_expired', 'deadline_passed', 'retired', 'permanently_retired', 'quarantined')`);
+  }
+  if (supportedColumns.has('deadline_status')) {
+    terminalParts.push(`LOWER(COALESCE(funding_opportunities.deadline_status, 'unknown')) IN
+      ('expired', 'closed', 'retired')`);
+  }
+  if (supportedColumns.has('verification_error')) {
+    terminalParts.push("COALESCE(funding_opportunities.verification_error, '') LIKE 'retired_after_definitive_recheck:%'");
+  }
+  const terminal = terminalParts.length ? terminalParts.join(' OR ') : '0 = 1';
+  const clearFixedDeadlineForRolling = supportedColumns.has('deadline_type')
+    ? "WHEN excluded.deadline_type IN ('rolling', 'ongoing') THEN NULL"
+    : '';
+  const out = {
+    // Recrawl is never a lifecycle restoration mechanism. A verifier or an
+    // explicit owner action owns restoration; the high-volume writer keeps
+    // quarantined/retired/deadline-expired visibility state atomically.
+    is_active: `CASE
+        WHEN ${terminal} THEN ${falseSql}
+        WHEN COALESCE(funding_opportunities.is_active, ${trueSql}) = ${falseSql}
+        THEN funding_opportunities.is_active
+        ELSE excluded.is_active
+      END`,
+    is_hidden: `CASE
+        WHEN ${terminal} THEN ${trueSql}
+        WHEN COALESCE(funding_opportunities.is_active, ${trueSql}) = ${falseSql}
+        THEN ${trueSql}
+        WHEN COALESCE(funding_opportunities.is_hidden, ${falseSql}) = ${trueSql}
+        THEN funding_opportunities.is_hidden
+        ELSE excluded.is_hidden
+      END`,
     field_provenance: provExpr,
     opportunity_kind: kindExpr,
+    deadline: `CASE
+        WHEN ${terminal} THEN funding_opportunities.deadline
+        ${clearFixedDeadlineForRolling}
+        ELSE ${keep('deadline')}
+      END`,
     amount_min: keep('amount_min'),
     amount_max: keep('amount_max'),
     amount_text: keep('amount_text'),
     amount_status: keep('amount_status'),
     amount_confidence: keep('amount_confidence'),
   };
+  if (supportedColumns.has('entity_types_allowed')) out.entity_types_allowed = keepNonemptyArray('entity_types_allowed');
+  if (supportedColumns.has('need_types_supported')) out.need_types_supported = keepNonemptyArray('need_types_supported');
+  if (supportedColumns.has('categories')) out.categories = keepNonemptyArray('categories');
+  if (supportedColumns.has('deadline_type')) {
+    out.deadline_type = `CASE
+        WHEN ${terminal} THEN funding_opportunities.deadline_type
+        WHEN excluded.deadline_type IS NULL OR excluded.deadline_type = 'unknown'
+        THEN COALESCE(funding_opportunities.deadline_type, excluded.deadline_type)
+        ELSE excluded.deadline_type
+      END`;
+  }
+  if (supportedColumns.has('deadline_status')) {
+    const clearStaleRollingStatus = supportedColumns.has('deadline_type')
+      ? "WHEN excluded.deadline_type = 'fixed' THEN NULL"
+      : '';
+    out.deadline_status = `CASE
+        WHEN ${terminal} THEN funding_opportunities.deadline_status
+        ${clearStaleRollingStatus}
+        WHEN excluded.deadline_status IS NULL OR excluded.deadline_status = 'unknown'
+        THEN COALESCE(funding_opportunities.deadline_status, excluded.deadline_status)
+        ELSE excluded.deadline_status
+      END`;
+  }
+  if (Object.prototype.hasOwnProperty.call(incomingRow, 'is_national')) {
+    out.is_national = 'excluded.is_national';
+    if (incomingRow.is_national) {
+      if (supportedColumns.has('state')) out.state = 'excluded.state';
+      if (supportedColumns.has('regions')) out.regions = 'excluded.regions';
+      if (supportedColumns.has('geo_county')) out.geo_county = 'excluded.geo_county';
+      if (supportedColumns.has('geo_zip')) out.geo_zip = 'excluded.geo_zip';
+    } else {
+      if (supportedColumns.has('state')) out.state = keep('state');
+      if (supportedColumns.has('regions')) out.regions = keepNonemptyArray('regions');
+      if (supportedColumns.has('geo_county')) out.geo_county = keep('geo_county');
+      if (supportedColumns.has('geo_zip')) out.geo_zip = keep('geo_zip');
+    }
+    if (supportedColumns.has('geo_scope')) out.geo_scope = keep('geo_scope');
+    if (supportedColumns.has('geo_eligibility')) out.geo_eligibility = keep('geo_eligibility');
+  }
+  return out;
 }
 
 /**
@@ -601,6 +787,7 @@ async function ensureOsTables(db) {
 
 export async function persistRun(db, memStore, run, opts = {}) {
   await ensureOsTables(db);
+  const supportedOpportunityColumns = await fundingOpportunityColumns(db);
   // When a run matched against MULTIPLE profiles (Robert's cross-profile cycle),
   // primaryProfileId is the profile whose own discovery this was — its full
   // 'crawler-os' match set is authoritative (reconcile = delete+insert). EVERY
@@ -620,7 +807,7 @@ export async function persistRun(db, memStore, run, opts = {}) {
   const idRemap = new Map();
   let opportunities = 0;
   for (const o of catalog) {
-    const row = osOppToLiveRow(o);
+    const row = osOppToLiveRow(o, supportedOpportunityColumns);
     let targetId = o.id;
     if (row.canonical_opportunity_key) {
       const existing = await db
@@ -645,7 +832,7 @@ export async function persistRun(db, memStore, run, opts = {}) {
     // provenance is untouched; there is no read-then-write gap and no fetch that
     // could error into a null-clobber.
     await upsertRow(db, 'funding_opportunities', ['id'], { ...row, id: targetId }, {
-      conflictExpr: fundingOpportunityConflictExpr(db),
+      conflictExpr: fundingOpportunityConflictExpr(db, supportedOpportunityColumns, row),
     });
     opportunities += 1;
   }
@@ -709,7 +896,7 @@ export async function persistRun(db, memStore, run, opts = {}) {
       });
       matches += 1;
     } else if (decision !== 'accept') {
-      // CROSS-MATCH PRECISION (2026-08-03, the Robert White report): a
+      // CROSS-MATCH PRECISION (2026-08-03, the Demo College Student Persona report): a
       // cross-profile row is stored ONLY on ACCEPT. "An opp this profile didn't
       // search for but is ELIGIBLE to" means the engine endorsed the pair; a
       // cross-profile REVIEW is scored against a thesis STUB (no sections, no

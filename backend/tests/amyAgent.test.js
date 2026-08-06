@@ -391,7 +391,22 @@ describe('Amy training run (end-to-end, offline discovery)', () => {
       expect(persisted).toBeTruthy()
       expect(persisted.run_id).toBe(out.run_id)
       expect(persisted.flywheel_cohort?.ok).toBe(true)
-      expect(persisted.flywheel_cohort?.day?.evaluated).toBe(categories.length)
+      expect(persisted.cohort_request).toMatchObject({
+        run_id: out.run_id,
+        requested_target: categories.length,
+        planned_members: categories.length,
+        exact_plan: true,
+      })
+      const receipt = persisted.flywheel_cohort?.day?.run_receipts?.at(-1)
+      expect(receipt?.run_id).toBe(out.run_id)
+      expect(receipt?.evaluation_rows).toBe(categories.length)
+      expect(receipt?.planned_members).toBe(categories.length)
+      expect(receipt?.reconciliation?.membership_total).toBe(categories.length)
+      // The offline fixture omits opportunity kinds. Those otherwise-ok rows
+      // are honestly unevaluable by the bounded oracle, not counted clean.
+      expect(receipt?.outcomes?.unevaluable).toBeGreaterThan(0)
+      expect(receipt?.all_clean).toBe(false)
+      expect(receipt?.qualification_proven).toBe(false)
     } finally {
       db.close()
     }

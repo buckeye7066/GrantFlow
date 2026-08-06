@@ -35,6 +35,15 @@ function formatDateSafe(value, fallback = '—') {
   return d ? format(d, 'MMM d, yyyy') : fallback
 }
 
+function formatDeadlineSafe(grant) {
+  const value = grant?.deadline
+  const type = String(grant?.deadline_type || '').trim().toLowerCase()
+  if (String(value || '').trim().toLowerCase() === 'rolling' || type === 'rolling' || type === 'ongoing') {
+    return 'Rolling / ongoing'
+  }
+  return formatDateSafe(value, 'Deadline not posted')
+}
+
 function formatMoneyRange(min, max, requested) {
   const fmt = (n) => {
     const v = typeof n === 'number' ? n : Number(n)
@@ -262,7 +271,7 @@ export default function PrintProfilePacket() {
                           <div className="text-right text-xs text-slate-600 shrink-0">
                             <div className="flex items-center gap-1 justify-end">
                               <Calendar className="w-3 h-3" />
-                              {formatDateSafe(g.deadline, 'Rolling / no deadline')}
+                              {formatDeadlineSafe(g)}
                             </div>
                             <div className="flex items-center gap-1 justify-end mt-0.5">
                               <DollarSign className="w-3 h-3" />
@@ -321,7 +330,7 @@ export default function PrintProfilePacket() {
                         </p>
                       </div>
                       <div className="text-right text-xs text-slate-700 shrink-0">
-                        <div>Deadline: {formatDateSafe(g.deadline, 'Rolling / no deadline')}</div>
+                        <div>Deadline: {formatDeadlineSafe(g)}</div>
                       </div>
                     </div>
                     {auto?.handoff_reason && (

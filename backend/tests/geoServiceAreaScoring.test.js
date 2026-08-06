@@ -2,7 +2,7 @@
  * geoServiceAreaScoring.test.js
  *
  * Bug: geo-matching ignored the profile's SERVICE AREA and scored geographic
- * fit off the MAILING / home address instead. Focus Forward Ministries is
+ * fit off the MAILING / home address instead. Demo Faith-Based Nonprofit is
  * headquartered (mailing address) in Cleveland, TN but DELIVERS services on the
  * Pine Ridge Reservation, South Dakota. Its matched sources were dominated by
  * Tennessee programs because the matcher resolved the profile's state from the
@@ -27,7 +27,7 @@ import { describe, it, expect } from 'vitest'
 import { buildProfileSignals, extractStateFromContext } from '../services/profileHelpers.js'
 import { computeMatchDecision } from '../services/matchEngine.js'
 
-// Focus Forward Ministries: mailing address Cleveland, TN; service area Pine
+// Demo Faith-Based Nonprofit: mailing address Cleveland, TN; service area Pine
 // Ridge Reservation, South Dakota.
 const FOCUS_FORWARD_PROFILE = { id: 'p-focus-forward', primary_type: 'nonprofit', state: 'TN' }
 const FOCUS_FORWARD_SECTIONS = {

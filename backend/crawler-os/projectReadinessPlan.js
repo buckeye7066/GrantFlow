@@ -155,7 +155,7 @@ function detectArchetype(profile, thesis, sections, blob) {
   // and the "Student funding and portal action plan".
   const NON_STUDENT_PERSON_TYPES = ['individual', 'family', 'senior', 'veteran', 'disabled_adult', 'medical_need', 'individual_need'];
   const isExplicitNonStudentPerson = NON_STUDENT_PERSON_TYPES.includes(primary);
-  // Same class of bug for ORGANIZATIONS: Focus Forward Ministries (primary_type
+  // Same class of bug for ORGANIZATIONS: Demo Faith-Based Nonprofit (primary_type
   // 'organization', which profileIntelligence maps to the 'nonprofit' applicant
   // bucket) got the student plan because it had an education-shaped section.
   // Any profile whose applicant_types resolve to an org bucket must never be

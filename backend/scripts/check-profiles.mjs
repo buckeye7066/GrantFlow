@@ -6,7 +6,7 @@ const db = new Database('./data/grantflow.db');
 const profiles = db.prepare(`
   SELECT id, display_name, primary_type, status, created_at 
   FROM profiles 
-  WHERE display_name IN ('Anastasia', 'Anastasia Profile', 'Paul Jason Dasher', 'Angelika Ptak', 'Rachel Miller', 'Kathy Marie Daniel')
+  WHERE display_name IN ('Demo Student', 'Demo Student Profile', 'Demo Workforce Training Persona', 'Demo Healthcare Workforce Persona', 'Demo Education Support Persona', 'Demo Basic Needs Persona')
   ORDER BY created_at DESC
 `).all();
 

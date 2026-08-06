@@ -128,12 +128,25 @@ describe('reScoreSurfacedIneligible', () => {
     expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id=?').get(m2).match_decision).toBe('accept')
   })
 
-  it('liveOppToOs maps geography, needs, and funding faithfully', () => {
-    const os = liveOppToOs({ id: 'x', title: 'T', description: 'D', categories: '["housing"]', is_national: 0, state: 'TN', amount_min: 100, amount_max: 500 })
+  it('liveOppToOs maps geography, needs, funding, and actionability faithfully', () => {
+    const os = liveOppToOs({
+      id: 'x',
+      title: 'T',
+      description: 'D',
+      categories: '["housing"]',
+      is_national: 0,
+      state: 'TN',
+      amount_min: 100,
+      amount_max: 500,
+      application_url: 'https://example.org/apply',
+      source_url: 'https://example.org/opportunity',
+    })
     expect(os.geography.states).toEqual(['TN'])
     expect(os.geography.national).toBe(false)
     expect(os.need_categories).toEqual(['housing'])
     expect(os.funding.amount_max).toBe(500)
+    expect(os.apply_url).toBe('https://example.org/apply')
+    expect(os.info_url).toBe('https://example.org/opportunity')
   })
 
   // The false-demotion class (2026-07-06): live rows never persist the OS

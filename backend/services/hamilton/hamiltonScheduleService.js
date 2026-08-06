@@ -2,11 +2,11 @@
  * hamiltonScheduleService.js
  *
  * Surfaces Hamilton's APPLICATION SCHEDULE on the calendar and the LOGIN
- * READINESS the owner needs to act on — the two halves of the "Hamilton applies
- * to your real portal; stand by if 2FA is needed" flow.
+ * READINESS the owner needs to act on — the two halves of the "Hamilton prepares
+ * work in your real portal; stand by if 2FA is needed" flow.
  *
  *   - getHamiltonReadiness(): which portals need a fresh login session captured
- *     (so Hamilton can act inside the real account), whether a schedule is set,
+ *     (so Hamilton can prepare work inside the real account), whether a schedule is set,
  *     and the next run time. Powers the login-time reminder banner.
  *   - computeHamiltonCalendarEvents(): Hamilton's scheduled access windows as
  *     calendar events, each flagged `requires_presence` when a portal it would
@@ -160,14 +160,14 @@ export async function computeHamiltonCalendarEvents(db, { profileId, rangeStart,
     id: `hamilton_run_${profileId}_${iso}`,
     deadline: iso, // calendar feed keys events on `deadline`
     calendar_source: 'hamilton_run',
-    title: `Hamilton applies — ${pendingCount} ${pendingCount === 1 ? 'source' : 'sources'}`,
+    title: `Hamilton prepares — ${pendingCount} ${pendingCount === 1 ? 'source' : 'sources'}`,
     profile_id: String(profileId),
     pending_task_count: pendingCount,
     requires_presence: requiresPresence,
     presence_reason: presenceReason,
     detail: requiresPresence
       ? 'A portal needs sign-in/2FA — be available, or capture a fresh session beforehand.'
-      : 'Hamilton runs unattended (saved session reused).',
+      : 'Hamilton prepares drafts unattended (saved session reused); final submission remains with you.',
   })
 
   if (!schedule.enabled) {
@@ -281,7 +281,7 @@ export async function emitSessionCaptureReminders(db, { profileId, lookbackHours
       profileUserId,
       type: SESSION_REMINDER_TYPE,
       title: `Capture your ${host} login for Hamilton`,
-      message: `Hamilton has work ready but no valid saved session for ${host}. Capture one (you complete login + 2FA once) so she can submit inside your real account — otherwise the scheduled run will pause for sign-in.`,
+      message: `Hamilton has preparation work ready but no valid saved session for ${host}. Capture one (you complete login + 2FA once) so she can open the portal and prepare drafts — otherwise the scheduled run will pause for sign-in. Final submission remains with you.`,
       severity: 'warning',
       data: { portal_host: host, action: 'capture_session' },
     }).catch(() => {})

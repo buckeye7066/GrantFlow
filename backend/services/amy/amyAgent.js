@@ -425,6 +425,17 @@ export async function runAmyTraining(options = {}) {
     categoryWeights,
   })
   const scenarios = [...catalogScenarios, ...probeScenarios]
+  // Resolve the run's requested target once and persist the exact planned
+  // member ids. The daily scoreboard must never combine profiles from several
+  // runs to manufacture an "exactly 50" receipt.
+  const requestedCohortTarget = Number.isFinite(Number(targetCount)) && Number(targetCount) > 0
+    ? Math.max(1, Math.min(5000, Math.trunc(Number(targetCount))))
+    : scenarios.length
+  const expectedCohortMembers = scenarios.map((scenario) => ({
+    cohort_member_id: scenario.scenario_id,
+    scenario_id: scenario.scenario_id,
+    category: scenario.category,
+  }))
   const scenarioById = new Map(scenarios.map((sc) => [sc.scenario_id, sc]))
   let probeCoverageSummary = null
   const evaluations = []
@@ -489,7 +500,12 @@ export async function runAmyTraining(options = {}) {
       startedAt: startedAtDate.toISOString(),
       completedAt: clock().toISOString(),
       dryRun: dryRunDiscovery,
-      options: { categories: categories.length, targetCount: targetCount ?? null, floor: sliderFloor },
+      options: {
+        categories: categories.length,
+        targetCount: targetCount ?? null,
+        requestedCohortTarget,
+        floor: sliderFloor,
+      },
     },
   })
 
@@ -740,6 +756,13 @@ export async function runAmyTraining(options = {}) {
       skipped: evaluations.filter((e) => e.status === 'skipped').length,
       errored: evaluations.filter((e) => e.status === 'error').length,
     },
+    cohort_request: {
+      run_id: runId,
+      requested_target: requestedCohortTarget,
+      planned_members: expectedCohortMembers.length,
+      member_ids: expectedCohortMembers.map((member) => member.cohort_member_id),
+      exact_plan: expectedCohortMembers.length === requestedCohortTarget,
+    },
     cohort: summarizeCohort(evaluations, operatingFloor),
     metrics: { current_floor: currentFloor, operating_floor: operatingFloor, before, after, sweep, best, baseline_quality: baselineQuality },
     tuning: { ...decision, applied: tuningApplied },
@@ -850,7 +873,9 @@ export async function runAmyTraining(options = {}) {
     try {
       combined.flywheel_cohort = await recordFlywheelCohort(db, {
         evaluations,
+        expectedMembers: expectedCohortMembers,
         runId,
+        target: requestedCohortTarget,
         at: completedAtDate.toISOString(),
       })
       if (combined.flywheel_cohort?.ok === false && !combined.flywheel_cohort?.skipped) {

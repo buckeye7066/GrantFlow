@@ -2,7 +2,7 @@
  * matchEngineCalibratedInventory.test.js
  *
  * Regression coverage for the 2026-07-27 "identical junk lists" report:
- * Anita Mayes (KY, individual) and Anastasia White (TN, student) both had
+ * Anita Mayes (KY, individual) and Demo Tennessee STEM Student (TN, student) both had
  * their match lists topped by the SAME broad registry directories at 50-83,
  * labeled "Excellent Match" — with explains like "Matches 9 of the profile's
  * 6 data points — 83% coverage".

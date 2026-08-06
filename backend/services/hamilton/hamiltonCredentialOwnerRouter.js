@@ -21,14 +21,14 @@
  *
  * Rule shape (a "route def"):
  *   {
- *     profileId: 'profile-john-white',
- *     label: 'Dr. John White',          // human-readable, for reporting
+ *     profileId: 'profile-demo-health-education',
+ *     label: 'Demo Research Owner',     // human-readable, for reporting
  *     match: {
- *       usernames:        ['jwhiternmba@yahoo.com'],  // exact, lowercased
- *       usernamePrefixes: ['firerookie', 'rwhite'],   // username startsWith
- *       emailDomains:     ['serenova.org'],           // part after '@'
- *       hosts:            ['axiombiolabs.org'],        // host == / endsWith / includes
- *       keywords:         ['johnwhite'],               // substring of user/label/host
+ *       usernames:        ['portal-owner@example.invalid'], // exact, lowercased
+ *       usernamePrefixes: ['demo-owner', 'demo-lab'], // username startsWith
+ *       emailDomains:     ['example.invalid'],        // part after '@'
+ *       hosts:            ['example.invalid'],        // host == / endsWith / includes
+ *       keywords:         ['demoresearchowner'],      // substring of user/label/host
  *     },
  *   }
  */
@@ -71,8 +71,8 @@ export function compileRoutes(routeDefs) {
  *   - a keyword appears anywhere in username / label / host.
  *
  * A single credential can legitimately match more than one profile (e.g. a
- * `dr.johnwhite@axiombiolabs.org` login belongs to both "Dr. John White" and
- * the "Axiom BioLabs" org), so the result is a list, not a single id.
+ * `owner@example.invalid` login belongs to both a demo owner and a demo lab),
+ * so the result is a list, not a single id.
  *
  * @param {{username?:string, host?:string, label?:string}} cred
  * @param {ReturnType<typeof compileRoutes>} compiled

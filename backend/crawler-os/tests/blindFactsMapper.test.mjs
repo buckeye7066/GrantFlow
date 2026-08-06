@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mapBlindFactsToCandidate } from '../blindFactsMapper.js';
+import { OPPORTUNITY_KIND } from '../contract.js';
 
 const FACTS = {
   title: 'Example Foundation Scholarship',
@@ -57,6 +58,19 @@ test('unstated fields stay EMPTY/neutral — never fabricated', () => {
   assert.equal(c.field_provenance, null);
   // fallback info_url is the page (never invented)
   assert.equal(c.apply_url, null);
+  assert.equal(c.kind, OPPORTUNITY_KIND.PROGRAM);
+});
+
+test('only a non-rolling page with an inventory-verified apply URL is a direct grant', () => {
+  assert.equal(mapBlindFactsToCandidate(FACTS).kind, OPPORTUNITY_KIND.DIRECT_GRANT);
+  assert.equal(
+    mapBlindFactsToCandidate({ ...FACTS, apply_url: null }).kind,
+    OPPORTUNITY_KIND.PROGRAM,
+  );
+  assert.equal(
+    mapBlindFactsToCandidate({ ...FACTS, is_rolling: true }).kind,
+    OPPORTUNITY_KIND.PROGRAM,
+  );
 });
 
 test('national scope clears states (mutually consistent geography)', () => {

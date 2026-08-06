@@ -2,7 +2,7 @@
 -- @sqlite-continue-on-idempotent-errors
 --
 -- Admin-only Agent Control Center: persistent orchestration runs that the
--- single canonical admin/operator (buckeye7066@gmail.com) uses to start /
+-- single canonical admin/operator (admin@grantflow.local) uses to start /
 -- stop / pause / resume the whole GrantFlow agent process (Sam, Robert,
 -- Yana lead-discovery, John outreach, Hamilton autopilot).
 --
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS agent_control_runs (
   )),
   started_by_user_id TEXT,
   started_by_email TEXT,
-  admin_email TEXT NOT NULL DEFAULT 'buckeye7066@gmail.com',
+  admin_email TEXT NOT NULL DEFAULT 'admin@grantflow.local',
   requested_agents_json TEXT NOT NULL DEFAULT '[]',
   options_json TEXT NOT NULL DEFAULT '{}',
   cancellation_requested_at DATETIME,

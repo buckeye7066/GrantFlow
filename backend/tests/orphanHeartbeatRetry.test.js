@@ -4,7 +4,7 @@
  * The 5-minute heartbeat sweep (cleanupStaleCrawlersByHeartbeat) is what fires
  * when a deploy/OOM kills a worker mid-job. Until 2026-07 it terminal-failed
  * every orphan while only the 7-hour started-at sweep auto-retried — so a
- * deploy during document ingestion permanently lost the work (Liubov's three
+ * deploy during document ingestion permanently lost the work (demo_senior_family's three
  * document_ingest jobs, 2026-07-01). These tests lock down the shared retry:
  *
  *   1. A heartbeat-orphaned job is failed AND a fresh queued copy is inserted

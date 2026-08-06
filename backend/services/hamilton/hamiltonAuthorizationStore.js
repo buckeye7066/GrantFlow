@@ -171,6 +171,7 @@ export async function recordAuthorizations(db, {
   authorizationVersion = 'hamilton-autopilot-v1',
   options = {},
   metadata = {},
+  replaceOmittedTypes = false,
 } = {}) {
   if (!db) throw new Error('db required')
   if (!userId) throw new Error('userId required')
@@ -210,6 +211,28 @@ export async function recordAuthorizations(db, {
   async function writeAuthorizations() {
    const ids = []
    for (const target of targets) {
+    // The authorization screen represents the caller's complete selection for
+    // this exact scope/target. When requested by that screen, revoke active
+    // capabilities that were omitted instead of leaving a stale grant alive
+    // behind an unchecked box. Revocation is fail-closed and preserves the
+    // audit row; a later insert failure can remove authority, never widen it.
+    if (replaceOmittedTypes) {
+      const omitted = HAMILTON_AUTHORIZATION_TYPES.filter((type) => !authorizationTypes.includes(type))
+      for (const type of omitted) {
+        await db.prepare(
+          `UPDATE hamilton_authorizations SET
+              revoked_at = ${nowFn}, revoked_reason = ?, updated_at = ${nowFn}
+            WHERE user_id = ? AND profile_id = ? AND scope = ? AND authorization_type = ?
+              AND COALESCE(funding_source_id,'') = COALESCE(?, '')
+              AND COALESCE(task_id,'') = COALESCE(?, '')
+              AND revoked_at IS NULL`,
+        ).run(
+          'replaced_by_authorization_selection',
+          String(userId), String(profileId), scope, type,
+          target.funding_source_id, target.task_id,
+        )
+      }
+    }
     for (const type of authorizationTypes) {
       const existing = await db.prepare(
         `SELECT id FROM hamilton_authorizations
@@ -299,6 +322,83 @@ export async function listActiveAuthorizations(db, { profileId, fundingSourceId 
   return (rows || []).map(rowToAuth)
 }
 
+/**
+ * Revoke submit authority attached to an exact task or funding source. Profile-
+ * wide grants are deliberately left alone; task intent is still cleared by the
+ * caller, so a broader grant cannot submit until the user explicitly opts in
+ * again. This helper exists for the task-level "Disable auto-submit" action.
+ */
+export async function revokeTargetAuthorizations(db, {
+  profileId,
+  authorizationType,
+  fundingSourceId = null,
+  taskId = null,
+  reason = 'target_authorization_revoked',
+} = {}) {
+  if (!db || !profileId || !authorizationType) return 0
+  if (!HAMILTON_AUTHORIZATION_TYPES.includes(authorizationType)) {
+    throw new Error(`invalid authorization_type: ${authorizationType}`)
+  }
+  if (!fundingSourceId && !taskId) return 0
+  await ensureHamiltonAuthorizationSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const result = await db.prepare(
+    `UPDATE hamilton_authorizations
+        SET revoked_at = ${nowFn}, revoked_reason = ?, updated_at = ${nowFn}
+      WHERE profile_id = ? AND authorization_type = ? AND revoked_at IS NULL
+        AND (
+          (scope = 'funding_source' AND funding_source_id = ?)
+          OR (scope = 'task' AND task_id = ?)
+        )`,
+  ).run(
+    reason,
+    String(profileId),
+    authorizationType,
+    fundingSourceId ? String(fundingSourceId) : null,
+    taskId ? String(taskId) : null,
+  )
+  return Number(result?.changes ?? result?.rowCount ?? 0)
+}
+
+/**
+ * Canonical submission decision. The live task's `allow_auto_submit` field is
+ * the sole intent flag; request payloads and the retired
+ * `auto_submit_enabled` field are never consulted at the irreversible
+ * boundary. The request may set the live task field when a run is enqueued,
+ * but clearing that field is then a durable veto even when a broader profile
+ * authorization remains active. Authority itself still comes only from a
+ * currently-active, persisted `submit_applications` authorization. A stored
+ * human-review preference is an unconditional veto. Call this again
+ * immediately before the portal click so revocation or disable actions made
+ * during a long browser run take effect.
+ */
+export async function resolveSubmissionDecision(db, {
+  profileId,
+  fundingSourceId = null,
+  taskId = null,
+  taskAllowAutoSubmit = false,
+} = {}) {
+  const active = await listActiveAuthorizations(db, { profileId, fundingSourceId, taskId })
+  const submitAuthorization = active.find((row) => row.authorization_type === 'submit_applications') || null
+  const requireHumanReview = active.some((row) => row.options?.require_human_review === true)
+  const requested = Boolean(taskAllowAutoSubmit)
+
+  let reason = 'authorized'
+  if (!requested) reason = 'not_requested'
+  else if (!submitAuthorization) reason = 'missing_submit_authorization'
+  else if (requireHumanReview) reason = 'human_review_required'
+
+  return {
+    allow_auto_submit: requested && Boolean(submitAuthorization) && !requireHumanReview,
+    requested,
+    authorized: Boolean(submitAuthorization),
+    require_human_review: requireHumanReview,
+    reason,
+    authorization_id: submitAuthorization?.id || null,
+    authorization_version: submitAuthorization?.authorization_version || null,
+  }
+}
+
 // Fetch one authorization by id (includes profile_id for ownership checks
 // before revoke). Null when not found.
 export async function getAuthorizationById(db, id) {
@@ -350,6 +450,7 @@ export async function updateAutopilotRun(db, runId, patch = {}) {
   const sets = [`updated_at = ${nowFn}`]
   const params = []
   if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status) }
+  if (patch.authorizationId !== undefined) { sets.push('authorization_id = ?'); params.push(patch.authorizationId ?? null) }
   if (patch.blockerKind !== undefined) { sets.push('blocker_kind = ?'); params.push(patch.blockerKind ?? null) }
   if (patch.blockerDetail !== undefined) { sets.push('blocker_detail = ?'); params.push(patch.blockerDetail ?? null) }
   if (patch.preflight !== undefined) { sets.push('preflight_json = ?'); params.push(JSON.stringify(patch.preflight ?? {})) }

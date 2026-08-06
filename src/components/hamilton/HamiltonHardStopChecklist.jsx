@@ -149,7 +149,7 @@ export default function HamiltonHardStopChecklist({ profileId }) {
       </div>
 
       {blockers.length === 0 ? (
-        <div className="px-4 py-3 text-sm text-emerald-700 flex items-center gap-2">
+        <div className="px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4" />
           {loading ? "Checking for hard stops…" : "No open hard stops for this profile. Hamilton is clear to run."}
         </div>

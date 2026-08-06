@@ -8,6 +8,11 @@ import {
   markViewed,
 } from '../../backend/services/robert/robertRecommendationService.js'
 import { getRecommendation, listRecommendationsForProfile } from '../../backend/services/robert/robertRunStore.js'
+import {
+  GOOD_MATCH_SCORE,
+  SCORE_SCALE_ID,
+  STRONG_MATCH_SCORE,
+} from '../../backend/config/matchThresholds.js'
 
 let db
 beforeEach(() => { db = makeMemoryDb() })
@@ -17,12 +22,17 @@ const ACCEPT_SAMPLE = {
   profileId: 'p1',
   opportunityId: 'o1',
   matchDecision: 'ACCEPT',
-  matchScore: 85,
+  matchScore: 20,
   matchReasons: ['state matched', 'applicant_type matched'],
   whyFound: 'Discovered from grants.gov',
   opportunityTitle: 'Firefighter Equipment Grant',
   profileDisplayName: 'Cleveland VFD',
-  config: { minToastMatchScore: 70, allowReviewMatchToasts: true, maxToastsPerProfilePerDay: 5 },
+  config: {
+    minToastMatchScore: STRONG_MATCH_SCORE,
+    minToastMatchScoreScaleId: SCORE_SCALE_ID,
+    allowReviewMatchToasts: true,
+    maxToastsPerProfilePerDay: 5,
+  },
 }
 
 describe('robertRecommendationService — creates only useful, deduped recommendations', () => {
@@ -33,6 +43,7 @@ describe('robertRecommendationService — creates only useful, deduped recommend
     assert.equal(rec.recommendation_status, 'pending')
     assert.equal(rec.toast_priority, 'high')
     assert.equal(rec.match_decision, 'ACCEPT')
+    assert.equal(r.score_scale_id, SCORE_SCALE_ID)
   })
 
   it('does NOT create a recommendation for a REJECT decision', async () => {
@@ -43,12 +54,46 @@ describe('robertRecommendationService — creates only useful, deduped recommend
     assert.equal(r.reason, 'decision_reject')
   })
 
-  it('does NOT create a recommendation for a low-confidence REVIEW', async () => {
+  it('trusts a canonical REVIEW even when its match score is low', async () => {
     const r = await createRecommendationIfHelpful({
-      ...ACCEPT_SAMPLE, db, matchDecision: 'REVIEW', matchScore: 30,
+      ...ACCEPT_SAMPLE, db, matchDecision: 'REVIEW', matchScore: 0,
+    })
+    assert.equal(r.created, true)
+    const rec = await getRecommendation(db, r.recommendation_id)
+    assert.equal(rec.match_decision, 'REVIEW')
+    assert.equal(rec.toast_priority, 'normal')
+  })
+
+  it('keeps the explicit REVIEW feature control without a score re-trial', async () => {
+    const r = await createRecommendationIfHelpful({
+      ...ACCEPT_SAMPLE,
+      db,
+      matchDecision: 'REVIEW',
+      matchScore: 100,
+      config: { ...ACCEPT_SAMPLE.config, allowReviewMatchToasts: false },
     })
     assert.equal(r.created, false)
-    assert.equal(r.reason, 'below_review_threshold')
+    assert.equal(r.reason, 'review_toasts_disabled')
+  })
+
+  it('translates an unstamped legacy toast threshold for priority only', async () => {
+    const r = await createRecommendationIfHelpful({
+      ...ACCEPT_SAMPLE,
+      db,
+      matchScore: GOOD_MATCH_SCORE,
+      config: { ...ACCEPT_SAMPLE.config, minToastMatchScore: 70, minToastMatchScoreScaleId: undefined },
+    })
+    assert.equal(r.created, true)
+    const rec = await getRecommendation(db, r.recommendation_id)
+    assert.equal(rec.toast_priority, 'high')
+  })
+
+  it('refuses a non-canonical decision value', async () => {
+    const r = await createRecommendationIfHelpful({
+      ...ACCEPT_SAMPLE, db, matchDecision: 'MAYBE', matchScore: 100,
+    })
+    assert.equal(r.created, false)
+    assert.equal(r.reason, 'invalid_match_decision')
   })
 
   it('refuses to create a duplicate active recommendation', async () => {
@@ -98,7 +143,7 @@ describe('robertRecommendationService — creates only useful, deduped recommend
       await createRecommendationIfHelpful({ ...ACCEPT_SAMPLE, db, opportunityId: `o-pre-${i}` })
     }
     const overCap = await createRecommendationIfHelpful({
-      ...ACCEPT_SAMPLE, db, opportunityId: 'o-overcap', matchDecision: 'REVIEW', matchScore: 60,
+      ...ACCEPT_SAMPLE, db, opportunityId: 'o-overcap', matchDecision: 'REVIEW', matchScore: 6,
     })
     assert.equal(overCap.created, true)
     const rec = await getRecommendation(db, overCap.recommendation_id)

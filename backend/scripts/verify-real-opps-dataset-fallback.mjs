@@ -12,6 +12,7 @@ process.env.ALLOW_SQLITE_IN_PROD = 'true'
 
 const { db } = await import('../db/index.js')
 const { default: runComprehensiveCrawler } = await import('../services/comprehensiveCrawlerOptimized.js')
+const { DEFAULT_MIN_SCORE } = await import('../config/matchThresholds.js')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -20,7 +21,10 @@ await db.exec(schemaSql)
 
 // This intentionally runs WITHOUT backend/data/crawlers/real_funding_opportunities.json present.
 // Expected behavior: single INFO about missing curated dataset; no ENOENT stack/noisy warn.
-await runComprehensiveCrawler(db, {}, { saveToDatabase: false, maxResults: 1, matchThreshold: 80 })
+await runComprehensiveCrawler(db, {}, {
+  saveToDatabase: false,
+  maxResults: 1,
+  matchThreshold: DEFAULT_MIN_SCORE,
+})
 
 console.log('[verify-real-opps-dataset-fallback] OK (completed without throwing)')
-

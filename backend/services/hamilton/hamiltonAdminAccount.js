@@ -1,14 +1,10 @@
 ﻿/**
  * hamiltonAdminAccount.js
  *
- * GrantFlow has a single canonical admin/operator account that
- * receives every Hamilton hard-stop notification:
- *
- *   buckeye7066@gmail.com
- *
- * The email is configurable via the HAMILTON_ADMIN_EMAIL environment
- * variable (falling back to ADMIN_EMAIL and finally to the hard-coded
- * default in `backend/config/constants.js`). The legacy multi-admin
+ * GrantFlow has one explicitly configured admin/operator account that receives
+ * Hamilton hard-stop notifications. HAMILTON_ADMIN_EMAIL may override the
+ * required deployed ADMIN_EMAIL; no source-controlled production identity is
+ * available. The legacy multi-admin
  * routing — "every user with role=admin" or "every is_admin=1 user" —
  * is no longer the primary path. We always send admin notifications
  * to this single account; if no row exists for it yet we create one.
@@ -28,7 +24,7 @@ import crypto from 'node:crypto'
 import { ADMIN_EMAIL, isAdminEmail } from '../../config/constants.js'
 
 export const HAMILTON_ADMIN_EMAIL = String(
-  process.env.HAMILTON_ADMIN_EMAIL || ADMIN_EMAIL || 'buckeye7066@gmail.com',
+  process.env.HAMILTON_ADMIN_EMAIL || ADMIN_EMAIL || '',
 ).trim().toLowerCase()
 
 const FALLBACK_ID = 'system_admin_hamilton'
@@ -55,6 +51,7 @@ function valueOrNull(row, ...keys) {
 export async function resolveAdminUserId(db) {
   if (cachedAdminUserId) return cachedAdminUserId
   if (!db || typeof db.prepare !== 'function') return FALLBACK_ID
+  if (!HAMILTON_ADMIN_EMAIL) return FALLBACK_ID
 
   const tryFind = async () => {
     // 1. Look up by primary_email.

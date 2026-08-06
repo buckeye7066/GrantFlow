@@ -3,7 +3,7 @@
 This repo is a single Node workspace (frontend + backend run from the repo root).
 
 ## Prereqs
-- Node.js \(>= 20 < 23\)
+- Node.js **20.20.2** (the release/runtime pin; Android/iOS tooling uses Node 22)
 - npm
 - (Optional) Postgres, if you want `DB_PROVIDER=postgres`
 
@@ -72,4 +72,3 @@ npm run smoke
 ```bash
 npm run test:all
 ```
-

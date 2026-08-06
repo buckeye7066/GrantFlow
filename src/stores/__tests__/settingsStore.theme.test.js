@@ -16,7 +16,7 @@ vi.mock('@/api/client', () => ({
 }))
 vi.mock('@/components/ui/use-toast', () => ({ toast: vi.fn() }))
 
-import { useSettingsStore } from '@/stores/settingsStore'
+import { pickReadableForegroundHex, useSettingsStore } from '@/stores/settingsStore'
 
 const BASE_PREFS = {
   theme: 'light',
@@ -51,6 +51,34 @@ describe('settingsStore — single-source theme applier', () => {
     useSettingsStore.setState({ preferences: { ...BASE_PREFS, accent_color: 'violet' } })
     useSettingsStore.getState().applyTheme()
     expect(document.documentElement.style.getPropertyValue('--accent-color')).toBe('#8b5cf6')
+  })
+
+  it.each([
+    '#3b82f6',
+    '#a855f7',
+    '#22c55e',
+    '#f97316',
+    '#f43f5e',
+    '#06b6d4',
+    '#f59e0b',
+    '#ec4899',
+    '#10b981',
+    '#8b5cf6',
+  ])('chooses a black/white foreground with WCAG AA contrast for %s', (background) => {
+    const toLuminance = (hex) => {
+      const channels = hex.slice(1).match(/.{2}/g).map((value) => parseInt(value, 16) / 255)
+      const [r, g, b] = channels.map((value) => (
+        value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+      ))
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const foreground = pickReadableForegroundHex(background)
+    const backgroundLum = toLuminance(background)
+    const foregroundLum = toLuminance(foreground)
+    const ratio = (Math.max(backgroundLum, foregroundLum) + 0.05) /
+      (Math.min(backgroundLum, foregroundLum) + 0.05)
+
+    expect(ratio).toBeGreaterThanOrEqual(4.5)
   })
 
   it('updatePreference("theme","dark") applies immediately AND caches to localStorage (no-flash on reload)', async () => {

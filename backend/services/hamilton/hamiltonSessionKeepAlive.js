@@ -40,6 +40,13 @@
 
 import { createLogger } from '../../utils/logger.js'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import {
+  CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
+  CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN,
+  controlledBetaBrowserContextOptions,
+  installControlledBetaBrowserEgressGuard,
+  isControlledBetaSyntheticBrowserUrl,
+} from './controlledBetaBrowserPolicy.js'
 import { classifyBlocker } from './hamiltonBlockerClassifier.js'
 import {
   getSessionStorageState,
@@ -98,20 +105,22 @@ export function isSessionDueForKeepAlive(row, nowMs, intervalMs) {
   return nowMs - t >= intervalMs
 }
 
-async function openProbeContext(launchBrowser, storageState) {
+async function openProbeContext(launchBrowser, storageState, target) {
   if (typeof launchBrowser === 'function') {
     const launched = await launchBrowser({ storageState })
     if (!launched) return null
     const browser = launched.browser ?? launched
     const context = launched.context
-      ?? await browser.newContext({ storageState, userAgent: REALISTIC_PORTAL_UA })
+      ?? await browser.newContext(controlledBetaBrowserContextOptions({ storageState, userAgent: REALISTIC_PORTAL_UA }))
+    await installControlledBetaBrowserEgressGuard(context)
     return { browser, context }
   }
   let chromium
   try { ({ chromium } = await import('playwright')) } catch { return null }
   if (!chromium?.executablePath?.()) return null
-  const { browser } = await launchPortalBrowser(chromium)
-  const context = await browser.newContext({ storageState, userAgent: REALISTIC_PORTAL_UA })
+  const { browser } = await launchPortalBrowser(chromium, { targetUrl: target })
+  const context = await browser.newContext(controlledBetaBrowserContextOptions({ storageState, userAgent: REALISTIC_PORTAL_UA }))
+  await installControlledBetaBrowserEgressGuard(context)
   return { browser, context }
 }
 
@@ -144,22 +153,31 @@ async function openProbeContext(launchBrowser, storageState) {
  * the owner measured dying in ~20 minutes.
  */
 async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }) {
+  const meta = parseMeta(row.metadata_json ?? row.metadata)
+  // The reserved fixture has an explicit auth-gated path so the positive
+  // keepalive state machine remains testable without visiting a real domain.
+  const syntheticProbeUrl = String(row.portal_host || '').toLowerCase() === CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST
+    ? `${CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN}/authenticated`
+    : null
+  const authProbeUrl = syntheticProbeUrl || authProbeUrlForHost(row.portal_host)
+  const target = authProbeUrl || meta.landing_url || `https://${row.portal_host}/`
+  if (!isControlledBetaSyntheticBrowserUrl(target)) {
+    return { outcome: 'skipped', detail: 'controlled beta keeps real-portal session checks in the user browser' }
+  }
+
   const storageState = await getSessionStorageState(db, row.id)
   if (!storageState) return { outcome: 'skipped', detail: 'no durable storage state' }
 
   let handle = null
   try {
-    handle = await openProbeContext(launchBrowser, storageState)
+    handle = await openProbeContext(launchBrowser, storageState, target)
     if (!handle) return { outcome: 'skipped', detail: 'browser unavailable' }
     const { context } = handle
     const page = await context.newPage()
 
-    const meta = parseMeta(row.metadata_json ?? row.metadata)
     // An AUTH-GATED path is the only target whose response carries information
     // about our session. Without one we can still refresh cookies, but we may
     // never claim the session is alive.
-    const authProbeUrl = authProbeUrlForHost(row.portal_host)
-    const target = authProbeUrl || meta.landing_url || `https://${row.portal_host}/`
     let navError = null
     try {
       await page.goto(target, { waitUntil: 'domcontentloaded', timeout: probeTimeoutMs })
@@ -177,6 +195,9 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
     let pageText = ''
     try { pageText = await page.evaluate(() => document.body?.innerText || '') } catch { pageText = '' }
     const finalUrl = page.url()
+    if (!isControlledBetaSyntheticBrowserUrl(finalUrl)) {
+      return { outcome: 'inconclusive', detail: 'controlled beta blocked an off-fixture redirect' }
+    }
 
     // A blank/thin page tells us nothing (JS shell that didn't render for the
     // probe) — never expire on silence.

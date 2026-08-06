@@ -26,7 +26,7 @@ import { BaseAgentAdapter } from '../../backend/services/agentControl/agentAdapt
 import { _resetAdminAccountCache } from '../../backend/services/hamilton/hamiltonAdminAccount.js'
 import { _resetNotificationsSchemaCache } from '../../backend/services/agentControl/agentControlNotifications.js'
 
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+const ADMIN_EMAIL = 'admin@grantflow.local'
 
 // A Robert-flavoured adapter whose start() writes a real row into robert_runs
 // via the real store — this is exactly the path that threw in production when
@@ -89,7 +89,16 @@ describe('Agent Control Center self-heal', () => {
     // Precondition: robert_runs really is absent before the run.
     assert.equal(tableExists(db, 'robert_runs'), false, 'robert_runs should be absent before the run')
 
-    const { run } = await startRun(db, { runType: 'full_cycle', user: { userId: 'u_admin', email: ADMIN_EMAIL, role: 'admin', is_admin: 1 } })
+    const { run } = await startRun(db, {
+      runType: 'full_cycle',
+      user: {
+        userId: 'u_admin',
+        email: ADMIN_EMAIL,
+        role: 'admin',
+        is_admin: 1,
+        controlCenterAuthorized: true,
+      },
+    })
     await executeRun({ db, runId: run.id })
 
     // Self-heal created the agent tables...

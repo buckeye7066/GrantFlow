@@ -65,9 +65,24 @@ function createDb() {
   return db
 }
 
-const adminUser = { id: 'admin', email: 'buckeye7066@gmail.com', is_admin: true }
-const otherAdmin = { id: 'other-admin', email: 'someone-else@example.com', is_admin: true }
-const normalUser = { id: 'u', email: 'jane@example.com', is_admin: false }
+const adminUser = {
+  id: 'admin',
+  email: 'admin@grantflow.local',
+  is_admin: true,
+  identityResolved: true,
+}
+const otherAdmin = {
+  id: 'other-admin',
+  email: 'someone-else@example.com',
+  is_admin: true,
+  identityResolved: true,
+}
+const normalUser = {
+  id: 'u',
+  email: 'jane@example.com',
+  is_admin: false,
+  identityResolved: true,
+}
 
 async function seedNotification(db) {
   await initializeProfilePricing(db, {
@@ -76,7 +91,7 @@ async function seedNotification(db) {
   })
 }
 
-test('listForAdmin returns notifications for the configured admin email only', async () => {
+test('listForAdmin returns configured-target notifications to a DB-recognized admin', async () => {
   const db = createDb()
   await seedNotification(db)
 
@@ -87,10 +102,20 @@ test('listForAdmin returns notifications for the configured admin email only', a
   assert.equal(r.items[0].title, 'New GrantFlow client priced')
 })
 
-test('listForAdmin refuses non-target admin (is_admin=true but wrong email)', async () => {
+test('listForAdmin refuses a DB admin who is not the configured queue recipient', async () => {
   const db = createDb()
   await seedNotification(db)
   const r = await listForAdmin(db, { user: otherAdmin })
+  assert.equal(r.ok, false)
+  assert.equal(r.error, 'not_admin_notification_target')
+})
+
+test('listForAdmin refuses a target-looking identity without canonical resolution', async () => {
+  const db = createDb()
+  await seedNotification(db)
+  const r = await listForAdmin(db, {
+    user: { ...adminUser, identityResolved: false },
+  })
   assert.equal(r.ok, false)
   assert.equal(r.error, 'not_admin_notification_target')
 })

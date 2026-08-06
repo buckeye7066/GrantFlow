@@ -1,7 +1,7 @@
 # Profile Pricing & Access Gate
 
 This document describes how GrantFlow automatically prices every new
-profile, notifies the only admin (`buckeye7066@gmail.com`), and gates
+profile, notifies the only admin (`owner@example.invalid`), and gates
 access to the full app behind a service agreement and a kickoff
 payment.
 
@@ -103,7 +103,7 @@ use `quote_status` values `pending_user_agreement`, `pending_user_payment`,
 | POST   | `/api/pricing/admin-notifications/:id/dismiss`              | dismiss a notification                               |
 
 The notification endpoints additionally restrict results to
-`PRICING_ADMIN_NOTIFICATION_EMAIL` (default `buckeye7066@gmail.com`).
+`PRICING_ADMIN_NOTIFICATION_EMAIL` (default `owner@example.invalid`).
 A user with `is_admin=true` but a different email gets an empty list.
 
 ---
@@ -131,7 +131,7 @@ Routing in `src/pages/index.jsx` is updated:
   PricingRequired, ServiceAgreement, CheckoutRequired, Admin, …).
 
 `<AdminPricingToastListener />` is mounted once inside the layout. It
-checks `user.email === buckeye7066@gmail.com` (or
+checks `user.email === owner@example.invalid` (or
 `PRICING_ADMIN_NOTIFICATION_EMAIL` from env on the server) before
 polling.
 
@@ -141,7 +141,7 @@ polling.
 
 | Env                                                         | Default       | Purpose                                                          |
 | ----------------------------------------------------------- | ------------- | ---------------------------------------------------------------- |
-| `PRICING_ADMIN_NOTIFICATION_EMAIL`                          | `buckeye7066@gmail.com` | the only admin who receives toasts                       |
+| `PRICING_ADMIN_NOTIFICATION_EMAIL`                          | `owner@example.invalid` | the only admin who receives toasts                       |
 | `PRICING_ADMIN_TOASTS_ENABLED`                              | `true`        | turn off to silence admin notifications                          |
 | `PRICING_REQUIRE_PAYMENT_BEFORE_FULL_ACCESS`                | `true`        | controls whether agreement+payment are required                  |
 | `PRICING_ALLOW_LIMITED_MATCH_PREVIEW_BEFORE_PAYMENT`        | `true`        | controls the post-intake match preview                           |

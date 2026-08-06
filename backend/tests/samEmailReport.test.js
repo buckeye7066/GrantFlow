@@ -4,7 +4,7 @@
  * Proves the per-run report email the owner asked for:
  *   - fires only when a sweep surfaces issues (or crashes) — clean runs stay silent
  *   - is opt-out via SAM_EMAIL_REPORTS=false
- *   - defaults to dr.johnwhite@axiombiolabs.org, overridable via SAM_REPORT_EMAIL
+ *   - has no source-controlled recipient and honors configured operator routing
  *   - includes BOTH the issues found and the corrections made
  *   - is best-effort (a send failure is reported, never thrown)
  */
@@ -74,8 +74,9 @@ describe('reportsEnabled / recipient', () => {
     expect(__testing__.reportsEnabled({ SAM_EMAIL_REPORTS: 'off' })).toBe(false)
     expect(__testing__.reportsEnabled({ SAM_EMAIL_REPORTS: 'true' })).toBe(true)
   })
-  it('defaults to dr.johnwhite and honours override', () => {
-    expect(__testing__.recipient({})).toBe('dr.johnwhite@axiombiolabs.org')
+  it('has no default and honours operator/explicit overrides', () => {
+    expect(__testing__.recipient({})).toBeNull()
+    expect(__testing__.recipient({ ADMIN_EMAIL: 'admin@axiombiolabs.org' })).toBe('admin@axiombiolabs.org')
     expect(__testing__.recipient({ SAM_REPORT_EMAIL: 'ops@example.com' })).toBe('ops@example.com')
   })
 })
@@ -108,13 +109,14 @@ describe('buildReport', () => {
 })
 
 describe('sendSamReportEmail', () => {
-  it('sends with issues + corrections to the default recipient', async () => {
+  it('sends with issues + corrections to the configured recipient', async () => {
     const send = vi.fn().mockResolvedValue({ ok: true, id: 'email-1' })
-    const res = await sendSamReportEmail(runWithFindings(), { send, env: {} })
-    expect(res).toMatchObject({ sent: true, id: 'email-1', to: 'dr.johnwhite@axiombiolabs.org' })
+    const env = { ADMIN_EMAIL: 'admin@axiombiolabs.org' }
+    const res = await sendSamReportEmail(runWithFindings(), { send, env })
+    expect(res).toMatchObject({ sent: true, id: 'email-1', to: 'admin@axiombiolabs.org' })
     expect(send).toHaveBeenCalledTimes(1)
     const arg = send.mock.calls[0][0]
-    expect(arg.to).toBe('dr.johnwhite@axiombiolabs.org')
+    expect(arg.to).toBe('admin@axiombiolabs.org')
     expect(arg.subject).toMatch(/Sam/)
     expect(arg.html).toMatch(/Broken import/)
     expect(arg.text).toMatch(/CORRECTIONS MADE/)
@@ -134,15 +136,28 @@ describe('sendSamReportEmail', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
+  it('does NOT send when no recipient is configured', async () => {
+    const send = vi.fn()
+    const res = await sendSamReportEmail(runWithFindings(), { send, env: {} })
+    expect(res).toEqual({ sent: false, reason: 'recipient_not_configured' })
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it('reports email-not-configured without throwing', async () => {
     const send = vi.fn().mockResolvedValue({ ok: false, skipped: true, error: 'email_not_configured' })
-    const res = await sendSamReportEmail(runWithFindings(), { send, env: {} })
+    const res = await sendSamReportEmail(runWithFindings(), {
+      send,
+      env: { ADMIN_EMAIL: 'admin@axiombiolabs.org' },
+    })
     expect(res).toEqual({ sent: false, reason: 'email_not_configured' })
   })
 
   it('is best-effort — a thrown sender is swallowed', async () => {
     const send = vi.fn().mockRejectedValue(new Error('resend exploded'))
-    const res = await sendSamReportEmail(runWithFindings(), { send, env: {} })
+    const res = await sendSamReportEmail(runWithFindings(), {
+      send,
+      env: { ADMIN_EMAIL: 'admin@axiombiolabs.org' },
+    })
     expect(res.sent).toBe(false)
     expect(res.reason).toBe('exception')
     expect(res.error).toMatch(/resend exploded/)

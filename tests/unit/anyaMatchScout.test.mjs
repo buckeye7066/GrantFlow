@@ -10,7 +10,7 @@ import {
  * Regression tests for backend/services/anyaMatchScout.js
  *
  * Hard rules the scout MUST honor (mirrored in the service's own JSDoc):
- *   - threshold gate at ANYA_MATCH_SCOUT_THRESHOLD (default 85)
+ *   - threshold gate at ANYA_MATCH_SCOUT_THRESHOLD (canonical strong bar)
  *   - exclude opportunities already in the profile's pipeline
  *   - exclude opportunities previously dismissed / pending / accepted
  *   - respect the per-user `anya_match_scout_muted` preference
@@ -60,6 +60,7 @@ function makeMockDb(state) {
           }))
         }
         if (matchesAny(s, ['FROM funding_opportunities'])) {
+          state.candidateSql = s
           // Loose: just return the canned opportunities. The scout filters
           // them by score afterwards, which is the path under test.
           return state.opportunities || []
@@ -208,6 +209,27 @@ test('runMatchScoutForProfile: threshold gate — never suggests below threshold
   assert.equal(state.inserts.notifications.length, 0)
 })
 
+test('runMatchScoutForProfile: hidden/inactive candidates never create suggestions or notifications', async () => {
+  const state = {
+    ...makeStudentProfile(),
+    opportunities: [
+      makeOpportunity({ id: 'opp-hidden', is_hidden: 1, is_active: 1 }),
+      makeOpportunity({ id: 'opp-inactive', is_hidden: 0, is_active: 0 }),
+    ],
+  }
+  const db = makeMockDb(state)
+  const result = await runMatchScoutForProfile(db, 'prof-1', { threshold: 0, maxAlerts: 5 })
+
+  assert.equal(result.scanned, 2, 'mock deliberately bypasses SQL filtering to exercise the JS defense')
+  assert.equal(result.above_threshold, 0)
+  assert.equal(result.created, 0)
+  assert.equal(result.notified, 0)
+  assert.equal(state.inserts.suggestions.length, 0)
+  assert.equal(state.inserts.notifications.length, 0)
+  assert.match(state.candidateSql, /COALESCE\(is_active, 1\) = 1/)
+  assert.match(state.candidateSql, /COALESCE\(is_hidden, 0\) = 0/)
+})
+
 test('runMatchScoutForProfile: excludes opportunities already in pipeline', async () => {
   const opp = makeOpportunity({ id: 'opp-in-pipeline' })
   const state = {
@@ -287,6 +309,8 @@ test('runMatchScoutForProfile: writes a notification per accepted suggestion', a
   const payload = JSON.parse(notif[4])
   assert.ok(payload.suggestion_id, 'notification.data.suggestion_id must be present')
   assert.equal(payload.opportunity_id, 'opp-notify')
+  assert.doesNotMatch(notif[3], /% fit/i)
+  assert.match(notif[3], /canonical evidence score/i)
   assert.ok(payload.add_url.includes('/accept'))
   assert.ok(payload.dismiss_url.includes('/dismiss'))
 })

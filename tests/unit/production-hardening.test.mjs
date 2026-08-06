@@ -67,7 +67,7 @@ describe('Production Hardening - Code Verification', () => {
       const toolsPath = join(__dirname, '..', '..', 'backend', 'services', 'anyaAdminTools.js')
       const toolsCode = fs.readFileSync(toolsPath, 'utf8')
       
-      // Should NOT have hardcoded email like 'buckeye7066@gmail.com' in authorization
+      // Should NOT have hardcoded email like 'owner@example.invalid' in authorization
       const lines = toolsCode.split('\n')
       for (const line of lines) {
         if (line.includes('isAdmin') && line.includes('@')) {
@@ -84,6 +84,31 @@ describe('Production Hardening - Code Verification', () => {
       // Check that isAdmin function uses is_admin flag, not email comparison
       assert.ok(!triggerCode.includes('=== ADMIN_EMAIL') && !triggerCode.includes('=== \'buckeye'), 
         'anyaLoginTrigger should not have hardcoded admin email comparisons')
+    })
+  })
+
+  describe('CI and E2E identity isolation', () => {
+    it('boots the production container with an explicit operator and no background jobs', () => {
+      const workflowPath = join(__dirname, '..', '..', '.github', 'workflows', 'ci.yml')
+      const workflow = fs.readFileSync(workflowPath, 'utf8')
+
+      assert.match(workflow, /--env ADMIN_EMAIL=ci-operator@grantflow\.app/)
+      assert.match(workflow, /--env DISABLE_BACKGROUND_SERVICES=true/)
+    })
+
+    it('uses one synthetic configurable E2E admin identity', () => {
+      const configPath = join(__dirname, '..', 'e2e', 'playwright.config.mjs')
+      const appSpecPath = join(__dirname, '..', 'e2e', 'app-e2e.spec.mjs')
+      const anyaSpecPath = join(__dirname, '..', 'e2e', 'anya-persistence.spec.mjs')
+      const config = fs.readFileSync(configPath, 'utf8')
+      const appSpec = fs.readFileSync(appSpecPath, 'utf8')
+      const anyaSpec = fs.readFileSync(anyaSpecPath, 'utf8')
+
+      assert.match(config, /process\.env\.E2E_ADMIN_EMAIL/)
+      assert.match(config, /admin-e2e@example\.invalid/)
+      assert.match(appSpec, /e2eAdminEmail/)
+      assert.match(anyaSpec, /e2eAdminEmail/)
+      assert.doesNotMatch(`${config}\n${appSpec}\n${anyaSpec}`, /@gmail\.com/i)
     })
   })
 

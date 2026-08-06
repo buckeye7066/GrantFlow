@@ -82,6 +82,12 @@ export function liveOppToOs(row = {}) {
     title: row.title,
     sponsor: row.sponsor,
     summary: row.description ?? row.summary ?? null,
+    // Preserve the live row's actionability evidence. The crawler facade maps
+    // apply_url to a direct application target and info_url to the official
+    // source. Dropping both here makes the canonical no_actionable_url rule
+    // falsely REJECT every persisted direct row during the post-crawl sweep.
+    apply_url: row.application_url ?? row.apply_url ?? null,
+    info_url: row.source_url ?? row.url ?? null,
     applicant_types: applicantTypes,
     need_categories: parseListMaybe(row.categories),
     geography: {

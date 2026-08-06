@@ -26,8 +26,26 @@ import {
   insertRecommendation,
   updateRecommendationStatus,
 } from './robertRunStore.js'
+import {
+  SCORE_SCALE_ID,
+  STRONG_MATCH_SCORE,
+  translateLegacyMinScore,
+} from '../../config/matchThresholds.js'
 
 const DEFAULT_TOAST_TITLE = 'Robert found a possible funding source'
+
+function resolveToastPriorityThreshold(config = {}) {
+  const configured = Number(config.minToastMatchScore ?? STRONG_MATCH_SCORE)
+  if (!Number.isFinite(configured)) return STRONG_MATCH_SCORE
+
+  // getRobertConfig stamps current-scale values. Unstamped values are accepted
+  // for API/back-compat, but retired 0-100 settings must be translated before
+  // they are used for presentation priority.
+  if (config.minToastMatchScoreScaleId === SCORE_SCALE_ID) {
+    return Math.max(0, Math.min(100, configured))
+  }
+  return Math.max(0, Math.min(100, translateLegacyMinScore(configured)))
+}
 
 /**
  * Decide whether to create a recommendation, then create it
@@ -57,24 +75,24 @@ export async function createRecommendationIfHelpful({
   if (!profileId) return { created: false, reason: 'missing_profile_id' }
   if (!opportunityId) return { created: false, reason: 'missing_opportunity_id' }
 
-  // Score / decision gates.
+  // Canonical decision is the sole recommendation-admission authority. The
+  // score is retained for ranking/presentation only; Robert must not perform a
+  // hidden second eligibility trial with its own numeric cutoff.
   const score = Number(matchScore || 0)
   const decision = String(matchDecision || '').toUpperCase()
-  const minTopScore = Number(config.minToastMatchScore ?? 70)
+  const minTopScore = resolveToastPriorityThreshold(config)
   const allowReview = config.allowReviewMatchToasts !== false
-  const reviewMin = Math.max(35, minTopScore - 25)         // matches engine REVIEW threshold
 
   if (decision === MATCH_DECISION.REJECT) return { created: false, reason: 'decision_reject' }
   if (decision === MATCH_DECISION.NEEDS_PROFILE_DATA) {
     // we still record one recommendation but with priority=low and no
     // delivery toast, so the admin can see what Robert needs.
   }
-  if (decision === MATCH_DECISION.ACCEPT && score < minTopScore) {
-    // Fall through — accepted-by-engine but below user-toast threshold.
-  } else if (decision === MATCH_DECISION.REVIEW && !allowReview) {
+  if (decision === MATCH_DECISION.REVIEW && !allowReview) {
     return { created: false, reason: 'review_toasts_disabled' }
-  } else if (decision === MATCH_DECISION.REVIEW && score < reviewMin) {
-    return { created: false, reason: 'below_review_threshold' }
+  }
+  if (!Object.values(MATCH_DECISION).includes(decision)) {
+    return { created: false, reason: 'invalid_match_decision' }
   }
 
   // Idempotency — refuse duplicates and skip declined unless superseding.
@@ -146,6 +164,7 @@ export async function createRecommendationIfHelpful({
     recommendation_id: insertResult.id,
     reason: 'created',
     over_daily_cap: overCap,
+    score_scale_id: SCORE_SCALE_ID,
   }
 }
 
@@ -194,4 +213,8 @@ function pickShortReason(matchReasons, whyFound) {
   return ''
 }
 
-export const __testing__ = { pickShortReason, DEFAULT_TOAST_TITLE }
+export const __testing__ = {
+  pickShortReason,
+  resolveToastPriorityThreshold,
+  DEFAULT_TOAST_TITLE,
+}

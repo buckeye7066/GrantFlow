@@ -207,13 +207,15 @@ describe('autopilot identity state machine', () => {
     expect(rows.length).toBe(1)
   })
 
-  it('VAULT LOCKED → blocks a new registration with a clear status', async () => {
+  it('account-creation boundary wins before vault state for a new registration', async () => {
     await setMasterPassphrase(db, { profileId: 'pA', passphrase: 'master-pass-1' })
     lockVault('pA') // passphrase set but not unlocked
     const r = await runAutopilotIdentityForPortal(db, {
       profileId: 'pA', userId: 'u1', portalHost: 'communityforce.com',
     })
-    expect(r.state).toBe(AUTOPILOT_STATE.VAULT_LOCKED)
+    expect(r.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(r.blocker).toBe('create_portal_account')
+    expect(r.detail).toMatch(/does not authorize|create.*yourself/i)
     // no credential provisioned while locked
     const rows = await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE profile_id = ?').all('pA')
     expect(rows.length).toBe(0)

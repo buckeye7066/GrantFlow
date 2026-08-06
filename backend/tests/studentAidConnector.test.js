@@ -2,7 +2,7 @@
  * studentaid.gov portal-sync connector — FAFSA read path.
  *
  * WHY IT EXISTS: studentaid.gov previously fell through to the GENERIC
- * connector. A live prod run on 2026-08-01 (Anastasia's captured session)
+ * connector. A live prod run on 2026-08-01 (Demo Student's captured session)
  * signed in successfully and honestly reported "no structured data connector
  * for this portal yet" — 0 fields, 0 awards. This connector reads the FAFSA
  * lifecycle stage, the Student Aid Index, stated Pell eligibility, and any
@@ -287,7 +287,7 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
   })
 
   it('a personalized greeting is proof of being inside the account', () => {
-    expect(classifyAccess({ url: 'https://studentaid.gov/fafsa-apply/2026-27/roles', title: 'Roles', text: 'FORM 2026-27 Welcome, Anastasia, to the FAFSA Form' })).toBe('authenticated')
+    expect(classifyAccess({ url: 'https://studentaid.gov/fafsa-apply/2026-27/roles', title: 'Roles', text: 'FORM 2026-27 Welcome, Demo Student, to the FAFSA Form' })).toBe('authenticated')
   })
 
   it('reads a genuinely served private page (the fix must not make every run signin_wall)', async () => {
@@ -349,13 +349,13 @@ describe('studentaid.gov connector — write() is refused by design', () => {
 describe('studentaid.gov connector — the REAL FAFSA record page (owner screenshot, 2026-08-01)', () => {
   // The actual record, transcribed from the live page:
   //   "2026-27 Free Application for Federal Student Aid (FAFSA) Form: Details"
-  //   Processed | Student: Anastasia White | Data Release Number (DRN) 2224
+  //   Processed | Student: Demo Tennessee STEM Student | Data Release Number (DRN) 2224
   //   Status Tracker: FAFSA Form Started (Oct 29, 2025) / FAFSA Form Submitted
   //   (Submitted on Oct 29, 2025) | Started on Oct 29 2025 / Processed on Oct 30 2025
   const RECORD = [
     '2026-27 Free Application for Federal Student Aid (FAFSA) Form: Details',
     'Processed',
-    'FAFSA Information Student Anastasia White Data Release Number (DRN) 2224 Submission Number 01 Submission Type Initial',
+    'FAFSA Information Student Demo Tennessee STEM Student Data Release Number (DRN) 2224 Submission Number 01 Submission Type Initial',
     'Status Tracker',
     'FAFSA Form Started Started on Oct 29, 2025',
     'FAFSA Form Submitted Submitted on Oct 29, 2025',

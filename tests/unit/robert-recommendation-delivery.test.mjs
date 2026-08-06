@@ -10,25 +10,31 @@ import {
   listRecommendationsSince,
 } from '../../backend/services/robert/robertRecommendationDelivery.js'
 import { getRecommendation } from '../../backend/services/robert/robertRunStore.js'
+import { SCORE_SCALE_ID, STRONG_MATCH_SCORE } from '../../backend/config/matchThresholds.js'
 
 let db
 beforeEach(() => { db = makeMemoryDb() })
 
 const BASE = {
-  matchDecision: 'ACCEPT', matchScore: 85, matchReasons: ['fit'],
+  matchDecision: 'ACCEPT', matchScore: 20, matchReasons: ['fit'],
   whyFound: 'discovered', opportunityTitle: 'Grant', profileDisplayName: 'Profile',
-  config: { minToastMatchScore: 70, maxToastsPerProfilePerDay: 5, allowReviewMatchToasts: true },
+  config: {
+    minToastMatchScore: STRONG_MATCH_SCORE,
+    minToastMatchScoreScaleId: SCORE_SCALE_ID,
+    maxToastsPerProfilePerDay: 5,
+    allowReviewMatchToasts: true,
+  },
 }
 
 describe('robertRecommendationDelivery — durable, dedup\'d toast queue', () => {
   it('selectDeliverable splits high/normal/batch correctly', async () => {
-    await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o1' }) // ACCEPT 85 → high
-    await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o2', matchDecision: 'REVIEW', matchScore: 65 })
+    await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o1' }) // strong ACCEPT → high
+    await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o2', matchDecision: 'REVIEW', matchScore: 7 })
     // Force a low-priority by exceeding cap.
     for (let i = 0; i < 5; i += 1) {
       await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: `o-pre-${i}` })
     }
-    const next = await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o-low', matchDecision: 'REVIEW', matchScore: 60 })
+    const next = await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o-low', matchDecision: 'REVIEW', matchScore: 6 })
     assert.equal(next.created, true)
 
     const slice = await selectDeliverable({ db, profileId: 'p1', config: BASE.config })

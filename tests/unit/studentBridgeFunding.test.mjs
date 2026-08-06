@@ -19,13 +19,13 @@ import { STUDENT_BRIDGE_FUNDING_TEMPLATES } from '../../backend/services/student
 import { expandStudentBridgeFunding } from '../../backend/services/studentBridgeFunding/expander.js'
 import { isPipelineSourceAllowed } from '../../backend/config/pipelineAllowedSources.js'
 
-const ANASTASIA_LIKE_PROFILE = {
+const DEMO_STUDENT_PROFILE = {
   id: 'test-profile',
   primary_type: 'individual',
-  display_name: 'Anastasia Test',
+  display_name: 'Demo Student Test',
 }
 
-const ANASTASIA_LIKE_SECTIONS = {
+const DEMO_STUDENT_SECTIONS = {
   basic_information: {
     state: 'TN',
     city: 'Cleveland',
@@ -48,8 +48,8 @@ const ANASTASIA_LIKE_SECTIONS = {
 
 test('calendar: HS senior in May → Fall enrollment THIS year', () => {
   const out = deriveStudentCycle({
-    profile: ANASTASIA_LIKE_PROFILE,
-    sections: ANASTASIA_LIKE_SECTIONS,
+    profile: DEMO_STUDENT_PROFILE,
+    sections: DEMO_STUDENT_SECTIONS,
     today: new Date('2026-05-13T00:00:00Z'),
   })
   assert.equal(out.isStudent, true)
@@ -67,8 +67,8 @@ test('calendar: HS senior in May → Fall enrollment THIS year', () => {
 
 test('calendar: HS senior in October → Fall enrollment NEXT year', () => {
   const out = deriveStudentCycle({
-    profile: ANASTASIA_LIKE_PROFILE,
-    sections: ANASTASIA_LIKE_SECTIONS,
+    profile: DEMO_STUDENT_PROFILE,
+    sections: DEMO_STUDENT_SECTIONS,
     today: new Date('2026-10-15T00:00:00Z'),
   })
   assert.equal(out.enrollmentYear, 2027)
@@ -77,14 +77,14 @@ test('calendar: HS senior in October → Fall enrollment NEXT year', () => {
 
 test('calendar: HS junior → Fall enrollment NEXT year', () => {
   const sections = {
-    ...ANASTASIA_LIKE_SECTIONS,
+    ...DEMO_STUDENT_SECTIONS,
     basic_information: {
-      ...ANASTASIA_LIKE_SECTIONS.basic_information,
+      ...DEMO_STUDENT_SECTIONS.basic_information,
       academic_status: { education_level: 'High School Junior' },
     },
   }
   const out = deriveStudentCycle({
-    profile: ANASTASIA_LIKE_PROFILE,
+    profile: DEMO_STUDENT_PROFILE,
     sections,
     today: new Date('2026-05-13T00:00:00Z'),
   })
@@ -102,11 +102,11 @@ test('calendar: non-student profile → isStudent=false', () => {
 
 test('calendar: defaults to national pattern for unlisted state', () => {
   const sections = {
-    ...ANASTASIA_LIKE_SECTIONS,
-    basic_information: { ...ANASTASIA_LIKE_SECTIONS.basic_information, state: 'WY' },
+    ...DEMO_STUDENT_SECTIONS,
+    basic_information: { ...DEMO_STUDENT_SECTIONS.basic_information, state: 'WY' },
   }
   const out = deriveStudentCycle({
-    profile: ANASTASIA_LIKE_PROFILE,
+    profile: DEMO_STUDENT_PROFILE,
     sections,
     today: new Date('2026-05-13T00:00:00Z'),
   })
@@ -125,7 +125,7 @@ test('schoolResolver: picks accepted MTSU over planning UCF', () => {
       ],
     },
   }
-  const school = resolveTargetSchool({ profile: ANASTASIA_LIKE_PROFILE, sections })
+  const school = resolveTargetSchool({ profile: DEMO_STUDENT_PROFILE, sections })
   assert.equal(school.name, 'Middle Tennessee State University')
   assert.equal(school.state, 'TN')
   assert.equal(school.city, 'Murfreesboro')
@@ -142,7 +142,7 @@ test('schoolResolver: known school beats unknown school at the same status', () 
       ],
     },
   }
-  const school = resolveTargetSchool({ profile: ANASTASIA_LIKE_PROFILE, sections })
+  const school = resolveTargetSchool({ profile: DEMO_STUDENT_PROFILE, sections })
   assert.equal(school.name, 'Middle Tennessee State University')
 })
 
@@ -156,7 +156,7 @@ test('schoolResolver: returns null for non-student profile', () => {
 
 test('schoolResolver: falls back to education.target_colleges when no applications block', () => {
   const sections = { education: { target_colleges: ['Middle Tennessee State University'] } }
-  const school = resolveTargetSchool({ profile: ANASTASIA_LIKE_PROFILE, sections })
+  const school = resolveTargetSchool({ profile: DEMO_STUDENT_PROFILE, sections })
   assert.equal(school.name, 'Middle Tennessee State University')
   assert.equal(school.state, 'TN')
 })
@@ -310,8 +310,8 @@ test('templates: school + county templates exist', () => {
 
 test('expander: TN HS senior to MTSU yields 12+ opportunities with TN/MTSU specifics', () => {
   const out = expandStudentBridgeFunding({
-    profile: ANASTASIA_LIKE_PROFILE,
-    sections: ANASTASIA_LIKE_SECTIONS,
+    profile: DEMO_STUDENT_PROFILE,
+    sections: DEMO_STUDENT_SECTIONS,
     today: new Date('2026-05-13T00:00:00Z'),
   })
   assert.equal(out.isStudent, true)
@@ -351,8 +351,8 @@ test('expander: TN HS senior to MTSU yields 12+ opportunities with TN/MTSU speci
 
 test('expander: every rendered opportunity has correct cycle deadlines (no 2027-cycle leakage)', () => {
   const out = expandStudentBridgeFunding({
-    profile: ANASTASIA_LIKE_PROFILE,
-    sections: ANASTASIA_LIKE_SECTIONS,
+    profile: DEMO_STUDENT_PROFILE,
+    sections: DEMO_STUDENT_SECTIONS,
     today: new Date('2026-05-13T00:00:00Z'),
   })
   for (const opp of out.opportunities) {
@@ -393,8 +393,8 @@ test('expander: FL student gets FL templates and no TN HOPE', () => {
 
 test('expander: every opportunity uses an allowed pipeline source', () => {
   const out = expandStudentBridgeFunding({
-    profile: ANASTASIA_LIKE_PROFILE,
-    sections: ANASTASIA_LIKE_SECTIONS,
+    profile: DEMO_STUDENT_PROFILE,
+    sections: DEMO_STUDENT_SECTIONS,
     today: new Date('2026-05-13T00:00:00Z'),
   })
   for (const opp of out.opportunities) {
@@ -417,13 +417,13 @@ test('expander: non-student profile yields zero opportunities', () => {
 
 test('expander: idempotent template list — running twice yields identical result', () => {
   const a = expandStudentBridgeFunding({
-    profile: ANASTASIA_LIKE_PROFILE,
-    sections: ANASTASIA_LIKE_SECTIONS,
+    profile: DEMO_STUDENT_PROFILE,
+    sections: DEMO_STUDENT_SECTIONS,
     today: new Date('2026-05-13T00:00:00Z'),
   })
   const b = expandStudentBridgeFunding({
-    profile: ANASTASIA_LIKE_PROFILE,
-    sections: ANASTASIA_LIKE_SECTIONS,
+    profile: DEMO_STUDENT_PROFILE,
+    sections: DEMO_STUDENT_SECTIONS,
     today: new Date('2026-05-13T00:00:00Z'),
   })
   assert.equal(a.opportunities.length, b.opportunities.length)

@@ -452,7 +452,7 @@ export async function buildCoverageEvidence(db, profileId) {
       // `condition_not_declared` belongs here for the SAME reason (2026-08-02):
       // a condition lane skipped because the profile names no matching
       // diagnosis is correct gating, not missing coverage. Without it, every
-      // profile whose disability has no named condition — Anastasia White's
+      // profile whose disability has no named condition — Demo Tennessee STEM Student's
       // class, and 14 of 33 real prod profiles — would mint a nightly
       // disease_specific "gap" the owner cannot fix, which is precisely the
       // finding-that-can-never-go-green noise #1088 was written against.

@@ -106,7 +106,7 @@ describe('owner-facing persisted match truth', () => {
     expect(result[0].match_score).toBe(20)
   })
 
-  it('pins the funding-source route to the canonical persisted-truth query boundary', () => {
+  it('pins the funding-source route to the read-only canonical persisted-truth boundary', () => {
     const routeSource = fs.readFileSync(
       path.join(HERE, '..', 'routes', 'fundingSources.js'),
       'utf8',
@@ -117,8 +117,13 @@ describe('owner-facing persisted match truth', () => {
     )
 
     expect(routeSource).toContain('const loadedRows = await readFundingSourceRows(req.db, profileId)')
-    expect(routeSource).toContain('restorePersistedMatchTruth(canonical.kept, mapped, {')
-    expect(routeSource).toContain('profileContext,')
+    expect(routeSource).toContain('const rows = loadedRows.rows')
+    expect(routeSource).toContain('const canonical = canonicalizeOpportunityList(profileContext, mapped, {')
+    expect(routeSource).toContain('useStoredDecision: true')
+    // The query already returns the authoritative persisted score/decision.
+    // A GET may filter unsafe rows, but must not perform a second restoration
+    // or recompute pass over that stored match artifact.
+    expect(routeSource).not.toContain('restorePersistedMatchTruth(')
     expect(querySource).toContain('pom.match_explain_json')
     expect(querySource).toContain('pom.matcher_version')
     expect(querySource).toContain('fo.description AS summary')

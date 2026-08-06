@@ -2,7 +2,10 @@
 // after the Crawler OS cutover. The old bulk grant-crawl engine is retired:
 // profile-facing discovery routes delegate to runProfileDiscoveryLive, and
 // non-profile bulk crawl endpoints return an explicit retired/OS response.
-import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
+import {
+  opportunityLifecycleVisibilitySql,
+  SURFACED_MATCHER_VERSIONS_SQL,
+} from '../config/matchSurfacing.js'
 
 const SUPERSEDED = Object.freeze({
   retired: true,
@@ -36,13 +39,14 @@ function safeJsonParse(value, fallback) {
 
 export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
   if (!db || !profileId) return []
-  const activeClause = db?.dialect === 'postgres'
-    ? 'AND (fo.is_active IS NULL OR fo.is_active = TRUE)'
-    : 'AND (fo.is_active IS NULL OR fo.is_active = 1)'
+  const lifecycleClause = opportunityLifecycleVisibilitySql({
+    tableAlias: 'fo',
+    dialect: db?.dialect,
+  })
   const rows = await db.prepare(`
     SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.application_url, fo.apply_url,
            fo.source_url, fo.opportunity_kind, fo.deadline, fo.amount_min, fo.amount_max,
-           fo.state, fo.categories, fo.funding_type,
+           fo.state, fo.categories, fo.funding_type, fo.is_hidden, fo.is_active,
            m.match_score, m.match_decision, m.match_explanation, m.match_reasons,
            m.match_explain_json, m.matcher_version
       FROM profile_opportunity_matches m
@@ -50,7 +54,7 @@ export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
      WHERE m.profile_id = ?
        AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
        AND lower(COALESCE(m.match_decision, '')) IN ('accept', 'review')
-       ${activeClause}
+       AND ${lifecycleClause}
      ORDER BY m.match_score DESC
      LIMIT ?
   `).all(String(profileId), Number(limit) || 200)
@@ -77,6 +81,8 @@ export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
       deadline: row.deadline || null,
       stateRestriction: row.state || null,
       recurring: !row.deadline,
+      is_hidden: row.is_hidden ?? null,
+      is_active: row.is_active ?? null,
       match_explain: { ...explain, why: row.match_explanation || explain?.why, matcher_version: row.matcher_version },
     }
   })

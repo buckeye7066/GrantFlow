@@ -350,6 +350,7 @@ async function main() {
     // auth/session-ish (optional)
     'user_credentials',
     'user_sessions',
+    'auth_refresh_token_history',
     'user_verification_codes',
     'oauth_states',
     'app_runtime_secrets',
@@ -437,4 +438,3 @@ async function main() {
 }
 
 await main()
-

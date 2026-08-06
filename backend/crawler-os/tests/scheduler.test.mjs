@@ -8,6 +8,8 @@ import { createAdminControl } from '../adminControl.js';
 import { storage } from '../index.js';
 import { makeOfflineFetcher, SAMPLE_VFD_PROFILE } from './fixtures/fakeFetch.mjs';
 
+const TEST_ADMIN = 'owner@example.invalid';
+
 function build() {
   const store = createMemoryStore();
   const fetcher = makeOfflineFetcher();
@@ -46,9 +48,9 @@ test('the durable lock prevents an overlapping cycle from running', async () => 
 
 test('a paused control center halts the cycle before agents run', async () => {
   const { store, fleet } = build();
-  const control = createAdminControl({ store });
-  control.start('buckeye7066@gmail.com');
-  control.pause('buckeye7066@gmail.com');
+  const control = createAdminControl({ store, admin: TEST_ADMIN });
+  control.start(TEST_ADMIN);
+  control.pause(TEST_ADMIN);
   const scheduler = createScheduler({ store, fleet, control });
   const report = await scheduler.runCycle({ profiles: [SAMPLE_VFD_PROFILE], now: 3_000_000 });
   assert.equal(report.paused, true);
@@ -57,8 +59,8 @@ test('a paused control center halts the cycle before agents run', async () => {
 
 test('an emergency-stopped control center aborts the cycle', async () => {
   const { store, fleet } = build();
-  const control = createAdminControl({ store });
-  control.emergencyStop('buckeye7066@gmail.com', 'test');
+  const control = createAdminControl({ store, admin: TEST_ADMIN });
+  control.emergencyStop(TEST_ADMIN, 'test');
   const scheduler = createScheduler({ store, fleet, control });
   const report = await scheduler.runCycle({ profiles: [SAMPLE_VFD_PROFILE], now: 4_000_000 });
   assert.equal(report.aborted, true);

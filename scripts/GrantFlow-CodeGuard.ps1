@@ -24,7 +24,7 @@
     .\GrantFlow-CodeGuard.ps1 -NonInteractive "4"
 
 .NOTES
-    Prerequisites: PowerShell 7+, Node.js 20+
+    Prerequisites: PowerShell 7+, Node.js 20.20.2
     Required environment variables:
       GITHUB_TOKEN          – GitHub PAT with 'repo' scope (Options 1, 5, 6)
       GRANTFLOW_ADMIN_TOKEN – GitHub PAT with 'repo' + 'delete_repo' scopes (Options 2, 3)

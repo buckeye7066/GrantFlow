@@ -6,7 +6,7 @@
  * Three things are asserted here, and each one FAILS on pre-fix code:
  *
  *   1. WE COUNT THE RIGHT THING. A profile whose whole list is locators has
- *      been given directions, not funding. Prod 2026-08-01: Melissa Justus and
+ *      been given directions, not funding. Prod 2026-08-01: Demo General Support Persona and
  *      William each hold 24–25 ACTIONABLE rows and ZERO awardable ones, and
  *      both read as healthy against `MIN_HEALTHY_SURFACED` (3).
  *   2. THE BACKFILL CONVERGES AND NEVER PADS. Attempts are bounded, a transient
@@ -62,9 +62,9 @@ const locator = (over = {}) => ({ match_score: 40, match_decision: 'REVIEW', tit
 // ───────────────────────────── 1. THE COUNT ─────────────────────────────────
 
 describe('what counts as a RESULT (the pointer-padding defect)', () => {
-  it('does NOT count a locator as a result — the real prod Melissa Justus / William shape', () => {
+  it('does NOT count a locator as a result — the real prod Demo General Support Persona / William shape', () => {
     // 25 qualifying, 25 actionable, ZERO awardable. This is the exact prod
-    // measurement for `profile-melissa-justus` on 2026-08-01.
+    // measurement for `profile-demo-general-support` on 2026-08-01.
     const rows = Array.from({ length: 25 }, (_, i) => locator({ title: `Local assistance programs near town ${i}` }))
     const audit = auditProfileResultCoverageFromData({ profileId: 'p', surfacedRows: rows, resultTarget: 10 })
 

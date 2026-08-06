@@ -38,7 +38,6 @@ import {
   createScheduler,
   createAdminControl,
   CONTROL_STATE,
-  ADMIN_EMAIL,
   storage,
 } from '../crawler-os/index.js';
 
@@ -54,7 +53,6 @@ export {
   createAdminControl,
   createMemoryStore,
   CONTROL_STATE,
-  ADMIN_EMAIL,
   storage,
 };
 
@@ -510,7 +508,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // THE CRAWLERS READ THE PROFILE FIRST — and say so when there is nothing in
   // it (owner rule; 2026-08-02). A profile that declares no need, no
   // eligibility fact and no usable location cannot be served by ANY lane, and
-  // crawling it anyway is how `profile-melissa-justus` came to hold 27 matches
+  // crawling it anyway is how `profile-demo-general-support` came to hold 27 matches
   // — every one a DIRECTORY, with invented geography — while reading as a
   // crawler shortfall to chase. This is the EVA runner's posture: BLOCKED,
   // with the prerequisite NAMED. It is not a crawler failure and must never be
@@ -534,7 +532,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // profile's 6 data points — 83%" class): the pipeline used to score every
   // profile against its THESIS STUB (~6 data points: the needs list), so any
   // broad registry directory trivially "covered" 50–100% of EVERY profile and
-  // identical junk lists topped Anita's and Anastasia's matches. The engine's
+  // identical junk lists topped Anita's and Demo Student's matches. The engine's
   // calibrated bands assume real 50–150-point inventories, which live in the
   // profile context this function already loaded — attach it so the pipeline
   // scores the discovering profile against everything it actually knows.

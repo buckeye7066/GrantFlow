@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
 const searchWebMock = vi.fn()
 const searchLocalWebByProfileMock = vi.fn()
@@ -25,7 +26,7 @@ vi.mock('../services/profileHelpers.js', () => ({
 
 const { invokeTool, listToolMetadata } = await import('../services/anyaToolRegistry.js')
 
-const OWNER = 'buckeye7066@gmail.com'
+const OWNER = ADMIN_EMAIL
 const ownerCtx = { ctx: { email: OWNER, isAdmin: true, userId: 'owner-1' }, user: { email: OWNER } }
 
 beforeEach(() => {

@@ -5,7 +5,9 @@ import { fileURLToPath } from 'url'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { collectComponentFiles, scanComponentForButtons } from './anyaButtonScanner.js'
 import { getJwtSecretOrThrow } from '../config/env.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 import { createLogger } from '../utils/logger.js'
+import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 const log = createLogger('anyaAutonomousFunctionTesting')
 
 const REPO_ROOT = path.resolve(process.cwd())
@@ -190,24 +192,28 @@ const API_TEST_SUITES = {
 }
 
 function resolveInternalBaseUrl(context = {}) {
-  const contextUrl = String(context?.internalBaseUrl || context?.baseUrl || '').trim()
-  if (contextUrl) return contextUrl.replace(/\/+$/, '')
+  let candidate = String(context?.internalBaseUrl || context?.baseUrl || '').trim()
 
-  const explicit = String(process.env.ANYA_SELF_BASE_URL || '').trim()
-  if (explicit) return explicit.replace(/\/+$/, '')
-
-  try {
-    const globalUrl = globalThis.__grantflow_internal_base_url
-    if (typeof globalUrl === 'string' && globalUrl.trim()) {
-      return globalUrl.trim().replace(/\/+$/, '')
+  if (!candidate) {
+    try {
+      const globalUrl = globalThis.__grantflow_internal_base_url
+      if (typeof globalUrl === 'string' && globalUrl.trim()) {
+        candidate = globalUrl.trim()
+      }
+    } catch (error) {
+      log.debug('[anyaAutonomousFunctionTesting] globalThis access failed:', error.message)
     }
-  } catch (error) {
-    log.debug('[anyaAutonomousFunctionTesting] globalThis access failed:', error.message)
   }
 
-  const port = String(process.env.PORT || '').trim()
-  if (port && port !== '0') return `http://127.0.0.1:${port}`
-  return null
+  const resolved = resolveInternalSelfBaseUrl({
+    configured: candidate || process.env.ANYA_SELF_BASE_URL,
+    port: process.env.PORT || 8080,
+  })
+  if (!resolved.ok) {
+    log.warn('[anyaAutonomousFunctionTesting] internal base URL refused', { reason: resolved.reason })
+    return null
+  }
+  return resolved.baseUrl
 }
 
 function resolveAdminToken() {
@@ -229,6 +235,8 @@ function resolveInternalAdminToken(context) {
   // DB-backed admin only (context.ctx.isAdmin); never a raw JWT role/is_admin claim.
   const isAdmin = context?.ctx?.isAdmin === true
   if (!isAdmin) return null
+  const operatorEmail = String(process.env.AGENT_CONTROL_ADMIN_EMAIL || ADMIN_EMAIL || '').trim().toLowerCase()
+  if (!operatorEmail) return null
 
   try {
     const secret = getJwtSecretOrThrow(process.env)
@@ -243,10 +251,7 @@ function resolveInternalAdminToken(context) {
         // email so it passes isControlCenterAdmin() on /api/admin/agent-control
         // and any other canonical-admin gate. The throwaway placeholder used to
         // fail every canonical check, costing us false-positive Sam findings.
-        email: user.email
-          || process.env.AGENT_CONTROL_ADMIN_EMAIL
-          || process.env.ADMIN_EMAIL
-          || 'buckeye7066@gmail.com',
+        email: operatorEmail,
         typ: 'service',
       },
       secret,
@@ -262,7 +267,7 @@ async function fetchWithTimeout(url, init, timeoutMs = 20_000) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { ...init, signal: controller.signal })
+    const res = await fetch(url, { ...init, redirect: 'error', signal: controller.signal })
     return res
   } finally {
     clearTimeout(timeout)

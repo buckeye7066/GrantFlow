@@ -6,7 +6,7 @@ This runbook is focused on **deployment sanity**, **database safety**, and **fas
 
 ## Prereqs
 
-- Node **20.x** (see `.nvmrc`)
+- Node **20.20.2** (see `.nvmrc`; Android/iOS tooling is the Node 22 exception)
 - `npm ci` works locally
 - Access to:
   - Vercel project (frontend)

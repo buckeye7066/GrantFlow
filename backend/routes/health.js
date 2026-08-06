@@ -12,6 +12,7 @@ import { RELEVANCE_RULES } from '../services/relevanceFilterRules.js'
 import { buildMissionHealth } from '../services/missionHealthService.js'
 import { looksUnsafeJwtSecret } from '../config/env.js'
 import { BOOT_ID } from '../config/bootId.js'
+import { TASK_STATUSES } from '../services/hamilton/applicationTaskStore.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:health')
@@ -155,9 +156,115 @@ async function checkRequiredSchema(db) {
         if (!has) return { ok: false, reason: 'missing_schema', missing: item }
       }
     }
+    if (db?.dialect === 'postgres') {
+      const constraint = await checkApplicationTaskStatusConstraint(db)
+      if (!constraint.ok) return constraint
+    }
     return { ok: true }
   } catch (error) {
     return { ok: false, reason: 'schema_check_failed', error: error?.message || String(error) }
+  }
+}
+
+function extractQuotedSqlValues(definition) {
+  const values = []
+  const quotedLiteral = /'((?:''|[^'])*)'(?:\s*::\s*(?:text|character varying))?/gi
+  for (const match of String(definition || '').matchAll(quotedLiteral)) {
+    values.push(match[1].replace(/''/g, "'"))
+  }
+  return [...new Set(values)].sort()
+}
+
+export async function checkApplicationTaskStatusConstraint(db) {
+  if (db?.dialect !== 'postgres') return { ok: true, applicable: false }
+
+  const row = await db.prepare(`
+    SELECT
+      pg_get_constraintdef(c.oid) AS definition,
+      c.convalidated AS validated
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = current_schema()
+      AND t.relname = 'application_tasks'
+      AND c.conname = 'application_tasks_status_check'
+      AND c.contype = 'c'
+    LIMIT 1
+  `).get()
+
+  if (!row || row.validated !== true) {
+    return { ok: false, reason: 'application_task_status_constraint_invalid' }
+  }
+
+  const expected = [...TASK_STATUSES].sort()
+  const actual = extractQuotedSqlValues(row.definition)
+  if (
+    actual.length !== expected.length
+    || actual.some((status, index) => status !== expected[index])
+  ) {
+    return { ok: false, reason: 'application_task_status_constraint_invalid' }
+  }
+
+  return { ok: true, applicable: true }
+}
+
+export async function checkBootMigrationHealth(
+  db,
+  appLocals = {},
+  { requireCurrentBoot = false } = {},
+) {
+  if (appLocals.migrate_boot_error) {
+    return { ok: false, reason: 'boot_migration_failed' }
+  }
+  if (
+    requireCurrentBoot
+    &&
+    appLocals.migrate_boot_attempted === false
+    && appLocals.migrate_boot_complete === false
+  ) {
+    return { ok: false, reason: 'boot_migration_not_run' }
+  }
+  if (
+    requireCurrentBoot
+    &&
+    appLocals.migrate_boot_attempted === true
+    && appLocals.migrate_boot_complete !== true
+  ) {
+    return { ok: false, reason: 'boot_migration_incomplete' }
+  }
+
+  const localFailures = Array.isArray(appLocals.migrate_boot_failed_migrations)
+    ? appLocals.migrate_boot_failed_migrations
+    : []
+  if (localFailures.length > 0) {
+    return {
+      ok: false,
+      reason: 'boot_migrations_incomplete',
+      failed_count: localFailures.length,
+    }
+  }
+
+  try {
+    const row = await db
+      .prepare('SELECT value FROM system_kv WHERE key = ? LIMIT 1')
+      .get('migrate_boot_failed_migrations')
+    if (!row || typeof row.value !== 'string') {
+      return { ok: false, reason: 'boot_migration_health_unavailable' }
+    }
+    const failed = JSON.parse(row.value)
+    if (!Array.isArray(failed)) {
+      return { ok: false, reason: 'boot_migration_health_invalid' }
+    }
+    if (failed.length > 0) {
+      return {
+        ok: false,
+        reason: 'boot_migrations_incomplete',
+        failed_count: failed.length,
+      }
+    }
+    return { ok: true }
+  } catch {
+    return { ok: false, reason: 'boot_migration_health_unavailable' }
   }
 }
 
@@ -296,6 +403,22 @@ router.get('/readyz', async (req, res) => {
       ok: false,
       status: 'not_ready',
       reason: dbCheck.reason,
+      details_redacted: true,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  const migrations = await checkBootMigrationHealth(
+    req.db,
+    req.app?.locals || {},
+    { requireCurrentBoot: String(process.env.NODE_ENV || '').toLowerCase() === 'production' },
+  )
+  if (!migrations.ok) {
+    return res.status(503).json({
+      ok: false,
+      status: 'not_ready',
+      reason: migrations.reason,
+      failed_migration_count: migrations.failed_count ?? null,
       details_redacted: true,
       timestamp: new Date().toISOString(),
     })

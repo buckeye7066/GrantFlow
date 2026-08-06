@@ -57,7 +57,7 @@ import GeoFundingView from "@/components/funding/GeoFundingView"
 import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
 import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
 import { useSavedSearches, useViewHistory, useHiddenGrants, exportGrantAsPDF, parseBooleanQuery } from "@/hooks/useGrantTools"
-import { scoreToMatchTier, MIN_SCORE_SLIDER_MAX, fitPercent } from "@/lib/matchDisplayThresholds"
+import { scoreToMatchTier, scoreToMatchLabel, MIN_SCORE_SLIDER_MAX } from "@/lib/matchDisplayThresholds"
 
 const NOT_AVAILABLE = 'N/A'
 
@@ -188,7 +188,7 @@ function buildOpportunitySummary(opportunity, profile, match) {
     lines.push(`Deadline type: ${opportunity.deadline_type}`)
   }
   if (typeof match?.score === "number") {
-    lines.push(`Match fit: ${fitPercent(match.score)}%`)
+    lines.push(`Match tier: ${scoreToMatchLabel(match.score)} (evidence score ${Math.round(match.score)})`)
   }
   if (Array.isArray(match?.reasons) && match.reasons.length) {
     lines.push("")

@@ -89,7 +89,12 @@ export async function authorizeAttestation(db, {
   }
   if (!authorizationText) throw new Error('authorizationText required')
   await ensureSchema(db)
-  const finalPattern = String(pattern || SEED_PATTERNS[category] || '').trim()
+  // Patterns are code-owned policy, not user input. Persisting a caller-supplied
+  // regex allowed both catastrophic backtracking and an authorization broader
+  // than the reviewed category. Ignore the legacy input parameter so existing
+  // clients remain compatible while every new/updated row is canonicalized.
+  void pattern
+  const finalPattern = String(SEED_PATTERNS[category] || '').trim()
   if (!finalPattern) throw new Error('pattern required')
   // Validate the pattern compiles.
   try { new RegExp(finalPattern, 'i') } catch { throw new Error('pattern must be a valid regex') }
@@ -161,8 +166,15 @@ export async function isAttestationAllowed(db, { profileId, labelText } = {}) {
   const list = await listActiveAttestations(db, profileId)
   for (const auth of list) {
     try {
-      if (new RegExp(auth.pattern, 'i').test(labelText)) {
-        return { allowed: true, category: auth.category, authorization: auth }
+      // Recompile only the code-owned category pattern. This also neutralizes
+      // malicious or over-broad patterns already persisted by older releases.
+      const canonicalPattern = SEED_PATTERNS[auth.category]
+      if (canonicalPattern && new RegExp(canonicalPattern, 'i').test(labelText)) {
+        return {
+          allowed: true,
+          category: auth.category,
+          authorization: { ...auth, pattern: canonicalPattern },
+        }
       }
     } catch { /* skip malformed pattern */ }
   }

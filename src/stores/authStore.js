@@ -8,7 +8,7 @@ import {
   verifyEmailCode,
   startPhoneSignIn,
   verifyPhoneCode,
-  refreshSession,
+  completeOAuthSession as completeOAuthSessionRequest,
   logout as logoutRequest,
 } from '@/api/auth'
 import client, { apiFetch } from '@/api/client'
@@ -161,6 +161,28 @@ function clearRefreshTimer() {
   }
 }
 
+function handleAutomaticRefreshFailure(error, get) {
+  console.warn('Automatic session refresh failed:', error)
+  if (error?.status === 401) {
+    get().markSessionExpired('Your session expired. Please sign in again.')
+    return
+  }
+  // A network/gateway blip is not evidence that the HttpOnly session is dead.
+  // Keep the current in-memory token and make one later timer attempt.
+  if (typeof window !== 'undefined') {
+    clearRefreshTimer()
+    refreshTimerId = window.setTimeout(() => {
+      get().refreshSession().catch((retryError) => {
+        if (retryError?.status === 401) {
+          get().markSessionExpired('Your session expired. Please sign in again.')
+        } else {
+          console.warn('Deferred session refresh failed:', retryError)
+        }
+      })
+    }, 30_000)
+  }
+}
+
 const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
 /** Normalize admin flags from /api/auth/me, JWT payloads, and legacy login shapes. */
@@ -219,7 +241,6 @@ const initialState = {
   profiles: [],
   activeProfileId: null,
   accessToken: null,
-  refreshToken: null,
   accessTokenExpiresAt: null,
   isAuthenticated: false,
   isLoading: false,
@@ -264,26 +285,15 @@ export const useAuthStore = create((set, get) => ({
 
   hydrateFromStorage: () => {
     if (typeof window === 'undefined') return
-    const accessToken = localStorage.getItem('grantflow:access-token')
-    const refreshToken = localStorage.getItem('grantflow:refresh-token')
+    // Security migration: credentials from older builds are deleted without
+    // reading or adopting them. The HttpOnly cookie bootstrap in App.jsx is now
+    // the only persisted-session path.
+    safeLocalStorageRemove('grantflow:access-token')
+    safeLocalStorageRemove('grantflow:refresh-token')
     const storedActiveProfileId = localStorage.getItem('grantflow:active-profile-id')
     const storedMethod = localStorage.getItem('grantflow:auth-method')
     const hasSeenOnboarding = localStorage.getItem('grantflow:onboarding-complete') === 'true'
-    const storedExpiry = localStorage.getItem(ACCESS_EXPIRY_STORAGE_KEY)
     const updates = {}
-    if (accessToken) {
-      client.setToken(accessToken)
-      updates.accessToken = accessToken
-      // Tentatively mark authenticated so route guards don't briefly redirect
-      // returning users (and admin smoke tests) to /login while client.auth.me()
-      // is still in flight. App.jsx's bootstrap will call clearState() if the
-      // token turns out to be invalid, flipping this back to false.
-      updates.isAuthenticated = true
-    }
-    if (refreshToken) {
-      client.setRefreshToken?.(refreshToken)
-      updates.refreshToken = refreshToken
-    }
     if (storedActiveProfileId) {
       client.setActiveProfileId?.(storedActiveProfileId)
       updates.activeProfileId = normalizeId(storedActiveProfileId)
@@ -295,40 +305,15 @@ export const useAuthStore = create((set, get) => ({
     if (Object.keys(updates).length > 0) {
       set((state) => ({ ...state, ...updates }))
     }
-    if (storedExpiry) {
-      const expiryMs = Number(storedExpiry)
-      if (Number.isFinite(expiryMs) && expiryMs > Date.now()) {
-        get().scheduleSessionRefresh({ accessExpires: expiryMs })
-      } else {
-        clearAccessExpiry()
-      }
-    }
-    // If we have a token, validate it immediately by fetching the canonical
-    // identity rather than relying solely on a (possibly far-future) refresh
-    // timer. This guarantees user/profiles are populated even if App bootstrap
-    // never runs auth.me(), and flips isAuthenticated back to false on failure.
-    if (accessToken) {
-      Promise.resolve()
-        .then(() => client.auth?.me?.())
-        .then((me) => {
-          if (me) {
-            get().setAuthenticatedUser(me)
-          }
-        })
-        .catch((err) => {
-          try { console.warn('[authStore] hydrate identity validation failed:', err?.message || err) } catch { /* ignore */ }
-          // Token is invalid/expired — drop the tentative authenticated state.
-          get().clearState()
-        })
-    }
+    clearAccessExpiry()
   },
 
-  clearState: () => {
+  clearState: ({ broadcast = false } = {}) => {
     const preferredAuthMethod = get().preferredAuthMethod
     const prevProfileId = get().activeProfileId
     clearRefreshTimer()
     clearAccessExpiry()
-    client.clearToken()
+    client.clearToken({ broadcast })
     client.setActiveProfileId?.(null)
     // Funding-results store is persisted to localStorage; if we don't clear it
     // on logout / session-expired, the next user (or the same user with a
@@ -668,8 +653,7 @@ export const useAuthStore = create((set, get) => ({
         get()
           .refreshSession()
           .catch((error) => {
-            console.warn('Automatic session refresh failed:', error)
-            get().markSessionExpired('Your session expired. Please sign in again.')
+            handleAutomaticRefreshFailure(error, get)
           })
       }, 0)
       return
@@ -685,10 +669,7 @@ export const useAuthStore = create((set, get) => ({
       get()
         .refreshSession()
         .catch((error) => {
-          console.warn('Automatic session refresh failed:', error)
-          // Surface to the user via the session-expired flow so they get explicit
-          // re-authentication feedback rather than a silent session expiry.
-          get().markSessionExpired('Your session expired. Please sign in again.')
+          handleAutomaticRefreshFailure(error, get)
         })
     }, refreshDelay)
   },
@@ -701,7 +682,6 @@ export const useAuthStore = create((set, get) => ({
       clearAccessExpiry()
       set({
         accessToken: null,
-        refreshToken: null,
         isAuthenticated: false,
         sessionExpired: false,
         sessionMessage: null,
@@ -722,7 +702,6 @@ export const useAuthStore = create((set, get) => ({
       clearAccessExpiry()
       set({
         accessToken: null,
-        refreshToken: null,
         isAuthenticated: false,
         sessionExpired: false,
         sessionMessage: null,
@@ -753,12 +732,6 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
-        safeLocalStorageSet('grantflow:access-token', result.accessToken)
-      }
-      if (result?.refreshToken) {
-        client.setRefreshToken?.(result.refreshToken)
-        set({ refreshToken: result.refreshToken })
-        safeLocalStorageSet('grantflow:refresh-token', result.refreshToken)
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -779,12 +752,6 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
-        safeLocalStorageSet('grantflow:access-token', result.accessToken)
-      }
-      if (result?.refreshToken) {
-        client.setRefreshToken?.(result.refreshToken)
-        set({ refreshToken: result.refreshToken })
-        safeLocalStorageSet('grantflow:refresh-token', result.refreshToken)
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -805,12 +772,6 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
-        safeLocalStorageSet('grantflow:access-token', result.accessToken)
-      }
-      if (result?.refreshToken) {
-        client.setRefreshToken?.(result.refreshToken)
-        set({ refreshToken: result.refreshToken })
-        safeLocalStorageSet('grantflow:refresh-token', result.refreshToken)
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -832,7 +793,6 @@ export const useAuthStore = create((set, get) => ({
       clearAccessExpiry()
       set({
         accessToken: null,
-        refreshToken: null,
         isAuthenticated: false,
         sessionExpired: false,
         sessionMessage: null,
@@ -852,12 +812,6 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
-        safeLocalStorageSet('grantflow:access-token', result.accessToken)
-      }
-      if (result?.refreshToken) {
-        client.setRefreshToken?.(result.refreshToken)
-        set({ refreshToken: result.refreshToken })
-        safeLocalStorageSet('grantflow:refresh-token', result.refreshToken)
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -873,33 +827,22 @@ export const useAuthStore = create((set, get) => ({
 
   loginWithTokens: async ({
     accessToken,
-    refreshToken,
     expiresIn,
     accessExpires,
     refreshExpires,
   } = {}) => {
     set({ isLoading: true, error: null })
     try {
-      const response = await client.auth.loginWithTokens({
-        accessToken,
-        refreshToken,
-      })
+      const response = await client.auth.loginWithTokens({ accessToken })
 
       // Defer all state writes until after the full response is validated.
       if (response) {
-        // Persist the tokens the SERVER returned (rotate-on-use), falling back to
-        // the caller-supplied tokens only when the response omits them.
+        // Access credentials remain memory-only. Refresh rotation is represented
+        // solely by the HttpOnly Set-Cookie response.
         const effectiveAccessToken = response.accessToken ?? accessToken
-        const effectiveRefreshToken = response.refreshToken ?? refreshToken
         if (effectiveAccessToken) {
           client.setToken(effectiveAccessToken)
           set({ accessToken: effectiveAccessToken })
-          safeLocalStorageSet('grantflow:access-token', effectiveAccessToken)
-        }
-        if (effectiveRefreshToken) {
-          client.setRefreshToken?.(effectiveRefreshToken)
-          set({ refreshToken: effectiveRefreshToken })
-          safeLocalStorageSet('grantflow:refresh-token', effectiveRefreshToken)
         }
         // Prefer server-issued expiry metadata when present.
         const expiryMeta = {
@@ -933,12 +876,27 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  refreshSession: async () => {
-    const refreshToken = client.getRefreshToken?.() ?? get().refreshToken
-    if (!refreshToken) {
+  completeOAuthSession: async (handoff) => {
+    set({ isLoading: true, error: null })
+    try {
+      const response = await completeOAuthSessionRequest(handoff)
+      if (!response?.accessToken || !response?.user) {
+        throw new Error('OAuth session handoff did not return an authenticated session')
+      }
+      client.setToken(response.accessToken)
+      set({ accessToken: response.accessToken })
+      get().setAuthenticatedUser(response)
+      get().scheduleSessionRefresh(response)
+      return response
+    } catch (error) {
       get().clearState()
-      throw new Error('Missing refresh token')
+      throw error
+    } finally {
+      set({ isLoading: false })
     }
+  },
+
+  refreshSession: async () => {
     try {
       // Use client.refreshTokens() so this shares the single-flight refreshPromise
       // with handleUnauthorized(). This prevents a simultaneous timer-based refresh
@@ -948,12 +906,6 @@ export const useAuthStore = create((set, get) => ({
       if (response?.accessToken) {
         client.setToken(response.accessToken)
         set({ accessToken: response.accessToken })
-        safeLocalStorageSet('grantflow:access-token', response.accessToken)
-      }
-      if (response?.refreshToken) {
-        client.setRefreshToken?.(response.refreshToken)
-        set({ refreshToken: response.refreshToken })
-        safeLocalStorageSet('grantflow:refresh-token', response.refreshToken)
       }
       // Refresh responses typically carry only token fields. Only update user
       // state when the response actually contains an identity payload; otherwise
@@ -977,7 +929,7 @@ export const useAuthStore = create((set, get) => ({
       }
       return response
     } catch (error) {
-      get().clearState()
+      if (error?.status === 401) get().clearState()
       throw error
     }
   },
@@ -1004,12 +956,9 @@ export const useAuthStore = create((set, get) => ({
 
   logout: async () => {
     try {
-      const refreshToken = client.getRefreshToken?.() ?? get().refreshToken
-      if (refreshToken) {
-        await logoutRequest(refreshToken)
-      }
+      await logoutRequest()
     } finally {
-      get().clearState()
+      get().clearState({ broadcast: true })
     }
   },
 

@@ -121,7 +121,7 @@ const PERSON_ENTITY_TYPES = new Set(['individual', 'caregiver', 'student', 'vete
 /**
  * Which side of the org/person matrix is this profile on?
  * Declared identity only — section PRESENCE never promotes a person to an org
- * (the Kimberly Botts hallucinated-org-section class). Unknown → 'unknown'
+ * (the Demo HCBS Support Persona hallucinated-org-section class). Unknown → 'unknown'
  * (never used to filter).
  *
  * @returns {'person'|'org'|'unknown'}

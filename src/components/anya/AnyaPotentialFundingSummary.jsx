@@ -14,8 +14,10 @@ const fmt = (n) =>
  *
  * Inputs:
  *   - total_matches:        all matches surfaced
- *   - strong_matches:       count with score >= 0.7
- *   - review_matches:       count needing review (e.g. eligibility unsure)
+ *   - accepted_matches:     persisted canonical ACCEPT decisions
+ *   - review_matches:       persisted canonical REVIEW decisions
+ *   - rejected_matches:     persisted canonical REJECT decisions (normally 0)
+ *   - unrated_matches:      rows missing a canonical decision
  *   - potential_low_total:  sum of amount_min over matches with known min
  *   - potential_high_total: sum of amount_max over matches with known max
  *   - amount_unknown_count: matches with no published amount
@@ -24,8 +26,10 @@ export function AnyaPotentialFundingSummary({ summary }) {
   if (!summary) return null
   const {
     total_matches = 0,
-    strong_matches = 0,
+    accepted_matches = 0,
     review_matches = 0,
+    rejected_matches = 0,
+    unrated_matches = 0,
     potential_low_total = 0,
     potential_high_total = 0,
     amount_unknown_count = 0,
@@ -48,8 +52,10 @@ export function AnyaPotentialFundingSummary({ summary }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap gap-2">
-          <Badge variant="default">{strong_matches} strong matches</Badge>
-          <Badge variant="secondary">{review_matches} need review</Badge>
+          <Badge variant="default">{accepted_matches} match candidates</Badge>
+          {review_matches > 0 ? <Badge variant="secondary">{review_matches} need review</Badge> : null}
+          {unrated_matches > 0 ? <Badge variant="outline">{unrated_matches} unrated</Badge> : null}
+          {rejected_matches > 0 ? <Badge variant="destructive">{rejected_matches} not eligible</Badge> : null}
           {amount_unknown_count > 0 ? (
             <Badge variant="outline">{amount_unknown_count} with amount varies</Badge>
           ) : null}

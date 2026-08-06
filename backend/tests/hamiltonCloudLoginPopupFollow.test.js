@@ -25,6 +25,9 @@ const {
   startCloudLogin, startScreencast, getCloudLoginSession, dispatchInput, cancelCloudLogin,
 } = await import('../services/hamilton/hamiltonCloudLogin.js')
 
+const FIXTURE_HOST = 'hamilton-submit-fixture.invalid'
+const FIXTURE_ORIGIN = `https://${FIXTURE_HOST}`
+
 const tick = () => new Promise((r) => setTimeout(r, 0))
 const settle = async () => { await tick(); await tick(); await tick() }
 
@@ -63,7 +66,7 @@ function makeFakePage(name, ctxRef) {
     viewportSize: () => ({ width: 1280, height: 900 }),
     context: () => ctxRef.ctx,
     goto: vi.fn(async () => {}),
-    url: () => `https://${name}/`,
+    url: () => `${FIXTURE_ORIGIN}/${encodeURIComponent(name)}`,
     locator: () => ({ count: async () => 0 }),
   }
   return page
@@ -74,6 +77,7 @@ function makeFakeWorld() {
   const cdps = []
   const pageListeners = []
   const ctx = {
+    route: vi.fn(async () => {}),
     on(evt, fn) { if (evt === 'page') pageListeners.push(fn) },
     newCDPSession: vi.fn(async (page) => {
       const cdp = makeFakeCdp(page)
@@ -81,7 +85,7 @@ function makeFakeWorld() {
       return cdp
     }),
     newPage: async () => makeFakePage('portal.example.edu', ctxRef),
-    storageState: async () => ({ cookies: [{ name: 'sid', value: 'x', domain: 'portal.example.edu', path: '/' }], origins: [] }),
+    storageState: async () => ({ cookies: [{ name: 'sid', value: 'x', domain: FIXTURE_HOST, path: '/' }], origins: [] }),
     opts: {},
   }
   ctxRef.ctx = ctx
@@ -106,8 +110,8 @@ describe('the live mirror follows SSO popups', () => {
     world = makeFakeWorld()
     frames = []
     const res = await startCloudLogin({
-      userId: 'u1', profileId: 'pA', portalHost: 'portal.example.edu',
-      loginUrl: 'https://portal.example.edu/login', label: 'Portal',
+      userId: 'u1', profileId: 'pA', portalHost: FIXTURE_HOST,
+      loginUrl: `${FIXTURE_ORIGIN}/login`, label: 'Synthetic portal fixture',
       launchBrowser: world.launchBrowser,
     })
     expect(res.ok).toBe(true)

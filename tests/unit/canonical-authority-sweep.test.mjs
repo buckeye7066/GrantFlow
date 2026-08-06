@@ -214,6 +214,17 @@ test('mapDecisionToPersistedFields falls back to snake_case input for defensive 
   assert.equal(mapped.matcher_version, '4.0.0')
 })
 
+test('mapDecisionToPersistedFields never relabels a match score as confidence', async () => {
+  const { mapDecisionToPersistedFields } = await import(
+    '../../backend/services/itemCrawler.js'
+  )
+  const mapped = mapDecisionToPersistedFields(
+    { decision: 'REVIEW', confidence: null },
+    { fallbackScore: 99 },
+  )
+  assert.equal(mapped.match_confidence, null)
+})
+
 // ---------------------------------------------------------------------------
 // 4. Deprecated fake-data seeders must hard-fail on load
 // ---------------------------------------------------------------------------
@@ -304,7 +315,46 @@ test('scripts/prepopulate-profile-grants.mjs uses computeMatchDecision as sole a
 })
 
 // ---------------------------------------------------------------------------
-// 6. Docs match code truth (MATCHER_VERSION)
+// 6. Retired profile-intelligence scorers remain outside runtime authority
+// ---------------------------------------------------------------------------
+
+test('runtime code does not import the retired profile-intelligence decision engines', async () => {
+  const fs = await import('node:fs/promises')
+  const backendRoot = path.join(REPO_ROOT, 'backend')
+  const retiredModules = new Set([
+    path.join(backendRoot, 'services', 'profileIntelligence', 'eligibilityFilter.js'),
+    path.join(backendRoot, 'services', 'profileIntelligence', 'relevanceScorer.js'),
+  ])
+  const offenders = []
+
+  async function walk(directory) {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        if (entry.name === 'tests' || entry.name === 'node_modules') continue
+        await walk(absolute)
+        continue
+      }
+      if (!/\.(?:js|mjs)$/.test(entry.name) || retiredModules.has(absolute)) continue
+      const source = await fs.readFile(absolute, 'utf8')
+      if (
+        /(?:from\s*|import\s*\(|require\s*\()\s*['"][^'"\n]*(?:profileIntelligence\/)?(?:relevanceScorer|eligibilityFilter)\.js['"]/.test(source)
+      ) {
+        offenders.push(path.relative(REPO_ROOT, absolute))
+      }
+    }
+  }
+
+  await walk(backendRoot)
+  assert.deepEqual(
+    offenders,
+    [],
+    'retired 0–100 scorers are test fixtures only; runtime decisions must use computeMatchDecision',
+  )
+})
+
+// ---------------------------------------------------------------------------
+// 7. Docs match code truth (MATCHER_VERSION)
 // ---------------------------------------------------------------------------
 
 test('docs/matching-architecture.md references the current MATCHER_VERSION', async () => {

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -85,9 +85,13 @@ test('documents download: 401 without auth, 200 with admin bearer', async () => 
       const fileName = 'test-download.txt'
       const filePath = path.join(uploadsDir, fileName)
       const avatarPath = path.join(uploadsDir, 'avatar_profile_test_1_123.png')
+      const outsidePath = path.join(tmp, 'outside-secret.txt')
+      const symlinkPath = path.join(uploadsDir, 'outside-link.txt')
       mkdirSync(uploadsDir, { recursive: true })
       writeFileSync(filePath, 'hello world', 'utf8')
       writeFileSync(avatarPath, 'avatar cache', 'utf8')
+      writeFileSync(outsidePath, 'must not leave the server', 'utf8')
+      symlinkSync(outsidePath, symlinkPath)
 
       // Satisfy FK constraints (documents.profile_id -> profiles.id)
       db.prepare(
@@ -110,6 +114,22 @@ test('documents download: 401 without auth, 200 with admin bearer', async () => 
         filePath,
         'text/plain',
       )
+
+      const insertUnsafeDocument = db.prepare(
+        `
+          INSERT INTO documents (id, profile_id, name, file_path, mime_type, created_at)
+          VALUES (?, ?, ?, ?, 'text/plain', CURRENT_TIMESTAMP)
+        `,
+      )
+      insertUnsafeDocument.run('doc_outside', profileId, 'Outside path', outsidePath)
+      insertUnsafeDocument.run('doc_symlink', profileId, 'Symlink path', symlinkPath)
+      insertUnsafeDocument.run('doc_directory', profileId, 'Directory path', uploadsDir)
+      db.prepare(
+        `
+          INSERT INTO documents (id, profile_id, name, file_path, file_bytes, mime_type, created_at)
+          VALUES (?, ?, ?, ?, ?, 'text/plain', CURRENT_TIMESTAMP)
+        `,
+      ).run('doc_durable_bytes', profileId, 'Durable bytes', outsidePath, Buffer.from('safe durable bytes'))
     } finally {
       db.close()
     }
@@ -163,6 +183,39 @@ test('documents download: 401 without auth, 200 with admin bearer', async () => 
     assert.equal(auth.status, 200)
     const text = await auth.text()
     assert.equal(text, 'hello world')
+
+    for (const docId of ['doc_outside', 'doc_symlink', 'doc_directory']) {
+      const blocked = await fetch(`${base}/api/documents/${docId}/download`, {
+        headers: { Authorization: 'Bearer test-admin-token' },
+      })
+      assert.equal(blocked.status, 404, `${docId} must not be streamed`)
+      const body = await blocked.json()
+      assert.equal(body.code, 'DOCUMENT_FILE_MISSING')
+    }
+
+    const durableBytes = await fetch(`${base}/api/documents/doc_durable_bytes/download`, {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    })
+    assert.equal(durableBytes.status, 200)
+    assert.equal(await durableBytes.text(), 'safe durable bytes')
+
+    const durableMetadata = await fetch(`${base}/api/documents/doc_durable_bytes`, {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    })
+    assert.equal(durableMetadata.status, 200)
+    const durableMetadataJson = await durableMetadata.json()
+    assert.equal(durableMetadataJson.download_url, '/api/documents/doc_durable_bytes/download')
+    assert.equal(Object.hasOwn(durableMetadataJson, 'file_bytes'), false)
+    assert.equal(Object.hasOwn(durableMetadataJson, 'has_durable_bytes'), false)
+
+    const documentList = await fetch(`${base}/api/documents?profile_id=profile_test_1`, {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    })
+    assert.equal(documentList.status, 200)
+    const listedDurable = (await documentList.json()).find((doc) => doc.id === 'doc_durable_bytes')
+    assert.equal(listedDurable.download_url, '/api/documents/doc_durable_bytes/download')
+    assert.equal(Object.hasOwn(listedDurable, 'file_bytes'), false)
+    assert.equal(Object.hasOwn(listedDurable, 'has_durable_bytes'), false)
   } finally {
     await stop()
   }
