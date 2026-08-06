@@ -108,14 +108,14 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
-    "@aws-sdk/client-textract": "^3.1096.0",
+    "@aws-sdk/client-textract": "^3.1101.0",
     "@babel/parser": "^8.0.4",
-    "@capacitor/android": "8.4.2",
-    "@capacitor/core": "8.4.2",
-    "@capacitor/ios": "8.4.2",
-    "@sentry/node": "10.68.0",
+    "@capacitor/android": "8.5.0",
+    "@capacitor/core": "8.5.0",
+    "@capacitor/ios": "8.5.0",
+    "@sentry/node": "10.69.0",
     "acorn": "^8.18.0",
-    "axios": "^1.18.1",
+    "axios": "^1.19.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",
     "cheerio": "^1.2.0",
@@ -126,7 +126,7 @@
     "express-rate-limit": "^8.6.1",
     "fast-xml-parser": ">=5.3.8",
     "helmet": "^8.3.0",
-    "imapflow": "1.6.3",
+    "imapflow": "1.6.5",
     "jsonwebtoken": "9.0.3",
     "mammoth": "^1.8.0",
     "multer": "^2.2.0",
@@ -134,10 +134,10 @@
     "openai": "^6.49.0",
     "pdf-parse": "^1.1.1",
     "pg": "^8.22.0",
-    "playwright": "^1.62.0",
+    "playwright": "^1.62.1",
     "psl": "1.15.0",
     "resend": "^6.18.1",
-    "stripe": "^22.3.2",
+    "stripe": "^22.4.0",
     "tesseract.js": "^7.0.0",
     "twilio": "^5.11.1",
     "zipcodes": "^8.0.0",
@@ -226,6 +226,6 @@
   },
   "optionalDependencies": {
     "@esbuild/linux-x64": "^0.28.1",
-    "@rollup/rollup-linux-x64-gnu": "^4.62.3"
+    "@rollup/rollup-linux-x64-gnu": "^4.62.4"
   }
 }
