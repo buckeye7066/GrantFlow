@@ -15,21 +15,20 @@
  * (a `hamilton_generated_application` packet from the draft step), with NO
  * autopilot run carrying a confirmation reference or a durable confirmation doc.
  *
- * The proof-reality check is delegated to `assessStoredConfirmationProof`
- * (hamiltonConfirmationArtifacts.js, #1114) so this predicate and the durable
- * proof pipeline can never drift on what "retrievable proof" means. A
- * packet/draft/proposal `output_document_id` NEVER qualifies here — only a
- * `hamilton_submission_confirmation` document (with bytes), or a submitted
- * autopilot run whose confirmation is retrievable, or a captured portal
- * confirmation reference on such a run.
+ * Only the fenced v2 submission-attempt ledger may establish external receipt.
+ * Legacy task/run status, confirmation-looking documents, screenshots, and
+ * references are not bound to the exact owner/profile/source/portal/application
+ * attempt and therefore remain internal-only. The v2 attempt proof must pass
+ * `assessExternalReceiptProof`; artifact-only proof remains disabled until the
+ * DB-backed owner/profile/bytes/hash verification contract is implemented.
  */
 
 import {
-  assessStoredConfirmationProof,
-  _internal as confirmationInternal,
-} from './hamiltonConfirmationArtifacts.js'
+  assessExternalReceiptProof,
+  normalizeSubmissionAttemptRow,
+} from './hamiltonSubmissionAttemptStore.js'
 
-const CONFIRMATION_DOCUMENT_TYPE = confirmationInternal.CONFIRMATION_DOCUMENT_TYPE
+const CONFIRMATION_DOCUMENT_TYPE = 'hamilton_submission_confirmation'
 
 export const SUBMISSION_PROOF_STATE = Object.freeze({
   // Hamilton (or the user) actually transmitted to the funder AND a durable
@@ -49,7 +48,7 @@ export const SUBMISSION_PROOF_LABELS = Object.freeze({
 
 // Statuses that assert "this application was submitted". `application_tasks`
 // only uses 'submitted'; a Hamilton autopilot run additionally uses 'submitted'.
-const SUBMITTED_TASK_STATUSES = new Set(['submitted'])
+const SUBMITTED_TASK_STATUSES = new Set(['submitted', 'externally_received', 'externally_validated'])
 
 function isSubmittedStatus(status) {
   return SUBMITTED_TASK_STATUSES.has(String(status || '').trim().toLowerCase())
@@ -58,6 +57,10 @@ function isSubmittedStatus(status) {
 function safeJsonObject(raw) {
   if (raw && typeof raw === 'object') return raw
   try { return JSON.parse(raw || '{}') } catch { return {} }
+}
+
+function attemptRowForAssessment(row) {
+  return normalizeSubmissionAttemptRow(row)
 }
 
 /**
@@ -75,17 +78,25 @@ function runRowForAssessment(row) {
   }
 }
 
-async function loadSubmittedRunsForTask(db, taskId) {
+async function loadExternallyReceivedAttempts(db, taskId) {
   if (!db || !taskId) return []
   try {
-    const rows = await db
-      .prepare(
-        `SELECT id, status, confirmation_reference, confirmation_screenshot_path, result_json
-           FROM hamilton_autopilot_runs
-          WHERE task_id = ? AND status = 'submitted'`,
-      )
-      .all(String(taskId))
-    return (rows || []).map(runRowForAssessment)
+    const rows = db?.dialect === 'postgres'
+      ? await db.prepare(
+        `SELECT * FROM hamilton_submission_attempts
+          WHERE state IN ('externally_received','externally_validated')
+            AND (task_id = ? OR task_references_json @> CAST(? AS JSONB))
+          ORDER BY external_received_at DESC`,
+      ).all(String(taskId), JSON.stringify([String(taskId)]))
+      : await db.prepare(
+        `SELECT * FROM hamilton_submission_attempts
+          WHERE state IN ('externally_received','externally_validated')
+            AND (task_id = ? OR EXISTS (
+              SELECT 1 FROM json_each(task_references_json) refs WHERE refs.value = ?
+            ))
+          ORDER BY external_received_at DESC`,
+      ).all(String(taskId), String(taskId))
+    return rows || []
   } catch {
     return []
   }
@@ -151,53 +162,40 @@ export async function assessTaskSubmissionProof(db, task, opts = {}) {
     ...patch,
   })
 
-  // 1) A submitted autopilot run whose confirmation is durably retrievable, or
-  //    which carries a captured portal confirmation reference. This is the
-  //    strongest, most-honest evidence: the #1114 pipeline's own proof check.
-  let runs = opts.runs
-  if (!Array.isArray(runs)) runs = await loadSubmittedRunsForTask(db, task.id)
-  else runs = runs.map((r) => (r && r.result !== undefined ? r : runRowForAssessment(r)))
-
-  for (const run of runs) {
-    const proof = await assessStoredConfirmationProof(db, run)
-    if (proof.proof_retrievable) {
-      return verified({
-        source: `run_${proof.source}`,
-        proof_document_id: proof.document_id || null,
-        confirmation_reference: run.confirmation_reference || null,
-      })
-    }
-    const ref = String(run.confirmation_reference || '').trim()
-    if (ref) {
-      // A portal-issued confirmation reference stored on a submitted run is
-      // itself a durable, captured portal fact (survives a filesystem wipe).
-      return verified({ source: 'confirmation_reference', confirmation_reference: ref })
-    }
+  // Only the v2 attempt ledger can establish external receipt. A legacy run
+  // marked submitted, arbitrary confirmation_reference, generic success page,
+  // or confirmation-looking output document is insufficient because it is not
+  // bound to the exact user/profile/source/portal/application attempt.
+  const attempts = Array.isArray(opts.attempts)
+    ? opts.attempts
+    : await loadExternallyReceivedAttempts(db, task.id)
+  for (const row of attempts) {
+    const attempt = attemptRowForAssessment(row)
+    if (!attempt?.integrity_valid) continue
+    const proof = safeJsonObject(row.proof_json ?? row.proof)
+    let assessment
+    try { assessment = assessExternalReceiptProof(attempt, proof) } catch { continue }
+    if (!assessment.verified) continue
+    return verified({
+      source: 'fenced_submission_attempt',
+      proof_document_id: proof.proof_document_id || null,
+      confirmation_reference: proof.confirmation_reference || null,
+    })
   }
 
-  // 2) The task's output_document_id — ONLY a confirmation-kind document counts.
-  //    A packet/draft/proposal (`hamilton_generated_application`, etc.) is the
-  //    thing we would submit, never proof that we did.
+  let outputType = null
   if (task.output_document_id) {
-    const { isConfirmation, type } = await outputDocumentIsConfirmation(db, task.output_document_id)
-    if (isConfirmation) {
-      return verified({ source: 'output_confirmation_doc', proof_document_id: String(task.output_document_id), output_document_kind: type })
-    }
-    return {
-      ...base,
-      state: SUBMISSION_PROOF_STATE.INTERNAL_ONLY,
-      label: SUBMISSION_PROOF_LABELS[SUBMISSION_PROOF_STATE.INTERNAL_ONLY],
-      unverified_reason: type ? `output_document_is_${type}` : 'output_document_not_confirmation',
-      output_document_kind: type,
-    }
+    const document = await outputDocumentIsConfirmation(db, task.output_document_id)
+    outputType = document.type
   }
-
-  // 3) Submitted, but nothing retrievable: an internal record only.
   return {
     ...base,
     state: SUBMISSION_PROOF_STATE.INTERNAL_ONLY,
     label: SUBMISSION_PROOF_LABELS[SUBMISSION_PROOF_STATE.INTERNAL_ONLY],
-    unverified_reason: runs.length > 0 ? 'run_without_captured_evidence' : 'no_run_no_confirmation_doc',
+    unverified_reason: task.status === 'submitted'
+      ? 'legacy_submitted_status_without_bound_attempt_proof'
+      : 'externally_received_state_without_valid_bound_proof',
+    output_document_kind: outputType,
   }
 }
 
@@ -212,7 +210,7 @@ export async function taskHasVerifiedExternalSubmission(db, task, opts = {}) {
 }
 
 export const _internal = {
-  CONFIRMATION_DOCUMENT_TYPE,
   isSubmittedStatus,
   runRowForAssessment,
+  attemptRowForAssessment,
 }

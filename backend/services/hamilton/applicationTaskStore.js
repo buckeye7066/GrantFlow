@@ -68,6 +68,17 @@ export const TASK_STATUSES = Object.freeze([
   'ready_to_fax',
   'completed',
   'blocked',
+  // Canonical externally-confirmed submission lifecycle. Only the final two
+  // states represent a funder-side receipt; every earlier state is explicitly
+  // not submitted and is excluded from success KPIs.
+  'prepared',
+  'portal_draft_saved',
+  'human_action_required',
+  'ready_for_final_submit',
+  'submission_in_flight',
+  'reconciliation_required',
+  'externally_received',
+  'externally_validated',
 ])
 
 export const AUTOMATION_TYPES = Object.freeze([
@@ -551,7 +562,7 @@ export async function ensureApplicationTask(db, {
 async function attachSubmissionProof(db, task) {
   if (!task) return task
   const status = String(task.status || '').trim().toLowerCase()
-  if (status !== 'submitted') {
+  if (!['submitted', 'externally_received', 'externally_validated'].includes(status)) {
     task.submission_proof = {
       verified_external: false,
       state: SUBMISSION_PROOF_STATE.NOT_SUBMITTED,
@@ -1075,6 +1086,7 @@ export async function cancelApplicationTask(db, taskId, { actorUserId = null, ac
 // ── Events ─────────────────────────────────────────────────────────
 
 export async function appendTaskEvent(db, {
+  eventId = null,
   taskId,
   eventType,
   status = null,
@@ -1083,16 +1095,18 @@ export async function appendTaskEvent(db, {
   details = null,
   actorUserId = null,
   actorRole = null,
+  idempotent = false,
 } = {}) {
   if (!taskId) throw new Error('taskId required')
   if (!eventType) throw new Error('eventType required')
   await ensureApplicationTaskSchema(db)
-  const id = crypto.randomUUID()
+  const id = eventId ? String(eventId) : crypto.randomUUID()
   await db
     .prepare(
       `INSERT INTO application_task_events
          (id, task_id, event_type, status, step, message, details_json, actor_user_id, actor_role, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowSqlLiteral(db)})`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowSqlLiteral(db)})
+       ${idempotent ? 'ON CONFLICT(id) DO NOTHING' : ''}`,
     )
     .run(
       id,

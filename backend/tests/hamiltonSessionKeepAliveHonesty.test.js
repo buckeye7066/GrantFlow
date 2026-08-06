@@ -32,6 +32,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
+import {
+  addSyntheticHamiltonNetworkSurface,
+  prepareSyntheticHamiltonEgress,
+} from './helpers/hamiltonBrowserHarness.mjs'
 
 process.env.RUNTIME_SECRETS_KEY = 'f'.repeat(64)
 
@@ -39,7 +43,13 @@ const Database = (await import('better-sqlite3')).default
 
 const { importSession, _resetCredentialSchemaCache, getSessionById } =
   await import('../services/hamilton/hamiltonCredentialSessionService.js')
-const { runSessionKeepAliveSweep } = await import('../services/hamilton/hamiltonSessionKeepAlive.js')
+const { runSessionKeepAliveSweep: runSessionKeepAliveSweepImpl } = await import('../services/hamilton/hamiltonSessionKeepAlive.js')
+function runSessionKeepAliveSweep(db, options = {}) {
+  return runSessionKeepAliveSweepImpl(db, {
+    prepareBrowserEgress: prepareSyntheticHamiltonEgress,
+    ...options,
+  })
+}
 const { loadLifetimeLedger, summarizeHostLifetime } =
   await import('../services/hamilton/portalSessionLifetime.js')
 
@@ -61,7 +71,7 @@ const STUDENTAID_MY_ACTIVITY = 'My Activity Anastasia Your recent activity 2026-
 function makeLauncher(pages, { record = {} } = {}) {
   return async ({ storageState }) => {
     record.storageStateSeen = storageState
-    const context = {
+    const context = addSyntheticHamiltonNetworkSurface({
       newPage: async () => {
         let current = null
         return {
@@ -72,7 +82,7 @@ function makeLauncher(pages, { record = {} } = {}) {
         }
       },
       storageState: async () => ({ cookies: [{ name: 'refreshed', value: '1' }], origins: [] }),
-    }
+    })
     return { browser: { close: async () => {} }, context }
   }
 }
@@ -206,7 +216,7 @@ describe('keep-alive liveness verdict', () => {
     // Akamai-class refusal: navigation throws, nothing is readable.
     const launchBrowser = async () => ({
       browser: { close: async () => {} },
-      context: {
+      context: addSyntheticHamiltonNetworkSurface({
         newPage: async () => ({
           goto: async () => { throw new Error('page.goto: net::ERR_HTTP2_PROTOCOL_ERROR') },
           waitForLoadState: async () => {},
@@ -214,7 +224,7 @@ describe('keep-alive liveness verdict', () => {
           url: () => 'about:blank',
         }),
         storageState: async () => ({ cookies: [], origins: [] }),
-      },
+      }),
     })
 
     const out = await runSessionKeepAliveSweep(db, { launchBrowser })

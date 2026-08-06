@@ -19,12 +19,12 @@ const FULL_AUTO_OPTIONS = {
   upload_documents: true,
   generate_narratives: true,
   save_drafts: true,
-  submit_applications: true,
-  allow_auto_submit: true,
+  submit_applications: false,
+  allow_auto_submit: false,
   use_saved_session: true,
   use_saved_credentials_reference: true,
-  use_standing_attestation: true,
-  require_human_review: false,
+  use_standing_attestation: false,
+  require_human_review: true,
 }
 
 const REVIEW_FIRST_OPTIONS = {
@@ -38,7 +38,7 @@ const REVIEW_FIRST_OPTIONS = {
 /**
  * The guided tour's "how hands-on do you want to be" step. Presents Hamilton's
  * automation choice in plain language and, if the user picks one, posts a
- * profile-wide standing authorization via the same endpoint the advanced
+ * profile-wide preparation authorization via the same endpoint the advanced
  * HamiltonAutopilotAuthorization panel uses (scope: 'profile', so it isn't
  * tied to one funding source). Choosing "decide later" leaves nothing
  * authorized -- see reportAutomationChoiceDeferred in guidedTourStore usage:
@@ -59,9 +59,7 @@ export default function AutomationChoiceBody({ onDone }) {
     setBusy(kind)
     try {
       const options = kind === 'auto' ? FULL_AUTO_OPTIONS : REVIEW_FIRST_OPTIONS
-      const types = kind === 'auto'
-        ? [...AUTOMATION_TYPES, 'submit_applications', 'use_standing_attestation']
-        : AUTOMATION_TYPES
+      const types = AUTOMATION_TYPES
       await apiFetch('/api/hamilton/automation/authorize', {
         method: 'POST',
         body: JSON.stringify({
@@ -72,10 +70,10 @@ export default function AutomationChoiceBody({ onDone }) {
         }),
       })
       toast({
-        title: kind === 'auto' ? "Hamilton's on autopilot" : 'Hamilton will check in with you first',
+        title: kind === 'auto' ? 'Hamilton can prepare applications' : 'Hamilton will check in with you first',
         description: kind === 'auto'
-          ? "I'll complete and submit applications for you. You can change this anytime from the Pipeline page."
-          : "I'll fill everything out and pause for your review before anything is ever submitted.",
+          ? "I'll prepare forms and drafts. Final submission is approved later on the exact application task."
+          : "I'll prepare the application and keep final submission as an exact-task decision.",
       })
     } catch (err) {
       toast({
@@ -92,9 +90,9 @@ export default function AutomationChoiceBody({ onDone }) {
   return (
     <div>
       <p className="text-sm leading-relaxed text-slate-700">
-        Hamilton can fill out and submit applications for you automatically, or pause and let you
-        review everything first before anything gets sent. Either way, I'll never submit anything
-        to a real portal without one of these two choices being made.
+        Hamilton can prepare forms, organize documents, and save drafts. This onboarding choice
+        never authorizes a real portal submission, account creation, or legal attestation. Those
+        decisions happen later on the exact application task.
       </p>
 
       <div className="mt-3 space-y-2">
@@ -110,8 +108,8 @@ export default function AutomationChoiceBody({ onDone }) {
             <Zap className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
           )}
           <span>
-            <span className="block text-sm font-semibold text-slate-900">Let Hamilton handle everything</span>
-            <span className="block text-xs text-slate-500">Fastest — forms get filled and submitted without waiting on you.</span>
+            <span className="block text-sm font-semibold text-slate-900">Prepare applications automatically</span>
+            <span className="block text-xs text-slate-500">Hamilton fills and saves drafts; final Submit remains task-specific.</span>
           </span>
         </button>
 

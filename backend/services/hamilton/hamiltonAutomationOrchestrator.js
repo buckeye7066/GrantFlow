@@ -36,6 +36,7 @@
  */
 
 import { classifyFundingSource } from './hamiltonAutomationClassifier.js'
+import crypto from 'node:crypto'
 import { assessHamiltonFundingSource } from './hamiltonFundingSourcePolicy.js'
 import {
   ensureApplicationTask,
@@ -58,9 +59,8 @@ import {
 } from './hamiltonNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
-import { runAutopilot } from './hamiltonAutopilotEngine.js'
+import { runAutopilot, sanitizeListingSnapshotForPersistence } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
-import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './hamiltonConfirmationArtifacts.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
@@ -90,12 +90,33 @@ import {
 } from './hamiltonPreflight.js'
 import {
   createAutopilotRun,
+  isAuthorizationActive,
   updateAutopilotRun,
 } from './hamiltonAuthorizationStore.js'
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
-import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
+import { getPolicyFor, getReviewedSubmissionAdapter } from './hamiltonPortalPolicyRegistry.js'
 import { isSearchEngineUrl } from '../../config/urlRules.js'
 import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
+import {
+  HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+  HAMILTON_MUTATION_AUTHORIZATION,
+  HAMILTON_SUBMISSION_LIFECYCLE,
+} from '../../../shared/hamiltonSubmissionContract.js'
+import { buildTargetScopedAnswerSnapshot } from './hamiltonApplicationAnswerSnapshot.js'
+import {
+  assertSubmissionAttemptFence,
+  createOrClaimSubmissionAttempt,
+  getSubmissionAttempt,
+  recordExternalReceipt,
+  renewSubmissionAttemptLease,
+  supersedeSubmissionAttemptSnapshots,
+  transitionSubmissionAttempt,
+} from './hamiltonSubmissionAttemptStore.js'
+import { drainHamiltonSubmissionOutbox } from './hamiltonSubmissionReceiptProjector.js'
+import {
+  HAMILTON_SUBMISSION_CHANNELS,
+  selectHamiltonSubmissionChannel,
+} from '../../../shared/hamiltonSubmissionChannelContract.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
@@ -108,6 +129,204 @@ const ENV = (typeof process !== 'undefined' && process?.env) ? process.env : {}
 // here makes it authoritative on the path the Control Center actually drives.
 export function isBrowserAutomationEnabled() {
   return String(ENV.HAMILTON_ENABLE_BROWSER_AUTOMATION || 'false').toLowerCase() === 'true'
+}
+
+const PORTAL_IDENTITY_QUERY_KIND = Object.freeze({
+  applicationid: 'application',
+  workspaceid: 'workspace',
+  submissionid: 'submission',
+})
+
+function canonicalPortalIdentityQueryKind(key) {
+  return PORTAL_IDENTITY_QUERY_KIND[String(key || '').toLowerCase().replace(/[_-]/g, '')] || null
+}
+
+function normalizePortalIdentityValue(value) {
+  return String(value || '').normalize('NFKC').trim()
+}
+
+function oneConsistentValue(entries, conflictCode) {
+  const values = [...new Set(entries.map((entry) => normalizePortalIdentityValue(entry.value)).filter(Boolean))]
+  if (values.length > 1) throw new Error(conflictCode)
+  return values[0] || null
+}
+
+function normalizeCycleValue(value) {
+  return normalizePortalIdentityValue(value).toLowerCase().replace(/\s+/g, ' ')
+}
+
+function normalizeDeadlineValue(value) {
+  const normalized = normalizePortalIdentityValue(value)
+  if (!normalized) return ''
+  const parsed = Date.parse(normalized)
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : normalized.toLowerCase()
+}
+
+export function resolveExternalApplicationIdentity({
+  task = {}, opportunity = {}, grant = {}, fundingSourceId, portalUrl, submissionAdapter = null,
+} = {}) {
+  let parsed
+  try { parsed = new URL(String(portalUrl)) } catch { throw new Error('valid_portal_url_required') }
+  if (parsed.protocol !== 'https:') throw new Error('https_portal_url_required')
+  const host = parsed.hostname.toLowerCase()
+  const byKind = new Map()
+  const add = (kind, value, source) => {
+    const normalized = normalizePortalIdentityValue(value)
+    if (!normalized) return
+    const entries = byKind.get(kind) || []
+    entries.push({ value: normalized, source })
+    byKind.set(kind, entries)
+  }
+  const explicit = {
+    application: [
+      ['task.portal_application_id', task.portal_application_id],
+      ['opportunity.portal_application_id', opportunity.portal_application_id],
+      ['grant.portal_application_id', grant.portal_application_id],
+    ],
+    workspace: [
+      ['task.portal_workspace_id', task.portal_workspace_id], ['task.workspace_id', task.workspace_id],
+      ['opportunity.portal_workspace_id', opportunity.portal_workspace_id], ['opportunity.workspace_id', opportunity.workspace_id],
+      ['grant.portal_workspace_id', grant.portal_workspace_id], ['grant.workspace_id', grant.workspace_id],
+    ],
+    submission: [
+      ['task.portal_submission_id', task.portal_submission_id],
+      ['opportunity.portal_submission_id', opportunity.portal_submission_id],
+      ['grant.portal_submission_id', grant.portal_submission_id],
+    ],
+  }
+  for (const [kind, entries] of Object.entries(explicit)) {
+    for (const [source, value] of entries) add(kind, value, source)
+  }
+  const queryKinds = new Map()
+  for (const [key, value] of parsed.searchParams.entries()) {
+    const kind = canonicalPortalIdentityQueryKind(key)
+    if (!kind || !normalizePortalIdentityValue(value)) continue
+    add(kind, value, `query:${key}`)
+    const queries = queryKinds.get(kind) || []
+    queries.push({ key, value: normalizePortalIdentityValue(value) })
+    queryKinds.set(kind, queries)
+  }
+  const consistent = new Map()
+  for (const [kind, entries] of byKind.entries()) {
+    consistent.set(kind, oneConsistentValue(entries, `portal_${kind}_identity_conflict`))
+  }
+  const populatedKinds = [...consistent.entries()].filter(([, value]) => value).map(([kind]) => kind)
+  let selectedKind = populatedKinds[0] || null
+  if (populatedKinds.length > 1) {
+    const authoritative = String(submissionAdapter?.application_identity_kind || '')
+    if (!authoritative || !consistent.get(authoritative)) throw new Error('portal_identity_kind_conflict')
+    selectedKind = authoritative
+  }
+  if (submissionAdapter) {
+    const authoritative = String(submissionAdapter.application_identity_kind || '')
+    if (!authoritative || (selectedKind && selectedKind !== authoritative)) {
+      throw new Error('reviewed_adapter_identity_kind_mismatch')
+    }
+    const queryParameter = String(submissionAdapter.status_query?.query_parameter || '')
+    const queryKind = canonicalPortalIdentityQueryKind(queryParameter)
+    if (queryKind !== authoritative) throw new Error('reviewed_adapter_status_identity_kind_mismatch')
+    const queryValue = oneConsistentValue(queryKinds.get(authoritative) || [], `portal_${authoritative}_query_conflict`)
+    if (!queryValue) throw new Error('reviewed_adapter_exact_identity_query_required')
+    const selectedValue = consistent.get(authoritative)
+    if (selectedValue && selectedValue !== queryValue) throw new Error('reviewed_adapter_target_identity_mismatch')
+    selectedKind = authoritative
+    consistent.set(authoritative, queryValue)
+  }
+  const opaqueIdentity = (kind, material) => `v2:${kind}:${host}:${crypto.createHash('sha256').update(String(material)).digest('hex')}`
+  if (selectedKind) {
+    return {
+      identity: opaqueIdentity(`portal-${selectedKind}`, consistent.get(selectedKind)),
+      kind: selectedKind,
+      source_count: (byKind.get(selectedKind) || []).length,
+    }
+  }
+
+  const cycleEntries = [
+    task.application_round, task.funding_cycle, task.academic_year,
+    opportunity.application_round, opportunity.funding_cycle, opportunity.academic_year,
+    grant.application_round, grant.funding_cycle, grant.academic_year,
+  ].map(normalizeCycleValue).filter(Boolean)
+  const cycleValues = [...new Set(cycleEntries)]
+  if (cycleValues.length > 1) throw new Error('portal_funding_cycle_conflict')
+  const deadlineEntries = [
+    task.deadline, opportunity.deadline, opportunity.close_date, opportunity.application_deadline,
+    grant.deadline, grant.close_date, grant.application_deadline,
+  ].map(normalizeDeadlineValue).filter(Boolean)
+  const deadlineValues = [...new Set(deadlineEntries)]
+  if (deadlineValues.length > 1) throw new Error('portal_deadline_conflict')
+  const cycle = cycleValues[0] || 'round-unspecified'
+  const deadline = deadlineValues[0] || 'deadline-unspecified'
+  const path = parsed.pathname.replace(/\/+$/, '') || '/'
+  return {
+    identity: opaqueIdentity('catalog-cycle', `${String(fundingSourceId)}\n${cycle}\n${deadline}\n${path}`),
+    kind: 'catalog-cycle', source_count: 0,
+  }
+}
+
+/**
+ * External identity is independent of GrantFlow task ids. Prefer a portal's
+ * own application/workspace identity; otherwise bind the canonical funding
+ * record, round/deadline, and normalized portal target. This converges
+ * duplicate tasks without collapsing a later annual round.
+ */
+export function buildExternalApplicationIdentity({
+  task = {}, opportunity = {}, grant = {}, fundingSourceId, portalUrl, submissionAdapter = null,
+} = {}) {
+  return resolveExternalApplicationIdentity({
+    task, opportunity, grant, fundingSourceId, portalUrl, submissionAdapter,
+  }).identity
+}
+
+export function resolveCanonicalFundingSourceIdentity({ task = {}, opportunity = {}, grant = {} } = {}) {
+  const linkedOpportunityId = [
+    opportunity.funding_opportunity_id,
+    opportunity.id,
+    grant.funding_opportunity_id,
+    grant.opportunity_id,
+    task.funding_opportunity_id,
+    task.opportunity_id,
+  ].map((value) => String(value || '').trim()).find(Boolean)
+  if (linkedOpportunityId) return `funding_opportunity:${linkedOpportunityId}`
+  const nativeProgramId = [
+    opportunity.source_program_id, opportunity.external_id, opportunity.program_id,
+    grant.source_program_id, grant.external_id, grant.program_id,
+    task.source_program_id,
+  ].map((value) => String(value || '').trim()).find(Boolean)
+  const source = [opportunity.source, grant.source, task.source].map((value) => String(value || '').trim()).find(Boolean)
+  if (source && nativeProgramId) return `source:${source}:${nativeProgramId}`
+  const fallback = grant.id || task.grant_id
+  if (fallback) return `grant:${String(fallback)}`
+  throw new Error('canonical funding source identity required')
+}
+
+function canonicalStoredPortalTarget(portalUrl) {
+  const parsed = new URL(String(portalUrl))
+  if (parsed.protocol !== 'https:') throw new Error('https portal target required')
+  // Paths as well as query strings can carry application IDs, resume tokens,
+  // or SSO state. The exact target is encrypted on the submission attempt;
+  // general events, notifications, checkpoints, and UI receive only origin.
+  return `${parsed.origin}/`
+}
+
+function redactionSafeClassification(classification) {
+  return {
+    automation_type: classification?.automation_type || null,
+    source: classification?.source || null,
+    confidence: Number.isFinite(classification?.confidence) ? classification.confidence : null,
+    has_resolved_url: Boolean(classification?.resolved_url),
+  }
+}
+
+function redactionSafeResolverDirective(directive) {
+  return {
+    outcome: directive?.outcome || null,
+    strategy: directive?.strategy || null,
+    fallback: directive?.fallback || null,
+    retry: directive?.retry === true,
+    payload_keys: directive?.payload && typeof directive.payload === 'object'
+      ? Object.keys(directive.payload).filter((key) => !/(value|text|credential|password|token|secret)/i.test(key)).sort()
+      : [],
+  }
 }
 
 // Optional comma-separated host allowlist (e.g. "tn.gov,mtsu.edu"). When set,
@@ -479,34 +698,36 @@ async function reload(db, taskId) {
  */
 export async function attemptPortalSignupRecovery(db, {
   profileId, userId = 'system_admin_token', taskId = null, url, profile = null,
+  createPortalAccountAuthorized = false,
+  reviewedSignupAdapter = null,
   _identityRunner = null, _credentialFetcher = null,
 } = {}) {
-  try {
-    const runIdentity = _identityRunner
-      || (await import('./hamiltonPortalAutopilotIdentity.js')).runAutopilotIdentityForPortal
-    const outcome = await runIdentity(db, {
-      profileId, userId, portalHost: url, loginUrl: url, profile,
-    })
-    if (taskId) {
-      await appendTaskEvent(db, {
-        taskId, eventType: 'progress', status: 'filling_portal', step: 'portal_signup',
-        message: `No saved login for this portal — Hamilton ran the account-signup path: ${outcome.state}${outcome.detail ? ` (${outcome.detail})` : ''}`,
-        actorUserId: userId, actorRole: 'agent',
-        details: { state: outcome.state, host: outcome.host, blocker: outcome.blocker || null },
-      }).catch(() => {})
-    }
-    if (outcome.state !== 'auto_provisioned' && outcome.state !== 'has_existing_credentials') {
-      return { outcome, credential: null }
-    }
-    const fetchCredential = _credentialFetcher || getDecryptedCredentialWithFallback
-    let credential = await fetchCredential(db, { profileId, portalHost: url }).catch(() => null)
-    if (credential?.vault_locked || credential?.pending_registration) credential = null
-    return { outcome, credential }
-  } catch (err) {
-    // Signup is additive; a failure falls through to the caller's normal backoff.
-    console.warn(`[hamiltonOrchestrator] portal signup path failed (non-fatal): ${err?.message || err}`)
-    return { outcome: null, credential: null }
+  // Existing-credential authority is never account-creation authority. The
+  // bounded release deliberately ships no real reviewed signup adapter, so
+  // even an explicit grant produces a precise owner handoff instead of the old
+  // generic registration heuristic (which could accept hidden terms).
+  const reason = createPortalAccountAuthorized !== true
+    ? 'account_creation_not_authorized'
+    : !reviewedSignupAdapter
+      ? 'reviewed_signup_adapter_required'
+      : 'reviewed_signup_execution_not_enabled'
+  const outcome = {
+    state: 'needs_user',
+    host: hostOfUrl(url),
+    blocker: 'create_portal_account',
+    detail: reason === 'account_creation_not_authorized'
+      ? 'Using saved logins does not authorize Hamilton to create a new portal account.'
+      : 'This portal has no enabled, reviewed account-creation adapter. Create the account yourself, then Hamilton can use the saved login.',
   }
+  if (taskId) {
+    await appendTaskEvent(db, {
+      taskId, eventType: 'blocked', status: 'human_action_required', step: 'portal_account_creation',
+      message: outcome.detail, actorUserId: userId, actorRole: 'agent',
+      details: { state: outcome.state, host: outcome.host, blocker: outcome.blocker, reason },
+    }).catch(() => {})
+  }
+  void db; void profileId; void profile; void _identityRunner; void _credentialFetcher
+  return { outcome, credential: null, reason }
 }
 
 /**
@@ -907,7 +1128,7 @@ async function runPortalPathway(db, {
       message: 'Target URL is a search-engine results page — degraded to unknown_application_method; no login attempted.',
       actorUserId: userId,
       actorRole: 'agent',
-      details: { blocker_kind: 'unknown_application_method', rejected_url: classification.resolved_url },
+      details: { blocker_kind: 'unknown_application_method', rejected_url: canonicalStoredPortalTarget(classification.resolved_url) },
     })
     await emitHamiltonNotificationToProfileAndAdmins(db, {
       profileId: task.profile_id,
@@ -925,11 +1146,17 @@ async function runPortalPathway(db, {
   // authorized at least `complete_forms`. Without that authorization
   // we save the portal URL and wait — Autopilot does not run until
   // the user has explicitly granted authority on the launch screen.
-  const authorizations = options?.authorizations || (await readAuthorizations(db, {
+  // The worker never trusts caller-supplied/UI authorization flags. Resolve the
+  // exact current owner/version from the server ledger every time this pathway
+  // is entered; missing/old-version consent is default deny.
+  const authorizationOwnerId = task.user_id || profile?.user_id || userId
+  const authorizations = await readAuthorizations(db, {
+    userId: authorizationOwnerId,
     profileId: task.profile_id,
     fundingSourceId: opportunity?.id || grant?.id || null,
     taskId: task.id,
-  }))
+    expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+  })
 
   if (!authorizations.complete_forms) {
     await updateApplicationTask(db, task.id, {
@@ -952,7 +1179,11 @@ async function runPortalPathway(db, {
       title: 'Hamilton is ready to start a portal application',
       message: `Authorize Hamilton Autopilot for "${opportunity?.title || grant?.title || 'this funding source'}" to run unattended.`,
       severity: 'info',
-      data: { task_id: task.id, portal_url: classification.resolved_url, classification },
+      data: {
+        task_id: task.id,
+        portal_url: canonicalStoredPortalTarget(classification.resolved_url),
+        classification: redactionSafeClassification(classification),
+      },
     })
     return { task: await reload(db, task.id), classification, portal_url: classification.resolved_url }
   }
@@ -1007,7 +1238,7 @@ async function runAutopilotPathway(db, {
     message: 'Hamilton Autopilot starting (user-authorized unattended completion).',
     actorUserId: userId,
     actorRole: 'agent',
-    details: { autopilot_run_id: run.id, url },
+    details: { autopilot_run_id: run.id, portal_url: canonicalStoredPortalTarget(url) },
   })
 
   // Preflight (re-runs the lightweight checks; the launch screen
@@ -1081,21 +1312,19 @@ async function runAutopilotPathway(db, {
   // sign-in / 2FA prompt. Outside the window we defer the task to the next window
   // start. User-initiated runs (no options.autonomous) are never gated — the user
   // is already present.
-  if (options?.autonomous) {
-    // Per-profile automation toggle: the user can turn OFF unattended Hamilton
-    // auto-apply for this profile. When off we never drive an autonomous run —
-    // the user can still launch Hamilton by hand (which is not `autonomous`).
-    // Absent preference defaults ON (current behaviour). See
-    // shared/automationPreferences.js.
-    const automationPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
-    if (!isAutomationEnabled(automationPrefs, 'hamilton_autopilot')) {
+  // The profile toggle is part of server-side authority, not UI decoration.
+  // Missing/malformed explicitly defaults OFF in automationPreferences. A
+  // manual click may create a current authorization, but it does not silently
+  // override a profile whose Hamilton automation toggle is off.
+  const automationPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
+  if (!isAutomationEnabled(automationPrefs, 'hamilton_autopilot')) {
       await updateApplicationTask(db, task.id, {
         status: 'ready_to_start',
-        lastAgentMessage: 'Hamilton auto-apply is turned off for this profile. Launch Hamilton manually to run this application.',
+        lastAgentMessage: 'Hamilton portal automation is off for this profile. Turn it on in Automations, review the current authorization, and launch again.',
       })
       await appendTaskEvent(db, {
         taskId: task.id, eventType: 'note', status: 'ready_to_start', step: 'automation_disabled',
-        message: 'Skipped autonomous run: Hamilton auto-apply is disabled in this profile\'s Automations settings.',
+        message: 'Portal automation did not launch because Hamilton is disabled for this profile.',
         actorUserId: userId, actorRole: 'agent',
       })
       await updateAutopilotRun(db, run.id, {
@@ -1104,7 +1333,8 @@ async function runAutopilotPathway(db, {
         finishedAt: new Date().toISOString(),
       })
       return { task: await reload(db, task.id), classification, autopilot_run: run.id, deferred: true, reason: 'hamilton_autopilot_disabled' }
-    }
+  }
+  if (options?.autonomous) {
     const schedule = normalizeSchedule(profile?.automation_preferences || profile?.sections?.automation_preferences || {})
     if (schedule.enabled && !isWithinWindow(schedule, new Date())) {
       const nextAt = nextWindowStart(schedule, new Date())
@@ -1141,6 +1371,15 @@ async function runAutopilotPathway(db, {
   // the lawful fallback packet instead.
   const portalHostForPolicy = hostOfUrl(url)
   const portalPolicy = await getPolicyFor(db, portalHostForPolicy).catch(() => null)
+  const reviewedSubmitAdapter = getReviewedSubmissionAdapter(portalPolicy, { portalUrl: url })
+  const submissionChannel = selectHamiltonSubmissionChannel({
+    officialS2SContract: portalPolicy?.metadata?.official_s2s_contract || null,
+    // This browser worker does not contain an S2S credential executor. A future
+    // official channel must inject/register one explicitly; metadata alone can
+    // never route an irreversible submission.
+    officialS2SExecutorAvailable: false,
+    reviewedBrowserAdapter: reviewedSubmitAdapter,
+  })
   const policyForbidsAutomation = !!(portalPolicy && portalPolicy.automation_allowed === false)
 
   if (policyForbidsAutomation || !browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
@@ -1202,35 +1441,30 @@ async function runAutopilotPathway(db, {
 
   let storageStatePath = options?.storageStatePath || null
   let documents = Array.isArray(options?.documents) ? [...options.documents] : []
-  // Submission authority (owner addendum 2026-08-03): when auto-submit IS
-  // authorized, the run must carry that authority to the portal's real submit
-  // step on EVERY run — not just the batch that created the task. The task's
-  // STORED authorizations are therefore consulted alongside the live ones:
-  //   - task.allow_auto_submit — the persisted batch option (same authority
-  //     the options flag has on the run that set it);
-  //   - task.auto_submit_enabled — the user's explicit per-task
-  //     "approve auto-submit" toggle (routes/applicationTasks approve-submit),
-  //     which previously only the legacy hamiltonApplicationAgent honored and
-  //     never reached this authoritative path. It keeps the legacy agent's
-  //     rail: the global HAMILTON_ALLOW_AUTOSUBMIT flag must also be on;
-  //   - authorizations.submit_applications — the authorization-store grant.
-  // No new path and no default flip: an explicit batch option still wins in
-  // both directions, all three stored/live sources default false, and every
-  // downstream gate (per-profile toggle, tailored-approval gate) can still
-  // force the run back to filled-not-submitted.
-  let allowAutoSubmit = options?.allow_auto_submit ?? (
-    Boolean(task?.allow_auto_submit)
-    || (Boolean(task?.auto_submit_enabled) && isAutoSubmitGloballyEnabled())
-    || authorizations.submit_applications
+  // Final-submit authority has one server-side source of truth: a CURRENT v2
+  // submit_applications row owned by this profile's user. Persisted task booleans
+  // and request options can only narrow it; neither can mint authority.
+  const autoSubmitPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
+  let allowAutoSubmit = Boolean(
+    authorizations.submit_applications
+    && authorizations.require_human_review === false
+    && isAutomationEnabled(autoSubmitPrefs, 'hamilton_auto_submit')
+    && isAutoSubmitGloballyEnabled()
+    && options?.allow_auto_submit !== false
+    && options?.require_human_review !== true
+    && submissionChannel.channel === HAMILTON_SUBMISSION_CHANNELS.REVIEWED_BROWSER
   )
-  // Per-profile automation toggle: turning OFF "Hamilton auto-submit" forces a
-  // hand-back before submission regardless of the per-application authorization.
-  // Absent preference defaults ON (current behaviour).
-  {
-    const autoSubmitPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
-    if (allowAutoSubmit && !isAutomationEnabled(autoSubmitPrefs, 'hamilton_auto_submit')) {
-      allowAutoSubmit = false
-    }
+  if (authorizations.submit_applications && !reviewedSubmitAdapter) {
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'note',
+      status: 'filling_portal',
+      step: 'unreviewed_portal_submit_adapter',
+      message: 'Hamilton may prepare this portal application, but final Submit remains a human action because this portal has no reviewed, fixture-backed submission adapter.',
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { portal_host: portalHostForPolicy, auto_submit_allowed: false },
+    })
   }
 
   // ── TAILORED-APPLICATION AUTO-SUBMIT GATE (single choke point) ──────
@@ -1349,7 +1583,7 @@ async function runAutopilotPathway(db, {
   // application_sections, possibly user-edited in the Apply page), its
   // prepared content IS the fill source for the portal's long-form answers —
   // for EVERY profile and EVERY portal, resolved only by the task's funding
-  // source (no per-school special-casing). It overrides a fresh re-draft
+      // source (no per-school special-casing). It overrides a fresh re-draft
   // (the packet is what the user saw and edited) but stays BELOW the
   // APPROVED tailored text merged next. Submission authority is untouched:
   // the run stays filled-not-submitted unless the existing allow_auto_submit /
@@ -1394,6 +1628,267 @@ async function runAutopilotPathway(db, {
         narrativeAnswers = { ...(narrativeAnswers || {}), ...approvedAnswers }
       }
     } catch { /* best-effort */ }
+  }
+
+  const authorizationFundingSourceId = opportunity?.id || grant?.id || task.opportunity_id || task.grant_id
+  const fundingSourceId = resolveCanonicalFundingSourceIdentity({ task, opportunity, grant })
+  const authorizationOwnerId = task.user_id || profile?.user_id || userId
+  const answerSnapshot = buildTargetScopedAnswerSnapshot({
+    profile, task, opportunity, grant, portalUrl: url, narrativeAnswers,
+  })
+  const portalHost = hostOfUrl(url)
+  let applicationIdentity
+  try {
+    applicationIdentity = buildExternalApplicationIdentity({
+      task, opportunity, grant, fundingSourceId, portalUrl: url,
+      submissionAdapter: reviewedSubmitAdapter,
+    })
+  } catch (error) {
+    const reason = /^[a-z0-9_:-]{1,120}$/i.test(String(error?.message || ''))
+      ? String(error.message)
+      : 'portal_application_identity_invalid'
+    const message = `Hamilton found conflicting or unbound portal application identity data (${reason}). Review the exact application/workspace link before automation continues.`
+    await updateAutopilotRun(db, run.id, {
+      status: 'deferred', blockerKind: 'application_identity_conflict',
+      blockerDetail: message, result: { reason }, finishedAt: new Date().toISOString(),
+    })
+    await updateApplicationTask(db, task.id, { status: 'human_action_required', lastAgentMessage: message })
+    await appendTaskEvent(db, {
+      taskId: task.id, eventType: 'blocked', status: 'human_action_required',
+      step: 'application_identity_conflict', message, actorUserId: userId, actorRole: 'agent',
+      details: { reason },
+    })
+    return {
+      task: await reload(db, task.id), classification, autopilot_run: run.id,
+      human_action_required: true, blocker_kind: 'application_identity_conflict', reason,
+    }
+  }
+  const authorizationIds = [...(authorizations.authorization_ids || [])].map(String).sort()
+  const consentSnapshot = {
+    authorization_version: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+    authorization_ids: authorizationIds,
+    complete_forms: authorizations.complete_forms === true,
+    create_portal_account: authorizations.create_portal_account === true,
+    upload_documents: authorizations.upload_documents === true,
+    save_drafts: authorizations.save_drafts === true,
+    submit_applications: authorizations.submit_applications === true,
+    require_human_review: authorizations.require_human_review !== false,
+    hamilton_autopilot: isAutomationEnabled(automationPrefs, 'hamilton_autopilot'),
+    hamilton_auto_submit: isAutomationEnabled(autoSubmitPrefs, 'hamilton_auto_submit'),
+    submission_adapter: reviewedSubmitAdapter ? {
+      id: reviewedSubmitAdapter.id,
+      version: reviewedSubmitAdapter.version,
+      fixture_contract_sha256: reviewedSubmitAdapter.fixture_contract_sha256,
+    } : null,
+    submission_channel: submissionChannel.channel,
+    submission_channel_contract_version: submissionChannel.contract_version,
+  }
+  const documentIds = documents.map((document) => document?.document_id).filter(Boolean).map(String).sort()
+  let claim = await createOrClaimSubmissionAttempt(db, {
+    taskId: task.id,
+    profileId: task.profile_id,
+    userId: authorizationOwnerId,
+    fundingSourceId,
+    authorizationTargetId: authorizationFundingSourceId,
+    portalHost,
+    targetUrl: canonicalStoredPortalTarget(url),
+    executableTargetUrl: url,
+    applicationIdentity,
+    authorizationVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+    authorizationIds,
+    consentSnapshot,
+    answerSnapshotHash: answerSnapshot.hash,
+    answerProvenance: answerSnapshot.provenance,
+    documentIds,
+    submissionAdapter: reviewedSubmitAdapter,
+    evidenceRequired: {
+      receipt_or_tracking_reference: true,
+      independent_status_allowed: true,
+      submission_channel: submissionChannel.channel,
+      submission_channel_contract_version: submissionChannel.contract_version,
+    },
+    mapTerminalReceiptToDuplicateTask: true,
+    resumeHumanGate: options.require_verified_human_gate_resume === true,
+    leaseOwner: `autopilot-run:${run.id}`,
+  })
+  if (!claim.claimed && claim.reason === 'snapshot_changed') {
+    try {
+      claim = await supersedeSubmissionAttemptSnapshots(db, {
+        attemptId: claim.attempt.id,
+        taskId: task.id,
+        profileId: task.profile_id,
+        userId: authorizationOwnerId,
+        fundingSourceId,
+        authorizationTargetId: authorizationFundingSourceId,
+        portalHost,
+        targetUrl: canonicalStoredPortalTarget(url),
+        executableTargetUrl: url,
+        applicationIdentity,
+        authorizationVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+        authorizationIds,
+        consentSnapshot,
+        answerSnapshotHash: answerSnapshot.hash,
+        answerProvenance: answerSnapshot.provenance,
+        documentIds,
+        submissionAdapter: reviewedSubmitAdapter,
+        evidenceRequired: {
+          receipt_or_tracking_reference: true,
+          independent_status_allowed: true,
+          submission_channel: submissionChannel.channel,
+          submission_channel_contract_version: submissionChannel.contract_version,
+        },
+        leaseOwner: `autopilot-run:${run.id}`,
+      })
+    } catch (error) {
+      claim = { ...claim, reason: error?.message || 'snapshot_supersede_failed' }
+    }
+  }
+  if (!claim.claimed) {
+    const reason = claim.reason
+    if (reason === 'already_received') {
+      const projection = await drainHamiltonSubmissionOutbox(db, {
+        attemptId: claim.attempt.id,
+        leaseOwner: `autopilot-run:${run.id}:receipt-projection`,
+      })
+      await updateAutopilotRun(db, run.id, {
+        status: 'externally_received',
+        result: {
+          submission_attempt_id: claim.attempt.id,
+          canonical_receipt_reused: true,
+          projection_pending: projection.projected === 0 && projection.failed > 0,
+        },
+        confirmationReference: claim.attempt.proof?.confirmation_reference || null,
+        finishedAt: new Date().toISOString(),
+      })
+      return {
+        task: await reload(db, task.id), classification, autopilot_run: run.id,
+        submission_attempt: claim.attempt.id, externally_received: true,
+        canonical_receipt_reused: true,
+      }
+    }
+    const taskStatus = reason === 'reconciliation_required' ? 'reconciliation_required' : 'human_action_required'
+    const message = reason === 'reconciliation_required'
+      ? 'A prior submit action has an ambiguous outcome. Hamilton will not click Submit again until the portal is reconciled.'
+      : reason === 'active_lease'
+        ? 'This exact application is already owned by another active Hamilton run; the duplicate start was fenced.'
+        : `Hamilton cannot start this external attempt because its frozen state is ${reason}. Review and create a current attempt.`
+    await updateAutopilotRun(db, run.id, {
+      status: 'deferred',
+      result: { submission_attempt_id: claim.attempt.id, duplicate_fenced: true, reason },
+      finishedAt: new Date().toISOString(),
+    })
+    await updateApplicationTask(db, task.id, { status: taskStatus, lastAgentMessage: message })
+    await appendTaskEvent(db, {
+      taskId: task.id, eventType: 'note', status: taskStatus, step: 'submission_attempt_claim',
+      message, actorUserId: userId, actorRole: 'agent',
+      details: { submission_attempt_id: claim.attempt.id, reason },
+    })
+    return {
+      task: await reload(db, task.id), classification, autopilot_run: run.id,
+      submission_attempt: claim.attempt.id, fenced: true, reason,
+    }
+  }
+  const submissionAttempt = claim.attempt
+
+  const beforeExternalAction = async ({ action, detail = {} }) => {
+    const actionPortalHost = hostOfUrl(detail.portal_url || url)
+    const fenced = await assertSubmissionAttemptFence(db, {
+      attemptId: submissionAttempt.id,
+      fenceToken: submissionAttempt.fence_token,
+      fenceGeneration: submissionAttempt.fence_generation,
+      taskId: task.id,
+      profileId: task.profile_id,
+      userId: authorizationOwnerId,
+      fundingSourceId,
+      portalHost: actionPortalHost,
+    })
+    if (action === 'final_submit_commit'
+        && fenced.state !== HAMILTON_SUBMISSION_LIFECYCLE.READY_FOR_FINAL_SUBMIT) {
+      throw new Error('final_submit_commit_requires_ready_attempt')
+    }
+    const freshProfile = await loadProfileBundle(db, task.profile_id)
+    if (!freshProfile || String(freshProfile.user_id || '') !== String(authorizationOwnerId)) {
+      throw new Error('profile_owner_changed')
+    }
+    const freshPrefs = freshProfile.automation_preferences || freshProfile.sections?.automation_preferences || {}
+    if (!isAutomationEnabled(freshPrefs, 'hamilton_autopilot')) throw new Error('hamilton_autopilot_disabled')
+    const isFinalSubmitAction = action === 'final_submit' || action === 'final_submit_commit'
+    if (isFinalSubmitAction && !isAutomationEnabled(freshPrefs, 'hamilton_auto_submit')) {
+      throw new Error('hamilton_auto_submit_disabled')
+    }
+    if (isFinalSubmitAction) {
+      if (!isAutoSubmitGloballyEnabled()) throw new Error('global_auto_submit_kill_switch_off')
+      if (!isBrowserAutomationEnabled()) throw new Error('browser_automation_kill_switch_off')
+      const freshPolicy = await getPolicyFor(db, actionPortalHost)
+      if (freshPolicy?.automation_allowed !== true || freshPolicy?.agent_submission_allowed !== true) {
+        throw new Error('portal_submission_kill_switch_off')
+      }
+      const freshAdapter = getReviewedSubmissionAdapter(freshPolicy, { portalUrl: detail.portal_url || url })
+      if (!freshAdapter
+          || freshAdapter.id !== reviewedSubmitAdapter?.id
+          || freshAdapter.version !== reviewedSubmitAdapter?.version
+          || freshAdapter.fixture_contract_sha256 !== reviewedSubmitAdapter?.fixture_contract_sha256) {
+        throw new Error('portal_submission_adapter_unreviewed_or_changed')
+      }
+    }
+    const requiredAuthorization = HAMILTON_MUTATION_AUTHORIZATION[action]
+    if (!requiredAuthorization) throw new Error(`unknown_external_action:${action}`)
+    const active = await isAuthorizationActive(db, {
+      userId: authorizationOwnerId,
+      profileId: task.profile_id,
+      authorizationType: requiredAuthorization,
+      fundingSourceId: authorizationFundingSourceId,
+      taskId: task.id,
+      expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+    })
+    if (!active) throw new Error(`authorization_inactive:${requiredAuthorization}`)
+    const freshAuthorizations = await readAuthorizations(db, {
+      userId: authorizationOwnerId,
+      profileId: task.profile_id,
+      fundingSourceId: authorizationFundingSourceId,
+      taskId: task.id,
+      expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+    })
+    if (isFinalSubmitAction && freshAuthorizations.require_human_review !== false) {
+      throw new Error('final_human_review_required')
+    }
+    const freshIds = [...(freshAuthorizations.authorization_ids || [])].map(String).sort()
+    if (JSON.stringify(freshIds) !== JSON.stringify(fenced.authorization_ids)) {
+      throw new Error('authorization_snapshot_changed')
+    }
+    const freshAnswers = buildTargetScopedAnswerSnapshot({
+      profile: freshProfile, task, opportunity, grant, portalUrl: url, narrativeAnswers,
+    })
+    if (freshAnswers.hash !== fenced.answer_snapshot_hash) throw new Error('answer_snapshot_changed')
+    if (action === 'upload_document' && !fenced.document_ids.includes(String(detail.document_id || ''))) {
+      throw new Error('document_not_bound_to_attempt')
+    }
+    await renewSubmissionAttemptLease(db, {
+      attemptId: fenced.id, fenceToken: submissionAttempt.fence_token,
+    })
+    if (action === 'final_submit') {
+      let current = await getSubmissionAttempt(db, fenced.id)
+      if (current.state !== HAMILTON_SUBMISSION_LIFECYCLE.READY_FOR_FINAL_SUBMIT) {
+        current = await transitionSubmissionAttempt(db, {
+          attemptId: current.id,
+          fenceToken: submissionAttempt.fence_token,
+          toState: HAMILTON_SUBMISSION_LIFECYCLE.READY_FOR_FINAL_SUBMIT,
+          eventType: 'pre_submit_revalidated',
+          details: { portal_host: portalHost, answer_snapshot_hash: answerSnapshot.hash },
+        })
+      }
+      return current
+    }
+    if (action === 'final_submit_commit') {
+      return transitionSubmissionAttempt(db, {
+        attemptId: fenced.id,
+        fenceToken: submissionAttempt.fence_token,
+        toState: HAMILTON_SUBMISSION_LIFECYCLE.SUBMISSION_IN_FLIGHT,
+        eventType: 'final_submit_dispatch_committed',
+        details: { portal_host: portalHost },
+      })
+    }
+    return fenced
   }
 
   // Sink for the engine to hand back the authenticated storageState after a
@@ -1441,13 +1936,20 @@ async function runAutopilotPathway(db, {
       url, profile, authorizations,
       documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
       headless: options?.headless ?? true,
-      // DURABLE proof: capture the confirmation screenshot + saved page under
-      // the persistent volume (UPLOADS_DIR), NOT the container's ephemeral tmp
-      // that Railway wipes on every deploy. Without this the DB kept a path to a
-      // file that no longer existed and a real submission's proof evaporated.
-      screenshotsDir: resolveConfirmationCaptureDir(),
       sessionSink,
       narrativeAnswers,
+      answerSnapshot,
+      submissionAdapter: reviewedSubmitAdapter,
+      attemptContext: {
+        id: submissionAttempt.id,
+        task_id: task.id,
+        profile_id: task.profile_id,
+        user_id: authorizationOwnerId,
+        funding_source_id: fundingSourceId,
+        application_identity: applicationIdentity,
+        portal_host: portalHost,
+      },
+      beforeExternalAction,
     })
     if (loginCredential && engineResult?.logged_in) {
       await markCredentialUsed(db, loginCredential.id).catch(() => {})
@@ -1474,13 +1976,13 @@ async function runAutopilotPathway(db, {
       storageState = sessionSink.storageState
       sessionSink.storageState = null
     }
-    if (engineResult.status === 'submitted' || engineResult.status === 'completed_draft') break
+    if (['external_receipt_candidate', 'reconciliation_required', 'human_action_required', 'completed_draft'].includes(engineResult.status)) break
     if (engineResult.status === 'failed' && engineResult.blocker_kind === 'no_browser') break
     // NEVER re-run the engine after a submit click: submit_unconfirmed means
     // the submit action already completed but no confirmation evidence could
     // be captured — a resolver retry could submit the application TWICE.
     // Hand straight to a human to verify receipt on the portal.
-    if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'submit_unconfirmed') break
+    if (engineResult.status === 'reconciliation_required') break
     // A LISTING page (multiple awards, no single form) is not a blocker to
     // resolve — it is a decomposition target. Break out and hand it to the
     // listing-decomposition handler below instead of the auth/resolver ladder.
@@ -1498,7 +2000,8 @@ async function runAutopilotPathway(db, {
     // CAPTCHA are NEVER bypassed. Tried at most once per run.
     if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'login'
         && !loginCredential && !vaultLockedForHost && !signupAttempted
-        && authorizations.use_saved_credentials_reference) {
+        && authorizations.use_saved_credentials_reference
+        && authorizations.create_portal_account === true) {
       signupAttempted = true
       const recovered = await attemptPortalSignupRecovery(db, {
         profileId: task.profile_id,
@@ -1506,6 +2009,8 @@ async function runAutopilotPathway(db, {
         taskId: task.id,
         url,
         profile,
+        createPortalAccountAuthorized: true,
+        reviewedSignupAdapter: null,
         _identityRunner: options?._identityRunner || null,
       })
       if (recovered.credential) {
@@ -1533,7 +2038,7 @@ async function runAutopilotPathway(db, {
       message: `Resolver: ${directive.strategy} → ${directive.outcome}`,
       actorUserId: userId,
       actorRole: 'agent',
-      details: { directive },
+      details: { directive: redactionSafeResolverDirective(directive) },
     })
 
     if (directive.outcome === 'resolved' && directive.retry) {
@@ -1545,14 +2050,24 @@ async function runAutopilotPathway(db, {
       // fabricated). Redirect the remaining attempts there and persist it on
       // the task so every owner-facing surface links the real destination.
       if (directive.payload?.application_url) {
-        url = directive.payload.application_url
-        await updateApplicationTask(db, task.id, { applicationUrl: url }).catch(() => {})
+        const rescuedUrl = directive.payload.application_url
+        await updateApplicationTask(db, task.id, { applicationUrl: rescuedUrl }).catch(() => {})
         await appendTaskEvent(db, {
-          taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'url_rescue',
-          message: `Hamilton found the funder's application page and is continuing there: ${url}`,
+          taskId: task.id, eventType: 'progress', status: 'human_action_required', step: 'url_rescue',
+          message: `Hamilton found a different application target on ${hostOfUrl(rescuedUrl) || 'the portal'}. The current frozen attempt will not follow it automatically; review the target and start a new attempt snapshot.`,
           actorUserId: userId, actorRole: 'agent',
-          details: { autopilot_run_id: run.id, rescued_url: url },
+          details: {
+            autopilot_run_id: run.id,
+            rescued_url: canonicalStoredPortalTarget(rescuedUrl),
+            prior_url: canonicalStoredPortalTarget(url),
+          },
         }).catch(() => {})
+        engineResult = {
+          status: 'human_action_required',
+          blocker_kind: 'unknown_portal_state',
+          blocker_detail: 'The application URL changed after the attempt was frozen. Review the new portal target before continuing.',
+        }
+        break
       }
       continue
     }
@@ -1564,6 +2079,137 @@ async function runAutopilotPathway(db, {
     break
   }
 
+  const humanActionKindFor = (kind) => {
+    const normalized = String(kind || '').toLowerCase()
+    if (normalized === '2fa' || normalized.includes('two_factor') || normalized === 'sso') return 'mfa'
+    if (normalized.includes('login') || normalized.includes('credential') || normalized === 'authorization_guard') return 'login'
+    if (normalized.includes('captcha') || normalized.includes('bot_protected')) return 'captcha'
+    if (normalized.includes('signature')) return 'signature'
+    if (normalized.includes('attestation')) return 'attestation'
+    if (normalized.includes('terms')) return 'terms'
+    if (normalized.includes('release')) return 'release'
+    if (normalized.includes('payment')) return 'payment'
+    if (normalized.includes('final_submit') || normalized.includes('final_review_submit')) return 'final_review_submit'
+    if (normalized.includes('role') || normalized.includes('aor')) return 'role_aor'
+    if (normalized.includes('upload') || normalized.includes('document')) return 'manual_upload'
+    if (normalized.includes('missing') || normalized.includes('validation')) return 'missing_information'
+    return 'unknown_portal_state'
+  }
+
+  // Convert the engine's observation to the durable attempt lifecycle BEFORE
+  // any task status or notification is allowed to imply external receipt.
+  if (engineResult?.status === 'external_receipt_candidate') {
+    const evidenceType = portalHost === 'grants.gov' || portalHost?.endsWith('.grants.gov')
+      ? 'portal_tracking_number'
+      : 'portal_confirmation_reference'
+    const receipt = await recordExternalReceipt(db, {
+      attemptId: submissionAttempt.id,
+      fenceToken: submissionAttempt.fence_token,
+      fenceGeneration: submissionAttempt.fence_generation,
+      proof: {
+        evidence_type: evidenceType,
+        source: 'portal_response',
+        attempt_id: submissionAttempt.id,
+        task_id: task.id,
+        profile_id: task.profile_id,
+        user_id: authorizationOwnerId,
+        funding_source_id: String(fundingSourceId),
+        application_identity: applicationIdentity,
+        target_locator_sha256: submissionAttempt.target_locator_sha256,
+        portal_url: engineResult.confirmation_url,
+        captured_at: engineResult.confirmation_captured_at,
+        confirmation_reference: engineResult.confirmation_reference,
+        reference_kind: engineResult.confirmation_reference_kind,
+        received_acknowledgement: engineResult.confirmation_received_acknowledgement === true,
+        pre_click_reference: engineResult.pre_click_reference || null,
+        pre_click_page_fingerprint: engineResult.pre_click_page_fingerprint,
+        post_click_page_fingerprint: engineResult.post_click_page_fingerprint,
+        extraction_rule: engineResult.confirmation_extraction_rule,
+        portal_policy_version: reviewedSubmitAdapter
+          ? `${reviewedSubmitAdapter.id}@${reviewedSubmitAdapter.version}:${reviewedSubmitAdapter.fixture_contract_sha256}`
+          : 'unreviewed-portal-adapter',
+        portal_adapter: reviewedSubmitAdapter ? {
+          id: reviewedSubmitAdapter.id,
+          version: reviewedSubmitAdapter.version,
+          fixture_contract_sha256: reviewedSubmitAdapter.fixture_contract_sha256,
+        } : null,
+      },
+    })
+    if (receipt.recorded) {
+      engineResult.status = 'externally_received'
+      engineResult.submission_attempt_id = submissionAttempt.id
+      engineResult.external_receipt_proof = receipt.attempt.proof
+      engineResult.receipt_outbox_event_id = receipt.outbox_event_id
+    } else {
+      await transitionSubmissionAttempt(db, {
+        attemptId: submissionAttempt.id,
+        fenceToken: submissionAttempt.fence_token,
+        toState: HAMILTON_SUBMISSION_LIFECYCLE.RECONCILIATION_REQUIRED,
+        eventType: 'receipt_candidate_rejected',
+        details: { reason: receipt.reason },
+        releaseLease: true,
+      })
+      engineResult.status = 'reconciliation_required'
+      engineResult.blocker_kind = 'receipt_proof_rejected'
+      engineResult.blocker_detail = `The portal may have received the application, but its receipt evidence did not satisfy the proof contract (${receipt.reason}). Reconcile before retrying.`
+    }
+  } else if (engineResult?.status === 'reconciliation_required') {
+    await transitionSubmissionAttempt(db, {
+      attemptId: submissionAttempt.id,
+      fenceToken: submissionAttempt.fence_token,
+      toState: HAMILTON_SUBMISSION_LIFECYCLE.RECONCILIATION_REQUIRED,
+      eventType: 'submit_outcome_ambiguous',
+      details: {
+        blocker_kind: engineResult.blocker_kind || null,
+        submit_clicked: engineResult.submit_clicked === true,
+        confirmation_url: engineResult.confirmation_url || null,
+      },
+      releaseLease: true,
+    })
+  } else if (engineResult?.status === 'completed_draft') {
+    await transitionSubmissionAttempt(db, {
+      attemptId: submissionAttempt.id,
+      fenceToken: submissionAttempt.fence_token,
+      toState: HAMILTON_SUBMISSION_LIFECYCLE.PORTAL_DRAFT_SAVED,
+      eventType: 'portal_draft_saved',
+      details: { answer_snapshot_hash: answerSnapshot.hash },
+      checkpoint: { url: canonicalStoredPortalTarget(url), progress_durably_saved: true },
+      releaseLease: true,
+    })
+  } else if (engineResult?.status === 'human_action_required'
+      || (engineResult?.status === 'blocked' && isAuthBlocker(engineResult?.blocker_kind))) {
+    await transitionSubmissionAttempt(db, {
+      attemptId: submissionAttempt.id,
+      fenceToken: submissionAttempt.fence_token,
+      toState: HAMILTON_SUBMISSION_LIFECYCLE.HUMAN_ACTION_REQUIRED,
+      eventType: 'human_gate_observed',
+      humanActionKind: humanActionKindFor(engineResult.blocker_kind),
+      details: { blocker_kind: engineResult.blocker_kind || null },
+      checkpoint: engineResult.checkpoint || { url: canonicalStoredPortalTarget(url), progress_durably_saved: false },
+      releaseLease: true,
+    })
+  } else if (engineResult?.status === 'blocked' && engineResult?.blocker_kind !== 'listing_page') {
+    await transitionSubmissionAttempt(db, {
+      attemptId: submissionAttempt.id,
+      fenceToken: submissionAttempt.fence_token,
+      toState: HAMILTON_SUBMISSION_LIFECYCLE.HUMAN_ACTION_REQUIRED,
+      eventType: 'portal_blocker_observed',
+      humanActionKind: humanActionKindFor(engineResult.blocker_kind),
+      details: { blocker_kind: engineResult.blocker_kind || null },
+      checkpoint: engineResult.checkpoint || { url: canonicalStoredPortalTarget(url), progress_durably_saved: false },
+      releaseLease: true,
+    })
+  } else if (engineResult?.status === 'failed') {
+    await transitionSubmissionAttempt(db, {
+      attemptId: submissionAttempt.id,
+      fenceToken: submissionAttempt.fence_token,
+      toState: HAMILTON_SUBMISSION_LIFECYCLE.FAILED,
+      eventType: 'engine_failed_before_receipt',
+      details: { blocker_kind: engineResult.blocker_kind || null },
+      releaseLease: true,
+    })
+  }
+
   // ── LISTING DECOMPOSITION (owner directive 2026-08-03) ─────────────────────
   // The engine dead-ended on a page that lists MULTIPLE awards (triage returned
   // listing_page). Decompose it: enumerate the awards, admit each through the
@@ -1571,23 +2217,36 @@ async function runAutopilotPathway(db, {
   // ACCEPTs — reusing THIS run's authorizations + auto-submit consent verbatim
   // (never widened). NGWeb catalogs decompose for visibility only.
   if (engineResult?.blocker_kind === 'listing_page' && engineResult?.listing_snapshot) {
-    const applyItem = async (item) => runAutopilot({
-      url: item.applyUrl, profile, authorizations,
-      documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
-      headless: options?.headless ?? true, sessionSink, narrativeAnswers,
+    // Keep authenticated page text/links only in this stack frame. The run,
+    // task event, API response, and notifications receive a hash/count summary.
+    const ephemeralListingSnapshot = engineResult.listing_snapshot
+    engineResult.listing_snapshot = sanitizeListingSnapshotForPersistence(ephemeralListingSnapshot)
+    await transitionSubmissionAttempt(db, {
+      attemptId: submissionAttempt.id,
+      fenceToken: submissionAttempt.fence_token,
+      toState: HAMILTON_SUBMISSION_LIFECYCLE.HUMAN_ACTION_REQUIRED,
+      eventType: 'listing_requires_distinct_attempts',
+      humanActionKind: 'unknown_portal_state',
+      details: { reason: 'listing_page_not_single_application' },
+      releaseLease: true,
+    })
+    const applyItem = async (item) => ({
+      status: 'human_action_required',
+      blocker_kind: 'new_target_requires_attempt',
+      blocker_detail: `Award ${item?.title || item?.applyUrl || 'candidate'} needs its own target-scoped consent, answer snapshot, and fenced attempt.`,
     })
     const decomposition = await decomposeListing(
-      { db, profile, profileSections: profile?.sections || null, listing: engineResult.listing_snapshot },
+      { db, profile, profileSections: profile?.sections || null, listing: ephemeralListingSnapshot },
       { applyItem, log: (m, d) => { void m; void d } },
     ).catch((err) => ({ error: err?.message || String(err) }))
 
     engineResult.listing_decomposition = decomposition
-    const applied = decomposition?.items?.filter((i) => i.outcome === 'applied') || []
+    const separatelyGated = decomposition?.items?.filter((i) => i.outcome === 'applied') || []
     const summary = decomposition?.error
       ? `Hamilton found a page listing multiple awards but could not decompose it: ${decomposition.error}`
       : decomposition?.catalog_only
         ? `Hamilton catalogued ${decomposition.admitted} award(s) from this listing for matching. These are covered by the school's General Application — no per-item application is possible here.`
-        : `Hamilton decomposed this listing: ${decomposition?.enumerated || 0} award(s) found, ${decomposition?.admitted || 0} admitted to matching, ${applied.length} application(s) attempted for profile-accepted awards.`
+        : `Hamilton decomposed this listing: ${decomposition?.enumerated || 0} award(s) found and ${decomposition?.admitted || 0} admitted to matching. Each accepted award now requires its own target-scoped submission attempt; no listing item was submitted from this run (${separatelyGated.length} gated result(s)).`
     await appendTaskEvent(db, {
       taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'listing_decomposition',
       message: summary, actorUserId: userId, actorRole: 'agent', details: decomposition,
@@ -1676,128 +2335,90 @@ async function runAutopilotPathway(db, {
     }
   }
 
-  // DURABLE, OWNER-RETRIEVABLE PROOF: register the captured confirmation
-  // (screenshot + saved page) as `documents` rows whose bytes live in
-  // documents.file_bytes, so the owner can open the proof at
-  // /api/documents/<id>/download even after the ephemeral on-disk copy is gone.
-  // Best-effort — a registration failure never fails the run; the filesystem
-  // path fields are still recorded. Only runs on a genuine submission (the
-  // engine already refused status=submitted without captured evidence).
-  if (engineResult.status === 'submitted') {
-    try {
-      const artifact = await registerConfirmationArtifact(db, {
-        profileId: task.profile_id,
-        grantId: grant?.id || task.grant_id || null,
-        opportunityId: opportunity?.id || task.opportunity_id || null,
-        taskId: task.id,
-        title: opportunity?.title || grant?.title || 'Application',
-        screenshotPath: engineResult.confirmation_screenshot_path || null,
-        pageHtmlPath: engineResult.confirmation_page_html_path || null,
-        pageText: engineResult.confirmation_page_text || null,
-        reference: engineResult.confirmation_reference || null,
-        capturedUrl: engineResult.confirmation_url || null,
-      })
-      engineResult.confirmation_document_id = artifact.screenshot_document_id || artifact.page_document_id || null
-      engineResult.confirmation_page_document_id = artifact.page_document_id || null
-    } catch { /* proof registration is best-effort; never fail the run */ }
-  }
-
   await updateAutopilotRun(db, run.id, {
     result: engineResult,
     confirmationReference: engineResult.confirmation_reference || null,
-    confirmationScreenshotPath: engineResult.confirmation_screenshot_path || null,
+    confirmationScreenshotPath: null,
     blockerKind: engineResult.blocker_kind || null,
     blockerDetail: engineResult.blocker_detail || null,
-    status: engineResult.status === 'submitted'
-      ? 'submitted'
+    status: engineResult.status === 'externally_received'
+      ? 'externally_received'
       : engineResult.status === 'completed_draft'
         ? 'completed'
-        : engineResult.status === 'blocked'
+        : engineResult.status === 'reconciliation_required'
+          ? 'reconciliation_required'
+          : engineResult.status === 'human_action_required' || engineResult.status === 'blocked'
           ? 'blocked'
           : 'failed',
     finishedAt: new Date().toISOString(),
   })
 
-  if (engineResult.status === 'submitted') {
-    // Evidence honesty (owner addendum 2026-08-03): "clicked submit" and
-    // "portal confirmed receipt" are different facts — the record says which
-    // one we have. A portal-issued reference is confirmed receipt; a
-    // screenshot-only capture is a completed submit action whose receipt the
-    // owner should verify on the portal. (The engine refuses to return
-    // status=submitted with NO evidence at all — that surfaces as a
-    // submit_unconfirmed blocker instead.)
-    const confirmationEvidence = engineResult.confirmation_evidence
-      || (engineResult.confirmation_reference ? 'portal_reference' : 'screenshot_only')
-    const portalConfirmed = confirmationEvidence === 'portal_reference'
-    const proofDocumentId = engineResult.confirmation_document_id || null
-    const submittedMessage = portalConfirmed
-      ? `Hamilton Autopilot submitted the application and the portal confirmed receipt. Confirmation: ${engineResult.confirmation_reference}.`
-      : 'Hamilton Autopilot completed the portal\'s submit step and captured the final page screenshot; the portal showed no reference number. Verify receipt on the portal.'
-    await updateApplicationTask(db, task.id, {
-      status: 'submitted',
-      submittedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      lastAgentMessage: submittedMessage,
-      // The retrievable proof of external submission: an owner-openable document
-      // (/api/documents/<id>/download), not just an ephemeral filesystem path.
-      ...(proofDocumentId ? { outputDocumentId: proofDocumentId } : {}),
-    })
-    await appendTaskEvent(db, {
-      taskId: task.id,
-      eventType: 'submitted',
-      status: 'submitted',
-      step: 'autopilot',
-      message: submittedMessage,
-      actorUserId: userId,
-      actorRole: 'agent',
-      details: {
-        autopilot_run_id: run.id,
-        confirmation: engineResult.confirmation_reference,
-        screenshot: engineResult.confirmation_screenshot_path,
-        confirmation_evidence: confirmationEvidence,
-        confirmation_document_id: proofDocumentId,
-        confirmation_page_document_id: engineResult.confirmation_page_document_id || null,
-        received_acknowledgement: engineResult.confirmation_received_acknowledgement === true,
-        submit_clicked: engineResult.submit_clicked !== false,
-      },
-    })
-    await emitHamiltonNotificationToProfileAndAdmins(db, {
-      profileId: task.profile_id,
-      profileUserId: task.user_id,
-      type: 'hamilton_submitted',
-      title: 'Hamilton submitted through portal',
-      message: `Hamilton submitted "${opportunity?.title || grant?.title || 'this application'}" through the funder's portal. ${portalConfirmed ? `Confirmation: ${engineResult.confirmation_reference}.` : 'The portal showed no reference number — final-page screenshot captured; verify receipt on the portal.'}`,
-      severity: 'success',
-      data: { task_id: task.id, run_id: run.id, confirmation: engineResult.confirmation_reference, confirmation_evidence: confirmationEvidence, confirmation_document_id: proofDocumentId },
-    })
-    await emitHamiltonLifecycleAlerts(db, {
-      profileId: task.profile_id,
-      profileUserId: task.user_id,
-      fundingSourceId: opportunity?.id || grant?.id || task.grant_id || task.opportunity_id,
-      fundingSourceTitle: opportunity?.title || grant?.title || null,
-      taskId: task.id,
-      userType: 'hamilton_task_completed',
-      adminType: 'hamilton_admin_task_completed',
-      title: 'Hamilton submitted application',
-      message: `Hamilton Autopilot completed and submitted "${opportunity?.title || grant?.title || 'this application'}".`,
-      severity: 'success',
-      data: { run_id: run.id, confirmation: engineResult.confirmation_reference },
+  if (engineResult.status === 'externally_received') {
+    engineResult.receipt_projection = await drainHamiltonSubmissionOutbox(db, {
+      attemptId: submissionAttempt.id,
+      leaseOwner: `autopilot-run:${run.id}:receipt-projection`,
     })
   } else if (engineResult.status === 'completed_draft') {
     await updateApplicationTask(db, task.id, {
-      status: 'waiting_for_review',
+      status: 'portal_draft_saved',
       lastAgentMessage:
-        'Hamilton Autopilot finished filling the application and saved a draft. Authorize submit_applications and click "Run to completion" to finish.',
+        'Hamilton filled the application and saved a portal draft. No external submission is claimed. Review current consent and portal state before final submit.',
     })
     await appendTaskEvent(db, {
       taskId: task.id,
       eventType: 'progress',
-      status: 'waiting_for_review',
+      status: 'portal_draft_saved',
       step: 'autopilot',
       message: 'Autopilot saved a draft (submit_applications not authorized).',
       actorUserId: userId,
       actorRole: 'agent',
       details: { autopilot_run_id: run.id },
+    })
+  } else if (engineResult.status === 'reconciliation_required') {
+    const message = engineResult.blocker_detail || 'The portal submit outcome is ambiguous. Hamilton will not retry until a read-only portal reconciliation resolves it.'
+    await updateApplicationTask(db, task.id, {
+      status: 'reconciliation_required',
+      lastAgentMessage: message,
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id, eventType: 'blocked', status: 'reconciliation_required', step: 'submission_reconciliation',
+      message, actorUserId: userId, actorRole: 'agent',
+      details: { autopilot_run_id: run.id, submission_attempt_id: submissionAttempt.id, submit_clicked: engineResult.submit_clicked === true },
+    })
+    await emitHamiltonNotificationToProfileAndAdmins(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      type: 'hamilton_task_blocked',
+      title: 'Application receipt needs reconciliation',
+      message,
+      severity: 'warning',
+      data: { task_id: task.id, run_id: run.id, submission_attempt_id: submissionAttempt.id, blocker_kind: engineResult.blocker_kind },
+    })
+  } else if (engineResult.status === 'human_action_required') {
+    const actionKind = humanActionKindFor(engineResult.blocker_kind)
+    const message = engineResult.blocker_detail || `Hamilton paused for ${actionKind}. The underlying portal gate must be verified before resume.`
+    await updateApplicationTask(db, task.id, {
+      status: 'human_action_required',
+      lastAgentMessage: message,
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id, eventType: 'blocked', status: 'human_action_required', step: 'human_handoff',
+      message, actorUserId: userId, actorRole: 'agent',
+      details: {
+        autopilot_run_id: run.id,
+        submission_attempt_id: submissionAttempt.id,
+        human_action_kind: actionKind,
+        checkpoint: engineResult.checkpoint || null,
+      },
+    })
+    await emitHamiltonNotificationToProfileAndAdmins(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      type: 'hamilton_task_blocked',
+      title: `Hamilton paused for ${actionKind}`,
+      message,
+      severity: 'warning',
+      data: { task_id: task.id, run_id: run.id, submission_attempt_id: submissionAttempt.id, human_action_kind: actionKind },
     })
   } else if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'bot_protected') {
     // FULL-PAGE BOT-PROTECTION DEAD-END (owner 2026-08-03: "for the dead-ends,
@@ -1921,7 +2542,7 @@ async function runAutopilotPathway(db, {
           data: {
             task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind,
             auto_retry: true, next_retry_at: plan.nextRetryAt, attempt: plan.attempt, max_attempts: plan.maxAttempts,
-            portal_url: url,
+            portal_url: canonicalStoredPortalTarget(url),
             ...(vaultLockedForHost ? { vault_locked: true } : {}),
           },
         })
@@ -1952,7 +2573,7 @@ async function runAutopilotPathway(db, {
         title: blockerTitle(engineResult.blocker_kind),
         message: plan.exhausted ? plan.message : (engineResult.blocker_detail || 'Hamilton Autopilot needs your help to continue.'),
         severity: 'warning',
-        data: { task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind, portal_url: url },
+        data: { task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind, portal_url: canonicalStoredPortalTarget(url) },
       })
     }
   } else {
@@ -2053,7 +2674,7 @@ export async function handleBotProtectedBlock(db, {
   const botNotice = botProtectedNotice({
     profileId: task.profile_id,
     host: hostOfUrl(url) || url,
-    loginUrl: url,
+    loginUrl: canonicalStoredPortalTarget(url),
     fundingTitle,
   })
   await emitHamiltonNotificationToProfileAndAdmins(db, {
@@ -2063,7 +2684,7 @@ export async function handleBotProtectedBlock(db, {
     title: botNotice.title,
     message: botNotice.message,
     severity: 'warning',
-    data: { ...botNotice.data, task_id: task.id, run_id: runId, portal_url: url },
+    data: { ...botNotice.data, task_id: task.id, run_id: runId, portal_url: canonicalStoredPortalTarget(url) },
   })
 }
 

@@ -255,7 +255,7 @@ export default function PortalSessionsCard({ profileId }) {
             </CardTitle>
             <CardDescription>
               Encrypted logins Hamilton reuses to act inside your real portal accounts. You capture
-              one by logging in + clearing 2FA once; Hamilton never sees your password.
+              one by logging in + clearing 2FA once. GrantFlow relays live input to the portal but does not store or replay it.
             </CardDescription>
           </div>
           <Button size="sm" variant="outline" onClick={handleOpenSetup}>
@@ -274,7 +274,7 @@ export default function PortalSessionsCard({ profileId }) {
                 <Info className="h-4 w-4" /> What this does — please read
               </p>
               <ul className="list-disc pl-5 space-y-1">
-                <li><strong>What:</strong> captures the logged-in session (cookies) <em>after</em> you finish signing in — never your password or your 2FA code.</li>
+                <li><strong>What:</strong> relays your live input to the private portal browser without storing, analyzing, logging, or replaying it, then captures the logged-in session only after you finish.</li>
                 <li><strong>Why:</strong> lets Hamilton act inside this portal for you later (e.g. submit an application) without making you log in or approve 2FA every time.</li>
                 <li><strong>Scope:</strong> the session is tied to <strong>this profile only</strong> and reused only for this profile’s work. You can revoke it anytime below.</li>
               </ul>

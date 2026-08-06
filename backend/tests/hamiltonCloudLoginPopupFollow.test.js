@@ -17,6 +17,7 @@
  * Every test here fails on the pre-fix code.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { addSyntheticHamiltonNetworkSurface, prepareSyntheticHamiltonEgress } from './helpers/hamiltonBrowserHarness.mjs'
 
 process.env.RUNTIME_SECRETS_KEY = 'f'.repeat(64)
 process.env.HAMILTON_CLOUD_LOGIN_PROVIDER = 'self_hosted'
@@ -63,7 +64,7 @@ function makeFakePage(name, ctxRef) {
     viewportSize: () => ({ width: 1280, height: 900 }),
     context: () => ctxRef.ctx,
     goto: vi.fn(async () => {}),
-    url: () => `https://${name}/`,
+    url: () => `https://${name}${name === 'portal.example.edu' ? '/login' : '/'}`,
     locator: () => ({ count: async () => 0 }),
   }
   return page
@@ -73,7 +74,7 @@ function makeFakeWorld() {
   const ctxRef = {}
   const cdps = []
   const pageListeners = []
-  const ctx = {
+  const ctx = addSyntheticHamiltonNetworkSurface({
     on(evt, fn) { if (evt === 'page') pageListeners.push(fn) },
     newCDPSession: vi.fn(async (page) => {
       const cdp = makeFakeCdp(page)
@@ -83,7 +84,7 @@ function makeFakeWorld() {
     newPage: async () => makeFakePage('portal.example.edu', ctxRef),
     storageState: async () => ({ cookies: [{ name: 'sid', value: 'x', domain: 'portal.example.edu', path: '/' }], origins: [] }),
     opts: {},
-  }
+  })
   ctxRef.ctx = ctx
   const browser = { newContext: async () => ctx, close: vi.fn(async () => {}) }
   const launchBrowser = async () => ({ browser, engine: 'fake' })
@@ -109,6 +110,7 @@ describe('the live mirror follows SSO popups', () => {
       userId: 'u1', profileId: 'pA', portalHost: 'portal.example.edu',
       loginUrl: 'https://portal.example.edu/login', label: 'Portal',
       launchBrowser: world.launchBrowser,
+      prepareBrowserEgress: prepareSyntheticHamiltonEgress,
     })
     expect(res.ok).toBe(true)
     liveId = res.liveSessionId
@@ -136,15 +138,15 @@ describe('the live mirror follows SSO popups', () => {
     expect(frameSource(frames[frames.length - 1])).toBe('login.microsoftonline.com')
   })
 
-  it('input events reach the POPUP after retarget (the sign-in form is actually clickable)', async () => {
+  it('blocks input on an unreviewed cross-origin popup', async () => {
     world.openPopup('login.microsoftonline.com')
     await settle()
 
     const r = await dispatchInput(liveId, { type: 'mousedown', x: 0.5, y: 0.5, button: 0, modifiers: 0 })
-    expect(r.ok).toBe(true)
+    expect(r).toEqual({ ok: false, reason: 'live_page_path_not_allowed' })
     const inputSends = world.cdps.flatMap((c) =>
       c.sent.filter((m) => m.method === 'Input.dispatchMouseEvent').map(() => c.page.name))
-    expect(inputSends).toContain('login.microsoftonline.com')
+    expect(inputSends).not.toContain('login.microsoftonline.com')
     expect(inputSends).not.toContain('portal.example.edu')
   })
 

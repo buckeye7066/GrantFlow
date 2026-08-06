@@ -55,12 +55,9 @@ const FUNDING_APPLICATION_HOSTS = new Set([
 // Text / filename cues that indicate a COMPLETED (submitted/confirmed) funding
 // application rather than merely a login page or blank form.
 const COMPLETION_CUES = [
-  /\bsubmitted\b/i,
-  /\bconfirmation\b/i,
-  /\bconfirmation\s+number\b/i,
-  /\byour\s+application\s+(?:is|was|has been)\s+(?:complete|completed|received|submitted)\b/i,
-  /\bapplication\s+complete(?:d)?\b/i,
-  /\bsuccessfully\s+submitted\b/i,
+  // Typed portal-issued references. Generic "submitted", "accepted", or a
+  // /status URL is deliberately insufficient.
+  /\b(?:confirmation|tracking|receipt|submission)\s*(?:number|no\.?|#|id|code)\s*[:#.-]?\s*[A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*\d[A-Za-z0-9-]*\b/i,
   /\bstudent\s+aid\s+report\b/i, // FAFSA SAR
   /\bSAR\b/,
   /\bexpected\s+family\s+contribution\b/i,
@@ -69,13 +66,8 @@ const COMPLETION_CUES = [
   /\bSAI\b/,
   /\baward\s+letter\b/i,
   /\bfinancial\s+aid\s+award\b/i,
-  /\bweb\s+confirmation\b/i,
-  /\baccepted\b/i,
+  /\bweb\s+confirmation\s*(?:number|no\.?|#|id|code)\s*[:#.-]?\s*[A-Za-z0-9-]*\d[A-Za-z0-9-]*\b/i,
 ]
-
-// URL paths that indicate a submitted/confirmation/result view (a completed
-// application), as opposed to /login or /apply (an unstarted one).
-const COMPLETED_PATH_RE = /(\/confirmation|\/submitted|\/complete|\/completed|\/receipt|\/award|\/results?|\/status|\/sar|\/summary)/i
 
 /** Extract candidate URLs from a string (best-effort, capped). */
 function extractUrls(text, cap = 50) {
@@ -90,25 +82,13 @@ function extractUrls(text, cap = 50) {
   return out
 }
 
-function urlPath(input) {
-  const s = String(input || '').trim()
-  if (!s) return ''
-  try {
-    const withProto = /^https?:\/\//i.test(s) ? s : `https://${s}`
-    return new URL(withProto).pathname || ''
-  } catch {
-    return ''
-  }
-}
-
 /** Does the artifact carry a "this application is complete" signal? */
 function hasCompletionSignal({ text, fileName, urls }) {
   const haystack = `${fileName || ''}\n${text || ''}`
   if (COMPLETION_CUES.some((re) => re.test(haystack))) return true
-  for (const u of urls) {
-    const p = urlPath(u)
-    if (p && p !== '/' && COMPLETED_PATH_RE.test(p)) return true
-  }
+  // A URL is target context, not evidence. /confirmation, /status, /summary,
+  // and similar routes are frequently drafts or navigation chrome.
+  void urls
   return false
 }
 

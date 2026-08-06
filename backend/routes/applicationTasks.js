@@ -38,6 +38,16 @@ import {
   continueHamiltonTask,
 } from '../services/hamiltonApplicationAgent.js'
 import { createLogger } from '../utils/logger.js'
+import {
+  listActiveAuthorizations,
+  recordAuthorizations,
+  revokeAuthorization,
+} from '../services/hamilton/hamiltonAuthorizationStore.js'
+import { cancelSubmissionAttemptsForAuthorization } from '../services/hamilton/hamiltonSubmissionAttemptStore.js'
+import {
+  HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+  HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+} from '../../shared/hamiltonSubmissionContract.js'
 
 const log = createLogger('route:application-tasks')
 
@@ -330,6 +340,46 @@ router.post('/:taskId/approve-submit', async (req, res) => {
     const task = await getApplicationTask(req.db, taskId)
     if (!task) return res.status(404).json({ error: 'task_not_found' })
     if (!(await userMayAccessTask(req, user, task))) return res.status(403).json({ error: 'Forbidden' })
+    const userId = getAuthUserId(user)
+    if (enable) {
+      if (req.body?.authorization_version !== HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION
+          || req.body?.authorization_text !== HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT) {
+        return res.status(409).json({
+          error: 'versioned_authorization_required',
+          message: 'Review the current Hamilton external-submission authorization before enabling this task.',
+          authorization_text: HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+          authorization_version: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+        })
+      }
+      await recordAuthorizations(req.db, {
+        userId,
+        profileId: task.profile_id,
+        scope: 'task',
+        taskIds: [taskId],
+        authorizationTypes: ['submit_applications'],
+        authorizationText: HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+        authorizationVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+        metadata: { accepted_at: new Date().toISOString(), source: 'task_submit_toggle' },
+      })
+    } else {
+      const active = await listActiveAuthorizations(req.db, {
+        userId,
+        profileId: task.profile_id,
+        taskId,
+        expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+      })
+      for (const authorization of active.filter((row) => row.authorization_type === 'submit_applications')) {
+        await revokeAuthorization(req.db, { id: authorization.id, reason: 'task_submit_disabled' })
+        await cancelSubmissionAttemptsForAuthorization(req.db, {
+          authorizationId: authorization.id,
+          profileId: task.profile_id,
+          userId,
+          reason: 'task_submit_disabled',
+        })
+      }
+    }
+    // Compatibility projection only. Workers never treat this boolean as
+    // authority; they enforce the current server authorization record.
     await updateApplicationTask(req.db, taskId, { autoSubmitEnabled: enable })
     await appendTaskEvent(req.db, {
       taskId,
@@ -337,9 +387,12 @@ router.post('/:taskId/approve-submit', async (req, res) => {
       message: enable
         ? 'User approved auto-submit for this task.'
         : 'User revoked auto-submit for this task.',
-      actorUserId: getAuthUserId(user),
+      actorUserId: userId,
       actorRole: user.role || null,
-      details: { auto_submit_enabled: enable },
+      details: {
+        auto_submit_enabled: enable,
+        authorization_version: enable ? HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION : null,
+      },
     })
     return res.json({ ok: true, task: await getApplicationTask(req.db, taskId) })
   } catch (err) {

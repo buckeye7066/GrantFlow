@@ -24,6 +24,7 @@
  * semantic). Every test in this file fails on the pre-fix code.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { addSyntheticHamiltonNetworkSurface, prepareSyntheticHamiltonEgress } from './helpers/hamiltonBrowserHarness.mjs'
 
 process.env.RUNTIME_SECRETS_KEY = 'e'.repeat(64)
 process.env.HAMILTON_CLOUD_LOGIN_PROVIDER = 'self_hosted'
@@ -62,12 +63,13 @@ function makeFakeLaunch() {
       opts,
       newPage: async () => ({
         goto: vi.fn(async () => {}),
-        url: () => 'https://mtsu.edu/landing',
+        url: () => 'https://mtsu.edu/login',
         viewportSize: () => ({ width: 1280, height: 900 }),
         context: () => ctx,
       }),
       storageState: async () => opts.storageState || COLD_JAR,
     }
+    addSyntheticHamiltonNetworkSurface(ctx)
     return ctx
   })
   const browser = { newContext, close: vi.fn(async () => {}) }
@@ -85,6 +87,7 @@ async function startWatched(db, launchBrowser, overrides = {}) {
     label: 'MTSU',
     db,
     launchBrowser,
+    prepareBrowserEgress: prepareSyntheticHamiltonEgress,
     ...overrides,
   })
   if (res?.liveSessionId) liveIds.push(res.liveSessionId)

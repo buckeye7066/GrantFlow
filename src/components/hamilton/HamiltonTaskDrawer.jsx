@@ -440,14 +440,20 @@ export default function HamiltonTaskDrawer({ open, onClose, task: initialTask, o
                 {busy ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
                 Let Hamilton continue
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => approveAutoSubmit(!task.auto_submit_enabled)}
-                disabled={busy}
-              >
-                {task.auto_submit_enabled ? 'Disable auto-submit' : 'Enable auto-submit'}
-              </Button>
+              {task.auto_submit_enabled ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => approveAutoSubmit(false)}
+                  disabled={busy}
+                >
+                  Disable auto-submit
+                </Button>
+              ) : (
+                <span className="max-w-56 text-xs text-slate-500">
+                  Auto-submit is authorized only from Run to completion, where the current terms and exact task are shown.
+                </span>
+              )}
             </>
           )}
           {task?.application_url && (

@@ -1,5 +1,5 @@
 /**
- * Durable, owner-retrievable submission PROOF (2026-08-03).
+ * Privacy-minimized, attempt-bound submission proof.
  *
  * OWNER GOAL: an application reported "submitted externally" must leave durable,
  * retrievable evidence the owner can OPEN — not a claim, and not a path to a
@@ -10,15 +10,12 @@
  * ephemeral filesystem the proof evaporated while the DB kept a dangling path.
  *
  * Pins:
- *   1. A submitted run persists a RETRIEVABLE artifact (a `documents` row whose
- *      bytes live in documents.file_bytes) under a DURABLE dir, not tmp.
- *   2. assessSubmissionEvidence still REFUSES to claim submitted with nothing
- *      captured (that honesty is unchanged).
- *   3. Extraction accepts the new real patterns (Confirmation #, Ref/Reference,
- *      Application ID, a submission id in the post-submit URL) and STILL rejects
- *      the known false positive ("Application designed…").
- *   4. Backfill honesty: a run whose confirmation_screenshot_path points at a
- *      now-missing file reports proof as NOT retrievable.
+ *   1. Generic browser capture keeps only typed receipt metadata + hashes; it
+ *      never persists full-page screenshots/HTML containing application data.
+ *   2. A receipt candidate needs a new typed receipt/reference, acknowledgement,
+ *      and post-dispatch page change; Application ID alone is only draft identity.
+ *   3. Legacy artifact helpers remain honest about dangling bytes, but legacy
+ *      task status/artifacts never establish the v2 externally-received state.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -44,12 +41,11 @@ const { runAutopilot, _internal: engineInternal } = await import('../services/ha
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
 const {
   confirmationCaptureDirPath,
-  resolveConfirmationCaptureDir,
   isEphemeralCaptureDir,
   registerConfirmationArtifact,
   assessStoredConfirmationProof,
 } = await import('../services/hamilton/hamiltonConfirmationArtifacts.js')
-const { ensureApplicationTask, updateApplicationTask, _resetSchemaCache } =
+const { _resetSchemaCache } =
   await import('../services/hamilton/applicationTaskStore.js')
 const { _resetAuthSchemaCache } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
 
@@ -164,14 +160,25 @@ describe('resolveConfirmationCaptureDir', () => {
 
 // ── 2. assessSubmissionEvidence honesty is unchanged ────────────────────────
 
-describe('assessSubmissionEvidence still refuses without captured evidence', () => {
+describe('assessSubmissionEvidence requires a new typed post-click receipt', () => {
   const { assessSubmissionEvidence } = engineInternal
-  it('a reference is portal-confirmed, a screenshot is screenshot_only, nothing is refused', () => {
-    expect(assessSubmissionEvidence({ reference: 'CONF-1', screenshot_path: null }))
+  it('accepts only a labelled receipt plus acknowledgement and changed page fingerprint', () => {
+    const preClick = { reference: null, page_fingerprint: 'a'.repeat(64) }
+    expect(assessSubmissionEvidence({
+      reference: 'CONF-10001',
+      reference_kind: 'confirmation',
+      extraction_rule: 'explicit_label:confirmation_number',
+      received_acknowledgement: true,
+      page_fingerprint: 'b'.repeat(64),
+    }, preClick))
       .toEqual({ ok: true, confirmation_evidence: 'portal_reference' })
-    expect(assessSubmissionEvidence({ reference: null, screenshot_path: '/tmp/s.png' }))
-      .toEqual({ ok: true, confirmation_evidence: 'screenshot_only' })
-    expect(assessSubmissionEvidence({ reference: null, screenshot_path: null }))
+    expect(assessSubmissionEvidence({
+      reference: 'CONF-10001', reference_kind: 'confirmation',
+      extraction_rule: 'explicit_label:confirmation_number',
+      received_acknowledgement: false, page_fingerprint: 'b'.repeat(64),
+    }, preClick))
+      .toEqual({ ok: false, confirmation_evidence: 'none' })
+    expect(assessSubmissionEvidence({ reference: null, screenshot_path: '/tmp/untrusted.png' }, preClick))
       .toEqual({ ok: false, confirmation_evidence: 'none' })
   })
 })
@@ -187,8 +194,8 @@ describe('extractConfirmationReference — new real patterns, no fabrication', (
   it('accepts Reference:', () => {
     expect(extractConfirmationReference('Reference: REF-2026-00123')).toBe('REF-2026-00123')
   })
-  it('accepts Application ID:', () => {
-    expect(extractConfirmationReference('Application ID: APP-99881')).toBe('APP-99881')
+  it('rejects a pre-existing draft Application ID', () => {
+    expect(extractConfirmationReference('Application ID: APP-99881')).toBeNull()
   })
   it('accepts an abbreviated Ref No.', () => {
     expect(extractConfirmationReference('Your application has been received. Ref No. 7781234')).toBe('7781234')
@@ -214,9 +221,9 @@ describe('extractConfirmationReference — new real patterns, no fabrication', (
   })
 })
 
-// ── captureConfirmation writes a durable screenshot AND saved page ──────────
+// ── captureConfirmation retains structured proof, never a raw page ──────────
 
-describe('captureConfirmation saves the screenshot AND the confirmation page', () => {
+describe('captureConfirmation minimizes sensitive confirmation-page data', () => {
   const { captureConfirmation } = engineInternal
 
   function fakePage({ url, bodyText, html }) {
@@ -228,20 +235,23 @@ describe('captureConfirmation saves the screenshot AND the confirmation page', (
     }
   }
 
-  it('captures both artifacts even when the portal prints no reference number', async () => {
+  it('keeps acknowledgement + fingerprint but writes no screenshot or HTML', async () => {
     const dir = makeTmpDir('gf-cap-')
+    const secretCanary = 'SSN-123-45-6789-INCOME-90000'
     const conf = await captureConfirmation(fakePage({
       url: 'https://portal.example.org/done',
-      bodyText: 'Your application has been received. We will be in touch.',
-      html: '<html><body>Your application has been received.</body></html>',
+      bodyText: `Your application has been received. ${secretCanary}`,
+      html: `<html><body>Your application has been received. ${secretCanary}</body></html>`,
     }), dir)
 
     expect(conf.reference).toBeNull() // no printed reference
     expect(conf.received_acknowledgement).toBe(true)
-    expect(conf.screenshot_path).toBeTruthy()
-    expect(fs.existsSync(conf.screenshot_path)).toBe(true)
-    expect(conf.page_html_path).toBeTruthy()
-    expect(fs.readFileSync(conf.page_html_path, 'utf8')).toContain('has been received')
+    expect(conf.page_fingerprint).toMatch(/^[a-f0-9]{64}$/)
+    expect(conf).not.toHaveProperty('screenshot_path')
+    expect(conf).not.toHaveProperty('page_html_path')
+    expect(conf).not.toHaveProperty('page_text')
+    expect(JSON.stringify(conf)).not.toContain(secretCanary)
+    expect(fs.readdirSync(dir)).toEqual([])
   })
 })
 
@@ -293,65 +303,27 @@ describe('registerConfirmationArtifact makes proof retrievable, and the reader i
   })
 })
 
-// ── 1 (headline). A submitted run persists a retrievable artifact, durably ───
+// ── Server-side profile toggle is required before any browser/proof path ─────
 
-describe('a submitted run persists retrievable proof under a durable dir (not tmp)', () => {
-  it('registers the confirmation as an owner-retrievable document on the task', async () => {
-    const uploads = makeTmpDir('gf-uploads-') // stands in for the Railway volume
-    process.env.UPLOADS_DIR = uploads
-    const durableDir = resolveConfirmationCaptureDir()
-    expect(isEphemeralCaptureDir(durableDir)).toBe(false) // NOT the ephemeral tmp fallback
-
-    // The engine (mocked) writes its screenshot into the DURABLE dir and returns
-    // the captured proof, exactly as the real engine now does.
-    const shot = path.join(durableDir, `confirmation_${Date.now()}.png`)
-    const pageHtml = path.join(durableDir, `confirmation_${Date.now()}.html`)
-    fs.writeFileSync(shot, Buffer.from('\x89PNG-real'))
-    fs.writeFileSync(pageHtml, '<html><body>Confirmation #: ZZ778812</body></html>', 'utf8')
+describe('profile automation preference defaults off', () => {
+  it('does not invoke the engine or accept its mocked legacy submitted result', async () => {
     runAutopilot.mockResolvedValue({
       status: 'submitted',
-      submit_clicked: true,
-      confirmation_evidence: 'portal_reference',
-      confirmation_reference: 'ZZ778812',
-      confirmation_screenshot_path: shot,
-      confirmation_page_html_path: pageHtml,
-      confirmation_page_text: 'Confirmation #: ZZ778812',
-      confirmation_url: 'https://portal.example.org/done',
-      filled_fields: [{ key: 'essay', fid: 'f1', value: 'x' }],
-      pages_visited: 2, trace: [],
+      confirmation_reference: 'UNBOUND-LEGACY-RECEIPT',
     })
-
     const db = makeDb()
     await seedFixture(db)
-    const task = await ensureApplicationTask(db, {
-      profileId: PROFILE, opportunityId: 'opp-1', grantId: 'g-1', automationType: 'portal',
-    })
-    await updateApplicationTask(db, task.id, { allowAutoSubmit: true })
-
     const result = await automateSingleSource(db, {
       profileId: PROFILE, userId: 'user-1',
       source: { opportunity_id: 'opp-1', grant_id: 'g-1' },
       options: { authorizations: AUTHORIZATIONS },
     })
 
-    // The engine was handed the durable capture dir, never tmp.
-    expect(runAutopilot.mock.calls[0][0].screenshotsDir).toBe(durableDir)
-
-    // The task now carries a retrievable proof document.
-    expect(result.task.status).toBe('submitted')
-    const proofId = result.task.output_document_id
-    expect(proofId).toBeTruthy()
-
-    const doc = await db.prepare('SELECT * FROM documents WHERE id = ?').get(proofId)
-    expect(doc).toBeTruthy()
-    expect(doc.type).toBe('hamilton_submission_confirmation')
-    expect(doc.file_bytes && doc.file_bytes.length).toBeGreaterThan(0)
-
-    // And the reader confirms the proof is genuinely retrievable.
-    const verdict = await assessStoredConfirmationProof(db, {
-      confirmation_screenshot_path: shot,
-      result: { confirmation_document_id: proofId },
+    expect(runAutopilot).not.toHaveBeenCalled()
+    expect(result.task.status).toBe('ready_to_start')
+    expect(result.task.status).not.toBe('submitted')
+    expect(result.task.submission_proof).toMatchObject({
+      verified_external: false, state: 'not_submitted',
     })
-    expect(verdict.proof_retrievable).toBe(true)
   })
 })

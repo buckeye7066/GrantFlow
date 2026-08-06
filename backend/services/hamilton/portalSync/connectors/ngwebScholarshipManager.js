@@ -40,6 +40,7 @@
 
 import { normalizeHost } from '../../hamiltonCredentialSessionService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
+import { navigateHamiltonPortalPage } from '../../hamiltonBrowserNetworkGuard.js'
 
 export const id = 'ngweb_scholarship_manager'
 export const label = 'School scholarship portal (Scholarship Manager)'
@@ -161,9 +162,11 @@ export function tenantSlug(host) {
 const SETTLE_POLLS = 6
 const SETTLE_INTERVAL_MS = 700
 
-async function gotoQuiet(page, url, log) {
+async function gotoQuiet(page, url, log, networkEgress) {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    await navigateHamiltonPortalPage(page, url, networkEgress, {
+      waitUntil: 'domcontentloaded', timeout: 20000,
+    })
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
     let last = -1
     for (let i = 0; i < SETTLE_POLLS; i++) {
@@ -223,7 +226,7 @@ export async function read(page, ctx = {}) {
   const pageTexts = {}
   for (const nav of NAV_PATHS) {
     const url = `${base}${nav.path}`
-    const ok = await gotoQuiet(page, url, log)
+    const ok = await gotoQuiet(page, url, log, ctx.networkEgress)
     if (!ok) continue
     const snap = await readText(page)
     const landed = safeUrl(page) || url
@@ -285,6 +288,7 @@ export async function read(page, ctx = {}) {
   const llm = await extractPortalDataWithLLM(page, {
     log,
     navCandidates: NAV_PATHS.map((n) => `${base}${n.path}`),
+    networkEgress: ctx.networkEgress,
   })
   raw.llm = llm.raw
   const rejected = Array.isArray(llm.rejected) ? llm.rejected : []
@@ -342,7 +346,7 @@ export async function write(page, ctx = {}, data = {}) {
   // Land on an authenticated surface first; prove we are signed in before
   // touching anything.
   const url = `https://${host}/ScholarX_StudentLanding.aspx`
-  const ok = await gotoQuiet(page, url, log)
+  const ok = await gotoQuiet(page, url, log, ctx.networkEgress)
   const snap = ok ? await readText(page) : { text: '', title: '' }
   const landed = safeUrl(page) || url
   if (!ok || classifyLanding(url, landed) !== 'served' || classifyAccess({ url: landed, ...snap }) !== 'authenticated') {

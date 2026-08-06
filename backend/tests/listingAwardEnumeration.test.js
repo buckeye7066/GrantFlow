@@ -12,6 +12,7 @@ const ngweb = JSON.parse(
 // A fake invoker returning a fixed JSON payload — the deterministic fabrication
 // guard is what we exercise, not the model.
 const fakeInvoke = (json) => async () => ({ ok: true, json, provider: 'test' })
+const fixture = (invoke, extra = {}) => ({ _syntheticFixture: true, _invoke: invoke, ...extra })
 
 describe('extractListingAwardItems (listing enumeration + fabrication guard)', () => {
   it('keeps items whose titles are present in the real NGWeb catalog text', async () => {
@@ -20,9 +21,9 @@ describe('extractListingAwardItems (listing enumeration + fabrication guard)', (
     expect(present).toBeTruthy()
     const r = await extractListingAwardItems(
       { text: ngweb.text, url: ngweb.landed, title: ngweb.title, links: ngweb.links },
-      { _invoke: fakeInvoke({ items: [
+      fixture(fakeInvoke({ items: [
         { title: present, amount: 1000, sponsor: 'MTSU', deadline: null, applyUrl: null, evidence: present },
-      ] }) },
+      ] })),
     )
     expect(r.items).toHaveLength(1)
     expect(r.items[0].title).toContain('Aaron')
@@ -34,9 +35,9 @@ describe('extractListingAwardItems (listing enumeration + fabrication guard)', (
   it('REJECTS an enumerated award whose title is not on the page (fabrication)', async () => {
     const r = await extractListingAwardItems(
       { text: ngweb.text, url: ngweb.landed, title: ngweb.title, links: ngweb.links },
-      { _invoke: fakeInvoke({ items: [
+      fixture(fakeInvoke({ items: [
         { title: 'Totally Invented Moon Colony Scholarship', amount: 999999, applyUrl: null, evidence: 'nope' },
-      ] }) },
+      ] })),
     )
     expect(r.items).toHaveLength(0)
     expect(r.rejected[0].reason).toMatch(/title_not_on_page/)
@@ -51,9 +52,9 @@ describe('extractListingAwardItems (listing enumeration + fabrication guard)', (
         title: 'Housing Scholarships',
         links: [{ href: 'https://bold.org/scholarships/housing', text: 'Housing Security Scholarship' }],
       },
-      { _invoke: fakeInvoke({ items: [
+      fixture(fakeInvoke({ items: [
         { title, amount: 2000, applyUrl: 'https://evil.example/phish', evidence: `the ${title}` },
-      ] }) },
+      ] })),
     )
     expect(r.items).toHaveLength(1)
     expect(r.items[0].applyUrl).toBeNull()
@@ -70,9 +71,9 @@ describe('extractListingAwardItems (listing enumeration + fabrication guard)', (
         title: 'First-Gen Scholarships',
         links: [{ href, text: 'First-Generation Fellowship' }],
       },
-      { _invoke: fakeInvoke({ items: [
+      fixture(fakeInvoke({ items: [
         { title, amount: null, deadline: 'June 1', applyUrl: href, evidence: `The ${title}` },
-      ] }) },
+      ] })),
     )
     expect(r.items[0].applyUrl).toBe(href)
     expect(r.items[0].deadline).toBe('June 1')
@@ -81,15 +82,14 @@ describe('extractListingAwardItems (listing enumeration + fabrication guard)', (
   it('dedupes repeated titles and enforces maxItems', async () => {
     const r = await extractListingAwardItems(
       { text: 'Alpha Scholarship. Beta Scholarship. Gamma Scholarship.', url: 'https://x.org/list?q=a', links: [] },
-      {
+      fixture(fakeInvoke({ items: [
+        { title: 'Alpha Scholarship', applyUrl: null, evidence: 'Alpha Scholarship' },
+        { title: 'Alpha Scholarship', applyUrl: null, evidence: 'Alpha Scholarship' },
+        { title: 'Beta Scholarship', applyUrl: null, evidence: 'Beta Scholarship' },
+        { title: 'Gamma Scholarship', applyUrl: null, evidence: 'Gamma Scholarship' },
+      ] }), {
         maxItems: 2,
-        _invoke: fakeInvoke({ items: [
-          { title: 'Alpha Scholarship', applyUrl: null, evidence: 'Alpha Scholarship' },
-          { title: 'Alpha Scholarship', applyUrl: null, evidence: 'Alpha Scholarship' },
-          { title: 'Beta Scholarship', applyUrl: null, evidence: 'Beta Scholarship' },
-          { title: 'Gamma Scholarship', applyUrl: null, evidence: 'Gamma Scholarship' },
-        ] }),
-      },
+      }),
     )
     expect(r.items.map((i) => i.title)).toEqual(['Alpha Scholarship', 'Beta Scholarship'])
   })
@@ -97,7 +97,7 @@ describe('extractListingAwardItems (listing enumeration + fabrication guard)', (
   it('never throws and reports honestly when the model returns no JSON', async () => {
     const r = await extractListingAwardItems(
       { text: 'some text', url: 'https://x.org/search' },
-      { _invoke: async () => ({ ok: false, json: null, error: 'boom' }) },
+      fixture(async () => ({ ok: false, json: null, error: 'boom' })),
     )
     expect(r.items).toEqual([])
     expect(r.notFound[0]).toMatch(/no parseable JSON/)

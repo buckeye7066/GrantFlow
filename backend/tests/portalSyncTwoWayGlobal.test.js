@@ -136,6 +136,16 @@ function makeFormPage({ hasForm = true, hasAmount = true } = {}) {
   }
 }
 
+function testNetworkEgress(host) {
+  return {
+    allowed_origins: [`https://${host}`],
+    pinned_hosts: { [host]: '203.0.113.12' },
+    path_contract: {
+      navigation: ['/'], application: ['/'], authentication: [], status: [], interactive: [],
+    },
+  }
+}
+
 describe('reportOutsideAwards — the GLOBAL write path', () => {
   it('fills each accepted source and NEVER submits by default', async () => {
     const page = makeFormPage()
@@ -187,8 +197,11 @@ describe('generic connector — every portal now has a real write', () => {
     const generic = (await import('../services/hamilton/portalSync/connectors/generic.js')).default
     const page = makeFormPage()
     page.goto = async () => {}
+    page.url = () => 'https://someportal.edu/'
 
-    const res = await generic.write(page, { portalHost: 'someportal.edu', log: () => {} }, {
+    const res = await generic.write(page, {
+      portalHost: 'someportal.edu', log: () => {}, networkEgress: testNetworkEgress('someportal.edu'),
+    }, {
       fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
     })
 
@@ -206,8 +219,11 @@ describe('one-click submit — the owner/admin authorization path', () => {
     const generic = (await import('../services/hamilton/portalSync/connectors/generic.js')).default
     const page = makeFormPage()
     page.goto = async () => {}
+    page.url = () => 'https://x.edu/'
 
-    const staged = await generic.write(page, { portalHost: 'x.edu', log: () => {} }, {
+    const staged = await generic.write(page, {
+      portalHost: 'x.edu', log: () => {}, networkEgress: testNetworkEgress('x.edu'),
+    }, {
       fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
     })
     expect(staged.submitted).toBe(false)
@@ -216,7 +232,10 @@ describe('one-click submit — the owner/admin authorization path', () => {
 
     const authorizedPage = makeFormPage()
     authorizedPage.goto = async () => {}
-    const sent = await generic.write(authorizedPage, { portalHost: 'x.edu', log: () => {} }, {
+    authorizedPage.url = () => 'https://x.edu/'
+    const sent = await generic.write(authorizedPage, {
+      portalHost: 'x.edu', log: () => {}, networkEgress: testNetworkEgress('x.edu'),
+    }, {
       fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
       allowSubmit: true,
     })

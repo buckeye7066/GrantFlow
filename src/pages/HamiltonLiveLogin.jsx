@@ -69,6 +69,22 @@ export default function HamiltonLiveLogin() {
   // server-side (15-min TTL), so reconnecting just resumes the screencast.
   const [reconnectNonce, setReconnectNonce] = useState(0)
 
+  useEffect(() => {
+    const prior = document.querySelector('meta[name="referrer"]')
+    const previousContent = prior?.getAttribute('content') || null
+    const meta = prior || document.createElement('meta')
+    meta.setAttribute('name', 'referrer')
+    meta.setAttribute('content', 'no-referrer')
+    if (!prior) document.head.appendChild(meta)
+    document.documentElement.setAttribute('data-hamilton-sensitive-live-session', 'true')
+    return () => {
+      document.documentElement.removeAttribute('data-hamilton-sensitive-live-session')
+      if (!prior) meta.remove()
+      else if (previousContent === null) prior.removeAttribute('content')
+      else prior.setAttribute('content', previousContent)
+    }
+  }, [])
+
   // Input-channel health. The screencast (one long-lived authenticated GET) and
   // the input relay (one authenticated POST per event) have SEPARATE lifecycles:
   // the stream can keep painting (or the canvas keep its last frame) while every
@@ -401,7 +417,7 @@ export default function HamiltonLiveLogin() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-900 text-slate-100">
+    <div className="flex min-h-screen flex-col bg-slate-900 text-slate-100" data-private="true" data-sentry-mask="true">
       {/* Instruction banner + actions */}
       <div className="flex flex-col gap-3 border-b border-slate-700 bg-slate-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-2">
@@ -413,8 +429,9 @@ export default function HamiltonLiveLogin() {
             <p className="text-xs text-slate-400">
               You are driving a real, private browser <span className="font-medium text-slate-300">on this laptop</span> — type
               the username &amp; password and complete 2FA in this window. Only a phone-<em>push</em> 2FA (Duo / Microsoft
-              Authenticator) needs the phone; a texted or app code can be entered here. We capture the logged-in session
-              only — never your password or 2FA code. The window expires after 15 minutes of inactivity (60 minutes maximum).
+              Authenticator) needs the phone; a texted or app code can be entered here. GrantFlow relays what you type to
+              this private portal browser, but does not store, analyze, log, or replay those characters. Only the logged-in
+              session is saved when you click Done. The window expires after 15 minutes of inactivity (60 minutes maximum).
             </p>
           </div>
         </div>

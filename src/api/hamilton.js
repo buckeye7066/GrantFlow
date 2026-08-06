@@ -95,10 +95,13 @@ export function supplyMissingInfo(taskId, items) {
   })
 }
 
-export function approveAutoSubmit(taskId, enable = true) {
+export function approveAutoSubmit(taskId, enable = false, authorization = null) {
   return apiFetch(`/api/application-tasks/${encodeURIComponent(taskId)}/approve-submit`, {
     method: 'POST',
-    body: JSON.stringify({ enable }),
+    body: JSON.stringify({
+      enable,
+      ...(authorization || {}),
+    }),
   })
 }
 
@@ -440,6 +443,9 @@ export function sendCloudLoginInput(liveSessionId, event) {
   if (!liveSessionId) return Promise.reject(new Error('liveSessionId required'))
   return apiFetch(`/api/hamilton/automation/sessions/cloud-login/${encodeURIComponent(liveSessionId)}/input`, {
     method: 'POST',
+    // This explicit-intent, non-simple header prevents an ordinary cross-site
+    // HTML form from relaying input with ambient credentials.
+    headers: { 'X-Hamilton-Input-Intent': '1' },
     body: JSON.stringify(event || {}),
   })
 }

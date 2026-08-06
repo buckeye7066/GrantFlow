@@ -31,10 +31,10 @@
 import { preflightSingleSource } from './hamiltonPreflight.js'
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
 import { findValidSession, normalizeHost } from './hamiltonCredentialSessionService.js'
-import { canPayFor } from './hamiltonPaymentAuthorizationService.js'
 import { listActiveAttestations } from './hamiltonAttestationStore.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isAuthorizationActive } from './hamiltonAuthorizationStore.js'
+import { HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION } from '../../../shared/hamiltonSubmissionContract.js'
 import { getResolvedFieldsAsMap } from './hamiltonResolvedFieldStore.js'
 import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
 
@@ -95,12 +95,14 @@ export async function preflightAndResolveSource(db, {
   const flags = base.authorization
   const fundingSourceId = source.opportunity_id || source.grant_id || null
   const sessionAuthorized = await isAuthorizationActive(db, {
-    profileId, authorizationType: 'use_saved_session',
+    userId: userId || profile?.user_id || profile?.created_by, profileId, authorizationType: 'use_saved_session',
     fundingSourceId, taskId,
+    expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
   })
   const credentialAuthorized = await isAuthorizationActive(db, {
-    profileId, authorizationType: 'use_saved_credentials_reference',
+    userId: userId || profile?.user_id || profile?.created_by, profileId, authorizationType: 'use_saved_credentials_reference',
     fundingSourceId, taskId,
+    expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
   })
 
   const session = host ? await findValidSession(db, { profileId, portalHost: host }) : null
@@ -142,18 +144,12 @@ export async function preflightAndResolveSource(db, {
   let paymentReadiness = { needed: false, allowed: false, reason: null }
   const feeCents = Number(opportunity?.application_fee_cents || 0) || 0
   if (feeCents > 0) {
-    const decision = await canPayFor(db, {
-      profileId, category: 'application_fee',
-      amountCents: feeCents, portalHost: host,
+    paymentReadiness = { needed: true, allowed: false, reason: 'human_payment_required' }
+    base.blockers.push({
+      kind: 'payment_required', key: 'application_fee',
+      label: `Application fee ${(feeCents / 100).toFixed(2)} USD requires human payment`,
+      detail: `Review and complete the ${(feeCents / 100).toFixed(2)} USD payment at ${host || 'this portal'} yourself. Hamilton will not charge it.`,
     })
-    paymentReadiness = { needed: true, ...decision }
-    if (!decision.allowed) {
-      base.blockers.push({
-        kind: 'payment_required', key: 'application_fee',
-        label: `Application fee ${(feeCents / 100).toFixed(2)} USD not pre-authorized`,
-        detail: `Authorize Hamilton to charge ${(feeCents / 100).toFixed(2)} USD to ${host || 'this portal'} before launch.`,
-      })
-    }
   }
 
   // Resolve every predicted blocker we can.

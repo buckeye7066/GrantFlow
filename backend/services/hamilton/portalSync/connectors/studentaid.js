@@ -45,6 +45,7 @@
 
 import { normalizeHost } from '../../hamiltonCredentialSessionService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
+import { navigateHamiltonPortalPage } from '../../hamiltonBrowserNetworkGuard.js'
 import { isKnownStage, stageIndex } from '../../../college/fafsaStatus.js'
 
 export const id = 'studentaid'
@@ -272,9 +273,11 @@ export function saiBand(value) {
 const SPA_SETTLE_POLLS = 8
 const SPA_SETTLE_INTERVAL_MS = 700
 
-async function gotoQuiet(page, url, log) {
+async function gotoQuiet(page, url, log, networkEgress) {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 })
+    await navigateHamiltonPortalPage(page, url, networkEgress, {
+      waitUntil: 'domcontentloaded', timeout: 15000,
+    })
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
     let last = -1
     for (let i = 0; i < SPA_SETTLE_POLLS; i++) {
@@ -355,7 +358,7 @@ export async function read(page, ctx = {}) {
     const { url, followCases } = queue[qi]
     if (visited.has(url)) continue
     visited.add(url)
-    const ok = await gotoQuiet(page, url, log)
+    const ok = await gotoQuiet(page, url, log, ctx.networkEgress)
     if (!ok) continue
     const snap = await readText(page)
     const landed = safeUrl(page) || url
@@ -454,7 +457,9 @@ export async function read(page, ctx = {}) {
   // 3) Federal aid actually OFFERED to this user, via the shared extractor +
   //    its fabrication guard (which rejects anything without user-specific
   //    award evidence — e.g. the generic "types of aid" explainer pages).
-  const llm = await extractPortalDataWithLLM(page, { log, navCandidates: NAV_URLS })
+  const llm = await extractPortalDataWithLLM(page, {
+    log, navCandidates: NAV_URLS, networkEgress: ctx.networkEgress,
+  })
   raw.llm = llm.raw
   const rejected = Array.isArray(llm.rejected) ? llm.rejected : []
   for (const a of llm.awards || []) {

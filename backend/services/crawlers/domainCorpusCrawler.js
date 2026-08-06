@@ -76,6 +76,9 @@ function attachCorpusMetadata(opp, config) {
  * @returns {Promise<Object>} Stats
  */
 export async function runDomainCorpusCrawl(db, options = {}) {
+  const verifyUrl = typeof options.headForVerification === 'function'
+    ? options.headForVerification
+    : headForVerification
   // Resolve the profile signals (dispatcher passes profileContext.signals).
   const signals = options.signals ?? options.profileContext?.signals ?? null
   const profileForCrawl = signals ? { signals } : MINIMAL_PROFILE
@@ -280,7 +283,7 @@ export async function runDomainCorpusCrawl(db, options = {}) {
       if (!url || !String(url).startsWith('http')) continue
       const now = new Date().toISOString()
       try {
-        const probe = await headForVerification(url, { timeoutMs: 4000 })
+        const probe = await verifyUrl(url, { timeoutMs: 4000 })
         if (probe.ok) {
           await update.run(
             verVal,

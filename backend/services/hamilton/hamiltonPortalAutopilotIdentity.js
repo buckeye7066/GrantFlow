@@ -73,6 +73,12 @@ import { planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { emitEmailVerificationAlert } from './hamiltonNotifications.js'
 import { createLogger } from '../../utils/logger.js'
 
+// No real host-specific signup executor has completed the reviewed adapter
+// contract in this release. Keep the legacy implementation structurally
+// isolated for migration, but make the production gate an explicit fail-closed
+// constant that tests can pin.
+export function reviewedPortalAccountCreationEnabled() { return false }
+
 const log = createLogger('service:hamilton-portal-autopilot-identity')
 
 // Canonical per-portal autopilot states surfaced on the dashboard.
@@ -313,6 +319,7 @@ export async function runAutopilotIdentityForPortal(db, args = {}) {
 async function _runAutopilotIdentityForPortal(db, {
   profileId, userId = 'system_admin_token', portalHost, loginUrl = null, registrationResult = null,
   profile = null, dryRun = false, launchBrowser = null, outlookProvider = null,
+  createPortalAccountAuthorized = false, reviewedSignupAdapter = null,
   verifyWaitMs = undefined, verifyPollMs = undefined,
   _host, _resolvedLoginUrl,
 } = {}) {
@@ -348,14 +355,12 @@ async function _runAutopilotIdentityForPortal(db, {
       // the moment the email is verified the account becomes real and Hamilton
       // continues. Backoff-exhausted re-checks fall back to co-browse. A dry run
       // never launches a browser.
-      if (existingCred.verification_status === 'pending' && !dryRun) {
-        return await performVerificationRecheck(db, {
-          userId, profileId, cred: existingCred, loginUrl: resolvedLoginUrl,
-          launchBrowser, outlookProvider, verifyWaitMs, verifyPollMs,
-        })
-      }
       if (existingCred.verification_status === 'pending') {
-        return { state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, host, detail: 'Hamilton created this account; it is awaiting the email verification link (the only step we need from you).', blocker: 'verification_pending', next_retry_at: existingCred.verification_next_retry_at || null }
+        return {
+          state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, host,
+          detail: 'This account is awaiting email verification. Open the portal email yourself; Hamilton does not read your mailbox or visit activation links.',
+          blocker: 'verification_pending', next_retry_at: null,
+        }
       }
       return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: 'Hamilton provisioned a login here but the account registration was not completed; finish it in a side-by-side login.', blocker: 'pending_registration' }
     }
@@ -391,6 +396,28 @@ async function _runAutopilotIdentityForPortal(db, {
     if (policy?.automation_allowed === false) {
       await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'portal terms forbid automation' })
       return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: `This portal's terms forbid agent automation; sign in once and Hamilton continues lawfully.` }
+    }
+
+    // Account creation is a separate irreversible authority from using a
+    // saved login. This release intentionally has no real reviewed signup
+    // adapters enabled, so unknown/generic registration and mailbox activation
+    // are always owner handoffs. Policy/identity hard stops above remain more
+    // specific, but no path below can provision or submit a registration.
+    if (createPortalAccountAuthorized !== true || !reviewedSignupAdapter?.reviewed
+        || reviewedPortalAccountCreationEnabled() !== true) {
+      await queueHandoff(db, {
+        userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl,
+        reason: createPortalAccountAuthorized === true
+          ? 'reviewed signup adapter required'
+          : 'portal account creation not authorized',
+      })
+      return {
+        state: AUTOPILOT_STATE.NEEDS_USER, host,
+        detail: createPortalAccountAuthorized === true
+          ? 'Create this portal account yourself; no reviewed account-creation adapter is enabled for this host.'
+          : 'Using existing saved logins does not authorize Hamilton to create a new portal account.',
+        blocker: 'create_portal_account',
+      }
     }
 
     // 5. VAULT-LOCKED guard for NEW registrations: provisioning a login requires
@@ -596,7 +623,10 @@ export async function runAutopilotIdentityForProfile(db, { profileId, userId = '
  */
 export async function recheckDuePortalVerifications(db, { limit = 25, launchBrowser = null, outlookProvider = null } = {}) {
   const out = { checked: 0, verified: 0, still_pending: 0, exhausted: 0, results: [] }
-  if (!db) return out
+  if (!db || reviewedPortalAccountCreationEnabled() !== true) {
+    void limit; void launchBrowser; void outlookProvider
+    return out
+  }
   let rows = []
   try {
     rows = await listCredentialsAwaitingVerification(db, { nowIso: new Date().toISOString(), limit })
@@ -671,7 +701,7 @@ async function _describeAutopilotStateForPortal(db, { profileId, portalHost, has
       // email verification, surface that specific (auto-resuming) state instead.
       if (cred && cred.pending_registration && !hasSession) {
         if (cred.verification_status === 'pending') {
-          return { state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, detail: 'Account created — awaiting the email verification link (the only step we need from you). Hamilton finishes automatically once verified.' }
+          return { state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, detail: 'Account created — open the verification email yourself. Hamilton does not read your mailbox or visit activation links.' }
         }
         return { state: AUTOPILOT_STATE.NEEDS_USER, detail: 'Login provisioned, but registration was not completed; finish it in a side-by-side login.' }
       }
@@ -683,6 +713,12 @@ async function _describeAutopilotStateForPortal(db, { profileId, portalHost, has
     }
     if (policy?.automation_allowed === false) {
       return { state: AUTOPILOT_STATE.NEEDS_USER, detail: 'Portal terms forbid automation; sign in once.' }
+    }
+    if (reviewedPortalAccountCreationEnabled() !== true) {
+      return {
+        state: AUTOPILOT_STATE.NEEDS_USER,
+        detail: 'No saved login is available. Create the portal account yourself, then save or capture the login for Hamilton.',
+      }
     }
     const status = await getMasterVaultStatus(db, profileId).catch(() => null)
     if (!status?.has_passphrase) {

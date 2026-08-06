@@ -63,25 +63,32 @@ describe('hamiltonAuthorizationStore', () => {
 
   it('records, lists, and revokes authorizations', async () => {
     const db = makeDb()
-    const ids = await recordAuthorizations(db, {
+    const reversibleIds = await recordAuthorizations(db, {
       userId: 'u-1', profileId: 'p-1', scope: 'funding_source',
       fundingSourceIds: ['op-1', 'op-2'],
-      authorizationTypes: ['complete_forms', 'submit_applications'],
-      authorizationText: 'Test text',
-      options: { allow_auto_submit: true },
+      authorizationTypes: ['complete_forms'],
     })
-    // 2 sources × 2 types = 4 rows.
-    assert.equal(ids.length, 4)
+    const submitIds = await recordAuthorizations(db, {
+      userId: 'u-1', profileId: 'p-1', scope: 'task',
+      taskIds: ['task-1', 'task-2'],
+      authorizationTypes: ['submit_applications'],
+      options: { allow_auto_submit: true, require_human_review: false },
+    })
+    assert.equal(reversibleIds.length + submitIds.length, 4)
 
-    const active = await listActiveAuthorizations(db, { profileId: 'p-1', fundingSourceId: 'op-1' })
+    const active = await listActiveAuthorizations(db, {
+      userId: 'u-1', profileId: 'p-1', fundingSourceId: 'op-1', taskId: 'task-1',
+    })
     assert.equal(active.length, 2)
 
     const submit = await isAuthorizationActive(db, {
-      profileId: 'p-1', authorizationType: 'submit_applications', fundingSourceId: 'op-1',
+      userId: 'u-1', profileId: 'p-1', authorizationType: 'submit_applications', taskId: 'task-1',
     })
     assert.equal(submit, true)
 
-    const flags = await readAuthorizations(db, { profileId: 'p-1', fundingSourceId: 'op-1' })
+    const flags = await readAuthorizations(db, {
+      userId: 'u-1', profileId: 'p-1', fundingSourceId: 'op-1', taskId: 'task-1',
+    })
     assert.equal(flags.complete_forms, true)
     assert.equal(flags.submit_applications, true)
     assert.equal(flags.upload_documents, false)
@@ -92,14 +99,12 @@ describe('hamiltonAuthorizationStore', () => {
     await recordAuthorizations(db, {
       userId: 'u-1', profileId: 'p-2', scope: 'profile',
       authorizationTypes: ['complete_forms'],
-      authorizationText: 'Same text',
     })
     await recordAuthorizations(db, {
       userId: 'u-1', profileId: 'p-2', scope: 'profile',
       authorizationTypes: ['complete_forms'],
-      authorizationText: 'Same text',
     })
-    const active = await listActiveAuthorizations(db, { profileId: 'p-2' })
+    const active = await listActiveAuthorizations(db, { userId: 'u-1', profileId: 'p-2' })
     assert.equal(active.length, 1)
   })
 })
@@ -184,12 +189,12 @@ describe('hamiltonAutopilotEngine — internal mappers', () => {
     assert.equal(_internal.matchFieldKey({ name: 'pet_species' }), null)
   })
 
-  it('readProfileValues reads university_applications + essays', () => {
+  it('readProfileValues resolves university facts only from the current target + essays', () => {
     const v = _internal.readProfileValues({
       basic_information: { first_name: 'Anya', last_name: 'K', email: 'a@e.com' },
       university_applications: { applications: [{ name: 'MTSU', major: 'Biology' }] },
       essays: { primary: 'Essay text' },
-    })
+    }, { opportunity: { school_name: 'MTSU' } })
     assert.equal(v.first_name, 'Anya')
     assert.equal(v.full_name, 'Anya K')
     assert.equal(v.school, 'MTSU')

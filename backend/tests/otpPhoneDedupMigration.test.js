@@ -229,14 +229,29 @@ describe('forward repair migration 148 (already-147-stamped DBs) + ownership rep
     expect(MIG148_PG).toContain('to_regclass(t) IS NOT NULL')
   })
 
-  it('[r27 #3 GUARD] every two-owner table in the live migrated schema is classified (move / revoke / exempt)', () => {
+  it('[r27 #3 GUARD] every two-owner table in the live migrated schema is classified (move / revoke / post-repair invariant / exempt)', () => {
     const raw = fullDb()
     const { profile } = twoOwnerTables(raw)
-    const classified = new Set([...CLASSIFICATION.moveProfile, ...CLASSIFICATION.moveAccount, ...CLASSIFICATION.revoke, ...CLASSIFICATION.exempt])
+    const classified = new Set([
+      ...CLASSIFICATION.moveProfile,
+      ...CLASSIFICATION.moveAccount,
+      ...CLASSIFICATION.revoke,
+      ...CLASSIFICATION.postRepairInvariant,
+      ...CLASSIFICATION.exempt,
+    ])
     // Every discovered two-owner (user_id+profile_id) table MUST be explicitly classified —
     // a new one added by a future migration fails here until a human classifies it.
     const unclassified = profile.filter((t) => !classified.has(t))
     expect(unclassified).toEqual([])
+    // These consent/audit tables are created after the historical phone repair. They are
+    // intentionally not rewritten or deleted by 148/0152: their immutable user/profile
+    // ownership is enforced at creation/read time and remains covered by the live boot
+    // split check (unlike actor-log exemptions).
+    expect(CLASSIFICATION.postRepairInvariant).toEqual([
+      'hamilton_submission_attempts',
+      'hamilton_submission_audit_events',
+    ])
+    for (const table of CLASSIFICATION.postRepairInvariant) expect(EXEMPT.has(table)).toBe(false)
     // Sanity: the discovery found the known later-migration tables (not just schema.sql's).
     expect(profile).toContain('grant_applications')
     expect(profile).toContain('anya_match_suggestions')

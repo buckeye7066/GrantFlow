@@ -20,6 +20,7 @@
  *     yield an honest { ok:false }, never a throw (a throw 500s the route).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { addSyntheticHamiltonNetworkSurface, prepareSyntheticHamiltonEgress } from './helpers/hamiltonBrowserHarness.mjs'
 
 process.env.HAMILTON_CLOUD_LOGIN_PROVIDER = 'self_hosted'
 
@@ -77,12 +78,12 @@ function makeFakeLaunch({
         ? captureState
         : (opts.storageState || { cookies: [{ name: 'csrf', value: 'x', domain: 'mtsu.edu', path: '/' }], origins: [] })
     ))
-    const ctx = {
+    const ctx = addSyntheticHamiltonNetworkSurface({
       opts,
       newCDPSession,
       newPage: async () => ({
         goto: vi.fn(async () => {}),
-        url: () => 'https://mtsu.edu/landing',
+        url: () => 'https://mtsu.edu/login',
         viewportSize: () => ({ width: 1280, height: 900 }),
         context: () => ctx,
         ...(passwordFieldCount === null ? {} : {
@@ -92,7 +93,7 @@ function makeFakeLaunch({
         }),
       }),
       storageState,
-    }
+    })
     return ctx
   })
   const browser = { newContext, close: vi.fn(async () => {}) }
@@ -110,6 +111,7 @@ async function startLive(launchBrowser) {
     label: 'MTSU',
     db: null,
     launchBrowser,
+    prepareBrowserEgress: prepareSyntheticHamiltonEgress,
   })
   expect(res.ok).toBe(true)
   liveIds.push(res.liveSessionId)

@@ -26,6 +26,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
+import {
+  addSyntheticHamiltonNetworkSurface,
+  prepareSyntheticHamiltonEgress,
+} from './helpers/hamiltonBrowserHarness.mjs'
 
 process.env.RUNTIME_SECRETS_KEY = 'a'.repeat(64)
 
@@ -35,8 +39,15 @@ const {
   importSession, findValidSession, _resetCredentialSchemaCache,
 } = await import('../services/hamilton/hamiltonCredentialSessionService.js')
 const {
-  runSessionKeepAliveSweep, isSessionDueForKeepAlive,
+  runSessionKeepAliveSweep: runSessionKeepAliveSweepImpl, isSessionDueForKeepAlive,
 } = await import('../services/hamilton/hamiltonSessionKeepAlive.js')
+
+function runSessionKeepAliveSweep(db, options = {}) {
+  return runSessionKeepAliveSweepImpl(db, {
+    prepareBrowserEgress: prepareSyntheticHamiltonEgress,
+    ...options,
+  })
+}
 
 function makeDb() { return new Database(':memory:') }
 
@@ -53,7 +64,7 @@ async function seedSession(db, { host = 'mtsu.edu', keepaliveAt = OLD, profileId
 
 // Fake Playwright surface: launcher returns { browser, context }; context yields
 // one page whose goto/evaluate behavior the test controls.
-function makeFakeLauncher({ bodyText = '', url = 'https://mtsu.edu/dashboard', gotoError = null } = {}) {
+function makeFakeLauncher({ bodyText = '', url = 'https://mtsu.edu/', gotoError = null } = {}) {
   const calls = { storageStateReads: 0, closed: 0 }
   const page = {
     goto: async () => { if (gotoError) throw new Error(gotoError) },
@@ -65,6 +76,7 @@ function makeFakeLauncher({ bodyText = '', url = 'https://mtsu.edu/dashboard', g
     newPage: async () => page,
     storageState: async () => { calls.storageStateReads += 1; return { ...STORAGE_STATE, cookies: [...STORAGE_STATE.cookies, { name: 'refreshed', value: 'yes', domain: '.mtsu.edu' }] } },
   }
+  addSyntheticHamiltonNetworkSurface(context)
   const browser = { close: async () => { calls.closed += 1 } }
   return { launcher: async () => ({ browser, context }), calls }
 }

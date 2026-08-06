@@ -415,7 +415,6 @@ describe('hamiltonHardStopResolver', () => {
     await recordAuthorizations(db, {
       userId: 'u1', profileId: 'p1', scope: 'funding_source',
       fundingSourceIds: ['op-1'], authorizationTypes: ['use_saved_session'],
-      authorizationText: 'Use saved session.',
     })
     await recordSession(db, {
       userId: 'u1', profileId: 'p1', portalHost: 'aid.mtsu.edu',
@@ -458,7 +457,7 @@ describe('hamiltonHardStopResolver', () => {
     assert.equal(d.strategy, 'reuse_session_to_avoid_captcha')
   })
 
-  it('payment → resolves only within authorized envelope', async () => {
+  it('payment → always pauses for the user even when a legacy envelope exists', async () => {
     const db = makeDb()
     await authorizePayment(db, {
       userId: 'u1', profileId: 'p1',
@@ -466,8 +465,9 @@ describe('hamiltonHardStopResolver', () => {
       paymentMethodReference: 'pm_test', authorizationText: 'auth',
     })
     let d = await resolveBlocker(db, ctx(), { kind: 'payment', context: { category: 'application_fee', amount_cents: 2500 } })
-    assert.equal(d.outcome, 'resolved')
-    assert.equal(d.strategy, 'charge_within_pre_authorization')
+    assert.equal(d.outcome, 'escalated')
+    assert.equal(d.strategy, 'pause_for_user_payment')
+    assert.equal(d.payload.automated_payment, false)
 
     d = await resolveBlocker(db, ctx(), { kind: 'payment', context: { category: 'application_fee', amount_cents: 8000 } })
     assert.equal(d.outcome, 'escalated')
@@ -480,7 +480,7 @@ describe('hamiltonHardStopResolver', () => {
     assert.equal(d.fallback, 'pdf_docx')
   })
 
-  it('attestation → routine = auto-tick, penalty-of-perjury = escalate', async () => {
+  it('attestation → routine and penalty-of-perjury text both require exact human review', async () => {
     const db = makeDb()
     await authorizeAttestation(db, {
       userId: 'u1', profileId: 'p1',
@@ -488,8 +488,9 @@ describe('hamiltonHardStopResolver', () => {
       authorizationText: 'I authorize routine truthfulness.',
     })
     let d = await resolveBlocker(db, ctx(), { kind: 'attestation', text: 'Information is true and accurate to the best of my knowledge' })
-    assert.equal(d.outcome, 'resolved')
-    assert.equal(d.strategy, 'check_authorized_attestation')
+    assert.equal(d.outcome, 'escalated')
+    assert.equal(d.strategy, 'ask_user_to_review_attestation')
+    assert.equal(d.payload.exact_text_review_required, true)
 
     d = await resolveBlocker(db, ctx(), { kind: 'attestation', text: 'I declare under penalty of perjury that this is correct' })
     assert.equal(d.outcome, 'escalated')

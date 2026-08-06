@@ -36,17 +36,13 @@ import {
   markSessionUsed,
   normalizeHost,
 } from './hamiltonCredentialSessionService.js'
-import {
-  canPayFor,
-  recordCharge,
-} from './hamiltonPaymentAuthorizationService.js'
-import { isAttestationAllowed } from './hamiltonAttestationStore.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import {
   getResolvedField,
   saveResolvedField,
 } from './hamiltonResolvedFieldStore.js'
 import { isAuthorizationActive } from './hamiltonAuthorizationStore.js'
+import { HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION } from '../../../shared/hamiltonSubmissionContract.js'
 import { findOfficialUrlForOpportunity } from '../urlEnrichment.js'
 import { isSearchEngineUrl, portalUrlFunderPlausibility } from '../../config/urlRules.js'
 
@@ -438,12 +434,14 @@ async function resolveMissingDocument(db, ctx, input) {
 async function resolveLogin(db, ctx, input) {
   const host = ctx.portalUrl ? normalizeHost(ctx.portalUrl) : null
   const sessionAuthorized = await isAuthorizationActive(db, {
-    profileId: ctx.profileId, authorizationType: 'use_saved_session',
+    userId: ctx.userId, profileId: ctx.profileId, authorizationType: 'use_saved_session',
     fundingSourceId: ctx?.opportunity?.id || null, taskId: ctx.taskId,
+    expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
   })
   const credAuthorized = await isAuthorizationActive(db, {
-    profileId: ctx.profileId, authorizationType: 'use_saved_credentials_reference',
+    userId: ctx.userId, profileId: ctx.profileId, authorizationType: 'use_saved_credentials_reference',
     fundingSourceId: ctx?.opportunity?.id || null, taskId: ctx.taskId,
+    expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
   })
   if (!sessionAuthorized && !credAuthorized) {
     return escalate('ask_user_for_session', 'Hamilton needs the user to log in once and save the session before she can run unattended.', { portal_host: host })
@@ -488,33 +486,21 @@ async function resolveCaptcha(db, ctx, input) {
 }
 
 async function resolvePayment(db, ctx, input) {
+  void db
   const host = ctx.portalUrl ? normalizeHost(ctx.portalUrl) : null
   const category = String(input?.context?.category || 'application_fee')
   const amountCents = Number(input?.context?.amount_cents || input?.context?.amountCents || 0)
   if (!Number.isFinite(amountCents) || amountCents <= 0) {
     return escalate('ask_user_payment_amount', 'Hamilton could not read the payment amount. Confirm and re-authorize.', { portal_host: host })
   }
-  const decision = await canPayFor(db, { profileId: ctx.profileId, category, amountCents, portalHost: host })
-  if (!decision.allowed) {
-    return escalate('ask_user_to_authorize_payment',
-      `Hamilton needs payment authorization for ${category} at ${host || 'this portal'} (${(amountCents / 100).toFixed(2)} USD).`,
-      { portal_host: host, category, amount_cents: amountCents, reason: decision.reason })
-  }
-  // The actual charge call is the host's responsibility; Hamilton records
-  // the spend against the authorization for audit.
-  await recordCharge(db, {
-    authorizationId: decision.authorization.id,
-    amountCents,
-    taskId: ctx.taskId,
-    portalHost: host,
-    processorReceipt: input?.context?.receipt || null,
-  })
-  return ok('charge_within_pre_authorization', {
-    payment_authorization_id: decision.authorization.id,
-    payment_method_reference: decision.authorization.payment_method_reference,
-    amount_cents: amountCents,
-    category,
-  }, `Charged ${(amountCents / 100).toFixed(2)} USD to pre-authorized ${category}.`)
+  // External-submission v2 never performs or records a payment. The existing
+  // envelope service is read-then-write and cannot guarantee an atomic spend
+  // reservation under concurrent portal workers. Until a processor-backed,
+  // idempotent reservation/capture/reconciliation flow exists, payment is a
+  // mandatory human handoff regardless of any older standing envelope.
+  return escalate('pause_for_user_payment',
+    `A ${category} payment of ${(amountCents / 100).toFixed(2)} USD is required at ${host || 'this portal'}. Review and complete it yourself; Hamilton will not charge or mark it paid.`,
+    { portal_host: host, category, amount_cents: amountCents, automated_payment: false })
 }
 
 async function resolveWetSignature(db, ctx, input) {
@@ -537,17 +523,10 @@ async function resolveDigitalSignature(db, ctx, input) {
 async function resolveAttestation(db, ctx, input) {
   const text = String(input?.text || input?.detail || input?.context?.label || '')
   if (!text) return escalate('ask_user_to_review_attestation', 'Attestation text could not be captured.')
-  // Hard-attestation patterns — never auto-tick.
-  if (/(electronic\s*signature|sign\s*here|sign\s*below|penalty\s*of\s*perjury|under\s*oath|digital\s*signature|i\s*affirm\s*under)/i.test(text)) {
-    return escalate('ask_user_to_review_attestation', 'This attestation requires fresh personal judgment. Hamilton refused to auto-check.', { label: text.slice(0, 200) })
-  }
-  const allowed = await isAttestationAllowed(db, { profileId: ctx.profileId, labelText: text })
-  if (allowed.allowed) {
-    return ok('check_authorized_attestation', { category: allowed.category, label: text.slice(0, 200) },
-      `Auto-ticked routine attestation under category "${allowed.category}".`)
-  }
+  void db
   return escalate('ask_user_to_review_attestation',
-    'No matching standing attestation authorization. Hamilton refused to auto-check.', { label: text.slice(0, 200) })
+    'Review and accept the exact current text yourself. Profile-wide or fuzzy standing attestations are not valid for legal, accuracy, terms, release, or signature language.',
+    { label: text.slice(0, 200), exact_text_review_required: true })
 }
 
 async function resolvePortalTerms(db, ctx, input) {

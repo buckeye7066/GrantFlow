@@ -7,19 +7,12 @@
  * have.
  *
  * Pins:
- *   1. STORED AUTHORIZATION REACHES THE SUBMIT STEP — the task's persisted
- *      allow_auto_submit (batch option) and auto_submit_enabled (the user's
- *      explicit approve-submit toggle, previously honored only by the legacy
- *      hamiltonApplicationAgent) flow into the autopilot engine's
- *      allowAutoSubmit on EVERY run, not only the batch that created the task.
- *   2. NO WIDENING — auto_submit_enabled still requires the global
- *      HAMILTON_ALLOW_AUTOSUBMIT flag (same rail as the legacy agent), the
- *      tailored-approval gate still forces filled-not-submitted when not
- *      approved, and everything defaults OFF.
- *   3. SUBMISSION EVIDENCE HONESTY — a run is only reported "submitted" with
- *      captured evidence; the task record distinguishes a portal-issued
- *      reference from a screenshot-only capture, and a submit click with NO
- *      evidence is a blocker, never a submission.
+ *   1. Only the current server-side v2 authorization ledger can authorize a
+ *      submit. Persisted task booleans and request options can only narrow it.
+ *   2. The profile toggle, global kill switch, and a reviewed fixture-backed
+ *      portal adapter must all remain current.
+ *   3. A generic reference or screenshot is not durable proof. Receipt state
+ *      is projected only through the fenced v2 attempt/outbox contract.
  *   4. ORG PROFILES FIRST-CLASS — the engine's fill values pull an org
  *      profile's mission/programs narrative when no personal essay exists.
  */
@@ -53,6 +46,12 @@ vi.mock('../services/hamilton/hamiltonPreflight.js', async (importOriginal) => {
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const { runAutopilot, _internal: engineInternal } = await import('../services/hamilton/hamiltonAutopilotEngine.js')
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
+const { recordAuthorizations } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
+const {
+  onboardReviewedSubmissionAdapter,
+  SYNTHETIC_REFERENCE_ADAPTER,
+} = await import('../services/hamilton/hamiltonSubmissionAdapterRegistry.js')
+const { contractSha256, stableContractJson } = await import('../../shared/irreversibleActionContract.js')
 const {
   ensureApplicationTask,
   updateApplicationTask,
@@ -82,6 +81,7 @@ function makeDb() {
       profile_id TEXT,
       title TEXT,
       description TEXT,
+      portal_application_id TEXT,
       application_url TEXT,
       source_url TEXT
     );
@@ -113,7 +113,7 @@ async function seedFixture(db) {
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'automation_preferences', JSON.stringify({ automations: { hamilton_auto_submit: true, hamilton_autopilot: true } }))
   await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://portal.example.org/apply')
+    .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://fixture.hamilton.invalid/apply?applicationId=APP-AUTHORIZED-1')
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')
     .run('g-1', PROFILE, 'opp-1', 'Community Ministry Grant')
 }
@@ -129,7 +129,80 @@ const AUTHORIZATIONS = {
   use_standing_attestation: false,
 }
 
-async function runSource(db, extraOptions = {}) {
+function reviewedFixtures(definition) {
+  const applicationIdentity = 'fixture-app-123'
+  return [
+    {
+      case: 'new_receipt_success', application_identity: applicationIdentity,
+      receipt_application_identity: applicationIdentity, receipt_container_count: 1,
+      pre_click_text: 'Review application',
+      post_click_text: 'Your application has been received. Confirmation Number: CONF-123456',
+      form_observation: {
+        field_contract_sha256: contractSha256(stableContractJson(definition.field_contract)),
+        required_answer_keys: definition.field_contract.fields.filter((field) => field.required).map((field) => field.answer_key),
+      },
+    },
+    {
+      case: 'preexisting_application_id_negative', application_identity: applicationIdentity,
+      pre_click_text: 'Application ID: DRAFT-123456', post_click_text: 'Application ID: DRAFT-123456',
+    },
+    {
+      case: 'unchanged_spa_negative', application_identity: applicationIdentity,
+      pre_click_text: 'Your application has been received. Confirmation Number: CONF-123456',
+      post_click_text: 'Your application has been received. Confirmation Number: CONF-123456',
+    },
+    { case: 'screenshot_only_negative', application_identity: applicationIdentity },
+    { case: 'ambiguous_timeout_negative', application_identity: applicationIdentity },
+    {
+      case: 'unrelated_receipt_negative', application_identity: applicationIdentity,
+      receipt_application_identity: 'fixture-app-other', receipt_container_count: 1,
+      post_click_text: 'Your application has been received. Confirmation Number: CONF-OTHER-123',
+    },
+    {
+      case: 'multiple_application_receipts_negative', application_identity: applicationIdentity,
+      receipt_application_identity: applicationIdentity, receipt_container_count: 2,
+      post_click_text: 'Your application has been received. Confirmation Number: CONF-AMBIG-123',
+    },
+    {
+      case: 'exact_status_absence', application_identity: applicationIdentity,
+      status_lookup: {
+        application_identity: applicationIdentity, outcome: 'absent',
+        query_parameter: definition.status_query.query_parameter, response_sha256: 'f'.repeat(64),
+        path_prefix: definition.status_query.path_prefix,
+        container_selector_sha256: contractSha256(definition.status_query.container_selector),
+        identity_container_match: true, matching_container_count: 1,
+        identity_match_count: 1, status_match_count: 1,
+      },
+    },
+  ]
+}
+
+async function runSource(db, extraOptions = {}, {
+  authorizationTypes = ['complete_forms'],
+  reviewedAdapter = true,
+} = {}) {
+  const task = await ensureApplicationTask(db, {
+    profileId: PROFILE, opportunityId: 'opp-1', grantId: 'g-1', automationType: 'portal',
+  })
+  await recordAuthorizations(db, {
+    userId: 'user-1', profileId: PROFILE,
+    scope: authorizationTypes.includes('submit_applications') ? 'task' : 'funding_source',
+    taskIds: authorizationTypes.includes('submit_applications') ? [task.id] : [],
+    fundingSourceIds: authorizationTypes.includes('submit_applications') ? [] : ['opp-1'],
+    authorizationTypes,
+    options: authorizationTypes.includes('submit_applications')
+      ? { allow_auto_submit: true, require_human_review: false }
+      : {},
+  })
+  if (reviewedAdapter) {
+    const onboarded = await onboardReviewedSubmissionAdapter(db, {
+      portalHost: SYNTHETIC_REFERENCE_ADAPTER.portal_host,
+      definition: SYNTHETIC_REFERENCE_ADAPTER,
+      fixtures: reviewedFixtures(SYNTHETIC_REFERENCE_ADAPTER),
+      reviewedByUserId: 'operator-test',
+    })
+    expect(onboarded.onboarded, JSON.stringify(onboarded.report?.errors)).toBe(true)
+  }
   return automateSingleSource(db, {
     profileId: PROFILE,
     userId: 'user-1',
@@ -180,60 +253,78 @@ async function seedTaskWith(db, { allowAutoSubmit, autoSubmitEnabled } = {}) {
 
 // ── 1 + 2. Stored authorization reaches the engine; rails stay closed ──────
 
-describe('stored auto-submit authorization reaches the submit step', () => {
-  it('persisted allow_auto_submit (batch option) authorizes the engine on a later run', async () => {
+describe('server-side auto-submit authorization reaches the submit step', () => {
+  it('current v2 submit consent plus every live kill switch authorizes the reviewed adapter', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0' // operational escape hatch: isolate the wiring
+    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
     const db = makeDb()
     await seedFixture(db)
-    await seedTaskWith(db, { allowAutoSubmit: true })
+    await seedTaskWith(db, {})
 
-    await runSource(db) // no options.allow_auto_submit on this run
+    await runSource(db, {}, { authorizationTypes: ['complete_forms', 'submit_applications'] })
 
     expect(runAutopilot).toHaveBeenCalledTimes(1)
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
   })
 
-  it("the user's approve-submit toggle (auto_submit_enabled) authorizes the engine when the global flag is on", async () => {
+  it('persisted task/request booleans cannot mint submit authority when the v2 ledger has none', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
     const db = makeDb()
     await seedFixture(db)
-    await seedTaskWith(db, { autoSubmitEnabled: true })
-
-    await runSource(db)
-
-    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
-  })
-
-  it('auto_submit_enabled WITHOUT the global HAMILTON_ALLOW_AUTOSUBMIT flag stays draft-only (legacy-agent rail)', async () => {
-    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
-    const db = makeDb()
-    await seedFixture(db)
-    await seedTaskWith(db, { autoSubmitEnabled: true })
+    await seedTaskWith(db, { allowAutoSubmit: true, autoSubmitEnabled: true })
 
     await runSource(db)
 
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
   })
 
-  it('nothing stored, nothing granted → allowAutoSubmit stays false (default OFF everywhere)', async () => {
+  it('current submit consent without the global kill switch stays draft-only', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     const db = makeDb()
     await seedFixture(db)
     await seedTaskWith(db, {})
 
-    await runSource(db)
+    await runSource(db, {}, { authorizationTypes: ['complete_forms', 'submit_applications'] })
 
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
+  })
+
+  it('an explicit profile toggle-off stays draft-only even with current submit consent', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
+    const db = makeDb()
+    await seedFixture(db)
+    await db.prepare("UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = 'automation_preferences'")
+      .run(JSON.stringify({ automations: { hamilton_auto_submit: false, hamilton_autopilot: true } }), PROFILE)
+
+    await runSource(db, {}, { authorizationTypes: ['complete_forms', 'submit_applications'] })
+
+    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
+  })
+
+  it('stops before the engine when explicit and target-query application identities conflict', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
+    const db = makeDb()
+    await seedFixture(db)
+    await db.prepare('UPDATE funding_opportunities SET portal_application_id = ?, application_url = ? WHERE id = ?')
+      .run('APP-EXPLICIT-A', 'https://fixture.hamilton.invalid/apply?applicationId=APP-TARGET-B', 'opp-1')
+
+    const result = await runSource(db, {}, { authorizationTypes: ['complete_forms', 'submit_applications'] })
+
+    expect(runAutopilot).not.toHaveBeenCalled()
+    expect(result.reason).toBe('portal_application_identity_conflict')
+    expect(result.task.status).toBe('human_action_required')
   })
 
   it('an explicit batch denial overrides a stored authorization', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     const db = makeDb()
     await seedFixture(db)
-    await seedTaskWith(db, { allowAutoSubmit: true })
+    await seedTaskWith(db, {})
 
-    await runSource(db, { allow_auto_submit: false })
+    await runSource(db, { allow_auto_submit: false }, { authorizationTypes: ['complete_forms', 'submit_applications'] })
 
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
   })
@@ -244,11 +335,12 @@ describe('stored auto-submit authorization reaches the submit step', () => {
   // questions) still does.
   it('an authorized card with NO approved tailored record now SUBMITS (gate default ON)', async () => {
     // No HAMILTON_TAILORED_APPROVAL_GATE override → gate enforced.
+    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
     const db = makeDb()
     await seedFixture(db)
-    await seedTaskWith(db, { allowAutoSubmit: true })
+    await seedTaskWith(db, {})
 
-    const result = await runSource(db)
+    const result = await runSource(db, {}, { authorizationTypes: ['complete_forms', 'submit_applications'] })
 
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
     const events = await listTaskEvents(db, result.task.id)
@@ -256,9 +348,10 @@ describe('stored auto-submit authorization reaches the submit step', () => {
   })
 
   it('the gate STILL withholds for missing required questions (completeness, not approval)', async () => {
+    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
     const db = makeDb()
     await seedFixture(db)
-    await seedTaskWith(db, { allowAutoSubmit: true })
+    await seedTaskWith(db, {})
     const { ensureTailoredApplicationsTable } = await import('../services/hamilton/tailoredApplicationStore.js')
     await ensureTailoredApplicationsTable(db)
     await db.prepare(
@@ -266,7 +359,7 @@ describe('stored auto-submit authorization reaches the submit step', () => {
        VALUES ('ta-1', ?, 'g-1', 'pending', '{}', ?, '[]')`,
     ).run(PROFILE, JSON.stringify([{ question: 'Requires a nomination letter — who is the nominator?' }]))
 
-    const result = await runSource(db)
+    const result = await runSource(db, {}, { authorizationTypes: ['complete_forms', 'submit_applications'] })
 
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
     const events = await listTaskEvents(db, result.task.id)
@@ -279,11 +372,12 @@ describe('stored auto-submit authorization reaches the submit step', () => {
 // ── 3. Submission evidence honesty ─────────────────────────────────────────
 
 describe('submission evidence honesty', () => {
-  it('a portal-issued reference is reported as portal-confirmed receipt', async () => {
+  it('a legacy engine "submitted" claim with a generic reference is not projected as externally received', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
     const db = makeDb()
     await seedFixture(db)
-    await seedTaskWith(db, { allowAutoSubmit: true })
+    await seedTaskWith(db, {})
     runAutopilot.mockResolvedValueOnce({
       status: 'submitted',
       submit_clicked: true,
@@ -295,21 +389,20 @@ describe('submission evidence honesty', () => {
       trace: [],
     })
 
-    const result = await runSource(db)
+    const result = await runSource(db, {}, { authorizationTypes: ['complete_forms', 'submit_applications'] })
 
-    expect(result.task.status).toBe('submitted')
+    expect(result.task.status).not.toBe('submitted')
+    expect(result.task.status).not.toBe('externally_received')
     const events = await listTaskEvents(db, result.task.id)
-    const submittedEvent = events.find((e) => e.event_type === 'submitted')
-    expect(submittedEvent.message).toMatch(/portal confirmed receipt/i)
-    expect(submittedEvent.message).toContain('CONF-12345')
-    expect(submittedEvent.details?.confirmation_evidence).toBe('portal_reference')
+    expect(events.find((e) => e.event_type === 'submitted')).toBeFalsy()
   })
 
-  it('a screenshot-only capture never reads as portal-confirmed; the record says to verify', async () => {
+  it('a screenshot-only legacy claim is never projected as externally received', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
     const db = makeDb()
     await seedFixture(db)
-    await seedTaskWith(db, { allowAutoSubmit: true })
+    await seedTaskWith(db, {})
     runAutopilot.mockResolvedValueOnce({
       status: 'submitted',
       submit_clicked: true,
@@ -321,24 +414,28 @@ describe('submission evidence honesty', () => {
       trace: [],
     })
 
-    const result = await runSource(db)
+    const result = await runSource(db, {}, { authorizationTypes: ['complete_forms', 'submit_applications'] })
 
-    expect(result.task.status).toBe('submitted')
+    expect(result.task.status).not.toBe('submitted')
+    expect(result.task.status).not.toBe('externally_received')
     const events = await listTaskEvents(db, result.task.id)
-    const submittedEvent = events.find((e) => e.event_type === 'submitted')
-    expect(submittedEvent.message).not.toMatch(/portal confirmed receipt/i)
-    expect(submittedEvent.message).toMatch(/verify/i)
-    expect(submittedEvent.details?.confirmation_evidence).toBe('screenshot_only')
+    expect(events.find((e) => e.event_type === 'submitted')).toBeFalsy()
   })
 
-  it('engine: a submit click with NO captured evidence is a blocker, never a submission', () => {
+  it('engine: only a new typed receipt plus acknowledgement and page change passes', () => {
     const { assessSubmissionEvidence } = engineInternal
     expect(assessSubmissionEvidence({ reference: 'CONF-1', screenshot_path: null }))
-      .toEqual({ ok: true, confirmation_evidence: 'portal_reference' })
+      .toEqual({ ok: false, confirmation_evidence: 'none' })
     expect(assessSubmissionEvidence({ reference: null, screenshot_path: '/tmp/s.png' }))
-      .toEqual({ ok: true, confirmation_evidence: 'screenshot_only' })
+      .toEqual({ ok: false, confirmation_evidence: 'none' })
     expect(assessSubmissionEvidence({ reference: null, screenshot_path: null }))
       .toEqual({ ok: false, confirmation_evidence: 'none' })
+    expect(assessSubmissionEvidence({
+      reference: 'CONF-123456', reference_kind: 'confirmation',
+      extraction_rule: 'adapter_exact_label:confirmation', received_acknowledgement: true,
+      page_fingerprint: 'b'.repeat(64),
+    }, { page_fingerprint: 'a'.repeat(64) }))
+      .toEqual({ ok: true, confirmation_evidence: 'portal_reference' })
   })
 })
 

@@ -265,7 +265,6 @@ describe('hamilton hard-stop alerting (single canonical admin)', () => {
     await recordAuthorizations(db, {
       userId: 'u_owner', profileId: 'p1', scope: 'funding_source',
       fundingSourceIds: ['op1'], authorizationTypes: ['use_saved_session'],
-      authorizationText: 'auth',
     })
     delete process.env.HAMILTON_BROWSER_STORAGE_DIR
     await recordSession(db, {

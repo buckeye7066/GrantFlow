@@ -38,6 +38,10 @@
     "hamilton_session_capture_requests",
     "payment_access_events"
   ],
+  "postRepairInvariant": [
+    "hamilton_submission_attempts",
+    "hamilton_submission_audit_events"
+  ],
   "exempt": [
     "audit_logs",
     "agent_activity_events",

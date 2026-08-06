@@ -219,7 +219,7 @@ function parseMetadata(raw) {
 function rowToPolicy(row) {
   if (!row) return null
   const metadata = parseMetadata(row.metadata_json)
-  return {
+  const policy = {
     portal_host: row.portal_host,
     automation_allowed: !!row.automation_allowed,
     agent_submission_allowed: !!row.agent_submission_allowed,
@@ -235,11 +235,14 @@ function rowToPolicy(row) {
     last_checked_at: row.last_checked_at || null,
     notes: row.notes || null,
     metadata,
+    submission_adapter: metadata.submission_adapter || null,
     // A learned server-side (datacenter-IP / anti-bot) wall, if one has been
     // observed. { state, category, signal, engine, first_seen_at, last_seen_at,
     // hits, cleared_at } or null.
     datacenter_block: metadata.datacenter_block || null,
   }
+  policy.submission_mode = getReviewedSubmissionAdapter(policy) ? 'reviewed_auto_submit' : 'draft_only'
+  return policy
 }
 
 /**
@@ -266,7 +269,12 @@ export async function getPolicyFor(db, portalHost) {
   // Seed catalogue.
   const seed = SEED_POLICIES.find((p) => p.portal_host === host)
     || SEED_POLICIES.find((p) => host.endsWith(`.${p.portal_host}`))
-  if (seed) return { ...seed, identity_proofed: !!seed.identity_proofed || isIdentityProofedHost(host) }
+  if (seed) return {
+    ...seed,
+    identity_proofed: !!seed.identity_proofed || isIdentityProofedHost(host),
+    submission_adapter: null,
+    submission_mode: 'draft_only',
+  }
   return defaultPolicy(host)
 }
 
@@ -274,7 +282,7 @@ function defaultPolicy(host) {
   return {
     portal_host: host,
     automation_allowed: true,
-    agent_submission_allowed: true,
+    agent_submission_allowed: false,
     scraping_allowed: false,
     api_available: false,
     manual_only: false,
@@ -284,8 +292,143 @@ function defaultPolicy(host) {
     fallback_path: 'pdf_docx',
     source_of_policy: null,
     last_checked_at: null,
-    notes: 'Default permissive policy — no host-specific entry on file.',
+    notes: 'Preparation may proceed, but external submission is human-only until a reviewed, fixture-backed portal adapter is registered.',
+    submission_adapter: null,
+    submission_mode: 'draft_only',
   }
+}
+
+/**
+ * A portal may be auto-submitted only through a reviewed adapter whose exact
+ * implementation/policy and fixture contract are frozen in policy metadata.
+ * Merely setting agent_submission_allowed is not enough.
+ */
+export function getReviewedSubmissionAdapter(policy, { portalUrl = null } = {}) {
+  if (!policy || policy.agent_submission_allowed !== true) return null
+  const adapter = policy.submission_adapter || policy.metadata?.submission_adapter
+  if (!adapter || adapter.reviewed !== true) return null
+  if (adapter.enabled !== true || adapter.kill_switch === true) return null
+  if (!adapter.id || !adapter.version || !adapter.reviewed_at) return null
+  const syntheticFixtureOnly = adapterHostEndsInvalid(adapter)
+  if (syntheticFixtureOnly) {
+    if (adapter.operator_validation_version !== 'hamilton-adapter-fixtures-v1'
+        || adapter.synthetic_fixture_only !== true) return null
+  } else if (adapter.operator_validation_version !== 'hamilton-adapter-operator-validation-v1'
+      || !adapter.operator_validation_artifact_id
+      || !/^[a-f0-9]{64}$/i.test(String(adapter.operator_validation_evidence_sha256 || ''))
+      || !['sandbox', 'training'].includes(String(adapter.operator_validation_environment || ''))
+      || !Number.isFinite(Date.parse(adapter.operator_validation_expires_at))
+      || Date.parse(adapter.operator_validation_expires_at) <= Date.now()) return null
+  if (!/^[a-f0-9]{64}$/i.test(String(adapter.fixture_contract_sha256 || ''))) return null
+  if (adapter.mode !== 'typed_receipt_v1') return null
+  if (!['application', 'workspace', 'submission'].includes(adapter.application_identity_kind)) return null
+  const adapterHost = normalizeHost(adapter.portal_host)
+  if (!adapterHost || adapterHost !== normalizeHost(policy.portal_host)) return null
+  if (!Array.isArray(adapter.allowed_origins) || !adapter.allowed_origins.includes(`https://${adapterHost}`)) return null
+  for (const origin of adapter.allowed_origins) {
+    try {
+      const parsed = new URL(String(origin))
+      if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== normalizeHost(parsed.hostname)
+          || Boolean(parsed.port && parsed.port !== '443') || parsed.pathname !== '/'
+          || Boolean(parsed.search || parsed.hash || parsed.username || parsed.password)) return null
+    } catch { return null }
+  }
+  if (!adapter.submit_control?.selector || !/^[a-f0-9]{64}$/i.test(String(adapter.submit_control?.exact_text_sha256 || ''))) return null
+  if (!adapter.receipt?.container_selector || !adapter.receipt?.identity_selector || !adapter.receipt?.identity_attribute) return null
+  if (adapter.field_contract?.version !== 'exact-fields-v1'
+      || !Array.isArray(adapter.field_contract?.fields)
+      || adapter.field_contract.fields.length === 0) return null
+  if (adapter.reconciliation_mode !== 'authenticated_exact_application_lookup_v1'
+      || adapter.status_query?.mode !== 'authenticated_dom_exact_query_v1'
+      || !adapter.status_query?.query_parameter
+      || !String(adapter.status_query?.path_prefix || '').startsWith('/')
+      || !adapter.status_query?.container_selector
+      || !adapter.status_query?.status_selector
+      || !adapter.status_query?.identity_selector
+      || !adapter.status_query?.identity_attribute
+      || !adapter.status_query?.received_states?.length
+      || !adapter.status_query?.absent_states?.length) return null
+  const boundedPath = (value) => {
+    const path = String(value || '').replace(/\/+$/, '') || '/'
+    return path.startsWith('/') && path !== '/' && !path.includes('?') && !path.includes('#')
+  }
+  if (!Array.isArray(adapter.allowed_path_prefixes) || adapter.allowed_path_prefixes.length === 0
+      || adapter.allowed_path_prefixes.some((path) => !boundedPath(path))
+      || !Array.isArray(adapter.auth_path_prefixes)
+      || adapter.auth_path_prefixes.some((path) => !boundedPath(path))
+      || !boundedPath(adapter.status_query.path_prefix)) return null
+  if (portalUrl && Array.isArray(adapter.allowed_path_prefixes) && adapter.allowed_path_prefixes.length > 0) {
+    let path
+    try {
+      const parsed = new URL(portalUrl)
+      if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== adapterHost
+          || Boolean(parsed.port && parsed.port !== '443') || parsed.username || parsed.password) return null
+      path = parsed.pathname
+    } catch { return null }
+    if (!adapter.allowed_path_prefixes.some((rawPrefix) => {
+      const prefix = String(rawPrefix).replace(/\/+$/, '') || '/'
+      return path === prefix || path.startsWith(`${prefix}/`)
+    })) return null
+  }
+  const executable = {
+    id: String(adapter.id),
+    version: String(adapter.version),
+    portal_host: adapterHost,
+    reviewed_at: String(adapter.reviewed_at),
+    fixture_contract_sha256: String(adapter.fixture_contract_sha256).toLowerCase(),
+    mode: adapter.mode,
+    application_identity_kind: adapter.application_identity_kind,
+    allowed_path_prefixes: Object.freeze(adapter.allowed_path_prefixes.map(String)),
+    auth_path_prefixes: Object.freeze(adapter.auth_path_prefixes.map(String)),
+    allowed_origins: Object.freeze(adapter.allowed_origins.map(String)),
+    submit_control: Object.freeze({
+      selector: String(adapter.submit_control.selector),
+      exact_text_sha256: String(adapter.submit_control.exact_text_sha256).toLowerCase(),
+    }),
+    field_contract: Object.freeze({
+      version: 'exact-fields-v1',
+      fields: Object.freeze(adapter.field_contract.fields.map((field) => Object.freeze({
+        path_prefix: String(field.path_prefix),
+        selector: String(field.selector),
+        answer_key: String(field.answer_key),
+        control_type: String(field.control_type),
+        transform: String(field.transform),
+        required: field.required === true,
+      }))),
+    }),
+    receipt: Object.freeze({
+      exact_labels: Object.freeze((adapter.receipt?.exact_labels || []).map(String)),
+      container_selector: String(adapter.receipt.container_selector),
+      identity_selector: String(adapter.receipt.identity_selector),
+      identity_attribute: String(adapter.receipt.identity_attribute),
+    }),
+    reconciliation_mode: adapter.reconciliation_mode === 'authenticated_exact_application_lookup_v1'
+      ? adapter.reconciliation_mode
+      : null,
+    status_query: Object.freeze({
+      mode: String(adapter.status_query?.mode || ''),
+      query_parameter: String(adapter.status_query?.query_parameter || ''),
+      path_prefix: String(adapter.status_query?.path_prefix || ''),
+      container_selector: String(adapter.status_query?.container_selector || ''),
+      status_selector: String(adapter.status_query?.status_selector || ''),
+      identity_selector: String(adapter.status_query?.identity_selector || ''),
+      identity_attribute: String(adapter.status_query?.identity_attribute || ''),
+      received_states: Object.freeze((adapter.status_query?.received_states || []).map(String)),
+      absent_states: Object.freeze((adapter.status_query?.absent_states || []).map(String)),
+    }),
+    operator_validation_version: adapter.operator_validation_version,
+    synthetic_fixture_only: syntheticFixtureOnly,
+    operator_validation_artifact_id: adapter.operator_validation_artifact_id || null,
+    operator_validation_evidence_sha256: adapter.operator_validation_evidence_sha256 || null,
+    operator_validation_environment: adapter.operator_validation_environment || null,
+    operator_validation_expires_at: adapter.operator_validation_expires_at || null,
+  }
+  return Object.freeze(executable)
+}
+
+function adapterHostEndsInvalid(adapter) {
+  const host = normalizeHost(adapter?.portal_host)
+  return Boolean(host && host.endsWith('.invalid'))
 }
 
 /**
@@ -458,11 +601,12 @@ export async function clearPortalWall(db, portalHost) {
 }
 
 export async function listPolicies(db) {
-  if (!db) return SEED_POLICIES.map((p) => ({ ...p }))
+  const decorateSeed = (policy) => ({ ...policy, submission_adapter: null, submission_mode: 'draft_only' })
+  if (!db) return SEED_POLICIES.map(decorateSeed)
   await ensureSchema(db)
   const rows = await db.prepare('SELECT * FROM hamilton_portal_policies ORDER BY portal_host').all()
   const overrides = new Map((rows || []).map((r) => [r.portal_host, rowToPolicy(r)]))
-  const merged = SEED_POLICIES.map((seed) => overrides.get(seed.portal_host) || { ...seed })
+  const merged = SEED_POLICIES.map((seed) => overrides.get(seed.portal_host) || decorateSeed(seed))
   return merged.concat([...overrides.values()].filter((o) => !SEED_POLICIES.find((s) => s.portal_host === o.portal_host)))
 }
 

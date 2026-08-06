@@ -26,6 +26,16 @@ const {
 } = await import('../services/hamilton/portalSync/connectors/studentaid.js')
 const { resolveConnector, getConnectorForHost } = await import('../services/hamilton/portalSync/registry.js')
 
+const TEST_NETWORK_EGRESS = Object.freeze({
+  allowed_origins: ['https://studentaid.gov'],
+  pinned_hosts: { 'studentaid.gov': '203.0.113.10' },
+  path_contract: {
+    navigation: ['/my-activity', '/my-aid', '/aid-summary', '/fsa-id/sign-in', '/'],
+    application: [], authentication: [], status: [], interactive: [],
+  },
+})
+const READ_CONTEXT = Object.freeze({ log: () => {}, networkEgress: TEST_NETWORK_EGRESS })
+
 // The extractor is a network/LLM call; stub it so the read path is deterministic.
 vi.mock('../services/hamilton/portalSync/llmPageExtract.js', () => ({
   extractPortalDataWithLLM: vi.fn(async () => ({
@@ -170,7 +180,7 @@ describe('studentaid.gov connector — read()', () => {
       'Your information was sent to your school.',
     ].join('\n'))
 
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     // Furthest evidenced stage wins: "sent to your school" beats "submitted".
     expect(res.fafsaStatus.stage).toBe('school_received')
@@ -186,7 +196,7 @@ describe('studentaid.gov connector — read()', () => {
 
   it('an unreadable/empty page reports notFound honestly and certifies NOTHING', async () => {
     const page = makePage('')
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     expect(res.fafsaStatus).toBe(null)
     expect(res.fields).toHaveLength(0)
@@ -197,7 +207,7 @@ describe('studentaid.gov connector — read()', () => {
 
   it('a page with no stage phrase leaves the stage unset and SAYS so (never defaults)', async () => {
     const page = makePage('Federal Student Aid. Loan simulator. Repayment plans.')
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     expect(res.fafsaStatus).toBe(null)
     expect(res.notFound.some((n) => /never defaulted to not_started/i.test(n.reason))).toBe(true)
@@ -218,7 +228,7 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
 
   it('a sign-in wall reports NOT SIGNED IN — never "this student has no FAFSA data"', async () => {
     const page = makePage('Please sign in to continue. Create an FSA ID.', 'https://studentaid.gov/fsa-id/sign-in/landing')
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     expect(res.access).toBe('signin_wall')
     expect(res.fafsaStatus).toBe(null)
@@ -232,7 +242,7 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
     // The wall page even contains a stage-shaped phrase; it must be ignored,
     // because text we were served INSTEAD of her record is not her record.
     const page = makePage('Access Denied. Reference #18.9f2. Your FAFSA form is complete.', 'https://studentaid.gov/aid-summary/')
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     expect(res.access).toBe('blocked')
     expect(res.fafsaStatus).toBe(null) // NOT 'complete'
@@ -259,7 +269,7 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
       },
     })
 
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     expect(res.access).toBe('signin_wall')
     // And crucially: the marketing text must not have produced a stage.
@@ -299,7 +309,7 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
       },
     }, { landed: 'https://studentaid.gov/fsa-id/sign-in/landing', title: 'Log In', text: 'Log In' })
 
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     expect(res.access).toBe('authenticated')
     expect(res.fafsaStatus.stage).toBe('processed') // SAI figure is the furthest evidence
@@ -308,7 +318,7 @@ describe('studentaid.gov connector — "no data" vs "never got in" are different
 
   it('records per-page diagnostics (url/title/chars/access) and NEVER the page text', async () => {
     const page = makePage('Please sign in to continue.', 'https://studentaid.gov/fsa-id/sign-in/landing')
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     expect(res.raw.pages.length).toBeGreaterThan(0)
     for (const p of res.raw.pages) {
@@ -385,7 +395,7 @@ describe('studentaid.gov connector — the REAL FAFSA record page (owner screens
       },
     }, { landed: 'https://studentaid.gov/my-aid/loans', title: 'Loans | My Aid', text: 'My Loans You Currently Have No Loans' })
 
-    const res = await connector.read(page, { log: () => {} })
+    const res = await connector.read(page, READ_CONTEXT)
 
     expect(res.access).toBe('authenticated')
     expect(res.fafsaStatus.stage).toBe('processed')
@@ -394,7 +404,7 @@ describe('studentaid.gov connector — the REAL FAFSA record page (owner screens
 
   it('NEVER navigates the /fafsa-apply wizard (it renders identically for every user)', async () => {
     const page = makeRedirectingPage({}, { landed: 'https://studentaid.gov/my-aid/loans', title: 'Loans', text: 'My Loans' })
-    await connector.read(page, { log: () => {} })
+    await connector.read(page, READ_CONTEXT)
     // Reading that wizard is what produced a false "she has not filed" alarm.
     for (const call of page.goto.mock.calls) {
       expect(String(call[0])).not.toMatch(/\/fafsa-apply\//)

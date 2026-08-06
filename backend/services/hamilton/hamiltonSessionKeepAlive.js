@@ -39,7 +39,8 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
-import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import { launchGuardedPortalBrowser, launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import { navigateHamiltonPortalPage, prepareHamiltonBrowserEgress } from './hamiltonBrowserNetworkGuard.js'
 import { classifyBlocker } from './hamiltonBlockerClassifier.js'
 import {
   getSessionStorageState,
@@ -47,7 +48,11 @@ import {
   markSessionExpired,
 } from './hamiltonCredentialSessionService.js'
 import { emitHamiltonNotificationToProfileAndAdmins } from './hamiltonNotifications.js'
-import { authProbeUrlForHost, isSignInSurfaceUrl } from '../../config/portalSessionProfiles.js'
+import {
+  authProbeUrlForHost,
+  isSignInSurfaceUrl,
+  SESSION_PROBE_SIGN_IN_PATH_PREFIXES,
+} from '../../config/portalSessionProfiles.js'
 import {
   recordSessionObservation,
   OBSERVATION_ALIVE,
@@ -98,21 +103,29 @@ export function isSessionDueForKeepAlive(row, nowMs, intervalMs) {
   return nowMs - t >= intervalMs
 }
 
-async function openProbeContext(launchBrowser, storageState) {
-  if (typeof launchBrowser === 'function') {
-    const launched = await launchBrowser({ storageState })
-    if (!launched) return null
-    const browser = launched.browser ?? launched
-    const context = launched.context
-      ?? await browser.newContext({ storageState, userAgent: REALISTIC_PORTAL_UA })
-    return { browser, context }
-  }
+async function openProbeContext(launchBrowser, storageState, targetUrl, {
+  launchGuardedBrowser = launchGuardedPortalBrowser,
+  prepareBrowserEgress = prepareHamiltonBrowserEgress,
+} = {}) {
   let chromium
-  try { ({ chromium } = await import('playwright')) } catch { return null }
-  if (!chromium?.executablePath?.()) return null
-  const { browser } = await launchPortalBrowser(chromium)
-  const context = await browser.newContext({ storageState, userAgent: REALISTIC_PORTAL_UA })
-  return { browser, context }
+  if (typeof launchBrowser !== 'function') {
+    try { ({ chromium } = await import('playwright')) } catch { return null }
+    if (!chromium?.executablePath?.()) return null
+  }
+  const browserEgress = await prepareBrowserEgress({
+    targetUrl,
+    // Read-only navigation allowance only. The egress contract keeps these
+    // paths out of credential/application/interactive mutation groups.
+    additionalNavigationPathPrefixes: SESSION_PROBE_SIGN_IN_PATH_PREFIXES,
+  })
+  return launchGuardedBrowser(chromium, {
+    targetUrl,
+    contextOptions: { storageState, userAgent: REALISTIC_PORTAL_UA },
+    prepareEgress: async () => browserEgress,
+    launchBrowser: typeof launchBrowser === 'function'
+      ? async () => launchBrowser({ storageState })
+      : launchPortalBrowser,
+  })
 }
 
 /**
@@ -143,26 +156,32 @@ async function openProbeContext(launchBrowser, storageState) {
  * is how prod accumulated `keepalive_refreshes: 11` on a session whose sibling
  * the owner measured dying in ~20 minutes.
  */
-async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }) {
+async function probeAndRefreshSession(db, row, {
+  launchBrowser, probeTimeoutMs, launchGuardedBrowser, prepareBrowserEgress,
+}) {
   const storageState = await getSessionStorageState(db, row.id)
   if (!storageState) return { outcome: 'skipped', detail: 'no durable storage state' }
 
   let handle = null
   try {
-    handle = await openProbeContext(launchBrowser, storageState)
+    const meta = parseMeta(row.metadata_json ?? row.metadata)
+    const authProbeUrl = authProbeUrlForHost(row.portal_host)
+    const target = authProbeUrl || meta.landing_url || `https://${row.portal_host}/`
+    handle = await openProbeContext(launchBrowser, storageState, target, {
+      launchGuardedBrowser, prepareBrowserEgress,
+    })
     if (!handle) return { outcome: 'skipped', detail: 'browser unavailable' }
     const { context } = handle
     const page = await context.newPage()
 
-    const meta = parseMeta(row.metadata_json ?? row.metadata)
     // An AUTH-GATED path is the only target whose response carries information
     // about our session. Without one we can still refresh cookies, but we may
     // never claim the session is alive.
-    const authProbeUrl = authProbeUrlForHost(row.portal_host)
-    const target = authProbeUrl || meta.landing_url || `https://${row.portal_host}/`
     let navError = null
     try {
-      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: probeTimeoutMs })
+      await navigateHamiltonPortalPage(page, target, handle.egress, {
+        waitUntil: 'domcontentloaded', timeout: probeTimeoutMs,
+      })
       // Give client-side auth redirects a moment to settle before reading.
       await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {})
     } catch (err) {
@@ -292,6 +311,8 @@ export async function runSessionKeepAliveSweep(db, {
   limit = 6,
   timeBudgetMs = 120_000,
   launchBrowser = null,
+  launchGuardedBrowser = launchGuardedPortalBrowser,
+  prepareBrowserEgress = prepareHamiltonBrowserEgress,
   probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
 } = {}) {
   const out = {
@@ -330,7 +351,9 @@ export async function runSessionKeepAliveSweep(db, {
     out.checked += 1
     let result
     try {
-      result = await probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs })
+      result = await probeAndRefreshSession(db, row, {
+        launchBrowser, probeTimeoutMs, launchGuardedBrowser, prepareBrowserEgress,
+      })
     } catch (err) {
       result = { outcome: 'inconclusive', detail: err?.message || String(err) }
     }

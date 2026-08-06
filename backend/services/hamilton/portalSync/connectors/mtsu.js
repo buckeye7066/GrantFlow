@@ -23,6 +23,7 @@
 
 import { normalizeHost } from '../../hamiltonCredentialSessionService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
+import { navigateHamiltonPortalPage } from '../../hamiltonBrowserNetworkGuard.js'
 
 export const id = 'mtsu'
 export const label = 'Middle Tennessee State University (PipelineMT / AcademicWorks)'
@@ -91,10 +92,12 @@ function money(v) {
   return n !== null && n > 0 ? n : null
 }
 
-async function gotoFirst(page, urls, log) {
+async function gotoFirst(page, urls, log, networkEgress) {
   for (const url of urls) {
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 })
+      await navigateHamiltonPortalPage(page, url, networkEgress, {
+        waitUntil: 'domcontentloaded', timeout: 15000,
+      })
       log?.(`navigated to ${url}`)
       return true
     } catch (err) {
@@ -165,11 +168,13 @@ export async function read(page, ctx = {}) {
   // starts from a useful page. We do NOT depend on these succeeding — the
   // extractor also reads same-origin aid links from wherever we land.
   const navCandidates = [...new Set([...NAV.awards, ...NAV.scores, ...NAV.status])]
-  const landed = await gotoFirst(page, navCandidates, log)
+  const landed = await gotoFirst(page, navCandidates, log, ctx.networkEgress)
   raw.navigated = landed
 
   // ── PRIMARY: model-driven, selector-independent extraction ─────────────────
-  const llm = await extractPortalDataWithLLM(page, { log, navCandidates })
+  const llm = await extractPortalDataWithLLM(page, {
+    log, navCandidates, networkEgress: ctx.networkEgress,
+  })
   raw.llm = llm.raw
   // Fabrication-guard audit trail (items the extractor refused to treat as user
   // awards) — surfaced in the run summary for human review.

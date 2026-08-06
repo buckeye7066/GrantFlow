@@ -1,3 +1,8 @@
+import {
+  installHamiltonBrowserNetworkGuard,
+  prepareHamiltonBrowserEgress,
+} from './hamiltonBrowserNetworkGuard.js'
+
 /**
  * browserLaunch.js — the single source of truth for Chromium launch args used by
  * every Hamilton browser flow.
@@ -53,4 +58,37 @@ export async function launchPortalBrowser(chromium, { headless = true, extraArgs
     const browser = await chromium.launch({ headless, args })
     return { browser, engine: 'headless-shell' }
   }
+}
+
+/**
+ * Mandatory factory for any Hamilton context that can reach a third-party
+ * portal. It resolves and pins the exact reviewed origins before Chromium
+ * starts, installs HTTP/WebSocket routing before a page exists, and blocks
+ * service workers. Local HTML/PDF rendering is deliberately outside this API.
+ */
+export async function launchGuardedPortalBrowser(chromium, {
+  targetUrl,
+  submissionAdapter = null,
+  additionalAllowedOrigins = [],
+  headless = true,
+  contextOptions = {},
+  prepareEgress = prepareHamiltonBrowserEgress,
+  installGuard = installHamiltonBrowserNetworkGuard,
+  launchBrowser = launchPortalBrowser,
+} = {}) {
+  const egress = await prepareEgress({ targetUrl, submissionAdapter, additionalAllowedOrigins })
+  const launched = await launchBrowser(chromium, { headless, extraArgs: egress.extra_args })
+  const browser = launched?.browser ?? launched
+  let context
+  try {
+    context = launched?.context || await browser.newContext({
+      ...contextOptions,
+      ...egress.context_options,
+    })
+    await installGuard(context, egress)
+  } catch (error) {
+    await Promise.resolve(browser?.close?.()).catch(() => {})
+    throw error
+  }
+  return { ...launched, browser, context, egress }
 }

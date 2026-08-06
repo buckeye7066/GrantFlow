@@ -92,6 +92,34 @@ export const SIGN_IN_URL_PATTERNS = Object.freeze([
 ])
 
 /**
+ * Same-origin paths a READ-ONLY session probe may follow when a portal moves
+ * an auth-gated request to its sign-in surface. These extend navigation only;
+ * they never grant credential, profile-field, upload, or submit authority.
+ *
+ * Keep this list deliberately narrower than SIGN_IN_URL_PATTERNS: external SSO
+ * origins need their own reviewed origin contract and are not inferred here.
+ */
+export const SESSION_PROBE_SIGN_IN_PATH_PREFIXES = Object.freeze([
+  '/fsa-id/sign-in',
+  '/sign-in',
+  '/signin',
+  '/sign_in',
+  '/log-in',
+  '/login',
+  '/log_in',
+  '/signon',
+  '/sso/login',
+  '/sso/signin',
+  '/sso/authenticate',
+  '/auth/login',
+  '/auth/signin',
+  '/account/login',
+  '/idp',
+  '/adfs',
+  '/oauth2/authorize',
+])
+
+/**
  * Per-host session knowledge. Keyed by registrable domain (eTLD+1) or exact
  * host; `resolvePortalSessionProfile` prefers the exact host.
  *
@@ -200,6 +228,7 @@ export default {
   PORTAL_SESSION_PROFILES,
   DEFAULT_SESSION_PROFILE,
   SIGN_IN_URL_PATTERNS,
+  SESSION_PROBE_SIGN_IN_PATH_PREFIXES,
   resolvePortalSessionProfile,
   isSignInSurfaceUrl,
   authProbeUrlForHost,

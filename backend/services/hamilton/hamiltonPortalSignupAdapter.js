@@ -48,7 +48,8 @@
  */
 
 import fs from 'node:fs'
-import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import { launchGuardedPortalBrowser, launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import { navigateHamiltonPortalPage } from './hamiltonBrowserNetworkGuard.js'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { browserAutomationPermittedForUrl, isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
 import { isIdentityProofedHost, getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
@@ -65,6 +66,12 @@ const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_SIGNUP_STEP_TIMEOUT_MS) || 8
 // user). Kept short so the adapter never blocks indefinitely.
 const VERIFY_WAIT_MS = Number(process.env.HAMILTON_SIGNUP_VERIFY_WAIT_MS) || 45_000
 const VERIFY_POLL_MS = Number(process.env.HAMILTON_SIGNUP_VERIFY_POLL_MS) || 7_000
+
+// No portal-specific registration/activation adapter has completed the
+// irreversible-action review for a real host. These hard gates deliberately
+// keep legacy helpers unreachable from production until that contract exists.
+export function reviewedPortalSignupExecutionEnabled() { return false }
+export function automaticMailboxVerificationEnabled() { return false }
 
 // ── Result helpers ────────────────────────────────────────────────────────────
 
@@ -414,7 +421,16 @@ export function resolveHostAdapter(portalHost) {
 
 // ── Email verification (best-effort, via John's Graph mailbox) ─────────────────
 
-const CONFIRM_LINK_RX = /https?:\/\/[^\s"'<>)]+(?:verify|confirm|activate|activation|validate|token|signup|register)[^\s"'<>)]*/i
+const CONFIRM_LINK_RX = /https:\/\/[^\s"'<>)]+/i
+const CONFIRM_PATH_RX = /(?:^|[/_-])(?:verify|confirm|activate|activation|validate)(?:$|[/_.-])/i
+
+function explicitActivationLink(candidate) {
+  try {
+    const parsed = new URL(String(candidate || ''))
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null
+    return CONFIRM_PATH_RX.test(parsed.pathname) ? parsed.toString() : null
+  } catch { return null }
+}
 
 /** Extract the most likely confirmation URL from an email body (HTML or text). */
 export function extractConfirmationLink(body) {
@@ -425,14 +441,18 @@ export function extractConfirmationLink(body) {
   const candidates = []
   while ((m = hrefRx.exec(s)) !== null) candidates.push(m[1])
   for (const c of candidates) {
-    if (CONFIRM_LINK_RX.test(c)) return c
+    const accepted = explicitActivationLink(c)
+    if (accepted) return accepted
   }
-  // Fall back to a bare URL in the text.
-  const bare = s.match(CONFIRM_LINK_RX)
-  if (bare) return bare[0]
-  // Last resort: any first http link in the email (some portals use opaque URLs).
-  const anyLink = candidates.find((c) => /^https?:\/\//i.test(c))
-  return anyLink || null
+  // Bare URLs are accepted only when the path itself explicitly names the
+  // activation purpose. Query parameters such as `token=` do not turn an
+  // unsubscribe, tracking, or arbitrary link into a verification link.
+  const bareRx = /https:\/\/[^\s"'<>)]+/gi
+  for (const candidate of s.match(bareRx) || []) {
+    const accepted = explicitActivationLink(candidate)
+    if (accepted) return accepted
+  }
+  return null
 }
 
 /**
@@ -446,6 +466,7 @@ export function extractConfirmationLink(body) {
  */
 export async function completeEmailVerification({
   identityEmail, portalHost, browserContext = null,
+  browserEgress = null,
   outlookProvider = null, now = () => Date.now(),
   waitMs = VERIFY_WAIT_MS, pollMs = VERIFY_POLL_MS,
   // How far back to look for the verification email. Short for the inline
@@ -453,6 +474,14 @@ export async function completeEmailVerification({
   // re-check, where the email may have landed hours ago.
   lookbackMs = 10 * 60 * 1000,
 } = {}) {
+  if (automaticMailboxVerificationEnabled() !== true) {
+    void identityEmail; void portalHost; void browserContext; void browserEgress; void outlookProvider
+    void now; void waitMs; void pollMs; void lookbackMs
+    return ok('verification_pending', {
+      message: 'Email activation requires owner action. Hamilton does not read the mailbox or open activation links.',
+      blocker_kind: 'manual_email_verification_required',
+    })
+  }
   if (!identityEmail) {
     return ok('verification_pending', { message: 'No autopilot identity email to verify.' })
   }
@@ -513,7 +542,9 @@ export async function completeEmailVerification({
   try {
     const page = await browserContext.newPage()
     try {
-      await page.goto(link, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
+      await navigateHamiltonPortalPage(page, link, browserEgress, {
+        waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS,
+      })
       const text = (await pageText(page)).slice(0, 4000)
       const confirmed = /\b(verified|confirmed|activated|success|thank\s+you|your\s+e?-?mail\s+(has\s+been\s+)?(verified|confirmed))\b/i.test(text)
         || SUCCESS_URL_RX.test(safeUrl(page))
@@ -536,15 +567,9 @@ export async function completeEmailVerification({
  * registerOnPortal and recheckEmailVerification so the launch/guard logic lives
  * in one place.
  */
-async function openBrowserContext(launchBrowser) {
-  let browser = null
-  let context = null
-  if (typeof launchBrowser === 'function') {
-    const launched = await launchBrowser()
-    browser = launched?.browser || launched || null
-    context = launched?.context || (browser?.newContext ? await browser.newContext() : null)
-  } else {
-    let chromium
+async function openBrowserContext(launchBrowser, targetUrl) {
+  let chromium
+  if (typeof launchBrowser !== 'function') {
     try { ({ chromium } = await import('playwright')) }
     catch (err) {
       return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: `Playwright unavailable: ${err?.message || err}`, automation_disabled: true }) }
@@ -553,13 +578,18 @@ async function openBrowserContext(launchBrowser) {
     if (!exe || !fs.existsSync(exe)) {
       return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', automation_disabled: true }) }
     }
-    ;({ browser } = await launchPortalBrowser(chromium))
-    context = await browser.newContext({ userAgent: REALISTIC_PORTAL_UA })
   }
-  if (!context) {
-    return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'No browser context available' }) }
+  try {
+    return await launchGuardedPortalBrowser(chromium, {
+      targetUrl,
+      contextOptions: { userAgent: REALISTIC_PORTAL_UA },
+      launchBrowser: typeof launchBrowser === 'function'
+        ? async () => launchBrowser()
+        : launchPortalBrowser,
+    })
+  } catch {
+    return { error: ok('failed', { blocker_kind: 'unsafe_portal_target', blocker_detail: 'The portal browser network guard refused this target.' }) }
   }
-  return { browser, context }
 }
 
 async function closeBrowserContext({ browser, context } = {}) {
@@ -588,6 +618,13 @@ export async function recheckEmailVerification(db, {
   const host = registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase()
   const url = loginUrl || (host ? `https://${host}` : null)
   if (!identityEmail) return ok('verification_pending', { message: 'No autopilot identity email to verify.' })
+  if (automaticMailboxVerificationEnabled() !== true) {
+    void db; void launchBrowser; void outlookProvider; void waitMs; void pollMs; void lookbackMs
+    return ok('verification_pending', {
+      message: 'Email activation requires owner action. Hamilton does not read the mailbox or open activation links.',
+      blocker_kind: 'manual_email_verification_required',
+    })
+  }
   // Identity-proofed hosts are never auto-driven.
   if (isIdentityProofedHost(host)) {
     return ok('verification_pending', { message: 'Identity-proofed portal — verification is not auto-driven.' })
@@ -610,11 +647,11 @@ export async function recheckEmailVerification(db, {
   }
   let handle = null
   try {
-    handle = await openBrowserContext(launchBrowser)
+    handle = await openBrowserContext(launchBrowser, url)
     if (handle.error) return handle.error
     const verify = await completeEmailVerification({
       identityEmail, portalHost: host,
-      browserContext: handle.context, outlookProvider,
+      browserContext: handle.context, browserEgress: handle.egress, outlookProvider,
       waitMs, pollMs, lookbackMs,
     }).catch((err) => ok('verification_pending', { message: `Verification re-check failed: ${err?.message || err}` }))
     return verify
@@ -661,7 +698,7 @@ export async function registerOnPortal(db, {
     return blocked('identity_proof_required', {
       blockerKind: 'identity_proof',
       detail: 'Identity-proofed portal — account creation requires real identity verification; never auto-registered.',
-      evidence: { url, signal: 'identity_proofed_host' },
+      evidence: { host, signal: 'identity_proofed_host' },
       message: 'Hamilton will not fabricate identity proofing; sign in once and she takes over.',
     })
   }
@@ -673,17 +710,28 @@ export async function registerOnPortal(db, {
       return blocked('identity_proof_required', {
         blockerKind: 'identity_proof',
         detail: 'Portal policy marks this host identity-proofed.',
-        evidence: { url, signal: 'policy_identity_proofed' },
+        evidence: { host, signal: 'policy_identity_proofed' },
       })
     }
     if (policy && policy.automation_allowed === false) {
       return blocked('portal_terms_block', {
         blockerKind: 'portal_terms',
         detail: `Portal terms forbid agent automation (${host}).`,
-        evidence: { url, signal: 'policy_forbids_automation' },
+        evidence: { host, signal: 'policy_forbids_automation' },
       })
     }
   } catch { /* permissive default — continue to the browser gate */ }
+
+  if (reviewedPortalSignupExecutionEnabled() !== true) {
+    void db; void profile; void dryRun; void launchBrowser; void outlookProvider
+    void verifyWaitMs; void verifyPollMs; void identity
+    return blocked('create_portal_account', {
+      blockerKind: 'create_portal_account',
+      detail: 'No reviewed portal-account creation adapter is enabled for this host.',
+      evidence: { host, signal: 'reviewed_signup_adapter_required' },
+      message: 'Create the portal account yourself, then Hamilton can use the saved login.',
+    })
+  }
 
   // 3. Browser-automation gate (global flag + host allowlist). Defense in depth:
   // the brain already authorized this host (a profile-declared portal is treated
@@ -727,12 +775,16 @@ export async function registerOnPortal(db, {
   let browser = null
   let context = null
   try {
-    const handle = await openBrowserContext(launchBrowser)
+    const handle = await openBrowserContext(launchBrowser, url)
     if (handle.error) return handle.error
     browser = handle.browser
     context = handle.context
     const page = await context.newPage()
-    try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }) }
+    try {
+      await navigateHamiltonPortalPage(page, url, handle.egress, {
+        waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS,
+      })
+    }
     catch (err) {
       return ok('failed', { blocker_kind: 'navigation_failed', blocker_detail: `Could not open signup page: ${err?.message || err}`, evidence: { url } })
     }
@@ -751,7 +803,7 @@ export async function registerOnPortal(db, {
     if (result.status === 'verification_pending') {
       const verify = await completeEmailVerification({
         identityEmail: identity.email, portalHost: host,
-        browserContext: context, outlookProvider,
+        browserContext: context, browserEgress: handle.egress, outlookProvider,
         waitMs: verifyWaitMs, pollMs: verifyPollMs,
       }).catch(() => null)
       if (verify && verify.status === 'registered') {

@@ -76,16 +76,17 @@ describe('(A) escalation ordering — co-browse is the LAST resort', () => {
     expect(r.cobrowse?.loginUrl).toBe('https://studentaid.gov/login')
   })
 
-  it('"ready to auto-provision" is NOT a co-browse terminal (automation not yet exhausted)', async () => {
-    // Passphrase set + unlocked + no existing login + not identity-proofed →
-    // describe returns needs_user enum but is pending-automation, not terminal.
+  it('an unknown portal with no existing account stays a human handoff (account creation is separate authority)', async () => {
+    // A saved-credential reference never authorizes creating a new portal
+    // account or accepting registration terms. Unknown-host auto-provisioning
+    // is disabled, so this remains an explicit owner handoff.
     await setMasterPassphrase(db, { profileId: 'pA', passphrase: 'master-pass-1' })
     const st = await describeAutopilotStateForPortal(db, {
       profileId: 'pA', portalHost: 'communityforce.com',
     })
     expect(st.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
-    expect(st.resolution).toBe(RESOLUTION.NONE)
-    expect(st.canAutoMerge).toBe(true)
+    expect(st.resolution).toBe(RESOLUTION.SIDE_BY_SIDE_COBROWSE)
+    expect(st.canAutoMerge).toBe(false)
   })
 
   it('a ToS-forbidden portal (no passphrase) IS routed to co-browse (cant auto-merge)', async () => {

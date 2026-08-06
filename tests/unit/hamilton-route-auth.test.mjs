@@ -27,6 +27,10 @@ import Database from 'better-sqlite3'
 import hamiltonRouter from '../../backend/routes/hamiltonAutomation.js'
 import { recordSession } from '../../backend/services/hamilton/hamiltonCredentialSessionService.js'
 import { attachRequestContext } from '../../backend/middleware/requestContext.js'
+import {
+  HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+  HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+} from '../../shared/hamiltonSubmissionContract.js'
 
 // Two users, each owning one profile.
 const USERS = {
@@ -217,8 +221,8 @@ describe('Hamilton authorize route — JWT-shaped req.user with userId-only', ()
         scope: 'funding_source',
         funding_source_ids: ['opp-1'],
         authorization_types: ['complete_forms', 'upload_documents'],
-        authorization_text: 'test authorization text',
-        authorization_version: 'hamilton-autopilot-v1',
+        authorization_text: HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+        authorization_version: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
         options: { complete_forms: true },
       })
     assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`)

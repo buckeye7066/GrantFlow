@@ -114,7 +114,6 @@ import { suggestPortalLogin } from '../services/hamilton/hamiltonPortalLoginSugg
 import { getAuthWatchSummary } from '../services/hamilton/hamiltonAuthWatchService.js'
 import { flagMissingPortalCredential } from '../services/hamilton/hamiltonMissingCredential.js'
 import {
-  authorizeAttestation,
   revokeAttestation,
   getAttestationById,
   listActiveAttestations,
@@ -146,16 +145,18 @@ import { setProfileSectionField } from '../services/profileFieldWriter.js'
 import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
 import { createLogger } from '../utils/logger.js'
+import {
+  HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+  HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+} from '../../shared/hamiltonSubmissionContract.js'
+import { cancelSubmissionAttemptsForAuthorization } from '../services/hamilton/hamiltonSubmissionAttemptStore.js'
+import {
+  getSubmissionAdapterCoverage,
+  onboardReviewedSubmissionAdapter,
+  setSubmissionAdapterKillSwitch,
+} from '../services/hamilton/hamiltonSubmissionAdapterRegistry.js'
 
-export const HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT = (
-  'Hamilton will attempt to complete and submit the selected application(s) '
-  + 'automatically using the profile information and authorized documents on file. '
-  + 'Hamilton may open portals, fill forms, upload documents, save drafts, and submit '
-  + 'applications when allowed. Hamilton will only stop if required information, '
-  + 'documents, credentials, CAPTCHA, 2FA, payment, or a legally personal '
-  + 'attestation is required and not already authorized.'
-)
-export const HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION = 'hamilton-autopilot-v1'
+export { HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT, HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION }
 
 const log = createLogger('route:hamilton-automation')
 
@@ -168,6 +169,117 @@ const startLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'rate_limited', retry_after_ms: 60_000 },
 })
+
+const CLOUD_INPUT_TYPES = new Set([
+  'mousemove', 'mousedown', 'mouseup', 'click', 'wheel', 'scroll',
+  'keydown', 'keyup', 'char',
+])
+
+const CLOUD_INPUT_FIELDS = new Set([
+  'type', 'x', 'y', 'button', 'deltaX', 'deltaY', 'key', 'code', 'text',
+  'keyCode', 'modifiers',
+])
+
+const cloudInputBuckets = new Map()
+
+function cloudInputLane(type) {
+  return type === 'mousemove' ? 'pointer_move' : 'control_or_text'
+}
+
+export function _resetCloudInputRateLimits() {
+  cloudInputBuckets.clear()
+}
+
+export function consumeCloudInputRateLimit({ userId, profileId, liveSessionId, type, nowMs = Date.now() } = {}) {
+  const lane = cloudInputLane(type)
+  const capacity = lane === 'pointer_move' ? 300 : 120
+  const refillPerMs = capacity / 10_000
+  const key = `${String(userId)}:${String(profileId)}:${String(liveSessionId)}:${lane}`
+  const prior = cloudInputBuckets.get(key) || { tokens: capacity, at: nowMs }
+  const elapsed = Math.max(0, nowMs - prior.at)
+  const tokens = Math.min(capacity, prior.tokens + elapsed * refillPerMs)
+  if (tokens < 1) {
+    cloudInputBuckets.set(key, { tokens, at: nowMs })
+    return { allowed: false, lane, retry_after_ms: Math.ceil((1 - tokens) / refillPerMs) }
+  }
+  cloudInputBuckets.set(key, { tokens: tokens - 1, at: nowMs })
+  if (cloudInputBuckets.size > 10_000) {
+    const staleBefore = nowMs - 60_000
+    for (const [bucketKey, bucket] of cloudInputBuckets) {
+      if (bucket.at < staleBefore) cloudInputBuckets.delete(bucketKey)
+    }
+  }
+  return { allowed: true, lane }
+}
+
+export function setCloudLoginPrivateHeaders(res, { stream = false } = {}) {
+  res.setHeader('Cache-Control', 'private, no-store, no-cache, max-age=0, must-revalidate, no-transform')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Surrogate-Control', 'no-store')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Vary', 'Cookie, Authorization')
+  if (stream) {
+    res.setHeader('Content-Encoding', 'identity')
+    res.setHeader('X-Accel-Buffering', 'no')
+  }
+}
+
+/**
+ * Validate and copy one live-input event without ever including its character
+ * data in an error. This is exported for a focused security regression; the
+ * route returns only the generic reason.
+ */
+export function validateCloudLoginInputEvent(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: 'invalid_event' }
+  let encodedBytes
+  try { encodedBytes = Buffer.byteLength(JSON.stringify(raw), 'utf8') } catch { return { ok: false, reason: 'invalid_event' } }
+  if (encodedBytes > 4096) return { ok: false, reason: 'event_too_large' }
+  const keys = Object.keys(raw)
+  if (keys.some((key) => !CLOUD_INPUT_FIELDS.has(key))) return { ok: false, reason: 'invalid_event' }
+
+  const type = String(raw.type || '')
+  if (!CLOUD_INPUT_TYPES.has(type)) return { ok: false, reason: 'invalid_event' }
+  const event = { type }
+  const finite = (value) => typeof value === 'number' && Number.isFinite(value)
+  const bounded = (value, min, max) => finite(value) && value >= min && value <= max
+  if (['mousemove', 'mousedown', 'mouseup', 'click', 'wheel', 'scroll'].includes(type)) {
+    if (!bounded(raw.x, 0, 1) || !bounded(raw.y, 0, 1)) return { ok: false, reason: 'invalid_event' }
+    event.x = raw.x
+    event.y = raw.y
+  }
+  if (['mousedown', 'mouseup', 'click'].includes(type)) {
+    if (raw.button !== undefined && ![0, 1, 2].includes(raw.button)) return { ok: false, reason: 'invalid_event' }
+    event.button = raw.button ?? 0
+  }
+  if (type === 'wheel' || type === 'scroll') {
+    if (raw.deltaX !== undefined && !bounded(raw.deltaX, -10_000, 10_000)) return { ok: false, reason: 'invalid_event' }
+    if (raw.deltaY !== undefined && !bounded(raw.deltaY, -10_000, 10_000)) return { ok: false, reason: 'invalid_event' }
+    event.deltaX = raw.deltaX ?? 0
+    event.deltaY = raw.deltaY ?? 0
+  }
+  if (type === 'keydown' || type === 'keyup' || type === 'char') {
+    for (const field of ['key', 'code']) {
+      if (raw[field] !== undefined && (typeof raw[field] !== 'string' || raw[field].length > 64)) {
+        return { ok: false, reason: 'invalid_event' }
+      }
+      if (raw[field] !== undefined) event[field] = raw[field]
+    }
+    if (raw.text !== undefined && (typeof raw.text !== 'string' || raw.text.length > 256)) {
+      return { ok: false, reason: 'invalid_event' }
+    }
+    if (raw.text !== undefined) event.text = raw.text
+    if (raw.keyCode !== undefined && (!Number.isInteger(raw.keyCode) || raw.keyCode < 0 || raw.keyCode > 65_535)) {
+      return { ok: false, reason: 'invalid_event' }
+    }
+    if (raw.keyCode !== undefined) event.keyCode = raw.keyCode
+  }
+  if (raw.modifiers !== undefined && (!Number.isInteger(raw.modifiers) || raw.modifiers < 0 || raw.modifiers > 15)) {
+    return { ok: false, reason: 'invalid_event' }
+  }
+  event.modifiers = raw.modifiers ?? 0
+  return { ok: true, event }
+}
 
 async function userMayAccessProfile(req, user, profileId) {
   if (!profileId) return false
@@ -436,32 +548,30 @@ router.post('/tasks/:taskId/regenerate', async (req, res) => {
 async function markChannelSubmitted(req, res, channel) {
   const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
   if (!ctx) return
-  const submittedAt = new Date().toISOString()
-  const note = String(req.body?.note || '').slice(0, 1000) || `User confirmed ${channel} submission.`
+  const recordedAt = new Date().toISOString()
+  const note = String(req.body?.note || '').slice(0, 1000) || `User recorded a ${channel} dispatch; external receipt is not yet verified.`
   try {
     await updateApplicationTask(req.db, ctx.task.id, {
-      status: 'submitted',
-      submittedAt,
-      completedAt: submittedAt,
+      status: 'reconciliation_required',
       lastAgentMessage: note,
     })
     await appendTaskEvent(req.db, {
       taskId: ctx.task.id,
-      eventType: 'submitted',
-      status: 'submitted',
+      eventType: 'note',
+      status: 'reconciliation_required',
       message: note,
       actorUserId: getAuthUserId(ctx.user),
       actorRole: req.ctx?.isAdmin === true ? 'admin' : 'user',
-      details: { channel },
+      details: { channel, manual_dispatch_recorded_at: recordedAt, external_receipt_verified: false },
     })
     await emitHamiltonNotificationToProfileAndAdmins(req.db, {
       profileId: ctx.task.profile_id,
       profileUserId: ctx.task.user_id,
-      type: 'hamilton_submitted',
-      title: `Hamilton logged a ${channel.toUpperCase()} submission`,
-      message: note,
-      severity: 'success',
-      data: { task_id: ctx.task.id, channel, submitted_at: submittedAt },
+      type: 'hamilton_task_blocked',
+      title: `${channel.toUpperCase()} dispatch needs receipt verification`,
+      message: `${note} GrantFlow will not count it as externally received until a carrier/funder receipt is attached or independently verified.`,
+      severity: 'warning',
+      data: { task_id: ctx.task.id, channel, manual_dispatch_recorded_at: recordedAt, external_receipt_verified: false },
     })
     return res.json({ ok: true, task: await getApplicationTask(req.db, ctx.task.id) })
   } catch (err) {
@@ -478,6 +588,32 @@ router.post('/tasks/:taskId/approve', async (req, res) => {
   const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
   if (!ctx) return
   try {
+    if (req.body?.authorization_version !== HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION
+        || req.body?.authorization_text !== HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT) {
+      return res.status(409).json({
+        error: 'versioned_authorization_required',
+        authorization_text: HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+        authorization_version: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+      })
+    }
+    const authorizationIds = await recordAuthorizations(req.db, {
+      userId: getAuthUserId(ctx.user),
+      profileId: ctx.task.profile_id,
+      scope: 'task',
+      taskIds: [ctx.task.id],
+      authorizationTypes: ['submit_applications'],
+      authorizationText: HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+      authorizationVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+      options: {
+        allow_auto_submit: true,
+        require_human_review: false,
+      },
+      metadata: {
+        accepted_at: new Date().toISOString(),
+        source: 'exact_task_approval_endpoint',
+        task_id: ctx.task.id,
+      },
+    })
     await updateApplicationTask(req.db, ctx.task.id, {
       allowAutoSubmit: true,
       autoSubmitEnabled: true,
@@ -486,11 +622,11 @@ router.post('/tasks/:taskId/approve', async (req, res) => {
       taskId: ctx.task.id,
       eventType: 'note',
       step: 'approve_submit',
-      message: 'User explicitly approved auto-submission.',
+      message: 'User accepted the current, task-scoped external-submission authorization.',
       actorUserId: getAuthUserId(ctx.user),
       actorRole: req.ctx?.isAdmin === true ? 'admin' : 'user',
     })
-    return res.json({ ok: true, task: await getApplicationTask(req.db, ctx.task.id) })
+    return res.json({ ok: true, authorization_ids: authorizationIds, task: await getApplicationTask(req.db, ctx.task.id) })
   } catch (err) {
     log.error('approve_failed', { err: err?.message })
     return res.status(500).json({ error: 'approve_failed' })
@@ -554,6 +690,17 @@ router.post('/authorize', async (req, res) => {
   const authorizationVersion = String(req.body?.authorization_version || HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION)
 
   if (!profileId) return res.status(400).json({ error: 'profile_id_required', message: 'profile_id is required' })
+  if (
+    authorizationVersion !== HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION
+    || authorizationText !== HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT
+  ) {
+    return res.status(409).json({
+      error: 'authorization_contract_changed',
+      message: 'Hamilton’s authorization terms changed. Reopen the authorization screen and review the current terms.',
+      authorization_text: HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+      authorization_version: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+    })
+  }
   // Defense-in-depth: requireAuthenticatedUser already gated this, but the auth
   // middleware writes the canonical id as `user.userId` (JWT) — never `user.id`.
   // Older code paths that read `user.id` silently produced "userId required"
@@ -582,6 +729,18 @@ router.post('/authorize', async (req, res) => {
       return res.status(400).json({
         error: 'authorization_types_required',
         message: 'Tick at least one capability so Hamilton has something to do.',
+      })
+    }
+    if (types.includes('submit_applications')) {
+      return res.status(409).json({
+        error: 'exact_task_submit_authorization_required',
+        message: 'Prepare the application first, then approve final Submit on its exact task after the portal target and submission channel are known.',
+      })
+    }
+    if (types.includes('use_standing_attestation')) {
+      return res.status(409).json({
+        error: 'standing_attestations_disabled',
+        message: 'Hamilton always pauses for the exact terms, release, accuracy certification, legal attestation, or signature text.',
       })
     }
 
@@ -627,8 +786,15 @@ router.get('/authorizations', async (req, res) => {
   const fundingSourceId = req.query?.funding_source_id ? String(req.query.funding_source_id) : null
   const taskId = req.query?.task_id ? String(req.query.task_id) : null
   try {
-    const list = await listActiveAuthorizations(req.db, { profileId, fundingSourceId, taskId })
-    const flags = await readAuthorizations(req.db, { profileId, fundingSourceId, taskId })
+    const userId = getAuthUserId(user)
+    const list = await listActiveAuthorizations(req.db, {
+      userId, profileId, fundingSourceId, taskId,
+      expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+    })
+    const flags = await readAuthorizations(req.db, {
+      userId, profileId, fundingSourceId, taskId,
+      expectedVersion: HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+    })
     return res.json({ ok: true, active: list, flags })
   } catch (err) {
     log.error('list_auth_failed', { err: err?.message })
@@ -641,7 +807,13 @@ router.post('/authorizations/:id/revoke', async (req, res) => {
   if (!ctx) return
   try {
     const row = await revokeAuthorization(req.db, { id: req.params.id, reason: req.body?.reason || null })
-    return res.json({ ok: true, authorization: row })
+    const cancelledAttempts = await cancelSubmissionAttemptsForAuthorization(req.db, {
+      authorizationId: row.id,
+      profileId: row.profile_id,
+      userId: row.user_id,
+      reason: req.body?.reason || 'authorization_revoked',
+    })
+    return res.json({ ok: true, authorization: row, cancelled_attempt_ids: cancelledAttempts })
   } catch (err) {
     log.error('revoke_failed', { err: err?.message })
     return res.status(500).json({ error: 'revoke_failed' })
@@ -690,6 +862,9 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
       // caller never chose auto-submit, so it must not read as consent
       // (2026-08-03; was `!== false`, which defaulted every launch to true).
       allow_auto_submit: req.body?.options?.allow_auto_submit === true,
+      // This caller flag can only narrow authority. Exact-task consent is read
+      // again from the server ledger before every irreversible action.
+      require_human_review: req.body?.options?.require_human_review !== false,
       documents: Array.isArray(req.body?.options?.documents) ? req.body.options.documents : [],
       storageStatePath: req.body?.options?.storage_state_path || null,
       headless: req.body?.options?.headless !== false,
@@ -710,50 +885,57 @@ router.post('/tasks/:taskId/resolve-blocker', async (req, res) => {
   if (!ctx) return
   const note = String(req.body?.note || '').slice(0, 1000)
   try {
-    // 1. Mark every open blocker for this task as resolved + write
-    //    audit row(s) + clear the related persistent notifications so
-    //    the bell stops nagging.
-    const resolvedBlockers = await resolveOpenBlockersForTask(req.db, {
-      taskId: ctx.task.id,
-      strategy: 'user_action',
-      detail: note || null,
-      resolvedByUserId: getAuthUserId(ctx.user),
-    })
-    for (const b of resolvedBlockers) {
-      const ids = []
-      if (b.user_notification_id) ids.push(b.user_notification_id)
-      ids.push(...(b.admin_notification_ids || []))
-      if (ids.length > 0) await markNotificationsResolved(req.db, ids)
-    }
+    // A user's "Done" click is an acknowledgement, not proof that a portal
+    // login/MFA/CAPTCHA gate actually cleared. Keep blockers and notifications
+    // open until the resumed run positively traverses the underlying gate.
     await appendTaskEvent(req.db, {
       taskId: ctx.task.id,
       eventType: 'note',
-      step: 'resolve_blocker',
-      message: note || 'User indicated the blocker is resolved. Re-running Hamilton Autopilot.',
+      step: 'blocker_recheck_requested',
+      message: note || 'User requested a blocker recheck. Hamilton will verify the portal gate before marking it resolved.',
       actorUserId: getAuthUserId(ctx.user),
       actorRole: req.ctx?.isAdmin === true ? 'admin' : 'user',
-      details: { resolved_blocker_ids: resolvedBlockers.map((b) => b.id) },
+      details: { resolution_state: 'user_acknowledged_recheck_pending' },
     })
     const profile = await loadProfile(req.db, ctx.task.profile_id)
     if (!profile) return res.status(404).json({ error: 'profile_not_found' })
     // Resume in the background so clearing a blocker doesn't hang on the re-run.
-    runAutomationInBackground('resolve_blocker_resume', () => automateSingleSource(req.db, {
-      profile,
-      profileId: ctx.task.profile_id,
-      userId: getAuthUserId(ctx.user),
-      source: {
-        opportunity_id: ctx.task.opportunity_id,
-        grant_id: ctx.task.grant_id,
-        task_id: ctx.task.id,
-        current_stage: ctx.task.current_pipeline_stage || ctx.task.selected_from_stage,
-      },
-      // No allow_auto_submit here: resuming after a blocker keeps the TASK's
-      // stored per-application authorization (automateSingleSource leaves the
-      // column untouched when the option is absent). Hardcoding true here let
-      // a blocker-resume grant itself submission authority (2026-08-03).
-      options: { autopilot: true },
-    }))
-    return res.status(202).json({ ok: true, queued: true, resolved_blockers: resolvedBlockers, task_id: ctx.task.id, message: 'Blocker cleared. Hamilton is resuming in the background.' })
+    runAutomationInBackground('resolve_blocker_resume', async () => {
+      const outcome = await automateSingleSource(req.db, {
+        profile,
+        profileId: ctx.task.profile_id,
+        userId: getAuthUserId(ctx.user),
+        source: {
+          opportunity_id: ctx.task.opportunity_id,
+          grant_id: ctx.task.grant_id,
+          task_id: ctx.task.id,
+          current_stage: ctx.task.current_pipeline_stage || ctx.task.selected_from_stage,
+        },
+        // Resume never grants authority. Every action reloads the current
+        // server authorization/toggles and the same frozen attempt.
+        options: { autopilot: true, require_verified_human_gate_resume: true },
+      })
+      const verifiedStatus = outcome?.autopilot_result?.status
+      if (!['completed_draft', 'external_receipt_candidate', 'externally_received'].includes(verifiedStatus)) return outcome
+      const resolvedBlockers = await resolveOpenBlockersForTask(req.db, {
+        taskId: ctx.task.id,
+        strategy: 'portal_gate_reverified',
+        detail: `Resumed run traversed the prior gate and reached ${verifiedStatus}.`,
+        resolvedByUserId: getAuthUserId(ctx.user),
+      })
+      for (const blocker of resolvedBlockers) {
+        const notificationIds = [blocker.user_notification_id, ...(blocker.admin_notification_ids || [])].filter(Boolean)
+        if (notificationIds.length > 0) await markNotificationsResolved(req.db, notificationIds)
+      }
+      return outcome
+    })
+    return res.status(202).json({
+      ok: true,
+      queued: true,
+      task_id: ctx.task.id,
+      resolution_state: 'user_acknowledged_recheck_pending',
+      message: 'Hamilton is rechecking the portal. The blocker remains open until the underlying gate is verified.',
+    })
   } catch (err) {
     log.error('resolve_blocker_failed', { err: err?.message })
     return res.status(500).json({ error: 'resolve_failed', detail: err?.message })
@@ -1164,12 +1346,11 @@ router.get('/sessions/cloud-login/:liveSessionId/stream', async (req, res) => {
   const ctx = await requireCloudLoginSessionAccess(req, res)
   if (!ctx) return
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no', // disable proxy buffering so frames flush live
-  })
+  setCloudLoginPrivateHeaders(res, { stream: true })
+  res.status(200)
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders?.()
   res.write('retry: 3000\n\n')
 
   let stop = null
@@ -1229,10 +1410,31 @@ router.get('/sessions/cloud-login/:liveSessionId/stream', async (req, res) => {
 // scaled server-side by the latest frame's device size. Same auth + profile
 // gate as the stream — the liveSessionId never grants control on its own.
 router.post('/sessions/cloud-login/:liveSessionId/input', async (req, res) => {
+  setCloudLoginPrivateHeaders(res)
+  if (req.get('X-Hamilton-Input-Intent') !== '1') {
+    return res.status(403).json({ error: 'input_intent_required' })
+  }
+  if (!String(req.get('Content-Type') || '').toLowerCase().startsWith('application/json')) {
+    return res.status(415).json({ error: 'json_required' })
+  }
   const ctx = await requireCloudLoginSessionAccess(req, res)
   if (!ctx) return
-  const result = await dispatchInput(ctx.liveSessionId, req.body || {})
-  if (!result.ok) return res.status(400).json({ error: 'input_failed', ...result })
+  const validated = validateCloudLoginInputEvent(req.body)
+  if (!validated.ok) return res.status(400).json({ error: 'input_failed', reason: validated.reason })
+  const inputRate = consumeCloudInputRateLimit({
+    userId: getAuthUserId(ctx.user),
+    profileId: ctx.session.meta?.profileId,
+    liveSessionId: ctx.liveSessionId,
+    type: validated.event.type,
+  })
+  if (!inputRate.allowed) {
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil(inputRate.retry_after_ms / 1000))))
+    return res.status(429).json({ error: 'input_rate_limited', lane: inputRate.lane })
+  }
+  const result = await dispatchInput(ctx.liveSessionId, validated.event)
+  // Deliberately do not relay CDP/browser error details. They can echo typed
+  // characters on some protocol failures.
+  if (!result.ok) return res.status(400).json({ error: 'input_failed', reason: result.reason || 'dispatch_failed' })
   return res.json({ ok: true })
 })
 
@@ -1250,6 +1452,7 @@ router.post('/sessions/cloud-login/:liveSessionId/input', async (req, res) => {
 // "did you actually log in?" check — a heuristic, not proof; see
 // captureCloudLoginState).
 router.post('/sessions/cloud-login/:liveSessionId/complete', async (req, res) => {
+  setCloudLoginPrivateHeaders(res)
   const meta = getCloudLoginMeta(req.params.liveSessionId)
   if (!meta) return res.status(404).json({ error: 'not_found_or_expired' })
   const user = await requireProfileScope(req, res, meta.profileId)
@@ -1320,12 +1523,13 @@ router.post('/sessions/cloud-login/:liveSessionId/complete', async (req, res) =>
     // The DB write failed but the live login is still alive — release the
     // completion mark so the user can retry Done without logging in again.
     releaseCloudLoginCompletion(req.params.liveSessionId)
-    log.error('cloud_login_import_failed', { liveSessionId: req.params.liveSessionId, err: err?.message })
-    return res.status(500).json({ error: 'import_failed', retryable: true, detail: err?.message })
+    log.error('cloud_login_import_failed', { reason: 'session_import_failed' })
+    return res.status(500).json({ error: 'import_failed', retryable: true })
   }
 })
 
 router.post('/sessions/cloud-login/:liveSessionId/cancel', async (req, res) => {
+  setCloudLoginPrivateHeaders(res)
   const meta = getCloudLoginMeta(req.params.liveSessionId)
   if (!meta) return res.json({ ok: true, already: true })
   const user = await requireProfileScope(req, res, meta.profileId)
@@ -1695,12 +1899,10 @@ router.get('/attestations', async (req, res) => {
 router.post('/attestations', async (req, res) => {
   const user = await requireProfileScope(req, res, req.body?.profileId)
   if (!user) return
-  try {
-    const auth = await authorizeAttestation(req.db, { ...req.body, userId: getAuthUserId(user) })
-    return res.json({ ok: true, attestation: auth })
-  } catch (err) {
-    return res.status(400).json({ error: 'authorize_failed', detail: err?.message })
-  }
+  return res.status(409).json({
+    error: 'standing_attestations_disabled',
+    message: 'Hamilton requires you to review and accept the exact current portal text for legal, accuracy, terms, release, or signature statements.',
+  })
 })
 router.post('/attestations/:id/revoke', async (req, res) => {
   const ctx = await requireRecordOwnership(req, res, req.params.id, getAttestationById)
@@ -1722,6 +1924,13 @@ router.get('/portal-policies', async (req, res) => {
   const list = await listPolicies(req.db)
   return res.json({ ok: true, policies: list })
 })
+router.get('/submission-adapter-coverage', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const coverage = await getSubmissionAdapterCoverage(req.db)
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0')
+  return res.json({ ok: true, coverage })
+})
 router.post('/portal-policies', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
@@ -1731,6 +1940,51 @@ router.post('/portal-policies', async (req, res) => {
     return res.json({ ok: true, policy })
   } catch (err) {
     return res.status(400).json({ error: 'upsert_failed', detail: err?.message })
+  }
+})
+
+router.post('/portal-policies/:host/validate-submission-adapter', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
+  try {
+    const result = await onboardReviewedSubmissionAdapter(req.db, {
+      portalHost: req.params.host,
+      definition: req.body?.definition,
+      fixtures: req.body?.fixtures,
+      reviewedByUserId: getAuthUserId(user),
+      operatorValidationArtifactId: req.body?.operator_validation_artifact_id || null,
+    })
+    if (!result.onboarded) return res.status(422).json({ ok: false, report: result.report })
+    return res.json({
+      ok: true,
+      report: result.report,
+      submission_adapter: result.submission_adapter,
+      submission_mode: 'reviewed_auto_submit',
+    })
+  } catch (err) {
+    return res.status(400).json({ error: 'adapter_validation_failed', message: err?.message || 'Adapter validation failed.' })
+  }
+})
+
+router.post('/portal-policies/:host/submission-adapter/kill-switch', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
+  try {
+    const result = await setSubmissionAdapterKillSwitch(req.db, {
+      portalHost: req.params.host,
+      killed: req.body?.killed !== false,
+      changedByUserId: getAuthUserId(user),
+      reason: req.body?.reason || null,
+    })
+    return res.json({
+      ok: true,
+      submission_adapter: result.submission_adapter,
+      submission_mode: result.submission_adapter.kill_switch ? 'draft_only' : 'reviewed_auto_submit',
+    })
+  } catch (err) {
+    return res.status(400).json({ error: 'adapter_kill_switch_failed', message: err?.message || 'Kill switch update failed.' })
   }
 })
 

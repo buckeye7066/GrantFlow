@@ -15,6 +15,10 @@
  */
 
 import crypto from 'node:crypto'
+import {
+  HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+  HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+} from '../../../shared/hamiltonSubmissionContract.js'
 
 export const HAMILTON_AUTHORIZATION_TYPES = Object.freeze([
   'complete_forms',
@@ -24,6 +28,7 @@ export const HAMILTON_AUTHORIZATION_TYPES = Object.freeze([
   'submit_applications',
   'use_saved_session',
   'use_saved_credentials_reference',
+  'create_portal_account',
   'use_standing_attestation',
 ])
 
@@ -66,7 +71,7 @@ export async function ensureHamiltonAuthorizationSchema(db) {
       funding_source_id TEXT,
       task_id TEXT,
       authorization_text TEXT NOT NULL,
-      authorization_version TEXT NOT NULL DEFAULT 'hamilton-autopilot-v1',
+      authorization_version TEXT NOT NULL DEFAULT '${HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION}',
       options_json ${jsonbType} NOT NULL DEFAULT ${emptyObj},
       metadata_json ${jsonbType} NOT NULL DEFAULT ${emptyObj},
       accepted_at ${tsType} DEFAULT ${nowFn},
@@ -131,6 +136,30 @@ function rowToAuth(row) {
   }
 }
 
+function rowCarriesIrreversibleAuthority(auth) {
+  if (!auth) return false
+  if (auth.authorization_type === 'submit_applications') {
+    // Final Submit is never profile/funding-source standing authority. It is
+    // granted only after an exact task/application exists and the user accepts
+    // the current contract on that task. Stored UI booleans can only narrow.
+    return auth.scope === 'task'
+      && Boolean(auth.task_id)
+      && auth.options?.allow_auto_submit === true
+      && auth.options?.require_human_review !== true
+  }
+  if (auth.authorization_type === 'create_portal_account') {
+    return auth.scope === 'task'
+      && Boolean(auth.task_id)
+      && auth.options?.create_portal_account === true
+  }
+  if (auth.authorization_type === 'use_standing_attestation') {
+    // Fuzzy/profile-wide legal acknowledgement authority is disabled. Exact
+    // terms, releases, accuracy certifications, and signatures always pause.
+    return false
+  }
+  return true
+}
+
 function rowToRun(row) {
   if (!row) return null
   return {
@@ -167,8 +196,8 @@ export async function recordAuthorizations(db, {
   fundingSourceIds = [],
   taskIds = [],
   authorizationTypes = [],
-  authorizationText,
-  authorizationVersion = 'hamilton-autopilot-v1',
+  authorizationText = HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT,
+  authorizationVersion = HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
   options = {},
   metadata = {},
 } = {}) {
@@ -176,6 +205,12 @@ export async function recordAuthorizations(db, {
   if (!userId) throw new Error('userId required')
   if (!profileId) throw new Error('profileId required')
   if (!authorizationText) throw new Error('authorizationText required')
+  if (authorizationVersion !== HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION) {
+    throw new Error('unsupported Hamilton authorization version')
+  }
+  if (authorizationText !== HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT) {
+    throw new Error('Hamilton authorization text does not match the current server contract')
+  }
   if (!Array.isArray(authorizationTypes) || authorizationTypes.length === 0) {
     throw new Error('authorizationTypes required')
   }
@@ -183,6 +218,23 @@ export async function recordAuthorizations(db, {
     if (!HAMILTON_AUTHORIZATION_TYPES.includes(t)) throw new Error(`invalid authorization_type: ${t}`)
   }
   if (!HAMILTON_AUTHORIZATION_SCOPES.includes(scope)) throw new Error(`invalid scope: ${scope}`)
+  if (authorizationTypes.includes('submit_applications')) {
+    if (scope !== 'task' || !Array.isArray(taskIds) || taskIds.length === 0) {
+      throw new Error('submit_applications_requires_exact_task_scope')
+    }
+    if (options?.allow_auto_submit !== true || options?.require_human_review === true) {
+      throw new Error('submit_applications_requires_explicit_no-review_task_consent')
+    }
+  }
+  if (authorizationTypes.includes('create_portal_account')) {
+    if (scope !== 'task' || !Array.isArray(taskIds) || taskIds.length === 0
+        || options?.create_portal_account !== true) {
+      throw new Error('create_portal_account_requires_exact_task_scope')
+    }
+  }
+  if (authorizationTypes.includes('use_standing_attestation')) {
+    throw new Error('standing_attestations_disabled')
+  }
   await ensureHamiltonAuthorizationSchema(db)
 
   const targets = scope === 'funding_source' && fundingSourceIds.length > 0
@@ -263,40 +315,60 @@ export async function recordAuthorizations(db, {
  * matching `fundingSourceId` OR scope=task matching `taskId`.
  */
 export async function isAuthorizationActive(db, {
+  userId,
   profileId,
   authorizationType,
   fundingSourceId = null,
   taskId = null,
+  expectedVersion = HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+  authorizationId = null,
 } = {}) {
-  if (!db || !profileId || !authorizationType) return false
+  if (!db || !userId || !profileId || !authorizationType || !expectedVersion) return false
   await ensureHamiltonAuthorizationSchema(db)
   const row = await db.prepare(
-    `SELECT id FROM hamilton_authorizations
-      WHERE profile_id = ? AND authorization_type = ? AND revoked_at IS NULL
+    `SELECT * FROM hamilton_authorizations
+      WHERE user_id = ? AND profile_id = ? AND authorization_type = ?
+        AND authorization_version = ? AND authorization_text = ?
+        AND revoked_at IS NULL
+        AND (? IS NULL OR id = ?)
         AND (
           scope = 'profile'
           OR (scope = 'funding_source' AND funding_source_id = ?)
           OR (scope = 'task' AND task_id = ?)
         )
       ORDER BY accepted_at DESC LIMIT 1`,
-  ).get(String(profileId), authorizationType, fundingSourceId, taskId)
-  return Boolean(row)
+  ).get(
+    String(userId), String(profileId), authorizationType, String(expectedVersion),
+    HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT, authorizationId, authorizationId,
+    fundingSourceId, taskId,
+  )
+  return rowCarriesIrreversibleAuthority(rowToAuth(row))
 }
 
-export async function listActiveAuthorizations(db, { profileId, fundingSourceId = null, taskId = null } = {}) {
-  if (!db || !profileId) return []
+export async function listActiveAuthorizations(db, {
+  userId,
+  profileId,
+  fundingSourceId = null,
+  taskId = null,
+  expectedVersion = HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+} = {}) {
+  if (!db || !userId || !profileId || !expectedVersion) return []
   await ensureHamiltonAuthorizationSchema(db)
   const rows = await db.prepare(
     `SELECT * FROM hamilton_authorizations
-      WHERE profile_id = ? AND revoked_at IS NULL
+      WHERE user_id = ? AND profile_id = ? AND authorization_version = ?
+        AND authorization_text = ? AND revoked_at IS NULL
         AND (
           scope = 'profile'
           OR (scope = 'funding_source' AND funding_source_id = ?)
           OR (scope = 'task' AND task_id = ?)
         )
       ORDER BY accepted_at DESC`,
-  ).all(String(profileId), fundingSourceId, taskId)
-  return (rows || []).map(rowToAuth)
+  ).all(
+    String(userId), String(profileId), String(expectedVersion),
+    HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT, fundingSourceId, taskId,
+  )
+  return (rows || []).map(rowToAuth).filter(rowCarriesIrreversibleAuthority)
 }
 
 // Fetch one authorization by id (includes profile_id for ownership checks

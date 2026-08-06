@@ -147,7 +147,7 @@ export const HAMILTON_SEVERITIES = Object.freeze(['info', 'warning', 'error', 's
 
 let ensuredNotifications = false
 
-async function ensureNotificationsSchema(db) {
+export async function ensureNotificationsSchema(db) {
   if (!db || typeof db.prepare !== 'function') return
   if (ensuredNotifications) return
   const isPostgres = db?.dialect === 'postgres'
@@ -185,6 +185,7 @@ function normalizeSeverity(value) {
  * already done its primary work).
  */
 export async function emitHamiltonNotification(db, {
+  notificationId = null,
   userId,
   type,
   title,
@@ -192,6 +193,8 @@ export async function emitHamiltonNotification(db, {
   data = {},
   severity = 'info',
   expiresInDays = 30,
+  idempotent = false,
+  strict = false,
 } = {}) {
   if (!db || !userId || !type) return null
   if (!HAMILTON_NOTIFICATION_TYPES.includes(type)) {
@@ -200,7 +203,7 @@ export async function emitHamiltonNotification(db, {
   if (!title || !message) throw new Error('title and message required')
   await ensureNotificationsSchema(db)
 
-  const id = crypto.randomUUID()
+  const id = notificationId ? String(notificationId) : crypto.randomUUID()
   const isPostgres = db?.dialect === 'postgres'
   const expires = isPostgres
     ? `NOW() + INTERVAL '${Math.max(1, Math.min(365, Number(expiresInDays) || 30))} days'`
@@ -218,11 +221,13 @@ export async function emitHamiltonNotification(db, {
     await db
       .prepare(
         `INSERT INTO notifications (id, user_id, type, title, message, data, read, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ${expires})`,
+         VALUES (?, ?, ?, ?, ?, ?, 0, ${expires})
+         ${idempotent ? 'ON CONFLICT(id) DO NOTHING' : ''}`,
       )
       .run(id, String(userId), String(type), String(title), String(message), dataJson)
     return id
   } catch (err) {
+    if (strict) throw err
     // Notifications are advisory — never fail the agent run because
     // the table couldn't be written to.
     if (process?.env?.NODE_ENV !== 'test') {

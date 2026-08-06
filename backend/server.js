@@ -137,6 +137,8 @@ import { sendEmail, isEmailServiceConfigured } from './services/email.js'
 import { runBillingCycle } from './services/billing/invoiceService.js'
 import { validateCriticalImports } from './startup/validateImports.js'
 import { runGracefulShutdown } from './startup/gracefulShutdown.js'
+import { startHamiltonSubmissionOutboxDrainer } from './services/hamilton/hamiltonSubmissionReceiptProjector.js'
+import { startHamiltonSubmissionReconciler } from './services/hamilton/hamiltonSubmissionReconciler.js'
 
 /**
  * Lazy-loading route helper — caches the imported router after first load.
@@ -542,6 +544,19 @@ app.use('/api/eva', express.raw({ type: '*/*', limit: '2mb' }), lazyRouter('./ro
 // application/x-www-form-urlencoded (the router parses its own body) and signs
 // the raw request — see backend/routes/smsInbound.js. req.db is already attached.
 app.use('/api/sms', lazyRouter('./routes/smsInbound.js'));
+
+// The cloud-login input lane transports live keystrokes from the authenticated
+// user's browser to the isolated portal browser. Those characters may be a
+// password or one-time code. Mark the route *before* body parsing so even a
+// malformed JSON/parser error cannot make a credential body eligible for the
+// generic fallback logger below.
+app.use((req, _res, next) => {
+  const path = String(req.path || req.url || '').split('?')[0]
+  if (/^\/api\/hamilton\/automation\/sessions\/cloud-login\/[^/]+\/input$/.test(path)) {
+    req.suppressSensitiveBodyLogging = true
+  }
+  next()
+})
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 
@@ -2953,7 +2968,7 @@ app.use((err, req, res, next) => {
     stack: err.stack,
     path: req.path,
     method: req.method,
-    body: req.body,
+    body: req.suppressSensitiveBodyLogging ? '[SENSITIVE_BODY_SUPPRESSED]' : req.body,
     headers: {
       'content-type': req.headers['content-type'],
       'authorization': req.headers.authorization ? '[REDACTED]' : undefined
@@ -4191,6 +4206,8 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleSamDailyCodeSweep(db)
     scheduleAnyaDailyOwnerReport(db)
     scheduleEvaMaintenance(db)
+    startHamiltonSubmissionOutboxDrainer(db)
+    startHamiltonSubmissionReconciler(db)
 
     // Immediate boot-time net: if a previous nightly sweep crashed and left the
     // app stuck in a DOWN maintenance window, reopen it now rather than waiting

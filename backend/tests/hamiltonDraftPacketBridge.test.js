@@ -59,7 +59,7 @@ const {
 const { runAutopilot } = await import('../services/hamilton/hamiltonAutopilotEngine.js')
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
 const { listTaskEvents, _resetSchemaCache } = await import('../services/hamilton/applicationTaskStore.js')
-const { _resetAuthSchemaCache } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
+const { recordAuthorizations, _resetAuthSchemaCache } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
 
 const PROFILE = 'profile-draft-bridge'
 const OTHER_PROFILE = 'profile-someone-else'
@@ -124,6 +124,17 @@ async function seedProfile(db, profileId = PROFILE) {
     .run(profileId, 'basic_information', JSON.stringify({
       first_name: 'Robert', last_name: 'White', email: 'r@example.com',
     }))
+  await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+    .run(profileId, 'automation_preferences', JSON.stringify({
+      automations: { hamilton_autopilot: true, hamilton_auto_submit: false },
+    }))
+}
+
+async function authorizeFormCompletion(db) {
+  await recordAuthorizations(db, {
+    userId: 'user-1', profileId: PROFILE, scope: 'funding_source',
+    fundingSourceIds: ['opp-1'], authorizationTypes: ['complete_forms'],
+  })
 }
 
 async function seedDraftPacket(db, {
@@ -313,6 +324,7 @@ describe('autopilot pathway — draft packet is the fill source', () => {
     await seedProfile(db)
     await seedOpportunity(db)
     await seedDraftPacket(db)
+    await authorizeFormCompletion(db)
 
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
@@ -328,7 +340,7 @@ describe('autopilot pathway — draft packet is the fill source', () => {
       .toBe('A rigorous, evidence-led statement of need.\n\nA grounded project narrative.')
     // Submission authority is NOT widened by the bridge.
     expect(engineArgs.allowAutoSubmit).toBe(false)
-    expect(result.task.status).toBe('waiting_for_review')
+    expect(result.task.status).toBe('portal_draft_saved')
 
     // Audit trail: the bridge event says what will be used; the fill event says
     // what was actually written — and that written ≠ sent.
@@ -359,6 +371,7 @@ describe('autopilot pathway — draft packet is the fill source', () => {
     // grant exists but no applications/application_sections rows
     await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')
       .run('g-1', PROFILE, 'opp-1', 'Test Grant')
+    await authorizeFormCompletion(db)
 
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
@@ -379,6 +392,7 @@ describe('autopilot pathway — draft packet is the fill source', () => {
     await seedProfile(db)
     await seedOpportunity(db)
     await seedDraftPacket(db, { profileId: OTHER_PROFILE })
+    await authorizeFormCompletion(db)
 
     await automateSingleSource(db, {
       profileId: PROFILE,

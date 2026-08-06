@@ -3,9 +3,10 @@
  *
  * Goal: let a user on ANY device (including a phone), independent of the owner,
  * log into a portal once and have Hamilton capture the resulting session — so
- * future runs skip both login AND 2FA, even for push-2FA portals. Hamilton
- * never sees the password or the 2FA code; she only reuses the resulting
- * (AES-256-GCM-encrypted, profile-bound, revocable) Playwright storageState.
+ * future runs skip both login AND 2FA, even for push-2FA portals. GrantFlow
+ * relays live input to the isolated browser without storing, analyzing,
+ * logging, or replaying it; only the resulting (AES-256-GCM-encrypted,
+ * profile-bound, revocable) Playwright storageState can be saved.
  *
  * PROVIDERS (HAMILTON_CLOUD_LOGIN_PROVIDER):
  *
@@ -42,12 +43,27 @@
  */
 
 import http from 'node:http'
-import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import { launchGuardedPortalBrowser, launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
+import {
+  assertHamiltonActionPageAllowed,
+  navigateHamiltonPortalPage,
+  prepareHamiltonBrowserEgress,
+} from './hamiltonBrowserNetworkGuard.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
 import { findValidSession, getSessionStorageState } from './hamiltonCredentialSessionService.js'
 
 const log = createLogger('service:hamiltonCloudLogin')
+
+function safePortalOrigin(input) {
+  try {
+    const parsed = new URL(String(input || ''))
+    if (parsed.protocol !== 'https:') return null
+    return parsed.origin
+  } catch {
+    return null
+  }
+}
 
 // Idle-based session lifecycle. The old model was a single absolute TTL
 // (15 min from createdAt) checked ONLY when a NEW login started — so an ACTIVE
@@ -179,20 +195,6 @@ export function registerCloudLoginViewer(liveSessionId, notify) {
 }
 
 /**
- * Ask a HOSTED CDP provider for an interactive "live URL". Implemented for
- * Browserless's `Browserless.liveURL` CDP command; providers that don't support
- * it return null.
- */
-async function acquireProviderLiveUrl(page) {
-  try {
-    const cdp = await page.context().newCDPSession(page)
-    const res = await cdp.send('Browserless.liveURL').catch(() => null)
-    if (res && (res.liveURL || res.url)) return res.liveURL || res.url
-  } catch { /* provider doesn't support it */ }
-  return null
-}
-
-/**
  * Build the same-origin live-view URL the user opens. The frontend route mirrors
  * the page (SSE screencast) and relays input — so it's our own page, served on
  * the app's single public port. The caller (route) supplies the public origin;
@@ -262,7 +264,11 @@ async function loadSeedSession(db, { profileId, portalHost }) {
  * it must return a browser whose newContext receives the same options the real
  * launcher's would.
  */
-export async function startCloudLogin({ userId, profileId, portalHost, loginUrl, label, captureRequestId = null, origin = null, db = null, launchBrowser = null } = {}) {
+export async function startCloudLogin({
+  userId, profileId, portalHost, loginUrl, label, captureRequestId = null,
+  origin = null, db = null, launchBrowser = null,
+  prepareBrowserEgress = prepareHamiltonBrowserEgress,
+} = {}) {
   if (!isCloudLoginConfigured()) return { ok: false, reason: 'not_configured' }
   sweepExpired()
   const target = loginUrl || (portalHost ? `https://${portalHost}/` : null)
@@ -280,23 +286,11 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
   const provider = cloudLoginProvider()
   let browser
   try {
-    if (provider === 'cdp' && chromium) {
-      // Hosted interactive Chrome (Browserless / Browserbase).
-      browser = await chromium.connectOverCDP(cdpEndpoint())
-      const context = browser.contexts()[0] || (await browser.newContext())
-      const page = context.pages()[0] || (await context.newPage())
-      const nav = await navigateOrFail(page, target)
-      if (!nav.ok) {
-        await closeQuietly({ browser })
-        log.error('cloud login navigation failed', { provider, target, portalHost, detail: nav.detail })
-        return { ...nav, engine: 'cdp' }
-      }
-      const liveUrl = await acquireProviderLiveUrl(page)
-      if (!liveUrl) {
-        await closeQuietly({ browser })
-        return { ok: false, reason: 'provider_no_live_url' }
-      }
-      return finalizeStart({ browser, server: null, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl })
+    if (provider === 'cdp') {
+      // A remote CDP browser resolves DNS outside GrantFlow's pinned Chromium
+      // process. Without an outbound proxy that proves resolved-address
+      // enforcement, route interception alone is not a DNS-rebinding defense.
+      return { ok: false, reason: 'network_confinement_unavailable' }
     }
 
     // self_hosted: launch our OWN headless Chromium via the shared hardened
@@ -311,10 +305,21 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     // the captured session. See loadSeedSession for the offline-portal bug this
     // fixes; a missing/undecryptable seed degrades to the old cold start.
     const seed = await loadSeedSession(db, { profileId, portalHost })
-    const launched = launchBrowser
-      ? await launchBrowser({ storageState: seed?.storageState || null })
-      : await launchPortalBrowser(chromium)
-    browser = launched.browser ?? launched
+    const browserEgress = await prepareBrowserEgress({ targetUrl: target })
+    const launched = await launchGuardedPortalBrowser(chromium, {
+      targetUrl: target,
+      contextOptions: {
+        viewport: { width: 1280, height: 900 },
+        userAgent: REALISTIC_PORTAL_UA,
+        locale: 'en-US',
+        ...(seed?.storageState ? { storageState: seed.storageState } : {}),
+      },
+      prepareEgress: async () => browserEgress,
+      launchBrowser: launchBrowser
+        ? async () => launchBrowser({ storageState: seed?.storageState || null })
+        : launchPortalBrowser,
+    })
+    browser = launched.browser
     log.info('cloud login browser launched', {
       engine: launched.engine || 'injected', portalHost, seeded: Boolean(seed),
     })
@@ -324,17 +329,18 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     // stay REALISTIC_PORTAL_UA — Akamai-class WAFs bind captured cookies to the
     // fingerprint, so a seeded session presented under a different UA silently
     // reads as signed out (see browserLaunch.js / hamiltonSessionKeepAlive.js).
-    const context = await browser.newContext({
-      viewport: { width: 1280, height: 900 },
-      userAgent: REALISTIC_PORTAL_UA,
-      locale: 'en-US',
-      ...(seed?.storageState ? { storageState: seed.storageState } : {}),
-    })
+    const context = launched.context
     const page = await context.newPage()
-    const nav = await navigateOrFail(page, target)
+    const nav = await navigateOrFail(page, target, browserEgress)
     if (!nav.ok) {
       await closeQuietly({ browser })
-      log.error('cloud login navigation failed', { provider, target, portalHost, detail: nav.detail, engine: launched.engine })
+      log.error('cloud login navigation failed', {
+        provider,
+        portalHost,
+        targetOrigin: safePortalOrigin(target),
+        reason: nav.reason,
+        engine: launched.engine,
+      })
       return { ...nav, engine: launched.engine }
     }
     const liveSessionId = makeLiveSessionId()
@@ -343,11 +349,12 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       browser, server: null, context, page, userId, profileId, portalHost, target,
       label, captureRequestId, liveUrl, liveSessionId,
       seededFromSessionId: seed?.sessionId || null,
+      browserEgress,
     })
   } catch (err) {
     await closeQuietly({ browser })
-    log.error('cloud login start failed', { error: err?.message, provider })
-    return { ok: false, reason: 'connect_failed', detail: err?.message }
+    log.error('cloud login start failed', { errorName: err?.name || 'Error', provider })
+    return { ok: false, reason: 'connect_failed', detail: 'cloud_login_start_failed' }
   }
 }
 
@@ -360,16 +367,22 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
 // which reads as "Live" with nothing on screen, indistinguishable from the
 // bot-detection/no-repaint bugs already fixed, but never reported and never
 // fixed by them. Returns { ok:true } or { ok:false, reason, detail }.
-async function navigateOrFail(page, target) {
+async function navigateOrFail(page, target, browserEgress) {
   let navError = null
   try {
-    await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 20_000 })
+    await navigateHamiltonPortalPage(page, target, browserEgress, {
+      waitUntil: 'domcontentloaded', timeout: 20_000,
+    })
   } catch (err) {
     navError = err
   }
   const landedUrl = (() => { try { return page.url() } catch { return null } })()
   if (navError || !landedUrl || landedUrl === 'about:blank') {
-    return { ok: false, reason: 'navigation_failed', detail: navError?.message || `stayed_on_blank_page (target: ${target})` }
+    return {
+      ok: false,
+      reason: 'navigation_failed',
+      detail: navError ? 'portal_navigation_failed' : 'portal_did_not_leave_blank_page',
+    }
   }
   return { ok: true }
 }
@@ -378,10 +391,14 @@ function makeLiveSessionId() {
   return `cl_${Date.now().toString(36)}_${Math.floor(performance.now()).toString(36)}`
 }
 
-function finalizeStart({ browser, server, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl, liveSessionId, seededFromSessionId = null }) {
+function finalizeStart({
+  browser, server, context, page, userId, profileId, portalHost, target, label,
+  captureRequestId, liveUrl, liveSessionId, seededFromSessionId = null,
+  browserEgress = null,
+}) {
   const id = liveSessionId || makeLiveSessionId()
   const record = {
-    browser, server, context, page,
+    browser, server, context, page, browserEgress,
     completing: false,
     screencastCdp: null,
     inputCdp: null,
@@ -392,7 +409,15 @@ function finalizeStart({ browser, server, context, page, userId, profileId, port
     // heartbeat-alive over a dead browser.
     viewers: new Set(),
     meta: {
-      userId, profileId: String(profileId), portalHost, loginUrl: target, label, captureRequestId,
+      userId,
+      profileId: String(profileId),
+      portalHost,
+      // Exact resume/SSO locators can contain bearer-like path or query data.
+      // The live page already holds that state; metadata exposed to routes must
+      // retain at most the origin.
+      loginUrl: safePortalOrigin(target),
+      label,
+      captureRequestId,
       // The saved-session row this live context was seeded from (null = cold
       // start). Recorded so complete/diagnostics can tell a REFRESH capture
       // (seeded, signed-in jar) from a fresh first capture.
@@ -762,6 +787,11 @@ export async function dispatchInput(liveSessionId, event) {
   const s = sessions.get(liveSessionId)
   if (!s || !s.page) return { ok: false, reason: 'not_found_or_expired' }
   if (!event || typeof event !== 'object') return { ok: false, reason: 'bad_event' }
+  try {
+    assertHamiltonActionPageAllowed(s.page, s.browserEgress, 'human_input')
+  } catch {
+    return { ok: false, reason: 'live_page_path_not_allowed' }
+  }
   touchSession(s) // user input is activity — never idle out someone mid-2FA
 
   try {
@@ -776,11 +806,11 @@ export async function dispatchInput(liveSessionId, event) {
       try {
         return await sendInputOverCdp(fresh, s, event)
       } catch (retryErr) {
-        return { ok: false, reason: 'dispatch_failed', detail: retryErr?.message || err?.message }
+        return { ok: false, reason: 'dispatch_failed' }
       }
     }
   } catch (err) {
-    return { ok: false, reason: 'dispatch_failed', detail: err?.message }
+    return { ok: false, reason: 'dispatch_failed' }
   }
 }
 

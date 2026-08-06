@@ -40,6 +40,18 @@ const mtsuConnector = (await import('../services/hamilton/portalSync/connectors/
 
 const HOST = 'mtsu.scholarships.ngwebsolutions.com'
 const BASE = `https://${HOST}`
+const TEST_NETWORK_EGRESS = Object.freeze({
+  allowed_origins: [BASE],
+  pinned_hosts: { [HOST]: '203.0.113.11' },
+  path_contract: {
+    navigation: [
+      '/ScholarX_StudentLanding.aspx', '/ScholarX_StudentPortal.aspx',
+      '/Applicants/MyOpportunities', '/scholarx_studentaward.aspx',
+      '/CMXAdmin/Cmx_Content.aspx',
+    ],
+    application: [], authentication: [], status: [], interactive: [],
+  },
+})
 
 // Verbatim from the live signed-in probe (2026-08-02).
 const SIGNED_IN_HEADER = 'Skip to main content\nAnastasia Nicole White | Logout\n Home\nMy Applications\nMy Opportunities\nMy Awards\nScholarships Search\nContact Us\nSession expires in 45 minutes.\n'
@@ -158,7 +170,9 @@ describe('read() — landing honesty end to end', () => {
 
   it('a dead session yields access signin_wall, zero awards, and an actionable reason', async () => {
     const page = makeSignedOutPage()
-    const res = await connector.read(page, { portalHost: HOST, log: () => {} })
+    const res = await connector.read(page, {
+      portalHost: HOST, log: () => {}, networkEgress: TEST_NETWORK_EGRESS,
+    })
     expect(res.access).toBe('signin_wall')
     expect(res.awards).toHaveLength(0)
     expect(res.fields).toHaveLength(0)

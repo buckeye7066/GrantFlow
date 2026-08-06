@@ -27,6 +27,7 @@ import { assessHamiltonFundingSource } from './hamiltonFundingSourcePolicy.js'
 import { isAuthorizationActive, listActiveAuthorizations } from './hamiltonAuthorizationStore.js'
 import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
 import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
+import { HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION } from '../../../shared/hamiltonSubmissionContract.js'
 
 const REQUIRED_IDENTITY_FIELDS = [
   { key: 'first_name', paths: ['basic_information.first_name', 'first_name'] },
@@ -447,6 +448,7 @@ export async function preflightSingleSource(db, {
   // 6. Authorizations — the *active* set the user has granted on
   //    profile/funding-source/task scope.
   const authorization = await readAuthorizations(db, {
+    userId: source?.user_id || profile?.user_id || profile?.created_by || null,
     profileId: profileId || profile?.id,
     fundingSourceId: source?.opportunity_id || source?.grant_id || null,
     taskId: source?.task_id || null,
@@ -527,7 +529,13 @@ async function loadGrant(db, id) {
  * relative to (profile, funding-source, task). Reads the active
  * authorizations table.
  */
-export async function readAuthorizations(db, { profileId, fundingSourceId = null, taskId = null } = {}) {
+export async function readAuthorizations(db, {
+  userId,
+  profileId,
+  fundingSourceId = null,
+  taskId = null,
+  expectedVersion = HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION,
+} = {}) {
   const out = {
     complete_forms: false,
     upload_documents: false,
@@ -536,13 +544,23 @@ export async function readAuthorizations(db, { profileId, fundingSourceId = null
     submit_applications: false,
     use_saved_session: false,
     use_saved_credentials_reference: false,
+    create_portal_account: false,
     use_standing_attestation: false,
+    require_human_review: true,
   }
-  if (!db || !profileId) return out
-  const list = await listActiveAuthorizations(db, { profileId, fundingSourceId, taskId })
+  Object.defineProperties(out, {
+    authorization_ids: { value: [], writable: true, enumerable: false },
+    authorization_version: { value: expectedVersion, writable: false, enumerable: false },
+  })
+  if (!db || !userId || !profileId) return out
+  const list = await listActiveAuthorizations(db, {
+    userId, profileId, fundingSourceId, taskId, expectedVersion,
+  })
   for (const a of list) {
     if (a.authorization_type in out) out[a.authorization_type] = true
+    if (a.authorization_type === 'submit_applications') out.require_human_review = false
   }
+  out.authorization_ids = list.map((authorization) => authorization.id)
   void isAuthorizationActive // keep import for future single-flag lookup convenience
   return out
 }

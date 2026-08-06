@@ -23,11 +23,14 @@
  *   - NEVER throws. On any failure it returns empty arrays + an honest
  *     `notFound` reason; the orchestrator surfaces that verbatim in the run
  *     summary instead of recording status:'ok' with invented data.
- *   - Reuses the project's canonical AI wrapper (backend/utils/aiProviders.js
- *     invokeJsonWithFallback) — no new key, no new model id.
+ *   - Production cloud extraction is deliberately disabled until GrantFlow has
+ *     a durable, versioned, per-profile disclosure-consent store. Authenticated
+ *     portal text can contain financial/account data and must never be relayed
+ *     merely because an API key or environment flag exists.
+ *   - A test-only injected extractor keeps the deterministic normalization and
+ *     fabrication guards executable without sending any portal data off-box.
  */
-
-import { invokeJsonWithFallback, getOpenAIOptional } from '../../../utils/aiProviders.js'
+import { navigateHamiltonPortalPage } from '../hamiltonBrowserNetworkGuard.js'
 
 // Same-origin links whose visible text or href hint at financial-aid data are
 // worth visiting so the model sees the award package, not just a dashboard.
@@ -85,14 +88,30 @@ const SCHEMA_INSTRUCTIONS = [
   'Do NOT emit any field whose value is not literally shown on the page.',
 ].join('\n')
 
-function envFlagOn(name, defaultOn = true) {
-  const raw = process.env[name]
-  if (raw === undefined || raw === null || raw === '') return defaultOn
-  return String(raw).trim().toLowerCase() !== 'false'
+export const PORTAL_PAGE_CLOUD_DISCLOSURE_CONTRACT = 'portal-page-cloud-disclosure-v1'
+
+/**
+ * No production caller may enable authenticated-page relay with an env flag or
+ * request option. The only executable seam is a test-owned function while the
+ * process is running under NODE_ENV=test. A future release can replace this
+ * with a DB-backed consent lookup bound to profile/user/portal/scope/expiry.
+ */
+function syntheticFixtureExtractor(opts = {}) {
+  if (process.env.NODE_ENV !== 'test') return null
+  if (opts._syntheticFixture !== true || typeof opts._invoke !== 'function') return null
+  return opts._invoke
 }
 
-function anthropicKeyConfigured() {
-  return Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim())
+function disclosureDisabledResult(kind = 'extraction') {
+  const reason = `authenticated portal cloud ${kind} is disabled until a versioned, server-verified per-profile disclosure consent is implemented`
+  return {
+    reason,
+    raw: {
+      attempted: false,
+      provider: null,
+      disclosure_contract: PORTAL_PAGE_CLOUD_DISCLOSURE_CONTRACT,
+    },
+  }
 }
 
 function safeUrl(page) {
@@ -159,13 +178,18 @@ async function collectAidLinks(page) {
  * Visit `url`, wait briefly for it to settle, return its visible text + title.
  * Never throws — a navigation failure yields an empty snapshot.
  */
-async function visitAndRead(page, url, log) {
+async function visitAndRead(page, url, log, networkEgress) {
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
+    await navigateHamiltonPortalPage(page, url, networkEgress, {
+      waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS,
+    })
     await page.waitForLoadState('networkidle', { timeout: SETTLE_TIMEOUT_MS }).catch(() => {})
     return await readPageSnapshot(page)
   } catch (err) {
-    log?.(`llmPageExtract: could not read ${url}`, { error: err?.message })
+    // URLs and browser errors can contain resume tokens, identity values, or
+    // echoed page content. Keep the operational signal typed and value-free.
+    void err
+    log?.('llmPageExtract: authenticated page could not be read')
     return { text: '', title: '' }
   }
 }
@@ -329,17 +353,17 @@ function normalizeExtraction(json, fallbackUrl) {
 export async function extractPortalDataWithLLM(page, opts = {}) {
   const log = opts.log || (() => {})
   const maxPages = Number.isFinite(opts.maxPages) ? opts.maxPages : MAX_PAGES
-  const raw = { pagesRead: [], provider: null, attempted: true }
-
-  if (!envFlagOn('PORTAL_SYNC_LLM_EXTRACT', true)) {
-    const reason = 'LLM extraction disabled (PORTAL_SYNC_LLM_EXTRACT=false)'
-    log(`llmPageExtract: ${reason}`)
-    return { awards: [], fields: [], notFound: [reason], rejected: [], raw: { ...raw, attempted: false } }
+  const fixtureInvoke = syntheticFixtureExtractor(opts)
+  if (!fixtureInvoke) {
+    const disabled = disclosureDisabledResult('extraction')
+    log('llmPageExtract: authenticated portal cloud extraction is disabled')
+    return { awards: [], fields: [], notFound: [disabled.reason], rejected: [], raw: disabled.raw }
   }
-  if (!anthropicKeyConfigured() && !getOpenAIOptional()) {
-    const reason = 'no AI provider configured (ANTHROPIC_API_KEY / OPENAI_API_KEY) — cannot extract portal text'
-    log(`llmPageExtract: ${reason}`)
-    return { awards: [], fields: [], notFound: [reason], rejected: [], raw: { ...raw, attempted: false } }
+  const raw = {
+    pages_read: 0,
+    provider: 'synthetic_fixture',
+    attempted: true,
+    disclosure_contract: PORTAL_PAGE_CLOUD_DISCLOSURE_CONTRACT,
   }
 
   // 1) Gather text from candidate landing pages, the current page, and a few
@@ -349,14 +373,14 @@ export async function extractPortalDataWithLLM(page, opts = {}) {
   const pushPage = (url, snap) => {
     if (!snap?.text || !snap.text.trim()) return
     pages.push({ url: url || safeUrl(page), title: snap.title || '', text: snap.text })
-    raw.pagesRead.push(url || safeUrl(page))
+    raw.pages_read += 1
   }
 
   for (const url of Array.isArray(opts.navCandidates) ? opts.navCandidates : []) {
     if (pages.length >= maxPages) break
     if (!url || visited.has(url)) continue
     visited.add(url)
-    pushPage(url, await visitAndRead(page, url, log))
+    pushPage(url, await visitAndRead(page, url, log, opts.networkEgress))
   }
 
   // Current page (after nav attempts) — always include if it has text.
@@ -372,7 +396,7 @@ export async function extractPortalDataWithLLM(page, opts = {}) {
       if (pages.length >= maxPages) break
       if (visited.has(url)) continue
       visited.add(url)
-      pushPage(url, await visitAndRead(page, url, log))
+      pushPage(url, await visitAndRead(page, url, log, opts.networkEgress))
     }
   }
 
@@ -389,28 +413,30 @@ export async function extractPortalDataWithLLM(page, opts = {}) {
     .join('\n\n')
   const prompt = `${SCHEMA_INSTRUCTIONS}\n\nPORTAL TEXT (extract ONLY what is present below):\n\n${corpus}`
 
-  // 3) Call the canonical wrapper (OpenAI preferred when present, else Anthropic).
+  // 3) Exercise only the injected synthetic fixture. Production never reaches
+  // this branch until a later release implements the server-side disclosure
+  // authority described above.
   let result
   try {
-    result = await invokeJsonWithFallback({
-      openai: getOpenAIOptional(),
+    result = await fixtureInvoke({
       system: SYSTEM,
       prompt,
       temperature: 0,
       maxTokens: 1500,
     })
   } catch (err) {
-    const reason = `LLM extraction call failed: ${err?.message || err}`
-    log(`llmPageExtract: ${reason}`)
+    void err
+    const reason = 'synthetic extraction fixture failed'
+    log('llmPageExtract: synthetic extraction fixture failed')
     return { awards: [], fields: [], notFound: [reason], rejected: [], raw }
   }
 
   if (!result?.ok || !result?.json) {
-    const reason = `LLM returned no parseable JSON (${describeLlmFailure(result)})`
-    log(`llmPageExtract: ${reason}`)
+    const reason = 'synthetic extraction fixture returned no parseable JSON'
+    log('llmPageExtract: synthetic extraction fixture returned no parseable JSON')
     return { awards: [], fields: [], notFound: [reason], rejected: [], raw }
   }
-  raw.provider = result.provider
+  raw.provider = 'synthetic_fixture'
 
   const extracted = normalizeExtraction(result.json, safeUrl(page))
   const fields = extracted.fields
@@ -422,10 +448,10 @@ export async function extractPortalDataWithLLM(page, opts = {}) {
   const notFound = []
   if (rejected.length > 0) {
     notFound.push(`fabrication guard rejected ${rejected.length} extracted item(s) lacking user-specific award evidence (listing/marketing entries are not user awards; see rejected list)`)
-    log(`llmPageExtract: fabrication guard rejected ${rejected.length} item(s)`, { rejected: rejected.map((r) => r.title) })
+    log(`llmPageExtract: fabrication guard rejected ${rejected.length} item(s)`)
   }
   if (awards.length === 0) notFound.push('no financial-aid awards found in the portal text')
-  log(`llmPageExtract: ${awards.length} awards (${rejected.length} rejected), ${fields.length} fields from ${pages.length} page(s) via ${result.provider}`)
+  log(`llmPageExtract: ${awards.length} awards (${rejected.length} rejected), ${fields.length} fields from ${pages.length} synthetic fixture page(s)`)
   return { awards, fields, notFound, rejected, raw }
 }
 
@@ -521,13 +547,15 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
   const title = snapshot?.title || null
   const links = Array.isArray(snapshot?.links) ? snapshot.links : []
   const maxItems = Number.isFinite(opts.maxItems) ? opts.maxItems : 50
-  const raw = { provider: null, attempted: true }
-
-  if (!envFlagOn('PORTAL_SYNC_LLM_EXTRACT', true)) {
-    return { items: [], notFound: ['LLM extraction disabled (PORTAL_SYNC_LLM_EXTRACT=false)'], rejected: [], raw: { ...raw, attempted: false } }
+  const fixtureInvoke = syntheticFixtureExtractor(opts)
+  if (!fixtureInvoke) {
+    const disabled = disclosureDisabledResult('listing enumeration')
+    return { items: [], notFound: [disabled.reason], rejected: [], raw: disabled.raw }
   }
-  if (!opts._invoke && !anthropicKeyConfigured() && !getOpenAIOptional()) {
-    return { items: [], notFound: ['no AI provider configured (ANTHROPIC_API_KEY / OPENAI_API_KEY)'], rejected: [], raw: { ...raw, attempted: false } }
+  const raw = {
+    provider: 'synthetic_fixture',
+    attempted: true,
+    disclosure_contract: PORTAL_PAGE_CLOUD_DISCLOSURE_CONTRACT,
   }
   if (!text.trim()) {
     return { items: [], notFound: ['no page text to enumerate'], rejected: [], raw }
@@ -540,17 +568,16 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
     .join('\n')
   const prompt = `${LISTING_SCHEMA_INSTRUCTIONS}\n\nPAGE URL: ${url || '(unknown)'}${title ? `\nPAGE TITLE: ${title}` : ''}\n\nPAGE LINKS (only these hrefs may be used as applyUrl):\n${linkList || '(none)'}\n\nPAGE TEXT (enumerate ONLY awards written below):\n\n${text.slice(0, 60_000)}`
 
-  const invoke = opts._invoke || ((args) => invokeJsonWithFallback(args))
   let result
   try {
-    result = await invoke({ openai: getOpenAIOptional(), system: LISTING_SYSTEM, prompt, temperature: 0, maxTokens: 2000 })
+    result = await fixtureInvoke({ system: LISTING_SYSTEM, prompt, temperature: 0, maxTokens: 2000 })
   } catch (err) {
-    return { items: [], notFound: [`LLM enumeration call failed: ${err?.message || err}`], rejected: [], raw }
+    void err
+    return { items: [], notFound: ['synthetic listing fixture failed'], rejected: [], raw }
   }
   if (!result?.ok || !result?.json) {
-    return { items: [], notFound: [`LLM returned no parseable JSON (${describeLlmFailure(result)})`], rejected: [], raw }
+    return { items: [], notFound: ['synthetic listing fixture returned no parseable JSON'], rejected: [], raw }
   }
-  raw.provider = result.provider || null
 
   // Deterministic fabrication guard.
   const normText = normForPresence(text)
@@ -588,7 +615,7 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
   }
   const notFound = []
   if (items.length === 0) notFound.push('no individual award opportunities enumerated from the listing text')
-  log(`extractListingAwardItems: ${items.length} items (${rejected.length} rejected) from ${url || 'listing'} via ${raw.provider}`)
+  log(`extractListingAwardItems: ${items.length} items (${rejected.length} rejected) from synthetic fixture`)
   return { items, notFound, rejected, raw }
 }
 

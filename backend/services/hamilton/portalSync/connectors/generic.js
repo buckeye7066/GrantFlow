@@ -21,6 +21,7 @@
 
 import { registrableDomain } from '../../hamiltonPortalCredentialService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
+import { navigateHamiltonPortalPage } from '../../hamiltonBrowserNetworkGuard.js'
 
 const GENERIC_NOTE =
   'Signed in successfully, but there is no structured data connector for this portal yet, ' +
@@ -55,7 +56,9 @@ async function visit(page, ctx) {
   const attempts = []
   for (const url of candidateUrls(ctx)) {
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await navigateHamiltonPortalPage(page, url, ctx.networkEgress, {
+        waitUntil: 'domcontentloaded', timeout: 30000,
+      })
       return { reached: true, url, attempts }
     } catch (err) {
       attempts.push({ url, error: err?.message || String(err) })
@@ -110,7 +113,9 @@ const generic = {
     }
 
     // Selector-independent extraction from the authenticated page text.
-    const llm = await extractPortalDataWithLLM(page, { log, navCandidates: [nav.url] })
+    const llm = await extractPortalDataWithLLM(page, {
+      log, navCandidates: [nav.url], networkEgress: ctx.networkEgress,
+    })
     const notFound = (llm.notFound || []).slice()
     if ((llm.awards || []).length === 0 && (llm.fields || []).length === 0) {
       // Nothing extracted — keep the honest generic note alongside the reason.
