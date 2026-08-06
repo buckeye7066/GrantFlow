@@ -45,7 +45,9 @@ export function mapBlindFactsToCandidate(facts) {
   return {
     external_id: null,
     source_id: BLIND_WEB_SOURCE_ID,
-    kind: isRolling ? OPPORTUNITY_KIND.PROGRAM : OPPORTUNITY_KIND.DIRECT_GRANT,
+    // A non-rolling page with no verified application target is informational:
+    // it must not be represented as an immediately applicable direct grant.
+    kind: (isRolling || !applyUrl) ? OPPORTUNITY_KIND.PROGRAM : OPPORTUNITY_KIND.DIRECT_GRANT,
     title,
     sponsor,
     summary: typeof facts.summary === 'string' && facts.summary.trim()
