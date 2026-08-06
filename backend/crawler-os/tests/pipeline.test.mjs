@@ -115,10 +115,58 @@ test('when a run truly stores nothing, the zero-result ladder explains why and w
 test('telemetry records the run and its source outcomes (nothing fails silently)', async () => {
   const d = deps();
   const thesis = buildThesis(SAMPLE_VFD_PROFILE);
-  await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'runT' });
+  const result = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'runT' });
   const run = storage.getRun(d.store, 'runT');
   assert.ok(run, 'crawler_runs row persisted');
   assert.equal(run.run_id, 'runT');
+  assert.ok(result.sources.every((source) => source.fetch_attempts === source.fetched));
+  assert.ok(result.sources.every((source) => source.fetch_retries === 0));
+  assert.ok(result.sources.every((source) => source.oversize_responses === 0));
+  assert.ok(result.sources.reduce((sum, source) => sum + source.response_bytes, 0) > 0);
+
+  const persisted = JSON.parse(run.telemetry_json);
+  assert.deepEqual(persisted.sources, result.sources, 'transport telemetry is durable in the run payload');
+});
+
+test('source telemetry aggregates retries, attempts, bytes, and oversized responses', async () => {
+  const d = deps();
+  const baseFetcher = d.fetcher;
+  let first = true;
+  d.fetcher = {
+    async fetch(...args) {
+      const response = await baseFetcher.fetch(...args);
+      if (!first) return response;
+      first = false;
+      return {
+        ...response,
+        ok: false,
+        body: null,
+        contentHash: null,
+        error: 'response_too_large',
+        reason: 'body_exceeds_limit',
+        attempts: 2,
+        retries: 1,
+        responseBytes: 101,
+      };
+    },
+  };
+
+  const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+  const result = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'run_transport' });
+  const totals = result.sources.reduce((sum, source) => ({
+    fetched: sum.fetched + source.fetched,
+    attempts: sum.attempts + source.fetch_attempts,
+    retries: sum.retries + source.fetch_retries,
+    oversized: sum.oversized + source.oversize_responses,
+    bytes: sum.bytes + source.response_bytes,
+  }), { fetched: 0, attempts: 0, retries: 0, oversized: 0, bytes: 0 });
+
+  assert.equal(totals.attempts, totals.fetched + 1);
+  assert.equal(totals.retries, 1);
+  assert.equal(totals.oversized, 1);
+  assert.ok(totals.bytes >= 101);
+  const persisted = JSON.parse(storage.getRun(d.store, 'run_transport').telemetry_json);
+  assert.deepEqual(persisted.sources, result.sources);
 });
 
 test('grantsGovBody helper shapes a realistic Search2 payload', () => {

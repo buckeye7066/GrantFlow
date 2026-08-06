@@ -135,7 +135,21 @@ export async function runDiscovery(deps, opts = {}) {
     // started are skipped (honest SKIPPED, not a silent drop).
     if (Number.isFinite(opts.deadlineMs) && clock() >= opts.deadlineMs) {
       const srStartedAt = new Date(clock()).toISOString();
-      const sr = { source_id: sourceId, fetched: 0, parsed_candidates: 0, rejected: 0, stored: 0, existing: 0, deduped: 0, queries: [], started_at: srStartedAt };
+      const sr = {
+        source_id: sourceId,
+        fetched: 0,
+        fetch_attempts: 0,
+        fetch_retries: 0,
+        response_bytes: 0,
+        oversize_responses: 0,
+        parsed_candidates: 0,
+        rejected: 0,
+        stored: 0,
+        existing: 0,
+        deduped: 0,
+        queries: [],
+        started_at: srStartedAt,
+      };
       finishSource(store, runId, sr, CRAWLER_OUTCOME.SKIPPED, 'time_budget_exhausted', clock, sourceSummaries);
       continue;
     }
@@ -144,7 +158,21 @@ export async function runDiscovery(deps, opts = {}) {
     upsertSource(store, source); // keep the funding_sources catalog current
 
     const srStartedAt = new Date(clock()).toISOString();
-    const sr = { source_id: sourceId, fetched: 0, parsed_candidates: 0, rejected: 0, stored: 0, existing: 0, deduped: 0, queries: [], started_at: srStartedAt };
+    const sr = {
+      source_id: sourceId,
+      fetched: 0,
+      fetch_attempts: 0,
+      fetch_retries: 0,
+      response_bytes: 0,
+      oversize_responses: 0,
+      parsed_candidates: 0,
+      rejected: 0,
+      stored: 0,
+      existing: 0,
+      deduped: 0,
+      queries: [],
+      started_at: srStartedAt,
+    };
 
     const adapter = getAdapter(sourceId);
     if (!adapter) {
@@ -175,6 +203,10 @@ export async function runDiscovery(deps, opts = {}) {
       try { resp = await fetcher.fetch(req.url, req.init); }
       catch (e) { resp = { ok: false, status: null, error: String(e?.message ?? e), reason: 'fetch_threw' }; }
       sr.fetched += 1;
+      sr.fetch_attempts += Number.isFinite(resp.attempts) ? resp.attempts : 1;
+      sr.fetch_retries += Number.isFinite(resp.retries) ? resp.retries : 0;
+      sr.response_bytes += Number.isFinite(resp.responseBytes) ? resp.responseBytes : 0;
+      if (resp.error === 'response_too_large') sr.oversize_responses += 1;
       recordFetch(store, runId, { source_id: sourceId, url: req.url, status: resp.status, ok: resp.ok, content_hash: resp.contentHash, error: resp.error });
 
       if (!resp.ok || resp.body == null) {
@@ -305,7 +337,22 @@ export async function runDiscovery(deps, opts = {}) {
 function finishSource(store, runId, sr, outcome, reason, clock, summaries) {
   sr.outcome = outcome; sr.reason = reason; sr.finished_at = new Date(clock()).toISOString();
   recordSourceRun(store, runId, sr);
-  summaries.push({ source_id: sr.source_id, outcome, reason, fetched: sr.fetched, parsed: sr.parsed_candidates, rejected: sr.rejected, stored: sr.stored, existing: sr.existing ?? 0, deduped: sr.deduped ?? 0, queries: sr.queries ?? [] });
+  summaries.push({
+    source_id: sr.source_id,
+    outcome,
+    reason,
+    fetched: sr.fetched,
+    fetch_attempts: sr.fetch_attempts ?? 0,
+    fetch_retries: sr.fetch_retries ?? 0,
+    response_bytes: sr.response_bytes ?? 0,
+    oversize_responses: sr.oversize_responses ?? 0,
+    parsed: sr.parsed_candidates,
+    rejected: sr.rejected,
+    stored: sr.stored,
+    existing: sr.existing ?? 0,
+    deduped: sr.deduped ?? 0,
+    queries: sr.queries ?? [],
+  });
 }
 
 function diagnoseZeroResult(summaries, totalRejected) {

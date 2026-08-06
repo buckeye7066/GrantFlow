@@ -95,6 +95,11 @@ export function makeProductionFetcher(overrides = {}) {
   return createFetcher({
     doFetch: (url, init) => fetchWithTimeout(url, init),
     resolve: (host) => dns.promises.resolve(host),
+    // One retry keeps the wall-clock cost bounded while recovering common
+    // transient GET/HEAD failures. The existing flag remains the rollout kill
+    // switch; MAX_CRAWLER_RETRIES and CRAWLER_RETRY_BASE_DELAY belong to the
+    // job queue and are deliberately not reused as HTTP-attempt settings.
+    maxRetries: process.env.FEATURE_CRAWLER_RETRIES !== 'false' ? 1 : 0,
     ...overrides,
   });
 }
