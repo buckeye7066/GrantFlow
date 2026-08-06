@@ -6,11 +6,20 @@ import { buildIsolatedTestEnv } from './test-environment.mjs'
 
 const vitestEntry = path.resolve('node_modules', 'vitest', 'vitest.mjs')
 const args = process.argv.slice(2)
+// Vercel's build sandbox can finish all test assertions while a parallel
+// worker still has a console-log RPC in flight. Vitest then reports an
+// EnvironmentTeardownError and turns an otherwise green release gate red.
+// File-level serial execution is intentionally scoped to Vercel builds: the
+// test process remains isolated everywhere, and local/CI runs retain their
+// normal parallelism.
+const hostedSerialArgs = process.env.VERCEL === '1' && !args.includes('--no-file-parallelism')
+  ? ['--no-file-parallelism']
+  : []
 const env = buildIsolatedTestEnv(process.env, {
   GRANTFLOW_TEST_RUNNER: process.env.GRANTFLOW_TEST_RUNNER || '1',
 })
 
-const child = spawn(process.execPath, [vitestEntry, ...args], {
+const child = spawn(process.execPath, [vitestEntry, ...args, ...hostedSerialArgs], {
   stdio: 'inherit',
   env,
 })
