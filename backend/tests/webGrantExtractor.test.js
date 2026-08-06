@@ -161,6 +161,77 @@ describe('extractOpportunitiesFromPage', () => {
     expect(out.raw.directory_child_apply_url).toBe('https://directory.org/award-0')
   })
 
+
+  it('ignores navigation application links when classifying one program page', async () => {
+    const pageHtml = `<body>
+      <nav>${Array.from({ length: 16 }, (_, i) => `<a href="/nav-${i}">Apply for another program ${i}</a>`).join('')}</nav>
+      <main>
+        <h1>Nashville Youth Fund Grant</h1>
+        <p>The Nashville Youth Fund offers grants to nonprofit organizations serving youth in Tennessee. Applications are due September 1, 2026. Awards are up to $10,000. Applicants may submit one proposal during the current funding cycle.</p>
+        <a href="/apply">Apply now</a>
+      </main>
+    </body>`
+    const invoke = vi.fn().mockResolvedValue({
+      ok: true,
+      json: { opportunities: [{
+        title: 'Nashville Youth Fund Grant',
+        funder: 'Nashville Youth Fund',
+        summary: 'Grant.',
+        eligibility_text: null,
+        eligibility_bullets: [],
+        need_categories: ['youth'],
+        amount_min: null,
+        amount_max: null,
+        deadline: '2026-09-01',
+        national: null,
+        states: [],
+        is_loan: null,
+        requires_cost_share: null,
+        apply_link_id: 'L1',
+        info_link_id: null,
+        evidence: { deadline: 'Applications are due September 1, 2026' },
+      }] },
+    })
+    const [out] = await extractOpportunitiesFromPage(
+      { pageUrl: 'https://nyf.org/grant', html: pageHtml },
+      { invoke, openai: null },
+    )
+    expect(out.kind).toBe(OPPORTUNITY_KIND.DIRECT_GRANT)
+    expect(out.is_directory).toBe(false)
+    expect(out.apply_url).toBe('https://nyf.org/apply')
+  })
+
+  it('maps a non-rolling info-only page as a program, never a directly applicable grant', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      ok: true,
+      json: { opportunities: [{
+        title: 'Nashville Youth Fund Grant',
+        funder: 'Nashville Youth Fund',
+        summary: 'Grant.',
+        eligibility_text: null,
+        eligibility_bullets: [],
+        need_categories: ['youth'],
+        amount_min: null,
+        amount_max: null,
+        deadline: '2026-09-01',
+        national: null,
+        states: [],
+        is_loan: null,
+        requires_cost_share: null,
+        apply_link_id: null,
+        info_link_id: null,
+        evidence: { deadline: 'Applications are due September 1, 2026' },
+      }] },
+    })
+    const [out] = await extractOpportunitiesFromPage(
+      { pageUrl: 'https://nyf.org/grant', html: longPage },
+      { invoke, openai: null },
+    )
+    expect(out.kind).toBe(OPPORTUNITY_KIND.PROGRAM)
+    expect(out.apply_url).toBeNull()
+    expect(out.info_url).toBe('https://nyf.org/grant')
+  })
+
   it('returns [] for a too-short page without an LLM call', async () => {
     const invoke = vi.fn()
     const out = await extractOpportunitiesFromPage(
