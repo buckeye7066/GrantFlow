@@ -64,6 +64,8 @@ export const pricingApi = {
     apiFetch('/api/pricing/discount-rules', { method: 'POST', body: JSON.stringify(rule) }),
 
   // ── Admin pricing toast notifications ────────────────────────────────────
+  adminNotificationCapability: () =>
+    apiFetch('/api/pricing/admin-notifications/capability'),
   listAdminNotifications: ({ status, limit = 25 } = {}) => {
     const p = new URLSearchParams()
     if (status) p.set('status', status)

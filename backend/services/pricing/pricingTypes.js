@@ -12,6 +12,8 @@
  * enforces both rules.
  */
 
+import { ADMIN_EMAIL, LOCAL_ADMIN_EMAIL } from '../../config/constants.js'
+
 export const PRICING_CATALOG_VERSION = '2026-06-15'
 
 export const CLIENT_CATEGORIES = Object.freeze({
@@ -106,7 +108,7 @@ export const SERVICE_AGREEMENT_VERSION = '2026-06-15'
  * The single admin who receives pricing toast notifications. Configurable
  * via `PRICING_ADMIN_NOTIFICATION_EMAIL`.
  */
-export const DEFAULT_ADMIN_NOTIFICATION_EMAIL = 'buckeye7066@gmail.com'
+export const DEFAULT_ADMIN_NOTIFICATION_EMAIL = LOCAL_ADMIN_EMAIL
 
 export const PAYMENT_TERMS = Object.freeze({
   schedule: [
@@ -240,7 +242,7 @@ export const PRICING_ENV_KEYS = Object.freeze({
 export function adminNotificationEmail() {
   const v = (process.env || {})[PRICING_ENV_KEYS.PRICING_ADMIN_NOTIFICATION_EMAIL]
   if (typeof v === 'string' && v.includes('@')) return v.toLowerCase().trim()
-  return DEFAULT_ADMIN_NOTIFICATION_EMAIL
+  return ADMIN_EMAIL || ''
 }
 
 export function isAdminNotificationTarget(email) {

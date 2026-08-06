@@ -8,7 +8,7 @@ caches, localStorage keys, and the in-flight crawler payload — must follow.
 
 The bug behind these invariants:
 
-- `localStorage` was holding 518 cached results tagged `profile-luibov`
+- `localStorage` was holding 518 cached results tagged `profile-demo_senior_family`
   while the active profile was `__admin__`.
 - `/api/matching/profile/<individual-id>/opportunities` was returning NSF /
   USDA / federal-only programs that the pipeline writer then rejected with

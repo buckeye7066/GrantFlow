@@ -35,7 +35,7 @@ function query(dbPath) {
       `
         SELECT profile_id, email, created_at
         FROM profile_emails
-        WHERE profile_id IN ('profile-axiom-biolabs', 'profile-focus-forward-ministries')
+        WHERE profile_id IN ('profile-axiom-biolabs', 'profile-demo-faith-nonprofit')
         ORDER BY profile_id ASC, email ASC
       `,
     )
@@ -47,7 +47,7 @@ function query(dbPath) {
         SELECT profile_id, data
         FROM profile_sections
         WHERE section_key = 'basic_information'
-          AND profile_id IN ('profile-axiom-biolabs', 'profile-focus-forward-ministries')
+          AND profile_id IN ('profile-axiom-biolabs', 'profile-demo-faith-nonprofit')
         ORDER BY profile_id ASC
       `,
     )
@@ -80,11 +80,11 @@ function query(dbPath) {
     .all()
 
   const focusForwardId = db
-    .prepare(`SELECT id FROM profiles WHERE id = 'profile-focus-forward-ministries' LIMIT 1`)
+    .prepare(`SELECT id FROM profiles WHERE id = 'profile-demo-faith-nonprofit' LIMIT 1`)
     .get()
 
   const focusForwardTombstone = db
-    .prepare(`SELECT profile_id, deleted_at, reason FROM profile_tombstones WHERE profile_id = 'profile-focus-forward-ministries' LIMIT 1`)
+    .prepare(`SELECT profile_id, deleted_at, reason FROM profile_tombstones WHERE profile_id = 'profile-demo-faith-nonprofit' LIMIT 1`)
     .get()
 
   db.close()

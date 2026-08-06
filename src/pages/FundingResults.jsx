@@ -19,6 +19,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useToast } from '@/components/ui/use-toast';
 import { createLogger } from '@/utils/logger';
 import { formatReasonText } from '@/utils/reasonText';
+import { canonicalMatchDisplay, STRONG_MATCH_SCORE } from '@/lib/matchDisplayThresholds';
 
 const SORT_OPTIONS = [
   { value: 'match', label: 'Match score' },
@@ -138,22 +139,12 @@ export default function FundingResults() {
       list = list.filter((o) => o.usable_for_housing === true || o.usable_for_housing === 1);
     }
     if (strongMatchesOnly) {
-      // Only suppress when the engine has NOT already made an ACCEPT/REVIEW decision.
-      // If match_decision is ACCEPT or REVIEW, honour the engine regardless of score.
       list = list.filter((o) => {
-        const decision = (o?.match_decision ?? o?.matchDecision ?? '').toUpperCase();
-        // Honour all engine decisions unconditionally.
-        if (decision === 'ACCEPT' || decision === 'REVIEW') return true;
-        // If the engine explicitly rejected, respect that.
-        if (decision === 'REJECT') return false;
-        // Engine decision absent: use match_score only (never the raw crawler
-        // `match` field). Unscored rows are not "strong" on a page with add buttons.
-        // because this page never inserts grants â it only presents candidates.
-        const score = Number(o?.match_score ?? null);
-        if (isNaN(score) || o?.match_score === null) {
-          return false;
-        }
-        return score >= 70;
+        const display = canonicalMatchDisplay({
+          score: o?.match_score,
+          decision: o?.match_decision ?? o?.matchDecision,
+        });
+        return display.decision === 'ACCEPT' && Number(display.score) >= STRONG_MATCH_SCORE;
       });
     }
     if (sortBy === 'match') {
@@ -358,7 +349,7 @@ export default function FundingResults() {
           </h1>
           <p className="text-muted-foreground mt-1">
             {uniqueResults.length !== filteredAndSorted.length
-              ? `Showing ${filteredAndSorted.length} of ${displayedReturned} returned${strongMatchesOnly ? ' (strong matches ≥70%)' : ''}${showHousingOnly ? ' (housing-usable)' : ''}`
+              ? `Showing ${filteredAndSorted.length} of ${displayedReturned} returned${strongMatchesOnly ? ` (accepted matches scoring at least ${STRONG_MATCH_SCORE})` : ''}${showHousingOnly ? ' (housing-usable)' : ''}`
               : 'Review and add opportunities to your pipeline'}
           </p>
           {(totalScored !== null || displayedTotalFound > displayedReturned || truncated || thresholdFallbackMessage) && (
@@ -391,7 +382,9 @@ export default function FundingResults() {
             </div>
             <div className="flex items-center gap-2">
               <Switch id="strong-only" checked={strongMatchesOnly} onCheckedChange={setStrongMatchesOnly} />
-              <Label htmlFor="strong-only" className="text-sm cursor-pointer">Only strong matches (≥70%)</Label>
+              <Label htmlFor="strong-only" className="text-sm cursor-pointer">
+                Only strong accepted matches (score ≥ {STRONG_MATCH_SCORE})
+              </Label>
             </div>
             <div className="flex items-center gap-2">
               <Switch id="housing-only" checked={showHousingOnly} onCheckedChange={setShowHousingOnly} />

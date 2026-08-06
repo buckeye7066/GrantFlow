@@ -2,8 +2,8 @@
  * A PHRASE the source never wrote must never gate a match.
  *
  * THE PROD REGRESSION (2026-08-01, golden-outcome sentinel, HIGH):
- * "2 verified profile(s) lost required coverage — Gilbert McCosh (ECF CHOICES,
- * verified 2026-07-07): missing tn_ecf_choices; Kimberly Botts (ECF CHOICES,
+ * "2 verified profile(s) lost required coverage — Demo Assistive Technology Persona (ECF CHOICES,
+ * verified 2026-07-07): missing tn_ecf_choices; Demo HCBS Support Persona (ECF CHOICES,
  * verified 2026-07-07): missing tn_ecf_choices."
  *
  * Measured read-only in prod that morning: 13 ACTIVE `tn_ecf_choices` catalog
@@ -67,7 +67,7 @@ function ecfOpportunity(overrides = {}) {
   }
 }
 
-/** A TN adult with a disability — NOT a caregiver (the Kimberly Botts shape). */
+/** A TN adult with a disability — NOT a caregiver (the Demo HCBS Support Persona shape). */
 const disabledAdultContext = {
   profile: { id: 'p-kim', primary_type: 'individual' },
   sections: {

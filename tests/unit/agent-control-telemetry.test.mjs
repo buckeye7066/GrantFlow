@@ -70,8 +70,8 @@ async function runOneStep(db, agent, summary) {
       requestedAgents: [agent],
       options: {},
       status: 'queued',
-      adminEmail: 'buckeye7066@gmail.com',
-      startedByEmail: 'buckeye7066@gmail.com',
+      adminEmail: 'owner@example.invalid',
+      startedByEmail: 'owner@example.invalid',
     })
     await createSteps(db, runId, [{ agentName: agent, stepName: `${agent}_main`, stepOrder: 0, status: 'queued', progress: { stage: 'main' } }])
     await executeRun({ db, runId })

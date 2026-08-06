@@ -8,12 +8,9 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { applyRelevanceFilter } from '../services/relevanceFilter.js';
-import { buildProfileSignals } from '../services/profileHelpers.js';
 import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchEngine.js';
-import { PIPELINE_ALLOWED_SOURCES, evaluatePipelineSource } from '../config/pipelineAllowedSources.js';
+import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js';
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js';
-import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -141,7 +138,6 @@ export async function seedProfileGrants(db) {
   const opportunities = db.prepare(`
     SELECT * FROM funding_opportunities 
     WHERE is_active = 1 
-    AND (requires_match = 0 OR requires_match IS NULL)
     LIMIT 500
   `).all();
   
@@ -150,12 +146,6 @@ export async function seedProfileGrants(db) {
   let totalGrantsAdded = 0;
   
   for (const profile of profiles) {
-    // Skip Rachel and Joshua
-    const displayName = (profile.display_name || '').toLowerCase();
-    if (displayName.includes('rachel') || displayName.includes('joshua') || displayName.includes('josh')) {
-      continue;
-    }
-    
     // Get profile sections
     const sectionsObj = {};
     const sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id);
@@ -163,105 +153,23 @@ export async function seedProfileGrants(db) {
       try { sectionsObj[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sectionsObj[row.section_key] = {}; }
     });
     
-    // Use canonical buildProfileSignals for comprehensive keyword extraction
-    let signals;
-    try {
-      signals = buildProfileSignals({ profile, sections: sectionsObj });
-    } catch (e) {
-      console.warn(`[seedOnStartup] buildProfileSignals failed for ${profile.display_name}:`, e.message);
-      continue;
+    // Adjudicate the complete SQL-bounded candidate set before ranking. A
+    // candidate that throws is attempted and then fails closed; no heuristic
+    // score or route-local relevance filter gets a preliminary vote.
+    const acceptedMatches = [];
+    for (const opp of opportunities) {
+      try {
+        const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
+        if (decision.decision === 'ACCEPT') acceptedMatches.push({ opp, decision });
+      } catch (error) {
+        console.warn(
+          `[seedOnStartup] Canonical adjudication failed for opportunity ${opp.id || opp.title || 'unknown'}:`,
+          error?.message || error,
+        );
+      }
     }
-
-    // Build profileData for relevance filter
-    let parsedTags = [];
-    try { parsedTags = JSON.parse(profile.tags || '[]'); } catch (e) { /* ignore */ }
-    const basic = sectionsObj.basic_information || {};
-    const demographics = sectionsObj.demographics || {};
-    const military = sectionsObj.military_service || {};
-    const health = sectionsObj.health_medical || {};
-    const family = sectionsObj.family_life || {};
-    const locFocus = sectionsObj.location_focus || {};
-    const addr = basic.address;
-    let stateFromAddr = null;
-    if (typeof addr === 'string') {
-      stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
-    } else if (addr && typeof addr === 'object') {
-      stateFromAddr = addr.state || null;
-    }
-    const profileData = {
-      primary_type: profile.primary_type || null,
-      veteran_status: military.veteran || demographics.veteran_status || null,
-      immigrant_status: demographics.immigrant_status || null,
-      disability_status: health.disability_type || demographics.disability_status || null,
-      state: profile.state || basic.state || locFocus.state || stateFromAddr || null,
-      tags: parsedTags,
-      gender: basic.gender || demographics.gender || null,
-      age: basic.age || demographics.age || null,
-      foster_youth: family.foster_youth || null,
-      first_responder: null,
-    };
-
-    // Score opportunities using canonical signals
-    const scored = opportunities.map(opp => {
-      let score = 0;
-      const matchedFields = [];
-      
-      let oppKeywords = [], oppCategories = [];
-      try { oppKeywords = JSON.parse(opp.keywords || '[]'); } catch (e) { /* ignore malformed JSON */ }
-      try { oppCategories = JSON.parse(opp.categories || '[]'); } catch (e) { /* ignore malformed JSON */ }
-      
-      const oppTerms = new Set([
-        ...oppKeywords.map(k => k.toLowerCase()),
-        ...oppCategories.map(c => c.toLowerCase())
-      ]);
-
-      const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase();
-
-      // Geographic scoring
-      const oppState = (opp.state || '').toLowerCase();
-      const profState = (profileData.state || '').toLowerCase();
-      if (!oppState || oppState === 'nationwide' || opp.is_national) {
-        score += 8;
-      } else if (profState && oppState === profState) {
-        score += 18;
-        matchedFields.push(`state:${opp.state}`);
-      } else if (profState && oppState && oppState !== profState) {
-        score -= 20; // state mismatch penalty
-      }
-
-      // Intent phrase matching (5 pts each, up to 25)
-      let intentMatches = 0;
-      if (signals.intentPhraseSet) {
-        for (const phrase of signals.intentPhraseSet) {
-          const p = String(phrase).toLowerCase();
-          if (p.length < 4) continue;
-          if (oppText.includes(p) || oppKeywords.some(k => k.toLowerCase().includes(p))) {
-            intentMatches++;
-            matchedFields.push(`intent:${p}`);
-          }
-        }
-      }
-      score += Math.min(25, intentMatches * 5);
-
-      // Keyword matching (1.5 pts each in opp keywords, 0.5 in text, up to 20)
-      let kwScore = 0;
-      const keywordsToCheck = signals.keywordSet || signals.keywords || new Set();
-      for (const kw of keywordsToCheck) {
-        const k = String(kw).toLowerCase();
-        if (k.length < 3 || k.includes(' ')) continue;
-        if (oppTerms.has(k)) { kwScore += 1.5; matchedFields.push(`kw:${k}`); }
-        else if (oppText.includes(k)) { kwScore += 0.5; }
-      }
-      score += Math.min(20, Math.floor(kwScore));
-
-      return { opp, score: Math.min(100, Math.max(0, score)), matchedFields };
-    });
-    
-    // Stage 1 (junk filter): only skip obvious non-matches (score < 5).
-    // computeMatchDecision() below is the final acceptance authority, not this score.
-    const topMatches = scored
-      .filter(s => s.score >= 5)
-      .sort((a, b) => b.score - a.score)
+    const topMatches = acceptedMatches
+      .sort((a, b) => Number(b.decision.score || 0) - Number(a.decision.score || 0))
       .slice(0, 50);
     
     // Ensure organization exists
@@ -282,35 +190,21 @@ export async function seedProfileGrants(db) {
     // the seed path honors the SAME gates as every other pipeline write:
     // source allowlist, the DISMISSED tombstone (a user-deleted grant must not
     // be resurrected by a startup re-seed), the decision engine, exclusion
-    // rules, dedup, and the relevance floor. The local `score`/relevance
-    // pre-filter below is kept only as a cheap pre-cut so we don't hand the
-    // saver obvious junk; the saver re-runs computeMatchDecision and is the
-    // authority. (Seeding is non-production only — isSeedingBlocked guards the
-    // caller — but correctness here matters because the floor + dismissed gates
-    // are exactly the invariants this path used to violate.)
+    // rules, dedup, and the relevance floor. Seeding is non-production only —
+    // isSeedingBlocked guards the caller — but it must still preserve the same
+    // single-authority contract as a clean install.
     const seedProfileContext = { profile, sections: sectionsObj };
     let added = 0;
     for (const { opp } of topMatches) {
-      // Cheap pre-cut: skip rows the relevance filter would obviously drop.
-      const oppForFilter = {
-        ...opp,
-        keywords: (() => { try { return JSON.parse(opp.keywords || '[]'); } catch (e) { return []; } })(),
-        categories: (() => { try { return JSON.parse(opp.categories || '[]'); } catch (e) { return []; } })(),
-      };
-      const filterResult = applyRelevanceFilter(oppForFilter, profileData);
-      if (!filterResult.pass) continue;
-
       try {
-        // Let the saver score it (pass null) and enforce the floor. Do NOT pass
-        // the local heuristic score — computeMatchDecision inside the saver is
-        // the canonical authority.
+        // Let the saver re-verify the canonical decision at the write boundary.
         const result = await saveToProfilePipeline(
           db,
           opp,
           profile.id,
           seedProfileContext,
           null,
-          RELEVANCE_FLOOR,
+          undefined,
         );
         if (result?.saved) added++;
       } catch (e) {
@@ -382,116 +276,13 @@ export function cleanupIrrelevantGrants(db) {
     console.warn('[seedOnStartup] Phase 1 source cleanup failed (non-fatal):', e?.message || e);
   }
 
-  // Get all profile-scoped grants with their associated profile data.
-  // We also fetch record_origin so the per-row source check below can use the
-  // canonical evaluator (which considers both source label and provenance).
-  const grants = db.prepare(`
-    SELECT g.id, g.title, g.funder, g.match_score,
-           g.profile_id, g.funding_opportunity_id,
-           fo.description, fo.keywords, fo.categories, fo.state, fo.is_national,
-           fo.sponsor, fo.eligibility_bullets,
-           fo.source AS opportunity_source,
-           fo.record_origin AS opportunity_record_origin
-    FROM grants g
-    LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
-    WHERE g.profile_id IS NOT NULL
-  `).all();
-
-  if (grants.length === 0) {
-    console.log('[seedOnStartup] No profile-scoped grants to check');
-    return removedBySource;
-  }
-
-  console.log(`[seedOnStartup] Checking ${grants.length} profile-scoped grants for relevance...`);
-
-  // Cache profiles and sections to avoid re-querying
-  const profileCache = new Map();
-  const getProfileData = (profileId) => {
-    if (profileCache.has(profileId)) return profileCache.get(profileId);
-    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId);
-    if (!profile) { profileCache.set(profileId, null); return null; }
-    const sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId);
-    const sections = {};
-    sectionRows.forEach(row => {
-      try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
-    });
-    const basic = sections.basic_information || {};
-    const demographics = sections.demographics || {};
-    const military = sections.military_service || {};
-    const health = sections.health_medical || {};
-    const family = sections.family_life || {};
-    const locFocus = sections.location_focus || {};
-    const addr = basic.address;
-    let stateFromAddr = null;
-    if (typeof addr === 'string') {
-      stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
-    } else if (addr && typeof addr === 'object') {
-      stateFromAddr = addr.state || null;
-    }
-    let parsedTags = [];
-    try { parsedTags = JSON.parse(profile.tags || '[]'); } catch (e) { /* ignore */ }
-    const data = {
-      primary_type: profile.primary_type || null,
-      veteran_status: military.veteran || demographics.veteran_status || null,
-      immigrant_status: demographics.immigrant_status || null,
-      disability_status: health.disability_type || demographics.disability_status || null,
-      state: profile.state || basic.state || locFocus.state || stateFromAddr || null,
-      tags: parsedTags,
-      gender: basic.gender || demographics.gender || null,
-      age: basic.age || demographics.age || null,
-      foster_youth: family.foster_youth || null,
-      first_responder: null,
-    };
-    profileCache.set(profileId, data);
-    return data;
-  };
-
-  let removed = 0;
-  for (const grant of grants) {
-    if (!grant.funding_opportunity_id) continue;
-    // Skip relevance re-check when the opportunity is already from a trusted
-    // source/origin — phase 1 already removed denylist rows. This preserves
-    // legitimate domain-crawler entries (e.g. "Student Endowments",
-    // "Trade School Grants") that would otherwise be re-evaluated and could
-    // be falsely scrubbed by stricter relevance heuristics.
-    const phase2Gate = evaluatePipelineSource({
-      source: grant.opportunity_source,
-      record_origin: grant.opportunity_record_origin,
-    });
-    if (phase2Gate.allowed) continue;
-    const profileData = getProfileData(grant.profile_id);
-    if (!profileData) continue;
-
-    const oppForFilter = {
-      title: grant.title || '',
-      description: grant.description || '',
-      sponsor: grant.funder || grant.sponsor || '',
-      keywords: (() => { try { return JSON.parse(grant.keywords || '[]'); } catch (e) { return []; } })(),
-      categories: (() => { try { return JSON.parse(grant.categories || '[]'); } catch (e) { return []; } })(),
-      eligibility_bullets: (() => { try { return JSON.parse(grant.eligibility_bullets || '[]'); } catch (e) { return []; } })(),
-      state: grant.state || null,
-      is_national: grant.is_national || false,
-    };
-
-    // Two-layer filter: relevance filter first (fast), then canonical decision engine (thorough)
-    const filterResult = applyRelevanceFilter(oppForFilter, profileData);
-    const decisionResult = computeMatchDecision(profileData, oppForFilter);
-    if (!filterResult.pass || decisionResult.decision === 'REJECT') {
-      const removalReason = !filterResult.pass
-        ? filterResult.reason
-        : `Decision engine REJECT: ${(decisionResult.ineligibilityReasons ?? []).join('; ')}`;
-      try {
-        db.prepare('DELETE FROM grants WHERE id = ?').run(grant.id);
-        console.log(`[seedOnStartup] Removed irrelevant grant "${grant.title}" from profile ${grant.profile_id}: ${removalReason}`);
-        removed++;
-      } catch (e) {
-        // Ignore errors
-      }
-    }
-  }
-
-  console.log(`[seedOnStartup] Cleanup complete: removed ${removed} irrelevant grants`);
-  return removedBySource + removed;
+  // Do not run the retired route-local relevance/eligibility cleanup here.
+  // Canonical re-evaluation is handled below by
+  // reEvaluateStalePipelineEntries(), and production convergence is owned by
+  // the catalog/pipeline integrity services. This cleanup retains only the
+  // explicit source-denylist removal above.
+  console.log(`[seedOnStartup] Cleanup complete: removed ${removedBySource} disallowed-source grant(s)`)
+  return removedBySource
 }
 
 export async function seedOnStartup(db) {

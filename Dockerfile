@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Multi-stage Dockerfile for GrantFlow (Vite + Express hybrid)
 # Stage 1: Build stage
-FROM node:20-slim AS builder
+FROM node:20.20.2-slim AS builder
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # Stage 2: Production stage
-FROM node:20-slim
+FROM node:20.20.2-slim
 
 WORKDIR /app
 

@@ -3,9 +3,16 @@ import {
   SURFACED_MATCHER_VERSIONS,
   SURFACED_MATCHER_VERSIONS_SQL,
   DIRECTORY_MIN_SCORE,
+  isOpportunityLifecycleVisible,
+  opportunityLifecycleVisibility,
+  opportunityLifecycleVisibilitySql,
   qualifiesForDisplay,
 } from '../config/matchSurfacing.js'
-import { REVIEW_SCORE } from '../config/matchThresholds.js'
+import {
+  ACCEPT_SCORE,
+  REVIEW_SCORE,
+  STRONG_MATCH_SCORE,
+} from '../config/matchThresholds.js'
 
 describe('matchSurfacing — surfaced matcher versions', () => {
   it('includes every reconcile-surviving version, in order', () => {
@@ -102,37 +109,56 @@ describe('matchSurfacing — surfaced matcher versions', () => {
 })
 
 describe('matchSurfacing — qualifiesForDisplay', () => {
-  const MIN = 75
+  const MIN = STRONG_MATCH_SCORE
 
   it('surfaces rows at or above the display floor', () => {
-    expect(qualifiesForDisplay({ match_score: 75 }, MIN)).toBe(true)
-    expect(qualifiesForDisplay({ match_score: 92 }, MIN)).toBe(true)
+    expect(qualifiesForDisplay({ match_score: MIN }, MIN)).toBe(true)
+    expect(qualifiesForDisplay({ match_score: MIN + 3 }, MIN)).toBe(true)
   })
 
   it('hides plain rows below the floor', () => {
-    expect(qualifiesForDisplay({ match_score: 74, match_decision: 'review' }, MIN)).toBe(false)
-    expect(qualifiesForDisplay({ match_score: 40, match_decision: 'review' }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ match_score: MIN - 1, match_decision: 'review' }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ match_score: REVIEW_SCORE, match_decision: 'review' }, MIN)).toBe(false)
   })
 
   it('ALWAYS surfaces the engine-certified ACCEPT decisions below the floor', () => {
-    // Anastasia White's real case: HOPE Scholarship scored 72 (ACCEPT) but was
-    // buried by the 75 display floor.
-    expect(qualifiesForDisplay({ match_score: 72, match_decision: 'accept' }, MIN)).toBe(true)
-    expect(qualifiesForDisplay({ match_score: 70, match_decision: 'ACCEPT' }, MIN)).toBe(true)
+    expect(qualifiesForDisplay({ match_score: ACCEPT_SCORE, match_decision: 'accept' }, MIN)).toBe(true)
+    expect(qualifiesForDisplay({ match_score: REVIEW_SCORE, match_decision: 'ACCEPT' }, MIN)).toBe(true)
   })
 
   it('surfaces directories past the display floor (mission rule), but not ones the engine scored irrelevant', () => {
-    // A directory below the requested floor (75) still surfaces...
-    expect(qualifiesForDisplay({ is_directory: true, match_score: 50 }, MIN)).toBe(true)
+    // A review-worthy directory below the requested display floor still surfaces.
+    expect(qualifiesForDisplay({ is_directory: true, match_score: REVIEW_SCORE }, MIN)).toBe(true)
     expect(qualifiesForDisplay({ is_directory: true, match_score: DIRECTORY_MIN_SCORE }, MIN)).toBe(true)
     // ...and an UNSCORED directory always surfaces (never scored ≠ scored irrelevant)...
     expect(qualifiesForDisplay({ is_directory: true }, MIN)).toBe(true)
     expect(qualifiesForDisplay({ is_directory: true, match_score: null }, MIN)).toBe(true)
     // ...but a directory the engine affirmatively judged irrelevant stays hidden
-    // (Liubov's real case: federal student-aid directory scored 0 for a senior citizen).
+    // (demo_senior_family's real case: federal student-aid directory scored 0 for a senior citizen).
     expect(qualifiesForDisplay({ is_directory: true, match_score: 0 }, MIN)).toBe(false)
     expect(qualifiesForDisplay({ is_directory: true, match_score: 5 }, MIN)).toBe(false)
     expect(qualifiesForDisplay({ is_directory: true, match_score: DIRECTORY_MIN_SCORE - 1 }, MIN)).toBe(false)
+  })
+
+  it('recognizes directory resources and typed referrals without route-local flags', () => {
+    expect(qualifiesForDisplay({ is_directory_resource: true, match_score: REVIEW_SCORE }, MIN)).toBe(true)
+    expect(qualifiesForDisplay({ opportunity_kind: 'referral', match_score: REVIEW_SCORE }, MIN)).toBe(true)
+  })
+
+  it('never lets ACCEPT or pointer preservation override explicit lifecycle quarantine', () => {
+    expect(qualifiesForDisplay({
+      is_hidden: 1,
+      is_active: 1,
+      match_score: MIN,
+      match_decision: 'ACCEPT',
+    }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({
+      is_hidden: 0,
+      is_active: 0,
+      opportunity_kind: 'referral',
+      match_score: REVIEW_SCORE,
+      match_decision: 'REVIEW',
+    }, MIN)).toBe(false)
   })
 
   it('DIRECTORY_MIN_SCORE stays in sync with the engine REVIEW band', () => {
@@ -140,13 +166,42 @@ describe('matchSurfacing — qualifiesForDisplay', () => {
   })
 
   it('does NOT surface REVIEW/REJECT rows below the floor', () => {
-    expect(qualifiesForDisplay({ match_score: 66, match_decision: 'review' }, MIN)).toBe(false)
-    expect(qualifiesForDisplay({ match_score: 60, match_decision: 'reject' }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ match_score: REVIEW_SCORE, match_decision: 'review' }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ match_score: MIN + 3, match_decision: 'reject' }, MIN)).toBe(false)
   })
 
   it('handles missing/garbage rows without throwing', () => {
     expect(qualifiesForDisplay(null, MIN)).toBe(false)
     expect(qualifiesForDisplay({}, MIN)).toBe(false)
     expect(qualifiesForDisplay({ match_score: 'nan', match_decision: '' }, MIN)).toBe(false)
+  })
+})
+
+describe('matchSurfacing — opportunity lifecycle visibility', () => {
+  it('accepts visible and legacy-unset rows, but fails closed for quarantine and invalid flags', () => {
+    expect(isOpportunityLifecycleVisible({ is_active: true, is_hidden: false })).toBe(true)
+    expect(isOpportunityLifecycleVisible({ is_active: '1', is_hidden: '0' })).toBe(true)
+    expect(isOpportunityLifecycleVisible({})).toBe(true)
+    expect(opportunityLifecycleVisibility({ is_active: 1, is_hidden: 1 })).toEqual({
+      visible: false,
+      reason: 'lifecycle_hidden',
+    })
+    expect(opportunityLifecycleVisibility({ is_active: false, is_hidden: false })).toEqual({
+      visible: false,
+      reason: 'lifecycle_inactive',
+    })
+    expect(opportunityLifecycleVisibility({ is_active: 'unknown', is_hidden: 0 })).toEqual({
+      visible: false,
+      reason: 'lifecycle_invalid_flag',
+    })
+  })
+
+  it('builds dialect-correct SQL from code-owned aliases only', () => {
+    expect(opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect: 'postgres' }))
+      .toBe('(COALESCE(fo.is_active, TRUE) = TRUE AND COALESCE(fo.is_hidden, FALSE) = FALSE)')
+    expect(opportunityLifecycleVisibilitySql())
+      .toBe('(COALESCE(is_active, 1) = 1 AND COALESCE(is_hidden, 0) = 0)')
+    expect(() => opportunityLifecycleVisibilitySql({ tableAlias: 'fo; DROP TABLE x' }))
+      .toThrow(/invalid table alias/)
   })
 })

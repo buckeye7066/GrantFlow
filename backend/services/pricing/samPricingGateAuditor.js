@@ -23,7 +23,6 @@ import {
   ADMIN_NOTIFICATION_TYPE,
   PAYMENT_ACCESS_EVENT,
   adminNotificationEmail,
-  isAdminNotificationTarget,
 } from './pricingTypes.js'
 import {
   ADMIN_NOTIFICATIONS_TABLE,
@@ -69,7 +68,7 @@ export function deriveGateFindings({
     return findings
   }
 
-  const isAdmin = Boolean(user?.is_admin) || isAdminNotificationTarget(user?.email)
+  const isAdmin = Boolean(user?.is_admin === true || user?.is_admin === 1 || user?.role === 'admin')
 
   if (!profilePricing) {
     findings.push({

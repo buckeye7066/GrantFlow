@@ -251,7 +251,7 @@ export const FINDINGS = [
     requirement: "8. Repeated first-name or field flags across a profile's tasks",
     file: 'database',
     question:
-      'The Anastasia class: ONE profile field flagged as missing across MANY tasks simultaneously. A profile-wide fact cannot be missing on 30 tasks and present on the profile — that is a reconciliation failure, not 30 separate gaps. Reported where the same key is unresolved on 2+ tasks.',
+      'The Demo Student class: ONE profile field flagged as missing across MANY tasks simultaneously. A profile-wide fact cannot be missing on 30 tasks and present on the profile — that is a reconciliation failure, not 30 separate gaps. Reported where the same key is unresolved on 2+ tasks.',
     sql: `
       SELECT p.id AS profile_id, p.display_name, ami.key, ami.kind,
              count(DISTINCT ami.task_id)::int AS distinct_tasks,

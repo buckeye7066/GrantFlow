@@ -16,8 +16,9 @@ import {
   __testHelpers,
 } from '../services/anyaAdversarialRepairLoop.js'
 import { isOwnerCaller, invokeTool, listToolMetadata } from '../services/anyaToolRegistry.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
-const OWNER = 'buckeye7066@gmail.com'
+const OWNER = ADMIN_EMAIL
 
 /** A well-formed unified diff touching a NON-forbidden backend path. */
 function goodDiff(file = 'backend/services/example.js') {

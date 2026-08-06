@@ -1,12 +1,43 @@
+/**
+ * Import profile documents into an explicitly confirmed SQLite database.
+ *
+ * Required env: PROFILE_DOCS_DB_PATH, PROFILE_DOCS_CONFIRM_DB_PATH,
+ * PROFILE_DOCS_SOURCE_DIR, PROFILE_DOCS_UPLOADS_DIR,
+ * PROFILE_DOCS_ADMIN_USER_ID, and PROFILE_DOCS_CONFIRM=CREATE_PROFILES.
+ * PROFILE_DOCS_SOURCE_DIR must contain a private `profiles.json` manifest:
+ * [{ "file": "applicant.pdf", "name": "Applicant", "type": "individual" }].
+ */
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import pdfParse from 'pdf-parse';
+import process from 'node:process';
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js';
 
-const db = new Database('./data/grantflow.db');
-const docsFolder = 'G:\\Apps\\grantflow\\GrantFlowb44';
+function requiredEnv(name) {
+  const value = String(process.env[name] || '').trim();
+  if (!value) throw new Error(`${name} is required; this mutating script has no path or identity defaults`);
+  return value;
+}
+
+const dbPath = path.resolve(process.cwd(), requiredEnv('PROFILE_DOCS_DB_PATH'));
+const confirmedDbPath = path.resolve(process.cwd(), requiredEnv('PROFILE_DOCS_CONFIRM_DB_PATH'));
+const docsFolder = path.resolve(process.cwd(), requiredEnv('PROFILE_DOCS_SOURCE_DIR'));
+const uploadsDir = path.resolve(process.cwd(), requiredEnv('PROFILE_DOCS_UPLOADS_DIR'));
+const adminUserId = requiredEnv('PROFILE_DOCS_ADMIN_USER_ID');
+if (confirmedDbPath !== dbPath) {
+  throw new Error('PROFILE_DOCS_CONFIRM_DB_PATH must resolve to exactly PROFILE_DOCS_DB_PATH');
+}
+if (requiredEnv('PROFILE_DOCS_CONFIRM') !== 'CREATE_PROFILES') {
+  throw new Error('PROFILE_DOCS_CONFIRM must equal CREATE_PROFILES');
+}
+if (!fs.existsSync(dbPath)) throw new Error(`PROFILE_DOCS_DB_PATH does not exist: ${dbPath}`);
+if (!fs.existsSync(docsFolder) || !fs.statSync(docsFolder).isDirectory()) {
+  throw new Error(`PROFILE_DOCS_SOURCE_DIR is not a directory: ${docsFolder}`);
+}
+
+const db = new Database(dbPath, { fileMustExist: true });
 
 // All canonical section keys
 const SECTION_KEYS = [
@@ -15,27 +46,52 @@ const SECTION_KEYS = [
   'organization_details', 'programs_services'
 ];
 
-// Get admin user ID
-const adminUser = db.prepare(`SELECT id FROM users WHERE primary_email LIKE '%buckeye7066%' OR is_admin = 1`).get();
+// Resolve only the explicitly selected, DB-authorized admin.
+const adminUser = db.prepare(`
+  SELECT id
+  FROM users
+  WHERE id = ? AND COALESCE(is_admin, 0) = 1
+  LIMIT 1
+`).get(adminUserId);
 const adminId = adminUser?.id;
+if (!adminId) {
+  db.close();
+  throw new Error('PROFILE_DOCS_ADMIN_USER_ID is not a DB-authorized admin');
+}
 console.log('Admin ID:', adminId);
 
-// Profile documents to process
-const profileDocs = [
-  { file: 'Anastasia profile.pdf', name: 'Anastasia', type: 'individual' },
-  { file: 'Avanell profile.pdf', name: 'Avanell', type: 'individual' },
-  { file: 'Allen profile.pdf', name: 'Allen', type: 'individual' },
-  { file: 'John Profile.pdf', name: 'John', type: 'individual' },
-  { file: 'Kim profile.pdf', name: 'Kim', type: 'individual' },
-  { file: 'Luba profile.pdf', name: 'Luba', type: 'individual' },
-  { file: 'Brian.pdf', name: 'Brian', type: 'individual' },
-  { file: 'Hollie.pdf', name: 'Hollie', type: 'individual' },
-  { file: 'Oliva.pdf', name: 'Oliva', type: 'individual' },
-  { file: 'Focus Forward Ministries Profile.pdf', name: 'Focus Forward Ministries', type: 'nonprofit' },
-];
+// Profile identities and source filenames are private operator data, never
+// public-repository defaults. Load and validate the explicit private manifest.
+const manifestPath = path.join(docsFolder, 'profiles.json');
+if (!fs.existsSync(manifestPath) || !fs.statSync(manifestPath).isFile()) {
+  db.close();
+  throw new Error('PROFILE_DOCS_SOURCE_DIR must contain a private profiles.json manifest');
+}
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+const profileDocs = Array.isArray(manifest) ? manifest : manifest?.profiles;
+if (!Array.isArray(profileDocs) || profileDocs.length === 0 || profileDocs.length > 500) {
+  db.close();
+  throw new Error('profiles.json must contain 1-500 profile document entries');
+}
+const allowedProfileTypes = new Set(['individual', 'family', 'student', 'nonprofit', 'business', 'school', 'government']);
+for (const [index, doc] of profileDocs.entries()) {
+  const file = String(doc?.file || '').trim();
+  const name = String(doc?.name || '').trim();
+  const type = String(doc?.type || '').trim().toLowerCase();
+  if (!file || path.basename(file) !== file || !/\.pdf$/i.test(file)) {
+    db.close();
+    throw new Error(`profiles.json entry ${index} must name one PDF filename without a path`);
+  }
+  if (!name || name.length > 200 || !allowedProfileTypes.has(type)) {
+    db.close();
+    throw new Error(`profiles.json entry ${index} has an invalid name or profile type`);
+  }
+  doc.file = file;
+  doc.name = name;
+  doc.type = type;
+}
 
-// Ensure uploads directory exists
-const uploadsDir = './uploads';
+// Ensure the explicitly selected uploads directory exists.
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -63,8 +119,8 @@ for (const doc of profileDocs) {
     const profileId = crypto.randomUUID();
     db.prepare(`
       INSERT INTO profiles (id, display_name, primary_type, status, tags, created_by)
-      VALUES (?, ?, ?, 'draft', '[]', 'admin')
-    `).run(profileId, doc.name, doc.type);
+      VALUES (?, ?, ?, 'draft', '[]', ?)
+    `).run(profileId, doc.name, doc.type, adminId);
     
     profile = { id: profileId, display_name: doc.name };
     console.log(`  Created profile: ${profileId}`);
@@ -171,7 +227,7 @@ const otherProfiles = db.prepare(`
     (SELECT COUNT(*) FROM profile_sections WHERE profile_id = p.id) as sections,
     (SELECT COUNT(*) FROM documents WHERE profile_id = p.id) as docs
   FROM profiles p
-  WHERE p.display_name IN ('Paul Jason Dasher', 'Angelika Ptak', 'Rachel Miller', 'Kathy Marie Daniel')
+  WHERE p.display_name IN ('Demo Workforce Training Persona', 'Demo Healthcare Workforce Persona', 'Demo Education Support Persona', 'Demo Basic Needs Persona')
   ORDER BY p.display_name
 `).all();
 

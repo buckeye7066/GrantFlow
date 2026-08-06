@@ -45,6 +45,16 @@ function safeHost(rawUrl) {
   }
 }
 
+function safeExternalUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return null
+  try {
+    const parsed = new URL(rawUrl)
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.href : null
+  } catch {
+    return null
+  }
+}
+
 function labelize(value) {
   if (!value) return "Not recorded"
   return String(value).replace(/_/g, " ")
@@ -54,14 +64,14 @@ function TraceFact({ icon: Icon, label, value, tone = "slate" }) {
   const tones = {
     slate: "border-slate-200 bg-slate-50 text-slate-700",
     green: "border-emerald-200 bg-emerald-50 text-emerald-800",
-    amber: "border-amber-200 bg-amber-50 text-amber-800",
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
     blue: "border-blue-200 bg-blue-50 text-blue-800",
     red: "border-rose-200 bg-rose-50 text-rose-800",
   }
 
   return (
     <div className={cn("rounded-md border px-3 py-2", tones[tone] ?? tones.slate)}>
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide opacity-80">
+      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide">
         <Icon className="h-3.5 w-3.5" />
         {label}
       </div>
@@ -91,7 +101,7 @@ function ReasonList({ reasons }) {
   )
 }
 
-export default function OpportunitySourceTrace({ opportunity, match, profileName }) {
+export default function OpportunitySourceTrace({ opportunity, match, profileName, scoreSemantics = "match" }) {
   if (!opportunity) return null
 
   const linkStatus = opportunity.link_status || "unverified"
@@ -123,7 +133,9 @@ export default function OpportunitySourceTrace({ opportunity, match, profileName
     { label: "Application", url: opportunity.application_url },
     { label: "Source", url: opportunity.source_url },
     { label: "Evidence", url: opportunity.evidence_url },
-  ].filter((item, index, arr) => item.url && arr.findIndex((x) => x.url === item.url) === index)
+  ]
+    .map((item) => ({ ...item, url: safeExternalUrl(item.url) }))
+    .filter((item, index, arr) => item.url && arr.findIndex((x) => x.url === item.url) === index)
 
   return (
     <section className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
@@ -200,12 +212,23 @@ export default function OpportunitySourceTrace({ opportunity, match, profileName
           </p>
           {matchScore !== null ? (
             <p className="text-sm text-slate-700">
-              Scored against <span className="font-semibold">{profileName || "the selected profile"}</span> with a match score of{" "}
-              <span className="font-semibold">{matchScore}</span>.
+              {scoreSemantics === "item_relevance" ? (
+                <>
+                  Item wording and profile-context relevance for <span className="font-semibold">{profileName || "the selected profile"}</span>:{" "}
+                  <span className="font-semibold">{matchScore}%</span>. This estimate is not an eligibility or award decision.
+                </>
+              ) : (
+                <>
+                  Scored against <span className="font-semibold">{profileName || "the selected profile"}</span> with a match score of{" "}
+                  <span className="font-semibold">{matchScore}</span>.
+                </>
+              )}
             </p>
           ) : (
             <p className="text-sm text-slate-600">
-              Select a profile to show profile-specific scoring. Empty profile fields are treated as questions, not penalties.
+              {scoreSemantics === "item_relevance"
+                ? "No item relevance estimate was provided. Review the official source and profile facts directly."
+                : "Select a profile to show profile-specific scoring. Empty profile fields are treated as questions, not penalties."}
             </p>
           )}
           <ReasonList reasons={matchReasons} />

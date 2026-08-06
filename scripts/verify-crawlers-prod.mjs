@@ -22,6 +22,8 @@
  *   1 = one or more checks failed
  */
 
+import { DEFAULT_MIN_SCORE, SCORE_SCALE_ID } from '../backend/config/matchThresholds.js'
+
 const args = process.argv.slice(2);
 
 function getArg(name, fallback) {
@@ -87,7 +89,8 @@ async function main() {
       const data = await api('POST', '/api/real-crawlers/run', {
         crawler_type: crawlerType,
         profile_id: profileId,
-        min_match_score: 20,
+        min_match_score: DEFAULT_MIN_SCORE,
+        score_scale_id: SCORE_SCALE_ID,
       });
 
       if (data.gated) {
@@ -119,7 +122,7 @@ async function main() {
       // Print top 5
       for (const opp of opps.slice(0, 5)) {
         const url = opp.url || opp.application_url || '(no url)';
-        console.log(`    ${opp.match_score}%  ${(opp.title || '').slice(0, 50)}  →  ${url.slice(0, 60)}`);
+        console.log(`    match=${opp.match_score ?? 'unrated'} (${data.score_scale_id || SCORE_SCALE_ID})  ${(opp.title || '').slice(0, 50)}  →  ${url.slice(0, 60)}`);
       }
       console.log();
     } catch (err) {
@@ -135,14 +138,14 @@ async function main() {
     const data = await api('POST', '/api/real-crawlers/specific-need', {
       profile_id: profileId,
       need_text: 'emergency rent',
-      min_match_score: 20,
+      min_item_relevance: 10,
       max_results: 5,
     });
     const count = data.count || 0;
-    const topScore = data.opportunities?.[0]?.combined_score || 0;
-    console.log(`    count=${count}  expanded_to=${data.expanded?.canonicalNeed || '?'}  top_score=${topScore}`);
+    const topRelevance = data.opportunities?.[0]?.item_relevance_score ?? null;
+    console.log(`    count=${count}  expanded_to=${data.expanded?.canonicalNeed || '?'}  top_item_relevance=${topRelevance ?? 'unrated'}  scale=${data.item_relevance_scale_id || 'unknown'}`);
     for (const opp of (data.opportunities || []).slice(0, 3)) {
-      console.log(`    ${opp.combined_score}%  ${(opp.title || '').slice(0, 50)}  →  ${(opp.url || '').slice(0, 60)}`);
+      console.log(`    item_relevance=${opp.item_relevance_score ?? 'unrated'}  canonical_match=${opp.match_score ?? 'unrated'}  ${(opp.title || '').slice(0, 50)}  →  ${(opp.url || '').slice(0, 60)}`);
     }
     if (count > 0) totalPass++;
     else { totalFail++; failures.push({ crawlerType: 'specific-need', count }); }

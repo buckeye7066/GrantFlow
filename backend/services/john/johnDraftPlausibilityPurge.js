@@ -9,7 +9,7 @@
  * `enforceLeadContactPlausibility` boot net). John then drafted real outreach
  * to those addresses. In prod, 113 of 190 lead-linked drafts (59%) carried an
  * implausible recipient — a funeral home's address for a health foundation, a
- * newspaper's admin@ for a community clinic, `your@gmail.com` scraped off a
+ * newspaper's admin@ for a community clinic, `configured-admin@example.invalid` scraped off a
  * template. The owner had hand-deleted 95 of them.
  *
  * The enrichment gate stops NEW ones and the boot net cleans the lead rows, but

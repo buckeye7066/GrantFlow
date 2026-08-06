@@ -5,8 +5,8 @@
  * above the surfacing floor must NOT be un-surfaced by the older keyword
  * "no-fit" gate (referral_directory / directory_no_profile_fit /
  * web_lead_no_profile_fit / generic_only_no_profile_fit / generic_directory_page),
- * while genuine ELIGIBILITY / DEMOGRAPHIC mismatches STILL drop — for EVERY
- * profile type (the PROFILE-TYPE MATRIX guard).
+ * while genuine ELIGIBILITY / DEMOGRAPHIC mismatches are decided at canonical
+ * write time — never as an alternate read-time verdict.
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -18,7 +18,9 @@ import {
   canonicalResultForProfile,
   canonicalizeOpportunityList,
   assertNoSilentUnsurfacing,
+  hasPersistedCanonicalDecision,
 } from '../services/matching/resultEnricher.js'
+import { computeMatchDecision } from '../services/matchEngine.js'
 
 // A stored above-floor decision (matchEngine already scored it) — the trigger
 // for no-fit suppression. Keyword-thin directory: its short text hits a no-fit
@@ -177,6 +179,30 @@ describe('hasAuthoritativeStoredDecision', () => {
   })
 })
 
+describe('persisted canonical artifact contract', () => {
+  it('requires both a supported decision and a measured score', () => {
+    expect(hasPersistedCanonicalDecision({ match_score: 8, match_decision: 'ACCEPT' })).toBe(true)
+    expect(hasPersistedCanonicalDecision({ match_score: 8 })).toBe(false)
+    expect(hasPersistedCanonicalDecision({ match_score: null, match_decision: 'REVIEW' })).toBe(false)
+    expect(hasPersistedCanonicalDecision({ match_score: 8, match_decision: 'UNKNOWN' })).toBe(false)
+    expect(hasPersistedCanonicalDecision(
+      { match_score: 8, match_decision: 'ACCEPT' },
+      { useStoredDecision: false },
+    )).toBe(false)
+  })
+
+  it('never resurrects a stored REJECT merely because the row is a directory', () => {
+    const result = canonicalResultForProfile(
+      { primary_type: 'individual', state: 'TN' },
+      storedDirectory({ match_score: 30, match_decision: 'REJECT' }),
+      { useStoredDecision: true, preserveDirectories: true },
+    )
+    expect(result.display).toBe(false)
+    expect(result.dropReason).toBe('decision')
+    expect(result.decision.decision).toBe('REJECT')
+  })
+})
+
 // ── PROFILE-TYPE MATRIX ─────────────────────────────────────────────────────
 // One representative fixture per effective profile type, each with (a) a stored
 // above-floor keyword-thin DIRECTORY that the no-fit family would drop, and
@@ -268,13 +294,14 @@ describe('PROFILE-TYPE MATRIX: no-fit suppression is type-agnostic', () => {
       expect(SUPPRESSIBLE_NO_FIT_RULE_IDS.has(dropped.dropReason)).toBe(true)
     })
 
-    it(`[${type}] STILL drops a genuine eligibility/demographic mismatch despite a stored score`, () => {
+    it(`[${type}] displays the persisted artifact unchanged, then canonical rescore rejects the mismatch`, () => {
       const res = canonicalResultForProfile(profile, mismatch, { ...STORED, preserveDirectories: true, rejectHardIneligible: true })
-      expect(res.display, `${type}: mismatch must not surface`).toBe(false)
-      expect(
-        SUPPRESSIBLE_NO_FIT_RULE_IDS.has(res.dropReason),
-        `${type}: dropped for ${res.dropReason} which must be an eligibility rule, not a no-fit rule`,
-      ).toBe(false)
+      expect(res.display, `${type}: persisted decision must remain the read authority`).toBe(true)
+      expect(res.opportunity.match_decision).toBe(mismatch.match_decision)
+      expect(res.opportunity.match_score).toBe(mismatch.match_score)
+
+      const recomputed = computeMatchDecision(profile, mismatch)
+      expect(recomputed.decision, `${type}: write-time authority must own the mismatch`).toBe('REJECT')
     })
   }
 })

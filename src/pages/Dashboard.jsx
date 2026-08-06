@@ -12,12 +12,12 @@ import {
   Sparkles,
   LogOut,
 } from "lucide-react"
-import { differenceInDays, format } from "date-fns"
+import { format } from "date-fns"
 
 import client, { apiFetch } from '@/api/client'
 import { getPipelineStats, getReminders } from "@/api/dashboard"
 import { listProfiles, getProfile } from "@/api/profiles"
-import { parseDateSafe } from "@/components/shared/dateUtils"
+import { daysUntilLocal } from "@/components/shared/dateUtils"
 import { isActiveStage } from "../../shared/pipelineStages.js"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -50,8 +50,10 @@ import { Star, User, CheckCircle2, ArrowRight } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
 
+const END_USER_DASHBOARD_PATHS = new Set(['/Calendar', '/Help', '/ItemFunding', '/Pipeline'])
+
 /** Resolves last-visited page from preferences (source of truth) or localStorage (fallback). */
-function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants }) {
+function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants, isSimplified = false }) {
   const [lastVisitedPath, setLastVisitedPath] = useState(null);
   useEffect(() => {
     let cancelled = false;
@@ -70,15 +72,20 @@ function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrant
     })();
     return () => { cancelled = true; };
   }, []);
+  const lastVisitedBasePath = lastVisitedPath?.split('?')[0]
   const hasLastPage =
-    lastVisitedPath && lastVisitedPath !== "/" && lastVisitedPath !== "/Dashboard";
+    lastVisitedPath &&
+    lastVisitedPath !== "/" &&
+    lastVisitedPath !== "/Dashboard" &&
+    (!isSimplified || END_USER_DASHBOARD_PATHS.has(lastVisitedBasePath));
   if (hasLastPage) return <ContinueCard lastVisitedPath={lastVisitedPath} />;
-  if (profilesLength === 0) return <StartHereCard />;
+  if (profilesLength === 0 && !isSimplified) return <StartHereCard />;
   return (
     <ResumeWhereYouLeftOff
       urgentDeadlines={urgentDeadlines}
       activeGrants={activeGrants}
       hasGrants={hasGrants}
+      isSimplified={isSimplified}
     />
   );
 }
@@ -87,8 +94,8 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
   const { savedIds, sync, synced } = useSavedGrantsStore()
 
   React.useEffect(() => {
-    if (!synced) sync()
-  }, [synced, sync])
+    if (!isSimplified && !synced) sync()
+  }, [isSimplified, synced, sync])
 
   const profileCompletion = useMemo(() => calculateProfileCompletion(profileDetail), [profileDetail])
   const filledCount = profileCompletion.completedSections
@@ -124,7 +131,7 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
     : null
 
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className={`grid gap-4 ${isSimplified ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
       {/* Profile Completion */}
       <Card>
         <CardHeader className="pb-2">
@@ -137,7 +144,11 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
             <span className="font-semibold text-lg">{completionPct}%</span>
             {completionPct === 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
           </div>
-          <Progress value={completionPct} className="h-2" />
+          <Progress
+            value={completionPct}
+            className="h-2"
+            aria-label={`Profile completeness: ${completionPct}%`}
+          />
           <p className="text-xs text-slate-600">
             {completionPct < 100 ? `${filledCount} of ${totalCount} sections filled` : 'Profile complete'}
           </p>
@@ -145,7 +156,7 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
       </Card>
 
       {/* Saved Grants */}
-      <Card>
+      {!isSimplified ? <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
             <Star className="w-4 h-4" /> Saved Grants
@@ -162,21 +173,24 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
             </Link>
           )}
         </CardContent>
-      </Card>
+      </Card> : null}
 
       {/* Next Action */}
-      <Card className={nextAction ? 'border-blue-200 bg-blue-50/50' : ''}>
+      <Card className={nextAction ? 'border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-950/30' : ''}>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
-            <Sparkles className="w-4 h-4" /> Next Step
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-blue-100">
+            <Sparkles className="h-4 w-4" /> Next Step
           </CardTitle>
         </CardHeader>
         <CardContent>
           {nextAction ? (
-            <Link to={nextAction.url} className="group flex items-center gap-2">
-              <nextAction.icon className="w-4 h-4 text-blue-600 shrink-0" />
-              <span className="text-sm text-blue-800 group-hover:underline">{nextAction.label}</span>
-              <ArrowRight className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+            <Link
+              to={nextAction.url}
+              className="group flex min-h-6 items-center gap-2 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
+            >
+              <nextAction.icon className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-300" />
+              <span className="text-sm text-blue-800 group-hover:underline dark:text-blue-200">{nextAction.label}</span>
+              <ArrowRight className="h-3.5 w-3.5 shrink-0 text-blue-500 dark:text-blue-300" />
             </Link>
           ) : (
             <p className="text-sm text-emerald-700">You're on track! Keep monitoring your pipeline.</p>
@@ -328,7 +342,7 @@ export default function Dashboard() {
       const res = await client.entities.Expense.list("-date")
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
-    enabled: Boolean(currentUser),
+    enabled: Boolean(currentUser) && !isSimplified,
     staleTime: 60_000,
   })
 
@@ -339,7 +353,7 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ["pipeline-stats"],
     queryFn: getPipelineStats,
-    enabled: Boolean(currentUser),
+    enabled: Boolean(currentUser) && !isSimplified,
     staleTime: 60_000,
     retry: 0,
   })
@@ -351,7 +365,7 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ["reminders"],
     queryFn: getReminders,
-    enabled: Boolean(currentUser), // CRITICAL: Only fetch when authenticated
+    enabled: Boolean(currentUser) && !isSimplified,
     staleTime: 60_000,
     retry: 0,
   })
@@ -402,8 +416,8 @@ export default function Dashboard() {
       relevantMilestones
         .filter((m) => {
           if (m.completed) return false
-          const date = parseDateSafe(m.due_date)
-          return date && date >= new Date()
+          const daysLeft = daysUntilLocal(m.due_date)
+          return daysLeft !== null && daysLeft >= 0
         })
         .slice(0, 5),
     [relevantMilestones],
@@ -446,13 +460,11 @@ export default function Dashboard() {
         }
 
         if (g.deadline?.toLowerCase() === "rolling") {
-          return true
+          return false
         }
 
-        const date = parseDateSafe(g.deadline)
-        if (!date) return false
-
-        const daysLeft = differenceInDays(date, new Date())
+        const daysLeft = daysUntilLocal(g.deadline)
+        if (daysLeft === null) return false
         return daysLeft >= 0 && daysLeft <= 14
       }),
     [relevantGrants],
@@ -514,7 +526,7 @@ export default function Dashboard() {
         color: "from-amber-500 to-amber-600",
         link: createPageUrl("Calendar"),
       },
-    ],
+    ].filter((stat) => !isSimplified || !['Organizations', 'Total Expenses'].includes(stat.title)),
     [
       displayOrganizationsCount,
       displayActiveGrantsCount,
@@ -522,6 +534,7 @@ export default function Dashboard() {
       urgentDeadlines.length,
       totalFundsSecured,
       isLoadingGrants,
+      isSimplified,
     ],
   )
 
@@ -562,8 +575,9 @@ export default function Dashboard() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      <div role="status" aria-live="polite" className="flex min-h-screen items-center justify-center gap-3 px-4 text-sm text-foreground">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" aria-hidden="true" />
+        Loading your dashboard…
       </div>
     )
   }
@@ -599,7 +613,7 @@ export default function Dashboard() {
               <div className="absolute -right-12 -top-12 h-52 w-52 rounded-full bg-gradient-to-br from-primary/20 via-primary/15 to-transparent blur-3xl" />
               <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
                 <div className="max-w-xl space-y-4">
-                  <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
+                  <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200">
                     {today}
                   </span>
                   <h1 className="text-2xl font-bold text-card-foreground md:text-3xl">
@@ -658,7 +672,7 @@ export default function Dashboard() {
               isLoading={isLoadingPipeline}
               hasError={Boolean(pipelineError)}
             />
-            <PipelineActionsCard activeProfileId={activeProfileId} />
+            <PipelineActionsCard activeProfileId={activeProfileId} isSimplified={isSimplified} />
           </div>
 
           <div className="space-y-6">
@@ -667,8 +681,9 @@ export default function Dashboard() {
               urgentDeadlines={urgentDeadlines}
               activeGrants={activeGrants}
               hasGrants={relevantGrants?.length > 0}
+              isSimplified={isSimplified}
             />
-            <PersonalizationPanel />
+            {!isSimplified ? <PersonalizationPanel /> : null}
             {activeProfileId && !globalThis?.__GF_SMOKE__ ? <AnyaChat profileId={activeProfileId} /> : null}
           </div>
         </div>
@@ -689,11 +704,11 @@ export default function Dashboard() {
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="grid gap-6">
-            <UrgentDeadlinesCard urgentDeadlines={urgentDeadlines} />
+            <UrgentDeadlinesCard urgentDeadlines={urgentDeadlines} isSimplified={isSimplified} />
             <UpcomingMilestonesCard upcomingMilestones={upcomingMilestones} />
           </div>
           {/* Only render ReminderCenterCard if we have currentUser */}
-          {currentUser && (
+          {currentUser && !isSimplified && (
             <ReminderCenterCard
               urgentDeadlines={remindersData?.urgentDeadlines ?? urgentDeadlines}
               upcomingMilestones={remindersData?.upcomingMilestones ?? upcomingMilestones}
@@ -703,10 +718,12 @@ export default function Dashboard() {
           )}
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          <RecentGrantsCard grants={grants} />
-          <QuickStatsCard grants={grants} />
-        </div>
+        {!isSimplified ? (
+          <div className="grid gap-6 lg:grid-cols-2">
+            <RecentGrantsCard grants={grants} />
+            <QuickStatsCard grants={grants} />
+          </div>
+        ) : null}
 
         {currentUser?.role === "admin" && profiles.length === 0 && <EmptyStateCard />}
       </div>

@@ -54,6 +54,12 @@ import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferen
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
 import { resolveProfileType, getParentChain } from './profileTypeRegistry.js'
 import { createLogger } from '../utils/logger.js'
+import {
+  applyNeedFirstScoring,
+  NEED_FIRST_SCORING_VERSION,
+} from './matching/needFirstScoringAdapter.js'
+import { evaluateApplicantTypeEligibility } from './applicantTypeGate.js'
+import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 const log = createLogger('matchEngine')
 
 // Read once at module load: per-opportunity env reads in the hot scoring loop
@@ -63,6 +69,7 @@ import {
   SCORE_FLOOR, AUTO_ADD_SCORE,
   DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N,
   ACCEPT_SCORE, REVIEW_SCORE,
+  SCORE_SCALE_ID,
   DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
   NEED_FULL_CREDIT_HITS,
   // Need-anchored scale (owner directive 2026-07-06)
@@ -1017,7 +1024,7 @@ const RE_NONPROFIT_ONLY = /\b(for nonprofits|philanthropy for nonprofits|grants?
 // TN HOPE family — "HOPE Access Grant", "HOPE Grant" — and TN Promise/Reconnect/
 // Aspire/Student Assistance Award). Without the program names, a title like
 // "Tennessee HOPE Access Grant" reads as a plain "grant" and the non-student cap
-// never fires, so it leaks to a non-student profile (found on Gilbert McCosh /
+// never fires, so it leaks to a non-student profile (found on Demo Assistive Technology Persona /
 // John White). These are unambiguous student-aid program brands.
 const RE_STUDENT_AID_SIGNAL = /\b(scholarship|scholarships|tuition|fafsa|pell|fseog|work[- ]study|cost of attendance|cost_of_attendance|room and board|student aid|student_aid|student assistance|hope (?:scholarship|access grant|grant)|tennessee promise|tn promise|tennessee reconnect|tn reconnect|aspire award|dual enrollment grant|collegepays|undergraduate|community college)\b/i
 const RE_DISASTER_SIGNAL = /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i
@@ -2467,7 +2474,9 @@ function scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity)
  *
  * @param {Object} profile      - Raw profile OR profileContext { profile, sections, signals, facets }
  * @param {Object} opportunity  - Raw opportunity object
- * @returns {{ score: number, reasons: string[], match_explain: object }}
+ * @returns {{ score: number, scoreScaleId: string, confidence: number,
+ *             confidence_reasons: string[], confidence_band: string,
+ *             reasons: string[], match_explain: object }}
  */
 export function scoreOpportunity(profile, opportunity, opts = {}) {
   const profileContext =
@@ -2503,7 +2512,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     : opportunity
   const oppNorm = normalizeOpportunity(effectiveOpp)
 
-  // Condition-specific × unnamed disability (the Anastasia audit, 2026-08-03):
+  // Condition-specific × unnamed disability (the Demo Student audit, 2026-08-03):
   // a bare "Has disability" flag mints a 'disability' need, and that need used
   // to earn full need-alignment credit against Autism Speaks-class rows. A
   // NAMED matching condition keeps the credit; an unnamed flag contributes
@@ -2797,7 +2806,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
 
   // Strong local fit: profile need(s) align with this program AND geography
   // is at least state-level (or closer). Surfaces TN SNAP / TennCare / AAAD
-  // at realistic slider thresholds for profiles like Dr. John White.
+  // at realistic slider thresholds for fully populated research profiles.
   const profileNeedsForBoost = collectProfileNeeds(effectiveProfile, effectiveSignals, profileNorm)
   if (profileNeedsForBoost.length > 0 && geo.subscale >= NEED_GEO_FIT_MIN_GEO_SUBSCALE) {
     const oppKwsForBoost = safeParseArrayField(opportunity?.keywords, [])
@@ -3172,7 +3181,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // barely-started profile) makes the ratio meaningless — the crawler-os lane
   // scored "9 of the profile's 6 data points — 83%" and every broad registry
   // directory read as an Excellent Match for EVERY profile (the identical
-  // Anita/Anastasia junk lists, 2026-07-27). Below the floor we fall back to
+  // Anita/Demo Student junk lists, 2026-07-27). Below the floor we fall back to
   // the same bounded topical path a bare profile gets: reachable, never
   // "Excellent".
   const inventoryCalibratable = dataPointInventory.total >= MIN_CALIBRATED_INVENTORY
@@ -3351,6 +3360,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   for (const line of profileReasonLines) reasons.push(line)
 
   const match_explain = {
+    score_scale_id: SCORE_SCALE_ID,
     matchedNeeds: matchedNeeds.length > 0 ? matchedNeeds : undefined,
     // The data-point evidence list IS the score: matched/total × gates.
     // Persisted via match_explain_json; the Coverage & Evidence Dashboard
@@ -3437,6 +3447,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
 
   return {
     score: finalScore,
+    scoreScaleId: SCORE_SCALE_ID,
     confidence,
     confidence_reasons,
     confidence_band,
@@ -4209,20 +4220,33 @@ function buildMatchedProfileFacts(profileNorm, matchedNeeds = [], matchedSignals
  * @param {Object} rawOpportunity - Raw opportunity or pre-normalized
  * @param {Object} [opts]
  * @param {Object} [opts.profileSections] - Profile sections for richer normalization
- * @returns {Object} Full structured result
+ * @returns {Object} Full structured result, including the canonical
+ *   scoreScaleId and scoreOpportunity confidence contract.
  */
 export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (!rawProfile || !rawOpportunity) {
     return {
       score: 0,
       reasons: ['Insufficient data'],
-      match_explain: { matchedNeeds: [], matchedSignals: [], scoreBreakdown: {}, reasons: ['Insufficient data'] },
+      match_explain: {
+        score_scale_id: SCORE_SCALE_ID,
+        matchedNeeds: [],
+        matchedSignals: [],
+        scoreBreakdown: {},
+        confidence: 0,
+        confidence_band: 'low',
+        reasons: ['Insufficient data'],
+      },
       decision: 'REVIEW',
       explanation: 'Insufficient data to evaluate match.',
       eligible: 'maybe',
       ineligibilityReasons: ['Could not evaluate — missing profile or opportunity'],
       needAlignment: 0,
       confidence: 0,
+      confidence_reasons: ['Confidence unavailable — missing profile or opportunity'],
+      confidence_band: 'low',
+      scoreScaleId: SCORE_SCALE_ID,
+      scoringPolicyVersion: NEED_FIRST_SCORING_VERSION,
       matcherVersion: MATCHER_VERSION,
       evaluatedAt: new Date().toISOString(),
     }
@@ -4254,25 +4278,112 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     ? rawOpportunity
     : normalizeOpportunity(rawOpportunity)
 
+  // The relevance rule registry owns explicit exclusivity and source-invalidity
+  // predicates (residents-only, known demographic conflicts, fundraising,
+  // foreign embassy calls, missing URLs, templated locator stubs, and similar
+  // hard facts). Evaluate only rules explicitly marked hard here, inside the
+  // canonical write-time decision. Display consumers must trust the persisted
+  // result and must never run this as an alternate post-persistence trial.
+  const profileContextForHardRules = rawProfile?.profile
+    ? {
+        ...rawProfile,
+        sections: opts.profileSections ?? rawProfile.sections ?? {},
+        signals: signals ?? rawProfile.signals ?? null,
+      }
+    : {
+        profile: rawProfile,
+        sections: opts.profileSections ?? {},
+        signals,
+      }
+  const hardRelevanceEval = applyRelevanceFilter(
+    rawOpportunity,
+    extractProfileData(profileContextForHardRules),
+    { mode: 'soft', allowDirectories: false },
+  )
+
   const eligibilityEval = evaluateEligibility(profileNorm, oppNorm)
+  const sectionsForApplicantType = opts.profileSections ?? rawProfile?.sections ?? null
+  const basicForApplicantType = sectionsForApplicantType?.basic_information ??
+    sectionsForApplicantType?.basic_info ?? {}
+  const rawProfileForApplicantType = rawProfile?.profile ?? rawProfile
+  const profileApplicantType = rawProfileForApplicantType?.applicant_type ??
+    rawProfileForApplicantType?.primary_type ??
+    rawProfileForApplicantType?.primary_profile_type ??
+    rawProfileForApplicantType?.profile_type ??
+    basicForApplicantType?.profile_category ??
+    basicForApplicantType?.applicant_type ??
+    null
+  const applicantTypeEval = evaluateApplicantTypeEligibility(
+    rawOpportunity,
+    profileApplicantType,
+    {
+      profile: rawProfileForApplicantType,
+      sections: sectionsForApplicantType ?? {},
+    },
+  )
+  const canonicalMissingEligibilityFields = [
+    ...(eligibilityEval.missingFields ?? []),
+    ...(applicantTypeEval.decision === 'review' && applicantTypeEval.reason === 'profile_applicant_type_missing'
+      ? ['profile.applicant_type']
+      : []),
+  ].filter((value, index, values) => values.indexOf(value) === index)
+
+  // Build the canonical scoring context once, before any eligibility return.
+  // Even a hard REJECT still needs the same orthogonal source/actionability/
+  // eligibility-text/freshness confidence that scoreOpportunity owns; the
+  // decision gate may zero the MATCH score, but it must not invent a second
+  // confidence scale from fit or eligibility.
+  const effectiveProfileForScoring = rawProfile?.profile ?? rawProfile
+  const sectionsForScoring = opts.profileSections ?? rawProfile?.sections ?? null
+  const signalsForScoring = signals ?? rawProfile?.signals ?? null
+  const profileForScoring = (sectionsForScoring || signalsForScoring)
+    ? { profile: effectiveProfileForScoring, sections: sectionsForScoring, signals: signalsForScoring }
+    : rawProfile
+  const scoreResult = scoreOpportunity(profileForScoring, rawOpportunity, {
+    preferenceSignals: opts.preferenceSignals,
+  })
+  const {
+    score,
+    reasons,
+    match_explain,
+    scoreScaleId,
+    confidence,
+    confidence_reasons,
+    confidence_band,
+  } = scoreResult
 
   // Hard eligibility gate.
   // Geography is intentionally excluded here because makeDecision() has the
   // project-specific rule: state mismatch is hard only when the opportunity is
   // explicitly resident/state-exclusive. All other hard ineligibility reasons
   // should reject before scoring so profile-inappropriate matches do not appear.
-  const hardEligibilityReasons = (eligibilityEval.ineligibilityReasons ?? [])
-    .filter((reason) => !/^Geographic mismatch:/i.test(String(reason)))
+  const hardEligibilityReasons = [
+    ...(eligibilityEval.ineligibilityReasons ?? [])
+      .filter((reason) => !/^Geographic mismatch:/i.test(String(reason))),
+    ...(applicantTypeEval.decision === 'mismatch'
+      ? [`Applicant type mismatch: ${applicantTypeEval.reason || 'explicit applicant restriction'}`]
+      : []),
+    ...(!hardRelevanceEval.pass
+      ? [hardRelevanceEval.reason || `Hard relevance rule: ${hardRelevanceEval.ruleId || 'unknown'}`]
+      : []),
+  ].filter((value, index, values) => values.indexOf(value) === index)
 
   if (hardEligibilityReasons.length > 0) {
     const evaluatedAt = new Date().toISOString()
-    return {
+    return applyNeedFirstScoring({
+      canonical: {
       score: 0,
       reasons: hardEligibilityReasons,
       match_explain: {
+        score_scale_id: scoreScaleId,
         matchedNeeds: [],
         matchedSignals: [],
         scoreBreakdown: { total: 0 },
+        confidence,
+        confidence_band,
+        confidence_components: match_explain?.confidence_components,
+        applicant_type_gate: applicantTypeEval,
+        hard_relevance_gate: hardRelevanceEval,
         reasons: hardEligibilityReasons,
       },
       decision: 'REJECT',
@@ -4282,28 +4393,25 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
       matchedNeeds: [],
       matchedProfileTraits: [],
       matched_profile_facts: buildMatchedProfileFacts(profileNorm),
-      missingEligibilityFields: eligibilityEval.missingFields ?? [],
+      missingEligibilityFields: canonicalMissingEligibilityFields,
       needAlignment: 0,
-      confidence: 95,
+      confidence,
+      confidence_reasons,
+      confidence_band,
+      scoreScaleId,
       matcherVersion: MATCHER_VERSION,
       evaluatedAt,
-    }
+      },
+      profileContext: {
+        profile: effectiveProfileForScoring,
+        sections: sectionsForScoring ?? {},
+        signals: signalsForScoring,
+        profileNorm,
+      },
+      opportunity: rawOpportunity,
+      oppNorm,
+    })
   }
-
-  // Pass sections/signals to scoreOpportunity so it can build keyword + facet
-  // signals (geo, keywords, etc.). Without this, already-normalized profiles
-  // short-circuit the scoring context and every opportunity gets the same score.
-  const effectiveProfileForScoring = rawProfile?.profile ?? rawProfile
-  const sectionsForScoring = opts.profileSections ?? rawProfile?.sections ?? null
-  const signalsForScoring = signals ?? rawProfile?.signals ?? null
-  const profileForScoring = (sectionsForScoring || signalsForScoring)
-    ? { profile: effectiveProfileForScoring, sections: sectionsForScoring, signals: signalsForScoring }
-    : rawProfile
-  // Forward the optional soft behavior-preference signals (no-op when absent),
-  // so the user-activity nudge applies on the canonical decision path too.
-  const { score, reasons, match_explain } = scoreOpportunity(profileForScoring, rawOpportunity, {
-    preferenceSignals: opts.preferenceSignals,
-  })
 
   // Need alignment from normalised objects (uses calculateNeedAlignment for consistency).
   // Condition-specific × unnamed disability (2026-08-03): the bare flag's
@@ -4470,17 +4578,13 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     eligible = true
   }
 
-  // Confidence
-  let confidence = 50
-  if (eligible === true) confidence += 30
-  if (eligible === false) confidence -= 20
-  if (matchedNeeds.length > 0) confidence += Math.min(15, matchedNeeds.length * 5)
-  confidence = Math.max(0, Math.min(100, confidence))
-
   // ── Free, keyless verification influence (ProPublica + Census) ──
   // Pure + synchronous: reads a `verification` signal ATTACHED EARLIER during
   // async discovery/normalization enrichment (no network in this hot loop).
-  // BOOST-ONLY + honest: a CONFIRMED tax-exempt sponsor nudges confidence up.
+  // BOOST-ONLY + honest: a CONFIRMED tax-exempt sponsor remains observable in
+  // the general decision reasons. Canonical confidence itself is owned by
+  // scoreOpportunity and is returned unchanged below, so this layer cannot
+  // rebuild or mutate it from fit/eligibility evidence.
   // A registry MISS (verified:false) or API-down (verified:null) is STRICTLY
   // NEUTRAL — many legitimate orgs GrantFlow serves (churches/faith-based,
   // new nonprofits, government, non-501(c)(3)) are absent from the IRS 990
@@ -4495,9 +4599,6 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
       finalScore = Math.round(Math.max(0, Math.min(100, finalScore + adj.scoreDelta)))
       if (match_explain?.scoreBreakdown) match_explain.scoreBreakdown.total = finalScore
     }
-    if (adj.confidenceDelta !== 0) {
-      confidence = Math.max(0, Math.min(100, confidence + adj.confidenceDelta))
-    }
     if (adj.reasons.length > 0) reasons.push(...adj.reasons)
   }
 
@@ -4506,7 +4607,8 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // Previously hardcoded to [] on the ACCEPT/REVIEW path, which silently dropped
   // the "what's missing from your profile" guidance for non-rejected matches
   // (it was only ever populated on the REJECT branch). (Mission System 3.)
-  const missingEligibilityFields = eligibilityEval.missingFields ?? []
+  const missingEligibilityFields = canonicalMissingEligibilityFields
+  match_explain.applicant_type_gate = applicantTypeEval
 
   // matched_profile_facts: a plain-language list of what specifically about
   // the profile caused this opportunity to surface. Used by Anya, the result
@@ -4515,7 +4617,8 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // from my profile caused this to appear?'".
   const matchedProfileFacts = buildMatchedProfileFacts(profileNorm, matchedNeeds, matchedProfileTraits)
 
-  return {
+  return applyNeedFirstScoring({
+    canonical: {
     score: finalScore,
     reasons,
     match_explain,
@@ -4529,13 +4632,25 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     missingEligibilityFields,
     needAlignment,
     confidence,
+    confidence_reasons,
+    confidence_band,
+    scoreScaleId,
     // Surface the verification signal (if any was attached during discovery)
     // so it is OBSERVABLE downstream (Sam diagnostics / Anya tools), per the
     // agent-observability rule.
     verification: verificationSignal ?? null,
     matcherVersion: MATCHER_VERSION,
     evaluatedAt: new Date().toISOString(),
-  }
+    },
+    profileContext: {
+      profile: effectiveProfileForScoring,
+      sections: sectionsForScoring ?? {},
+      signals: signalsForScoring,
+      profileNorm,
+    },
+    opportunity: rawOpportunity,
+    oppNorm,
+  })
 }
 
 export default {

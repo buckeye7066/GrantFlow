@@ -4,14 +4,15 @@
 // recommendation ROLLUP against the 2026-07-06 DATA-POINT match scale.
 //
 // Regression guarded here (goal drift): the rollup used to filter ACCEPT rows by
-// the thesis `min_match_score`, which defaults to 55/60 — a value on the RETIRED
-// 0-100 slider scale. On the data-point scale real matches run p50=8 / p90=15 /
-// max~47 and ACCEPT fires around 11, so a 55/60 floor discarded effectively
-// EVERY genuine recommendation for a real profile, silently emptying the rollup.
+// the thesis `min_match_score`, whose legacy defaults were calibrated on the
+// retired slider scale. On the data-point scale real matches run in low double
+// digits, so that old floor discarded effectively every genuine recommendation
+// for a real profile and silently emptied the rollup.
 // The authoritative gate is now the canonical engine's `decision === 'accept'`,
 // with no re-derived numeric floor (crawler-os is import-isolated from
 // config/matchThresholds by design — see legacy-crawler-ban.test.mjs). The
-// score-20 ACCEPT case below FAILS on the old `minScore: th.min_match_score`.
+// ACCEPT case below fails whenever Robert re-applies the caller's numeric
+// floor instead of trusting the canonical decision.
 //
 // NOTE: scale constants are written as literals on purpose — this file lives
 // under backend/crawler-os/ and may not import config/matchThresholds.
@@ -54,19 +55,27 @@ function seedOpp(store, id, over = {}) {
   });
 }
 
-const REAL_PROFILE = { id: 'p_real', type: 'individual', state: 'TN', location: { state: 'TN' }, needs: ['housing'] };
+const REAL_PROFILE = {
+  id: 'p_real',
+  type: 'individual',
+  state: 'TN',
+  location: { state: 'TN' },
+  needs: ['housing'],
+  min_match_score: 99,
+};
 
-test('Robert surfaces a real ACCEPT recommendation scored below the retired 55/60 floor', async () => {
+test('Robert surfaces a real ACCEPT recommendation below a caller-supplied numeric floor', async () => {
   const store = createMemoryStore();
   const pid = buildThesis(REAL_PROFILE).profile_id;
   assert.equal(pid, 'p_real', 'buildThesis derives profile_id from profile.id');
-  // Sanity: for an individual profile the thesis floor is the retired 55 value.
-  assert.equal(buildThesis(REAL_PROFILE).min_match_score, 55);
+  // The thesis retains explicit caller input for discovery planning, while the
+  // recommendation rollup below must not turn it into a second decision gate.
+  assert.equal(buildThesis(REAL_PROFILE).min_match_score, 99);
 
   seedOpp(store, 'opp_real', { title: 'Emergency Rental Assistance' });
   // A genuine ACCEPT on the data-point scale: decision accept, score 20 — a
-  // realistic real-profile match (11 ≤ 20 ≪ 55), i.e. above the ACCEPT band but
-  // far below the retired slider floor.
+  // realistic real-profile match: above the ACCEPT band but far below the
+  // caller's deliberately strict discovery control.
   storage.upsertMatch(store, { profile_id: pid, opportunity_id: 'opp_real', match_score: 20, decision: 'accept' });
 
   const robert = createRobert({ store, fetcher: emptyFetcher(), env: {} });

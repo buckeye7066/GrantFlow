@@ -59,7 +59,7 @@ const {
   listTaskEvents,
   _resetSchemaCache,
 } = await import('../services/hamilton/applicationTaskStore.js')
-const { _resetAuthSchemaCache } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
+const { _resetAuthSchemaCache, recordAuthorizations } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
 
 const PROFILE = 'profile-authorized-leg'
 
@@ -113,20 +113,12 @@ async function seedFixture(db) {
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'automation_preferences', JSON.stringify({ automations: { hamilton_auto_submit: true, hamilton_autopilot: true } }))
   await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://portal.example.org/apply')
+    // Reserved synthetic host: the bounded release deliberately has zero real
+    // reviewed submit adapters, but this fixture keeps the positive proof path
+    // executable without enabling any real portal.
+    .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://hamilton-submit-fixture.invalid/apply')
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')
     .run('g-1', PROFILE, 'opp-1', 'Community Ministry Grant')
-}
-
-const AUTHORIZATIONS = {
-  complete_forms: true,
-  save_drafts: false,
-  generate_narratives: false,
-  submit_applications: false,
-  use_saved_credentials_reference: false,
-  use_saved_session: false,
-  upload_documents: false,
-  use_standing_attestation: false,
 }
 
 async function runSource(db, extraOptions = {}) {
@@ -134,7 +126,21 @@ async function runSource(db, extraOptions = {}) {
     profileId: PROFILE,
     userId: 'user-1',
     source: { opportunity_id: 'opp-1', grant_id: 'g-1' },
-    options: { authorizations: AUTHORIZATIONS, ...extraOptions },
+    options: { ...extraOptions },
+  })
+}
+
+async function seedStoredAuthorization(db, { submit = false, requireHumanReview = false } = {}) {
+  return recordAuthorizations(db, {
+    userId: 'user-1',
+    profileId: PROFILE,
+    scope: 'funding_source',
+    fundingSourceIds: ['opp-1'],
+    authorizationTypes: ['complete_forms', ...(submit ? ['submit_applications'] : [])],
+    authorizationText: 'Test authorization',
+    authorizationVersion: 'hamilton-autopilot-test-v1',
+    options: { require_human_review: requireHumanReview },
+    replaceOmittedTypes: true,
   })
 }
 
@@ -153,7 +159,7 @@ beforeEach(() => {
   savedEnv.gate = process.env.HAMILTON_TAILORED_APPROVAL_GATE
   process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'true'
   process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = ''
-  delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
+  process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
   delete process.env.HAMILTON_TAILORED_APPROVAL_GATE
   return () => {
     process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = savedEnv.enabled
@@ -181,34 +187,38 @@ async function seedTaskWith(db, { allowAutoSubmit, autoSubmitEnabled } = {}) {
 // ── 1 + 2. Stored authorization reaches the engine; rails stay closed ──────
 
 describe('stored auto-submit authorization reaches the submit step', () => {
-  it('persisted allow_auto_submit (batch option) authorizes the engine on a later run', async () => {
+  it('persisted allow_auto_submit is intent only and cannot authorize submission by itself', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0' // operational escape hatch: isolate the wiring
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db)
     await seedTaskWith(db, { allowAutoSubmit: true })
 
     await runSource(db) // no options.allow_auto_submit on this run
 
     expect(runAutopilot).toHaveBeenCalledTimes(1)
-    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
+    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
   })
 
-  it("the user's approve-submit toggle (auto_submit_enabled) authorizes the engine when the global flag is on", async () => {
+  it("the user's approve-submit toggle is intent only without a stored submit grant", async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db)
     await seedTaskWith(db, { autoSubmitEnabled: true })
 
     await runSource(db)
 
-    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
+    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
   })
 
   it('auto_submit_enabled WITHOUT the global HAMILTON_ALLOW_AUTOSUBMIT flag stays draft-only (legacy-agent rail)', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
     await seedTaskWith(db, { autoSubmitEnabled: true })
 
     await runSource(db)
@@ -220,6 +230,7 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db)
     await seedTaskWith(db, {})
 
     await runSource(db)
@@ -231,11 +242,63 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
     await seedTaskWith(db, { allowAutoSubmit: true })
 
     await runSource(db, { allow_auto_submit: false })
 
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
+  })
+
+  it('a persisted final-human-review preference vetoes an otherwise authorized submit', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true, requireHumanReview: true })
+    await seedTaskWith(db, { allowAutoSubmit: true, autoSubmitEnabled: true })
+
+    await runSource(db)
+
+    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
+  })
+
+  it('a profile-level Disable during a live run vetoes the irreversible click', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
+    await seedTaskWith(db, { allowAutoSubmit: true })
+    runAutopilot.mockImplementationOnce(async ({ beforeSubmit }) => {
+      const row = await db.prepare(
+        `SELECT data FROM profile_sections
+          WHERE profile_id = ? AND section_key = 'automation_preferences'`,
+      ).get(PROFILE)
+      const prefs = JSON.parse(row.data)
+      prefs.automations.hamilton_auto_submit = false
+      await db.prepare(
+        `UPDATE profile_sections SET data = ?
+          WHERE profile_id = ? AND section_key = 'automation_preferences'`,
+      ).run(JSON.stringify(prefs), PROFILE)
+
+      const boundary = await beforeSubmit()
+      expect(boundary).toMatchObject({
+        allow: false,
+        reason: 'profile_auto_submit_disabled',
+      })
+      return {
+        status: 'completed_draft',
+        submit_withheld_reason: boundary.reason,
+        filled_fields: [],
+        pages_visited: 1,
+        trace: [],
+      }
+    })
+
+    const result = await runSource(db)
+
+    expect(result.task.status).toBe('waiting_for_review')
+    expect(result.task.allow_auto_submit).toBe(true)
+    expect(result.autopilot_result.submit_withheld_reason).toBe('profile_auto_submit_disabled')
   })
 
   // OWNER RULE 2026-08-03: "auto submit should mean auto submit. No more, no
@@ -246,6 +309,7 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     // No HAMILTON_TAILORED_APPROVAL_GATE override → gate enforced.
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
     await seedTaskWith(db, { allowAutoSubmit: true })
 
     const result = await runSource(db)
@@ -255,9 +319,30 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     expect(events.find((e) => e.step === 'auto_submit_gate')).toBeFalsy()
   })
 
+  it('withholds final Submit on every real host until a reviewed executable adapter exists', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await db.prepare('UPDATE funding_opportunities SET application_url = ? WHERE id = ?')
+      .run('https://portal.example.org/apply', 'opp-1')
+    await seedStoredAuthorization(db, { submit: true })
+    await seedTaskWith(db, { allowAutoSubmit: true })
+
+    const result = await runSource(db)
+
+    expect(runAutopilot).not.toHaveBeenCalled()
+    expect(['waiting_for_review', 'blocked']).toContain(result.task.status)
+    expect(result.task.last_agent_message).toMatch(/browser automation|packet/i)
+    const events = await listTaskEvents(db, result.task.id)
+    if (result.task.status === 'waiting_for_review') {
+      expect(events.find((event) => /Browser automation skipped/i.test(event.message || ''))).toBeTruthy()
+    }
+  })
+
   it('the gate STILL withholds for missing required questions (completeness, not approval)', async () => {
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
     await seedTaskWith(db, { allowAutoSubmit: true })
     const { ensureTailoredApplicationsTable } = await import('../services/hamilton/tailoredApplicationStore.js')
     await ensureTailoredApplicationsTable(db)
@@ -283,16 +368,23 @@ describe('submission evidence honesty', () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
     await seedTaskWith(db, { allowAutoSubmit: true })
-    runAutopilot.mockResolvedValueOnce({
-      status: 'submitted',
-      submit_clicked: true,
-      confirmation_evidence: 'portal_reference',
-      confirmation_reference: 'CONF-12345',
-      confirmation_screenshot_path: '/tmp/shot.png',
-      filled_fields: [{ key: 'essay', fid: 'f1', value: 'x' }],
-      pages_visited: 2,
-      trace: [],
+    runAutopilot.mockImplementationOnce(async ({ beforeSubmit }) => {
+      const boundary = await beforeSubmit()
+      expect(boundary.allow).toBe(true)
+      return {
+        status: 'submitted',
+        submission_attempt_started: true,
+        submit_clicked: true,
+        confirmation_evidence: 'portal_reference',
+        confirmation_reference: 'CONF-12345',
+        confirmation_reference_is_new: true,
+        confirmation_screenshot_path: '/tmp/shot.png',
+        filled_fields: [{ key: 'essay', fid: 'f1', value: 'x' }],
+        pages_visited: 2,
+        trace: [],
+      }
     })
 
     const result = await runSource(db)
@@ -305,30 +397,66 @@ describe('submission evidence honesty', () => {
     expect(submittedEvent.details?.confirmation_evidence).toBe('portal_reference')
   })
 
-  it('a screenshot-only capture never reads as portal-confirmed; the record says to verify', async () => {
+  it('a screenshot-only capture is submit_unconfirmed and never marks the task submitted', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     const db = makeDb()
     await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
     await seedTaskWith(db, { allowAutoSubmit: true })
+    runAutopilot.mockImplementationOnce(async ({ beforeSubmit }) => {
+      const boundary = await beforeSubmit()
+      expect(boundary.allow).toBe(true)
+      return {
+        status: 'submitted',
+        submission_attempt_started: true,
+        submit_clicked: true,
+        confirmation_evidence: 'attempt_evidence',
+        confirmation_reference: null,
+        confirmation_screenshot_path: '/tmp/shot.png',
+        filled_fields: [{ key: 'essay', fid: 'f1', value: 'x' }],
+        pages_visited: 2,
+        trace: [],
+      }
+    })
+
+    const result = await runSource(db)
+
+    expect(result.task.status).toBe('submission_verification_required')
+    const events = await listTaskEvents(db, result.task.id)
+    expect(events.find((e) => e.event_type === 'submitted')).toBeFalsy()
+    expect(result.autopilot_result.blocker_kind).toBe('submission_verification_required')
+
+    const retry = await runSource(db)
+    expect(retry.task.status).toBe('submission_verification_required')
+    expect(retry.blocker_kind).toBe('submission_verification_required')
+    expect(runAutopilot).toHaveBeenCalledTimes(1)
+  })
+
+  it('a legacy engine cannot claim submitted without acquiring the durable submit lease', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
+    await seedTaskWith(db, { allowAutoSubmit: true })
+    // Deliberately bypasses beforeSubmit, as the retired legacy path did.
     runAutopilot.mockResolvedValueOnce({
       status: 'submitted',
       submit_clicked: true,
-      confirmation_evidence: 'screenshot_only',
-      confirmation_reference: null,
-      confirmation_screenshot_path: '/tmp/shot.png',
-      filled_fields: [{ key: 'essay', fid: 'f1', value: 'x' }],
-      pages_visited: 2,
+      confirmation_evidence: 'portal_reference',
+      confirmation_reference: 'SPOOF-12345',
+      confirmation_reference_is_new: true,
+      filled_fields: [],
+      pages_visited: 1,
       trace: [],
     })
 
     const result = await runSource(db)
 
-    expect(result.task.status).toBe('submitted')
+    expect(result.task.status).toBe('submission_verification_required')
+    expect(result.autopilot_result.blocker_kind).toBe('submission_verification_required')
+    expect(result.autopilot_result.blocker_detail).toMatch(/authorization lease/i)
     const events = await listTaskEvents(db, result.task.id)
-    const submittedEvent = events.find((e) => e.event_type === 'submitted')
-    expect(submittedEvent.message).not.toMatch(/portal confirmed receipt/i)
-    expect(submittedEvent.message).toMatch(/verify/i)
-    expect(submittedEvent.details?.confirmation_evidence).toBe('screenshot_only')
+    expect(events.find((event) => event.event_type === 'submitted')).toBeFalsy()
   })
 
   it('engine: a submit click with NO captured evidence is a blocker, never a submission', () => {
@@ -336,7 +464,13 @@ describe('submission evidence honesty', () => {
     expect(assessSubmissionEvidence({ reference: 'CONF-1', screenshot_path: null }))
       .toEqual({ ok: true, confirmation_evidence: 'portal_reference' })
     expect(assessSubmissionEvidence({ reference: null, screenshot_path: '/tmp/s.png' }))
-      .toEqual({ ok: true, confirmation_evidence: 'screenshot_only' })
+      .toEqual({ ok: false, confirmation_evidence: 'attempt_evidence' })
+    expect(assessSubmissionEvidence({
+      reference: null,
+      screenshot_path: '/tmp/s.png',
+      received_acknowledgement: true,
+    }, { received_acknowledgement: false }))
+      .toEqual({ ok: true, confirmation_evidence: 'portal_acknowledgement' })
     expect(assessSubmissionEvidence({ reference: null, screenshot_path: null }))
       .toEqual({ ok: false, confirmation_evidence: 'none' })
   })

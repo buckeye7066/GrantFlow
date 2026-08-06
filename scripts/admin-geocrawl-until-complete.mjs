@@ -1,27 +1,21 @@
 #!/usr/bin/env node
 /**
- * admin-geocrawl-until-complete.mjs
+ * Drive nationwide ZIP coverage toward a bounded target.
  *
- * Drive nationwide ZIP coverage to (effectively) 100% by:
+ * This script mutates the configured GrantFlow deployment. It deliberately
+ * has no URL, account, password, or token defaults. The operator must name the
+ * target host twice so a copied command cannot silently operate on production.
  *
- *   1. Polling the current geo-crawl job every 60s.
- *   2. When it terminates (completed / failed / cancelled), check
- *      /api/admin/geo/zip-coverage. If coverage < target_percent OR
- *      uncovered_zip_count > 0 AND the previous run made forward
- *      progress (i.e. didn't process exactly 0 ZIPs — that means
- *      every state's ZIPs are already in the resume window), kick
- *      off another 6h run with the same params.
- *   3. Stop when:
- *        a. coverage >= target_percent (default 99%), OR
- *        b. the last run made no forward progress (0 ZIPs processed
- *           because everything was already in the resume window —
- *           we're done with what's reachable in the current snapshot)
- *        c. max_runs is hit (safety stop).
+ * Required:
+ *   GF_API=https://api.example.com/api
+ *   GF_CONFIRM_MUTATING_HOST=api.example.com
+ *   GF_ADMIN_TOKEN=...                         # preferred
+ *     or GF_ADMIN_EMAIL=... GF_ADMIN_PASSWORD=...
  *
- * Re-authenticates on every poll cycle so the script can run for
- * multi-day stretches without token expiry.
- *
- * Usage:
+ * Example:
+ *   GF_API=https://api.example.com/api \
+ *   GF_CONFIRM_MUTATING_HOST=api.example.com \
+ *   GF_ADMIN_TOKEN=... \
  *   node scripts/admin-geocrawl-until-complete.mjs \
  *     --max-runs=8 --target-percent=99 --max-zips=5000
  */
@@ -30,208 +24,215 @@ import process from 'node:process'
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((arg) => {
-    const m = arg.match(/^--([^=]+)=(.*)$/)
-    return m ? [m[1], m[2]] : [arg.replace(/^--/, ''), 'true']
+    const match = arg.match(/^--([^=]+)=(.*)$/)
+    return match ? [match[1], match[2]] : [arg.replace(/^--/, ''), 'true']
   }),
 )
 
-const API = process.env.GF_API || 'https://www.axiombiolabs.org/grantflow/api'
-const EMAIL = process.env.GF_ADMIN_EMAIL || 'buckeye7066@gmail.com'
-const PASSWORD = process.env.GF_ADMIN_PASSWORD || 'Elyria7066!'
+function requiredEnv(name) {
+  const value = String(process.env[name] || '').trim()
+  if (!value) throw new Error(`${name} is required; this mutating script has no live defaults`)
+  return value
+}
 
-const MAX_RUNS = Number.parseInt(args['max-runs'] || '12', 10)
-const TARGET_PERCENT = Number.parseFloat(args['target-percent'] || '99')
-const MAX_ZIPS = Number.parseInt(args['max-zips'] || '5000', 10)
-const POLL_INTERVAL_MS = Number.parseInt(args['poll-ms'] || '60000', 10)
-const COUNTRIES = (process.env.GF_COUNTRIES || 'US,CA')
+function boundedInteger(value, { name, min, max }) {
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be an integer from ${min} to ${max}`)
+  }
+  return parsed
+}
+
+function boundedNumber(value, { name, min, max }) {
+  const parsed = Number.parseFloat(value)
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be a number from ${min} to ${max}`)
+  }
+  return parsed
+}
+
+const apiUrl = new URL(requiredEnv('GF_API'))
+const isLoopback = ['127.0.0.1', '::1', 'localhost'].includes(apiUrl.hostname.toLowerCase())
+if (apiUrl.protocol !== 'https:' && !(apiUrl.protocol === 'http:' && isLoopback)) {
+  throw new Error('GF_API must use HTTPS unless it targets loopback')
+}
+if (apiUrl.username || apiUrl.password || apiUrl.search || apiUrl.hash) {
+  throw new Error('GF_API must not contain credentials, query parameters, or a fragment')
+}
+const confirmedHost = requiredEnv('GF_CONFIRM_MUTATING_HOST').toLowerCase()
+if (confirmedHost !== apiUrl.hostname.toLowerCase()) {
+  throw new Error('GF_CONFIRM_MUTATING_HOST must exactly match the GF_API hostname')
+}
+
+const API = apiUrl.toString().replace(/\/$/, '')
+const ADMIN_TOKEN = String(process.env.GF_ADMIN_TOKEN || '').trim()
+const EMAIL = String(process.env.GF_ADMIN_EMAIL || '').trim()
+const PASSWORD = String(process.env.GF_ADMIN_PASSWORD || '')
+if (!ADMIN_TOKEN && (!EMAIL || !PASSWORD)) {
+  throw new Error('set GF_ADMIN_TOKEN, or both GF_ADMIN_EMAIL and GF_ADMIN_PASSWORD')
+}
+
+const MAX_RUNS = boundedInteger(args['max-runs'] || '12', { name: 'max-runs', min: 1, max: 100 })
+const TARGET_PERCENT = boundedNumber(args['target-percent'] || '99', { name: 'target-percent', min: 0, max: 100 })
+const MAX_ZIPS = boundedInteger(args['max-zips'] || '5000', { name: 'max-zips', min: 1, max: 50_000 })
+const POLL_INTERVAL_MS = boundedInteger(args['poll-ms'] || '60000', { name: 'poll-ms', min: 1_000, max: 900_000 })
+const COUNTRIES = String(process.env.GF_COUNTRIES || 'US,CA')
   .split(',')
-  .map((c) => c.trim().toUpperCase())
+  .map((country) => country.trim().toUpperCase())
   .filter(Boolean)
-const RUN_PARAMS = {
-  // National scope (no run_all_states / state / zip_list) walks the full merged
-  // US ZIP + Canadian FSA list. This is the single canonical "national geocrawl"
-  // covering all of the USA and Canada — run_all_states cannot reach Canada
-  // because lookupByState() keys Canadian data by province NAME, not abbr.
-  countries: COUNTRIES, // US + CA by default
+if (COUNTRIES.length === 0 || COUNTRIES.some((country) => !/^[A-Z]{2}$/.test(country))) {
+  throw new Error('GF_COUNTRIES must contain comma-separated two-letter country codes')
+}
+
+const RUN_PARAMS = Object.freeze({
+  countries: COUNTRIES,
   discover_local_resources: true,
   offline_only: false,
-  max_zips: MAX_ZIPS, // per-run chunk; resume=true advances across the ~44k list
-  min_sources_per_zip: 3, // floor; no max (all eligible sources are saved)
+  max_zips: MAX_ZIPS,
+  min_sources_per_zip: 3,
   rate_limit_ms: 600,
   resume: true,
   skip_domain_corpus: true,
-}
+})
 
-let token = null
+let token = ADMIN_TOKEN || null
+
 async function login() {
-  const res = await fetch(`${API}/auth/password/login`, {
+  const response = await fetch(`${API}/auth/password/login`, {
     method: 'POST',
+    redirect: 'error',
+    signal: AbortSignal.timeout(30_000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
   })
-  if (!res.ok) throw new Error(`login failed: ${res.status}`)
-  const j = await res.json()
-  token = j.accessToken
+  if (!response.ok) throw new Error(`login failed: ${response.status}`)
+  const body = await response.json()
+  if (!body?.accessToken) throw new Error('login response did not include an access token')
+  token = body.accessToken
   return token
 }
 
 async function api(path, init = {}) {
   if (!token) await login()
-  let res = await fetch(`${API}${path}`, {
+  const request = () => fetch(`${API}${path}`, {
     ...init,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
+    redirect: 'error',
+    signal: AbortSignal.timeout(30_000),
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+    },
   })
-  if (res.status === 401) {
+  let response = await request()
+  if (response.status === 401 && !ADMIN_TOKEN) {
     await login()
-    res = await fetch(`${API}${path}`, {
-      ...init,
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
-    })
+    response = await request()
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`${path} → ${res.status}: ${text.slice(0, 300)}`)
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`${path} -> ${response.status}: ${text.slice(0, 300)}`)
   }
-  return await res.json()
+  return response.json()
 }
 
-function ts() {
+function timestamp() {
   return new Date().toISOString().replace('T', ' ').replace(/\..+$/, '')
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 async function getStatus() {
-  return await api('/admin/geo/crawl/status')
+  return api('/admin/geo/crawl/status')
 }
 
 async function getCoverage() {
-  return await api('/admin/geo/zip-coverage')
+  return api('/admin/geo/zip-coverage')
 }
 
 async function startRun() {
-  return await api('/admin/geo/crawl/start', {
+  return api('/admin/geo/crawl/start', {
     method: 'POST',
     body: JSON.stringify(RUN_PARAMS),
   })
 }
 
 async function waitForJobToFinish(jobId) {
-  // Poll every POLL_INTERVAL_MS until the job is no longer running.
   let lastReport = 0
   while (true) {
-    let st
+    let status
     try {
-      st = await getStatus()
-    } catch (err) {
-      console.warn(`[${ts()}] status poll error: ${err.message}; backing off`)
+      status = await getStatus()
+    } catch (error) {
+      console.warn(`[${timestamp()}] status poll error: ${error.message}; backing off`)
       await sleep(15_000)
       continue
     }
-    const cur = st.geo_crawl
-    if (!cur || cur.id !== jobId) {
-      console.warn(`[${ts()}] active job changed (was ${jobId}, now ${cur?.id || 'none'}) — exiting wait`)
-      return cur || null
+    const current = status.geo_crawl
+    if (!current || current.id !== jobId) {
+      console.warn(`[${timestamp()}] active job changed; exiting wait without starting a replacement`)
+      return current || null
     }
     const now = Date.now()
-    if (now - lastReport > 5 * 60_000 || cur.status !== 'running') {
+    if (now - lastReport > 5 * 60_000 || current.status !== 'running') {
       console.log(
-        `[${ts()}] job ${cur.id.slice(0, 8)} status=${cur.status} processed=${cur.processed} inserted=${cur.inserted}`,
+        `[${timestamp()}] job ${current.id.slice(0, 8)} status=${current.status} processed=${current.processed} inserted=${current.inserted}`,
       )
       lastReport = now
     }
-    if (cur.status !== 'running' && cur.status !== 'queued') {
-      return cur
-    }
+    if (!['running', 'queued'].includes(current.status)) return current
     await sleep(POLL_INTERVAL_MS)
   }
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms))
-}
-
 async function main() {
-  console.log(`[${ts()}] === admin-geocrawl-until-complete starting ===`)
-  console.log(`[${ts()}] API=${API} max_runs=${MAX_RUNS} target=${TARGET_PERCENT}% max_zips=${MAX_ZIPS}`)
+  console.log(`[${timestamp()}] === admin-geocrawl-until-complete starting ===`)
+  console.log(`[${timestamp()}] host=${apiUrl.hostname} max_runs=${MAX_RUNS} target=${TARGET_PERCENT}% max_zips=${MAX_ZIPS}`)
 
-  let runIdx = 0
+  let runIndex = 0
   let lastProcessed = -1
-
-  // If there is already a running job, wait for it to finish first.
   const initial = await getStatus()
-  if (initial.geo_crawl && (initial.geo_crawl.status === 'running' || initial.geo_crawl.status === 'queued')) {
-    console.log(
-      `[${ts()}] existing job ${initial.geo_crawl.id} is ${initial.geo_crawl.status}; waiting for it to finish before starting new ones`,
-    )
+  if (initial.geo_crawl && ['running', 'queued'].includes(initial.geo_crawl.status)) {
+    console.log(`[${timestamp()}] an existing job is active; waiting without launching another`)
     const final = await waitForJobToFinish(initial.geo_crawl.id)
-    runIdx += 1
+    runIndex += 1
     lastProcessed = Number(final?.processed ?? 0)
-    console.log(`[${ts()}] initial job finished: status=${final?.status} processed=${lastProcessed}`)
   }
 
-  while (runIdx < MAX_RUNS) {
-    const cov = await getCoverage()
+  while (runIndex < MAX_RUNS) {
+    const coverage = await getCoverage()
     console.log(
-      `[${ts()}] coverage=${cov.coverage_percent}% completed=${cov.progress_completed}/${cov.total_us_zips} uncovered=${cov.uncovered_zip_count}`,
+      `[${timestamp()}] coverage=${coverage.coverage_percent}% completed=${coverage.progress_completed}/${coverage.total_us_zips} uncovered=${coverage.uncovered_zip_count}`,
     )
+    if (coverage.coverage_percent >= TARGET_PERCENT || coverage.uncovered_zip_count === 0 || lastProcessed === 0) break
 
-    if (cov.coverage_percent >= TARGET_PERCENT) {
-      console.log(`[${ts()}] target reached (${cov.coverage_percent}% >= ${TARGET_PERCENT}%); stopping`)
-      break
-    }
-
-    if (cov.uncovered_zip_count === 0) {
-      console.log(`[${ts()}] uncovered_zip_count=0; stopping`)
-      break
-    }
-
-    if (lastProcessed === 0) {
-      console.log(
-        `[${ts()}] previous run processed 0 ZIPs (everything in resume window) — no forward progress possible; stopping`,
-      )
-      break
-    }
-
-    runIdx += 1
-    console.log(`[${ts()}] launching run ${runIdx}/${MAX_RUNS}…`)
+    runIndex += 1
+    console.log(`[${timestamp()}] launching run ${runIndex}/${MAX_RUNS}`)
     let started
     try {
       started = await startRun()
-    } catch (err) {
-      console.warn(`[${ts()}] start failed: ${err.message}; retrying in 30s`)
+    } catch (error) {
+      console.warn(`[${timestamp()}] start failed: ${error.message}; retrying in 30s`)
       await sleep(30_000)
       continue
     }
     const jobId = started.job?.id
-    const runId = started.run_id
-    console.log(`[${ts()}] run ${runIdx}: job=${jobId} geo_run=${runId}`)
-
+    if (!jobId) throw new Error('crawl start response did not include a job id')
     const final = await waitForJobToFinish(jobId)
     lastProcessed = Number(final?.processed ?? 0)
-    console.log(
-      `[${ts()}] run ${runIdx} finished: status=${final?.status} processed=${lastProcessed} inserted=${final?.inserted}`,
-    )
-
-    // Brief cool-down so Anya autonomous heartbeats don't race.
     await sleep(15_000)
   }
 
-  const finalCov = await getCoverage()
-  console.log(`[${ts()}] === FINAL COVERAGE ===`)
+  const finalCoverage = await getCoverage()
+  console.log(`[${timestamp()}] === FINAL COVERAGE ===`)
   console.log(
-    `[${ts()}] coverage=${finalCov.coverage_percent}% completed=${finalCov.progress_completed}/${finalCov.total_us_zips} uncovered=${finalCov.uncovered_zip_count}`,
+    `[${timestamp()}] coverage=${finalCoverage.coverage_percent}% completed=${finalCoverage.progress_completed}/${finalCoverage.total_us_zips} uncovered=${finalCoverage.uncovered_zip_count}`,
   )
-  if (Array.isArray(finalCov.by_state)) {
-    const sorted = [...finalCov.by_state].sort((a, b) => b.percent - a.percent)
-    for (const row of sorted) {
-      console.log(
-        `[${ts()}]   ${String(row.state).padEnd(2)} ${String(row.completed).padStart(5)}/${String(row.total_zips).padStart(5)}  ${String(row.percent).padStart(6)}%`,
-      )
-    }
-  }
 }
 
-main().catch((err) => {
-  console.error(`[${ts()}] FATAL: ${err.message}`)
-  console.error(err.stack)
-  process.exit(1)
+main().catch((error) => {
+  console.error(`[${timestamp()}] FATAL: ${error.message}`)
+  process.exitCode = 1
 })

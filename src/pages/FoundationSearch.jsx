@@ -6,7 +6,7 @@ import {
 } from "@/api/foundations"
 import { listProfiles } from "@/api/profiles"
 import { apiFetch } from "@/api/client"
-import { scoreToMatchTier, fitPercent } from "@/lib/matchDisplayThresholds"
+import { scoreToMatchTier } from "@/lib/matchDisplayThresholds"
 import { useToast } from "@/components/ui/use-toast"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -402,7 +402,7 @@ export default function FoundationSearch() {
         title={!selectedProfileId ? "Select a profile first" : "Add to pipeline"}
       >
         {busy ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Plus className="w-4 h-4 mr-1" />}
-        Add{hasScore(score) ? ` · ${fitPercent(score)}%` : ""}
+        Add{hasScore(score) ? ` · score ${Math.round(Number(score))}` : ""}
       </Button>
     )
   }

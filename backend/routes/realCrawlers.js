@@ -11,23 +11,26 @@ import { runProfileDiscoveryLive, isWebDiscoveryEnabled } from '../services/craw
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { expandNeed, scoreNeedMatch } from '../services/shared/needTaxonomy.js'
-import { loadProfileContext, computeProfileDigest } from '../services/profileHelpers.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
-import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
-import { applyRelevanceFilter, extractProfileData } from '../services/relevanceFilter.js'
-import {
-  assessOpportunityTrust,
-  buildTrustMetadata,
-} from '../services/opportunityTrust.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
-import { SCORE_FLOOR, DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
-import { resolveRunSmartMinScore } from '../services/discoveryPreferences.js'
-import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
+import { SCORE_FLOOR, DEFAULT_MIN_SCORE, SCORE_SCALE_ID } from '../config/matchThresholds.js'
+import {
+  normalizeMinMatchScore,
+  resolveRunSmartMinScore,
+} from '../services/discoveryPreferences.js'
+import {
+  SURFACED_MATCHER_VERSIONS_SQL,
+  qualifiesForDisplay,
+} from '../config/matchSurfacing.js'
 import { searchNeedWebLeads } from '../services/shared/liveWebSearch.js'
 import { searchItemNeeds } from '../services/itemNeedSearch.js'
 import { ingestOpportunities } from '../services/sources/ingestionService.js'
-import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
+import {
+  canonicalizeOpportunityList,
+  isDirectoryRecord,
+} from '../services/matching/resultEnricher.js'
 import {
   detectProfessionalDevelopmentIntent,
   applyProfessionalDevelopmentQueryPolicy,
@@ -35,10 +38,6 @@ import {
 import { allSources as allCrawlerOsSources } from '../crawler-os/sourceRegistry.js'
 import { implementedAdapterIds } from '../crawler-os/adapters/index.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
-import { resolveUploadsDir } from '../utils/uploadsDir.js'
-import { fileURLToPath } from 'url'
-import { dirname } from 'path'
-import { createOpenAIClient } from '../utils/openaiClient.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:realCrawlers')
@@ -61,21 +60,6 @@ async function runProfileCrawlerOs(db, profileId, options = {}) {
     rejected: run?.rejected ?? 0,
     pipelinePruned: persisted?.pipelinePruned ?? 0,
     hamiltonCleaned: persisted?.hamiltonCleaned ?? 0,
-  }
-}
-
-// Upload dir + OpenAI factory mirror backend/routes/crawlers.js so the
-// on-demand discover-all dispatch can pass the same context the login/daily
-// auto-discovery paths use to triggerAutoDiscoveryCrawlers.
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-const { uploadsDir: discoverAllUploadDir } = resolveUploadsDir({ baseDir: __dirname })
-function getDiscoverAllOpenAI() {
-  try {
-    const { openai } = createOpenAIClient({ allowMissing: true })
-    return openai
-  } catch {
-    return null
   }
 }
 
@@ -231,9 +215,8 @@ export async function queryNearbyOpportunities(db, analysis, curatedTitles, prof
         url: row.application_url || row.apply_url || row.source_url || null,
         application_url: row.application_url || row.apply_url || null,
         source_url: row.source_url || row.application_url || null,
-        // Default to the score FLOOR (not 50) when a row can't be scored: a row with
-        // no computable relevance must rank last and fall below min_match_score, never
-        // masquerade as a median-strength (== DEFAULT_MIN_SCORE) match.
+        // Default to the canonical floor when a row cannot be scored: unknown
+        // relevance must rank last, never masquerade as an evaluated match.
         match_score: profileContext ? (scoreOpportunity(profileContext, row)?.score ?? SCORE_FLOOR) : SCORE_FLOOR,
         match_reasons: safeJsonParse(row.match_reasons, []),
         categories: safeJsonParse(row.categories, []),
@@ -245,7 +228,8 @@ export async function queryNearbyOpportunities(db, analysis, curatedTitles, prof
         source: row.source || 'discovered',
         record_origin: row.record_origin || 'geo_crawl',
         is_directory_resource: row.type === 'DIRECTORY',
-        deadline_type: row.deadline_type || 'rolling',
+        deadline: row.deadline || null,
+        deadline_type: row.deadline_type || null,
         is_national: Boolean(row.is_national),
         state: row.state || null,
         contact_info: row.contact_info || null,
@@ -265,6 +249,81 @@ function safeJsonParse(val, fallback) {
   if (Array.isArray(val)) return val;
   if (!val || typeof val !== 'string') return fallback;
   try { return JSON.parse(val); } catch { return fallback; }
+}
+
+/**
+ * Reattach the persisted match artifact that the legacy compatibility shape
+ * omits. Response paths must not infer ACCEPT/REVIEW from a score or run a
+ * second eligibility trial after Crawler OS has stored the canonical verdict.
+ */
+export async function attachStoredMatchAuthority(db, profileId, results = []) {
+  if (!db?.prepare || !profileId || !Array.isArray(results) || results.length === 0) return results
+
+  const opportunityIds = [...new Set(results.map((result) => result?.id).filter(Boolean).map(String))]
+  if (opportunityIds.length === 0) return results
+  const opportunityPlaceholders = opportunityIds.map(() => '?').join(', ')
+
+  const rows = await db.prepare(`
+    SELECT m.opportunity_id, m.match_score, m.match_confidence,
+           m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version,
+           fo.opportunity_kind, fo.sponsor, fo.source, fo.record_origin, fo.link_status,
+           fo.reality_status, fo.reality_reasons, fo.verification_status,
+           fo.last_verified_at, fo.source_trust_tier, fo.final_url,
+           fo.http_status, fo.result_kind, fo.is_hidden, fo.is_active,
+           fo.deadline, fo.deadline_type, fo.is_loan, fo.requires_match
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+     WHERE m.profile_id = ?
+       AND m.opportunity_id IN (${opportunityPlaceholders})
+       AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
+       AND LOWER(COALESCE(m.match_decision, '')) IN ('accept', 'review')
+  `).all(String(profileId), ...opportunityIds)
+
+  const byOpportunityId = new Map((rows || []).map((row) => [String(row.opportunity_id), row]))
+  return results.map((result) => {
+    const stored = byOpportunityId.get(String(result?.id ?? ''))
+    if (!stored) return result
+    const storedExplain = safeJsonParse(stored.match_explain_json, {})
+    const rawConfidence = stored.match_confidence
+    return {
+      ...result,
+      matchScore: Number(stored.match_score),
+      matchDecision: stored.match_decision,
+      matchExplanation: stored.match_explanation,
+      matchConfidence:
+        rawConfidence === null || rawConfidence === undefined || rawConfidence === ''
+          ? null
+          : Number(rawConfidence),
+      matchReasons: safeJsonParse(stored.match_reasons, result.matchReasons || []),
+      matcherVersion: stored.matcher_version,
+      opportunity_kind: stored.opportunity_kind ?? result.opportunity_kind ?? null,
+      sponsor: stored.sponsor ?? result.sponsor ?? null,
+      source: stored.source ?? result.source ?? null,
+      record_origin: stored.record_origin ?? result.record_origin ?? null,
+      link_status: stored.link_status ?? result.link_status ?? null,
+      reality_status: stored.reality_status ?? result.reality_status ?? null,
+      reality_reasons: stored.reality_reasons ?? result.reality_reasons ?? null,
+      verification_status: stored.verification_status ?? result.verification_status ?? null,
+      last_verified_at: stored.last_verified_at ?? result.last_verified_at ?? null,
+      source_trust_tier: stored.source_trust_tier ?? result.source_trust_tier ?? null,
+      final_url: stored.final_url ?? result.final_url ?? null,
+      http_status: stored.http_status ?? result.http_status ?? null,
+      result_kind: stored.result_kind ?? result.result_kind ?? null,
+      is_hidden: stored.is_hidden ?? result.is_hidden ?? null,
+      is_active: stored.is_active ?? result.is_active ?? null,
+      deadline: stored.deadline ?? result.deadline ?? null,
+      deadline_type: stored.deadline_type ?? result.deadline_type ?? null,
+      is_loan: stored.is_loan ?? result.is_loan ?? null,
+      requires_match: stored.requires_match ?? result.requires_match ?? null,
+      match_explain: {
+        ...(result.match_explain || {}),
+        ...storedExplain,
+        why: stored.match_explanation || storedExplain?.why || result.match_explain?.why || null,
+        matcher_version: stored.matcher_version,
+      },
+    }
+  })
 }
 
 /**
@@ -317,6 +376,13 @@ const CRAWLER_TYPES = [
 function mapResultToFrontendShape(result) {
   const isScholarship = result.id?.startsWith('sch-');
   const isSchoolCard = result.id?.startsWith('school-');
+  const isDirectory = Boolean(
+    result.is_directory ||
+    result.is_directory_resource ||
+    result.type === 'portal' ||
+    result.type === 'referral' ||
+    String(result.opportunity_kind || '').toLowerCase() === 'directory',
+  )
 
   const contactObj = result.contact || null;
   const contactInfo = contactObj
@@ -331,7 +397,11 @@ function mapResultToFrontendShape(result) {
     url: result.url || result.applicationUrl || null,
     application_url: result.applicationUrl || result.url || null,
     source_url: result.url || null,
-    match_score: result.matchScore,
+    match_score: result.matchScore ?? result.match_score ?? null,
+    match_confidence: result.matchConfidence ?? result.match_confidence ?? null,
+    match_decision: result.matchDecision ?? result.match_decision ?? null,
+    match_explanation: result.matchExplanation ?? result.match_explanation ?? result.match_explain?.why ?? null,
+    matcher_version: result.matcherVersion ?? result.matcher_version ?? result.match_explain?.matcher_version ?? null,
     match_reasons: result.matchReasons || [],
     categories: result.matchedCategories || result.categories || [],
     opportunity_type: isSchoolCard
@@ -340,7 +410,7 @@ function mapResultToFrontendShape(result) {
     funding_type: result.fundingType || null,
     amount_max: result.maxAmount || null,
     amount_description: result.maxAmount ? `Up to $${result.maxAmount.toLocaleString()}` : null,
-    sponsor: isSchoolCard
+    sponsor: result.sponsor || (isSchoolCard
       ? (result.schoolName || 'University')
       : isScholarship
         ? 'Scholarship / Financial Aid'
@@ -348,20 +418,73 @@ function mapResultToFrontendShape(result) {
           ? `${result.stateRestriction} State Program`
           : result.id?.startsWith('fed-')
             ? 'Federal Government'
-            : 'National Program',
-    source: isSchoolCard ? 'school' : (isScholarship ? 'scholarship' : (result.stateRestriction ? 'state' : result.id?.startsWith('fed-') ? 'federal' : 'national')),
-    record_origin: isSchoolCard ? 'school_portal' : 'curated_program',
-    is_directory_resource: result.type === 'portal' || result.type === 'referral' || result.type === 'school_portal',
-    deadline_type: result.recurring ? 'rolling' : 'ongoing',
+            : 'National Program'),
+    source: result.source || (isSchoolCard ? 'school' : (isScholarship ? 'scholarship' : (result.stateRestriction ? 'state' : result.id?.startsWith('fed-') ? 'federal' : 'national'))),
+    record_origin: result.record_origin || (isSchoolCard ? 'school_portal' : 'curated_program'),
+    is_directory_resource: isDirectory,
+    is_directory: isDirectory,
+    opportunity_kind: result.opportunity_kind || (isDirectory ? 'directory' : null),
+    deadline: result.deadline || null,
+    deadline_type: result.deadline_type || (result.recurring ? 'rolling' : null),
     is_national: !result.stateRestriction,
     state: result.stateRestriction || null,
     contact_info: contactInfo,
+    link_status: result.link_status ?? null,
+    reality_status: result.reality_status ?? null,
+    reality_reasons: result.reality_reasons ?? null,
+    verification_status: result.verification_status ?? null,
+    last_verified_at: result.last_verified_at ?? null,
+    source_trust_tier: result.source_trust_tier ?? null,
+    final_url: result.final_url ?? null,
+    http_status: result.http_status ?? null,
+    result_kind: result.result_kind ?? null,
+    is_hidden: result.is_hidden ?? null,
+    is_active: result.is_active ?? null,
+    is_loan: result.is_loan ?? null,
+    requires_match: result.requires_match ?? null,
     school_name: isSchoolCard ? result.schoolName : null,
     eligibility_bullets: result.eligibility
       ? Object.entries(result.eligibility).map(([k, v]) => `${k.replace(/([A-Z])/g, ' $1').trim()}: ${v}`)
       : [],
     application_note: result.applicationNote || null,
     match_explain: result.match_explain || null,
+  }
+}
+
+/**
+ * Apply the canonical read/display contract without re-scoring a stored match.
+ * minScore is only a current-scale display preference: ACCEPT remains visible,
+ * REVIEW follows the requested floor, and honest pointers use the centralized
+ * directory/referral rule. Trust and lifecycle decisions remain inside the
+ * canonical result enricher.
+ */
+export function selectCanonicalDisplayOpportunities(
+  profileContext,
+  opportunities,
+  { minScore = DEFAULT_MIN_SCORE, maxResults = null } = {},
+) {
+  const normalizedMinScore = normalizeMinMatchScore(minScore)
+  const displayMinScore = normalizedMinScore === null ? DEFAULT_MIN_SCORE : normalizedMinScore
+  const canonical = canonicalizeOpportunityList(profileContext, opportunities, {
+    useStoredDecision: true,
+    preserveDirectories: true,
+    rejectHardIneligible: true,
+  })
+  const visible = canonical.kept.filter((opportunity) => qualifiesForDisplay({
+    ...opportunity,
+    is_directory: isDirectoryRecord(opportunity),
+  }, displayMinScore))
+  const bounded = Number.isFinite(Number(maxResults)) && Number(maxResults) > 0
+    ? visible.slice(0, Number(maxResults))
+    : visible
+
+  return {
+    opportunities: bounded,
+    dropped: canonical.dropped,
+    display_preference_excluded: canonical.kept.length - visible.length,
+    unsurfaced_above_floor_no_fit: canonical.unsurfacedAboveFloorNoFit,
+    min_match_score: displayMinScore,
+    score_scale_id: SCORE_SCALE_ID,
   }
 }
 
@@ -373,9 +496,8 @@ router.post('/run', ensureAuth, async (req, res) => {
   // CUTOVER: discovery + matching is the Crawler OS. Historical crawler_type
   // values are accepted as aliases only; every request uses the OS pipeline.
   const { crawler_type, profile_id, min_match_score: bodyMinScore, item_request: itemRequest } = req.body
-  let min_match_score = DEFAULT_MIN_SCORE
-  if (typeof bodyMinScore === 'number' && bodyMinScore >= 0 && bodyMinScore <= 100) min_match_score = bodyMinScore
-  else if (typeof bodyMinScore === 'string' && /^\d+$/.test(bodyMinScore)) min_match_score = Math.min(100, Math.max(0, parseInt(bodyMinScore, 10)))
+  const requestedMinScore = normalizeMinMatchScore(bodyMinScore)
+  const min_match_score = requestedMinScore === null ? DEFAULT_MIN_SCORE : requestedMinScore
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
     return res.status(400).json({ error: 'Invalid crawler type', message: `Invalid crawler type: ${crawler_type}`, available_crawlers: CRAWLER_TYPES })
   }
@@ -459,29 +581,33 @@ router.post('/run', ensureAuth, async (req, res) => {
     if (timedOut) {
       routeLogger.warn(`[RealCrawlers] run (${crawler_type}) for ${profile_id} exceeded gateway budget; returning partial (work continues in background)`)
     }
-    const rows = await db.prepare(
-      `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.application_url, fo.apply_url,
-              fo.source_url, fo.opportunity_kind, fo.deadline, fo.amount_min, fo.amount_max, fo.state,
-              m.match_score, m.match_decision, m.match_explanation
-         FROM profile_opportunity_matches m
-         JOIN funding_opportunities fo ON fo.id = m.opportunity_id
-        WHERE m.profile_id = ? AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
-          AND (fo.is_active IS NULL OR fo.is_active = 1)
-        ORDER BY m.match_score DESC`,
-    ).all(String(profile_id))
-    const results = rows.map((r) => ({
-      id: r.id, name: r.title, title: r.title, sponsor: r.sponsor, description: r.description,
-      url: r.application_url || r.apply_url || r.source_url || null,
-      deadline: r.deadline, amount_min: r.amount_min, amount_max: r.amount_max, state: r.state,
-      match_score: r.match_score, match_decision: r.match_decision,
-      match_explain: { why: r.match_explanation },
-      is_directory: String(r.opportunity_kind || '').toUpperCase() === 'DIRECTORY',
-    }))
+    const compatibilityResults = await loadCrawlerOsProfileResults(db, String(profile_id), 200)
+    const authoritativeResults = await attachStoredMatchAuthority(
+      db,
+      String(profile_id),
+      compatibilityResults,
+    )
+    const persistedResults = authoritativeResults.map(mapResultToFrontendShape)
+    let profileContext = null
+    try {
+      profileContext = await loadProfileContext(db, String(profile_id))
+    } catch {
+      // Stored Crawler OS decisions remain authoritative even when optional
+      // profile display context cannot be reconstructed on this read path.
+    }
+    const selection = selectCanonicalDisplayOpportunities(profileContext, persistedResults, {
+      minScore: min_match_score,
+    })
+    const results = selection.opportunities
     return res.json({
       success: true, crawler_type, profile_id, engine: 'crawler-os',
+      score_scale_id: SCORE_SCALE_ID,
+      min_match_score: selection.min_match_score,
       partial: timedOut, timed_out: timedOut,
       count: results.length, total_found: results.length,
       results, opportunities: results,
+      display_preference_excluded: selection.display_preference_excluded,
+      dropped: selection.dropped,
       sources: run?.sources ?? [], zero_result: run?.zero_result?.zero_result_reason ?? null,
       ...(timedOut ? { message: 'Search is still running in the background — showing results found so far. Check back shortly for more.' } : {}),
     })
@@ -525,6 +651,10 @@ router.get('/list', ensureAuth, (req, res) => {
  */
 router.post('/run-multiple', ensureAuth, async (req, res) => {
   const { profile_id, crawler_types, min_match_score = DEFAULT_MIN_SCORE } = req.body
+  const requestedDisplayMinScore = normalizeMinMatchScore(min_match_score)
+  const displayMinScore = requestedDisplayMinScore === null
+    ? DEFAULT_MIN_SCORE
+    : requestedDisplayMinScore
 
   if (!profile_id) {
     return res.status(400).json({
@@ -548,17 +678,17 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   let totalFound = 0
   let totalInserted = 0
 
-    // Load profile data for relevance filtering and crawler context (prevents cross-profile contamination)
-    let profileData = null
+    // Load the full profile once for the canonical display adapter. Crawler OS
+    // remains the sole matching authority; this route does not re-score it.
     let profileContext = null
     try {
       const ctx = await loadProfileContext(db, profile_id)
       if (ctx?.profile) {
         profileContext = ctx
-        profileData = extractProfileData(ctx)
       }
-    } catch (e) {
-      // continue without profile-based filtering
+    } catch {
+      // The canonical adapter can still consume stored decisions when the
+      // optional display context is unavailable.
     }
 
   try {
@@ -571,43 +701,22 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
       }
       try {
         const result = await runCrawler(db, profile_id, {
-          minScore: Math.max(1, Math.floor(Number(min_match_score) * 0.25)),
           maxResults: 50,
           crawlerType,
           profileContext,
         })
 
-        const mapped = filterActionableOpportunities(result.results.map(mapResultToFrontendShape))
-        const isDirectory = (opp) => (
-          Boolean(opp.is_directory_resource) ||
-          String(opp.source || '').startsWith('directory') ||
-          String(opp.record_origin || '').startsWith('directory')
+        const authoritativeResults = await attachStoredMatchAuthority(
+          db,
+          profile_id,
+          result.results,
         )
-        let filtered = mapped
-          .filter((opp) => {
-            const rel = applyRelevanceFilter(opp, profileData)
-            return rel.pass || isDirectory(opp)
-          })
-          .filter((opp) => typeof opp.match_score === 'number' && (opp.match_score >= Number(min_match_score) || isDirectory(opp)))
-          .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-          .slice(0, 50)
-
-        if (filtered.length === 0 && mapped.length > 0) {
-          filtered = mapped
-            .filter((opp) => {
-              const rel = applyRelevanceFilter(opp, profileData, { mode: 'soft' })
-              return rel.pass || isDirectory(opp)
-            })
-            .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-            .slice(0, 50)
-        }
-
-        filtered = filtered.flatMap((opp) => {
-          const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
-          if (!trust.display) return []
-          const meta = buildTrustMetadata(trust) || {}
-          return [{ ...opp, ...meta }]
+        const mapped = authoritativeResults.map(mapResultToFrontendShape)
+        const selection = selectCanonicalDisplayOpportunities(profileContext, mapped, {
+          minScore: displayMinScore,
+          maxResults: 50,
         })
+        const filtered = selection.opportunities
 
         totalFound += mapped.length
         totalInserted += filtered.length
@@ -620,6 +729,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
           used_curated: true,
           gated: result.debug?.gated || false,
           gate_reason: result.debug?.gateReason || null,
+          display_preference_excluded: selection.display_preference_excluded,
         })
       } catch (crawlErr) {
         failed.push({ crawler: crawlerType, error: crawlErr?.message || String(crawlErr), status: 500 })
@@ -638,24 +748,19 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
     failed,
     totalFound,
     totalInserted,
+    min_match_score: displayMinScore,
+    score_scale_id: SCORE_SCALE_ID,
   })
 })
 
 /**
- * Fire the FULL relevance-gated discovery fleet for a profile, on demand.
+ * Run the full profile-scoped Crawler OS discovery path synchronously.
  * POST /api/real-crawlers/discover-all
  *
- * Reuses the canonical relevance selector (triggerAutoDiscoveryCrawlers) — the
- * same code path that runs on login + daily — so gating is identical: a
- * corporation never gets student/scholarship crawlers, a student never gets
- * military/fire-department crawlers, foundation_990 only fires for org/nonprofit/
- * business profiles, clinical_trials only when opted in with conditions, etc.
- *
- * Profile-scoped (ensureProfileAccess) — no cross-tenant. Returns the honest
- * enqueued summary { jobs_enqueued, crawler_types } so the UI can report exactly
- * how many relevant crawlers were dispatched (never claims crawlers that didn't
- * run). The jobs themselves run in the BACKGROUND (fire-and-forget); this route
- * returns as soon as they are enqueued + dispatched.
+ * This is a compatibility alias over triggerAutoDiscoveryCrawlers, whose
+ * post-cutover contract executes runProfileDiscoveryLive before resolving. It
+ * therefore reports persisted counts and per-source receipts; it does not claim
+ * that retired crawler jobs were enqueued or are still running in background.
  */
 router.post('/discover-all', ensureAuth, async (req, res) => {
   const profileId = req.body?.profile_id
@@ -670,70 +775,56 @@ router.post('/discover-all', ensureAuth, async (req, res) => {
   if (!(await ensureProfileAccess(req, res, String(profileId)))) return
 
   try {
-    // Throttle: don't re-dispatch the whole crawler fleet if this profile was
-    // crawled very recently. Repeated Discover searches / slider changes would
-    // otherwise pile fleet load onto the small Postgres and starve the
-    // interactive matcher (→ statement_timeout 503 / 504). The catalog already
-    // holds the fresh results; let the client just read them. Honor ?force=1
-    // for an explicit re-crawl. Window is configurable.
-    const isPg = req.db?.dialect === 'postgres'
-    const force = req.query?.force === '1' || req.body?.force === true
-    const throttleMin = Number(process.env.DISCOVER_ALL_THROTTLE_MIN) || 10
-    if (!force) {
-      try {
-        const recent = await req.db
-          .prepare(
-            `SELECT parameters FROM crawler_jobs
-              WHERE profile_id = ?
-                AND requested_by IN ('auto-discovery','discover-all','scheduled-auto-discovery')
-                AND created_at > ${isPg ? `now() - interval '${throttleMin} minutes'` : `datetime('now','-${throttleMin} minutes')`}
-              ORDER BY created_at DESC LIMIT 1`,
-          )
-          .get(String(profileId))
-        if (recent) {
-          // QUALITY GUARD: only throttle when the recent crawl used the SAME
-          // profile snapshot. A profile edit changes the digest → we must
-          // re-crawl so results reflect the new inputs (never serve stale
-          // matches for changed data). If either digest is unknown we fail OPEN
-          // (re-crawl) rather than risk staleness.
-          let recentDigest = null
-          try {
-            const params = typeof recent.parameters === 'string' ? JSON.parse(recent.parameters) : (recent.parameters || {})
-            recentDigest = params?._profile_digest ?? null
-          } catch { /* unparseable params → treat as unknown digest */ }
-          let currentDigest = null
-          try { currentDigest = await computeProfileDigest(req.db, String(profileId)) } catch { /* unknown */ }
-          if (recentDigest && currentDigest && recentDigest === currentDigest) {
-            routeLogger.info(`[RealCrawlers] discover-all throttled for profile ${profileId} (same profile, crawled within ${throttleMin}m)`)
-            return res.json({
-              success: true,
-              profile_id: String(profileId),
-              jobs_enqueued: 0,
-              crawler_types: [],
-              throttled: true,
-              reason: 'recently_crawled_same_profile',
-            })
-          }
-        }
-      } catch { /* best-effort — if this fails we just proceed to crawl */ }
-    }
-
     const summary = await triggerAutoDiscoveryCrawlers(req.db, String(profileId), {
-      uploadDir: discoverAllUploadDir,
-      getOpenAI: getDiscoverAllOpenAI,
       requestedBy: 'discover-all',
       trigger: 'on_demand_discover_all',
     })
 
+    if (summary?.error) {
+      routeLogger.error(`[RealCrawlers] discover-all Crawler OS failure for ${profileId}: ${summary.error}`)
+      return res.status(500).json({
+        success: false,
+        error: 'discover-all failed',
+        message: String(summary.error),
+        profile_id: String(profileId),
+        engine: summary?.engine || 'crawler-os',
+        synchronous: true,
+        jobs_enqueued: 0,
+        crawler_types: [],
+        stored: 0,
+        matches: 0,
+        sources: [],
+        source_receipts: [],
+      })
+    }
+
+    const sources = Array.isArray(summary?.sources) ? summary.sources : []
+    const crawlerTypes = Array.isArray(summary?.crawler_types)
+      ? summary.crawler_types
+      : [...new Set(sources.map((source) => source?.source_id || source?.id).filter(Boolean))]
+    const stored = Number(summary?.stored ?? summary?.opportunities ?? 0) || 0
+    const matches = Number(summary?.matches ?? 0) || 0
+
     routeLogger.info(
-      `[RealCrawlers] discover-all enqueued ${summary?.jobs_enqueued ?? 0} jobs for profile ${profileId}: [${(summary?.crawler_types || []).join(', ')}]`,
+      `[RealCrawlers] discover-all completed synchronously for ${profileId}: stored=${stored}, matches=${matches}, sources=${sources.length}`,
     )
 
     return res.json({
       success: true,
       profile_id: String(profileId),
-      jobs_enqueued: summary?.jobs_enqueued ?? 0,
-      crawler_types: summary?.crawler_types ?? [],
+      engine: summary?.engine || 'crawler-os',
+      synchronous: summary?.synchronous === true,
+      // Deprecated compatibility fields stay present, but a synchronous run
+      // truthfully enqueues no background jobs.
+      jobs_enqueued: 0,
+      crawler_types: crawlerTypes,
+      stored,
+      matches,
+      planned: Number(summary?.planned ?? 0) || 0,
+      rejected: Number(summary?.rejected ?? 0) || 0,
+      recommendations: Number(summary?.recommendations ?? 0) || 0,
+      sources,
+      source_receipts: sources,
     })
   } catch (error) {
     routeLogger.error('[RealCrawlers] discover-all failed:', error)
@@ -741,8 +832,15 @@ router.post('/discover-all', ensureAuth, async (req, res) => {
       success: false,
       error: 'discover-all failed',
       message: error?.message || String(error),
+      profile_id: String(profileId),
+      engine: 'crawler-os',
+      synchronous: true,
       jobs_enqueued: 0,
       crawler_types: [],
+      stored: 0,
+      matches: 0,
+      sources: [],
+      source_receipts: [],
     })
   }
 })
@@ -800,6 +898,13 @@ router.get('/find-profile', ensureAdmin, async (req, res) => {
  */
 const WEB_LEAD_MIN_NEED_SCORE = Number(process.env.ITEM_WEB_LEAD_MIN_NEED_SCORE) || 10
 const WEB_LEAD_MAX_RESULTS = Number(process.env.ITEM_WEB_LEAD_MAX_RESULTS) || 12
+const ITEM_RELEVANCE_SCALE_ID = 'item_query_relevance_v1'
+
+function normalizeItemRelevanceFloor(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return WEB_LEAD_MIN_NEED_SCORE
+  return Math.min(100, Math.max(0, numeric))
+}
 
 /**
  * Specific need search (the Item Funding page's live search).
@@ -819,9 +924,19 @@ const WEB_LEAD_MAX_RESULTS = Number(process.env.ITEM_WEB_LEAD_MAX_RESULTS) || 12
  *      `variant: 'gift'` biases queries toward donation / in-kind programs.
  */
 router.post('/specific-need', ensureAuth, async (req, res) => {
-  // Default = the canonical data-point-scale bar; the old literal 30 was a
-  // retired-scale fossil that filtered out nearly everything (p90 is ~15).
-  const { profile_id, need_text, min_match_score = DEFAULT_MIN_SCORE, max_results = 20, variant = 'funding' } = req.body
+  const {
+    profile_id,
+    need_text,
+    min_item_relevance,
+    // Backward-compatible request alias only. This value ranks the submitted
+    // item/query; it never changes the canonical profile/opportunity decision.
+    min_match_score: legacyMinItemRelevance,
+    max_results = 20,
+    variant = 'funding',
+  } = req.body
+  const itemRelevanceFloor = normalizeItemRelevanceFloor(
+    min_item_relevance ?? legacyMinItemRelevance,
+  )
 
   if (!profile_id) return res.status(400).json({ error: 'profile_id is required' })
   if (!need_text || typeof need_text !== 'string' || need_text.trim().length < 2) {
@@ -900,7 +1015,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
     const seenUrls = new Set()
     for (const opp of curatedResults) {
       const needMatch = scoreNeedMatch(opp, expandedNeed)
-      if (needMatch && needMatch.score >= Number(min_match_score)) {
+      if (needMatch && needMatch.score >= itemRelevanceFloor) {
         const mapped = mapResultToFrontendShape(opp)
         mapped.need_match = {
           score: needMatch.score,
@@ -909,7 +1024,11 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
           expandedFrom: need_text,
           matchedKey: expandedNeed.matchedKey,
         }
-        mapped.combined_score = Math.round(mapped.match_score * 0.6 + needMatch.score * 0.4)
+        // Item relevance is a query-ranking signal, not eligibility evidence
+        // and not the canonical profile/opportunity match score. Keep the
+        // persisted match artifact on `mapped` unchanged.
+        mapped.item_relevance_score = needMatch.score
+        mapped.item_relevance_scale_id = ITEM_RELEVANCE_SCALE_ID
         mapped.result_source = 'curated'
         needScored.push(mapped)
         if (mapped.url) seenUrls.add(mapped.url.toLowerCase().replace(/\/$/, ''))
@@ -932,8 +1051,13 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       if (urlKey) seenUrls.add(urlKey)
       webLeads.push({
         ...lead,
-        match_score: score,
-        combined_score: score,
+        // Search hits have not been through the canonical profile/opportunity
+        // decision contract. Never mint a match score or qualification verdict
+        // from snippet overlap.
+        match_score: null,
+        match_decision: null,
+        item_relevance_score: score,
+        item_relevance_scale_id: ITEM_RELEVANCE_SCALE_ID,
         result_source: 'web_search',
         need_match: {
           score,
@@ -944,7 +1068,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
         },
       })
     }
-    webLeads.sort((a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0))
+    webLeads.sort((a, b) => (b.item_relevance_score ?? 0) - (a.item_relevance_score ?? 0))
     const webIncluded = webLeads.slice(0, WEB_LEAD_MAX_RESULTS)
 
     let detectedApplicantType = 'crawler-os-profile'
@@ -956,12 +1080,14 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       detectedApplicantType = 'crawler-os-profile'
     }
 
-    needScored.sort((a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0))
+    needScored.sort((a, b) => (b.item_relevance_score ?? 0) - (a.item_relevance_score ?? 0))
     const curatedFinal = needScored.slice(0, Number(max_results))
-    // Merge: curated matches + labeled web leads, ranked together by score.
+    // Merge: curated matches + labeled web leads, ranked together only by the
+    // item/query relevance estimate. Canonical match decisions remain intact
+    // for curated rows and explicitly absent for unreviewed web leads.
     // Leads carry result_source='web_search' so the UI shows honest provenance.
     const final = [...curatedFinal, ...webIncluded].sort(
-      (a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0),
+      (a, b) => (b.item_relevance_score ?? 0) - (a.item_relevance_score ?? 0),
     )
 
     const duration = Date.now() - startTime
@@ -971,6 +1097,9 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       engine: 'crawler-os',
       need_text,
       variant: needVariant,
+      item_relevance_floor: itemRelevanceFloor,
+      item_relevance_scale_id: ITEM_RELEVANCE_SCALE_ID,
+      item_relevance_semantics: 'query_ranking_only_not_eligibility_or_qualification',
       expanded: {
         canonicalNeed: expandedNeed?.canonicalNeed || null,
         matchedKey: expandedNeed?.matchedKey || null,
@@ -1104,18 +1233,18 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   // "Minimum match score" slider) is the default, then DEFAULT_MIN_SCORE.
   // The stored preference rides the sanctioned explicit-min path — the
   // DISPLAY floor itself is never lowered here.
-  const minScore = await resolveRunSmartMinScore(db, profile_id, min_match_score)
+  const resolvedMinScore = await resolveRunSmartMinScore(db, profile_id, min_match_score)
+  const normalizedMinScore = normalizeMinMatchScore(resolvedMinScore)
+  const minScore = normalizedMinScore === null ? DEFAULT_MIN_SCORE : normalizedMinScore
   const allOpportunities = []
   const seenTitles = new Set()
 
   // Load profile context once — reused across all crawlers and domain engines to prevent
   // cross-profile contamination from repeated live DB queries.
   let smartProfileContext = null
-  let smartProfileData = null
   try {
     const ctx = await loadProfileContext(db, profile_id)
     smartProfileContext = ctx
-    smartProfileData = ctx ? extractProfileData(ctx) : null
   } catch {
     // continue without profile context; crawlers will fall back to live DB load
   }
@@ -1156,6 +1285,11 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       t.includes('vocational rehabilitation'),
     )
   const dispatchProfDev = intentSignalsProfDev || profileIsLicensedProfessional || profileHasProfDevNeed
+  const pdIntent = detectProfessionalDevelopmentIntent({
+    searchTerms: need_text ? [String(need_text)] : [],
+    freeText: String(need_text || ''),
+    profileContext: smartProfileContext,
+  })
 
   let sourcesUsed = ['crawler-os']
   try {
@@ -1167,7 +1301,6 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
     // the "server took too long to respond" 504 the Discover page surfaced.
     const result = await withCrawlBudget(
       () => runProfileCrawlerOs(db, profile_id, {
-        minScore,
         maxResults: 200,
         crawlerType: 'crawler-os',
         profileContext: smartProfileContext,
@@ -1179,16 +1312,26 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       // Return whatever the crawler-os has already persisted so the user gets
       // results instead of a 504; the abandoned crawl finishes + persists the rest.
       const partial = await loadCrawlerOsProfileResults(db, profile_id, 200).catch(() => [])
-      const partialMapped = Array.isArray(partial) ? partial.map(mapResultToFrontendShape) : []
+      const authoritativePartial = await attachStoredMatchAuthority(db, profile_id, partial)
+      const partialMapped = authoritativePartial.map(mapResultToFrontendShape)
+      const partialPolicyRows = pdIntent.active
+        ? applyProfessionalDevelopmentQueryPolicy(partialMapped, pdIntent)
+        : partialMapped
+      const partialSelection = selectCanonicalDisplayOpportunities(
+        smartProfileContext,
+        partialPolicyRows,
+        { minScore, maxResults: 100 },
+      )
       return res.json({
         success: true,
         engine: 'crawler-os',
         partial: true,
         timed_out: true,
-        count: partialMapped.length,
+        count: partialSelection.opportunities.length,
         total_found: partialMapped.length,
         min_match_score: minScore,
-        opportunities: partialMapped,
+        score_scale_id: SCORE_SCALE_ID,
+        opportunities: partialSelection.opportunities,
         sources_used: ['crawler-os'],
         message: 'Search is still running in the background — showing results found so far. Check back shortly for more.',
       })
@@ -1196,8 +1339,13 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
     sourcesUsed = Array.isArray(result?.sources) && result.sources.length
       ? [...new Set(result.sources.map((s) => s?.source_id || s?.id).filter(Boolean))]
       : ['crawler-os']
-    const mapped = Array.isArray(result?.results)
-      ? result.results.map(mapResultToFrontendShape)
+    const authoritativeResults = await attachStoredMatchAuthority(
+      db,
+      profile_id,
+      result?.results,
+    )
+    const mapped = Array.isArray(authoritativeResults)
+      ? authoritativeResults.map(mapResultToFrontendShape)
       : []
     for (const opp of mapped) {
       const key = String(opp.url || opp.application_url || opp.title || opp.id || '')
@@ -1210,90 +1358,18 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       }
     }
 
-    // Spec §3: when professional-development intent is active, exclude
-    // generic cash-assistance / means-tested rows so SSI/SNAP/TANF don't
-    // pad the result list (the regression case from the original PROBE
-    // query). Directory-style or general funding directories survive — they
-    // help the user navigate to the right funder.
-    const isCashAssistanceOpportunity = (opp) => {
-      // Repo policy: `eqeqeq: ['error', 'always']` — spell the nullish
-      // check out explicitly so the corruption detector stays happy.
-      const stringifyForCashScan = (v) => {
-        if (v === null || v === undefined) return ''
-        if (Array.isArray(v)) return v.join(' ')
-        return String(v)
-      }
-      const haystack = [
-        opp?.title,
-        opp?.name,
-        opp?.description,
-        opp?.categories,
-        opp?.funding_category,
-        opp?.opportunity_type,
-        opp?.type,
-      ]
-        .map(stringifyForCashScan)
-        .join(' ')
-        .toLowerCase()
-      if (!haystack) return false
-      return [
-        'supplemental security income',
-        'ssi ',
-        ' ssi',
-        ' ssdi',
-        'tanf',
-        'snap benefits',
-        'food stamps',
-        'general assistance',
-        'cash assistance',
-        'income support',
-        'liheap',
-        'wic ',
-      ].some((kw) => haystack.includes(kw))
-    }
-
-    const filtered = filterActionableOpportunities(allOpportunities)
-      .filter((opp) => { const rel = applyRelevanceFilter(opp, smartProfileData); return rel.pass; })
-      .filter((opp) => {
-        if (!dispatchProfDev) return true
-        if (opp.is_directory_resource) return true
-        return !isCashAssistanceOpportunity(opp)
-      })
-      .filter((opp) => typeof opp.match_score !== 'number' || opp.match_score >= minScore || opp.is_directory_resource)
-      .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-      .slice(0, 100)
-
-    const pdIntent = detectProfessionalDevelopmentIntent({
-      searchTerms: need_text ? [String(need_text)] : [],
-      freeText: String(need_text || ''),
-      profileContext: smartProfileContext,
-    })
-
-    let working = filtered
-    if (pdIntent.active) {
-      // No curated injection here: run-smart must return only profile-specific
-      // Crawler OS results. The query policy may narrow/reorder OS rows.
-      working = applyProfessionalDevelopmentQueryPolicy(working, pdIntent)
-        .filter((opp) => (opp.match_score ?? 0) >= minScore || opp.is_directory_resource)
-        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-        .slice(0, 100)
-    }
-
-    // Canonical trust decoration — same vocabulary everywhere.
-    const decoratedSmart = working.map((opp) => {
-      const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
-      const meta = buildTrustMetadata(trust) || {}
-      return {
-        ...opp,
-        trust_tier: opp.trust_tier ?? meta.trust_tier,
-        source_trust: opp.source_trust ?? meta.source_trust,
-        trust_flags: opp.trust_flags ?? meta.trust_flags,
-        trust_reasons: opp.trust_reasons ?? meta.trust_reasons,
-        trust_downgrade: opp.trust_downgrade ?? meta.trust_downgrade,
-        trust_downgrade_reason: opp.trust_downgrade_reason ?? meta.trust_downgrade_reason,
-        actionable_url: opp.actionable_url ?? meta.actionable_url,
-      }
-    })
+    // Query intent may remove explicitly off-intent cash assistance, but it
+    // never changes the canonical match score or decision. The canonical
+    // adapter then applies trust/lifecycle and the explicit display preference.
+    const policyRows = pdIntent.active
+      ? applyProfessionalDevelopmentQueryPolicy(allOpportunities, pdIntent)
+      : allOpportunities
+    const selection = selectCanonicalDisplayOpportunities(
+      smartProfileContext,
+      policyRows,
+      { minScore, maxResults: 100 },
+    )
+    const decoratedSmart = selection.opportunities
 
     return res.json({
       success: true,
@@ -1301,6 +1377,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       count: decoratedSmart.length,
       total_found: allOpportunities.length,
       min_match_score: minScore,
+      score_scale_id: SCORE_SCALE_ID,
       opportunities: decoratedSmart,
       sources_used: sourcesUsed,
       dispatch_profile_development: dispatchProfDev,

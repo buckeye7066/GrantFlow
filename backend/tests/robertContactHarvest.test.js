@@ -40,10 +40,10 @@ const { pushQualifiedToJohn, makeYanaLeadSource, _resetYanaSchemaCache } = await
 )
 const { fetchLeadsForJohn } = await import('../services/john/johnYanaBridge.js')
 
-const GMAIL = 'buckeye7066@gmail.com'
-const YAHOO1 = 'firerookie_74@yahoo.com'
-const YAHOO2 = 'jwhiternmba@yahoo.com'
-const AXIOM = 'dr.johnwhite@axiombiolabs.org'
+const GMAIL = 'demo.owner-gmail@example.invalid'
+const YAHOO1 = 'demo.owner-yahoo-primary@example.invalid'
+const YAHOO2 = 'demo.owner-yahoo-secondary@example.invalid'
+const AXIOM = 'demo.owner-graph@example.invalid'
 
 function makeDb() {
   const sqlite = new Database(':memory:')
@@ -144,7 +144,7 @@ describe('robert contact harvest → yana verification lane', () => {
                   { name: 'No Reply', email: 'noreply@bank.com' },
                   { name: 'Grants List', email: 'grants-request@lists.example.org' },
                   { name: 'Comp Etitor', email: 'sales@instrumentl.com' },
-                  { name: 'John White', email: GMAIL }, // owner's own address
+                  { name: 'Demo Owner', email: GMAIL }, // owner's own address
                   { name: 'Colleague', email: 'colleague@axiombiolabs.org' }, // own org
                 ],
                 cc: [],

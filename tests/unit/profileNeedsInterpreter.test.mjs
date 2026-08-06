@@ -2,6 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { interpretProfileNeeds } from '../../backend/services/profileNeedsInterpreter.js'
+import {
+  DEFAULT_MIN_SCORE,
+  SCORE_SCALE_ID,
+} from '../../backend/config/matchThresholds.js'
 
 /**
  * Regression tests for backend/services/profileNeedsInterpreter.js
@@ -33,6 +37,8 @@ test('housing section + rent_help tag emits housing_stability need with searchTe
   assert.ok(housing.searchTerms.includes('rent relief'))
   assert.equal(housing.grantflowSearch.route, 'DiscoverGrants')
   assert.equal(housing.grantflowSearch.filters.category, 'housing')
+  assert.equal(housing.grantflowSearch.filters.minScore, DEFAULT_MIN_SCORE)
+  assert.equal(housing.grantflowSearch.filters.score_scale_id, SCORE_SCALE_ID)
   assert.ok(suggestedSearches.find((s) => s.title.toLowerCase().includes('housing')))
   // monthly housing cost missing should show up as a missing detail
   assert.ok(missingProfileDetails.find((m) => m.field === 'monthly housing cost'))
@@ -126,6 +132,28 @@ test('determinism: same input → same primaryNeeds keys & order', () => {
     a.primaryNeeds.map((n) => n.key),
     b.primaryNeeds.map((n) => n.key),
   )
+})
+
+test('every recommendation carries one current-scale minimum and a scale receipt', () => {
+  const interpreted = interpretProfileNeeds({
+    profile: {
+      primary_type: 'student',
+      state: 'TN',
+      tags: ['rent_help', 'emergency'],
+    },
+    sections: { education: { school_name: 'MTSU' } },
+  })
+
+  assert.ok(interpreted.primaryNeeds.length > 1)
+  for (const need of interpreted.primaryNeeds) {
+    assert.equal(need.grantflowSearch.filters.minScore, DEFAULT_MIN_SCORE)
+    assert.equal(need.grantflowSearch.filters.score_scale_id, SCORE_SCALE_ID)
+    assert.equal(Object.keys(need.grantflowSearch.filters).filter((key) => key === 'minScore').length, 1)
+  }
+  for (const search of interpreted.suggestedSearches) {
+    assert.equal(search.recommendedFilters.minScore, DEFAULT_MIN_SCORE)
+    assert.equal(search.recommendedFilters.score_scale_id, SCORE_SCALE_ID)
+  }
 })
 
 test('CSV string tags are split correctly (legacy profile shape)', () => {

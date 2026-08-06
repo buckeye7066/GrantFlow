@@ -34,6 +34,9 @@ const {
   dispatchInput,
 } = await import('../services/hamilton/hamiltonCloudLogin.js')
 
+const FIXTURE_HOST = 'hamilton-submit-fixture.invalid'
+const FIXTURE_ORIGIN = `https://${FIXTURE_HOST}`
+
 function makeFakeCdp({ failWith = null } = {}) {
   const sent = []
   return {
@@ -75,14 +78,15 @@ function makeFakeLaunch({
     storageState.mockImplementation(async () => (
       captureState !== undefined
         ? captureState
-        : (opts.storageState || { cookies: [{ name: 'csrf', value: 'x', domain: 'mtsu.edu', path: '/' }], origins: [] })
+        : (opts.storageState || { cookies: [{ name: 'csrf', value: 'x', domain: FIXTURE_HOST, path: '/' }], origins: [] })
     ))
     const ctx = {
       opts,
+      route: vi.fn(async () => {}),
       newCDPSession,
       newPage: async () => ({
         goto: vi.fn(async () => {}),
-        url: () => 'https://mtsu.edu/landing',
+        url: () => `${FIXTURE_ORIGIN}/landing`,
         viewportSize: () => ({ width: 1280, height: 900 }),
         context: () => ctx,
         ...(passwordFieldCount === null ? {} : {
@@ -105,9 +109,9 @@ async function startLive(launchBrowser) {
   const res = await startCloudLogin({
     userId: 'u1',
     profileId: 'pA',
-    portalHost: 'mtsu.edu',
-    loginUrl: 'https://mtsu.edu/login',
-    label: 'MTSU',
+    portalHost: FIXTURE_HOST,
+    loginUrl: `${FIXTURE_ORIGIN}/login`,
+    label: 'Synthetic portal fixture',
     db: null,
     launchBrowser,
   })

@@ -1,13 +1,13 @@
 import express from 'express'
 import pdfParse from 'pdf-parse'
-import fetch from 'node-fetch'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import { requireAuthenticatedUser, ensureOrganizationAccess } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { parseGrantsGovDigest } from '../../shared/grantsGovDigestParser.js'
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
-import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js'
+import { RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
+import { fetchPublicResource, publicFetchFailureStatus } from '../utils/safeRemoteFetch.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:nofo')
@@ -15,12 +15,18 @@ const routeLogger = createLogger('route:nofo')
 // A caller-supplied minMatchThreshold may not drop a save below the canonical
 // pipeline relevance floor — clamp every request-controlled threshold so the
 // NOFO import endpoints can't be used to smuggle sub-floor rows into a pipeline.
-const clampPipelineThreshold = (value) =>
-  Math.max(Number.isFinite(Number(value)) ? Number(value) : 55, RELEVANCE_FLOOR)
+const clampPipelineThreshold = (value) => {
+  const numeric = Number(value)
+  const requested = Number.isFinite(numeric)
+    ? Math.max(0, Math.min(100, numeric))
+    : RELEVANCE_FLOOR
+  return Math.max(requested, RELEVANCE_FLOOR)
+}
 
 const router = express.Router()
 
 const MAX_TEXT_CHARS = Number(process.env.NOFO_PARSE_MAX_TEXT_CHARS || 14_000)
+const MAX_REMOTE_BYTES = Number(process.env.NOFO_FETCH_MAX_BYTES || 20 * 1024 * 1024)
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'
 
 function getOpenAIOptional() {
@@ -59,54 +65,43 @@ function tryExtractFirstJson(text) {
 }
 
 async function fetchPdfTextFromUrl(fileUrl) {
-  let parsedUrl
-  try {
-    parsedUrl = new URL(fileUrl)
-  } catch {
-    const err = new Error(`Invalid URL: ${fileUrl}`)
-    err.status = 400
-    throw err
-  }
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    const err = new Error(`Unsupported URL scheme: ${parsedUrl.protocol}`)
-    err.status = 400
-    throw err
-  }
   const FETCH_TIMEOUT_MS = Number(process.env.NOFO_FETCH_TIMEOUT_MS || 20_000)
-  const controller = new AbortController()
-  const fetchTimer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-  let resp
-  try {
-    resp = await fetch(fileUrl, {
-      signal: controller.signal,
-      headers: {
-        // Grants.gov and some provider sites require a User-Agent to return the full document/page.
-        'User-Agent': 'GrantFlow NOFO Parser (+https://app.axiombiolabs.org)',
-        Accept: 'text/html,application/pdf;q=0.9,*/*;q=0.8',
-      },
-    })
-  } catch (fetchErr) {
-    clearTimeout(fetchTimer)
-    const err = new Error(
-      fetchErr.name === 'AbortError'
-        ? `Fetch timed out after ${FETCH_TIMEOUT_MS}ms: ${fileUrl}`
-        : `Fetch error: ${fetchErr.message}`
-    )
-    err.status = 504
+  const remote = await fetchPublicResource(fileUrl, {
+    timeoutMs: FETCH_TIMEOUT_MS,
+    maxBytes: MAX_REMOTE_BYTES,
+    allowedContentTypes: [
+      'application/pdf',
+      'application/octet-stream',
+      'text/html',
+      'application/xhtml+xml',
+      'text/plain',
+      'application/xml',
+      'text/xml',
+    ],
+    userAgent: 'GrantFlow NOFO Parser (+https://app.axiombiolabs.org)',
+    accept: 'text/html,application/pdf;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+  })
+  if (!remote.ok) {
+    const err = new Error(`Unable to fetch public HTTPS resource: ${remote.reason}`)
+    err.status = publicFetchFailureStatus(remote)
+    err.code = `REMOTE_FETCH_${String(remote.reason || 'FAILED').toUpperCase()}`
     throw err
   }
-  clearTimeout(fetchTimer)
-  if (!resp.ok) {
-    const err = new Error(`Failed to fetch file (HTTP ${resp.status})`)
-    err.status = resp.status
-    throw err
-  }
-  const contentType = String(resp.headers.get('content-type') || '').toLowerCase()
+  const contentType = String(remote.contentType || '').toLowerCase()
 
   // Some callers pass a web page URL (e.g. grants.gov detail pages). In those cases,
   // pdf-parse will throw because the payload is HTML. Treat non-PDF content as text/HTML
   // and extract a best-effort plain-text representation.
-  const buf = Buffer.from(await resp.arrayBuffer())
+  const buf = remote.body
+  if (
+    contentType === 'application/octet-stream' &&
+    (buf.length < 5 || buf.subarray(0, 5).toString('ascii') !== '%PDF-')
+  ) {
+    const err = new Error('Remote server returned an unverified binary NOFO type.')
+    err.status = 415
+    err.code = 'REMOTE_NOFO_TYPE_UNVERIFIED'
+    throw err
+  }
   const asString = () => {
     try {
       return buf.toString('utf8')
@@ -302,7 +297,7 @@ router.post('/parseNOFO', standardRateLimiter, async (req, res) => {
   } catch (error) {
     console.error('[parseNOFO] Failed:', error)
     const status = Number(error?.status)
-    if (Number.isFinite(status) && status >= 400 && status < 500) {
+    if (Number.isFinite(status) && status >= 400 && status <= 599) {
       return res.status(status).json({
         success: false,
         message:
@@ -360,7 +355,9 @@ router.post('/importGrantsGovDigest', standardRateLimiter, async (req, res) => {
     const text = typeof req.body?.text === 'string' ? req.body.text : ''
     const organizationId = req.body?.organizationId ?? req.body?.organization_id ?? null
     const profileIdInput = req.body?.profileId ?? req.body?.profile_id ?? null
-    const minMatchThreshold = clampPipelineThreshold(req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? 55)
+    const minMatchThreshold = clampPipelineThreshold(
+      req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? RELEVANCE_FLOOR,
+    )
 
     if (!text.trim()) {
       return res.status(400).json({ success: false, message: 'text is required' })
@@ -445,7 +442,9 @@ router.post('/saveToProfilePipeline', standardRateLimiter, async (req, res) => {
     const opportunity = req.body?.opportunity
     const organizationId = req.body?.organizationId ?? req.body?.organization_id ?? opportunity?.organization_id ?? null
     const profileIdInput = req.body?.profileId ?? req.body?.profile_id ?? null
-    const minMatchThreshold = clampPipelineThreshold(req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? 55)
+    const minMatchThreshold = clampPipelineThreshold(
+      req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? RELEVANCE_FLOOR,
+    )
 
     if (!opportunity || typeof opportunity !== 'object' || Array.isArray(opportunity)) {
       return res.status(400).json({ success: false, message: 'opportunity object is required' })
@@ -515,4 +514,3 @@ router.post('/saveToProfilePipeline', standardRateLimiter, async (req, res) => {
 })
 
 export default router
-

@@ -2,10 +2,13 @@ name: CodeQL
 
 on:
   pull_request:
+  # Branch pushes are the pre-merge full-scan lane. GitHub's pull_request
+  # analysis is diff-informed, so it cannot be compared honestly with the
+  # reviewed whole-repository baseline.
   push:
-    branches: [main]
   schedule:
     - cron: "30 8 * * 1"
+  workflow_dispatch:
 
 # See ci.yml: supersede in-flight runs per branch, but never on main, whose
 # per-commit analysis record must stay complete — main gets a UNIQUE group per
@@ -33,28 +36,47 @@ jobs:
       - name: Setup Node 20 for baseline enforcement
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 20
+          node-version: 20.20.2
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           languages: javascript-typescript
           queries: security-extended,security-and-quality
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/autobuild@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
 
       - name: Perform CodeQL Analysis
         id: analyze
-        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           # This private repo does not currently have GitHub Advanced Security
           # purchased, so Code Scanning uploads fail with a configuration error.
           # Keep the analysis real, retain SARIF, and enforce the measured baseline.
           upload: never
 
-      - name: Block new high-confidence findings
-        if: steps.analyze.outputs.sarif-output != ''
+      - name: Require full-scan SARIF output
+        if: github.event_name != 'pull_request'
+        env:
+          CODEQL_SARIF_OUTPUT: ${{ steps.analyze.outputs.sarif-output }}
+        run: |
+          if [ -z "$CODEQL_SARIF_OUTPUT" ]; then
+            echo "CodeQL analyze did not publish a SARIF output path" >&2
+            exit 1
+          fi
+          if [ ! -e "$CODEQL_SARIF_OUTPUT" ]; then
+            echo "CodeQL SARIF output path does not exist: $CODEQL_SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
+      - name: Enforce reviewed full-scan CodeQL baseline
+        if: github.event_name != 'pull_request'
+        env:
+          CODEQL_SCAN_EVENT: ${{ github.event_name }}
+          CODEQL_SCAN_REPOSITORY: ${{ github.repository }}
+          CODEQL_SCAN_SHA: ${{ github.sha }}
+          CODEQL_SCAN_REF: ${{ github.ref }}
         run: >-
           node scripts/check-codeql-baseline.mjs
           "${{ steps.analyze.outputs.sarif-output }}"

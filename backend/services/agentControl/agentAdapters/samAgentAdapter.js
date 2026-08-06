@@ -35,7 +35,7 @@ const SAM_ADMIN_CTX = Object.freeze({
   id: SAM_SYSTEM_USER_ID,
   email: (process.env.AGENT_CONTROL_ADMIN_EMAIL
     || process.env.ADMIN_EMAIL
-    || 'buckeye7066@gmail.com').trim().toLowerCase(),
+    || 'admin@grantflow.local').trim().toLowerCase(),
 })
 
 export class SamAgentAdapter extends BaseAgentAdapter {

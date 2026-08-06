@@ -33,6 +33,15 @@ function fakeFetcher(bodyByUrl) {
   }
 }
 
+function withSearchMeta(rows, meta) {
+  const results = [...rows]
+  Object.defineProperty(results, 'searchMeta', {
+    value: Object.freeze(meta),
+    enumerable: false,
+  })
+  return results
+}
+
 describe('runWebDiscoveryLane', () => {
   it('stores a real extracted opportunity and matches it; rejects a sponsorless one', async () => {
     const store = createMemoryStore()
@@ -96,6 +105,58 @@ describe('runWebDiscoveryLane', () => {
     const res = await runWebDiscoveryLane({ store: null }, { thesis })
     expect(res.ok).toBe(false)
     expect(res.reason).toBe('web_lane_deps_missing')
+  })
+
+  it('preserves live per-query searchMeta and truthfully aggregates provider status', async () => {
+    const store = createMemoryStore()
+    const searchWeb = vi.fn(async () => withSearchMeta([], {
+      provider: 'google_cse',
+      provenance: 'live',
+      status: 'empty',
+      cache_age_ms: null,
+      provider_mode: 'official_api',
+    }))
+    const res = await runWebDiscoveryLane(
+      { store, fetcher: fakeFetcher({}), searchWeb, extractOpportunities: vi.fn() },
+      { thesis, runId: 'provenance-live', maxQueries: 2, seed: 0 },
+    )
+
+    expect(res.search_provenance).toHaveLength(2)
+    expect(res.search_provenance[0]).toMatchObject({
+      query_index: 0,
+      provider: 'google_cse',
+      provenance: 'live',
+      status: 'empty',
+      cache_age_known: false,
+    })
+    expect(res.search_provider_counts).toEqual({ google_cse: 2 })
+    expect(res.search_cache_hits).toBe(0)
+    expect(res.search_unknown_provenance_count).toBe(0)
+    expect(res.search_degraded_queries).toBe(0)
+    expect(res.search_unavailable_queries).toBe(0)
+  })
+
+  it('does not disguise cache metadata or a thrown query as healthy live provenance', async () => {
+    const store = createMemoryStore()
+    const searchWeb = vi.fn()
+      .mockResolvedValueOnce(withSearchMeta([], {
+        provider: 'cache',
+        provenance: 'cache',
+        status: 'ok',
+        cache_age_ms: null,
+      }))
+      .mockRejectedValueOnce(new Error('provider failed'))
+    const res = await runWebDiscoveryLane(
+      { store, fetcher: fakeFetcher({}), searchWeb, extractOpportunities: vi.fn() },
+      { thesis, runId: 'provenance-fail-closed', maxQueries: 2, seed: 0 },
+    )
+
+    expect(res.search_provenance).toHaveLength(2)
+    expect(res.search_provenance[0]).toMatchObject({ provider: 'cache', provenance: 'cache', status: 'ok' })
+    expect(res.search_provenance[1]).toMatchObject({ provider: 'unknown', provenance: 'unknown', status: 'error' })
+    expect(res.search_cache_hits).toBe(1)
+    expect(res.search_unknown_provenance_count).toBe(1)
+    expect(res.search_unavailable_queries).toBe(1)
   })
 
   it('breadth budgets default to 20 queries and honour the env overrides (2026-08-03 recall audit)', async () => {

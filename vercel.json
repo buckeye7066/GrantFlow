@@ -35,6 +35,7 @@
     { "source": "/uploads/:path*", "destination": "/api/preview-backend-disabled" },
     { "source": "/welcome", "destination": "/welcome.html" },
     { "source": "/privacy", "destination": "/privacy.html" },
+    { "source": "/deployment-version.json", "destination": "/assets/deployment-version.json" },
     { "source": "/grantflow/((?!assets/).*)", "destination": "/index.html" },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
   ],
@@ -63,6 +64,10 @@
         { "key": "Cache-Control", "value": "no-store" },
         { "key": "x-vercel-enable-rewrite-caching", "value": "0" }
       ]
+    },
+    {
+      "source": "/deployment-version.json",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
     },
     {
       "source": "/assets/(.*)",

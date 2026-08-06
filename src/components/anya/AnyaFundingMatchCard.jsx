@@ -4,14 +4,18 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ExternalLink, BookmarkPlus, MessageCircle, ListChecks } from 'lucide-react'
 import { formatMatchAmount, formatMatchDeadline } from './anyaResultsFormatters'
+import { canonicalMatchDisplay } from '@/lib/matchDisplayThresholds'
 
-function scoreLabel(score) {
-  const n = Number(score || 0)
-  if (n >= 0.85) return { label: 'Excellent fit', tone: 'default' }
-  if (n >= 0.7) return { label: 'Strong fit', tone: 'default' }
-  if (n >= 0.5) return { label: 'Possible fit', tone: 'secondary' }
-  return { label: 'Worth a look', tone: 'outline' }
-}
+const MATCH_TONES = Object.freeze({
+  excellent: 'default',
+  good: 'default',
+  fair: 'secondary',
+  potential: 'secondary',
+  low: 'outline',
+  review: 'secondary',
+  rejected: 'destructive',
+  unrated: 'outline',
+})
 
 function trustLabel(match) {
   const t = (match?.source_trust_tier || match?.source_trust || '').toLowerCase()
@@ -28,7 +32,10 @@ function trustLabel(match) {
  */
 export function AnyaFundingMatchCard({ match, onView, onSave, onAddToPipeline, onAsk }) {
   if (!match) return null
-  const fit = scoreLabel(match.match_score ?? match.score)
+  const fit = canonicalMatchDisplay({
+    score: match.match_score ?? match.score,
+    decision: match.match_decision ?? match.decision,
+  })
   const trust = trustLabel(match)
   const deadline = formatMatchDeadline(match)
   const reasons = Array.isArray(match.match_reasons) ? match.match_reasons : Array.isArray(match.reasons) ? match.reasons : []
@@ -38,7 +45,7 @@ export function AnyaFundingMatchCard({ match, onView, onSave, onAddToPipeline, o
       <CardHeader className="space-y-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <CardTitle className="text-base">{match.title || match.name || 'Funding opportunity'}</CardTitle>
-          <Badge variant={fit.tone}>{fit.label}</Badge>
+          <Badge variant={MATCH_TONES[fit.tier] || 'outline'}>{fit.label}</Badge>
         </div>
         <CardDescription>
           {match.sponsor || match.funder || match.source || 'Source pending verification'}
@@ -54,7 +61,7 @@ export function AnyaFundingMatchCard({ match, onView, onSave, onAddToPipeline, o
           </div>
           <div>
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Deadline</div>
-            <div className="font-medium">{deadline || 'Rolling / not posted'}</div>
+            <div className="font-medium">{deadline || 'Deadline not posted'}</div>
           </div>
         </div>
 

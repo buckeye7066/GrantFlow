@@ -2,7 +2,7 @@
   "app_id": "app-store-publisher",
   "display_name": "App Store Publisher",
   "repo": "buckeye7066/app-store-publisher",
-  "local_path": "C:/Users/firer/app-store-publisher",
+  "local_path": "C:/Users/example_user/app-store-publisher",
   "runtime_type": "web",
   "start_command": "npm start",
   "stop_command": "taskkill-by-port",

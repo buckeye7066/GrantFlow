@@ -35,7 +35,9 @@ vi.mock('../services/hamilton/hamiltonAutomationOrchestrator.js', async (importO
 
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
-const hamiltonRouter = (await import('../routes/hamiltonAutomation.js')).default
+const hamiltonRouteModule = await import('../routes/hamiltonAutomation.js')
+const hamiltonRouter = hamiltonRouteModule.default
+const { resolveConfiguredHamiltonFrontendOrigin } = hamiltonRouteModule
 const { attachRequestContext } = await import('../middleware/requestContext.js')
 const {
   ensureApplicationTaskSchema,
@@ -140,7 +142,7 @@ describe('HamiltonAgentAdapter — due-task re-pick', () => {
 describe('POST /tasks/:taskId/retry — truthful retry accounting', () => {
   it('increments retry_count on every manual retry and appends a manual_retry event', async () => {
     const db = await makeDb()
-    db.raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-retry', 'Robert White')
+    db.raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-retry', 'Demo College Student Persona')
     const task = await ensureApplicationTask(db, {
       profileId: 'p-retry', grantId: 'g-retry', automationType: 'portal', initialStatus: 'queued',
     })
@@ -160,6 +162,109 @@ describe('POST /tasks/:taskId/retry — truthful retry accounting', () => {
     const retryEvents = events.filter((e) => e.step === 'manual_retry')
     expect(retryEvents.length).toBe(2)
     expect(retryEvents[1].details.retry_count).toBe(2)
+  })
+
+  it.each(['submit_attempt_started', 'submit_evidence_pending', 'submission_verification_required'])(
+    'refuses a manual retry while %s is unresolved',
+    async (status) => {
+      const db = await makeDb()
+      db.raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-no-retry', 'Demo Applicant')
+      const task = await ensureApplicationTask(db, {
+        profileId: 'p-no-retry', grantId: `g-${status}`, automationType: 'portal', initialStatus: 'queued',
+      })
+      await updateApplicationTask(db, task.id, { status })
+
+      const response = await request(createApp(db)).post(`/api/hamilton/automation/tasks/${task.id}/retry`)
+
+      expect(response.status).toBe(409)
+      expect(response.body.error).toBe('submission_verification_required')
+      expect(response.body.message).toMatch(/check the funder portal/i)
+      expect((await getApplicationTask(db, task.id)).retry_count).toBe(0)
+    },
+  )
+})
+
+describe('legacy Hamilton route irreversible boundaries', () => {
+  it('records manual mail/email/fax dispatch without claiming external receipt', async () => {
+    const db = await makeDb()
+    db.raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-dispatch', 'Demo Applicant')
+    const task = await ensureApplicationTask(db, {
+      profileId: 'p-dispatch', grantId: 'g-dispatch', automationType: 'email', initialStatus: 'ready_to_email',
+    })
+
+    const response = await request(createApp(db))
+      .post(`/api/hamilton/automation/tasks/${task.id}/mark-emailed`)
+
+    expect(response.status).toBe(200)
+    const updated = await getApplicationTask(db, task.id)
+    expect(updated.status).toBe('submission_verification_required')
+    expect(updated.submitted_at).toBeNull()
+    expect(updated.completed_at).toBeNull()
+    const events = await listTaskEvents(db, task.id)
+    const dispatch = events.find((event) => event.step === 'manual_dispatch_recorded')
+    expect(dispatch).toBeTruthy()
+    expect(dispatch.event_type).toBe('note')
+    expect(dispatch.details).toMatchObject({ channel: 'email', external_receipt_verified: false })
+  })
+
+  it('does not provide a second way to re-enable submission while evidence is unresolved', async () => {
+    const db = await makeDb()
+    db.raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-uncertain', 'Uncertain Owner')
+    const task = await ensureApplicationTask(db, {
+      profileId: 'p-uncertain', grantId: 'g-uncertain', automationType: 'portal', initialStatus: 'queued',
+    })
+    await updateApplicationTask(db, task.id, { status: 'submission_verification_required' })
+
+    const response = await request(createApp(db))
+      .post(`/api/hamilton/automation/tasks/${task.id}/approve`)
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toBe('submission_verification_required')
+    expect(response.body.message).toMatch(/check the funder portal/i)
+    expect((await getApplicationTask(db, task.id)).allow_auto_submit).toBe(false)
+  })
+
+  it.each([
+    { storageStatePath: '/etc/passwd' },
+    { storageStateRef: 'vault://caller-controlled-reference' },
+  ])('rejects caller-supplied legacy session pointers: %o', async (pointer) => {
+    const db = await makeDb()
+    db.raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-session', 'Session Owner')
+
+    const response = await request(createApp(db))
+      .post('/api/hamilton/automation/sessions')
+      .send({ profileId: 'p-session', portalHost: 'example.gov', ...pointer })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error).toBe('session_pointer_not_accepted')
+    expect(response.body.message).toMatch(/encrypted storage state|session-capture/i)
+  })
+
+  it('never reflects the browser access token or request Host into a capture command', async () => {
+    const db = await makeDb()
+    db.raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-token', 'Token Owner')
+
+    const response = await request(createApp(db))
+      .post('/api/hamilton/automation/sessions/capture-token')
+      .set('authorization', 'Bearer owner-access-secret')
+      .set('host', 'attacker.example')
+      .send({ profileId: 'p-token' })
+
+    expect(response.status).toBe(410)
+    expect(response.body.error).toBe('capture_token_disabled')
+    expect(response.body).not.toHaveProperty('token')
+    expect(response.body).not.toHaveProperty('api_base')
+    expect(JSON.stringify(response.body)).not.toMatch(/owner-access-secret|attacker\.example/)
+  })
+
+  it('uses only a validated configured frontend origin for cloud-login links', () => {
+    expect(resolveConfiguredHamiltonFrontendOrigin({
+      AUTH_FRONTEND_URL: 'https://app.example.org/grantflow',
+    })).toBe('https://app.example.org')
+    expect(resolveConfiguredHamiltonFrontendOrigin({
+      AUTH_FRONTEND_URL: 'javascript:alert(1)',
+    })).toBeNull()
+    expect(resolveConfiguredHamiltonFrontendOrigin({})).toBeNull()
   })
 })
 

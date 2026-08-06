@@ -968,7 +968,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
 
   // Disability is also commonly captured on the DEMOGRAPHICS section
   // (`disability_status: "Has disability"` / boolean), not only on health_medical.
-  // Read it here so a profile like Avanell (disability declared in demographics)
+  // Read it here so a profile like demo_senior_applicant (disability declared in demographics)
   // still surfaces the disability facet + need.
   let hasDisabilityFromDemographics = false
   {

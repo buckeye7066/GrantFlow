@@ -16,6 +16,7 @@ import {
   listProfileTasks,
 } from '../services/anyaOrchestrator.js'
 import { createAnyaRun, appendAnyaRunLog, completeAnyaRun, getAnyaRun, requestAnyaRunCancel } from '../services/anyaRuns.js'
+import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:anya')
@@ -52,14 +53,13 @@ let _statusTestCache = null
 let _statusTestCacheExpiry = 0
 const STATUS_TEST_CACHE_TTL_MS = 5 * 60 * 1000
 
-function getInternalBaseUrl(req) {
-  const configured = String(process.env.ANYA_SELF_BASE_URL || '').trim()
-  if (configured) return configured.replace(/\/+$/, '')
-
-  const host = req.get('host')
-  if (!host) return null
-  const protocol = req.protocol || 'http'
-  return `${protocol}://${host}`
+function getInternalBaseUrl() {
+  const resolved = resolveInternalSelfBaseUrl()
+  if (!resolved.ok) {
+    routeLogger.warn('[anya] internal self URL unavailable', { reason: resolved.reason })
+    return null
+  }
+  return resolved.baseUrl
 }
 
 /**
@@ -663,7 +663,7 @@ router.post('/tools/:toolName/invoke', async (req, res) => {
 
     const result = await invokeTool(req.db, req.ctx, req.params.toolName, params, {
       sessionId,
-      internalBaseUrl: getInternalBaseUrl(req),
+      internalBaseUrl: getInternalBaseUrl(),
     })
 
     await completeAnyaRun(req.db, runId, { status: 'completed', response: result })

@@ -14,15 +14,15 @@ import path from 'path'
 import { ADMIN_EMAIL } from './constants.js'
 
 const SOURCE_SAFE_PROFILE_MAPPINGS = {
-  [ADMIN_EMAIL]: null, // Admin has access to all profiles.
-  'client.avanell@example.invalid': 'profile-avanell-leamon',
-  'client.olivia@example.invalid': 'profile-olivia-beltran',
-  'client.brian@example.invalid': 'profile-brian-client',
-  'client.hollie@example.invalid': 'profile-hollie-knox',
-  'client.angelika@example.invalid': 'profile-angelika-ptak',
-  'client.paul@example.invalid': 'profile-paul-jason-dasher',
-  'client.rachel@example.invalid': 'profile-rachel-miller',
-  'client.melissa@example.invalid': 'profile-melissa-justus',
+  ...(ADMIN_EMAIL ? { [ADMIN_EMAIL]: null } : {}), // Admin has access to all profiles.
+  'demo.senior-accessibility@example.invalid': 'profile-demo-senior-accessibility',
+  'demo.wellness-business@example.invalid': 'profile-demo-wellness-business',
+  'demo.veteran-community@example.invalid': 'profile-demo-veteran-community',
+  'demo.caregiver-household@example.invalid': 'profile-demo-caregiver-household',
+  'demo.healthcare-workforce@example.invalid': 'profile-demo-healthcare-workforce',
+  'demo.workforce-training@example.invalid': 'profile-demo-workforce-training',
+  'demo.education-support@example.invalid': 'profile-demo-education-support',
+  'demo.general-support@example.invalid': 'profile-demo-general-support',
 }
 
 function normalizeMappings(value) {

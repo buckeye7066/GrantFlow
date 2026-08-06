@@ -2,14 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  OWNER_ADMIN_EMAIL,
   hasFullAdminWorkspace,
   usesSimplifiedWorkspace,
 } from '../../src/lib/workspaceAccess.js'
 
-test('canonical owner email keeps the full admin workspace', () => {
-  assert.equal(hasFullAdminWorkspace({ email: OWNER_ADMIN_EMAIL }), true)
-  assert.equal(hasFullAdminWorkspace({ primary_email: OWNER_ADMIN_EMAIL.toUpperCase() }), true)
+test('an email address alone never grants the full admin workspace', () => {
+  assert.equal(hasFullAdminWorkspace({ email: 'admin@example.invalid' }), false)
+  assert.equal(hasFullAdminWorkspace({ primary_email: 'ADMIN@example.invalid' }), false)
 })
 
 test('recognized admin shapes keep the full workspace', () => {
@@ -55,7 +54,7 @@ test('an /api/auth/me envelope for an ordinary member stays simplified', () => {
   assert.equal(usesSimplifiedWorkspace(envelope), true)
 })
 
-test('the owner email inside an envelope keeps the full workspace', () => {
-  const envelope = { user: { primary_email: OWNER_ADMIN_EMAIL }, profiles: [] }
-  assert.equal(hasFullAdminWorkspace(envelope), true)
+test('an email-only user inside an envelope stays simplified', () => {
+  const envelope = { user: { primary_email: 'admin@example.invalid' }, profiles: [] }
+  assert.equal(hasFullAdminWorkspace(envelope), false)
 })

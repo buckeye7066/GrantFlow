@@ -17,7 +17,8 @@ import {
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { scoreOpportunity } from './matchEngine.js'
 import { filterOutPipelineMembers } from './pipelineExclusion.js'
-import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js'
+import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, SCORE_SCALE_ID } from '../config/matchThresholds.js'
+import { RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('localCrawler')
 
@@ -155,7 +156,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   }
   
   const parameters = job.parameters ?? {}
-  const matchThreshold = parameters.match_threshold || 60
+  const matchThreshold = parameters.match_threshold ?? DEFAULT_MIN_SCORE
   const maxResults = parameters.max_results || 30
   
   // Build profile signals with error handling
@@ -358,10 +359,14 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   // Sort and limit
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
   const targetMin = Math.min(8, maxResults)
-  const requestedThreshold = Number(matchThreshold) || 0
-  const thresholdCandidates = Array.from(
-    new Set([requestedThreshold, 70, 60, 50, 40, 30, 0].filter((v) => Number.isFinite(v))),
-  ).sort((a, b) => b - a)
+  const parsedThreshold = Number(matchThreshold)
+  const requestedThreshold = Number.isFinite(parsedThreshold)
+    ? Math.max(0, Math.min(100, parsedThreshold))
+    : DEFAULT_MIN_SCORE
+  const thresholdCandidates = Array.from(new Set([
+    requestedThreshold,
+    ...RELAX_THRESHOLDS.filter((threshold) => threshold < requestedThreshold),
+  ]))
 
   let thresholdUsed = requestedThreshold
   let filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= thresholdUsed)
@@ -452,8 +457,8 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         // relevanceFilter hard-rejection, audit metadata, and ACCEPT/REVIEW
         // decisions are all produced inside that call (Goals 3, 8).
         // Pass the crawler's already-chosen threshold (thresholdUsed) so
-        // saveToProfilePipeline does not silently apply its own 55% default
-        // and drop everything the crawler legitimately surfaced. The saver
+        // saveToProfilePipeline does not introduce a second caller default and
+        // drop what the crawler legitimately surfaced. The saver
         // still re-runs computeMatchDecision and still treats the numeric
         // floor as authoritative (ACCEPT/REVIEW does NOT bypass it).
         //
@@ -481,7 +486,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     }
   }
   
-  log.info(`[localCrawler] Saved ${savedToPipeline} opportunities to profile pipeline (≥${thresholdUsed}% match)`)
+  log.info(`[localCrawler] Saved ${savedToPipeline} opportunities to profile pipeline (canonical score threshold ${thresholdUsed})`)
   
   return {
     evaluated: allOpps.length,
@@ -492,6 +497,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     savedToPipeline,
     result_meta: {
       total_scored: scoredOpps.length,
+      score_scale: SCORE_SCALE_ID,
       skipped_requires_match: requiresMatchSkipped,
       match_threshold_requested: requestedThreshold,
       match_threshold_used: thresholdUsed,

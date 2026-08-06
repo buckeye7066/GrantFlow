@@ -3,13 +3,73 @@ import { promises as fs } from 'fs'
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { runGrantFlowDomainAudits } from './anyaGrantFlowAudits.js'
 import { ANYA_CODE_REPAIR_POLICY } from '../config/missionGoals.js'
 import { createLogger } from '../utils/logger.js'
+import { isAgentEditLockPresent } from '../utils/agentEditLock.js'
 const log = createLogger('anyaAutonomousCrawler')
 
-const REPO_ROOT = path.resolve(process.cwd())
+const MODULE_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+function pathIsInside(rootDir, candidatePath) {
+  const relative = path.relative(rootDir, candidatePath)
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+function pathScopeError(message, code = 'ANYA_REPO_SCOPE_VIOLATION') {
+  const error = new Error(message)
+  error.code = code
+  error.status = 400
+  return error
+}
+
+async function resolveTrustedScanRoot(directory, context = {}) {
+  const trustedInput = context?.trustedRepoRoot || MODULE_REPO_ROOT
+  let trustedRoot
+  try {
+    trustedRoot = await fs.realpath(path.resolve(String(trustedInput)))
+  } catch {
+    throw pathScopeError('Trusted repository root is unavailable', 'ANYA_TRUSTED_ROOT_UNAVAILABLE')
+  }
+
+  const requested = directory
+    ? (path.isAbsolute(directory) ? path.resolve(directory) : path.resolve(trustedRoot, directory))
+    : trustedRoot
+
+  let rootDir
+  try {
+    rootDir = await fs.realpath(requested)
+  } catch {
+    throw pathScopeError('Requested scan directory does not exist', 'ANYA_SCAN_DIRECTORY_MISSING')
+  }
+  if (!pathIsInside(trustedRoot, rootDir)) {
+    throw pathScopeError('Requested scan directory is outside the trusted repository root')
+  }
+
+  const stats = await fs.stat(rootDir)
+  if (!stats.isDirectory()) {
+    throw pathScopeError('Requested scan path is not a directory', 'ANYA_SCAN_PATH_NOT_DIRECTORY')
+  }
+  return { trustedRoot, rootDir }
+}
+
+async function assertSafeEditTarget(filePath, trustedRoot) {
+  const absolutePath = path.resolve(filePath)
+  if (!pathIsInside(trustedRoot, absolutePath)) {
+    throw pathScopeError('Edit target is outside the trusted repository root')
+  }
+  const stats = await fs.lstat(absolutePath)
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw pathScopeError('Edit target must be a regular non-symlink file', 'ANYA_UNSAFE_EDIT_TARGET')
+  }
+  const realPath = await fs.realpath(absolutePath)
+  if (!pathIsInside(trustedRoot, realPath)) {
+    throw pathScopeError('Edit target resolves outside the trusted repository root')
+  }
+  return realPath
+}
 
 // Lazy-loaded acorn parser. We go through createRequire so the project works
 // whether acorn ships as CJS or ESM, and degrade gracefully (regex-only) if
@@ -59,8 +119,8 @@ export const SEARCH_KIND = Object.freeze({
 //   writes_explicitly_enabled = true iff the caller intentionally requested
 //                         writes for code-error repair
 //   dry_run_effective     = what actually happened (final)
-//   dry_run_forced_by_env = retained legacy telemetry; always false because
-//                           Anya code-error edits no longer require an env gate
+//   dry_run_forced_by_env = true when a requested production write is held in
+//                           dry-run because the production write gate is off
 //
 // Legacy back-compat (kept so scheduler + older dashboards don't break):
 //   dry_run               = dry_run_effective (same value)
@@ -544,18 +604,22 @@ function applySafeFixes(oldText, { fixEmptyCatch = true, fixConsoleLog = false }
   return { changed, newText, fixesApplied }
 }
 
-async function writeAuditReport(rootDir, report) {
-  const auditDir = path.join(rootDir, 'audit-reports')
+async function writeAuditReport(trustedRoot, report) {
+  const auditDir = path.join(trustedRoot, 'audit-reports')
   await fs.mkdir(auditDir, { recursive: true })
-  const filename = `anya-audit-${Date.now()}.json`
+  const filename = `anya-audit-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.json`
   const fullPath = path.join(auditDir, filename)
   await fs.writeFile(fullPath, JSON.stringify(report, null, 2), 'utf8')
-  return relativeTo(rootDir, fullPath)
+  return relativeTo(trustedRoot, fullPath)
 }
 
-async function backupFile(filePath, content) {
-  const backupPath = `${filePath}.bak.${Date.now()}`
-  await fs.writeFile(backupPath, content, 'utf8')
+async function backupFile(filePath, content, trustedRoot) {
+  const safeFilePath = await assertSafeEditTarget(filePath, trustedRoot)
+  const backupPath = `${safeFilePath}.bak.${Date.now()}.${crypto.randomUUID().slice(0, 8)}`
+  if (!pathIsInside(trustedRoot, backupPath)) {
+    throw pathScopeError('Backup target is outside the trusted repository root')
+  }
+  await fs.writeFile(backupPath, content, { encoding: 'utf8', flag: 'wx' })
   return backupPath
 }
 
@@ -597,8 +661,10 @@ function runNodeSyntaxCheck(absolutePath) {
 
 async function restoreFromBackup({ filePath, backupRelativePath }) {
   if (!backupRelativePath) return { restored: false, reason: 'backup_missing' }
-  const targetPath = path.resolve(REPO_ROOT, filePath)
-  const backupPath = path.resolve(REPO_ROOT, backupRelativePath)
+  const targetPath = path.resolve(MODULE_REPO_ROOT, filePath)
+  const backupPath = path.resolve(MODULE_REPO_ROOT, backupRelativePath)
+  await assertSafeEditTarget(targetPath, MODULE_REPO_ROOT)
+  await assertSafeEditTarget(backupPath, MODULE_REPO_ROOT)
   const backupContent = await fs.readFile(backupPath, 'utf8')
   await fs.writeFile(targetPath, backupContent, 'utf8')
   return { restored: true, backupPath: backupRelativePath }
@@ -645,7 +711,7 @@ async function auditLog(entry, context) {
   // Dev-only filesystem sink (explicit opt-in).
   if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
     try {
-      const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+      const auditDir = path.join(MODULE_REPO_ROOT, 'backend', 'data', 'audit')
       await fs.mkdir(auditDir, { recursive: true })
       const logFile = path.join(auditDir, 'autonomous-crawler.log')
       await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
@@ -690,9 +756,9 @@ export async function runAutonomousCodeCrawl(options, context) {
     // Skip AST analysis entirely (mostly for unit tests that don't want acorn
     // loaded).
     skipAst = false,
-    // Legacy per-invocation flag from the CLI/admin route. It is retained for
-    // telemetry, but dryRun=false is now the write decision. The old env gate
-    // was removed by the Anya code-error repair policy.
+    // Per-invocation flag from the CLI/admin route, retained in telemetry.
+    // dryRun=false requests a write; production additionally requires the
+    // explicit ANYA_CODE_REPAIR_PRODUCTION_WRITES gate.
     writeFlag = false,
   } = options || {}
 
@@ -701,18 +767,17 @@ export async function runAutonomousCodeCrawl(options, context) {
   // Writes are controlled by the caller's dryRun choice. No environment
   // permission gate is required for Anya code-error repair.
   const writesExplicitlyEnabled = !dryRunRequested
-  const effectiveDryRun = dryRunRequested
-  // Retained for older dashboards that still read this field.
-  const dryRunForcedByEnv = false
-  const writesEnvEnabled = true
-  const envWriteGateRequired = false
+  const envWriteGateRequired = isProdEnv()
+  const writesEnvEnabled = !envWriteGateRequired || process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES === 'true'
+  const dryRunForcedByEnv = writesExplicitlyEnabled && !writesEnvEnabled
+  const effectiveDryRun = dryRunRequested || dryRunForcedByEnv
 
-  // Resolve per call so tests that chdir() into a temp dir work, and so that
-  // absolute directory arguments are honored as-is.
-  const cwd = process.cwd()
-  const rootDir = directory
-    ? (path.isAbsolute(directory) ? directory : path.resolve(cwd, directory))
-    : cwd
+  const { trustedRoot, rootDir } = await resolveTrustedScanRoot(directory, context)
+  if (!effectiveDryRun && isAgentEditLockPresent(trustedRoot)) {
+    const error = pathScopeError('Autonomous code repair is blocked by the repository edit lock', 'ANYA_EDIT_LOCK_PRESENT')
+    error.status = 409
+    throw error
+  }
 
   const startedAtIso = new Date().toISOString()
   const startTime = Date.now()
@@ -842,17 +907,19 @@ export async function runAutonomousCodeCrawl(options, context) {
 
         let backup = null
         if (!effectiveDryRun) {
-          backup = await backupFile(filePath, content)
-          await fs.writeFile(filePath, newText, 'utf8')
+          const safeFilePath = await assertSafeEditTarget(filePath, trustedRoot)
+          backup = await backupFile(safeFilePath, content, trustedRoot)
+          await fs.writeFile(safeFilePath, newText, 'utf8')
 
           // Safety net: if the edit breaks Node syntax, restore immediately.
           const ext = path.extname(filePath).toLowerCase()
           if (['.js', '.mjs', '.cjs'].includes(ext)) {
-            const syntaxCheck = await runNodeSyntaxCheck(filePath)
+            const syntaxCheck = await runNodeSyntaxCheck(safeFilePath)
             if (!syntaxCheck.ok) {
               let restored = false
               try {
-                await fs.writeFile(filePath, content, 'utf8')
+                await assertSafeEditTarget(safeFilePath, trustedRoot)
+                await fs.writeFile(safeFilePath, content, 'utf8')
                 restored = true
               } catch {
                 restored = false
@@ -1063,7 +1130,7 @@ export async function runAutonomousCodeCrawl(options, context) {
 
     // Persist a full JSON report on disk for auditability.
     try {
-      const reportPath = await writeAuditReport(rootDir, report)
+      const reportPath = await writeAuditReport(trustedRoot, report)
       report.report_path = reportPath
     } catch (writeErr) {
       report.report_path = null
@@ -1111,7 +1178,7 @@ export async function getAutonomousStatus(context) {
   }
 
   // Fallback: dev filesystem log
-  const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
+  const auditDir = path.join(MODULE_REPO_ROOT, 'backend', 'data', 'audit')
   const logFile = path.join(auditDir, 'autonomous-crawler.log')
 
   try {
@@ -1130,7 +1197,7 @@ export async function getAutonomousStatus(context) {
     return {
       last_run: lastRun || null,
       recent_operations: recentLogs.length,
-      audit_log_path: path.relative(REPO_ROOT, logFile),
+      audit_log_path: path.relative(MODULE_REPO_ROOT, logFile),
       source: 'filesystem',
     }
   } catch (error) {

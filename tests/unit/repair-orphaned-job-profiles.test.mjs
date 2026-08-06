@@ -5,8 +5,8 @@
  * `failed` with `error = "Snapshot creation failed: Profile profile-X not found"`
  * and `result_meta = { non_retryable: true }`. After the alias-resolver fix
  * (commit f446de41), new dispatches self-heal, but already-dead rows like
- *   - Anastasia: b71c0528-…
- *   - Avanell:   e16c4731-…
+ *   - Demo Student: b71c0528-…
+ *   - demo_senior_applicant:   e16c4731-…
  * stay failed until someone clicks Retry. This module repairs them on
  * startup so the run actually finishes (mission rule: zero results is a
  * failure state, not an acceptable outcome).
@@ -127,8 +127,8 @@ describe('repairOrphanedJobProfiles', () => {
     insertJob(db, {
       id: 'b71c0528-test',
       type: 'scholarship',
-      profile_id: 'profile-anastasia-white',
-      error: 'Snapshot creation failed: Profile profile-anastasia-white not found',
+      profile_id: 'profile-demo-tennessee-stem-student',
+      error: 'Snapshot creation failed: Profile profile-demo-tennessee-stem-student not found',
       result_meta: { non_retryable: true },
     })
 
@@ -147,7 +147,7 @@ describe('repairOrphanedJobProfiles', () => {
 
     const meta = JSON.parse(repaired.result_meta)
     assert.equal(meta.non_retryable, false)
-    assert.equal(meta.repaired_from_profile_id, 'profile-anastasia-white')
+    assert.equal(meta.repaired_from_profile_id, 'profile-demo-tennessee-stem-student')
     assert.equal(meta.repaired_to_profile_id, 'uuid-student')
     assert.ok(meta.repaired_at)
     assert.match(meta.repair_strategy, /designated_display_name|reseed/)
@@ -185,8 +185,8 @@ describe('repairOrphanedJobProfiles', () => {
     insertJob(db, {
       id: 'e16c4731-test',
       type: 'comprehensive',
-      profile_id: 'profile-avanell-leamon',
-      error: 'Snapshot creation failed: Profile profile-avanell-leamon not found',
+      profile_id: 'profile-demo-senior-accessibility',
+      error: 'Snapshot creation failed: Profile profile-demo-senior-accessibility not found',
       result_meta: { non_retryable: true },
     })
 
@@ -196,7 +196,7 @@ describe('repairOrphanedJobProfiles', () => {
     // Even if the row drops back to `failed` later (e.g. transient runtime
     // error in the next run), the repair flag must stop us from repairing
     // again.
-    db.raw.prepare(`UPDATE crawler_jobs SET status='failed', error='Snapshot creation failed: Profile profile-avanell-leamon not found' WHERE id = 'e16c4731-test'`).run()
+    db.raw.prepare(`UPDATE crawler_jobs SET status='failed', error='Snapshot creation failed: Profile profile-demo-senior-accessibility not found' WHERE id = 'e16c4731-test'`).run()
 
     const second = await repairOrphanedJobProfiles(db, { limit: 50, log: () => {} })
     assert.equal(second.scanned, 1)

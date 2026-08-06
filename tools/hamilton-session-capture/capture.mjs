@@ -19,7 +19,7 @@
  *     [--label "MTSU SSO"] [--expires-days 14]
  *
  * Examples:
- *   MTSU  (Anastasia):  --portal-host mtsu.edu          --login-url https://login.microsoftonline.com/
+ *   MTSU  (Demo Student):  --portal-host mtsu.edu          --login-url https://login.microsoftonline.com/
  *   CSCC  (Robert):     --portal-host clevelandstatecc.edu --login-url https://www.clevelandstatecc.edu/
  *
  * Requires Playwright (already a project dependency): the window opens, you log

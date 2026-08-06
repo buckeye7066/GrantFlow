@@ -2,7 +2,7 @@
  * profile-resolver.test.mjs
  *
  * Regression for: scholarship/curated_benefits jobs failing with
- *   "Snapshot creation failed: Profile profile-anastasia-white not found"
+ *   "Snapshot creation failed: Profile profile-demo-tennessee-stem-student not found"
  *   Result payload: { non_retryable: true }
  *
  * Mission goals:
@@ -66,12 +66,12 @@ function makeDb() {
 }
 
 describe('isDesignatedProfileSlug', () => {
-  it('recognizes anastasia-white as a designated slug', () => {
-    assert.equal(isDesignatedProfileSlug('profile-anastasia-white'), true)
+  it('recognizes demo_stem_student-white as a designated slug', () => {
+    assert.equal(isDesignatedProfileSlug('profile-demo-tennessee-stem-student'), true)
   })
 
   it('rejects unrelated ids', () => {
-    assert.equal(isDesignatedProfileSlug('c4a92724-9cee-416f-ba30-e91b9b5cd885'), false)
+    assert.equal(isDesignatedProfileSlug('00000000-0000-4000-8000-000000000001'), false)
     assert.equal(isDesignatedProfileSlug(''), false)
     assert.equal(isDesignatedProfileSlug(null), false)
   })
@@ -100,28 +100,28 @@ describe('resolveProfileForId — direct lookup', () => {
 })
 
 describe('resolveProfileForId — designated slug → live UUID self-heal', () => {
-  it('repairs profile-anastasia-white to a live UUID-keyed profile via display_name', async () => {
+  it('repairs profile-demo-tennessee-stem-student to a live UUID-keyed profile via display_name', async () => {
     const db = makeDb()
     // Live profile keyed by UUID, with the same display_name as the
-    // designated config entry for `profile-anastasia-white`.
+    // designated config entry for `profile-demo-tennessee-stem-student`.
     db.raw.prepare(
       `INSERT INTO profiles (id, display_name, primary_type, status) VALUES (?, ?, ?, 'active')`,
     ).run(
-      'c4a92724-9cee-416f-ba30-e91b9b5cd885',
+      '00000000-0000-4000-8000-000000000001',
       'Demo Tennessee STEM Student',
       'high_school_student',
     )
 
-    const result = await resolveProfileForId(db, 'profile-anastasia-white', {
+    const result = await resolveProfileForId(db, 'profile-demo-tennessee-stem-student', {
       allowReseed: false,
     })
 
     assert.ok(result, 'expected resolution')
     assert.equal(result.repaired, true)
     assert.equal(result.strategy, 'designated_display_name')
-    assert.equal(result.originalId, 'profile-anastasia-white')
-    assert.equal(result.resolvedId, 'c4a92724-9cee-416f-ba30-e91b9b5cd885')
-    assert.equal(result.profile.id, 'c4a92724-9cee-416f-ba30-e91b9b5cd885')
+    assert.equal(result.originalId, 'profile-demo-tennessee-stem-student')
+    assert.equal(result.resolvedId, '00000000-0000-4000-8000-000000000001')
+    assert.equal(result.profile.id, '00000000-0000-4000-8000-000000000001')
   })
 
   it('does NOT match deleted profiles when re-keying', async () => {
@@ -129,12 +129,12 @@ describe('resolveProfileForId — designated slug → live UUID self-heal', () =
     db.raw.prepare(
       `INSERT INTO profiles (id, display_name, primary_type, status) VALUES (?, ?, ?, 'deleted')`,
     ).run(
-      'c4a92724-9cee-416f-ba30-e91b9b5cd885',
+      '00000000-0000-4000-8000-000000000001',
       'Demo Tennessee STEM Student',
       'high_school_student',
     )
 
-    const result = await resolveProfileForId(db, 'profile-anastasia-white', {
+    const result = await resolveProfileForId(db, 'profile-demo-tennessee-stem-student', {
       allowReseed: false,
     })
 
@@ -144,7 +144,7 @@ describe('resolveProfileForId — designated slug → live UUID self-heal', () =
   it('seeds the designated profile when nothing matches and allowReseed=true', async () => {
     const db = makeDb()
     // No matching profile in DB at all.
-    const result = await resolveProfileForId(db, 'profile-anastasia-white', {
+    const result = await resolveProfileForId(db, 'profile-demo-tennessee-stem-student', {
       allowReseed: true,
     })
 

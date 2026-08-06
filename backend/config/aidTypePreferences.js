@@ -2,7 +2,7 @@
  * aidTypePreferences.js — which KINDS of aid a profile is willing to accept.
  *
  * THE OWNER RULE (2026-08-01): "give the profile the option of which aid they
- * would like to accept. In the case of Anastasia and Robert, for example, they
+ * would like to accept. In the case of Demo Student and Robert, for example, they
  * do not want any loans, only grants, endowments, and scholarships."
  *
  * A loan is not free money — it is debt with the student's name on it — and a
@@ -129,7 +129,7 @@ export function evaluateAwardAgainstPreferences(award, education = {}) {
  *
  * WHY THIS EXISTS (2026-08-02). `evaluateAwardAgainstPreferences` above gated
  * exactly ONE path — portal sync. Everything else ignored the preference, so
- * measured read-only in prod: Anastasia White declares
+ * measured read-only in prod: Demo Tennessee STEM Student declares
  * `education.aid_types_accepted = ["grant","endowment","scholarship"]` — no
  * work-study, no loans — and her Funding Sources list carried **"Federal
  * Work-Study" as an ACCEPT at score 100**, plus two Federal Work-Study rows in

@@ -5,9 +5,9 @@
  *
  * Sam already (a) persists every run to `sam_runs`/`sam_findings`, and (b)
  * pushes an in-app notification on CRITICAL findings (samEscalation.js). This
- * module adds the third channel the owner asked for: a PUSH email — to
- * dr.johnwhite@axiombiolabs.org by default — listing the issues Sam found AND
- * the corrections he made, every time a sweep surfaces anything.
+ * module adds an optional third channel: a push email to an explicitly
+ * configured operator address, listing the issues Sam found and corrections
+ * he made whenever a sweep surfaces anything.
  *
  * Fires when a completed run has at least one finding, OR when a run crashed
  * (a crash is itself an issue worth surfacing). A perfectly clean run sends
@@ -20,8 +20,6 @@
 import { sendEmail as defaultSendEmail } from '../email.js'
 import { maskSecrets } from './samAuditStore.js'
 
-const DEFAULT_RECIPIENT = 'dr.johnwhite@axiombiolabs.org'
-
 function reportsEnabled(env) {
   const raw = env?.SAM_EMAIL_REPORTS
   if (raw === null || raw === undefined || raw === '') return true // default ON
@@ -29,8 +27,13 @@ function reportsEnabled(env) {
 }
 
 function recipient(env) {
-  const v = (env?.SAM_REPORT_EMAIL || env?.ADMIN_OPS_EMAIL || '').trim()
-  return v || DEFAULT_RECIPIENT
+  const value = String(
+    env?.SAM_REPORT_EMAIL
+    || env?.ADMIN_OPS_EMAIL
+    || env?.ADMIN_EMAIL
+    || '',
+  ).trim()
+  return value || null
 }
 
 /**
@@ -236,6 +239,7 @@ export async function sendSamReportEmail(run = {}, { send = defaultSendEmail, en
     if (!shouldEmail(run)) return { sent: false, reason: 'clean_run' }
 
     const to = recipient(env)
+    if (!to) return { sent: false, reason: 'recipient_not_configured' }
     const { subject, html, text } = buildReport(run, env)
     const res = await send({ to, subject, html, text })
     if (res?.ok) return { sent: true, id: res.id ?? null, to }

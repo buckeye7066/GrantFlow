@@ -89,11 +89,10 @@ describe("TailoredApplicationPanel", () => {
     const approveBtn = screen.getByRole("button", { name: /^approve$/i })
     expect(approveBtn.disabled).toBe(true)
 
-    // Auto-submit state tells the truth: answer the questions first.
-    expect(screen.getByText(/before this can be submitted/i)).toBeTruthy()
+    expect(screen.getByText(/before the draft is ready for your portal handoff/i)).toBeTruthy()
   })
 
-  it("shows read-only text + 'auto-submit when automation on' when approved but automation is off", async () => {
+  it("shows read-only text and a truthful human portal handoff when approved", async () => {
     apiFetchMock.mockImplementation(async (endpoint) => {
       if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
         return {
@@ -113,10 +112,8 @@ describe("TailoredApplicationPanel", () => {
     expect(await screen.findByText("Approved narrative body.")).toBeTruthy()
     // No editable textarea in read-only/approved view.
     expect(screen.queryByRole("textbox")).toBeNull()
-    // Truthful gate state + link to turn automation on.
-    expect(screen.getByText(/will auto-submit when you turn on automation/i)).toBeTruthy()
-    const link = screen.getByRole("link", { name: /turn on automation/i })
-    expect(link.getAttribute("href")).toContain("focus=profile-automations")
+    expect(screen.getByText(/review it in the portal.*submit it yourself/i)).toBeTruthy()
+    expect(screen.queryByText(/auto-submit/i)).toBeNull()
     // Approved status badge is present, and the approve button reads "Approved"
     // and is disabled (already approved — nothing more to do).
     expect(screen.getAllByText(/^Approved$/).length).toBeGreaterThanOrEqual(1)

@@ -12,8 +12,8 @@
  * state with a `next_retry_at` timestamp and let the periodic Hamilton runner
  * re-attempt it on an exponential-backoff schedule. Every retry re-checks the
  * credential vault and saved-session store, so the moment the user logs in once
- * (saving a session) — or a vault password is added — Hamilton resumes and
- * finishes on her own, no manual "resume" click required.
+ * (saving a session) — or a vault password is added — Hamilton can resume draft
+ * preparation without a manual "resume" click. Final submission remains human.
  *
  * After MAX_ATTEMPTS the backoff is exhausted and we fall back to a hard
  * `blocked` so a human is unambiguously asked to step in.
@@ -100,14 +100,14 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now() }
       attempt: priorAttempts,
       maxAttempts: AUTH_MAX_ATTEMPTS,
       message: waitingStatus === 'waiting_for_email_verification'
-        ? 'Hamilton created the account and re-checked several times but the email still is not verified. Please click the verification link (or finish the sign-in in a side-by-side login) so she can continue.'
+        ? 'The portal account is still not verified. Open the verification email yourself (or finish the sign-in in a side-by-side login) before Hamilton can reuse the login for draft preparation.'
         : 'Hamilton retried this login several times without success and needs you to complete the sign-in (and save the session) before she can continue.',
     }
   }
   const mins = AUTH_BACKOFF_MINUTES[priorAttempts]
   const message = waitingStatus === 'waiting_for_email_verification'
-    ? `Hamilton created your account — the only step we need from you is to click the verification link in the email we triggered. She'll keep working other applications and automatically re-check in ~${humanizeMinutes(mins)}; the moment the email is verified she resumes and finishes on her own.`
-    : `Hamilton needs you to sign in to this portal once. She'll keep working other applications and automatically retry in ~${humanizeMinutes(mins)} — log in (and save the session) whenever you can and she'll resume on her own.`
+    ? `This portal account is awaiting email verification. Open the message and use its verification link yourself. Hamilton will re-check in ~${humanizeMinutes(mins)} and may then resume draft preparation; final Submit remains yours.`
+    : `Hamilton needs you to sign in to this portal once. She'll keep working other applications and automatically retry in ~${humanizeMinutes(mins)} — log in (and save the session) whenever you can and she can resume draft preparation. Final Submit remains yours.`
   return {
     isAuth: true,
     status: waitingStatus,

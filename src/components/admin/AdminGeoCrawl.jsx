@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react"
-import { AlertCircle, Globe2, Loader2, Play, RefreshCw } from "lucide-react"
+import { AlertCircle, Globe2, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -11,6 +11,7 @@ import { apiFetch } from "@/api/client"
 import GeoCrawlMonitor from "@/components/admin/GeoCrawlMonitor.jsx"
 
 const LS_LAST_RUN_ID = "gf_geo_crawl_last_run_id_v2"
+const GEO_CRAWL_START_RETIRED = true
 
 async function fetchStates() {
   return apiFetch("/api/admin/geo/states")
@@ -32,13 +33,6 @@ async function fetchGeoStatus() {
   return apiFetch("/api/admin/geo/crawl/status")
 }
 
-async function startGeoCrawl(payload) {
-  return apiFetch("/api/admin/geo/crawl/start", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
-}
-
 export default function AdminGeoCrawl() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
@@ -52,7 +46,6 @@ export default function AdminGeoCrawl() {
   const [citySearch, setCitySearch] = useState("")
   const [selectedZips, setSelectedZips] = useState(new Set())
   const [selectedCounties, setSelectedCounties] = useState(new Set())
-  const [minSources, setMinSources] = useState(3)
   const [status, setStatus] = useState(null)
   const [activeRunId, setActiveRunId] = useState("")
 
@@ -260,36 +253,6 @@ export default function AdminGeoCrawl() {
     }
   }
 
-  const handleStart = async () => {
-    if (!selectedState || loading) return
-    const zipList = Array.from(selectedZips)
-    const countyList = Array.from(selectedCounties)
-    setLoading(true)
-    try {
-      const res = await startGeoCrawl({
-        state: selectedState,
-        zips: zipList.length ? zipList : undefined,
-        counties: !zipList.length && countyList.length ? countyList : undefined,
-        min_sources_per_zip: Number(minSources) || 3,
-      })
-      toast({ title: "Geo crawl started", description: `Job ${res?.job?.id || ""}` })
-      setStatus((prev) => ({ ...(prev || {}), geo_crawl: res?.job }))
-      if (res?.run_id) {
-        const rid = String(res.run_id)
-        setActiveRunId(rid)
-        try {
-          window.localStorage.setItem(LS_LAST_RUN_ID, rid)
-        } catch {
-          // ignore
-        }
-      }
-    } catch (err) {
-      toast({ title: "Failed to start geo crawl", description: err.message, variant: "destructive" })
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
     <div className="space-y-6">
       <Card className="border border-slate-200 bg-white/70 backdrop-blur">
@@ -303,8 +266,8 @@ export default function AdminGeoCrawl() {
           <Alert>
             <AlertCircle className="w-4 h-4" />
             <AlertDescription>
-              This tool is admin-only. Choose a state, optionally pick ZIP codes, then run a scoped crawl that saves real
-              opportunities into the Opportunities page over time.
+              Historical Geo Crawl coverage remains available below. Starting the legacy global ZIP crawler is retired;
+              current discovery runs through the profile-scoped Crawler OS so every match has an accountable profile context.
             </AlertDescription>
           </Alert>
 
@@ -325,15 +288,9 @@ export default function AdminGeoCrawl() {
               </Select>
             </div>
 
-            <div className="space-y-2">
-              <Label>Min sources per ZIP</Label>
-              <Input
-                type="number"
-                min={1}
-                value={minSources}
-                onChange={(e) => setMinSources(e.target.value)}
-                className="bg-white text-slate-900 border-slate-300 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-              />
+            <div className="space-y-2 text-sm text-slate-700" role="status">
+              <Label>Run availability</Label>
+              <p>Historical coverage and prior run receipts remain readable.</p>
             </div>
 
             <div className="flex items-end gap-2">
@@ -348,17 +305,16 @@ export default function AdminGeoCrawl() {
               </Button>
               <Button
                 variant="default"
-                onClick={handleStart}
-                disabled={!selectedState || loading}
+                disabled={GEO_CRAWL_START_RETIRED}
+                title="Legacy global ZIP crawl start is retired; use profile-scoped Crawler OS discovery."
                 className="bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-700"
               >
-                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
-                Start crawl
+                Crawl start retired
               </Button>
             </div>
           </div>
 
-          {selectedState ? (
+          {selectedState && !GEO_CRAWL_START_RETIRED ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1">
@@ -598,4 +554,3 @@ export default function AdminGeoCrawl() {
     </div>
   )
 }
-

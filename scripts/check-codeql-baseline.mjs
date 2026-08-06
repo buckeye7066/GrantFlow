@@ -41,6 +41,89 @@ function ruleCatalog(run = {}) {
   return catalog
 }
 
+const FULL_SCAN_EVENTS = new Set(['push', 'schedule', 'workflow_dispatch'])
+
+function fail(code, message) {
+  const error = new Error(`${code}: ${message}`)
+  error.code = code
+  throw error
+}
+
+export function assertFullScanSarif(sarifDocuments) {
+  if (!Array.isArray(sarifDocuments) || sarifDocuments.length === 0) {
+    fail('sarif_missing_runs', 'no SARIF documents were supplied')
+  }
+
+  for (const [documentIndex, document] of sarifDocuments.entries()) {
+    const runs = Array.isArray(document?.runs) ? document.runs : []
+    if (runs.length === 0) {
+      fail('sarif_missing_runs', `document ${documentIndex} has no runs`)
+    }
+
+    for (const [runIndex, run] of runs.entries()) {
+      const incrementalMode = String(run?.properties?.incrementalMode || '').trim()
+      const extensionNames = (Array.isArray(run?.tool?.extensions)
+        ? run.tool.extensions
+        : [])
+        .map((extension) => String(extension?.name || '').toLowerCase())
+
+      if (incrementalMode || extensionNames.includes('codeql-action/pr-diff-range')) {
+        fail(
+          'diff_informed_sarif_not_allowed',
+          `document ${documentIndex}, run ${runIndex} is not a full scan`,
+        )
+      }
+
+      if (
+        run?.tool?.driver?.name !== 'CodeQL' ||
+        !run?.tool?.driver?.semanticVersion ||
+        !Array.isArray(run?.properties?.codeqlConfigSummary?.queries) ||
+        run.properties.codeqlConfigSummary.queries.length === 0
+      ) {
+        fail(
+          'full_scan_metadata_missing',
+          `document ${documentIndex}, run ${runIndex} lacks CodeQL full-scan metadata`,
+        )
+      }
+    }
+  }
+}
+
+export function assertFullScanBaselineMetadata(baseline) {
+  const source = baseline?.generated_from || {}
+
+  if (baseline?.schema_version !== 2 || source.scan_mode !== 'full') {
+    fail(
+      'baseline_full_scan_metadata_missing',
+      'baseline must use schema 2 and declare generated_from.scan_mode=full',
+    )
+  }
+  if (!FULL_SCAN_EVENTS.has(source.event_name)) {
+    fail(
+      'baseline_source_event_not_full_scan',
+      `unsupported baseline source event: ${source.event_name || 'missing'}`,
+    )
+  }
+  if (!/^[0-9a-f]{40}$/i.test(String(source.commit || ''))) {
+    fail('baseline_source_sha_invalid', 'baseline source commit must be a full SHA')
+  }
+  if (!/^sha256:[0-9a-f]{64}$/i.test(String(source.artifact_digest || ''))) {
+    fail('baseline_artifact_digest_invalid', 'baseline SARIF SHA-256 digest is required')
+  }
+}
+
+export function assertCurrentScanContext(context = {}) {
+  if (!FULL_SCAN_EVENTS.has(context.eventName)) {
+    fail(
+      'current_scan_event_not_full_scan',
+      `unsupported current event: ${context.eventName || 'missing'}`,
+    )
+  }
+  if (!/^[0-9a-f]{40}$/i.test(String(context.sha || ''))) {
+    fail('current_scan_sha_invalid', 'current scan SHA must be a full SHA')
+  }
+}
+
 function numericSeverity(value) {
   const number = Number(value)
   return Number.isFinite(number) ? number : 0
@@ -130,6 +213,15 @@ export function evaluateCodeQlBaseline({ sarifPath, baselinePath }) {
   }
   const baseline = readJson(path.resolve(baselinePath))
   const documents = files.map(readJson)
+  // Validate the current artifact before the historical baseline so an old PR
+  // SARIF reports the precise scan-scope defect even while schema 1 remains.
+  assertFullScanSarif(documents)
+  assertCurrentScanContext({
+    eventName: process.env.CODEQL_SCAN_EVENT,
+    repository: process.env.CODEQL_SCAN_REPOSITORY,
+    sha: process.env.CODEQL_SCAN_SHA,
+  })
+  assertFullScanBaselineMetadata(baseline)
   const currentCounts = countQualifyingFindings(documents, baseline.policy)
   return {
     sarif_files: files,

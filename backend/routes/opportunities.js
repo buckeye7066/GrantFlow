@@ -8,6 +8,18 @@ import {
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
+import { computeMatchDecision } from '../services/matchEngine.js'
+import {
+  GOOD_MATCH_SCORE,
+  MODERATE_MATCH_SCORE,
+  SCORE_SCALE_ID,
+  STRONG_MATCH_SCORE,
+} from '../config/matchThresholds.js'
+import {
+  isOpportunityLifecycleVisible,
+  opportunityLifecycleVisibility,
+  opportunityLifecycleVisibilitySql,
+} from '../config/matchSurfacing.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:opportunities')
@@ -229,6 +241,12 @@ function filterByTrust(rows, { allowLoans = true, allowMatchingFunds = true } = 
   const droppedReasons = {};
   let dropped = 0;
   for (const row of rows) {
+    const lifecycle = opportunityLifecycleVisibility(row)
+    if (!lifecycle.visible) {
+      dropped += 1
+      droppedReasons[lifecycle.reason] = (droppedReasons[lifecycle.reason] || 0) + 1
+      continue
+    }
     // decorateOpportunity may have stashed the decision on `_trust` already.
     const trust = row?._trust
       || assessOpportunityTrust(row, {
@@ -433,8 +451,11 @@ router.get('/', async (req, res) => {
       : `FROM funding_opportunities`;
     const fallbackFromClause = hasGeoRun ? `FROM funding_opportunities fo` : `FROM funding_opportunities`;
 
-    const baseConditions = [`${prefix}is_active = ?`];
-    const baseParams = [sqlBool(true)];
+    const baseConditions = [opportunityLifecycleVisibilitySql({
+      tableAlias: hasGeoRun ? 'fo' : '',
+      dialect,
+    })];
+    const baseParams = [];
 
     const tableAlias = hasGeoRun ? 'fo' : undefined;
     baseConditions.push(trustedOriginClause(tableAlias));
@@ -830,8 +851,11 @@ router.get('/', async (req, res) => {
       if (fallbackTokens.length >= 2) {
         routeLogger.info('[opportunities] primary search returned 0, trying token-AND fallback', { search });
         const likeOp = likeOperatorForDb(req.db);
-        const fbConds = [`${prefix}is_active = ?`];
-        const fbParams = [sqlBool(true)];
+        const fbConds = [opportunityLifecycleVisibilitySql({
+          tableAlias: hasGeoRun ? 'fo' : '',
+          dialect,
+        })];
+        const fbParams = [];
         if (dialect === 'postgres') {
           fbConds.push(`(${prefix}type = 'DIRECTORY' OR LOWER(COALESCE(${prefix}record_origin, '')) LIKE '%directory%' OR ${prefix}deadline_type IN ('rolling','ongoing') OR ${prefix}deadline IS NULL OR ${prefix}deadline >= CURRENT_DATE)`);
         } else {
@@ -980,6 +1004,7 @@ router.get('/', async (req, res) => {
     if (mainTrust.kept.length === 0 && Array.isArray(withoutExpired) && withoutExpired.length > 0) {
       const relaxed = []
       for (const row of withoutExpired) {
+        if (!isOpportunityLifecycleVisible(row)) continue
         const trust = assessOpportunityTrust(row, {
           allowDirectory: true,
           allowExpired: true,
@@ -1044,9 +1069,14 @@ router.get('/meta/ingestion', async (req, res) => {
 // Get distinct sources for filtering
 router.get('/meta/sources', async (req, res) => {
   try {
-    const isPostgres = req.db?.dialect === 'postgres'
-    const activeVal = isPostgres ? 'TRUE' : '1'
-    const conditions = ['source IS NOT NULL', `is_active = ?`, trustedOriginClause(), trustedSourceClause()]; const params = [activeVal];
+    const conditions = [
+      'source IS NOT NULL',
+      opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect }),
+      trustedOriginClause(),
+      trustedSourceClause(),
+    ];
+    const params = [];
+    params.__dialect = req.db?.dialect;
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -1068,9 +1098,14 @@ router.get('/meta/sources', async (req, res) => {
 // Get distinct states for filtering
 router.get('/meta/states', async (req, res) => {
   try {
-    const isPostgres = req.db?.dialect === 'postgres'
-    const activeVal = isPostgres ? 'TRUE' : '1'
-    const conditions = ['state IS NOT NULL', `is_active = ?`, trustedOriginClause(), trustedSourceClause()]; const params = [activeVal];
+    const conditions = [
+      'state IS NOT NULL',
+      opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect }),
+      trustedOriginClause(),
+      trustedSourceClause(),
+    ];
+    const params = [];
+    params.__dialect = req.db?.dialect;
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -1102,8 +1137,8 @@ router.get('/meta/export', async (req, res) => {
     const dialect = req.db?.dialect;
     const likeOp = likeOperatorForDb(req.db);
     const sqlBool = (value) => (dialect === 'sqlite' ? (value ? 1 : 0) : Boolean(value));
-    const conditions = [`is_active = ?`];
-    const params = [sqlBool(true)];
+    const conditions = [opportunityLifecycleVisibilitySql({ dialect })];
+    const params = [];
     if (search) {
       const rawTokens = search.trim().split(/\s+/).filter(Boolean);
       if (rawTokens.length >= 2) {
@@ -1178,7 +1213,7 @@ router.get('/geo/summary', async (req, res) => {
           COUNT(DISTINCT gi.opportunity_id) AS opportunity_count
         FROM funding_opportunity_geo_index gi
         JOIN funding_opportunities fo ON fo.id = gi.opportunity_id
-        WHERE fo.is_active = ${dialect === 'sqlite' ? '1' : 'true'}
+        WHERE ${opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect })}
           AND ${trustedOriginClause('fo')}
           AND ${trustedSourceClause('fo')}
         GROUP BY gi.state, gi.zip, gi.county
@@ -1193,7 +1228,7 @@ router.get('/geo/summary', async (req, res) => {
           geo_county AS county,
           COUNT(*) AS opportunity_count
         FROM funding_opportunities
-        WHERE is_active = ${dialect === 'sqlite' ? '1' : 'true'}
+        WHERE ${opportunityLifecycleVisibilitySql({ dialect })}
           AND ${trustedOriginClause()} AND ${trustedSourceClause()}
           AND geo_zip IS NOT NULL
           AND geo_zip != ''
@@ -1268,7 +1303,7 @@ router.get('/geo/scored', async (req, res) => {
     const normalizedState = String(state).toUpperCase().trim();
 
     const conditions = [
-      `fo.is_active = ${dialect === 'sqlite' ? '1' : 'true'}`,
+      opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect }),
       'fo.state = ?',
       trustedOriginClause('fo'),
       trustedSourceClause('fo'),
@@ -1292,7 +1327,7 @@ router.get('/geo/scored', async (req, res) => {
       `).all(...params, parsedLimit, parsedOffset);
     } catch {
       const fallbackConditions = [
-        `is_active = ${dialect === 'sqlite' ? '1' : 'true'}`,
+        opportunityLifecycleVisibilitySql({ dialect }),
         'state = ?',
         trustedOriginClause(),
         trustedSourceClause(),
@@ -1326,7 +1361,10 @@ router.get('/geo/scored', async (req, res) => {
     }
 
     // Decorate rows
-    let decorated = rows.map(decorateOpportunity).filter(Boolean);
+    let decorated = rows
+      .filter(isOpportunityLifecycleVisible)
+      .map(decorateOpportunity)
+      .filter(Boolean);
 
     // If profile_id provided, compute match scores using the canonical matchingEngine.
     const isRealProfile = profileId && profileId !== 'all' && profileId !== 'admin';
@@ -1405,13 +1443,9 @@ function requireUuidParam(req, res) {
 router.get('/:id', async (req, res) => {
   if (!requireUuidParam(req, res)) return
   try {
-    const isPostgres = req.db?.dialect === 'postgres'
-    const activeVal = isPostgres ? 'TRUE' : '1'
-    // NOTE: is_active is interpolated (activeVal), not bound — a second `?`
-    // here with only one bound param made this route 500 on EVERY call.
     const opp = await req.db.prepare(`
       SELECT * FROM funding_opportunities
-      WHERE id = ? AND is_active = ${activeVal}
+      WHERE id = ? AND ${opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })}
         AND ${trustedOriginClause()} AND ${trustedSourceClause()}
     `).get(req.params.id);
 
@@ -1629,7 +1663,10 @@ router.get('/:id/explain', async (req, res) => {
       return res.status(400).json({ error: 'profileId query param is required' })
     }
 
-    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(String(id))
+    const opp = await req.db.prepare(`
+      SELECT * FROM funding_opportunities
+      WHERE id = ? AND ${opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })}
+    `).get(String(id))
     if (!opp) {
       return res.status(404).json({ error: 'Opportunity not found' })
     }
@@ -1659,95 +1696,60 @@ router.get('/:id/explain', async (req, res) => {
   }
 })
 
-function buildMatchExplanation(profile, sections, opp) {
-  const matches = []
-  const misses = []
-  const neutral = []
+export function buildMatchExplanation(profile, sections, opp) {
+  const decision = computeMatchDecision(profile, opp, { profileSections: sections })
+  const normalizedDecision = String(decision?.decision ?? '').toUpperCase()
+  const numericScore = Number(decision?.score)
+  const matchScore = Number.isFinite(numericScore) ? numericScore : null
 
-  // Helper to safely parse arrays
-  const parseArr = (v) => {
-    if (!v) return []
-    if (Array.isArray(v)) return v
-    try { const p = JSON.parse(v); return Array.isArray(p) ? p : [] } catch { return [] }
+  let scoreContext = 'Unrated'
+  if (normalizedDecision === 'REJECT') scoreContext = 'Not eligible'
+  else if (normalizedDecision === 'REVIEW') scoreContext = 'Needs review'
+  else if (normalizedDecision === 'ACCEPT' && matchScore !== null) {
+    if (matchScore >= STRONG_MATCH_SCORE) scoreContext = 'Strong match'
+    else if (matchScore >= GOOD_MATCH_SCORE) scoreContext = 'Good match'
+    else if (matchScore >= MODERATE_MATCH_SCORE) scoreContext = 'Moderate match'
+    else scoreContext = 'Accepted match'
   }
 
-  const basic = sections.basic_information ?? {}
-  const narrative = sections.narrative ?? {}
-
-  // 1. Applicant type match
-  const profileType = profile.primary_type || basic.profile_category || null
-  const oppTypes = parseArr(opp.applicant_types || opp.eligible_applicants)
-  if (profileType && oppTypes.length > 0) {
-    const typeMatch = oppTypes.some(t =>
-      t?.toLowerCase().includes(profileType?.toLowerCase()) ||
-      profileType?.toLowerCase().includes(t?.toLowerCase())
-    )
-    if (typeMatch) {
-      matches.push({ signal: 'Applicant Type', detail: `Your profile type "${profileType}" matches this opportunity's eligible applicants: ${oppTypes.join(', ')}` })
-    } else {
-      misses.push({ signal: 'Applicant Type', detail: `Your profile type "${profileType}" may not match eligible applicants: ${oppTypes.join(', ')}. You may still be eligible — check the opportunity details.` })
-    }
-  } else if (oppTypes.length === 0) {
-    neutral.push({ signal: 'Applicant Type', detail: 'This opportunity does not specify applicant type restrictions.' })
-  }
-
-  // 2. Location match
-  const profileState = basic.state || profile.state || null
-  const oppState = opp.state || opp.location || null
-  const oppScope = opp.geographic_scope || opp.scope || 'national'
-  if (oppScope === 'national' || oppScope === 'federal') {
-    matches.push({ signal: 'Location', detail: 'This is a national program available in all states.' })
-  } else if (profileState && oppState) {
-    if (oppState.toLowerCase().includes(profileState.toLowerCase()) || profileState.toLowerCase().includes(oppState.toLowerCase())) {
-      matches.push({ signal: 'Location', detail: `Your state (${profileState}) matches this opportunity's location (${oppState}).` })
-    } else {
-      misses.push({ signal: 'Location', detail: `Your state (${profileState}) may not match this opportunity's location (${oppState}).` })
-    }
-  } else if (!profileState) {
-    misses.push({ signal: 'Location', detail: 'Your profile does not have a state set. Adding your state may improve match accuracy.' })
-  }
-
-  // 3. Category / keyword match
-  const oppCategories = parseArr(opp.categories || opp.focus_areas)
-  const profileKeywords = parseArr(profile.keywords || profile.interests)
-  const profileFocusAreas = parseArr(sections.programs_services?.focus_areas)
-  const allProfileTerms = [...profileKeywords, ...profileFocusAreas].map(t => t?.toLowerCase()).filter(Boolean)
-  const oppTerms = oppCategories.map(t => t?.toLowerCase()).filter(Boolean)
-  const matchedTerms = allProfileTerms.filter(pt => oppTerms.some(ot => ot.includes(pt) || pt.includes(ot)))
-  if (matchedTerms.length > 0) {
-    matches.push({ signal: 'Focus Areas / Keywords', detail: `Matched on: ${matchedTerms.join(', ')}` })
-  } else if (oppCategories.length > 0 && allProfileTerms.length > 0) {
-    neutral.push({ signal: 'Focus Areas / Keywords', detail: `Opportunity covers: ${oppCategories.join(', ')}. Your profile covers: ${allProfileTerms.slice(0, 5).join(', ')}. No direct keyword overlap — this match may be based on broader criteria.` })
-  }
-
-  // 4. Financial need signal
-  const belowPoverty = profile.below_poverty_line || sections.financial?.below_poverty_line
-  if (opp.needs_based || oppCategories.some(c => ['financial_assistance', 'low_income'].includes(c))) {
-    if (belowPoverty) {
-      matches.push({ signal: 'Financial Need', detail: 'Your profile indicates financial need, which this needs-based program prioritizes.' })
-    } else {
-      neutral.push({ signal: 'Financial Need', detail: 'This program may prioritize financial need. Adding income information to your profile could improve match accuracy.' })
-    }
-  }
-
-  // 5. Score context
-  const matchScore = opp.match_score ?? opp.score ?? null
-  // Need-anchored scale: 75 = ~¾ of main needs, 50 = half, 15 = partial.
-  const scoreContext = matchScore !== null
-    ? matchScore >= 75 ? 'Strong match' : matchScore >= 50 ? 'Good match' : matchScore >= 15 ? 'Moderate match' : 'Weak match'
-    : null
+  const matchedFacts = Array.isArray(decision?.matched_profile_facts)
+    ? decision.matched_profile_facts
+    : []
+  const matchedNeeds = Array.isArray(decision?.matchedNeeds) ? decision.matchedNeeds : []
+  const matches = [
+    ...matchedFacts.map((detail) => ({ signal: 'Profile fact', detail: String(detail) })),
+    ...matchedNeeds.map((need) => ({ signal: 'Need alignment', detail: String(need) })),
+  ]
+  const misses = (decision?.ineligibilityReasons ?? []).map((detail) => ({
+    signal: 'Eligibility',
+    detail: String(detail),
+  }))
+  const neutral = (decision?.missingEligibilityFields ?? []).map((field) => ({
+    signal: 'Missing eligibility evidence',
+    detail: String(field),
+  }))
 
   return {
     opportunityId: opp.id,
     opportunityName: opp.name || opp.title,
     matchScore,
+    matchDecision: normalizedDecision || null,
+    scoreScaleId: decision?.scoreScaleId ?? SCORE_SCALE_ID,
+    scoringPolicyVersion:
+      decision?.scoringPolicyVersion ??
+      decision?.match_explain?.scoring_policy_version ??
+      null,
     scoreContext,
+    eligible: decision?.eligible ?? 'unknown',
     matches,
     misses,
     neutral,
-    summary: matches.length > 0
-      ? `This opportunity matched your profile on ${matches.length} signal(s): ${matches.map(m => m.signal).join(', ')}.`
-      : 'No strong match signals found. Review the opportunity details to determine eligibility manually.',
+    reasons: Array.isArray(decision?.reasons) ? decision.reasons : [],
+    matchExplain: decision?.match_explain ?? null,
+    summary: decision?.explanation ||
+      (normalizedDecision === 'REJECT'
+        ? 'The canonical matcher found this profile ineligible.'
+        : 'Review the official source and unresolved eligibility details before applying.'),
   }
 }
 
@@ -1783,9 +1785,10 @@ router.get('/:id/similar', async (req, res) => {
   try {
     const rawId = String(req.params.id || '').trim()
     if (!rawId) return res.status(400).json({ error: 'id is required', similar: [] })
+    const lifecycleSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
 
     let opp = await req.db
-      .prepare('SELECT * FROM funding_opportunities WHERE id = ?')
+      .prepare(`SELECT * FROM funding_opportunities WHERE id = ? AND ${lifecycleSql}`)
       .get(rawId)
 
     // Fallback path: caller may have sent a grants.id (pipeline row id),
@@ -1799,7 +1802,7 @@ router.get('/:id/similar', async (req, res) => {
         const foId = grantRow?.funding_opportunity_id
         if (foId) {
           opp = await req.db
-            .prepare('SELECT * FROM funding_opportunities WHERE id = ?')
+            .prepare(`SELECT * FROM funding_opportunities WHERE id = ? AND ${lifecycleSql}`)
             .get(String(foId))
           resolvedFromGrant = Boolean(opp)
         }
@@ -1820,9 +1823,6 @@ router.get('/:id/similar', async (req, res) => {
     const keywords = safeParseJSON(opp.keywords, [])
     const sponsor = (opp.sponsor || '').trim()
 
-    const isPostgres = req.db?.dialect === 'postgres'
-    const activeVal = isPostgres ? 'TRUE' : '1'
-
     // Fetch candidates: active, not self, same state or national.
     // Use opp.id (the *resolved* funding_opportunities id) — the caller may
     // have sent grants.id originally; we still want to exclude the actual
@@ -1831,7 +1831,7 @@ router.get('/:id/similar', async (req, res) => {
       `SELECT id, title, sponsor, categories, keywords, amount_min, amount_max,
               deadline, application_url, state, is_national, link_status
        FROM funding_opportunities
-       WHERE id != ? AND is_active = ${activeVal}
+       WHERE id != ? AND ${lifecycleSql}
        ORDER BY updated_at DESC
        LIMIT 200`
     ).all(String(opp.id))

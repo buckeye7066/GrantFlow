@@ -39,7 +39,7 @@ function makeDb() {
       PRIMARY KEY (profile_id, section_key)
     );
   `)
-  db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p1', 'Anastasia White')
+  db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p1', 'Demo Tennessee STEM Student')
   return db
 }
 
@@ -54,19 +54,19 @@ describe('setProfileSectionField', () => {
   it('writes a missing field back into its section', async () => {
     const db = makeDb()
     const res = await setProfileSectionField(db, {
-      profileId: 'p1', sectionKey: 'basic_information', field: 'first_name', value: 'Anastasia',
+      profileId: 'p1', sectionKey: 'basic_information', field: 'first_name', value: 'Demo Student',
     })
     assert.equal(res.accepted, true)
     const data = await sectionData(db, 'p1', 'basic_information')
-    assert.equal(data.first_name, 'Anastasia')
+    assert.equal(data.first_name, 'Demo Student')
   })
 
   it('merges rather than clobbering sibling fields', async () => {
     const db = makeDb()
-    await setProfileSectionField(db, { profileId: 'p1', sectionKey: 'basic_information', field: 'first_name', value: 'Anastasia' })
+    await setProfileSectionField(db, { profileId: 'p1', sectionKey: 'basic_information', field: 'first_name', value: 'Demo Student' })
     await setProfileSectionField(db, { profileId: 'p1', sectionKey: 'basic_information', field: 'last_name', value: 'White' })
     const data = await sectionData(db, 'p1', 'basic_information')
-    assert.equal(data.first_name, 'Anastasia')
+    assert.equal(data.first_name, 'Demo Student')
     assert.equal(data.last_name, 'White')
   })
 

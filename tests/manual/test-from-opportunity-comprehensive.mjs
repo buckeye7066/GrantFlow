@@ -33,7 +33,7 @@ test('POST /api/grants/from-opportunity - Comprehensive failure prevention', asy
   
   await t.test('✅ Valid request returns 201, not 500', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia',
+      profile_id: 'profile-demo-tennessee-stem-student',
       opportunity_data: {
         title: `Test Valid ${Date.now()}`,
         sponsor: 'Test Foundation',
@@ -50,7 +50,7 @@ test('POST /api/grants/from-opportunity - Comprehensive failure prevention', asy
 
   await t.test('✅ Both opportunity_id and opportunity_data returns 201, not 500', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia',
+      profile_id: 'profile-demo-tennessee-stem-student',
       opportunity_id: 'nonexistent-opp-id',  // This doesn't exist in DB
       opportunity_data: {
         title: `Test Fallback ${Date.now()}`,
@@ -85,7 +85,7 @@ test('POST /api/grants/from-opportunity - Comprehensive failure prevention', asy
 
   await t.test('✅ opportunity_id not found without fallback returns 404, not 500', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia',
+      profile_id: 'profile-demo-tennessee-stem-student',
       opportunity_id: 'nonexistent-opp-id',
       // No opportunity_data provided
     })
@@ -110,7 +110,7 @@ test('POST /api/grants/from-opportunity - Comprehensive failure prevention', asy
 
   await t.test('✅ Invalid opportunity_data type returns 400, not 500', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia',
+      profile_id: 'profile-demo-tennessee-stem-student',
       opportunity_data: 'invalid string',
     })
 
@@ -121,7 +121,7 @@ test('POST /api/grants/from-opportunity - Comprehensive failure prevention', asy
 
   await t.test('✅ Missing title returns 400, not 500', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia',
+      profile_id: 'profile-demo-tennessee-stem-student',
       opportunity_data: {
         sponsor: 'Test',
       },
@@ -134,7 +134,7 @@ test('POST /api/grants/from-opportunity - Comprehensive failure prevention', asy
 
   await t.test('✅ Expired deadline returns 400, not 500', async () => {
     const { status, data } = await makeRequest({
-      profile_id: 'profile-anastasia',
+      profile_id: 'profile-demo-tennessee-stem-student',
       opportunity_data: {
         title: 'Test Expired',
         sponsor: 'Test',

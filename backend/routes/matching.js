@@ -252,20 +252,17 @@ router.get('/profile/:profileId/grants', async (req, res, next) => {
       const matches = rows.map((row) => {
               const candidate = row.id
                 ? {
-                              title: row.title,
-                              description: row.description,
-                              is_national: row.is_national,
-                              state: row.state,
-                              keywords: row.keywords,
-                              categories: row.categories,
+                              // `fo.*` is already joined above. Preserve the complete
+                              // opportunity contract rather than hand-copying a
+                              // partial score input: the old projection silently
+                              // dropped application/source URLs, applicant types,
+                              // funding kind, loan status, and eligibility evidence,
+                              // so the canonical engine correctly treated valid rows
+                              // as unactionable or could miss a hard exclusion.
+                              ...row,
+                              title: row.title ?? row.grant_title,
+                              description: row.description ?? row.grant_notes ?? null,
                               deadline: row.deadline ?? row.grant_deadline,
-                              deadline_type: row.deadline_type,
-                              amount_min: row.amount_min,
-                              amount_max: row.amount_max,
-                              requires_501c3: row.requires_501c3,
-                              requires_match: row.requires_match,
-                              match_percentage: row.match_percentage,
-                              eligibility_bullets: row.eligibility_bullets,
                 }
                         : {
                                       title: row.grant_title,

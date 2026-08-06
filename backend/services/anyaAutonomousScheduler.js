@@ -355,7 +355,8 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
     }
 
     // Phase 7: Anya Match Scout — recommend-only background scan that
-    // surfaces high-confidence (>=ANYA_MATCH_SCOUT_THRESHOLD, default 85)
+    // surfaces high-confidence (>=ANYA_MATCH_SCOUT_THRESHOLD, whose default is
+    // the canonical data-point-scale strong-match bar)
     // matches per profile as pending suggestions + notifications. NEVER
     // auto-adds to pipelines. Honors the per-user mute preference.
     if (AUTONOMOUS_CONFIG.operations.matchScout && context.db) {

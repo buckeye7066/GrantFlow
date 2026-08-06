@@ -51,7 +51,7 @@ const {
 } = await import('../services/hamilton/hamiltonConfirmationArtifacts.js')
 const { ensureApplicationTask, updateApplicationTask, _resetSchemaCache } =
   await import('../services/hamilton/applicationTaskStore.js')
-const { _resetAuthSchemaCache } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
+const { _resetAuthSchemaCache, recordAuthorizations } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
 
 const PROFILE = 'profile-durable-proof'
 const tmpDirs = []
@@ -98,16 +98,12 @@ async function seedFixture(db) {
     .run(PROFILE, 'user-1', 'Focus Forward Ministry')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Focus', last_name: 'Forward', email: 'ffm@example.org' }))
+  await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+    .run(PROFILE, 'automation_preferences', JSON.stringify({ automations: { hamilton_auto_submit: true, hamilton_autopilot: true } }))
   await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://portal.example.org/apply')
+    .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://hamilton-submit-fixture.invalid/apply')
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')
     .run('g-1', PROFILE, 'opp-1', 'Community Ministry Grant')
-}
-
-const AUTHORIZATIONS = {
-  complete_forms: true, save_drafts: false, generate_narratives: false,
-  submit_applications: true, use_saved_credentials_reference: false,
-  use_saved_session: false, upload_documents: false, use_standing_attestation: false,
 }
 
 const savedEnv = {}
@@ -118,9 +114,11 @@ beforeEach(() => {
   savedEnv.gate = process.env.HAMILTON_TAILORED_APPROVAL_GATE
   savedEnv.uploads = process.env.UPLOADS_DIR
   savedEnv.confdir = process.env.HAMILTON_CONFIRMATION_DIR
+  savedEnv.autosubmit = process.env.HAMILTON_ALLOW_AUTOSUBMIT
   process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'true'
   process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = ''
   process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+  process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
 })
 afterEach(() => {
   process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = savedEnv.enabled
@@ -131,6 +129,8 @@ afterEach(() => {
   else process.env.UPLOADS_DIR = savedEnv.uploads
   if (savedEnv.confdir === undefined) delete process.env.HAMILTON_CONFIRMATION_DIR
   else process.env.HAMILTON_CONFIRMATION_DIR = savedEnv.confdir
+  if (savedEnv.autosubmit === undefined) delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
+  else process.env.HAMILTON_ALLOW_AUTOSUBMIT = savedEnv.autosubmit
   while (tmpDirs.length) {
     try { fs.rmSync(tmpDirs.pop(), { recursive: true, force: true }) } catch { /* ignore */ }
   }
@@ -164,15 +164,103 @@ describe('resolveConfirmationCaptureDir', () => {
 
 // ── 2. assessSubmissionEvidence honesty is unchanged ────────────────────────
 
-describe('assessSubmissionEvidence still refuses without captured evidence', () => {
-  const { assessSubmissionEvidence } = engineInternal
-  it('a reference is portal-confirmed, a screenshot is screenshot_only, nothing is refused', () => {
+describe('assessSubmissionEvidence requires a genuinely new receipt signal', () => {
+  const {
+    assessSubmissionEvidence,
+    mergeSubmitCapture,
+    submitCaptureResult,
+    submitCaptureHistoryResult,
+  } = engineInternal
+  it('accepts a new reference without requiring a URL change', () => {
     expect(assessSubmissionEvidence({ reference: 'CONF-1', screenshot_path: null }))
       .toEqual({ ok: true, confirmation_evidence: 'portal_reference' })
+    expect(assessSubmissionEvidence(
+      { reference: 'CONF-2', url: 'https://portal.example.org/apply' },
+      { reference: 'CONF-1', url: 'https://portal.example.org/apply' },
+    )).toEqual({ ok: true, confirmation_evidence: 'portal_reference' })
+  })
+
+  it('URL change, same reference, and screenshots remain attempt evidence', () => {
+    expect(assessSubmissionEvidence(
+      {
+        reference: 'conf-1',
+        url: 'https://portal.example.org/done',
+        screenshot_path: '/tmp/s.png',
+        page_html_path: '/tmp/p.html',
+        received_acknowledgement: false,
+      },
+      {
+        reference: 'CONF-1',
+        url: 'https://portal.example.org/apply',
+        received_acknowledgement: false,
+      },
+    )).toEqual({ ok: false, confirmation_evidence: 'attempt_evidence' })
     expect(assessSubmissionEvidence({ reference: null, screenshot_path: '/tmp/s.png' }))
-      .toEqual({ ok: true, confirmation_evidence: 'screenshot_only' })
+      .toEqual({ ok: false, confirmation_evidence: 'attempt_evidence' })
+    expect(assessSubmissionEvidence({
+      reference: null,
+      screenshot_path: '/tmp/s.png',
+      received_acknowledgement: true,
+    }, { received_acknowledgement: false }))
+      .toEqual({ ok: true, confirmation_evidence: 'portal_acknowledgement' })
     expect(assessSubmissionEvidence({ reference: null, screenshot_path: null }))
       .toEqual({ ok: false, confirmation_evidence: 'none' })
+  })
+
+  it('retains earlier and later post-click captures while classifying the bundle honestly', () => {
+    const merged = mergeSubmitCapture(
+      {
+        url: 'https://portal.example.org/apply', reference: 'OLD-12345',
+        screenshot_path: '/captures/first.png', page_html_path: '/captures/first.html',
+        page_text: 'Submitting…', received_acknowledgement: false,
+      },
+      {
+        url: 'https://portal.example.org/done', reference: 'OLD-12345',
+        screenshot_path: null, page_html_path: '/captures/final.html',
+        page_text: 'Thank you for your submission', received_acknowledgement: true,
+      },
+    )
+    expect(merged.screenshot_path).toBe('/captures/first.png')
+    expect(merged.page_html_path).toBe('/captures/final.html')
+
+    expect(submitCaptureResult(merged, {
+      url: 'https://portal.example.org/apply',
+      reference: 'OLD-12345',
+      received_acknowledgement: false,
+    })).toEqual(expect.objectContaining({
+      submit_clicked: true,
+      confirmation_evidence: 'portal_acknowledgement',
+      submission_evidence_classification: 'confirmation_proof',
+      confirmation_reference: 'OLD-12345',
+      confirmation_reference_is_new: false,
+      confirmation_screenshot_path: '/captures/first.png',
+      confirmation_page_html_path: '/captures/final.html',
+      confirmation_received_acknowledgement: true,
+      confirmation_received_acknowledgement_is_new: true,
+      confirmation_url_changed: true,
+    }))
+
+    const historyResult = submitCaptureHistoryResult([
+      {
+        url: 'https://portal.example.org/apply', reference: 'OLD-12345',
+        screenshot_path: '/captures/first.png', page_html_path: '/captures/first.html',
+        page_text: 'Submitting…', received_acknowledgement: false,
+      },
+      {
+        url: 'https://portal.example.org/done', reference: 'OLD-12345',
+        screenshot_path: '/captures/final.png', page_html_path: '/captures/final.html',
+        page_text: 'Thank you for your submission', received_acknowledgement: true,
+      },
+    ], {
+      url: 'https://portal.example.org/apply',
+      reference: 'OLD-12345',
+      received_acknowledgement: false,
+    })
+    expect(historyResult.submission_evidence_classification).toBe('confirmation_proof')
+    expect(historyResult.confirmation_evidence).toBe('portal_acknowledgement')
+    expect(historyResult.submission_attempt_captures).toHaveLength(2)
+    expect(historyResult.submission_attempt_captures.map((capture) => capture.screenshot_path))
+      .toEqual(['/captures/first.png', '/captures/final.png'])
   })
 })
 
@@ -261,6 +349,7 @@ describe('registerConfirmationArtifact makes proof retrievable, and the reader i
       profileId: PROFILE, grantId: 'g-1', opportunityId: 'opp-1', taskId: 'task-1',
       title: 'Community Ministry Grant', screenshotPath: shot, pageHtmlPath: page,
       pageText: 'Confirmation #: ABC12345', reference: 'ABC12345',
+      referenceIsNew: true,
       capturedUrl: 'https://portal.example.org/done',
     })
     expect(artifact.screenshot_document_id).toBeTruthy()
@@ -275,10 +364,26 @@ describe('registerConfirmationArtifact makes proof retrievable, and the reader i
     fs.rmSync(page)
     const verdict = await assessStoredConfirmationProof(db, {
       confirmation_screenshot_path: shot,
-      result: { confirmation_document_id: artifact.screenshot_document_id },
+      confirmation_reference: 'ABC12345',
+      result: {
+        confirmation_document_id: artifact.screenshot_document_id,
+        confirmation_reference: 'ABC12345',
+        confirmation_reference_is_new: true,
+        confirmation_evidence: 'portal_reference',
+      },
     })
     expect(verdict.proof_retrievable).toBe(true)
     expect(verdict.source).toBe('document')
+
+    const flagWithoutAcknowledgement = await assessStoredConfirmationProof(db, {
+      confirmation_screenshot_path: shot,
+      result: {
+        confirmation_document_id: artifact.screenshot_document_id,
+        confirmation_evidence: 'portal_acknowledgement',
+        confirmation_received_acknowledgement_is_new: true,
+      },
+    })
+    expect(flagWithoutAcknowledgement.proof_retrievable).toBe(false)
   })
 
   it('BACKFILL HONESTY: a dangling screenshot path with no document reads as NO proof', async () => {
@@ -290,6 +395,137 @@ describe('registerConfirmationArtifact makes proof retrievable, and the reader i
     })
     expect(verdict.proof_retrievable).toBe(false)
     expect(verdict.reason).toBe('screenshot_path_missing_on_disk')
+  })
+
+  it('stores acknowledgement/screenshots without a new reference as attempt evidence, never proof', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const dir = makeTmpDir('gf-attempt-')
+    const shot = path.join(dir, 'attempt.png')
+    const page = path.join(dir, 'attempt.html')
+    fs.writeFileSync(shot, Buffer.from('\x89PNG-attempt'))
+    fs.writeFileSync(page, '<html><body>Thank you for your submission.</body></html>', 'utf8')
+
+    const artifact = await registerConfirmationArtifact(db, {
+      profileId: PROFILE, grantId: 'g-1', opportunityId: 'opp-1', taskId: 'task-1',
+      title: 'Community Ministry Grant', screenshotPath: shot, pageHtmlPath: page,
+      pageText: 'Thank you for your submission.', reference: 'OLD-REFERENCE-12345',
+      referenceIsNew: false,
+      capturedUrl: 'https://portal.example.org/done',
+    })
+    expect(artifact.evidence_classification).toBe('attempt_evidence')
+    const doc = await db.prepare('SELECT type, notes FROM documents WHERE id = ?')
+      .get(artifact.screenshot_document_id)
+    expect(doc.type).toBe('hamilton_submission_attempt_evidence')
+    expect(doc.notes).toMatch(/receipt is not confirmed/i)
+
+    const verdict = await assessStoredConfirmationProof(db, {
+      confirmation_screenshot_path: shot,
+      result: {
+        confirmation_document_id: artifact.screenshot_document_id,
+        confirmation_page_document_id: artifact.page_document_id,
+        confirmation_evidence: 'attempt_evidence',
+        confirmation_reference: 'OLD-REFERENCE-12345',
+        confirmation_reference_is_new: false,
+        confirmation_received_acknowledgement: true,
+        confirmation_page_html_path: page,
+      },
+    })
+    expect(verdict.proof_retrievable).toBe(false)
+    expect(verdict.attempt_evidence_retrievable).toBe(true)
+    expect(verdict.reason).toBe('attempt_evidence_is_not_confirmation_proof')
+  })
+
+  it('treats an unclassified reference as attempt evidence instead of inferring that it is new', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const dir = makeTmpDir('gf-unclassified-ref-')
+    const shot = path.join(dir, 'attempt.png')
+    fs.writeFileSync(shot, Buffer.from('\x89PNG-unclassified-reference'))
+
+    const artifact = await registerConfirmationArtifact(db, {
+      profileId: PROFILE, grantId: 'g-1', opportunityId: 'opp-1', taskId: 'task-1',
+      title: 'Community Ministry Grant', screenshotPath: shot,
+      reference: 'UNCLASSIFIED-12345',
+    })
+
+    expect(artifact.evidence_classification).toBe('attempt_evidence')
+    const doc = await db.prepare('SELECT type FROM documents WHERE id = ?')
+      .get(artifact.screenshot_document_id)
+    expect(doc.type).toBe('hamilton_submission_attempt_evidence')
+
+    const verdict = await assessStoredConfirmationProof(db, {
+      confirmation_screenshot_path: shot,
+      confirmation_reference: 'UNCLASSIFIED-12345',
+      result: {
+        confirmation_document_id: artifact.screenshot_document_id,
+        confirmation_evidence: 'portal_reference',
+        confirmation_reference: 'UNCLASSIFIED-12345',
+      },
+    })
+    expect(verdict.proof_retrievable).toBe(false)
+    expect(verdict.attempt_evidence_retrievable).toBe(true)
+  })
+
+  it('stores a newly appearing receipt acknowledgement as confirmation proof', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const dir = makeTmpDir('gf-ack-proof-')
+    const shot = path.join(dir, 'acknowledgement.png')
+    const page = path.join(dir, 'acknowledgement.html')
+    fs.writeFileSync(shot, Buffer.from('\x89PNG-acknowledgement'))
+    fs.writeFileSync(page, '<html><body>Thank you for your submission.</body></html>', 'utf8')
+
+    const artifact = await registerConfirmationArtifact(db, {
+      profileId: PROFILE, grantId: 'g-1', opportunityId: 'opp-1', taskId: 'task-1',
+      title: 'Community Ministry Grant', screenshotPath: shot, pageHtmlPath: page,
+      pageText: 'Thank you for your submission.', reference: null,
+      referenceIsNew: false,
+      receivedAcknowledgement: true,
+      receivedAcknowledgementIsNew: true,
+      capturedUrl: 'https://portal.example.org/done',
+    })
+    expect(artifact.evidence_classification).toBe('confirmation_proof')
+    const doc = await db.prepare('SELECT type, notes FROM documents WHERE id = ?')
+      .get(artifact.screenshot_document_id)
+    expect(doc.type).toBe('hamilton_submission_confirmation')
+    expect(doc.notes).toMatch(/newly appearing receipt acknowledgement/i)
+
+    const verdict = await assessStoredConfirmationProof(db, {
+      confirmation_screenshot_path: shot,
+      result: {
+        confirmation_document_id: artifact.screenshot_document_id,
+        confirmation_page_document_id: artifact.page_document_id,
+        confirmation_evidence: 'portal_acknowledgement',
+        confirmation_reference: null,
+        confirmation_reference_is_new: false,
+        confirmation_received_acknowledgement: true,
+        confirmation_received_acknowledgement_is_new: true,
+        confirmation_page_html_path: page,
+      },
+    })
+    expect(verdict.proof_retrievable).toBe(true)
+    expect(verdict.source).toBe('document')
+  })
+
+  it('does not promote an acknowledgement newness flag without an actual acknowledgement', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const dir = makeTmpDir('gf-ack-flag-only-')
+    const shot = path.join(dir, 'attempt.png')
+    fs.writeFileSync(shot, Buffer.from('\x89PNG-attempt'))
+
+    const artifact = await registerConfirmationArtifact(db, {
+      profileId: PROFILE, grantId: 'g-1', opportunityId: 'opp-1', taskId: 'task-1',
+      title: 'Community Ministry Grant', screenshotPath: shot,
+      receivedAcknowledgement: false,
+      receivedAcknowledgementIsNew: true,
+    })
+
+    expect(artifact.evidence_classification).toBe('attempt_evidence')
+    const doc = await db.prepare('SELECT type FROM documents WHERE id = ?')
+      .get(artifact.screenshot_document_id)
+    expect(doc.type).toBe('hamilton_submission_attempt_evidence')
   })
 })
 
@@ -308,17 +544,23 @@ describe('a submitted run persists retrievable proof under a durable dir (not tm
     const pageHtml = path.join(durableDir, `confirmation_${Date.now()}.html`)
     fs.writeFileSync(shot, Buffer.from('\x89PNG-real'))
     fs.writeFileSync(pageHtml, '<html><body>Confirmation #: ZZ778812</body></html>', 'utf8')
-    runAutopilot.mockResolvedValue({
-      status: 'submitted',
-      submit_clicked: true,
-      confirmation_evidence: 'portal_reference',
-      confirmation_reference: 'ZZ778812',
-      confirmation_screenshot_path: shot,
-      confirmation_page_html_path: pageHtml,
-      confirmation_page_text: 'Confirmation #: ZZ778812',
-      confirmation_url: 'https://portal.example.org/done',
-      filled_fields: [{ key: 'essay', fid: 'f1', value: 'x' }],
-      pages_visited: 2, trace: [],
+    runAutopilot.mockImplementation(async ({ beforeSubmit }) => {
+      const boundary = await beforeSubmit()
+      expect(boundary.allow).toBe(true)
+      return {
+        status: 'submitted',
+        submission_attempt_started: true,
+        submit_clicked: true,
+        confirmation_evidence: 'portal_reference',
+        confirmation_reference: 'ZZ778812',
+        confirmation_reference_is_new: true,
+        confirmation_screenshot_path: shot,
+        confirmation_page_html_path: pageHtml,
+        confirmation_page_text: 'Confirmation #: ZZ778812',
+        confirmation_url: 'https://hamilton-submit-fixture.invalid/done',
+        filled_fields: [{ key: 'essay', fid: 'f1', value: 'x' }],
+        pages_visited: 2, trace: [],
+      }
     })
 
     const db = makeDb()
@@ -327,11 +569,22 @@ describe('a submitted run persists retrievable proof under a durable dir (not tm
       profileId: PROFILE, opportunityId: 'opp-1', grantId: 'g-1', automationType: 'portal',
     })
     await updateApplicationTask(db, task.id, { allowAutoSubmit: true })
+    await recordAuthorizations(db, {
+      userId: 'user-1',
+      profileId: PROFILE,
+      scope: 'funding_source',
+      fundingSourceIds: ['opp-1'],
+      authorizationTypes: ['complete_forms', 'submit_applications'],
+      authorizationText: 'Test authorization',
+      authorizationVersion: 'hamilton-autopilot-test-v1',
+      options: { require_human_review: false },
+      replaceOmittedTypes: true,
+    })
 
     const result = await automateSingleSource(db, {
       profileId: PROFILE, userId: 'user-1',
       source: { opportunity_id: 'opp-1', grant_id: 'g-1' },
-      options: { authorizations: AUTHORIZATIONS },
+      options: {},
     })
 
     // The engine was handed the durable capture dir, never tmp.
@@ -350,8 +603,77 @@ describe('a submitted run persists retrievable proof under a durable dir (not tm
     // And the reader confirms the proof is genuinely retrievable.
     const verdict = await assessStoredConfirmationProof(db, {
       confirmation_screenshot_path: shot,
-      result: { confirmation_document_id: proofId },
+      confirmation_reference: 'ZZ778812',
+      result: {
+        confirmation_document_id: proofId,
+        confirmation_reference: 'ZZ778812',
+        confirmation_reference_is_new: true,
+        confirmation_evidence: 'portal_reference',
+      },
     })
     expect(verdict.proof_retrievable).toBe(true)
+  })
+
+  it('accepts a newly appearing acknowledgement only when its confirmation page is retained', async () => {
+    const uploads = makeTmpDir('gf-ack-uploads-')
+    process.env.UPLOADS_DIR = uploads
+    const durableDir = resolveConfirmationCaptureDir()
+    const shot = path.join(durableDir, `acknowledgement_${Date.now()}.png`)
+    const pageHtml = path.join(durableDir, `acknowledgement_${Date.now()}.html`)
+    fs.writeFileSync(shot, Buffer.from('\x89PNG-ack'))
+    fs.writeFileSync(pageHtml, '<html><body>Thank you for your submission.</body></html>', 'utf8')
+    runAutopilot.mockImplementation(async ({ beforeSubmit }) => {
+      const boundary = await beforeSubmit()
+      expect(boundary.allow).toBe(true)
+      return {
+        status: 'submitted',
+        submission_attempt_started: true,
+        submit_clicked: true,
+        confirmation_evidence: 'portal_acknowledgement',
+        confirmation_reference: null,
+        confirmation_reference_is_new: false,
+        confirmation_received_acknowledgement: true,
+        confirmation_received_acknowledgement_is_new: true,
+        confirmation_screenshot_path: shot,
+        confirmation_page_html_path: pageHtml,
+        confirmation_page_text: 'Thank you for your submission.',
+        confirmation_url: 'https://hamilton-submit-fixture.invalid/done',
+        filled_fields: [{ key: 'essay', fid: 'f1', value: 'x' }],
+        pages_visited: 2,
+        trace: [],
+      }
+    })
+
+    const db = makeDb()
+    await seedFixture(db)
+    const task = await ensureApplicationTask(db, {
+      profileId: PROFILE, opportunityId: 'opp-1', grantId: 'g-1', automationType: 'portal',
+    })
+    await updateApplicationTask(db, task.id, { allowAutoSubmit: true })
+    await recordAuthorizations(db, {
+      userId: 'user-1',
+      profileId: PROFILE,
+      scope: 'funding_source',
+      fundingSourceIds: ['opp-1'],
+      authorizationTypes: ['complete_forms', 'submit_applications'],
+      authorizationText: 'Test authorization',
+      authorizationVersion: 'hamilton-autopilot-test-v1',
+      options: { require_human_review: false },
+      replaceOmittedTypes: true,
+    })
+
+    const result = await automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: 'user-1',
+      source: { opportunity_id: 'opp-1', grant_id: 'g-1' },
+      options: {},
+    })
+
+    expect(result.task.status).toBe('submitted')
+    expect(result.autopilot_result.confirmation_evidence).toBe('portal_acknowledgement')
+    expect(result.autopilot_result.confirmation_document_id).toBeTruthy()
+    const doc = await db.prepare('SELECT type FROM documents WHERE id = ?')
+      .get(result.autopilot_result.confirmation_document_id)
+    expect(doc.type).toBe('hamilton_submission_confirmation')
   })
 })

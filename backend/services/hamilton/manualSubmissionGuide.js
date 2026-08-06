@@ -113,8 +113,8 @@ export function buildManualCompletionGuide(task, extras = {}) {
     steps.push({
       action: 'fill_profile',
       text: missingNames.length
-        ? `Fastest path: add ${missingNames.join(', ')} to the profile (use "Go there" on each flagged item) — Hamilton resumes and finishes automatically on her next pass.`
-        : 'Fastest path: answer the flagged items on the profile — Hamilton resumes and finishes automatically on her next pass.',
+        ? `Fastest path: add ${missingNames.join(', ')} to the profile (use "Go there" on each flagged item) — Hamilton can resume draft preparation on her next pass; final portal Submit remains yours.`
+        : 'Fastest path: answer the flagged items on the profile — Hamilton can resume draft preparation on her next pass; final portal Submit remains yours.',
     })
     steps.push({ ...portalStep(portalUrl, { title }), text: `Or finish it yourself now: ${portalStep(portalUrl, { title }).text}` })
     const pk = packetStep(task)
@@ -146,8 +146,8 @@ export function buildManualCompletionGuide(task, extras = {}) {
       text: 'Review the saved draft on the portal (or paste from the packet), complete anything it still flags, and click Submit there.',
     })
     steps.push({
-      action: 'enable_auto',
-      text: 'Want Hamilton to take this click next time? Turn ON auto-submit for this profile (and approve auto-submit on the task) — with those on she submits herself and captures the confirmation.',
+      action: 'human_handoff',
+      text: 'Hamilton can prepare and save future drafts, but final portal review, signatures, attestations, Submit, and confirmation remain your visible handoff.',
     })
     steps.push(MARK_SUBMITTED_STEP)
   } else if (status === 'waiting_for_login' || status === 'blocked_login_required' || status === 'blocked_2fa' || status === 'blocked_captcha') {
@@ -157,7 +157,7 @@ export function buildManualCompletionGuide(task, extras = {}) {
     steps.push({
       action: 'sign_in',
       url: portalUrl || undefined,
-      text: `Sign in once${portalUrl ? ' at the portal link' : ''} side-by-side with Hamilton watching (Portals → this portal → sign in). She captures the session and resumes this application on her own.`,
+      text: `Sign in once${portalUrl ? ' at the portal link' : ''} side-by-side with Hamilton watching (Portals → this portal → sign in). Hamilton can reuse the authorized session to resume draft preparation; final Submit remains yours.`,
     })
     steps.push({
       action: 'submit',

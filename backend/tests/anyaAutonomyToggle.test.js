@@ -33,7 +33,7 @@ describe('agentControlStore agent_settings KV', () => {
   })
 
   it('persists and reads back a value (insert path)', async () => {
-    await setAgentSetting(db, 'anya.autonomous_enabled', 'false', { updatedByEmail: 'buckeye7066@gmail.com' })
+    await setAgentSetting(db, 'anya.autonomous_enabled', 'false', { updatedByEmail: 'owner@example.invalid' })
     expect(await getAgentSetting(db, 'anya.autonomous_enabled')).toBe('false')
   })
 

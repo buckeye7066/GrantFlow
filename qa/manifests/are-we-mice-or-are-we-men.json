@@ -2,7 +2,7 @@
   "app_id": "are-we-mice-or-are-we-men",
   "display_name": "Are We Mice Or Are We Men",
   "repo": "buckeye7066/are-we-mice-or-are-we-men",
-  "local_path": "C:/Users/firer/are-we-mice-or-are-we-men",
+  "local_path": "C:/Users/example_user/are-we-mice-or-are-we-men",
   "runtime_type": "web",
   "start_command": "cd backend && npm run dev & npm run dev",
   "stop_command": "taskkill-by-port",
@@ -30,7 +30,7 @@
   "prohibited_actions": [
     "educational fixtures only — no patient-specific medical direction",
     "no real Anthropic spend (leave ANTHROPIC_API_KEY unset in test runs)",
-    "do not register the admin email buckeye7066@gmail.com locally (it grants admin); use synthetic fixture emails like eva-fixture@example.com"
+    "do not register the admin email owner@example.invalid locally (it grants admin); use synthetic fixture emails like eva-fixture@example.com"
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],

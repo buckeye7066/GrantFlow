@@ -37,7 +37,17 @@ class APIClient {
   constructor() {
     this.baseUrl = API_URL;
     this.token = null;
-    this.refreshToken = null;
+    // Browser smoke harnesses may inject a per-document bearer token directly
+    // into memory. It is accepted only alongside the explicit smoke marker and
+    // deleted immediately; production sessions never use this path.
+    if (
+      typeof globalThis !== 'undefined' &&
+      globalThis.__GF_SMOKE__ === true &&
+      typeof globalThis.__GRANTFLOW_SMOKE_ACCESS_TOKEN__ === 'string'
+    ) {
+      this.token = globalThis.__GRANTFLOW_SMOKE_ACCESS_TOKEN__
+      try { delete globalThis.__GRANTFLOW_SMOKE_ACCESS_TOKEN__ } catch { /* ignore */ }
+    }
     this.activeProfileId = null;
     this.refreshPromise = null; // Single-flight refresh promise
     this.onAuthFailure = null;
@@ -74,20 +84,28 @@ class APIClient {
       const stored = localStorage.getItem('grantflow:active-profile-id')
       this.activeProfileId = stored && String(stored).trim() ? String(stored).trim() : null
 
-      // Keep this window's in-memory token cache coherent with other tabs/windows.
-      // A separate window (e.g. the Hamilton live-login popup) shares this origin's
-      // localStorage but has its OWN APIClient instance. When it rotates or clears
-      // tokens, we must observe that here instead of clinging to a now-dead
-      // in-memory copy. The `storage` event fires only in the OTHER windows, which
-      // is exactly the cross-window sync we need.
+      // Access tokens stay process-memory-only. BroadcastChannel carries only a
+      // logout signal (never credentials) so logging out in one tab immediately
+      // clears authenticated state in the others. Refresh-cookie rotation itself
+      // is serialized by Web Locks below.
       try {
-        window.addEventListener('storage', (e) => {
-          if (e.key === 'grantflow:access-token') this.token = e.newValue || null
-          else if (e.key === 'grantflow:refresh-token') this.refreshToken = e.newValue || null
-        })
+        if (typeof BroadcastChannel !== 'undefined') {
+          this._authChannel = new BroadcastChannel('grantflow:auth')
+          this._authChannel.addEventListener('message', (event) => {
+            if (event?.data?.type !== 'logout') return
+            this._handlingPeerLogout = true
+            try {
+              this.clearToken({ broadcast: false })
+              if (this.onAuthFailure && !this._suppressAuthFailureCount) {
+                this.onAuthFailure('You signed out in another tab.')
+              }
+            } finally {
+              this._handlingPeerLogout = false
+            }
+          })
+        }
       } catch {
-        // addEventListener unavailable — getToken()/getRefreshToken() read
-        // localStorage directly anyway, so cross-window reads still stay fresh.
+        this._authChannel = null
       }
     }
   }
@@ -109,17 +127,14 @@ class APIClient {
   }
 
   setToken(token) {
-    this.token = token;
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('grantflow:access-token', token);
-    }
+    this.token = token || null;
   }
 
-  setRefreshToken(token) {
-    this.refreshToken = token;
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('grantflow:refresh-token', token);
-    }
+  // Refresh credentials are owned by the server-issued HttpOnly cookie and are
+  // intentionally unavailable to JavaScript. Retain this no-op compatibility
+  // method temporarily so older call sites fail closed while rolling forward.
+  setRefreshToken(_token) {
+    this._clearLegacyTokenStorage()
   }
 
   setActiveProfileId(profileId) {
@@ -146,51 +161,33 @@ class APIClient {
   }
 
   getToken() {
-    // localStorage is the cross-window source of truth: another tab or the
-    // Hamilton live-login popup (a separate window with its own APIClient) may
-    // have rotated the access token, leaving our in-memory copy stale. Prefer
-    // the stored value and keep our cache in sync; fall back to memory only when
-    // storage is unavailable (SSR / tests / private-mode failures).
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem('grantflow:access-token');
-        if (stored) {
-          this.token = stored;
-          return stored;
-        }
-      } catch {
-        // localStorage read failed — fall back to the in-memory copy below.
-      }
-    }
     return this.token;
   }
 
   getRefreshToken() {
-    // Same rotation hazard as getToken(): prefer the shared localStorage value so
-    // we never refresh with an in-memory token another window already rotated.
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem('grantflow:refresh-token');
-        if (stored) {
-          this.refreshToken = stored;
-          return stored;
-        }
-      } catch {
-        // localStorage read failed — fall back to the in-memory copy below.
-      }
-    }
-    return this.refreshToken;
+    return null;
   }
 
-  clearToken() {
+  _clearLegacyTokenStorage() {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.removeItem('grantflow:access-token')
+      window.localStorage.removeItem('grantflow:refresh-token')
+    } catch {
+      // Storage may be unavailable in private mode. Tokens are never read from it.
+    }
+  }
+
+  clearToken({ broadcast = true } = {}) {
     this.token = null;
-    this.refreshToken = null;
     this.refreshPromise = null; // Clear any pending refresh
     this.activeProfileId = null;
+    this._clearLegacyTokenStorage()
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('grantflow:access-token');
-      localStorage.removeItem('grantflow:refresh-token');
       localStorage.removeItem('grantflow:active-profile-id');
+    }
+    if (broadcast && !this._handlingPeerLogout) {
+      try { this._authChannel?.postMessage({ type: 'logout' }) } catch { /* ignore */ }
     }
   }
 
@@ -201,26 +198,6 @@ class APIClient {
   }
 
   async handleUnauthorized(originalRequest) {
-    const refreshToken = this.getRefreshToken();
-    
-    // CRITICAL: Don't attempt refresh if no token exists.
-    // Do NOT call onAuthFailure here — this path fires during bootstrap when a
-    // stale access token exists but the refresh token is already cleared. The
-    // bootstrap in App.jsx already calls clearState() on failure, so calling
-    // onAuthFailure here would set sessionExpired: true unnecessarily and cause
-    // the Login page flash/oscillation loop.
-    if (!refreshToken) {
-      console.warn('[APIClient] No refresh token available, clearing auth state');
-      this.clearToken();
-      // Notify auth store so it clears isAuthenticated and redirects to login.
-      // Without this, the Zustand store still shows the user as authenticated
-      // while the actual tokens are gone, causing 'Authentication required' errors.
-      if (this.onAuthFailure && !this._suppressAuthFailureCount) {
-        this.onAuthFailure('Your session has expired. Please sign in again.');
-      }
-      throw this.createAuthError('Authentication required');
-    }
-    
     // If the original request was to /refresh, don't try again - just fail
     if (originalRequest?.endpoint?.includes('/auth/refresh')) {
       console.warn('[APIClient] Refresh endpoint failed, clearing auth state');
@@ -272,7 +249,7 @@ class APIClient {
    * callers (e.g. authStore's scheduleSessionRefresh timer) share the same
    * in-flight request and we never send two simultaneous refresh calls.
    *
-   * @returns {Promise<{accessToken: string, refreshToken?: string}>} The new tokens.
+   * @returns {Promise<{accessToken: string}>} The new access token and expiry metadata.
    */
   async refreshTokens() {
     // Reuse any in-flight refresh so concurrent callers in THIS window share one
@@ -283,13 +260,8 @@ class APIClient {
       return this.refreshPromise
     }
 
-    // Snapshot the refresh token we believe is current BEFORE we (possibly) wait
-    // on the cross-window lock. If a peer window rotates while we wait, the stored
-    // token will differ and we can adopt its result instead of rotating again.
-    const expected = this.getRefreshToken()
-
     log.debug('refreshTokens: starting new refresh')
-    this.refreshPromise = this._runRefresh(expected).finally(() => {
+    this.refreshPromise = this._runRefresh().finally(() => {
       this.refreshPromise = null
     })
     return this.refreshPromise
@@ -298,41 +270,24 @@ class APIClient {
   // Serialize refreshes ACROSS same-origin windows/tabs. The refresh token is
   // single-use (the server rotates refresh_token_hash on every call), so two
   // windows refreshing at once — the app tab and the Hamilton live-login popup,
-  // each with its OWN APIClient instance — would race: one rotates, the other's
-  // call 401s and (previously) wiped the shared tokens, logging BOTH windows out
-  // and 401-ing the live-login SSE stream. navigator.locks lets only one window
-  // refresh at a time; the others wait and reuse the freshly-stored token.
-  async _runRefresh(expected) {
-    const run = () => this._refreshTokenNetwork(expected)
+  // each with its OWN APIClient instance — must not send the same cookie at once.
+  // navigator.locks serializes those rotations. The server also uses a compare-
+  // and-swap and a brief 409 retry window for browsers without Web Locks.
+  async _runRefresh() {
+    const run = () => this._refreshTokenNetwork()
     try {
       if (typeof navigator !== 'undefined' && navigator.locks?.request) {
         return await navigator.locks.request('grantflow:auth-refresh', run)
       }
     } catch (error) {
       // Web Locks unavailable or the request was rejected — fall back to an
-      // unlocked refresh. The adopt-don't-clear net below still prevents a lost
-      // race from nuking a peer window's session.
+      // unlocked refresh. The backend CAS/409 contract remains the safety net.
       log.debug('web lock refresh unavailable; running unlocked', error?.message)
     }
     return run()
   }
 
-  async _refreshTokenNetwork(expected) {
-    // Re-read inside the lock: a peer window may have already rotated the token
-    // while we waited to acquire it.
-    const current = this.getRefreshToken()
-    if (!current) {
-      this.clearToken()
-      throw this.createAuthError('Authentication required')
-    }
-
-    // A peer refreshed while we waited — adopt its result instead of rotating the
-    // (already fresh) token a second time, which would needlessly invalidate it.
-    if (expected && current !== expected) {
-      log.debug('refreshTokens: peer window already rotated; adopting stored tokens')
-      return this._adoptStoredTokens(current)
-    }
-
+  async _refreshTokenNetwork({ retryOnConflict = true } = {}) {
     const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
       method: 'POST',
       headers: {
@@ -342,20 +297,16 @@ class APIClient {
         'X-Requested-With': 'XMLHttpRequest',
       },
       credentials: 'include',
-      body: JSON.stringify({ refreshToken: current }),
+      body: '{}',
     })
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+      if (response.status === 409 && errorData?.retryable && retryOnConflict) {
+        await new Promise((resolve) => setTimeout(resolve, 150))
+        return this._refreshTokenNetwork({ retryOnConflict: false })
+      }
       if (response.status === 401) {
-        // Belt-and-suspenders for the no-Web-Locks / cross-process race: another
-        // window may have rotated the token out from under us and stored a fresh
-        // one. Adopt it rather than clearing shared auth for every window.
-        const latest = this._readStored('grantflow:refresh-token')
-        if (latest && latest !== current) {
-          log.debug('refreshTokens: 401 but a peer stored a newer token; adopting it')
-          return this._adoptStoredTokens(latest)
-        }
         // A genuine dead refresh token: clear so the app routes to sign-in. Do
         // NOT call onAuthFailure here — callers (handleUnauthorized) already do
         // when appropriate; firing it twice thrashes markSessionExpired().
@@ -363,40 +314,16 @@ class APIClient {
       }
       // Non-401 (network blip / 5xx): DON'T clear — a transient failure must not
       // log the user out. The caller surfaces the error and may retry.
-      throw new Error(errorData.error || `Refresh failed with status ${response.status}`)
+      const error = new Error(errorData.error || `Refresh failed with status ${response.status}`)
+      error.status = response.status
+      error.errorCode = errorData.error || null
+      error.retryable = Boolean(errorData.retryable)
+      throw error
     }
 
     const data = await response.json()
     if (data?.accessToken) this.setToken(data.accessToken)
-    if (data?.refreshToken) this.setRefreshToken(data.refreshToken)
     return data
-  }
-
-  // Read a localStorage value defensively (private-mode / SSR safe).
-  _readStored(key) {
-    if (typeof window === 'undefined') return null
-    try {
-      return window.localStorage.getItem(key)
-    } catch {
-      return null
-    }
-  }
-
-  // Adopt tokens a peer window already stored in shared localStorage. We include
-  // the peer's persisted access expiry so the caller (authStore.refreshSession)
-  // reschedules THIS window's refresh timer instead of silently dropping it.
-  _adoptStoredTokens(refreshToken) {
-    const accessToken = this._readStored('grantflow:access-token')
-    if (accessToken) this.token = accessToken
-    if (refreshToken) this.refreshToken = refreshToken
-    const rawExpiry = this._readStored('grantflow:access-expiry')
-    const accessExpires = rawExpiry ? Number(rawExpiry) : NaN
-    return {
-      accessToken: accessToken || this.token,
-      refreshToken,
-      ...(Number.isFinite(accessExpires) ? { accessExpires } : {}),
-      adoptedFromPeer: true,
-    }
   }
 
   // HTTP method shims.
@@ -924,42 +851,17 @@ class APIClient {
   // Auth methods
   auth = {
     me: async () => {
-      const token = this.getToken();
-      if (!token) return null;
+      if (!this.getToken()) {
+        try {
+          // A reload starts with no JavaScript-readable credential. Exchange the
+          // HttpOnly refresh cookie for a fresh in-memory access token.
+          await this.refreshTokens()
+        } catch {
+          return null
+        }
+      }
 
       try {
-        // Proactive refresh:
-        // If we have a refresh token and the stored access expiry is near/over due,
-        // refresh before calling `/api/auth/me` so we avoid noisy 401s.
-        // IMPORTANT: Uses this.refreshTokens() (single-flight) so that concurrent
-        // callers (e.g. authStore's scheduleSessionRefresh timer that may fire during
-        // bootstrap) share the same in-flight request. Without this, two parallel
-        // /api/auth/refresh calls with the same token cause one to fail because the
-        // server rotates refresh_token_hash on every use.
-        try {
-          if (typeof window !== 'undefined') {
-            const refreshToken = this.getRefreshToken?.()
-            const expiryRaw = window.localStorage.getItem('grantflow:access-expiry')
-            const expiryMs = expiryRaw ? Number(expiryRaw) : NaN
-            const leewayMs = 60 * 1000
-            if (refreshToken && (!Number.isFinite(expiryMs) || expiryMs <= Date.now() + leewayMs)) {
-              try {
-                await this.refreshTokens()
-              } catch {
-                // Refresh token is dead — clear ALL tokens and return null immediately.
-                // Do NOT fall through to this.fetch('/api/auth/me') because that would
-                // trigger handleUnauthorized → onAuthFailure → markSessionExpired and
-                // cause a state-thrashing loop on the login page.
-                log.debug('proactive refresh failed; clearing tokens and returning null cleanly')
-                this.clearToken()
-                return null
-              }
-            }
-          }
-        } catch {
-          // Network/parse error — best-effort, fall through to /api/auth/me
-        }
-
         // Increment _suppressAuthFailureCount so that any onAuthFailure callbacks triggered
         // deep in the fetch/handleUnauthorized call stack (e.g. by a 401 on the
         // /api/auth/me request itself) do not fire markSessionExpired() during
@@ -1002,12 +904,9 @@ class APIClient {
       }
     },
     
-    loginWithTokens: async ({ accessToken, refreshToken }) => {
+    loginWithTokens: async ({ accessToken } = {}) => {
       if (accessToken) {
         this.setToken(accessToken);
-      }
-      if (refreshToken) {
-        this.setRefreshToken(refreshToken);
       }
       return this.auth.me();
     },
@@ -1016,7 +915,11 @@ class APIClient {
       // Send the logout request BEFORE clearing tokens so the server receives the
       // Authorization header / refresh token and can revoke the session. Clear
       // local tokens afterwards regardless of the request outcome.
-      this.fetch('/api/auth/logout', { method: 'POST' })
+      this.fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: '{}',
+      })
         .catch(() => {
           // Non-blocking — best-effort server notification; ignore errors.
         })
@@ -1026,7 +929,6 @@ class APIClient {
       // Clear in-memory token immediately so subsequent calls don't reuse it, but
       // the in-flight logout request above already captured the header.
       this.token = null;
-      this.refreshToken = null;
       if (typeof window !== 'undefined') {
         const base = (env.appBase || '').replace(/\/$/, '');
         window.location.href = `${base}/login`;

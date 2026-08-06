@@ -423,6 +423,7 @@ export const SOURCES = Object.freeze([
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
     base_url: 'https://www.ssa.gov/disability',
+    application_url: 'https://www.ssa.gov/disability',
     sponsor_name: 'Social Security Administration',
     resource_title: 'Social Security disability benefits (SSDI/SSI)',
     resource_summary: 'Official Social Security disability-benefits information and application entry point: SSDI for workers with a qualifying disability and SSI for people with limited income and resources. This is a benefits lane, not a grant.',

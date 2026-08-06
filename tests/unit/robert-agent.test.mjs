@@ -21,6 +21,20 @@ const PROFILE_CTX = {
   signals: { entityType: 'family', state: 'OH' },
 }
 
+function crawlerOsReceipt() {
+  return {
+    run: {
+      stored: 0,
+      rejected: 0,
+      cross_matches: 0,
+      recommendations: [],
+      sources: [{ source_id: 'fixture', outcome: 'ok', fetched: 1, parsed: 0, stored: 0, deduped: 0 }],
+    },
+    persisted: { opportunities: 0, matches: 0 },
+    thesis: { applicant_types: ['individual'] },
+  }
+}
+
 describe('robertAgent — defaults are safe', () => {
   it('is disabled by default; observe runs from manual trigger persist a run', async () => {
     const result = await runRobert({
@@ -87,17 +101,19 @@ describe('robertAgent — defaults are safe', () => {
           { title: 'Real Grant', sponsor: 'FEMA', application_url: 'https://www.fema.gov/apply', source_url: 'https://www.fema.gov/x', deadline: '2099-09-01', deadline_type: 'fixed' },
         ]),
         upsertFundingOpportunity: async () => { upsertCalled += 1; return { id: 'opp', inserted: true } },
+        runProfileDiscoveryLive: async () => crawlerOsReceipt(),
       },
     })
     assert.equal(upsertCalled, 0, 'upsert must NOT be called without autoIngestVerified')
     assert.ok(result.ok)
   })
 
-  it('rejects placeholder URLs as opportunity candidates without ingesting', async () => {
+  it('does not invoke the retired placeholder adapter or legacy writer after Crawler OS cutover', async () => {
     process.env.ROBERT_ENABLED = 'true'
     process.env.ROBERT_ALLOW_LIVE_WEB = 'true'
     process.env.ROBERT_AUTO_INGEST_VERIFIED = 'true'
     let upsertCalled = 0
+    let legacyAdapterCalled = 0
     const result = await runRobert({
       db,
       mode: 'full-cycle',
@@ -105,14 +121,17 @@ describe('robertAgent — defaults are safe', () => {
       profileIds: ['p1'],
       deps: {
         loadProfileContext: async () => PROFILE_CTX,
-        opportunityAdapter: async () => ([
-          { title: 'Test Grant', sponsor: 'Test', application_url: 'https://example.com/x', source_url: 'https://example.com/x' },
-        ]),
+        opportunityAdapter: async () => {
+          legacyAdapterCalled += 1
+          return [{ title: 'Test Grant', sponsor: 'Test', application_url: 'https://example.com/x', source_url: 'https://example.com/x' }]
+        },
         seedSources: [{ id: 's1', source_url: 'https://www.fema.gov/grants', source_type: 'fire_department_grants' }],
         upsertFundingOpportunity: async () => { upsertCalled += 1; return { id: 'opp', inserted: true } },
+        runProfileDiscoveryLive: async () => crawlerOsReceipt(),
       },
     })
-    assert.equal(upsertCalled, 0, 'placeholder URLs must never reach the inserter')
+    assert.equal(legacyAdapterCalled, 0, 'retired opportunity adapter must not run')
+    assert.equal(upsertCalled, 0, 'retired writer must not run')
     assert.ok(result.ok)
   })
 
@@ -138,122 +157,7 @@ describe('robertAgent — defaults are safe', () => {
   })
 })
 
-// REGRESSION: Mission Control kept reporting "Robert did nothing" because
-// the match/recommend phase only iterated over freshly ingested rows. With
-// the Agent Control Center path we don't wire deps.opportunityAdapter
-// (we won't issue unattended outbound web calls), so summary.ingested was
-// always empty and Phase 7-9 was a no-op even when the canonical
-// funding_opportunities table had thousands of real rows.
-//
-// The fallback below pulls the most-recent active rows when the run had
-// nothing fresh to match on, so a Mission Control cycle ALWAYS produces
-// real recommendations when funding exists. createRecommendationIfHelpful
-// is idempotent on (profile, opportunity) so this is safe across cycles.
-// CUTOVER (Crawler OS): Robert now drives the Crawler OS for discovery + matching
-// (runRobert delegates to crawlerOsService.runProfileDiscoveryLive); the legacy
-// catalog-miner path is superseded. Matching invariants are covered by the OS
-// suite (backend/crawler-os/tests). Skipped pending a re-point to the OS.
-describe.skip('robertAgent — mines the existing funding catalog (catalog miner)', () => {
-  it('scores existing funding_opportunities against the profile and excludes hidden rows', async () => {
-    db.seed('funding_opportunities', [
-      {
-        id: 'opp-active-1',
-        title: 'Recent Active Grant',
-        sponsor: 'TestFunder',
-        application_url: 'https://www.real-grant.example.gov/apply',
-        source_url: 'https://www.real-grant.example.gov',
-        record_origin: 'curated_catalog',
-        is_active: true,
-        is_hidden: false,
-        is_national: true,
-        updated_at: '2026-06-15T00:00:00Z',
-        created_at: '2026-06-01T00:00:00Z',
-      },
-      {
-        id: 'opp-hidden',
-        title: 'Hidden Grant',
-        sponsor: 'X',
-        application_url: 'https://x.example.com/apply',
-        source_url: 'https://x.example.com',
-        record_origin: 'curated_catalog',
-        is_active: true,
-        is_hidden: true, // must NOT reach the matcher (excluded at the SQL layer)
-        is_national: true,
-        updated_at: '2026-06-16T00:00:00Z',
-        created_at: '2026-06-02T00:00:00Z',
-      },
-    ])
-
-    let computedDecisions = 0
-    const result = await runRobert({
-      db,
-      mode: 'full-cycle',
-      trigger: 'admin-ui',
-      profileIds: ['p1'],
-      deps: {
-        loadProfileContext: async () => PROFILE_CTX,
-        listActiveProfileIds: async () => ['p1'],
-        // No searchProvider/opportunityAdapter — the catalog miner is Robert's
-        // primary, always-on discovery surface and must run regardless.
-        configOverride: { enabled: true, allowLiveWeb: true, autoIngestVerified: true },
-        // Canonical 0-100 scale; ACCEPT well above the relevance floor.
-        computeMatchDecision: () => {
-          computedDecisions += 1
-          return { decision: 'ACCEPT', score: 90, reasons: ['catalog test'], missingEligibilityFields: [] }
-        },
-      },
-    })
-
-    assert.equal(result.ok, true)
-    assert.equal(result.status, 'completed')
-    // Only the visible active row reaches the matcher; the hidden row is excluded
-    // by the miner's SQL (is_hidden=0).
-    assert.equal(
-      computedDecisions,
-      1,
-      'only the visible active catalog row should reach the matcher (hidden excluded)',
-    )
-    const mine = result.summary?.catalog_mine
-    assert.ok(mine, 'summary.catalog_mine must be present')
-    assert.ok(mine.matched >= 1, 'the strong-scoring visible row should be matched')
-    const note = (result.summary?.notes || []).find(
-      (n) => typeof n === 'object' && n.stage === 'catalog_mine',
-    )
-    assert.ok(note, 'summary.notes must record the catalog_mine stage')
-  })
-
-  it('reports a structured catalog_mine summary (rows considered + matched)', async () => {
-    db.seed('funding_opportunities', [
-      {
-        id: 'opp-stray',
-        title: 'Stray',
-        sponsor: 'S',
-        application_url: 'https://www.stray-grant.example.gov/apply',
-        source_url: 'https://www.stray-grant.example.gov',
-        record_origin: 'curated_catalog',
-        is_active: true,
-        is_hidden: false,
-        is_national: true,
-        updated_at: '2026-06-18T00:00:00Z',
-        created_at: '2026-06-18T00:00:00Z',
-      },
-    ])
-
-    const result = await runRobert({
-      db,
-      mode: 'full-cycle',
-      trigger: 'admin-ui',
-      profileIds: ['p1'],
-      deps: {
-        loadProfileContext: async () => PROFILE_CTX,
-        listActiveProfileIds: async () => ['p1'],
-        configOverride: { enabled: true, allowLiveWeb: true, autoIngestVerified: true },
-        computeMatchDecision: () => ({ decision: 'ACCEPT', score: 88, reasons: [], missingEligibilityFields: [] }),
-      },
-    })
-    const mine = result.summary?.catalog_mine
-    assert.ok(mine, 'summary.catalog_mine must be present')
-    assert.ok(mine.rows_considered >= 1, 'rows_considered must reflect the seeded catalog row')
-    assert.ok(mine.matched >= 1, 'the seeded row should match with a high score')
-  })
-})
+// Catalog-wide recommendation coverage moved to the authoritative Crawler OS:
+// backend/crawler-os/tests/integration.test.mjs, pipeline.test.mjs, and
+// robert.test.mjs. The retired catalog-miner assertions were unreachable from
+// runRobert after that cutover.

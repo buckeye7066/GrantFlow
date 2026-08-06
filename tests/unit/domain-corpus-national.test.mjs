@@ -215,17 +215,23 @@ test('verified_url remains 0 when skipVerification=true', async () => {
   }
 })
 
-test('verified_url set when HEAD returns 200 - integration (may be 0 if network unavailable)', async () => {
+test('verified_url is set from a deterministic successful HEAD verification', async () => {
   const { db } = createTestDb()
   try {
-    const stats = await runDomainCorpusCrawl(db, { skipVerification: false })
-    assert.ok(typeof stats.total_verified === 'number' && stats.total_verified >= 0)
-    if (stats.total_verified > 0) {
-      const verifiedRows = db
-        .prepare('SELECT id FROM funding_opportunities WHERE verified_url = 1 LIMIT 1')
-        .all()
-      assert.ok(verifiedRows.length > 0, 'At least one row should have verified_url=1 when total_verified>0')
-    }
+    let verificationCalls = 0
+    const stats = await runDomainCorpusCrawl(db, {
+      skipVerification: false,
+      headForVerification: async () => {
+        verificationCalls += 1
+        return { ok: true, status: 200 }
+      },
+    })
+    assert.ok(verificationCalls > 0, 'Expected the crawler to verify at least one inserted URL')
+    assert.equal(stats.total_verified, verificationCalls)
+    const verifiedRows = db
+      .prepare('SELECT id FROM funding_opportunities WHERE verified_url = 1')
+      .all()
+    assert.equal(verifiedRows.length, verificationCalls)
   } finally {
     db.close()
   }

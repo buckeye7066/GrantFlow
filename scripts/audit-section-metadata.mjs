@@ -91,9 +91,9 @@ async function main() {
   const loadedDb = await collectFromDb(observed)
   if (!loadedDb) {
     for (const profile of DESIGNATED_PROFILES) collectFromProfile(profile, observed)
-    const anastasiaPath = path.join(process.cwd(), 'backend', 'config', 'profile-anastasia.json')
-    const anastasia = JSON.parse(readFileSync(anastasiaPath, 'utf8'))
-    collectFromProfile(anastasia, observed)
+    const demoProfilePath = path.join(process.cwd(), 'backend', 'config', 'profile-demo-tennessee-stem-student.json')
+    const demo_stem_student = JSON.parse(readFileSync(demoProfilePath, 'utf8'))
+    collectFromProfile(demo_stem_student, observed)
   }
 
   const failures = []

@@ -153,7 +153,7 @@ Rules:
 - **Payment Methods**:
   - Check - Make payable to: John White
   - Venmo: @John-White-1384
-  - CashApp: $jwhiternmba
+  - CashApp: $example-payment-handle
   - ACH / Bank Transfer
   - Credit Card (processing fee may apply)
   - Bill-to-Grant (when allowed by funder)
@@ -179,4 +179,3 @@ Key clauses included in the PDF:
 - Work product ownership after full payment; consultant retains methodologies/templates
 - Liability cap: not to exceed total fees paid for specific project
 - Dispute resolution; governing law: Tennessee; venue: Hamilton County, TN
-

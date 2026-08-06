@@ -3,7 +3,7 @@
 -- "Anya Match Scout" — recommend-only background discovery surface.
 --
 -- The Match Scout periodically scans for funding opportunities with a
--- match_score >= ANYA_MATCH_SCOUT_THRESHOLD (default 85) for each active
+-- match_score >= ANYA_MATCH_SCOUT_THRESHOLD (canonical strong bar) for each active
 -- profile. When it finds one that is NOT already in the profile's pipeline
 -- and has NOT been dismissed, it writes a row here AND a notification.
 --

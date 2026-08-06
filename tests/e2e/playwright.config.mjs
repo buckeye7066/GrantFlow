@@ -9,6 +9,7 @@ const baseURL =
   `http://127.0.0.1:${port}`
 const basePath = process.env.E2E_BASE_PATH || process.env.SMOKE_BASE_PATH || process.env.VITE_APP_BASE || '/grantflow'
 const crawlerDataDir = process.env.CRAWLER_DATA_DIR || path.resolve(process.cwd(), 'tests', 'fixtures', 'crawlers')
+const e2eAdminEmail = process.env.E2E_ADMIN_EMAIL || process.env.ADMIN_EMAIL || 'admin-e2e@example.invalid'
 
 export default defineConfig({
   testDir: path.resolve(process.cwd(), 'tests', 'e2e'),
@@ -31,7 +32,7 @@ export default defineConfig({
       PORT: String(port),
       NODE_ENV: process.env.NODE_ENV || (process.env.CI ? 'test' : 'development'),
       // Ensure deterministic seed aligns with backend admin defaults.
-      ADMIN_EMAIL: process.env.ADMIN_EMAIL || 'buckeye7066@gmail.com',
+      ADMIN_EMAIL: e2eAdminEmail,
       ADMIN_NAME: process.env.ADMIN_NAME || 'Admin User',
       CRAWLER_DATA_DIR: crawlerDataDir,
       // Hint to frontend + backend to suppress noisy background behavior during automation.
@@ -55,5 +56,4 @@ export default defineConfig({
   ],
 })
 
-export { baseURL, basePath }
-
+export { baseURL, basePath, e2eAdminEmail }

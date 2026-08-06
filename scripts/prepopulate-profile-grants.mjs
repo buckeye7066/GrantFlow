@@ -3,14 +3,13 @@
  * Prepopulate Profiles with Grant Matches
  *
  * Dev-only helper. For every profile, find funding opportunities that the
- * canonical decision engine ACCEPTs (or REVIEWs) and insert the top N into
+ * canonical decision engine ACCEPTs and insert the top N into
  * the grants pipeline.
  *
  * Architectural contract:
- *   - `scoreOpportunity()` (from matchEngine.js, re-exported via
- *     matchDecisionEngine.js) is used ONLY for ranking/prefiltering.
- *   - `computeMatchDecision()` is the SOLE acceptance authority. A score of
- *     ≥ TARGET_MATCH_SCORE is never sufficient on its own.
+ *   - `computeMatchDecision()` is the sole scoring and acceptance authority.
+ *   - Every active opportunity is adjudicated before the accepted set is
+ *     ranked and bounded; no heuristic prefilter can hide an ACCEPT.
  */
 
 import fs from 'node:fs'
@@ -19,12 +18,8 @@ import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import {
   computeMatchDecision,
-  scoreOpportunity,
   MATCHER_VERSION,
 } from '../backend/services/matchDecisionEngine.js'
-
-// Non-authoritative pre-score used only for ranking.
-const calculateMatchScore = scoreOpportunity
 
 // Safety guard: never run in production or when seeding is explicitly disabled.
 const _nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
@@ -34,12 +29,15 @@ if (_nodeEnv === 'production' || _disableSeeding === 'true' || _disableSeeding =
   process.exit(1)
 }
 
+if (/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL || '')) {
+  console.error('[prepopulate] Refusing to seed a PostgreSQL target; this helper is SQLite-only.')
+  process.exit(1)
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const projectRoot = path.resolve(__dirname, '..')
 
-// Pre-filter threshold used purely for ranking, NOT for acceptance.
-const TARGET_MATCH_SCORE = 80
 const TARGET_GRANTS_PER_PROFILE = 50
 
 function ensureFile(filePath, description) {
@@ -54,7 +52,6 @@ function main() {
   ensureFile(dbPath, 'SQLite database (run `npm run seed:db` first)')
 
   console.log(`[prepopulate] Starting profile grant prepopulation`)
-  console.log(`[prepopulate] Target match score: ≥${TARGET_MATCH_SCORE}%`)
   console.log(`[prepopulate] Target grants per profile: ${TARGET_GRANTS_PER_PROFILE}\n`)
 
   const db = new Database(dbPath)
@@ -93,39 +90,41 @@ function main() {
     profiles.forEach((profile, profileIndex) => {
       console.log(`[${profileIndex + 1}/${profiles.length}] Processing profile: ${profile.display_name || profile.id}`)
 
-      // Get organization data for better matching
-      const organization = profile.organization_id 
-        ? db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile.organization_id)
-        : null
-
       // Get profile sections for better matching
-      const sections = db.prepare(
+      const sectionRows = db.prepare(
         'SELECT * FROM profile_sections WHERE profile_id = ?'
       ).all(profile.id)
+      const sections = {}
+      for (const row of sectionRows) {
+        try {
+          sections[row.section_key] = typeof row.data === 'string'
+            ? JSON.parse(row.data)
+            : (row.data || {})
+        } catch {
+          sections[row.section_key] = {}
+        }
+      }
 
-      // Step 1: rank opportunities with the non-authoritative score. This is
-      // just a helper to pick reasonable candidates; it is NOT the accept/reject
-      // gate. The final gate is computeMatchDecision() below.
-      const profileContext = { profile, sections }
-      const scoredCandidates = opportunities
-        .map(opp => {
-          const { score: matchScore, reasons: matchReasons } = calculateMatchScore(profileContext, opp)
-          return { ...opp, matchScore, matchReasons: matchReasons || [] }
-        })
-        .filter(opp => opp.matchScore >= TARGET_MATCH_SCORE)
-        .sort((a, b) => b.matchScore - a.matchScore)
-        .slice(0, TARGET_GRANTS_PER_PROFILE * 2) // generous top-N before canonical gate
+      const acceptedCandidates = []
+      for (const opp of opportunities) {
+        try {
+          const decision = computeMatchDecision(profile, opp, { profileSections: sections })
+          if (decision.decision === 'ACCEPT') acceptedCandidates.push({ opp, decision })
+        } catch (error) {
+          console.warn(
+            `  Canonical adjudication failed for ${opp.id || opp.title || 'unknown'}:`,
+            error?.message || error,
+          )
+        }
+      }
 
-      // Step 2: canonical decision is the sole acceptance authority. Reject
-      // means: do NOT insert, regardless of raw score. ACCEPT / REVIEW pass.
-      const matchedOpportunities = []
-      for (const opp of scoredCandidates) {
-        const decision = computeMatchDecision(profile, opp, { profileSections: sections })
-        if (decision.decision === 'REJECT') continue
-        matchedOpportunities.push({
+      const matchedOpportunities = acceptedCandidates
+        .sort((a, b) => Number(b.decision.score || 0) - Number(a.decision.score || 0))
+        .slice(0, TARGET_GRANTS_PER_PROFILE)
+        .map(({ opp, decision }) => ({
           ...opp,
-          matchScore: decision.score ?? opp.matchScore,
-          matchReasons: decision.reasons ?? opp.matchReasons ?? [],
+          matchScore: decision.score,
+          matchReasons: decision.reasons ?? [],
           match_decision: decision.decision,
           match_explanation: decision.explanation ?? null,
           matched_needs: decision.matchedNeeds ?? [],
@@ -134,18 +133,9 @@ function main() {
           match_confidence: decision.confidence ?? null,
           matcher_version: decision.matcherVersion ?? MATCHER_VERSION,
           evaluated_at: decision.evaluatedAt ?? new Date().toISOString(),
-        })
-        if (matchedOpportunities.length >= TARGET_GRANTS_PER_PROFILE) break
-      }
+        }))
 
-      if (profileIndex === 0) {
-        const scores = opportunities.map(o => calculateMatchScore(profileContext, o).score)
-        const maxScore = Math.max(...scores)
-        const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length
-        console.log(`  DEBUG [${profile.display_name}]: maxScore=${maxScore}, avgScore=${avgScore.toFixed(1)}`)
-      }
-
-      console.log(`  → Found ${matchedOpportunities.length} opportunities matching at ≥${TARGET_MATCH_SCORE}%`)
+      console.log(`  → Found ${matchedOpportunities.length} canonical ACCEPT opportunities`)
 
       if (matchedOpportunities.length === 0) {
         console.log(`  ⚠️  No matches found for this profile`)
@@ -155,8 +145,8 @@ function main() {
       // Check for existing grants to avoid duplicates
       const existingGrantIds = db.prepare(`
         SELECT funding_opportunity_id FROM grants 
-        WHERE organization_id = ? AND funding_opportunity_id IS NOT NULL
-      `).all(profile.organization_id).map(g => g.funding_opportunity_id)
+        WHERE profile_id = ? AND funding_opportunity_id IS NOT NULL
+      `).all(profile.id).map(g => g.funding_opportunity_id)
 
       const existingSet = new Set(existingGrantIds)
 
@@ -164,6 +154,7 @@ function main() {
       const insertStmt = db.prepare(`
         INSERT INTO grants (
           organization_id,
+          profile_id,
           funding_opportunity_id,
           title,
           funder,
@@ -174,7 +165,7 @@ function main() {
           match_reasons,
           notes,
           application_url
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
 
       let inserted = 0
@@ -187,6 +178,7 @@ function main() {
         try {
           insertStmt.run(
             profile.organization_id,
+            profile.id,
             opp.id,
             opp.title,
             opp.sponsor,

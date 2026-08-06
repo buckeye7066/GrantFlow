@@ -47,20 +47,21 @@ export default function HamiltonReadinessBanner({ profileId }) {
       <div className="flex items-start gap-3">
         <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
         <div className="space-y-2">
-          <p className="font-medium">Set Hamilton up to apply for you</p>
+          <p className="font-medium">Set Hamilton up to prepare your applications</p>
           {needCapture.length > 0 && (
             <p className="flex items-center gap-1.5 text-sm">
               <KeyRound className="h-4 w-4" />
-              These portals need a saved login before Hamilton can submit inside your real account:{" "}
+              These portals need a saved login before Hamilton can open your real account and prepare drafts:{" "}
               <span className="font-semibold">{needCapture.join(", ")}</span>. Capture a session
-              (you complete login + 2FA once), then Hamilton reuses it.
+              (you complete login + 2FA once), then Hamilton can reuse it for authorized preparation.
+              You still review and complete final submission in the portal.
             </p>
           )}
           {noSchedule && (
             <p className="flex items-center gap-1.5 text-sm">
               <CalendarClock className="h-4 w-4" />
               You have {r.pending_task_count} application{r.pending_task_count === 1 ? "" : "s"} ready.
-              Set a schedule so Hamilton runs them — she&apos;ll flag any times you need to be available for 2FA.
+              Set a schedule so Hamilton prepares them — she&apos;ll flag any times you need to be available for 2FA.
             </p>
           )}
           {syncPortals.length > 0 && (

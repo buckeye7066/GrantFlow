@@ -44,7 +44,7 @@ are faked or stubbed.
 
 ### Related (separate commits, already on main + prod)
 - Sticky cleanup of 1,366 geo-stub rows from prod pipelines via `recordDismissal` +
-  `reconcileDismissedGrants` (won't resurface). Liubov 237→11, Vermilion 112→60.
+  `reconcileDismissedGrants` (won't resurface). demo_senior_family 237→11, Vermilion 112→60.
 
 ## Remaining mission scope (NOT done — follow-up increments)
 

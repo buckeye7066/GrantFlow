@@ -15,12 +15,13 @@
  * redeploy permanently stranded whatever Hamilton was working on, and an
  * operator had to notice and re-kick the batch by hand.
  *
- * THE FIX: demote in-flight tasks that have gone stale (no update for
+ * THE FIX: demote ordinary in-flight tasks that have gone stale (no update for
  * `staleMinutes`) back to 'ready_to_start' so the normal resume machinery
  * (scheduler tick / adapter / re-POSTed autopilot) picks them up again.
- * Re-entering from the top is safe: ensureApplicationTask is idempotent per
- * (profile, opportunity/grant) and generated-document saves are idempotent
- * (PR #757), so a re-run never duplicates tasks or packets.
+ * Submission-boundary states are different: the external click may already
+ * have landed, so restart recovery quarantines them for verification and NEVER
+ * requeues them. Re-entering ordinary work from the top is safe;
+ * re-entering an ambiguous external submission is not.
  *
  * Staleness (not "am I in-flight") is the trigger so a rolling deploy's
  * OVERLAP window — where the old container may still be driving a task —
@@ -31,7 +32,10 @@
  * filling_portal for ~30 minutes).
  */
 
-import { updateApplicationTask, appendTaskEvent } from '../services/hamilton/applicationTaskStore.js'
+import {
+  appendTaskEvent,
+  SUBMISSION_ATTEMPT_STATUSES,
+} from '../services/hamilton/applicationTaskStore.js'
 
 /**
  * Transient in-flight statuses that only a live in-process run can advance.
@@ -49,6 +53,14 @@ export const IN_FLIGHT_STATUSES = Object.freeze([
   'in_progress',
 ])
 
+export const RECOVERY_SCAN_STATUSES = Object.freeze([
+  ...IN_FLIGHT_STATUSES,
+  ...SUBMISSION_ATTEMPT_STATUSES,
+])
+
+const VERIFICATION_REQUIRED_MESSAGE =
+  'Hamilton restarted after the external submit step began. The submission may already have reached the funder; verify portal or email confirmation before retrying.'
+
 function toMillis(value) {
   if (!value) return null
   if (value instanceof Date) return value.getTime()
@@ -57,24 +69,31 @@ function toMillis(value) {
 }
 
 /**
- * Demote stale in-flight application_tasks back to ready_to_start.
+ * Reconcile stale in-flight application_tasks: ordinary work is requeued;
+ * ambiguous submission work is quarantined for verification.
  *
- * @returns {{scanned:number, demoted:number, task_ids:string[]}}
+ * @returns {{scanned:number, demoted:number, quarantined:number, task_ids:string[], quarantined_task_ids:string[]}}
  */
 export async function reconcileOrphanedApplicationTasks(db, {
   staleMinutes = 15,
   now = Date.now(),
   logger = console,
 } = {}) {
-  const out = { scanned: 0, demoted: 0, task_ids: [] }
+  const out = {
+    scanned: 0,
+    demoted: 0,
+    quarantined: 0,
+    task_ids: [],
+    quarantined_task_ids: [],
+  }
   if (!db || typeof db.prepare !== 'function') return out
 
   let rows = []
   try {
-    const placeholders = IN_FLIGHT_STATUSES.map(() => '?').join(',')
+    const placeholders = RECOVERY_SCAN_STATUSES.map(() => '?').join(',')
     rows = await db
       .prepare(`SELECT id, status, updated_at FROM application_tasks WHERE status IN (${placeholders})`)
-      .all(...IN_FLIGHT_STATUSES)
+      .all(...RECOVERY_SCAN_STATUSES)
   } catch {
     // Table missing on bare DBs — nothing to recover.
     return out
@@ -89,30 +108,68 @@ export async function reconcileOrphanedApplicationTasks(db, {
     // stale so a corrupt timestamp can't strand a task forever.
     const isStale = updatedMs === null || (now - updatedMs) >= cutoffMs
     if (!isStale) continue
+
+    const isAmbiguousSubmission = SUBMISSION_ATTEMPT_STATUSES.includes(row.status)
     try {
-      await updateApplicationTask(db, row.id, {
-        status: 'ready_to_start',
-        lastAgentMessage:
-          `Hamilton recovered this task: it was stuck at "${row.status}" after a server restart interrupted the run. Requeued to start again automatically.`,
-      })
+      // Compare-and-swap against BOTH the selected status and timestamp. If a
+      // live overlapping process advanced or refreshed the row after our scan,
+      // recovery must leave it alone rather than clobbering newer truth.
+      const hasUpdatedAt = row.updated_at !== null && row.updated_at !== undefined
+      const updatedAtGuard = hasUpdatedAt ? 'updated_at = ?' : 'updated_at IS NULL'
+      const updatedAtParams = hasUpdatedAt ? [row.updated_at] : []
+      const nowSql = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+      const nextStatus = isAmbiguousSubmission ? 'submission_verification_required' : 'ready_to_start'
+      const nextStep = isAmbiguousSubmission ? 'submission_verification_required' : 'recovery'
+      const nextMessage = isAmbiguousSubmission
+        ? VERIFICATION_REQUIRED_MESSAGE
+        : `Hamilton recovered this task: it was stuck at "${row.status}" after a server restart interrupted the run. Requeued to start again automatically.`
+      const submitVetoSql = isAmbiguousSubmission
+        ? ', auto_submit_enabled = FALSE, allow_auto_submit = FALSE, next_retry_at = NULL'
+        : ''
+      const result = await db
+        .prepare(
+          `UPDATE application_tasks
+              SET status = ?, current_step = ?, last_agent_message = ?, updated_at = ${nowSql}${submitVetoSql}
+            WHERE id = ? AND status = ? AND ${updatedAtGuard}`,
+        )
+        .run(nextStatus, nextStep, nextMessage, row.id, row.status, ...updatedAtParams)
+      const changed = Number(result?.changes ?? result?.rowCount ?? 0) === 1
+      if (!changed) continue
+
+      if (isAmbiguousSubmission) {
+        out.quarantined += 1
+        out.quarantined_task_ids.push(row.id)
+      } else {
+        out.demoted += 1
+        out.task_ids.push(row.id)
+      }
+
       await appendTaskEvent(db, {
         taskId: row.id,
         eventType: 'note',
-        status: 'ready_to_start',
+        status: nextStatus,
         step: 'recovery',
-        message: `Orphaned in-flight task (was "${row.status}", stale ≥${staleMinutes} min) requeued to ready_to_start by restart recovery.`,
+        message: isAmbiguousSubmission
+          ? `Ambiguous submission task (was "${row.status}", stale ≥${staleMinutes} min) quarantined for confirmation verification; it was not requeued.`
+          : `Orphaned in-flight task (was "${row.status}", stale ≥${staleMinutes} min) requeued to ready_to_start by restart recovery.`,
         actorRole: 'agent',
-        details: { recovered_from: row.status, stale_minutes: staleMinutes },
+        details: {
+          recovered_from: row.status,
+          stale_minutes: staleMinutes,
+          submission_may_have_occurred: isAmbiguousSubmission,
+          requeued: !isAmbiguousSubmission,
+        },
       })
-      out.demoted += 1
-      out.task_ids.push(row.id)
     } catch (err) {
-      logger?.warn?.('[hamilton:recovery] failed to requeue task', row.id, err?.message || err)
+      logger?.warn?.('[hamilton:recovery] failed to reconcile task', row.id, err?.message || err)
     }
   }
 
   if (out.demoted > 0) {
     logger?.info?.(`[hamilton:recovery] requeued ${out.demoted}/${out.scanned} orphaned in-flight task(s) to ready_to_start`)
+  }
+  if (out.quarantined > 0) {
+    logger?.warn?.(`[hamilton:recovery] quarantined ${out.quarantined}/${out.scanned} ambiguous submission task(s) for verification; none were requeued`)
   }
   return out
 }

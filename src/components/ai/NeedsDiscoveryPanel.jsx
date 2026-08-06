@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useId, useState } from 'react';
 import { apiFetch } from '@/api/client';
 import { searchSpecificNeed } from '@/api/crawlers';
 import { MODERATE_MATCH_SCORE } from '@/lib/matchDisplayThresholds';
@@ -42,38 +42,86 @@ const CATEGORY_ICONS = {
   legal: Scale,
 };
 
+function safeExternalUrl(value) {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function NeedSourceResult({ source }) {
+  const sourceUrl = safeExternalUrl(source.url || source.application_url);
+  const rawRelevance = source.item_relevance_score;
+  const relevance = rawRelevance !== null && rawRelevance !== undefined && rawRelevance !== '' && Number.isFinite(Number(rawRelevance))
+    ? Number(rawRelevance)
+    : null;
+  const content = (
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0">
+        <p className={`truncate text-sm font-medium ${sourceUrl ? 'text-blue-700' : 'text-slate-800'}`}>{source.title}</p>
+        <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{source.description}</p>
+        {!sourceUrl ? <p className="mt-1 text-xs font-medium text-amber-700">No usable source link was provided.</p> : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {relevance !== null ? <Badge variant="outline" className="text-[10px]">Item relevance {relevance}%</Badge> : null}
+        {sourceUrl ? <ExternalLink className="h-3 w-3 text-slate-400" aria-hidden="true" /> : null}
+      </div>
+    </div>
+  );
+
+  return sourceUrl ? (
+    <a
+      href={sourceUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block rounded-lg border bg-white p-3 transition hover:border-blue-200 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
+      aria-label={`Open source lead: ${source.title} (new tab)`}
+    >
+      {content}
+    </a>
+  ) : (
+    <div className="rounded-lg border bg-white p-3">{content}</div>
+  );
+}
+
 function NeedItemCard({ item, profileId, onSearchItem }) {
   const [expanded, setExpanded] = useState(false);
   const [searching, setSearching] = useState(false);
   const [sources, setSources] = useState(null);
+  const [searchError, setSearchError] = useState(null);
+  const sourcePanelId = `need-sources-${useId()}`;
 
   const fundingInfo = FUNDING_PATH_LABELS[item.funding_path] || FUNDING_PATH_LABELS.self_fund;
   const FundingIcon = fundingInfo.icon;
   const CategoryIcon = CATEGORY_ICONS[item.category] || Package;
 
   const handleFindSources = useCallback(async () => {
-    if (sources) { setExpanded(true); return; }
+    if (sources?.length > 0 && !searchError) {
+      setExpanded(true);
+      return;
+    }
     setSearching(true);
     setExpanded(true);
+    setSearchError(null);
     try {
       const data = await searchSpecificNeed({
         profileId,
         needText: item.search_terms || item.name,
-        minMatchScore: MODERATE_MATCH_SCORE,
+        minItemRelevance: MODERATE_MATCH_SCORE,
         maxResults: 8,
       });
       setSources(data?.opportunities || []);
     } catch (err) {
       console.error('[NeedsDiscoveryPanel] searchSpecificNeed failed:', err);
       setSources([]);
-      // Surface a distinct error state so the user knows the search failed vs truly empty
-      // Re-use the existing error boundary pattern: store an error flag alongside sources
-      // Since this component has no per-item error state, at minimum log and show toast
-      // (toast is not in scope here, but the catch must not be silent)
+      setSearchError('The funding-source search could not be completed. Please try again.');
     } finally {
       setSearching(false);
     }
-  }, [profileId, item, sources]);
+  }, [profileId, item, searchError, sources]);
 
   return (
     <Card className={`border-l-4 ${item.priority === 'critical' ? 'border-l-red-500' : item.priority === 'high' ? 'border-l-orange-400' : 'border-l-blue-300'}`}>
@@ -98,7 +146,7 @@ function NeedItemCard({ item, profileId, onSearchItem }) {
               <p className="text-xs text-slate-500">Est. cost: <span className="font-medium">{item.estimated_cost}</span></p>
             )}
 
-            <div className="flex items-center gap-2 mt-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
@@ -106,12 +154,14 @@ function NeedItemCard({ item, profileId, onSearchItem }) {
                 onClick={handleFindSources}
                 disabled={searching}
               >
-                {searching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                {sources && sources.length > 0
-  ? `${sources.length} source${sources.length !== 1 ? 's' : ''} found${sources.length > 5 ? ' (showing 5)' : ''}`
-  : sources !== null
-    ? 'Find funding sources'
-    : '0 sources found'}
+                {searching ? <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" /> : <Search className="w-3 h-3" aria-hidden="true" />}
+                {searching
+                  ? 'Searching…'
+                  : sources?.length > 0
+                    ? `${sources.length} source${sources.length !== 1 ? 's' : ''} found${sources.length > 5 ? ' (showing 5)' : ''}`
+                    : sources === null
+                      ? 'Find funding sources'
+                      : searchError ? 'Retry source search' : 'Search again'}
               </Button>
               <Button
                 size="sm"
@@ -121,48 +171,42 @@ function NeedItemCard({ item, profileId, onSearchItem }) {
               >
                 <ShoppingCart className="w-3 h-3" /> Search in Item Funding
               </Button>
-              {sources && (
-                <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setExpanded(!expanded)}>
+              {sources !== null && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0"
+                  onClick={() => setExpanded(!expanded)}
+                  aria-label={`${expanded ? 'Hide' : 'Show'} source results for ${item.name}`}
+                  aria-expanded={expanded}
+                  aria-controls={sourcePanelId}
+                >
                   {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </Button>
               )}
             </div>
 
             {expanded && searching && (
-              <div className="mt-3 p-3 bg-slate-50 rounded-lg flex items-center gap-2 text-xs text-slate-500">
-                <Loader2 className="w-4 h-4 animate-spin" /> Searching curated data and the web...
+              <div role="status" className="mt-3 p-3 bg-slate-50 rounded-lg flex items-center gap-2 text-xs text-slate-500">
+                <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Searching stored sources and the web…
               </div>
             )}
 
             {expanded && sources && !searching && (
-              <div className="mt-3 space-y-2">
-                {sources.length === 0 ? (
+              <div id={sourcePanelId} className="mt-3 space-y-2">
+                {searchError ? (
+                  <div role="alert" className="p-3 bg-red-50 rounded-lg text-xs text-red-800 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
+                    <span>Source search failed: {searchError} No missing source is being treated as a zero result.</span>
+                  </div>
+                ) : sources.length === 0 ? (
                   <div className="p-3 bg-amber-50 rounded-lg text-xs text-amber-700 flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                     <span>No funding sources found for this specific item. Try broadening the search terms in Item Funding.</span>
                   </div>
                 ) : (
-                  sources.slice(0, 5).map((src, idx) => (
-                    <a
-                      key={idx}
-                      href={src.url || src.application_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block p-3 bg-white border rounded-lg hover:bg-blue-50 hover:border-blue-200 transition"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-blue-700 truncate">{src.title}</p>
-                          <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">{src.description}</p>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {src.combined_score || src.match_score ? (
-                            <Badge variant="outline" className="text-[10px]">Score {src.combined_score || src.match_score}</Badge>
-                          ) : null}
-                          <ExternalLink className="w-3 h-3 text-slate-400" />
-                        </div>
-                      </div>
-                    </a>
+                  sources.slice(0, 5).map((source, index) => (
+                    <NeedSourceResult key={source.id || source.url || source.application_url || `${source.title}-${index}`} source={source} />
                   ))
                 )}
               </div>
@@ -221,46 +265,45 @@ export default function NeedsDiscoveryPanel({ profileId, onSearchItem }) {
               AI Needs Discovery
             </h3>
             <p className="text-xs text-slate-500 mt-1">
-              Analyzes the profile and generates a list of every item, service, and credential needed
-              — then finds funding sources for each.
+              Suggests possible items, services, and credentials from profile information. Review each suggestion before searching for sources.
             </p>
           </div>
         </div>
 
         {!result && !loading && (
-          <div className="space-y-3">
+          <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); discoverNeeds() }}>
             <div className="space-y-2">
-              <label className="text-xs font-medium text-slate-600 uppercase tracking-wide">
+              <label htmlFor="needs-custom-goal" className="text-xs font-medium text-slate-600 uppercase tracking-wide">
                 Optional: describe a specific goal
               </label>
               <Input
+                id="needs-custom-goal"
                 placeholder='e.g. "Start a food truck business" or "Regain nursing license"'
                 value={customGoal}
                 onChange={(e) => setCustomGoal(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && discoverNeeds()}
               />
             </div>
             <Button
-              onClick={discoverNeeds}
+              type="submit"
               disabled={!profileId}
-              className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700"
+              className="w-full gap-2 bg-emerald-700 text-white hover:bg-emerald-800"
             >
               <Sparkles className="w-4 h-4" />
               {profileId ? 'Discover What This Profile Needs' : 'Select a Profile First'}
             </Button>
-          </div>
+          </form>
         )}
 
         {loading && (
-          <div className="flex flex-col items-center py-8 gap-3">
-            <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+          <div role="status" className="flex flex-col items-center py-8 gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-emerald-600" aria-hidden="true" />
             <p className="text-sm text-slate-600 font-medium">Analyzing profile and identifying needs...</p>
             <p className="text-xs text-slate-400">This takes 10-20 seconds</p>
           </div>
         )}
 
         {error && (
-          <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+          <div role="alert" className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
             <div>
               <p className="font-medium text-red-900 text-sm">Analysis failed</p>
@@ -282,7 +325,7 @@ export default function NeedsDiscoveryPanel({ profileId, onSearchItem }) {
                   {' '}&bull;{' '}
                   {items.filter(i => i.priority === 'critical').length} critical
                   {' '}&bull;{' '}
-                  {items.filter(i => ['donation', 'grant', 'benefit'].includes(i.funding_path)).length} potentially free
+                  {items.filter(i => ['donation', 'grant', 'benefit'].includes(i.funding_path)).length} marked as non-repayable paths to verify
                 </p>
               </div>
               <Button variant="outline" size="sm" className="text-xs gap-1" onClick={() => { setResult(null); setError(null); }}>
@@ -291,7 +334,7 @@ export default function NeedsDiscoveryPanel({ profileId, onSearchItem }) {
             </div>
 
             {/* Summary bar */}
-            <div className="grid grid-cols-5 gap-1">
+            <div className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-5">
               {Object.entries(FUNDING_PATH_LABELS).map(([key, info]) => {
                 const count = items.filter(i => i.funding_path === key).length;
                 if (!count) return null;

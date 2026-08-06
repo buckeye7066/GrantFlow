@@ -1,8 +1,8 @@
 /**
  * Admin Agent Control Center route tests.
  *
- * Mounts the real router behind a fake auth middleware that injects
- * either the canonical admin (buckeye7066@gmail.com), a different
+ * Mounts the real router behind fake auth/context middleware that injects
+ * either the configured operator, a different
  * admin email, or a non-admin user. Validates:
  *
  *   - non-admin → 403 on every route
@@ -27,7 +27,7 @@ import { _resetSchemaCache } from '../../backend/services/agentControl/agentCont
 import { _resetAdminAccountCache } from '../../backend/services/hamilton/hamiltonAdminAccount.js'
 import { _resetNotificationsSchemaCache } from '../../backend/services/agentControl/agentControlNotifications.js'
 
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+const ADMIN_EMAIL = 'admin@grantflow.local'
 
 class TrivialAdapter extends BaseAgentAdapter {
   constructor(name) { super({ name }) }
@@ -69,18 +69,36 @@ function makeDb() {
       is_admin INTEGER NOT NULL DEFAULT 0,
       role TEXT
     );
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      refresh_expires_at DATETIME,
+      revoked_at DATETIME
+    );
   `)
   sqlite.prepare('INSERT INTO users (id, primary_email, is_admin, role) VALUES (?, ?, 1, ?)')
     .run('u_admin', ADMIN_EMAIL, 'admin')
   return wrapSqlite(sqlite)
 }
 
-function startApp({ db, user }) {
+function contextFor(user) {
+  return {
+    userId: user?.userId || null,
+    email: user?.storedEmail ?? user?.email ?? null,
+    identityResolved: Boolean(user),
+    isAdmin: user?.dbAdmin === undefined
+      ? Boolean(user?.is_admin === true || user?.is_admin === 1)
+      : user.dbAdmin,
+  }
+}
+
+function startApp({ db, user, context = undefined }) {
   const app = express()
   app.use(express.json())
   app.use((req, _res, next) => {
     req.db = db
     if (user) req.user = user
+    if (context !== null) req.ctx = context ?? contextFor(user)
     next()
   })
   app.use('/api/admin/agent-control', controlRouter)
@@ -148,6 +166,68 @@ test('a different admin email also gets 403 (single canonical admin)', async () 
   } finally { server.close() }
 })
 
+test('capability discovery tells another DB admin not to render controls', async () => {
+  const db = makeDb()
+  const server = startApp({ db, user: otherAdminSession() })
+  try {
+    const result = await request(server, 'GET', '/api/admin/agent-control/capability')
+    assert.equal(result.status, 200)
+    assert.deepEqual(result.body, { ok: true, can_control_agents: false })
+  } finally { server.close() }
+})
+
+test('a stale canonical-email JWT is denied after DB demotion', async () => {
+  const db = makeDb()
+  const user = { ...adminSession(), dbAdmin: false }
+  const server = startApp({ db, user })
+  try {
+    const result = await request(server, 'GET', '/api/admin/agent-control/status')
+    assert.equal(result.status, 403)
+    assert.equal(result.body?.error, 'agent_control_admin_only')
+    assert.doesNotMatch(result.body?.message || '', /admin@/i)
+  } finally { server.close() }
+})
+
+test('a stale canonical-email JWT is denied after the stored email changes', async () => {
+  const db = makeDb()
+  const user = { ...adminSession(), storedEmail: 'renamed@example.com' }
+  const server = startApp({ db, user })
+  try {
+    const result = await request(server, 'GET', '/api/admin/agent-control/status')
+    assert.equal(result.status, 403)
+  } finally { server.close() }
+})
+
+test('missing canonical request context fails closed', async () => {
+  const db = makeDb()
+  const server = startApp({ db, user: adminSession(), context: null })
+  try {
+    const result = await request(server, 'GET', '/api/admin/agent-control/status')
+    assert.equal(result.status, 403)
+  } finally { server.close() }
+})
+
+test('a validated synthetic service token can reach the control center', async () => {
+  const db = makeDb()
+  const user = {
+    userId: 'system_admin_token',
+    email: ADMIN_EMAIL,
+    role: 'admin',
+    is_admin: true,
+    serviceToken: true,
+  }
+  const server = startApp({
+    db,
+    user,
+    context: { userId: user.userId, email: null, identityResolved: true, isAdmin: true },
+  })
+  try {
+    const result = await request(server, 'GET', '/api/admin/agent-control/status')
+    assert.equal(result.status, 200)
+    assert.equal(result.body?.ok, true)
+  } finally { server.close() }
+})
+
 test('canonical admin can call /status and gets adapter snapshot', async () => {
   const db = makeDb()
   const server = startApp({ db, user: adminSession() })
@@ -161,6 +241,46 @@ test('canonical admin can call /status and gets adapter snapshot', async () => {
     // available_agents = the CONTROLLABLE set (ALL_AGENTS): anya is never
     // started/stopped via the control center, so she is NOT listed here.
     assert.deepEqual(r.body.available_agents.sort(), ['hamilton', 'john', 'robert', 'sam', 'yana'])
+  } finally { server.close() }
+})
+
+test('canonical admin capability is true without exposing the configured email', async () => {
+  const db = makeDb()
+  const server = startApp({ db, user: adminSession() })
+  try {
+    const result = await request(server, 'GET', '/api/admin/agent-control/capability')
+    assert.equal(result.status, 200)
+    assert.deepEqual(result.body, { ok: true, can_control_agents: true })
+    assert.doesNotMatch(JSON.stringify(result.body), /admin@/i)
+  } finally { server.close() }
+})
+
+test('configured operator can review the exact DB admin/session roster read-only', async () => {
+  const db = makeDb()
+  await db.prepare(
+    `INSERT INTO users (id, display_name, primary_email, is_admin, role)
+     VALUES (?, ?, ?, 1, 'admin')`,
+  ).run('u_unexpected', 'Unexpected Admin', 'unexpected@example.com')
+  await db.prepare(
+    `INSERT INTO user_sessions (id, user_id, refresh_expires_at, revoked_at)
+     VALUES (?, ?, ?, NULL), (?, ?, ?, ?)`,
+  ).run(
+    'session-active', 'u_unexpected', '2999-01-01T00:00:00.000Z',
+    'session-revoked', 'u_unexpected', '2999-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+  )
+  const server = startApp({ db, user: adminSession() })
+  try {
+    const result = await request(server, 'GET', '/api/admin/agent-control/authority-audit')
+    assert.equal(result.status, 200)
+    assert.equal(result.body?.read_only, true)
+    assert.equal(result.body?.admin_count, 2)
+    assert.equal(result.body?.unexpected_admin_count, 1)
+    assert.equal(result.body?.requires_owner_review, true)
+    const unexpected = result.body?.admins?.find((row) => row.user_id === 'u_unexpected')
+    assert.equal(unexpected?.primary_email, 'unexpected@example.com')
+    assert.equal(unexpected?.configured, false)
+    assert.equal(unexpected?.active_sessions, 1)
+    assert.equal(unexpected?.total_sessions, 2)
   } finally { server.close() }
 })
 

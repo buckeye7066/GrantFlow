@@ -31,8 +31,8 @@ const APPLY = process.argv.includes('--apply')
 // ── Known, owner-specified fixes keyed by profile id ────────────────────────
 // These override the heuristics (owner judgment already made).
 const KNOWN_FIXES = Object.freeze({
-  // Anastasia — currently 'caregiver', is actually a student.
-  'c4a92724-9cee-416f-ba30-e91b9b5cd885': 'student',
+  // Demo Student — currently 'caregiver', is actually a student.
+  '00000000-0000-4000-8000-000000000001': 'student',
 })
 
 // ── Name-keyword heuristics → canonical primary_type ────────────────────────

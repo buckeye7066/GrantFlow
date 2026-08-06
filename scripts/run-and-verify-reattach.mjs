@@ -33,9 +33,9 @@ log('Step 1: Running reattach script...');
 const reattachScript = join(__dirname, 'reattach-users-simple.mjs');
 
 await new Promise((resolve) => {
-  const child = spawn('node', [reattachScript], {
+  const child = spawn(process.execPath, [reattachScript, ...process.argv.slice(2)], {
     stdio: ['inherit', 'pipe', 'pipe'],
-    shell: true
+    shell: false
   });
   
   let stdout = '';
@@ -93,9 +93,9 @@ log('\nStep 3: Running verification script...');
 const verifyScript = join(__dirname, 'verify-reattach.mjs');
 
 await new Promise((resolve) => {
-  const child = spawn('node', [verifyScript], {
+  const child = spawn(process.execPath, [verifyScript], {
     stdio: ['inherit', 'pipe', 'pipe'],
-    shell: true
+    shell: false
   });
   
   let stdout = '';

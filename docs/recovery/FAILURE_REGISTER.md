@@ -25,11 +25,10 @@ Stays-removed guard: `tests/unit/deployment-entry-points.test.mjs`.
   2026-08-03: driver run in a clean worktree exits 0 with the final
   "verified product source already present" line never printed.
 - Root cause: permanent repairs were shipped as install-time patches instead of commits.
-- Correction: equivalence proven (materializer run in clean worktree at anchor →
-  `git diff --quiet` exit 0), then full removal — branch `recovery/remove-source-materialization`
-  (deletes the stack, strips 8 hooks + Docker steps, rewrites the 4 dependent
-  tests/checks, adds a stays-removed guard test). Verification pending: full local
-  test chain + CI.
+- Correction: equivalence was proven (materializer run in a clean worktree at the
+  anchor → `git diff --quiet` exit 0), then the stack was removed in #1149. The
+  materializer-free production image was subsequently live-verified as recorded
+  above and in `PRODUCTION_TRUTH.md`.
 
 ## F-02 — Display/read-path second authorities can overturn the canonical engine — OPEN (top slice of the #1140/#1142 class)
 Census of 17 hazards (full detail: audit census, 2026-08-03). Highest severity:

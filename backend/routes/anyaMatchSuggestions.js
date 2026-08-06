@@ -18,6 +18,7 @@ import { safeParseJSON } from '../utils/safeJson.js'
 import { isScoutMutedForUser } from '../services/anyaMatchScout.js'
 import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
 import { createLogger } from '../utils/logger.js'
+import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 
 const routeLogger = createLogger('route:anya-match-suggestions')
 
@@ -96,14 +97,12 @@ async function loadAuthorizedSuggestion(req, res, id) {
  * inspects status to decide what to surface to the UI).
  */
 async function forwardFromOpportunity(req, body) {
-  const host = req.get('host')
-  if (!host) {
-    return { ok: false, status: 500, body: { error: 'cannot resolve internal host' } }
+  const internalBase = resolveInternalSelfBaseUrl()
+  if (!internalBase.ok) {
+    routeLogger.error('[match-suggestions] invalid internal base URL', { reason: internalBase.reason })
+    return { ok: false, status: 503, body: { error: 'internal_forward_unavailable' } }
   }
-  const base = (process.env.ANYA_SELF_BASE_URL || `${req.protocol || 'http'}://${host}`).replace(
-    /\/+$/,
-    '',
-  )
+  const base = internalBase.baseUrl
 
   const headers = {
     'content-type': 'application/json',
@@ -115,11 +114,15 @@ async function forwardFromOpportunity(req, body) {
     'x-anya-internal': 'match-scout-accept',
   }
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15_000)
   try {
     const r = await fetch(`${base}/api/grants/from-opportunity`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      redirect: 'error',
+      signal: controller.signal,
     })
     let parsed = null
     try {
@@ -131,6 +134,8 @@ async function forwardFromOpportunity(req, body) {
   } catch (err) {
     routeLogger.error('[match-suggestions] internal forward failed', { err: err?.message })
     return { ok: false, status: 502, body: { error: 'internal_forward_failed', message: err?.message } }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 

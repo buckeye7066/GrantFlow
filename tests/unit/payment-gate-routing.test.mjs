@@ -65,8 +65,10 @@ function createDb() {
   return db
 }
 
-const ADMIN = { id: 'admin', email: 'buckeye7066@gmail.com', is_admin: true }
+const ADMIN = { id: 'admin', email: 'owner@example.invalid', is_admin: true }
 const USER = { id: 'u1', email: 'jane@example.com', is_admin: false }
+const ADMIN_PRINCIPAL = { userId: ADMIN.id, identityResolved: true, isAdmin: true }
+const USER_PRINCIPAL = { userId: USER.id, identityResolved: true, isAdmin: false }
 
 test('PricingRequired and AnyaOnboarding are always allowed; Pipeline is gated', () => {
   for (const p of ['/login', '/AnyaOnboarding', '/AnyaOnboarding/q-2', '/PricingRequired', '/ServiceAgreement', '/Checkout', '/Admin', '/Admin/Pricing', '/Pricing', '/services?purchase_id=abc']) {
@@ -94,11 +96,11 @@ test('getAccessStatus blocks new unpaid user, allows admin', async () => {
     intakeAnswers: { wants_research_only: true },
     user: USER,
   })
-  const userStatus = await getAccessStatus(db, { user: USER, profileId: 'p1' })
+  const userStatus = await getAccessStatus(db, { principal: USER_PRINCIPAL, profileId: 'p1' })
   assert.equal(userStatus.access_granted, false)
   assert.equal(userStatus.blocking_reason, 'agreement_required')
 
-  const adminStatus = await getAccessStatus(db, { user: ADMIN, profileId: 'p1' })
+  const adminStatus = await getAccessStatus(db, { principal: ADMIN_PRINCIPAL, profileId: 'p1' })
   assert.equal(adminStatus.access_granted, true)
   assert.equal(adminStatus.is_admin, true)
 })
@@ -111,7 +113,7 @@ test('agreement acceptance flips status from PENDING_AGREEMENT to PENDING_PAYMEN
     user: USER,
   })
   await acceptAgreement(db, { profileId: 'p1', userId: USER.id, ip: '127.0.0.1', userAgent: 'test' })
-  const status = await getAccessStatus(db, { user: USER, profileId: 'p1' })
+  const status = await getAccessStatus(db, { principal: USER_PRINCIPAL, profileId: 'p1' })
   assert.equal(status.access_status, ACCESS_STATUS.PENDING_PAYMENT)
   assert.equal(status.checkout_available, true)
   assert.equal(status.access_granted, false)
@@ -125,7 +127,7 @@ test('markPaid flips status to ACTIVE_PAID and grants access', async () => {
     user: USER,
   })
   await markPaid(db, { profileId: 'p1' })
-  const status = await getAccessStatus(db, { user: USER, profileId: 'p1' })
+  const status = await getAccessStatus(db, { principal: USER_PRINCIPAL, profileId: 'p1' })
   assert.equal(status.access_status, ACCESS_STATUS.ACTIVE_PAID)
   assert.equal(status.access_granted, true)
 })
@@ -142,7 +144,7 @@ test('Sam: deriveGateFindings flags admin blocked', () => {
   const findings = deriveGateFindings({
     profile: { id: 'p1' },
     profilePricing: { access_status: ACCESS_STATUS.PENDING_PAYMENT, subtotal_cents: 1000, discount_total_cents: 0, total_cents: 1000, pricing_catalog_version: '2026-06-15' },
-    user: { email: 'buckeye7066@gmail.com', is_admin: true },
+    user: { email: 'owner@example.invalid', is_admin: true },
   })
   assert.ok(findings.some((f) => f.category === 'admin_blocked_by_payment_gate'))
 })
@@ -158,7 +160,7 @@ test('Sam: deriveGateFindings flags total mismatch', () => {
       pricing_catalog_version: '2026-06-15',
     },
     user: { email: 'jane@example.com' },
-    notifications: [{ admin_email: 'buckeye7066@gmail.com', notification_type: 'new_user_pricing', profile_id: 'p1' }],
+    notifications: [{ admin_email: 'owner@example.invalid', notification_type: 'new_user_pricing', profile_id: 'p1' }],
   })
   assert.ok(findings.some((f) => f.category === 'profile_pricing_total_mismatch'))
 })

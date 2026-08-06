@@ -1,0 +1,140 @@
+{
+  "version": "1.0",
+  "profile": {
+    "id": "profile-demo-tennessee-stem-student",
+    "display_name": "Demo Tennessee STEM Student",
+    "primary_type": "high_school_student",
+    "status": "active",
+    "tags": ["individual", "student", "source-safe"]
+  },
+  "sections": {
+    "basic_information": {
+      "full_name": "Demo Tennessee STEM Student",
+      "email": "",
+      "phone": "",
+      "website": "",
+      "address": "Cleveland, Tennessee",
+      "notes": "Synthetic high school senior taking college-level classes."
+    },
+    "demographics": {
+      "african_american": false,
+      "hispanic_latino": false,
+      "asian_american": false,
+      "native_american": false,
+      "tribal_affiliation": "",
+      "lgbtq": false,
+      "immigrant_status": "second-generation",
+      "gender": "Female",
+      "notes": "Synthetic profile signal: Polish heritage; multilingual English/Russian household support."
+    },
+    "location_focus": {
+      "rural_resident": true,
+      "appalachian_region": true,
+      "urban_underserved": false,
+      "geographic_focus": "Cleveland, Tennessee",
+      "notes": "Synthetic rural/Appalachian student-aid signal."
+    },
+    "financial_information": {
+      "household_income": 56000,
+      "household_size": 7,
+      "financial_need_level": "moderate",
+      "low_income": false,
+      "unemployed": true,
+      "displaced_worker": false,
+      "notes": "Synthetic moderate-need student aid profile."
+    },
+    "government_assistance": {
+      "medicaid_enrolled": false,
+      "medicare_recipient": false,
+      "ssi_recipient": false,
+      "ssdi_recipient": true,
+      "snap_recipient": false,
+      "tanf_recipient": false,
+      "section8_housing": false,
+      "other_programs": "Synthetic dependent-benefit signal for student-aid matching."
+    },
+    "health_medical": {
+      "chronic_illness": false,
+      "chronic_illness_type": "",
+      "disability_type": [],
+      "support_needs_level": "unknown",
+      "dialysis_patient": false,
+      "organ_transplant": false,
+      "hiv_aids": false,
+      "tbi_survivor": false,
+      "amputee": false,
+      "neurodivergent": false,
+      "visual_impairment": false,
+      "hearing_impairment": false,
+      "wheelchair_user": false,
+      "substance_recovery": false,
+      "mental_health_condition": false,
+      "notes": "No real medical details are stored in this source-safe fixture."
+    },
+    "family_life": {
+      "single_parent": false,
+      "foster_youth": false,
+      "orphan": false,
+      "adopted": false,
+      "foster_parent": false,
+      "caregiver": true,
+      "widow_widower": false,
+      "grandparent_raising_grandchildren": false,
+      "first_time_parent": false,
+      "homeless": false,
+      "domestic_violence_survivor": false,
+      "trafficking_survivor": false,
+      "disaster_survivor": false,
+      "formerly_incarcerated": false,
+      "notes": "Synthetic family support and translation responsibility signal."
+    },
+    "occupation": {
+      "healthcare_worker": false,
+      "healthcare_worker_type": "",
+      "ems_worker": false,
+      "educator": false,
+      "firefighter": false,
+      "law_enforcement": false,
+      "public_servant": false,
+      "clergy": false,
+      "missionary": false,
+      "nonprofit_employee": false,
+      "small_business_owner": false,
+      "minority_owned_business": false,
+      "women_owned_business": false,
+      "union_member": false,
+      "farmer": false,
+      "truck_driver": false,
+      "notes": "Student focused on academics."
+    },
+    "education": {
+      "highest_level": "High School Senior (with college courses)",
+      "current_institution": "Cleveland State Community College",
+      "gpa": "3.84",
+      "act_score": "28",
+      "intended_major": "Forensic Science",
+      "interests": ["Forensic Science", "Criminal Justice", "STEM", "DNA Analysis", "Crime Scene Investigation"],
+      "target_colleges": ["Middle Tennessee State University"]
+    },
+    "university_applications": {
+      "applications": [
+        { "name": "Middle Tennessee State University", "status": "planning" },
+        { "name": "University of Tennessee Chattanooga", "status": "planning" },
+        { "name": "University of Tennessee Knoxville", "status": "planning" }
+      ]
+    },
+    "narrative": {
+      "mission": "Pursue forensic science while advocating for educational access for multilingual and rural students in STEM.",
+      "primary_goal": "Secure financial assistance for higher education and complete a college path toward forensic science.",
+      "target_population": "Rural, multilingual, and first-generation-adjacent students pursuing STEM and forensic science pathways.",
+      "funding_amount_needed": "",
+      "timeline": "Apply to colleges and scholarships during senior year; begin undergraduate studies after graduation.",
+      "past_experience": "Balancing rigorous high school coursework with college-level classes.",
+      "unique_qualities": "Multilingual student with strong academic performance and family-support responsibilities.",
+      "collaboration_partners": "",
+      "sustainability_plan": "Maintain strong academic performance, pursue scholarships, and build mentorship/community support networks during college.",
+      "barriers_faced": "Cost of attendance, housing, transportation, and family-support responsibilities.",
+      "special_circumstances": "Large household and dependent-benefit context are synthetic test signals."
+    }
+  }
+}

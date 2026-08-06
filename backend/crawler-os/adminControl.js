@@ -1,6 +1,6 @@
 // crawler-os/adminControl.js
 //
-// Agent Control Center. The SINGLE admin/operator (buckeye7066@gmail.com) can
+// Agent Control Center. The explicitly configured admin/operator can
 // start, stop, pause, resume, and emergency-stop the whole agent process. Every
 // transition is authorized (non-admin actors are rejected) and persisted as an
 // admin event. The scheduler reads getStatus() before each agent so pause/stop/
@@ -10,8 +10,6 @@
 
 import { recordAdminEvent, getAdminEvents } from './storage.js';
 
-export const ADMIN_EMAIL = 'buckeye7066@gmail.com';
-
 export const CONTROL_STATE = Object.freeze({
   IDLE: 'idle', RUNNING: 'running', PAUSED: 'paused',
   STOPPED: 'stopped', EMERGENCY_STOPPED: 'emergency_stopped',
@@ -20,12 +18,18 @@ export const CONTROL_STATE = Object.freeze({
 export function createAdminControl(deps = {}) {
   const store = deps.store;
   if (!store) throw new Error('createAdminControl: store required');
-  const admin = deps.admin ?? ADMIN_EMAIL;
+  // The application shell owns privileged-identity configuration. Crawler OS
+  // receives only the already-validated operator capability and never reaches
+  // across its architecture boundary into deployment config.
+  const admin = typeof deps.admin === 'string' && deps.admin.trim()
+    ? deps.admin.trim().toLowerCase()
+    : null;
   let state = deps.initialState ?? CONTROL_STATE.IDLE;
 
   function authorize(actor) {
-    if (actor !== admin) {
-      const err = new Error(`unauthorized: only ${admin} may control the agent process`);
+    const normalizedActor = typeof actor === 'string' ? actor.trim().toLowerCase() : '';
+    if (!admin || normalizedActor !== admin) {
+      const err = new Error('unauthorized: configured operator required for agent control');
       err.code = 'UNAUTHORIZED';
       throw err;
     }
@@ -80,4 +84,4 @@ export function createAdminControl(deps = {}) {
   };
 }
 
-export default { createAdminControl, CONTROL_STATE, ADMIN_EMAIL };
+export default { createAdminControl, CONTROL_STATE };

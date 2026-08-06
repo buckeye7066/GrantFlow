@@ -8,6 +8,7 @@
 import { expandNeed } from '../shared/needTaxonomy.js'
 import NATIONAL_PROGRAMS from '../shared/data/nationalPrograms.js'
 import SCHOLARSHIPS from '../shared/data/scholarships.js'
+import { DEFAULT_MIN_SCORE } from '../../config/matchThresholds.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('matching:professionalDevelopment')
@@ -386,33 +387,35 @@ export function loadCuratedProfessionalDevelopmentPrograms(profileContextOrState
 }
 
 /**
- * Apply PD query policy to scored opportunities:
- * - drop income-support rows unless user explicitly asked for them
- * - cap cross-category mismatches at 25%
+ * Apply a presentation-only professional-development query policy.
+ *
+ * An explicit off-intent income-support row may be omitted when the user asks
+ * only for professional development. Every other row keeps the canonical
+ * stored score and decision byte-for-byte; query relevance is additive
+ * metadata, never a second eligibility or scoring verdict.
  */
 export function applyProfessionalDevelopmentQueryPolicy(opportunities, intent) {
   if (!intent?.active || !Array.isArray(opportunities)) return opportunities
 
   return opportunities
     .map((opp) => {
-      if (intent.excludeIncomeSupport && isIncomeSupportOpportunity(opp)) {
+      const incomeSupport = isIncomeSupportOpportunity(opp)
+      if (intent.excludeIncomeSupport && incomeSupport) {
         return null
       }
 
       const pdOpp = isProfessionalDevelopmentOpportunity(opp)
-      if (!pdOpp && intent.active) {
-        const capped = Math.min(Number(opp.match_score ?? 0), 25)
-        if (capped !== opp.match_score) {
-          return {
-            ...opp,
-            match_score: capped,
-            match: capped,
-            pd_cross_category_capped: true,
-            match_explanation: `${opp.match_explanation || ''} Cross-category mismatch with professional development query (capped at 25%).`.trim(),
-          }
-        }
+      return {
+        ...opp,
+        pd_query_relevance: pdOpp
+          ? 'professional_development'
+          : incomeSupport ? 'income_support_requested' : 'adjacent_funding',
+        pd_query_relevance_reason: pdOpp
+          ? 'The source addresses the professional-development query.'
+          : incomeSupport
+            ? 'Income support was explicitly included in this query.'
+            : 'The source remains a canonical profile match but is not specifically professional-development funding.',
       }
-      return opp
     })
     .filter(Boolean)
 }
@@ -426,7 +429,7 @@ export async function recordLowCoverageEvent(db, payload = {}) {
     searchTerms = [],
     freeText = '',
     qualifiedCount = 0,
-    minScore = 50,
+    minScore = DEFAULT_MIN_SCORE,
     intent = null,
   } = payload
 

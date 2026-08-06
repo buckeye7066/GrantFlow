@@ -26,7 +26,7 @@ Admin Mission Control and is restricted to a single operator account.
 There is **one** GrantFlow admin/operator:
 
 ```
-buckeye7066@gmail.com
+owner@example.invalid
 ```
 
 Override env vars (default to the same address):
@@ -193,7 +193,7 @@ liberally; the timeline + progress UI relies on them.
 
 Every lifecycle transition creates one persistent
 `notifications` row addressed to the canonical admin
-(`buckeye7066@gmail.com`). Types:
+(`owner@example.invalid`). Types:
 
 - `agent_control_started`
 - `agent_control_completed`
@@ -237,7 +237,7 @@ Sam owns two checks specific to the Control Center:
 
 ## Manual verification checklist
 
-1. Sign in as `buckeye7066@gmail.com`. Open Admin → Mission Control.
+1. Sign in as `owner@example.invalid`. Open Admin → Mission Control.
    The Agent Control Center renders at the top of the page.
 2. Click **Start full cycle** with the default options. The card shows
    the active run id, runtime ticking, and a step-by-step timeline.
@@ -261,7 +261,7 @@ Sam owns two checks specific to the Control Center:
 |---|---|---|
 | `Lock "agent_control:full_cycle" already held` | Previous full_cycle didn't release the lock (process crashed) | The `tryAcquireLock` function already sweeps expired locks, but you can manually `DELETE FROM agent_control_locks WHERE lock_name = 'agent_control:full_cycle'` |
 | Run stuck in `pausing` or `stopping` | Adapter not polling `signal.shouldStop()` / `signal.shouldPause()` | Edit the adapter to poll between every atomic operation |
-| Buttons greyed out for a logged-in user | Email is not `buckeye7066@gmail.com` | Set `AGENT_CONTROL_ADMIN_EMAIL` env override or sign in as the canonical operator |
+| Buttons greyed out for a logged-in user | Email is not `owner@example.invalid` | Set `AGENT_CONTROL_ADMIN_EMAIL` env override or sign in as the canonical operator |
 | Hamilton step counts the same task twice | `application_tasks` query returned a row that was already running | The adapter only picks up `queued` and `running` rows in a single batch; reduce `hamilton_batch_size` or add `WHERE control_run_id IS NULL` if you assign per-run task ownership |
 
 ## Related docs

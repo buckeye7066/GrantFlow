@@ -20,12 +20,14 @@
 import { describe, it, expect } from 'vitest'
 import {
   scoreOpportunity,
+  computeMatchDecision,
   calculateConfidence,
   confidenceBand,
 } from '../services/matchEngine.js'
 import {
   CONFIDENCE_BAND_HIGH,
   CONFIDENCE_BAND_MEDIUM,
+  SCORE_SCALE_ID,
 } from '../config/matchThresholds.js'
 
 // A well-filled TN student profile so opportunities below score with strong fit.
@@ -148,6 +150,50 @@ describe('confidence is ADDITIVE — it never alters score', () => {
 
     expect(richerConfidence.score).toBe(base.score) // MATCH unchanged
     expect(richerConfidence.confidence).toBeGreaterThan(base.confidence) // CONFIDENCE up
+  })
+})
+
+describe('canonical decision preserves scoreOpportunity confidence and scale semantics', () => {
+  it('returns the same confidence contract for the same profile/opportunity pair', () => {
+    const scored = scoreOpportunity(STUDENT_PROFILE, HIGH_CONFIDENCE_OPP)
+    const decided = computeMatchDecision(STUDENT_PROFILE, HIGH_CONFIDENCE_OPP)
+
+    expect(decided.confidence).toBe(scored.confidence)
+    expect(decided.confidence_reasons).toEqual(scored.confidence_reasons)
+    expect(decided.confidence_band).toBe(scored.confidence_band)
+    expect(decided.match_explain.confidence).toBe(scored.match_explain.confidence)
+
+    expect(scored.scoreScaleId).toBe(SCORE_SCALE_ID)
+    expect(decided.scoreScaleId).toBe(scored.scoreScaleId)
+    expect(scored.match_explain.score_scale_id).toBe(SCORE_SCALE_ID)
+    expect(decided.match_explain.score_scale_id).toBe(SCORE_SCALE_ID)
+  })
+
+  it('keeps source confidence orthogonal even when eligibility hard-rejects the match', () => {
+    const loan = {
+      ...HIGH_CONFIDENCE_OPP,
+      id: 'opp-loan',
+      title: 'Tennessee Student Loan',
+      funding_type: 'loan',
+      is_loan: true,
+    }
+    const scored = scoreOpportunity(STUDENT_PROFILE, loan)
+    const decided = computeMatchDecision(STUDENT_PROFILE, loan)
+
+    expect(decided.decision).toBe('REJECT')
+    expect(decided.score).toBe(0)
+    expect(decided.confidence).toBe(scored.confidence)
+    expect(decided.confidence_reasons).toEqual(scored.confidence_reasons)
+    expect(decided.confidence_band).toBe(scored.confidence_band)
+    expect(decided.scoreScaleId).toBe(SCORE_SCALE_ID)
+    expect(decided.match_explain.confidence).toBe(scored.confidence)
+    expect(decided.match_explain.score_scale_id).toBe(SCORE_SCALE_ID)
+  })
+
+  it('stamps the current score scale on the insufficient-data return', () => {
+    const decided = computeMatchDecision(null, HIGH_CONFIDENCE_OPP)
+    expect(decided.scoreScaleId).toBe(SCORE_SCALE_ID)
+    expect(decided.match_explain.score_scale_id).toBe(SCORE_SCALE_ID)
   })
 })
 

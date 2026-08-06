@@ -139,7 +139,7 @@ test('anya: status, sessions/messages, tasks, tools (deterministic)', async () =
   const { port } = await srv.ready
 
   try {
-    const adminEmail = 'buckeye7066@gmail.com'
+    const adminEmail = 'owner@example.invalid'
     const userEmail = 'anya-user@example.com'
 
     const adminUserId = '00000000-0000-0000-0000-00000000d001'

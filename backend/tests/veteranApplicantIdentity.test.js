@@ -94,8 +94,8 @@ describe('THE NEGATION TRAP: only an explicit true declares service', () => {
   // Verbatim from prod 2026-08-02. All three of these were wrongly promoted by
   // the text-matching version of the fix.
   const DENIALS = [
-    { name: 'Anastasia Nicole White', notes: 'No military affiliation or documentation provided in the profile. No military affiliation or documentation indicating veteran status, active duty, or dependency on military personnel.' },
-    { name: 'Gilbert Allen McCosh', notes: 'No military affiliation or documentation indicating veteran status, active duty, or disability related to military service.' },
+    { name: 'Demo Tennessee STEM Student', notes: 'No military affiliation or documentation provided in the profile. No military affiliation or documentation indicating veteran status, active duty, or dependency on military personnel.' },
+    { name: 'Demo Support Applicant', notes: 'No military affiliation or documentation indicating veteran status, active duty, or disability related to military service.' },
     { name: 'Focus Forward Ministry', notes: 'No military affiliation or documentation indicating veteran status or service found in the profile.' },
   ]
 

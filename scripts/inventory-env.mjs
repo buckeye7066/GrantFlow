@@ -1,63 +1,43 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { fileURLToPath } from 'node:url'
+
+import {
+  enumerateSourceFiles,
+  extractEnvReferences,
+} from './generate-env-examples.mjs'
 
 const ROOT = path.resolve(process.cwd())
-
-function isTextFile(filePath) {
-  return /\.(mjs|cjs|js|jsx|ts|tsx|json)$/i.test(filePath)
-}
-
-function walk(dir, out = []) {
-  const entries = fs.readdirSync(dir, { withFileTypes: true })
-  for (const ent of entries) {
-    if (ent.name === 'node_modules' || ent.name === 'dist' || ent.name === 'artifacts') continue
-    const full = path.join(dir, ent.name)
-    if (ent.isDirectory()) walk(full, out)
-    else if (ent.isFile() && isTextFile(full)) out.push(full)
-  }
-  return out
-}
 
 function scanEnvUsages(filePath) {
   const text = fs.readFileSync(filePath, 'utf8')
   const lines = text.split(/\r?\n/)
-  const matches = []
-
-  const reProcess = /\bprocess\.env\.([A-Z0-9_]+)\b/g
-  const reImportMeta = /\bimport\.meta\.env\.([A-Z0-9_]+)\b/g
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]
-    for (const re of [reProcess, reImportMeta]) {
-      re.lastIndex = 0
-      let m
-      while ((m = re.exec(line))) {
-        matches.push({
-          varName: m[1],
-          kind: re === reProcess ? 'process.env' : 'import.meta.env',
-          file: path.relative(ROOT, filePath).replace(/\\/g, '/'),
-          line: i + 1,
-          excerpt: line.trim(),
-        })
-      }
+  return extractEnvReferences(text).map((reference) => {
+    const line = text.slice(0, reference.index).split(/\r?\n/).length
+    return {
+      varName: reference.varName,
+      kind: reference.kind,
+      file: path.relative(ROOT, filePath).replace(/\\/g, '/'),
+      line,
+      excerpt: String(lines[line - 1] || '').trim(),
     }
-  }
-  return matches
+  })
 }
 
-function parseEnvExample(filePath) {
+export function parseEnvExample(filePath) {
   const text = fs.readFileSync(filePath, 'utf8')
   const lines = text.split(/\r?\n/)
   const vars = []
   for (let i = 0; i < lines.length; i += 1) {
     const raw = lines[i]
-    const line = raw.trim()
-    if (!line || line.startsWith('#')) continue
+    let line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('#')) line = line.slice(1).trim()
     const eq = line.indexOf('=')
     if (eq === -1) continue
     const key = line.slice(0, eq).trim()
-    if (!/^[A-Z0-9_]+$/.test(key)) continue
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
     const value = line.slice(eq + 1)
     vars.push({
       varName: key,
@@ -88,16 +68,14 @@ function formatLineRange(lines) {
   return `L${sorted[0]}–L${sorted[sorted.length - 1]}`
 }
 
-function main() {
-  const files = walk(ROOT)
+export function main() {
+  const files = enumerateSourceFiles({ root: ROOT })
   const usage = files.flatMap(scanEnvUsages)
   const usageByVar = groupByVar(usage)
 
   const envExampleFiles = [
     '.env.example',
-    'env.example',
     'backend/.env.example',
-    'backend/env.example',
   ]
     .map((p) => path.join(ROOT, p))
     .filter((p) => fs.existsSync(p))
@@ -116,20 +94,23 @@ function main() {
   const lines = []
   lines.push('# ENV Vars Inventory')
   lines.push('')
-  lines.push('This file is **generated** by `node scripts/inventory-env.mjs`.')
-  lines.push('It enumerates environment variables referenced in code and/or present in example env files.')
+  lines.push('This file is generated from first-party source present in the checkout and the generated')
+  lines.push('example templates. “Referenced” means a static source reference; “Listed in')
+  lines.push('templates” includes commented optional entries. Presence here does not prove that a')
+  lines.push('variable is required, configured in Vercel/Railway, or safe to log; production')
+  lines.push('requirements remain in `docs/ENVIRONMENT.md`.')
   lines.push('')
 
   lines.push('## Summary')
   lines.push('')
   lines.push(`- Total vars: **${allVarNames.length}**`)
   lines.push(`- Vars referenced in code: **${usageByVar.size}**`)
-  lines.push(`- Vars present in env templates: **${exampleByVar.size}**`)
+  lines.push(`- Vars listed in env templates: **${exampleByVar.size}**`)
   lines.push('')
 
   lines.push('## Inventory')
   lines.push('')
-  lines.push('| Name | Referenced in code | Defined in templates | Notes |')
+  lines.push('| Name | Referenced in code | Listed in templates | Notes |')
   lines.push('| --- | --- | --- | --- |')
 
   for (const name of allVarNames) {
@@ -143,6 +124,8 @@ function main() {
     } else if (code.some((u) => u.kind === 'import.meta.env')) {
       notes.push('Frontend (Vite)')
     } else if (code.some((u) => u.kind === 'process.env')) {
+      notes.push('Backend/Node')
+    } else if (code.length) {
       notes.push('Backend/Node')
     }
     lines.push(`| \`${name}\` | ${referenced} | ${defined} | ${mdEscape(notes.join('; '))} |`)
@@ -200,5 +183,5 @@ function main() {
   console.log(`Wrote ${path.relative(ROOT, outPath)}`)
 }
 
-main()
-
+const isMain = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (isMain) main()

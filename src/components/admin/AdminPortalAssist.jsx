@@ -1,10 +1,10 @@
 /**
  * AdminPortalAssist
  *
- * Admin-only "Portal Assist" surface. Lets the owner (buckeye7066@gmail.com /
- * any is_admin user) pick ANY profile and do that user's portal logins FOR them
- * via Hamilton's secure side-by-side window — the concrete case being a
- * deadline-pressed applicant (e.g. Anastasia) who can't get signed in herself.
+ * Admin-only "Portal Assist" surface. Lets the configured operator (or any
+ * authorized admin) pick ANY profile and open that user's official portal for
+ * a visible manual handoff — the concrete case being a
+ * deadline-pressed applicant (e.g. Demo Student) who can't get signed in herself.
  *
  * Why this exists even though admins can already reach any profile: the access
  * layer already authorizes an admin on every profile (getAccessibleProfileIds →
@@ -18,10 +18,8 @@
  *   • listProfiles              → the profile picker
  *   • listProfilePortals        → the same GET /api/profiles/:id/portals the
  *                                 user's own Portals dashboard uses
- *   • startCloudLogin +         → the secure live co-browse window
- *     openPendingLoginWindow      (CDP screencast over SSE). The admin signs in
- *                                 in that window; Hamilton captures + learns the
- *                                 session so future runs reuse it.
+ *   • openWithHamiltonWatching  → controlled-beta manual portal open; real
+ *                                 domains never call the server-browser API.
  *   • <ProfilePortalsCard/>     → the full per-profile toolset (per-portal login,
  *                                 autopilot, packets, two-way sync) rendered
  *                                 below, so nothing is lost vs visiting the
@@ -37,12 +35,12 @@
 import React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { listProfiles } from "@/api/profiles"
-import { listProfilePortals, startCloudLogin } from "@/api/hamilton"
-import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
+import { listProfilePortals } from "@/api/hamilton"
+import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
 import ProfilePortalsCard from "@/components/hamilton/ProfilePortalsCard"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { useToast } from "@/components/ui/use-toast"
-import { showSuccessToast, showErrorToast } from "@/components/shared/toastHelpers"
+import { showErrorToast } from "@/components/shared/toastHelpers"
 import {
   PanelsTopLeft,
   Search,
@@ -127,43 +125,21 @@ export default function AdminPortalAssist() {
 
   const [openingHost, setOpeningHost] = React.useState(null)
 
-  // Open ONE portal's secure side-by-side login for the selected profile. The
-  // popup is opened synchronously in the click gesture (else it's blocked), then
-  // navigated once startCloudLogin resolves — exactly the ProfilePortalsCard flow.
+  // Open one official portal in the admin's own browser. The shared helper
+  // never calls cloud login for real domains during controlled beta.
   const openPortalLogin = async (portal) => {
     if (!selectedId || !portal?.portalHost) return
-    const popup = openPendingLoginWindow()
-    if (!popup || popup.blocked) {
-      showErrorToast(
-        toast,
-        "Allow pop-ups to sign in",
-        "Your browser blocked the secure login window. Allow pop-ups for GrantFlow, then click again.",
-      )
-      return
-    }
     setOpeningHost(portal.portalHost)
     try {
-      const res = await startCloudLogin(selectedId, {
-        portalHost: portal.portalHost,
-        loginUrl: portal.loginUrl || null,
+      await openWithHamiltonWatching({
+        profileId: selectedId,
+        url: portal.loginUrl || `https://${portal.portalHost}/`,
         label: portal.label || `${portal.portalHost} session`,
-      })
-      const url = resolveLiveLoginUrl(res)
-      if (!url) {
-        popup.fail?.("We couldn't open the secure login. Please try again.")
-        showErrorToast(toast, "Could not start the secure login", "No login window link was returned.")
-        return
-      }
-      popup.navigate?.(url)
-      refreshOnReturn.current = true
-      showSuccessToast(
         toast,
-        `Signing in to ${portal.label || portal.portalHost}`,
-        `Sign in + clear 2FA in the new window on ${selectedProfile?.name || "this profile"}'s behalf, then close it. Hamilton captures the session so it's reused next time.`,
-      )
+      })
+      refreshOnReturn.current = true
     } catch (err) {
-      popup.fail?.(err?.message || "Could not start the secure login.")
-      showErrorToast(toast, "Could not start the secure login", err?.message || "Please try again.")
+      showErrorToast(toast, "Could not open the official portal", err?.message || "Please try again.")
     } finally {
       setOpeningHost(null)
     }
@@ -209,10 +185,8 @@ export default function AdminPortalAssist() {
             Portal Assist — sign in for a user
           </CardTitle>
           <CardDescription>
-            Pick any profile and do their portal logins for them through Hamilton&rsquo;s secure
-            side-by-side window — for a deadline-pressed applicant who can&rsquo;t get signed in.
-            You act as admin on their behalf; Hamilton watches and learns each login so it&rsquo;s
-            reused next time. Nothing is submitted — this only signs in.
+            Pick a profile and open its official portals for a visible manual handoff. Controlled
+            beta does not run a server browser, capture logins, or submit anything on the user&rsquo;s behalf.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -283,7 +257,7 @@ export default function AdminPortalAssist() {
                     </p>
                   ) : (
                     <p className="mt-0.5 text-sm text-muted-foreground">
-                      {portals.length} portal{portals.length === 1 ? "" : "s"} · {readyCount} signed in ·{" "}
+                      {portals.length} portal{portals.length === 1 ? "" : "s"} · {readyCount} with saved access ·{" "}
                       <span className={pending.length ? "font-semibold text-amber-600" : ""}>
                         {pending.length} need{pending.length === 1 ? "s" : ""} login
                       </span>
@@ -306,15 +280,15 @@ export default function AdminPortalAssist() {
                       onClick={openNextLogin}
                       disabled={Boolean(openingHost)}
                       className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      title={`Open the secure login for ${pending[0]?.label || pending[0]?.portalHost}`}
+                      title={`Open the official portal for ${pending[0]?.label || pending[0]?.portalHost}`}
                     >
                       {openingHost ? <Loader2 className="h-4 w-4 animate-spin" /> : <PanelsTopLeft className="h-4 w-4" />}
-                      Open next login → {pending[0]?.label || pending[0]?.portalHost}
+                      Open next portal manually → {pending[0]?.label || pending[0]?.portalHost}
                     </button>
                   ) : (
                     !portalsQuery.isLoading && (
                       <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
-                        <CheckCircle2 className="h-4 w-4" /> All portals signed in
+                        <CheckCircle2 className="h-4 w-4" /> No portal login flagged
                       </span>
                     )
                   )}
@@ -322,8 +296,7 @@ export default function AdminPortalAssist() {
               </div>
               {pending.length > 1 && (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Browsers block opening every window at once, so this walks the {pending.length} remaining
-                  logins one at a time — sign in, close the window, and the next one is ready.
+                  Open the {pending.length} remaining portals one at a time and complete each login or required check manually.
                 </p>
               )}
 
@@ -331,8 +304,8 @@ export default function AdminPortalAssist() {
               <div className="mt-4 border-t border-border pt-3">
                 <p className="text-sm font-medium text-foreground">Launch any portal</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Not listed above? Paste any portal&rsquo;s login page and open it with Hamilton watching —
-                  he captures the session for {selectedProfile.name} so future logins are automatic.
+                  Not listed above? Paste the official login page and open it directly. Controlled beta
+                  does not capture or replay the session.
                 </p>
                 <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                   <input

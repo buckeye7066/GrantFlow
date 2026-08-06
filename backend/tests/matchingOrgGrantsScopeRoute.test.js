@@ -91,7 +91,7 @@ function createDb() {
     INSERT INTO organizations (id, name, state, city, zip)
     VALUES ('org-1', 'Community Ministries Inc', 'OH', 'Columbus', '43215');
     INSERT INTO profiles (id, display_name, primary_type, applicant_type, organization_id, user_id, status, state, zip, tags, interests, created_at, updated_at)
-    VALUES ('profile-josh', 'Josh Dasher', 'nonprofit', 'nonprofit', 'org-1', 'user-josh', 'active', 'OH', '43215', '["community"]', '["housing"]', '2026-07-01', '2026-07-01');
+    VALUES ('profile-josh', 'Demo Career Support Persona', 'nonprofit', 'nonprofit', 'org-1', 'user-josh', 'active', 'OH', '43215', '["community"]', '["housing"]', '2026-07-01', '2026-07-01');
     INSERT INTO profile_sections (profile_id, section_key, data)
     VALUES ('profile-josh', 'basic_information', '{"state":"OH","zip_code":"43215","profile_category":"nonprofit"}');
     INSERT INTO funding_opportunities (id, title, sponsor, description, deadline_type, amount_min, amount_max, keywords, categories)

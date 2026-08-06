@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
+import { DESIGNATED_PROFILES, DESIGNATED_PROFILES_SOURCE } from '../config/designatedProfiles.js'
 import { safeParseJSON } from './safeJson.js'
 import { attachDesignatedProfileOwner } from './profileOwnershipRepair.js'
 
@@ -14,6 +14,8 @@ export const DESIGNATED_PROFILE_IDS = new Set(
 export function isDesignatedProfileId(id) {
   return DESIGNATED_PROFILE_IDS.has(String(id || '').trim())
 }
+
+let warnedMissingPrivateRoster = false
 
 function loadSectionsFromDataFile(dataFile) {
   if (!dataFile) return null
@@ -160,6 +162,21 @@ async function _seedProfilesAsync(tx) {
 }
 
 export async function ensureDesignatedProfiles(db) {
+  if (DESIGNATED_PROFILES_SOURCE === 'disabled_missing_private_file') {
+    if (!warnedMissingPrivateRoster) {
+      warnedMissingPrivateRoster = true
+      console.warn(
+        '[ensureDesignatedProfiles] Skipping without database writes: deployed runtime has no private designated-profile roster.',
+      )
+    }
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'private_designated_profiles_unavailable',
+      profiles: 0,
+    }
+  }
+
   const isPostgres = db?.dialect === 'postgres'
   if (isPostgres) {
     await db.withTransaction(async (tx) => {
@@ -180,6 +197,13 @@ export async function ensureDesignatedProfiles(db) {
     } catch (e) {
       console.warn('[ensureDesignatedProfiles] attachDesignatedProfileOwner failed', profileId, e?.message || e)
     }
+  }
+
+  return {
+    ok: true,
+    skipped: false,
+    source: DESIGNATED_PROFILES_SOURCE,
+    profiles: DESIGNATED_PROFILES.length,
   }
 }
 

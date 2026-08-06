@@ -1,6 +1,6 @@
 /**
  * Owner autonomy tools shipped for the "Anya edits on her own" mission:
- *   owner.moderate_match        — promote/demote/dismiss/restore pipeline matches
+ *   owner.moderate_match        — canonical recompute/dismiss/restore pipeline matches
  *   owner.requeue_hamilton_task — re-kick blocked/failed Hamilton tasks
  *   owner.recrawl_weak_profile  — targeted coverage repair (seed + re-crawl)
  *   owner.propose_code_fix      — patch → workflow → PR (CI-gated auto-merge)
@@ -13,6 +13,7 @@ import Database from 'better-sqlite3'
 import { invokeTool, listToolMetadata } from '../services/anyaToolRegistry.js'
 import { findDismissal } from '../services/pipelineDismissals.js'
 import { ensureApplicationTask, getApplicationTask, _resetSchemaCache } from '../services/hamilton/applicationTaskStore.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
 // The recrawl tool leans on Robert's funding-trace bridge (live ProPublica web
 // lookups) and the crawler dispatcher — both mocked so these tests stay
@@ -38,7 +39,9 @@ vi.mock('../services/crawlerDispatcher.js', () => ({
 import { autoSeedTraceForProfile, autoSeedWeakestProfiles } from '../services/robert/robertFundingTraceBridge.js'
 import { createCrawlerJob } from '../services/crawlerJobCreation.js'
 
-const OWNER = 'buckeye7066@gmail.com'
+// Exercise the same canonical, fail-closed owner identity that the registry
+// resolves; never invent a second privileged test identity.
+const OWNER = ADMIN_EMAIL
 const NEW_TOOLS = [
   'owner.moderate_match',
   'owner.requeue_hamilton_task',
@@ -52,15 +55,26 @@ function createDb() {
     CREATE TABLE users (id TEXT PRIMARY KEY);
     CREATE TABLE profiles (
       id TEXT PRIMARY KEY, display_name TEXT, primary_type TEXT,
-      status TEXT DEFAULT 'active', created_by TEXT,
+      applicant_type TEXT, state TEXT, tags TEXT DEFAULT '[]', interests TEXT DEFAULT '[]',
+      organization_id TEXT, status TEXT DEFAULT 'active', created_by TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT
     );
+    CREATE TABLE profile_sections (
+      id TEXT PRIMARY KEY, profile_id TEXT, section_key TEXT, data TEXT
+    );
     CREATE TABLE funding_opportunities (
-      id TEXT PRIMARY KEY, title TEXT, source_url TEXT, sponsor TEXT, deadline TEXT
+      id TEXT PRIMARY KEY, title TEXT, source_url TEXT, application_url TEXT,
+      sponsor TEXT, description TEXT, deadline TEXT, deadline_type TEXT,
+      categories TEXT DEFAULT '[]', keywords TEXT DEFAULT '[]', eligibility_bullets TEXT DEFAULT '[]',
+      is_national INTEGER DEFAULT 0, state TEXT, opportunity_kind TEXT,
+      source TEXT, record_origin TEXT
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY, profile_id TEXT, funding_opportunity_id TEXT,
       title TEXT, status TEXT DEFAULT 'discovered', match_score INTEGER,
+      match_decision TEXT, match_explanation TEXT, match_reasons TEXT,
+      matched_needs TEXT, eligibility_status TEXT, ineligibility_reasons TEXT,
+      matcher_version TEXT, evaluated_at TEXT, match_confidence INTEGER,
       source_url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT
     );
     CREATE TABLE milestones (id TEXT PRIMARY KEY, grant_id TEXT);
@@ -72,8 +86,16 @@ function createDb() {
       tool_name TEXT, session_id TEXT, user_id TEXT, profile_id TEXT,
       parameters TEXT, success INTEGER, error_message TEXT, execution_time_ms INTEGER
     );
-    INSERT INTO profiles (id, display_name, primary_type) VALUES ('p1', 'Weak Profile', 'individual');
-    INSERT INTO funding_opportunities (id, title, source_url) VALUES ('opp1', 'Test Opportunity', 'https://example.org/g');
+    INSERT INTO profiles (id, display_name, primary_type, applicant_type, state, interests)
+      VALUES ('p1', 'Weak Profile', 'individual', 'individual', 'TN', '["housing"]');
+    INSERT INTO funding_opportunities (
+      id, title, source_url, application_url, sponsor, description, categories,
+      keywords, is_national, opportunity_kind, source, record_origin
+    ) VALUES (
+      'opp1', 'Housing Stability Grant', 'https://example.org/g', 'https://example.org/apply',
+      'Test Funder', 'Housing stability assistance for Tennessee residents', '["housing"]',
+      '["housing","tennessee"]', 1, 'direct', 'verified_test', 'curated_verified'
+    );
     INSERT INTO grants (id, profile_id, funding_opportunity_id, title, status, match_score, source_url)
       VALUES ('g1', 'p1', 'opp1', 'Test Opportunity', 'discovered', 62, 'https://example.org/g');
     INSERT INTO grants (id, profile_id, title, status, match_score)
@@ -139,7 +161,7 @@ describe('owner gate integrity for the new autonomy tools', () => {
 })
 
 describe('owner.moderate_match', () => {
-  it('promote raises the score (default 85) and demote lowers it, profile-scoped', async () => {
+  it('deprecated promote/demote aliases recompute one canonical result and ignore score overrides', async () => {
     const db = createDb()
     try {
       const { output: promoted } = await invokeTool(
@@ -147,16 +169,38 @@ describe('owner.moderate_match', () => {
         { profileId: 'p1', action: 'promote', grantId: 'g1' },
         ownerCtx(db),
       )
-      expect(promoted.previous_score).toBe(62)
-      expect(promoted.new_score).toBe(85)
-      expect(db.prepare('SELECT match_score FROM grants WHERE id = ?').get('g1').match_score).toBe(85)
+      expect(promoted).toMatchObject({
+        action: 'recompute',
+        deprecated_action: 'promote',
+        score_override_ignored: false,
+        previous_score: null,
+        rated: true,
+      })
+      expect(promoted.new_score).toBe(promoted.match_score)
+      expect(promoted.match_decision).toMatch(/^(ACCEPT|REVIEW|REJECT)$/)
+      expect(promoted.matcher_version).toBeTruthy()
+      const canonicalAfterPromote = db.prepare(`
+        SELECT match_score, match_decision, matcher_version FROM grants WHERE id = ?
+      `).get('g1')
+      expect(canonicalAfterPromote).toEqual({
+        match_score: promoted.match_score,
+        match_decision: promoted.match_decision,
+        matcher_version: promoted.matcher_version,
+      })
 
       const { output: demoted } = await invokeTool(
         'owner.moderate_match',
         { profileId: 'p1', action: 'demote', grantId: 'g1', score: 40 },
         ownerCtx(db),
       )
-      expect(demoted.new_score).toBe(40)
+      expect(demoted).toMatchObject({
+        action: 'recompute',
+        deprecated_action: 'demote',
+        score_override_ignored: true,
+        previous_score: null,
+        new_score: promoted.new_score,
+        match_decision: promoted.match_decision,
+      })
 
       // Cross-profile scoping: the grant is invisible to another profile id.
       await expect(
@@ -165,15 +209,48 @@ describe('owner.moderate_match', () => {
     } finally { db.close() }
   })
 
-  it('clamps scores to 0-100', async () => {
+  it('ignores even an out-of-range legacy score input instead of turning it into match truth', async () => {
     const db = createDb()
     try {
+      const { output: baseline } = await invokeTool(
+        'owner.moderate_match',
+        { profileId: 'p1', action: 'recompute', grantId: 'g1' },
+        ownerCtx(db),
+      )
       const { output } = await invokeTool(
         'owner.moderate_match',
         { profileId: 'p1', action: 'promote', grantId: 'g1', score: 250 },
         ownerCtx(db),
       )
-      expect(output.new_score).toBe(100)
+      expect(output.score_override_ignored).toBe(true)
+      expect(output.new_score).toBe(output.match_score)
+      expect(output.new_score).toBe(baseline.new_score)
+      expect(output.match_decision).toBe(baseline.match_decision)
+      expect(db.prepare('SELECT match_score FROM grants WHERE id = ?').get('g1').match_score)
+        .toBe(output.match_score)
+    } finally { db.close() }
+  })
+
+  it('clears the compatibility score and returns unrated when no profile/opportunity pair exists', async () => {
+    const db = createDb()
+    try {
+      const { output } = await invokeTool(
+        'owner.moderate_match',
+        { profileId: 'p1', action: 'recompute', grantId: 'g2', score: 99 },
+        ownerCtx(db),
+      )
+      expect(output).toMatchObject({
+        action: 'recompute',
+        rated: false,
+        previous_score: null,
+        new_score: null,
+        match_score: null,
+        match_decision: null,
+        score_override_ignored: true,
+        reason: 'canonical_profile_opportunity_pair_unavailable',
+      })
+      expect(db.prepare('SELECT match_score,match_decision FROM grants WHERE id = ?').get('g2'))
+        .toEqual({ match_score: null, match_decision: null })
     } finally { db.close() }
   })
 

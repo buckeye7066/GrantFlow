@@ -1,7 +1,7 @@
 // Lane ORDER is a claim about the profile, not a global constant.
 //
-// Measured read-only in prod 2026-08-02 on Anastasia White
-// (`c4a92724-9cee-416f-ba30-e91b9b5cd885`), a dual-enrolled high-school senior
+// Measured read-only in prod 2026-08-02 on Demo Tennessee STEM Student
+// (`00000000-0000-4000-8000-000000000001`), a dual-enrolled high-school senior
 // whose `education.intended_major` is Forensic Science and whose
 // `medical.disabilities` is literally `[]`:
 //
@@ -14,7 +14,7 @@
 // After: her 9 student-aid lanes hold ranks 1–9 and `pell_grant` is #1.
 // Fleet-wide across all 33 real prod profiles the SELECTED SET is byte-for-byte
 // unchanged (0 differences) — this promotes, it never suppresses. And it is not
-// anti-disease: Gilbert McCosh, a real disability profile, has his four
+// anti-disease: Demo Assistive Technology Persona, a real disability profile, has his four
 // condition-matched lanes rise to the top (autism_speaks 10 → 1).
 
 import test from 'node:test';
@@ -24,8 +24,8 @@ import { allSources } from '../sourceRegistry.js';
 import { STUDENT_AID_NEED_CATEGORIES } from '../../config/stageOfLifeEligibility.js';
 import { isDiseaseSpecificSource } from '../../config/sourceLanes.js';
 
-/** Anastasia's real thesis shape, trimmed to what the planner reads. */
-function anastasiaThesis(overrides = {}) {
+/** Demo Student's real thesis shape, trimmed to what the planner reads. */
+function demoStudentThesis(overrides = {}) {
   return {
     applicant_types: ['student', 'individual'],
     // Her REAL prod need list — 27 entries, `disability` among them.
@@ -51,7 +51,7 @@ function anastasiaThesis(overrides = {}) {
 const rank = (p, id) => p.selected_source_ids.indexOf(id) + 1;
 
 test('a declared student stage puts the student-aid lanes FIRST', () => {
-  const p = plan(anastasiaThesis());
+  const p = plan(demoStudentThesis());
   assert.ok(p.selected_source_ids.length > 40, 'the plan must still be broad');
   for (const id of ['pell_grant', 'fseog', 'studentaid_gov', 'federal_work_study']) {
     const r = rank(p, id);
@@ -66,7 +66,7 @@ test('a declared student stage puts the student-aid lanes FIRST', () => {
 });
 
 test('SELECTION is untouched — this ranks, it never suppresses', () => {
-  const thesis = anastasiaThesis();
+  const thesis = demoStudentThesis();
   const withFacts = plan(thesis);
   const withoutFacts = plan({ ...thesis, derived_facts: null });
   assert.deepEqual(
@@ -77,7 +77,7 @@ test('SELECTION is untouched — this ranks, it never suppresses', () => {
 });
 
 test('a profile that declares NOTHING gets the old plan, byte for byte', () => {
-  const thesis = anastasiaThesis({ derived_facts: null });
+  const thesis = demoStudentThesis({ derived_facts: null });
   const p = plan(thesis);
   // Pure priority_score order, descending, with source_id as the tiebreak.
   const byPriority = Object.fromEntries(allSources().map((s) => [s.source_id, s.priority_score ?? 0]));
@@ -114,7 +114,7 @@ test('topic affinity reads the CURATED keywords only — never need_categories',
   // interest "forensic science education programs" shares the token
   // `education` with a coarse need category. That is the #937 one-shared-word
   // floor, one level up.
-  const p = plan(anastasiaThesis({
+  const p = plan(demoStudentThesis({
     derived_facts: {
       topicalTerms: [{ term: 'forensic science education programs', evidence: 'programs_services.interests', recallSafe: false }],
       stageOfLife: null,
@@ -125,7 +125,7 @@ test('topic affinity reads the CURATED keywords only — never need_categories',
 });
 
 test('a catch-all lane is never promoted as a student-aid lane', () => {
-  const p = plan(anastasiaThesis());
+  const p = plan(demoStudentThesis());
   for (const id of ['findhelp_local_programs', 'usa_gov_local_governments', 'cof_locator']) {
     const d = p.source_decisions.find((x) => x.source_id === id);
     if (d?.selected) assert.notEqual(d.lane_tier, LANE_TIER.DECLARED_STAGE, `${id} is a '*' lane, not student aid`);
@@ -133,14 +133,14 @@ test('a catch-all lane is never promoted as a student-aid lane', () => {
 });
 
 test('an EXCLUDED source never carries a lane tier', () => {
-  const p = plan(anastasiaThesis());
+  const p = plan(demoStudentThesis());
   for (const d of p.source_decisions) {
     if (!d.selected) assert.equal(d.lane_tier, null, `${d.source_id} was excluded but carries a rank`);
   }
 });
 
 test('the ordering is deterministic across repeated plans', () => {
-  const thesis = anastasiaThesis();
+  const thesis = demoStudentThesis();
   assert.deepEqual(plan(thesis).selected_source_ids, plan(thesis).selected_source_ids);
 });
 
@@ -156,14 +156,14 @@ test('every STUDENT_AID_NEED_CATEGORY is declared by a real registry source', ()
 //
 // Measured read-only in prod 2026-08-02 across all 33 real profiles: 438
 // disease-lane selections, 19 apiece even for profiles whose declared health
-// vocabulary is EMPTY. Anastasia White's disability is REAL
+// vocabulary is EMPTY. Demo Tennessee STEM Student's disability is REAL
 // (`demographics.disability_status = "Has disability"`,
 // `government_assistance.ssdi_recipient_self = true`) — but her own medical
 // sections say "no chronic illnesses or disabilities noted", so it has NO NAMED
 // CONDITION, and an unnamed disability is not evidence for every named
 // condition in the registry.
 
-const withHealth = (terms) => anastasiaThesis({ declared_health_terms: terms });
+const withHealth = (terms) => demoStudentThesis({ declared_health_terms: terms });
 
 test('an UNNAMED disability does not fire the named-condition fleet', () => {
   // `disability` is the only health term she carries. It is a category of
@@ -195,7 +195,7 @@ test('a NAMED condition keeps its lane, from conditions OR support', () => {
   const kidney = plan(withHealth(['chronic kidney disease']));
   assert.ok(kidney.selected_source_ids.includes('american_kidney_fund'));
   assert.ok(!kidney.selected_source_ids.includes('autism_speaks_family_support'));
-  // Dr. John Robert White carries `arthritis` in health_SUPPORT, not conditions.
+  // Demo Health Education Persona carries `arthritis` in health_SUPPORT, not conditions.
   const arthritis = plan(withHealth(['arthritis', 'transportation']));
   assert.ok(arthritis.selected_source_ids.includes('arthritis_foundation_help'));
   assert.ok(arthritis.selected_source_ids.includes('mercy_medical_angels'));
@@ -204,7 +204,7 @@ test('a NAMED condition keeps its lane, from conditions OR support', () => {
 test('MISSING is NEUTRAL — a thesis that never carried the fact is not gated', () => {
   // A hand-built or cross-profile thesis supplies no health terms at all. That
   // is silence, not "declares nothing", so every lane is selected as before.
-  const absent = plan(anastasiaThesis());
+  const absent = plan(demoStudentThesis());
   assert.ok(absent.selected_source_ids.includes('american_kidney_fund'));
   const empty = plan(withHealth([]));
   assert.ok(!empty.selected_source_ids.includes('american_kidney_fund'));
@@ -219,7 +219,7 @@ test('the exclusion is RECORDED and explainable', () => {
 
 test('ONLY disease_specific lanes are gated', () => {
   const gated = plan(withHealth([]));
-  const ungated = plan(anastasiaThesis());
+  const ungated = plan(demoStudentThesis());
   const diff = ungated.selected_source_ids.filter((id) => !gated.selected_source_ids.includes(id));
   for (const id of diff) {
     assert.ok(isDiseaseSpecificSource(id), `${id} is not a disease lane and must not be gated`);
@@ -227,14 +227,14 @@ test('ONLY disease_specific lanes are gated', () => {
 });
 
 test('the condition vocabulary is the CURATED keywords, never need_categories', () => {
-  // Gilbert McCosh's real declared term. `need_categories` on
+  // Demo Assistive Technology Persona's real declared term. `need_categories` on
   // american_kidney_fund / amputee_coalition / arthritis_foundation is
   // `disability`, which sits whole inside "cognitive disability (f70)" — so
   // reading need_categories here would hand a cognitive-disability profile the
   // kidney fund and the amputee coalition. Their curated KEYWORDS say
   // "chronic kidney disease"/"dialysis" and "amputee"/"prosthesis", which is
   // what a condition lane actually serves. (#937, one level up.)
-  const p = plan(anastasiaThesis({ declared_health_terms: ['cognitive disability (f70)'] }));
+  const p = plan(demoStudentThesis({ declared_health_terms: ['cognitive disability (f70)'] }));
   const sel = new Set(p.selected_source_ids);
   for (const id of ['american_kidney_fund', 'amputee_coalition_resources', 'arthritis_foundation_help', 'reeve_foundation_paralysis']) {
     assert.ok(!sel.has(id), `${id} must not be claimed by a need_categories collision`);

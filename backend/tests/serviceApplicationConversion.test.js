@@ -54,7 +54,7 @@ describe('convertApplicationToProfile', () => {
     const db = makeDb()
     const appId = insertApplication(db, {
       fullName: 'Anita Mayes',
-      email: 'nitaboatdrink@hotmail.com',
+      email: 'demo.service-applicant@example.invalid',
       phone: '8594200924',
     })
     const app = db.prepare('SELECT * FROM service_applications WHERE id = ?').get(appId)
@@ -74,7 +74,7 @@ describe('convertApplicationToProfile', () => {
       .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information'`)
       .get(result.profileId)
     const data = JSON.parse(section.data)
-    expect(data.email).toBe('nitaboatdrink@hotmail.com')
+    expect(data.email).toBe('demo.service-applicant@example.invalid')
     expect(data.phone).toBe('8594200924')
     expect(data.first_name).toBe('Anita')
     expect(data.last_name).toBe('Mayes')
@@ -85,7 +85,7 @@ describe('convertApplicationToProfile', () => {
       .prepare('SELECT email FROM profile_emails WHERE profile_id = ?')
       .all(result.profileId)
       .map((r) => r.email)
-    expect(emails).toContain('nitaboatdrink@hotmail.com')
+    expect(emails).toContain('demo.service-applicant@example.invalid')
 
     // Application row is linked + converted.
     const updated = db.prepare('SELECT * FROM service_applications WHERE id = ?').get(appId)
@@ -102,8 +102,8 @@ describe('convertApplicationToProfile', () => {
 
   it('links to the single existing profile matching by email instead of creating a duplicate', async () => {
     const db = makeDb()
-    const existing = insertProfile(db, { displayName: 'Anita Mayes', email: 'nitaboatdrink@hotmail.com' })
-    const appId = insertApplication(db, { fullName: 'Anita Mayes', email: 'nitaboatdrink@hotmail.com' })
+    const existing = insertProfile(db, { displayName: 'Anita Mayes', email: 'demo.service-applicant@example.invalid' })
+    const appId = insertApplication(db, { fullName: 'Anita Mayes', email: 'demo.service-applicant@example.invalid' })
     const app = db.prepare('SELECT * FROM service_applications WHERE id = ?').get(appId)
 
     const result = await convertApplicationToProfile(db, app)
@@ -119,9 +119,9 @@ describe('convertApplicationToProfile', () => {
 
   it('reports ambiguity (and changes nothing) when multiple profiles match', async () => {
     const db = makeDb()
-    insertProfile(db, { displayName: 'Anita Mayes', email: 'nitaboatdrink@hotmail.com' })
-    insertProfile(db, { displayName: 'Anita M.', email: 'nitaboatdrink@hotmail.com' })
-    const appId = insertApplication(db, { fullName: 'Anita Mayes', email: 'nitaboatdrink@hotmail.com' })
+    insertProfile(db, { displayName: 'Anita Mayes', email: 'demo.service-applicant@example.invalid' })
+    insertProfile(db, { displayName: 'Anita M.', email: 'demo.service-applicant@example.invalid' })
+    const appId = insertApplication(db, { fullName: 'Anita Mayes', email: 'demo.service-applicant@example.invalid' })
     const app = db.prepare('SELECT * FROM service_applications WHERE id = ?').get(appId)
 
     const result = await convertApplicationToProfile(db, app)
@@ -141,7 +141,7 @@ describe('reconcileConvertedApplications (boot-sweep net)', () => {
     const db = makeDb()
     const appId = insertApplication(db, {
       fullName: 'Anita Mayes',
-      email: 'nitaboatdrink@hotmail.com',
+      email: 'demo.service-applicant@example.invalid',
       status: 'converted',
       profileId: null,
     })
@@ -178,10 +178,10 @@ describe('reconcileConvertedApplications (boot-sweep net)', () => {
 
   it('links a signup-type row to its single name-matched profile', async () => {
     const db = makeDb()
-    const profileId = insertProfile(db, { displayName: 'Liubov Samoylenko' })
+    const profileId = insertProfile(db, { displayName: 'Demo Senior Medical Persona' })
     db.prepare(
       `INSERT INTO service_applications (id, type, full_name, email, status, profile_id)
-       VALUES ('sg-2', 'signup', 'Liubov Samoylenko', 'owner@example.com', 'converted', NULL)`,
+       VALUES ('sg-2', 'signup', 'Demo Senior Medical Persona', 'owner@example.com', 'converted', NULL)`,
     ).run()
 
     const result = await reconcileConvertedApplications(db)

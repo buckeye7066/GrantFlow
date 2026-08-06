@@ -6,6 +6,7 @@ import {
   canonicalizeOpportunityList,
 } from '../../backend/services/matching/resultEnricher.js'
 import { evaluateProfileSpecificGate } from '../../backend/services/matching/profileSpecificGate.js'
+import { computeMatchDecision } from '../../backend/services/matchEngine.js'
 
 const studentProfile = {
   profile: {
@@ -95,7 +96,7 @@ test('profile-specific gate keeps a real student-aid crawler row without requiri
   assert.notEqual(result.opportunity.match_decision, 'REJECT')
 })
 
-test('profile-specific gate rejects Boots to Business for non-military startup or employment profiles', () => {
+test('canonical writer rejects Boots to Business while display preserves its persisted decision', () => {
   const robertLikeProfile = {
     profile: {
       id: 'robert-like',
@@ -104,7 +105,7 @@ test('profile-specific gate rejects Boots to Business for non-military startup o
       needs: JSON.stringify(['education', 'employment']),
     },
     sections: {
-      basic_information: { state: 'TN', full_name: 'Robert White' },
+      basic_information: { state: 'TN', full_name: 'Demo College Student Persona' },
       education: { current_level: 'college', field_of_study: 'paramedicine' },
       military_service: {
         is_veteran: 'no',
@@ -135,8 +136,18 @@ test('profile-specific gate rejects Boots to Business for non-military startup o
     `Unexpected Boots rejection rule: ${gate.ruleId}`,
   )
 
+  const currentDecision = computeMatchDecision(robertLikeProfile, boots, {
+    profileSections: robertLikeProfile.sections,
+    signals: robertLikeProfile.signals,
+  })
+  assert.equal(currentDecision.decision, 'REJECT')
+
+  // The row deliberately carries a persisted ACCEPT fixture. A SELECT/display
+  // path must not run the diagnostic gate as a hidden second eligibility trial;
+  // the catalog rescore writer owns replacing this stale artifact.
   const result = canonicalResultForProfile(robertLikeProfile, boots)
-  assert.equal(result.display, false)
+  assert.equal(result.display, true)
+  assert.equal(result.opportunity.match_decision, 'ACCEPT')
 })
 
 test('profile-specific gate keeps Boots to Business for a real veteran startup profile', () => {

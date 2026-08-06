@@ -5,7 +5,7 @@
 #   ./scripts/deploy-production.sh
 #
 # Prerequisites:
-#   - Node 20+ installed (nvm recommended)
+#   - Node 20.20.2 installed (see .nvmrc)
 #   - Nginx configured (nginx/grantflow.conf symlinked in sites-enabled)
 #   - systemd service installed (systemd/grantflow-backend.service)
 #   - /opt/grantflow/.env.production populated from .env.production.example

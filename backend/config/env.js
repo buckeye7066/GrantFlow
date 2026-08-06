@@ -46,6 +46,35 @@ function containsCorsWildcard(origins) {
   return Array.isArray(origins) && origins.some((o) => String(o || '').trim() === '*')
 }
 
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim())
+}
+
+function normalizedMode(value) {
+  return String(value || 'development').trim().toLowerCase()
+}
+
+function isDeployedRuntime(env, mode = env?.NODE_ENV) {
+  return normalizedMode(mode) === 'production'
+    || Boolean(String(env?.RAILWAY_ENVIRONMENT_ID || '').trim())
+    || Boolean(String(env?.RAILWAY_DEPLOYMENT_ID || '').trim())
+}
+
+function isDeployableEmail(value) {
+  if (!looksLikeEmail(value)) return false
+  const domain = String(value).trim().toLowerCase().split('@').at(-1)
+  return !(
+    domain === 'example.com'
+    || domain === 'example.net'
+    || domain === 'example.org'
+    || domain?.endsWith('.example')
+    || domain?.endsWith('.invalid')
+    || domain?.endsWith('.local')
+    || domain?.endsWith('.localhost')
+    || domain?.endsWith('.test')
+  )
+}
+
 const EnvSchema = z
   .object({
     NODE_ENV: z.string().optional().default('development'),
@@ -84,6 +113,10 @@ const EnvSchema = z
     ANYA_API_KEY: z.string().optional(),
     BULK_POPULATE_KEY: z.string().optional(),
     ALLOW_LEGACY_PROFILE_TOKEN: z.string().optional(),
+    ADMIN_EMAIL: z.string().optional(),
+    ADMIN_EMAILS: z.string().optional(),
+    AGENT_CONTROL_ADMIN_EMAIL: z.string().optional(),
+    HAMILTON_ADMIN_EMAIL: z.string().optional(),
 
     // Integrations
     OPENAI_API_KEY: z.string().optional(),
@@ -120,8 +153,8 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
   const env = parsed.data
   const warnings = []
 
-  const effectiveMode = String(mode || env.NODE_ENV || 'development')
-  const isProd = effectiveMode === 'production'
+  const effectiveMode = normalizedMode(mode || env.NODE_ENV)
+  const isProd = isDeployedRuntime(env, effectiveMode)
 
   // Normalize provider selection logic: DB_PROVIDER/DB_DIALECT or DATABASE_URL implies postgres
   const providerRaw = String(env.DB_PROVIDER || env.DB_DIALECT || '').trim().toLowerCase()
@@ -140,6 +173,35 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
   }
 
   if (isProd) {
+    const adminEmail = normalizeMaybeSecret(env.ADMIN_EMAIL)
+    if (!adminEmail || !isDeployableEmail(adminEmail)) {
+      return {
+        ok: false,
+        issues: ['ADMIN_EMAIL is required in deployed runtimes and must be a deliverable, non-fixture email address'],
+        env: null,
+        warnings: [],
+      }
+    }
+    const invalidAdditionalAdmins = splitCsv(env.ADMIN_EMAILS).filter(value => !isDeployableEmail(value))
+    if (invalidAdditionalAdmins.length > 0) {
+      return {
+        ok: false,
+        issues: ['ADMIN_EMAILS contains an invalid or fixture email address'],
+        env: null,
+        warnings: [],
+      }
+    }
+    for (const name of ['AGENT_CONTROL_ADMIN_EMAIL', 'HAMILTON_ADMIN_EMAIL']) {
+      const value = normalizeMaybeSecret(env[name])
+      if (value && !isDeployableEmail(value)) {
+        return {
+          ok: false,
+          issues: [`${name} must be a deliverable, non-fixture email address when configured`],
+          env: null,
+          warnings: [],
+        }
+      }
+    }
     const jwtSecret = normalizeMaybeSecret(env.AUTH_JWT_SECRET) || normalizeMaybeSecret(env.JWT_SECRET)
     if (!jwtSecret) {
       return {
@@ -225,6 +287,10 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
     env: {
       ...env,
       NODE_ENV: effectiveMode,
+      ADMIN_EMAIL: normalizeMaybeSecret(env.ADMIN_EMAIL)?.toLowerCase() || null,
+      ADMIN_EMAILS: splitCsv(env.ADMIN_EMAILS).map(value => value.toLowerCase()).join(','),
+      AGENT_CONTROL_ADMIN_EMAIL: normalizeMaybeSecret(env.AGENT_CONTROL_ADMIN_EMAIL)?.toLowerCase() || null,
+      HAMILTON_ADMIN_EMAIL: normalizeMaybeSecret(env.HAMILTON_ADMIN_EMAIL)?.toLowerCase() || null,
       isProd,
       dbProvider: provider,
       corsOrigins,
@@ -238,7 +304,8 @@ export function assertEnv({ mode } = {}) {
   if (!result.ok) {
     console.error('[env] Invalid environment configuration:')
     result.issues.forEach((issue) => console.error(`- ${issue}`))
-    if (String(mode || process.env.NODE_ENV) === 'production') {
+    const deployed = isDeployedRuntime(process.env, mode || process.env.NODE_ENV)
+    if (deployed) {
       process.exit(1)
     }
     // Return issues in warnings so callers can programmatically surface them
@@ -256,7 +323,7 @@ export function assertEnv({ mode } = {}) {
 // NOTE: This must never generate random secrets.
 export function getJwtSecretOrThrow(env = {}) {
   const secret = normalizeMaybeSecret(env.AUTH_JWT_SECRET) || normalizeMaybeSecret(env.JWT_SECRET)
-  const isProd = Boolean(env.isProd) || String(env.NODE_ENV || '').toLowerCase() === 'production'
+  const isProd = Boolean(env.isProd) || normalizedMode(env.NODE_ENV) === 'production'
   if (!secret) {
     // Unit tests and local dev shouldn't require configuring secrets.
     // IMPORTANT: This must never be random; tests require deterministic behavior.
@@ -278,4 +345,3 @@ export function getJwtSecretOrThrow(env = {}) {
 
   return secret
 }
-

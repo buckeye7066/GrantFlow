@@ -5,8 +5,8 @@
  * This script intentionally checks only public/status-style signals and never
  * reads secret config. It proves the local branch is clean/pushed (or, with
  * --target-branch, that local HEAD matches that remote branch), current
- * production surfaces are green, and the live backend reports the exact commit
- * being certified.
+ * production surfaces are green, and both the Vercel frontend artifact and the
+ * Railway backend report the exact commit being certified.
  * Contract: current production surfaces are green before this proof passes.
  */
 
@@ -225,6 +225,30 @@ async function main() {
   })
 
   const productionBaseUrl = normalizeBaseUrl(PRODUCTION_URL)
+  const frontendVersionUrl = `${productionBaseUrl}/deployment-version.json`
+  let frontendVersion = null
+  try {
+    frontendVersion = await fetchJson(frontendVersionUrl)
+  } catch (error) {
+    frontendVersion = { ok: false, status: null, fetch_error: error?.message || String(error) }
+  }
+  const frontendCommit = frontendVersion?.data?.commit || null
+  addAsync(
+    checks,
+    'Vercel frontend commit matches certified branch',
+    `GET ${frontendVersionUrl}`,
+    frontendVersion.ok
+      && frontendVersion?.data?.contract === 'grantflow-frontend-deployment-version-v1'
+      && shaMatches(expectedHead, frontendCommit),
+    {
+      expected_head: expectedHead || null,
+      frontend_commit: frontendCommit,
+      source: frontendVersion?.data?.source || null,
+      status: frontendVersion?.status ?? null,
+      error: frontendVersion?.fetch_error || frontendVersion?.parse_error || null,
+    },
+  )
+
   const liveVersionUrl = `${productionBaseUrl}/api/version`
   let liveVersion = null
   try {
@@ -233,7 +257,7 @@ async function main() {
     liveVersion = { ok: false, status: null, fetch_error: error?.message || String(error) }
   }
   const liveCommit = liveVersion?.data?.commit || liveVersion?.data?.build?.commit_sha || null
-  addAsync(checks, 'live backend commit matches certified branch', `GET ${liveVersionUrl}`, liveVersion.ok && shaMatches(expectedHead, liveCommit), {
+  addAsync(checks, 'Railway backend commit matches certified branch', `GET ${liveVersionUrl}`, liveVersion.ok && shaMatches(expectedHead, liveCommit), {
     expected_head: expectedHead || null,
     live_commit: liveCommit || null,
     branch: liveVersion?.data?.branch || null,
@@ -248,8 +272,8 @@ async function main() {
     ok: failures.length === 0,
     generated_at: new Date().toISOString(),
     mode: TARGET_BRANCH
-      ? `release-readiness status check; verifies clean local tree/local HEAD matches origin/${TARGET_BRANCH}, current production health, and live backend commit; no secrets read`
-      : 'release-readiness status check; verifies clean local tree/current branch pushed, current production health, and live backend commit; no secrets read',
+      ? `release-readiness status check; verifies clean local tree/local HEAD matches origin/${TARGET_BRANCH}, current production health, and exact Vercel frontend/Railway backend commits; no secrets read`
+      : 'release-readiness status check; verifies clean local tree/current branch pushed, current production health, and exact Vercel frontend/Railway backend commits; no secrets read',
     checks,
     failures,
   }

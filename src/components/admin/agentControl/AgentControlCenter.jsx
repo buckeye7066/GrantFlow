@@ -15,7 +15,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import agentControlApi from '@/api/agentControl'
-import { isAgentControlAdminEmail, AGENT_CONTROL_ADMIN_EMAIL } from '../../../../shared/adminEmail.js'
 import { useAuthStore } from '@/stores/authStore'
 import AgentControlAgentCard from './AgentControlAgentCard.jsx'
 import AnyaAutonomyToggle from './AnyaAutonomyToggle.jsx'
@@ -37,16 +36,17 @@ const POLL_MS = 7_000
 /**
  * AgentControlCenter
  *
- * Admin-only block at the top of Mission Control. Lets the canonical
- * operator (buckeye7066@gmail.com) start the full cycle, pick a subset
+ * Operator-only block at the top of Mission Control. The server derives the
+ * `can_control_agents` capability from trusted DB context before this client
+ * loads status or controls. An eligible operator can start the full cycle, pick a subset
  * of agents, pause/resume/stop/emergency-stop, and see per-agent status
  * + live events. Non-admin callers get a friendly hidden notice — the
  * backend rejects every request with 403 anyway.
  */
 export default function AgentControlCenter() {
   const user = useAuthStore((state) => state.user)
-  const userEmail = (user?.email || user?.primary_email || '').trim().toLowerCase()
-  const isOperator = isAgentControlAdminEmail(userEmail)
+  const isDbAdmin = user?.is_admin === true || user?.is_admin === 1
+  const [canControlAgents, setCanControlAgents] = useState(null)
 
   const [status, setStatus] = useState(null)
   const [activeRun, setActiveRun] = useState(null)
@@ -70,8 +70,25 @@ export default function AgentControlCenter() {
   })
   const inFlight = useRef(false)
 
+  useEffect(() => {
+    let cancelled = false
+    setCanControlAgents(null)
+    if (!isDbAdmin) {
+      setCanControlAgents(false)
+      return () => { cancelled = true }
+    }
+    agentControlApi.capability()
+      .then((result) => {
+        if (!cancelled) setCanControlAgents(result?.can_control_agents === true)
+      })
+      .catch(() => {
+        if (!cancelled) setCanControlAgents(false)
+      })
+    return () => { cancelled = true }
+  }, [isDbAdmin, user?.id, user?.userId])
+
   const fetchStatus = useCallback(async () => {
-    if (!isOperator) return
+    if (canControlAgents !== true) return
     if (inFlight.current) return
     inFlight.current = true
     setRefreshing(true)
@@ -95,18 +112,18 @@ export default function AgentControlCenter() {
       setRefreshing(false)
       inFlight.current = false
     }
-  }, [isOperator])
+  }, [canControlAgents])
 
   useEffect(() => { fetchStatus() }, [fetchStatus])
 
   useEffect(() => {
-    if (!isOperator) return undefined
+    if (canControlAgents !== true) return undefined
     const id = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       fetchStatus()
     }, POLL_MS)
     return () => clearInterval(id)
-  }, [isOperator, fetchStatus])
+  }, [canControlAgents, fetchStatus])
 
   const selectedAgents = useMemo(
     () => ALL_AGENTS.filter((a) => agentToggles[a]),
@@ -150,18 +167,19 @@ export default function AgentControlCenter() {
     safeAction('emergency_stop', () => agentControlApi.emergencyStop(activeRun.id, 'admin emergency stop'))
   }
 
-  if (!isOperator) {
+  if (canControlAgents !== true) {
     return (
       <Card className="border-amber-200 bg-amber-50 dark:border-amber-900/30 dark:bg-amber-900/10">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-amber-900 dark:text-amber-200">
             <ShieldCheck className="h-5 w-5" />
-            Agent Control Center (operator only)
+            Agent Control Center {canControlAgents === null ? '(checking access)' : '(operator only)'}
           </CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-amber-900 dark:text-amber-200">
-          Start / stop / pause / resume / emergency-stop controls are restricted to{' '}
-          <span className="font-mono">{AGENT_CONTROL_ADMIN_EMAIL}</span>. You can still see telemetry below.
+          {canControlAgents === null
+            ? 'Checking the server-issued Agent Control capability…'
+            : 'These controls require the designated, DB-recognized operator. Other administrators retain their normal admin tools.'}
         </CardContent>
       </Card>
     )
@@ -186,8 +204,7 @@ export default function AgentControlCenter() {
               Agent Control Center
             </CardTitle>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              Start, stop, pause, resume, and monitor the entire agent process. Only{' '}
-              <span className="font-mono">{AGENT_CONTROL_ADMIN_EMAIL}</span> can run these controls.
+              Start, stop, pause, resume, and monitor the entire agent process. The server verifies administrator authority for every action.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -351,4 +368,3 @@ export default function AgentControlCenter() {
     </Card>
   )
 }
-

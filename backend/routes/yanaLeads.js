@@ -37,7 +37,7 @@ router.post('/import', async (req, res) => {
   }
 })
 
-// Seed the owner's own four addresses as the first leads (idempotent).
+// Seed explicitly configured owner addresses as leads (idempotent).
 router.post('/seed-owner', async (req, res) => {
   if (!requireAdmin(req, res)) return
   try {

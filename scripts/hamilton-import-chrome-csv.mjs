@@ -10,13 +10,14 @@
  *
  * Usage (PowerShell):
  *
- *   $env:GRANTFLOW_API = "https://grantflow.up.railway.app"     # default
- *   $env:GRANTFLOW_ADMIN_TOKEN = "gf-admin-2026-"               # ADMIN_TOKEN
- *   node scripts/hamilton-import-chrome-csv.mjs --csv "C:\Users\firer\OneDrive\Documents\Chrome Passwords.csv" --profile-id <uuid>
+ *   $env:GRANTFLOW_API = "https://your-grantflow-backend.example.invalid"
+ *   $env:GRANTFLOW_ADMIN_TOKEN = "<ADMIN_TOKEN>"
+ *   node scripts/hamilton-import-chrome-csv.mjs --csv "C:\Users\Example\Documents\Chrome Passwords.csv" --profile-id <uuid>
  *
  * If you already know the user behind a profile, this script also accepts a
  * `--profile-slug <slug>` for the well-known designated profiles (e.g.
- * "anastasia"). It looks the slug up via /api/profiles?primary_email=...
+ * "demo-tennessee-stem-student"). It looks the slug up via
+ * /api/profiles?primary_email=...
  * with the admin token.
  *
  * The CSV is sent over HTTPS, encrypted at rest by the server, and the
@@ -28,12 +29,16 @@ import path from 'node:path'
 import process from 'node:process'
 
 const args = parseArgs(process.argv.slice(2))
-const API = (args['api'] || process.env.GRANTFLOW_API || 'https://grantflow.up.railway.app').replace(/\/+$/, '')
+const API = String(args['api'] || process.env.GRANTFLOW_API || '').trim().replace(/\/+$/, '')
 const TOKEN = args['token'] || process.env.GRANTFLOW_ADMIN_TOKEN || process.env.ADMIN_TOKEN
 const CSV_PATH = args['csv']
 const PROFILE_ID = args['profile-id']
 const SOURCE = args['source'] || 'Chrome'
 
+if (!API) {
+  console.error('error: GRANTFLOW_API (or --api) is required; this mutating script has no deployment default')
+  process.exit(2)
+}
 if (!TOKEN) {
   console.error('error: GRANTFLOW_ADMIN_TOKEN (or ADMIN_TOKEN) env var is required')
   process.exit(2)

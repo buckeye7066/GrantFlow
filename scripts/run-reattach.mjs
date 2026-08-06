@@ -13,9 +13,9 @@ const scriptPath = join(__dirname, 'reattach-users-simple.mjs');
 
 console.log('Starting reattach script...\n');
 
-const child = spawn('node', [scriptPath], {
+const child = spawn(process.execPath, [scriptPath, ...process.argv.slice(2)], {
   stdio: 'inherit',
-  shell: true
+  shell: false
 });
 
 child.on('close', (code) => {

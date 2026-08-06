@@ -407,6 +407,10 @@ async function submitHamiltonTask(req, res, { userId }) {
   const scope = { isAdmin: !!req.ctx?.isAdmin, userId: String(userId), taskId, limit: 1 }
   const [task] = await fetchHamiltonApplications(req.db, scope)
   if (!task) return res.status(404).json({ error: 'Not found' })
+  // A repeated tracker click must not rewrite the timestamp or reactivate a
+  // receipt-bound proof lifecycle. The scoped current row is already the
+  // canonical response shape, so this is an honest idempotent no-op.
+  if (task.status === 'submitted') return res.json(task)
 
   const now = new Date().toISOString()
   await updateApplicationTask(req.db, taskId, { status: 'submitted', submittedAt: now })
@@ -460,6 +464,9 @@ router.post('/:id/submit', async (req, res) => {
     return res.json(mapRow(updated))
   } catch (error) {
     routeLogger.error('[grant-applications] submit error:', error)
+    if (error?.code === 'manual_submission_receipt_active') {
+      return res.status(409).json({ error: error.code, message: error.message })
+    }
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

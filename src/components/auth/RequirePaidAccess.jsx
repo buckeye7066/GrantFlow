@@ -1,17 +1,17 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 
 import { useAuthStore } from '@/stores/authStore'
 import { accessGateApi } from '@/api/accessGate'
 
 /**
- * Wraps a route element. Until `/api/access-gate/status` confirms the
- * user is authorized (paid, waived, or admin), the user is redirected
+ * Wraps a route element. Until `/api/access-gate/status` confirms that the
+ * server authorizes the user (paid, waived, or admin), the user is redirected
  * to `/PricingRequired?profile_id=<active>`.
  *
- * Admin users always bypass. Anonymous users fall through to the
- * existing auth redirect (this component does not handle login redirect
- * — `LayoutRoutes` already does that upstream).
+ * No browser-side role or email claim can bypass this check. Anonymous users
+ * fall through to the existing auth redirect (this component does not handle
+ * login redirect — `LayoutRoutes` already does that upstream).
  */
 export function RequirePaidAccess({ children, fallback = null }) {
   const location = useLocation()
@@ -27,31 +27,56 @@ export function RequirePaidAccess({ children, fallback = null }) {
     return null
   }, [user, profiles])
 
-  const [state, setState] = useState({ status: 'checking', payload: null })
+  const [retryAttempt, setRetryAttempt] = useState(0)
+  const identityKey = user?.id || user?.userId || user?.user_id || (user ? 'authenticated' : 'anonymous')
+  const requestKey = `${identityKey}:${profileId || 'no-profile'}:${location.pathname}:${retryAttempt}`
+  const [state, setState] = useState({ status: 'checking', payload: null, requestKey: null })
 
   useEffect(() => {
     let cancelled = false
     if (!user) {
-      setState({ status: 'anonymous', payload: null })
+      setState({ status: 'anonymous', payload: null, requestKey })
       return () => { cancelled = true }
     }
-    if (user.is_admin || isConfiguredAdminEmail(user.email)) {
-      setState({ status: 'allowed', payload: { is_admin: true } })
-      return () => { cancelled = true }
-    }
+
+    setState({ status: 'checking', payload: null, requestKey })
     accessGateApi
       .status(profileId)
       .then((r) => {
         if (cancelled) return
-        if (r?.access_granted) setState({ status: 'allowed', payload: r })
-        else setState({ status: 'blocked', payload: r })
+        if (r?.ok !== true || r?.authenticated !== true) {
+          setState({ status: 'error', payload: null, requestKey })
+        } else if (r.access_granted === true) {
+          setState({ status: 'allowed', payload: r, requestKey })
+        } else {
+          setState({ status: 'blocked', payload: r, requestKey })
+        }
       })
-      .catch(() => !cancelled && setState({ status: 'allowed', payload: { degraded: true } }))
+      .catch(() => {
+        if (!cancelled) setState({ status: 'error', payload: null, requestKey })
+      })
     return () => { cancelled = true }
-  }, [user, profileId, location.pathname])
+  }, [user, profileId, location.pathname, requestKey])
 
-  if (state.status === 'checking') return fallback
+  if (state.requestKey !== requestKey || state.status === 'checking') return fallback
   if (state.status === 'anonymous') return null // upstream LayoutRoutes handles unauth redirect
+  if (state.status === 'error') {
+    return (
+      <div className="mx-auto max-w-lg rounded-lg border border-amber-300 bg-amber-50 p-6 text-slate-900" role="alert">
+        <h2 className="text-lg font-semibold">We couldn’t verify your access</h2>
+        <p className="mt-2 text-sm">
+          GrantFlow is keeping this workspace locked until the server confirms your access. Check your connection and try again.
+        </p>
+        <button
+          type="button"
+          className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2"
+          onClick={() => setRetryAttempt((attempt) => attempt + 1)}
+        >
+          Try again
+        </button>
+      </div>
+    )
+  }
   if (state.status === 'blocked') {
     const target = profileId
       ? `/PricingRequired?profile_id=${encodeURIComponent(profileId)}`
@@ -59,13 +84,6 @@ export function RequirePaidAccess({ children, fallback = null }) {
     return <Navigate to={target} replace state={{ from: location }} />
   }
   return children
-}
-
-function isConfiguredAdminEmail(email) {
-  if (!email) return false
-  // Match the server-side default. The server-side env override is the
-  // source of truth; this is just an early-exit hint for the frontend.
-  return String(email).toLowerCase().trim() === 'buckeye7066@gmail.com'
 }
 
 export default RequirePaidAccess

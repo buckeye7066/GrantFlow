@@ -2,7 +2,7 @@
  * Admin Agent Control Center orchestrator tests.
  *
  * Covers:
- *   - admin gating (only buckeye7066@gmail.com can start)
+ *   - admin gating (only a canonical-context-authorized operator can start)
  *   - run creation: full_cycle / selected_agents / *_only
  *   - ordered step plan (sam preflight → robert → yana → john → hamilton → sam postflight)
  *   - graceful_stop / pause / resume / cancel / emergency_stop semantics
@@ -26,6 +26,7 @@ import {
   executeRun,
   getControlCenterStatus,
   getCanonicalAdminEmail,
+  authorizeControlCenterUser,
   isControlCenterAdmin,
 } from '../../backend/services/agentControl/agentControlOrchestrator.js'
 import {
@@ -42,7 +43,7 @@ import { BaseAgentAdapter } from '../../backend/services/agentControl/agentAdapt
 import { _resetAdminAccountCache } from '../../backend/services/hamilton/hamiltonAdminAccount.js'
 import { _resetNotificationsSchemaCache } from '../../backend/services/agentControl/agentControlNotifications.js'
 
-const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+const ADMIN_EMAIL = 'admin@grantflow.local'
 const NON_ADMIN = 'someone@example.com'
 
 class MockAdapter extends BaseAgentAdapter {
@@ -104,7 +105,13 @@ function makeDb() {
 }
 
 function adminUser() {
-  return { userId: 'u_admin', email: ADMIN_EMAIL, role: 'admin', is_admin: 1 }
+  return {
+    userId: 'u_admin',
+    email: ADMIN_EMAIL,
+    role: 'admin',
+    is_admin: 1,
+    controlCenterAuthorized: true,
+  }
 }
 
 function nonAdminUser() {
@@ -144,12 +151,35 @@ describe('Agent Control Center — admin gating', () => {
     assert.equal(getCanonicalAdminEmail(), ADMIN_EMAIL)
   })
 
-  it('isControlCenterAdmin only returns true for the canonical email', () => {
-    assert.equal(isControlCenterAdmin({ email: ADMIN_EMAIL }), true)
-    assert.equal(isControlCenterAdmin({ primary_email: ADMIN_EMAIL }), true)
-    assert.equal(isControlCenterAdmin({ email: 'BUCKEYE7066@gmail.com' }), true)
+  it('raw token email or role never authorizes the control center', () => {
+    assert.equal(isControlCenterAdmin({ email: ADMIN_EMAIL }), false)
+    assert.equal(isControlCenterAdmin({ primary_email: ADMIN_EMAIL }), false)
+    assert.equal(isControlCenterAdmin({ email: ADMIN_EMAIL, role: 'admin', is_admin: 1 }), false)
     assert.equal(isControlCenterAdmin({ email: NON_ADMIN, role: 'admin', is_admin: 1 }), false)
     assert.equal(isControlCenterAdmin(null), false)
+  })
+
+  it('authorizes only the configured operator from resolved DB context', () => {
+    const user = { userId: 'u_admin', email: 'stale-token@example.com', role: 'admin' }
+    const trusted = authorizeControlCenterUser(user, {
+      userId: 'u_admin',
+      identityResolved: true,
+      isAdmin: true,
+      email: ADMIN_EMAIL,
+    })
+    assert.equal(isControlCenterAdmin(trusted), true)
+    assert.equal(trusted.email, ADMIN_EMAIL)
+    assert.equal(authorizeControlCenterUser(user, {
+      identityResolved: true,
+      isAdmin: false,
+      email: ADMIN_EMAIL,
+    }), null)
+    assert.equal(authorizeControlCenterUser(user, {
+      identityResolved: true,
+      isAdmin: true,
+      email: NON_ADMIN,
+    }), null)
+    assert.equal(authorizeControlCenterUser(user, null), null)
   })
 
   it('non-admin cannot start a run', async () => {

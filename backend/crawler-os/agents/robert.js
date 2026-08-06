@@ -27,7 +27,6 @@ function broadThesis() {
     is_student: false,
     is_org: false,
     school: null,
-    min_match_score: 55,
     keywords: ['grant', 'funding', 'assistance'],
     raw_profile_present: false,
   };
@@ -75,15 +74,12 @@ export function createRobert(deps = {}) {
         // `decision === 'accept'` — the crawler-os matchEngine maps the canonical
         // ACCEPT/REVIEW/REJECT decision through, and the canonical engine only
         // returns ACCEPT at/above its ACCEPT band. We deliberately do NOT re-apply
-        // a numeric `min_match_score` floor here: that thesis field defaults to
-        // 55/60, a value on the RETIRED 0-100 slider scale that predates the
-        // 2026-07-06 DATA-POINT rescale (real matches now run p50=8 / p90=15 /
-        // max~47; ACCEPT fires around 11). Filtering ACCEPTs at 55/60 discarded
-        // effectively EVERY genuine recommendation for a real 50-150-data-point
-        // profile, silently emptying this rollup — goal drift masked only by thin
-        // test fixtures whose tiny denominator scores 100% coverage. Crawler-os is
-        // import-isolated from config/matchThresholds by design, so the OS reads
-        // the canonical bar through the decision, never by re-deriving a number.
+        // a numeric `min_match_score` floor here: legacy thesis defaults were
+        // calibrated on a retired scale and discarded effectively every genuine
+        // recommendation after the DATA-POINT rescale. Crawler-os is import-isolated
+        // from config/matchThresholds by design, so the OS reads the canonical bar
+        // through the decision, never by re-deriving a number. A no-profile thesis
+        // therefore carries no match floor at all: it builds the catalog only.
         const recommendationsByProfile = {};
         for (const th of theses) {
           if (!th.profile_id) continue;

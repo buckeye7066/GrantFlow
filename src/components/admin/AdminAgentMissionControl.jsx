@@ -127,7 +127,7 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
 
       {/* Agent Control Center: start/stop/pause/resume/emergency-stop the
           whole agent process. Restricted to the canonical operator
-          (buckeye7066@gmail.com); non-admin sees a friendly notice and
+          configured by the server; non-admin sees a friendly notice and
           telemetry below still renders. Mounted ABOVE telemetry so the
           stop controls are always reachable in one click. */}
       <AgentControlCenter />

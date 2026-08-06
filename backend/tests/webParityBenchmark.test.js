@@ -5,9 +5,10 @@
  *
  * Proves:
  *   - overlap / web_only / grantflow_only classification against stored top
- *     matches (url identity → title identity → domain fallback), with
+ *     matches (canonical URL or sponsor-corroborated program title; never
+ *     domain-only), with
  *     search-engine / social / aggregator / non-funding noise excluded
- *   - parity math (points 0–100), incl. zero-web-results ⇒ parity 100 not NaN
+ *   - parity math (points 0–100), incl. zero eligible web results ⇒ unscored
  *   - bounded budget: ≤ MAX_QUERIES_PER_PROFILE searches, ≤ MAX_RESULTS_PER_QUERY
  *   - persistence: system_kv `web_parity_benchmark` history ring (last 30) +
  *     `latest`; telemetry event emitted
@@ -54,7 +55,13 @@ function makeDb() {
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
     CREATE TABLE funding_opportunities (
       id TEXT PRIMARY KEY, title TEXT, sponsor TEXT,
-      application_url TEXT, apply_url TEXT, source_url TEXT
+      application_url TEXT, apply_url TEXT, source_url TEXT,
+      final_url TEXT, evidence_url TEXT,
+      is_active INTEGER DEFAULT 1, is_hidden INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active', link_status TEXT DEFAULT 'unverified',
+      verification_status TEXT DEFAULT 'needs_review', reality_status TEXT,
+      deadline_status TEXT, deadline TEXT, deadline_at TEXT,
+      deadline_type TEXT, verification_error TEXT
     );
     CREATE TABLE profile_opportunity_matches (
       profile_id TEXT, opportunity_id TEXT, match_score REAL, match_decision TEXT
@@ -130,11 +137,10 @@ describe('pure helpers', () => {
     expect(isRealFundingHit({ url: 'https://example.com/grants', title: 'Grants', snippet: '' })).toBe(false) // placeholder
   })
 
-  it('parityScore: 0 web results ⇒ 100, never NaN; standard ratio otherwise', () => {
-    expect(parityScore(0, 0)).toBe(100)
+  it('parityScore: no measured web denominator is unscored; standard ratio otherwise', () => {
+    expect(parityScore(0, 0)).toBeNull()
     expect(parityScore(1, 1)).toBe(50)
     expect(parityScore(2, 1)).toBe(66.7)
-    expect(Number.isNaN(parityScore(0, 0))).toBe(false)
   })
 
   it('classifyWebResults: overlap by url identity, web_only for real finds, grantflow_only counts unclaimed stored rows', () => {
@@ -223,7 +229,7 @@ describe('pure helpers', () => {
     expect(web_only).toHaveLength(0)
   })
 
-  it('classifyWebResults: title identity and domain fallback both count as overlap', () => {
+  it('classifyWebResults: title identity counts, but a shared funder domain alone does not', () => {
     const stored = [{ id: 'o3', title: 'The Riverside Teacher Fund', sponsor: 'Riverside CF', application_url: 'https://riversidecf.org/programs' }]
     // Same title, re-punctuated + reordered host page → title-identity overlap.
     const byTitle = classifyWebResults(
@@ -231,13 +237,23 @@ describe('pure helpers', () => {
       stored,
     )
     expect(byTitle.overlap).toHaveLength(1)
-    // Different page on the SAME funder domain → domain-fallback overlap.
+    // A different program on the SAME funder domain is not the same
+    // opportunity. Domain-only overlap previously hid this real miss.
     const byDomain = classifyWebResults(
-      [{ url: 'https://riversidecf.org/other-grants', title: 'Community grants', snippet: 'funding for teachers' }],
+      [{ url: 'https://riversidecf.org/other-grants', title: 'Neighborhood Emergency Grant', snippet: 'Eligible families may apply for emergency funding' }],
       stored,
     )
-    expect(byDomain.overlap).toHaveLength(1)
-    expect(byDomain.grantflow_only).toBe(0)
+    expect(byDomain.overlap).toHaveLength(0)
+    expect(byDomain.web_only).toHaveLength(1)
+    expect(byDomain.grantflow_only).toBe(1)
+
+    // A generic title on an unrelated sponsor's site is also insufficient.
+    const generic = classifyWebResults(
+      [{ url: 'https://otherfoundation.org/community-grants', title: 'Community Grants', snippet: 'Eligible nonprofits may apply for funding.' }],
+      [{ id: 'o4', title: 'Community Grants', sponsor: 'Riverside Foundation', application_url: 'https://riversidecf.org/community-grants' }],
+    )
+    expect(generic.overlap).toHaveLength(0)
+    expect(generic.web_only).toHaveLength(1)
   })
 })
 
@@ -297,16 +313,139 @@ describe('runWebParityBenchmark', () => {
     }
   })
 
-  it('zero web results ⇒ parity 100 (not NaN) with an honest outage flag', async () => {
+  it('persists provider/cache provenance and cache age when the search abstraction supplies it', async () => {
     const db = makeDb()
     try {
       seedGolden(db)
       seedStoredMatches(db)
+      let calls = 0
+      const searchWeb = vi.fn(async () => {
+        const results = calls++ === 0 ? [WEB_HITS[0]] : []
+        Object.defineProperty(results, 'searchMeta', {
+          value: calls === 1
+            ? { provider: 'cache', provenance: 'cache', status: 'ok', cache_age_ms: 12_345 }
+            : { provider: 'searxng', provenance: 'live', status: 'empty', cache_age_ms: null },
+          enumerable: false,
+        })
+        return results
+      })
+      const res = await runWebParityBenchmark(db, benchmarkDeps({ searchWeb }))
+      const profile = res.per_profile[0]
+      expect(profile.parity).toBe(100)
+      expect(profile.search_cache_hits).toBe(1)
+      expect(profile.search_provider_counts).toMatchObject({ cache: 1, searxng: profile.queries_run - 1 })
+      expect(profile.search_provenance[0]).toMatchObject({
+        query_index: 0,
+        provider: 'cache',
+        provenance: 'cache',
+        status: 'ok',
+        cache_age_ms: 12_345,
+        cache_age_known: true,
+      })
+      const stored = await readWebParityBenchmark(db)
+      expect(stored.latest.per_profile[0].search_provenance[0].provider).toBe('cache')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('zero web results are unscored, excluded from fleet parity, and do not prune prior gaps', async () => {
+    const db = makeDb()
+    try {
+      seedGolden(db)
+      seedStoredMatches(db)
+      seedQueue(db, [{
+        url: 'https://prior.example/apply',
+        title: 'Prior candidate',
+        profile_id: 'gilbert',
+        source: 'web_parity_benchmark',
+        status: 'candidate',
+      }])
       const res = await runWebParityBenchmark(db, benchmarkDeps({ searchWeb: vi.fn(async () => []) }))
-      expect(res.per_profile[0].parity).toBe(100)
-      expect(res.fleet_parity).toBe(100)
+      expect(res.per_profile[0].parity).toBeNull()
+      expect(res.per_profile[0].measurement_status).toBe('unscored')
+      expect(res.per_profile[0].error).toBe('web_search_returned_zero_results')
+      expect(res.fleet_parity).toBeNull()
+      expect(res).toMatchObject({ measurement_status: 'unscored', profiles_scored: 0, profiles_unscored: 1 })
       expect(res.per_profile[0].web_outage_suspected).toBe(true)
-      expect(Number.isNaN(res.fleet_parity)).toBe(false)
+      const store = await readWebParityBenchmark(db)
+      expect(store.latest).not.toHaveProperty('fleet_parity')
+      expect(store.latest.measurement_status).toBe('unscored')
+      expect((await readWebParityGapQueue(db)).map((entry) => entry.url)).toEqual(['https://prior.example/apply'])
+    } finally {
+      db.close()
+    }
+  })
+
+  it('labels a provider outage explicitly and never emits a numeric fleet score', async () => {
+    const db = makeDb()
+    try {
+      seedGolden(db)
+      seedStoredMatches(db)
+      const searchWeb = vi.fn(async () => {
+        const results = []
+        Object.defineProperty(results, 'searchMeta', {
+          value: { provider: 'duckduckgo', provenance: 'live', status: 'unavailable', reason: 'process_breaker_open' },
+          enumerable: false,
+        })
+        return results
+      })
+      const emitTelemetry = vi.fn(async () => {})
+      const res = await runWebParityBenchmark(db, benchmarkDeps({ searchWeb, emitTelemetry }))
+      expect(res.fleet_parity).toBeNull()
+      expect(res.per_profile[0]).toMatchObject({
+        parity: null,
+        error: 'web_search_provider_unavailable',
+        web_provider_unavailable: true,
+      })
+      expect(emitTelemetry.mock.calls[0][1]).toMatchObject({
+        status: 'failed',
+        severity: 'high',
+        metric_value: null,
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a partially measured cohort reports subset parity but withholds the fleet score', async () => {
+    const db = makeDb()
+    try {
+      let calls = 0
+      const searchWeb = vi.fn(async () => calls++ === 0 ? [] : [WEB_HITS[0]])
+      const emitTelemetry = vi.fn(async () => {})
+      const stored = [{
+        id: 'o1',
+        title: 'Medical Bills Assistance Grant',
+        sponsor: 'TN Foundation',
+        application_url: 'https://tnfoundation.org/grants/medical-bills/',
+      }]
+      const res = await runWebParityBenchmark(db, benchmarkDeps({
+        searchWeb,
+        emitTelemetry,
+        loadGolden: vi.fn(async () => [
+          { profile_id: 'unmeasured', label: 'Unmeasured' },
+          { profile_id: 'measured', label: 'Measured' },
+        ]),
+        loadStoredMatches: vi.fn(async () => stored),
+        maxQueriesPerProfile: 1,
+      }))
+      expect(res).toMatchObject({
+        measurement_status: 'partial',
+        profiles_total: 2,
+        profiles_scored: 1,
+        profiles_unscored: 1,
+        scored_profiles_parity: 100,
+        fleet_parity: null,
+      })
+      expect(emitTelemetry.mock.calls[0][1]).toMatchObject({
+        status: 'failed',
+        severity: 'medium',
+        metric_value: null,
+      })
+      const store = await readWebParityBenchmark(db)
+      expect(store.latest).not.toHaveProperty('fleet_parity')
+      expect(store.latest.scored_profiles_parity).toBe(100)
     } finally {
       db.close()
     }
@@ -328,7 +467,81 @@ describe('runWebParityBenchmark', () => {
       const store = await readWebParityBenchmark(db)
       expect(store.runs).toHaveLength(MAX_RUN_HISTORY)
       expect(store.runs[0].fleet_parity).toBe(41) // oldest dropped
-      expect(store.runs[MAX_RUN_HISTORY - 1].fleet_parity).toBe(100) // newest appended
+      expect(store.runs[MAX_RUN_HISTORY - 1]).not.toHaveProperty('fleet_parity')
+      expect(store.runs[MAX_RUN_HISTORY - 1].measurement_status).toBe('unscored')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('default stored-match selection excludes every available dead lifecycle class and reports the selection counts', async () => {
+    const db = makeDb()
+    try {
+      seedGolden(db)
+      const rows = [
+        ['live', 'Live Medical Grant', 1, 0, 'active', 'ok', 'verified_live_url', 'allowed', null, null],
+        ['inactive', 'Inactive Medical Grant', 0, 0, 'active', 'ok', 'verified_live_url', 'allowed', null, null],
+        ['hidden', 'Hidden Medical Grant', 1, 1, 'active', 'ok', 'verified_live_url', 'allowed', null, null],
+        ['broken', 'Broken Medical Grant', 1, 0, 'active', 'broken', 'suspected_dead', 'allowed', null, null],
+        ['paused', 'Quarantined Medical Grant', 1, 0, 'paused', 'unverified', 'needs_review', 'allowed', null, null],
+        ['expired', 'Expired Medical Grant', 1, 0, 'expired', 'ok', 'verified_live_url', 'allowed', null, null],
+        ['retired', 'Retired Medical Grant', 1, 0, 'active', 'skipped', 'needs_review', 'allowed', null, 'retired_after_definitive_recheck:404'],
+        ['rejected', 'Reality Rejected Medical Grant', 1, 0, 'active', 'ok', 'verified_live_url', 'rejected', null, null],
+        ['past', 'Past Deadline Medical Grant', 1, 0, 'active', 'ok', 'verified_live_url', 'allowed', '2020-01-01', null],
+        ['stale-ineligible', 'Stale Ineligible Medical Grant', 1, 0, 'active', 'ok', 'verified_live_url', 'allowed', null, null],
+      ]
+      const insertOpportunity = db.prepare(`
+        INSERT INTO funding_opportunities
+          (id, title, sponsor, application_url, is_active, is_hidden, status,
+           link_status, verification_status, reality_status, deadline,
+           verification_error)
+        VALUES (?, ?, 'Lifecycle Foundation', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      const insertMatch = db.prepare(`
+        INSERT INTO profile_opportunity_matches
+          (profile_id, opportunity_id, match_score, match_decision)
+        VALUES ('gilbert', ?, 50, ?)`)
+      for (const [id, title, active, hidden, status, linkStatus, verificationStatus, realityStatus, deadline, verificationError] of rows) {
+        insertOpportunity.run(
+          id,
+          title,
+          `https://lifecycle.example/${id}`,
+          active,
+          hidden,
+          status,
+          linkStatus,
+          verificationStatus,
+          realityStatus,
+          deadline,
+          verificationError,
+        )
+        insertMatch.run(id, id === 'stale-ineligible' ? 'REJECT' : 'ACCEPT')
+      }
+
+      const searchWeb = vi.fn(async () => [{
+        url: 'https://lifecycle.example/live',
+        title: 'Live Medical Grant',
+        snippet: 'Individuals may apply for medical assistance funding.',
+      }])
+      const res = await runWebParityBenchmark(db, benchmarkDeps({ searchWeb }))
+      const profile = res.per_profile[0]
+      expect(profile).toMatchObject({
+        parity: 100,
+        overlap_count: 1,
+        stored_matches: 1,
+        stored_candidates_total: 10,
+        stored_candidates_eligible: 1,
+        stored_candidates_excluded: 9,
+        stored_selection_unknown: false,
+      })
+      expect(profile.stored_filter_fields).toEqual(expect.arrayContaining([
+        'match_decision_not_reject',
+        'active_only',
+        'visible_only',
+        'live_status_only',
+        'usable_link_only',
+        'deadline_not_past',
+        'not_permanently_retired',
+      ]))
     } finally {
       db.close()
     }

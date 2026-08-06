@@ -70,7 +70,7 @@ The old discovery crawler stack is retired from runtime. Do not import legacy cr
 - Yana finds qualified potential clients.
 - John drafts emails only; do not auto-send.
 - Sam monitors agents, failures, stuck jobs, hard stops, and safe code repair flows.
-- The single admin/operator is `buckeye7066@gmail.com`.
+- The single admin/operator is `owner@example.invalid`.
 
 ## Required Checks After Crawler Changes
 

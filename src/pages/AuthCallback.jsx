@@ -48,17 +48,15 @@ function formatProviderName(value) {
 export default function AuthCallback() {
   const location = useLocation()
   const navigate = useNavigate()
-  const loginWithTokens = useAuthStore((state) => state.loginWithTokens)
+  const completeOAuthSession = useAuthStore((state) => state.completeOAuthSession)
   const [status, setStatus] = useState('loading')
   const [message, setMessage] = useState('Finishing your secure sign-in…')
   const timeoutRef = useRef(null)
+  const handoffAttemptedRef = useRef(null)
 
   const params = useMemo(() => parseParams(location), [location])
   const provider = formatProviderName(params.get('provider'))
   const errorCode = params.get('error')
-  const expiresInParam = params.get('expiresIn')
-  const accessExpiresParam = params.get('accessExpires')
-  const refreshExpiresParam = params.get('refreshExpires')
 
   useEffect(() => {
     if (timeoutRef.current) {
@@ -80,14 +78,15 @@ export default function AuthCallback() {
       return
     }
 
-    const accessToken = params.get('accessToken')
-    const refreshToken = params.get('refreshToken')
+    const handoff = params.get('handoff')
 
-    if (!accessToken) {
+    if (!handoff) {
       setStatus('error')
-      setMessage('Missing credentials from provider. Please try again.')
+      setMessage('Missing or expired sign-in handoff. Please try again.')
       return
     }
+    if (handoffAttemptedRef.current === handoff) return
+    handoffAttemptedRef.current = handoff
 
     // Clean URL to avoid leaving credentials in history
     if (typeof window !== 'undefined') {
@@ -95,22 +94,7 @@ export default function AuthCallback() {
       window.history.replaceState({}, document.title, cleanUrl)
     }
 
-    const sessionMeta = {
-      accessToken,
-      refreshToken,
-    }
-    if (expiresInParam) {
-      const parsed = Number(expiresInParam)
-sessionMeta.expiresIn = Number.isFinite(parsed) ? parsed : undefined
-    }
-    if (accessExpiresParam) {
-      sessionMeta.accessExpires = accessExpiresParam
-    }
-    if (refreshExpiresParam) {
-      sessionMeta.refreshExpires = refreshExpiresParam
-    }
-
-    loginWithTokens(sessionMeta)
+    completeOAuthSession(handoff)
       .then((result) => {
         if (!result || typeof result !== 'object' || result.error || !result.user) {
           throw new Error('AUTHENTICATION_FAILED')
@@ -131,7 +115,7 @@ sessionMeta.expiresIn = Number.isFinite(parsed) ? parsed : undefined
         timeoutRef.current = null
       }
     }
-  }, [errorCode, params, expiresInParam, accessExpiresParam, refreshExpiresParam, loginWithTokens, navigate])
+  }, [errorCode, params, completeOAuthSession, navigate])
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-12">

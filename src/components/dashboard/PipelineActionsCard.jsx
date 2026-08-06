@@ -67,9 +67,29 @@ function WorkflowButton({ icon: Icon, title, detail, to, tooltip, primary = fals
   )
 }
 
-export default function PipelineActionsCard({ activeProfileId = null }) {
+export default function PipelineActionsCard({ activeProfileId = null, isSimplified = false }) {
   const hasProfile = Boolean(activeProfileId)
-  const actions = hasProfile
+  const actions = isSimplified
+    ? [
+        {
+          key: 'pipeline',
+          title: 'Open pipeline',
+          detail: hasProfile ? 'Choose one accepted source to work next.' : 'See when your first accepted source is ready.',
+          tooltip: 'Open the profile-scoped funding pipeline.',
+          icon: Kanban,
+          to: createPageUrl('Pipeline'),
+          primary: true,
+        },
+        {
+          key: 'help',
+          title: 'Ask Anya',
+          detail: 'Get a plain-language next step.',
+          tooltip: 'Open the Help Center and ask Anya about your profile or funding workflow.',
+          icon: Sparkles,
+          to: createPageUrl('Help'),
+        },
+      ]
+    : hasProfile
     ? [
         {
           key: "facts",
@@ -129,19 +149,21 @@ export default function PipelineActionsCard({ activeProfileId = null }) {
     <Card className="border border-border/70 bg-card text-card-foreground shadow-none">
       <CardHeader>
         <div className="space-y-1">
-          <div className="inline-flex w-fit items-center rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase text-primary">
+          <div className="inline-flex w-fit items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold uppercase text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200">
             <Sparkles className="mr-1 h-3 w-3" />
             Guided workflow
           </div>
-          <CardTitle className="text-lg">Work in the right order</CardTitle>
+          <CardTitle className="text-lg">{isSimplified ? 'Choose your next step' : 'Work in the right order'}</CardTitle>
           <CardDescription>
-            These shortcuts open real GrantFlow workspaces. They do not start hidden background work.
+            {isSimplified
+              ? 'These buttons open your funding workflow. They do not submit anything.'
+              : 'These shortcuts open real GrantFlow workspaces. They do not start hidden background work.'}
           </CardDescription>
         </div>
       </CardHeader>
       <CardContent>
         <TooltipProvider delayDuration={150}>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className={`grid gap-3 md:grid-cols-2 ${isSimplified ? '' : 'xl:grid-cols-5'}`}>
             {actions.map((action) => (
               <WorkflowButton key={action.key} {...action} />
             ))}

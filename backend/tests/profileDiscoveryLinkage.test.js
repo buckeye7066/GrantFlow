@@ -49,10 +49,10 @@ const ROBERT = {
   financial: { funding_needs: ['education', 'housing'] },
 }
 
-/** Anastasia White's real shape: NINETEEN target colleges, one attended school. */
-const ANASTASIA = {
+/** Demo Tennessee STEM Student's real shape: NINETEEN target colleges, one attended school. */
+const demo_stem_student = {
   basic_information: {
-    first_name: 'Anastasia',
+    first_name: 'Demo Student',
     location: { city: 'Cleveland', state: 'TN', county: 'Bradley County', zip_code: '37312' },
   },
   education: {
@@ -98,7 +98,7 @@ const HARVARD_AID = {
   state: 'nationwide', is_national: 1, opportunity_kind: 'directory', source: 'school_portal',
   source_url: 'https://college.harvard.edu/financial-aid',
   application_url: 'https://college.harvard.edu/financial-aid',
-  is_active: 1, profile_id: 'p-anastasia',
+  is_active: 1, profile_id: 'p-demo_stem_student',
 }
 /** The ATTENDED school's twin of the same shape — must still be linked. */
 const MTSU_AID = {
@@ -108,7 +108,7 @@ const MTSU_AID = {
   state: 'nationwide', is_national: 1, opportunity_kind: 'directory', source: 'school_portal',
   source_url: 'https://www.mtsu.edu/financial-aid/',
   application_url: 'https://www.mtsu.edu/financial-aid/',
-  is_active: 1, profile_id: 'p-anastasia',
+  is_active: 1, profile_id: 'p-demo_stem_student',
 }
 /** Provenance naming a profile that no longer exists (3 such rows in prod). */
 const ORPHANED = {
@@ -227,15 +227,15 @@ describe('the ASPIRATION guard (the second door onto the #1089 defect)', () => {
   })
 
   it('never truncates the refusal set below a real profile\'s target list', () => {
-    // Anastasia lists NINETEEN. A cap of 3 (the ATTENDANCE cap) would let 16 of
+    // Demo Student lists NINETEEN. A cap of 3 (the ATTENDANCE cap) would let 16 of
     // them through the guard they exist to trip.
     expect(MAX_ASPIRATIONAL_INSTITUTIONS).toBeGreaterThanOrEqual(19)
-    expect(resolveAspirationalInstitutions(ANASTASIA)).toHaveLength(19)
-    expect(resolveAspirationalInstitutions(ANASTASIA)).toContain('Harvard University')
+    expect(resolveAspirationalInstitutions(demo_stem_student)).toHaveLength(19)
+    expect(resolveAspirationalInstitutions(demo_stem_student)).toContain('Harvard University')
   })
 
   it('keeps ATTENDANCE and ASPIRATION disjoint in what they authorize', () => {
-    expect(resolveAttendedInstitutions(ANASTASIA)).toEqual(['Middle Tennessee State University'])
+    expect(resolveAttendedInstitutions(demo_stem_student)).toEqual(['Middle Tennessee State University'])
     expect(resolveAspirationalInstitutions({ education: { current_institution: 'Only Attended U' } })).toEqual([])
   })
 })
@@ -245,7 +245,7 @@ describe('enforceProfileDiscoveredCatalogLinkage', () => {
   beforeEach(() => {
     db = makeDb()
     addProfile(db, 'p-robert', ROBERT, { display_name: 'Robert Michael White' })
-    addProfile(db, 'p-anastasia', ANASTASIA, { display_name: 'Anastasia Nicole White' })
+    addProfile(db, 'p-demo_stem_student', demo_stem_student, { display_name: 'Demo Tennessee STEM Student' })
   })
 
   it('links a row to the profile its OWN provenance names', async () => {
@@ -267,7 +267,7 @@ describe('enforceProfileDiscoveredCatalogLinkage', () => {
     addOpp(db, HARVARD_AID)
     addOpp(db, MTSU_AID)
     const res = await enforceProfileDiscoveredCatalogLinkage(wrap(db))
-    const ids = linkRows(db, 'p-anastasia').map((r) => r.opportunity_id)
+    const ids = linkRows(db, 'p-demo_stem_student').map((r) => r.opportunity_id)
     expect(ids).not.toContain(HARVARD_AID.id)
     expect(ids).toContain(MTSU_AID.id)
     expect(res.aspirationRefused).toBe(1)
@@ -275,9 +275,9 @@ describe('enforceProfileDiscoveredCatalogLinkage', () => {
 
   it('never links a row to a profile its provenance does NOT name', async () => {
     addOpp(db, BRADLEY_SCHOOLS) // p-robert
-    addOpp(db, MTSU_AID)        // p-anastasia
+    addOpp(db, MTSU_AID)        // p-demo_stem_student
     await enforceProfileDiscoveredCatalogLinkage(wrap(db))
-    expect(linkRows(db, 'p-anastasia').map((r) => r.opportunity_id)).not.toContain(BRADLEY_SCHOOLS.id)
+    expect(linkRows(db, 'p-demo_stem_student').map((r) => r.opportunity_id)).not.toContain(BRADLEY_SCHOOLS.id)
     expect(linkRows(db, 'p-robert').map((r) => r.opportunity_id)).not.toContain(MTSU_AID.id)
   })
 

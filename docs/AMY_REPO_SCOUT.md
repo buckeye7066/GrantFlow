@@ -11,7 +11,7 @@ Sunday mornings at 02:00.
 | Tool | What it is | How Amy uses it |
 |---|---|---|
 | **Repo Rewards** (`G:\One Drive\Desktop\Repo Rewards.lnk` → https://web-production-d7db7.up.railway.app) | The owner's natural-language code-repository search engine (GitHub/GitLab/Codeberg/SourceForge/Bitbucket/Gitea/Forgejo) with an always-on safety gate and relevance/safety/trust/quality scoring. Nothing un-reviewed is ever returned. | `backend/services/amy/repoRewardsScout.js` — a search lane inside Amy's nightly competitive research. Queries are **derived from Amy's own latest training report**: her most-tripped gap finding types (hyperlocal recall, amount recall, false positives, …) each map to a query hunting code that fixes that gap, and the worst-served archetype contributes a needs-of-the-profile query. |
-| **FlexFactor Scout** (`G:\One Drive\Desktop\Scout a Program.lnk` → `C:\Users\firer\flexfactor\flexfactor_scout_launch.ps1`) | A deep-inspection tool: profiles a program, searches Repo Rewards for repos that would improve it, judges per-candidate benefit (with evidence matrices, license/injection/execution-risk verdicts, fail-closed safety gates), and writes a markdown benefit report. Report-only by default; apply mode integrates improvements on a local `flexfactor/adopt-*` branch (never pushes). | The weekly unattended run (below) points Scout at `C:\Users\firer\GrantFlow` in **report-only** mode. |
+| **FlexFactor Scout** (`G:\One Drive\Desktop\Scout a Program.lnk` → `C:\Users\example_user\flexfactor\flexfactor_scout_launch.ps1`) | A deep-inspection tool: profiles a program, searches Repo Rewards for repos that would improve it, judges per-candidate benefit (with evidence matrices, license/injection/execution-risk verdicts, fail-closed safety gates), and writes a markdown benefit report. Report-only by default; apply mode integrates improvements on a local `flexfactor/adopt-*` branch (never pushes). | The weekly unattended run (below) points Scout at `C:\Users\example_user\GrantFlow` in **report-only** mode. |
 
 ## How the pieces connect
 
@@ -59,14 +59,14 @@ to external code adoption.
 ## The weekly run (Sunday 02:00)
 
 - **Task Scheduler**: `Amy Weekly Repo Scout` → `powershell -File
-  C:\Users\firer\flexfactor\amy_weekly_scout.ps1` (weekly, SUN, 02:00).
-- **What it does**: FlexFactor Scout against `C:\Users\firer\GrantFlow`,
+  C:\Users\example_user\flexfactor\amy_weekly_scout.ps1` (weekly, SUN, 02:00).
+- **What it does**: FlexFactor Scout against `C:\Users\example_user\GrantFlow`,
   report-only, provider `openai` (falls back to `anthropic` if the OpenAI key
   is missing), against **prod** Repo Rewards (`--no-auto-start`, so the local
   dev stack is never booted unattended).
 - **Where results land**: report →
   `docs/amy-scout-reports/YYYY-MM-DD-repo-rewards-scout.md`; log →
-  `C:\Users\firer\flexfactor\logs\amy_weekly_scout_YYYY-MM-DD.log`.
+  `C:\Users\example_user\flexfactor\logs\amy_weekly_scout_YYYY-MM-DD.log`.
 - Run it by hand anytime: `schtasks /Run /TN "Amy Weekly Repo Scout"`, or
   double-click the **Scout a Program** shortcut and drop the GrantFlow folder
   on it for the interactive version.

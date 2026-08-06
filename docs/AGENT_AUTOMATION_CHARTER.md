@@ -6,7 +6,7 @@
 > charter wins** — update the per-agent doc, not the charter, unless the doctrine
 > itself is changing.
 
-Status: **active** · Owner/admin: `buckeye7066@gmail.com` · Last reviewed: 2026-07-07
+Status: **active** · Owner/admin: `owner@example.invalid` · Last reviewed: 2026-07-07
 
 The owner-ratified product thesis (four pillars + the measured Google-bar) and
 the self-improvement loop this charter's agents serve are defined in

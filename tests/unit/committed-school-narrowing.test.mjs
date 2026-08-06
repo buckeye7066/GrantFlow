@@ -28,7 +28,7 @@ import {
   COMMITTED_SCHOOL_STATUSES,
 } from '../../backend/services/crawlers/crawlerManager.js'
 
-const ANASTASIA_BASE = {
+const DEMO_STUDENT_BASE = {
   applicantType: 'student',
   demographics: new Set(['female']),
   interests: new Set(['forensic science']),
@@ -36,7 +36,7 @@ const ANASTASIA_BASE = {
 }
 
 function withSchools(schools) {
-  return { ...ANASTASIA_BASE, schools }
+  return { ...DEMO_STUDENT_BASE, schools }
 }
 
 describe('committed-school narrowing — generateSchoolCards', () => {

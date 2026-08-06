@@ -96,11 +96,14 @@ export async function testEndpoints(db, baseUrl, adminToken = null) {
     }
 
     const start = Date.now()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30000)
     try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 30000)
-      const res = await fetch(`${baseUrl}${ep.path}`, { headers, signal: controller.signal })
-      clearTimeout(timeout)
+      const res = await fetch(`${baseUrl}${ep.path}`, {
+        headers,
+        redirect: 'error',
+        signal: controller.signal,
+      })
       const ms = Date.now() - start
       const ok = res.status >= 200 && res.status < 400
 
@@ -117,6 +120,8 @@ export async function testEndpoints(db, baseUrl, adminToken = null) {
     } catch (err) {
       const ms = Date.now() - start
       return { name: ep.name, path: ep.path, status: 'FAIL', code: null, ms, reason: err.message }
+    } finally {
+      clearTimeout(timeout)
     }
   }
 

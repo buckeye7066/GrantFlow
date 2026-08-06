@@ -1,5 +1,5 @@
 import { apiFetch } from "@/api/client"
-import { AUTO_ADD_SCORE, MODERATE_MATCH_SCORE } from "@/lib/matchDisplayThresholds"
+import { AUTO_ADD_SCORE } from "@/lib/matchDisplayThresholds"
 
 export async function listCrawlerJobs(params = {}) {
   const searchParams = new URLSearchParams()
@@ -89,7 +89,7 @@ export async function listRealCrawlers() {
  * Single button: "Find Real Funding For Me".
  * @param {Object} opts
  * @param {string} opts.profileId - Required.
- * @param {number} [opts.minMatchScore]
+ * @param {number} [opts.minMatchScore] - Current-scale display preference.
  * @param {string} [opts.state]
  * @param {string} [opts.city]
  * @param {string} [opts.applicantType]
@@ -136,7 +136,8 @@ export async function runSmartCrawler({
  * @param {Object} opts
  * @param {string} opts.profileId - Required. Profile ID for context/signals.
  * @param {string} opts.needText - Required. Human-readable need description.
- * @param {number} [opts.minMatchScore]
+ * @param {number} [opts.minItemRelevance] - Query-ranking floor; not a match or eligibility threshold.
+ * @param {number} [opts.minMatchScore] - Deprecated alias for minItemRelevance.
  * @param {number} [opts.maxResults]
  * @param {('funding'|'gift')} [opts.variant]
  * @returns {Promise<Object>}
@@ -144,7 +145,8 @@ export async function runSmartCrawler({
 export async function searchSpecificNeed({
   profileId,
   needText,
-  minMatchScore = MODERATE_MATCH_SCORE,
+  minItemRelevance,
+  minMatchScore,
   maxResults = 30,
   variant = 'funding',
 }) {
@@ -155,12 +157,15 @@ export async function searchSpecificNeed({
   if (!needText || typeof needText !== 'string' || needText.trim().length < 2) {
     throw new Error('Enter what you are looking for (at least 2 characters).')
   }
+  const requestedItemRelevance = minItemRelevance ?? minMatchScore
   return apiFetch('/api/real-crawlers/specific-need', {
     method: 'POST',
     body: JSON.stringify({
       profile_id: pid,
       need_text: needText.trim(),
-      min_match_score: minMatchScore,
+      ...(requestedItemRelevance === undefined
+        ? {}
+        : { min_item_relevance: requestedItemRelevance }),
       max_results: maxResults,
       variant: variant === 'gift' ? 'gift' : 'funding',
     }),

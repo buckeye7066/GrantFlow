@@ -34,7 +34,7 @@ This runs: env inventory → lint → typecheck → unit → build → start bac
 ## Environment Variables (single source of truth)
 
 - **[`ENVIRONMENT.md`](ENVIRONMENT.md)**: Production env variable requirements + verification notes
-- **`env.example`** / **`backend/env.example`**: Example env files
+- **`.env.example`** / **`backend/.env.example`**: generated, checked environment templates
 
 ## Deployment Playbooks
 

@@ -1,5 +1,5 @@
 /**
- * Hamilton task-CREATION eligibility gate (2026-08-03, the Robert White class):
+ * Hamilton task-CREATION eligibility gate (2026-08-03, the Demo College Student Persona class):
  * ~200 auto-populated application cards landed on a student profile, including
  * UNCF / Hispanic Scholarship Fund / Society of Women Engineers / veteran and
  * disability programs the profile's KNOWN facts exclude. The policy check ran
@@ -72,8 +72,10 @@ function makeDb() {
       profile_id TEXT,
       title TEXT,
       description TEXT,
+      opportunity_kind TEXT,
       application_url TEXT,
-      source_url TEXT
+      source_url TEXT,
+      evidence_url TEXT
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -183,6 +185,32 @@ describe('Hamilton task-creation eligibility gate', () => {
     } catch (e) { err = e }
     expect(err?.code).toBe('unresolvable_funding_source')
     expect(err?.status).toBe(422)
+    expect(await taskCount(db)).toBe(0)
+  })
+
+  it('returns an explicit manual research handoff for a URL-less pointer without creating a task', async () => {
+    await db.prepare(
+      `INSERT INTO funding_opportunities (id, title, description, opportunity_kind)
+       VALUES (?, ?, ?, ?)`,
+    ).run('opp-pointer', 'County Assistance Directory', 'Research programs listed by the county.', 'directory')
+    await db.prepare(
+      `INSERT INTO grants (id, profile_id, funding_opportunity_id, title)
+       VALUES (?, ?, ?, ?)`,
+    ).run('g-pointer', PROFILE, 'opp-pointer', 'County Assistance Directory')
+
+    const r = await automateSingleSource(db, {
+      profileId: PROFILE,
+      source: { grant_id: 'g-pointer' },
+    })
+
+    expect(r).toMatchObject({
+      skipped: true,
+      reason: 'pointer_research_lead',
+      task: null,
+      policy: { code: 'pointer_research_lead' },
+    })
+    expect(r.manual_handoff?.instructions).toMatch(/directory/i)
+    expect(r.policy?.handoff?.instructions).toBe(r.manual_handoff?.instructions)
     expect(await taskCount(db)).toBe(0)
   })
 })

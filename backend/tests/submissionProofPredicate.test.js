@@ -15,7 +15,7 @@
  * Pins:
  *   1. NAEMT packet output_document_id → verified_external === false (the bug).
  *   2. No run + no output doc → internal only.
- *   3. A durable `hamilton_submission_confirmation` document → verified.
+ *   3. A confirmation document not bound to a submitted run → internal only.
  *   4. A submitted run whose confirmation is retrievable (durable doc bytes) →
  *      verified, via the #1114 assessStoredConfirmationProof check.
  *   5. A submitted run carrying only a captured portal confirmation reference →
@@ -91,22 +91,27 @@ describe('assessTaskSubmissionProof', () => {
     expect(res.unverified_reason).toBe('no_run_no_confirmation_doc')
   })
 
-  it('3) a durable hamilton_submission_confirmation output_document IS proof', async () => {
+  it('3) a confirmation output_document alone is not bound external proof', async () => {
     await insertDoc(db, { id: 'doc-conf', type: CONFIRMATION_TYPE, bytes: Buffer.from('PNG confirmation screenshot') })
     const task = { id: 't-conf', status: 'submitted', output_document_id: 'doc-conf' }
     const res = await assessTaskSubmissionProof(db, task)
-    expect(res.verified_external).toBe(true)
-    expect(res.state).toBe(SUBMISSION_PROOF_STATE.VERIFIED_EXTERNAL)
-    expect(res.proof_document_id).toBe('doc-conf')
-    expect(res.source).toBe('output_confirmation_doc')
-    expect(await taskHasVerifiedExternalSubmission(db, task)).toBe(true)
+    expect(res.verified_external).toBe(false)
+    expect(res.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
+    expect(res.unverified_reason).toBe('confirmation_document_not_bound_to_submitted_run')
+    expect(await taskHasVerifiedExternalSubmission(db, task)).toBe(false)
   })
 
   it('4) a submitted run with a retrievable confirmation document IS proof', async () => {
     await insertDoc(db, { id: 'run-conf', type: CONFIRMATION_TYPE, bytes: Buffer.from('durable bytes') })
     await insertRun(db, {
       id: 'r1', taskId: 't-run', status: 'submitted',
-      resultJson: JSON.stringify({ confirmation_document_id: 'run-conf' }),
+      reference: 'RUN-CONF-12345',
+      resultJson: JSON.stringify({
+        confirmation_document_id: 'run-conf',
+        confirmation_reference: 'RUN-CONF-12345',
+        confirmation_reference_is_new: true,
+        confirmation_evidence: 'portal_reference',
+      }),
     })
     // Even though the output_document is a mere packet, the run's proof wins.
     await insertDoc(db, { id: 'pk', type: PACKET_TYPE, bytes: Buffer.from('packet') })
@@ -117,13 +122,43 @@ describe('assessTaskSubmissionProof', () => {
     expect(res.proof_document_id).toBe('run-conf')
   })
 
-  it('5) a submitted run carrying only a captured portal confirmation reference IS proof', async () => {
-    await insertRun(db, { id: 'r2', taskId: 't-ref', status: 'submitted', reference: 'CONF-2026-ABC123' })
+  it('5) a submitted run carrying an explicitly new portal confirmation reference IS proof', async () => {
+    await insertRun(db, {
+      id: 'r2', taskId: 't-ref', status: 'submitted', reference: 'CONF-2026-ABC123',
+      resultJson: JSON.stringify({
+        confirmation_evidence: 'portal_reference',
+        confirmation_reference_is_new: true,
+      }),
+    })
     const task = { id: 't-ref', status: 'submitted', output_document_id: null }
     const res = await assessTaskSubmissionProof(db, task)
     expect(res.verified_external).toBe(true)
     expect(res.source).toBe('confirmation_reference')
     expect(res.confirmation_reference).toBe('CONF-2026-ABC123')
+  })
+
+  it('5a) an unclassified legacy reference remains internal-only', async () => {
+    await insertRun(db, { id: 'r-legacy', taskId: 't-legacy', status: 'submitted', reference: 'LEGACY-2025-123' })
+    const task = { id: 't-legacy', status: 'submitted', output_document_id: null }
+    const res = await assessTaskSubmissionProof(db, task)
+    expect(res.verified_external).toBe(false)
+    expect(res.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
+  })
+
+  it('5aa) portal_reference text without an explicit new-reference flag remains internal-only', async () => {
+    await insertRun(db, {
+      id: 'r-unproven-reference',
+      taskId: 't-unproven-reference',
+      status: 'submitted',
+      reference: 'UNPROVEN-REFERENCE-123',
+      resultJson: JSON.stringify({ confirmation_evidence: 'portal_reference' }),
+    })
+    const task = { id: 't-unproven-reference', status: 'submitted', output_document_id: null }
+
+    const res = await assessTaskSubmissionProof(db, task)
+
+    expect(res.verified_external).toBe(false)
+    expect(res.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
   })
 
   it('5b) a run that is NOT submitted (blocked/failed) never grants proof', async () => {
@@ -132,6 +167,29 @@ describe('assessTaskSubmissionProof', () => {
     const res = await assessTaskSubmissionProof(db, task)
     expect(res.verified_external).toBe(false)
     expect(res.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
+  })
+
+  it('5c) an explicitly unchanged reference with only attempt evidence never grants proof', async () => {
+    await insertRun(db, {
+      id: 'r-unchanged',
+      taskId: 't-unchanged',
+      status: 'submitted',
+      reference: 'PREEXISTING-12345',
+      screenshot: '/tmp/attempt-only.png',
+      resultJson: JSON.stringify({
+        confirmation_reference: 'PREEXISTING-12345',
+        confirmation_reference_is_new: false,
+        confirmation_evidence: 'attempt_evidence',
+        confirmation_url_changed: true,
+      }),
+    })
+    const task = { id: 't-unchanged', status: 'submitted', output_document_id: null }
+
+    const res = await assessTaskSubmissionProof(db, task)
+
+    expect(res.verified_external).toBe(false)
+    expect(res.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
+    expect(res.unverified_reason).toBe('run_without_captured_evidence')
   })
 
   it('6) a non-submitted task never claims proof', async () => {

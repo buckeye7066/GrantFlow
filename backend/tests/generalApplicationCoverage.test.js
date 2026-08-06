@@ -5,7 +5,7 @@
  * general application is complete, then that should be reflected in those
  * related portals").
  *
- * The fixture is Anastasia's REAL prod pipeline (2026-08-02): six MTSU
+ * The fixture is Demo Student's REAL prod pipeline (2026-08-02): six MTSU
  * scholarships governed by the General Scholarship Application, and six
  * MTSU-hosted rows that are NOT (admissions, housing, emergency fund, book
  * voucher, work-study, TELS) — the precision the rule lives or dies on.

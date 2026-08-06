@@ -20,18 +20,18 @@ record exists in Play Console and the service account has app access +
 ## Short description (80 chars max)
 
 ```
-Find the grants, scholarships & benefits you qualify for — and win them
+Find relevant grants, scholarships, and benefits with evidence-backed guidance
 ```
 
 ## Full description (4000 chars max)
 
 ```
-GrantFlow is your AI funding team. It finds the grants, scholarships, and benefit programs you actually qualify for — then helps you organize, apply, and win them.
+GrantFlow helps you discover grants, scholarships, and benefit programs that may fit your profile, understand the evidence and unknowns, organize your work, and prepare honest application handoffs.
 
 FIND FUNDING THAT FITS YOU
 • Build a profile once; GrantFlow matches you against grants, scholarships, benefits, and local programs
-• A transparent match score shows how well each opportunity fits — so you spend time on the ones that count
-• A verified funding library spanning federal and state grants, scholarships, foundations, and benefit programs
+• A versioned match decision explains why an opportunity appears relevant and what still needs human verification
+• A provenance-aware funding library spanning federal and state grants, scholarships, foundations, and benefit programs
 
 STAY ON TOP OF EVERYTHING
 • A pipeline that tracks every opportunity from discovered → interested → drafting → submitted → awarded

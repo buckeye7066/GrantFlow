@@ -136,6 +136,9 @@ test('buildAnyaContext: includes matching results from real scoring', async () =
   assert.ok(result.includes('Available Results'), 'should have results section')
   assert.ok(result.includes('opportunities evaluated'), 'should mention evaluation count')
   assert.ok(result.includes('Top 5') || result.includes('pts'), 'should have scored results')
+  assert.ok(result.includes('canonical ACCEPT'), 'should count canonical decisions, not infer acceptance from score')
+  assert.ok(result.includes('data_point_v1'), 'should identify the live score scale')
+  assert.ok(!result.includes('strong ≥50'), 'should not emit the retired score threshold')
 })
 
 test('buildAnyaContext: includes missing profile data suggestions', async () => {

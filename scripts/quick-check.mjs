@@ -42,19 +42,6 @@ try {
   
   log(`\nSummary: ${linked} linked, ${unlinked} unlinked`);
   
-  // Check target users
-  log('\n=== TARGET USERS ===');
-  const targets = ['Rachel', 'Josh', 'Olivia', 'Avanell', 'Hollie', 'Brian'];
-  targets.forEach(name => {
-    const user = db.prepare('SELECT id, display_name, primary_email FROM users WHERE LOWER(display_name) LIKE ? OR LOWER(primary_email) LIKE ? LIMIT 1').get(`%${name}%`, `%${name}%`);
-    if (user) {
-      const userProfiles = db.prepare('SELECT display_name FROM profiles WHERE user_id = ?').all(user.id);
-      log(`${name}: ${user.display_name} (${user.primary_email}) - ${userProfiles.length} profiles`);
-    } else {
-      log(`${name}: NOT FOUND`);
-    }
-  });
-  
   db.close();
   
   // Write output

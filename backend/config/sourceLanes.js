@@ -8,8 +8,8 @@
  * to fire every condition lane it had for any profile carrying a coarse
  * `disability`/`medical` need. Measured read-only in prod 2026-08-02: **438
  * disease-lane selections across 33 real profiles**, including 19 apiece for
- * profiles whose health vocabulary is EMPTY (Robert White, Admin Vault, Tasha
- * Reynolds) and for Anastasia White, who declares `disability_status: "Has
+ * profiles whose health vocabulary is EMPTY (Demo College Student Persona, Admin Vault, Tasha
+ * Reynolds) and for Demo Tennessee STEM Student, who declares `disability_status: "Has
  * disability"` while her own medical sections say *"no chronic illnesses or
  * disabilities noted"* — a disability with **no named condition**.
  *

@@ -8,7 +8,8 @@
  * throwaway email 'admin@grantflow.app'. The Agent Control Center gate
  * (`isControlCenterAdmin`) compares `user.email` against
  *   AGENT_CONTROL_ADMIN_EMAIL || ADMIN_EMAIL || CANONICAL_ADMIN_EMAIL_DEFAULT
- * which defaults to 'buckeye7066@gmail.com'. Those two never matched, so every
+ * which now defaults locally to the non-routable `admin@grantflow.local`
+ * fixture. Those two values previously diverged, so every
  * server-internal probe (Sam, codeGuard.endpointHealth, Hamilton telemetry)
  * was rejected with 403 — surfacing as recurring HIGH "Authentication
  * required" findings on the admin Production-Readiness panel.
@@ -46,8 +47,8 @@ describe('Synthetic ADMIN_TOKEN user matches canonical-admin gate (regression)',
 
   // The canonical default is what server.js falls back to when neither override
   // is set. If this changes, every other admin-gated subsystem must change too.
-  it('CANONICAL_ADMIN_EMAIL_DEFAULT is buckeye7066@gmail.com', () => {
-    expect(CANONICAL_ADMIN_EMAIL_DEFAULT).toBe('buckeye7066@gmail.com')
+  it('CANONICAL_ADMIN_EMAIL_DEFAULT is a non-routable local fixture', () => {
+    expect(CANONICAL_ADMIN_EMAIL_DEFAULT).toBe('admin@grantflow.local')
   })
 
   // Mirrors the expression in backend/server.js for the synthetic admin user
@@ -62,7 +63,13 @@ describe('Synthetic ADMIN_TOKEN user matches canonical-admin gate (regression)',
   }
 
   it('with no overrides, the synthetic-admin email passes isControlCenterAdmin', () => {
-    const synth = { role: 'admin', is_admin: true, userId: 'system_admin_token', email: syntheticAdminEmail() }
+    const synth = {
+      role: 'admin',
+      is_admin: true,
+      serviceToken: true,
+      userId: 'system_admin_token',
+      email: syntheticAdminEmail(),
+    }
     expect(isControlCenterAdmin(synth)).toBe(true)
   })
 

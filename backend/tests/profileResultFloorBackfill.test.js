@@ -78,7 +78,7 @@ describe('the result-floor backfill queue', () => {
   it('queues the pointer-padded profile FIRST — the deepest real shortfall, not the smallest total', async () => {
     const db = makeDb()
     try {
-      // `padded` shows 25 "results" and has ZERO awards (the Melissa Justus
+      // `padded` shows 25 "results" and has ZERO awards (the Demo General Support Persona
       // shape). `thin` shows 9 and has 9 real awards. The OLD queue, ordered by
       // the padded actionable count, put `thin` first.
       seed(db, 'padded', { locators: 25 })

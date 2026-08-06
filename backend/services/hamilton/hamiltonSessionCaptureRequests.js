@@ -30,7 +30,7 @@ export const CAPTURE_DISCLAIMER = {
   what:
     'Captures the authenticated browser SESSION (cookies) after you finish logging in — never your password or your 2FA code.',
   why:
-    'Lets Hamilton act inside this portal on your behalf later (e.g. submit an application) without making you re-enter your login or approve another 2FA prompt every time.',
+    'Lets Hamilton reopen this portal later to prepare authorized forms, upload approved documents, and save drafts without making you repeat login or 2FA every time. You still complete final submission yourself.',
   how:
     'When you click capture, your computer\'s GrantFlow helper opens the real login page. You log in and clear 2FA yourself; the moment you\'re in, the session is captured and stored encrypted (AES-256-GCM).',
   scope:

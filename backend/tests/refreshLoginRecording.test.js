@@ -1,6 +1,6 @@
 // Login recording on the token-refresh path — the admin "Logins" panel was
 // stale because RETURNING users never hit a session-mint path: the frontend
-// keeps the refresh token in localStorage and POST /api/auth/refresh slides
+// keeps the refresh token in an HttpOnly cookie and POST /api/auth/refresh slides
 // the 30-day window forward on every rotation, so createSessionAndTokens (the
 // choke point that stamps users.last_login_at and appends the durable
 // client_sign_in audit the panel reads) never ran again for them.
@@ -135,6 +135,22 @@ function seedSchema(db) {
       user_agent TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE auth_refresh_token_history (
+      token_hash TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      replaced_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      reuse_detected_at TEXT
+    );
+    CREATE TABLE oauth_states (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      state TEXT NOT NULL UNIQUE,
+      code_verifier TEXT,
+      redirect_to TEXT,
+      metadata TEXT,
+      expires_at TEXT NOT NULL
+    );
   `)
 }
 
@@ -159,6 +175,19 @@ async function seedSession(db, { id, userId, accessExpiresAt, refreshToken }) {
     `INSERT INTO user_sessions (id, user_id, profile_id, issued_at, access_expires_at, refresh_expires_at, refresh_token_hash)
      VALUES (?, ?, NULL, ?, ?, ?, ?)`,
   ).run(id, userId, '2026-06-01T00:00:00.000Z', accessExpiresAt, future, hashValue(refreshToken))
+}
+
+function refreshRequest(app, refreshToken) {
+  return request(app)
+    .post('/api/auth/refresh')
+    .set('X-Requested-With', 'XMLHttpRequest')
+    .set('Cookie', `grantflow_refresh=${encodeURIComponent(refreshToken)}`)
+    .send({})
+}
+
+function responseRefreshCookie(res) {
+  const cookie = (res.headers['set-cookie'] || []).find((value) => value.startsWith('grantflow_refresh='))
+  return cookie?.split(';', 1)[0] || null
 }
 
 async function lastLoginOf(db, userId) {
@@ -230,7 +259,8 @@ describe('login recording across auth paths', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.accessToken).toBeTruthy()
-    expect(res.body.refreshToken).toBeTruthy()
+    expect(res.body.refreshToken).toBeUndefined()
+    expect(responseRefreshCookie(res)).toBeTruthy()
 
     // Durable stamp for the admin panel's user login info.
     expect(await waitForLastLogin(db, 'user-1')).toBeTruthy()
@@ -255,7 +285,7 @@ describe('login recording across auth paths', () => {
       refreshToken,
     })
 
-    const res = await request(app).post('/api/auth/refresh').send({ refreshToken })
+    const res = await refreshRequest(app, refreshToken)
     expect(res.status).toBe(200)
     expect(res.body.accessToken).toBeTruthy()
 
@@ -282,7 +312,7 @@ describe('login recording across auth paths', () => {
       refreshToken,
     })
 
-    const res = await request(app).post('/api/auth/refresh').send({ refreshToken })
+    const res = await refreshRequest(app, refreshToken)
     expect(res.status).toBe(200)
     expect(res.body.accessToken).toBeTruthy()
 
@@ -304,19 +334,149 @@ describe('login recording across auth paths', () => {
       refreshToken,
     })
 
-    const first = await request(app).post('/api/auth/refresh').send({ refreshToken })
+    const first = await refreshRequest(app, refreshToken)
     expect(first.status).toBe(200)
     await waitForLastLogin(db, 'user-4')
 
     // Immediately rotate again with the fresh token (access now valid again).
     const second = await request(app)
       .post('/api/auth/refresh')
-      .send({ refreshToken: first.body.refreshToken })
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .set('Cookie', responseRefreshCookie(first))
+      .send({})
     expect(second.status).toBe(200)
 
     await new Promise((resolve) => setTimeout(resolve, 150))
     const events = await signInAuditRows(db)
     expect(events.length).toBe(1)
     expect(JSON.parse(events[0].details).method).toBe('session_resume')
+  })
+
+  it('accepts refresh credentials only from the HttpOnly cookie', async () => {
+    const refreshToken = 'c'.repeat(64)
+    await seedUser(db, { id: 'user-cookie-only', email: 'cookie-only@example.test' })
+    await seedSession(db, {
+      id: 'session-cookie-only',
+      userId: 'user-cookie-only',
+      accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      refreshToken,
+    })
+
+    const bodyAttempt = await request(app)
+      .post('/api/auth/refresh')
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .send({ refreshToken })
+
+    expect(bodyAttempt.status).toBe(400)
+    expect(bodyAttempt.body.error).toBe('refresh_token_body_not_allowed')
+  })
+
+  it('rejects a cross-site refresh before rotating the cookie', async () => {
+    const refreshToken = 'd'.repeat(64)
+    await seedUser(db, { id: 'user-csrf', email: 'csrf@example.test' })
+    await seedSession(db, {
+      id: 'session-csrf',
+      userId: 'user-csrf',
+      accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      refreshToken,
+    })
+
+    const attack = await request(app)
+      .post('/api/auth/refresh')
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .set('Origin', 'https://attacker.example')
+      .set('Sec-Fetch-Site', 'cross-site')
+      .set('Cookie', `grantflow_refresh=${refreshToken}`)
+      .send({})
+
+    expect(attack.status).toBe(403)
+    const row = await db.prepare('SELECT revoked_at, refresh_token_hash FROM user_sessions WHERE id = ?').get('session-csrf')
+    expect(row.revoked_at).toBeNull()
+    expect(row.refresh_token_hash).toBe(hashValue(refreshToken))
+  })
+
+  it('clears the cookie and revokes the session on logout', async () => {
+    const refreshToken = 'e'.repeat(64)
+    await seedUser(db, { id: 'user-logout', email: 'logout@example.test' })
+    await seedSession(db, {
+      id: 'session-logout',
+      userId: 'user-logout',
+      accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      refreshToken,
+    })
+
+    const logout = await request(app)
+      .post('/api/auth/logout')
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .set('Cookie', `grantflow_refresh=${refreshToken}`)
+      .send({})
+
+    expect(logout.status).toBe(204)
+    expect((logout.headers['set-cookie'] || []).some((cookie) => /grantflow_refresh=;/.test(cookie))).toBe(true)
+    const row = await db.prepare('SELECT revoked_at FROM user_sessions WHERE id = ?').get('session-logout')
+    expect(row.revoked_at).toBeTruthy()
+  })
+
+  it('revokes a session when a previously rotated token is reused outside the race grace', async () => {
+    const refreshToken = 'f'.repeat(64)
+    await seedUser(db, { id: 'user-reuse', email: 'reuse@example.test' })
+    await seedSession(db, {
+      id: 'session-reuse',
+      userId: 'user-reuse',
+      accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      refreshToken,
+    })
+
+    const rotation = await refreshRequest(app, refreshToken)
+    expect(rotation.status).toBe(200)
+    await db.prepare(
+      `UPDATE auth_refresh_token_history SET replaced_at = ? WHERE token_hash = ?`,
+    ).run(new Date(Date.now() - 60_000).toISOString(), hashValue(refreshToken))
+
+    const reuse = await refreshRequest(app, refreshToken)
+    expect(reuse.status).toBe(401)
+    expect(reuse.body.error).toBe('refresh_token_reuse_detected')
+    const row = await db.prepare('SELECT revoked_at FROM user_sessions WHERE id = ?').get('session-reuse')
+    expect(row.revoked_at).toBeTruthy()
+  })
+
+  it('completes OAuth through a one-time same-origin handoff without URL tokens', async () => {
+    const initialRefreshToken = '0'.repeat(64)
+    const handoff = 'oauth-handoff-secret-that-is-long-enough'
+    await seedUser(db, { id: 'user-oauth', email: 'oauth@example.test' })
+    await seedSession(db, {
+      id: 'session-oauth',
+      userId: 'user-oauth',
+      accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      refreshToken: initialRefreshToken,
+    })
+    await db.prepare(
+      `INSERT INTO oauth_states (id, provider, state, code_verifier, expires_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      'handoff-row',
+      'grantflow-session',
+      hashValue(handoff),
+      'session-oauth',
+      new Date(Date.now() + 600_000).toISOString(),
+    )
+
+    const complete = await request(app)
+      .post('/api/auth/oauth/complete')
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .set('Origin', 'https://app.axiombiolabs.org')
+      .set('Sec-Fetch-Site', 'same-origin')
+      .send({ handoff })
+
+    expect(complete.status).toBe(200)
+    expect(complete.body.accessToken).toBeTruthy()
+    expect(complete.body.refreshToken).toBeUndefined()
+    expect(responseRefreshCookie(complete)).toBeTruthy()
+
+    const replay = await request(app)
+      .post('/api/auth/oauth/complete')
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .send({ handoff })
+    expect(replay.status).toBe(401)
   })
 })

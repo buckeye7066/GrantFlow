@@ -45,10 +45,7 @@ describe('catalog rescore review follow-up', () => {
         if (/SELECT id, created_by FROM profiles/i.test(sql)) {
           return { all: async () => [{ id: 'profile-1', created_by: null }] }
         }
-        if (/SELECT COUNT\(\*\) AS c FROM funding_opportunities/i.test(sql)) {
-          return { get: async () => ({ c: 1 }) }
-        }
-        if (/SELECT fo\.\* FROM funding_opportunities/i.test(sql)) {
+        if (/SELECT fo\.\*,/i.test(sql)) {
           return { all: async () => [opportunity] }
         }
         throw new Error(`Unexpected SQL in test: ${sql}`)

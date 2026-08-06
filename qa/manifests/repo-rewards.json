@@ -2,7 +2,7 @@
   "app_id": "repo-rewards",
   "display_name": "Repo Rewards",
   "repo": "buckeye7066/repo-rewards",
-  "local_path": "C:/Users/firer/repo-rewards",
+  "local_path": "C:/Users/example_user/repo-rewards",
   "runtime_type": "web",
   "start_command": "npm run dev",
   "stop_command": "taskkill-by-port",

@@ -32,7 +32,7 @@ system — activity, productivity, outcomes, errors, recent events.
 
 0. **Agent Control Center** *(top of the page, admin-only)* —
    start / stop / pause / resume / emergency-stop the whole agent process.
-   Restricted to the canonical operator (`buckeye7066@gmail.com`). See
+   Restricted to the canonical operator (`owner@example.invalid`). See
    [`AGENT_CONTROL_CENTER.md`](./AGENT_CONTROL_CENTER.md).
 1. **Agent overview cards** — one card per agent showing health, install
    state, success rate, error count, and the agent's primary metrics.

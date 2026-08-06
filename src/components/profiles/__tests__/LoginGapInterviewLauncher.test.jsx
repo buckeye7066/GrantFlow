@@ -153,7 +153,7 @@ describe('LoginGapInterviewLauncher component', () => {
     mockApi({
       profiles: [
         { id: 'p1', display_name: 'Robert' },
-        { id: 'p2', display_name: 'Anastasia' },
+        { id: 'p2', display_name: 'Demo Student' },
         { id: 'p3', display_name: 'Done Profile' },
       ],
       plans: { p1: GAPPED_PLAN('state'), p2: GAPPED_PLAN('county'), p3: COMPLETE_PLAN },
@@ -201,7 +201,7 @@ describe('LoginGapInterviewLauncher component', () => {
     mockApi({
       profiles: [
         { id: 'p1', display_name: 'Robert' },
-        { id: 'p2', display_name: 'Anastasia' },
+        { id: 'p2', display_name: 'Demo Student' },
       ],
       plans: { p1: GAPPED_PLAN('state'), p2: GAPPED_PLAN('county') },
     })

@@ -7,15 +7,13 @@
  *   1. SOURCE_ALLOWLIST  — blocks non-approved sources
  *   2. DECISION_ENGINE   — REJECT = hard ineligible
  *   3. EXCLUSION_ENGINE   — custom suppression rules
- *   4. RELEVANCE_FILTER   — hard exclusions + soft penalties
- *   5. THRESHOLD          — numeric floor; never bypassed by ACCEPT/REVIEW
- *   6. IDEMPOTENCY        — dedup by profile + opportunity
+ *   4. THRESHOLD          — pipeline admission floor; never changes the score
+ *   5. IDEMPOTENCY        — dedup by profile + opportunity
  *
  * computeMatchDecision() is the sole scoring/decision authority.
  */
 
 import crypto from 'crypto'
-import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
 import {
   evaluatePipelineSource,
@@ -30,7 +28,6 @@ import {
   isTrustedRecordOrigin,
 } from '../config/relevanceFloor.js'
 import { evaluateExclusion } from './exclusionEngine.js'
-import { evaluateProfileSpecificGate } from './matching/profileSpecificGate.js'
 import {
   grantFingerprintFromOpportunity,
   chooseGrantUrl,
@@ -38,7 +35,6 @@ import {
   likelySameGrantOpportunity,
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
-import { evaluateApplicantTypeEligibility } from './applicantTypeGate.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -76,12 +72,14 @@ function sha256Stable(value) {
 }
 
 export const PIPELINE_ADMISSION_POLICY_VERSION = sha256Stable({
-  version: 1,
+  version: 2,
   allowedSources: PIPELINE_ALLOWED_SOURCES,
   deniedSources: PIPELINE_DENIED_SOURCES,
   relevanceFloor: RELEVANCE_FLOOR,
   trustedRelevanceFloor: TRUSTED_RELEVANCE_FLOOR,
   trustedOrigins: TRUSTED_RECORD_ORIGINS,
+  canonicalDecisionAuthority: true,
+  hiddenProfileEligibilityTrials: false,
 })
 
 export function pipelineAdmissionFingerprints(profileContext, opportunity) {
@@ -113,6 +111,76 @@ async function emitPromotionOutcome(outcomeSink, payload) {
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
 const _decisionColumnCache = new WeakMap()
+const _profileMatchColumnCache = new WeakMap()
+
+async function profileMatchColumns(db) {
+  if (_profileMatchColumnCache.has(db)) return _profileMatchColumnCache.get(db)
+  const dialect = db?.dialect || 'sqlite'
+  const rows = dialect === 'postgres'
+    ? await db.prepare(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'profile_opportunity_matches'`,
+    ).all()
+    : await db.prepare('PRAGMA table_info(profile_opportunity_matches)').all()
+  const columns = new Set((rows || []).map((row) => String(row.column_name ?? row.name)))
+  _profileMatchColumnCache.set(db, columns)
+  return columns
+}
+
+/**
+ * A promotion-time rescore must replace the persisted pair truth in the same
+ * transaction as its pipeline outcome. Otherwise a freshly rejected pair can
+ * remain visible as an old ACCEPT, or the new grant can display a score that
+ * disagrees with profile_opportunity_matches.
+ */
+async function persistFreshCanonicalDecision(db, profileId, opportunityId, decision) {
+  if (!profileId || !opportunityId || !decision) return 0
+  const columns = await profileMatchColumns(db)
+  const now = new Date().toISOString()
+  const explain = {
+    ...(decision.match_explain ?? {}),
+    score_scale_id:
+      decision.scoreScaleId ?? decision.match_explain?.score_scale_id ?? null,
+    scoring_policy_version:
+      decision.scoringPolicyVersion ??
+      decision.match_explain?.scoring_policy_version ??
+      null,
+    canonical_decision: String(decision.decision ?? '').toUpperCase() || null,
+  }
+  const candidates = [
+    ['match_score', Number.isFinite(Number(decision.score)) ? Number(decision.score) : null],
+    ['match_confidence', Number.isFinite(Number(decision.confidence)) ? Number(decision.confidence) : null],
+    ['match_decision', String(decision.decision ?? '').toLowerCase() || null],
+    ['match_explanation', decision.explanation ?? null],
+    ['match_reasons', JSON.stringify(decision.reasons ?? [])],
+    ['match_explain_json', JSON.stringify(explain)],
+    ['matcher_version', decision.matcherVersion ?? null],
+    ['computed_at', decision.evaluatedAt ?? now],
+    ['updated_at', now],
+    ['evaluated_at', decision.evaluatedAt ?? now],
+  ].filter(([column]) => columns.has(column))
+
+  if (!candidates.some(([column]) => column === 'match_score') ||
+      !candidates.some(([column]) => column === 'match_decision')) {
+    const error = new Error('profile_opportunity_matches lacks canonical score/decision columns')
+    error.canonicalMatchPersistenceFailed = true
+    throw error
+  }
+
+  const result = await db.prepare(
+    `UPDATE profile_opportunity_matches
+        SET ${candidates.map(([column]) => `${column} = ?`).join(', ')}
+      WHERE profile_id = ? AND opportunity_id = ?`,
+  ).run(...candidates.map(([, value]) => value), profileId, opportunityId)
+  const changed = Number(result?.changes ?? result?.rowCount ?? 0)
+  if (!Number.isFinite(changed) || changed < 1) {
+    const error = new Error('fresh canonical rescore did not update its persisted profile/opportunity pair')
+    error.canonicalMatchPersistenceFailed = true
+    throw error
+  }
+  return changed
+}
 
 /**
  * Last-resort profile-scoped dedup key: normalized lower(title)+lower(funder).
@@ -166,29 +234,6 @@ async function hasGrantsDecisionColumns(db) {
 }
 
 /**
- * Calculate match percentage between opportunity and profile.
- * Uses the shared decision engine as the single source of truth.
- * No legacy fallback — computeMatchDecision() is the sole authority.
- */
-function calculateMatchPercentage(opportunity, profileContext) {
-  if (!profileContext) return 0
-  try {
-    const profile = profileContext?.profile ?? profileContext
-    const sections = profileContext?.sections ?? null
-    const decision = computeMatchDecision(profile, opportunity, { profileSections: sections })
-    return decision.score
-  } catch (err) {
-    // Decision engine failure must never save a mystery score — log it so we
-    // can find crashing inputs, then return 0 to gate downstream persistence.
-    console.warn(
-      `[opportunityMatcher] calculateMatchPercentage failed for opp=${opportunity?.id || 'unknown'}:`,
-      err?.message || err,
-    )
-    return 0
-  }
-}
-
-/**
  * The one canonical pipeline admission predicate. It evaluates only; the sole
  * public entry point below owns persistence. Sweep callers opt into fail-closed
  * tombstones while ordinary interactive callers retain the historical
@@ -196,7 +241,8 @@ function calculateMatchPercentage(opportunity, profileContext) {
  */
 async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
   const profileId = ctx.profileId ?? profileContext?.profile?.id ?? profileContext?.id ?? null
-  let matchPercentage = ctx.matchPercentage ?? null
+  const callerReportedMatchPercentage = ctx.matchPercentage ?? null
+  let matchPercentage = null
   const minMatchThreshold = ctx.minMatchThreshold ?? null
   const failClosedTombstone = ctx.failClosedTombstone === true
   const quiet = ctx.quiet === true
@@ -264,9 +310,9 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
 
     // Gate 1.5: Pipeline dismissals (sticky deletes). The user's explicit
     // decision to remove an opportunity from this profile's pipeline overrides
-    // every downstream matching/eligibility/relevance gate. We run this BEFORE
+    // every downstream matching/admission gate. We run this BEFORE
     // the decision engine so the response correctly reports DISMISSED rather
-    // than being absorbed by RELEVANCE_FILTER / DECISION_ENGINE / etc., and
+    // than being absorbed by DECISION_ENGINE or another admission policy, and
     // so we don't pay the cost of running the matcher for a row we'll reject
     // anyway. Manual re-add via POST /api/grants/from-opportunity clears the
     // tombstone.
@@ -341,6 +387,10 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       }
     }
 
+    if (ctx.persistFreshCanonicalDecision === true) {
+      await persistFreshCanonicalDecision(db, profileId, opportunity?.id, decision)
+    }
+
     // Gate 2: Canonical decision engine — REJECT means hard ineligible
     if (decision?.decision === 'REJECT') {
       if (!quiet) log.info(`[opportunityMatcher] Gate:DECISION_ENGINE rejected "${opportunity.title}" — ${(decision.ineligibilityReasons ?? []).join('; ')}`)
@@ -352,52 +402,6 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         threshold,
         decision: 'REJECT',
       }, decision.score ?? 0)
-    }
-
-    // Gate 2.5: Applicant-type eligibility (the fix for institution-only rows
-    // landing in an INDIVIDUAL's pipeline). Federal personnel-prep / institutional
-    // training grants (OSEP/OESE/OSERS, NRSA, NSF institutional programs) and any
-    // opportunity whose eligible applicants are institutions / states / nonprofits
-    // are structurally closed to an individual — they can never be the applicant.
-    // Discover (matching.js GATE 2) and POST /from-opportunity already hard-drop
-    // these via evaluateApplicantTypeEligibility; the pipeline WRITER was the one
-    // path that skipped it, so auto-add crawlers + Anya autonomous adds slipped
-    // them into individual pipelines (e.g. Anastasia, a graduate student).
-    //
-    // Rule-aligned: directories are EXEMPT (must always survive), and ONLY an
-    // EXPLICIT mismatch (institution/government/nonprofit-only eligibility, or
-    // explicit applicant_types that exclude the profile bucket) is blocked —
-    // demographic/field mismatches stay a SCORE penalty (handled by the relevance
-    // filter below), never a hard drop.
-    if (!isDirectoryLikeOpportunity(opportunity)) {
-      const basicSection = profileSections?.basic_information ?? profileSections?.basic_info ?? null
-      const profileApplicantType =
-        rawProfile?.applicant_type ||
-        rawProfile?.primary_type ||
-        rawProfile?.profile_category ||
-        basicSection?.profile_category ||
-        basicSection?.applicant_type ||
-        null
-      // Pass the SECTIONS too: a person-type profile that structurally declares
-      // a farm (occupation.farmer / a NAICS-11 code) holds BOTH an individual
-      // and a farm identity, and USDA/NRCS rows carry applicant_types ['farm'].
-      // Without this the gate saw only 'individual' and hard-dropped the entire
-      // agriculture universe (the Anita class, 2026-08-01).
-      const applicantEval = evaluateApplicantTypeEligibility(opportunity, profileApplicantType, {
-        profile: rawProfile,
-        sections: profileSections,
-      })
-      if (applicantEval.decision === 'mismatch') {
-        if (!quiet) log.info(`[opportunityMatcher] Gate:APPLICANT_TYPE suppressed "${opportunity.title}" — ${applicantEval.reason} (profile applicant type: ${profileApplicantType ?? 'unknown'})`)
-        return denied('live_reject', {
-          saved: false,
-          reason: `Not eligible for this applicant type (${applicantEval.reason})`,
-          gate: 'APPLICANT_TYPE',
-          matchPercentage: decision?.score ?? null,
-          threshold,
-          decision: 'REJECT',
-        }, decision?.score ?? null)
-      }
     }
 
     // Gate 3: Exclusion engine — custom suppression rules
@@ -418,11 +422,22 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       })
     }
 
-    // Use decision engine score when available, fall back to legacy scorer.
-    // The numeric threshold is authoritative. ACCEPT/REVIEW explain match quality;
-    // they do not override the user's minimum score.
-    if (matchPercentage === null) {
-      matchPercentage = decision?.score ?? calculateMatchPercentage(opportunity, profileContext)
+    // The decision engine owns the score. The legacy positional score remains
+    // accepted for API compatibility, but it is diagnostic only and can never
+    // overwrite, promote, or demote the canonical value.
+    matchPercentage = decision?.score ?? null
+    if (
+      callerReportedMatchPercentage !== null &&
+      callerReportedMatchPercentage !== undefined &&
+      Number.isFinite(Number(callerReportedMatchPercentage)) &&
+      Number(callerReportedMatchPercentage) !== Number(matchPercentage) &&
+      !quiet
+    ) {
+      log.warn('ignored caller-reported match score; canonical decision is authoritative', {
+        opportunity_id: opportunity?.id ?? null,
+        caller_score: Number(callerReportedMatchPercentage),
+        canonical_score: Number.isFinite(Number(matchPercentage)) ? Number(matchPercentage) : null,
+      })
     }
 
     // NULL / unknown-score handling (documented choice):
@@ -439,72 +454,17 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         decision?.decision === 'ACCEPT' && decision?.eligible === true ? RELEVANCE_FLOOR : 0
     }
 
-    if (exclusion?.decision === 'WATCH') {
-      adjustedScore = Math.max(0, adjustedScore - 15)
-    }
-
-    // Gate 4: Relevance filter.
-    // Run in soft mode so non-exclusive mismatches reduce score instead of deleting
-    // potentially useful real opportunities. Rules marked hard:true still reject.
-    if (profileContext) {
-      const profileData = extractProfileData(profileContext)
-      const profileGate = evaluateProfileSpecificGate(profileContext, opportunity, { mode: 'pipeline' })
-      if (!profileGate.pass) {
-        if (!quiet) log.info(`[opportunityMatcher] Gate:PROFILE_SPECIFIC suppressed "${opportunity.title}" - ${profileGate.reason}`)
-        return denied('live_reject', {
-          saved: false,
-          reason: profileGate.reason,
-          gate: 'PROFILE_SPECIFIC',
-          ruleId: profileGate.ruleId,
-          matchPercentage: adjustedScore,
-          threshold,
-        }, adjustedScore)
-      }
-
-      const relevance = applyRelevanceFilter(opportunity, profileData, { mode: 'soft' })
-      if (!relevance.pass) {
-        if (!quiet) log.info(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
-        return denied('relevance_floor', {
-          saved: false,
-          reason: relevance.reason,
-          gate: 'RELEVANCE_FILTER',
-          matchPercentage: adjustedScore,
-          threshold,
-        }, adjustedScore)
-      }
-
-      if (relevance.softFail) {
-        const penalty = Number.isFinite(Number(relevance.penalty)) ? Number(relevance.penalty) : 25
-        adjustedScore = Math.max(0, adjustedScore - penalty)
-        if (decision) {
-          decision.reasons = [
-            ...(Array.isArray(decision.reasons) ? decision.reasons : []),
-            `Soft relevance penalty -${penalty}: ${relevance.reason}`,
-          ]
-        }
-      }
-    }
-
     adjustedScore = Math.round(Math.max(0, Math.min(100, adjustedScore)))
 
     // TRUSTED-SOURCE FLOOR EXEMPTION (recall fix for vetted student aid).
     //
-    // Legitimately relevant aid from a vetted source (curated catalog,
-    // scholarship/school crawler, federal feed, explicitly-verified) routinely
-    // scores 40–54 — most visibly student aid that the student-aid score caps
-    // pin into the 40s. The 55 floor silently drops it. For such rows, when the
-    // decision is NOT REJECT (REJECT already returned at Gate 2), we lower the
-    // effective floor to TRUSTED_RELEVANCE_FLOOR (40). Untrusted/open-web rows
-    // keep the full RELEVANCE_FLOOR. Precision is bounded by the origin
-    // allowlist + the REJECT gate, both of which still apply.
+    // A vetted source may use the centrally configured trusted floor. The
+    // canonical score and decision remain unchanged; this is only an admission
+    // policy for whether a row enters the pipeline.
     const recordOrigin = opportunity?.record_origin ?? null
-    // Trust is about WHERE the row comes from, not HOW it arrived: a grants.gov
-    // / SAM.gov row fetched by the live crawl carries record_origin='live_crawl'
-    // (the untrusted open-web bucket) even though its SOURCE is an official
-    // federal API — the same vetting class as the allowlist's 'grants_gov'
-    // origin. Without this, official federal rows scoring 40-54 (e.g. the NIH
-    // Parent STTR at 40 for a research org, 2026-07-06) were silently floored
-    // at 55 while identical rows from the seed path passed at 40.
+    // Trust is about WHERE the row comes from, not HOW it arrived: an official
+    // API row may carry record_origin='live_crawl', so its explicit source tier
+    // is also considered.
     const officialApiTier = String(opportunity?.source_trust_tier ?? '').toUpperCase() === 'OFFICIAL_API'
     const trusted = isTrustedRecordOrigin(recordOrigin) || officialApiTier
     const decisionIsReject = decision?.decision === 'REJECT' // already returned above; defensive
@@ -688,6 +648,7 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       },
     }
   } catch (error) {
+    if (error?.canonicalMatchPersistenceFailed) throw error
     return {
       ...denied('error:transient', {
         saved: false,
@@ -723,6 +684,8 @@ export async function saveToProfilePipeline(
       failClosedTombstone: outcomeSink?.failClosedTombstone === true,
       quiet: outcomeSink?.quiet === true,
       freshRescoreRequired: outcomeSink?.freshRescoreRequired === true,
+      persistFreshCanonicalDecision:
+        outcomeSink?.freshRescoreRequired === true && outcomeSink?.mode === 'live',
     })
     if (!admission.admitted) {
       if (admission._admissionError && !outcomeSink) {
@@ -937,12 +900,12 @@ export async function saveToProfilePipeline(
       decision: decision?.decision ?? null,
     }
   } catch (error) {
-    if (error?.promotionOutcomeSinkFailed) throw error
+    if (error?.promotionOutcomeSinkFailed || error?.canonicalMatchPersistenceFailed) throw error
     const msg = String(error?.message || '').toLowerCase()
     // Race-condition duplicate — treat as idempotent, not an error
     if (msg.includes('unique') || msg.includes('duplicate')) {
       const thresholdNum = Number(minMatchThreshold)
-      const callerThreshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
+      const callerThreshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 0
       const threshold = Math.max(callerThreshold, RELEVANCE_FLOOR)
       const result = { saved: false, reason: 'Already in pipeline', gate: 'DUPLICATE', matchPercentage, threshold }
       await emitPromotionOutcome(outcomeSink, {
@@ -1046,7 +1009,7 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
     }
 
     // Delegate fully to saveToProfilePipeline — it runs the canonical decision engine,
-    // threshold gate, relevance filter, and idempotency check as one unified pipeline.
+    // threshold gate and idempotency check as one unified pipeline.
     // No pre-filtering here; that was duplicating logic and could diverge from the
     // canonical authority in saveToProfilePipeline.
     const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, null, minMatchThreshold)
@@ -1062,7 +1025,7 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
   }
   
   log.info(`[opportunityMatcher] Processed ${results.total} opportunities:`)
-  log.info(`  - ${results.savedToPipeline} saved to pipeline (>=${minMatchThreshold}% match)`)
+  log.info(`  - ${results.savedToPipeline} saved to pipeline (minimum score ${minMatchThreshold ?? 'canonical floor'})`)
   log.info(`  - ${results.savedGlobally} saved globally`)
   
   return results

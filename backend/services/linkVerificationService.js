@@ -24,6 +24,12 @@
 
 import { setTimeout as sleep } from 'node:timers/promises'
 import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl, assertSsrfSafeUrl } from '../config/urlRules.js'
+import {
+  isLinkLifecycleKind,
+  isPointerOpportunityRow,
+  linkLifecycleOpportunitySql,
+  pointerOpportunityRowSql,
+} from '../config/linkLifecycleKinds.js'
 
 const REQUEST_TIMEOUT_MS = 10_000
 const BATCH_SIZE = 10
@@ -32,6 +38,56 @@ const REVERIFY_AFTER_DAYS = 30
 // After this many days without a successful re-verification, a direct
 // opportunity is considered stale and hidden from user-facing results.
 const STALE_AFTER_DAYS = 90
+const RETIRED_MARKER = 'retired_after_definitive_recheck:'
+const SCHEDULED_RETRY_MARKER = 'retry_scheduled_after_bounded_recheck:'
+const NON_RESTORABLE_LIFECYCLE_STATUSES = Object.freeze([
+  'expired',
+  'deadline_expired',
+  'deadline_passed',
+  'retired',
+  'permanently_retired',
+  'quarantined',
+])
+const NON_RESTORABLE_STATUS_SQL = NON_RESTORABLE_LIFECYCLE_STATUSES
+  .map((status) => `'${status}'`)
+  .join(', ')
+
+/**
+ * A URL probe may update/restore only a non-terminal lifecycle row. The
+ * predicate is repeated on every mutating statement so a concurrent deadline
+ * expiry or permanent retirement wins the race.
+ */
+export function mutableLinkLifecycleSql(alias = '') {
+  const prefix = alias ? `${alias}.` : ''
+  return `LOWER(COALESCE(${prefix}status, 'active')) NOT IN (${NON_RESTORABLE_STATUS_SQL})
+    AND LOWER(COALESCE(${prefix}link_status, 'unverified')) NOT IN (${NON_RESTORABLE_STATUS_SQL})
+    AND COALESCE(${prefix}verification_error, '') NOT LIKE '${RETIRED_MARKER}%'
+    AND (
+      ${pointerOpportunityRowSql(alias)}
+      OR ${prefix}deadline IS NULL
+      OR LOWER(COALESCE(${prefix}deadline_type, 'unknown')) IN ('rolling', 'ongoing')
+      OR ${prefix}deadline >= CURRENT_DATE
+    )`
+}
+
+export function rowLifecycleIsMutable(row = {}) {
+  const status = String(row.status || 'active').trim().toLowerCase()
+  const linkStatus = String(row.link_status || 'unverified').trim().toLowerCase()
+  if (NON_RESTORABLE_LIFECYCLE_STATUSES.includes(status)) return false
+  if (NON_RESTORABLE_LIFECYCLE_STATUSES.includes(linkStatus)) return false
+  if (String(row.verification_error || '').startsWith(RETIRED_MARKER)) return false
+  if (isPointerOpportunityRow(row)) return true
+  const deadlineType = String(row.deadline_type || 'unknown').toLowerCase()
+  if (!row.deadline || deadlineType === 'rolling' || deadlineType === 'ongoing') return true
+  const deadline = String(row.deadline).slice(0, 10)
+  return deadline >= new Date().toISOString().slice(0, 10)
+}
+
+function isRetryableLinkQuarantine(row = {}) {
+  const status = String(row.link_status || 'unverified').toLowerCase()
+  if (status === 'broken' || status === 'unverified') return true
+  return status === 'skipped' && String(row.verification_error || '').startsWith(SCHEDULED_RETRY_MARKER)
+}
 
 function shouldSkipUrl(url) {
   if (!url || typeof url !== 'string') return true
@@ -183,15 +239,31 @@ export async function checkUrl(url, opts = {}) {
  * @returns {Promise<{status:string, code:number|null, updated:boolean}>}
  */
 export async function verifyOpportunityLinkNow(db, oppRow, { verifiedBy = 'stop-recheck' } = {}) {
-  const url = oppRow?.application_url || oppRow?.source_url || null
-  if (!db || !oppRow?.id || !url) return { status: 'skipped', code: null, updated: false }
+  if (!db || !oppRow?.id) return { status: 'skipped', code: null, updated: false }
+  let current
+  try {
+    current = await db.prepare(`
+      SELECT id, application_url, source_url, opportunity_kind, result_kind,
+             opportunity_type, type, status, deadline, deadline_type,
+             link_status, verification_error
+        FROM funding_opportunities
+       WHERE id = ?
+    `).get(String(oppRow.id))
+  } catch {
+    return { status: 'skipped', code: null, updated: false }
+  }
+  const url = current?.application_url || current?.source_url || null
+  if (!url || !rowLifecycleIsMutable(current)) {
+    return { status: 'skipped', code: null, updated: false }
+  }
 
   const startMs = Date.now()
   const result = await checkUrl(url)
   if (result.status === 'skipped') return { status: 'skipped', code: null, updated: false }
 
+  let updated = false
   try {
-    await db.prepare(`
+    const write = await db.prepare(`
       UPDATE funding_opportunities
       SET last_verified_at = ?,
           link_status = ?,
@@ -202,6 +274,7 @@ export async function verifyOpportunityLinkNow(db, oppRow, { verifiedBy = 'stop-
           final_url = COALESCE(?, final_url),
           http_status = COALESCE(?, http_status)
       WHERE id = ?
+        AND ${mutableLinkLifecycleSql()}
     `).run(
       new Date().toISOString(),
       result.status,
@@ -213,24 +286,19 @@ export async function verifyOpportunityLinkNow(db, oppRow, { verifiedBy = 'stop-
       typeof result.code === 'number' ? result.code : null,
       String(oppRow.id),
     )
-    if (result.status === 'ok' || result.status === 'redirect') {
+    updated = Number(write?.changes ?? write?.rowCount ?? 0) > 0
+    if (updated && (result.status === 'ok' || result.status === 'redirect') && isRetryableLinkQuarantine(current)) {
       const isPostgres = db?.dialect === 'postgres'
       const falseVal = isPostgres ? false : 0
       const trueVal = isPostgres ? true : 1
-      try {
-        await db.prepare(`
-          UPDATE funding_opportunities
-             SET is_hidden = ?, is_active = ?,
-                 status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
-           WHERE id = ? AND COALESCE(status, 'active') <> 'expired'
-        `).run(falseVal, trueVal, String(oppRow.id))
-      } catch {
-        try {
-          await db.prepare(`
-            UPDATE funding_opportunities SET is_hidden = ?, is_active = ? WHERE id = ?
-          `).run(falseVal, trueVal, String(oppRow.id))
-        } catch { /* legacy schema: verification truth already persisted above */ }
-      }
+      await db.prepare(`
+        UPDATE funding_opportunities
+           SET is_hidden = ?, is_active = ?,
+               status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
+         WHERE id = ?
+           AND link_status IN ('ok', 'redirect', 'verified')
+           AND ${mutableLinkLifecycleSql()}
+      `).run(falseVal, trueVal, String(oppRow.id))
     }
   } catch {
     return { status: result.status, code: result.code, updated: false }
@@ -249,7 +317,7 @@ export async function verifyOpportunityLinkNow(db, oppRow, { verifiedBy = 'stop-
     })
   } catch { /* audit is best-effort, same as the sweep */ }
 
-  return { status: result.status, code: result.code, updated: true }
+  return { status: result.status, code: result.code, updated }
 }
 
 /**
@@ -271,22 +339,17 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
   const trueVal = isPostgres ? true : 1
   const falseVal = isPostgres ? false : 0
   const changes = (result) => Number(result?.changes ?? result?.rowCount ?? 0)
-  const directPredicate = [
-    "LOWER(COALESCE(opportunity_kind, 'direct')) IN ('direct', 'benefit')",
-    "UPPER(COALESCE(type, '')) NOT IN ('DIRECTORY', 'REFERRAL', 'SCHOOL_PORTAL', 'PAST_AWARD_INTEL')",
-    "LOWER(COALESCE(result_kind, '')) NOT IN ('directory', 'referral', 'school_portal', 'past_award_intel')",
-    "LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%directory%'",
-    "LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%referral%'",
-  ].join(' AND ')
+  const directPredicate = linkLifecycleOpportunitySql()
 
   try {
     const quarantined = await db
       .prepare(
         'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + directPredicate +
         // proof-based startup quarantine: only a timestamped successful probe
-        // may keep a direct/benefit row visible. skipped, null, stale-claimed,
+        // may keep a lifecycle row visible. skipped, null, stale-claimed,
         // unknown, and future noncanonical statuses all fail closed.
-        " AND COALESCE(is_hidden, ?) = ? AND (COALESCE(link_status, 'unverified') NOT IN ('ok', 'redirect', 'verified') OR last_verified_at IS NULL)",
+        " AND COALESCE(is_hidden, ?) = ? AND (COALESCE(link_status, 'unverified') NOT IN ('ok', 'redirect', 'verified') OR last_verified_at IS NULL)" +
+        ` AND ${mutableLinkLifecycleSql()}`,
       )
       .run(trueVal, falseVal, falseVal)
 
@@ -295,25 +358,19 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
     const deactivated = await db
       .prepare(
         'UPDATE funding_opportunities SET is_active = ? WHERE ' + directPredicate +
-        " AND COALESCE(is_active, ?) = ? AND link_status = 'broken'",
+        " AND COALESCE(is_active, ?) = ? AND link_status = 'broken'" +
+        ` AND ${mutableLinkLifecycleSql()}`,
       )
       .run(falseVal, trueVal, trueVal)
-
-    // A prior interrupted sweep may have left a proven row hidden. Reveal only
-    // rows carrying both a successful canonical status and a real timestamp;
-    // never reactivate an independently expired/deactivated program.
-    const restored = await db
-      .prepare(
-        'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + directPredicate +
-        " AND COALESCE(is_hidden, ?) = ? AND link_status IN ('ok', 'redirect', 'verified') AND last_verified_at IS NOT NULL",
-      )
-      .run(falseVal, falseVal, trueVal)
 
     return {
       ok: true,
       quarantined: changes(quarantined),
       deactivated: changes(deactivated),
-      restored: changes(restored),
+      // SQL-only startup state cannot prove that a hidden row was hidden by a
+      // retryable link failure rather than an independent quarantine. Only a
+      // current successful probe that observed the prior failure may restore.
+      restored: 0,
       reason: null,
     }
   } catch (error) {
@@ -338,7 +395,8 @@ export async function runLinkVerification(
     .prepare(
       `
         SELECT id, application_url, source_url, type, opportunity_type,
-               result_kind, last_verified_at, link_status
+               opportunity_kind, result_kind, last_verified_at, link_status,
+               verification_error, status, deadline, deadline_type
         FROM funding_opportunities
         WHERE (application_url IS NOT NULL OR source_url IS NOT NULL)
             AND NOT (
@@ -346,6 +404,7 @@ export async function runLinkVerification(
               AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'
             )
             AND (link_status = 'broken' OR last_verified_at IS NULL OR last_verified_at < ?)
+            AND ${mutableLinkLifecycleSql()}
           ORDER BY CASE WHEN link_status = 'broken' THEN 0 ELSE 1 END,
                    (last_verified_at IS NULL) DESC, last_verified_at ASC
         LIMIT ?
@@ -377,6 +436,7 @@ export async function runLinkVerification(
         final_url = COALESCE(?, final_url),
         http_status = COALESCE(?, http_status)
     WHERE id = ?
+      AND ${mutableLinkLifecycleSql()}
   `)
 
   // Soft-hide for broken direct opps (separate from is_active; allows admin
@@ -384,36 +444,33 @@ export async function runLinkVerification(
   const hide = db.prepare(`
       UPDATE funding_opportunities
       SET is_hidden = ?
-      WHERE id = ?
+      WHERE id = ? AND ${mutableLinkLifecycleSql()}
     `)
 
   const deactivate = db.prepare(`
     UPDATE funding_opportunities
     SET is_active = ?
-    WHERE id = ?
+    WHERE id = ? AND ${mutableLinkLifecycleSql()}
   `)
 
   const isPostgres = db?.dialect === 'postgres'
   const falseVal = isPostgres ? false : 0
   const trueVal = isPostgres ? true : 1
-  // link_repair_success_restores_visibility: current proof heals quarantine.
-  // Legacy/minimal schemas may not carry status; restoration is additive and
-  // must never invalidate the canonical verification timestamp write.
-  const restoreVerifiedVisibility = async (opportunityId) => {
-    try {
-      await db.prepare(`
-        UPDATE funding_opportunities
-           SET is_hidden = ?, is_active = ?,
-               status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
-         WHERE id = ? AND COALESCE(status, 'active') <> 'expired'
-      `).run(falseVal, trueVal, opportunityId)
-    } catch {
-      try {
-        await db.prepare(`
-          UPDATE funding_opportunities SET is_hidden = ?, is_active = ? WHERE id = ?
-        `).run(falseVal, trueVal, opportunityId)
-      } catch { /* visibility columns may also be absent on a narrow legacy fixture */ }
-    }
+  // link_repair_success_restores_visibility: current proof heals only a row
+  // that was quarantined by a retryable link
+  // failure. A successful recheck of an independently hidden row must not
+  // silently undo the separate quarantine.
+  const restoreVerifiedVisibility = async (row) => {
+    if (!isRetryableLinkQuarantine(row)) return 0
+    const result = await db.prepare(`
+      UPDATE funding_opportunities
+         SET is_hidden = ?, is_active = ?,
+             status = CASE WHEN status = 'paused' THEN 'active' ELSE status END
+       WHERE id = ?
+         AND link_status IN ('ok', 'redirect', 'verified')
+         AND ${mutableLinkLifecycleSql()}
+    `).run(falseVal, trueVal, row.id)
+    return Number(result?.changes ?? result?.rowCount ?? 0)
   }
 
   const quarantine = await quarantineUnverifiedDirectOpportunities(db)
@@ -425,12 +482,6 @@ export async function runLinkVerification(
     console.warn('[link-verify] quarantine pass failed:', quarantine?.reason || 'unknown')
   }
 
-  const revealVerified = db.prepare(`
-    UPDATE funding_opportunities
-       SET is_hidden = ?
-     WHERE id = ?
-  `)
-
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE)
     await Promise.all(
@@ -440,7 +491,7 @@ export async function runLinkVerification(
         const result = await checkUrl(url)
         const durationMs = Date.now() - startMs
         const now = new Date().toISOString()
-        await update.run(
+        const persisted = await update.run(
           now,
           result.status,
           result.code,
@@ -451,18 +502,15 @@ export async function runLinkVerification(
           typeof result.code === 'number' ? result.code : null,
           row.id,
         )
-        if (result.status === 'ok' || result.status === 'redirect') {
-          await restoreVerifiedVisibility(row.id)
-        }
+        const didPersist = Number(persisted?.changes ?? persisted?.rowCount ?? 0) > 0
         stats.checked++
         stats[result.status] = (stats[result.status] || 0) + 1
 
-        if (result.status === 'ok' || result.status === 'redirect') {
+        if (didPersist && (result.status === 'ok' || result.status === 'redirect')) {
           try {
-            const revealed = await revealVerified.run(falseVal, row.id)
-            stats.restored += Number(revealed?.changes ?? revealed?.rowCount ?? 0)
+            stats.restored += await restoreVerifiedVisibility(row)
           } catch (err) {
-            console.warn('[link-verify] reveal verified row failed for', row.id, err?.message)
+            console.warn('[link-verify] restore verified row failed for', row.id, err?.message)
           }
         }
 
@@ -481,12 +529,12 @@ export async function runLinkVerification(
         // Direct (non-directory) broken opportunities should not stay visible.
         // Prefer the explicit result_kind column when set; fall back to
         // legacy heuristics for older rows.
-        const resultKindLower = String(row.result_kind || '').toLowerCase()
-        const isDirectory =
-          resultKindLower === 'directory' ||
-          String(row.type || '').toUpperCase() === 'DIRECTORY' ||
-          String(row.opportunity_type || '').toLowerCase().includes('directory')
-        if (result.status === 'broken' && !isDirectory) {
+        if (
+          didPersist &&
+          result.status === 'broken' &&
+          isLinkLifecycleKind(row.opportunity_kind) &&
+          !isPointerOpportunityRow(row)
+        ) {
           try {
             // is_hidden is the soft signal consumer queries filter on; deactivate
             // is the hard kill-switch that strips it from active=1 paths.
@@ -514,18 +562,15 @@ export async function runLinkVerification(
       .prepare(
         `
           UPDATE funding_opportunities
-          SET is_active = ?
+          SET is_active = ?, is_hidden = ?
           WHERE is_active = ?
-            AND (
-              UPPER(COALESCE(type, '')) <> 'DIRECTORY'
-              AND LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%directory%'
-              AND LOWER(COALESCE(result_kind, '')) <> 'directory'
-            )
+            AND ${linkLifecycleOpportunitySql()}
             AND link_status IN ('broken', 'unverified')
             AND COALESCE(last_verified_at, discovered_at, created_at) < ?
+            AND ${mutableLinkLifecycleSql()}
         `,
       )
-      .run(falseVal, isPostgres ? true : 1, staleCutoff)
+      .run(falseVal, isPostgres ? true : 1, isPostgres ? true : 1, staleCutoff)
     stats.expired = Number(result?.changes ?? result?.rowCount ?? 0)
   } catch (err) {
     console.warn('[link-verify] stale expiry pass failed:', err?.message)

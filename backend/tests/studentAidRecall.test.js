@@ -5,7 +5,7 @@
  *
  *   (a) A loosely-tagged TN student profile gets TN HOPE + Pell as eligible
  *       (REVIEW/ACCEPT, NOT REJECT), AND a curated/trusted aid row scoring
- *       12–19 (need-anchored scale) SAVES (passes the trusted floor) and is
+ *       5–6 on data_point_v1 SAVES (passes the trusted floor) and is
  *       NOT purged by the boot sweep.
  *   (b) A clearly non-student nonprofit/business profile still does NOT get
  *       student scholarships (the hard REJECT is preserved — precision).
@@ -19,8 +19,23 @@
  * convention of saveToProfilePipelineGates.test.js / enforceInvariants.test.js.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
+
+vi.mock('../services/matchEngine.js', async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    computeMatchDecision: (...args) => {
+      const result = actual.computeMatchDecision(...args)
+      const forcedScore = Number(args[1]?.__test_canonical_score)
+      return Number.isFinite(forcedScore)
+        ? { ...result, score: forcedScore }
+        : result
+    },
+  }
+})
+
 import { computeMatchDecision } from '../services/matchEngine.js'
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import { enforceRelevanceFloor, __resetFloorCache } from '../startup/enforceInvariants.js'
@@ -121,7 +136,7 @@ describe('(a) loosely-tagged TN student gets student aid as eligible (not REJECT
 })
 
 // ---------------------------------------------------------------------------
-// (a) Recall: a trusted aid row scoring 12–19 SAVES via the trusted floor
+// (a) Recall: a trusted aid row scoring 5–6 SAVES via the trusted floor
 // ---------------------------------------------------------------------------
 
 function makeSaveDb() {
@@ -169,34 +184,39 @@ describe('(a) trusted student aid scoring in the trusted band SAVES via the trus
     expect(score).toBeLessThan(RELEVANCE_FLOOR)
     expect(score).toBeGreaterThanOrEqual(TRUSTED_RELEVANCE_FLOOR)
 
+    const canonicalLowScore = { ...tnHope, __test_canonical_score: score }
     const res = await saveToProfilePipeline(
       db,
-      tnHope,
+      canonicalLowScore,
       'p-student',
       looseTnStudent,
-      score, // explicit match% so we exercise the THRESHOLD gate deterministically
+      99, // deliberately conflicting caller value; canonical score must win
       0, // caller relaxed its own threshold (the crawler-quota case)
     )
 
     expect(res.saved).toBe(true)
+    expect(res.matchPercentage).toBe(score)
     expect(res.threshold).toBe(TRUSTED_RELEVANCE_FLOOR)
     expect(Number(db.prepare('SELECT COUNT(*) AS n FROM grants').get().n)).toBe(1)
   })
 
   it('still BLOCKS an UNTRUSTED open-web aid row at the same below-floor score', async () => {
     const db = makeSaveDb()
-    const untrusted = { ...tnHope, id: 'opp-openweb', record_origin: 'live_crawl' }
-    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 6, 0)
+    const untrusted = {
+      ...tnHope,
+      id: 'opp-openweb',
+      record_origin: 'live_crawl',
+      __test_canonical_score: 6,
+    }
+    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 99, 0)
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('THRESHOLD')
     expect(res.threshold).toBe(RELEVANCE_FLOOR)
   })
 
-  // Trust is about the SOURCE, not the arrival path (2026-07-06): a grants.gov
-  // row fetched live carries record_origin='live_crawl' but its source tier is
-  // OFFICIAL_API — the same vetting class as the 'grants_gov' origin above.
-  // The NIH Parent STTR at 40 for a research org was floored at 55 while an
-  // identical seed-path row would have passed at 40.
+  // Trust is about the SOURCE, not the arrival path: a grants.gov row fetched
+  // live carries record_origin='live_crawl' but its source tier is OFFICIAL_API
+  // — the same vetting class as the 'grants_gov' origin above.
   it('saves an OFFICIAL_API-tier row that arrived via live_crawl at the trusted floor', async () => {
     const db = makeSaveDb()
     const officialLive = {
@@ -204,16 +224,15 @@ describe('(a) trusted student aid scoring in the trusted band SAVES via the trus
       id: 'opp-grantsgov-live',
       record_origin: 'live_crawl',
       source_trust_tier: 'OFFICIAL_API',
+      __test_canonical_score: 6,
     }
-    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 45, 0)
+    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 99, 0)
     expect(res.saved).toBe(true)
     expect(res.threshold).toBe(TRUSTED_RELEVANCE_FLOOR)
   })
 
-  // An OMITTED caller threshold must mean "the canonical floor decides" — the
-  // old default acted like an explicit 55 and out-maxed the trusted floor on
-  // every default path (the manual /from-opportunity add could never benefit
-  // from trust; the NIH Parent STTR at 40 was unaddable by ANY caller).
+  // An omitted caller threshold means "the canonical floor decides"; it must
+  // not invent a second default above the trusted floor.
   it('default (omitted) caller threshold lets the trusted floor apply', async () => {
     const db = makeSaveDb()
     const officialLive = {
@@ -221,17 +240,23 @@ describe('(a) trusted student aid scoring in the trusted band SAVES via the trus
       id: 'opp-grantsgov-live-2',
       record_origin: 'live_crawl',
       source_trust_tier: 'OFFICIAL_API',
+      __test_canonical_score: 6,
     }
     // 6 = inside the trusted band (5–6) on the data-point scale.
-    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 6)
+    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 99)
     expect(res.saved).toBe(true)
     expect(res.threshold).toBe(TRUSTED_RELEVANCE_FLOOR)
   })
 
   it('default (omitted) caller threshold still floors UNTRUSTED rows at the full floor', async () => {
     const db = makeSaveDb()
-    const untrusted = { ...tnHope, id: 'opp-openweb-2', record_origin: 'live_crawl' }
-    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 6)
+    const untrusted = {
+      ...tnHope,
+      id: 'opp-openweb-2',
+      record_origin: 'live_crawl',
+      __test_canonical_score: 6,
+    }
+    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 99)
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('THRESHOLD')
     expect(res.threshold).toBe(RELEVANCE_FLOOR)

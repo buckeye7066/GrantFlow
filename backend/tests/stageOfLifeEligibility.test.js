@@ -3,7 +3,7 @@
  * award that says nothing about academic stage must never be refused.
  *
  * Every fixture below is a REAL prod row or profile field, read read-only on
- * 2026-08-02 against Anastasia White (`c4a92724-9cee-416f-ba30-e91b9b5cd885`),
+ * 2026-08-02 against Demo Tennessee STEM Student (`00000000-0000-4000-8000-000000000001`),
  * a 17-year-old dual-enrolled high-school senior in Cleveland, TN:
  *
  *   • The catalog holds 21 active TN HOPE rows; she matched ZERO. Replaying the
@@ -47,9 +47,9 @@ import {
 
 const HS = 'dual_enrolled_incoming_freshman'
 
-const ANASTASIA = {
+const demo_stem_student = {
   basic_information: {
-    first_name: 'Anastasia',
+    first_name: 'Demo Student',
     location: { city: 'Cleveland', state: 'TN', county: 'Bradley County', zip_code: '37312' },
     academic_status: { gpa: 3.84, act_score: 28, education_level: 'High School Senior', college_courses: 'Yes' },
   },
@@ -193,7 +193,7 @@ function addProfile(db, id, sections, extra = {}) {
     `INSERT INTO profiles (id, display_name, primary_type, applicant_type, status, state, city, postal_code)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    // Anastasia's REAL prod row: `primary_type = 'student'` (prod `profiles`
+    // Demo Student's REAL prod row: `primary_type = 'student'` (prod `profiles`
     // has no `applicant_type`/`state` column at all — a live schema fact).
     id, extra.display_name ?? id, extra.primary_type ?? 'student',
     extra.applicant_type ?? 'student', extra.status ?? 'active',
@@ -355,7 +355,7 @@ describe('stageOfLifeConflict — the gate refuses, and only on a declaration', 
       application_url: 'https://www.tn.gov/tenncare/',
     })
     expect(stageOfLifeConflict(HS, ecf)).toBeNull()
-    expect(stageOfLifeConflictForSections(ANASTASIA, ecf)).toBeNull()
+    expect(stageOfLifeConflictForSections(demo_stem_student, ecf)).toBeNull()
   })
 
   it('SILENCE IS NEVER A DENIAL — a row that states no stage is untouched', () => {
@@ -381,8 +381,8 @@ describe('stageOfLifeConflict — the gate refuses, and only on a declaration', 
     expect(stageOfLifeConflict('graduate_student', VANDERBILT_MED)).toBeNull()
   })
 
-  it('a DUAL-ENROLLMENT award is refused for an enrolled college student (the Robert White class)', () => {
-    // REAL prod row, verbatim: institution-link ACCEPT 53 for Robert White,
+  it('a DUAL-ENROLLMENT award is refused for an enrolled college student (the Demo College Student Persona class)', () => {
+    // REAL prod row, verbatim: institution-link ACCEPT 53 for Demo College Student Persona,
     // a full-time enrolled Cleveland State student — dual enrollment is being
     // IN HIGH SCHOOL while earning college credit, which he provably is not.
     const dual = row({
@@ -420,9 +420,9 @@ describe('stageOfLifeConflict — the gate refuses, and only on a declaration', 
   })
 
   it('derives the stage from SECTIONS through the canonical deriver', () => {
-    expect(stageOfLifeConflictForSections(ANASTASIA, VANDERBILT_MED)?.classId).toBe('graduate_or_professional')
+    expect(stageOfLifeConflictForSections(demo_stem_student, VANDERBILT_MED)?.classId).toBe('graduate_or_professional')
     expect(stageOfLifeConflictForSections(NO_STAGE, VANDERBILT_MED)).toBeNull()
-    expect(stageOfLifeConflictForSections(ANASTASIA, HOPE)).toBeNull()
+    expect(stageOfLifeConflictForSections(demo_stem_student, HOPE)).toBeNull()
   })
 
   it('never asserts an award IS winnable', () => {
@@ -450,14 +450,14 @@ describe('makeDecision applies the gate at the one choke point', () => {
   const profile = { id: 'p1', primary_type: 'college_student', applicant_type: 'individual', state: 'TN' }
 
   it('REJECTS a medical-school scholarship for a high-school senior', () => {
-    const d = makeDecision(84, profile, VANDERBILT_MED, null, null, null, ANASTASIA)
+    const d = makeDecision(84, profile, VANDERBILT_MED, null, null, null, demo_stem_student)
     expect(d.decision).toBe('REJECT')
     expect(d.explanation).toMatch(/Academic stage/)
     expect(d.explanation).toMatch(/School of Medicine/i)
   })
 
   it('does NOT reject the state award she can actually receive', () => {
-    const d = makeDecision(100, profile, HOPE, null, null, null, ANASTASIA)
+    const d = makeDecision(100, profile, HOPE, null, null, null, demo_stem_student)
     expect(d.decision).not.toBe('REJECT')
   })
 
@@ -471,7 +471,7 @@ describe('makeDecision applies the gate at the one choke point', () => {
 describe('enforceStageOfLifeMatchScope', () => {
   it('removes the surfaced awards the profile\'s stage cannot receive', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA, { display_name: 'Anastasia Nicole White' })
+    addProfile(db, 'p-ana', demo_stem_student, { display_name: 'Demo Tennessee STEM Student' })
     for (const o of [HOPE, VANDERBILT_MED, OSHER_REENTRY, FWS]) addOpp(db, o)
     addMatch(db, 'm1', 'p-ana', 'row-hope')
     addMatch(db, 'm2', 'p-ana', 'row-vandy')
@@ -495,7 +495,7 @@ describe('enforceStageOfLifeMatchScope', () => {
 
   it('is idempotent — a second pass repairs nothing', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, VANDERBILT_MED)
     addMatch(db, 'm1', 'p-ana', 'row-vandy')
     expect((await enforceStageOfLifeMatchScope(wrap(db))).repaired).toBe(1)
@@ -505,7 +505,7 @@ describe('enforceStageOfLifeMatchScope', () => {
   it('counts without deleting when ENFORCE_STAGE_OF_LIFE_SCOPE=0', async () => {
     process.env.ENFORCE_STAGE_OF_LIFE_SCOPE = '0'
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, VANDERBILT_MED)
     addMatch(db, 'm1', 'p-ana', 'row-vandy')
     const res = await enforceStageOfLifeMatchScope(wrap(db))
@@ -517,7 +517,7 @@ describe('enforceStageOfLifeMatchScope', () => {
 
   it('deletes the MATCH, never the catalog row', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, VANDERBILT_MED)
     addMatch(db, 'm1', 'p-ana', 'row-vandy')
     await enforceStageOfLifeMatchScope(wrap(db))
@@ -533,7 +533,7 @@ describe('enforceStudentAidInStateRecall', () => {
 
   it('links the TN student to the TN HOPE Scholarship she could never see', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA, { display_name: 'Anastasia Nicole White' })
+    addProfile(db, 'p-ana', demo_stem_student, { display_name: 'Demo Tennessee STEM Student' })
     addOpp(db, HOPE)
     const res = await enforceStudentAidInStateRecall(wrap(db))
     expect(res.repaired).toBe(1)
@@ -545,7 +545,7 @@ describe('enforceStudentAidInStateRecall', () => {
 
   it('REFUSES a row the engine rejects — the stage gate is what makes the key safe', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     // Both are TN rows whose sponsor names Tennessee; only one is receivable.
     addOpp(db, HOPE)
     addOpp(db, { ...HOPE_NONTRAD, sponsor: 'Tennessee Student Assistance Corporation' })
@@ -556,7 +556,7 @@ describe('enforceStudentAidInStateRecall', () => {
 
   it('does NOT link an in-state row that never NAMES the state (the 208→85 flood cut)', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     // Real prod shape: state column says TN, the row is an OHIO college's award.
     addOpp(db, row({
       id: 'row-cuyahoga', title: 'Bessie A. McNair Scholarship', sponsor: 'Cuyahoga Community College',
@@ -578,7 +578,7 @@ describe('enforceStudentAidInStateRecall', () => {
 
   it('is idempotent — a second pass neither re-links nor deletes', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, HOPE)
     const first = await enforceStudentAidInStateRecall(wrap(db))
     expect(first.repaired).toBe(1)
@@ -590,7 +590,7 @@ describe('enforceStudentAidInStateRecall', () => {
 
   it('converges: a link the gate no longer authorizes is dropped', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, HOPE)
     await enforceStudentAidInStateRecall(wrap(db))
     expect(linkRows(db, 'p-ana')).toHaveLength(1)
@@ -604,7 +604,7 @@ describe('enforceStudentAidInStateRecall', () => {
   it('counts without writing when ENFORCE_STUDENT_AID_INSTATE_LINK=0', async () => {
     process.env.ENFORCE_STUDENT_AID_INSTATE_LINK = '0'
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, HOPE)
     const res = await enforceStudentAidInStateRecall(wrap(db))
     expect(res.enforced).toBe(false)

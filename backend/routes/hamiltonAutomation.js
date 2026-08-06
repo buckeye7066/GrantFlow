@@ -12,6 +12,8 @@
  *   POST   /api/hamilton/automation/tasks/:taskId/mark-mailed   — record physical mail submission
  *   POST   /api/hamilton/automation/tasks/:taskId/mark-emailed  — record email submission
  *   POST   /api/hamilton/automation/tasks/:taskId/mark-faxed    — record fax submission
+ *   POST   /api/hamilton/automation/tasks/:taskId/manual-submission-receipt — bind owner-uploaded portal proof
+ *   POST   /api/hamilton/automation/tasks/:taskId/manual-submission-receipts/:receiptId/revoke — revoke binding
  *   POST   /api/hamilton/automation/tasks/:taskId/approve       — explicit user approval to submit
  *   GET    /api/hamilton/automation/tasks                       — list automation tasks scoped to caller
  *   GET    /api/hamilton/automation/tasks/:taskId               — fetch one with classification + outputs
@@ -22,20 +24,26 @@
 
 import express from 'express'
 import rateLimit from 'express-rate-limit'
+import multer from 'multer'
 import {
   requireAuthenticatedUser,
+  requireResolvedIdentity,
   getAccessibleProfileIds,
   getAuthUserId,
+  isProfileOwner,
 } from '../utils/accessControl.js'
+import { isReservedSyntheticUserId } from '../middleware/syntheticServiceTokens.js'
 import {
   getApplicationTask,
   listApplicationTasks,
   updateApplicationTask,
+  cancelApplicationTask,
   appendTaskEvent,
   listTaskEvents,
   listMissingInfo,
 } from '../services/hamilton/applicationTaskStore.js'
 import { listScopedHamiltonTasks } from '../services/hamilton/hamiltonTaskListing.js'
+import { cancelActiveHamiltonTaskRun } from '../services/hamilton/hamiltonRunCancellation.js'
 import {
   automateSelected,
   automateSingleSource,
@@ -67,7 +75,6 @@ import {
   PAYMENT_CATEGORIES,
 } from '../services/hamilton/hamiltonPaymentAuthorizationService.js'
 import {
-  recordSession,
   importSession,
   listSessionsForProfile,
   getSessionById,
@@ -97,6 +104,11 @@ import {
   cancelCloudLogin,
   cloudLoginStatus,
 } from '../services/hamilton/hamiltonCloudLogin.js'
+import {
+  CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
+  controlledBetaBrowserRefusal,
+  isControlledBetaSyntheticBrowserUrl,
+} from '../services/hamilton/controlledBetaBrowserPolicy.js'
 import {
   saveCredential,
   saveGeneratedCredential,
@@ -145,19 +157,53 @@ import { resolveProfileFieldTarget, inlineFieldForBlocker } from '../services/ha
 import { setProfileSectionField } from '../services/profileFieldWriter.js'
 import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
+import {
+  MANUAL_RECEIPT_ATTESTATION_VERSION,
+  MAX_MANUAL_RECEIPT_BYTES,
+  ManualSubmissionReceiptError,
+  recordManualSubmissionReceipt,
+  revokeManualSubmissionReceipt,
+} from '../services/hamilton/manualSubmissionReceiptStore.js'
 import { createLogger } from '../utils/logger.js'
 
 export const HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT = (
-  'Hamilton will attempt to complete and submit the selected application(s) '
-  + 'automatically using the profile information and authorized documents on file. '
-  + 'Hamilton may open portals, fill forms, upload documents, save drafts, and submit '
-  + 'applications when allowed. Hamilton will only stop if required information, '
-  + 'documents, credentials, CAPTCHA, 2FA, payment, or a legally personal '
-  + 'attestation is required and not already authorized.'
+  'Hamilton will prepare the selected application(s) using the profile information '
+  + 'and authorized documents on file. Hamilton may open portals, fill forms, upload '
+  + 'documents, generate narratives, and save drafts. Final portal Submit and portal '
+  + 'account creation remain visible human handoffs. Hamilton never bypasses login, '
+  + 'CAPTCHA, 2FA, payment, signatures, attestations, or owner approval.'
 )
 export const HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION = 'hamilton-autopilot-v1'
 
 const log = createLogger('route:hamilton-automation')
+
+const SUBMISSION_MAY_BE_IN_FLIGHT_STATUSES = new Set([
+  'submit_attempt_started',
+  'submit_evidence_pending',
+  'submission_verification_required',
+])
+
+export function resolveConfiguredHamiltonFrontendOrigin(env = process.env) {
+  const candidates = [
+    env.AUTH_FRONTEND_URL,
+    env.FRONTEND_BASE_URL,
+    env.PUBLIC_APP_URL,
+    env.GRANTFLOW_APP_BASE_URL,
+  ]
+  for (const raw of candidates) {
+    const value = String(raw || '').trim()
+    if (!value) continue
+    try {
+      const parsed = new URL(value)
+      if (!['http:', 'https:'].includes(parsed.protocol)) continue
+      if (parsed.username || parsed.password) continue
+      return parsed.origin
+    } catch {
+      // Ignore malformed optional configuration and fail closed below.
+    }
+  }
+  return null
+}
 
 const router = express.Router()
 
@@ -168,6 +214,88 @@ const startLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'rate_limited', retry_after_ms: 60_000 },
 })
+
+const manualReceiptLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate_limited', retry_after_ms: 15 * 60_000 },
+})
+
+// Evidence is held only in bounded process memory until the atomic DB write.
+// Multer's disk storage and caller-supplied filesystem paths are never used.
+const manualReceiptUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_MANUAL_RECEIPT_BYTES,
+    files: 1,
+    fields: 5,
+    parts: 6,
+    fieldSize: 4096,
+  },
+})
+
+function parseManualReceipt(req, res, next) {
+  manualReceiptUpload.single('receipt')(req, res, (error) => {
+    if (!error) return next()
+    if (error?.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'receipt_file_too_large', message: 'The receipt must be 10 MiB or smaller.' })
+    }
+    if (error instanceof multer.MulterError) {
+      return res.status(400).json({ error: 'invalid_receipt_upload', message: 'Invalid receipt upload.' })
+    }
+    return res.status(400).json({ error: 'invalid_receipt_upload', message: 'Invalid receipt upload.' })
+  })
+}
+
+function sendManualReceiptError(res, error) {
+  if (error instanceof ManualSubmissionReceiptError) {
+    return res.status(error.statusCode || error.status || 400).json({
+      error: error.code,
+      message: error.message,
+    })
+  }
+  // Never log uploaded evidence, filenames, receipt references, or multipart
+  // parser objects. An unexpected failure is deliberately opaque to callers.
+  return res.status(500).json({ error: 'manual_receipt_failed' })
+}
+
+/**
+ * Resolve the exact task/profile human authority before accepting multipart
+ * bytes. Shared-access collaborators, legacy profile tokens, service tokens,
+ * and reserved synthetic identities cannot attest an external submission.
+ */
+async function requireHumanOwnedReceiptTask(req, res, next) {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (!requireResolvedIdentity(req, res)) return
+  const actorUserId = getAuthUserId(user)
+  if (
+    !actorUserId
+    || user?.serviceToken === true
+    || user?.profileTokenAuth === true
+    || isReservedSyntheticUserId(actorUserId)
+  ) {
+    return res.status(403).json({ error: 'human_owner_required' })
+  }
+
+  try {
+    const task = await getApplicationTask(req.db, String(req.params.taskId))
+    if (!task) return res.status(404).json({ error: 'task_not_found' })
+    if (!(await isProfileOwner(req.db, user, task.profile_id))) {
+      return res.status(403).json({ error: 'human_owner_required' })
+    }
+    req.hamiltonManualReceiptContext = {
+      user,
+      task,
+      actorUserId: String(actorUserId),
+    }
+    return next()
+  } catch (error) {
+    return sendManualReceiptError(res, error)
+  }
+}
 
 async function userMayAccessProfile(req, user, profileId) {
   if (!profileId) return false
@@ -390,9 +518,88 @@ router.get('/tasks/:taskId', async (req, res) => {
   }
 })
 
+router.post(
+  '/tasks/:taskId/manual-submission-receipt',
+  manualReceiptLimiter,
+  requireHumanOwnedReceiptTask,
+  parseManualReceipt,
+  async (req, res) => {
+    const ctx = req.hamiltonManualReceiptContext
+    if (String(req.body?.attested || '').trim().toLowerCase() !== 'true') {
+      if (req.file) req.file.buffer = null
+      return res.status(400).json({
+        error: 'attestation_required',
+        message: 'Explicit manual-submission attestation is required.',
+      })
+    }
+    // Existing system-captured proof cannot be replaced or reclassified by an
+    // owner upload. A retry of this dedicated manual path is allowed through so
+    // the store can enforce exact idempotency.
+    if (
+      ctx.task.submission_proof?.verified_external === true
+      && ctx.task.submission_proof?.source !== 'owner_attested_manual_receipt'
+    ) {
+      if (req.file) req.file.buffer = null
+      return res.status(409).json({
+        error: 'external_submission_already_verified',
+        message: 'This task already has captured external-submission proof.',
+      })
+    }
+
+    try {
+      const receipt = await recordManualSubmissionReceipt(req.db, {
+        taskId: ctx.task.id,
+        profileId: ctx.task.profile_id,
+        file: req.file,
+        submittedAt: req.body?.submitted_at,
+        confirmationReference: req.body?.confirmation_reference,
+        attestationVersion: req.body?.attestation_version,
+        idempotencyKey: req.get('Idempotency-Key'),
+        actorUserId: ctx.actorUserId,
+      })
+      const task = await getApplicationTask(req.db, ctx.task.id, { profileId: ctx.task.profile_id })
+      return res.status(receipt.idempotent ? 200 : 201).json({ ok: true, receipt, task })
+    } catch (error) {
+      return sendManualReceiptError(res, error)
+    } finally {
+      // Drop the request's reference to the in-memory evidence as soon as the
+      // transaction completes. No evidence bytes are retained in logs/events.
+      if (req.file) req.file.buffer = null
+    }
+  },
+)
+
+router.post(
+  '/tasks/:taskId/manual-submission-receipts/:receiptId/revoke',
+  manualReceiptLimiter,
+  requireHumanOwnedReceiptTask,
+  async (req, res) => {
+    const ctx = req.hamiltonManualReceiptContext
+    try {
+      const receipt = await revokeManualSubmissionReceipt(req.db, {
+        taskId: ctx.task.id,
+        profileId: ctx.task.profile_id,
+        receiptId: req.params.receiptId,
+        reason: req.body?.reason,
+        actorUserId: ctx.actorUserId,
+      })
+      const task = await getApplicationTask(req.db, ctx.task.id, { profileId: ctx.task.profile_id })
+      return res.json({ ok: true, receipt, task })
+    } catch (error) {
+      return sendManualReceiptError(res, error)
+    }
+  },
+)
+
 router.post('/tasks/:taskId/regenerate', async (req, res) => {
   const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
   if (!ctx) return
+  if (ctx.task.submission_proof?.source === 'owner_attested_manual_receipt') {
+    return res.status(409).json({
+      error: 'manual_submission_receipt_active',
+      message: 'Revoke the active portal receipt before regenerating the submitted packet.',
+    })
+  }
   try {
     const profile = await loadProfile(req.db, ctx.task.profile_id)
     if (!profile) return res.status(404).json({ error: 'profile_not_found' })
@@ -429,6 +636,9 @@ router.post('/tasks/:taskId/regenerate', async (req, res) => {
     return res.json({ ok: true, packet: result })
   } catch (err) {
     log.error('regenerate_failed', { err: err?.message })
+    if (err?.code === 'manual_submission_receipt_active') {
+      return res.status(409).json({ error: err.code, message: err.message })
+    }
     return res.status(500).json({ error: 'regenerate_failed', detail: err?.message })
   }
 })
@@ -436,36 +646,55 @@ router.post('/tasks/:taskId/regenerate', async (req, res) => {
 async function markChannelSubmitted(req, res, channel) {
   const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
   if (!ctx) return
-  const submittedAt = new Date().toISOString()
-  const note = String(req.body?.note || '').slice(0, 1000) || `User confirmed ${channel} submission.`
+  if (ctx.task.submission_proof?.source === 'owner_attested_manual_receipt') {
+    return res.status(409).json({
+      error: 'manual_submission_receipt_active',
+      message: 'Revoke the active portal receipt before recording a different submission channel.',
+    })
+  }
+  const recordedAt = new Date().toISOString()
+  const note = String(req.body?.note || '').slice(0, 1000)
+    || `User recorded a ${channel} dispatch; external receipt is not yet verified.`
   try {
     await updateApplicationTask(req.db, ctx.task.id, {
-      status: 'submitted',
-      submittedAt,
-      completedAt: submittedAt,
+      status: 'submission_verification_required',
+      currentStep: 'submission_verification_required',
+      submittedAt: null,
+      completedAt: null,
+      allowAutoSubmit: false,
+      autoSubmitEnabled: false,
       lastAgentMessage: note,
     })
     await appendTaskEvent(req.db, {
       taskId: ctx.task.id,
-      eventType: 'submitted',
-      status: 'submitted',
+      eventType: 'note',
+      status: 'submission_verification_required',
+      step: 'manual_dispatch_recorded',
       message: note,
       actorUserId: getAuthUserId(ctx.user),
       actorRole: req.ctx?.isAdmin === true ? 'admin' : 'user',
-      details: { channel },
+      details: { channel, manual_dispatch_recorded_at: recordedAt, external_receipt_verified: false },
     })
     await emitHamiltonNotificationToProfileAndAdmins(req.db, {
       profileId: ctx.task.profile_id,
       profileUserId: ctx.task.user_id,
-      type: 'hamilton_submitted',
-      title: `Hamilton logged a ${channel.toUpperCase()} submission`,
-      message: note,
-      severity: 'success',
-      data: { task_id: ctx.task.id, channel, submitted_at: submittedAt },
+      type: 'hamilton_task_blocked',
+      title: `${channel.toUpperCase()} dispatch needs receipt verification`,
+      message: `${note} GrantFlow will not count it as externally received until a carrier or funder receipt is retained.`,
+      severity: 'warning',
+      data: {
+        task_id: ctx.task.id,
+        channel,
+        manual_dispatch_recorded_at: recordedAt,
+        external_receipt_verified: false,
+      },
     })
     return res.json({ ok: true, task: await getApplicationTask(req.db, ctx.task.id) })
   } catch (err) {
     log.error('mark_channel_failed', { channel, err: err?.message })
+    if (err?.code === 'manual_submission_receipt_active') {
+      return res.status(409).json({ error: err.code, message: err.message })
+    }
     return res.status(500).json({ error: 'mark_failed', detail: err?.message })
   }
 }
@@ -478,6 +707,25 @@ router.post('/tasks/:taskId/approve', async (req, res) => {
   const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
   if (!ctx) return
   try {
+    if (SUBMISSION_MAY_BE_IN_FLIGHT_STATUSES.has(ctx.task.status)) {
+      return res.status(409).json({
+        error: 'submission_verification_required',
+        message: 'Auto-submit cannot be re-enabled while an external submission attempt is unresolved. Check the funder portal and reconcile the confirmation evidence first.',
+      })
+    }
+    const authorization = await readAuthorizations(req.db, {
+      profileId: ctx.task.profile_id,
+      fundingSourceId: ctx.task.opportunity_id || ctx.task.grant_id || null,
+      taskId: ctx.task.id,
+    })
+    if (!authorization.submit_applications || authorization.require_human_review) {
+      return res.status(409).json({
+        error: authorization.require_human_review ? 'human_review_required' : 'submit_authorization_required',
+        message: authorization.require_human_review
+          ? 'Final human review is required for this application.'
+          : 'Authorize submit_applications before approving auto-submission.',
+      })
+    }
     await updateApplicationTask(req.db, ctx.task.id, {
       allowAutoSubmit: true,
       autoSubmitEnabled: true,
@@ -500,6 +748,12 @@ router.post('/tasks/:taskId/approve', async (req, res) => {
 router.post('/tasks/:taskId/retry', async (req, res) => {
   const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
   if (!ctx) return
+  if (SUBMISSION_MAY_BE_IN_FLIGHT_STATUSES.has(ctx.task.status)) {
+    return res.status(409).json({
+      error: 'submission_verification_required',
+      message: 'This application may already have crossed the external submit boundary. Check the funder portal and reconcile confirmation evidence before any retry.',
+    })
+  }
   // Re-run the orchestrator on this single source — in the background so the
   // request doesn't hang on browser automation.
   try {
@@ -584,6 +838,14 @@ router.post('/authorize', async (req, res) => {
         message: 'Tick at least one capability so Hamilton has something to do.',
       })
     }
+    if (types.includes('submit_applications')
+        && options?.allow_auto_submit === true
+        && options?.require_human_review === true) {
+      return res.status(400).json({
+        error: 'contradictory_submission_controls',
+        message: 'Choose either automatic submission or final human review, not both.',
+      })
+    }
 
     const ids = await recordAuthorizations(req.db, {
       userId,
@@ -595,6 +857,7 @@ router.post('/authorize', async (req, res) => {
       authorizationText,
       authorizationVersion,
       options,
+      replaceOmittedTypes: true,
       metadata: {
         ip: req.ip || req.headers['x-forwarded-for'] || null,
         user_agent: req.headers['user-agent'] || null,
@@ -679,6 +942,15 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
   if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
   if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
   if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
+  // Web callers may reference saved sessions/documents only by opaque,
+  // profile-owned identifiers. Raw server paths would let an authenticated
+  // caller make Playwright read or upload arbitrary files from the host.
+  if (req.body?.options?.storage_state_path !== undefined || req.body?.options?.documents !== undefined) {
+    return res.status(400).json({
+      error: 'server_paths_not_accepted',
+      message: 'Use saved profile documents and sessions; raw server file paths are not accepted.',
+    })
+  }
   // Background: autopilot drives real portals and can run for minutes.
   runAutomationInBackground('start_autopilot', () => automateSelected(req.db, {
     profileId,
@@ -690,8 +962,6 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
       // caller never chose auto-submit, so it must not read as consent
       // (2026-08-03; was `!== false`, which defaulted every launch to true).
       allow_auto_submit: req.body?.options?.allow_auto_submit === true,
-      documents: Array.isArray(req.body?.options?.documents) ? req.body.options.documents : [],
-      storageStatePath: req.body?.options?.storage_state_path || null,
       headless: req.body?.options?.headless !== false,
     },
   }))
@@ -857,12 +1127,10 @@ router.get('/sessions', async (req, res) => {
 router.post('/sessions', async (req, res) => {
   const user = await requireProfileScope(req, res, req.body?.profileId)
   if (!user) return
-  try {
-    const session = await recordSession(req.db, { ...req.body, userId: getAuthUserId(user) })
-    return res.json({ ok: true, session })
-  } catch (err) {
-    return res.status(400).json({ error: 'record_failed', detail: err?.message })
-  }
+  return res.status(400).json({
+    error: 'session_pointer_not_accepted',
+    message: 'Raw storage-state paths and external references are not accepted. Import an owner-established encrypted storage state or use the session-capture flow.',
+  })
 })
 // Import a session the user established themselves (logged in + cleared 2FA in
 // their own browser) by posting the exported Playwright storageState. Stored
@@ -934,32 +1202,18 @@ router.post('/sessions/:id/expire', async (req, res) => {
   return res.json({ ok: true, session })
 })
 
-// Convenience for the session-capture tool: hand the (already authenticated,
-// profile-scoped) caller a ready-to-use token so they don't have to copy a
-// bearer token out of DevTools. We reuse the caller's existing access token —
-// the same credential they already authenticated this request with — and return
-// it alongside the api base + profileId so the UI can render a pre-filled
-// `node tools/hamilton-session-capture/capture.mjs ...` command. The token is
-// only ever returned to the verified owner of the target profile over HTTPS.
+// Retired fail-closed endpoint. Reflecting a caller's access token into a JSON
+// response defeats the browser's in-memory/httpOnly credential boundary and a
+// request Host header is not a trustworthy API authority. The owner-scoped
+// capture-request and cloud-login flows remain available without exporting a
+// reusable GrantFlow credential.
 router.post('/sessions/capture-token', async (req, res) => {
   const profileId = String(req.body?.profileId || req.body?.profile_id || '').trim()
   const user = await requireProfileScope(req, res, profileId)
   if (!user) return
-  const authHeader = String(req.headers?.authorization || '')
-  const token = authHeader.toLowerCase().startsWith('bearer ')
-    ? authHeader.slice(7).trim()
-    : authHeader.trim()
-  if (!token) {
-    return res.status(400).json({
-      error: 'no_bearer_token',
-      message: 'No bearer token on this request to hand to the capture tool.',
-    })
-  }
-  return res.json({
-    ok: true,
-    token,
-    profileId,
-    api_base: `${req.protocol}://${req.get('host')}`,
+  return res.status(410).json({
+    error: 'capture_token_disabled',
+    message: 'GrantFlow no longer exports access tokens to session-capture commands. Use the owner-scoped capture-request or cloud interactive-login flow.',
   })
 })
 
@@ -1038,12 +1292,9 @@ router.post('/sessions/capture-requests/:id/cancel', async (req, res) => {
 })
 
 // ── Cloud interactive login (Option B) ──────────────────────────────────────
-// Self-serve, any device, owner-independent: the backend opens a browser the
-// user drives to log in + clear 2FA, then we capture the session. ON GLOBALLY by
-// default via the self_hosted provider (uses the Playwright that already ships in
-// the prod image — no third-party service). Set HAMILTON_CLOUD_LOGIN_PROVIDER=cdp
-// (+ endpoint) for a hosted streamed window, or =disabled to turn it off. The
-// captured session imports through the same profile-bound, encrypted path.
+// Controlled beta: the interactive browser remains available only for the
+// reserved synthetic fixture. Real portals always use a visible manual/external
+// handoff and never reach Playwright from this route.
 
 router.get('/sessions/cloud-login/status', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
@@ -1059,6 +1310,18 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
     return res.status(501).json({ error: 'cloud_login_not_configured', ...cloudLoginStatus() })
   }
   const portalHost = req.body?.portal_host || req.body?.portalHost
+  const loginUrl = req.body?.login_url || req.body?.loginUrl || (portalHost ? `https://${portalHost}/` : null)
+  const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
+  if (!isControlledBetaSyntheticBrowserUrl(loginUrl)
+      || normalizedPortalHost !== CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST) {
+    const refusal = controlledBetaBrowserRefusal()
+    return res.status(409).json({
+      error: 'cloud_login_start_failed',
+      reason: refusal.code,
+      detail: refusal.message,
+      requires_human_handoff: true,
+    })
+  }
 
   // ADAPT: if this portal has already taught us it blocks our datacenter browser
   // (a stable anti-bot / IP-reputation wall the engine upgrade can't beat), do
@@ -1088,12 +1351,13 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
     userId: getAuthUserId(user),
     profileId,
     portalHost,
-    loginUrl: req.body?.login_url || req.body?.loginUrl || null,
+    loginUrl,
     label: req.body?.label || null,
     captureRequestId: req.body?.capture_request_id || null,
-    // Public origin of THIS request so the self_hosted liveUrl is absolute and
-    // points back at GrantFlow's own /HamiltonLiveLogin live-view page.
-    origin: `${req.protocol}://${req.get('host')}`,
+    // Never derive a credential-bearing/self URL from request Host. A validated
+    // configured frontend origin is used when present; otherwise the service
+    // returns a relative live URL and the frontend anchors it to its own origin.
+    origin: resolveConfiguredHamiltonFrontendOrigin(),
     // REQUIRED for session seeding: with the db the live context is seeded from
     // the profile's existing valid saved session for this portal, so a watched
     // side-by-side open lands SIGNED IN and "Done" refreshes that session
@@ -1753,9 +2017,9 @@ router.post('/resolved-fields', async (req, res) => {
 })
 
 // Admin: dashboard list of every open hard stop in the system. Restricted to
-// the canonical Hamilton operator (buckeye7066@gmail.com). Multi-admin routing
-// is *not* the primary path — this endpoint accepts is_admin=1 OR an email
-// that matches the canonical admin email.
+// the configured Hamilton operator. Multi-admin routing is *not* the primary
+// path — this endpoint accepts is_admin=1 OR an email that matches the
+// configured admin email.
 router.get('/admin/hard-stops', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
@@ -2084,8 +2348,20 @@ router.get('/admin/tasks', async (req, res) => {
 router.post('/tasks/:taskId/cancel', async (req, res) => {
   const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
   if (!ctx) return
+  if (ctx.task.submission_proof?.source === 'owner_attested_manual_receipt') {
+    return res.status(409).json({
+      error: 'manual_submission_receipt_active',
+      message: 'Revoke the active portal receipt before cancelling this submitted task.',
+    })
+  }
   const reason = String(req.body?.reason || '').slice(0, 500) || 'cancelled_by_user'
   try {
+    cancelActiveHamiltonTaskRun(ctx.task.id, reason)
+    const task = await cancelApplicationTask(req.db, ctx.task.id, {
+      actorUserId: getAuthUserId(ctx.user),
+      actorRole: req.ctx?.isAdmin === true ? 'admin' : 'user',
+      reason,
+    })
     const resolvedBlockers = await resolveOpenBlockersForTask(req.db, {
       taskId: ctx.task.id,
       strategy: 'cancelled',
@@ -2096,17 +2372,23 @@ router.post('/tasks/:taskId/cancel', async (req, res) => {
       const ids = [b.user_notification_id, ...(b.admin_notification_ids || [])].filter(Boolean)
       if (ids.length > 0) await markNotificationsResolved(req.db, ids)
     }
-    await appendTaskEvent(req.db, {
-      taskId: ctx.task.id,
-      eventType: 'cancelled',
-      step: 'cancel',
-      message: reason,
-      actorUserId: getAuthUserId(ctx.user),
-      actorRole: req.ctx?.isAdmin === true ? 'admin' : 'user',
+    const warning = task?.status === 'submission_verification_required'
+      ? {
+          code: 'submission_action_may_be_in_progress',
+          message: 'Hamilton had already reached the portal submission boundary. Automation is stopped, but the external action may already have occurred; check the portal before retrying.',
+        }
+      : null
+    return res.json({
+      ok: true,
+      task,
+      resolved_blockers: resolvedBlockers,
+      ...(warning ? { warning } : {}),
     })
-    return res.json({ ok: true, resolved_blockers: resolvedBlockers })
   } catch (err) {
     log.error('cancel_task_failed', { err: err?.message })
+    if (err?.code === 'manual_submission_receipt_active') {
+      return res.status(409).json({ error: err.code, message: err.message })
+    }
     return res.status(500).json({ error: 'cancel_failed', detail: err?.message })
   }
 })

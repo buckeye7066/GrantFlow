@@ -52,8 +52,9 @@ API_DATA_GOV_KEY          # enrichment only
 ## 2. Where to install keys
 
 ### Local development
-Backend reads from `backend/.env` (or root `.env`). Copy from `backend/env.example`,
-then add the variables above.
+GrantFlow loads the root `.env`. Copy the generated root `.env.example` to `.env`,
+then add the variables above. `backend/env.example` is a deprecated compatibility
+notice, not a configuration template.
 
 ### Railway (production backend — this is the one that matters for live crawls)
 The recurring crawl runs on Railway, so a key only affects production once it's set here.

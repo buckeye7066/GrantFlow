@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, Calendar as CalendarIcon, ArrowRight } from "lucide-react";
 import { daysUntilLocal } from "@/components/shared/dateUtils";
 
-export default function UrgentDeadlinesCard({ urgentDeadlines }) {
+export default function UrgentDeadlinesCard({ urgentDeadlines, isSimplified = false }) {
   const getDeadlineInfo = (grant) => {
     if (grant.deadline?.toLowerCase() === 'rolling') {
       return {
@@ -78,7 +78,9 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
               if (!deadlineInfo) return null;
 
               return (
-                <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
+                <Link key={grant.id} to={isSimplified
+                  ? `${createPageUrl('Pipeline')}?grant_id=${encodeURIComponent(grant.id)}`
+                  : createPageUrl("GrantDetail", { id: grant.id })}>
                   <div className="flex items-start justify-between p-4 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
                     <div className="flex-1">
                       <h4 className="font-semibold text-card-foreground">{grant.title}</h4>

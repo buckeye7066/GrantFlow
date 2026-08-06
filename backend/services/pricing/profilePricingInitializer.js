@@ -9,7 +9,7 @@
  *   2. a `profile_pricing` row that owns the access gate's status
  *   3. a `service_agreements` row that records the required acceptance
  *   4. an `admin_pricing_notifications` row queued for the only admin
- *      (buckeye7066@gmail.com — overridable via env)
+ *      (configured-admin@example.invalid — overridable via env)
  *   5. one or two `payment_access_events` rows so Sam can audit the
  *      sequence end-to-end.
  *
@@ -34,7 +34,6 @@ import {
   QUOTE_STATUS,
   SERVICE_AGREEMENT_VERSION,
   adminNotificationEmail,
-  isAdminNotificationTarget,
   readEnvFlag,
   toCents,
 } from './pricingTypes.js'
@@ -380,7 +379,7 @@ export async function initializeProfilePricing(db, args = {}) {
   if (!profileId) return { ok: false, error: 'profile_id_required' }
   if (!(await preflight(db))) return { ok: false, error: 'pricing_tables_not_installed' }
 
-  const isAdmin = Boolean(user?.is_admin || isAdminNotificationTarget(user?.email))
+  const isAdmin = Boolean(user?.is_admin === true || user?.is_admin === 1 || user?.role === 'admin')
 
   const quote = buildRecommendedQuote({
     profile,

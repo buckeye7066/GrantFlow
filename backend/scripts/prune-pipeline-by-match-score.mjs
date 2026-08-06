@@ -12,15 +12,15 @@
  * the tombstone, then delete the grant.
  *
  * Profiles are resolved by a case-insensitive display_name / name match so you
- * can target people by first name ("Anastasia", "Robert").
+ * can target people by first name ("Demo Student", "Robert").
  *
  * Usage:
- *   node backend/scripts/prune-pipeline-by-match-score.mjs --names "Anastasia,Robert"            # dry-run
- *   node backend/scripts/prune-pipeline-by-match-score.mjs --names "Anastasia,Robert" --apply    # delete
- *   node backend/scripts/prune-pipeline-by-match-score.mjs --names "Anastasia" --threshold 80 --apply
+ *   node backend/scripts/prune-pipeline-by-match-score.mjs --names "Demo Student,Robert"            # dry-run
+ *   node backend/scripts/prune-pipeline-by-match-score.mjs --names "Demo Student,Robert" --apply    # delete
+ *   node backend/scripts/prune-pipeline-by-match-score.mjs --names "Demo Student" --threshold 80 --apply
  *
  * Against production run with Railway env injected:
- *   railway run node backend/scripts/prune-pipeline-by-match-score.mjs --names "Anastasia,Robert" --apply
+ *   railway run node backend/scripts/prune-pipeline-by-match-score.mjs --names "Demo Student,Robert" --apply
  *
  * Null/unknown match_score counts as "below threshold" (it does NOT meet the
  * >= threshold bar). Pass --keep-unscored to leave NULL-score rows in place.
@@ -56,7 +56,7 @@ function isProtected(grant) {
   const hay = `${grant?.title || ''} ${grant?.funder || ''}`
   return protectRe.test(hay)
 }
-const names = String(argValue('--names', 'Anastasia,Robert'))
+const names = String(argValue('--names', 'Demo Student,Robert'))
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean)

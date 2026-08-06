@@ -10,14 +10,14 @@
  * needs of the profile."
  *
  * THE DEFECT THIS EXISTS FOR, measured read-only in prod 2026-08-02 on
- * Anastasia White (`c4a92724-…`, `education.intended_major = "Forensic Science"`,
+ * Demo Tennessee STEM Student (`c4a92724-…`, `education.intended_major = "Forensic Science"`,
  * `education.interests = [Forensic Science, Criminal Justice, STEM, DNA
  * Analysis, Crime Scene Investigation]`):
  *
  *   buildThesis's `interest_terms` — the ONLY topical seed the open-web query
  *   builder consumes — resolved to:
  *
- *     ['anastasia','nicole','white','female','woman','women','girl','girls',
+ *     ['demo_stem_student','nicole','white','female','woman','women','girl','girls',
  *      'female-led','led','female identifying','identifying']
  *
  *   Her NAME and twelve gender synonyms. Not one word about forensic science.
@@ -319,7 +319,7 @@ const HS_RX = /high school|secondary|senior|junior|sophomore|freshman \(hs\)/i
 // fellowships (UAB Blazer class) for an incoming freshman. "graduated from
 // X" alone is also NOT graduate school ("graduated high school in May").
 // SECOND LIVE INSTANCE, same day: the phrase-lookbehind alone still let
-// "graduate" match INSIDE the word "UNDERgraduate" — Robert White's
+// "graduate" match INSIDE the word "UNDERgraduate" — Demo College Student Persona's
 // `education.highest_level` is verbatim "College Student - Currently in
 // undergraduate program", and he derived `graduate_student`. A letter
 // lookbehind makes the token a WORD; `post-?graduate` is re-admitted

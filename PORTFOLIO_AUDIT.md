@@ -1,6 +1,6 @@
 # GrantFlow — Focused Security & Integrity Hardening Pass
 
-**Branch:** `claude/portfolio-hardening-2026-07-18` (worktree `C:\Users\firer\portfolio-hardening\grantflow`, based off `93d271c0`)
+**Branch:** `claude/portfolio-hardening-2026-07-18` (worktree `C:\Users\example_user\portfolio-hardening\grantflow`, based off `93d271c0`)
 **Date:** 2026-07-18
 **Scope:** Cross-cutting security/integrity audit (AuthN/AuthZ + multi-tenant isolation, AI controls, honest capability states, outbound side-effect controls, secret/PII leakage). NOT a rewrite or feature work. Confirmed defects were reproduced from code, fixed with the smallest robust change, and covered by regression tests. Larger/behavioral items are recorded as findings with recommendations rather than changed in a live prod repo.
 

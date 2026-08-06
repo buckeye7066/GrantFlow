@@ -28,6 +28,7 @@ import {
   findDuplicateProfileGroups,
   mergeProfiles,
 } from '../services/profileDedupeService.js';
+import { DEFAULT_MIN_SCORE, SCORE_SCALE_ID } from '../config/matchThresholds.js';
 
 export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCorsOrigins }) {
   // ── 1. Postgres CHECK-constraint auto-heal ────────────────────────────────
@@ -506,7 +507,12 @@ async function _scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
           comprehensiveJobId,
           'comprehensive',
           profileId,
-          JSON.stringify({ max_results: 1, match_threshold: 80, save_to_database: false }),
+          JSON.stringify({
+            max_results: 1,
+            match_threshold: DEFAULT_MIN_SCORE,
+            score_scale_id: SCORE_SCALE_ID,
+            save_to_database: false,
+          }),
           'system-smoke',
         );
 

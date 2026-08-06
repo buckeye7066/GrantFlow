@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import OpenAI from 'openai';
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js';
 
-const pdfPath = process.argv[2] || 'G:\\Apps\\grantflow\\GrantFlowb44\\Anastasia profile.pdf';
+const pdfPath = process.argv[2] || 'G:\\Apps\\grantflow\\GrantFlowb44\\Demo Student profile.pdf';
 const dbPath = process.argv[3] || './data/grantflow.db';
 
 const PROFILE_EXTRACTION_PROMPT = `You are extracting structured profile information from a document. Extract all relevant information and return a JSON object with the following structure:
@@ -105,7 +105,7 @@ async function main() {
   const db = new Database(dbPath);
   
   const profileId = crypto.randomUUID();
-  const displayName = extractedData.display_name || 'Anastasia Profile';
+  const displayName = extractedData.display_name || 'Demo Student Profile';
   const primaryType = extractedData.primary_type || 'individual';
   
   console.log('Creating profile:', displayName, '(', profileId, ')');

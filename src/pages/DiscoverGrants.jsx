@@ -1152,7 +1152,9 @@ export default function DiscoverGrants() {
       })
     }
     
-    // Auto-add high-confidence matches (\u226570%).
+    // Auto-add only persisted canonical ACCEPT decisions. The browser does not
+    // run a second score threshold or eligibility trial; the server still
+    // re-validates the exact pair at the write boundary.
     let addedCount = 0
     let alreadyCount = 0
     let skippedCount = 0
@@ -1163,8 +1165,8 @@ export default function DiscoverGrants() {
       // Server-flagged pipeline members are never re-added (they'd only
       // round-trip to an `already` answer).
       if (opp?.already_in_pipeline) { alreadyCount += 1; continue }
-      const score = Number(opp.match_score ?? opp.match ?? 0);
-      if (Number.isFinite(score) && score >= AUTO_ADD_SCORE) {
+      const canonicalDecision = String(opp?.match_decision ?? '').trim().toUpperCase()
+      if (canonicalDecision === 'ACCEPT') {
         attempted += 1
         try {
           const result = await handleAddToPipeline(opp, { silent: true, autoAdd: true })

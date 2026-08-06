@@ -10,7 +10,13 @@ import { runAutonomousCodeCrawl } from '../services/anyaAutonomousCrawler.js'
 let tmpDir
 let originalCwd
 
-const mockContext = { db: null, user: { id: 'test-admin', role: 'admin' } }
+const mockContext = {
+  db: null,
+  user: { id: 'test-admin', role: 'admin' },
+  get trustedRepoRoot() {
+    return process.cwd()
+  },
+}
 
 async function seed(file, content) {
   const abs = path.join(tmpDir, file)
@@ -319,7 +325,7 @@ describe('anyaAutonomousCrawler: extended honest-metrics contract', () => {
     // pointing at a dead inode -> ENOENT on any subsequent process.cwd()
     // call (as runAutonomousCodeCrawl does). Preserving tmp3 as the cwd
     // avoids that entirely while still giving each test a clean slate.
-    for (const child of ['src', 'assets', 'node_modules', 'backend']) {
+    for (const child of ['src', 'assets', 'node_modules', 'backend', 'outside-link', '.agent-edit-lock']) {
       await fs
         .rm(path.join(tmp3, child), { recursive: true, force: true })
         .catch(() => { /* intentionally ignored: test tmpdir cleanup is best-effort */ })
@@ -490,15 +496,77 @@ describe('anyaAutonomousCrawler: extended honest-metrics contract', () => {
     expect(page2.findings[0]).not.toEqual(page1.findings[0])
   })
 
-  it('surfaces readdir errors (e.g. missing directory) instead of swallowing them', async () => {
-    const r = await runAutonomousCodeCrawl(
+  it('rejects a missing scan directory before traversal', async () => {
+    await expect(runAutonomousCodeCrawl(
       { directory: path.join(tmp3, '__nope__'), dryRun: true, includeDomainAudits: false },
       mockContext,
-    )
-    expect(r.scan_errors).toBeGreaterThanOrEqual(1)
-    expect(r.scan_errors_detail.some((e) => e.stage === 'readdir')).toBe(true)
-    // Errors must also appear in the unified errors array
-    expect(r.errors.some((e) => e.stage === 'readdir')).toBe(true)
+    )).rejects.toMatchObject({ code: 'ANYA_SCAN_DIRECTORY_MISSING', status: 400 })
+  })
+
+  it('rejects absolute and parent-traversal scan roots outside the trusted repository', async () => {
+    await expect(runAutonomousCodeCrawl(
+      { directory: os.tmpdir(), dryRun: true, includeDomainAudits: false },
+      mockContext,
+    )).rejects.toMatchObject({ code: 'ANYA_REPO_SCOPE_VIOLATION', status: 400 })
+
+    await expect(runAutonomousCodeCrawl(
+      { directory: '..', dryRun: true, includeDomainAudits: false },
+      mockContext,
+    )).rejects.toMatchObject({ code: 'ANYA_REPO_SCOPE_VIOLATION', status: 400 })
+  })
+
+  it('rejects a symlinked scan root that resolves outside the trusted repository', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'anya-outside-'))
+    try {
+      await fs.symlink(outside, path.join(tmp3, 'outside-link'), 'dir')
+    } catch {
+      await fs.rm(outside, { recursive: true, force: true })
+      return
+    }
+
+    try {
+      await expect(runAutonomousCodeCrawl(
+        { directory: 'outside-link', dryRun: true, includeDomainAudits: false },
+        mockContext,
+      )).rejects.toMatchObject({ code: 'ANYA_REPO_SCOPE_VIOLATION', status: 400 })
+    } finally {
+      await fs.rm(path.join(tmp3, 'outside-link'), { force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('forces requested production writes into dry-run unless the operator gate is enabled', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    const previousGate = process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES
+    process.env.NODE_ENV = 'production'
+    delete process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES
+    try {
+      const report = await runAutonomousCodeCrawl(
+        { dryRun: false, maxFileChanges: 0, includeDomainAudits: false },
+        mockContext,
+      )
+      expect(report.dry_run_requested).toBe(false)
+      expect(report.dry_run_effective).toBe(true)
+      expect(report.dry_run_forced_by_env).toBe(true)
+      expect(report.writes_env_enabled).toBe(false)
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = previousNodeEnv
+      if (previousGate === undefined) delete process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES
+      else process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES = previousGate
+    }
+  })
+
+  it('refuses apply mode while the repository edit lock is present', async () => {
+    await fs.writeFile(path.join(tmp3, '.agent-edit-lock'), 'test lock\n', 'utf8')
+    try {
+      await expect(runAutonomousCodeCrawl(
+        { dryRun: false, maxFileChanges: 1, includeDomainAudits: false },
+        mockContext,
+      )).rejects.toMatchObject({ code: 'ANYA_EDIT_LOCK_PRESENT', status: 409 })
+    } finally {
+      await fs.rm(path.join(tmp3, '.agent-edit-lock'), { force: true })
+    }
   })
 
   it('runs GrantFlow domain audits and returns a summary + individual findings', async () => {

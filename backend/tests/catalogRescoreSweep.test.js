@@ -51,7 +51,7 @@ function makeDb() {
     );
     CREATE TABLE profile_opportunity_matches (
       id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,
-      match_score INTEGER, match_decision TEXT, match_explanation TEXT,
+      match_score INTEGER, match_confidence REAL, match_decision TEXT, match_explanation TEXT,
       match_reasons TEXT, match_explain_json TEXT, source_query TEXT,
       discovered_via TEXT, matcher_version TEXT,
       computed_at DATETIME, updated_at DATETIME, evaluated_at DATETIME
@@ -97,10 +97,24 @@ function addOpp(db, over = {}) {
 /** Deterministic engine stub: verdict keyed off the row title. */
 function stubEngine() {
   return (profile, opp) => {
-    if (/JUNK/.test(opp.title)) return { decision: 'accept', score: 12, explanation: 'junk-accept' }
-    if (/REVIEW/.test(opp.title)) return { decision: 'review', score: 40, explanation: 'review' }
-    if (/REJECT/.test(opp.title)) return { decision: 'reject', score: 2, explanation: 'reject' }
-    return { decision: 'accept', score: 85, explanation: 'accept' }
+    const verdict = /REVIEW/.test(opp.title) ? 'review' : (/REJECT/.test(opp.title) ? 'reject' : 'accept')
+    const score = verdict === 'accept' ? 17 : (verdict === 'review' ? 7 : 2)
+    return {
+      decision: verdict,
+      score,
+      confidence: verdict === 'accept' ? 88 : 54,
+      explanation: verdict,
+      reasons: [`current-${verdict}`],
+      matchedNeeds: verdict === 'accept' ? ['education'] : [],
+      scoreScaleId: 'data_point_test_v1',
+      scoringPolicyVersion: 'policy-test-v1',
+      matcherVersion: 'matcher-test-v1',
+      evaluatedAt: '2026-08-06T12:00:00.000Z',
+      match_explain: {
+        nested_evidence: { source: 'test', retained: true },
+        scoreBreakdown: { total: score },
+      },
+    }
   }
 }
 
@@ -187,17 +201,30 @@ describe('ACCEPT-only writes under the reconcile-surviving version', () => {
     db.close()
   })
 
-  it('a pair with ANY existing match row is excluded by the SQL predicate — a profile\'s own crawler-os verdict always wins', async () => {
+  it('revisits an existing pair and replaces stale persisted truth with the current canonical ACCEPT', async () => {
     const db = makeDb()
     addProfile(db, 'p1')
     const opp = addOpp(db, { title: 'HOPE Scholarship' })
     db.prepare(
-      `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_decision, matcher_version)
-       VALUES ('existing', 'p1', ?, 'reject', 'crawler-os')`,
+      `INSERT INTO profile_opportunity_matches
+         (id, profile_id, opportunity_id, match_decision, matcher_version, source_query, discovered_via)
+       VALUES ('existing', 'p1', ?, 'reject', 'crawler-os', 'housing scholarship', 'serpapi')`,
     ).run(opp.id)
     const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
-    expect(res.scanned).toBe(0)
-    expect(matches(db)).toHaveLength(0)
+    expect(res.scanned).toBe(1)
+    expect(res.adjudicated).toBe(1)
+    expect(res.updated).toBe(1)
+    const current = matches(db)
+    expect(current).toHaveLength(1)
+    expect(current[0]).toMatchObject({
+      opportunity_id: opp.id,
+      match_score: 17,
+      match_confidence: 88,
+      match_decision: 'accept',
+      match_explanation: 'accept',
+      source_query: 'housing scholarship',
+      discovered_via: 'serpapi',
+    })
     db.close()
   })
 })
@@ -287,7 +314,11 @@ describe('the cursor (bounded, resumable, drift-reopening)', () => {
   it('a budget-truncated pass resumes past its watermark instead of re-scanning', async () => {
     const db = makeDb()
     addProfile(db, 'p1')
-    for (let i = 0; i < 5; i += 1) addOpp(db, { title: `REVIEW filler ${i}` })
+    // Legacy inventory can have no created_at. The resumable cursor must still
+    // advance through every pair instead of stranding NULL-timestamp rows.
+    for (let i = 0; i < 5; i += 1) {
+      addOpp(db, { title: `REVIEW filler ${i}`, created_at: null })
+    }
     const first = await runCatalogRescoreSweep(db, { writeEnabled: true, pairBudget: 2, deps: baseDeps() })
     expect(first.truncated).toBe(true)
     expect(first.adjudicated).toBe(2)
@@ -298,21 +329,22 @@ describe('the cursor (bounded, resumable, drift-reopening)', () => {
     db.close()
   })
 
-  it('a completed profile is skipped until the active catalog materially drifts', async () => {
+  it('reopens a completed cycle on the next invocation even when catalog size is unchanged', async () => {
     const db = makeDb()
     addProfile(db, 'p1')
     addOpp(db, { title: 'REVIEW one' })
-    await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
+    const first = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
+    expect(first.profiles_completed).toBe(1)
     const again = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
-    expect(again.adjudicated).toBe(0) // nothing re-scanned
-    // The world moves 500+ active rows: the profile re-opens and NEW rows are seen.
-    for (let i = 0; i < 501; i += 1) addOpp(db, { title: `REVIEW drift ${i}`, created_at: `2026-03-01T01:00:00Z` })
-    const drift = await runCatalogRescoreSweep(db, { writeEnabled: true, pairBudget: 10_000, deps: baseDeps() })
-    expect(drift.adjudicated).toBeGreaterThan(0)
+    expect(again.cycles_reopened).toBe(1)
+    expect(again.adjudicated).toBe(1)
+    const cursor = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(CATALOG_RESCORE_KV_KEY).value)
+    expect(cursor.profiles.p1.cycle).toBe(2)
+    expect(cursor.profiles.p1.completed_at).toBeTruthy()
     db.close()
   })
 
-  it('is idempotent in write mode: a second full pass writes nothing new', async () => {
+  it('keeps one row per pair while a later cycle refreshes its current truth', async () => {
     const db = makeDb()
     addProfile(db, 'p1')
     addOpp(db, { title: 'HOPE Scholarship' })
@@ -321,12 +353,125 @@ describe('the cursor (bounded, resumable, drift-reopening)', () => {
     const before = matches(db).length
     const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
     expect(res.linked).toBe(0)
+    expect(res.updated).toBe(2)
     expect(matches(db)).toHaveLength(before)
     db.close()
   })
 })
 
 describe('convergence', () => {
+  it.each(['review', 'reject'])(
+    'removes a stale catalog-rescore ACCEPT when the current canonical decision becomes %s',
+    async (nextVerdict) => {
+      const db = makeDb()
+      try {
+        addProfile(db, 'p1')
+        const opp = addOpp(db, { title: 'Policy-sensitive scholarship' })
+        let verdict = 'accept'
+        const deps = {
+          computeMatchDecision: () => ({
+            decision: verdict,
+            score: verdict === 'accept' ? 14 : (verdict === 'review' ? 7 : 2),
+            confidence: 80,
+            explanation: `current-${verdict}`,
+            reasons: [`reason-${verdict}`],
+            scoreScaleId: 'data_point_test_v1',
+            scoringPolicyVersion: 'policy-test-v1',
+            matcherVersion: 'matcher-test-v1',
+            match_explain: { verdict_evidence: verdict },
+          }),
+        }
+
+        await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
+        expect(matches(db)).toHaveLength(1)
+
+        verdict = nextVerdict
+        const converged = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
+        expect(converged.stale_removed).toBe(1)
+        expect(matches(db)).toHaveLength(0)
+        expect(db.prepare(
+          'SELECT COUNT(*) AS c FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id = ?',
+        ).get('p1', opp.id).c).toBe(0)
+      } finally {
+        db.close()
+      }
+    },
+  )
+
+  it('refreshes score, confidence, explanation, reasons, and full versioned match evidence', async () => {
+    const db = makeDb()
+    try {
+      addProfile(db, 'p1')
+      addOpp(db, { title: 'Versioned scholarship' })
+      let revision = 1
+      const deps = {
+        computeMatchDecision: () => ({
+          decision: 'accept',
+          score: revision === 1 ? 12 : 19,
+          confidence: revision === 1 ? 71 : 93,
+          explanation: `explanation-v${revision}`,
+          reasons: [`reason-v${revision}`, 'shared-reason'],
+          matchedNeeds: ['education'],
+          scoreScaleId: `scale-v${revision}`,
+          scoringPolicyVersion: `policy-v${revision}`,
+          matcherVersion: `engine-v${revision}`,
+          evaluatedAt: `2026-08-0${revision}T12:00:00.000Z`,
+          match_explain: {
+            nested_evidence: { revision, retained: true },
+            scoreBreakdown: { total: revision === 1 ? 12 : 19 },
+          },
+        }),
+      }
+
+      await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
+      revision = 2
+      const refreshed = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
+      expect(refreshed.updated).toBe(1)
+
+      const row = matches(db)[0]
+      expect(row).toMatchObject({
+        match_score: 19,
+        match_confidence: 93,
+        match_decision: 'accept',
+        match_explanation: 'explanation-v2',
+        matcher_version: CATALOG_RESCORE_MATCHER_VERSION,
+        evaluated_at: '2026-08-02T12:00:00.000Z',
+      })
+      expect(JSON.parse(row.match_reasons)).toEqual(['reason-v2', 'shared-reason'])
+      expect(JSON.parse(row.match_explain_json)).toMatchObject({
+        score_scale_id: 'scale-v2',
+        scoring_policy_version: 'policy-v2',
+        matcher_version: 'engine-v2',
+        nested_evidence: { revision: 2, retained: true },
+        scoreBreakdown: { total: 19 },
+        catalog_rescore: {
+          persistence_version: CATALOG_RESCORE_MATCHER_VERSION,
+          evaluated_at: '2026-08-02T12:00:00.000Z',
+        },
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('withdraws its prior ACCEPT when the row no longer passes current fundability policy', async () => {
+    const db = makeDb()
+    try {
+      addProfile(db, 'p1')
+      const opp = addOpp(db, { title: 'Program whose source later disappears' })
+      await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
+      expect(matches(db)).toHaveLength(1)
+
+      db.prepare('UPDATE funding_opportunities SET application_url = NULL, source_url = NULL WHERE id = ?').run(opp.id)
+      const converged = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
+      expect(converged.not_fundable).toBe(1)
+      expect(converged.stale_removed).toBe(1)
+      expect(matches(db)).toHaveLength(0)
+    } finally {
+      db.close()
+    }
+  })
+
   it('removes this sweep\'s own link when its row goes inactive — and touches no other version', async () => {
     const db = makeDb()
     addProfile(db, 'p1')

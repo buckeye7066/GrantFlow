@@ -72,6 +72,19 @@ test('all package and direct release-gate test entry points use the isolation bo
   assert.doesNotMatch(releaseGates, /await run\('npx', \['vitest'/)
 })
 
+test('release gates pin Node 20 and run the authoritative Crawler OS checks', () => {
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+  const releaseGates = fs.readFileSync('scripts/release-gates.mjs', 'utf8')
+
+  assert.equal(pkg.engines.node, '>=20.19.0 <21')
+  assert.equal(pkg.scripts['crawler-os:lint'], 'node backend/crawler-os/scripts/lint.mjs')
+  assert.equal(pkg.scripts['crawler-os:test'], 'node --test backend/crawler-os/tests/*.test.mjs')
+  assert.match(releaseGates, /async function main\(\) \{\s+assertNode20Runtime\(\)/)
+  assert.match(releaseGates, /pinCurrentNodeOnPath\(baseEnv\)/)
+  assert.match(releaseGates, /\['run', 'crawler-os:lint'\]/)
+  assert.match(releaseGates, /\['run', 'crawler-os:test'\]/)
+})
+
 test('Ohio offline supplement is one canonical official state directory, not a per-ZIP clone', () => {
   const firstZip = buildStateSupplementalDirectories({ state: 'oh', zip: '44089' })
   const secondZip = buildStateSupplementalDirectories({ state: 'OH', zip: '44101' })

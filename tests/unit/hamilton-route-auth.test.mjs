@@ -32,7 +32,7 @@ import { attachRequestContext } from '../../backend/middleware/requestContext.js
 const USERS = {
   'u-A': { id: 'u-A', role: 'user', email: 'a@test.com' },
   'u-B': { id: 'u-B', role: 'user', email: 'b@test.com' },
-  'u-admin': { id: 'u-admin', role: 'user', email: 'buckeye7066@gmail.com' },
+  'u-admin': { id: 'u-admin', role: 'user', email: 'owner@example.invalid' },
   // Demoted admin: the JWT still claims role:'admin' but users.is_admin=0.
   'u-demoted': { id: 'u-demoted', role: 'admin', is_admin: true, roles: ['admin'], email: 'demoted@test.com' },
 }
@@ -47,7 +47,7 @@ function makeDb() {
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-A', 'a@test.com', 0, 'user');
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-B', 'b@test.com', 0, 'user');
     -- The canonical admin is DB-backed (users.is_admin), NOT a token/email claim.
-    INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-admin', 'buckeye7066@gmail.com', 1, 'admin');
+    INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-admin', 'owner@example.invalid', 1, 'admin');
     -- Demoted admin: DB says NOT admin even though the JWT still claims role:'admin'.
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-demoted', 'demoted@test.com', 0, 'user');
   `)

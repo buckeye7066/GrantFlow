@@ -2,7 +2,7 @@
  * hamiltonStopRecheck.js — re-check SYSTEM-side task stops against current
  * state, so a stop that no longer reproduces cannot pile up forever.
  *
- * The class (owner report 2026-07-27, Robert White's 41 stops): Hamilton's
+ * The class (owner report 2026-07-27, Demo College Student Persona's 41 stops): Hamilton's
  * preflight files hard stops as application_missing_info rows —
  *   • key 'crawler_profile_rules' ("Funding source does not meet GrantFlow
  *     crawler/profile rules", e.g. missing_profile_crawler_match)

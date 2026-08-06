@@ -120,6 +120,11 @@ export function buildFlatProfileData(profileContext, normalized) {
   const comprehensive = sectionAnswers(sections.comprehensive_application)
   const narrative = sectionAnswers(sections.narrative)
   const govAssistance = sectionAnswers(sections.government_assistance)
+  const locationFocus = sectionAnswers(sections.location_focus)
+  const faith = sectionAnswers(
+    sections.faith || sections.religion || sections.religious_affiliation,
+  )
+  const personal = sectionAnswers(sections.personal_information)
 
   const primary_type =
     normalized?.entityType ||
@@ -276,6 +281,50 @@ export function buildFlatProfileData(profileContext, normalized) {
     number_of_children: Number(family.number_of_children || 0) || 0,
     household_members_under_18: Number(family.members_under_18 || 0) || 0,
     ethnicity,
+    // Exact declared attributes are retained only for explicit-exclusivity
+    // checks. Unknown/missing values stay null, so the hard rules remain
+    // neutral instead of inferring sensitive identity facts.
+    religion: firstNonEmpty(
+      profile.religion,
+      basic.religion,
+      demographics.religion,
+      faith.religion,
+      faith.faith,
+    ),
+    denomination: firstNonEmpty(
+      profile.denomination,
+      basic.denomination,
+      demographics.denomination,
+      faith.denomination,
+    ),
+    religious_affiliation: firstNonEmpty(
+      profile.religious_affiliation,
+      demographics.religious_affiliation,
+      faith.religious_affiliation,
+      faith.faith_affiliation,
+    ),
+    sexual_orientation: firstNonEmpty(
+      profile.sexual_orientation,
+      demographics.sexual_orientation,
+      personal.sexual_orientation,
+    ),
+    marital_status: firstNonEmpty(
+      profile.marital_status,
+      demographics.marital_status,
+      personal.marital_status,
+      family.marital_status,
+    ),
+    locale: firstNonEmpty(profile.locale, basic.locale, locationFocus.locale),
+    rural_urban: firstNonEmpty(
+      profile.rural_urban,
+      basic.rural_urban,
+      locationFocus.rural_urban,
+    ),
+    rural_resident: asBool(locationFocus.rural_resident) ?? asBool(profile.rural_resident),
+    urban_resident: asBool(locationFocus.urban_resident) ?? asBool(profile.urban_resident),
+    basic_information: basic,
+    demographics,
+    location_focus: locationFocus,
     // Affiliations / qualifiers surfaced for rules (church, school, tribal, etc.).
     affiliations: Array.isArray(normalized?.affiliations)
       ? [...normalized.affiliations]

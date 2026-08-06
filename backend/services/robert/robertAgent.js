@@ -81,7 +81,14 @@ const CRAWLER_OS_DISCOVERY_MODES = new Set([
  * per-profile matches via the OS persistence adapter. No legacy crawler/matcher
  * code runs. Populates Robert's counters/summary so the run record is unchanged.
  */
-async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summary, dryRun = false }) {
+async function runRobertDiscoveryViaCrawlerOs({
+  db,
+  profileIds,
+  counters,
+  summary,
+  dryRun = false,
+  runProfileDiscovery = runProfileDiscoveryLive,
+}) {
   // Charter doctrine: "match every newly stored opportunity against ALL known
   // profiles". Build every active profile's thesis ONCE and pass them as
   // matchProfiles so each profile's discovered opps are matched against all the
@@ -108,7 +115,7 @@ async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summar
       // a dry-run an honest read-only preview of what discovery WOULD store, with
       // real per-source outcomes — instead of silently skipping discovery and
       // reporting a misleading 0/0/0.
-      const { run, persisted, thesis } = await runProfileDiscoveryLive({ db, profileId, dryRun, matchProfiles: allTheses || undefined })
+      const { run, persisted, thesis } = await runProfileDiscovery({ db, profileId, dryRun, matchProfiles: allTheses || undefined })
       counters.cross_matches = (counters.cross_matches || 0) + (run.cross_matches || 0)
       counters.urls_fetched += run.sources.reduce((a, s) => a + (s.fetched || 0), 0)
       counters.candidates_found += run.sources.reduce((a, s) => a + (s.parsed || 0), 0)
@@ -145,7 +152,15 @@ async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summar
         matches: persisted.matches,
         recommendations: recsCreated,
         dry_run: dryRun || undefined,
-        sources: run.sources.map((s) => ({ source_id: s.source_id, outcome: s.outcome, reason: s.reason, stored: s.stored, deduped: s.deduped })),
+        sources: run.sources.map((s) => ({
+          source_id: s.source_id,
+          outcome: s.outcome,
+          reason: s.reason,
+          fetched: s.fetched,
+          parsed: s.parsed,
+          stored: s.stored,
+          deduped: s.deduped,
+        })),
         zero_result: run.zero_result?.reason ?? null,
       })
     } catch (err) {
@@ -382,7 +397,14 @@ export async function runRobert({
     // outcomes instead of silently skipping discovery and returning a misleading
     // 0 found / 0 verified / 0 ingested.
     if (CRAWLER_OS_DISCOVERY_MODES.has(chosenMode)) {
-      await runRobertDiscoveryViaCrawlerOs({ db, profileIds: profilesToConsider, counters, summary, dryRun })
+      await runRobertDiscoveryViaCrawlerOs({
+        db,
+        profileIds: profilesToConsider,
+        counters,
+        summary,
+        dryRun,
+        runProfileDiscovery: deps.runProfileDiscoveryLive || runProfileDiscoveryLive,
+      })
       summary.notes.push({ stage: 'discovery', engine: 'crawler-os', profiles: profilesToConsider.length, dry_run: dryRun || undefined })
       // Honest degradation: if discovery ran but every source was SKIPPED for
       // missing env (e.g. an API key), or no source could be selected, surface a
@@ -706,6 +728,17 @@ function dedup(arr) {
  */
 export function summarizeDiscoveryDegradation(summary) {
   const runs = Array.isArray(summary?.matched) ? summary.matched.filter((m) => Array.isArray(m.sources)) : []
+  const discoveryErrors = Array.isArray(summary?.errors)
+    ? summary.errors.filter((error) => error?.stage === 'crawler_os_discovery')
+    : []
+  if (discoveryErrors.length > 0) {
+    return {
+      reason: runs.length > 0
+        ? 'crawler_os_discovery_partially_failed'
+        : 'crawler_os_discovery_failed',
+      detail: `${discoveryErrors.length} profile discovery run(s) failed before a durable Crawler OS receipt was produced`,
+    }
+  }
   if (runs.length === 0) return null
   const stored = runs.reduce((a, m) => a + (Number(m.stored) || 0), 0)
   if (stored > 0) return null // discovery worked — not degraded

@@ -1,86 +1,99 @@
 #!/usr/bin/env node
 /**
- * Evidence: "correct owner(s)" can access Axiom + Focus Forward.
+ * Verify that an explicitly identified owner can access the required profiles.
  *
- * We use the dev-only preview_token from password reset to obtain a real access token,
- * then call the canonical profile list endpoint with scope=mine.
+ * Required env (there are deliberately no deployment or credential defaults):
+ * - VERIFY_BACKEND_BASE_URL
+ * - OWNER_EMAIL
+ * - OWNER_ACCESS_TOKEN
  *
- * Env:
- * - VERIFY_BACKEND_BASE_URL (default http://127.0.0.1:19181)
- * - OWNER_EMAIL (default buckeye7066@gmail.com)
+ * This proof is read-only. It no longer resets the owner's password or relies
+ * on a development-only preview token.
  */
 import process from 'node:process'
 
-const BASE = process.env.VERIFY_BACKEND_BASE_URL || 'http://127.0.0.1:19181'
-const EMAIL = process.env.OWNER_EMAIL || 'buckeye7066@gmail.com'
+function requiredEnv(name) {
+  const value = String(process.env[name] || '').trim()
+  if (!value) throw new Error(`${name} is required; refusing to contact an implicit deployment`)
+  return value
+}
 
-async function postJson(path, body, headers = {}) {
+function validatedBaseUrl(value) {
+  const url = new URL(value)
+  const isLoopback = ['127.0.0.1', '::1', 'localhost'].includes(url.hostname.toLowerCase())
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback)) {
+    throw new Error('VERIFY_BACKEND_BASE_URL must use HTTPS unless it targets loopback')
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('VERIFY_BACKEND_BASE_URL must not contain credentials, query parameters, or a fragment')
+  }
+  return url.toString().replace(/\/$/, '')
+}
+
+const BASE = validatedBaseUrl(requiredEnv('VERIFY_BACKEND_BASE_URL'))
+const EMAIL = requiredEnv('OWNER_EMAIL').toLowerCase()
+const ACCESS_TOKEN = requiredEnv('OWNER_ACCESS_TOKEN')
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(EMAIL)) {
+  throw new Error('OWNER_EMAIL must be a valid email address')
+}
+
+async function getJson(path) {
   const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify(body),
+    redirect: 'error',
+    signal: AbortSignal.timeout(30_000),
+    headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
   })
   const json = await res.json().catch(() => null)
   return { status: res.status, json }
 }
 
-async function getJson(path, headers = {}) {
-  const res = await fetch(`${BASE}${path}`, { headers })
-  const json = await res.json().catch(() => null)
-  return { status: res.status, json }
-}
-
 async function run() {
-  // Start reset to get preview token (dev mode, email not configured)
-  const start = await postJson('/api/auth/password/reset/start', { email: EMAIL })
-  if (start.status !== 202 || !start.json?.preview_token) {
-    throw new Error(`reset/start failed: ${start.status} ${JSON.stringify(start.json)}`)
+  const me = await getJson('/api/auth/me')
+  if (me.status !== 200) {
+    throw new Error(`auth/me failed: ${me.status}`)
   }
-  const token = String(start.json.preview_token)
-
-  // Complete setup with a strong password to obtain access token
-  const password = `TempPass!${Math.floor(Math.random() * 1e6)}Aa`
-  const complete = await postJson('/api/auth/password/setup/complete', { token, password })
-  if (complete.status !== 200 || !complete.json?.accessToken) {
-    throw new Error(`setup/complete failed: ${complete.status} ${JSON.stringify(complete.json)}`)
+  const authenticatedUser = me.json?.user || me.json || {}
+  const authenticatedEmail = String(
+    authenticatedUser.primary_email || authenticatedUser.email || '',
+  ).trim().toLowerCase()
+  if (!authenticatedEmail || authenticatedEmail !== EMAIL) {
+    throw new Error('OWNER_ACCESS_TOKEN did not resolve to the explicitly configured OWNER_EMAIL')
   }
-  const accessToken = String(complete.json.accessToken)
 
-  const mine = await getJson('/api/profiles?scope=mine', { Authorization: `Bearer ${accessToken}` })
+  const mine = await getJson('/api/profiles?scope=mine')
   if (mine.status !== 200 || !Array.isArray(mine.json)) {
-    throw new Error(`profiles?scope=mine failed: ${mine.status} ${JSON.stringify(mine.json)}`)
+    throw new Error(`profiles?scope=mine failed: ${mine.status}`)
   }
 
-  const ids = new Set(mine.json.map((p) => String(p?.id || '')).filter(Boolean))
-  const required = ['profile-axiom-biolabs', 'profile-focus-forward-ministries']
+  const ids = new Set(mine.json.map((profile) => String(profile?.id || '')).filter(Boolean))
+  const required = ['profile-axiom-biolabs', 'profile-demo-faith-nonprofit']
   const present = required.reduce((acc, id) => ({ ...acc, [id]: ids.has(id) }), {})
 
   console.log(
     JSON.stringify(
       {
-        ok: true,
-        backend: BASE,
-        owner_email: EMAIL,
-        auth: {
-          reset_start_status: start.status,
-          setup_complete_status: complete.status,
-          token_type: complete.json?.tokenType || null,
-          active_profile_id: complete.json?.user?.activeProfileId || null,
-        },
+        ok: Object.values(present).every(Boolean),
+        backend_origin: new URL(BASE).origin,
+        owner_identity_verified: true,
         profiles_mine_count: mine.json.length,
         required_profiles_present: present,
         profiles_mine_sample: mine.json
-          .filter((p) => required.includes(String(p?.id || '')))
-          .map((p) => ({ id: p.id, display_name: p.display_name, status: p.status })),
+          .filter((profile) => required.includes(String(profile?.id || '')))
+          .map((profile) => ({
+            id: profile.id,
+            display_name: profile.display_name,
+            status: profile.status,
+          })),
       },
       null,
       2,
     ),
   )
+
+  if (!Object.values(present).every(Boolean)) process.exitCode = 1
 }
 
-run().catch((err) => {
-  console.error('[owner-profile-access] failed:', err?.stack || err)
-  process.exit(1)
+run().catch((error) => {
+  console.error('[owner-profile-access] failed:', error?.message || error)
+  process.exitCode = 1
 })
-

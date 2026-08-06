@@ -2,9 +2,9 @@
  * Hamilton restart-resilience + efficiency guards:
  *
  * 1. reconcileOrphanedApplicationTasks — a Railway redeploy kills in-process
- *    autopilot work; tasks stuck in transient in-flight statuses must be
- *    requeued to ready_to_start (stale ones only — active work is never
- *    demoted), while durable waiting/blocked/terminal statuses are untouched.
+ *    autopilot work; ordinary transient work is requeued, while stale
+ *    submission-boundary work is quarantined for verification and never
+ *    retried. Fresh work and durable waiting/blocked/terminal states remain.
  * 2. latestFinishedBlockerKind — the fast-skip evidence lookup must report the
  *    LATEST finished run's blocker (so a portal that later succeeded never
  *    fast-skips) and exclude the in-progress run.
@@ -17,9 +17,11 @@ const Database = (await import('better-sqlite3')).default
 const {
   reconcileOrphanedApplicationTasks,
   IN_FLIGHT_STATUSES,
+  RECOVERY_SCAN_STATUSES,
 } = await import('../startup/hamiltonTaskRecovery.js')
 const {
   ensureApplicationTaskSchema,
+  SUBMISSION_ATTEMPT_STATUSES,
   _resetSchemaCache,
 } = await import('../services/hamilton/applicationTaskStore.js')
 const { _internal, resolveAutopilotConcurrency } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
@@ -29,11 +31,14 @@ function makeDb() {
   return new Database(':memory:')
 }
 
-async function seedTask(db, { id, status, updatedAt }) {
+async function seedTask(db, { id, status, updatedAt, allowAutoSubmit = false }) {
   await db.prepare(`
-    INSERT INTO application_tasks (id, profile_id, opportunity_id, status, updated_at)
-    VALUES (?, 'p1', ?, ?, ?)
-  `).run(id, `opp-${id}`, status, updatedAt)
+    INSERT INTO application_tasks (
+      id, profile_id, opportunity_id, status, allow_auto_submit,
+      auto_submit_enabled, updated_at
+    )
+    VALUES (?, 'p1', ?, ?, ?, ?, ?)
+  `).run(id, `opp-${id}`, status, allowAutoSubmit ? 1 : 0, allowAutoSubmit ? 1 : 0, updatedAt)
 }
 
 const OLD = new Date(Date.now() - 60 * 60_000).toISOString()   // 1h ago
@@ -66,7 +71,10 @@ describe('reconcileOrphanedApplicationTasks (restart recovery)', () => {
   })
 
   it('leaves durable hand-off and terminal statuses untouched', async () => {
-    for (const status of ['waiting_for_login', 'waiting_for_review', 'blocked', 'submitted', 'ready_to_start', 'queued']) {
+    for (const status of [
+      'waiting_for_login', 'waiting_for_review', 'blocked', 'submitted',
+      'ready_to_start', 'queued', 'submission_verification_required',
+    ]) {
       await seedTask(db, { id: `t-${status}`, status, updatedAt: OLD })
     }
     const r = await reconcileOrphanedApplicationTasks(db, { staleMinutes: 15 })
@@ -83,13 +91,79 @@ describe('reconcileOrphanedApplicationTasks (restart recovery)', () => {
   it('is idempotent and safe on a bare DB with no table', async () => {
     const bare = new Database(':memory:')
     const r = await reconcileOrphanedApplicationTasks(bare, { staleMinutes: 15 })
-    expect(r).toEqual({ scanned: 0, demoted: 0, task_ids: [] })
+    expect(r).toEqual({
+      scanned: 0,
+      demoted: 0,
+      quarantined: 0,
+      task_ids: [],
+      quarantined_task_ids: [],
+    })
+  })
+
+  it.each(SUBMISSION_ATTEMPT_STATUSES)(
+    'quarantines stale %s work for verification and NEVER requeues it',
+    async (status) => {
+      await seedTask(db, {
+        id: `t-${status}`,
+        status,
+        updatedAt: OLD,
+        allowAutoSubmit: true,
+      })
+
+      const r = await reconcileOrphanedApplicationTasks(db, { staleMinutes: 15 })
+
+      expect(r.demoted).toBe(0)
+      expect(r.task_ids).toEqual([])
+      expect(r.quarantined).toBe(1)
+      expect(r.quarantined_task_ids).toEqual([`t-${status}`])
+      const row = db.prepare(`
+        SELECT status, current_step, allow_auto_submit, auto_submit_enabled,
+               next_retry_at, last_agent_message
+          FROM application_tasks WHERE id = ?
+      `).get(`t-${status}`)
+      expect(row.status).toBe('submission_verification_required')
+      expect(row.current_step).toBe('submission_verification_required')
+      expect(Boolean(row.allow_auto_submit)).toBe(false)
+      expect(Boolean(row.auto_submit_enabled)).toBe(false)
+      expect(row.next_retry_at).toBeNull()
+      expect(row.last_agent_message).toMatch(/may already have reached the funder/i)
+      const event = db.prepare(`
+        SELECT status, message, details_json
+          FROM application_task_events WHERE task_id = ? AND step = 'recovery'
+      `).get(`t-${status}`)
+      expect(event.status).toBe('submission_verification_required')
+      expect(event.message).toMatch(/not requeued/i)
+      expect(JSON.parse(event.details_json)).toMatchObject({
+        submission_may_have_occurred: true,
+        requeued: false,
+      })
+    },
+  )
+
+  it('does not quarantine a fresh live submission attempt', async () => {
+    await seedTask(db, {
+      id: 't-fresh-submit',
+      status: 'submit_attempt_started',
+      updatedAt: FRESH,
+      allowAutoSubmit: true,
+    })
+    const r = await reconcileOrphanedApplicationTasks(db, { staleMinutes: 15 })
+    expect(r.scanned).toBe(1)
+    expect(r.demoted).toBe(0)
+    expect(r.quarantined).toBe(0)
+    expect(db.prepare(`SELECT status FROM application_tasks WHERE id = 't-fresh-submit'`).get().status)
+      .toBe('submit_attempt_started')
   })
 
   it('covers every transient in-flight status', () => {
     expect([...IN_FLIGHT_STATUSES].sort()).toEqual([
       'filling_portal', 'generating_application', 'generating_documents',
       'in_progress', 'launching_portal', 'saving_documents', 'saving_portal_draft',
+    ].sort())
+    expect([...RECOVERY_SCAN_STATUSES].sort()).toEqual([
+      ...IN_FLIGHT_STATUSES,
+      'submit_attempt_started',
+      'submit_evidence_pending',
     ].sort())
   })
 })

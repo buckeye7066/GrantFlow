@@ -82,13 +82,13 @@ function createDb() {
       PRIMARY KEY (profile_id, opportunity_id, matcher_version)
     );
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, tags, interests, created_at, updated_at)
-    VALUES ('profile-focus-forward-ministries', 'church', 'church', 'OH', '43215', '["ministry","community"]', '["housing","transportation"]', '2026-04-26', '2026-04-26');
+    VALUES ('profile-demo-faith-nonprofit', 'church', 'church', 'OH', '43215', '["ministry","community"]', '["housing","transportation"]', '2026-04-26', '2026-04-26');
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, tags, interests, created_at, updated_at)
     VALUES
       ('profile-pa-business', 'business', 'business', NULL, NULL, '["business"]', '["equipment"]', '2026-04-26', '2026-04-26'),
       ('profile-no-state', 'individual', 'individual', NULL, NULL, '["housing"]', '["rent"]', '2026-04-26', '2026-04-26');
     INSERT INTO profile_sections (profile_id, section_key, data)
-    VALUES ('profile-focus-forward-ministries', 'basic_information', '{"state":"OH","zip_code":"43215","profile_category":"church"}');
+    VALUES ('profile-demo-faith-nonprofit', 'basic_information', '{"state":"OH","zip_code":"43215","profile_category":"church"}');
     INSERT INTO profile_sections (profile_id, section_key, data)
     VALUES
       ('profile-pa-business', 'location_focus', '{"geographic_focus":"Beaver County, Pennsylvania"}'),
@@ -164,7 +164,7 @@ function createDb() {
     INSERT INTO profile_opportunity_matches
       (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version, computed_at, updated_at)
     VALUES
-      ('profile-focus-forward-ministries', 'real-grant-1', 82, 'review', 'Crawler OS matched ministry/community signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('profile-demo-faith-nonprofit', 'real-grant-1', 82, 'review', 'Crawler OS matched ministry/community signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       ('profile-pa-business', 'real-grant-1', 62, 'review', 'Crawler OS matched a nationwide funding source.', '["nationwide_scope"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       ('profile-pa-business', 'pa-grant-1', 86, 'accept', 'Crawler OS matched Pennsylvania business equipment signals.', '["profile_need_match","location_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       ('profile-no-state', 'real-grant-1', 58, 'review', 'Crawler OS matched only nationwide funding because profile state is unavailable.', '["nationwide_scope"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
@@ -189,7 +189,7 @@ describe('matching quality gate route', () => {
     const db = createDb()
     try {
       const response = await request(createApp(db))
-        .get('/api/matching/profile/profile-focus-forward-ministries/opportunities')
+        .get('/api/matching/profile/profile-demo-faith-nonprofit/opportunities')
         .query({ min_score: 0, limit: 2000, skip_readiness_check: 1, allow_relax: 1 })
 
       expect(response.status).toBe(200)

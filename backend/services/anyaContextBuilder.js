@@ -15,6 +15,10 @@ import { computeMatchDecision } from './matchDecisionEngine.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { assessOpportunityTrust } from './opportunityTrust.js'
 import { getMemories } from './anyaBrainService.js'
+import {
+  SCORE_SCALE_ID,
+  STRONG_MATCH_SCORE,
+} from '../config/matchThresholds.js'
 
 // Section labels aligned with canonical keys from backend/config/profileSchema.js
 const SECTION_LABELS = {
@@ -292,14 +296,16 @@ async function buildResultsSnapshot(db, profileContext) {
     displayable.sort((a, b) => b.score - a.score)
 
     const top5 = displayable.slice(0, 5)
-    const totalAbove50 = displayable.filter((s) => s.score >= 50).length
-    const totalAbove30 = displayable.filter((s) => s.score >= 30).length
+    const accepted = displayable.filter((s) => s.decision === 'ACCEPT')
+    const needsReview = displayable.filter((s) => s.decision === 'REVIEW')
+    const strongAccepted = accepted.filter((s) => s.score >= STRONG_MATCH_SCORE)
     const droppedByTrust = scored.length - displayable.length
 
     const lines = ['### Available Results (from real matching)']
     lines.push(
       `- **${displayable.length}** displayable of **${rows.length}** opportunities evaluated ` +
-      `(**${totalAbove50}** strong ≥50, **${totalAbove30}** moderate+ ≥30` +
+      `(**${accepted.length}** canonical ACCEPT, **${needsReview.length}** need review, ` +
+      `**${strongAccepted.length}** strong ACCEPT at ≥${STRONG_MATCH_SCORE} on ${SCORE_SCALE_ID}` +
       (droppedByTrust > 0 ? `, **${droppedByTrust}** dropped by trust layer` : '') +
       `)`,
     )
@@ -318,7 +324,7 @@ async function buildResultsSnapshot(db, profileContext) {
       if (item.trust?.flags?.loan) flags.push('loan')
       if (item.trust?.downgrade) flags.push('downgraded')
       const flagStr = flags.length ? ` [${flags.join(',')}]` : ''
-      lines.push(`  ${item.score}pts — "${title}" (${state}) [trust:${tt}]${flagStr} — ${reasons}`)
+      lines.push(`  ${item.score}pts ${item.decision} — "${title}" (${state}) [trust:${tt}]${flagStr} — ${reasons}`)
     }
 
     // Why these results appear

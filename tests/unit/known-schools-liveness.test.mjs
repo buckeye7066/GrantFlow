@@ -12,7 +12,7 @@
  *
  * Mission rules
  *   - Real funding only — no placeholder URLs may ship.
- *   - Avoid zero-result UX — students like Anastasia (MTSU) must be handed
+ *   - Avoid zero-result UX — students like Demo Student (MTSU) must be handed
  *     a working institutional page, not a Google search or a 404.
  *
  * Skip behavior

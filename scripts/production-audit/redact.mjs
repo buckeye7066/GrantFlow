@@ -258,8 +258,8 @@ const FIXTURES = [
   },
   {
     name: 'email',
-    input: 'Contact was anastasia.white@example.com for this profile',
-    mustNotContain: ['anastasia.white@example.com'],
+    input: 'Contact was demo_stem_student.white@example.com for this profile',
+    mustNotContain: ['demo_stem_student.white@example.com'],
     mustDetect: false,
   },
   {
@@ -315,7 +315,7 @@ const BENIGN = [
   'The cookie banner was dismissed before the screenshot was taken.',
   'token_count: 42',
   'portal_host: studentaid.gov',
-  'profile_id: c4a92724-9cee-416f-ba30-e91b9b5cd885',
+  'profile_id: 00000000-0000-4000-8000-000000000001',
   'needs_session: true',
   'matcher_version: live-recheck',
 ];

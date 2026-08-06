@@ -15,7 +15,8 @@ import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
 import { runDomainCorpusCrawl } from './crawlers/domainCorpusCrawler.js'
 import { ingestFromConnectors } from './connectorIngestService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
-import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js'
+import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, SCORE_SCALE_ID } from '../config/matchThresholds.js'
+import { RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('comprehensiveCrawlerOptimized')
 
@@ -544,14 +545,14 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       }
     }
 
-    matchThreshold = params.match_threshold || 65
+    matchThreshold = params.match_threshold ?? DEFAULT_MIN_SCORE
     maxResults = params.max_results || 50
     saveToDatabase = params.save_to_database !== false
   } else {
     // Called directly with (db, profileContext, options)
     db = contextOrDb
     profileContext = profileContextArg
-    matchThreshold = options.matchThreshold || 80
+    matchThreshold = options.matchThreshold ?? DEFAULT_MIN_SCORE
     maxResults = options.maxResults || 50
     saveToDatabase = options.saveToDatabase !== false
   }
@@ -725,10 +726,14 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   // Sort by score and limit
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
   const targetMin = Math.min(10, maxResults)
-  const requestedThreshold = Number(matchThreshold) || 0
-  const thresholdCandidates = Array.from(
-    new Set([requestedThreshold, 80, 70, 60, 50, 0].filter((v) => Number.isFinite(v))),
-  ).sort((a, b) => b - a)
+  const parsedThreshold = Number(matchThreshold)
+  const requestedThreshold = Number.isFinite(parsedThreshold)
+    ? Math.max(0, Math.min(100, parsedThreshold))
+    : DEFAULT_MIN_SCORE
+  const thresholdCandidates = Array.from(new Set([
+    requestedThreshold,
+    ...RELAX_THRESHOLDS.filter((threshold) => threshold < requestedThreshold),
+  ]))
 
   let thresholdUsed = requestedThreshold
   let filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= thresholdUsed)
@@ -813,9 +818,8 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   // Pass the crawler's chosen threshold (thresholdUsed) to
   // saveToProfilePipeline. ACCEPT/REVIEW no longer bypasses the saver's
   // numeric floor, so callers must explicitly supply the floor they already
-  // filtered against. Otherwise the saver's 55% default silently rejects
-  // opportunities this crawler legitimately surfaced.
-  // instead of pre-filtering at 80% which blocked all individual-profile results.
+  // filtered against. The saver remains the sole canonical admission authority;
+  // the caller-supplied bar can tighten that decision but cannot lower its floor.
   let savedToProfile = 0
   // Per-profile automation toggle: scheduled/automatic discovery only auto-adds
   // to the pipeline when `discovery_auto_add` is on. When off, the opportunities
@@ -840,7 +844,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           // Do NOT pass pre-computed score — let saveToProfilePipeline run
           // computeMatchDecision() as the single canonical authority (Goal 4).
           // Pass the crawler's chosen threshold so the saver respects this
-          // caller's filtering choice instead of using its 55% default.
+          // caller's filtering choice instead of introducing another default.
           //
           // The relaxation loop above can drop thresholdUsed to 0 when matches
           // are scarce. Never ask the saver to persist below the canonical
@@ -895,6 +899,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     savedToProfile,
     result_meta: {
       total_scored: scoredOpps.length,
+      score_scale: SCORE_SCALE_ID,
       match_threshold_requested: requestedThreshold,
       match_threshold_used: thresholdUsed,
       match_threshold_fallback_applied: thresholdFallbackApplied,

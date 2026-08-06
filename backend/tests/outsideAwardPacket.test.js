@@ -20,7 +20,7 @@ process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'a'.repeat(
 
 const { buildOutsideAwardReport } = await import('../services/hamilton/portalSync/outsideAwardPacket.js')
 
-const PROFILE = { id: 'p1', display_name: 'Anastasia White', user_id: 'u1' }
+const PROFILE = { id: 'p1', display_name: 'Demo Tennessee STEM Student', user_id: 'u1' }
 const SOURCES = [
   { name: 'Rotary Club Scholarship', amount: 2000, sponsor: 'Rotary International' },
   { name: 'Elks Lodge Grant', amount: 1500, sponsor: null },
@@ -48,7 +48,7 @@ describe('buildOutsideAwardReport', () => {
     const r = buildOutsideAwardReport({ profile: PROFILE, portalHost: 'mtsu.edu', sources: SOURCES })
     const body = r.sections.map((s) => `${s.heading}\n${s.body}`).join('\n')
     expect(body).toMatch(/Signature:/)
-    expect(body).toMatch(/Anastasia White/)
+    expect(body).toMatch(/Demo Tennessee STEM Student/)
     expect(body).toMatch(/Student ID/)
   })
 

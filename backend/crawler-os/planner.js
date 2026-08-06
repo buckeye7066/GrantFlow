@@ -31,14 +31,14 @@ function servesNeed(source, thesis) {
  *
  * THE DEFECT, measured read-only in prod 2026-08-02 across all 33 real
  * profiles: **438 disease-lane selections**, 19 apiece even for profiles whose
- * declared health vocabulary is completely EMPTY (Robert White, Admin Vault,
+ * declared health vocabulary is completely EMPTY (Demo College Student Persona, Admin Vault,
  * Tasha Reynolds). `servesNeed` admits a lane on a coarse `disability` /
  * `medical` need token, and a `disease_specific` source's whole identity is a
  * specific diagnosis — so the kidney fund, the amputee coalition, the HIV-care
  * locator and the rare-disease network all ran for people who evidence needing
  * none of them.
  *
- * The motivating profile is the sharp case. Anastasia White declares
+ * The motivating profile is the sharp case. Demo Tennessee STEM Student declares
  * `demographics.disability_status = "Has disability"` and
  * `government_assistance.ssdi_recipient_self = true` — the disability signal is
  * REAL, not spurious, and the generic disability/benefit lanes (ssa_disability,
@@ -56,8 +56,8 @@ function servesNeed(source, thesis) {
  *     re-derived here.
  *
  * A profile with a real diagnosis keeps its lanes and loses nothing: measured,
- * Gilbert McCosh keeps 5 (brain injury, vision, mental health…), Brian Newman 7
- * (kidney, sleep apnea, vision…), Dr. John Robert White 7 (arthritis, medical
+ * Demo Assistive Technology Persona keeps 5 (brain injury, vision, mental health…), Brian Newman 7
+ * (kidney, sleep apnea, vision…), Demo Health Education Persona 7 (arthritis, medical
  * transport, copay…) — including lanes matched from his `health_support` terms,
  * which is why the union of conditions and support is what the thesis carries.
  */
@@ -82,7 +82,7 @@ function servesGeo(source, thesis) {
 /**
  * ORDER IS A CLAIM ABOUT THE PROFILE, NOT A GLOBAL CONSTANT.
  *
- * THE DEFECT, measured read-only in prod 2026-08-02 on Anastasia White — a
+ * THE DEFECT, measured read-only in prod 2026-08-02 on Demo Tennessee STEM Student — a
  * dual-enrolled high-school senior whose `education.intended_major` is Forensic
  * Science. `plan()` selected 54 of 167 sources and ordered them by
  * `priority_score` alone, a number curated ONCE per source with no knowledge of

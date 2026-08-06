@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Smoke test for the `/auth/callback` page to ensure provider redirects surface
- * meaningful feedback (both error and token paths).
+ * meaningful feedback (both error and one-time handoff paths).
  *
  * Requires the preview bundle to be served locally (e.g. `npm run preview`).
  *
@@ -51,8 +51,8 @@ async function run() {
     `${buildPath(basePathEnv, 'auth/callback')}?provider=google&error=oauth_state_invalid`,
     PREVIEW_BASE_URL,
   ).toString()
-  const tokenUrl = new URL(
-    `${buildPath(basePathEnv, 'auth/callback')}?provider=google&accessToken=fake-access&refreshToken=fake-refresh`,
+  const handoffUrl = new URL(
+    `${buildPath(basePathEnv, 'auth/callback')}?provider=google&handoff=fake-oauth-handoff-that-is-not-valid-1234`,
     PREVIEW_BASE_URL,
   ).toString()
 
@@ -71,7 +71,7 @@ async function run() {
       { timeout: 30_000 },
     )
 
-    await page.goto(tokenUrl, { waitUntil: 'networkidle', timeout: 30_000 })
+    await page.goto(handoffUrl, { waitUntil: 'networkidle', timeout: 30_000 })
     await page.waitForFunction(
       () => document.body && document.body.innerText.includes('Sign-in issue'),
       { timeout: 30_000 },

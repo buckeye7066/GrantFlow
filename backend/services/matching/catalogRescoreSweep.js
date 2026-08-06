@@ -33,12 +33,13 @@
  * the same convention as the older sweeps.
  *
  * ── RULES HONORED ───────────────────────────────────────────────────────────
- * - ACCEPT-ONLY writes (REVIEW is the locator band; a REJECT is never stored).
+ * - ACCEPT-ONLY visible truth (REVIEW/REJECT remove this sweep's stale ACCEPT).
  * - matcher_version 'catalog-rescore-link' (SURFACED_MATCHER_VERSIONS carries
  *   it; the reconcile DELETE names only crawler-os/crawler-os-xmatch, so these
- *   rows survive the rolling snapshot — the same reason the keyed nets exist).
- * - Candidate discovery is a SQL PREDICATE (active, non-pointer, NOT EXISTS
- *   match) ahead of every LIMIT — never a post-LIMIT JS filter (#944/#1080).
+ *   rows survive the rolling snapshot until the next canonical rescore).
+ * - Every active non-pointer pair is revisited in repeating bounded cycles.
+ *   Existing rows are not excluded: current policy must be able to replace an
+ *   old score/version or withdraw a stale ACCEPT.
  * - Pointer kinds are refused before the engine is called (the county-crisis
  *   posture: a directory is a pointer, never an award).
  * - Amy synthetic profiles and unconfigured profiles are skipped.
@@ -46,12 +47,16 @@
  *   is a stateless census, so enabling writes later starts from the beginning
  *   instead of skipping everything the census already walked past (the
  *   "green while doing nothing" class).
- * - ON CONFLICT DO NOTHING: a profile's own crawler-os row always wins.
+ * - ACCEPT upserts the complete current canonical result. The sweep provenance
+ *   remains in matcher_version; engine/score/policy versions live in the full
+ *   match_explain_json because the table has no dedicated scale/policy columns.
  */
 
 import { isProposalEligibleOpportunity } from '../../../shared/opportunityFundability.js'
 import { isFundableOpportunity } from '../../config/fundingResultFilters.js'
+import { SCORE_SCALE_ID } from '../../config/matchThresholds.js'
 import { createLogger } from '../../utils/logger.js'
+import { NEED_FIRST_SCORING_VERSION } from './needFirstScoringAdapter.js'
 
 const log = createLogger('catalog-rescore')
 
@@ -62,6 +67,37 @@ export const CATALOG_RESCORE_KV_KEY = 'catalog_rescore_cursor'
 const BATCH_SIZE = 200
 
 const changesOf = (res) => Number(res?.changes ?? res?.rowCount ?? 0) || 0
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+function json(value, fallback) {
+  try { return JSON.stringify(value) } catch { return JSON.stringify(fallback) }
+}
+
+function canonicalExplain(decision, evaluatedAt) {
+  const explain = asObject(decision?.match_explain)
+  const breakdown = asObject(explain.scoreBreakdown ?? explain.score_breakdown)
+  const scoreScaleId = decision?.scoreScaleId ?? explain.score_scale_id ?? SCORE_SCALE_ID
+  const scoringPolicyVersion = decision?.scoringPolicyVersion ??
+    explain.scoring_policy_version ??
+    breakdown.scoring_policy_version ??
+    NEED_FIRST_SCORING_VERSION
+  const engineMatcherVersion = decision?.matcherVersion ?? explain.matcher_version ?? null
+
+  return {
+    ...explain,
+    score_scale_id: scoreScaleId,
+    scoring_policy_version: scoringPolicyVersion,
+    matcher_version: engineMatcherVersion,
+    catalog_rescore: {
+      ...asObject(explain.catalog_rescore),
+      persistence_version: CATALOG_RESCORE_MATCHER_VERSION,
+      evaluated_at: decision?.evaluatedAt ?? evaluatedAt,
+    },
+  }
+}
 
 function envInt(raw, fallback) {
   const n = Number(raw)
@@ -148,7 +184,8 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   const isPg = (db?.dialect || 'sqlite') === 'postgres'
   const trueLit = isPg ? 'TRUE' : '1'
   const nowFn = isPg ? 'now()' : 'CURRENT_TIMESTAMP'
-  const notPointer = `NOT (${pointerKindSql('fo.opportunity_kind')})`
+  const pointerPredicate = pointerKindSql('fo.opportunity_kind')
+  const notPointer = `NOT (${pointerPredicate})`
 
   const summary = {
     ok: true,
@@ -161,11 +198,17 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     not_fundable: 0,
     adjudicated: 0,
     linked: 0,
+    updated: 0,
+    upserted: 0,
     would_link: 0,
+    would_update: 0,
+    would_remove: 0,
     review: 0,
     rejected_by_engine: 0,
     unscorable: 0,
     stale_removed: 0,
+    convergence_errors: 0,
+    cycles_reopened: 0,
     truncated: false,
     examples: [],
   }
@@ -193,15 +236,6 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   const cursor = (writeEnabled ? await kvGetJson(db, CATALOG_RESCORE_KV_KEY) : null) ?? { profiles: {}, last_profile: null }
   if (!cursor.profiles || typeof cursor.profiles !== 'object') cursor.profiles = {}
 
-  let activeBucket = 0
-  try {
-    const c = await db.prepare(
-      `SELECT COUNT(*) AS c FROM funding_opportunities fo
-        WHERE (fo.is_active IS NULL OR fo.is_active = ${trueLit})`,
-    ).get()
-    activeBucket = Math.floor((Number(c?.c) || 0) / 500)
-  } catch { /* bucket stays 0; drift reopening degrades, sweep still runs */ }
-
   const ordered = [...(profiles || [])]
   if (cursor.last_profile) {
     const i = ordered.findIndex((p) => String(p.id) === String(cursor.last_profile))
@@ -226,77 +260,140 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
 
     summary.profiles_considered += 1
     const entry = cursor.profiles[profileId] ?? {}
-    if (entry.completed_at && entry.active_bucket === activeBucket) continue
-    if (entry.completed_at && entry.active_bucket !== activeBucket) {
-      delete entry.completed_at
-      delete entry.watermark
-    }
-
-    let watermark = entry.watermark ?? null
+    const reopeningCompletedCycle = Boolean(entry.completed_at)
+    if (reopeningCompletedCycle) summary.cycles_reopened += 1
+    const previousCycle = Number.isFinite(Number(entry.cycle)) ? Number(entry.cycle) : 0
+    const cycle = Math.max(1, previousCycle + (reopeningCompletedCycle ? 1 : 0))
+    let watermark = reopeningCompletedCycle ? null : (entry.watermark ?? null)
     let profileDone = false
     while (!profileDone && !outOfBudget()) {
       const remaining = Math.max(1, Math.min(BATCH_SIZE, pairBudget - spent()))
       let rows
       try {
-        const whereMark = watermark
-          ? `AND (fo.created_at > ? OR (fo.created_at = ? AND fo.id > ?))`
-          : ''
-        const params = watermark ? [watermark.created_at, watermark.created_at, watermark.id] : []
+        // ID ordering is deliberately independent of created_at. Legacy rows
+        // may have NULL timestamps; a timestamp watermark would make every
+        // later NULL row unreachable after the first batch. Repeating cycles
+        // pick up any newly inserted lower-sorting id on the next pass.
+        const whereMark = watermark ? 'AND fo.id > ?' : ''
+        const params = watermark ? [watermark.id] : []
         rows = await db.prepare(
-          `SELECT fo.* FROM funding_opportunities fo
+          `SELECT fo.*,
+                  m.id AS existing_match_id,
+                  m.matcher_version AS existing_matcher_version,
+                  m.match_decision AS existing_match_decision
+             FROM funding_opportunities fo
+        LEFT JOIN profile_opportunity_matches m
+               ON m.profile_id = ? AND m.opportunity_id = fo.id
             WHERE (fo.is_active IS NULL OR fo.is_active = ${trueLit})
               AND ${notPointer}
               ${whereMark}
-              AND NOT EXISTS (SELECT 1 FROM profile_opportunity_matches m
-                              WHERE m.profile_id = ? AND m.opportunity_id = fo.id)
-            ORDER BY fo.created_at, fo.id
+            ORDER BY fo.id
             LIMIT ?`,
-        ).all(...params, profileId, remaining)
+        ).all(profileId, ...params, remaining)
       } catch (err) {
         log.warn('candidate query failed (non-fatal)', { profile: profileId, error: String(err?.message || err) })
+        summary.convergence_errors += 1
         break
       }
 
       for (const opp of rows || []) {
         summary.scanned += 1
-        watermark = { created_at: opp.created_at, id: opp.id }
-        if (!passesFundabilityGate(opp)) { summary.not_fundable += 1; continue }
+        watermark = { id: opp.id }
+        const staleCatalogAccept = String(opp.existing_matcher_version ?? '') === CATALOG_RESCORE_MATCHER_VERSION
+        const withdrawStaleCatalogAccept = async () => {
+          if (!staleCatalogAccept) return 0
+          if (!writeEnabled) {
+            summary.would_remove += 1
+            return 0
+          }
+          const res = await db.prepare(
+            `DELETE FROM profile_opportunity_matches
+              WHERE profile_id = ? AND opportunity_id = ? AND matcher_version = ?`,
+          ).run(profileId, opp.id, CATALOG_RESCORE_MATCHER_VERSION)
+          const removed = changesOf(res)
+          summary.stale_removed += removed
+          return removed
+        }
+
+        if (!passesFundabilityGate(opp)) {
+          summary.not_fundable += 1
+          try { await withdrawStaleCatalogAccept() } catch { summary.convergence_errors += 1 }
+          continue
+        }
         let decision
         try { decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections }) }
         catch { summary.unscorable += 1; summary.adjudicated += 1; continue }
         summary.adjudicated += 1
         const verdict = String(decision?.decision ?? '').toUpperCase()
-        if (verdict === 'REVIEW') { summary.review += 1; continue }
-        if (verdict !== 'ACCEPT') { summary.rejected_by_engine += 1; continue }
+        if (verdict === 'REVIEW') {
+          summary.review += 1
+          try { await withdrawStaleCatalogAccept() } catch { summary.convergence_errors += 1 }
+          continue
+        }
+        if (verdict !== 'ACCEPT') {
+          summary.rejected_by_engine += 1
+          try { await withdrawStaleCatalogAccept() } catch { summary.convergence_errors += 1 }
+          continue
+        }
         const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
-        if (score === null) { summary.unscorable += 1; continue }
+        if (score === null) {
+          summary.unscorable += 1
+          try { await withdrawStaleCatalogAccept() } catch { summary.convergence_errors += 1 }
+          continue
+        }
 
         if (!writeEnabled) {
-          summary.would_link += 1
+          if (opp.existing_match_id) summary.would_update += 1
+          else summary.would_link += 1
           if (summary.examples.length < 5) summary.examples.push(`${opp.title} (ACCEPT ${score})`)
           continue
         }
         try {
+          const evaluatedAt = new Date().toISOString()
+          const confidence = Number.isFinite(Number(decision?.confidence)) ? Number(decision.confidence) : null
+          const reasons = Array.isArray(decision?.reasons)
+            ? decision.reasons
+            : (Array.isArray(decision?.matchedNeeds) ? decision.matchedNeeds : [])
+          const explain = canonicalExplain(decision, evaluatedAt)
           const res = await db.prepare(
             `INSERT INTO profile_opportunity_matches
-               (id, profile_id, opportunity_id, match_score, match_decision, match_explanation,
+               (id, profile_id, opportunity_id, match_score, match_confidence, match_decision, match_explanation,
                 match_reasons, match_explain_json, source_query, discovered_via, matcher_version,
                 computed_at, updated_at, evaluated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '${CATALOG_RESCORE_MATCHER_VERSION}', ${nowFn}, ${nowFn}, ${nowFn})
-             ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '${CATALOG_RESCORE_MATCHER_VERSION}', ${nowFn}, ${nowFn}, ?)
+             ON CONFLICT (profile_id, opportunity_id) DO UPDATE SET
+               match_score = excluded.match_score,
+               match_confidence = excluded.match_confidence,
+               match_decision = excluded.match_decision,
+               match_explanation = excluded.match_explanation,
+               match_reasons = excluded.match_reasons,
+               match_explain_json = excluded.match_explain_json,
+               matcher_version = excluded.matcher_version,
+               computed_at = excluded.computed_at,
+               updated_at = excluded.updated_at,
+               evaluated_at = excluded.evaluated_at`,
           ).run(
-            `cr:${profileId}:${opp.id}`, profileId, opp.id, score, 'accept',
+            `cr:${profileId}:${opp.id}`, profileId, opp.id, score,
+            confidence,
+            'accept',
             decision?.explanation ?? null,
-            JSON.stringify(decision?.matchedNeeds ?? []),
-            JSON.stringify({ gate: 'catalog_rescore' }),
-            null, 'catalog_rescore',
+            json(reasons, []),
+            json(explain, {
+              score_scale_id: SCORE_SCALE_ID,
+              scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+              matcher_version: decision?.matcherVersion ?? null,
+            }),
+            null, 'catalog_rescore', decision?.evaluatedAt ?? evaluatedAt,
           )
           if (changesOf(res) > 0) {
-            summary.linked += 1
+            summary.upserted += 1
+            if (opp.existing_match_id) summary.updated += 1
+            else summary.linked += 1
             if (summary.examples.length < 5) summary.examples.push(`${opp.title} (ACCEPT ${score})`)
           }
         } catch (err) {
           log.warn('insert failed (non-fatal)', { profile: profileId, opportunity: opp.id, error: String(err?.message || err) })
+          summary.convergence_errors += 1
         }
         if (outOfBudget()) break
       }
@@ -306,10 +403,9 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     }
 
     if (writeEnabled) {
-      cursor.profiles[profileId] = {
-        ...(watermark ? { watermark } : {}),
-        ...(profileDone ? { completed_at: new Date().toISOString(), active_bucket: activeBucket } : {}),
-      }
+      cursor.profiles[profileId] = profileDone
+        ? { cycle, completed_at: new Date().toISOString() }
+        : { cycle, ...(watermark ? { watermark } : {}) }
       cursor.last_profile = profileId
     }
     if (profileDone) summary.profiles_completed += 1
@@ -325,25 +421,34 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     try {
       const doomed = await db.prepare(
         `SELECT m.id FROM profile_opportunity_matches m
-          JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+          LEFT JOIN funding_opportunities fo ON fo.id = m.opportunity_id
          WHERE m.matcher_version = '${CATALOG_RESCORE_MATCHER_VERSION}'
-           AND fo.is_active IS NOT NULL AND fo.is_active <> ${trueLit}
+           AND (
+             fo.id IS NULL
+             OR (fo.is_active IS NOT NULL AND fo.is_active <> ${trueLit})
+             OR ${pointerPredicate}
+           )
          LIMIT 500`,
       ).all()
       for (let i = 0; i < (doomed?.length ?? 0); i += 200) {
         const slice = doomed.slice(i, i + 200).map((r) => r.id)
         const ph = slice.map(() => '?').join(', ')
         const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
-        summary.stale_removed += changesOf(res) || slice.length
+        summary.stale_removed += changesOf(res)
       }
-    } catch { /* convergence is best-effort; never fails the sweep */ }
-    try { await kvSet(db, CATALOG_RESCORE_KV_KEY, cursor) } catch { /* cursor loss = re-scan, never corruption */ }
+    } catch { summary.convergence_errors += 1 }
+    try { await kvSet(db, CATALOG_RESCORE_KV_KEY, cursor) } catch { summary.convergence_errors += 1 }
   }
 
   summary.elapsed_ms = Date.now() - startedAt
-  if (!writeEnabled && summary.would_link > 0) {
-    log.info('catalog rescore census: writes DISABLED (ENFORCE_CATALOG_RESCORE=0) — engine ACCEPTs waiting', {
-      would_link: summary.would_link, adjudicated: summary.adjudicated, examples: summary.examples,
+  if (summary.convergence_errors > 0) summary.ok = false
+  if (!writeEnabled && (summary.would_link > 0 || summary.would_update > 0 || summary.would_remove > 0)) {
+    log.info('catalog rescore census: writes DISABLED (ENFORCE_CATALOG_RESCORE=0) — convergence waiting', {
+      would_link: summary.would_link,
+      would_update: summary.would_update,
+      would_remove: summary.would_remove,
+      adjudicated: summary.adjudicated,
+      examples: summary.examples,
     })
   }
   return summary

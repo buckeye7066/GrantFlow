@@ -20,8 +20,9 @@ import {
  *
  * Floating action bar that appears when the user has selected one or
  * more pipeline cards. From here the user can:
- *   - "Automate with Hamilton" — opens HamiltonAutopilotAuthorization to
- *     grant Autopilot the rights to complete/submit the SELECTED sources.
+ *   - "Prepare with Hamilton" — opens HamiltonAutopilotAuthorization to
+ *     grant scoped draft-preparation rights for the SELECTED sources. Final
+ *     portal submission remains a visible human handoff.
  *   - "Delete unselected" — removes every other pipeline card so only the
  *     sources the user picked for Hamilton remain. This is the "click the
  *     ones you want Hamilton to process; delete the rest" workflow.
@@ -94,10 +95,10 @@ export default function HamiltonSelectionToolbar({ profileId, onComplete, grants
           <Sparkles className="w-5 h-5 text-indigo-600" />
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-slate-900">
-              {count} selected · ready for Hamilton Autopilot
+              {count} selected · ready for Hamilton preparation
             </div>
             <div className="text-xs text-slate-500 truncate">
-              Hamilton runs unattended after you authorize her — she stops only on a true hard blocker.
+              Hamilton can prepare drafts within this authorization. You handle login, 2FA, attestations, signatures, and final portal submission.
             </div>
           </div>
           <Button variant="ghost" size="sm" onClick={clear} title="Clear selection">
@@ -116,7 +117,7 @@ export default function HamiltonSelectionToolbar({ profileId, onComplete, grants
           )}
           <Button onClick={openAuthorize} className="bg-indigo-600 hover:bg-indigo-700 text-white">
             <Sparkles className="w-4 h-4 mr-2" />
-            Submit with Hamilton
+            Prepare with Hamilton
           </Button>
         </div>
       </div>

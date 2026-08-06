@@ -245,20 +245,10 @@ const matchesSearch =
         formData.append('display_name', inferredName)
       }
       
-      const response = await fetch('/api/documents/ingest', {
+      const result = await apiFetch('/api/documents/ingest', {
         method: 'POST',
         body: formData,
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-        },
       })
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }))
-        throw new Error(errorData.error || `Upload failed with status ${response.status}`)
-      }
-      
-      const result = await response.json()
       
       // Validate that we got a profile ID back
       if (!result || !result.profile_id) {

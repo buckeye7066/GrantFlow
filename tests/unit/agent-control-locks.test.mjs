@@ -31,7 +31,7 @@ import {
 import { startRun } from '../../backend/services/agentControl/agentControlOrchestrator.js'
 import { agentLockName } from '../../backend/services/agentControl/agentControlTypes.js'
 
-const ADMIN = { email: 'buckeye7066@gmail.com' }
+const ADMIN = { email: 'admin@grantflow.local', controlCenterAuthorized: true }
 const SAM_LOCK = agentLockName('sam')
 
 function makeDb() {

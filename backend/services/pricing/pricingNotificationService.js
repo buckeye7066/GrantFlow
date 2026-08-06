@@ -5,9 +5,9 @@
  * `profilePricingInitializer.queueAdminNotification` and consumed by
  * the admin client (live polling).
  *
- * The queue ONLY targets the configured admin email (default
- * `buckeye7066@gmail.com`); other users — even users with `is_admin=true`
- * — never receive these notifications. The route layer enforces this.
+ * The queue targets one configured operator. Access requires both canonical
+ * DB-backed admin state and the trusted DB email matching that recipient;
+ * token email/role claims are never sufficient.
  */
 
 import { withProfileScope } from '../../middleware/profileContext.js'
@@ -32,6 +32,18 @@ async function tableExists(db, table) {
   }
 }
 
+function isAdminActor(user) {
+  return user?.is_admin === true || user?.is_admin === 1
+}
+
+function isAuthorizedTarget(user) {
+  return Boolean(
+    isAdminActor(user)
+    && user?.identityResolved === true
+    && isAdminNotificationTarget(user?.email),
+  )
+}
+
 function decodeNotification(row) {
   if (!row) return null
   let payload = null
@@ -40,12 +52,10 @@ function decodeNotification(row) {
 }
 
 /**
- * List recent notifications for the given admin user. Returns empty
- * when the requester isn't the configured admin email — even if they
- * have `is_admin=true`.
+ * List recent notifications for the configured, DB-recognized recipient.
  */
 export async function listForAdmin(db, { user, limit = 25, status = null } = {}) {
-  if (!user || !isAdminNotificationTarget(user.email)) {
+  if (!isAuthorizedTarget(user)) {
     return { ok: false, error: 'not_admin_notification_target', items: [] }
   }
   if (!(await tableExists(db, ADMIN_NOTIFICATIONS_TABLE))) {
@@ -76,7 +86,7 @@ export async function listForAdmin(db, { user, limit = 25, status = null } = {})
  * mode="live" or "on_login".
  */
 export async function markDelivered(db, { user, id, mode = 'live' }) {
-  if (!user || !isAdminNotificationTarget(user.email)) {
+  if (!isAuthorizedTarget(user)) {
     return { ok: false, error: 'not_admin_notification_target' }
   }
   if (!(await tableExists(db, ADMIN_NOTIFICATIONS_TABLE))) {
@@ -100,7 +110,7 @@ export async function markDelivered(db, { user, id, mode = 'live' }) {
  * Dismiss a notification (admin clicked the X). Records dismissed_at.
  */
 export async function dismiss(db, { user, id }) {
-  if (!user || !isAdminNotificationTarget(user.email)) {
+  if (!isAuthorizedTarget(user)) {
     return { ok: false, error: 'not_admin_notification_target' }
   }
   if (!(await tableExists(db, ADMIN_NOTIFICATIONS_TABLE))) {
@@ -123,7 +133,7 @@ export async function dismiss(db, { user, id }) {
  * queue on first load.
  */
 export async function flushQueuedOnLogin(db, { user }) {
-  if (!user || !isAdminNotificationTarget(user.email)) {
+  if (!isAuthorizedTarget(user)) {
     return { ok: false, error: 'not_admin_notification_target', items: [] }
   }
   if (!(await tableExists(db, ADMIN_NOTIFICATIONS_TABLE))) {

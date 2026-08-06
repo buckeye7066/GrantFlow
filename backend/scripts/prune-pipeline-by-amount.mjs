@@ -22,7 +22,7 @@
  * Apply:
  *   railway run node backend/scripts/prune-pipeline-by-amount.mjs --names "Robert" --threshold 25000 --apply
  *
- * Anastasia's fabricated-award cleanup is owned by another process — her profile
+ * Demo Student's fabricated-award cleanup is owned by another process — her profile
  * is hard-excluded here.
  */
 import { db } from '../db/index.js'
@@ -32,7 +32,7 @@ import { __testables } from '../startup/enforceInvariants.js'
 const { isIndividualProfileType } = __testables
 
 // Do not touch — owned by a separate cleanup process (scope guardrail).
-const EXCLUDED_PROFILE_IDS = new Set(['c4a92724-9cee-416f-ba30-e91b9b5cd885'])
+const EXCLUDED_PROFILE_IDS = new Set(['00000000-0000-4000-8000-000000000001'])
 
 const PIPELINE_ACTIVE_STATUSES = [
   'discovery', 'discovered', 'interested', 'auto_applied', 'drafting',

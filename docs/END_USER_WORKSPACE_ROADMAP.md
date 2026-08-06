@@ -4,7 +4,7 @@
 
 GrantFlow will operate as two deliberately different workspaces:
 
-1. **Owner/admin workspace**: the current full GrantFlow interface remains available to the canonical owner account (`buckeye7066@gmail.com`) and other DB-recognized administrators.
+1. **Owner/admin workspace**: the current full GrantFlow interface remains available to the canonical owner account (`owner@example.invalid`) and other DB-recognized administrators.
 2. **End-user workspace**: ordinary users see only the funding journey they need to understand: Dashboard, Calendar, Pipeline, Item Requests, and Ask Anya.
 
 The application's discovery engines, profile analysis, crawlers, match scoring, document processing, pricing logic, application generation, portal automation, reporting, and diagnostics remain available in the background. They stop competing for attention in the end-user navigation.

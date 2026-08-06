@@ -115,22 +115,9 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     matched_fields: opp.matched_fields || []
   }));
 
-  // Return ALL opportunities from the backend â the decision engine (computeMatchDecision)
-  // is the sole acceptance authority (Goal 4). Suppressing by score here would override
-  // canonical ACCEPT/REVIEW decisions and hide results from the user (Goals 7, 8).
-  // UI layers may sort or visually tier by match_score but must never hard-drop records.
-  const suppressed = allOpportunities.filter(opp => {
-    const matchScore = typeof opp.match === 'number' ? opp.match : 0;
-    return matchScore < 80;
-  });
-
-  if (suppressed.length > 0) {
-    log.debug('low-score opportunities retained (not suppressed) â decision engine is authority', {
-      total: allOpportunities.length,
-      below_80: suppressed.length,
-      titles: suppressed.map(o => o.title),
-    });
-  }
+  // Return every opportunity selected by the backend's canonical decision.
+  // A browser-side score cutoff would create a second, potentially stale
+  // admission policy; components may sort or display score tiers only.
 
   return {
     opportunities: allOpportunities,

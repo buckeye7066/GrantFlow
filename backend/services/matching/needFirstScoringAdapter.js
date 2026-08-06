@@ -348,6 +348,13 @@ export function applyNeedFirstScoring({
   decisionResult.reasons = eligibilityPolicy.reasons
   const eligibilityUnconfirmed = eligibilityPolicy.confirmation.unconfirmed
 
+  // SCORE_FLOOR distinguishes a validated non-match from missing data; it must
+  // never make a hard eligibility denial look like a positive fit. A canonical
+  // REJECT remains exactly zero through every adapter.
+  if (String(decisionResult.decision ?? '').toUpperCase() === 'REJECT') {
+    score = 0
+  }
+
   const previousExplain = canonical?.match_explain ?? {}
   const previousBreakdown = previousExplain.scoreBreakdown ??
     previousExplain.score_breakdown ?? {}
@@ -391,7 +398,10 @@ export function applyNeedFirstScoring({
       eligibility_confirmation_applied: eligibilityPolicy.applied,
       data_point_bonus_credit: Math.round(fit.boundedBonus * 10) / 10,
       data_point_total_credit: Math.round(totalCredit * 10) / 10,
-      total_before_need_first: clampScore(canonical?.score),
+      total_before_need_first:
+        String(canonical?.decision ?? '').toUpperCase() === 'REJECT'
+          ? 0
+          : clampScore(canonical?.score),
       total: score,
     },
   }

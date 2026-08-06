@@ -1,4 +1,5 @@
 import fs from 'fs'
+import { DEFAULT_MIN_SCORE, SCORE_SCALE_ID } from '../backend/config/matchThresholds.js'
 
 // Node 22 has global fetch.
 const BASE = process.env.BASE_URL || 'http://localhost:8080'
@@ -80,6 +81,8 @@ async function main() {
   const report = {
     started_at: new Date().toISOString(),
     base: BASE,
+    score_scale_id: SCORE_SCALE_ID,
+    display_min_score: DEFAULT_MIN_SCORE,
     crawlers: CRAWLERS,
     profiles: [],
     totals: Object.fromEntries(CRAWLERS.map((c) => [c, { runs: 0, success: 0, matches: 0, used_db_fallback: 0 }])),
@@ -91,7 +94,8 @@ async function main() {
       const result = await apiPost('/api/real-crawlers/run', {
         crawler_type: crawler,
         profile_id: profileId,
-        min_match_score: 50,
+        min_match_score: DEFAULT_MIN_SCORE,
+        score_scale_id: SCORE_SCALE_ID,
         allow_db_fallback: true,
       })
 
@@ -133,4 +137,3 @@ main().catch((err) => {
   console.error(err)
   process.exit(1)
 })
-

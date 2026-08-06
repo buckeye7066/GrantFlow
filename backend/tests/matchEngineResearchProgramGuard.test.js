@@ -244,7 +244,7 @@ describe('research-program + procedural-notice guard (decision path)', () => {
 //    restriction tells (the MTSU off-campus-housing class, 2026-07-27) ─────
 
 describe('resource-kind override for institutional/research tells', () => {
-  // Real prod row (verbatim description): Anastasia's own university housing
+  // Real prod row (verbatim description): Demo Student's own university housing
   // portal hard-rejected as "institutions or research organizations only"
   // because its prose contains 'institutions'/'institutional'.
   const MTSU_PORTAL = {
@@ -263,7 +263,7 @@ describe('resource-kind override for institutional/research tells', () => {
   const MTSU_STUDENT = {
     id: 'p-mtsu-student',
     primary_type: 'student',
-    first_name: 'Anastasia',
+    first_name: 'Demo Student',
     state: 'TN',
     needs: ['housing', 'education'],
   }

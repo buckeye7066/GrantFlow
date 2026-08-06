@@ -217,7 +217,7 @@ describe('per-host adapter registry', () => {
       expect(['studentaid.gov', 'login.gov', 'id.me', 'irs.gov', 'sam.gov']).not.toContain(key)
     }
   })
-  it('a per-host adapter is selected over the generic in registerOnPortal', async () => {
+  it('does not treat a legacy per-host helper as a reviewed account-creation adapter', async () => {
     enableBrowser()
     const db = makeDb()
     const hostAdapter = vi.fn(async () => ({ status: 'registered', evidence: {} }))
@@ -241,8 +241,9 @@ describe('per-host adapter registry', () => {
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-pw-1234!' },
       launchBrowser,
     })
-    expect(res.status).toBe('registered')
-    expect(res.adapter).toBe('host:communityforce.com')
+    expect(res.status).toBe('blocked')
+    expect(res.blockerType).toBe('create_portal_account')
+    expect(res.evidence?.signal).toBe('reviewed_signup_adapter_required')
     disableBrowser()
   })
 })
@@ -267,7 +268,7 @@ describe('registerOnPortal safety rails', () => {
     disableBrowser()
   })
 
-  it('automation disabled → failed/automation_disabled, not attempted', async () => {
+  it('fails closed at the reviewed-adapter gate before browser settings matter', async () => {
     disableBrowser()
     const db = makeDb()
     const launchBrowser = vi.fn()
@@ -276,12 +277,12 @@ describe('registerOnPortal safety rails', () => {
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
       launchBrowser,
     })
-    expect(res.status).toBe('failed')
-    expect(res.automation_disabled).toBe(true)
+    expect(res.status).toBe('blocked')
+    expect(res.blockerType).toBe('create_portal_account')
     expect(launchBrowser).not.toHaveBeenCalled()
   })
 
-  it('host not on allowlist → not attempted', async () => {
+  it('fails closed before an allowlisted-browser decision can launch', async () => {
     enableBrowser('tn.gov')
     const db = makeDb()
     const launchBrowser = vi.fn()
@@ -290,13 +291,13 @@ describe('registerOnPortal safety rails', () => {
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
       launchBrowser,
     })
-    expect(res.status).toBe('failed')
-    expect(res.automation_disabled).toBe(true)
+    expect(res.status).toBe('blocked')
+    expect(res.blockerType).toBe('create_portal_account')
     expect(launchBrowser).not.toHaveBeenCalled()
     disableBrowser()
   })
 
-  it('dry run → planned, no browser launched', async () => {
+  it('does not let dry-run bypass the reviewed account-creation boundary', async () => {
     enableBrowser()
     const db = makeDb()
     const launchBrowser = vi.fn()
@@ -305,7 +306,8 @@ describe('registerOnPortal safety rails', () => {
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
       dryRun: true, launchBrowser,
     })
-    expect(res.status).toBe('planned')
+    expect(res.status).toBe('blocked')
+    expect(res.blockerType).toBe('create_portal_account')
     expect(launchBrowser).not.toHaveBeenCalled()
     disableBrowser()
   })
@@ -323,7 +325,7 @@ describe('completeEmailVerification', () => {
     expect(res.status).toBe('verification_pending')
   })
 
-  it('registered when the verification link is found and visited successfully', async () => {
+  it('never reads a configured mailbox or visits an activation link', async () => {
     const provider = {
       notConfigured: false,
       listInboxMessages: vi.fn(async () => ({
@@ -341,7 +343,9 @@ describe('completeEmailVerification', () => {
       identityEmail: 'auto@vault.example', portalHost: 'portal.example.org',
       outlookProvider: provider, browserContext: context, waitMs: 1000, pollMs: 1,
     })
-    expect(res.status).toBe('registered')
+    expect(res.status).toBe('verification_pending')
+    expect(res.blocker_kind).toBe('manual_email_verification_required')
+    expect(provider.listInboxMessages).not.toHaveBeenCalled()
   })
 
   it('verification_pending when the mailbox is not configured', async () => {
@@ -366,7 +370,7 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
     disableBrowser()
   })
 
-  it('registered → brain finalizes the auto-provisioned credential', async () => {
+  it('saved-login automation does not authorize creating a portal account', async () => {
     enableBrowser()
     await setMasterPassphrase(db, { profileId: 'pReg', passphrase: 'a-strong-passphrase', identityEmail: 'auto@vault.example' })
     const page = makeFakePage({
@@ -383,18 +387,16 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
       profileId: 'pReg', userId: 'u1', portalHost: 'communityforce.com',
       loginUrl: 'https://communityforce.com/register', launchBrowser,
     })
-    expect(r.state).toBe(AUTOPILOT_STATE.AUTO_PROVISIONED)
-    expect(r.registration?.status).toBe('registered')
-    // a master-wrapped credential was finalized
+    expect(r.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(r.blocker).toBe('create_portal_account')
     const rows = await db.prepare(
       `SELECT * FROM hamilton_portal_credentials WHERE profile_id = ? AND generated_by = 'hamilton'`,
     ).all('pReg')
-    expect(rows.length).toBe(1)
-    expect(Boolean(rows[0].has_master_wrap)).toBe(true)
+    expect(rows.length).toBe(0)
     disableBrowser()
   })
 
-  it('blocked(CAPTCHA) → brain routes to needs_user + queues a handoff', async () => {
+  it('stops at account authority before a generic signup form or CAPTCHA', async () => {
     enableBrowser()
     await setMasterPassphrase(db, { profileId: 'pBlk', passphrase: 'a-strong-passphrase', identityEmail: 'auto@vault.example' })
     const page = makeFakePage({
@@ -412,14 +414,13 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
       loginUrl: 'https://communityforce.com/register', launchBrowser,
     })
     expect(r.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
-    expect(r.blocker).toBe('captcha_required')
-    // the credential record still exists (the account password was generated)…
+    expect(r.blocker).toBe('create_portal_account')
     const reqs = await db.prepare('SELECT * FROM hamilton_session_capture_requests WHERE profile_id = ?').all('pBlk')
     expect(reqs.length).toBe(1) // …and a side-by-side handoff was queued
     disableBrowser()
   })
 
-  it('verification_pending → brain enters WAITING_FOR_EMAIL_VERIFICATION (user\'s one step), not co-browse', async () => {
+  it('does not provision an account or start mailbox verification', async () => {
     enableBrowser()
     await setMasterPassphrase(db, { profileId: 'pVer', passphrase: 'a-strong-passphrase', identityEmail: 'auto@vault.example' })
     const page = makeFakePage({
@@ -439,28 +440,16 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
       loginUrl: 'https://communityforce.com/register', launchBrowser, outlookProvider,
       verifyWaitMs: 0, verifyPollMs: 1, // don't poll the mailbox in a unit test
     })
-    expect(r.state).toBe(AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION)
-    expect(r.blocker).toBe('verification_pending')
-    expect(r.next_retry_at).toBeTruthy()
-    // NOT a co-browse terminal — automation will finish once verified.
-    expect(r.resolution).toBeNull()
-    // The credential is flagged awaiting verification (still pending_registration).
-    const cred = await db.prepare(
-      `SELECT verification_status, pending_registration, verification_next_retry_at
-         FROM hamilton_portal_credentials WHERE profile_id = ? AND portal_host = ?`,
-    ).get('pVer', 'communityforce.com')
-    expect(cred.verification_status).toBe('pending')
-    expect(Boolean(cred.pending_registration)).toBe(true)
-    expect(cred.verification_next_retry_at).toBeTruthy()
-    // A "verify your email" notification was emitted (the user's one step).
-    const notif = await db.prepare(
-      `SELECT COUNT(*) AS n FROM notifications WHERE type = 'hamilton_email_verification_required'`,
-    ).get()
-    expect(Number(notif.n)).toBeGreaterThan(0)
+    expect(r.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(r.blocker).toBe('create_portal_account')
+    const credentials = await db.prepare(
+      'SELECT * FROM hamilton_portal_credentials WHERE profile_id = ?',
+    ).all('pVer')
+    expect(credentials).toHaveLength(0)
     disableBrowser()
   })
 
-  it('re-run RE-CHECKS a pending account and auto-resumes when the link is now verified', async () => {
+  it('does not create or auto-resume an account across repeated runs', async () => {
     enableBrowser()
     await setMasterPassphrase(db, { profileId: 'pRe', passphrase: 'a-strong-passphrase', identityEmail: 'auto@vault.example' })
     // 1) Initial signup → verification_pending (no link yet).
@@ -480,7 +469,8 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
       loginUrl: 'https://communityforce.com/register', launchBrowser: first.launchBrowser,
       outlookProvider: emptyMailbox, verifyWaitMs: 0, verifyPollMs: 1,
     })
-    expect(r1.state).toBe(AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION)
+    expect(r1.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(r1.blocker).toBe('create_portal_account')
     // Clear the just-set next_retry so the re-check is due immediately.
     await db.prepare(`UPDATE hamilton_portal_credentials SET verification_next_retry_at = NULL WHERE profile_id = ?`).run('pRe')
 
@@ -500,13 +490,12 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
       loginUrl: 'https://communityforce.com/register', launchBrowser: second.launchBrowser,
       outlookProvider: mailbox, verifyWaitMs: 100, verifyPollMs: 1,
     })
-    expect(r2.state).toBe(AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS)
-    // Verification cleared + account is real now.
-    const cred = await db.prepare(
-      `SELECT verification_status, pending_registration FROM hamilton_portal_credentials WHERE profile_id = ?`,
-    ).get('pRe')
-    expect(cred.verification_status === null || cred.verification_status === undefined).toBe(true)
-    expect(Boolean(cred.pending_registration)).toBe(false)
+    expect(r2.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(r2.blocker).toBe('create_portal_account')
+    const credentials = await db.prepare(
+      'SELECT * FROM hamilton_portal_credentials WHERE profile_id = ?',
+    ).all('pRe')
+    expect(credentials).toHaveLength(0)
     disableBrowser()
   })
 
@@ -525,7 +514,7 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
     disableBrowser()
   })
 
-  it('dry run → brain provisions the credential but does NOT launch a browser', async () => {
+  it('dry run does not provision a credential behind the owner boundary', async () => {
     enableBrowser()
     await setMasterPassphrase(db, { profileId: 'pDry', passphrase: 'a-strong-passphrase', identityEmail: 'auto@vault.example' })
     const launchBrowser = vi.fn(async () => { throw new Error('must not launch on dry run') })
@@ -533,10 +522,11 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
       profileId: 'pDry', userId: 'u1', portalHost: 'communityforce.com',
       loginUrl: 'https://communityforce.com/register', dryRun: true, launchBrowser,
     })
-    expect(r.state).toBe(AUTOPILOT_STATE.AUTO_PROVISIONED)
+    expect(r.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(r.blocker).toBe('create_portal_account')
     expect(launchBrowser).not.toHaveBeenCalled()
     const rows = await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE profile_id = ?').all('pDry')
-    expect(rows.length).toBe(1) // credential record provisioned (no browser run)
+    expect(rows.length).toBe(0)
     disableBrowser()
   })
 })
@@ -553,17 +543,17 @@ describe('recheckEmailVerification + recheckDuePortalVerifications', () => {
     disableBrowser()
   })
 
-  it('recheckEmailVerification refuses to launch when browser automation is off', async () => {
+  it('recheckEmailVerification always leaves mailbox activation to the owner', async () => {
     const launchBrowser = vi.fn()
     const res = await recheckEmailVerification(db, {
       portalHost: 'communityforce.com', identityEmail: 'auto@vault.example', launchBrowser,
     })
-    expect(res.status).toBe('failed')
-    expect(res.automation_disabled).toBe(true)
+    expect(res.status).toBe('verification_pending')
+    expect(res.blocker_kind).toBe('create_portal_account')
     expect(launchBrowser).not.toHaveBeenCalled()
   })
 
-  it('driver verifies a DUE pending account and clears it; skips future ones', async () => {
+  it('scheduler does not read mail or mutate pending accounts without reviewed execution', async () => {
     enableBrowser()
     const { key } = await setMasterPassphrase(db, { profileId: 'pDrv', passphrase: 'a-strong-passphrase' })
     // A pending-verification account whose re-check is due (no next_retry).
@@ -596,11 +586,12 @@ describe('recheckEmailVerification + recheckDuePortalVerifications', () => {
       }],
     })) }
     const summary = await recheckDuePortalVerifications(db, { limit: 25, launchBrowser, outlookProvider: mailbox })
-    expect(summary.checked).toBe(1)
-    expect(summary.verified).toBe(1)
-    // The verified account no longer carries a pending verification.
+    expect(summary.checked).toBe(0)
+    expect(summary.verified).toBe(0)
+    expect(mailbox.listInboxMessages).not.toHaveBeenCalled()
+    // The account remains pending for the owner to verify.
     const stillPending = await listCredentialsAwaitingVerification(db, {})
-    expect(stillPending.map((r) => r.portal_host)).not.toContain('communityforce.com')
+    expect(stillPending.map((r) => r.portal_host)).toContain('communityforce.com')
     disableBrowser()
   })
 })

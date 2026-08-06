@@ -1,5 +1,10 @@
 # GrantFlow Production Readiness Report
 
+> **Historical snapshot (2026-05-08), not current release evidence.** Runtime,
+> dependency, authorization, migration, and deployment claims below describe the
+> recorded commit only. Use `docs/recovery/PRODUCTION_TRUTH.md` for the current
+> deployed baseline and rerun all gates on the intended release SHA.
+
 > Generated: 2026-05-08
 > Verifier: AI agent acting as senior full-stack engineer
 > Repo: `buckeye7066/GrantFlow` @ branch `main`

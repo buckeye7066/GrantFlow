@@ -1298,7 +1298,7 @@ export async function enforceProfileIncomeReconciliation(db) {
 }
 
 /**
- * INVARIANT: INDIVIDUAL/ORG SECTION CONFLICT (the Kimberly Botts class, found
+ * INVARIANT: INDIVIDUAL/ORG SECTION CONFLICT (the Demo HCBS Support Persona class, found
  * 2026-07-06). A bad Base44/AI-enrichment import can hallucinate an
  * organization identity (organization_details.organization_type: "nonprofit",
  * a small_business_details.business_name) onto a person-type profile
@@ -1386,7 +1386,7 @@ export async function enforceIndividualOrgSectionConflict(db) {
       const occupation = sections.occupation
       // THE INVERSE CASE (the Anita class, 2026-08-01). A person who runs a
       // FARM is a person who legitimately IS also a business — the exact
-      // mirror image of Kimberly Botts. Many farmers tick `occupation.farmer`
+      // mirror image of Demo HCBS Support Persona. Many farmers tick `occupation.farmer`
       // and leave `small_business_owner` at its schema DEFAULT of false: they
       // are farmers, not "small business owners". That default-false is not a
       // denial, and treating it as one would WIPE a real farm identity
@@ -1446,7 +1446,7 @@ export async function enforceIndividualOrgSectionConflict(db) {
  * every grant/task binds to a REAL profile, by its canonical id).
  *
  * Deferred work (crawler jobs, Hamilton tasks) and older inserts can stamp a
- * grant/application_task with a DESIGNATED-PROFILE SLUG (e.g. 'profile-brian-client')
+ * grant/application_task with a DESIGNATED-PROFILE SLUG (e.g. 'profile-demo-veteran-community')
  * instead of the profile's live canonical UUID. The slug is the same person, but
  * the stale value (a) makes "scored against / save portal login" bind to a slug
  * the UI can't resolve, and (b) drifts the row out of the canonical-id pipeline.
@@ -1581,7 +1581,7 @@ const STUDENT_AID_DEMOTE_SCORE = DEMOTED_MATCH_SCORE
  *   2. `web-llm` rows are DELIBERATELY excluded from the crawler-os reconcile
  *      DELETE + xmatch cleanup (so real web scholarships are never wiped), which
  *      means a stale `web-llm` ACCEPT is NEVER recomputed.
- * Result: a senior widow (Liubov Samoylenko, `individual`, is_student=false) kept
+ * Result: a senior widow (Demo Senior Medical Persona, `individual`, is_student=false) kept
  * surfacing 13 stale `web-llm` scholarship ACCEPTs (81/accept, computed a week
  * earlier under older logic) even though the CURRENT engine REJECTs/caps every
  * one of them. `qualifiesForDisplay` surfaces any ACCEPT regardless of score, so
@@ -1606,7 +1606,7 @@ const STUDENT_AID_DEMOTE_SCORE = DEMOTED_MATCH_SCORE
  *   - the profile does NOT declare a student-aid NEED (scholarship / student_aid
  *     / cost_of_attendance) — this mirrors the engine's `!wantsStudentAid` arm,
  *     so an adult learner who genuinely wants aid is preserved.
- * A real student (Anastasia White) and an aid-seeking adult are NEVER touched, so
+ * A real student (Demo Tennessee STEM Student) and an aid-seeking adult are NEVER touched, so
  * this raises PRECISION without lowering recall. Directory/referral rows (mission
  * rule: directories always survive) are exempt.
  *
@@ -1806,13 +1806,13 @@ function preflightLabelToFieldKey(label) {
 
 /**
  * INVARIANT: A TASK-FLAGGED PROFILE FIELD THE PROFILE CAN NOW ANSWER IS
- * RESOLVED EVERYWHERE (the Anastasia first-name class, owner report
+ * RESOLVED EVERYWHERE (the Demo Student first-name class, owner report
  * 2026-07-27).
  *
  * Hamilton flags missing fields PER TASK (application_missing_info), but the
  * fix is PROFILE-WIDE: the owner adds first_name once. Prod carried 30+
- * unresolved "Profile is missing first name" rows across Anastasia's portal
- * tasks while basic_information.first_name = "Anastasia" sat right there —
+ * unresolved "Profile is missing first name" rows across Demo Student's portal
+ * tasks while basic_information.first_name = "Demo Student" sat right there —
  * the reconcile existed but ran only after DOCUMENT PARSES, and the task
  * self-heal above only re-queues status='blocked' tasks without resolving
  * the flag rows on waiting/review tasks, so every portal kept announcing the
@@ -1882,7 +1882,7 @@ export async function enforceStaleMissingFieldResolution(db) {
 
 /**
  * INVARIANT: A SYSTEM-SIDE TASK STOP THAT NO LONGER REPRODUCES IS CLEARED,
- * AND A TASK WHOSE FUNDING SOURCE WAS PURGED IS CLOSED (the Robert White
+ * AND A TASK WHOSE FUNDING SOURCE WAS PURGED IS CLOSED (the Demo College Student Persona
  * 41-stop class, owner report 2026-07-27).
  *
  * Preflight files 'crawler_profile_rules' / 'application_url' hard stops as
@@ -1927,6 +1927,53 @@ export async function enforceHamiltonStopRecheck(db, deps = {}) {
       scannedTasks: r.scannedTasks,
       enforced: enforce,
     }
+  })
+}
+
+/**
+ * INVARIANT: URL-less pointer/directory/referral sources are research leads,
+ * not application surfaces. The task-store creation choke point prevents new
+ * rows; this bounded boot net conservatively blocks legacy tasks without
+ * deleting packet, document, or submission evidence.
+ *
+ * ENFORCE_POINTER_TASK_RECLASS=0 keeps the scan count-only. Write and scan
+ * bounds are independently configurable so a capped run reports deferred
+ * repair work instead of implying the population was exhausted.
+ */
+export async function enforcePointerTaskReclassification(db, deps = {}) {
+  return runInvariant('pointer_task_reclassification', async () => {
+    let repairLegacyPointerApplicationTasks = deps.repairLegacyPointerApplicationTasks
+    if (!repairLegacyPointerApplicationTasks) {
+      try {
+        ;({ repairLegacyPointerApplicationTasks } = await import('../services/hamilton/pointerTaskRepair.js'))
+      } catch (err) {
+        log.warn('pointer_task_reclassification: repair service unavailable (non-fatal)', {
+          error: String(err?.message || err),
+        })
+        return { scanned: 0, repaired: 0, enforced: true, skipped: 'service_unavailable' }
+      }
+    }
+
+    const enforced = _parseBoolEnv(process.env.ENFORCE_POINTER_TASK_RECLASS) !== false
+    const limit = _boundedLimit('POINTER_TASK_RECLASS_LIMIT', 500)
+    const scanLimit = _boundedLimit('POINTER_TASK_RECLASS_SCAN_LIMIT', 5000)
+    const report = await repairLegacyPointerApplicationTasks(db, {
+      limit,
+      scanLimit,
+      dryRun: !enforced,
+      actorRole: 'system',
+    })
+
+    if ((report.repaired || report.would_repair) > 0) {
+      log.info('pointer application-task invariant evaluated legacy research leads', {
+        scanned: report.scanned,
+        repaired: report.repaired,
+        wouldRepair: report.would_repair,
+        deferredByLimit: report.deferred_by_limit,
+        enforced,
+      })
+    }
+    return { ...report, enforced }
   })
 }
 
@@ -2150,7 +2197,7 @@ export async function enforceHamiltonTaskSelfHeal(db) {
  * application_url. Hamilton then queued the search page as a portal,
  * classified Google's sign-in wall as login_required, and retried login 5x
  * against a search results page (verified in prod: 8 Robert tasks + 1
- * Anastasia task, 2026-07). The producers are now fixed (school-card
+ * Demo Student task, 2026-07). The producers are now fixed (school-card
  * fallbacks removed, insert-path scrub in opportunityInserter, classifier
  * readUrl filter); this sweep is the NET that heals rows any path already
  * persisted.
@@ -2734,7 +2781,7 @@ export async function enforceApplicationUrlRescue(db, deps = {}) {
  * Catalog rows are deleted by several paths (dedupe collapse, reality-gate
  * purges, the Amy reaper, manual cleanups) and NONE of them cleaned up
  * `profile_opportunity_matches` rows pointing at the deleted opportunity.
- * 271 dangling matches had accumulated; Avanell Leamon's matches view showed
+ * 271 dangling matches had accumulated; Demo Senior Accessibility Persona's matches view showed
  * 96 candidates ≥65 of which 62 were unusable ghosts — every read path joins
  * to funding_opportunities, so they inflate counts, waste promote passes
  * (`opportunity_not_found`), and misrepresent discovery quality to the
@@ -5827,7 +5874,7 @@ export async function enforceDeclaredGeoScope(db) {
 
 /**
  * INVARIANT: a per-state housing finance agency row IS state-scoped
- * (2026-08-03, the Robert White out-of-state-HFA class).
+ * (2026-08-03, the Demo College Student Persona out-of-state-HFA class).
  *
  * The `state_housing_finance_agency` lane is ONE national registry row whose
  * adapter resolves the profile's OWN agency from STATE_REGISTRY — but the
@@ -5992,7 +6039,7 @@ export async function enforceStateAgencyGeoScope(db) {
 
 /**
  * INVARIANT: a CROSS-PROFILE match row exists only on the engine's ACCEPT
- * (2026-08-03, the Robert White report — the global door).
+ * (2026-08-03, the Demo College Student Persona report — the global door).
  *
  * The xmatch lane ("match every newly stored opportunity against ALL known
  * profiles") scores every catalog row of every run against every OTHER
@@ -6083,7 +6130,7 @@ export async function enforceCrossProfileMatchPrecision(db) {
  * resource-preserving reconcile (crawlerOsPersistence.js) restores every
  * DIRECTORY match the run did not explicitly re-score as REJECT, and the
  * planner gate guarantees those lanes are never re-scored for that profile
- * again. Robert White's amputee/arthritis/autism/HLAA/Reeve/BIAA rows were
+ * again. Demo College Student Persona's amputee/arthritis/autism/HLAA/Reeve/BIAA rows were
  * evaluated 2026-08-02T04:10Z (pre-gate) and survived his 2026-08-03 crawl
  * exactly this way. Measured fleet-wide 2026-08-03: 291 'crawler-os' rows
  * across 27 profiles + 126 xmatch rows across 28 profiles on disease-specific
@@ -6093,7 +6140,7 @@ export async function enforceCrossProfileMatchPrecision(db) {
  * `DISEASE_SPECIFIC_SOURCE_IDS` + `sourceServesDeclaredCondition`
  * (config/sourceLanes.js) against the thesis's `declared_health_terms`
  * (`buildThesisForProfile`, the union of `signals.health_conditions` and
- * `health_support` — Dr. John Robert White's `arthritis` lives in SUPPORT and
+ * `health_support` — Demo Health Education Persona's `arthritis` lives in SUPPORT and
  * keeps his arthritis lane). MISSING = NEUTRAL: a profile whose thesis cannot
  * be built, or that carries no `declared_health_terms` ARRAY, loses nothing;
  * an EMPTY array is a read that found nothing and purges (the planner gate's
@@ -7023,7 +7070,7 @@ async function loadUnconfiguredProfiles(db) {
  * INVARIANT: a profile that was NEVER FILLED IN is not shown fabricated
  * geography (2026-08-02).
  *
- * `profile-melissa-justus` is not a person. Its address is
+ * `profile-demo-general-support` is not a person. Its address is
  * `{ street:'123 Main St', city:'Anytown', state:'USA', zip_code:'12345' }`,
  * its email is `@example.com`, its phone is `555-1234`, and its own notes say
  * "Designated roster profile. Add the owner login email here…". It declares no
@@ -7207,7 +7254,7 @@ export async function enforceUnconfiguredProfileGeoMatches(db) {
  *  - 52 ACTIVE `Middle Tennessee State University` catalog rows (Peggy Perry
  *    Belcher Scholarship Fund, MTSU Guaranteed Scholarship, Buchanan
  *    Fellowship, …) carry **ZERO** match rows, for ANY profile — while
- *    Anastasia White's `education.current_institution` IS
+ *    Demo Tennessee STEM Student's `education.current_institution` IS
  *    "Middle Tennessee State University".
  *  - The same student's only university-sponsored matches are SEVEN
  *    `Wayne County Community College District` / `Wayne State University`
@@ -7215,7 +7262,7 @@ export async function enforceUnconfiguredProfileGeoMatches(db) {
  *    fleet-wide including nonprofits and a biolab. Both ends of one defect.
  *
  * THE ENGINE IS NOT THE DROP POINT. Replaying the REAL canonical engine on the
- * real pair (`services/matchEngine.computeMatchDecision`, Anastasia + "Peggy
+ * real pair (`services/matchEngine.computeMatchDecision`, Demo Student + "Peggy
  * Perry Belcher Scholarship Fund", her live profile row + all live sections)
  * returns **ACCEPT, score 100** — "Matches 70 of the profile's 70 data points",
  * "Geography: State match". The pair is simply never SCORED.
@@ -7227,7 +7274,7 @@ export async function enforceUnconfiguredProfileGeoMatches(db) {
  * lane keyed on the school's NAME (no registry source lists one school's
  * endowed funds), so the FIRST run of that profile that is registry-only — web
  * lane off, rate-limited, or simply no hits — erases the entire institution set
- * and nothing ever looks at the surviving catalog row again. Anastasia's 35
+ * and nothing ever looks at the surviving catalog row again. Demo Student's 35
  * live `crawler-os` rows are ALL registry lanes (`benefits_gov`, `hrsa_*`,
  * `tn_benefits`, `findhelp_*`) and not one is from the web lane. Fleet-wide,
  * same measurement: `source='web_search'` holds **7,645 active catalog rows of
@@ -7240,7 +7287,7 @@ export async function enforceUnconfiguredProfileGeoMatches(db) {
  * false-positive flood it is meant to cure:
  *   1. ATTENDANCE, NOT ASPIRATION — only `current_institution` /
  *      `current_school` / a COMMITTED university application / `schools.name`.
- *      `target_colleges` is deliberately excluded: Anastasia lists NINETEEN,
+ *      `target_colleges` is deliberately excluded: Demo Student lists NINETEEN,
  *      and nineteen schools' aid is the flood. Aspiration still seeds discovery
  *      QUERIES; it just never authorizes a match.
  *   2. THE WHOLE NAME, NOT ONE WORD — bidirectional distinctive-token EQUALITY
@@ -7723,7 +7770,7 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
  *
  * THE DEFECT (2026-08-02, the owner's north-star rule: "It will determine the
  * need, run the correct crawlers, and use the profile information in finding the
- * funding source"). Anastasia White's `education.intended_major` is "Forensic
+ * funding source"). Demo Tennessee STEM Student's `education.intended_major` is "Forensic
  * Science". Measured read-only in prod:
  *
  *   forensic rows in the catalog       13 active — 1 carried a match row for her
@@ -7742,7 +7789,7 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
  * Replaying the real engine over real prod profiles + rows, 2026-08-02:
  *
  *   - in-state geography alone (row.state = profile.state, non-national):
- *     8,215 pairs -> 6,210 links across 18 profiles. Anastasia alone gains 632,
+ *     8,215 pairs -> 6,210 links across 18 profiles. Demo Student alone gains 632,
  *     including "Route 55 - DONELSON/DELL STATION OUTBOUND (shelter)" and
  *     "Nashville Chess Center (community centre)". REJECTED.
  *   - in-state + a student-aid title + the aid taxonomy: 240 pairs -> 217 links.
@@ -8031,7 +8078,7 @@ export async function enforceDeclaredFieldOfStudyRecall(db) {
  * rows that name money the profile could receive:
  *
  *   min 0 · p25 7 · median 14 · p75 26 · max 86 — **11 of 33 below 10**
- *   Melissa Justus: 25 actionable, **0 awardable**  (and "healed" 2→4 that day)
+ *   Demo General Support Persona: 25 actionable, **0 awardable**  (and "healed" 2→4 that day)
  *   William:        24 actionable, **0 awardable**
  *
  * WHAT THIS SWEEP DOES, AND WHAT IT DELIBERATELY DOES NOT. It counts (no
@@ -8335,7 +8382,7 @@ export async function enforceStageOfLifeMatchScope(db) {
  * INVARIANT: A STUDENT'S OWN STATE'S STUDENT AID REACHES THAT STUDENT
  * (2026-08-02 — the other half of the stage-gate work).
  *
- * MEASURED READ-ONLY IN PROD. Anastasia White is a TN dual-enrolled high-school
+ * MEASURED READ-ONLY IN PROD. Demo Tennessee STEM Student is a TN dual-enrolled high-school
  * senior. The catalog holds 21 active TN HOPE rows; she matched **ZERO**.
  * Replaying the REAL `computeMatchDecision` on the pair nobody had ever scored
  * returns **ACCEPT 100 — "Matches 70 of the profile's 70 data points"**. The
@@ -8361,7 +8408,7 @@ export async function enforceStageOfLifeMatchScope(db) {
  * "in-state" set carried seven Cuyahoga Community College (Ohio) awards and
  * five from Cleveland University-KANSAS CITY. A row whose own title or sponsor
  * says "Tennessee" is making a claim about itself; a state column is making a
- * claim about a crawl. Anastasia's 13 anchored links are TN HOPE (ACCEPT 100),
+ * claim about a crawl. Demo Student's 13 anchored links are TN HOPE (ACCEPT 100),
  * TN Promise, the TN General Assembly Merit Scholarship, Education Freedom
  * Scholarship Act, TN STEP UP, and UT-Chattanooga awards.
  *
@@ -8612,11 +8659,11 @@ export async function enforceStudentAidInStateRecall(db) {
  *
  * Measured read-only in prod, 2026-08-02T04:59Z. 416 active eviction/rental
  * rows carry 16 match rows between them; homelessness 282→13, utilities
- * 252→22, food 176→9, foreclosure 95→30. The concrete pair: Hollie Machelle
- * Knox (family, North Ridgeville OH 44039 = Lorain County, declared need
+ * 252→22, food 176→9, foreclosure 95→30. The concrete pair: Demo Housing
+ * Applicant (family, North Ridgeville OH 44039 = Lorain County, declared need
  * `housing`) vs "Love INC Lorain County – Emergency Housing & Rent Assistance".
  * The REAL `computeMatchDecision` returns **ACCEPT 100** and the match store
- * held NO ROW — NEVER SCORED, not scored-and-rejected. Seven more of her
+ * held NO ROW — NEVER SCORED, not scored-and-rejected. Seven more local
  * county's awardable rows sat in the same state (HEAP 69, CHIP 62, Catholic
  * Charities Housing Services 50, the county Children & Families Mini Grant 55).
  * What DID reach her were three findhelp / USA.gov / HUD DIRECTORY pointers.
@@ -9351,7 +9398,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // A per-state housing finance agency row declares its state as a FULL NAME in
   // its curated title/sponsor — a shape the "<Place>, XX —" rule above cannot
   // read. Re-scope those rows from the SAME registry that minted them, and
-  // purge the out-of-state agency matches (the Robert White HFA class). Runs
+  // purge the out-of-state agency matches (the Demo College Student Persona HFA class). Runs
   // right after the general geo repair so every later comparison reads the
   // corrected state this same boot.
   steps.push(await enforceStateAgencyGeoScope(db))
@@ -9383,7 +9430,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // catalog is already re-scoped and the ordinary place/foreign/ceiling nets
   // have taken their (profile-agnostic) rows first.
   steps.push(await enforceUnconfiguredProfileGeoMatches(db))
-  // CROSS-PROFILE PRECISION (2026-08-03, the Robert White report): a
+  // CROSS-PROFILE PRECISION (2026-08-03, the Demo College Student Persona report): a
   // cross-profile (xmatch) row is a match only on the engine's ACCEPT. Purges
   // the stored REVIEW flood (95.5% of all xmatch rows in prod) that the
   // resource-preserving reconcile would otherwise restore forever. Sits with
@@ -9497,6 +9544,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // System-side stops (crawler policy / portal URL) re-checked with the same
   // code that wrote them; zombie tasks for purged sources are closed.
   steps.push(await enforceHamiltonStopRecheck(db))
+  // URL-less pointer/directory/referral tasks are research leads, not portal
+  // applications. Preserve their evidence while disabling submission intent.
+  steps.push(await enforcePointerTaskReclassification(db))
   // URL-hygiene net: a search-engine RESULTS url is never a portal/application
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
@@ -9670,6 +9720,7 @@ export const __testables = {
   enforceHamiltonTaskSelfHeal,
   enforceStaleMissingFieldResolution,
   enforceHamiltonStopRecheck,
+  enforcePointerTaskReclassification,
   resolveSelfHealRequeueCap,
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
   enforceAdminReinterviewSuppression,

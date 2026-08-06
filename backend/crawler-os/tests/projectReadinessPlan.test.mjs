@@ -168,7 +168,7 @@ test('campaign profile is routed to compliance resources, not ordinary grant lan
 });
 
 test('student mentioning a school "election"/"campaign" is NOT classified as a political campaign', () => {
-  // Regression: Anya asked a student (Anastasia) about political campaign committee
+  // Regression: Anya asked a student (Demo Student) about political campaign committee
   // and campaign-finance filings. Root cause: the bare need words 'campaign'/'election'
   // in a free-text blob flagged 'campaign', and detectArchetype short-circuited to
   // campaign_compliance_plan on that need keyword alone. A stray theme word must never
@@ -176,7 +176,7 @@ test('student mentioning a school "election"/"campaign" is NOT classified as a p
   const plan = buildProjectReadinessPlan({
     id: 'student-council-election',
     profile_type: 'college_student',
-    display_name: 'Anastasia',
+    display_name: 'Demo Student',
     description: 'Ran a student council election campaign and needs help with tuition and scholarships.',
     sections: [
       { section_key: 'education', data: { committed_college: 'Middle Tennessee State University' } },
@@ -216,7 +216,7 @@ test('individual with education history is NOT classified as a student plan', ()
 });
 
 test('organization with education-shaped section data is NOT classified as a student plan', () => {
-  // Regression: Focus Forward Ministries (primary_type 'organization', which
+  // Regression: Demo Faith-Based Nonprofit (primary_type 'organization', which
   // profileIntelligence.js maps to the 'nonprofit' applicant bucket) got the
   // "Student funding and portal action plan" (FAFSA / college / work-study
   // questions) merely because it had an education/university_applications
@@ -226,7 +226,7 @@ test('organization with education-shaped section data is NOT classified as a stu
   const plan = buildProjectReadinessPlan({
     id: 'focus-forward-ministries',
     profile_type: 'organization',
-    display_name: 'Focus Forward Ministries',
+    display_name: 'Demo Faith-Based Nonprofit',
     description: 'Faith-based ministry seeking program funding.',
     sections: [
       { section_key: 'education', data: { school_name: 'Community partner university' } },

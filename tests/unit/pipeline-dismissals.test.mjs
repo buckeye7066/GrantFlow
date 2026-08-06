@@ -76,7 +76,7 @@ function createTestDb() {
       id TEXT PRIMARY KEY,
       action TEXT
     );
-    INSERT INTO profiles (id, organization_id) VALUES ('p_anastasia', 'org_anastasia');
+    INSERT INTO profiles (id, organization_id) VALUES ('p_demo_student', 'org_demo_student');
   `)
   return db
 }
@@ -122,16 +122,16 @@ test('pipelineDismissals: buildDismissalKey produces stable identity tuple', () 
 
 test('pipelineDismissals: isDismissed returns false before any tombstone is recorded', async () => {
   const db = createTestDb()
-  const dismissed = await isDismissed(db, 'p_anastasia', SAMPLE_OPPORTUNITY)
+  const dismissed = await isDismissed(db, 'p_demo_student', SAMPLE_OPPORTUNITY)
   assert.equal(dismissed, false)
 })
 
 test('pipelineDismissals: recordDismissal then isDismissed returns true', async () => {
   const db = createTestDb()
   const result = await recordDismissal(db, {
-    profileId: 'p_anastasia',
+    profileId: 'p_demo_student',
     grantRow: {
-      profile_id: 'p_anastasia',
+      profile_id: 'p_demo_student',
       funding_opportunity_id: SAMPLE_OPPORTUNITY.id,
       title: SAMPLE_OPPORTUNITY.title,
       funder: SAMPLE_OPPORTUNITY.sponsor,
@@ -147,41 +147,41 @@ test('pipelineDismissals: recordDismissal then isDismissed returns true', async 
   assert.equal(result.alreadyExisted, false)
   assert.ok(result.key.fingerprint)
 
-  const dismissed = await isDismissed(db, 'p_anastasia', SAMPLE_OPPORTUNITY)
+  const dismissed = await isDismissed(db, 'p_demo_student', SAMPLE_OPPORTUNITY)
   assert.equal(dismissed, true)
 
-  const count = await countDismissals(db, 'p_anastasia')
+  const count = await countDismissals(db, 'p_demo_student')
   assert.equal(count, 1)
 })
 
 test('pipelineDismissals: recordDismissal is idempotent (second call returns alreadyExisted=true)', async () => {
   const db = createTestDb()
   await recordDismissal(db, {
-    profileId: 'p_anastasia',
-    grantRow: { profile_id: 'p_anastasia', title: SAMPLE_OPPORTUNITY.title, funder: SAMPLE_OPPORTUNITY.sponsor, url: SAMPLE_OPPORTUNITY.url },
+    profileId: 'p_demo_student',
+    grantRow: { profile_id: 'p_demo_student', title: SAMPLE_OPPORTUNITY.title, funder: SAMPLE_OPPORTUNITY.sponsor, url: SAMPLE_OPPORTUNITY.url },
     opportunity: SAMPLE_OPPORTUNITY,
   })
   const second = await recordDismissal(db, {
-    profileId: 'p_anastasia',
-    grantRow: { profile_id: 'p_anastasia', title: SAMPLE_OPPORTUNITY.title, funder: SAMPLE_OPPORTUNITY.sponsor, url: SAMPLE_OPPORTUNITY.url },
+    profileId: 'p_demo_student',
+    grantRow: { profile_id: 'p_demo_student', title: SAMPLE_OPPORTUNITY.title, funder: SAMPLE_OPPORTUNITY.sponsor, url: SAMPLE_OPPORTUNITY.url },
     opportunity: SAMPLE_OPPORTUNITY,
   })
   assert.equal(second.recorded, true)
   assert.equal(second.alreadyExisted, true)
-  const count = await countDismissals(db, 'p_anastasia')
+  const count = await countDismissals(db, 'p_demo_student')
   assert.equal(count, 1, 'no duplicate row should be inserted')
 })
 
 test('pipelineDismissals: matches by opportunity_id even when fingerprint differs', async () => {
   const db = createTestDb()
   await recordDismissal(db, {
-    profileId: 'p_anastasia',
-    grantRow: { profile_id: 'p_anastasia', funding_opportunity_id: 'opp_X', title: 'Original Title', funder: 'Same Funder', url: 'https://example.com/x' },
+    profileId: 'p_demo_student',
+    grantRow: { profile_id: 'p_demo_student', funding_opportunity_id: 'opp_X', title: 'Original Title', funder: 'Same Funder', url: 'https://example.com/x' },
     opportunity: { id: 'opp_X', title: 'Original Title', sponsor: 'Same Funder', url: 'https://example.com/x' },
   })
   // Crawler returns the same opportunity_id with a slightly drifted title.
   // We must still recognize it as dismissed via opportunity_id.
-  const dismissed = await isDismissed(db, 'p_anastasia', {
+  const dismissed = await isDismissed(db, 'p_demo_student', {
     id: 'opp_X',
     title: 'Title got rewritten by enrichment',
     sponsor: 'Same Funder',
@@ -194,9 +194,9 @@ test('pipelineDismissals: matches by lowercased title fallback for legacy synthe
   const db = createTestDb()
   // Synthetic legacy row with no opportunity_id and no canonical url
   await recordDismissal(db, {
-    profileId: 'p_anastasia',
+    profileId: 'p_demo_student',
     grantRow: {
-      profile_id: 'p_anastasia',
+      profile_id: 'p_demo_student',
       funding_opportunity_id: null,
       title: 'Some Local Resource',
       funder: 'Local Foundation',
@@ -204,7 +204,7 @@ test('pipelineDismissals: matches by lowercased title fallback for legacy synthe
     },
     opportunity: null,
   })
-  const dismissed = await isDismissed(db, 'p_anastasia', {
+  const dismissed = await isDismissed(db, 'p_demo_student', {
     id: null,
     title: 'some local resource', // case drift
     sponsor: 'Local Foundation',
@@ -215,15 +215,15 @@ test('pipelineDismissals: matches by lowercased title fallback for legacy synthe
 test('pipelineDismissals: clearDismissal lets the matcher re-add a previously-dismissed opportunity', async () => {
   const db = createTestDb()
   await recordDismissal(db, {
-    profileId: 'p_anastasia',
-    grantRow: { profile_id: 'p_anastasia', title: SAMPLE_OPPORTUNITY.title, funder: SAMPLE_OPPORTUNITY.sponsor, url: SAMPLE_OPPORTUNITY.url },
+    profileId: 'p_demo_student',
+    grantRow: { profile_id: 'p_demo_student', title: SAMPLE_OPPORTUNITY.title, funder: SAMPLE_OPPORTUNITY.sponsor, url: SAMPLE_OPPORTUNITY.url },
     opportunity: SAMPLE_OPPORTUNITY,
   })
-  assert.equal(await isDismissed(db, 'p_anastasia', SAMPLE_OPPORTUNITY), true)
+  assert.equal(await isDismissed(db, 'p_demo_student', SAMPLE_OPPORTUNITY), true)
 
-  const cleared = await clearDismissal(db, 'p_anastasia', SAMPLE_OPPORTUNITY)
+  const cleared = await clearDismissal(db, 'p_demo_student', SAMPLE_OPPORTUNITY)
   assert.ok(cleared >= 1, `expected ≥1 row cleared, got ${cleared}`)
-  assert.equal(await isDismissed(db, 'p_anastasia', SAMPLE_OPPORTUNITY), false)
+  assert.equal(await isDismissed(db, 'p_demo_student', SAMPLE_OPPORTUNITY), false)
 })
 
 test('pipelineDismissals: tombstones are scoped per profile (other profiles unaffected)', async () => {
@@ -231,11 +231,11 @@ test('pipelineDismissals: tombstones are scoped per profile (other profiles unaf
   db.prepare("INSERT INTO profiles (id) VALUES ('p_other')").run()
 
   await recordDismissal(db, {
-    profileId: 'p_anastasia',
-    grantRow: { profile_id: 'p_anastasia', title: SAMPLE_OPPORTUNITY.title, funder: SAMPLE_OPPORTUNITY.sponsor, url: SAMPLE_OPPORTUNITY.url },
+    profileId: 'p_demo_student',
+    grantRow: { profile_id: 'p_demo_student', title: SAMPLE_OPPORTUNITY.title, funder: SAMPLE_OPPORTUNITY.sponsor, url: SAMPLE_OPPORTUNITY.url },
     opportunity: SAMPLE_OPPORTUNITY,
   })
-  assert.equal(await isDismissed(db, 'p_anastasia', SAMPLE_OPPORTUNITY), true)
+  assert.equal(await isDismissed(db, 'p_demo_student', SAMPLE_OPPORTUNITY), true)
   assert.equal(await isDismissed(db, 'p_other', SAMPLE_OPPORTUNITY), false)
 })
 
@@ -261,18 +261,18 @@ test('opportunityMatcher: dismissed opportunities are NOT re-added by saveToProf
   // or a non-DISMISSED gate failure (e.g. THRESHOLD with no profile context),
   // because the assertion that matters is the second pass.
   const profileContext = {
-    profile: { id: 'p_anastasia', primary_type: 'individual_need', state: 'TN', applicant_type: 'individual' },
+    profile: { id: 'p_demo_student', primary_type: 'individual_need', state: 'TN', applicant_type: 'individual' },
     sections: {},
     match_reasons: ['MTSU off-campus resource'],
   }
-  const first = await saveToProfilePipeline(db, opp, 'p_anastasia', profileContext, 90, 50)
+  const first = await saveToProfilePipeline(db, opp, 'p_demo_student', profileContext, 90, 50)
   assert.notEqual(first.gate, 'DISMISSED', 'first save must not be blocked by DISMISSED gate')
 
   // User deletes the grant from the pipeline → record tombstone.
   await recordDismissal(db, {
-    profileId: 'p_anastasia',
+    profileId: 'p_demo_student',
     grantRow: {
-      profile_id: 'p_anastasia',
+      profile_id: 'p_demo_student',
       funding_opportunity_id: opp.id,
       title: opp.title,
       funder: opp.sponsor,
@@ -284,12 +284,12 @@ test('opportunityMatcher: dismissed opportunities are NOT re-added by saveToProf
   // Wipe the live grant row so saveToProfilePipeline doesn't short-circuit
   // on the existing-grant check before reaching the DISMISSED gate.
   db.prepare('DELETE FROM grants WHERE profile_id = ? AND funding_opportunity_id = ?').run(
-    'p_anastasia',
+    'p_demo_student',
     opp.id,
   )
 
   // Second save (simulates Process All / next crawl). Must be blocked.
-  const second = await saveToProfilePipeline(db, opp, 'p_anastasia', profileContext, 90, 50)
+  const second = await saveToProfilePipeline(db, opp, 'p_demo_student', profileContext, 90, 50)
   assert.equal(second.saved, false, 'previously-dismissed opportunity must not be re-added')
   assert.equal(second.gate, 'DISMISSED', `expected DISMISSED gate, got: ${second.gate}; reason: ${second.reason}`)
 })

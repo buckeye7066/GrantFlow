@@ -9,7 +9,7 @@
  *   npm run backend
  *
  *   # in another terminal
- *   PROFILE_ID=profile-anastasia node scripts/verify-add-to-pipeline-from-opportunity.mjs http://localhost:8080
+ *   PROFILE_ID=profile-demo-tennessee-stem-student node scripts/verify-add-to-pipeline-from-opportunity.mjs http://localhost:8080
  *
  * Notes:
  * - Requires you to be authenticated in that backend (cookie/JWT) depending on your setup.
@@ -68,7 +68,7 @@ async function test(name, payload, expectedStatus) {
 }
 
 async function main() {
-  const profileId = process.env.PROFILE_ID || 'profile-anastasia'
+  const profileId = process.env.PROFILE_ID || 'profile-demo-tennessee-stem-student'
   console.log('[verify] Testing /api/grants/from-opportunity endpoint')
   console.log(`[verify] Base URL: ${baseUrl}`)
   console.log(`[verify] Profile ID: ${profileId}`)

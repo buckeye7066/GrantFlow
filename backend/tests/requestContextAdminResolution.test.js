@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { buildRequestContext } from '../middleware/requestContext.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
 function emailStubDb(usersRow) {
   return {
@@ -128,7 +129,7 @@ describe('buildRequestContext DB-backed admin resolution', () => {
   })
 
   it('a JWT carrying the CONFIGURED admin email but no is_admin DB row is NOT admin', async () => {
-    // The token supplies email=buckeye7066@gmail.com (the configured admin), but
+    // The token supplies the configured admin email, but
     // there is no users row. The configured-admin-email elevation must be honored
     // ONLY from a trusted DB email, never a token claim -> non-admin.
     const db = {
@@ -139,7 +140,7 @@ describe('buildRequestContext DB-backed admin resolution', () => {
         return { get: () => null, all: () => [], run: () => ({ changes: 0 }) }
       },
     }
-    const user = { role: 'user', userId: 'attacker', email: 'buckeye7066@gmail.com' }
+    const user = { role: 'user', userId: 'attacker', email: ADMIN_EMAIL }
     const ctx = await buildRequestContext(db, user)
     expect(ctx.isAdmin).toBe(false)
   })
@@ -151,7 +152,7 @@ describe('buildRequestContext DB-backed admin resolution', () => {
         const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
         if (norm.includes('from users where id')) {
           // is_admin flag not yet set, but the trusted stored email is configured admin.
-          return { get: () => ({ is_admin: 0, primary_email: 'buckeye7066@gmail.com' }) }
+          return { get: () => ({ is_admin: 0, primary_email: ADMIN_EMAIL }) }
         }
         return { get: () => null, all: () => [], run: () => ({ changes: 0 }) }
       },

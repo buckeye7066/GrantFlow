@@ -20,6 +20,7 @@ import { withProfileScope } from '../../middleware/profileContext.js'
 import { parseFullName } from '../../../shared/nameParsing.js'
 import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
 import { assessTaskSubmissionProof, SUBMISSION_PROOF_STATE } from './submissionProofPredicate.js'
+import { assessPointerResearchLead } from './hamiltonFundingSourcePolicy.js'
 
 export const TASK_STATUSES = Object.freeze([
   // Legacy task statuses (per-grant Hamilton flow).
@@ -60,6 +61,13 @@ export const TASK_STATUSES = Object.freeze([
   'waiting_for_window',
   'waiting_for_missing_info',
   'filling_portal',
+  // Durable irreversible-boundary states. `submit_attempt_started` is acquired
+  // with a compare-and-swap immediately before the external submit action;
+  // `submit_evidence_pending` means the action may have happened but proof is
+  // not durable yet. Neither state may be blindly retried after a restart.
+  'submit_attempt_started',
+  'submit_evidence_pending',
+  'submission_verification_required',
   'saving_portal_draft',
   'waiting_for_review',
   'ready_to_submit',
@@ -68,6 +76,19 @@ export const TASK_STATUSES = Object.freeze([
   'ready_to_fax',
   'completed',
   'blocked',
+])
+
+export const SUBMISSION_ATTEMPT_STATUSES = Object.freeze([
+  'submit_attempt_started',
+  'submit_evidence_pending',
+])
+
+// Cancellation is no longer an honest terminal claim once the irreversible
+// boundary may have been crossed. Keep an already-quarantined task in the same
+// state if cancellation is requested again.
+export const SUBMISSION_UNCERTAIN_STATUSES = Object.freeze([
+  ...SUBMISSION_ATTEMPT_STATUSES,
+  'submission_verification_required',
 ])
 
 export const AUTOMATION_TYPES = Object.freeze([
@@ -242,13 +263,21 @@ export async function ensureApplicationTaskSchema(db) {
   // table without this constraint, so it's Postgres-only.
   if (isPostgres) {
     const statusList = TASK_STATUSES.map((s) => `'${String(s).replace(/'/g, "''")}'`).join(', ')
-    try {
-      await db.exec(`ALTER TABLE application_tasks DROP CONSTRAINT IF EXISTS application_tasks_status_check`)
-      await db.exec(`ALTER TABLE application_tasks ADD CONSTRAINT application_tasks_status_check CHECK (status IN (${statusList}))`)
-    } catch (err) {
-      // Tolerate concurrent-boot races re-adding the same constraint.
-      if (!/already exists|does not exist/i.test(String(err?.message || err))) throw err
+    // These statements must share one PostgreSQL transaction. If an unknown
+    // persisted status makes the ADD fail, PostgreSQL rolls the DROP back too;
+    // the service must never commit a half-applied self-heal with no CHECK at
+    // all. The table lock also serializes concurrent boot attempts.
+    if (typeof db.withTransaction !== 'function') {
+      throw new Error('application_tasks status CHECK resync requires transactional DDL')
     }
+    await db.withTransaction(async (tx) => {
+      await tx.exec(
+        'ALTER TABLE application_tasks DROP CONSTRAINT IF EXISTS application_tasks_status_check',
+      )
+      await tx.exec(
+        `ALTER TABLE application_tasks ADD CONSTRAINT application_tasks_status_check CHECK (status IN (${statusList}))`,
+      )
+    })
   }
 
   // Upgrade legacy shape (pre-migration 087) to the automation-task
@@ -382,6 +411,179 @@ function rowToMissing(row) {
   }
 }
 
+function isMissingTaskSourceTable(error) {
+  const message = String(error?.message || error).toLowerCase()
+  return (
+    /no such table/.test(message)
+    || /relation .* does not exist/.test(message)
+    || /undefined table/.test(message)
+    || String(error?.code || '') === '42P01'
+  )
+}
+
+async function loadOptionalTaskSourceRow(db, table, id) {
+  if (!id) return null
+  try {
+    if (table === 'grants') {
+      return await db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(String(id))
+    }
+    return await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(id))
+  } catch (error) {
+    // Minimal/local schemas legitimately omit one or both source tables. A
+    // missing table means there is no catalog-kind evidence to adjudicate;
+    // other DB failures remain loud so a transient outage cannot mint a task
+    // while its source policy is unknowable.
+    if (isMissingTaskSourceTable(error)) return null
+    throw error
+  }
+}
+
+function normalizeTaskIdentity(value) {
+  const normalized = String(value ?? '').trim()
+  return normalized || null
+}
+
+function firstUsableTaskUrl(values) {
+  for (const value of values) {
+    const url = String(value ?? '').trim()
+    if (/^https?:\/\//i.test(url)) return url
+  }
+  return null
+}
+
+export class ApplicationTaskSourceScopeError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'ApplicationTaskSourceScopeError'
+    this.code = 'application_task_source_scope_mismatch'
+    this.status = 403
+    this.statusCode = 403
+  }
+}
+
+export class PointerResearchLeadTaskError extends Error {
+  constructor(lead) {
+    super(lead?.instructions || 'This pointer is a research lead, not an application surface.')
+    this.name = 'PointerResearchLeadTaskError'
+    this.code = 'pointer_research_lead'
+    this.status = 422
+    this.statusCode = 422
+    this.handoff = lead ?? null
+  }
+}
+
+export class ActiveManualSubmissionReceiptError extends Error {
+  constructor() {
+    super('This task has active manual-submission proof. Revoke that receipt before changing its submission identity.')
+    this.name = 'ActiveManualSubmissionReceiptError'
+    this.code = 'manual_submission_receipt_active'
+    this.status = 409
+    this.statusCode = 409
+  }
+}
+
+function isMissingManualReceiptTable(error) {
+  const message = String(error?.message || error || '').toLowerCase()
+  return (
+    String(error?.code || '') === '42P01'
+    || message.includes('no such table: hamilton_manual_submission_receipts')
+    || message.includes('relation "hamilton_manual_submission_receipts" does not exist')
+  )
+}
+
+function isManualReceiptIdentityTriggerError(error) {
+  return String(error?.message || error || '')
+    .toLowerCase()
+    .includes('active manual submission receipt locks task identity')
+}
+
+async function lockTaskAndAssertNoActiveManualReceipt(db, taskId) {
+  const lockClause = db?.dialect === 'postgres' ? ' FOR UPDATE' : ''
+  const task = await db.prepare(
+    `SELECT id FROM application_tasks WHERE id = ? LIMIT 1${lockClause}`,
+  ).get(String(taskId))
+  if (!task) return null
+
+  let activeReceipt = null
+  try {
+    activeReceipt = await db.prepare(
+      `SELECT id FROM hamilton_manual_submission_receipts
+        WHERE task_id = ? AND status = 'active' LIMIT 1`,
+    ).get(String(taskId))
+  } catch (error) {
+    // Rolling deploys may run old schemas before receipt uploads are available.
+    // Only the exact absent-table state is ignorable.
+    if (!isMissingManualReceiptTable(error)) throw error
+  }
+  if (activeReceipt) throw new ActiveManualSubmissionReceiptError()
+  return task
+}
+
+/**
+ * Resolve the catalog row that actually governs a task and apply the shared
+ * pointer policy before any application_tasks write. Grant linkage wins over
+ * a caller-supplied opportunity id because a grant-backed task's identity is
+ * the existing pipeline row. Direct/kindless/manual subjects remain untouched.
+ */
+export async function assessApplicationTaskPointerSource(db, {
+  profileId,
+  opportunityId = null,
+  grantId = null,
+  applicationUrl = null,
+  portalUrl = null,
+} = {}) {
+  const normalizedProfileId = normalizeTaskIdentity(profileId)
+  const grant = await loadOptionalTaskSourceRow(db, 'grants', grantId)
+  if (
+    grant?.profile_id
+    && normalizedProfileId
+    && String(grant.profile_id) !== normalizedProfileId
+  ) {
+    throw new ApplicationTaskSourceScopeError('The grant does not belong to the selected profile.')
+  }
+
+  const catalogIds = Array.from(new Set([
+    normalizeTaskIdentity(grant?.funding_opportunity_id ?? grant?.opportunity_id),
+    normalizeTaskIdentity(opportunityId),
+  ].filter(Boolean)))
+  let opportunity = null
+  for (const catalogId of catalogIds) {
+    opportunity = await loadOptionalTaskSourceRow(db, 'funding_opportunities', catalogId)
+    if (opportunity) break
+  }
+  if (!opportunity) return null
+  if (
+    opportunity.profile_id
+    && normalizedProfileId
+    && String(opportunity.profile_id) !== normalizedProfileId
+  ) {
+    throw new ApplicationTaskSourceScopeError('The funding opportunity does not belong to the selected profile.')
+  }
+
+  const usableUrl = firstUsableTaskUrl([
+    opportunity.application_url,
+    opportunity.apply_url,
+    opportunity.source_url,
+    opportunity.url,
+    opportunity.evidence_url,
+    grant?.application_url,
+    grant?.apply_url,
+    grant?.source_url,
+    grant?.url,
+    grant?.evidence_url,
+    applicationUrl,
+    portalUrl,
+  ])
+  return assessPointerResearchLead({
+    ...opportunity,
+    title: opportunity.title ?? grant?.title ?? null,
+    // Give the policy the combined, evidence-backed task surface without
+    // mutating either source row. Any real URL keeps listing decomposition
+    // reachable; no URL means there is literally nothing to apply through.
+    url: usableUrl ?? opportunity.url ?? null,
+  })
+}
+
 /**
  * Create or fetch the existing task for a (profile, opportunity-or-grant).
  * The unique key in the schema makes repeated calls safe — they return
@@ -415,6 +617,14 @@ export async function ensureApplicationTask(db, {
   if (!AUTOMATION_TYPES.includes(automationType)) {
     throw new Error(`invalid automationType: ${automationType}`)
   }
+
+  const pointerLead = await assessApplicationTaskPointerSource(db, {
+    profileId,
+    opportunityId,
+    grantId,
+  })
+  if (pointerLead) throw new PointerResearchLeadTaskError(pointerLead)
+
   await ensureApplicationTaskSchema(db)
 
   return await withProfileScope({ bypass: true }, async () => {
@@ -480,11 +690,26 @@ export async function ensureApplicationTask(db, {
       if (currentPipelineStage && existing.current_pipeline_stage !== currentPipelineStage) {
         patch.push('current_pipeline_stage = ?'); params.push(currentPipelineStage)
       }
-      // Keep allow_auto_submit in sync with the batch that (re-)enqueued the
-      // task: an idempotent re-POST that resumes a task must refresh the flag
-      // so the stored column keeps reflecting the runtime option.
-      if (allowAutoSubmit !== undefined && Boolean(existing.allow_auto_submit) !== Boolean(allowAutoSubmit)) {
+      // Keep BOTH legacy intent columns in sync with the batch that
+      // (re-)enqueued the task. The irreversible boundary reads the canonical
+      // allow_auto_submit value, but leaving auto_submit_enabled stale lets a
+      // legacy retry silently revive consent after the owner turns it off.
+      // A new denial is always safe. A new grant is not: once a task is at an
+      // irreversible/verification boundary or terminal state, a re-POSTed
+      // batch must not revive submission intent behind that durable state.
+      const submitIntentCanBeGranted = !SUBMISSION_UNCERTAIN_STATUSES.includes(existing.status)
+        && !TASK_TERMINAL_STATUSES.includes(existing.status)
+        && existing.status !== 'completed'
+      if (
+        allowAutoSubmit !== undefined
+        && (!allowAutoSubmit || submitIntentCanBeGranted)
+        && (
+          Boolean(existing.allow_auto_submit) !== Boolean(allowAutoSubmit)
+          || Boolean(existing.auto_submit_enabled) !== Boolean(allowAutoSubmit)
+        )
+      ) {
         patch.push('allow_auto_submit = ?'); params.push(allowAutoSubmit ? 1 : 0)
+        patch.push('auto_submit_enabled = ?'); params.push(allowAutoSubmit ? 1 : 0)
       }
       if (patch.length > 0) {
         params.push(existing.id)
@@ -502,8 +727,9 @@ export async function ensureApplicationTask(db, {
         `INSERT INTO application_tasks
            (id, user_id, profile_id, opportunity_id, grant_id, portal_id, application_id,
             university_application_id, automation_type, selected_from_stage, current_pipeline_stage,
-            agent_persona_version, assigned_agent, status, current_step, allow_auto_submit, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'hamilton', ?, ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})`,
+            agent_persona_version, assigned_agent, status, current_step, auto_submit_enabled,
+            allow_auto_submit, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'hamilton', ?, ?, ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})`,
       )
       .run(
         id,
@@ -520,6 +746,7 @@ export async function ensureApplicationTask(db, {
         agentPersonaVersion,
         initialStatus,
         currentStep,
+        allowAutoSubmit === undefined ? 0 : (allowAutoSubmit ? 1 : 0),
         allowAutoSubmit === undefined ? 0 : (allowAutoSubmit ? 1 : 0),
       )
 
@@ -646,6 +873,8 @@ export async function updateApplicationTask(db, taskId, {
   cancelledAt,
   nextRetryAt,
   retryCount,
+  unlessCancelled = false,
+  onlyIfStatuses = null,
 } = {}) {
   if (!taskId) throw new Error('taskId required')
   if (status !== undefined && !TASK_STATUSES.includes(status)) {
@@ -653,6 +882,14 @@ export async function updateApplicationTask(db, taskId, {
   }
   if (automationType !== undefined && !AUTOMATION_TYPES.includes(automationType)) {
     throw new Error(`invalid automationType: ${automationType}`)
+  }
+  const guardedStatuses = Array.isArray(onlyIfStatuses)
+    ? [...new Set(onlyIfStatuses.map((value) => String(value || '').trim()).filter(Boolean))]
+    : []
+  for (const guardedStatus of guardedStatuses) {
+    if (!TASK_STATUSES.includes(guardedStatus)) {
+      throw new Error(`invalid guarded status: ${guardedStatus}`)
+    }
   }
   await ensureApplicationTaskSchema(db)
 
@@ -689,9 +926,126 @@ export async function updateApplicationTask(db, taskId, {
 
   if (sets.length === 1) return await getApplicationTask(db, taskId)
 
-  params.push(String(taskId))
-  await db.prepare(`UPDATE application_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...params)
+  const guards = []
+  if (unlessCancelled) {
+    // This option is used by asynchronous browser-run conclusions. A stale
+    // worker must never overwrite cancellation, a terminal external outcome,
+    // or another worker's durable irreversible-boundary lease. The active
+    // lease owner uses `onlyIfStatuses` for the two legal forward transitions
+    // (`submit_attempt_started` -> `submit_evidence_pending` -> `submitted`).
+    guards.push(
+      "status NOT IN ('cancelled', 'failed', 'completed', 'submitted', "
+      + "'submit_attempt_started', 'submit_evidence_pending', 'submission_verification_required')",
+    )
+  }
+  if (guardedStatuses.length > 0) {
+    guards.push(`status IN (${guardedStatuses.map(() => '?').join(', ')})`)
+  }
+
+  params.push(String(taskId), ...guardedStatuses)
+  const sql = `UPDATE application_tasks SET ${sets.join(', ')} WHERE id = ?${guards.length > 0 ? ` AND ${guards.join(' AND ')}` : ''}`
+  const touchesManualReceiptIdentity = [
+    status,
+    currentStep,
+    autoSubmitEnabled,
+    allowAutoSubmit,
+    applicationId,
+    universityApplicationId,
+    portalId,
+    automationType,
+    portalUrl,
+    applicationUrl,
+    outputDocumentId,
+    outputPdfDocumentId,
+    outputDocxDocumentId,
+    outputProposalDocumentId,
+    submittedAt,
+    completedAt,
+  ].some((value) => value !== undefined)
+
+  const executeUpdate = async (targetDb) => {
+    try {
+      return await targetDb.prepare(sql).run(...params)
+    } catch (error) {
+      if (isManualReceiptIdentityTriggerError(error)) {
+        throw new ActiveManualSubmissionReceiptError()
+      }
+      throw error
+    }
+  }
+
+  if (touchesManualReceiptIdentity && typeof db.withTransaction === 'function') {
+    // All application writers take the task row first, then inspect the active
+    // receipt. Receipt creation/revocation use the same lock order. On
+    // PostgreSQL the post-lock SELECT is a new READ COMMITTED statement, so a
+    // receipt transaction that won the race cannot be missed by an older
+    // statement snapshot.
+    await db.withTransaction(async (tx) => {
+      const task = await lockTaskAndAssertNoActiveManualReceipt(tx, taskId)
+      if (!task) return executeUpdate(tx)
+      return executeUpdate(tx)
+    })
+  } else {
+    await executeUpdate(db)
+  }
   return await getApplicationTask(db, taskId)
+}
+
+/**
+ * Acquire the durable external-submission boundary exactly once.
+ *
+ * The task row is the lease: only a live `filling_portal` task whose canonical
+ * stored intent still allows auto-submit and which has never been cancelled can
+ * transition to `submit_attempt_started`. Concurrent callers race on one SQL
+ * UPDATE, so at most one can acquire. A failed CAS is deliberately descriptive
+ * but never mutates the task.
+ */
+export async function beginSubmissionAttempt(db, taskId, {
+  actorUserId = null,
+  actorRole = 'agent',
+} = {}) {
+  if (!taskId) throw new Error('taskId required')
+  await ensureApplicationTaskSchema(db)
+
+  const message =
+    'Hamilton reached the external submit boundary. Submission evidence must be captured before this task can be marked submitted or retried.'
+  const result = await db
+    .prepare(
+      `UPDATE application_tasks
+          SET status = 'submit_attempt_started',
+              current_step = 'submit_attempt_started',
+              last_agent_message = ?,
+              updated_at = ${nowSqlLiteral(db)}
+        WHERE id = ?
+          AND status = 'filling_portal'
+          AND allow_auto_submit IS TRUE
+          AND cancelled_at IS NULL`,
+    )
+    .run(message, String(taskId))
+
+  const acquired = Number(result?.changes ?? result?.rowCount ?? 0) === 1
+  let task = await getApplicationTask(db, taskId, { withSubmissionProof: false })
+  if (!acquired) {
+    let reason = 'compare_and_swap_failed'
+    if (!task) reason = 'task_not_found'
+    else if (task.status === 'cancelled' || task.cancelled_at) reason = 'task_cancelled'
+    else if (task.status !== 'filling_portal') reason = `invalid_status:${task.status}`
+    else if (!task.allow_auto_submit) reason = 'auto_submit_disabled'
+    return { acquired: false, reason, task }
+  }
+
+  await appendTaskEvent(db, {
+    taskId,
+    eventType: 'progress',
+    status: 'submit_attempt_started',
+    step: 'submit_attempt_started',
+    message,
+    actorUserId,
+    actorRole,
+    details: { irreversible_boundary: true, submission_evidence_required: true },
+  })
+  task = await getApplicationTask(db, taskId, { withSubmissionProof: false })
+  return { acquired: true, reason: null, task }
 }
 
 // Statuses a task can be auto-resumed FROM once the user supplies the info
@@ -911,7 +1265,7 @@ const FIELD_RECONCILE_SKIP_STATUSES = Object.freeze([
  * profile can now answer is resolved across ALL of that profile's live tasks,
  * and any resumable task with nothing left outstanding is re-queued. Without
  * this, 30+ portal tasks each kept their own stale "Profile is missing first
- * name" row after the name was added (the Anastasia class, owner report
+ * name" row after the name was added (the Demo Student class, owner report
  * 2026-07-27): the flags were per-task, the fix was profile-wide, and nothing
  * connected the two outside the document-parse path.
  *
@@ -1054,22 +1408,71 @@ export async function reconcileProfileAfterParse(db, { profileId } = {}) {
 export async function cancelApplicationTask(db, taskId, { actorUserId = null, actorRole = null, reason = null } = {}) {
   await ensureApplicationTaskSchema(db)
   const ts = new Date().toISOString()
-  await db
-    .prepare(
+  const uncertainStatusSql = SUBMISSION_UNCERTAIN_STATUSES
+    .map((status) => `'${String(status).replace(/'/g, "''")}'`)
+    .join(', ')
+  const verificationMessage =
+    'Cancellation was requested after Hamilton began the external submit step. The external submission may already be in progress, so confirmation must be verified before this task is retried or marked cancelled.'
+  const cancelledMessage = reason || 'Task cancelled.'
+  const cancelSql =
       `UPDATE application_tasks
-         SET status = 'cancelled', cancelled_at = ?, updated_at = ${nowSqlLiteral(db)}
-       WHERE id = ?`,
-    )
-    .run(ts, String(taskId))
+         SET status = CASE
+               WHEN status IN (${uncertainStatusSql}) THEN 'submission_verification_required'
+               ELSE 'cancelled'
+             END,
+             current_step = CASE
+               WHEN status IN (${uncertainStatusSql}) THEN 'submission_verification_required'
+               ELSE current_step
+             END,
+             last_agent_message = CASE
+               WHEN status IN (${uncertainStatusSql}) THEN ?
+               ELSE ?
+             END,
+             cancelled_at = CASE
+               WHEN status IN (${uncertainStatusSql}) THEN NULL
+               ELSE ?
+             END,
+             next_retry_at = NULL,
+             auto_submit_enabled = 0, allow_auto_submit = 0,
+             updated_at = ${nowSqlLiteral(db)}
+       WHERE id = ?`
+  const cancelParams = [verificationMessage, cancelledMessage, ts, String(taskId)]
+  const executeCancel = async (targetDb) => {
+    try {
+      return await targetDb.prepare(cancelSql).run(...cancelParams)
+    } catch (error) {
+      if (isManualReceiptIdentityTriggerError(error)) {
+        throw new ActiveManualSubmissionReceiptError()
+      }
+      throw error
+    }
+  }
+  if (typeof db.withTransaction === 'function') {
+    await db.withTransaction(async (tx) => {
+      const task = await lockTaskAndAssertNoActiveManualReceipt(tx, taskId)
+      if (!task) return null
+      return executeCancel(tx)
+    })
+  } else {
+    await executeCancel(db)
+  }
+
+  const task = await getApplicationTask(db, taskId)
+  if (!task) return null
+  const requiresVerification = task.status === 'submission_verification_required'
   await appendTaskEvent(db, {
     taskId,
-    eventType: 'cancelled',
-    status: 'cancelled',
-    message: reason || 'task cancelled',
+    eventType: requiresVerification ? 'note' : 'cancelled',
+    status: task.status,
+    step: requiresVerification ? 'submission_verification_required' : null,
+    message: requiresVerification ? verificationMessage : cancelledMessage,
     actorUserId,
     actorRole,
+    details: requiresVerification
+      ? { cancel_requested: true, ambiguous_submission: true, reason: reason || null }
+      : { reason: reason || null },
   })
-  return await getApplicationTask(db, taskId)
+  return task
 }
 
 // ── Events ─────────────────────────────────────────────────────────

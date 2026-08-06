@@ -158,7 +158,7 @@ test('admin profile is automatically waived and gets no admin notification', asy
   const db = createDb()
   const r = await initializeProfilePricing(db, {
     profile: { id: 'admin1', display_name: 'Admin', primary_type: 'individual' },
-    user: { id: 'admin', email: 'buckeye7066@gmail.com', is_admin: true },
+    user: { id: 'admin', email: 'owner@example.invalid', is_admin: true },
   })
   assert.equal(r.ok, true)
   assert.equal(r.access_status, ACCESS_STATUS.ADMIN_WAIVED)
@@ -173,7 +173,7 @@ test('adminWaiveProfile flips access_status and records an event', async () => {
     profile: { id: 'p1', display_name: 'A', primary_type: 'individual' },
     user: { id: 'u1', email: 'a@example.com', is_admin: false },
   })
-  const r = await adminWaiveProfile(db, 'p1', { actor: { email: 'buckeye7066@gmail.com' } })
+  const r = await adminWaiveProfile(db, 'p1', { actor: { email: 'owner@example.invalid' } })
   assert.equal(r.ok, true)
   assert.equal(r.access_status, ACCESS_STATUS.ADMIN_WAIVED)
   const pp = await getProfilePricing(db, 'p1')

@@ -2,7 +2,6 @@ import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
-import net from 'net'
 import { promises as fsp } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -30,7 +29,6 @@ import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
 import zipcodes from 'zipcodes';
 import { resolveCountyForZip } from '../services/geo/zipCountyResolver.js';
-import { createGeoCrawlRun, backfillGeoCrawlRunFromJob } from '../services/geoCrawlRunStore.js'
 import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
@@ -40,6 +38,7 @@ import { runRegionalPurge, getPurgeSummary, getPurgeEvents } from '../services/r
 import { restoreProfileSectionsFromLinkedOrganizations } from '../services/profileOrganizationSync.js'
 import { runAutonomousCodeCrawl } from '../services/anyaAutonomousCrawler.js'
 import { auditPipelinesAgainstGoals } from '../services/pipelineGoalCleanupService.js'
+import { fetchPublicResource, publicFetchFailureStatus } from '../utils/safeRemoteFetch.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:admin')
@@ -532,27 +531,27 @@ const KB_ALLOWED_MIME_TYPES = new Set([
   'image/heic',
   'image/heif',
 ])
+const KB_ALLOWED_EXTENSIONS = new Set([
+  'pdf',
+  'doc',
+  'docx',
+  'txt',
+  'rtf',
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'gif',
+  'bmp',
+  'tif',
+  'tiff',
+  'heic',
+  'heif',
+])
 
 function kbMulterFileFilter(_req, file, cb) {
   const extension = (file?.originalname?.split('.').pop() || '').toLowerCase()
-  const allowedExt = new Set([
-    'pdf',
-    'doc',
-    'docx',
-    'txt',
-    'rtf',
-    'jpg',
-    'jpeg',
-    'png',
-    'webp',
-    'gif',
-    'bmp',
-    'tif',
-    'tiff',
-    'heic',
-    'heif',
-  ])
-  const ok = KB_ALLOWED_MIME_TYPES.has(file?.mimetype) || allowedExt.has(extension)
+  const ok = KB_ALLOWED_MIME_TYPES.has(file?.mimetype) || KB_ALLOWED_EXTENSIONS.has(extension)
   if (!ok) return cb(new Error('Unsupported file type'))
   return cb(null, true)
 }
@@ -611,108 +610,65 @@ function extractAnthropicText(response) {
     .trim()
 }
 
-function isPrivateIpAddress(ip) {
-  // IPv4 private ranges: 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16
-  const v = net.isIP(ip)
-  if (v === 4) {
-    const parts = ip.split('.').map((n) => Number(n))
-    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true
-    const [a, b] = parts
-    if (a === 10) return true
-    if (a === 127) return true
-    if (a === 0) return true
-    if (a === 169 && b === 254) return true
-    if (a === 192 && b === 168) return true
-    if (a === 172 && b >= 16 && b <= 31) return true
-    return false
-  }
-
-  // IPv6 loopback/link-local/ULA
-  if (v === 6) {
-    const lower = ip.toLowerCase()
-    if (lower === '::1') return true // loopback
-    if (lower.startsWith('fe80:')) return true // link-local
-    if (lower.startsWith('fc') || lower.startsWith('fd')) return true // unique local
-    return false
-  }
-
-  return true
-}
-
-function assertRemoteUrlAllowed(rawUrl) {
-  let parsed
-  try {
-    parsed = new URL(String(rawUrl))
-  } catch {
-    throw new Error('Invalid URL')
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Only http(s) URLs are supported')
-  }
-
-  const hostname = (parsed.hostname || '').toLowerCase().trim()
-  if (!hostname) throw new Error('Invalid URL host')
-  if (hostname === 'localhost' || hostname === '0.0.0.0' || hostname.endsWith('.local')) {
-    throw new Error('URL host is not allowed')
-  }
-  if (net.isIP(hostname)) {
-    if (isPrivateIpAddress(hostname)) throw new Error('URL host is not allowed')
-  }
-
-  return parsed
-}
-
 async function downloadRemoteFileToUploads({ url, req }) {
-  const initial = assertRemoteUrlAllowed(url)
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 20_000)
-  try {
-    const resp = await fetch(initial.toString(), { signal: controller.signal })
-    if (!resp.ok) throw new Error(`Unable to download file (${resp.status})`)
+  const remote = await fetchPublicResource(url, {
+    timeoutMs: 20_000,
+    maxBytes: KB_MAX_FILE_BYTES,
+    allowedContentTypes: [...KB_ALLOWED_MIME_TYPES, 'application/octet-stream'],
+    userAgent: 'GrantFlow Knowledge Ingest (+https://app.axiombiolabs.org)',
+    accept: 'application/pdf,text/plain,text/html,application/octet-stream;q=0.8,*/*;q=0.5',
+  })
+  if (!remote.ok) {
+    const status = remote.status ? ` (${remote.status})` : ''
+    const error = new Error(`Unable to download public HTTPS resource${status}: ${remote.reason}`)
+    error.status = publicFetchFailureStatus(remote)
+    error.code = `REMOTE_FETCH_${String(remote.reason || 'FAILED').toUpperCase()}`
+    throw error
+  }
+
+  let contentType = remote.contentType || 'application/octet-stream'
+  if (contentType === 'application/octet-stream') {
+    if (remote.body.length < 5 || remote.body.subarray(0, 5).toString('ascii') !== '%PDF-') {
+      const error = new Error('Remote server returned an unverified binary document type.')
+      error.status = 415
+      error.code = 'REMOTE_DOCUMENT_TYPE_UNVERIFIED'
+      throw error
+    }
+    contentType = 'application/pdf'
+  }
+  const fileNameFromUrl = (() => {
     try {
-      if (resp.url) assertRemoteUrlAllowed(resp.url)
+      const parsed = new URL(remote.finalUrl || url)
+      return parsed.pathname.split('/').pop() || 'remote-upload'
     } catch {
-      throw new Error('Final URL host is not allowed')
+      return 'remote-upload'
     }
+  })()
 
-    const contentType = resp.headers.get('content-type') || 'application/octet-stream'
-    const contentLength = Number(resp.headers.get('content-length') || '0')
-    if (contentLength && contentLength > KB_MAX_FILE_BYTES) {
-      throw new Error('Remote file is too large (max 50MB).')
-    }
+  const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+  const candidateExtension = fileNameFromUrl.includes('.')
+    ? fileNameFromUrl.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '')
+    : ''
+  const safeExtension = KB_ALLOWED_EXTENSIONS.has(candidateExtension)
+    ? candidateExtension
+    : contentType === 'application/pdf'
+      ? 'pdf'
+      : ''
+  const extension = safeExtension ? `.${safeExtension}` : ''
+  const filename = `kb-${unique}${extension}`
+  const absPath = join(getUploadsDir(req), filename)
 
-    const fileNameFromUrl = (() => {
-      try {
-        const parsed = new URL(url)
-        return parsed.pathname.split('/').pop() || 'remote-upload'
-      } catch {
-        return 'remote-upload'
-      }
-    })()
+  await fsp.writeFile(absPath, remote.body)
 
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
-    const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : ''
-    const filename = `kb-${unique}${extension}`
-    const absPath = join(getUploadsDir(req), filename)
-
-    const buf = Buffer.from(await resp.arrayBuffer())
-    if (buf.length > KB_MAX_FILE_BYTES) {
-      throw new Error('Remote file is too large (max 50MB).')
-    }
-    await fsp.writeFile(absPath, buf)
-
-    return {
-      file: {
-        path: absPath,
-        size: buf.length,
-        mimetype: contentType,
-        originalname: fileNameFromUrl,
-        filename,
-      },
-      publicUrl: `/uploads/${filename}`,
-    }
-  } finally {
-    clearTimeout(timeoutId)
+  return {
+    file: {
+      path: absPath,
+      size: remote.body.length,
+      mimetype: contentType,
+      originalname: fileNameFromUrl,
+      filename,
+    },
+    publicUrl: `/uploads/${filename}`,
   }
 }
 
@@ -1289,7 +1245,11 @@ router.post('/knowledge/ingest-url', async (req, res) => {
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
     if (downloaded?.file?.path) safeDeleteFile(req, downloaded.file.path)
-    res.status(500).json({ ok: false, error: error?.message || String(error) })
+    res.status(Number(error?.status) || 500).json({
+      ok: false,
+      error: error?.message || String(error),
+      code: error?.code || undefined,
+    })
   }
 })
 
@@ -1742,6 +1702,32 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
 router.post('/reattach-users', async (req, res) => {
   try {
     const db = req.db;
+
+    const suppliedMappings = req.body?.mappings;
+    if (!Array.isArray(suppliedMappings) || suppliedMappings.length === 0 || suppliedMappings.length > 50) {
+      return res.status(400).json({
+        error: 'mappings must be a non-empty array with at most 50 entries',
+      });
+    }
+
+    const userMappings = [];
+    for (const candidate of suppliedMappings) {
+      const name = String(candidate?.name || '').trim();
+      const emailPattern = String(candidate?.emailPattern || '').trim();
+      const safeSelector = (value) => (
+        value.length >= 2
+        && value.length <= 100
+        && !value.includes('%')
+        && !value.includes('_')
+        && /^[-a-z0-9@.+ ']+$/i.test(value)
+      );
+      if (!safeSelector(name) || !safeSelector(emailPattern)) {
+        return res.status(400).json({
+          error: 'each mapping requires safe name and emailPattern selectors (2-100 characters; no SQL wildcard characters)',
+        });
+      }
+      userMappings.push({ name, emailPattern });
+    }
     
     // Get admin user
     const adminUser = await db.prepare(`
@@ -1760,16 +1746,6 @@ router.post('/reattach-users', async (req, res) => {
       linked: [],
       errors: []
     };
-    
-    // User mappings
-    const userMappings = [
-      { name: 'Rachel', emailPattern: 'rachel' },
-      { name: 'Josh', emailPattern: 'josh' },
-      { name: 'Olivia', emailPattern: 'olivia' },
-      { name: 'Avanell', emailPattern: 'avanell' },
-      { name: 'Hollie', emailPattern: 'hollie' },
-      { name: 'Brian', emailPattern: 'brian' },
-    ];
     
     // Process each user
     for (const mapping of userMappings) {
@@ -2623,93 +2599,19 @@ router.get('/geo/zip-coverage', async (req, res) => {
 router.post('/geo/crawl/start', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
-    const payload = req.body ?? {};
-
-    // IMPORTANT: crawler_jobs.type is CHECK-constrained in production. Use an allowed type.
-    // We tag the job with parameters.mode='geo' so it can be queried separately from other comprehensive runs.
-    const incoming = payload && typeof payload === 'object' ? payload : {}
-
-    // UI payload normalization:
-    // - AdminGeoCrawl sends `zips`, but the crawler expects `zip_list`.
-    // - Provide a sane `max_zips` default when a zip list is provided.
-    // - Enable local-resource discovery by default for Geo Crawl (new source discovery).
-    const zipList =
-      Array.isArray(incoming.zips) && incoming.zips.length > 0
-        ? incoming.zips
-        : Array.isArray(incoming.zip_list) && incoming.zip_list.length > 0
-          ? incoming.zip_list
-          : null
-
-    const geoRunId = crypto.randomUUID()
-
-    const parameters = {
-      ...incoming,
-      mode: 'geo',
-      geo_run_id: geoRunId,
-      run_all_states:
-        incoming.run_all_states ?? incoming.runAllStates ?? undefined,
-      states: Array.isArray(incoming.states) ? incoming.states : undefined,
-      zip_list: zipList ?? undefined,
-      max_zips:
-        zipList && zipList.length > 0
-          ? zipList.length
-          : incoming.max_zips ?? incoming.maxZips ?? undefined,
-      // Feature toggles (crawler reads these)
-      discover_local_resources:
-        incoming.discover_local_resources ?? incoming.discoverLocalResources ?? true,
-      // Default offline_only=false so each ZIP gets Grants.gov + Overpass (no cap on max sources per zip; min 3).
-      offline_only: incoming.offline_only ?? incoming.offlineOnly ?? false,
-      // Conservative defaults; can be overridden per request
-      overpass_radius_km: incoming.overpass_radius_km ?? 12,
-      overpass_max_results: incoming.overpass_max_results ?? 60,
-    }
-
-    // Avoid persisting UI-only keys.
-    delete parameters.zips
-
-    const jobId = crypto.randomUUID();
-    await req.db
-      .prepare(
-        `
-          INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
-          VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'admin')
-        `,
-      )
-      .run(jobId, JSON.stringify(parameters));
-
-    const job = await req.db
-      .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error, parameters FROM crawler_jobs WHERE id = ?')
-      .get(jobId);
-
-    // Durable run row for GeoCrawl Monitor (/api/geo-crawl/runs/:id). If insert fails, backfill from job
-    // so the UI never gets a run_id without a DB row (avoids permanent 404 on the monitor).
-    try {
-      await createGeoCrawlRun(req.db, {
-        id: geoRunId,
-        state: parameters.run_all_states ? null : parameters.state ?? null,
-        createdByUserId: req.ctx?.userId ?? null,
-        crawlerJobId: jobId,
-      })
-    } catch (err) {
-      console.error('[admin/geo/crawl/start] createGeoCrawlRun failed, backfilling from job:', err?.message || err)
-      try {
-        await backfillGeoCrawlRunFromJob(req.db, geoRunId, job)
-      } catch (e2) {
-        console.error('[admin/geo/crawl/start] backfillGeoCrawlRunFromJob also failed:', e2?.message || e2)
-      }
-    }
-
-    // Dispatch asynchronously (don't block response).
-    dispatchCrawlerJob({
-      db: req.db,
-      jobId: job.id,
-      uploadDir: getUploadsDir(req),
-      getOpenAI,
-    }).catch((error) => {
-      console.warn('[admin/geo/crawl/start] Failed to dispatch job:', error?.message || error);
-    });
-
-    res.status(201).json({ success: true, job, run_id: geoRunId });
+    // The legacy `comprehensive` dispatcher job is intentionally retired by
+    // the Crawler OS cutover. Creating it here used to return 201 and then mark
+    // the job `superseded_by_crawler_os`, a false "started" experience. Keep
+    // historical status/coverage endpoints available, but refuse new global
+    // ZIP mutations until a native, profile-scoped Crawler OS replacement is
+    // reviewed and tested.
+    return res.status(410).json({
+      ok: false,
+      error: 'geo_crawl_start_retired',
+      code: 'GEO_CRAWL_START_RETIRED',
+      message: 'Legacy global ZIP crawl start is retired. Run current Crawler OS discovery from a consented profile instead.',
+      replacement: 'profile_scoped_crawler_os',
+    })
   } catch (error) {
     console.error('[admin/geo/crawl/start] Error:', error);
     res.status(500).json({ error: error.message });
@@ -5653,8 +5555,9 @@ router.post('/crawler-jobs/resolve-failures', async (req, res) => {
  *   { directory, pattern, dry_run, max_iterations, max_file_changes,
  *     fixConsoleLog, fixEmptyCatch, fixTodos }
  *
- * Writes require dry_run === false. Anya code-error repair no longer requires
- * a separate environment permission gate; each write is backed up and audited.
+ * Writes require dry_run === false. Production additionally requires
+ * ANYA_CODE_REPAIR_PRODUCTION_WRITES=true. All scans remain confined to the
+ * server-owned repository root; each write is backed up and audited.
  */
 router.post('/anya/runAutonomous', async (req, res) => {
   const {
@@ -5667,6 +5570,20 @@ router.post('/anya/runAutonomous', async (req, res) => {
     fixEmptyCatch,
     fixTodos,
   } = req.body || {}
+
+  const production = [process.env.NODE_ENV, process.env.DEPLOY_ENV]
+    .some((value) => String(value || '').toLowerCase() === 'production')
+  if (dry_run === false && production && process.env.ANYA_CODE_REPAIR_PRODUCTION_WRITES !== 'true') {
+    return res.status(403).json({
+      id: crypto.randomUUID(),
+      tool: 'admin.anya.runAutonomous',
+      output: {
+        success: false,
+        code: 'ANYA_PRODUCTION_WRITES_DISABLED',
+        error: 'Production code repair writes are disabled. Run dry_run=true or enable the explicit operator gate.',
+      },
+    })
+  }
 
   const options = {
     directory,
@@ -5685,6 +5602,9 @@ router.post('/anya/runAutonomous', async (req, res) => {
     db: req.db,
     user: req.ctx?.user ?? req.user ?? null,
     req,
+    // Server-owned injection for clean-room/test installations. Never read
+    // this authority from the request body.
+    trustedRepoRoot: req.app?.locals?.trustedRepoRoot || undefined,
   }
 
   try {
@@ -5696,11 +5616,12 @@ router.post('/anya/runAutonomous', async (req, res) => {
     })
   } catch (err) {
     routeLogger.error('[admin/anya/runAutonomous] Error:', err)
-    return res.status(500).json({
+    return res.status(Number(err?.status) || 500).json({
       id: crypto.randomUUID(),
       tool: 'admin.anya.runAutonomous',
       output: {
         success: false,
+        code: err?.code || 'ANYA_AUTONOMOUS_FAILED',
         error: err?.message || String(err),
       },
     })

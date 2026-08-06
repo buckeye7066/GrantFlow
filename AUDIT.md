@@ -4,6 +4,15 @@
 > **critical** / **important** / **nit**, each with a `file:line` reference.
 > Generated 2026-06-19.
 
+> **Historical snapshot — not current release evidence.** This report records the
+> repository as it existed on 2026-06-19. Many findings below have since been
+> remediated or moved behind fail-closed controls, and line references have drifted.
+> Reproduce a finding against the current commit before relying on it. In particular,
+> current-tree admin authority is environment- and database-backed, public profile
+> fixtures are synthetic, and deployed designated-profile data requires a private
+> manifest. Public Git history may still retain retired identifiers and remains a
+> separate owner/privacy-counsel decision.
+
 ---
 
 ## 1. Repository Map
@@ -74,13 +83,13 @@ Read-only audit of `backend/` core infrastructure: entry points, middleware, con
 
 ### backend/server.js
 
-- **[important]** `backend/server.js:1497` — `jwt.verify(token, EFFECTIVE_JWT_SECRET)` is called with **no `algorithms` allowlist**. Standard JWT hardening requires `{ algorithms: ['HS256'] }` to prevent algorithm-confusion attacks. With a symmetric HMAC secret the practical risk is low, but the allowlist should be explicit.
-- **[important]** `backend/server.js:1546` — `const effectiveIsAdmin = Boolean(tokenIsAdmin || sessionRow.is_admin)`. The token-claimed admin flag is OR'd with the DB flag, so a validly-signed token claiming `roles:['admin']` keeps admin even when `users.is_admin` is false in the DB (e.g. admin revoked). Admin revocation is not effective until token expiry. Mitigated downstream by `requestContext` re-resolving from DB, but this contradicts the "admin is DB-backed" invariant stated in the same block's comment (line 1544).
+- **[historical finding; remediated]** The wired inline auth parser now pins `jwt.verify(..., { algorithms: ['HS256'] })`; a live-server regression rejects HS384 even for a valid backing user. The separate `middleware/authIdentity.js` implementation uses the same allowlist.
+- **[historical finding; canonical authority remediated]** The inline parser still derives a provisional role from JWT claims and may OR that claim with a session-row flag while constructing `req.user`. It no longer establishes authorization authority: `attachRequestContext()` immediately resolves canonical `req.ctx.isAdmin` from the trusted `users` row or validated synthetic-service-token provenance, fails closed on a missing row or DB error, and the remediated routes named below use that context. A raw `roles:['admin']` claim therefore does not retain canonical admin access on those paths, although the duplicate provisional-role logic and any unreviewed legacy caller remain cleanup work.
 - **[important]** `backend/server.js:1420-1604` — The entire primary auth gate is a large inline `app.use` middleware rather than the dedicated `middleware/authIdentity.js` (which exists and does the same job). Two parallel auth implementations are a divergence/maintenance hazard; only one is actually wired (the inline one), leaving `authIdentity.js` as likely dead code at the server level.
-- **[important]** `backend/server.js:668-674` — DB healthcheck failure is caught and the server continues in "degraded mode" without DB. All subsequent startup steps (runtime-secret restore line 690, schema bootstrap, seeding) still issue `db.prepare(...)` against a DB that just failed healthcheck, producing cascading caught errors instead of a clean degraded boot. (Partly guarded later by `app.locals.db_startup_error`, but the secret-restore block at 684-725 runs before that guard is checked.)
+- **[historical finding; substantially remediated]** A failed startup DB healthcheck is now recorded in `app.locals.db_startup_error`; runtime-secret key migration and schema/seed/background startup work are skipped or isolated, and readiness remains unavailable. The process intentionally stays up only to expose health/diagnostic evidence. Re-test the remaining best-effort secret-restore catch path before treating degraded boot as fully closed.
 - **[important]** `backend/server.js:907` — Legacy SQLite auto-migration builds DDL by string concatenation: `db.prepare(\`ALTER TABLE ${table} ADD COLUMN ${column} ${type}\`)`. Guarded by `validTables` Set + `validColumnPattern` (line 902), so safe in practice, but identifiers are concatenated rather than validated-then-quoted; relies entirely on the whitelist.
 - **[important]** `backend/server.js:380-388` — CORS `origin` is set to an array of allowed origins (good), but when `ENV.corsOrigins` is empty it falls back to `defaultCorsOrigins` which includes `http://localhost:5173`/`:3000`. In production these dev origins remain whitelisted; combined with `credentials: true`, dev origins can make credentialed cross-origin requests against a production deploy.
-- **[nit]** `backend/server.js:1566` — `if (!handled && token && safeTokenEqual(token, ADMIN_TOKEN))` is dead: the same comparison already ran at lines 1468-1471 (`expectedAdminToken === ADMIN_TOKEN`). This third check can never set `handled` because the earlier one already did. Redundant.
+- **[historical finding; remediated]** The redundant later raw `ADMIN_TOKEN` bearer branch has been removed from the wired inline parser; the single earlier constant-time branch retains explicit service-token provenance.
 - **[nit]** `backend/server.js:437-467` — Both `req.setTimeout` and `res.setTimeout` are registered with the same handler and both send a 504. If both fire, the second `res.status().json()` after `headersSent` is guarded by `!res.headersSent`, so no crash — but this duplicates the dedicated `middleware/requestTimeout.js` which is also imported (line 79) yet apparently not used here. Divergent timeout handling.
 - **[nit]** `backend/server.js:1659` — `/api/auth/diagnostics` reports `jwtSecret: ... ? 'configured' : 'not configured'` and `adminTokenConfigured` — presence-only, no values leaked. Good; flagged only to confirm.
 - **[nit]** `backend/server.js:144` — `safeTokenEqual` correctly returns false for `null`/non-string, so `ADMIN_TOKEN === null` (unset) cannot accidentally authenticate. Verified safe.
@@ -117,7 +126,7 @@ Read-only audit of `backend/` core infrastructure: entry points, middleware, con
 
 ### backend/middleware/ensureAdminUser.js
 
-- **[important]** `ensureAdminUser.js:30` — Gates on token-claimed role (`user.role !== 'admin'`) rather than DB-backed `req.ctx.isAdmin`, contradicting the "never trust token claims for admin authority" invariant. Impact limited to an idempotent synthetic-admin INSERT, and also requires `user.userId`.
+- **[historical finding; remediated]** `ensureAdminUser.js` now gates only on `isSyntheticServiceAdmin(user)`, which requires validated service-token provenance, rather than a raw `user.role`/`is_admin` JWT claim. The insertion remains best-effort and is not an authorization grant.
 - **[nit]** `ensureAdminUser.js:33-45,59` — TOCTOU between the existence `SELECT` and the `INSERT`: two concurrent admin requests can both pass the check, one INSERT throws on PK conflict, silently swallowed by bare `catch {}` (line 59) which also hides genuine schema errors. Functionally harmless.
 - **[nit]** `ensureAdminUser.js:48` — Hardcoded column INSERT with no `ON CONFLICT` guard, inconsistent with upsert patterns elsewhere.
 
@@ -128,15 +137,15 @@ Read-only audit of `backend/` core infrastructure: entry points, middleware, con
 
 ### backend/middleware/requestContext.js
 
-- **[important]** `requestContext.js:194-203` — Auto-upgrades any user whose email matches `isAdminEmail()` to `is_admin = TRUE` in the DB. This is a persistent privilege-escalation path keyed entirely on email match; safe **only** if `isAdminEmail` is a strict exact allowlist (note `config/constants.js` hardcodes `buckeye7066@gmail.com` as a permanent admin — see below).
+- **[historical finding; remediated boundary]** Configured-admin elevation now compares the exact allowlist only with `users.primary_email` loaded from the trusted DB row, never with a token-supplied email. Deployed runtimes must provide the operator email through environment configuration; the current tree has no source-controlled privileged mailbox.
 - **[important]** `requestContext.js:27-28,79-81` — `lastAdminSelfHealAtMs` module-global throttle mutated without a lock; concurrent admin requests can both pass the time check before either updates it, running the heavy self-heal multiple times. Best-effort, racy.
-- **[nit]** `requestContext.js:205-212` — Falls back to token-claimed admin (`Boolean(user.is_admin || user.role === 'admin')`) when the DB row is missing or the query throws, re-trusting token claims the file header says never to trust. Acceptable degraded fallback but contradicts the stated invariant.
+- **[historical finding; remediated]** A missing users row or DB error now fails closed for admin and profile/org access. Only a token admitted through validated synthetic-service provenance retains its explicitly scoped service authority; raw JWT role, email, and `is_admin` claims are not fallback authority.
 
 ### backend/middleware/authIdentity.js
 
-- **[important]** `authIdentity.js:149` — `jwt.verify(token, jwtSecret)` with no `algorithms` allowlist (same gap as server.js inline auth).
-- **[important]** `authIdentity.js:215` — `effectiveIsAdmin = Boolean(tokenIsAdmin || sessionRow.is_admin)` — token-claimed admin OR'd with DB flag; admin revocation not effective until token expiry (same as server.js:1546).
-- **[important]** `authIdentity.js:43,149` — No guard that `jwtSecret` is non-empty before `jwt.verify`; an unset secret throws (caught → guest), failing closed, but no startup assertion, so a misconfigured prod silently rejects all JWT auth.
+- **[historical finding; remediated]** Both `middleware/authIdentity.js` and the wired inline parser verify JWTs with `{ algorithms: ['HS256'] }`.
+- **[current implementation detail; not canonical authority]** This module still uses token/session role data to construct provisional `req.user`, but `requestContext` is the downstream authorization authority and re-resolves admin from the DB or validated service-token provenance. Do not use `req.user.role` for authorization.
+- **[historical finding; production guard remediated]** This helper still has no local non-empty-secret assertion, but deployed boot validation now requires `AUTH_JWT_SECRET`/`JWT_SECRET` and rejects known placeholders. A direct standalone invocation with an empty secret still fails closed and should remain covered by tests.
 - **[nit]** `authIdentity.js:62-134` — All token comparisons correctly use `safeTokenEqual` (constant-time). Logs print `error.message` only, no tokens. Good. This module appears to duplicate the inline server.js auth and may be unused.
 
 ### backend/middleware/schoolPortalAuth.js
@@ -179,7 +188,7 @@ Read-only audit of `backend/` core infrastructure: entry points, middleware, con
 
 ### backend/config/constants.js
 
-- **[important]** `constants.js:10,16-17` — `DEFAULT_ADMIN_EMAIL = 'buckeye7066@gmail.com'` is hardcoded and **unconditionally** injected into `ADMIN_EMAILS` even when the operator sets a different `ADMIN_EMAIL`. The developer's personal email is therefore a permanent admin in every deployment, removable only by editing source. Combined with `requestContext.js:194` (email-match → persistent `is_admin = TRUE`), this is standing production admin access for a fixed external account.
+- **[historical finding; remediated]** Deployed runtimes no longer inherit any source-controlled privileged identity. `ADMIN_EMAIL`/`ADMIN_EMAILS` are environment-owned; only local/test runs receive the non-routable `admin@grantflow.local` fixture, and production env validation requires an explicit operator mailbox.
 - **[nit]** `constants.js:52` — `DEFAULT_OPENAI_MODEL` reads `process.env.OPENAI_MODEL` at module-load time; if env is restored later (server.js restores secrets at boot) this captures the pre-restore value.
 
 ### backend/config/pipelineAllowedSources.js
@@ -196,14 +205,14 @@ Read-only audit of `backend/` core infrastructure: entry points, middleware, con
 
 ### backend/config/designatedProfiles.js
 
-- **[critical]** `designatedProfiles.js:74,184,189-200` — Real PII for real individuals is embedded directly in source and checked into git: full names, personal emails, phone numbers, home addresses, DOBs, EIN (`'88-4291655'`), a Medicaid number (`'Medicaid number: ZECM15043724.'`), VA disability ratings, and detailed medical diagnoses/ICD codes. `missionGoals.js` Goal 11 explicitly prohibits sensitive identifiers (Medicaid ID, medical identifiers) from leaving the system — committing them to the repo is a direct privacy/compliance violation regardless of crawler behavior.
-- **[important]** `designatedProfiles.js:67` vs `userProfileMappings.js:23` — Email mismatch: profile email `'Oliviadbeltran@gmail.com'` vs mapping key `'oliviabeltran@gmail.com'` (different local-part, missing `d`). The designated-profile auto-link for Olivia will never match.
-- **[important]** `designatedProfiles.js:899` — `owner_email: 'melissa.justus@example.com'` ships a placeholder `example.com` address (also in the urlRules denylist) as production data; this owner can never authenticate.
+- **[historical finding; current tree sanitized]** The 2026-06-19 tree contained real designated-profile PII. The current public fixture contains synthetic personas only; deployed designated-profile seeding fails closed unless an owner-approved private manifest is mounted. The historical exposure is not erased by this source edit: public Git history may still retain retired identifiers and requires the separate owner/privacy-counsel decision stated at the top of this report.
+- **[historical, sanitized]** A designated-profile email-mapping mismatch was recorded in the prior audit; the public fixture identities and mappings have since been replaced with synthetic examples.
+- **[historical, sanitized]** `designatedProfiles.js` previously shipped a non-routable profile-owner placeholder; the public fixture now uses a reserved synthetic address.
 
 ### backend/config/userProfileMappings.js
 
-- **[important]** `userProfileMappings.js:33` — `anyawhite@rocketmail.com → profile-luibov-samoylenko` maps an "anyawhite" email to Luibov Samoylenko's profile. If that is a different real person (John White's wife is named Anya per designatedProfiles:486), this mis-assigns one user to another person's sensitive medical-assistance profile — a serious access-control/privacy risk worth verifying.
-- **[nit]** `userProfileMappings.js:20` — `[ADMIN_EMAIL]: null` computed key; if `ADMIN_EMAIL` collides with another mapping key, order-dependent override.
+- **[historical finding; current tree sanitized]** Legacy personal-mailbox mappings were removed from source. The checked-in defaults now use reserved `example.invalid` demo identities; production/staging mappings must come from `USER_PROFILE_MAPPINGS_FILE` or `USER_PROFILE_MAPPINGS_JSON`.
+- **[historical finding; remediated]** The admin sentinel is now included only when configured `ADMIN_EMAIL` is non-empty; deployed runtimes do not receive a source default.
 
 ### backend/config/profileSchema.js
 
@@ -425,7 +434,7 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 ### backend/routes/admin.js
 - **[important]** `backend/routes/admin.js:1710` — `POST /reattach-users` has no in-handler admin check (`ensureAdminRequest` not called) yet performs destructive mass re-assignment of profile ownership (`UPDATE profiles SET user_id = ...`, links all unowned profiles to admin ~1784). Protected today only by router-level middleware; diverges from the defense-in-depth pattern every sibling mutating route uses.
 - **[important]** `backend/routes/admin.js:3744` — `POST /link-admin-to-organizations` similarly has no in-handler admin check while mutating `user_organizations`.
-- **[important]** `backend/routes/admin.js:1454` — `POST /upload-profile-document` authorizes via `isAdminUser(req.user)` (token-claims only) rather than the DB-backed `isAdminUserWithDb`/`ensureAdminRequest` used elsewhere. Inconsistent admin enforcement on a route that creates profiles and dispatches jobs.
+- **[historical finding; remediated]** `POST /upload-profile-document` now authorizes with canonical `req.ctx.isAdmin === true`; raw `req.user.role`/`is_admin` claims do not grant this profile-creation and job-dispatch path.
 - **[important]** `backend/routes/admin.js:807` / `:849` / `:926` — `/openai/verify-key`, `/openai/apply-key`, `/env/apply` accept secrets in the body and mutate `process.env` process-wide, with no rate limiting on the router. Sensitive secret-handling endpoints unthrottled.
 - **[important]** `backend/routes/admin.js:3561` — `POST /seed-baseline-profiles` allows a non-session auth path via `X-Seed-Key`/body `seed_key` compared `===` to `process.env.SEED_KEY` (non-constant-time compare; key may be passed in JSON body where it is more likely to be logged).
 - **[nit]** `backend/routes/admin.js:1476` — `POST /upload-profile-document`: early validation returns (e.g. 400 on no extractable text ~1480) exit before the catch's `fs.unlinkSync`, leaving the uploaded file orphaned on disk.
@@ -476,7 +485,7 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 - **[nit]** `backend/routes/applications.js:52` (pervasive) — idiom `x && typeof x === 'string' ? x : String(x || '')` silently converts a missing required value to `''` rather than rejecting with 400.
 
 ### backend/routes/applicationTasks.js
-- **[important]** `backend/routes/applicationTasks.js:61` — authorization uses `user.role === 'admin'` (e.g. `userMayAccessTask` `:61`, list `:74`) rather than the canonical `req.ctx.isAdmin`. If the admin flag is exposed as `is_admin`/`isAdmin` rather than `role`, this mis-scopes admins. Verify `user.role` is reliably populated.
+- **[historical finding; remediated]** Application-task admin branches now use canonical `req.ctx.isAdmin`; non-admin task access delegates to the shared DB-backed accessible-profile resolver rather than a raw role claim.
 - **[nit]** `backend/routes/applicationTasks.js:79` — `GET /` non-admin path issues one `listApplicationTasks` query per accessible profile (unbounded fan-out; each capped at 100, but no cap on number of profiles).
 - **[nit]** `backend/routes/applicationTasks.js:203` — `POST /:taskId/missing-info` iterates `items` with no count bound, doing sequential DB writes per item.
 
@@ -486,8 +495,8 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 - **[nit]** `backend/routes/applicationWorkflow.js:96` (every catch) — returns `err?.message ?? String(err)` to the client.
 
 ### backend/routes/authMe.js
-- **[important]** `backend/routes/authMe.js:263` — `GET /api/auth/diagnostics` has no authn/authz. Leaks secrets-presence metadata (`adminTokenConfigured`, `bulkKeyConfigured`, JWT secret state, per-provider OAuth client-id/secret presence) and DB error strings (`'error: ' + error.message`) to any caller. Should require admin.
-- **[nit]** `backend/routes/authMe.js:49` — handler reads the auth principal off `req.user.*` as primary, consulting `req.ctx.isAdmin` only as one of several admin signals — divergence from the `req.ctx` convention.
+- **[historical finding; remediated]** Both the wired `/api/auth/diagnostics` handler and the extracted router definition now require authentication plus canonical admin authorization before returning presence-only operational metadata.
+- **[historical/unwired implementation note]** The extracted `authMe.js` `/me` handler still contains legacy `req.user`-primary logic, but the server's earlier wired `/api/auth/me` handler uses the canonical resolved context and wins routing. Do not mount the extracted duplicate without first converging its authority contract.
 - **[nit]** `backend/routes/authMe.js:19` — `routeLogger` created but never used (file logs via `console.*`).
 
 ### backend/routes/auth.js
@@ -502,7 +511,7 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 - **[nit]** `backend/routes/auth.js:3322` / `:3378` — `/refresh` and `/logout` have no rate limiter (refresh-token entropy makes brute force impractical; noting the gap).
 
 ### backend/routes/billing.js
-- **[important]** `backend/routes/billing.js:36` — `requireAdmin` checks only `req.user?.role !== 'admin'` rather than the canonical DB-backed `req.ctx.isAdmin`; an admin via `req.ctx.isAdmin` whose `req.user.role` isn't `'admin'` is wrongly 403'd (and vice-versa it trusts only the token-derived role).
+- **[historical finding; remediated]** Billing admin authorization now requires canonical `req.ctx.isAdmin`; profile access for non-admins is resolved through the shared DB-backed accessibility contract.
 - **[nit]** `backend/routes/billing.js:357` / `:372` — uses `req.user.userId` for `assigned_by`/`changed_by`; if undefined it degrades audit attribution to `'admin'`.
 - **[nit]** `backend/routes/billing.js:16` — `ensureProfileAccess as ensureProfileAccessByEmail` imported but never used.
 
@@ -512,7 +521,7 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 - Note: tenant scoping is correct — every handler queries `user_preferences WHERE user_id = ?` and `:id` routes verify `row.id === req.params.id` after loading by `userId`; no IDOR.
 
 ### backend/routes/blocklist.js
-- **[important]** `backend/routes/blocklist.js:48` — `adminAuth` accepts `req.user?.role === 'admin' || req.user?.is_admin === true` as a fallback beside the correct `req.ctx.isAdmin === true`, widening the trust surface to whatever weaker source populates `req.user`. Same in `ingestAuth` (`:64`).
+- **[historical finding; remediated]** Blocklist routes no longer accept raw `req.user.role`/`is_admin` claims. Browser admin access uses canonical `req.ctx.isAdmin`; the separately configured device/admin bearer tokens remain explicit credential paths with timing-safe comparison.
 - **[nit]** `backend/routes/blocklist.js:188` — `res.status(result.ok ? 200 : 200)` — both branches 200; a failed sync (`ok:false`) still returns HTTP 200, masking failure.
 - **[nit]** `backend/routes/blocklist.js:77` — `GET /` `const limit = Number(req.query.limit) || 500` has no upper bound (the `/hits` route correctly clamps to 1000).
 
@@ -527,7 +536,7 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 - Note: `trustedOriginClause()`/`trustedSourceClause()` are interpolated into SQL (`:78`, `:91`) but are constant clause-builders with no request input — not injection. Auth + rate limiting applied router-wide.
 
 ### backend/routes/committedCollege.js
-- **[important]** `backend/routes/committedCollege.js:81` — `userMayAccessProfile` reads `req.user` and grants access on `user.role === 'admin'`, rather than the DB-backed canonical `req.ctx.isAdmin`. A token claiming `role:'admin'` that is not a DB admin gets full access — token-only admin bypass. Authz for the whole file rests on this non-canonical check.
+- **[historical finding; remediated]** `committedCollege.js` now grants admin access only through `req.ctx.isAdmin === true` and otherwise checks the shared DB-backed accessible-profile set; the token-only admin shortcut was removed.
 - **[nit]** `backend/routes/committedCollege.js:45` — `try { await ensurePipelineDismissalsSchema(db) } catch {}` silently swallows schema-init errors.
 - Note: deletes/updates in `deleteDeselectedFromPipeline` are correctly scoped by `profile_id` (`:51`, `:58`); SQL parameterized.
 
@@ -616,7 +625,7 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 - Note: dynamic SQL (`IN (...)` placeholder lists, column names) is consistently guarded by `assertSafeIdentifier`/allowlists with parameterized values — no injection found.
 
 ### backend/routes/hamiltonAutomation.js
-- **[important]** `backend/routes/hamiltonAutomation.js:262` — `GET /tasks` admin detection uses `user.role === 'admin'`; an admin via `req.ctx.isAdmin`/`is_admin` without `role === 'admin'` falls into the non-admin (own-profiles) branch. Same `user.role === 'admin'` at `:137` (`userMayAccessProfile`, which fails safe/more restrictive). Inconsistent with `req.ctx.isAdmin`.
+- **[historical finding; remediated]** Hamilton task listing and profile access now use canonical `req.ctx.isAdmin` and the shared DB-backed accessible-profile contract. Raw role claims are retained only for display/audit attribution, not authorization.
 - **[nit]** `backend/routes/hamiltonAutomation.js:1094` — `admin/tasks` interpolates `${where}` built from a fixed allowlist (constant literals, no injection).
 
 ### backend/routes/health.js
@@ -660,7 +669,7 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 ---
 
 ## Cross-cutting patterns
-- **Non-canonical admin checks**: several files gate admin on `req.user.role === 'admin'`/`req.user.is_admin` instead of the DB-backed `req.ctx.isAdmin` — `billing.js:36`, `blocklist.js:48`, `committedCollege.js:81`, `hamiltonAutomation.js:262`, `applicationTasks.js:61`, `discovery.js:627`. Inconsistent and, in `committedCollege.js`, a token-only admin bypass.
+- **Historical non-canonical admin checks (remediated in the named routes)**: `billing.js`, `blocklist.js`, `committedCollege.js`, `hamiltonAutomation.js`, `applicationTasks.js`, and `discovery.js` now gate admin behavior on canonical `req.ctx.isAdmin`. Re-verify any new or legacy route separately; the deprecated raw-role helper still exists for compatibility and must not be treated as proof that all callers are safe.
 - **Raw `error.message` leaked to clients** across many files (applicationDrafts, applicationWorkflow, contacts, contactMethods, crawlerV2, discovery, expenses, grantApplications, billingSettings, milestones, admin).
 - **Client-supplied primary keys / mass-assignment** of `id`/`created_by`/`approved`: applicationDrafts.js:100, budgets.js:145, contactMethods.js:110/130, expenses.js:120, billingSettings.js:81.
 - **`Host`-header-derived internal `fetch` (SSRF + credential forwarding)**: anyaMatchSuggestions.js:101, laptopConnector.js:387 (and the `getInternalBaseUrl` pattern referenced in anya.js).
@@ -778,14 +787,14 @@ Convention note: the global middleware in `backend/server.js` (~line 1602–1648
 - Positives: parameterized SQL, sessions loaded by UUID, ordered/completed-session guards return 409.
 
 ### backend/routes/schoolPortal.js
-- **[important]** `backend/routes/schoolPortal.js:96-98,291-296` — Admin authorization uses `req.user?.role === 'admin'`, the deprecated non-DB-backed check (`accessControl.js` explicitly says to use `isAdminUserWithDb`/`req.ctx.isAdmin`). These routes mint/revoke partner API keys (broad student-PII access), so they should use the DB-backed admin check.
+- **[historical finding; remediated]** School-portal partner-key administration now authorizes only through canonical `req.ctx.isAdmin === true`; the raw-role shortcut was removed.
 - **[important]** `backend/routes/schoolPortal.js:176-203` — `GET /students/:external_student_id` returns full merged profile PII but, unlike `/matches` (lines ~217-223), does NOT check `link.consent_status === 'revoked'`. A partner whose student revoked consent can still read the full profile. Inconsistent consent enforcement.
 - **[nit]** `backend/routes/schoolPortal.js:124-168` — `/students/sync` iterates `records` with no upper bound on array length; each element triggers a DB merge. Add a cap.
 - **[nit]** `backend/routes/schoolPortal.js:325` — Several admin handlers have no try/catch; a DB error becomes an unhandled rejection relying on Express's default handler.
 - Positives: partner routes `requireSchoolPartner`-gated, `findLink` scoped by `school_partner_id` (no cross-partner IDOR), API keys hashed and returned once, revoke is partner+key scoped.
 
 ### backend/routes/studentPortals.js
-- **[important]** `backend/routes/studentPortals.js:38-45` — `userMayAccessProfile` treats `getAccessibleProfileIds(...) === null` as "admin → allow". Admin is already handled one line above, so the `null` branch is a redundant second admin path: if `getAccessibleProfileIds` ever returns null for a non-admin reason (internal error/empty mis-encoded), it silently grants access to ANY profile. Also uses deprecated `user.role === 'admin'`.
+- **[historical finding; remediated]** `studentPortals.js` handles admin solely through `req.ctx.isAdmin`; non-admin access requires an actual `Set` containing the profile. A `null`/non-Set accessibility result no longer acts as a second allow-all branch.
 - **[nit]** `backend/routes/studentPortals.js:185-199` — `/classify-preview` only enforces `userMayAccessProfile` when `profile.id` is present; a caller can pass a profile object with no `id` to bypass the access check. Preview-only/non-persisting, low impact.
 - **[nit]** `backend/routes/studentPortals.js:141-181` — `/link-student-portal` trusts caller-supplied `body.opportunity`/`body.profile` over DB rows when present; the access check only validates `profileId`, not that `body.profile` matches it. Integrity smell.
 - Positives: every route calls `requireAuthenticatedUser` + `userMayAccessProfile`; writes go through `withProfileScope`; create-time enums validated.

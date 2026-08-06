@@ -42,7 +42,7 @@ function makeMemoryDb() {
       id TEXT PRIMARY KEY,
       role TEXT
     );
-    INSERT INTO profiles (id, user_id, display_name) VALUES ('p-mtsu', 'u-1', 'Anastasia');
+    INSERT INTO profiles (id, user_id, display_name) VALUES ('p-mtsu', 'u-1', 'Demo Student');
     INSERT INTO profiles (id, user_id, display_name) VALUES ('p-other', 'u-2', 'Other Student');
     INSERT INTO users (id, role) VALUES ('u-admin', 'admin');
     CREATE TABLE IF NOT EXISTS profile_sections (
@@ -53,7 +53,7 @@ function makeMemoryDb() {
     );
     INSERT INTO profile_sections (id, profile_id, section_key, data)
       VALUES ('ps-1', 'p-mtsu', 'basic_information',
-              '{"first_name":"Anastasia","last_name":"K","email":"a@example.com","state":"TN"}');
+              '{"first_name":"Demo Student","last_name":"K","email":"a@example.com","state":"TN"}');
     INSERT INTO profile_sections (id, profile_id, section_key, data)
       VALUES ('ps-2', 'p-mtsu', 'university_applications',
               '{"applications":[{"name":"Middle Tennessee State University","status":"committed","committed":true}]}');

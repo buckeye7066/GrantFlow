@@ -33,10 +33,10 @@ export const messages = {
   editProfile: 'Edit profile',
   lowerMatchThreshold: 'Lower match threshold',
   whyItMatched: 'Why it matched',
-  onlyStrongMatches: 'Only strong matches (≥70%)',
+  onlyStrongMatches: 'Only strong accepted matches',
 
   onboardingStep1Title: 'Why we need your profile',
-  onboardingStep1Description: 'We use your profile to match you with funding you qualify for.',
+  onboardingStep1Description: 'We use your profile to find funding that may fit and explain the evidence and unknowns.',
   onboardingStep2Title: 'Tell us a bit about you',
   onboardingStep2Description: 'We need your ZIP and state to find local opportunities.',
   onboardingStep3Title: "You're all set",

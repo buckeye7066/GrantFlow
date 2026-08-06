@@ -113,21 +113,14 @@ router.post('/write', limiter, syncHandler('write'))
 router.post('/sync', limiter, syncHandler('both'))
 
 /**
- * POST /submit-awards — the ONE-CLICK submission the owner asked for
- * (2026-08-01): an ordinary sync fills the portal's outside-award form and
- * stops; this completes it.
+ * POST /submit-awards — retained only as a fail-closed compatibility endpoint.
  *
- * THE HUMAN CLICK IS THE AUTHORIZATION. That is the whole point of the
- * separation: an autonomous sync never submits on a real financial-aid account,
- * but a profile owner (or an admin acting for them) can send it deliberately,
- * and GrantFlow does the submitting — not the user retyping it on the portal.
- *
- * It RE-FILLS and submits in one live session rather than "resuming" the
- * earlier staged form: the browser and the portal's form state are destroyed
- * when a sync ends, so there is no half-filled page waiting anywhere. A click
- * that claimed to resume one would be fiction.
- *
- * Every submission records who authorized it on the run row (submit_authorized_by).
+ * Portal sync has no reviewed final-submit adapter and does not participate in
+ * Hamilton's durable task authorization, final-review veto, submission lease,
+ * or confirmation-proof protocol. A browser click alone therefore cannot be
+ * treated as sufficient authority for an irreversible external submission.
+ * Existing clients receive an explicit conflict instead of silently falling
+ * through to the old broad submit-button matcher.
  */
 router.post('/submit-awards', limiter, async (req, res) => {
   // Must run BEFORE any await — see SYNC_REQUEST_TIMEOUT_MS above.
@@ -152,25 +145,15 @@ router.post('/submit-awards', limiter, async (req, res) => {
   const host = normalizeHost(portalHost)
   if (!host) return res.status(400).json({ error: 'portalHost is not a valid host' })
 
-  try {
-    const result = await runPortalSync(req.db, {
-      profileId,
-      portalHost: host,
-      direction: 'write',
-      actorUserId: getAuthUserId(user) || null,
-      allowSubmit: true,
-    })
-    log.info('portal_sync_submit_awards', {
-      profileId, host, submitted: result?.write?.submitted === true, actor: getAuthUserId(user) || null,
-    })
-    // 200 with the real outcome in the body: a portal with no submit control,
-    // or a form that could not be reached, is reported honestly rather than
-    // dressed up as a send.
-    return res.json(result)
-  } catch (err) {
-    log.error('portal_sync_submit_failed', { profileId, host, err: err?.message })
-    return res.status(500).json({ ok: false, error: err?.message || 'portal_sync_submit_failed' })
-  }
+  log.warn('portal_sync_submit_refused', {
+    profileId, host, actor: getAuthUserId(user) || null,
+  })
+  return res.status(409).json({
+    ok: false,
+    error: 'reviewed_submission_adapter_required',
+    detail: 'Hamilton can prepare the portal form, but final submission must be completed by the user in the portal.',
+    requires_human_submission: true,
+  })
 })
 
 router.get('/runs', async (req, res) => {

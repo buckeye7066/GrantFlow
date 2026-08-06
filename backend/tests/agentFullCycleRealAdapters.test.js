@@ -34,7 +34,13 @@ const OK_STEP_STATUSES = new Set([
 ])
 
 function adminUser() {
-  return { userId: 'u_admin_fullcycle', email: getCanonicalAdminEmail(), role: 'admin', is_admin: 1 }
+  return {
+    userId: 'u_admin_fullcycle',
+    email: getCanonicalAdminEmail(),
+    role: 'admin',
+    is_admin: 1,
+    controlCenterAuthorized: true,
+  }
 }
 
 async function waitForTerminal(db, runId, timeoutMs = 30_000) {

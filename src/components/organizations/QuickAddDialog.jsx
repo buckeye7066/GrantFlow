@@ -102,7 +102,7 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
             </div>
             <p className="text-sm text-slate-500">
               No need to pick a profile type. Anya figures out the right fit — and
-              the funding you qualify for — from your own information as you go.
+              funding that may fit — with the evidence and open questions shown as you go.
             </p>
             <div className="grid gap-2">
               <Label htmlFor="avatar">Profile Picture (optional)</Label>

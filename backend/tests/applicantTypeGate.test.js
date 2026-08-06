@@ -1,6 +1,6 @@
 /**
  * Tests for the applicant-type eligibility gate, with the regression cases from
- * Anastasia's pipeline: an INDIVIDUAL (graduate student) must NOT receive
+ * Demo Student's pipeline: an INDIVIDUAL (graduate student) must NOT receive
  * institution-only federal grants (OSEP personnel preparation, NRSA institutional
  * training grants, OESE comprehensive centers, NSF Space Grant) — an individual
  * cannot be the applicant. Directories and legitimate individual scholarships

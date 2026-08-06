@@ -7,10 +7,9 @@
  *
  * Metrics produced:
  *
- *   verified_opportunities         total + percentage of direct opps with
- *                                  link_status='verified'
- *   broken_link_opportunities      direct opps with link_status='broken'
- *   directory_opportunities        kind='directory'|'referral' counts
+ *   verified_opportunities         fresh verified / visible lifecycle rows
+ *   broken_link_opportunities      visible lifecycle rows with broken links
+ *   directory_opportunities        visible pointer/resource rows
  *   placeholder_opportunities      illegal placeholder/synthetic rows
  *                                  (mission rule: must be 0 in production)
  *   verification_events_24h        rows in verification_events from the
@@ -30,13 +29,20 @@
 
 import { promises as fsPromises } from 'fs'
 import path from 'path'
+import {
+  legacyDefaultedLinkLifecycleKindSql,
+  linkLifecycleOpportunitySql,
+  pointerOpportunityRowSql,
+} from '../config/linkLifecycleKinds.js'
 import { MATCHER_VERSION } from './matchEngine.js'
+import { REVERIFY_AFTER_DAYS_CONST } from './linkVerificationService.js'
 import { buildFieldUsageReport } from './profileFieldUsageRegistry.js'
 import { listProfileTypes, recommendedSourcesFor, recommendStrategyFor } from './profileTypeRegistry.js'
 import { buildProductionReadinessReport } from './productionReadinessChecks.js'
 
 const TARGETS = Object.freeze({
   verified_pct_min: 95,
+  verified_max_age_days: REVERIFY_AFTER_DAYS_CONST,
   broken_pct_max: 5,
   placeholder_max: 0,
   // Phase F (release-gate): codes that block a production release. Any
@@ -51,6 +57,7 @@ const TARGETS = Object.freeze({
     'field_usage_references_unknown_source',
     'profile_types_below_source_minimum',
     'mission_service_not_globally_integrated',
+    'link_lifecycle_partition_mismatch',
     'verified_pct_below_target',
     'broken_pct_above_target',
     'crawler_source_outcomes_stale',
@@ -199,69 +206,99 @@ export async function buildMissionHealth(db) {
   const generatedAt = new Date().toISOString()
 
   // ── Opportunity-level metrics ───────────────────────────────────────
-  const directKinds = "('direct','benefit')"
-  const directoryKinds = "('directory','referral','school_portal')"
-  const visibleDirectWhere = `
-    COALESCE(opportunity_kind,'direct') IN ${directKinds}
-    AND COALESCE(is_active, TRUE) = TRUE
-    AND COALESCE(is_hidden, FALSE) = FALSE
-  `
+  const verificationFreshCutoff = new Date(
+    Date.now() - REVERIFY_AFTER_DAYS_CONST * 24 * 60 * 60 * 1000,
+  ).toISOString()
+  const lifecycleSnapshot = await safeGet(
+    db,
+    `WITH lifecycle_rows AS (
+       SELECT opportunity_kind,
+              CASE
+                WHEN COALESCE(is_active, TRUE) = TRUE
+                 AND COALESCE(is_hidden, FALSE) = FALSE
+                 AND LOWER(TRIM(COALESCE(link_status, ''))) IN ('ok', 'redirect', 'verified')
+                 AND last_verified_at IS NOT NULL
+                 AND last_verified_at >= ?
+                  THEN 'verified_visible'
+                WHEN COALESCE(is_active, TRUE) = TRUE
+                 AND COALESCE(is_hidden, FALSE) = FALSE
+                 AND LOWER(TRIM(COALESCE(link_status, ''))) = 'broken'
+                  THEN 'broken_visible'
+                WHEN COALESCE(is_active, TRUE) = TRUE
+                 AND COALESCE(is_hidden, FALSE) = FALSE
+                  THEN 'unverified_visible'
+                WHEN LOWER(TRIM(COALESCE(link_status, ''))) = 'skipped'
+                 AND LOWER(TRIM(COALESCE(status, ''))) = 'paused'
+                 AND COALESCE(verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
+                  THEN 'scheduled_retry'
+                WHEN LOWER(TRIM(COALESCE(link_status, ''))) = 'skipped'
+                 AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'
+                  THEN 'permanently_retired'
+                WHEN LOWER(TRIM(COALESCE(link_status, ''))) = 'broken'
+                 AND LOWER(TRIM(COALESCE(status, ''))) = 'paused'
+                  THEN 'repair_pending'
+                WHEN LOWER(TRIM(COALESCE(link_status, ''))) = 'broken'
+                 AND LOWER(TRIM(COALESCE(status, 'active'))) = 'active'
+                  THEN 'active_quarantine'
+                ELSE 'other_nonvisible'
+              END AS lifecycle_bucket
+         FROM funding_opportunities
+        WHERE ${linkLifecycleOpportunitySql()}
+     )
+     SELECT COUNT(*) AS denominator_total,
+            SUM(CASE WHEN ${legacyDefaultedLinkLifecycleKindSql('opportunity_kind')} THEN 1 ELSE 0 END) AS legacy_defaulted,
+            SUM(CASE WHEN lifecycle_bucket = 'verified_visible' THEN 1 ELSE 0 END) AS verified_visible,
+            SUM(CASE WHEN lifecycle_bucket = 'broken_visible' THEN 1 ELSE 0 END) AS broken_visible,
+            SUM(CASE WHEN lifecycle_bucket = 'unverified_visible' THEN 1 ELSE 0 END) AS unverified_visible,
+            SUM(CASE WHEN lifecycle_bucket = 'active_quarantine' THEN 1 ELSE 0 END) AS active_quarantine,
+            SUM(CASE WHEN lifecycle_bucket = 'repair_pending' THEN 1 ELSE 0 END) AS repair_pending,
+            SUM(CASE WHEN lifecycle_bucket = 'scheduled_retry' THEN 1 ELSE 0 END) AS scheduled_retry,
+            SUM(CASE WHEN lifecycle_bucket = 'permanently_retired' THEN 1 ELSE 0 END) AS permanently_retired,
+            SUM(CASE WHEN lifecycle_bucket = 'other_nonvisible' THEN 1 ELSE 0 END) AS other_nonvisible
+       FROM lifecycle_rows`,
+    [verificationFreshCutoff],
+  )
+  const lifecycleSnapshotAvailable = !lifecycleSnapshot?.__error
+  const lifecycleBuckets = {
+    verified_visible: normalizeCount(lifecycleSnapshot?.verified_visible),
+    broken_visible: normalizeCount(lifecycleSnapshot?.broken_visible),
+    unverified_visible: normalizeCount(lifecycleSnapshot?.unverified_visible),
+    active_quarantine: normalizeCount(lifecycleSnapshot?.active_quarantine),
+    repair_pending: normalizeCount(lifecycleSnapshot?.repair_pending),
+    scheduled_retry: normalizeCount(lifecycleSnapshot?.scheduled_retry),
+    permanently_retired: normalizeCount(lifecycleSnapshot?.permanently_retired),
+    other_nonvisible: normalizeCount(lifecycleSnapshot?.other_nonvisible),
+  }
+  const catalogDirect = normalizeCount(lifecycleSnapshot?.denominator_total)
+  const totalDirect = lifecycleBuckets.verified_visible +
+    lifecycleBuckets.broken_visible + lifecycleBuckets.unverified_visible
+  const verifiedDirect = lifecycleBuckets.verified_visible
+  const brokenDirect = lifecycleBuckets.broken_visible
+  const quarantinedBrokenDirect = lifecycleBuckets.active_quarantine
+  const repairPendingBrokenDirect = lifecycleBuckets.repair_pending
+  const retiredBrokenDirect = lifecycleBuckets.permanently_retired
+  const scheduledRetryBrokenDirect = lifecycleBuckets.scheduled_retry
+  const lifecyclePartitionTotal = Object.values(lifecycleBuckets)
+    .reduce((sum, count) => sum + count, 0)
+  const lifecyclePartitionReconciles = lifecycleSnapshotAvailable &&
+    lifecyclePartitionTotal === catalogDirect
+  const linkLifecycle = {
+    denominator_total: catalogDirect,
+    visible_total: totalDirect,
+    verification_fresh_after: verificationFreshCutoff,
+    legacy_defaulted: normalizeCount(lifecycleSnapshot?.legacy_defaulted),
+    buckets: lifecycleBuckets,
+    partition_total: lifecyclePartitionTotal,
+    partition_reconciles: lifecyclePartitionReconciles,
+    error: lifecycleSnapshotAvailable ? null : lifecycleSnapshot?.__error || 'snapshot_unavailable',
+  }
 
-  // pg returns COUNT(*) as strings. Normalize at the metric boundary.
-  const catalogDirect = normalizeCount((await safeGet(
-    db,
-    `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}`,
-  ))?.n)
-  const totalDirect = normalizeCount((await safeGet(
-    db,
-    `SELECT COUNT(*) AS n FROM funding_opportunities WHERE ${visibleDirectWhere}`,
-  ))?.n)
-  const verifiedDirect = normalizeCount((await safeGet(
-    db,
-    `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE ${visibleDirectWhere}
-       AND link_status IN ('ok','redirect','verified')
-       AND last_verified_at IS NOT NULL`,
-  ))?.n)
-  const brokenDirect = normalizeCount((await safeGet(
-    db,
-    `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE ${visibleDirectWhere}
-       AND link_status = 'broken'`,
-  ))?.n)
-  const quarantinedBrokenDirect = normalizeCount((await safeGet(
-      db,
-      `SELECT COUNT(*) AS n FROM funding_opportunities
-       WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
-         AND link_status = 'broken'
-         AND COALESCE(status, 'active') = 'active'
-         AND (COALESCE(is_hidden, FALSE) = TRUE OR COALESCE(is_active, TRUE) = FALSE)`,
-    ))?.n)
-    const repairPendingBrokenDirect = normalizeCount((await safeGet(
-      db,
-      `SELECT COUNT(*) AS n FROM funding_opportunities
-       WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
-         AND link_status = 'broken' AND status = 'paused'`,
-    ))?.n)
-  const retiredBrokenDirect = normalizeCount((await safeGet(
-    db,
-    `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
-       AND link_status = 'skipped'
-       AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'`,
-  ))?.n)
-  const scheduledRetryBrokenDirect = normalizeCount((await safeGet(
-    db,
-    `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'direct') IN ${directKinds}
-       AND link_status = 'skipped' AND status = 'paused'
-       AND COALESCE(verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'`,
-  ))?.n)
+  // Pointer rows are excluded from the lifecycle denominator even when a
+  // legacy/null opportunity_kind would otherwise default to DIRECT.
   const totalDirectory = normalizeCount((await safeGet(
     db,
     `SELECT COUNT(*) AS n FROM funding_opportunities
-     WHERE COALESCE(opportunity_kind,'') IN ${directoryKinds}
+     WHERE (${pointerOpportunityRowSql()})
        AND COALESCE(is_active, TRUE) = TRUE
        AND COALESCE(is_hidden, FALSE) = FALSE`,
   ))?.n)
@@ -327,6 +364,15 @@ export async function buildMissionHealth(db) {
   const brokenPct = pct(brokenDirect, totalDirect)
 
   const alerts = []
+  if (!lifecyclePartitionReconciles) {
+    alerts.push({
+      level: 'warn',
+      code: 'link_lifecycle_partition_mismatch',
+      detail: lifecycleSnapshotAvailable
+        ? `Link lifecycle buckets total ${lifecyclePartitionTotal}, but the canonical denominator is ${catalogDirect}.`
+        : `Link lifecycle snapshot is unavailable: ${linkLifecycle.error}`,
+    })
+  }
   // ── Phase 10 integration metrics ────────────────────────────────────
   // Surface boolean integration flags so the dashboard can show
   // "service exists ✓ + integrated ✓" at a glance, and the audit can
@@ -537,8 +583,8 @@ export async function buildMissionHealth(db) {
       direct_opportunities_verified: verifiedDirect,
       direct_opportunities_broken: brokenDirect,
       quarantined_broken_direct_opportunities: quarantinedBrokenDirect,
-        repair_pending_broken_direct_opportunities: repairPendingBrokenDirect,
-        retired_broken_direct_opportunities: retiredBrokenDirect,
+      repair_pending_broken_direct_opportunities: repairPendingBrokenDirect,
+      retired_broken_direct_opportunities: retiredBrokenDirect,
       scheduled_retry_broken_direct_opportunities: scheduledRetryBrokenDirect,
       directory_opportunities_total: totalDirectory,
       placeholder_opportunities: placeholderCount,
@@ -546,8 +592,10 @@ export async function buildMissionHealth(db) {
     },
     rates: {
       verified_pct: verifiedPct,
+      verified_fresh_visible_pct: verifiedPct,
       broken_pct: brokenPct,
     },
+    link_lifecycle: linkLifecycle,
     coverage_by_source: normalizedCoverage,
     application_funnel: normalizedFunnel,
     integration,

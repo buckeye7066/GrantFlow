@@ -2,9 +2,9 @@
  * agentControl.js
  *
  * Frontend API client for the Admin Agent Control Center. Talks to
- * /api/admin/agent-control. Every endpoint requires the canonical
- * admin/operator session (buckeye7066@gmail.com) — non-admins receive
- * HTTP 403 from the backend, which the UI treats as "hide controls".
+ * /api/admin/agent-control. Capability discovery is available to an
+ * authenticated session; command and status endpoints require the configured,
+ * DB-resolved operator.
  */
 
 import { apiFetch } from '@/api/client'
@@ -30,6 +30,8 @@ function postJson(path, body) {
 }
 
 export const agentControlApi = {
+  capability: () => apiFetch(`${BASE}/capability`),
+  authorityAudit: () => apiFetch(`${BASE}/authority-audit`),
   status: () => apiFetch(`${BASE}/status`),
 
   listRuns: (params) => apiFetch(`${BASE}/runs${qs(params)}`),

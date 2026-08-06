@@ -110,7 +110,7 @@ export const GOLDEN_SCORING_PROFILES = Object.freeze([
 // stubs whose tiny denominators minted the "83% coverage for everyone" junk —
 // so their STRONG bands were passing on the very phantom math the floor
 // kills. Each fixture now mirrors the density of its real prod counterpart
-// (e.g. Vermilion Church = 19 points, Anastasia = 66) so the bands assert
+// (e.g. Vermilion Church = 19 points, Demo Student = 66) so the bands assert
 // HONEST calibrated behavior.
   // 3) CHURCH / FAITH-BASED ORG.
   {

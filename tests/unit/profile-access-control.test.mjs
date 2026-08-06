@@ -127,7 +127,7 @@ test('profile access: only owner + admin can access /api/profiles/:id', async ()
   try {
     const email1 = 'user1@grantflow.local'
     const email2 = 'user2@grantflow.local'
-    const adminEmail = 'buckeye7066@gmail.com'
+    const adminEmail = 'owner@example.invalid'
 
     const user1Id = '00000000-0000-0000-0000-00000000a001'
     const user2Id = '00000000-0000-0000-0000-00000000a002'
@@ -208,7 +208,7 @@ test('profile access: basic_information email grants access', async () => {
 
   try {
     const email1 = 'user1@grantflow.local'
-    const email2 = 'anastasia@grantflow.local'
+    const email2 = 'demo_stem_student@grantflow.local'
 
     const user1Id = '00000000-0000-0000-0000-00000000d001'
     const user2Id = '00000000-0000-0000-0000-00000000d002'
@@ -221,7 +221,7 @@ test('profile access: basic_information email grants access', async () => {
       INSERT INTO users (id, display_name, primary_email, is_admin)
       VALUES
         ('${user1Id}', 'User One', '${email1}', 0),
-        ('${user2Id}', 'Anastasia', '${email2}', 0);
+        ('${user2Id}', 'Demo Student', '${email2}', 0);
 
       INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
       VALUES
@@ -258,4 +258,3 @@ test('profile access: basic_information email grants access', async () => {
     await srv.stop()
   }
 })
-

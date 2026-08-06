@@ -10,6 +10,11 @@ import {
   isExpiredDeadline,
   maskSecrets,
 } from '../../backend/services/robert/robertSafety.js'
+import {
+  GOOD_MATCH_SCORE,
+  SCORE_SCALE_ID,
+  STRONG_MATCH_SCORE,
+} from '../../backend/config/matchThresholds.js'
 
 describe('robertSafety — defaults are SAFEST possible', () => {
   it('robert is disabled by default', () => {
@@ -30,6 +35,27 @@ describe('robertSafety — defaults are SAFEST possible', () => {
     delete process.env.ROBERT_MODE
     const cfg = getRobertConfig()
     assert.equal(cfg.mode, 'observe')
+  })
+
+  it('uses a stamped current-scale toast bar and translates a legacy env value', () => {
+    const previous = process.env.ROBERT_MIN_TOAST_MATCH_SCORE
+    try {
+      delete process.env.ROBERT_MIN_TOAST_MATCH_SCORE
+      const defaults = getRobertConfig()
+      assert.equal(defaults.minToastMatchScore, STRONG_MATCH_SCORE)
+      assert.equal(defaults.minToastMatchScoreScaleId, SCORE_SCALE_ID)
+      assert.equal(defaults.minToastMatchScoreTranslated, false)
+
+      process.env.ROBERT_MIN_TOAST_MATCH_SCORE = '70'
+      const legacy = getRobertConfig()
+      assert.equal(legacy.minToastMatchScoreConfigured, 70)
+      assert.equal(legacy.minToastMatchScore, GOOD_MATCH_SCORE)
+      assert.equal(legacy.minToastMatchScoreScaleId, SCORE_SCALE_ID)
+      assert.equal(legacy.minToastMatchScoreTranslated, true)
+    } finally {
+      if (previous === undefined) delete process.env.ROBERT_MIN_TOAST_MATCH_SCORE
+      else process.env.ROBERT_MIN_TOAST_MATCH_SCORE = previous
+    }
   })
 })
 

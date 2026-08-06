@@ -12,8 +12,29 @@
  */
 
 import { spawn } from 'node:child_process'
+import path from 'node:path'
 import process from 'node:process'
 import { buildIsolatedTestEnv } from './test-environment.mjs'
+
+const REQUIRED_NODE_VERSION = '20.20.2'
+
+function assertNode20Runtime() {
+  if (process.versions.node !== REQUIRED_NODE_VERSION) {
+    throw new Error(
+      `release gates require Node ${REQUIRED_NODE_VERSION}; received ${process.versions.node}`,
+    )
+  }
+  console.log(`[gate:node-runtime] ok (Node ${process.versions.node})`)
+}
+
+function pinCurrentNodeOnPath(sourceEnv) {
+  const pathKey = Object.keys(sourceEnv).find((key) => key.toLowerCase() === 'path') || 'PATH'
+  const currentPath = sourceEnv[pathKey] || ''
+  return {
+    ...sourceEnv,
+    [pathKey]: [path.dirname(process.execPath), currentPath].filter(Boolean).join(path.delimiter),
+  }
+}
 
 function npmBin() {
   // Prefer `npm` and let the platform resolve it (we enable `shell` on Windows below).
@@ -29,9 +50,13 @@ function run(cmd, args, { label, isolatedTest = false } = {}) {
     // Windows: `npm`/`.cmd` resolution can fail with shell: false depending on environment.
     // Run via shell on Windows to make this robust for local dev + CI.
     const useShell = process.platform === 'win32'
-    const env = isolatedTest
+    const baseEnv = isolatedTest
       ? buildIsolatedTestEnv(process.env, { GRANTFLOW_TEST_RUNNER: '1' })
       : process.env
+    // `npm run` and direct `node` children must use the exact runtime that
+    // passed the exact Node runtime guard, even when another version appears later
+    // on a workstation or CI runner's PATH.
+    const env = pinCurrentNodeOnPath(baseEnv)
     const child = spawn(cmd, args, { stdio: 'inherit', shell: useShell, env })
     child.on('error', reject)
     child.on('exit', (code) => {
@@ -54,6 +79,8 @@ function runVitest(args, label) {
 }
 
 async function main() {
+  assertNode20Runtime()
+
   // Gate 0: CI/workstation guard — ensure Rollup native optional dep is present (npm optional-deps can be flaky on Linux CI).
   await run('node', ['scripts/ensure-rollup-native.mjs'], { label: 'rollup-native' })
   await run('node', ['scripts/guard-corruption-hotspots.mjs'], { label: 'corruption-hotspots' })
@@ -84,6 +111,14 @@ async function main() {
   // their own isolation wrappers; the Vite production build still sees the
   // deployment build-time settings being validated by this exact run.
   await run(npmBin(), ['test'], { label: 'quality+build' })
+
+  // Gate 1a: the authoritative Crawler OS suite is intentionally outside the
+  // legacy Node/Vitest discovery globs, so it must be an explicit release gate.
+  await run(npmBin(), ['run', 'crawler-os:lint'], { label: 'crawler-os-lint' })
+  await run(npmBin(), ['run', 'crawler-os:test'], {
+    label: 'crawler-os-test',
+    isolatedTest: true,
+  })
 
   // Gate 2: contrast
   await runNodeTests(['tests/unit/ui-dashboard-contrast.test.mjs'], 'ui-contrast-dashboard')

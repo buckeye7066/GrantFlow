@@ -143,7 +143,7 @@ export const RE_PROCEDURAL_NOTICE_TITLE =
 // Senior/aging service programs (Area Agencies on Aging, eldercare locators,
 // senior centers). NOT an eligibility gate — a family/caregiver profile
 // legitimately reaches these for a household elder — but a young student with
-// no aging/caregiving signal must not see them ACCEPT at 75 (the Anastasia
+// no aging/caregiving signal must not see them ACCEPT at 75 (the Demo Student
 // class). matchEngine caps the score when the profile lacks any senior signal.
 // ---------------------------------------------------------------------------
 const SENIOR_PROGRAM_PATTERNS = [
@@ -252,7 +252,7 @@ const DISEASE_SPECIFIC_PATTERNS = [
   'cerebral palsy', 'muscular dystrophy', 'cystic fibrosis', 'sickle cell',
   'rare disease', 'rare disorder', 'specific diagnosis', 'diagnosed with',
   'living with this condition', 'condition-specific', 'disease-specific',
-  // 2026-08-03 (the Anastasia audit): the condition-specific block her bare
+  // 2026-08-03 (the Demo Student audit): the condition-specific block her bare
   // "Has disability" flag admitted — Brain Injury Association, Autism Speaks,
   // Arthritis Foundation, Amputee Coalition, Reeve Foundation (paralysis),
   // HLAA (hearing loss) — was invisible to this detection, so the engine's

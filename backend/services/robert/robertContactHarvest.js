@@ -2,12 +2,10 @@
  * robertContactHarvest.js — Robert harvests (name, email) contacts from the
  * owner's four mailboxes and hands them to YANA'S VERIFICATION LANE.
  *
- * Owner directive (2026-07-25): look through the owner's contacts and recent
- * emails in buckeye7066@gmail.com, firerookie_74@yahoo.com,
- * jwhiternmba@yahoo.com and dr.johnwhite@axiombiolabs.org; extract contacts
- * that have BOTH a name and an email address; send them to Yana for
- * verification; only Yana-VERIFIED contacts may reach John via the EXISTING
- * yana→john handoff (qualification → pushQualifiedToJohn → johnYanaBridge).
+ * Reads only the explicitly configured owner mailboxes, extracts contacts that
+ * have BOTH a name and an email address, and sends them to Yana for independent
+ * verification. Only Yana-VERIFIED contacts may reach John via the existing
+ * yana→john handoff.
  *
  * Hard rules (fail-closed everywhere):
  *   - Feature gate: ROBERT_CONTACT_HARVEST=true required (default OFF — this
@@ -36,11 +34,10 @@
  *   process.env.ROBERT_HARVEST_DAYS                     lookback window, days (default 90)
  *   process.env.ROBERT_HARVEST_MAX_MESSAGES             per-account message cap (default 200)
  *   process.env.ROBERT_HARVEST_MAX_CONTACTS             per-account address-book cap (default 500)
- *   process.env.ROBERT_GMAIL_APP_PASSWORD               buckeye7066@gmail.com IMAP app password
- *   process.env.ROBERT_YAHOO_FIREROOKIE74_APP_PASSWORD  firerookie_74@yahoo.com IMAP app password
- *   process.env.ROBERT_YAHOO_JWHITERNMBA_APP_PASSWORD   jwhiternmba@yahoo.com IMAP app password
- *   (axiombiolabs.org reuses MICROSOFT_TENANT_ID / MICROSOFT_CLIENT_ID /
- *    MICROSOFT_CLIENT_SECRET — John's existing Graph app credentials)
+ *   process.env.ROBERT_GMAIL_ACCOUNT / ROBERT_GMAIL_APP_PASSWORD
+ *   process.env.ROBERT_YAHOO_PRIMARY_ACCOUNT / ROBERT_YAHOO_PRIMARY_APP_PASSWORD
+ *   process.env.ROBERT_YAHOO_SECONDARY_ACCOUNT / ROBERT_YAHOO_SECONDARY_APP_PASSWORD
+ *   process.env.ROBERT_GRAPH_ACCOUNT (reuses MICROSOFT_* Graph credentials)
  */
 
 import crypto from 'node:crypto'

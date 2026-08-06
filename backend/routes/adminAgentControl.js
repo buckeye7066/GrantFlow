@@ -5,8 +5,7 @@
  * /api/admin/agent-control. Every route requires:
  *
  *   - a valid session (ensureAuth)
- *   - admin email exactly buckeye7066@gmail.com
- *     (or AGENT_CONTROL_ADMIN_EMAIL / ADMIN_EMAIL env override)
+ *   - the explicitly configured AGENT_CONTROL_ADMIN_EMAIL / ADMIN_EMAIL
  *
  * Non-admin callers receive HTTP 403. Every successful control action
  * is persisted to agent_control_events so the admin always has an
@@ -16,6 +15,7 @@
 import express from 'express'
 import { ensureAuth } from '../middleware/auth.js'
 import { createLogger } from '../utils/logger.js'
+import { ADMIN_EMAILS } from '../config/constants.js'
 import {
   ALL_AGENTS,
   RUN_TYPES,
@@ -24,6 +24,7 @@ import {
 import {
   cancelRun,
   emergencyStopRun,
+  authorizeControlCenterUser,
   getAgentDirective,
   getAgentStatus,
   getCanonicalAdminEmail,
@@ -80,25 +81,39 @@ const log = createLogger('route:agent-control')
 
 router.use(ensureAuth)
 
+// Capability discovery is available to authenticated callers so the admin UI
+// can hide controls without repeatedly probing a protected endpoint. It
+// reveals no configured email or operator identity.
+router.get('/capability', (req, res) => {
+  const authorizedUser = authorizeControlCenterUser(req.user, req.ctx)
+  return res.status(200).json({
+    ok: true,
+    can_control_agents: Boolean(authorizedUser && isControlCenterAdmin(authorizedUser)),
+  })
+})
+
 /**
  * Admin gate. Strict: only the canonical admin/operator
- * (buckeye7066@gmail.com or env override) may use any route under this
+ * from the deployed environment may use any route under this
  * router. We do not honour role-based fallbacks here on purpose —
  * Control Center actions are too dangerous for a vague allowlist.
  */
 function ensureCanonicalAdmin(req, res, next) {
-  if (!isControlCenterAdmin(req.user)) {
+  const authorizedUser = authorizeControlCenterUser(req.user, req.ctx)
+  if (!authorizedUser || !isControlCenterAdmin(authorizedUser)) {
     log.warn('rejected non-admin attempt', {
-      email: req.user?.email || null,
-      role: req.user?.role || null,
+      user_id: req.ctx?.userId || req.user?.userId || null,
+      identity_resolved: req.ctx?.identityResolved === true,
+      db_admin: req.ctx?.isAdmin === true,
       route: req.originalUrl,
     })
     return res.status(403).json({
       ok: false,
       error: 'agent_control_admin_only',
-      message: `Only ${getCanonicalAdminEmail()} may access the Agent Control Center.`,
+      message: 'This account is not authorized to access the Agent Control Center.',
     })
   }
+  req.user = authorizedUser
   return next()
 }
 
@@ -123,9 +138,76 @@ async function logAdminAction(req, action, data = {}) {
   } catch { /* best-effort */ }
 }
 
+async function adminAuthorityRoster(db) {
+  let rows
+  try {
+    rows = await db.prepare(`
+      SELECT
+        u.id AS user_id,
+        u.display_name,
+        u.primary_email,
+        COUNT(s.id) AS total_sessions,
+        COUNT(CASE
+          WHEN s.revoked_at IS NULL
+            AND (s.refresh_expires_at IS NULL OR s.refresh_expires_at > CURRENT_TIMESTAMP)
+          THEN 1
+          ELSE NULL
+        END) AS active_sessions
+      FROM users u
+      LEFT JOIN user_sessions s ON s.user_id = u.id
+      WHERE u.is_admin = TRUE
+      GROUP BY u.id, u.display_name, u.primary_email
+      ORDER BY LOWER(COALESCE(u.primary_email, '')), u.id
+    `).all()
+  } catch {
+    rows = await db.prepare(`
+      SELECT id AS user_id, display_name, primary_email,
+             0 AS total_sessions, 0 AS active_sessions
+      FROM users
+      WHERE is_admin = TRUE
+      ORDER BY LOWER(COALESCE(primary_email, '')), id
+    `).all()
+  }
+
+  const approvedEmails = new Set(
+    [...ADMIN_EMAILS, getCanonicalAdminEmail()]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean),
+  )
+  const admins = (rows || []).map((row) => {
+    const normalizedEmail = String(row.primary_email || '').trim().toLowerCase()
+    return {
+      user_id: row.user_id,
+      display_name: row.display_name || null,
+      primary_email: normalizedEmail || null,
+      configured: Boolean(normalizedEmail && approvedEmails.has(normalizedEmail)),
+      active_sessions: Number(row.active_sessions || 0),
+      total_sessions: Number(row.total_sessions || 0),
+    }
+  })
+  return {
+    admins,
+    admin_count: admins.length,
+    configured_admin_count: admins.filter((row) => row.configured).length,
+    unexpected_admin_count: admins.filter((row) => !row.configured).length,
+    active_session_count: admins.reduce((sum, row) => sum + row.active_sessions, 0),
+    requires_owner_review: admins.some((row) => !row.configured),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // READ endpoints
 // ---------------------------------------------------------------------------
+router.get('/authority-audit', asyncHandler(async (req, res) => {
+  const audit = await adminAuthorityRoster(req.db)
+  res.json({
+    ok: true,
+    read_only: true,
+    generated_at: new Date().toISOString(),
+    ...audit,
+  })
+}))
+
 router.get('/status', asyncHandler(async (req, res) => {
   const status = await getControlCenterStatus(req.db)
   const highlights = await getRunHighlights(req.db)

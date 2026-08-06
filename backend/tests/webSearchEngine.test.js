@@ -98,6 +98,12 @@ describe('searchWeb (DuckDuckGo fallback, no key)', () => {
     expect(results).toHaveLength(1)
     expect(results[0].url).toBe('https://bradleyfoundation.org/grants')
     expect(results[0].title).toBe('Bradley Foundation Grants')
+    expect(results.searchMeta).toMatchObject({
+      provider: 'duckduckgo',
+      provenance: 'live',
+      status: 'ok',
+      provider_mode: 'html_fallback',
+    })
     expect(makeBraveMock).not.toHaveBeenCalled() // no key → Brave never constructed
   })
 
@@ -105,6 +111,7 @@ describe('searchWeb (DuckDuckGo fallback, no key)', () => {
     getWithRetryMock.mockRejectedValue(new Error('timeout'))
     const results = await searchWeb('anything')
     expect(results).toEqual([])
+    expect(results.searchMeta).toMatchObject({ provider: 'duckduckgo', status: 'unavailable' })
   })
 
   it('returns [] for an empty query without hitting the network', async () => {
@@ -188,6 +195,12 @@ describe('searchWeb (SearXNG primary + provider chain)', () => {
     const results = await searchWeb('"Bradley County" scholarship')
     expect(makeSearxngMock).toHaveBeenCalled()
     expect(results.map((r) => r.url)).toEqual(['https://county.gov/scholarship'])
+    expect(results.searchMeta).toMatchObject({
+      provider: 'searxng',
+      provenance: 'live',
+      status: 'ok',
+      provider_mode: 'default_engines',
+    })
     expect(braveSearchFn).not.toHaveBeenCalled() // SearXNG satisfied it; no Brave
     expect(getWithRetryMock).not.toHaveBeenCalled() // and no DDG
   })
@@ -357,6 +370,14 @@ describe('the persistent SERP cache rung (nightly-load reducer, 2026-07-28)', ()
 
     const results = await searchWeb('"Bradley County" scholarship')
     expect(results).toEqual(HIT)
+    expect(results.searchMeta).toMatchObject({
+      provider: 'cache',
+      provenance: 'cache',
+      status: 'ok',
+      cache_age_ms: null,
+      cache_age_available: false,
+      reason: 'cache_age_not_exposed_by_cache_contract',
+    })
     expect(searxngSearchFn).not.toHaveBeenCalled()
     expect(braveSearchFn).not.toHaveBeenCalled()
     expect(getWithRetryMock).not.toHaveBeenCalled()
@@ -570,6 +591,12 @@ describe('the Google CSE rung (rung 0.5 — official API above SearXNG, 2026-08-
     expect(makeGoogleMock).toHaveBeenCalled()
     expect(tryConsumeGoogleMock).toHaveBeenCalledTimes(1)
     expect(results).toEqual(GOOGLE_HIT)
+    expect(results.searchMeta).toMatchObject({
+      provider: 'google_cse',
+      provenance: 'live',
+      status: 'ok',
+      provider_mode: 'official_api',
+    })
     expect(searxngSearchFn).not.toHaveBeenCalled()
     expect(getWithRetryMock).not.toHaveBeenCalled() // no DDG
     expect(cachePutMock).toHaveBeenCalledTimes(1)

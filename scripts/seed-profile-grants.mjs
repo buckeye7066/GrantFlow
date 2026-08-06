@@ -3,11 +3,8 @@
  * Seed Profile Grants
  * 
  * Seeds each profile with real grants evaluated by the canonical decision engine.
- * Adaptive candidate selection: if junk-filtered candidates ≤ 200, all are evaluated
- * canonically; if > 200, the top 200 by heuristic score are used as a generous ceiling.
- * Strategy: Stage 1 lightweight junk filter (heuristic >= 5) → Stage 2 canonical engine gate.
- * The local heuristic is only used to rank candidates before canonical evaluation,
- * NOT as an acceptance gate. computeMatchDecision() is the sole acceptance authority.
+ * Every loaded candidate is adjudicated before canonical ACCEPT rows are ranked
+ * and bounded. No heuristic score or secondary relevance filter participates.
  * Only uses verified real funding opportunities - no fakes.
  */
 
@@ -30,10 +27,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js';
 import {
   computeMatchDecision,
-  scoreOpportunity,
   normalizeProfile,
   normalizeOpportunity,
   computeProfileFingerprint,
@@ -45,44 +40,16 @@ import {
   getPlaceholderUrlSqlPatterns,
 } from '../backend/services/shared/opportunityPolicy.js';
 
-// Non-authoritative heuristic pre-score. Used ONLY as a junk filter and a
-// bounded ranking tool before the canonical engine runs. computeMatchDecision
-// is the sole acceptance/rejection authority below. Kept as a local alias so
-// the intent is unmistakable at each call site.
-const prefilterScoreOpportunity = scoreOpportunity;
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, '../backend/data/grantflow.db');
 
-console.log('=== Seed Profile Grants (80%+ Match) ===\n');
+console.log('=== Seed Profile Grants (canonical ACCEPT only) ===\n');
 console.log('Database:', DB_PATH);
 
 // Connect to database
 const db = new Database(DB_PATH);
-
-/**
- * Safely parse array fields that may be JSON arrays or comma-separated strings
- */
-function safeParseArrayField(value, fallback = []) {
-  if (!value) return fallback;
-  if (Array.isArray(value)) return value;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (trimmed.startsWith('[')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        return Array.isArray(parsed) ? parsed : fallback;
-      } catch {
-        // Fall through to comma-split
-      }
-    }
-    // Handle comma-separated strings
-    return trimmed.split(',').map(s => s.trim()).filter(Boolean);
-  }
-  return fallback;
-}
 
 // Load real opportunities from all data files
 function loadAllRealOpportunities() {
@@ -194,51 +161,11 @@ for (const profile of profiles) {
   // Get profile sections
   const sections = db.prepare('SELECT * FROM profile_sections WHERE profile_id = ?').all(profile.id);
 
-  // Build profileContext for canonical engine
-  const profileContext = { profile, sections };
-
   // Convert sections array to object format for canonical decision engine
   const sectionsObj = {};
   for (const row of sections) {
     try { sectionsObj[row.section_key] = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {}); } catch { sectionsObj[row.section_key] = {}; }
   }
-
-  // Fix: sections[].data is a JSON string — parse it before accessing .state
-  function parseSectionData(sections, key) {
-    const row = sections.find(s => s.section_key === key);
-    if (!row || !row.data) return {};
-    try { return typeof row.data === 'string' ? JSON.parse(row.data) : row.data; } catch { return {}; }
-  }
-  const locFocusData = parseSectionData(sections, 'location_focus');
-  const basicInfoData = parseSectionData(sections, 'basic_information');
-  const addr = basicInfoData.address;
-  let stateFromAddr = null;
-  if (typeof addr === 'string') {
-    stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
-  } else if (addr && typeof addr === 'object') {
-    stateFromAddr = addr.state || null;
-  }
-  const profileState = profile.state || locFocusData.state || basicInfoData.state || stateFromAddr || null;
-
-  // Build profileData for relevance filter
-  const demographicsData = parseSectionData(sections, 'demographics');
-  const militaryData = parseSectionData(sections, 'military_service');
-  const healthData = parseSectionData(sections, 'health_medical');
-  const familyData = parseSectionData(sections, 'family_life');
-  let parsedTags = [];
-  try { parsedTags = typeof profile.tags === 'string' ? JSON.parse(profile.tags) : (profile.tags || []); } catch { parsedTags = []; }
-  const profileData = {
-    primary_type: profile.primary_type || null,
-    veteran_status: militaryData.veteran || demographicsData.veteran_status || null,
-    immigrant_status: demographicsData.immigrant_status || null,
-    disability_status: healthData.disability_type || demographicsData.disability_status || null,
-    state: profileState,
-    tags: parsedTags,
-    gender: basicInfoData.gender || demographicsData.gender || null,
-    age: basicInfoData.age || demographicsData.age || null,
-    foster_youth: familyData.foster_youth || null,
-    first_responder: null,
-  };
   
   // Get or create organization for this profile
   let orgId = profile.organization_id;
@@ -261,84 +188,42 @@ for (const profile of profiles) {
     db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
   }
   
-  // Score all opportunities
-  const scoredOpps = [];
+  // Adjudicate the complete loaded set before ranking or applying the output
+  // bound. Canonical ACCEPT is the only automatic pipeline admission state.
+  const acceptedCandidates = [];
   for (const opp of allOpportunities) {
-    // Skip if requires matching funds
-    if (opp.requires_match) continue;
-    
-    // Non-authoritative heuristic pre-score (matchEngine.scoreOpportunity via
-    // the compat re-export). Used ONLY to strip garbage and to rank candidates;
-    // computeMatchDecision below is the sole acceptance authority.
-    const { score, reasons: matchReasons } = prefilterScoreOpportunity(profileContext, opp);
-
-    // Stage 1 (junk filter): only skip obviously irrelevant candidates (score < 5).
-    // The canonical decision engine (computeMatchDecision) is the final acceptance
-    // authority — this heuristic must NOT exclude plausible canonical matches.
-    if (score >= 5) {
-      // Apply relevance filter before adding to candidates
-      const oppForFilter = {
-        ...opp,
-        keywords: Array.isArray(opp.keywords) ? opp.keywords : (() => { try { return JSON.parse(opp.keywords || '[]'); } catch { return []; } })(),
-        categories: Array.isArray(opp.categories) ? opp.categories : (() => { try { return JSON.parse(opp.categories || '[]'); } catch { return []; } })(),
-      };
-      const filterResult = applyRelevanceFilter(oppForFilter, profileData);
-      if (!filterResult.pass) continue;
-
-      scoredOpps.push({
-        ...opp,
-        match_score: score,
-        match_reasons: matchReasons
-      });
+    try {
+      const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
+      if (decision.decision === 'ACCEPT') acceptedCandidates.push({ opp, decision });
+    } catch (error) {
+      console.warn(
+        `   Canonical adjudication failed for ${opp.id || opp.title || 'unknown'}:`,
+        error?.message || error,
+      );
     }
   }
-  
-  // ---------------------------------------------------------------------------
-  // Adaptive candidate selection — three-tier strategy:
-  //   1. Junk filter (heuristic < 5): removes clear garbage (applied above).
-  //   2. Adaptive cap (≤ ADAPTIVE_CANDIDATE_CAP pass through; > cap takes top N):
-  //      bounds worst-case canonical engine calls while ensuring no plausible
-  //      canonical match is excluded merely because it ranked below an old
-  //      hard-50 cutoff. In practice, most profiles have well under 200
-  //      junk-filtered candidates so the cap rarely activates.
-  //   3. Canonical engine (computeMatchDecision): sole acceptance authority.
-  // ---------------------------------------------------------------------------
-  const ADAPTIVE_CANDIDATE_CAP = 200;
-  let candidatePool;
-  if (scoredOpps.length <= ADAPTIVE_CANDIDATE_CAP) {
-    // Evaluate ALL junk-filtered candidates — no cap needed.
-    candidatePool = scoredOpps;
-  } else {
-    // More than the cap: sort by heuristic and take the top N.
-    // A ceiling of 200 is generous enough that missing a strong canonical
-    // match is virtually impossible while keeping performance bounded.
-    scoredOpps.sort((a, b) => b.match_score - a.match_score);
-    candidatePool = scoredOpps.slice(0, ADAPTIVE_CANDIDATE_CAP);
-  }
-
-  const passingCount = scoredOpps.length <= ADAPTIVE_CANDIDATE_CAP
-    ? `all ${scoredOpps.length}`
-    : `top ${ADAPTIVE_CANDIDATE_CAP} of ${scoredOpps.length}`;
-  console.log(`   Found ${scoredOpps.length} heuristic candidates (junk-filtered), passing ${passingCount} to canonical engine...`);
+  const candidatePool = acceptedCandidates
+    .sort((a, b) => Number(b.decision.score || 0) - Number(a.decision.score || 0))
+    .slice(0, 200);
+  console.log(
+    `   Canonically adjudicated ${allOpportunities.length} candidates; ` +
+    `${acceptedCandidates.length} ACCEPT; seeding top ${candidatePool.length}`,
+  );
 
   let addedForProfile = 0;
-  for (const opp of candidatePool) {
+  const profileFingerprint = _hasDecisionCols
+    ? computeProfileFingerprint(normalizeProfile(profile, sectionsObj)) ?? null
+    : null;
+  for (const { opp, decision } of candidatePool) {
     // Check if already exists for this profile
     const existing = checkExisting.get(profile.id, opp.title);
     if (existing) continue;
-
-    // --- CANONICAL DECISION ENGINE: final acceptance authority ---
-    const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
-
-    // Hard reject: never insert into profile pipeline
-    if (decision.decision === 'REJECT') continue;
 
     // Use canonical score as the stored match score
     const finalScore = decision.score;
 
     try {
       if (_hasDecisionCols) {
-        const profileFingerprint = computeProfileFingerprint(normalizeProfile(profile, sectionsObj)) ?? null;
         const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(opp)) ?? null;
         insertGrant.run(
           crypto.randomUUID(),
@@ -360,7 +245,7 @@ for (const profile of profiles) {
           JSON.stringify(decision.ineligibilityReasons ?? []),
           profileFingerprint,
           opportunityFingerprint,
-          MATCHER_VERSION,
+          decision.matcherVersion ?? MATCHER_VERSION,
           decision.evaluatedAt ?? new Date().toISOString(),
           decision.confidence ?? null,
         );

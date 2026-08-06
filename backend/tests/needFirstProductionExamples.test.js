@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateNeedFirstMatchPolicy } from '../services/matching/needFirstMatchPolicy.js'
 
-const anastasiaContext = {
-  profile: { id: 'anastasia', primary_type: 'student' },
+const demoStudentContext = {
+  profile: { id: 'demo_stem_student', primary_type: 'student' },
   sections: {
     education: {
       intended_major: 'Forensic Science',
@@ -18,7 +18,7 @@ const anastasiaContext = {
   },
 }
 
-const anastasiaNorm = {
+const demoStudentNorm = {
   isStudent: true,
   entityType: 'student',
   education: { intendedMajor: 'Forensic Science' },
@@ -29,8 +29,8 @@ const anastasiaNorm = {
 
 function policyFor(opportunity, points = []) {
   return evaluateNeedFirstMatchPolicy({
-    profileContext: anastasiaContext,
-    profileNorm: anastasiaNorm,
+    profileContext: demoStudentContext,
+    profileNorm: demoStudentNorm,
     opportunity,
     dataPointEval: { matched: points, credit: points.length },
     matchedNeeds: ['education'],

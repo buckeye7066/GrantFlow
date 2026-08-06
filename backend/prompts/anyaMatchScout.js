@@ -16,6 +16,13 @@
  * back to the deterministic scoring if the AI output is malformed.
  */
 
+import {
+  ACCEPT_SCORE,
+  DEFAULT_MIN_SCORE,
+  SCORE_SCALE_ID,
+  STRONG_MATCH_SCORE,
+} from '../config/matchThresholds.js'
+
 export function buildAnyaMatchScoutPrompt({
   profile,
   profileSections,
@@ -57,7 +64,7 @@ ${JSON.stringify(candidateOpportunities || [], null, 2)}
 
 Your tasks:
 
-1. Identify funding opportunities with a true match score of 85% or higher.
+1. Use the canonical matcher output already attached to each candidate. Recommend only candidates whose canonical match_decision is ACCEPT and whose existing match_score is at least ${STRONG_MATCH_SCORE}. Never calculate a replacement score or eligibility verdict.
 2. Exclude anything already in the user's pipeline.
 3. Exclude anything the user previously dismissed unless the opportunity has materially changed.
 4. Exclude expired, loan-only, fake, placeholder, or untrustworthy opportunities.
@@ -80,7 +87,7 @@ Return ONLY valid JSON in this exact structure:
       "opportunity_id": "string or null",
       "title": "string",
       "funder": "string or null",
-      "match_score": 85,
+      "match_score": ${STRONG_MATCH_SCORE},
       "confidence": 0.0,
       "matched_needs": ["need key or phrase"],
       "plain_english_reason": "One or two sentences explaining why this is a strong fit.",
@@ -110,7 +117,7 @@ Return ONLY valid JSON in this exact structure:
       "search_terms": ["short phrase"],
       "grantflow_route": "DiscoverGrants",
       "recommended_filters": {
-        "min_score": 70,
+        "min_score": ${DEFAULT_MIN_SCORE},
         "category": "string or null",
         "state_first": true
       }
@@ -127,7 +134,10 @@ Return ONLY valid JSON in this exact structure:
 }
 
 Rules:
-- Only include a high_confidence_match when the score is 85 or higher.
+- The canonical matcher decision is the sole ACCEPT/REVIEW/REJECT authority. Its current ACCEPT score bar begins at ${ACCEPT_SCORE}, but never infer ACCEPT from a number alone; copy the candidate's existing match_decision.
+- match_score uses GrantFlow's ${SCORE_SCALE_ID} data-point evidence scale. It is not a qualification percentage, award probability, or confidence value. Copy the existing score exactly.
+- The high_confidence_matches key is retained for API compatibility. Include an item there only when match_decision is ACCEPT and match_score is at least the current scout strong-match bar (${STRONG_MATCH_SCORE}).
+- confidence is separate metadata about source/actionability certainty. Never use it to rewrite match_score or match_decision.
 - Never say a user qualifies with certainty. Say "looks like a strong fit" or "may be worth reviewing."
 - Never pressure the user.
 - Never make up deadlines, amounts, eligibility rules, URLs, or funder names.

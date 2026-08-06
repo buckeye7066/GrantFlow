@@ -1,20 +1,17 @@
 /**
  * PortalSessionsCard
  *
- * Management surface for the saved portal sessions Hamilton reuses — the
+ * Management surface for saved portal-session records — the
  * AES-256-GCM-encrypted Playwright storageStates the owner captured by logging
  * in + clearing 2FA once. Lists each saved session for a profile (host, label,
  * status, expiry with a "expires in N days" / "expired" cue, last used) and
- * lets the owner revoke any of them so Hamilton can no longer act inside that
- * account.
+ * lets the owner revoke them. Controlled beta does not replay these sessions
+ * against real portal domains.
  *
  * Data:    GET  /api/hamilton/automation/sessions?profileId=...
  * Revoke:  POST /api/hamilton/automation/sessions/:id/revoke
- * Capture: a "Set up a new session" helper mints a short-lived capture token
- *          (POST /api/hamilton/automation/sessions/capture-token) and renders a
- *          ready-to-run `node tools/hamilton-session-capture/capture.mjs ...`
- *          command pre-filled with the profileId — no copying a bearer token
- *          out of DevTools.
+ * Capture: the owner signs in through the profile-scoped cloud-login flow.
+ *          GrantFlow never exports the browser access token into a command.
  */
 
 import React, { useState } from "react"
@@ -22,7 +19,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   listPortalSessions,
   revokePortalSession,
-  getPortalSessionCaptureToken,
   getCloudLoginStatus,
   startCloudLogin,
   suggestPortalLogin,
@@ -34,7 +30,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/use-toast"
 import { showSuccessToast, showErrorToast } from "@/components/shared/toastHelpers"
-import { KeyRound, Loader2, ShieldCheck, ShieldX, Clock, Copy, Plus, X, Smartphone, Globe, Info, Wand2, Sparkles } from "lucide-react"
+import { KeyRound, Loader2, ShieldCheck, ShieldX, Clock, Plus, X, Smartphone, Globe, Info, Wand2, Sparkles } from "lucide-react"
 
 const DAY_MS = 86_400_000
 
@@ -66,30 +62,6 @@ function formatWhen(iso) {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
 }
 
-function buildCaptureCommand({ apiBase, token, profileId }) {
-  const base = apiBase || "https://grantflow-production.up.railway.app"
-  const tok = token || "<your GrantFlow access token>"
-  return [
-    "node tools/hamilton-session-capture/capture.mjs \\",
-    `  --api-base ${base} \\`,
-    `  --token ${tok} \\`,
-    `  --profile-id ${profileId} \\`,
-    "  --portal-host school.edu \\",
-    "  --login-url https://login.microsoftonline.com/ \\",
-    '  --label "School SSO" --expires-days 14',
-  ].join("\n")
-}
-
-function buildOutModeCommand(profileId) {
-  return [
-    "node tools/hamilton-session-capture/capture.mjs \\",
-    `  --profile-id ${profileId} \\`,
-    "  --portal-host school.edu \\",
-    "  --login-url https://login.microsoftonline.com/ \\",
-    "  --out session.json",
-  ].join("\n")
-}
-
 export default function PortalSessionsCard({ profileId }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -112,13 +84,6 @@ export default function PortalSessionsCard({ profileId }) {
     },
     onError: (err) => {
       showErrorToast(toast, "Could not revoke session", err?.message || "Please try again.")
-    },
-  })
-
-  const tokenMutation = useMutation({
-    mutationFn: () => getPortalSessionCaptureToken(profileId),
-    onError: (err) => {
-      showErrorToast(toast, "Could not generate a capture token", err?.message || "Please try again.")
     },
   })
 
@@ -225,25 +190,9 @@ export default function PortalSessionsCard({ profileId }) {
     cloudStartMutation.mutate({ popup })
   }
 
-  const handleCopy = (text, what) => {
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text)
-        .then(() => showSuccessToast(toast, "Copied", `${what} copied to your clipboard.`))
-        .catch(() => showErrorToast(toast, "Copy failed", "Select and copy the text manually."))
-    }
-  }
-
   const handleOpenSetup = () => {
-    const next = !setupOpen
-    setSetupOpen(next)
-    if (next && !tokenMutation.data && !tokenMutation.isPending) tokenMutation.mutate()
+    setSetupOpen((current) => !current)
   }
-
-  const captureCommand = buildCaptureCommand({
-    apiBase: tokenMutation.data?.api_base,
-    token: tokenMutation.data?.token,
-    profileId,
-  })
 
   return (
     <Card>
@@ -254,13 +203,13 @@ export default function PortalSessionsCard({ profileId }) {
               <KeyRound className="h-4 w-4" /> Saved portal sessions
             </CardTitle>
             <CardDescription>
-              Encrypted logins Hamilton reuses to act inside your real portal accounts. You capture
-              one by logging in + clearing 2FA once; Hamilton never sees your password.
+              Review or revoke encrypted session records. Controlled beta does not open or automate
+              real portal accounts; portal login, review, and final submission stay in your browser.
             </CardDescription>
           </div>
           <Button size="sm" variant="outline" onClick={handleOpenSetup}>
             {setupOpen ? <X className="h-4 w-4 mr-1.5" /> : <Plus className="h-4 w-4 mr-1.5" />}
-            {setupOpen ? "Close" : "Set up a new session"}
+            {setupOpen ? "Close" : "Session safety"}
           </Button>
         </div>
       </CardHeader>
@@ -275,7 +224,7 @@ export default function PortalSessionsCard({ profileId }) {
               </p>
               <ul className="list-disc pl-5 space-y-1">
                 <li><strong>What:</strong> captures the logged-in session (cookies) <em>after</em> you finish signing in — never your password or your 2FA code.</li>
-                <li><strong>Why:</strong> lets Hamilton act inside this portal for you later (e.g. submit an application) without making you log in or approve 2FA every time.</li>
+                <li><strong>Why retained:</strong> existing encrypted records remain revocable and may support a future reviewed adapter. They are not replayed against real portals in controlled beta.</li>
                 <li><strong>Scope:</strong> the session is tied to <strong>this profile only</strong> and reused only for this profile’s work. You can revoke it anytime below.</li>
               </ul>
             </div>
@@ -309,8 +258,14 @@ export default function PortalSessionsCard({ profileId }) {
                     </Button>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <Input placeholder="Portal host (optional — Hamilton knows it)" value={portalHost} onChange={(e) => setPortalHost(e.target.value)} />
-                    <Input placeholder="Login URL (optional)" value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)} />
+                    <div className="space-y-1">
+                      <label htmlFor="hamilton-portal-host" className="text-xs font-medium">Portal host</label>
+                      <Input id="hamilton-portal-host" placeholder="Optional — Hamilton may know it" value={portalHost} onChange={(e) => setPortalHost(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <label htmlFor="hamilton-login-url" className="text-xs font-medium">Login URL</label>
+                      <Input id="hamilton-login-url" placeholder="Optional" value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)} />
+                    </div>
                   </div>
                   {cloudFilledByHamilton && (
                     <p className="text-xs text-indigo-700 flex items-center gap-1">
@@ -341,8 +296,9 @@ export default function PortalSessionsCard({ profileId }) {
                 </>
               ) : (
                 <p>
-                  In-app cloud login isn’t enabled on this deployment yet. Use <strong>Saved Login</strong>
-                  {" "}below (works on any phone or computer), or an admin can capture a session from a computer.
+                  Controlled beta intentionally disables in-app browser login on real portal domains.
+                  Open the official portal in your own browser; login, required checks, review, and final
+                  submission remain your manual handoff.
                 </p>
               )}
             </div>
@@ -353,55 +309,14 @@ export default function PortalSessionsCard({ profileId }) {
                 <KeyRound className="h-4 w-4" /> Or save your login (works on any device)
               </p>
               <p>
-                Enter your portal username + password (and an authenticator/2FA secret if you have one)
-                in <strong>Saved Logins</strong>. Hamilton signs in for you each run. For portals that send
-                a “tap to approve” 2FA push, Hamilton will notify you to approve it when it runs.
+                Existing <strong>Saved Logins</strong> can be reviewed or revoked, but they do not enable
+                real-domain browser automation in controlled beta. Open the official portal yourself.
               </p>
             </div>
 
-            {/* Advanced / owner: capture from a computer via the CLI tool. */}
-            <details className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
-              <summary className="cursor-pointer font-medium">Advanced: capture from a computer (owner)</summary>
-              <p className="mt-2">
-              Run this in the GrantFlow repo. A browser window opens — log in and clear 2FA, then
-              return to the terminal and press Enter. The session uploads encrypted and Hamilton
-              reuses it.
-            </p>
-            {tokenMutation.isPending && (
-              <p className="flex items-center gap-1.5 text-sky-700">
-                <Loader2 className="h-4 w-4 animate-spin" /> Generating a one-click capture token…
-              </p>
-            )}
-            <div className="relative">
-              <pre className="overflow-x-auto rounded-md bg-slate-900 p-3 pr-10 text-xs text-slate-100">
-                {captureCommand}
-              </pre>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="absolute right-1.5 top-1.5 h-7 w-7 text-slate-300 hover:text-white"
-                onClick={() => handleCopy(captureCommand, "Capture command")}
-                title="Copy command"
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </Button>
+            <div role="note" className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
+              GrantFlow does not place your access token in copyable setup commands. Real-portal server browsing is disabled in controlled beta; use the portal&rsquo;s official site directly.
             </div>
-            {!tokenMutation.data && !tokenMutation.isPending && (
-              <Button size="sm" variant="secondary" onClick={() => tokenMutation.mutate()}>
-                Generate a one-click token
-              </Button>
-            )}
-            <details className="text-xs text-sky-800">
-              <summary className="cursor-pointer font-medium">No token? Use file mode instead</summary>
-              <p className="mt-2">
-                Pass <code>--out session.json</code> to write the captured session to a local file
-                (no token needed), then hand the file to Hamilton to import:
-              </p>
-              <pre className="mt-2 overflow-x-auto rounded-md bg-slate-900 p-3 text-xs text-slate-100">
-                {buildOutModeCommand(profileId)}
-              </pre>
-            </details>
-            </details>
           </div>
         )}
 
@@ -420,10 +335,7 @@ export default function PortalSessionsCard({ profileId }) {
             <ShieldX className="mx-auto h-6 w-6 text-muted-foreground" />
             <p className="mt-2 text-sm font-medium">No saved sessions yet</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Capture one so Hamilton can act inside your real portal account. Run{" "}
-              <code>tools/hamilton-session-capture/capture.mjs</code> with{" "}
-              <code>--out session.json</code> (file mode, no token), or click{" "}
-              <span className="font-medium">Set up a new session</span> above for a one-click command.
+              No saved sessions are present. Controlled beta keeps real-portal login, review, and final Submit in your own browser.
             </p>
           </div>
         )}

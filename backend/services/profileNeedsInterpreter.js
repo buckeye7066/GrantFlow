@@ -19,7 +19,11 @@
  *         searchTerms: ['housing assistance', 'rent relief', ...],
  *         grantflowSearch: {
  *           route: 'DiscoverGrants',
- *           filters: { category: 'housing', minScore: 70 }
+ *           filters: {
+ *             category: 'housing',
+ *             minScore: DEFAULT_MIN_SCORE,
+ *             score_scale_id: SCORE_SCALE_ID
+ *           }
  *         },
  *         evidence: ['housing section present', 'tag:rent_help', ...]
  *       },
@@ -39,6 +43,7 @@
  */
 
 import { safeParseJSON } from '../utils/safeJson.js'
+import { DEFAULT_MIN_SCORE, SCORE_SCALE_ID } from '../config/matchThresholds.js'
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -110,6 +115,14 @@ function pushNeed(needs, def, evidence) {
   needs.push({ ...def, evidence: evidence ? [evidence] : [] })
 }
 
+function discoveryFilters(overrides = {}) {
+  return {
+    ...overrides,
+    minScore: DEFAULT_MIN_SCORE,
+    score_scale_id: SCORE_SCALE_ID,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Need catalog
 // ---------------------------------------------------------------------------
@@ -132,7 +145,7 @@ const NEED_HOUSING = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'housing', minScore: 70 },
+    filters: discoveryFilters({ category: 'housing' }),
   },
 }
 
@@ -147,7 +160,7 @@ const NEED_HEALTH = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'medical', minScore: 70 },
+    filters: discoveryFilters({ category: 'medical' }),
   },
 }
 
@@ -162,7 +175,7 @@ const NEED_DISABILITY = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'disability', minScore: 70 },
+    filters: discoveryFilters({ category: 'disability' }),
   },
 }
 
@@ -177,7 +190,7 @@ const NEED_STUDENT = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'education', minScore: 70 },
+    filters: discoveryFilters({ category: 'education' }),
   },
 }
 
@@ -192,7 +205,7 @@ const NEED_EMPLOYMENT = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'employment', minScore: 70 },
+    filters: discoveryFilters({ category: 'employment' }),
   },
 }
 
@@ -207,7 +220,7 @@ const NEED_BUSINESS = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'business', minScore: 70 },
+    filters: discoveryFilters({ category: 'business' }),
   },
 }
 
@@ -222,7 +235,7 @@ const NEED_NONPROFIT = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'nonprofit', minScore: 70 },
+    filters: discoveryFilters({ category: 'nonprofit' }),
   },
 }
 
@@ -237,7 +250,7 @@ const NEED_FAMILY = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'family', minScore: 70 },
+    filters: discoveryFilters({ category: 'family' }),
   },
 }
 
@@ -252,7 +265,7 @@ const NEED_MILITARY = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { category: 'military', minScore: 70 },
+    filters: discoveryFilters({ category: 'military' }),
   },
 }
 
@@ -267,7 +280,7 @@ const NEED_EMERGENCY = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { urgent: true, minScore: 60 },
+    filters: discoveryFilters({ urgent: true }),
   },
 }
 
@@ -282,7 +295,7 @@ const NEED_LOCAL = {
   ],
   grantflowSearch: {
     route: 'DiscoverGrants',
-    filters: { geography_first: true, minScore: 65 },
+    filters: discoveryFilters({ geography_first: true }),
   },
 }
 
@@ -496,7 +509,7 @@ export function interpretProfileNeeds({ profile, sections, signals = null } = {}
       searchQuery: need.searchTerms.slice(0, 4).join(' '),
       searchTerms: need.searchTerms,
       grantflowRoute: need.grantflowSearch?.route || 'DiscoverGrants',
-      recommendedFilters: need.grantflowSearch?.filters || { minScore: 70 },
+      recommendedFilters: need.grantflowSearch?.filters || discoveryFilters(),
     })
   }
 

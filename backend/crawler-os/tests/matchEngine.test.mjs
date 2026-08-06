@@ -16,7 +16,7 @@ const thesis = buildThesis(SAMPLE_VFD_PROFILE);
 // ACCEPT decisions) require a real data-point inventory
 // (MIN_CALIBRATED_INVENTORY); a bare thesis stub is capped at the topical
 // bound so broad directories can never read as "Excellent Match" for every
-// profile again (the identical Anita/Anastasia junk-lists class). Person
+// profile again (the identical Anita/Demo Student junk-lists class). Person
 // profiles mine sections into rich signal inventories (real prod profiles
 // measure 19-66+ through this same path), so the calibrated-path fixtures
 // below use a student.
@@ -98,7 +98,7 @@ test('a strong, well-matched grant ACCEPTs with a high score (full profile conte
 });
 
 test('a context-less thesis stub can never mint a calibrated ACCEPT (topical cap)', () => {
-  // The exact class behind the identical Anita/Anastasia junk lists: a stub
+  // The exact class behind the identical Anita/Demo Student junk lists: a stub
   // inventory of ~6 points made every broad row "cover" 50-100% of every
   // profile. Without context the same strong grant stays reachable but
   // bounded — and can never claim the calibrated coverage sentence.

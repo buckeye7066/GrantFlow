@@ -2,7 +2,7 @@
  * profileGapInterview.js — the backend for Anya's opening interview + the login
  * gap gate + the gap-explanation email.
  *
- * The problem this closes: an empty/under-filled profile (e.g. Kathy Daniel, who
+ * The problem this closes: an empty/under-filled profile (e.g. Demo Basic Needs Persona, who
  * had only a name and phone) cannot be matched to real funding no matter how good
  * the crawlers are — there is nothing to match on. So on login, when a profile has
  * gaps, Anya must ASK for the missing pieces and the owner must get an email

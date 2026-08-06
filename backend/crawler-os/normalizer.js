@@ -78,6 +78,10 @@ export function normalize(candidate, verdict, ctx = {}) {
       content_hash: evidence.content_hash ?? null,
       fetched_at: evidence.fetched_at ?? null,
     },
+    eligibility_text: candidate.eligibility_text ?? null,
+    eligibility_bullets: candidate.eligibility_bullets ?? [],
+    page_fact_schema_version: candidate.page_fact_schema_version ?? null,
+    field_provenance: candidate.field_provenance ?? null,
     raw: candidate.raw ?? null,
   });
 }

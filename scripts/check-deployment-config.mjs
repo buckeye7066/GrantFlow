@@ -57,6 +57,8 @@ const dockerignore = readText('.dockerignore')
 const envGenerator = readText('scripts/generate-env-examples.mjs')
 const healthRoutes = readText('backend/routes/health.js')
 const nvmrc = readText('.nvmrc').trim()
+const nodeRuntimeVersion = '20.20.2'
+const nodeEngineRange = '>=20.19.0 <21'
 
 const railwayApi = 'https://grantflow-production.up.railway.app/api/:path*'
 const railwayUploads = 'https://grantflow-production.up.railway.app/uploads/:path*'
@@ -193,10 +195,13 @@ assert(Number(railway?.deploy?.healthcheckTimeout || 0) >= 120, 'Railway healthc
 assert(railway?.deploy?.restartPolicyType === 'ALWAYS', 'Railway restart policy must stay ALWAYS')
 assert(Number(railway?.deploy?.restartPolicyMaxRetries || 0) >= 3, 'Railway restart retries must be configured')
 
-assert(pkg?.engines?.node === '20.x', 'package.json must pin the production runtime to Node 20.x')
+assert(pkg?.engines?.node === nodeEngineRange, `package.json must require the supported Node range ${nodeEngineRange}`)
 assert(lock?.packages?.['']?.engines?.node === pkg?.engines?.node, 'package-lock root engine must match package.json')
-assert(nvmrc === '20', '.nvmrc must remain pinned to Node 20')
-assert((dockerfile.match(/FROM node:20-slim/g) || []).length === 2, 'both Docker build and runtime stages must use Node 20')
+assert(nvmrc === nodeRuntimeVersion, `.nvmrc must pin the verified Node runtime ${nodeRuntimeVersion}`)
+assert(
+  (dockerfile.match(new RegExp(`FROM node:${nodeRuntimeVersion.replace(/\./g, '\\.')}\\-slim`, 'g')) || []).length === 2,
+  `both Docker build and runtime stages must use Node ${nodeRuntimeVersion}`,
+)
 
 if (failures.length) {
   console.error('[deployment-config] FAIL')

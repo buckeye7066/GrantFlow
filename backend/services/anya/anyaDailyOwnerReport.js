@@ -35,7 +35,7 @@ export function isAnyaDailyReportEnabled() {
 
 function recipient() {
   const v = (process.env.ANYA_DAILY_REPORT_EMAIL || ADMIN_EMAIL || '').trim()
-  return v || 'buckeye7066@gmail.com'
+  return v || null
 }
 
 /**
@@ -887,6 +887,7 @@ export async function runAnyaDailyOwnerReport(db, {
     const agentMesh = await loadAgentMesh(db, { now }).catch(() => null)
     const { subject, html, text, stats } = buildOwnerReport(run || {}, { now, amy, gaps, parity, research, eva, agentMesh, samUnavailable })
     const to = recipient()
+    if (!to) return { ran: true, sent: false, reason: 'owner_email_not_configured', run_id: run?.id || null }
     const res = await send({ to, subject, html, text })
     if (res?.ok) {
       log.info('daily owner report sent', { to, run_id: run?.id || null, sam_unavailable: samUnavailable, ...stats })

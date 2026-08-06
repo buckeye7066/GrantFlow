@@ -6,14 +6,16 @@
 # agent rule lands changes directly on main and the PR-based workflow
 # is reserved for non-fix work.
 #
-# Mission rule: "There is only one GrantFlow admin/operator:
-# buckeye7066@gmail.com." Routing every code review to that account
-# keeps the chain of custody simple and matches existing alerting.
+# Routing every code review to the repository owner keeps the chain of
+# custody simple without publishing a private operator mailbox.
 
 * @buckeye7066
 
 # High-blast-radius areas: same owner, but called out so a future
 # multi-owner setup can split these without re-discovering them.
+
+# Repository automation and review policy
+/.github/                               @buckeye7066
 
 # Boot, schema, migration, mission-control orchestration
 /backend/server.js                       @buckeye7066

@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import {
   computeMatchDecision,
@@ -151,4 +152,26 @@ test('specific housing opportunity still returns a strong aligned result', () =>
     `Expected matched housing/utilities needs, got ${result.matchedNeeds.join(', ')}`,
   )
   assert.ok(['ACCEPT', 'REVIEW'].includes(result.decision))
+})
+
+test('live discovery surfaces do not re-admit records with retired browser thresholds', () => {
+  const fundingResults = readFileSync(
+    new URL('../../src/pages/FundingResults.jsx', import.meta.url),
+    'utf8',
+  )
+  const discoverGrants = readFileSync(
+    new URL('../../src/pages/DiscoverGrants.jsx', import.meta.url),
+    'utf8',
+  )
+  const discoveryHelpers = readFileSync(
+    new URL('../../src/components/discovery/discoveryHelpers.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(fundingResults, /canonicalMatchDisplay/)
+  assert.match(fundingResults, /display\.decision === ['"]ACCEPT['"]/)
+  assert.doesNotMatch(fundingResults, /match_score\s*(?:>=|>)\s*70/)
+  assert.match(discoverGrants, /match_decision\s*\?\?\s*opp\.decision/)
+  assert.match(discoverGrants, /canonicalDecision === ['"]ACCEPT['"]/)
+  assert.doesNotMatch(discoveryHelpers, /below_80|matchScore\s*<\s*80/)
 })

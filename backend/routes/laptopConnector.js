@@ -40,6 +40,7 @@ import {
   markReviewItem,
 } from '../services/laptopConnector/laptopConnectorStore.js'
 import { analyzeText, buildProfilesDigest, redactSecrets } from '../services/laptopConnector/laptopAnalyzer.js'
+import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 
 const log = createLogger('route:laptop-connector')
 const router = express.Router()
@@ -393,20 +394,27 @@ async function acceptProfileField(req, item) {
   }
   const merged = { ...existing, [field]: value }
 
-  const host = req.get('host')
-  if (!host) return { ok: false, status: 500, message: 'cannot resolve internal host' }
-  const base = (process.env.ANYA_SELF_BASE_URL || `${req.protocol || 'http'}://${host}`).replace(/\/+$/, '')
+  const internalBase = resolveInternalSelfBaseUrl()
+  if (!internalBase.ok) {
+    log.error('[laptop-connector] invalid internal base URL', { reason: internalBase.reason })
+    return { ok: false, status: 503, message: 'internal profile forward unavailable' }
+  }
+  const base = internalBase.baseUrl
   const headers = {
     'content-type': 'application/json',
     ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
     ...(req.headers.cookie ? { cookie: req.headers.cookie } : {}),
     'x-laptop-connector': 'profile-field-accept',
   }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15_000)
   try {
     const r = await fetch(`${base}/api/profiles/${encodeURIComponent(profileId)}/sections/${encodeURIComponent(sectionKey)}`, {
       method: 'PUT',
       headers,
       body: JSON.stringify({ data: merged, updated_by: 'laptop-connector' }),
+      redirect: 'error',
+      signal: controller.signal,
     })
     if (!r.ok) {
       let body = null
@@ -420,6 +428,8 @@ async function acceptProfileField(req, item) {
     return { ok: true, routed_to: 'profile', target_id: profileId, section_key: sectionKey, field }
   } catch (err) {
     return { ok: false, status: 502, message: `profile forward failed: ${err?.message}` }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 

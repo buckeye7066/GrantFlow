@@ -16,10 +16,9 @@ import {
   disableAutonomousUnlock,
 } from "@/api/hamilton"
 
-// One profile-level consent = "sign in with my saved logins and prepare my
-// applications on every portal." Granted at scope:'profile' so it covers every
-// funding source without per-portal authorizing. Submitting is a SEPARATE,
-// explicit opt-in below (kept distinct so consent stays informed).
+// Profile-level consent covers saved-login draft preparation only. Real-portal
+// final Submit remains a visible human handoff. A retired submit grant may still
+// be shown so the owner can revoke it, but this surface never creates one.
 const LOGIN_TYPES = [
   "use_saved_credentials_reference",
   "use_saved_session",
@@ -99,7 +98,7 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
         title: vars.enable ? "Autonomous sign-in on" : "Autonomous sign-in off",
         description: vars.enable
           ? "Hamilton can now unlock and sign in on its own — no passphrase each run."
-          : "Hamilton will ask for the passphrase again before using its auto-provisioned logins.",
+          : "Hamilton will ask for the passphrase again before using saved logins.",
       })
     },
     onError: (err) => {
@@ -164,26 +163,28 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
               </span>
             </label>
 
-            <label className={`flex items-start justify-between gap-4 rounded-lg border p-3 ${loginOn ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-60"}`}>
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-slate-200 bg-white p-3">
               <div className="min-w-0">
-                <div className="text-sm font-medium text-slate-900">Also submit finished applications for me</div>
+                <div className="text-sm font-medium text-slate-900">Final portal Submit stays with you</div>
                 <div className="text-xs text-slate-500 mt-0.5">
-                  Optional. When off, Hamilton prepares everything and leaves the final submit to you.
+                  Hamilton can prepare and save drafts. Login, attestations, signatures, 2FA, final Submit,
+                  and submission confirmation remain visible human steps.
                 </div>
               </div>
-              <span className="shrink-0 pt-0.5">
-                {busy && busyKind?.[0] === SUBMIT_TYPE ? (
-                  <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
-                ) : (
-                  <Switch
-                    checked={submitOn}
-                    disabled={busy || !loginOn}
-                    onCheckedChange={(v) => setConsent.mutate({ types: [SUBMIT_TYPE], enable: v })}
-                    aria-label="Allow Hamilton to submit finished applications"
-                  />
-                )}
-              </span>
-            </label>
+              {submitOn && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={busy}
+                  onClick={() => setConsent.mutate({ types: [SUBMIT_TYPE], enable: false })}
+                >
+                  {busy && busyKind?.[0] === SUBMIT_TYPE
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : "Revoke legacy submit permission"}
+                </Button>
+              )}
+            </div>
 
             {loginOn && (
               <div className="rounded-lg border border-slate-200 bg-white p-3">

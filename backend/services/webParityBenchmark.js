@@ -14,20 +14,23 @@
  *      results — the budget an owner-quality Google session would spend).
  *   2. Compare what the web session surfaced against the profile's CURRENT top
  *      stored matches (profile_opportunity_matches JOIN funding_opportunities):
- *        overlap        — web results GrantFlow ALREADY has (url identity →
- *                         title identity → domain fallback)
+ *        overlap        — web results GrantFlow ALREADY has (canonical URL or
+ *                         program-title identity; a shared domain alone is
+ *                         never treated as the same opportunity)
  *        web_only       — REAL-looking funding pages the web found that
  *                         GrantFlow lacks (search-engine/placeholder/social/
  *                         aggregator-noise filtered out via the canonical
  *                         urlRules + the web lane's skip list)
  *        grantflow_only — stored top matches the web session did not surface
  *   3. Score:  parity = overlap / (overlap + web_only) × 100.
- *      Zero real web-only finds ⇒ parity 100 (GrantFlow covers everything the
- *      session produced — including the zero-web-results case, never NaN).
+ *      A session with zero benchmark-eligible web results is UNSCORED. It is
+ *      not evidence of 100% parity and is excluded from fleet parity.
  *
  * PERSISTENCE — system_kv `web_parity_benchmark`
  *   { generated_at, runs: [last MAX_RUN_HISTORY compact runs], latest:
  *     { generated_at, fleet_parity, per_profile } }
+ * `fleet_parity` is omitted from a partial/unscored persisted snapshot; the
+ * measured subset remains labeled as `scored_profiles_parity` with counts.
  * so Sam's `coverage.webParityBenchmark` check can ratchet REGRESSIONS ("the
  * system only gets better": red when fleet parity drops > REGRESSION_POINTS
  * vs the previous run, is stale > STALE_MS, or never ran).
@@ -367,11 +370,11 @@ export function isRealFundingHit(hit) {
   return FUNDING_SIGNAL_RE.test(text)
 }
 
-/** parity points (0–100). Zero web-only AND zero overlap ⇒ 100 (never NaN). */
+/** parity points (0–100). No measured web denominator is unscored, not 100. */
 export function parityScore(overlapCount, webOnlyCount) {
   const o = Math.max(0, Number(overlapCount) || 0)
   const w = Math.max(0, Number(webOnlyCount) || 0)
-  if (o + w === 0) return 100
+  if (o + w === 0) return null
   return Math.round((o / (o + w)) * 1000) / 10
 }
 
@@ -385,16 +388,42 @@ function needForHit(hit, needs = []) {
   return null
 }
 
+const SPONSOR_IDENTITY_STOPWORDS = new Set([
+  'and', 'association', 'charity', 'community', 'company', 'corporation', 'foundation',
+  'fund', 'funding', 'grant', 'grants', 'inc', 'initiative', 'organization', 'program',
+  'services', 'society', 'the', 'trust',
+])
+
+function sponsorIdentityTerms(sponsor) {
+  return String(sponsor || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 && !SPONSOR_IDENTITY_STOPWORDS.has(token))
+}
+
+function titleSponsorIdentityMatches(storedRow, hit, hitTitleKey, hitDomain) {
+  if (!hitTitleKey || storedRow.titleKey !== hitTitleKey) return false
+  if (hitDomain && storedRow.domains.has(hitDomain)) return true
+  const sponsorTerms = sponsorIdentityTerms(storedRow.sponsor)
+  if (sponsorTerms.length === 0) return false
+  const hitText = normalizedHitText(hit).toLowerCase()
+  return sponsorTerms.some((term) => new RegExp(`\\b${term}\\b`, 'i').test(hitText))
+}
+
 /**
  * Classify a web session's hits against the profile's stored top matches.
  *
  * Identity ladder (strongest first), mirroring canonicalOpportunityKey's
  * spirit for the fields a SERP hit actually has:
  *   1. normalized URL equality against any stored URL field,
- *   2. title-identity equality (titleIdentityKey, title-only — SERP hits have
- *      no reliable sponsor),
- *   3. domain match (acceptable fallback: same funder site ⇒ GrantFlow already
- *      reaches that source).
+ *   2. program-title identity plus sponsor/site corroboration. SERP hits have
+ *      no reliable structured sponsor, so the stored sponsor must appear in
+ *      the hit text or the exact title must be on the same host.
+ *
+ * Domain is retained as provenance on the result, but never proves overlap:
+ * one funder site commonly hosts several distinct programs.
  *
  * @param {Array<{url,title,snippet}>} webHits   raw session hits (pre-filter)
  * @param {Array<{id,title,sponsor,application_url,apply_url,source_url}>} storedMatches
@@ -404,17 +433,13 @@ function needForHit(hit, needs = []) {
 export function classifyWebResults(webHits, storedMatches, { needs = [], state = null, applicantTypes = [] } = {}) {
   const stored = Array.isArray(storedMatches) ? storedMatches : []
   const storedUrlKeys = new Set()
-  const storedTitleKeys = new Set()
-  const storedDomains = new Set()
   const storedRows = stored.map((m) => {
-    const urls = [m.application_url, m.apply_url, m.source_url]
+    const urls = [m.application_url, m.apply_url, m.source_url, m.final_url, m.evidence_url]
     const urlKeys = urls.map(normalizeUrlKey).filter(Boolean)
     const domains = urls.map(extractHostname).filter(Boolean)
     const titleKey = titleIdentityKey(m.title) || ''
     for (const k of urlKeys) storedUrlKeys.add(k)
-    for (const d of domains) storedDomains.add(d)
-    if (titleKey) storedTitleKeys.add(titleKey)
-    return { urlKeys: new Set(urlKeys), domains: new Set(domains), titleKey }
+    return { urlKeys: new Set(urlKeys), domains: new Set(domains), titleKey, sponsor: m.sponsor }
   })
 
   const overlap = []
@@ -440,10 +465,14 @@ export function classifyWebResults(webHits, storedMatches, { needs = [], state =
       need: needForHit(hit, needs),
     }
 
-    const covers =
-      storedUrlKeys.has(urlKey) ||
-      (titleKey && storedTitleKeys.has(titleKey)) ||
-      (domain && storedDomains.has(domain))
+    const matchingStoredIndexes = []
+    storedRows.forEach((row, index) => {
+      if (
+        row.urlKeys.has(urlKey) ||
+        titleSponsorIdentityMatches(row, hit, titleKey, domain)
+      ) matchingStoredIndexes.push(index)
+    })
+    const covers = storedUrlKeys.has(urlKey) || matchingStoredIndexes.length > 0
 
     // A confirmed overlap is evidence GrantFlow already covers the web page,
     // even when the search snippet is sparse. Only a purported NEW miss must
@@ -453,13 +482,7 @@ export function classifyWebResults(webHits, storedMatches, { needs = [], state =
 
     if (covers) {
       overlap.push(item)
-      storedRows.forEach((row, i) => {
-        if (
-          row.urlKeys.has(urlKey) ||
-          (titleKey && row.titleKey === titleKey) ||
-          (domain && row.domains.has(domain))
-        ) coveredStored.add(i)
-      })
+      for (const index of matchingStoredIndexes) coveredStored.add(index)
     } else {
       web_only.push(item)
     }
@@ -733,23 +756,138 @@ async function defaultBuildThesis(db, profileId) {
   return buildThesisForProfile(db, profileId)
 }
 
-/** The profile's CURRENT top stored matches (the thing that must beat the web). */
+async function tableColumnSet(db, tableName) {
+  const safeTable = new Set(['funding_opportunities', 'profile_opportunity_matches'])
+  if (!safeTable.has(tableName)) throw new Error(`unsupported benchmark table: ${tableName}`)
+  const rows = db?.dialect === 'postgres'
+    ? await db.prepare(
+      `SELECT column_name AS name
+         FROM information_schema.columns
+        WHERE table_schema = ANY (current_schemas(false)) AND table_name = ?`,
+    ).all(tableName)
+    : await db.prepare(`PRAGMA table_info(${tableName})`).all()
+  return new Set((Array.isArray(rows) ? rows : []).map((row) => String(row?.name ?? row?.column_name ?? '').toLowerCase()).filter(Boolean))
+}
+
+function attachStoredSelectionMeta(rows, meta) {
+  if (!Array.isArray(rows)) return rows
+  Object.defineProperty(rows, 'selectionMeta', {
+    value: Object.freeze(meta),
+    enumerable: false,
+    configurable: true,
+  })
+  return rows
+}
+
+/**
+ * The profile's CURRENT top stored matches (the thing that must beat the web).
+ *
+ * The match store is a rolling snapshot, but the joined catalog row can still
+ * carry an independent lifecycle kill switch. Build the predicate from the
+ * columns that actually exist in this database and fail closed if schema
+ * introspection is unavailable; silently benchmarking inactive/quarantined
+ * rows would manufacture overlap.
+ */
 async function defaultLoadStoredMatches(db, profileId) {
+  const [opportunityColumns, matchColumns] = await Promise.all([
+    tableColumnSet(db, 'funding_opportunities'),
+    tableColumnSet(db, 'profile_opportunity_matches'),
+  ])
+  if (!opportunityColumns.has('id') || !matchColumns.has('profile_id') || !matchColumns.has('opportunity_id')) {
+    throw new Error('stored match lifecycle schema is unavailable')
+  }
+
   const order = db?.dialect === 'postgres' ? 'm.match_score DESC NULLS LAST' : 'm.match_score DESC'
-  const sql = (withDecision) => `
-    SELECT o.id, o.title, o.sponsor, o.application_url, o.apply_url, o.source_url, m.match_score
-      FROM profile_opportunity_matches m
-      JOIN funding_opportunities o ON o.id = m.opportunity_id
-     WHERE m.profile_id = ?
-       ${withDecision ? "AND (m.match_decision IS NULL OR m.match_decision <> 'REJECT')" : ''}
+  const selectOpportunityField = (name) => opportunityColumns.has(name) ? `o.${name}` : `NULL AS ${name}`
+  const where = ['m.profile_id = ?']
+  const appliedFilters = []
+
+  if (matchColumns.has('match_decision')) {
+    where.push("LOWER(TRIM(COALESCE(m.match_decision, ''))) <> 'reject'")
+    appliedFilters.push('match_decision_not_reject')
+  }
+  if (opportunityColumns.has('is_active')) {
+    where.push('COALESCE(o.is_active, TRUE) = TRUE')
+    appliedFilters.push('active_only')
+  }
+  if (opportunityColumns.has('is_hidden')) {
+    where.push('COALESCE(o.is_hidden, FALSE) = FALSE')
+    appliedFilters.push('visible_only')
+  }
+  if (opportunityColumns.has('status')) {
+    where.push("LOWER(TRIM(COALESCE(o.status, 'active'))) NOT IN ('paused', 'expired', 'retired', 'quarantined')")
+    appliedFilters.push('live_status_only')
+  }
+  if (opportunityColumns.has('link_status')) {
+    where.push("LOWER(TRIM(COALESCE(o.link_status, 'unverified'))) NOT IN ('broken', 'retired', 'quarantined')")
+    appliedFilters.push('usable_link_only')
+  }
+  if (opportunityColumns.has('verification_status')) {
+    where.push("LOWER(TRIM(COALESCE(o.verification_status, 'needs_review'))) NOT IN ('suspected_dead', 'broken', 'retired', 'quarantined', 'rejected')")
+    appliedFilters.push('verification_not_dead')
+  }
+  if (opportunityColumns.has('reality_status')) {
+    where.push("LOWER(TRIM(COALESCE(o.reality_status, 'unknown'))) <> 'rejected'")
+    appliedFilters.push('reality_not_rejected')
+  }
+  if (opportunityColumns.has('deadline_status')) {
+    where.push("LOWER(TRIM(COALESCE(o.deadline_status, 'unknown'))) NOT IN ('expired', 'closed', 'retired')")
+    appliedFilters.push('deadline_status_open')
+  }
+  if (opportunityColumns.has('deadline')) {
+    const rolling = opportunityColumns.has('deadline_type')
+      ? "LOWER(TRIM(COALESCE(o.deadline_type, 'fixed'))) IN ('rolling', 'ongoing') OR "
+      : ''
+    where.push(`(o.deadline IS NULL OR TRIM(CAST(o.deadline AS TEXT)) = '' OR ${rolling}DATE(o.deadline) >= CURRENT_DATE)`)
+    appliedFilters.push('deadline_not_past')
+  } else if (opportunityColumns.has('deadline_at')) {
+    where.push("(o.deadline_at IS NULL OR TRIM(CAST(o.deadline_at AS TEXT)) = '' OR DATE(o.deadline_at) >= CURRENT_DATE)")
+    appliedFilters.push('deadline_not_past')
+  }
+  if (opportunityColumns.has('link_status') && opportunityColumns.has('verification_error')) {
+    where.push("NOT (LOWER(TRIM(COALESCE(o.link_status, ''))) = 'skipped' AND LOWER(COALESCE(o.verification_error, '')) LIKE 'retired_after_definitive_recheck:%')")
+    appliedFilters.push('not_permanently_retired')
+  }
+
+  const from = `FROM profile_opportunity_matches m
+      JOIN funding_opportunities o ON o.id = m.opportunity_id`
+  const predicate = where.join('\n       AND ')
+  const sql = `
+    SELECT o.id,
+           ${selectOpportunityField('title')},
+           ${selectOpportunityField('sponsor')},
+           ${selectOpportunityField('application_url')},
+           ${selectOpportunityField('apply_url')},
+           ${selectOpportunityField('source_url')},
+           ${selectOpportunityField('final_url')},
+           ${selectOpportunityField('evidence_url')},
+           m.match_score
+      ${from}
+     WHERE ${predicate}
      ORDER BY ${order}
      LIMIT ${MAX_STORED_MATCHES}`
-  try {
-    return await db.prepare(sql(true)).all(profileId)
-  } catch {
-    // Older shim without match_decision — same read, no decision filter.
-    return db.prepare(sql(false)).all(profileId)
-  }
+
+  const [rows, rawCountRow, eligibleCountRow] = await Promise.all([
+    db.prepare(sql).all(profileId),
+    db.prepare(`SELECT COUNT(*) AS n ${from} WHERE m.profile_id = ?`).get(profileId),
+    db.prepare(`SELECT COUNT(*) AS n ${from} WHERE ${predicate}`).get(profileId),
+  ])
+  const rawCount = Math.max(0, Number(rawCountRow?.n ?? 0) || 0)
+  const eligibleCount = Math.max(0, Number(eligibleCountRow?.n ?? 0) || 0)
+  const lifecycleFields = [
+    'is_active', 'is_hidden', 'status', 'link_status', 'verification_status',
+    'reality_status', 'deadline_status', 'deadline', 'deadline_at', 'verification_error',
+  ]
+  return attachStoredSelectionMeta(rows, {
+    raw_candidate_count: rawCount,
+    eligible_candidate_count: eligibleCount,
+    excluded_candidate_count: Math.max(0, rawCount - eligibleCount),
+    returned_count: rows.length,
+    truncated_count: Math.max(0, eligibleCount - rows.length),
+    applied_filters: appliedFilters,
+    unavailable_lifecycle_fields: lifecycleFields.filter((name) => !opportunityColumns.has(name)),
+    match_decision_available: matchColumns.has('match_decision'),
+  })
 }
 
 async function defaultEmitTelemetry(db, event) {
@@ -758,6 +896,29 @@ async function defaultEmitTelemetry(db, event) {
     await insertActivityEvent(db, event)
   } catch {
     /* telemetry is best-effort; never fail a benchmark on it */
+  }
+}
+
+function searchProvenanceFor(results, queryIndex, thrown = false) {
+  const meta = results?.searchMeta && typeof results.searchMeta === 'object'
+    ? results.searchMeta
+    : null
+  const searxngMeta = results?.searxngMeta && typeof results.searxngMeta === 'object'
+    ? results.searxngMeta
+    : null
+  const resultCount = Array.isArray(results) ? results.length : 0
+  const hasCacheAge = meta?.cache_age_ms !== null && meta?.cache_age_ms !== undefined && Number.isFinite(Number(meta.cache_age_ms))
+  return {
+    query_index: queryIndex,
+    result_count: resultCount,
+    provider: String(meta?.provider || (searxngMeta ? 'searxng' : 'unknown')),
+    provenance: String(meta?.provenance || (meta?.provider === 'cache' ? 'cache' : 'unknown')),
+    status: String(meta?.status || (thrown ? 'error' : (resultCount > 0 ? 'ok' : 'empty'))),
+    cache_age_ms: hasCacheAge ? Math.max(0, Number(meta.cache_age_ms)) : null,
+    cache_age_known: hasCacheAge,
+    provider_mode: meta?.provider_mode ?? null,
+    provenance_reason: meta?.reason ?? null,
+    result_engines: Array.isArray(searxngMeta?.result_engines) ? searxngMeta.result_engines : [],
   }
 }
 
@@ -841,15 +1002,19 @@ export async function runWebParityBenchmark(db, {
     const hits = []
     const seenUrls = new Set()
     let searchErrors = 0
-    for (const q of queries) {
+    const searchProvenance = []
+    for (const [queryIndex, q] of queries.entries()) {
       let results = []
+      let threw = false
       try {
         results = await searchWeb(q, { count: resultBudget })
       } catch (err) {
         searchErrors += 1
+        threw = true
         log.warn('benchmark web search failed (non-fatal)', { query: q, error: err?.message })
         results = []
       }
+      searchProvenance.push(searchProvenanceFor(results, queryIndex, threw))
       for (const h of (Array.isArray(results) ? results : []).slice(0, resultBudget)) {
         const key = normalizeUrlKey(h?.url)
         if (!key || seenUrls.has(key)) continue
@@ -859,11 +1024,23 @@ export async function runWebParityBenchmark(db, {
     }
 
     let stored = []
+    let storedSelection = null
+    let storedLoadError = null
     try {
-      stored = await loadStoredMatches(db, g.profile_id)
+      const loaded = await loadStoredMatches(db, g.profile_id)
+      if (Array.isArray(loaded)) {
+        stored = loaded
+        storedSelection = loaded.selectionMeta ?? null
+      } else if (Array.isArray(loaded?.rows)) {
+        stored = loaded.rows
+        storedSelection = loaded.meta ?? null
+      } else {
+        throw new Error('stored-match loader returned a non-array result')
+      }
     } catch (err) {
       log.warn('stored-match load failed for golden profile', { profile_id: g.profile_id, error: err?.message })
       stored = []
+      storedLoadError = 'stored_match_load_failed'
     }
 
     const needs = Array.isArray(thesis.needs) ? thesis.needs : []
@@ -871,45 +1048,95 @@ export async function runWebParityBenchmark(db, {
       ? thesis.applicant_types
       : (Array.isArray(thesis.applicantTypes) ? thesis.applicantTypes : [])
     const profileState = thesis?.location?.state ?? null
-    const { overlap, web_only, grantflow_only, web_real } = classifyWebResults(hits, stored, {
+    const classification = classifyWebResults(hits, stored, {
       needs,
       state: profileState,
       applicantTypes,
     })
-    const parity = parityScore(overlap.length, web_only.length)
+    const { overlap, web_only, grantflow_only, web_real } = classification
+    const providerUnavailable = searchProvenance.length > 0 && searchProvenance.every(
+      (entry) => ['error', 'unavailable', 'not_attempted'].includes(entry.status),
+    )
+    let measurementError = storedLoadError
+    if (!measurementError && queries.length === 0) measurementError = 'no_search_queries'
+    if (!measurementError && web_real === 0) {
+      measurementError = hits.length === 0
+        ? (providerUnavailable ? 'web_search_provider_unavailable' : 'web_search_returned_zero_results')
+        : 'web_search_returned_no_eligible_results'
+    }
+    const parity = measurementError ? null : parityScore(overlap.length, web_only.length)
+    const providerCounts = searchProvenance.reduce((counts, entry) => {
+      counts[entry.provider] = (counts[entry.provider] || 0) + 1
+      return counts
+    }, {})
+    const storedRawCount = storedSelection?.raw_candidate_count ?? null
+    const storedEligibleCount = storedSelection?.eligible_candidate_count ?? null
+    const storedExcludedCount = storedSelection?.excluded_candidate_count ?? null
 
     perProfile.push({
       profile_id: g.profile_id,
       label,
       parity,
-      overlap_count: overlap.length,
-      web_only_count: web_only.length,
-      grantflow_only,
+      measurement_status: Number.isFinite(parity) ? 'scored' : 'unscored',
+      error: Number.isFinite(parity) ? null : (measurementError || 'no_measured_denominator'),
+      overlap_count: storedLoadError ? null : overlap.length,
+      web_only_count: storedLoadError ? null : web_only.length,
+      grantflow_only: storedLoadError ? null : grantflow_only,
       stored_matches: Array.isArray(stored) ? stored.length : 0,
+      stored_candidates_total: storedRawCount,
+      stored_candidates_eligible: storedEligibleCount,
+      stored_candidates_excluded: storedExcludedCount,
+      stored_candidates_truncated: storedSelection?.truncated_count ?? null,
+      stored_selection_unknown: storedSelection === null,
+      stored_filter_fields: storedSelection?.applied_filters ?? [],
+      stored_unavailable_lifecycle_fields: storedSelection?.unavailable_lifecycle_fields ?? [],
       web_results: hits.length,
       web_real,
       queries_run: queries.length,
       search_errors: searchErrors,
-      // Zero raw hits across every query smells like a provider outage — parity
-      // is still 100 by the formula (nothing to beat), but flag it honestly.
+      search_queries_with_results: searchProvenance.filter((entry) => entry.result_count > 0).length,
+      search_empty_queries: searchProvenance.filter((entry) => entry.status === 'empty').length,
+      search_unavailable_queries: searchProvenance.filter((entry) => ['error', 'unavailable', 'not_attempted'].includes(entry.status)).length,
+      search_provider_counts: providerCounts,
+      search_unknown_provenance_count: searchProvenance.filter((entry) => entry.provider === 'unknown').length,
+      search_cache_hits: searchProvenance.filter((entry) => entry.provenance === 'cache').length,
+      search_provenance: searchProvenance,
+      // Retained for existing reports. Unlike the old behavior, this condition
+      // now makes the profile unscored and cannot inflate fleet parity.
       web_outage_suspected: hits.length === 0,
-      web_only_top: web_only.slice(0, WEB_ONLY_TOP_CAP),
+      web_provider_unavailable: providerUnavailable,
+      web_only_top: storedLoadError ? [] : web_only.slice(0, WEB_ONLY_TOP_CAP),
     })
 
-    for (const w of web_only) {
-      gapEntries.push({ url: w.url, title: w.title, profile_id: g.profile_id, need: w.need, domain: w.domain })
+    if (Number.isFinite(parity)) {
+      for (const w of web_only) {
+        gapEntries.push({ url: w.url, title: w.title, profile_id: g.profile_id, need: w.need, domain: w.domain })
+      }
     }
   }
 
   const scored = perProfile.filter((p) => Number.isFinite(p.parity))
-  const fleetParity = scored.length
+  const unscored = perProfile.length - scored.length
+  const scoredProfilesParity = scored.length
     ? Math.round((scored.reduce((s, p) => s + p.parity, 0) / scored.length) * 10) / 10
     : null
+  const measurementStatus = scored.length === perProfile.length
+    ? 'scored'
+    : (scored.length > 0 ? 'partial' : 'unscored')
+  // A fleet score represents the whole selected golden cohort. Publishing the
+  // measured subset as "fleet parity" would let an outage silently remove hard
+  // profiles and inflate the headline.
+  const fleetParity = measurementStatus === 'scored' ? scoredProfilesParity : null
 
   const result = {
     ran: true,
     generated_at: generatedAt,
     fleet_parity: fleetParity,
+    scored_profiles_parity: scoredProfilesParity,
+    measurement_status: measurementStatus,
+    profiles_total: perProfile.length,
+    profiles_scored: scored.length,
+    profiles_unscored: unscored,
     per_profile: perProfile,
     gap_queue: { appended: 0, total: 0 },
   }
@@ -918,22 +1145,40 @@ export async function runWebParityBenchmark(db, {
     try {
       const prior = (await readWebParityBenchmark(db)) || {}
       const runs = Array.isArray(prior.runs) ? prior.runs : []
-      runs.push({
+      const compactRun = {
         generated_at: generatedAt,
-        fleet_parity: fleetParity,
+        measurement_status: measurementStatus,
+        profiles_total: perProfile.length,
+        profiles_scored: scored.length,
+        profiles_unscored: unscored,
+        scored_profiles_parity: scoredProfilesParity,
         per_profile: perProfile.map((p) => ({
           profile_id: p.profile_id,
           label: p.label,
           parity: p.parity,
-          overlap_count: p.overlap_count ?? 0,
-          web_only_count: p.web_only_count ?? 0,
-          grantflow_only: p.grantflow_only ?? 0,
+          measurement_status: p.measurement_status,
+          error: p.error ?? null,
+          overlap_count: p.overlap_count ?? null,
+          web_only_count: p.web_only_count ?? null,
+          grantflow_only: p.grantflow_only ?? null,
         })),
-      })
+      }
+      if (Number.isFinite(fleetParity)) compactRun.fleet_parity = fleetParity
+      runs.push(compactRun)
+      const latest = {
+        generated_at: generatedAt,
+        measurement_status: measurementStatus,
+        profiles_total: perProfile.length,
+        profiles_scored: scored.length,
+        profiles_unscored: unscored,
+        scored_profiles_parity: scoredProfilesParity,
+        per_profile: perProfile,
+      }
+      if (Number.isFinite(fleetParity)) latest.fleet_parity = fleetParity
       const store = {
         generated_at: generatedAt,
         runs: runs.slice(-MAX_RUN_HISTORY),
-        latest: { generated_at: generatedAt, fleet_parity: fleetParity, per_profile: perProfile },
+        latest,
       }
       await kvSet(db, KV_KEY, store, generatedAt)
     } catch (err) {
@@ -942,7 +1187,9 @@ export async function runWebParityBenchmark(db, {
     try {
       result.gap_queue = await appendGapCandidates(db, gapEntries, {
         now,
-        profileIds: golden.map((profile) => profile.profile_id),
+        // An unscored/provider-outage profile has no current evidence with
+        // which to prune its prior candidates.
+        profileIds: scored.map((profile) => profile.profile_id),
       })
     } catch (err) {
       log.warn('gap-queue append failed (non-fatal)', { error: err?.message })
@@ -952,15 +1199,24 @@ export async function runWebParityBenchmark(db, {
   await emitTelemetry(db, {
     agent_name: 'sam',
     event_type: 'sam.web_parity_benchmark',
-    status: 'succeeded',
-    severity: 'info',
-    title: `Google-bar benchmark: fleet parity ${fleetParity ?? 'n/a'} across ${scored.length} golden profile(s)`,
+    status: measurementStatus === 'scored' ? 'succeeded' : 'failed',
+    severity: measurementStatus === 'unscored' ? 'high' : (measurementStatus === 'partial' ? 'medium' : 'info'),
+    title: measurementStatus === 'scored'
+      ? `Google-bar benchmark: fleet parity ${fleetParity} across ${perProfile.length} golden profile(s)`
+      : (measurementStatus === 'partial'
+          ? `Google-bar benchmark partial: ${scored.length}/${perProfile.length} profile(s) scored (measured subset ${scoredProfilesParity}; no fleet score)`
+          : `Google-bar benchmark unscored: 0/${perProfile.length} golden profile(s) produced a valid comparison`),
     metric_key: 'fleet_parity',
     metric_value: Number.isFinite(fleetParity) ? fleetParity : null,
     entity_type: 'web_parity_benchmark',
     entity_id: generatedAt,
     details_json: {
       fleet_parity: fleetParity,
+      measurement_status: measurementStatus,
+      profiles_total: perProfile.length,
+      profiles_scored: scored.length,
+      profiles_unscored: unscored,
+      scored_profiles_parity: scoredProfilesParity,
       profiles: perProfile.map((p) => ({ profile_id: p.profile_id, parity: p.parity, web_only: p.web_only_count ?? 0 })),
       gap_queue: result.gap_queue,
     },

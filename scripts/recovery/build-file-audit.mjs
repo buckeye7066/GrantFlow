@@ -4,6 +4,10 @@
 // merging inspection state from any existing ledger so re-runs never lose review work.
 // Verify mode (--verify) fails non-zero when the tree has drifted from the ledger.
 //
+// FILE_AUDIT.csv is deliberately excluded from its own inventory. Generate it from a
+// clean source commit, then commit only the ledger. Verification accepts that exact
+// ledger-only child commit while continuing to reject any other source drift.
+//
 // Usage:
 //   node scripts/recovery/build-file-audit.mjs            # (re)generate, preserving inspected/findings columns
 //   node scripts/recovery/build-file-audit.mjs --verify   # reconciliation gate: exit 1 on any drift
@@ -15,7 +19,21 @@ import path from 'node:path';
 const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel']).toString().trim();
 const headSha = execFileSync('git', ['rev-parse', 'HEAD']).toString().trim();
 const ledgerPath = path.join(repoRoot, 'docs', 'recovery', 'FILE_AUDIT.csv');
+const ledgerRelativePath = 'docs/recovery/FILE_AUDIT.csv';
 const verifyMode = process.argv.includes('--verify');
+
+function nonLedgerWorktreeDrift() {
+  return execFileSync('git', [
+    'status', '--porcelain=v1', '--untracked-files=all', '--', '.',
+    `:(exclude)${ledgerRelativePath}`,
+  ], { cwd: repoRoot, maxBuffer: 1 << 24 }).toString().trim();
+}
+
+const sourceDrift = nonLedgerWorktreeDrift();
+if (sourceDrift) {
+  console.error('FILE_AUDIT requires a clean committed source tree; only the ledger itself may be uncommitted.');
+  process.exit(1);
+}
 
 // --- enumerate tracked files with blob SHAs (NUL-safe) ---
 const lsRaw = execFileSync('git', ['ls-files', '-s', '-z'], { cwd: repoRoot, maxBuffer: 1 << 26 }).toString();
@@ -23,7 +41,7 @@ const entries = lsRaw.split('\0').filter(Boolean).map((line) => {
   const tab = line.indexOf('\t');
   const [mode, blob] = line.slice(0, tab).split(' ');
   return { mode, blob, path: line.slice(tab + 1) };
-});
+}).filter((entry) => entry.path !== ledgerRelativePath);
 
 // --- binary detection + line counts from the empty-tree diff (matches git's own heuristic) ---
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -136,8 +154,29 @@ if (verifyMode) {
   const problems = [];
   if (!existsSync(ledgerPath)) problems.push('ledger missing');
   if (prior.size !== entries.length) problems.push(`row count ${prior.size} != tracked ${entries.length}`);
-  const staleSha = [...prior.values()].find((c) => c[12] && c[12] !== headSha);
-  if (staleSha) problems.push(`ledger built at ${staleSha[12].slice(0, 8)}, HEAD is ${headSha.slice(0, 8)}`);
+  const recordedSourceShas = new Set([...prior.values()].map((c) => c[12]).filter(Boolean));
+  if (recordedSourceShas.size !== 1) {
+    problems.push(`ledger must record exactly one source SHA (found ${recordedSourceShas.size})`);
+  } else {
+    const [recordedSourceSha] = recordedSourceShas;
+    let sourceShaAccepted = recordedSourceSha === headSha;
+    if (!sourceShaAccepted) {
+      try {
+        const parentSha = execFileSync('git', ['rev-parse', 'HEAD^'], { cwd: repoRoot }).toString().trim();
+        const changedPaths = execFileSync('git', [
+          'diff', '--name-only', '--no-renames', `${recordedSourceSha}..${headSha}`,
+        ], { cwd: repoRoot }).toString().trim().split('\n').filter(Boolean);
+        sourceShaAccepted = recordedSourceSha === parentSha
+          && changedPaths.length === 1
+          && changedPaths[0] === ledgerRelativePath;
+      } catch {
+        sourceShaAccepted = false;
+      }
+    }
+    if (!sourceShaAccepted) {
+      problems.push(`ledger source ${recordedSourceSha.slice(0, 8)} is neither HEAD nor its ledger-only parent ${headSha.slice(0, 8)}`);
+    }
+  }
   problems.push(...drift);
   if (prior.size && newFiles.length) problems.push(`${newFiles.length} tracked file(s) missing from ledger`);
   if (problems.length) {
@@ -146,7 +185,7 @@ if (verifyMode) {
     process.exit(1);
   }
   const uninspected = [...prior.values()].filter((c) => c[8] !== 'yes' && c[5] === 'text').length;
-  console.log(`FILE_AUDIT reconciles: ${entries.length} tracked = ${prior.size} rows @ ${headSha.slice(0, 8)}; uninspected readable: ${uninspected}`);
+  console.log(`FILE_AUDIT reconciles: ${entries.length} tracked source files = ${prior.size} rows; uninspected readable: ${uninspected}`);
   process.exit(0);
 }
 

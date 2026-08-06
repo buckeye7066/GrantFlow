@@ -72,7 +72,7 @@ node scripts/merge-all-branches.mjs --exclude=branch1,branch2
 ```
 
 **Note**: The script requires:
-- Node.js 20+
+- Node.js 20.20.2
 - GitHub CLI (`gh`) installed and authenticated
 - `GH_TOKEN` environment variable set with appropriate permissions
 

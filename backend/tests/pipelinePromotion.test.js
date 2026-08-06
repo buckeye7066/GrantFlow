@@ -54,11 +54,15 @@ function makeDb() {
       contact_info TEXT, is_national INTEGER, state TEXT, regions TEXT, categories TEXT,
       keywords TEXT, opportunity_type TEXT, opportunity_kind TEXT, type TEXT,
       requires_501c3 INTEGER, requires_match INTEGER, is_active INTEGER DEFAULT 1,
+      is_hidden INTEGER DEFAULT 0, status TEXT DEFAULT 'active',
+      link_status TEXT DEFAULT 'unverified', reality_status TEXT,
       profile_id TEXT, source_trust_tier TEXT, test_decision TEXT, live_score REAL
     );
     CREATE TABLE profile_opportunity_matches (
       id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
-      match_score REAL, match_decision TEXT, matcher_version TEXT, updated_at TEXT
+      match_score REAL, match_confidence REAL, match_decision TEXT,
+      match_explanation TEXT, match_reasons TEXT, match_explain_json TEXT,
+      matcher_version TEXT, computed_at TEXT, updated_at TEXT, evaluated_at TEXT
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY, organization_id TEXT, profile_id TEXT,
@@ -104,8 +108,9 @@ function seedCandidate(db, profileId, overrides = {}) {
   db.prepare(`INSERT INTO funding_opportunities
     (id, created_at, updated_at, title, sponsor, source, record_origin, description,
      amount_min, amount_max, deadline_type, application_url, source_url, categories,
-     opportunity_kind, is_active, test_decision, live_score)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rolling', ?, ?, ?, ?, 1, ?, ?)`)
+     opportunity_kind, is_active, is_hidden, status, link_status, reality_status,
+     test_decision, live_score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rolling', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       id, '2026-07-01', overrides.updated_at || '2026-07-01', title,
       overrides.sponsor || 'Community Foundation', overrides.source || 'grants_gov',
@@ -114,6 +119,8 @@ function seedCandidate(db, profileId, overrides = {}) {
       overrides.amount_min ?? null, overrides.amount_max ?? null,
       overrides.url || `https://example.org/${id}`, overrides.url || `https://example.org/${id}`,
       JSON.stringify(['emergency', 'housing']), overrides.kind || 'DIRECT_GRANT',
+      overrides.is_active ?? 1, overrides.is_hidden ?? 0, overrides.status ?? 'active',
+      overrides.link_status ?? 'unverified', overrides.reality_status ?? null,
       overrides.liveDecision || 'ACCEPT', overrides.liveScore ?? 90,
     )
   db.prepare(`INSERT INTO profile_opportunity_matches
@@ -133,7 +140,7 @@ beforeEach(() => {
   computeSpy.mockImplementation((_profile, opp) => ({
     decision: opp.test_decision || 'ACCEPT',
     eligible: opp.test_decision !== 'REJECT',
-    score: Number(opp.live_score ?? 90),
+    score: opp.test_decision === 'REJECT' ? 0 : Number(opp.live_score ?? 90),
     reasons: ['fresh live score'],
     ineligibilityReasons: opp.test_decision === 'REJECT' ? ['live policy rejected'] : [],
     explanation: 'test decision',
@@ -141,6 +148,12 @@ beforeEach(() => {
     matcherVersion: 'test-live',
     evaluatedAt: '2026-07-21T00:00:00Z',
     confidence: 0.9,
+    scoreScaleId: 'data_point_v1',
+    scoringPolicyVersion: 'need-first-v1',
+    match_explain: {
+      score_scale_id: 'data_point_v1',
+      scoring_policy_version: 'need-first-v1',
+    },
   }))
 })
 
@@ -189,6 +202,74 @@ describe('qualified pipeline promotion', () => {
 
     expect(grantsFor(db, 'real')).toHaveLength(0)
     expect(db.prepare('SELECT outcome, reason FROM pipeline_promotion_outcomes').get()).toEqual({ outcome: 'live_reject', reason: 'live_reject' })
+    expect(db.prepare(`SELECT match_score, match_decision, matcher_version
+                         FROM profile_opportunity_matches
+                        WHERE opportunity_id = 'fresh-reject'`).get())
+      .toEqual({ match_score: 0, match_decision: 'reject', matcher_version: 'test-live' })
+    expect(computeSpy).toHaveBeenCalledTimes(1)
+    db.close()
+  })
+
+  it('atomically replaces stale persisted truth with the fresh promoted decision', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', {
+      id: 'fresh-accept',
+      storedScore: 1,
+      storedDecision: 'REJECT',
+      liveDecision: 'ACCEPT',
+      liveScore: 18,
+    })
+
+    await runQualifiedPipelinePromotion(db, {
+      enabled: true,
+      batch: 1,
+      amountFollowup: false,
+    })
+
+    const persisted = db.prepare(`SELECT match_score, match_confidence, match_decision,
+                                         matcher_version, match_explain_json
+                                    FROM profile_opportunity_matches
+                                   WHERE opportunity_id = 'fresh-accept'`).get()
+    const grant = db.prepare(`SELECT match_score
+                                FROM grants
+                               WHERE funding_opportunity_id = 'fresh-accept'`).get()
+    expect(persisted).toMatchObject({
+      match_score: 18,
+      match_confidence: 0.9,
+      match_decision: 'accept',
+      matcher_version: 'test-live',
+    })
+    expect(JSON.parse(persisted.match_explain_json)).toMatchObject({
+      score_scale_id: 'data_point_v1',
+      scoring_policy_version: 'need-first-v1',
+      canonical_decision: 'ACCEPT',
+    })
+    expect(grant.match_score).toBe(persisted.match_score)
+    db.close()
+  })
+
+  it('never re-promotes catalog rows whose lifecycle says hidden, inactive, broken, expired, or rejected', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'active-control' })
+    seedCandidate(db, 'real', { id: 'hidden', is_hidden: 1 })
+    seedCandidate(db, 'real', { id: 'inactive', is_active: 0 })
+    seedCandidate(db, 'real', { id: 'expired', status: 'expired' })
+    seedCandidate(db, 'real', { id: 'broken', link_status: 'broken' })
+    seedCandidate(db, 'real', { id: 'quarantined', link_status: 'quarantined' })
+    seedCandidate(db, 'real', { id: 'reality-rejected', reality_status: 'rejected' })
+
+    const result = await runQualifiedPipelinePromotion(db, {
+      enabled: true,
+      batch: 20,
+      amountFollowup: false,
+    })
+
+    expect(result.promoted).toBe(1)
+    expect(result.remaining).toBe(0)
+    expect(grantsFor(db, 'real').map((grant) => grant.funding_opportunity_id))
+      .toEqual(['active-control'])
     expect(computeSpy).toHaveBeenCalledTimes(1)
     db.close()
   })

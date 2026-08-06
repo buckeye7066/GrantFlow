@@ -1,10 +1,7 @@
-// CUTOVER (Crawler OS): this file exercises the legacy crawler route/engine that
-// is now a retired OS-compatibility no-op (backend/services/crawlerOsCompatibility.js). The
-// discovery/matching invariants it checked are owned + tested by the Crawler OS
-// (backend/crawler-os/tests, 149 tests). Skipped pending a re-point to the OS pipeline.
-
 /**
- * Regression: Robert must NEVER silently drop a verified opportunity.
+ * Regression: Robert must never report a healthy run when its authoritative
+ * Crawler OS discovery/persistence seam failed before producing a durable
+ * receipt.
  *
  * Previously robertAgent's `safe()` wrapper swallowed errors from the
  * canonical DB writes (ingestOpportunity / updateOpportunityCandidate) with a
@@ -36,13 +33,13 @@ const PROFILE_CTX = {
   signals: { entityType: 'family', state: 'OH' },
 }
 
-describe.skip('robertAgent — verified opportunities are never silently lost', () => {
-  it('records ingest failures in summary.errors + rejected instead of swallowing them', async () => {
+describe('robertAgent — Crawler OS persistence failures are never silent', () => {
+  it('records the failure and returns ok=false instead of a healthy empty run', async () => {
     process.env.ROBERT_ENABLED = 'true'
     process.env.ROBERT_ALLOW_LIVE_WEB = 'true'
     process.env.ROBERT_AUTO_INGEST_VERIFIED = 'true'
 
-    let upsertCalls = 0
+    let discoveryCalls = 0
     const result = await runRobert({
       db,
       mode: 'full-cycle',
@@ -50,40 +47,26 @@ describe.skip('robertAgent — verified opportunities are never silently lost', 
       profileIds: ['p1'],
       deps: {
         loadProfileContext: async () => PROFILE_CTX,
-        // A real, verifiable opportunity that passes the canonical gates...
-        opportunityAdapter: async () => ([
-          {
-            title: 'Real Grant',
-            sponsor: 'FEMA',
-            application_url: 'https://www.fema.gov/apply',
-            source_url: 'https://www.fema.gov/x',
-            deadline: '2099-09-01',
-            deadline_type: 'fixed',
-          },
-        ]),
-        seedSources: [{ id: 's1', source_url: 'https://www.fema.gov/grants', source_type: 'fire_department_grants' }],
-        // ...but the canonical writer throws. This must NOT be swallowed silently.
-        upsertFundingOpportunity: async () => {
-          upsertCalls += 1
-          throw new Error('simulated DB write failure')
+        runProfileDiscoveryLive: async () => {
+          discoveryCalls += 1
+          throw new Error('simulated Crawler OS persistence failure')
         },
       },
     })
 
-    assert.equal(upsertCalls, 1, 'the verified opportunity must reach the inserter')
+    assert.equal(discoveryCalls, 1, 'the profile must reach the authoritative Crawler OS seam')
 
-    // The failure is recorded in the run summary's errors (no longer silent).
-    const ingestErrors = (result.errors || []).filter((e) => e.stage === 'ingest_opportunity')
-    assert.ok(ingestErrors.length >= 1, 'ingest failure must be recorded in summary.errors')
-    assert.match(ingestErrors[0].error, /simulated DB write failure/)
+    const discoveryErrors = (result.errors || []).filter((e) => e.stage === 'crawler_os_discovery')
+    assert.equal(discoveryErrors.length, 1, 'discovery failure must be recorded in summary.errors')
+    assert.match(discoveryErrors[0].error, /simulated Crawler OS persistence failure/)
 
-    // And it is surfaced as a rejected candidate so it is not silently dropped.
-    const ingestRejects = (result.rejected || []).filter((r) => r.reason === 'ingest_error')
-    assert.ok(ingestRejects.length >= 1, 'failed ingest must surface as a rejected candidate')
-
-    // The run still completes — one bad write does not crash the agent.
-    assert.ok(result.ok, 'run should still complete')
-    // It must NOT falsely report the opportunity as ingested.
+    // The administrative run record still closes, but its verdict is degraded
+    // and cannot be mistaken for a successful zero-result crawl.
+    assert.equal(result.status, 'completed')
+    assert.equal(result.ok, false)
+    assert.equal(result.status_reason, 'crawler_os_discovery_failed')
     assert.equal((result.ingested || []).length, 0, 'a failed write must not be counted as ingested')
+    assert.equal(result.counters.opportunities_ingested, 0)
+    assert.equal(result.counters.opportunities_matched, 0)
   })
 })

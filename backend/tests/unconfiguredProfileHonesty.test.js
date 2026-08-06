@@ -7,7 +7,7 @@
  *
  *   1. `config/placeholderProfileSignals.detectUnconfiguredProfile` — the rule
  *      and its threshold, including the sparse-but-REAL profile that must
- *      survive it (`Angelika Ptak`, who shares the "Synthetic location signal"
+ *      survive it (`Demo Healthcare Workforce Persona`, who shares the "Synthetic location signal"
  *      note with both placeholders and is NOT one).
  *   2. `utils/inferLocationFromAddress.inferUsStateZipFromText` — the exact
  *      line where `state:'USA'` became the fabricated state code `"SA"`.
@@ -44,21 +44,21 @@ import { createCountyCityDirectoryAdapter } from '../crawler-os/adapters/countyC
 
 // ── Real prod fixtures ───────────────────────────────────────────────────────
 const MELISSA = {
-  profile: { id: 'profile-melissa-justus', display_name: 'Melissa Justus', primary_type: 'individual', tags: ['designated', 'source-safe', 'general_support'] },
+  profile: { id: 'profile-demo-general-support', display_name: 'Demo General Support Persona', primary_type: 'individual', tags: ['designated', 'source-safe', 'general_support'] },
   sections: {
     basic_information: {
-      full_name: 'Melissa Justus',
-      email: 'melissa.justus@example.com',
+      full_name: 'Demo General Support Persona',
+      email: 'demo.general-support@example.com',
       phone: '555-1234',
       address: { street: '123 Main St', city: 'Anytown', state: 'USA', zip_code: '12345' },
       notes: 'Designated roster profile. Add the owner login email here and in userProfileMappings.js (and optional owner_email on this entry) so the account attaches on deploy.',
-      first_name: 'Melissa', last_name: 'Justus',
+      first_name: 'Demo', last_name: 'General Support',
     },
     location_focus: { geographic_focus: 'United States', notes: 'Synthetic location signal for crawler and matcher coverage.' },
     narrative: { mission: 'Find eligible benefits, grants, and community programs without exposing private details in source.', primary_goal: 'Find eligible benefits, grants, and community programs without exposing private details in source.', funding_amount_needed: '' },
     organization_details: {
       organization_type: 'Individual consultant',
-      ein: 'EIN (Tax ID) is not applicable as this application is submitted by an individual, Melissa Justus, who operates as a sole proprietor without a formal business entity.',
+      ein: 'EIN (Tax ID) is not applicable as this application is submitted by an individual, Demo General Support Persona, who operates as a sole proprietor without a formal business entity.',
       uei: 'N/A', annual_budget: 50000, staff_count: 1, mission: '',
       is_rural_serving: true, in_opportunity_zone: true, in_epa_ej_area: true,
       in_usda_persistent_poverty_county: true, in_appalachian_region: true, broadband_unserved: true,
@@ -67,7 +67,7 @@ const MELISSA = {
 }
 
 const WILLIAM = {
-  profile: { id: 'profile-william', display_name: 'William', primary_type: 'individual' },
+  profile: { id: 'profile-demo-general-funding', display_name: 'William', primary_type: 'individual' },
   sections: {
     basic_information: {
       full_name: 'William', email: 'william@example.com', phone: '+1234567890',
@@ -81,7 +81,7 @@ const WILLIAM = {
 }
 
 const JOHN_DOE = {
-  profile: { id: 'profile-john-doe', display_name: 'John Doe', primary_type: 'individual', tags: ['individual', 'demo'] },
+  profile: { id: 'profile-demo-individual', display_name: 'John Doe', primary_type: 'individual', tags: ['individual', 'demo'] },
   sections: {
     basic_information: {
       full_name: 'John Doe', email: 'john.doe@example.com', phone: '555-1234', website: 'www.johndoe.com',
@@ -97,9 +97,9 @@ const JOHN_DOE = {
 /** REAL and sparse. Shares the "Synthetic location signal" note with BOTH
  *  placeholders — the single most dangerous false positive in the fleet. */
 const ANGELIKA = {
-  profile: { id: 'profile-angelika-ptak', display_name: 'Angelika Ptak', primary_type: 'individual' },
+  profile: { id: 'profile-demo-healthcare-workforce', display_name: 'Demo Healthcare Workforce Persona', primary_type: 'individual' },
   sections: {
-    basic_information: { full_name: 'Angelika Ptak', email: 'angelikaps.rn@gmail.com', phone: '', address: '', first_name: 'Angelika', last_name: 'Ptak' },
+    basic_information: { full_name: 'Demo Healthcare Workforce Persona', email: 'demo.healthcare-workforce@example.invalid', phone: '', address: '', first_name: 'Demo', last_name: 'Healthcare Workforce' },
     location_focus: { geographic_focus: 'United States', notes: 'Synthetic location signal for crawler and matcher coverage.' },
     narrative: { mission: 'Find healthcare workforce, licensing, continuing education, and professional-development funding.', funding_amount_needed: '' },
     occupation: { healthcare_worker: true },
@@ -158,7 +158,7 @@ describe('the UNCONFIGURED-profile detector', () => {
   it('an EMPTY-but-real profile (no placeholder evidence at all) is NOT flagged', () => {
     const v = assessProfileConfiguration({
       profile: { id: 'p-new', display_name: 'Dana Whitfield', primary_type: 'individual' },
-      sections: { basic_information: { full_name: 'Dana Whitfield', email: 'dana.whitfield@gmail.com' } },
+      sections: { basic_information: { full_name: 'Dana Whitfield', email: 'demo.generic-applicant@example.invalid' } },
     })
     expect(v.unconfigured).toBe(false)
     expect(v.families).toContain(PLACEHOLDER_SIGNAL_FAMILY.NO_SUBSTANCE)
@@ -258,7 +258,7 @@ describe('junk geography is never fabricated', () => {
       base_url: 'https://www.findhelp.org',
       url_template: 'https://www.findhelp.org/search_results/{zip}',
     }
-    // The exact live prod thesis for profile-melissa-justus (pre-fix output:
+    // The exact live prod thesis for profile-demo-general-support (pre-fix output:
     // "Anytown, SA — Local assistance programs near you (findhelp)").
     const junk = adapter.buildRequests({ location: { city: 'Anytown', state: 'SA', zip: '12345' } }, source)
     expect(junk[0].parseCfg.directoryCandidate.title).toBe('Local assistance programs near you (findhelp)')

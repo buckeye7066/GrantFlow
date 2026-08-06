@@ -348,6 +348,26 @@ test('a non-http(s) page URL is rejected (scheme sanitization)', async () => {
   }
 });
 
+test('an impossible ISO calendar date is rejected instead of rolling into another month', async () => {
+  const pageText = 'The Example Foundation Scholarship deadline is 2026-02-31.';
+  const llm = mockLlm({
+    deadline: '2026-02-31',
+    amount_min: null,
+    amount_max: null,
+    national: null,
+    states: [],
+    is_loan: null,
+    requires_cost_share: null,
+    evidence: { deadline: 'deadline is 2026-02-31' },
+  });
+  const [facts] = await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText, linkInventory: INVENTORY },
+    { llm },
+  );
+  assert.ok(facts);
+  assert.equal(facts.deadline, null);
+});
+
 // --- prompt-injection resistance (Finding 5) --------------------------------
 test('page text that tries to inject instructions cannot fabricate an eligible fact', async () => {
   const injected = [

@@ -31,7 +31,7 @@
  * The page bodies below are the REAL captured text.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 process.env.RUNTIME_SECRETS_KEY = 'f'.repeat(64)
 
@@ -43,15 +43,13 @@ const { runSessionKeepAliveSweep } = await import('../services/hamilton/hamilton
 const { loadLifetimeLedger, summarizeHostLifetime } =
   await import('../services/hamilton/portalSessionLifetime.js')
 
-// Real innerText captured from the live public homepage, signed OUT.
-const STUDENTAID_PUBLIC_HOME = 'Manage and Repay Your Federal Student Loans Get Repayment Tips '
-  + 'View Your Loans POPULAR TOPICS Compare Plans With Our Repayment Calculator Find Your Student '
-  + 'Loan Servicer Apply for an Income-Driven Repayment Plan Complete Your FAFSA Form'
+const FIXTURE_HOST = 'hamilton-submit-fixture.invalid'
+const FIXTURE_ORIGIN = `https://${FIXTURE_HOST}`
 // Real innerText captured from the sign-in landing the auth-gated path 302s to.
 const STUDENTAID_SIGNIN = 'Log In Email Address or Username Forgot email address or username? '
   + 'Continue Create an Account'
 // Signed-IN account content.
-const STUDENTAID_MY_ACTIVITY = 'My Activity Anastasia Your recent activity 2026-2027 FAFSA Form '
+const STUDENTAID_MY_ACTIVITY = 'My Activity Demo Student Your recent activity 2026-2027 FAFSA Form '
   + 'Submitted View your aid summary and servicer details below.'
 
 /**
@@ -62,6 +60,7 @@ function makeLauncher(pages, { record = {} } = {}) {
   return async ({ storageState }) => {
     record.storageStateSeen = storageState
     const context = {
+      route: async () => {},
       newPage: async () => {
         let current = null
         return {
@@ -96,29 +95,20 @@ describe('keep-alive liveness verdict', () => {
     _resetCredentialSchemaCache()
   })
 
-  it('a PUBLIC page can never be scored "refreshed" — the exact prod false positive', async () => {
-    // leic.tennessee.edu has NO auth-gated probe path in the registry, so the
-    // only page we can reach is public and tells us nothing.
+  it('a real-domain session is skipped without launching a browser', async () => {
     const est = new Date(Date.now() - 3 * 86_400_000).toISOString()
     await seedSession(db, { host: 'leic.tennessee.edu', establishedAt: est })
 
-    const record = {}
-    const launchBrowser = makeLauncher({
-      'https://leic.tennessee.edu/': {
-        finalUrl: 'https://leic.tennessee.edu/',
-        text: 'University of Tennessee Institute for Public Service Give To IPS Forensics & '
-          + 'Investigative Communication Leadership Specialized Training About',
-      },
-    }, { record })
+    const launchBrowser = vi.fn(async () => { throw new Error('real-domain browser must not launch') })
 
     const out = await runSessionKeepAliveSweep(db, { launchBrowser })
 
-    // PRE-FIX this was `refreshed: 1`. Cookies are still re-saved, but no
-    // liveness is claimed.
     expect(out.refreshed).toBe(0)
-    expect(out.unverified).toBe(1)
+    expect(out.unverified).toBe(0)
+    expect(out.skipped).toBe(1)
     expect(out.expired).toBe(0)
-    expect(out.results[0].outcome).toBe('unverified')
+    expect(out.results[0].outcome).toBe('skipped')
+    expect(launchBrowser).not.toHaveBeenCalled()
 
     // And nothing enters the lifetime ledger from a probe that could not tell.
     const s = summarizeHostLifetime(await loadLifetimeLedger(db), 'leic.tennessee.edu')
@@ -131,49 +121,47 @@ describe('keep-alive liveness verdict', () => {
         .get('leic.tennessee.edu').metadata_json,
     )
     expect(meta.keepalive_confirmed_alive_at).toBeUndefined()
-    expect(meta.keepalive_refreshes).toBe(1) // cookie jar did get refreshed
+    expect(meta.keepalive_refreshes).toBeUndefined()
   })
 
-  it('probes the AUTH-GATED path for a registered host, not the homepage', async () => {
+  it('probes the auth-gated reserved fixture path without real egress', async () => {
     const est = new Date(Date.now() - 86_400_000).toISOString()
-    await seedSession(db, { host: 'studentaid.gov', establishedAt: est })
+    await seedSession(db, { host: FIXTURE_HOST, establishedAt: est })
 
     const record = {}
     const launchBrowser = makeLauncher({
-      'https://studentaid.gov/my-activity/': {
-        finalUrl: 'https://studentaid.gov/my-activity/',
+      [`${FIXTURE_ORIGIN}/authenticated`]: {
+        finalUrl: `${FIXTURE_ORIGIN}/authenticated`,
         text: STUDENTAID_MY_ACTIVITY,
       },
-      'https://studentaid.gov/': { finalUrl: 'https://studentaid.gov/', text: STUDENTAID_PUBLIC_HOME },
     }, { record })
 
     const out = await runSessionKeepAliveSweep(db, { launchBrowser })
 
-    expect(record.requested).toBe('https://studentaid.gov/my-activity/')
+    expect(record.requested).toBe(`${FIXTURE_ORIGIN}/authenticated`)
     expect(out.refreshed).toBe(1)
     expect(out.observed).toBe(1)
 
     // A CONFIRMED-alive observation lands as a measured LOWER bound.
-    const s = summarizeHostLifetime(await loadLifetimeLedger(db), 'studentaid.gov')
+    const s = summarizeHostLifetime(await loadLifetimeLedger(db), FIXTURE_HOST)
     expect(s.aliveSamples).toBe(1)
     expect(s.measured).toBe(true)
     expect(s.confirmedAliveMaxMs).toBeGreaterThan(0)
 
     const meta = JSON.parse(
       db.prepare('SELECT metadata_json FROM hamilton_saved_sessions WHERE portal_host = ?')
-        .get('studentaid.gov').metadata_json,
+        .get(FIXTURE_HOST).metadata_json,
     )
     expect(meta.keepalive_confirmed_alive_at).toBeTruthy()
   })
 
-  it('an auth-gated redirect to the sign-in surface EXPIRES the session and is recorded as a death', async () => {
+  it('an auth challenge on the reserved fixture expires the session and records a death', async () => {
     const est = new Date(Date.now() - 2 * 86_400_000).toISOString()
-    const row = await seedSession(db, { host: 'studentaid.gov', establishedAt: est })
+    const row = await seedSession(db, { host: FIXTURE_HOST, establishedAt: est })
 
     const launchBrowser = makeLauncher({
-      'https://studentaid.gov/my-activity/': {
-        // The REAL redirect measured live.
-        finalUrl: 'https://studentaid.gov/fsa-id/sign-in/landing?redirectTo=%2Fmy-activity',
+      [`${FIXTURE_ORIGIN}/authenticated`]: {
+        finalUrl: `${FIXTURE_ORIGIN}/login`,
         text: STUDENTAID_SIGNIN,
       },
     })
@@ -184,16 +172,16 @@ describe('keep-alive liveness verdict', () => {
     // scored it "refreshed" — a login wall read as a healthy session.
     expect(out.expired).toBe(1)
     expect(out.refreshed).toBe(0)
-    expect(out.results[0].detail).toMatch(/sign-in/i)
+    expect(out.results[0].detail).toMatch(/login|sign-in/i)
 
     const session = await getSessionById(db, row.id)
     expect(session.status).toBe('expired')
     // markSessionExpired MERGES: the consent/establishment record survives, so
     // the death observation has something to be measured against.
     expect(session.metadata.session_established_at).toBe(est)
-    expect(session.metadata.expired_reason).toMatch(/sign-in/i)
+    expect(session.metadata.expired_reason).toMatch(/login|sign-in/i)
 
-    const s = summarizeHostLifetime(await loadLifetimeLedger(db), 'studentaid.gov')
+    const s = summarizeHostLifetime(await loadLifetimeLedger(db), FIXTURE_HOST)
     expect(s.deadSamples).toBe(1)
     expect(s.confirmedDeadMinMs).toBeGreaterThan(0)
     expect(s.estimateSource).toBe('measured')
@@ -201,12 +189,13 @@ describe('keep-alive liveness verdict', () => {
 
   it('a WALL or an OUTAGE never burns a working session and never records an observation', async () => {
     const est = new Date(Date.now() - 86_400_000).toISOString()
-    const row = await seedSession(db, { host: 'studentaid.gov', establishedAt: est })
+    const row = await seedSession(db, { host: FIXTURE_HOST, establishedAt: est })
 
     // Akamai-class refusal: navigation throws, nothing is readable.
     const launchBrowser = async () => ({
       browser: { close: async () => {} },
       context: {
+        route: async () => {},
         newPage: async () => ({
           goto: async () => { throw new Error('page.goto: net::ERR_HTTP2_PROTOCOL_ERROR') },
           waitForLoadState: async () => {},
@@ -222,7 +211,7 @@ describe('keep-alive liveness verdict', () => {
     expect(out.expired).toBe(0)
     expect(out.observed).toBe(0)
     expect((await getSessionById(db, row.id)).status).toBe('valid')
-    expect(summarizeHostLifetime(await loadLifetimeLedger(db), 'studentaid.gov').samples).toBe(0)
+    expect(summarizeHostLifetime(await loadLifetimeLedger(db), FIXTURE_HOST).samples).toBe(0)
   })
 
   it('a keep-alive refresh does NOT move the human establishment clock', async () => {
@@ -230,24 +219,24 @@ describe('keep-alive liveness verdict', () => {
     // established_at dragged to 2026-08-01 by 11 cookie refreshes. The
     // establishment stamp must survive a refresh, or every measured age is wrong.
     const est = new Date(Date.now() - 5 * 86_400_000).toISOString()
-    await seedSession(db, { host: 'studentaid.gov', establishedAt: est })
+    await seedSession(db, { host: FIXTURE_HOST, establishedAt: est })
 
     const launchBrowser = makeLauncher({
-      'https://studentaid.gov/my-activity/': {
-        finalUrl: 'https://studentaid.gov/my-activity/', text: STUDENTAID_MY_ACTIVITY,
+      [`${FIXTURE_ORIGIN}/authenticated`]: {
+        finalUrl: `${FIXTURE_ORIGIN}/authenticated`, text: STUDENTAID_MY_ACTIVITY,
       },
     })
     await runSessionKeepAliveSweep(db, { launchBrowser })
 
     const meta = JSON.parse(
       db.prepare('SELECT metadata_json FROM hamilton_saved_sessions WHERE portal_host = ?')
-        .get('studentaid.gov').metadata_json,
+        .get(FIXTURE_HOST).metadata_json,
     )
     expect(meta.imported_via).toBe('session_keepalive_refresh')
     expect(meta.session_established_at).toBe(est) // unchanged by the refresh
 
     // …so the recorded age reflects 5 days of real session life, not ~0.
-    const s = summarizeHostLifetime(await loadLifetimeLedger(db), 'studentaid.gov')
+    const s = summarizeHostLifetime(await loadLifetimeLedger(db), FIXTURE_HOST)
     expect(s.confirmedAliveMaxMs).toBeGreaterThan(4.5 * 86_400_000)
   })
 })

@@ -6,12 +6,12 @@ import { Calendar as CalendarIcon, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { parseLocalDate } from "@/components/shared/dateUtils";
 
 export default function UpcomingMilestonesCard({ upcomingMilestones }) {
   const isValidDate = (dateString) => {
     if (!dateString) return false;
-    const date = new Date(dateString);
-    return !isNaN(date.getTime());
+    return Boolean(parseLocalDate(dateString));
   };
 
   return (
@@ -43,8 +43,8 @@ export default function UpcomingMilestonesCard({ upcomingMilestones }) {
                 <div className="flex-1">
                   <p className="font-medium text-card-foreground">{milestone.title}</p>
                   <p className="text-sm text-foreground">
-                    {isValidDate(milestone.due_date) 
-                      ? format(new Date(milestone.due_date), 'MMM d, yyyy') 
+                    {isValidDate(milestone.due_date)
+                      ? format(parseLocalDate(milestone.due_date), 'MMM d, yyyy')
                       : 'No due date'}
                   </p>
                 </div>

@@ -51,10 +51,11 @@ send email — John remains draft-only under his own safety config.
 | `ROBERT_HARVEST_DAYS` | Recent-mail lookback window (days) | `90` (max 365) |
 | `ROBERT_HARVEST_MAX_MESSAGES` | Max messages read per account per run | `200` (max 1000) |
 | `ROBERT_HARVEST_MAX_CONTACTS` | Max address-book entries per account | `500` (max 2000) |
-| `ROBERT_GMAIL_APP_PASSWORD` | `buckeye7066@gmail.com` — Gmail IMAP app password | unset → account skipped |
-| `ROBERT_YAHOO_FIREROOKIE74_APP_PASSWORD` | `firerookie_74@yahoo.com` — Yahoo IMAP app password | unset → account skipped |
-| `ROBERT_YAHOO_JWHITERNMBA_APP_PASSWORD` | `jwhiternmba@yahoo.com` — Yahoo IMAP app password | unset → account skipped |
-| `MICROSOFT_TENANT_ID` / `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | `dr.johnwhite@axiombiolabs.org` — **reuses John's existing Microsoft Graph app-only credentials** | unset → account skipped |
+| `ROBERT_GMAIL_ACCOUNT` / `ROBERT_GMAIL_APP_PASSWORD` | Owner-configured Gmail account and IMAP app password | either unset → account skipped |
+| `ROBERT_YAHOO_PRIMARY_ACCOUNT` / `ROBERT_YAHOO_PRIMARY_APP_PASSWORD` | Owner-configured primary Yahoo account and app password | either unset → account skipped |
+| `ROBERT_YAHOO_SECONDARY_ACCOUNT` / `ROBERT_YAHOO_SECONDARY_APP_PASSWORD` | Owner-configured secondary Yahoo account and app password | either unset → account skipped |
+| `ROBERT_GRAPH_ACCOUNT` + `MICROSOFT_TENANT_ID` / `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Owner-configured Microsoft 365 mailbox and app-only credentials | any unset → account skipped |
+| `OWNER_CONTACT_EMAILS` | Comma-separated owner self-addresses excluded from prospecting | unset in production → empty |
 | `YANA_HARVEST_VERIFY_LIMIT` | Yana verification batch per discovery cycle | `200` |
 
 No OAuth browser flows are implemented anywhere — env-provided app passwords /
@@ -62,20 +63,20 @@ app credentials only.
 
 ## What the owner must provision, per account
 
-1. **buckeye7066@gmail.com (Gmail)** — enable 2-Step Verification, create an
-   [App Password](https://myaccount.google.com/apppasswords), set it as
-   `ROBERT_GMAIL_APP_PASSWORD`. IMAP must be enabled in Gmail settings.
+1. **Configured Gmail account** — enable 2-Step Verification, create an
+   [App Password](https://myaccount.google.com/apppasswords), set the account as
+   `ROBERT_GMAIL_ACCOUNT` and the password as `ROBERT_GMAIL_APP_PASSWORD`.
+   IMAP must be enabled in Gmail settings.
    *Note:* IMAP exposes recent mail headers, not the Google Contacts address
    book. To also harvest the saved address book, export Google Contacts to CSV
    and use the existing owner-contacts import
    (`yanaContactsImport.parseContactsCsv` / the admin import endpoint).
-2. **firerookie_74@yahoo.com / jwhiternmba@yahoo.com (Yahoo)** — generate an
-   app password per account (Yahoo Account Security → "Generate app password")
-   and set `ROBERT_YAHOO_FIREROOKIE74_APP_PASSWORD` /
-   `ROBERT_YAHOO_JWHITERNMBA_APP_PASSWORD`. Yahoo has no contacts API — the
+2. **Configured Yahoo accounts** — generate an app password per account (Yahoo
+   Account Security → "Generate app password") and set the matching primary or
+   secondary account/password pair. Yahoo has no contacts API — the
    address book, if wanted, goes through the same CSV import as Gmail's.
-3. **dr.johnwhite@axiombiolabs.org (Microsoft 365)** — nothing new if John's
-   Graph app is already configured. The Azure app needs application (app-only)
+3. **Configured Microsoft 365 account** — set `ROBERT_GRAPH_ACCOUNT`; the
+   existing Graph app may be reused. The Azure app needs application (app-only)
    permissions **Mail.Read** (already consented for the grant email feed) and
    **Contacts.Read** (also used by the existing `ROBERT_SCAN_EMAIL_CONTACTS`
    scan) with admin consent.

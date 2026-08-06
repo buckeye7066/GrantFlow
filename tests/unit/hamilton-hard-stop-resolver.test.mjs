@@ -326,9 +326,9 @@ describe('hamiltonResolvedFieldStore', () => {
 
   it('saves and retrieves resolved fields, normalises keys', async () => {
     const db = makeDb()
-    await saveResolvedField(db, { profileId: 'p1', fieldKey: 'First-Name', fieldValue: 'Anastasia' })
+    await saveResolvedField(db, { profileId: 'p1', fieldKey: 'First-Name', fieldValue: 'Demo Student' })
     const got = await getResolvedField(db, { profileId: 'p1', fieldKey: 'first_name' })
-    assert.equal(got.field_value, 'Anastasia')
+    assert.equal(got.field_value, 'Demo Student')
     assert.equal(got.field_key, 'first_name')
     // Idempotent on key — second save updates.
     await saveResolvedField(db, { profileId: 'p1', fieldKey: 'first_name', fieldValue: 'Ana' })

@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS agent_control_runs (
   )),
   started_by_user_id TEXT,
   started_by_email TEXT,
-  admin_email TEXT NOT NULL DEFAULT 'buckeye7066@gmail.com',
+  admin_email TEXT NOT NULL DEFAULT 'admin@grantflow.local',
   requested_agents_json TEXT NOT NULL DEFAULT '[]',
   options_json TEXT NOT NULL DEFAULT '{}',
   cancellation_requested_at TIMESTAMPTZ,

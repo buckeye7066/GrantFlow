@@ -49,7 +49,9 @@ function dbFixture() {
       http_status INTEGER,
       is_hidden INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
-      status TEXT DEFAULT 'active'
+      status TEXT DEFAULT 'active',
+      deadline TEXT,
+      deadline_type TEXT
     );
     CREATE TABLE verification_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,6 +129,80 @@ describe('link backlog repair', () => {
     expect(row.opportunity_kind).toBe('referral')
     expect(row.is_hidden).toBe(1)
     expect(row.is_active).toBe(0)
+    db.close()
+  })
+
+  it('repairs the shared six-kind lifecycle plus NULL/blank legacy rows and excludes pointers', async () => {
+    const db = dbFixture()
+    const lifecycleRows = [
+      ['legacy-direct', ' direct '],
+      ['direct-grant', ' direct_grant '],
+      ['program', 'Program'],
+      ['scholarship', ' scholarship '],
+      ['in-kind', 'IN_KIND'],
+      ['benefit', ' benefit '],
+      ['legacy-null', null],
+      ['legacy-blank', '   '],
+    ]
+    for (const [index, [id, opportunityKind]] of lifecycleRows.entries()) {
+      insert(db, {
+        id,
+        opportunity_kind: opportunityKind,
+        application_url: `https://8.8.8.8/live-${index}`,
+      })
+    }
+    insert(db, {
+      id: 'pointer-result',
+      opportunity_kind: 'DIRECT',
+      result_kind: ' referral ',
+      application_url: 'https://8.8.8.8/pointer-result',
+    })
+    insert(db, {
+      id: 'pointer-type',
+      opportunity_kind: 'DIRECT',
+      type: 'SCHOOL_PORTAL',
+      application_url: 'https://8.8.8.8/pointer-type',
+    })
+    insert(db, {
+      id: 'unknown-kind',
+      opportunity_kind: 'OTHER',
+      application_url: 'https://8.8.8.8/unknown',
+    })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => ({ status: 200, url: String(url) }))
+
+    const result = await repairBrokenDirectBatch(db, {
+      limit: 10,
+      concurrency: 2,
+      timeoutMs: 3000,
+      verifiedBy: 'test-canonical-kinds',
+      findOfficialUrlImpl: async () => ({ url: null, searched: true, hits: 0 }),
+    })
+
+    expect(result).toMatchObject({ selected: 8, restored: 8, retired: 0, pending: 0 })
+    for (const [id] of lifecycleRows) {
+      expect(db.prepare(`
+        SELECT link_status, status, is_hidden, is_active
+          FROM funding_opportunities
+         WHERE id = ?
+      `).get(id)).toEqual({
+        link_status: 'ok',
+        status: 'active',
+        is_hidden: 0,
+        is_active: 1,
+      })
+    }
+    for (const id of ['pointer-result', 'pointer-type', 'unknown-kind']) {
+      expect(db.prepare(`
+        SELECT link_status, status, is_hidden, is_active
+          FROM funding_opportunities
+         WHERE id = ?
+      `).get(id)).toEqual({
+        link_status: 'broken',
+        status: 'active',
+        is_hidden: 1,
+        is_active: 0,
+      })
+    }
     db.close()
   })
 

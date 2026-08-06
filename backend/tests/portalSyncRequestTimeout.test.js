@@ -35,6 +35,7 @@ vi.mock('../utils/accessControl.js', () => ({
 }))
 
 const router = (await import('../routes/hamiltonPortalSync.js')).default
+const { runPortalSync } = await import('../services/hamilton/portalSync/index.js')
 
 /**
  * Build an app that arms the SAME 30s global deadline server.js does, and
@@ -93,5 +94,21 @@ describe('portal-sync request deadline', () => {
         .send({ profileId: 'p1', portalHost: 'studentaid.gov' })
       expect(captured.req, `${path} must re-arm its deadline`).toBeGreaterThan(30_000)
     }
+  })
+
+  it('fail-closes the legacy one-click submission endpoint without invoking portal automation', async () => {
+    const captured = {}
+    runPortalSync.mockClear()
+    const res = await request(makeApp(captured))
+      .post('/api/hamilton/portal-sync/submit-awards')
+      .send({ profileId: 'p1', portalHost: 'studentaid.gov' })
+
+    expect(res.status).toBe(409)
+    expect(res.body).toMatchObject({
+      ok: false,
+      error: 'reviewed_submission_adapter_required',
+      requires_human_submission: true,
+    })
+    expect(runPortalSync).not.toHaveBeenCalled()
   })
 })

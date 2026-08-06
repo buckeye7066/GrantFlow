@@ -219,6 +219,7 @@ test('opportunityInserter (C): curated_verified record WITH URL is accepted', as
 
 test('itemCrawler (D): no fallback threshold; matched=0 and fallback_applied=false when no items qualify', async () => {
   const { processItemCrawlerJob } = await import('../../backend/services/itemCrawler.js')
+  const { SCORE_SCALE_ID, STRONG_MATCH_SCORE } = await import('../../backend/config/matchThresholds.js')
   const db = createDb()
 
   const { mkdtempSync, writeFileSync } = await import('node:fs')
@@ -240,9 +241,13 @@ test('itemCrawler (D): no fallback threshold; matched=0 and fallback_applied=fal
   })
 
   assert.equal(result.matched, 0, `Expected 0 matched results but got ${result.matched}`)
-  assert.equal(result.result_meta.match_threshold, 90, 'match_threshold should reflect the requested value')
+  assert.equal(result.result_meta.match_threshold, STRONG_MATCH_SCORE, 'legacy input should be translated to the current scale')
   assert.equal(result.result_meta.match_threshold_requested, 90, 'match_threshold_requested (back-compat) should reflect the requested value')
-  assert.equal(result.result_meta.match_threshold_used, 90, 'match_threshold_used (back-compat) should equal the requested value')
+  assert.equal(result.result_meta.match_threshold_used, STRONG_MATCH_SCORE, 'effective threshold uses the current scale')
+  assert.equal(result.result_meta.match_threshold_applied, false, 'advisory metadata is not a second decision gate')
+  assert.equal(result.result_meta.match_threshold_translated, true)
+  assert.equal(result.result_meta.requested_score_scale_id, null)
+  assert.equal(result.result_meta.score_scale_id, SCORE_SCALE_ID)
   assert.equal(
     result.result_meta.match_threshold_fallback_applied,
     false,
@@ -375,4 +380,3 @@ test('discovery (G): frontend comprehensive match sends profile id, not a profil
   assert.match(text, /profile_json: selectedProfileId/)
   assert.doesNotMatch(text, /profile_json:\s*selectedOrg[,}]/)
 })
-

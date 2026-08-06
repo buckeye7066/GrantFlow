@@ -40,6 +40,7 @@ function startServer(extraEnv = {}) {
     ALLOW_SQLITE_IN_PROD: 'true',
     ALLOW_EPHEMERAL_SQLITE: 'true',
     ALLOW_EPHEMERAL_UPLOADS: 'true',
+    ADMIN_EMAIL: 'ci-operator@grantflow.app',
     ADMIN_TOKEN: 'test-admin-token-ci',
     SMOKE_MODE: 'true',
     DISABLE_BACKGROUND_SERVICES: 'true',
@@ -123,7 +124,7 @@ async function fetchJson(url, init) {
     },
   })
   const json = await res.json().catch(() => null)
-  return { status: res.status, json }
+  return { status: res.status, json, headers: res.headers }
 }
 
 test('auth: email start returns 403 for unauthorized emails in production (no matching profile)', async () => {
@@ -286,7 +287,8 @@ test('auth: password setup complete sets password, consumes token, and returns s
 
     assert.equal(complete.status, 200)
     assert.ok(complete.json?.accessToken)
-    assert.ok(complete.json?.refreshToken)
+    assert.equal(complete.json?.refreshToken, undefined)
+    assert.match(String(complete.headers?.get?.('set-cookie') || ''), /grantflow_refresh=.*HttpOnly.*Secure.*SameSite=Strict/i)
 
     const db2 = new Database(srv.dbPath)
     const userRow = db2.prepare('SELECT password_hash FROM users WHERE id = ?').get(userId)
@@ -338,7 +340,8 @@ test('auth: password login succeeds after password is set', async () => {
 
     assert.equal(login.status, 200)
     assert.ok(login.json?.accessToken)
-    assert.ok(login.json?.refreshToken)
+    assert.equal(login.json?.refreshToken, undefined)
+    assert.match(String(login.headers?.get?.('set-cookie') || ''), /grantflow_refresh=.*HttpOnly.*Secure.*SameSite=Strict/i)
   } finally {
     await srv.stop()
   }

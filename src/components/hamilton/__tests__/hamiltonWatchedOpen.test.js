@@ -1,11 +1,11 @@
 /**
  * openWithHamiltonWatching — the ONE way profile surfaces open a portal /
- * application URL. Guards the global guarantee behind "Hamilton is watching":
+ * application URL. Guards the controlled-beta manual-browser boundary:
  *
  *   1. The secure popup is claimed SYNCHRONOUSLY (before the async cloud-login
  *      start), else popup blockers kill it.
  *   2. Success navigates the popup to the same-origin /HamiltonLiveLogin view.
- *   3. A failed cloud-login start degrades to the RAW portal URL in the SAME
+ *   3. A failed synthetic cloud-login start degrades to the fixture URL in the SAME
  *      popup (never a dead window) and reports watched:false honestly.
  *   4. No profileId → plain window.open fallback (nothing to bind a session to).
  *   5. Non-http(s) URLs are refused outright.
@@ -52,43 +52,43 @@ describe('openWithHamiltonWatching', () => {
     vi.clearAllMocks()
   })
 
-  it('opens the popup BEFORE the cloud-login start resolves, then navigates to the live view', async () => {
+  it('keeps the watched path testable only on the reserved synthetic fixture', async () => {
     let popupOpenedFirst = false
     startCloudLogin.mockImplementation(async () => {
       // By the time the async start runs, the popup must already be claimed.
       popupOpenedFirst = openPendingLoginWindow.mock.calls.length === 1
-      return { liveSessionId: 'cl_1', portalHost: 'leic.tennessee.edu' }
+      return { liveSessionId: 'cl_1', portalHost: 'hamilton-submit-fixture.invalid' }
     })
 
     const res = await openWithHamiltonWatching({
       profileId: 'p1',
-      url: 'https://leic.tennessee.edu/national-forensic-academy-collegiate',
-      label: 'TIAI Scholarship',
+      url: 'https://hamilton-submit-fixture.invalid/application',
+      label: 'Synthetic fixture',
     })
 
     expect(popupOpenedFirst).toBe(true)
     expect(startCloudLogin).toHaveBeenCalledWith('p1', {
-      portalHost: 'leic.tennessee.edu',
-      loginUrl: 'https://leic.tennessee.edu/national-forensic-academy-collegiate',
-      label: 'TIAI Scholarship',
+      portalHost: 'hamilton-submit-fixture.invalid',
+      loginUrl: 'https://hamilton-submit-fixture.invalid/application',
+      label: 'Synthetic fixture',
     })
     expect(popup.navigate).toHaveBeenCalledWith(
-      'https://app.axiombiolabs.org/HamiltonLiveLogin?session=cl_1&host=leic.tennessee.edu',
+      'https://app.axiombiolabs.org/HamiltonLiveLogin?session=cl_1&host=hamilton-submit-fixture.invalid',
     )
     expect(res).toEqual({ opened: true, watched: true, blocked: false })
   })
 
-  it('degrades to the raw portal URL in the SAME popup when Hamilton cannot start', async () => {
-    startCloudLogin.mockRejectedValue(new Error('automation disabled'))
+  it('opens a real portal directly and never calls cloud login', async () => {
     const res = await openWithHamiltonWatching({ profileId: 'p1', url: 'https://studentaid.gov/fseog' })
-    expect(popup.navigate).toHaveBeenCalledWith('https://studentaid.gov/fseog')
-    expect(popup.fail).not.toHaveBeenCalled()
+    expect(window.open).toHaveBeenCalledWith('https://studentaid.gov/fseog', '_blank', 'noopener,noreferrer')
+    expect(openPendingLoginWindow).not.toHaveBeenCalled()
+    expect(startCloudLogin).not.toHaveBeenCalled()
     expect(res).toEqual({ opened: true, watched: false, blocked: false })
   })
 
   it('reports blocked (and opens nothing else) when the popup is refused', async () => {
     openPendingLoginWindow.mockReturnValueOnce({ ...popup, blocked: true })
-    const res = await openWithHamiltonWatching({ profileId: 'p1', url: 'https://example.org' })
+    const res = await openWithHamiltonWatching({ profileId: 'p1', url: 'https://hamilton-submit-fixture.invalid/login' })
     expect(startCloudLogin).not.toHaveBeenCalled()
     expect(res).toEqual({ opened: false, watched: false, blocked: true })
   })
@@ -108,7 +108,8 @@ describe('openWithHamiltonWatching', () => {
   })
 
   it('canHamiltonWatch requires a profileId and a valid http(s) URL', () => {
-    expect(canHamiltonWatch({ profileId: 'p1', url: 'https://a.org' })).toBe(true)
+    expect(canHamiltonWatch({ profileId: 'p1', url: 'https://hamilton-submit-fixture.invalid/apply' })).toBe(true)
+    expect(canHamiltonWatch({ profileId: 'p1', url: 'https://a.org' })).toBe(false)
     expect(canHamiltonWatch({ url: 'https://a.org' })).toBe(false)
     expect(canHamiltonWatch({ profileId: 'p1', url: 'ftp://a.org' })).toBe(false)
   })

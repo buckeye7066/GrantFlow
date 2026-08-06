@@ -16,8 +16,6 @@ import {
   isFundingResource,
   partitionFundingSources,
 } from '../services/matching/fundingSourcePresentation.js'
-import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
-import { reconcileNeedFirstProfileMatches } from '../services/matching/needFirstReconciler.js'
 import {
   FUNDING_SOURCE_QUERY_CONTRACT,
   readFundingSourceRows,
@@ -26,7 +24,6 @@ import { NEED_FIRST_SCORING_VERSION } from '../services/matching/needFirstScorin
 import { qualifiesForDisplay } from '../config/matchSurfacing.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
-  ensurePipelineDismissalsSchema,
   recordDismissal,
   reconcileDismissedGrants,
   reconcileDismissedMatches,
@@ -75,17 +72,6 @@ function jparse(value, fallback) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
-function emptyReconciliation() {
-  return {
-    scanned: 0,
-    updated: 0,
-    rejected: 0,
-    demoted: 0,
-    score_lowered: 0,
-    failures: [],
-  }
-}
-
 /**
  * Classify the failure without reflecting SQL, column names, or stack traces to
  * the client. The old route converted every failure into HTTP 200 + empty data,
@@ -108,6 +94,36 @@ export function classifyFundingSourcesError(error) {
     return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'database_busy' }
   }
   return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'internal_failure' }
+}
+
+export function isExplicitRollingDeadline(row) {
+  const deadlineType = String(row?.deadline_type || '').trim().toLowerCase()
+  return deadlineType === 'rolling' || deadlineType === 'ongoing'
+}
+
+export function persistedScoringPolicyReceipt(rows = []) {
+  const counts = {}
+  let unknown = 0
+  for (const row of rows) {
+    const version = String(row?.scoring_policy_version ?? '').trim()
+    if (!version) {
+      unknown += 1
+      continue
+    }
+    counts[version] = (counts[version] || 0) + 1
+  }
+  const versions = Object.keys(counts).sort()
+  return {
+    version: unknown === 0 && versions.length === 1 ? versions[0] : null,
+    versions: counts,
+    unknown,
+    current: NEED_FIRST_SCORING_VERSION,
+    all_current:
+      rows.length > 0 &&
+      unknown === 0 &&
+      versions.length === 1 &&
+      versions[0] === NEED_FIRST_SCORING_VERSION,
+  }
 }
 
 router.get('/profiles/:id/funding-sources', async (req, res) => {
@@ -133,66 +149,52 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
     // normalization so presentation and discovery use the same facts.
     profileContext.profileNorm = loadedContext.profileNorm ?? null
 
-    // The production audit deliberately performs SELECT-only comparison. In
-    // ordinary product traffic, keep the existing self-heal + reconciliation.
-    if (!readOnlyAudit) await ensurePipelineDismissalsSchema(req.db)
-
-    // Persisted rows converge in bounded slices, but a reconciliation failure
-    // never empties the user's list. restorePersistedMatchTruth below applies the
-    // same policy at read time, so owner-facing correctness does not depend on a
-    // successful write-back during this request.
-    let reconciliation = emptyReconciliation()
-    if (!readOnlyAudit) {
-      try {
-        reconciliation = await reconcileNeedFirstProfileMatches(req.db, {
-          profileId,
-          profileContext,
-          limit: 100,
-        })
-      } catch (error) {
-        reconciliation.failures.push({ error: error?.message || String(error) })
-        log.warn('funding_sources.need_first_reconcile_failed', {
-          profileId,
-          error: error?.message || String(error),
-        })
-      }
-    }
-
+    // Every GET is SELECT-only presentation. Match write-back belongs to the
+    // versioned background reconciliation/sweep path, never an ordinary read.
     const loadedRows = await readFundingSourceRows(req.db, profileId)
     const rows = loadedRows.rows
 
-    const mapped = rows.map((row) => ({
-      ...row,
-      match_score: row.match_score,
-      match_decision: row.match_decision,
-      match_explanation: row.match_explanation,
-      match_reasons: jparse(row.match_reasons, []),
-      match_explain_json: jparse(row.match_explain_json, row.match_explain_json ?? null),
-      ineligibility_reasons: jparse(row.ineligibility_reasons, row.ineligibility_reasons ?? []),
-      url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
-      actionable_url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
-      is_directory: isFundingResource(row),
-    }))
+    const mapped = rows.map((row) => {
+      const matchExplain = jparse(row.match_explain_json, row.match_explain_json ?? null)
+      return {
+        ...row,
+        match_score: row.match_score,
+        match_decision: row.match_decision,
+        match_explanation: row.match_explanation,
+        match_reasons: jparse(row.match_reasons, []),
+        match_explain_json: matchExplain,
+        scoring_policy_version:
+          row.scoring_policy_version ??
+          matchExplain?.scoring_policy_version ??
+          matchExplain?.scoreBreakdown?.scoring_policy_version ??
+          matchExplain?.score_breakdown?.scoring_policy_version ??
+          null,
+        score_scale_id:
+          row.score_scale_id ??
+          matchExplain?.score_scale_id ??
+          matchExplain?.scoreScaleId ??
+          null,
+        ineligibility_reasons: jparse(row.ineligibility_reasons, row.ineligibility_reasons ?? []),
+        url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
+        actionable_url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
+        is_directory: isFundingResource(row),
+      }
+    })
 
-    // Trust and hard-eligibility gates may remove unsafe/ineligible rows, but
-    // stored profile↔opportunity decisions are the authority. This prevents a
-    // read from silently recomputing a different score before persisted truth is
-    // restored and compared by the production audit.
+    // Trust and lifecycle presentation gates may hide unsafe rows, but the
+    // stored profile↔opportunity score and decision remain authoritative. No
+    // read-time need/geography policy is allowed to revise that artifact.
     const canonical = canonicalizeOpportunityList(profileContext, mapped, {
       preserveDirectories: true,
       rejectHardIneligible: true,
       useStoredDecision: true,
     })
-    const persistedTruth = restorePersistedMatchTruth(canonical.kept, mapped, {
-      profileContext,
-    })
 
     const sources = []
-    let geoStubsHidden = 0
-    for (const row of persistedTruth) {
+    let geoStubsObserved = 0
+    for (const row of canonical.kept) {
       if (isTemplatedGeoStub({ title: row.title, opportunity_kind: row.opportunity_kind })) {
-        geoStubsHidden += 1
-        continue
+        geoStubsObserved += 1
       }
       const kind = String(row.opportunity_kind ?? '').toUpperCase()
       sources.push({
@@ -214,7 +216,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         source: row.source ?? null,
         deadline: row.deadline ?? null,
         deadline_type: row.deadline_type ?? null,
-        is_rolling: row.deadline_type === 'rolling' || !row.deadline,
+        is_rolling: isExplicitRollingDeadline(row),
         amount_min: row.amount_min ?? null,
         amount_max: row.amount_max ?? null,
         geography: row.is_national ? 'National' : (row.state || null),
@@ -228,11 +230,13 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         trust_tier: row.source_trust_tier ?? null,
         matcher_version: row.matcher_version ?? null,
         scoring_policy_version: row.scoring_policy_version ?? null,
+        score_scale_id: row.score_scale_id ?? null,
       })
     }
 
     const qualified = sources.filter((source) => qualifiesForDisplay(source, minScore))
     const presented = partitionFundingSources(qualified)
+    const scoringPolicy = persistedScoringPolicyReceipt(qualified)
     res.set('Cache-Control', 'no-store')
     return res.json({
       ok: true,
@@ -241,17 +245,18 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       engine: 'crawler-os',
       query_contract: FUNDING_SOURCE_QUERY_CONTRACT,
       dismissal_filter: loadedRows.dismissal_filter,
-      scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+      scoring_policy_version: scoringPolicy.version,
+      current_scoring_policy_version: scoringPolicy.current,
+      persisted_scoring_policy_versions: scoringPolicy.versions,
+      scoring_policy_unknown_count: scoringPolicy.unknown,
+      scoring_policy_all_current: scoringPolicy.all_current,
       min_score: minScore,
       ...presented,
-      geo_stubs_hidden: geoStubsHidden,
+      geo_stubs_hidden: 0,
+      geo_stubs_observed: geoStubsObserved,
       need_first_reconciliation: {
-        scanned: reconciliation.scanned,
-        updated: reconciliation.updated,
-        rejected: reconciliation.rejected,
-        demoted: reconciliation.demoted,
-        score_lowered: reconciliation.score_lowered,
-        failures: reconciliation.failures?.length ?? 0,
+        read_only: true,
+        deferred_to_background: true,
         read_only_audit: readOnlyAudit,
       },
     })
@@ -277,8 +282,14 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       worth_reviewing: [],
       directories: [],
       resource_count: 0,
-      scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+      scoring_policy_version: null,
+      current_scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+      persisted_scoring_policy_versions: {},
+      scoring_policy_unknown_count: 0,
+      scoring_policy_all_current: false,
       need_first_reconciliation: {
+        read_only: true,
+        deferred_to_background: true,
         read_only_audit: readOnlyAudit,
       },
     })

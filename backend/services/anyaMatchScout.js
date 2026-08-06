@@ -3,7 +3,7 @@
  * --------------
  * "Anya Match Scout" — a recommend-only background scan that finds
  * funding opportunities with a deterministic match_score >= THRESHOLD
- * (default 85) for one profile and writes a PENDING row to
+ * (the canonical strong-match bar) for one profile and writes a PENDING row to
  * `anya_match_suggestions` plus a notification of `type='anya_high_match'`.
  *
  * Hard rules (mirrored in tests):
@@ -33,6 +33,11 @@ import { assessOpportunityTrust } from './opportunityTrust.js'
 import { interpretProfileNeeds } from './profileNeedsInterpreter.js'
 import { safeParseJSON, safeStringifyJSON } from '../utils/safeJson.js'
 import { createLogger } from '../utils/logger.js'
+import { SCORE_SCALE_ID, STRONG_MATCH_SCORE } from '../config/matchThresholds.js'
+import {
+  isOpportunityLifecycleVisible,
+  opportunityLifecycleVisibilitySql,
+} from '../config/matchSurfacing.js'
 
 const log = createLogger('service:anya-match-scout')
 
@@ -43,7 +48,7 @@ const log = createLogger('service:anya-match-scout')
 function getThreshold() {
   const raw = Number(process.env.ANYA_MATCH_SCOUT_THRESHOLD)
   if (Number.isFinite(raw) && raw >= 0 && raw <= 100) return raw
-  return 85
+  return STRONG_MATCH_SCORE
 }
 
 function getMaxAlertsPerProfile() {
@@ -101,7 +106,9 @@ async function loadCandidateOpportunities(db, profileContext) {
     null
 
   // Prefer state + national. Fall back to national-only if no state.
-  const clauses = [isPostgres ? 'is_active = TRUE' : 'is_active = 1']
+  const clauses = [opportunityLifecycleVisibilitySql({
+    dialect: isPostgres ? 'postgres' : 'sqlite',
+  })]
   const params = []
   if (profileState) {
     clauses.push('(UPPER(state) = UPPER(?) OR state IS NULL OR state = \'\' OR state = \'nationwide\')')
@@ -275,7 +282,7 @@ async function insertNotification(db, { userId, suggestionId, profileId, opportu
     add_url: `/api/anya/match-suggestions/${suggestionId}/accept`,
     dismiss_url: `/api/anya/match-suggestions/${suggestionId}/dismiss`,
   }
-  const message = `${title} looks like a ${Math.round(matchScore)}% fit for this profile.${
+  const message = `${title} has a canonical evidence score of ${Math.round(matchScore)} for this profile.${
     funder ? ` Funder: ${funder}.` : ''
   }`
   // Expires after 30 days — same window as the rest of the suggestion's
@@ -367,6 +374,9 @@ export async function runMatchScoutForProfile(db, profileId, options = {}) {
   // ── 1. Junk + trust gate (same gates Discover Grants uses) ──
   const trustKept = []
   for (const opp of candidates) {
+    // Defense in depth: the SQL loader excludes quarantined rows, and this
+    // blocks mock/alternate callers or a lifecycle change racing the scan.
+    if (!isOpportunityLifecycleVisible(opp)) continue
     if (isJunkOpportunity(opp, {})) continue
     const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
     if (!trust?.display) continue
@@ -389,6 +399,7 @@ export async function runMatchScoutForProfile(db, profileId, options = {}) {
         trust,
         score: decision.score,
         decision: decision.decision,
+        matcherVersion: decision.matcherVersion,
         reasons: decision.reasons ?? decision.matched_profile_facts ?? [],
       }
     })
@@ -433,8 +444,13 @@ export async function runMatchScoutForProfile(db, profileId, options = {}) {
   const primaryNeedKeys = needs.primaryNeeds.map((n) => n.key)
 
   // ── 5. Write rows + notifications ──
-  for (const { opp, trust, score, reasons } of eligible) {
-    const oppSnapshot = buildOpportunitySnapshot(opp, trust)
+  for (const { opp, trust, score, decision, matcherVersion, reasons } of eligible) {
+    const oppSnapshot = {
+      ...buildOpportunitySnapshot(opp, trust),
+      match_decision: decision,
+      matcher_version: matcherVersion || null,
+      score_scale: SCORE_SCALE_ID,
+    }
     const suggestionId = await insertSuggestion(db, {
       profile_id: String(profileId),
       user_id: userId,
@@ -448,6 +464,9 @@ export async function runMatchScoutForProfile(db, profileId, options = {}) {
         route: 'DiscoverGrants',
         candidate_source: 'funding_opportunities',
         threshold,
+        match_decision: decision,
+        matcher_version: matcherVersion || null,
+        score_scale: SCORE_SCALE_ID,
       },
       opportunity_data: oppSnapshot,
     })

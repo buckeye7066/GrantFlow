@@ -1,7 +1,7 @@
 /**
  * stageOfLifeEligibility.js — the ACADEMIC-STAGE eligibility gate.
  *
- * THE DEFECT, measured read-only in prod 2026-08-02 on Anastasia White
+ * THE DEFECT, measured read-only in prod 2026-08-02 on Demo Tennessee STEM Student
  * (`c4a92724-…`, a 17-year-old dual-enrolled HIGH-SCHOOL SENIOR in TN whose
  * derived stage is `dual_enrolled_incoming_freshman`):
  *
@@ -196,7 +196,7 @@ export const STAGE_REQUIREMENT_CLASSES = Object.freeze([
     // Dual enrollment is BEING IN HIGH SCHOOL while taking college classes —
     // an enrolled undergraduate or graduate student structurally cannot be one
     // (2026-08-03: "Cleveland State Foundation Dual Enrollment Scholarships"
-    // surfaced ACCEPT 53 to Robert White, a full-time enrolled college
+    // surfaced ACCEPT 53 to Demo College Student Persona, a full-time enrolled college
     // student, through the institution-attendance recall net — the engine had
     // no notion that a dual-enrollment award's audience excludes him).
     // `high_school_student` and `dual_enrolled_incoming_freshman` are the

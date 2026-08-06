@@ -35,14 +35,14 @@ const Billing = lazyWithRetry(() => import('@/pages/Billing'), 'Admin:Billing');
 const Automation = lazyWithRetry(() => import('@/pages/Automation'), 'Admin:Automation');
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { isHamiltonAdminEmail } from '../../shared/adminEmail.js';
 
 export default function Admin() {
   const user = useAuthStore((state) => state.user);
   // Use Boolean coercion to align with backend truthy checks - not strict equality
   const isAdmin = Boolean(user?.is_admin) || user?.role === 'admin';
-  // Yana operator dashboard is restricted to the single canonical admin email.
-  const isYanaOperator = isHamiltonAdminEmail(user?.email || user?.primary_email);
+  // The DB-backed admin flag is the only client-side presentation hint. The
+  // server independently authorizes every operator mutation.
+  const isYanaOperator = isAdmin;
 
   if (!isAdmin) {
     return (

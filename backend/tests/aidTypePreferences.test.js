@@ -2,7 +2,7 @@
  * Per-profile aid-type preference — "which aid would you actually accept?"
  *
  * OWNER RULE (2026-08-01): "give the profile the option of which aid they would
- * like to accept. In the case of Anastasia and Robert, for example, they do not
+ * like to accept. In the case of Demo Student and Robert, for example, they do not
  * want any loans, only grants, endowments, and scholarships."
  *
  * A loan is debt with the student's name on it. GrantFlow's DISCOVERY path
@@ -105,7 +105,7 @@ describe('resolveAcceptedAidTypes', () => {
 })
 
 describe('evaluateAwardAgainstPreferences', () => {
-  // Anastasia & Robert: grants, endowments, scholarships — no loans.
+  // Demo Student & Robert: grants, endowments, scholarships — no loans.
   const NO_LOANS = { aid_types_accepted: ['grant', 'endowment', 'scholarship'] }
 
   it('declines a loan for a no-loans profile, with a reason that stays honest about the offer', () => {

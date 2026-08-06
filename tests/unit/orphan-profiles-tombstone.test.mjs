@@ -82,7 +82,7 @@ test('tombstoned baseline profile does not reappear after restart + re-seed', as
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-tombstone-'))
   const dbPath = path.join(tmp, 'test.db')
 
-  const profileId = 'profile-focus-forward-ministries'
+  const profileId = 'profile-demo-faith-nonprofit'
 
   // Boot server once; baseline seed should create the profile.
   const srv1 = startServer({ dbPath })

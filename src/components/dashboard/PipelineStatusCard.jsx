@@ -80,6 +80,62 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
 
   const total = statusOrder.reduce((sum, status) => sum + resolveCount(stats, status.key), 0)
 
+  if (!isAdmin) {
+    return (
+      <Card className="border border-border/70 bg-card/80 text-card-foreground shadow-none backdrop-blur-lg">
+        <CardHeader className="pb-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle className="text-lg font-semibold text-card-foreground">Your pipeline</CardTitle>
+              <p className="mt-1 text-sm text-foreground">
+                Accepted sources stay here while you prepare, hand off, submit, and retain confirmation.
+              </p>
+            </div>
+            <Button asChild size="sm" variant="secondary" className="w-full gap-2 sm:w-auto">
+              <Link to={createPageUrl('Pipeline')}>
+                Open pipeline
+                <ArrowRight className="ml-1 h-3 w-3" aria-hidden="true" />
+              </Link>
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {grantsQuery.isError ? (
+            <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+              <p className="font-semibold">Pipeline totals are unavailable.</p>
+              <p className="mt-1">No source is being counted as missing or complete.</p>
+              <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => grantsQuery.refetch()}>Try again</Button>
+            </div>
+          ) : (
+            <div
+              className="grid grid-cols-1 gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3 min-[360px]:grid-cols-2"
+              aria-busy={grantsQuery.isLoading}
+            >
+              <div className="rounded-lg bg-background/85 p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-foreground">Funding sources</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">
+                  {grantsQuery.isLoading ? 'Loading…' : endUserSummary?.count ?? 0}
+                </p>
+              </div>
+              <div className="rounded-lg bg-background/85 p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-foreground">Potential amount listed</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">
+                  {grantsQuery.isLoading ? 'Loading…' : currency.format(endUserSummary?.amount ?? 0)}
+                </p>
+              </div>
+            </div>
+          )}
+          <p className="text-xs text-foreground">
+            Potential amounts come from source listings. They are not award, eligibility, or payment promises.
+          </p>
+          <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
+            <Link to={createPageUrl('Calendar')}>View deadlines and needed dates</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
     <Card className="h-full border border-border/70 bg-card/80 text-card-foreground shadow-none backdrop-blur-lg">
       <CardHeader className="pb-4">

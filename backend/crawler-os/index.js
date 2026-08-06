@@ -10,7 +10,7 @@
 //   const store = createMemoryStore();            // or createSqlStore(db) in prod
 //   const fetcher = createFetcher({ doFetch: fetch, resolve });
 //   const fleet = createFleet({ store, fetcher, env: process.env });
-//   const control = createAdminControl({ store });
+//   const control = createAdminControl({ store, admin: validatedOperatorEmail });
 //   const scheduler = createScheduler({ store, fleet, control });
 
 // contract + canonical logic
@@ -49,7 +49,7 @@ export { createHamilton } from './agents/hamilton.js';
 export { createSam } from './agents/sam.js';
 export { createAnya } from './agents/anya.js';
 export { createScheduler } from './scheduler.js';
-export { createAdminControl, CONTROL_STATE, ADMIN_EMAIL } from './adminControl.js';
+export { createAdminControl, CONTROL_STATE } from './adminControl.js';
 
 // convenience: apply the production schema to a better-sqlite3-style db.
 import { SCHEMA_DDL } from './storage.js';

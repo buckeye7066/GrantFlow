@@ -15,6 +15,11 @@ import {
   safeParseArrayField,
 } from './profileHelpers.js'
 import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
+import {
+  DEFAULT_MIN_SCORE,
+  SCORE_SCALE_ID,
+  translateLegacyMinScore,
+} from '../config/matchThresholds.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('itemCrawler')
 
@@ -30,11 +35,10 @@ const log = createLogger('itemCrawler')
  * @param {Object} decision - output of computeMatchDecision
  * @param {Object} [opts]
  * @param {string} [opts.effectiveDecision] - final ACCEPT/REVIEW/REJECT after URL guard
- * @param {number|null} [opts.fallbackScore] - pre-computed score to fall back on
  * @returns {Object} snake_case persistence fields
  */
 export function mapDecisionToPersistedFields(decision, opts = {}) {
-  const { effectiveDecision, fallbackScore = null } = opts
+  const { effectiveDecision } = opts
   return {
     match_decision: effectiveDecision ?? decision?.decision ?? null,
     match_explanation: decision?.explanation ?? null,
@@ -43,7 +47,10 @@ export function mapDecisionToPersistedFields(decision, opts = {}) {
       decision?.eligible ?? decision?.eligibility_status ?? null,
     ineligibility_reasons:
       decision?.ineligibilityReasons ?? decision?.ineligibility_reasons ?? [],
-    match_confidence: decision?.confidence ?? fallbackScore ?? null,
+    // Confidence describes source/actionability certainty; it is orthogonal to
+    // the match score. Never substitute a precomputed match score when the
+    // canonical decision has no confidence receipt.
+    match_confidence: decision?.confidence ?? null,
     matcher_version:
       decision?.matcherVersion ?? decision?.matcher_version ?? null,
     evaluated_at:
@@ -70,7 +77,19 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   log.info('[itemCrawler] Starting item funding search...')
   
   const parameters = job.parameters ?? {}
-  const matchThreshold = parameters.match_threshold || 50
+  const requestedThresholdValue = Number(parameters.match_threshold)
+  const hasRequestedThreshold = parameters.match_threshold !== null &&
+    parameters.match_threshold !== undefined &&
+    parameters.match_threshold !== '' &&
+    Number.isFinite(requestedThresholdValue)
+  const matchThresholdRequested = hasRequestedThreshold
+    ? requestedThresholdValue
+    : DEFAULT_MIN_SCORE
+  const requestedScaleId = parameters.score_scale_id ?? null
+  const matchThreshold = requestedScaleId === SCORE_SCALE_ID
+    ? Math.max(0, Math.min(100, matchThresholdRequested))
+    : Math.max(0, Math.min(100, translateLegacyMinScore(matchThresholdRequested)))
+  const thresholdTranslated = matchThreshold !== matchThresholdRequested
   const maxResults = parameters.max_results || 20
   
   // Get item keywords from job parameters
@@ -203,23 +222,19 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     )
   }
   
-  // Sort and filter by requested threshold only — no fallback relaxation
+  // Sort for bounded processing volume. The legacy match_threshold parameter
+  // is advisory metadata only; computeMatchDecision remains the sole authority
+  // and no canonical ACCEPT/REVIEW is suppressed by a numeric second trial.
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
   // Do not pre-filter by raw score; computeMatchDecision is the sole authority.
   // maxResults caps volume only; canonical ACCEPT/REVIEW decisions are never suppressed by threshold.
   const topOpps = scoredOpps.slice(0, maxResults)
   
   log.info(
-    `[itemCrawler] Found ${topOpps.length} matching item funding sources (threshold: ${matchThreshold}%)`,
+    `[itemCrawler] Evaluating ${topOpps.length} item funding sources ` +
+      `(advisory score setting: ${matchThreshold}, scale: ${SCORE_SCALE_ID})`,
   )
-  if (scoredOpps.length > 0 && topOpps.length === 0) {
-    console.warn(
-      `[itemCrawler] SUPPRESSION WARNING: ${scoredOpps.length} opportunities scored but 0 passed to insertion. ` +
-      `Top raw score: ${scoredOpps[0]?.match_score ?? 'n/a'}. Threshold: ${matchThreshold}. ` +
-      `Review threshold or decision engine configuration.`
-    )
-  }
-  
+
   // Insert into database
   let upsertedCount = 0
   let insertedCount = 0
@@ -259,7 +274,6 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       // does the explicit camelCase->snake_case mapping and is unit-tested.
       const decisionMeta = mapDecisionToPersistedFields(decision, {
         effectiveDecision,
-        fallbackScore: opp.match_score ?? null,
       })
 
       const result = await upsertFundingOpportunity(db, {
@@ -310,14 +324,19 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     result_meta: {
       total_scored: scoredOpps.length,
       match_threshold: matchThreshold,
-      match_threshold_requested: matchThreshold,
+      match_threshold_requested: matchThresholdRequested,
       match_threshold_used: matchThreshold,
       match_threshold_fallback_applied: false,
+      match_threshold_applied: false,
+      match_threshold_translated: thresholdTranslated,
+      requested_score_scale_id: requestedScaleId,
+      score_scale_id: SCORE_SCALE_ID,
     },
     opportunityLogs: topOpps.map(o => ({
       title: o.title,
       sponsor: o.sponsor,
       score: o.match_score,
+      score_scale_id: SCORE_SCALE_ID,
       reasons: o.match_reasons
     }))
   }

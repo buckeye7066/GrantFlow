@@ -23,8 +23,12 @@ import { dirname, join } from 'path'
 import { recordSelfHealRun, getLastSelfHealRun } from '../startup/selfHealStatus.js'
 import { runSelfHealOnDemand } from '../startup/selfHeal.js'
 import { invokeTool, listToolMetadata } from '../services/anyaToolRegistry.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
-const OWNER = 'buckeye7066@gmail.com'
+// Use the same configured identity imported by the owner gate. Deployed
+// runtimes fail closed without ADMIN_EMAIL; local/test uses the non-routable
+// fixture from constants rather than a second hardcoded authority.
+const OWNER = ADMIN_EMAIL
 
 // Keep the on-demand heal focused on the repair/enforcement steps for this
 // unit test: BASELINE_SEED_MODE=off short-circuits the (heavy, repo-file)

@@ -9,7 +9,7 @@ An interactive, menu-driven PowerShell tool for managing the GrantFlow code qual
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | PowerShell  | 7+      | Install from [github.com/PowerShell/PowerShell](https://github.com/PowerShell/PowerShell/releases) |
-| Node.js     | 20+     | Required to run `code-quality-gate.mjs` |
+| Node.js     | 20.20.2 | Matches GrantFlow's verified release runtime |
 | GitHub PAT  | —       | See token scopes below |
 
 ---

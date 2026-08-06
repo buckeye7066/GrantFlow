@@ -16,7 +16,6 @@ import {
 } from '../utils/accessControl.js'
 import { scheduleGrantApplicationApproach } from '../services/grantApplicationApproachAdvisor.js'
 import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
-import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { loadProfileContext, mergeOpportunitySignals } from '../services/profileHelpers.js'
 import { decorateOpportunityFreshness, saveToProfilePipeline } from '../services/opportunityMatcher.js'
@@ -119,9 +118,12 @@ function normalizeGrantFields(data) {
   return out
 }
 
-// Whitelist of allowed columns for UPDATE operations
+// Shared whitelist for grant CREATE/UPDATE payloads. Identity fields need
+// operation-specific policy below: profile_id is accepted on CREATE so the
+// profile-scoped dismissal/dedupe/scoring paths are reachable, but it is
+// immutable on UPDATE.
 const ALLOWED_GRANT_COLUMNS = new Set([
-  'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
+  'profile_id', 'organization_id', 'funding_opportunity_id', 'title', 'funder', 'deadline',
   'status', 'priority', 'amount_requested', 'amount_awarded', 'amount_min', 'amount_max',
   'application_url',
   // Outcome dates. `amount_awarded` was already writable but these were not, so
@@ -1072,6 +1074,11 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
 
+    // This route writes profile_id and the newer scoring columns when present.
+    // Re-assert the schema before sanitizing/inserting so a permitted field
+    // cannot become a deployment-specific INSERT failure.
+    await ensureGrantAiColumns(req.db)
+
     const data = req.body;
     
     // Validate required fields
@@ -1083,12 +1090,46 @@ router.post('/', mutationRateLimiter, async (req, res) => {
       });
     }
     
-    if (!(await ensureOrganizationAccess(req, res, String(data.organization_id)))) return
+    const normalizedOrganizationId = String(data.organization_id ?? '').trim()
+    if (!normalizedOrganizationId) {
+      return res.status(400).json({ error: 'Missing required fields', missingFields: ['organization_id'] })
+    }
+    if (!(await ensureOrganizationAccess(req, res, normalizedOrganizationId))) return
 
     const id = crypto.randomUUID();
 
     // Normalize frontend aliases → canonical column names, then sanitize
     const sanitizedData = sanitizeColumns(normalizeGrantFields(data), ALLOWED_GRANT_COLUMNS);
+    sanitizedData.organization_id = normalizedOrganizationId
+
+    // A profile-scoped grant is owned by both an authorized profile and its
+    // exact organization. Fail closed on lookup/schema errors: silently
+    // falling back to an org-only row would make the profile-aware dismissal,
+    // dedupe, and canonical-scoring branches unreachable again.
+    if (sanitizedData.profile_id !== undefined) {
+      const normalizedProfileId = String(sanitizedData.profile_id ?? '').trim()
+      if (!normalizedProfileId) {
+        delete sanitizedData.profile_id
+      } else {
+        if (!(await ensureProfileAccess(req, res, normalizedProfileId))) return
+        const profileRow = await req.db
+          .prepare('SELECT id, organization_id FROM profiles WHERE id = ? LIMIT 1')
+          .get(normalizedProfileId)
+        if (!profileRow?.id) {
+          return res.status(422).json({
+            error: 'unknown_profile',
+            message: 'profile_id does not resolve to an existing profile.',
+          })
+        }
+        if (String(profileRow.organization_id ?? '') !== normalizedOrganizationId) {
+          return res.status(409).json({
+            error: 'profile_organization_mismatch',
+            message: 'The grant organization must match the selected profile organization.',
+          })
+        }
+        sanitizedData.profile_id = normalizedProfileId
+      }
+    }
 
     // Stringify JSON fields
     if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
@@ -1305,6 +1346,45 @@ router.put('/:id', mutationRateLimiter, async (req, res) => {
     
     // Normalize frontend aliases → canonical column names, then sanitize
     const sanitizedData = sanitizeColumns(normalizeGrantFields(data), ALLOWED_GRANT_COLUMNS);
+
+    // profile_id is create-time identity. A PUT may repeat the current id for
+    // compatibility, but it may never add, clear, or change it; reject the
+    // whole mutation so callers cannot mistake a partial update for a
+    // successful re-parent.
+    if (Object.prototype.hasOwnProperty.call(sanitizedData, 'profile_id')) {
+      const requestedProfileId = String(sanitizedData.profile_id ?? '').trim() || null
+      const currentProfileId = String(grantAccess.profile_id ?? '').trim() || null
+      if (requestedProfileId !== currentProfileId) {
+        return res.status(409).json({
+          error: 'grant_profile_immutable',
+          message: 'An existing grant cannot be moved to a different profile.',
+        })
+      }
+      delete sanitizedData.profile_id
+    }
+
+    // Organization changes must be authorized for the destination. For a
+    // profile-owned grant the profile remains the authoritative tenancy signal,
+    // so its organization cannot diverge from the profile's organization.
+    if (Object.prototype.hasOwnProperty.call(sanitizedData, 'organization_id')) {
+      const requestedOrganizationId = String(sanitizedData.organization_id ?? '').trim()
+      if (!requestedOrganizationId) {
+        return res.status(400).json({ error: 'organization_id must be non-empty' })
+      }
+      if (!(await ensureOrganizationAccess(req, res, requestedOrganizationId))) return
+      if (grantAccess.profile_id) {
+        const profileRow = await req.db
+          .prepare('SELECT id, organization_id FROM profiles WHERE id = ? LIMIT 1')
+          .get(String(grantAccess.profile_id))
+        if (!profileRow?.id || String(profileRow.organization_id ?? '') !== requestedOrganizationId) {
+          return res.status(409).json({
+            error: 'profile_organization_mismatch',
+            message: 'The grant organization must match its existing profile organization.',
+          })
+        }
+      }
+      sanitizedData.organization_id = requestedOrganizationId
+    }
     
     if (Object.keys(sanitizedData).length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
@@ -1801,131 +1881,10 @@ router.post('/from-opportunity', async (req, res, next) => {
       })
     }
 
-    // Symmetry with /api/matching/profile/:id/opportunities: refuse pipeline
-    // inserts whose explicit applicant-type eligibility hard-conflicts with
-    // the target profile (e.g. trying to save NSF research-institution
-    // grants into an individual profile's pipeline). Without this gate, the
-    // matcher would drop them silently while POST /from-opportunity would
-    // happily save them, creating a UX divergence between Discover and
-    // Pipeline. We only look up applicant_type when we have a profile id —
-    // organisation-only saves take a different code path below.
-    if (normalizedProfileId) {
-      try {
-        const targetProfileRow = await req.db
-          .prepare(
-            'SELECT applicant_type, primary_type, primary_profile_type FROM profiles WHERE id = ?',
-          )
-          .get(normalizedProfileId)
-        const profileApplicantType =
-          targetProfileRow?.applicant_type ??
-          targetProfileRow?.primary_type ??
-          targetProfileRow?.primary_profile_type ??
-          null
-        // A profile can hold more than one identity (a person who also runs a
-        // farm). Load the sections that structurally DECLARE a second one so
-        // this 400 can never fire on an identity we simply never looked at —
-        // the Anita class, 2026-08-01.
-        const identitySections = {}
-        try {
-          const secRows = await req.db
-            .prepare(
-              `SELECT section_key, data FROM profile_sections
-               WHERE profile_id = ? AND section_key IN ('occupation', 'small_business_details', 'organization_details', 'basic_information')`,
-            )
-            .all(normalizedProfileId)
-          for (const sec of secRows || []) {
-            if (!sec?.data) continue
-            try {
-              identitySections[sec.section_key] =
-                typeof sec.data === 'string' ? JSON.parse(sec.data) : sec.data
-            } catch { /* unparseable section — never guess */ }
-          }
-        } catch { /* profile_sections unavailable — fall back to the type alone */ }
-
-        if (profileApplicantType || Object.keys(identitySections).length > 0) {
-          const eligDecision = evaluateApplicantTypeEligibility(opportunity, profileApplicantType, {
-            profile: targetProfileRow,
-            sections: identitySections,
-          })
-          if (eligDecision.decision === 'mismatch') {
-            routeLogger.info('[grants/from-opportunity] blocked by applicant-type gate', {
-              requestId,
-              profile_id: normalizedProfileId,
-              opportunity_id: resolvedOpportunityId,
-              applicant_type: profileApplicantType,
-              reason: eligDecision.reason,
-            })
-            return res.status(400).json({
-              error: 'ineligible_for_profile',
-              message:
-                'This opportunity is restricted to applicant types that do not match the selected profile (e.g. institutions of higher education, federal agencies, or 501(c)(3) organisations only).',
-              reason: eligDecision.reason,
-              applicant_type: profileApplicantType,
-              opportunity_id: resolvedOpportunityId,
-              requestId,
-            })
-          }
-        }
-      } catch (eligErr) {
-        // Eligibility lookup failure is non-fatal — fall through and let the
-        // existing trust / source / readiness gates make the call. Logged
-        // for traceability per project rule on lightweight logging.
-        routeLogger.warn('[grants/from-opportunity] applicant-type lookup failed', {
-          requestId,
-          profile_id: normalizedProfileId,
-          error: eligErr?.message || String(eligErr),
-        })
-      }
-    }
-
-    // Profession-lock gate (first line of defense; the boot sweep
-    // enforceProfileEligibility is the net). Refuse to promote an opportunity
-    // LOCKED to a licensed profession the target profile does not practise —
-    // e.g. an "Ohio Nurses Foundation" scholarship into a PARAMEDIC student's
-    // pipeline. Conservative: only fires when BOTH the profile resolves to a
-    // recognised profession AND the opportunity's IDENTITY (title + funder) is
-    // locked to a DIFFERENT one. Non-fatal — any lookup failure falls through.
-    if (normalizedProfileId) {
-      try {
-        const {
-          professionSignalTextFromSections, resolveProfileProfessions,
-          opportunityLockText, assessProfessionEligibility,
-        } = await import('../services/eligibility/professionEligibility.js')
-        const secs = await req.db
-          .prepare("SELECT section_key, data FROM profile_sections WHERE profile_id = ? AND section_key IN ('basic_information','education','employment','career','professional')")
-          .all(normalizedProfileId)
-        const sectionsByKey = {}
-        for (const s of secs || []) sectionsByKey[s.section_key] = s.data
-        const professions = resolveProfileProfessions(professionSignalTextFromSections(sectionsByKey))
-        const professionVerdict = assessProfessionEligibility({
-          itemText: opportunityLockText(opportunity),
-          professions,
-        })
-        if (professionVerdict.ineligible) {
-          routeLogger.info('[grants/from-opportunity] blocked by profession-lock gate', {
-            requestId,
-            profile_id: normalizedProfileId,
-            opportunity_id: resolvedOpportunityId,
-            lock: professionVerdict.lock,
-          })
-          return res.status(400).json({
-            error: 'ineligible_for_profile',
-            message:
-              'This opportunity is restricted to a professional field that does not match the selected profile (for example, a nursing-only scholarship for a paramedic student).',
-            reason: professionVerdict.reason,
-            profession_lock: professionVerdict.lock,
-            opportunity_id: resolvedOpportunityId,
-            requestId,
-          })
-        }
-      } catch (profErr) {
-        routeLogger.warn('[grants/from-opportunity] profession-lock gate lookup failed', {
-          requestId,
-          profile_id: normalizedProfileId,
-          error: profErr?.message || String(profErr),
-        })
-      }
-    }
+    // Applicant type and profession locks are intentionally NOT retried here.
+    // The canonical saver below calls computeMatchDecision(), whose hard
+    // eligibility contract owns both checks. Keeping one verdict avoids a
+    // route-only second trial with different profile parsing or error posture.
 
     // Guardrail: don't allow expired opportunities into pipelines.
     // Directory-style resources are allowed; rolling/ongoing deadlines are allowed.

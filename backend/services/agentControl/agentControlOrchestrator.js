@@ -5,7 +5,8 @@
  * Yana (Client Discovery, NOT Hamilton), John, and Hamilton (Application
  * Autopilot) through their adapter contracts.
  *
- * Single canonical admin / operator: buckeye7066@gmail.com.
+ * Single operator configured by the deployed environment and resolved from
+ * canonical request context.
  *
  * Lifecycle:
  *
@@ -74,6 +75,7 @@ import { getAdapter } from './agentAdapters/agentAdapterRegistry.js'
 import { makeSignal } from './agentAdapters/baseAgentAdapter.js'
 import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
 import { createLogger } from '../../utils/logger.js'
+import { isSyntheticServiceAdmin } from '../../middleware/syntheticServiceTokens.js'
 const qualityLog = createLogger('services:agentControl:agentControlOrchestrator')
 
 // ---------------------------------------------------------------------------
@@ -165,23 +167,41 @@ import {
   notifyStopped,
 } from './agentControlNotifications.js'
 
+const DEPLOYED_RUNTIME = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production'
+  || Boolean(String(process.env.RAILWAY_ENVIRONMENT_ID || '').trim())
+  || Boolean(String(process.env.RAILWAY_DEPLOYMENT_ID || '').trim())
 const ADMIN_EMAIL = (process.env.AGENT_CONTROL_ADMIN_EMAIL
   || process.env.ADMIN_EMAIL
-  || CANONICAL_ADMIN_EMAIL_DEFAULT).trim().toLowerCase()
+  || (DEPLOYED_RUNTIME ? '' : CANONICAL_ADMIN_EMAIL_DEFAULT)).trim().toLowerCase()
 
-/**
- * Verifies the caller is the canonical admin. We accept either:
- *   1. authenticated user.email === buckeye7066@gmail.com (default)
- *   2. ADMIN_EMAIL env override (defaults to buckeye7066@gmail.com)
- *   3. AGENT_CONTROL_ADMIN_EMAIL env override (preferred over ADMIN_EMAIL)
- * Anything else (role checks, allowlists, etc.) is REJECTED. The whole
- * Control Center is intentionally restricted to this single account.
- */
+/** Verifies a user previously authorized from canonical request context. */
 export function isControlCenterAdmin(user) {
+  if (!ADMIN_EMAIL) return false
+  if (isSyntheticServiceAdmin(user)) return true
+  if (user?.controlCenterAuthorized !== true) return false
   if (!user) return false
   const email = String(user.email || user.primary_email || '').trim().toLowerCase()
   if (!email) return false
   return email === ADMIN_EMAIL
+}
+
+/**
+ * Convert an authenticated request principal into the narrow operator actor
+ * consumed by command methods. Token email/role claims never authorize this
+ * step: a real user must be DB-resolved, DB-admin, and have the configured
+ * primary email. Validated synthetic service tokens retain their existing
+ * provenance-bound access.
+ */
+export function authorizeControlCenterUser(user, context) {
+  if (!ADMIN_EMAIL || context?.identityResolved !== true || context?.isAdmin !== true) return null
+
+  if (isSyntheticServiceAdmin(user)) {
+    return { ...user, email: ADMIN_EMAIL, controlCenterAuthorized: true }
+  }
+
+  const trustedEmail = String(context?.email || '').trim().toLowerCase()
+  if (!trustedEmail || trustedEmail !== ADMIN_EMAIL) return null
+  return { ...user, email: trustedEmail, controlCenterAuthorized: true }
 }
 
 export function getCanonicalAdminEmail() { return ADMIN_EMAIL }

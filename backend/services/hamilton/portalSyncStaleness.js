@@ -46,9 +46,9 @@
  *   profile_sections.updated_at    ACCEPTED, with a provenance filter. It moves
  *   with a MACHINE-WRITER filter   for real edits AND for machine writers, but
  *                                  unlike the others it records WHO wrote
- *                                  (`updated_by`): prod holds
- *                                  `buckeye7066@gmail.com` and
- *                                  `owner_directive_no_loans` (human) alongside
+ *                                  (`updated_by`): production holds a
+ *                                  configured operator identity and an
+ *                                  owner-authored directive (human) alongside
  *                                  `agent:amy`, `crawler-stress-cohort`,
  *                                  `system-seed`, `invariant:…`,
  *                                  `legacy_scale_migration` (machine). Filtering
@@ -93,7 +93,7 @@ export const DEFAULT_STALE_AFTER_DAYS = 7
  * Most portals prompted at once. The remainder is REPORTED as a count
  * (`truncated_count`), never silently dropped.
  *
- * Measured against real prod data (Anastasia, profile c4a92724, 2026-08-01):
+ * Measured against real prod data (Demo Student, profile c4a92724, 2026-08-01):
  * 14 portals qualify — 4 actionable "sync now" and 10 one-off portals last
  * touched by a bulk run on 2026-07-02 with no valid session. Fourteen prompts
  * at login is precisely the flood the owner rejected ("that way admin is not
@@ -128,7 +128,7 @@ export const AWARD_ACTIVITY_STAGES = Object.freeze([
  * classification by a totality test.
  *
  * A NULL/unknown writer counts as HUMAN. That is deliberate and conservative in
- * the safe direction: prod's null-writer rows are real UI edits (Anastasia's
+ * the safe direction: prod's null-writer rows are real UI edits (Demo Student's
  * basic_information / narrative / demographics), and the cost of a false
  * positive is one extra "sync now" prompt, while the cost of a false negative
  * is a portal that silently drifts out of date — the defect we are fixing.
@@ -141,7 +141,7 @@ export const MACHINE_WRITER_RX =
  *
  * Needed because a namespace prefix alone cannot separate `system-seed` (a
  * migration) from `system_admin_token` (a human admin editing through the admin
- * token — prod has one on Anastasia's `university_applications`). An email
+ * token — prod has one on Demo Student's `university_applications`). An email
  * address is likewise always a person. Checked FIRST so the namespace rule can
  * stay broad without swallowing real edits.
  */

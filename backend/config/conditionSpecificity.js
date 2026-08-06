@@ -2,7 +2,7 @@
  * conditionSpecificity.js — does THIS opportunity's condition match a condition
  * the profile actually NAMED?
  *
- * THE DEFECT THIS CLOSES (owner audit of Anastasia Nicole White, 2026-08-03).
+ * THE DEFECT THIS CLOSES (owner audit of Demo Tennessee STEM Student, 2026-08-03).
  * Her profile carries `demographics.disability_status = "Has disability"` while
  * her own health sections state "No confirmed medical conditions" — a disability
  * with NO NAMED CONDITION. The planner-side gate

@@ -42,10 +42,10 @@ const HOST = 'mtsu.scholarships.ngwebsolutions.com'
 const BASE = `https://${HOST}`
 
 // Verbatim from the live signed-in probe (2026-08-02).
-const SIGNED_IN_HEADER = 'Skip to main content\nAnastasia Nicole White | Logout\n Home\nMy Applications\nMy Opportunities\nMy Awards\nScholarships Search\nContact Us\nSession expires in 45 minutes.\n'
+const SIGNED_IN_HEADER = 'Skip to main content\nDemo Tennessee STEM Student | Logout\n Home\nMy Applications\nMy Opportunities\nMy Awards\nScholarships Search\nContact Us\nSession expires in 45 minutes.\n'
 const AWARD_PAGE_TEXT = `${SIGNED_IN_HEADER}Award Information\n\nThank you for your submission of the Middle Tennessee State University Scholarship Application(s).\n\nThis application process runs from October 1st to March 1st.`
 const MYOPPS_PAGE_TEXT = `${SIGNED_IN_HEADER}My Opportunities\nApplicant Home  My Opportunities\n\nPLEASE NOTE: Scholarship Matching ONLY OCCURS on Mondays & Thursdays.\n\nQualified Opportunities 0\nNo Opportunities Found`
-const APPLICATIONS_PAGE_TEXT = `${SIGNED_IN_HEADER}My Applications\n\nWelcome back, Anastasia Nicole White, to MTSU's Scholarship Manager!\n\nApplications\nSorry, currently there are no applications available. Check back at a later date.`
+const APPLICATIONS_PAGE_TEXT = `${SIGNED_IN_HEADER}My Applications\n\nWelcome back, Demo Tennessee STEM Student, to MTSU's Scholarship Manager!\n\nApplications\nSorry, currently there are no applications available. Check back at a later date.`
 const LANDING_CTA_TEXT = `${SIGNED_IN_HEADER}Home\nWelcome to the scholarship application portal.\nStep 1: Complete the General Scholarship Application.\nStep 2: Once the General Scholarship Application is submitted, you will be shown other scholarship applications.\nTasks  0\n- No Tasks at this time. -`
 const PUBLIC_CMS_TEXT = 'Scholarship Manager\nThis website lists all of the scholarships available to Middle Tennessee State University (MTSU) students.\nApply Now\nScholarships (557)'
 
@@ -122,7 +122,7 @@ describe('registry resolution — the tenant trap', () => {
     expect(getConnectorForHost('clevelandstatecc.scholarships.ngwebsolutions.com').id).toBe('ngweb_scholarship_manager')
   })
   it('a credential on a tenant host labelled "MTSU Scholarships" resolves HERE, never to mtsu.edu', () => {
-    const got = resolveConnector({ host: HOST, username: 'anastasia@mtmail.mtsu.edu', label: 'MTSU Scholarships' })
+    const got = resolveConnector({ host: HOST, username: 'demo_stem_student@mtmail.mtsu.edu', label: 'MTSU Scholarships' })
     expect(got.id).toBe('ngweb_scholarship_manager')
   })
   it('a real mtsu.edu host still resolves to the mtsu connector', () => {

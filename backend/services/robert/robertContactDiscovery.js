@@ -32,7 +32,7 @@
  *     JOHN_PRIMARY_MAILBOX. ROBERT_MESSAGE_SCAN_MAX caps messages read
  *     (default 500).
  *   - Note: this reads the axiombiolabs.org (Outlook) mailbox. Gmail
- *     (buckeye7066@gmail.com) contacts are a different provider and are not
+ *     (configured-admin@example.invalid) contacts are a different provider and are not
  *     covered by this Graph path.
  *
  * Safety:

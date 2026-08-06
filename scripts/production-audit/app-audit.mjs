@@ -109,6 +109,92 @@ export function classify(method, url, { allowPortalRead = false, allowedPortalHo
   return { allow: false, redFlag: RED_FLAG.some((re) => re.test(url)) };
 }
 
+export function isSuccessfulApiResponse(result) {
+  const status = Number(result?.status);
+  return result?.ok === true && Number.isInteger(status) && status >= 200 && status < 300;
+}
+
+export function assessIdentityAndScope(meResult, expectedProfileIds = []) {
+  if (!isSuccessfulApiResponse(meResult)) {
+    return {
+      ok: false,
+      reason: `auth_me_http_${Number(meResult?.status) || 0}`,
+      expected_profile_count: new Set(expectedProfileIds.map(String)).size,
+      actual_profile_count: null,
+    };
+  }
+
+  const body = meResult?.body && typeof meResult.body === 'object' ? meResult.body : {};
+  const user = body.user && typeof body.user === 'object' ? body.user : null;
+  if (!user?.id) return { ok: false, reason: 'auth_me_identity_missing' };
+  if (user.is_admin === true || user.is_admin === 1) {
+    return { ok: false, reason: 'audit_account_must_be_non_admin' };
+  }
+
+  const expected = [...new Set(expectedProfileIds.map((id) => String(id).trim()).filter(Boolean))].sort();
+  const actualRows = Array.isArray(body.profiles) ? body.profiles : [];
+  const actual = actualRows.map((profile) => String(profile?.id || '').trim()).filter(Boolean).sort();
+  const actualUnique = [...new Set(actual)];
+  if (actual.length !== actualUnique.length) {
+    return {
+      ok: false,
+      reason: 'auth_me_profile_scope_contains_duplicates',
+      expected_profile_count: expected.length,
+      actual_profile_count: actual.length,
+    };
+  }
+
+  const exact = expected.length === actualUnique.length
+    && expected.every((profileId, index) => profileId === actualUnique[index]);
+  return {
+    ok: exact,
+    reason: exact ? 'exact_non_admin_profile_scope' : 'auth_me_profile_scope_mismatch',
+    expected_profile_count: expected.length,
+    actual_profile_count: actualUnique.length,
+  };
+}
+
+const REQUIRED_PROFILE_CAPTURE_KEYS = Object.freeze([
+  'funding_sources',
+  'hamilton_tasks',
+  'hamilton_readiness',
+  'portal_sync_runs',
+]);
+
+export function assessProfileCaptures(profileCaptures = [], expectedProfileIds = []) {
+  const byProfile = new Map(
+    profileCaptures.map((capture) => [String(capture?.profile_id || ''), capture]),
+  );
+  const failures = [];
+
+  for (const profileId of [...new Set(expectedProfileIds.map(String))]) {
+    const capture = byProfile.get(profileId);
+    if (!capture) {
+      failures.push({ profile_id: profileId, endpoint: null, status: 0, reason: 'capture_missing' });
+      continue;
+    }
+    for (const key of REQUIRED_PROFILE_CAPTURE_KEYS) {
+      const result = capture[key];
+      if (!isSuccessfulApiResponse(result)) {
+        const status = Number(result?.status) || 0;
+        failures.push({
+          profile_id: profileId,
+          endpoint: key,
+          status,
+          reason: status === 401 || status === 403 ? 'authentication_or_scope_denied' : 'read_failed',
+        });
+      }
+    }
+  }
+
+  return {
+    ok: failures.length === 0,
+    expected_profile_count: new Set(expectedProfileIds.map(String)).size,
+    captured_profile_count: byProfile.size,
+    failures,
+  };
+}
+
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
@@ -145,6 +231,10 @@ async function main() {
   const baseUrl = (process.env.GRANTFLOW_PROD_BASE_URL || 'https://app.axiombiolabs.org').replace(/\/$/, '');
   const email = requireEnv('GRANTFLOW_AUDIT_EMAIL');
   const password = requireEnv('GRANTFLOW_AUDIT_PASSWORD');
+  if (args.profiles.length === 0) {
+    console.error('FATAL: at least one explicit --profiles id is required for authenticated scope proof.');
+    process.exit(2);
+  }
 
   const shotsDir = path.join(args.outDir, 'screenshots');
   fs.mkdirSync(shotsDir, { recursive: true });
@@ -235,21 +325,11 @@ async function main() {
     await page.screenshot({ path: path.join(shotsDir, `${name}.png`), fullPage: true }).catch(() => {});
   };
 
-  /**
-   * Authenticated GET issued from inside the page.
-   *
-   * GrantFlow authenticates with a BEARER token held in localStorage
-   * (`grantflow:access-token`), not a cookie — a plain `credentials: 'include'`
-   * fetch returns 401. The token is read and used entirely within the browser
-   * context and is never returned to Node or written to the report; the
-   * redactor would scrub it even if a response echoed it back.
-   */
+  /** Authenticated GET issued from inside the page using the current cookie session. */
   const apiGet = async (pathname, profileId = null) => {
     return page.evaluate(async ({ p, pid }) => {
       try {
-        const token = window.localStorage.getItem('grantflow:access-token');
         const headers = { accept: 'application/json' };
-        if (token) headers.Authorization = `Bearer ${token}`;
         if (pid) headers['X-Profile-Id'] = pid;
         const res = await fetch(p, { credentials: 'include', headers });
         const text = await res.text();
@@ -274,7 +354,7 @@ async function main() {
     return page.url();
   });
 
-  const signedIn = await step('sign in', async () => {
+  const signInNavigation = await step('sign in', async () => {
     // Two-step form: email -> "Continue with Email" -> password -> "Sign in".
     const emailInput = page.locator('input[type="email"]').first();
     await emailInput.waitFor({ timeout: 30_000 });
@@ -292,7 +372,13 @@ async function main() {
     return page.url();
   });
 
-  const me = await step('identity and scope', async () => apiGet('/api/auth/me'));
+  const me = await step('identity and scope', async () => {
+    const result = await apiGet('/api/auth/me');
+    const assessment = assessIdentityAndScope(result, args.profiles);
+    if (!assessment.ok) throw new Error(assessment.reason);
+    return result;
+  });
+  const identityScope = assessIdentityAndScope(me, args.profiles);
 
   // ---- per-profile capture ------------------------------------------------
   const profileCaptures = [];
@@ -300,18 +386,30 @@ async function main() {
     const capture = { profile_id: profileId };
     await step(`profile ${profileId}: funding sources`, async () => {
       capture.funding_sources = await apiGet(`/api/profiles/${profileId}/funding-sources`, profileId);
+      if (!isSuccessfulApiResponse(capture.funding_sources)) {
+        throw new Error(`HTTP ${capture.funding_sources?.status || 0}`);
+      }
       return `status ${capture.funding_sources?.status}`;
     });
     await step(`profile ${profileId}: hamilton tasks`, async () => {
       capture.hamilton_tasks = await apiGet(`/api/hamilton/automation/tasks?profileId=${profileId}`, profileId);
+      if (!isSuccessfulApiResponse(capture.hamilton_tasks)) {
+        throw new Error(`HTTP ${capture.hamilton_tasks?.status || 0}`);
+      }
       return `status ${capture.hamilton_tasks?.status}`;
     });
     await step(`profile ${profileId}: hamilton readiness / sessions`, async () => {
       capture.hamilton_readiness = await apiGet(`/api/hamilton/automation/readiness?profileId=${profileId}`, profileId);
+      if (!isSuccessfulApiResponse(capture.hamilton_readiness)) {
+        throw new Error(`HTTP ${capture.hamilton_readiness?.status || 0}`);
+      }
       return `status ${capture.hamilton_readiness?.status}`;
     });
     await step(`profile ${profileId}: portal sync runs`, async () => {
       capture.portal_sync_runs = await apiGet(`/api/hamilton/portal-sync/runs?profileId=${profileId}`, profileId);
+      if (!isSuccessfulApiResponse(capture.portal_sync_runs)) {
+        throw new Error(`HTTP ${capture.portal_sync_runs?.status || 0}`);
+      }
       return `status ${capture.portal_sync_runs?.status}`;
     });
 
@@ -363,9 +461,11 @@ async function main() {
           const result = await page.evaluate(
             async ({ p, h }) => {
               try {
-                const token = window.localStorage.getItem('grantflow:access-token');
-                const headers = { 'content-type': 'application/json', accept: 'application/json' };
-                if (token) headers.Authorization = `Bearer ${token}`;
+                const headers = {
+                  'content-type': 'application/json',
+                  accept: 'application/json',
+                  'X-Requested-With': 'XMLHttpRequest',
+                };
                 if (p) headers['X-Profile-Id'] = p;
                 const res = await fetch('/api/hamilton/portal-sync/read', {
                   method: 'POST',
@@ -432,7 +532,15 @@ async function main() {
   await step('logout', async () => {
     await page.evaluate(async () => {
       try {
-        await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'content-type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          body: '{}',
+        });
       } catch {
         /* best effort */
       }
@@ -441,6 +549,7 @@ async function main() {
   });
 
   await browser.close();
+  const profileCaptureAssessment = assessProfileCaptures(profileCaptures, args.profiles);
 
   const report = {
     lane: 'application',
@@ -451,12 +560,13 @@ async function main() {
       // secret), so only its shape is reported.
       email: '<redacted>',
       is_admin: me?.body?.user?.is_admin ?? me?.body?.is_admin ?? null,
-      accessible_profile_count: Array.isArray(me?.body?.user?.profiles)
-        ? me.body.user.profiles.length
-        : (Array.isArray(me?.body?.profiles) ? me.body.profiles.length : null),
+      accessible_profile_count: Array.isArray(me?.body?.profiles) ? me.body.profiles.length : null,
     },
     posture,
-    signed_in: Boolean(signedIn),
+    signed_in: identityScope.ok,
+    sign_in_navigation_completed: Boolean(signInNavigation),
+    identity_scope: identityScope,
+    profile_capture_assessment: profileCaptureAssessment,
     steps,
     profiles: profileCaptures,
     amy_visible: amyVisible,
@@ -496,16 +606,14 @@ async function main() {
     console.error(`\n${failed.length} step(s) failed (recorded in the artifact, not fatal):`);
     failed.forEach((f) => console.error(`  - ${f.name}: ${f.error}`));
   }
-  if (!signedIn) {
-    console.error('\nFAILED: could not sign in — the authenticated lane produced no evidence.');
+  if (!identityScope.ok) {
+    console.error(`\nFAILED: authenticated identity/scope proof failed (${identityScope.reason}).`);
     process.exit(1);
   }
-  // Every profile failing is not a flake, it is a broken lane.
-  const captured = profileCaptures.filter(
-    (c) => c.funding_sources || c.hamilton_tasks || c.portal_sync_runs,
-  );
-  if (args.profiles.length && !captured.length) {
-    console.error('\nFAILED: signed in, but not one profile yielded any data.');
+  if (!profileCaptureAssessment.ok) {
+    console.error(
+      `\nFAILED: ${profileCaptureAssessment.failures.length} authenticated profile read(s) failed.`,
+    );
     process.exit(1);
   }
 }

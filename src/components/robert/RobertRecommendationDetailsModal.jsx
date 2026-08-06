@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { toast } from '@/components/ui/use-toast'
 import { apiFetch } from '@/api/client'
 import { humanizeMatchReason } from '@/utils/reasonText'
-import { fitPercent } from '@/lib/matchDisplayThresholds'
+import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds'
 
 /**
  * RobertRecommendationDetailsModal
@@ -48,7 +48,9 @@ export default function RobertRecommendationDetailsModal({ open, recommendation,
 
   if (!recommendation) return null
 
-  const score = fitPercent(recommendation.match_score)
+  const rawScore = Number(recommendation.match_score)
+  const hasScore = Number.isFinite(rawScore)
+  const matchLabel = hasScore ? scoreToMatchLabel(rawScore) : null
   const decision = String(recommendation.match_decision || '').toUpperCase()
   const reasons = Array.isArray(recommendation.match_reasons) ? recommendation.match_reasons : []
 
@@ -116,7 +118,7 @@ export default function RobertRecommendationDetailsModal({ open, recommendation,
                 {decision}
               </Badge>
             )}
-            {score > 0 && <Badge variant="outline">{score}% match</Badge>}
+            {matchLabel && <Badge variant="outline">{matchLabel} · score {Math.round(rawScore)}</Badge>}
             {recommendation.toast_priority && (
               <Badge variant="outline">priority: {recommendation.toast_priority}</Badge>
             )}

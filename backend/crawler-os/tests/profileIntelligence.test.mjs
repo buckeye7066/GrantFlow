@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildThesis } from '../profileIntelligence.js';
+import { DEFAULT_MIN_SCORE } from '../../services/matchEngine.js';
 import { SAMPLE_VFD_PROFILE, SAMPLE_STUDENT_PROFILE } from './fixtures/fakeFetch.mjs';
 
 test('buildThesis carries profile_id, location, and needs from the full profile', () => {
@@ -21,13 +22,16 @@ test('loans and cost-share are OFF unless the profile explicitly opts in', () =>
   assert.equal(optedIn.cost_share_allowed, true);
 });
 
-test('org vs individual changes the minimum match floor', () => {
+test('org and individual defaults use the canonical current-scale discovery floor', () => {
   const org = buildThesis(SAMPLE_VFD_PROFILE);
   const student = buildThesis(SAMPLE_STUDENT_PROFILE);
-  assert.ok(Number.isFinite(org.min_match_score));
-  assert.ok(Number.isFinite(student.min_match_score));
-  // org floor is stricter (>=) than the individual floor
-  assert.ok(org.min_match_score >= student.min_match_score);
+  assert.equal(org.min_match_score, DEFAULT_MIN_SCORE);
+  assert.equal(student.min_match_score, DEFAULT_MIN_SCORE);
+});
+
+test('an explicit per-profile minimum remains a deliberate caller override', () => {
+  const thesis = buildThesis({ ...SAMPLE_STUDENT_PROFILE, min_match_score: 12 });
+  assert.equal(thesis.min_match_score, 12);
 });
 
 test('a student profile is recognized as a student', () => {

@@ -975,7 +975,7 @@ describe('enforceProfileIncomeReconciliation', () => {
 })
 
 describe('enforceIndividualOrgSectionConflict', () => {
-  it('clears organization_type + business_name — the Kimberly Botts class (structured self-denial)', async () => {
+  it('clears organization_type + business_name — the Demo HCBS Support Persona class (structured self-denial)', async () => {
     const db = makeProfileDb()
     insertTypedProfile(db, { id: 'p1', primaryType: 'individual' })
     setSection(db, 'p1', 'organization_details', {
@@ -983,7 +983,7 @@ describe('enforceIndividualOrgSectionConflict', () => {
       mission: 'To support underrepresented founders...',
       is_minority_serving: true,
     })
-    setSection(db, 'p1', 'small_business_details', { business_name: 'Kimberly Botts Nonprofit' })
+    setSection(db, 'p1', 'small_business_details', { business_name: 'Demo HCBS Support Persona Nonprofit' })
     setSection(db, 'p1', 'occupation', {
       nonprofit_employee: false,
       small_business_owner: false,
@@ -1035,7 +1035,7 @@ describe('enforceIndividualOrgSectionConflict', () => {
     expect(getSection(db, 'anita2', 'small_business_details').business_name).toBe('Bluegrass Cattle Co')
   })
 
-  it('STILL clears the Kimberly Botts case when no farm is declared (fix stays narrow)', async () => {
+  it('STILL clears the Demo HCBS Support Persona case when no farm is declared (fix stays narrow)', async () => {
     const db = makeProfileDb()
     insertTypedProfile(db, { id: 'kb2', primaryType: 'individual' })
     setSection(db, 'kb2', 'organization_details', { organization_type: 'nonprofit' })
@@ -1141,7 +1141,7 @@ describe('enforceInvariants — runner', () => {
     // + the stage-of-life eligibility nets (#1093)
     // + the unconfigured-profile geography net (#1094)
     // + the county/crisis-need RECALL net (local help that already exists)
-    // + the 3 global match-scope nets (2026-08-03, the Robert White report:
+    // + the 3 global match-scope nets (2026-08-03, the Demo College Student Persona report:
     //   per-state HFA geo scope, cross-profile ACCEPT-only precision, and the
     //   condition-lane match-store scope) here.
     // + the non-grant notice net (2026-08-03 owner QA: regulatory/lead-gen/
@@ -1153,7 +1153,8 @@ describe('enforceInvariants — runner', () => {
     // + the non-grant-notice PIPELINE net (#1148 merge, 2026-08-05)
     // + the funder-behavior pair (2026-08-05): the bounded 990 itemized-grant
     //   ingest and the demonstrated-giving RECALL net it feeds.
-    expect(summary.ran).toBe(57)
+    // + the URL-less pointer-task research-lead repair (#1161 class).
+    expect(summary.ran).toBe(58)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1182,7 +1183,7 @@ describe('enforceInvariants — runner', () => {
       // A per-state housing finance agency row declares its state as a FULL
       // NAME in its curated title/sponsor — invisible to the "<Place>, XX —"
       // rule above. Re-scoped from the SAME registry that minted it, right
-      // after the general geo repair (the Robert White HFA class).
+      // after the general geo repair (the Demo College Student Persona HFA class).
       'state_agency_geo_scope',
       'declared_place_scope_matches',
       'foreign_jurisdiction_matches',
@@ -1241,11 +1242,12 @@ describe('enforceInvariants — runner', () => {
       'individual_org_section_conflict',
       'hamilton_task_self_heal',
       // AFTER self-heal: a just-requeued task's remaining flags reconcile the
-      // same boot (the Anastasia stale first-name class).
+      // same boot (the Demo Student stale first-name class).
       'stale_missing_field_resolution',
       // System-side stops re-checked with the producer's own code; zombie
-      // tasks for purged sources closed (the Robert White 41-stop class).
+      // tasks for purged sources closed (the Demo College Student Persona 41-stop class).
       'hamilton_stop_recheck',
+      'pointer_task_reclassification',
       'no_search_engine_application_targets',
       // Right after URL hygiene: a registered canonical program's application
       // target is repointed to its official URL (the "TN Promise opens a
@@ -1462,7 +1464,7 @@ describe('enforceStudentAidEligibility — student-aid on non-student profiles',
   }
   const resolveThesis = (_db, pid) => theses[pid] ?? null
 
-  it('demotes a stale student-aid ACCEPT on a non-student individual (Liubov class)', async () => {
+  it('demotes a stale student-aid ACCEPT on a non-student individual (demo_senior_family class)', async () => {
     const db = makeMatchDb()
     const { mid } = insertMatch(db, { profileId: 'p-senior', title: 'Tennessee HOPE Scholarship', description: 'Lottery scholarship for enrolled TN undergraduates', score: 81, decision: 'accept' })
     const res = await enforceStudentAidEligibility(db, { resolveThesis })
@@ -1598,7 +1600,7 @@ describe('enforceHamiltonTaskSelfHeal', () => {
 
   it('re-queues a blocked task whose flagged name field is now derivable from display_name', async () => {
     const db = await makeHamiltonDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Demo Tennessee STEM Student')
     const task = await makeBlockedTask(db, {})
 
     const res = await __testables.enforceHamiltonTaskSelfHeal(db)
@@ -1631,7 +1633,7 @@ describe('enforceHamiltonTaskSelfHeal', () => {
 
   it('never touches a blocked task with a non-profile-field outstanding item (conservative class gate)', async () => {
     const db = await makeHamiltonDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Demo College Student Persona')
     const task = await makeBlockedTask(db, {
       missing: [
         { kind: 'field', key: 'first_name', label: 'Profile is missing first name' },
@@ -1646,7 +1648,7 @@ describe('enforceHamiltonTaskSelfHeal', () => {
 
   it('heals a LEGACY blocked task (no missing-info rows) by parsing the preflight message', async () => {
     const db = await makeHamiltonDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Anastasia White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Demo Tennessee STEM Student')
     db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
       .run('p-heal', 'basic_information', JSON.stringify({ email: 'ana@example.com' }))
     const task = await makeBlockedTask(db, {
@@ -1661,7 +1663,7 @@ describe('enforceHamiltonTaskSelfHeal', () => {
 
   it('skips a legacy blocked task whose message includes a NON-profile-field blocker', async () => {
     const db = await makeHamiltonDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Demo College Student Persona')
     const task = await makeBlockedTask(db, {
       message: 'Hamilton Autopilot stopped at preflight: Profile is missing first name; Portal URL is missing',
       missing: [],
@@ -1715,7 +1717,7 @@ describe('enforceHamiltonTaskSelfHeal', () => {
   it('ENFORCE_HAMILTON_TASK_SELF_HEAL=0 counts candidates but writes nothing', async () => {
     process.env.ENFORCE_HAMILTON_TASK_SELF_HEAL = '0'
     const db = await makeHamiltonDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Demo Tennessee STEM Student')
     const task = await makeBlockedTask(db, {})
 
     const res = await __testables.enforceHamiltonTaskSelfHeal(db)
@@ -1728,7 +1730,7 @@ describe('enforceHamiltonTaskSelfHeal', () => {
   it('caps requeues per boot (HAMILTON_SELF_HEAL_REQUEUE_CAP)', async () => {
     process.env.HAMILTON_SELF_HEAL_REQUEUE_CAP = '1'
     const db = await makeHamiltonDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Demo Tennessee STEM Student')
     await makeBlockedTask(db, { grantId: 'g-cap-1' })
     await makeBlockedTask(db, { grantId: 'g-cap-2' })
 
@@ -1746,7 +1748,7 @@ describe('enforceHamiltonTaskSelfHeal', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 // INVARIANT: a task-flagged profile field the profile can now answer is
-// resolved EVERYWHERE (the Anastasia first-name class, 2026-07-27): prod held
+// resolved EVERYWHERE (the Demo Student first-name class, 2026-07-27): prod held
 // 30+ unresolved "Profile is missing first name" rows across portal tasks
 // while basic_information.first_name sat filled — flags are per-task, the fix
 // is profile-wide, and only the document-parse path ever reconciled them.
@@ -1788,9 +1790,9 @@ describe('enforceStaleMissingFieldResolution', () => {
 
   it('resolves the SAME stale flag across many portal tasks once the profile has the field', async () => {
     const db = await makeDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia Nicole White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Demo Tennessee STEM Student')
     db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
-      .run('p-ana', 'basic_information', JSON.stringify({ first_name: 'Anastasia', last_name: 'White' }))
+      .run('p-ana', 'basic_information', JSON.stringify({ first_name: 'Demo Student', last_name: 'White' }))
 
     // Three portals, three tasks, each with its own stale first/last-name flag
     // — including a waiting_for_review task the blocked-task self-heal never
@@ -1814,7 +1816,7 @@ describe('enforceStaleMissingFieldResolution', () => {
 
   it('derives first/last name from display_name when sections never stored parts', async () => {
     const db = await makeDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia Nicole White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Demo Tennessee STEM Student')
 
     const t = await makeTaskWithFlag(db, {
       missing: [
@@ -1829,7 +1831,7 @@ describe('enforceStaleMissingFieldResolution', () => {
 
   it('a field the profile still does NOT have stays flagged (never fabricates)', async () => {
     const db = await makeDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Demo Tennessee STEM Student')
     const t = await makeTaskWithFlag(db, {
       missing: [
         { kind: 'field', key: 'first_name', label: 'Profile is missing first name' },
@@ -1846,7 +1848,7 @@ describe('enforceStaleMissingFieldResolution', () => {
   it('ENFORCE_STALE_MISSING_FIELDS=0 counts but never writes', async () => {
     const db = await makeDb()
     process.env.ENFORCE_STALE_MISSING_FIELDS = '0'
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Demo Tennessee STEM Student')
     const t = await makeTaskWithFlag(db, {})
 
     const res = await __testables.enforceStaleMissingFieldResolution(db)
@@ -1857,7 +1859,7 @@ describe('enforceStaleMissingFieldResolution', () => {
 
   it('ignores flags on terminal tasks (submitted history is not rewritten)', async () => {
     const db = await makeDb()
-    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Anastasia White')
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-ana', 'Demo Tennessee STEM Student')
     const t = await makeTaskWithFlag(db, { status: 'submitted' })
 
     const res = await __testables.enforceStaleMissingFieldResolution(db)
@@ -1868,7 +1870,7 @@ describe('enforceStaleMissingFieldResolution', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INVARIANT: a system-side task stop that no longer reproduces is cleared, and
-// a task whose funding source was purged is closed (the Robert White 41-stop
+// a task whose funding source was purged is closed (the Demo College Student Persona 41-stop
 // class, 2026-07-27): 'crawler_profile_rules' / 'application_url' stops were
 // permanent by construction — nothing re-ran the check, and the blocked-task
 // self-heal deliberately skips non-profile-field items.
@@ -5613,7 +5615,7 @@ describe('enforce: an out-of-area locator is not surfaced to a profile somewhere
 })
 
 /* ────────────────────────────────────────────────────────────────────────────
- * GLOBAL MATCH SCOPE — the 2026-08-03 Robert White report ("the matching
+ * GLOBAL MATCH SCOPE — the 2026-08-03 Demo College Student Persona report ("the matching
  * engine casts far too wide a net"). Three sweeps, each on REAL prod shapes.
  * Every behavioral test below FAILS on a no-op sweep body.
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -5803,7 +5805,7 @@ describe('enforceConditionLaneMatchScope — a disease lane reaches only a decla
     `)
     return raw
   }
-  // REAL prod rows, verbatim (Robert White's surviving pre-gate set + the
+  // REAL prod rows, verbatim (Demo College Student Persona's surviving pre-gate set + the
   // xmatch kidney fund; evaluated 2026-08-02T04:10Z, restored across his
   // 2026-08-03 crawl by the resource-preserving reconcile).
   const seed = (db) => {

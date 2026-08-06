@@ -2,18 +2,9 @@
  * robertMailboxReaders.js — per-account mailbox/contacts READERS for Robert's
  * owner-contact harvest (robertContactHarvest.js).
  *
- * One reader per owner account, each built ONLY from env-provided credentials
- * (app passwords / app-only Graph creds — never an interactive OAuth flow):
- *
- *   buckeye7066@gmail.com          IMAP (imap.gmail.com) via a Gmail APP
- *                                  PASSWORD in ROBERT_GMAIL_APP_PASSWORD.
- *   firerookie_74@yahoo.com        IMAP (imap.mail.yahoo.com) via a Yahoo app
- *                                  password in ROBERT_YAHOO_FIREROOKIE74_APP_PASSWORD.
- *   jwhiternmba@yahoo.com          IMAP (imap.mail.yahoo.com) via a Yahoo app
- *                                  password in ROBERT_YAHOO_JWHITERNMBA_APP_PASSWORD.
- *   dr.johnwhite@axiombiolabs.org  Microsoft Graph app-only — REUSES the same
- *                                  MICROSOFT_TENANT_ID / MICROSOFT_CLIENT_ID /
- *                                  MICROSOFT_CLIENT_SECRET John's provider uses.
+ * One reader per explicitly configured owner account. Both account names and
+ * credentials come from environment variables; source control contains only
+ * `.invalid` local fixtures. No interactive OAuth flow is used.
  *
  * Reader contract (what robertContactHarvest consumes, and what tests inject):
  *   {
@@ -40,31 +31,61 @@ const log = createLogger('robertMailboxReaders')
 const TOKEN_BASE = 'https://login.microsoftonline.com'
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 
-/** The four owner accounts the harvest covers (owner directive 2026-07-25). */
-export const HARVEST_ACCOUNTS = Object.freeze([
+// Environment contract (listed explicitly for the env-inventory generator):
+// process.env.ROBERT_GMAIL_ACCOUNT
+// process.env.ROBERT_GMAIL_APP_PASSWORD
+// process.env.ROBERT_YAHOO_PRIMARY_ACCOUNT
+// process.env.ROBERT_YAHOO_PRIMARY_APP_PASSWORD
+// process.env.ROBERT_YAHOO_SECONDARY_ACCOUNT
+// process.env.ROBERT_YAHOO_SECONDARY_APP_PASSWORD
+// process.env.ROBERT_GRAPH_ACCOUNT
+const HARVEST_ACCOUNT_SPECS = Object.freeze([
   Object.freeze({
-    account: 'buckeye7066@gmail.com',
+    accountEnv: 'ROBERT_GMAIL_ACCOUNT',
+    localFixtureAccount: 'demo.owner-gmail@example.invalid',
     kind: 'imap',
     host: 'imap.gmail.com',
     passwordEnv: 'ROBERT_GMAIL_APP_PASSWORD',
   }),
   Object.freeze({
-    account: 'firerookie_74@yahoo.com',
+    accountEnv: 'ROBERT_YAHOO_PRIMARY_ACCOUNT',
+    localFixtureAccount: 'demo.owner-yahoo-primary@example.invalid',
     kind: 'imap',
     host: 'imap.mail.yahoo.com',
-    passwordEnv: 'ROBERT_YAHOO_FIREROOKIE74_APP_PASSWORD',
+    passwordEnv: 'ROBERT_YAHOO_PRIMARY_APP_PASSWORD',
   }),
   Object.freeze({
-    account: 'jwhiternmba@yahoo.com',
+    accountEnv: 'ROBERT_YAHOO_SECONDARY_ACCOUNT',
+    localFixtureAccount: 'demo.owner-yahoo-secondary@example.invalid',
     kind: 'imap',
     host: 'imap.mail.yahoo.com',
-    passwordEnv: 'ROBERT_YAHOO_JWHITERNMBA_APP_PASSWORD',
+    passwordEnv: 'ROBERT_YAHOO_SECONDARY_APP_PASSWORD',
   }),
   Object.freeze({
-    account: 'dr.johnwhite@axiombiolabs.org',
+    accountEnv: 'ROBERT_GRAPH_ACCOUNT',
+    localFixtureAccount: 'demo.owner-graph@example.invalid',
     kind: 'graph',
   }),
 ])
+
+function isDeployedRuntime(env) {
+  return String(env?.NODE_ENV || '').trim().toLowerCase() === 'production'
+    || Boolean(String(env?.RAILWAY_ENVIRONMENT_ID || '').trim())
+    || Boolean(String(env?.RAILWAY_DEPLOYMENT_ID || '').trim())
+}
+
+export function getHarvestAccounts(env = process.env) {
+  const deployed = isDeployedRuntime(env)
+  return HARVEST_ACCOUNT_SPECS.map(spec => Object.freeze({
+    ...spec,
+    account: String(env?.[spec.accountEnv] || (deployed ? '' : spec.localFixtureAccount))
+      .trim()
+      .toLowerCase(),
+  }))
+}
+
+/** Resolved once for runtime self-address filtering; production has no defaults. */
+export const HARVEST_ACCOUNTS = Object.freeze(getHarvestAccounts())
 
 // ---------------------------------------------------------------------------
 // IMAP reader (Gmail + Yahoo app passwords)
@@ -233,13 +254,17 @@ export function makeGraphReader({ account, config = null, fetchImpl = null }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a reader for each of the four owner accounts from env credentials.
+ * Resolve a reader for each configured owner account from env credentials.
  * Returns [{ account, reader|null, skipReason|null }] — an unconfigured
  * account gets reader:null and an honest skipReason; it is NEVER an error.
  */
 export function resolveHarvestReaders({ env = process.env, fetchImpl = null } = {}) {
   const out = []
-  for (const spec of HARVEST_ACCOUNTS) {
+  for (const spec of getHarvestAccounts(env)) {
+    if (!spec.account) {
+      out.push({ account: spec.accountEnv, reader: null, skipReason: `no_account:${spec.accountEnv}` })
+      continue
+    }
     if (spec.kind === 'imap') {
       const password = String(env[spec.passwordEnv] || '').trim()
       if (!password) {

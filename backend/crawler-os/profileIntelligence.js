@@ -12,6 +12,11 @@
 
 import { nearbyCities } from './geoRadius.js';
 import { containsTermWholeWord } from '../services/shared/textMatch.js';
+// The canonical matcher is the approved Crawler OS seam for score policy.
+// Importing its re-export keeps thesis defaults on the live score scale without
+// coupling the OS directly to config/matchThresholds (which the boundary guard
+// intentionally forbids).
+import { DEFAULT_MIN_SCORE } from '../services/matchEngine.js';
 // ONE registry of what DECLARES an agricultural producer, shared with the
 // eligibility gate (services/applicantTypeGate.js). If the discovery lane and
 // the gate disagreed about who is a farmer, a profile could be planned INTO the
@@ -1217,11 +1222,12 @@ export function buildThesis(profile = {}) {
       : [],
     field_of_study: profile?.field_of_study ? String(profile.field_of_study).trim() : null,
     employer: profile?.employer ? String(profile.employer).trim() : null,
-    // Match floor / slider. Individuals get a slightly lower floor so they are
-    // not starved; the planner/match engine can override per-run.
+    // Match floor / slider. Explicit owner input is preserved; otherwise use
+    // the canonical discovery floor. The former 60/55 org/person defaults were
+    // calibrated on a retired scale and silently starved data-point matches.
     min_match_score: Number.isFinite(profile?.min_match_score)
       ? profile.min_match_score
-      : (isOrg ? 60 : 55),
+      : DEFAULT_MIN_SCORE,
     // Searchable keyword seeds (deduped) for the planner's query builders.
     // Research orgs add the terms that reach SBIR/STTR and research NOFOs in
     // the structured feeds (grants.gov keyword search) — absent these, a

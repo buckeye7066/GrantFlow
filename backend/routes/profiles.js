@@ -3367,7 +3367,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   // "Add it once, it clears everywhere": any Hamilton-flagged field this save
   // just answered is resolved across ALL of this profile's portal tasks, and
   // resumable tasks with nothing left outstanding are re-queued (the
-  // Anastasia first-name class — 30+ tasks each kept a stale flag after the
+  // Demo Student first-name class — 30+ tasks each kept a stale flag after the
   // profile gained the name). Best-effort; never blocks the save.
   try {
     await reconcileProfileFieldsToTasks(req.db, { profileId: String(id) })

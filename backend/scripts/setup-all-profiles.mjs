@@ -23,14 +23,14 @@ const SECTION_KEYS = [
 // Profiles to set up
 const profiles = [
   { 
-    name: 'Anastasia', 
-    id: 'c4a92724-9cee-416f-ba30-e91b9b5cd885',
-    pdfPath: 'G:\\Apps\\grantflow\\GrantFlowb44\\Anastasia profile.pdf'
+    name: 'Demo Student',
+    id: '00000000-0000-4000-8000-000000000001',
+    pdfPath: 'G:\\Apps\\grantflow\\GrantFlowb44\\Demo Student profile.pdf'
   },
-  { name: 'Paul Jason Dasher', id: '7b7484c6-391c-4fb9-950f-c47759ba9440' },
-  { name: 'Angelika Ptak', id: '886debfb-aae3-4560-8a3e-69b098b2becc' },
-  { name: 'Rachel Miller', id: 'e8df3604-e54e-4359-b196-a1a39a44404e' },
-  { name: 'Kathy Marie Daniel', id: '9955410f-abb2-4772-a152-6ed2d1288879' }
+  { name: 'Demo Workforce Training Persona', id: '7b7484c6-391c-4fb9-950f-c47759ba9440' },
+  { name: 'Demo Healthcare Workforce Persona', id: '886debfb-aae3-4560-8a3e-69b098b2becc' },
+  { name: 'Demo Education Support Persona', id: 'e8df3604-e54e-4359-b196-a1a39a44404e' },
+  { name: 'Demo Basic Needs Persona', id: '9955410f-abb2-4772-a152-6ed2d1288879' }
 ];
 
 console.log('=== Setting Up All Profiles ===\n');
@@ -71,7 +71,7 @@ for (const profile of profiles) {
     console.log(`  PDF found: ${profile.pdfPath}`);
     
     // Check if document already exists
-    const existingDoc = db.prepare('SELECT id FROM documents WHERE profile_id = ? AND name LIKE ?').get(profile.id, '%Anastasia%');
+    const existingDoc = db.prepare('SELECT id FROM documents WHERE profile_id = ? AND name LIKE ?').get(profile.id, '%Demo Student%');
     
     if (!existingDoc) {
       // Copy PDF to uploads

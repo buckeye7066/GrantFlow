@@ -6,10 +6,10 @@ in (or helps you finish a login it can't do alone).
 
 There are three walkthroughs below — one for each person:
 
-- **Robert** — signs in to his own profile.
-- **Anastasia** — signs in to her own profile.
-- **Anya** — signs in with **her own** account and works on her **mom
-  Liubov's** profile.
+- **Demo Applicant** — signs in to their own profile.
+- **Demo Student** — signs in to her own profile.
+- **Demo Caregiver** — signs in with **their own** account and works on a
+  **Demo Senior** profile they are authorized to manage.
 
 > **You will need:** your email + password for GrantFlow, and the **vault
 > passphrase** (already set — the one you were given). You'll type the vault
@@ -21,8 +21,8 @@ There are three walkthroughs below — one for each person:
 
 1. **Open GrantFlow** in your browser (your usual GrantFlow link).
 2. **Sign in** with your email + password.
-3. Go to **Profiles** and **open the right profile** (Robert/Anastasia = your
-   own; Anya = "Liubov Samoylenko").
+3. Go to **Profiles** and **open the right profile** (Demo Applicant/Demo
+   Student = your own; Demo Caregiver = "Demo Senior Medical Persona").
 4. Open the **"Portals & pipeline"** tab (the key 🔑 icon).
 5. **Unlock the vault:** open **"Portal Autopilot"**, type the **master
    passphrase**, click **Unlock** (badge turns green → *Unlocked*).
@@ -45,23 +45,22 @@ The detailed version follows.
 3. After signing in you land on the **Dashboard**.
 
 > **Who signs in as whom**
-> - **Robert** signs in with **Robert's** email/password.
-> - **Anastasia** signs in with **Anastasia's** email/password.
-> - **Anya** signs in with **Anya's own** email/password
->   (`anyawhite@rocketmail.com`) — **not** her mom's. Because Anya's email is
->   attached to Liubov's profile, Liubov's profile shows up in Anya's list
->   automatically. (If Liubov's profile does **not** appear for Anya, her email
->   isn't linked yet — see *Troubleshooting*.)
+> - **Demo Applicant** signs in with their own email/password.
+> - **Demo Student** signs in with **Demo Student's** email/password.
+> - **Demo Caregiver** signs in with their own email/password
+>   (`demo.caregiver@example.invalid`) — **not** the senior applicant's. Because
+>   that email is attached through an authorized relationship, the Demo Senior
+>   profile appears in the caregiver's list automatically. If it does not,
+>   see *Troubleshooting*.
 
 ## Step 2 — Open the right profile
 
 1. In the left navigation, click **Profiles** (the "My Profiles" page).
 2. You'll see a card for each profile you can work on. Use the **search box**
    at the top if you have several.
-   - **Robert** → click **Robert's** profile card.
-   - **Anastasia** → click **Anastasia's** profile card.
-   - **Anya** → click the **"Liubov Samoylenko"** card (this is her mom's
-     profile).
+   - **Demo Applicant** → click their own profile card.
+   - **Demo Student** → click **Demo Student's** profile card.
+   - **Demo Caregiver** → click the **"Demo Senior Medical Persona"** card.
 3. Clicking a card opens that profile's workspace (**Profile Detail**).
 
 ## Step 3 — Go to the "Portals & pipeline" tab
@@ -141,10 +140,10 @@ Repeat Step 5 for each red tile you want set up.
 
 ## Troubleshooting
 
-- **Anya doesn't see Liubov's profile.** Her login email isn't attached to
-  Liubov's profile yet. The account owner/admin needs to add Anya's email
-  (`anyawhite@rocketmail.com`) to that profile (Profile → emails / access), then
-  Anya signs out and back in.
+- **The caregiver doesn't see the Demo Senior profile.** Their login email is
+  not attached to that profile yet. The account owner/admin must grant access
+  to `demo.caregiver@example.invalid` (Profile → emails/access), then the
+  caregiver signs out and back in.
 - **Badge says "No passphrase."** The vault passphrase hasn't been set for this
   profile. Enter one (8+ characters) in **"Master passphrase (set one)"** and
   click **Set passphrase** — that becomes the passphrase to unlock next time.

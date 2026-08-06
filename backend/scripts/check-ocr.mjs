@@ -5,7 +5,7 @@ const db = new Database('./data/grantflow.db');
 const result = db.prepare(`
   SELECT d.extracted_text FROM documents d
   JOIN profiles p ON d.profile_id = p.id
-  WHERE p.display_name LIKE '%Anastasia%'
+  WHERE p.display_name LIKE '%Demo Student%'
 `).get();
 
 console.log('=== OCR TEXT CAPTURED ===\n');

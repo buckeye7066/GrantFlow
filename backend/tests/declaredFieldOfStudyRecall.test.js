@@ -3,7 +3,7 @@
  * and a household's DECLINED aid type must never reach it anywhere.
  *
  * Every fixture below is a REAL prod row or profile field, read read-only on
- * 2026-08-02 against Anastasia White (`c4a92724-9cee-416f-ba30-e91b9b5cd885`):
+ * 2026-08-02 against Demo Tennessee STEM Student (`00000000-0000-4000-8000-000000000001`):
  *
  *   • `education.intended_major` = "Forensic Science";
  *     `education.interests` = [Forensic Science, Criminal Justice, STEM,
@@ -33,9 +33,9 @@ import { buildWebQueries } from '../crawler-os/webQueries.js'
 
 const LINK_VERSION = 'field-of-study-link'
 
-const ANASTASIA = {
+const demo_stem_student = {
   basic_information: {
-    first_name: 'Anastasia',
+    first_name: 'Demo Student',
     location: { city: 'Cleveland', state: 'TN', county: 'Bradley County', zip_code: '37312' },
     academic_status: { gpa: 3.84, act_score: 28, education_level: 'High School Senior', college_courses: 'Yes' },
   },
@@ -183,7 +183,7 @@ afterEach(() => { process.env = ENV_SNAPSHOT })
 describe('enforceDeclaredFieldOfStudyRecall', () => {
   it('links the forensic scholarship the student could never see', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA, { display_name: 'Anastasia Nicole White' })
+    addProfile(db, 'p-ana', demo_stem_student, { display_name: 'Demo Tennessee STEM Student' })
     addOpp(db, AFTE)
     const res = await enforceDeclaredFieldOfStudyRecall(wrap(db))
     expect(res.repaired).toBe(1)
@@ -197,7 +197,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
     // "Floyd E. McDonald Scholarship" is named after a person; only the sponsor
     // says forensic science. Title-only would have missed it (ACCEPT 79 in prod).
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, MCDONALD)
     const res = await enforceDeclaredFieldOfStudyRecall(wrap(db))
     expect(res.repaired).toBe(1)
@@ -206,7 +206,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
 
   it('records WHICH profile field authorized the look', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, AFTE)
     await enforceDeclaredFieldOfStudyRecall(wrap(db))
     const explain = JSON.parse(linkRows(db, 'p-ana')[0].match_explain_json)
@@ -222,7 +222,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
     // `description` is unbounded prose (the #1089 "evidence is the SPONSOR
     // only" doctrine). Admitting it made a housing scholarship a forensic row.
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, BOLD_HOUSING)
     const res = await enforceDeclaredFieldOfStudyRecall(wrap(db))
     // The row never even reaches the adjudicator: the exclusion is enforced
@@ -240,7 +240,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
 
   it('a single generic word never becomes a key ("science" ⊄ 258 STEM rows)', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, GENERIC_STEM)
     const res = await enforceDeclaredFieldOfStudyRecall(wrap(db))
     expect(res.repaired).toBe(0)
@@ -257,7 +257,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
 
   it('is IDEMPOTENT — a second boot writes nothing new', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, AFTE); addOpp(db, MCDONALD)
     const first = await enforceDeclaredFieldOfStudyRecall(wrap(db))
     expect(first.repaired).toBe(2)
@@ -269,13 +269,13 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
 
   it('CONVERGES: a link the gate no longer authorizes is dropped', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, AFTE)
     await enforceDeclaredFieldOfStudyRecall(wrap(db))
     expect(linkRows(db, 'p-ana')).toHaveLength(1)
     // The student changes major; the forensic link must not survive.
     db.prepare('UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = ?')
-      .run(JSON.stringify({ ...ANASTASIA.education, intended_major: 'Accounting', interests: ['Accounting'] }), 'p-ana', 'education')
+      .run(JSON.stringify({ ...demo_stem_student.education, intended_major: 'Accounting', interests: ['Accounting'] }), 'p-ana', 'education')
     const res = await enforceDeclaredFieldOfStudyRecall(wrap(db))
     expect(res.stale).toBe(1)
     expect(linkRows(db, 'p-ana')).toHaveLength(0)
@@ -283,7 +283,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
 
   it('never writes an engine REJECT', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     // A forensic row that is categorically unavailable: a foreign-jurisdiction
     // host (#1080's gate) — the engine REJECTs, so the sweep must not link.
     addOpp(db, {
@@ -298,7 +298,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
 
   it('ENFORCE_FIELD_OF_STUDY_LINK=0 counts without writing', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, AFTE)
     process.env.ENFORCE_FIELD_OF_STUDY_LINK = '0'
     const res = await enforceDeclaredFieldOfStudyRecall(wrap(db))
@@ -310,7 +310,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
 
   it('an inactive catalog row is never linked', async () => {
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, { ...AFTE, is_active: 0 })
     expect((await enforceDeclaredFieldOfStudyRecall(wrap(db))).repaired).toBe(0)
   })
@@ -319,7 +319,7 @@ describe('enforceDeclaredFieldOfStudyRecall', () => {
     // `%dna analysis%` is a substring predicate; a row that survives it but
     // fails the boundary rule must be counted OUT, never linked.
     const db = makeDb()
-    addProfile(db, 'p-ana', ANASTASIA)
+    addProfile(db, 'p-ana', demo_stem_student)
     addOpp(db, {
       ...AFTE, id: 'row-boundary', title: 'Grand NA Analysis Fellowship',
       sponsor: 'Unrelated Foundation',
@@ -338,10 +338,10 @@ describe('the derived facts REACH query building (the wiring, not just the modul
   it('buildThesis prefers derived terms over the unranked mined bag', () => {
     // THE REGRESSION, verbatim from prod 2026-08-02: `tags` is
     // `signals.keywords`, an unranked 453-entry bag whose first twelve entries
-    // were Anastasia's name and gender synonyms. `buildThesis` sliced twelve off
+    // were Demo Student's name and gender synonyms. `buildThesis` sliced twelve off
     // the front, so her declared major never reached a single search.
     const minedBagAsProdHadIt = [
-      'student', 'anastasia', 'nicole', 'white', 'female', 'woman', 'women',
+      'student', 'demo_stem_student', 'nicole', 'white', 'female', 'woman', 'women',
       'girls', 'female-led', 'led', 'female identifying', 'identifying',
       'young adult', 'forensic science', 'criminal justice',
     ]
@@ -356,7 +356,7 @@ describe('the derived facts REACH query building (the wiring, not just the modul
     expect(thesis.interest_terms.slice(0, 3)).toEqual(['forensic science', 'criminal justice', 'dna analysis'])
     // Every mined-bag entry that survives at all now ranks BELOW the derived
     // terms; the ones the bound drops are the weakest evidence, not the major.
-    for (const junk of ['anastasia', 'nicole', 'white', 'female']) {
+    for (const junk of ['demo_stem_student', 'nicole', 'white', 'female']) {
       const at = thesis.interest_terms.indexOf(junk)
       if (at >= 0) expect(at).toBeGreaterThan(thesis.interest_terms.indexOf('dna analysis'))
     }
@@ -364,7 +364,7 @@ describe('the derived facts REACH query building (the wiring, not just the modul
 
   it("a declared topic reaches the CORE query set, which the per-run cap cannot truncate", () => {
     // The interest-keyed queries live in the ROTATED EXTRA pool and the final
-    // `.slice(0, max)` truncates from the END. Measured on Anastasia's live
+    // `.slice(0, max)` truncates from the END. Measured on Demo Student's live
     // profile: at the live cap (maxQueries 14) all fourteen executed queries
     // were school/geo CORE and ZERO were topical.
     const thesis = buildThesis({
@@ -400,7 +400,7 @@ describe('the DECLINED aid type is refused at the matching choke point', () => {
   const anaProfile = { id: 'p-ana', primary_type: 'college_student', state: 'TN' }
 
   it('Federal Work-Study is REJECTED for a student who declined work-study', () => {
-    const d = makeDecision(100, anaProfile, FWS, null, null, null, ANASTASIA)
+    const d = makeDecision(100, anaProfile, FWS, null, null, null, demo_stem_student)
     expect(d.decision).toBe('REJECT')
     expect(d.explanation).toMatch(/does not accept Work-study/i)
   })
@@ -418,7 +418,7 @@ describe('the DECLINED aid type is refused at the matching choke point', () => {
   })
 
   it('a scholarship she DOES accept still passes the gate', () => {
-    const d = makeDecision(83, anaProfile, AFTE, null, null, null, ANASTASIA)
+    const d = makeDecision(83, anaProfile, AFTE, null, null, null, demo_stem_student)
     expect(d.decision).not.toBe('REJECT')
   })
 
@@ -428,14 +428,14 @@ describe('the DECLINED aid type is refused at the matching choke point', () => {
       title: 'Cleveland State Community College Nursing Scholarship',
       description: 'Recipients may also be offered federal work-study and a direct subsidized loan.',
     }
-    expect(evaluateOpportunityAgainstPreferences(mentions, ANASTASIA.education).accepted).toBe(true)
-    expect(evaluateOpportunityAgainstPreferences({ title: 'Federal Work-Study' }, ANASTASIA.education).accepted).toBe(false)
+    expect(evaluateOpportunityAgainstPreferences(mentions, demo_stem_student.education).accepted).toBe(true)
+    expect(evaluateOpportunityAgainstPreferences({ title: 'Federal Work-Study' }, demo_stem_student.education).accepted).toBe(false)
   })
 
   it('an unnamed aid type is never excluded', () => {
-    expect(evaluateOpportunityAgainstPreferences({ title: 'Bradley County Bar Association Award' }, ANASTASIA.education).aidType)
+    expect(evaluateOpportunityAgainstPreferences({ title: 'Bradley County Bar Association Award' }, demo_stem_student.education).aidType)
       .toBe('unknown')
-    expect(evaluateOpportunityAgainstPreferences({ title: 'Bradley County Bar Association Award' }, ANASTASIA.education).accepted)
+    expect(evaluateOpportunityAgainstPreferences({ title: 'Bradley County Bar Association Award' }, demo_stem_student.education).accepted)
       .toBe(true)
   })
 })

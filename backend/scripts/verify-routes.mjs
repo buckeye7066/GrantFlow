@@ -3,7 +3,7 @@
 import { getDb } from '../db/index.js';
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js';
 
-const profileId = process.argv[2] || 'c4a92724-9cee-416f-ba30-e91b9b5cd885';
+const profileId = process.argv[2] || '00000000-0000-4000-8000-000000000001';
 
 async function main() {
   const db = getDb();

@@ -26,8 +26,8 @@ const {
   _resetUnlockCache,
 } = await import('../services/hamilton/hamiltonPortalMasterVault.js')
 
-const PID = 'c4a92724-9cee-416f-ba30-e91b9b5cd885'
-const PASS = 'Tennessee93!'
+const PID = '00000000-0000-4000-8000-000000000001'
+const PASS = 'fixture-password-not-a-secret'
 
 describe('autonomous vault unlock (escrow)', () => {
   let db

@@ -4,15 +4,15 @@
  * The clicked primary_type is advisory; a profile's eligibility must come from
  * its DATA. normalizeProfile derives `effectiveFacets` (a union of facts) so a
  * disabled senior individual is eligible for disability + senior + individual
- * funding regardless of the type they selected — the exact Avanell case.
+ * funding regardless of the type they selected — the exact demo_senior_applicant case.
  */
 import { describe, it, expect } from 'vitest'
 import { normalizeProfile } from '../services/profileNormalizer.js'
 
 describe('effectiveFacets — data over clicked type', () => {
-  it('derives disabled + senior + individual + caregiver from Avanell-shaped data (clicked "family")', () => {
+  it('derives disabled + senior + individual + caregiver from demo_senior_applicant-shaped data (clicked "family")', () => {
     const n = normalizeProfile(
-      { id: 'avanell', primary_type: 'family', state: 'TN', city: 'Cleveland' },
+      { id: 'demo_senior_applicant', primary_type: 'family', state: 'TN', city: 'Cleveland' },
       {
         demographics: { disability_status: 'Has disability', age_group: 'Senior 62+' },
         family_life: { caregiver: true },

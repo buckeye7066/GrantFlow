@@ -398,8 +398,8 @@ export async function emitHardStopAlerts(db, {
     })
   }
 
-  // 2. Admin notification — single canonical operator (buckeye7066@gmail.com
-  // by default). We always create the row even if the request says
+  // 2. Admin notification — single configured Hamilton operator. We always
+  // create the row even if the request says
   // adminRequired=false, because GrantFlow's operator must always see
   // every hard stop.
   const adminIds = []
@@ -561,11 +561,9 @@ export async function emitMissingInfoAlert(db, {
 }
 
 /**
- * "Your ONE step" email-verification alert. Hamilton created a brand-new portal
- * account; the only thing she needs from the user is a click on the verification
- * link in the email that was triggered to them. Once verified, Hamilton
- * auto-resumes and finishes (no further human step). Fans out to the profile
- * owner + admins so whoever has the mailbox sees it.
+ * Email-verification alert for a legacy pending registration. Account creation,
+ * mailbox access, and activation are human-owned; Hamilton may reuse a saved
+ * login for draft preparation only after the owner completes them.
  *
  * @returns {Promise<string[]>} created notification ids
  */
@@ -579,8 +577,8 @@ export async function emitEmailVerificationAlert(db, {
     profileId,
     profileUserId,
     type: 'hamilton_email_verification_required',
-    title: `Verify your ${label} email — that's the only step we need`,
-    message: `Hamilton created your ${label} account. Click the verification link in the email we just triggered to you. That's the only step we need — the moment it's verified Hamilton resumes and finishes on her own.`,
+    title: `Verify your ${label} email`,
+    message: `This portal account is awaiting email verification. Open the message and complete verification yourself; afterward Hamilton can reuse the saved login for authorized draft preparation. Final Submit remains yours.`,
     severity: 'warning',
     data: {
       task_id: taskId,
