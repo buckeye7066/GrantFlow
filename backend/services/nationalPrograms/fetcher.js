@@ -1,5 +1,6 @@
 import fetch from 'node-fetch'
 import { createLogger } from '../../utils/logger.js'
+import { safeFetch, SsrfBlockedError } from '../http/safeFetch.js'
 const qualityLog = createLogger('services:nationalPrograms:fetcher')
 
 function sleep(ms) {
@@ -98,16 +99,25 @@ export class RateLimitedFetcher {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? this.timeoutMs)
       try {
-        const response = await fetch(url, {
+        // This crawler follows links DISCOVERED on fetched pages, so `url` is
+        // attacker-influenceable. safeFetch validates it and every redirect hop
+        // against the private/loopback/metadata policy; `redirect: 'follow'`
+        // here previously let a crawled page bounce us into internal services.
+        // fetchImpl keeps node-fetch's Response semantics for existing callers.
+        const response = await safeFetch(url, {
           method: options.method ?? 'GET',
           headers,
-          redirect: 'follow',
+        }, {
+          fetchImpl: fetch,
           signal: controller.signal,
+          timeoutMs: options.timeoutMs ?? this.timeoutMs,
         })
         clearTimeout(timeout)
         return response
       } catch (error) {
         clearTimeout(timeout)
+        // A policy refusal is deterministic — retrying cannot change it.
+        if (error instanceof SsrfBlockedError) throw error
         lastError = error
         const backoff = 250 * Math.pow(2, attempt)
         await sleep(backoff)

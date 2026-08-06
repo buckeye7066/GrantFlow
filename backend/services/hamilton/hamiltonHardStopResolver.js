@@ -39,6 +39,7 @@ import {
 import {
   canPayFor,
   recordCharge,
+  PaymentAuthorizationExceededError,
 } from './hamiltonPaymentAuthorizationService.js'
 import { isAttestationAllowed } from './hamiltonAttestationStore.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
@@ -502,13 +503,34 @@ async function resolvePayment(db, ctx, input) {
   }
   // The actual charge call is the host's responsibility; Hamilton records
   // the spend against the authorization for audit.
-  await recordCharge(db, {
-    authorizationId: decision.authorization.id,
-    amountCents,
-    taskId: ctx.taskId,
-    portalHost: host,
-    processorReceipt: input?.context?.receipt || null,
-  })
+  //
+  // recordCharge re-asserts the cap atomically, so it can refuse even though
+  // canPayFor just approved (a concurrent charge or a revocation landed in
+  // between). A refusal means NOTHING was recorded — never continue as if the
+  // spend succeeded.
+  try {
+    await recordCharge(db, {
+      authorizationId: decision.authorization.id,
+      amountCents,
+      taskId: ctx.taskId,
+      portalHost: host,
+      processorReceipt: input?.context?.receipt || null,
+    })
+  } catch (err) {
+    if (err instanceof PaymentAuthorizationExceededError) {
+      return escalate('ask_user_to_authorize_payment',
+        `Hamilton could not record a ${(amountCents / 100).toFixed(2)} USD ${category} charge — it would exceed the pre-authorized limit, or the authorization was revoked. Nothing was charged.`,
+        {
+          portal_host: host,
+          category,
+          amount_cents: amountCents,
+          reason: 'payment_authorization_exceeded',
+          payment_authorization_id: decision.authorization.id,
+        })
+    }
+    throw err
+  }
+
   return ok('charge_within_pre_authorization', {
     payment_authorization_id: decision.authorization.id,
     payment_method_reference: decision.authorization.payment_method_reference,
