@@ -108,6 +108,18 @@ function normalizeHost(input) {
   try { return new URL(/^https?:\/\//i.test(String(input)) ? String(input) : `https://${input}`).hostname.toLowerCase() } catch { return null }
 }
 
+function normalizeBoundedPathPrefix(input) {
+  const raw = String(input || '')
+  if (raw.length > 512) return null
+  for (let index = 0; index < raw.length; index += 1) {
+    const code = raw.charCodeAt(index)
+    if (code <= 31 || code === 127) return null
+  }
+  let end = raw.length
+  while (end > 0 && raw.charCodeAt(end - 1) === 47) end -= 1
+  return raw.slice(0, end) || '/'
+}
+
 function validateDefinition(portalHost, definition) {
   const errors = []
   if (!definition || typeof definition !== 'object') return ['definition_required']
@@ -133,7 +145,8 @@ function validateDefinition(portalHost, definition) {
         } catch { return true }
       })) errors.push('exact_https_allowed_origins_required')
   const validBoundedPathPrefix = (path) => {
-    const value = String(path || '').replace(/\/+$/, '') || '/'
+    const value = normalizeBoundedPathPrefix(path)
+    if (!value) return false
     return value.startsWith('/') && value !== '/' && !value.includes('?') && !value.includes('#')
   }
   if (!Array.isArray(definition.allowed_path_prefixes) || definition.allowed_path_prefixes.length === 0
@@ -162,8 +175,9 @@ function validateDefinition(portalHost, definition) {
       if (!REVIEWED_TRANSFORMS.has(String(field?.transform || ''))) errors.push('field_contract_transform_invalid')
       if (typeof field?.required !== 'boolean') errors.push('field_contract_required_flag_invalid')
       const allowedByPrefix = (definition.allowed_path_prefixes || []).some((allowed) => {
-        const base = String(allowed).replace(/\/+$/, '') || '/'
-        const fieldPath = String(field?.path_prefix || '').replace(/\/+$/, '') || '/'
+        const base = normalizeBoundedPathPrefix(allowed)
+        const fieldPath = normalizeBoundedPathPrefix(field?.path_prefix)
+        if (!base || !fieldPath) return false
         return base === '/' || fieldPath === base || fieldPath.startsWith(`${base}/`)
       })
       if (!allowedByPrefix) errors.push('field_contract_path_outside_adapter_scope')

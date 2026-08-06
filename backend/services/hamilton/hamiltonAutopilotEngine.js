@@ -917,7 +917,7 @@ async function captureConfirmation(page, screenshotsDir, {
  * @param {object} arg.profile           pre-loaded profile bundle
  * @param {object} arg.authorizations    boolean flags from hamiltonPreflight.readAuthorizations
  * @param {Array<{path:string,kind:string}>} [arg.documents]  authorized uploads
- * @param {string} [arg.storageStatePath] optional saved Playwright storage state
+ * @param {object} [arg.storageState] optional decrypted, owner-scoped Playwright storage state
  * @param {boolean} [arg.allowAutoSubmit] defaults to authorizations.submit_applications
  * @returns {Promise<{
  *   status: 'submitted'|'completed_draft'|'blocked'|'failed',
@@ -938,7 +938,6 @@ export async function runAutopilot({
   profile,
   authorizations,
   documents = [],
-  storageStatePath = null,
   storageState = null,
   allowAutoSubmit = null,
   loginCredential = null,
@@ -976,7 +975,7 @@ export async function runAutopilot({
 
   try {
     await guard('browser_launch', { portal_url: url })
-    if ((storageState && typeof storageState === 'object') || (storageStatePath && fs.existsSync(storageStatePath))) {
+    if (storageState && typeof storageState === 'object') {
       await guard('use_saved_session', { portal_url: url })
     }
   } catch (error) {
@@ -1026,20 +1025,16 @@ export async function runAutopilot({
     return { status: 'human_action_required', blocker_kind: 'no_browser', blocker_detail: 'The browser binary is unavailable. The application remains retryable and no portal dispatch occurred.', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  // Prefer an in-memory storageState OBJECT (the durable, DB-backed session a
-  // user imported after clearing 2FA themselves) — it survives Railway's
-  // ephemeral filesystem, unlike an on-disk path. Fall back to a path if given.
+  // Only an in-memory storageState OBJECT loaded from the encrypted,
+  // owner-scoped session store is accepted. Caller-supplied filesystem paths
+  // are never interpreted by the submission engine.
   // UA matches the capture-time fingerprint (REALISTIC_PORTAL_UA) so a WAF that
   // bound the session cookies to it accepts the replay.
   const contextOptions = {
     userAgent: REALISTIC_PORTAL_UA,
     ...browserEgress.context_options,
   }
-  if (storageState && typeof storageState === 'object') {
-    contextOptions.storageState = storageState
-  } else if (storageStatePath && fs.existsSync(storageStatePath)) {
-    contextOptions.storageState = storageStatePath
-  }
+  if (storageState && typeof storageState === 'object') contextOptions.storageState = storageState
   // Guard the setup path: if newContext/newPage throws (e.g. /dev/shm memory
   // pressure), the already-launched Chromium must not leak — the main
   // try/finally below only covers code after both exist.

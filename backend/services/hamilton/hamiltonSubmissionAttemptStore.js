@@ -93,6 +93,29 @@ function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex')
 }
 
+const developmentAuditIntegrityKey = crypto.randomBytes(32)
+
+function auditIntegrityKey() {
+  const configured = String(
+    process.env.AUTH_JWT_SECRET
+      || process.env.JWT_SECRET
+      || '',
+  ).trim()
+  if (!configured) {
+    if (process.env.NODE_ENV === 'production') throw new Error('hamilton_audit_integrity_key_required')
+    return developmentAuditIntegrityKey
+  }
+  return crypto.createHmac('sha256', configured)
+    .update('grantflow:hamilton-submission-audit:v1')
+    .digest()
+}
+
+function auditEventDigest(value) {
+  return crypto.createHmac('sha256', auditIntegrityKey())
+    .update(String(value))
+    .digest('hex')
+}
+
 function safeJson(raw, fallback = {}) {
   if (raw && typeof raw === 'object') return raw
   try { return JSON.parse(raw || '{}') } catch { return fallback }
@@ -424,7 +447,7 @@ async function appendAuditEventTx(tx, attempt, {
   })
   const previousHash = previous?.event_hash || null
   const sequence = Number(previous?.event_sequence || 0) + 1
-  const eventHash = sha256(`${previousHash || ''}\n${body}`)
+  const eventHash = auditEventDigest(`${previousHash || ''}\n${body}`)
   const id = crypto.randomUUID()
   await tx.prepare(
     `INSERT INTO hamilton_submission_audit_events

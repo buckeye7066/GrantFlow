@@ -1439,7 +1439,6 @@ async function runAutopilotPathway(db, {
     lastAgentMessage: 'Hamilton is filling the portal application.',
   })
 
-  let storageStatePath = options?.storageStatePath || null
   let documents = Array.isArray(options?.documents) ? [...options.documents] : []
   // Final-submit authority has one server-side source of truth: a CURRENT v2
   // submit_applications row owned by this profile's user. Persisted task booleans
@@ -1934,7 +1933,7 @@ async function runAutopilotPathway(db, {
   for (let attempt = 0; attempt < MAX_RESOLVER_ATTEMPTS && !knownAuthWallKind; attempt += 1) {
     engineResult = await runAutopilot({
       url, profile, authorizations,
-      documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
+      documents, storageState, allowAutoSubmit, loginCredential,
       headless: options?.headless ?? true,
       sessionSink,
       narrativeAnswers,
@@ -2043,7 +2042,6 @@ async function runAutopilotPathway(db, {
 
     if (directive.outcome === 'resolved' && directive.retry) {
       // Adjust engine inputs based on the resolver payload.
-      if (directive.payload?.storage_state_path) storageStatePath = directive.payload.storage_state_path
       if (directive.payload?.document) documents = [...documents, directive.payload.document]
       // Runtime URL rescue: the resolver FOUND the funder's real application
       // page (searched, plausibility-screened, liveness-verified — never

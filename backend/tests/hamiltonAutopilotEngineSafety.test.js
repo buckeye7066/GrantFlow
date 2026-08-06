@@ -126,6 +126,27 @@ describe('Hamilton engine redaction and evidence clock boundary', () => {
     expect(result.blocker_detail).toMatch(/retryable|no portal dispatch/i)
   })
 
+  it('never interprets a caller-supplied storage-state filesystem path', async () => {
+    const beforeExternalAction = vi.fn(async () => ({}))
+    const result = await runAutopilot({
+      url: 'https://portal.example.test/apply',
+      profile: { basic_information: { first_name: 'Ada' } },
+      authorizations: { complete_forms: true, use_saved_session: true },
+      // This existing repository path would have passed the former existsSync
+      // branch. It is intentionally an unknown option now and must be ignored.
+      storageStatePath: 'backend/tests/hamiltonAutopilotEngineSafety.test.js',
+      beforeExternalAction,
+      _testRuntime: {
+        prepareBrowserEgress: async () => testEgress,
+        playwrightUnavailable: true,
+      },
+    })
+    expect(result).toMatchObject({ status: 'human_action_required', blocker_kind: 'no_browser' })
+    expect(beforeExternalAction).toHaveBeenCalledTimes(1)
+    expect(beforeExternalAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'browser_launch' }))
+    expect(beforeExternalAction).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'use_saved_session' }))
+  })
+
   it('never manufactures a post-dispatch timestamp when the observation clock is earlier', async () => {
     const page = {
       url: () => `https://portal.example.test/receipt/${SECRET_CANARIES.pathToken}?code=${SECRET_CANARIES.queryToken}`,

@@ -170,6 +170,17 @@ const startLimiter = rateLimit({
   message: { error: 'rate_limited', retry_after_ms: 60_000 },
 })
 
+// Adapter coverage and policy changes are security-sensitive control-plane
+// operations. Keep their budget separate from long-running automation starts
+// so an authenticated caller cannot use one surface to exhaust the other.
+const adapterPolicyLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate_limited', retry_after_ms: 60_000 },
+})
+
 const CLOUD_INPUT_TYPES = new Set([
   'mousemove', 'mousedown', 'mouseup', 'click', 'wheel', 'scroll',
   'keydown', 'keyup', 'char',
@@ -866,7 +877,6 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
       // again from the server ledger before every irreversible action.
       require_human_review: req.body?.options?.require_human_review !== false,
       documents: Array.isArray(req.body?.options?.documents) ? req.body.options.documents : [],
-      storageStatePath: req.body?.options?.storage_state_path || null,
       headless: req.body?.options?.headless !== false,
     },
   }))
@@ -1924,7 +1934,7 @@ router.get('/portal-policies', async (req, res) => {
   const list = await listPolicies(req.db)
   return res.json({ ok: true, policies: list })
 })
-router.get('/submission-adapter-coverage', async (req, res) => {
+router.get('/submission-adapter-coverage', adapterPolicyLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   const coverage = await getSubmissionAdapterCoverage(req.db)
@@ -1943,7 +1953,7 @@ router.post('/portal-policies', async (req, res) => {
   }
 })
 
-router.post('/portal-policies/:host/validate-submission-adapter', async (req, res) => {
+router.post('/portal-policies/:host/validate-submission-adapter', adapterPolicyLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
@@ -1967,7 +1977,7 @@ router.post('/portal-policies/:host/validate-submission-adapter', async (req, re
   }
 })
 
-router.post('/portal-policies/:host/submission-adapter/kill-switch', async (req, res) => {
+router.post('/portal-policies/:host/submission-adapter/kill-switch', adapterPolicyLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })

@@ -175,6 +175,33 @@ describe('Hamilton route auth + profile scoping', () => {
       .send({ portalHost: 'grants.example.gov', automationAllowed: true })
     assert.equal(admin.status, 200)
   })
+
+  it('rate-limits the adapter control plane with one shared middleware', async () => {
+    const paths = [
+      '/submission-adapter-coverage',
+      '/portal-policies/:host/validate-submission-adapter',
+      '/portal-policies/:host/submission-adapter/kill-switch',
+    ]
+    const middleware = paths.map((routePath) => {
+      const layer = hamiltonRouter.stack.find((candidate) => candidate.route?.path === routePath)
+      assert.ok(layer, `missing route ${routePath}`)
+      assert.equal(layer.route.stack.length, 2, `${routePath} must include limiter + handler`)
+      return layer.route.stack[0].handle
+    })
+    assert.equal(new Set(middleware).size, 1, 'all adapter control-plane routes share one isolated limiter')
+
+    for (let index = 0; index < 30; index += 1) {
+      const response = await request(app)
+        .get('/api/hamilton/automation/submission-adapter-coverage')
+        .set('x-test-user', 'u-A')
+      assert.equal(response.status, 200)
+    }
+    const limited = await request(app)
+      .get('/api/hamilton/automation/submission-adapter-coverage')
+      .set('x-test-user', 'u-A')
+    assert.equal(limited.status, 429)
+    assert.equal(limited.body.error, 'rate_limited')
+  })
 })
 
 // REGRESSION: the auth middleware writes the canonical user id as

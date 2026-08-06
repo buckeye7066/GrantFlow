@@ -534,6 +534,20 @@ describe('revocation and immutable redaction-safe audit', () => {
       safe: 'login required',
     })
     expect(events[1].previous_event_hash).toBe(events[0].event_hash)
+    const unhashedBody = _internal.stableJson({
+      attempt_id: events[1].attempt_id,
+      task_id: events[1].task_id,
+      profile_id: events[1].profile_id,
+      user_id: events[1].user_id,
+      from_state: events[1].from_state,
+      to_state: events[1].to_state,
+      event_type: events[1].event_type,
+      details: events[1].details,
+      created_at: events[1].created_at,
+    })
+    expect(events[1].event_hash).not.toBe(
+      _internal.sha256(`${events[1].previous_event_hash}\n${unhashedBody}`),
+    )
     expect(JSON.stringify(events)).not.toContain('canary-password')
     expect(JSON.stringify(events)).not.toContain('123456')
   })

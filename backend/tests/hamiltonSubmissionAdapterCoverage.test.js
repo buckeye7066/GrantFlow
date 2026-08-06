@@ -53,6 +53,20 @@ function fixtures(definition) {
 beforeEach(() => _resetPortalPolicySchemaCache())
 
 describe('Hamilton reviewed adapter live coverage truth', () => {
+  it('bounds path-prefix normalization before processing attacker-controlled slash runs', () => {
+    const oversized = {
+      ...SYNTHETIC_REFERENCE_ADAPTER,
+      allowed_path_prefixes: [`/apply${'/'.repeat(513)}`],
+    }
+    const report = validateSubmissionAdapterFixtures({
+      portalHost: oversized.portal_host,
+      definition: oversized,
+      fixtures: fixtures(oversized),
+    })
+    expect(report.valid).toBe(false)
+    expect(report.errors).toContain('allowed_paths_required')
+  })
+
   it('rejects status contracts and fixtures that do not bind identity + status to one exact container', () => {
     const missingContainer = {
       ...SYNTHETIC_REFERENCE_ADAPTER,
