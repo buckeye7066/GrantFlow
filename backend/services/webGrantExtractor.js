@@ -29,16 +29,29 @@ export const MAX_WEB_EXTRACTION_TEXT_CHARS = 12_000;
 const MIN_TRUSTWORTHY_PAGE_TEXT_CHARS = 200;
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 20_000;
 
-/** Strip a web page to readable text for the model (bounded). */
-export function htmlToText(html, maxChars = 6000) {
-  if (!html || typeof html !== 'string') return '';
-  let $;
-  try { $ = cheerio.load(html); } catch { return ''; }
-  $('script, style, noscript, svg, header, footer, nav, form, iframe').remove();
+/** Load only the page content used for extraction and link classification. */
+function loadContentDocument(html) {
+  if (!html || typeof html !== 'string') return null;
+  try {
+    const $ = cheerio.load(html);
+    $('script, style, noscript, svg, header, footer, nav, form, iframe').remove();
+    return $;
+  } catch {
+    return null;
+  }
+}
+
+function textFromContentDocument($, maxChars) {
+  if (!$) return '';
   const text = ($('main').text() || $('body').text() || $.root().text() || '')
     .replace(/\s+/g, ' ')
     .trim();
   return text.slice(0, maxChars);
+}
+
+/** Strip a web page to readable text for the model (bounded). */
+export function htmlToText(html, maxChars = 6000) {
+  return textFromContentDocument(loadContentDocument(html), maxChars);
 }
 
 function boundedHtml(html) {
@@ -83,10 +96,14 @@ export async function extractOpportunitiesFromPage(
   deps = {},
 ) {
   const cappedHtml = boundedHtml(html);
-  const pageText = htmlToText(cappedHtml, MAX_WEB_EXTRACTION_TEXT_CHARS);
+  const contentDocument = loadContentDocument(cappedHtml);
+  const pageText = textFromContentDocument(contentDocument, MAX_WEB_EXTRACTION_TEXT_CHARS);
   if (!pageUrl || pageText.length < MIN_TRUSTWORTHY_PAGE_TEXT_CHARS) return [];
 
-  const linkInventory = buildLinkInventory(cappedHtml, { baseUrl: pageUrl });
+  // Classification and model link selection must see the same content surface as
+  // extraction. Navigation/footer links are site chrome, not evidence that this
+  // page is a directory or that a child application belongs to this record.
+  const linkInventory = buildLinkInventory(contentDocument.html(), { baseUrl: pageUrl });
   const timeoutMs = Number.isFinite(Number(deps.timeoutMs)) && Number(deps.timeoutMs) > 0
     ? Number(deps.timeoutMs)
     : DEFAULT_EXTRACTION_TIMEOUT_MS;
