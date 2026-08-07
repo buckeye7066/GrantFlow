@@ -1,8 +1,17 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import express from 'express'
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 
 import accessGateRouter from '../routes/accessGate.js'
+
+const SERVER_SOURCE = readFileSync(fileURLToPath(new URL('../server.js', import.meta.url)), 'utf8')
+const FRONTEND_CLIENT_SOURCE = readFileSync(
+  fileURLToPath(new URL('../../src/api/accessGate.js', import.meta.url)),
+  'utf8',
+)
 
 function createApp({ user, ctx, db = null }) {
   const app = express()
@@ -97,5 +106,48 @@ describe('GET /api/access-gate/status canonical authority', () => {
 
     expect(response.status).toBe(403)
     expect(response.body).toEqual({ ok: false, error: 'profile_access_denied' })
+  })
+})
+
+/**
+ * WIRED-BUT-UNREACHABLE GUARD.
+ *
+ * Every test above builds its OWN express app and mounts the router by hand,
+ * so all four passed for months while `backend/server.js` never mounted
+ * `/api/access-gate` at all. In production the endpoint 404'd, `<RequirePaidAccess>`
+ * caught the failure, and EVERY authenticated user — admins included — saw
+ * "We couldn't verify your access" on every payment-gated route.
+ *
+ * A route module's behavior test can never prove the route is reachable. This
+ * block asserts the mount itself, and asserts that every path the frontend
+ * access-gate client calls is covered by that mount.
+ */
+describe('the /api/access-gate router is MOUNTED in the real server', () => {
+  it('backend/server.js mounts /api/access-gate on routes/accessGate.js', () => {
+    // Tolerant of quote style and of lazyRouter vs a direct import, strict about
+    // the mount path and the module it resolves to.
+    const mountPattern =
+      /app\.use\(\s*['"`]\/api\/access-gate['"`]\s*,[^\n]*accessGate\.js/
+    expect(SERVER_SOURCE).toMatch(mountPattern)
+  })
+
+  it('every path the frontend access-gate client calls lives under the mounted prefix', () => {
+    const calledPaths = Array.from(
+      FRONTEND_CLIENT_SOURCE.matchAll(/apiFetch\(\s*[`'"](\/api\/[^`'"$?]+)/g),
+      (m) => m[1],
+    )
+    // The client must actually be calling something, or this guard is vacuous.
+    expect(calledPaths.length).toBeGreaterThan(0)
+    for (const path of calledPaths) {
+      expect(path.startsWith('/api/access-gate/')).toBe(true)
+    }
+  })
+
+  it('the mount is not shadowed by the catch-all 404 handler', () => {
+    const mountIndex = SERVER_SOURCE.search(/app\.use\(\s*['"`]\/api\/access-gate['"`]/)
+    const notFoundIndex = SERVER_SOURCE.search(/res\.status\(404\)\.json\(\{\s*error:\s*['"`]Not found['"`]/)
+    expect(mountIndex).toBeGreaterThan(-1)
+    expect(notFoundIndex).toBeGreaterThan(-1)
+    expect(mountIndex).toBeLessThan(notFoundIndex)
   })
 })

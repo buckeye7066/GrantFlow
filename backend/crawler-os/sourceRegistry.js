@@ -1469,7 +1469,11 @@ export const SOURCES = Object.freeze([
     name: 'Chafee program for youth aging out of foster care',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
-    base_url: 'https://www.acf.hhs.gov/cb/program-guide/chafee',
+    // acf.hhs.gov now 301s to acf.gov and the old /cb/program-guide/chafee path
+    // 404s there (verified live 2026-08-07). This is the live 200 page for the
+    // same program; www.acf.hhs.gov/cb/resource/chafee-foster-care-program
+    // redirects here, so keep the canonical target, not the redirector.
+    base_url: 'https://acf.gov/cb/grant-funding/john-h-chafee-foster-care-independence-program',
     sponsor_name: 'HHS Administration for Children and Families',
     resource_title: 'John H. Chafee Foster Care Program for Successful Transition to Adulthood',
     resource_summary: 'Official Chafee program information for current and former foster youth: education and training vouchers, housing, employment, and transition-to-adulthood support. This is a benefits lane administered by states.',

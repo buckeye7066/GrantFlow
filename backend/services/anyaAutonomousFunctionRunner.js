@@ -22,6 +22,71 @@ const log = createLogger('anyaAutonomousFunctionRunner')
 
 const REPO_ROOT = path.resolve(process.cwd())
 
+// ── Fleet-crawl admission control ────────────────────────────────────────────
+//
+// A FLEET crawl (no explicit profileIds) runs `runProfileDiscoveryLive` once per
+// ACTIVE PROFILE, sequentially, with no cap. In production that is ~88 profiles
+// at ~1-2 min each => 2-3 HOURS of continuous crawling per invocation.
+//
+// Three triggers all call into here with no profileIds and, until this guard,
+// no mutual exclusion beyond one in-memory boolean that dies with the process:
+//   • server boot            (ANYA_RUN_ON_STARTUP,      startup/backgroundServices.js)
+//   • EVERY admin login      (ANYA_RUN_ON_ADMIN_LOGIN,  routes/auth.js)
+//   • the daily schedule     (ANYA_RUN_ON_SCHEDULE,     anyaAutonomousScheduler.checkSchedule)
+//
+// So one redeploy plus two admin logins = three OVERLAPPING full-fleet sweeps,
+// which is exactly what production showed on 2026-08-06 (86 distinct profiles /
+// 142 runs in 3h09m — the fleet crawled ~1.6x over, many profiles 3x). To the
+// owner this reads as "I'm not touching anything and it keeps running".
+//
+// The guard is admission control, NOT throttling: it never reduces what a crawl
+// looks at, never drops a source, and never touches an explicitly scoped
+// (owner-initiated) crawl. It only refuses to start a SECOND redundant sweep of
+// the same fleet while one is running or has just finished.
+const FLEET_CRAWL_LOCK = 'autonomous:fleet-crawl'
+const FLEET_CRAWL_LAST_RUN_SETTING = 'autonomous_fleet_crawl_last_started_at'
+// A fleet sweep takes hours; the lease must outlive it and is renewed per profile.
+const FLEET_CRAWL_LOCK_TTL_MS = 30 * 60 * 1000
+const DEFAULT_FLEET_CRAWL_MIN_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+/**
+ * Minimum spacing between fleet-wide sweeps. Generous enough that the once-daily
+ * scheduled crawl is NEVER skipped (24h >> 6h), tight enough that a redeploy or
+ * a login cannot re-crawl all 88 profiles minutes after the last sweep.
+ * Set ANYA_FLEET_CRAWL_MIN_INTERVAL_MS=0 to disable the cooldown (the lock still
+ * prevents overlap).
+ */
+export function getFleetCrawlMinIntervalMs(env = process.env) {
+  const raw = env?.ANYA_FLEET_CRAWL_MIN_INTERVAL_MS
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return DEFAULT_FLEET_CRAWL_MIN_INTERVAL_MS
+  }
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_FLEET_CRAWL_MIN_INTERVAL_MS
+  return parsed
+}
+
+function fleetSkipReport(reason, extra = {}) {
+  return {
+    started_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+    engine: 'crawler-os',
+    crawler_types: ['crawler-os'],
+    skipped: true,
+    skipped_reason: reason,
+    profiles_processed: 0,
+    jobs_created: 0,
+    jobs_completed: 0,
+    jobs_failed: 0,
+    jobs_retried: 0,
+    opportunities_stored: 0,
+    matches_created: 0,
+    errors: [],
+    jobs: [],
+    ...extra,
+  }
+}
+
 /**
  * Create audit log entry for autonomous crawler operations
  */
@@ -84,9 +149,89 @@ async function auditLog(entry, context) {
  * synthesized templated geo-stub junk and fat per-job snapshots. Returns a report
  * shape compatible with the scheduler (profiles_processed/jobs_created/jobs_completed).
  */
+/** Extend an already-held fleet lease so a multi-hour sweep is never taken over mid-run. */
+async function renewFleetLease(db, ownerToken, ttlMs = FLEET_CRAWL_LOCK_TTL_MS) {
+  if (!db || !ownerToken) return
+  try {
+    await db
+      .prepare('UPDATE agent_control_locks SET expires_at = ? WHERE lock_name = ? AND owner_token = ?')
+      .run(new Date(Date.now() + ttlMs).toISOString(), FLEET_CRAWL_LOCK, String(ownerToken))
+  } catch {
+    // Best-effort: a failed renewal only risks an expired-lease takeover, never the crawl.
+  }
+}
+
 async function runAutonomousCrawlersViaOs(options, context) {
-  const { profileIds = null } = options || {}
+  const { profileIds = null, force = false } = options || {}
   const { db } = context
+  const scoped = Array.isArray(profileIds) && profileIds.length > 0
+
+  // Fleet-wide sweeps go through admission control (see FLEET_CRAWL_LOCK above).
+  // Explicitly scoped runs — owner-initiated crawls, Amy/Anya per-profile work,
+  // the coverage auto-heal — are never gated: recall must not be starved.
+  let fleetLease = null
+  if (!scoped && !force) {
+    let store
+    try {
+      store = await import('./agentControl/agentControlStore.js')
+    } catch (err) {
+      log.warn('[autonomous-crawlers] fleet lock store unavailable; proceeding unguarded', {
+        error: err?.message || String(err),
+      })
+    }
+
+    if (store) {
+      const minIntervalMs = getFleetCrawlMinIntervalMs()
+      if (minIntervalMs > 0) {
+        const lastStartedRaw = await store.getAgentSetting(db, FLEET_CRAWL_LAST_RUN_SETTING)
+        const lastStartedMs = Date.parse(String(lastStartedRaw ?? ''))
+        if (Number.isFinite(lastStartedMs)) {
+          const sinceMs = Date.now() - lastStartedMs
+          if (sinceMs >= 0 && sinceMs < minIntervalMs) {
+            log.info('[autonomous-crawlers] fleet sweep skipped (cooldown)', {
+              last_started_at: String(lastStartedRaw),
+              since_seconds: Math.round(sinceMs / 1000),
+              min_interval_seconds: Math.round(minIntervalMs / 1000),
+            })
+            return fleetSkipReport('fleet_crawl_cooldown', {
+              last_started_at: String(lastStartedRaw),
+              retry_after_seconds: Math.ceil((minIntervalMs - sinceMs) / 1000),
+            })
+          }
+        }
+      }
+
+      const lease = await store.acquireLock(db, {
+        lockName: FLEET_CRAWL_LOCK,
+        controlRunId: `fleet-crawl:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
+        acquiredBy: context?.user?.id ? String(context.user.id) : 'system',
+        ttlMs: FLEET_CRAWL_LOCK_TTL_MS,
+      })
+      if (!lease?.acquired) {
+        log.info('[autonomous-crawlers] fleet sweep skipped (already running)', {
+          held_by: lease?.heldBy || null,
+        })
+        return fleetSkipReport('fleet_crawl_in_progress', { held_by: lease?.heldBy || null })
+      }
+      fleetLease = { store, lease }
+      await store.setAgentSetting(db, FLEET_CRAWL_LAST_RUN_SETTING, new Date().toISOString())
+    }
+  }
+
+  try {
+    return await _runAutonomousCrawlerSweep({ profileIds, db, context, fleetLease })
+  } finally {
+    if (fleetLease) {
+      await fleetLease.store.releaseLock(db, {
+        lockName: FLEET_CRAWL_LOCK,
+        ownerToken: fleetLease.lease.ownerToken,
+      })
+    }
+  }
+}
+
+async function _runAutonomousCrawlerSweep({ profileIds, db, context, fleetLease }) {
+  const options = { profileIds }
   const startTime = Date.now()
   const report = {
     started_at: new Date(startTime).toISOString(),
@@ -118,6 +263,9 @@ async function runAutonomousCrawlersViaOs(options, context) {
   report.profiles_processed = profiles.length
 
   for (const profile of profiles) {
+    // Keep the fleet lease alive across a multi-hour sweep so a concurrent
+    // trigger can never take it over mid-run and start an overlapping sweep.
+    if (fleetLease) await renewFleetLease(db, fleetLease.lease.ownerToken)
     try {
       const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: profile.id })
       if (run?.skipped) {

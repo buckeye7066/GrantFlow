@@ -30,19 +30,23 @@
  *           sources_planned, sources_queried, sources_failed (count),
  *           failed_sources: [{ source_id, label, error }],
  *           results_found, results_accepted, results_rejected,
- *           avg_trust, avg_match,
+ *           avg_trust, avg_match, metrics_status ('recorded' | 'not_recorded'),
  *         } ],
  *         stale_sources: [{ source_id, label, freshness_days, last_crawl,
- *                           days_since, failure_status }],
+ *                           days_since, failure_status ('never_run' | 'stale' |
+ *                           'not_crawlable'), runnable, crawler_os_source_id,
+ *                           reason }],
  *         weak_data_profiles: [{ profile_id, display_name, score, missing[] }],
  *         totals: { runs, sources_failed_recent, stale_sources,
- *                   weak_data_profiles, source_failure_rate },
+ *                   not_crawlable_sources, weak_data_profiles,
+ *                   source_failure_rate },
  *         optional_tables: { rejection_log: bool },
  *       }
  */
 
 import express from 'express'
 import { SOURCES, getSource } from '../services/sourceRegistry.js'
+import { classifyDisplaySource } from '../services/sourceRegistryParity.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -113,29 +117,46 @@ async function loadRuns(db, { profileId, limit }) {
   const limitPlaceholder = isPg ? `$${params.length + 1}` : '?'
   params.push(limit)
 
-  let runRows = []
-  try {
-    runRows = await db
-      .prepare(
-        `SELECT crawler_run_id,
+  const rollupSelect = (withMetrics) => `SELECT crawler_run_id,
                 MAX(profile_id)   AS profile_id,
                 MAX(crawler_type) AS crawler_type,
                 MAX(created_at)   AS started_at,
                 SUM(CASE WHEN planned THEN 1 ELSE 0 END)  AS sources_planned,
                 SUM(CASE WHEN queried THEN 1 ELSE 0 END)  AS sources_queried,
                 SUM(CASE WHEN failed  THEN 1 ELSE 0 END)  AS sources_failed,
-                SUM(found) AS results_found
+                SUM(found) AS results_found${
+                  withMetrics
+                    ? `,
+                SUM(accepted)        AS results_accepted,
+                SUM(rejected)        AS results_rejected,
+                SUM(match_score_sum) AS match_score_sum,
+                SUM(match_score_n)   AS match_score_n`
+                    : ''
+                }
          FROM crawler_source_runs
          ${where}
          GROUP BY crawler_run_id
          ORDER BY started_at DESC
-         LIMIT ${limitPlaceholder}`,
+         LIMIT ${limitPlaceholder}`
+
+  // Match telemetry lives in columns added by migration 166 / pg 0171. On a DB
+  // that has not replayed them the rollup degrades to the legacy shape and every
+  // run reports metrics_status:'not_recorded' — an honest "unknown", never a 0.
+  let runRows = []
+  let metricsAvailable = true
+  try {
+    runRows = await db.prepare(rollupSelect(true)).all(...params)
+  } catch (metricErr) {
+    metricsAvailable = false
+    try {
+      runRows = await db.prepare(rollupSelect(false)).all(...params)
+    } catch (err) {
+      // crawler_source_runs may not exist on a brand-new DB — that's fine.
+      routeLogger.warn(
+        `[CrawlCoverage] crawler_source_runs unavailable: ${err?.message ?? err} (metrics probe: ${metricErr?.message ?? metricErr})`,
       )
-      .all(...params)
-  } catch (err) {
-    // crawler_source_runs may not exist on a brand-new DB — that's fine.
-    routeLogger.warn(`[CrawlCoverage] crawler_source_runs unavailable: ${err?.message ?? err}`)
-    return []
+      return []
+    }
   }
 
   if (runRows.length === 0) return []
@@ -189,81 +210,27 @@ async function loadRuns(db, { profileId, limit }) {
     // best-effort
   }
 
-  // crawler_jobs: accepted count + avg match score. crawler_jobs has no
-  // crawler_run_id FK, so we join on profile + time proximity is unreliable;
-  // instead we read result_meta JSON which often carries { accepted, avg_match }.
-  // We key by crawler_run_id when result_meta embeds it; otherwise this stays
-  // null and the dashboard shows results_found only (honest degradation).
-  const acceptedByRun = new Map()
-  try {
-    const jobRows = await db
-      .prepare(
-        `SELECT result_count, result_meta
-         FROM crawler_jobs
-         WHERE result_meta IS NOT NULL
-         ORDER BY created_at DESC
-         LIMIT 500`,
-      )
-      .all()
-    for (const job of jobRows ?? []) {
-      let meta
-      try {
-        meta = typeof job.result_meta === 'string' ? JSON.parse(job.result_meta) : job.result_meta
-      } catch {
-        continue
-      }
-      const rid = meta?.crawler_run_id || meta?.run_id
-      if (!rid) continue
-      acceptedByRun.set(rid, {
-        accepted: Number(
-          meta.accepted ?? meta.results_accepted ?? meta.inserted ?? job.result_count ?? 0,
-        ),
-        rejected: Number(meta.rejected ?? meta.results_rejected ?? 0),
-        avg_match: Number.isFinite(Number(meta.avg_match ?? meta.avg_match_score))
-          ? Number(meta.avg_match ?? meta.avg_match_score)
-          : null,
-      })
-    }
-  } catch {
-    // crawler_jobs / result_meta missing — accepted/avg_match stay null.
-  }
-
-  // OPTIONAL rejection_log: count rejected per run if the table exists.
-  const rejectionByRun = new Map()
-  if (await tableExists(db, 'rejection_log')) {
-    try {
-      const ph = placeholders(isPg, 1, runIds.length)
-      const rejRows = await db
-        .prepare(
-          `SELECT crawler_run_id, COUNT(*) AS rejected
-           FROM rejection_log
-           WHERE crawler_run_id IN (${ph})
-           GROUP BY crawler_run_id`,
-        )
-        .all(...runIds)
-      for (const row of rejRows ?? []) {
-        rejectionByRun.set(row.crawler_run_id, Number(row.rejected ?? 0))
-      }
-    } catch {
-      // shape mismatch — ignore, degrade gracefully
-    }
-  }
-
+  // Accepted / rejected / avg_match come from the ENGINE's own per-source
+  // counters, recorded by crawlerOsCoveragePersistence into the columns added by
+  // migration 166 / pg 0171.
+  //
+  // They used to be read from crawler_jobs.result_meta keyed on
+  // meta.crawler_run_id, with rejection_log as a second fallback. NEITHER could
+  // ever produce a number: measured in prod 2026-08-07, 0 of 15,740
+  // result_meta rows contain `crawler_run_id` or `run_id` (that key is written
+  // by nothing), and prod's rejection_log has no crawler_run_id column at all,
+  // so its query threw into a silent catch on every request. That is why the
+  // panel showed "—" in Accepted/Rejected/Avg-match for every run while Found
+  // was populated. Both dead readers are removed rather than left to look like
+  // coverage that exists.
   return runRows.map((r) => {
     const rid = r.crawler_run_id
-    const accepted = acceptedByRun.get(rid) ?? null
     const trustAgg = trustBySrc.get(rid)
-    const rejectionLogCount = rejectionByRun.has(rid) ? rejectionByRun.get(rid) : null
     const resultsFound = Number(r.results_found ?? 0)
-    const resultsAccepted = accepted?.accepted ?? null
-    const resultsRejected =
-      rejectionLogCount !== null
-        ? rejectionLogCount
-        : accepted?.rejected !== null && accepted?.rejected !== undefined
-          ? accepted.rejected
-          : resultsAccepted !== null
-            ? Math.max(0, resultsFound - resultsAccepted)
-            : null
+    // A run predating migration 166 aggregates to NULL. NULL means UNKNOWN and
+    // must not be shown as 0 — the dashboard renders it as "not recorded".
+    const hasMetrics = metricsAvailable && r.results_accepted !== null && r.results_accepted !== undefined
+    const matchN = Number(r.match_score_n ?? 0)
     return {
       crawler_run_id: rid,
       profile_id: r.profile_id ?? null,
@@ -274,10 +241,15 @@ async function loadRuns(db, { profileId, limit }) {
       sources_failed: Number(r.sources_failed ?? 0),
       failed_sources: failedBySrc.get(rid) ?? [],
       results_found: resultsFound,
-      results_accepted: resultsAccepted,
-      results_rejected: resultsRejected,
+      results_accepted: hasMetrics ? Number(r.results_accepted ?? 0) : null,
+      results_rejected: hasMetrics ? Number(r.results_rejected ?? 0) : null,
       avg_trust: trustAgg && trustAgg.n > 0 ? Number((trustAgg.sum / trustAgg.n).toFixed(2)) : null,
-      avg_match: accepted?.avg_match ?? null,
+      avg_match:
+        hasMetrics && matchN > 0
+          ? Number((Number(r.match_score_sum ?? 0) / matchN).toFixed(2))
+          : null,
+      // Explicit so "—" can never mean both "zero" and "we never recorded it".
+      metrics_status: hasMetrics ? 'recorded' : 'not_recorded',
     }
   })
 }
@@ -311,7 +283,27 @@ async function loadStaleSources(db) {
   for (const src of Object.values(SOURCES)) {
     const freshnessDays = Number(src?.freshness_days ?? 0)
     if (!freshnessDays) continue
-    const lastCrawl = lastBySrc.get(src.id) ?? null
+    // Which crawler-os id (if any) actually runs this display source. 39 of the
+    // 61 display sources have none — they can never write a crawler_source_runs
+    // row, so calling them "never run" (with a Run-now button that can only 404
+    // source_not_crawlable) blamed the scheduler for registry drift. They stay
+    // LISTED — hiding them would hide the gap — but as `not_crawlable`.
+    const parity = classifyDisplaySource(src.id)
+    const lastCrawl = parity.runnable ? (lastBySrc.get(parity.crawler_os_source_id) ?? null) : null
+    if (!parity.runnable) {
+      stale.push({
+        source_id: src.id,
+        label: src.label ?? src.id,
+        freshness_days: freshnessDays,
+        last_crawl: lastBySrc.get(src.id) ?? null,
+        days_since: null,
+        failure_status: 'not_crawlable',
+        runnable: false,
+        crawler_os_source_id: null,
+        reason: parity.reason,
+      })
+      continue
+    }
     if (!lastCrawl) {
       stale.push({
         source_id: src.id,
@@ -320,6 +312,9 @@ async function loadStaleSources(db) {
         last_crawl: null,
         days_since: null,
         failure_status: 'never_run',
+        runnable: true,
+        crawler_os_source_id: parity.crawler_os_source_id,
+        reason: null,
       })
       continue
     }
@@ -333,13 +328,20 @@ async function loadStaleSources(db) {
         last_crawl: lastCrawl,
         days_since: Number(daysSince.toFixed(1)),
         failure_status: 'stale',
+        runnable: true,
+        crawler_os_source_id: parity.crawler_os_source_id,
+        reason: null,
       })
     }
   }
-  // Worst offenders first: never-run, then most-overdue.
+  // Actionable first: a runnable source that never ran or went stale is a real
+  // crawler problem; a not_crawlable row is a registry-wiring backlog item and
+  // sorts last so it can never crowd out the actionable ones.
+  const rank = (s) => (s.failure_status === 'not_crawlable' ? 2 : s.days_since === null ? 0 : 1)
   stale.sort((a, b) => {
-    if (a.days_since === null && b.days_since !== null) return -1
-    if (b.days_since === null && a.days_since !== null) return 1
+    const ra = rank(a)
+    const rb = rank(b)
+    if (ra !== rb) return ra - rb
     return (b.days_since ?? 0) - (a.days_since ?? 0)
   })
   return stale
@@ -457,7 +459,10 @@ router.get('/', async (req, res) => {
         runs: runs.length,
         sources_failed_recent: sourcesFailedRecent,
         sources_queried_recent: sourcesQueriedRecent,
-        stale_sources: staleSources.length,
+        stale_sources: staleSources.filter((s) => s.failure_status !== 'not_crawlable').length,
+        // Registry drift, counted separately so a wiring backlog can never be
+        // read as a crawler that stopped running (see sourceRegistryParity.js).
+        not_crawlable_sources: staleSources.filter((s) => s.failure_status === 'not_crawlable').length,
         weak_data_profiles: weakDataProfiles.length,
         source_failure_rate: sourceFailureRate,
       },

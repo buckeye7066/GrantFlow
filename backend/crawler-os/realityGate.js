@@ -110,16 +110,26 @@ export function applyGlobalRealityChecks(candidate, ctx = {}) {
     return reject(REASON.GEO_STUB, ['templated geo-stub presented as a direct opportunity'], kind, candidate, source);
   }
 
-  // URL checks. Direct-apply rows need a safe https apply_url. Standing
-  // PROGRAM rows may be honest program/intake records with only an info_url
-  // (SAM.gov assistance listings are the canonical example), so they are stored
-  // for REVIEW rather than rejected as fake direct applications.
+  // URL checks. An applicable row must present at least ONE safe https URL.
+  // Direct-apply rows carry an apply_url. A STANDING record — a real program /
+  // benefit / aid page that has no per-applicant application URL (SAM.gov
+  // assistance listings, LIHEAP, Pell, the Chafee foster-youth program) — is
+  // gated on its info_url instead and stored for REVIEW rather than rejected as
+  // a fake direct application.
+  //
+  // The fallback is deliberately keyed on "has no apply_url", not on the
+  // PROGRAM kind label: restricting it to PROGRAM silently zeroed every
+  // BENEFIT/SCHOLARSHIP/DIRECT_GRANT standing source the moment the adapter
+  // stopped promoting a base page into apply_url (2026-08-06, commit bfeae548 —
+  // 17 official lanes went from 1-found-per-run to 0 with reason `bad_url`).
+  // Honesty is preserved where it belongs: apply_url stays null, so nothing
+  // downstream can present the row as a direct application.
   if (isApplicable) {
-    const urlForGate = candidate.apply_url || (kind === OPPORTUNITY_KIND.PROGRAM ? candidate.info_url : null);
+    const urlForGate = candidate.apply_url || candidate.info_url || null;
     const urlKind = candidate.apply_url ? 'apply' : 'info';
     // An applicable opportunity we surface must use https, whether the gate URL
-    // is an apply_url or a PROGRAM info_url. Validating the PROGRAM info_url as
-    // kind 'info' alone would allow http (a downgrade), so enforce https here.
+    // is an apply_url or a standing record's info_url. Validating the info_url
+    // as kind 'info' alone would allow http (a downgrade), so enforce https here.
     if (/^http:\/\//i.test(String(urlForGate ?? ''))) {
       return reject(REASON.BAD_URL, [`${urlKind}_url must be https`], kind, candidate, source);
     }
@@ -129,6 +139,15 @@ export function applyGlobalRealityChecks(candidate, ctx = {}) {
         return reject(REASON.SEARCH_URL_AS_APPLY, ['apply_url is a search-engine result URL'], kind, candidate, source);
       }
       return reject(REASON.BAD_URL, [`${urlKind}_url unsafe/invalid: ${urlCheck.reason}`], kind, candidate, source);
+    }
+    // isSafeUrl only rejects search-engine URLs for kind 'apply'. An applicable
+    // row whose ONLY url is a search result is not a real opportunity either —
+    // this keeps the info_url fallback from becoming a laundering path.
+    if (!candidate.apply_url) {
+      const searchCheck = isSafeUrl(urlForGate, { kind: 'apply' });
+      if (!searchCheck.ok && searchCheck.reason === 'search_url_as_apply') {
+        return reject(REASON.SEARCH_URL_AS_APPLY, ['only url is a search-engine result URL'], kind, candidate, source);
+      }
     }
   } else if (candidate.info_url) {
     const infoCheck = isSafeUrl(candidate.info_url, { kind: 'info' });

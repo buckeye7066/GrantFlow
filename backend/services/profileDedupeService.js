@@ -469,6 +469,51 @@ export async function findDuplicateProfileGroups(db, {
   return { groups: groups.slice(0, limitGroups), scanned: profiles.length, capped }
 }
 
+let bestEffortSavepointSeq = 0
+
+/**
+ * Run a BEST-EFFORT (swallow-on-failure) statement block inside a SAVEPOINT.
+ *
+ * Why this exists (production 500, 2026-08-06): on PostgreSQL a single failed
+ * statement aborts the ENTIRE transaction — every subsequent command then fails
+ * with `current transaction is aborted, commands ignored until end of
+ * transaction block`. SQLite has no such rule, so a `try { … } catch {}`
+ * around an optional write is harmless locally and catastrophic in prod: the
+ * swallowed error leaves the connection poisoned and the NEXT (unrelated,
+ * non-optional) statement is what surfaces the 500. Wrapping each optional
+ * block in a savepoint makes "best effort" actually mean best effort on both
+ * dialects — the failed block is rolled back, the outer transaction survives.
+ *
+ * Returns `{ ok, value, error }` and never throws.
+ */
+async function runBestEffort(tx, fn) {
+  const name = `gf_dedupe_sp_${++bestEffortSavepointSeq}`
+  let savepointOpen = false
+  try {
+    await tx.exec(`SAVEPOINT ${name}`)
+    savepointOpen = true
+  } catch {
+    // No savepoint support (or a mock tx without exec): degrade to a plain
+    // guarded call rather than failing the merge outright.
+  }
+
+  try {
+    const value = await fn()
+    if (savepointOpen) {
+      try { await tx.exec(`RELEASE SAVEPOINT ${name}`) } catch { /* ignore */ }
+    }
+    return { ok: true, value, error: null }
+  } catch (error) {
+    if (savepointOpen) {
+      try {
+        await tx.exec(`ROLLBACK TO SAVEPOINT ${name}`)
+        await tx.exec(`RELEASE SAVEPOINT ${name}`)
+      } catch { /* ignore */ }
+    }
+    return { ok: false, value: undefined, error }
+  }
+}
+
 async function tableExists(tx, tableName) {
   const name = String(tableName)
   // Dialect detection must not rely on tx.dialect because some transaction wrappers
@@ -792,15 +837,16 @@ export async function mergeProfiles(db, {
       if (profileFieldUpdate) changes.push(profileFieldUpdate)
 
       // Preserve access emails (board members, alternates, etc.) by merging `profile_emails` first.
-      try {
-        changes.push(await mergeProfileEmails(tx, { winnerId, loserId, dryRun }))
-      } catch (e) {
+      const emailsOutcome = await runBestEffort(tx, () => mergeProfileEmails(tx, { winnerId, loserId, dryRun }))
+      if (emailsOutcome.ok) {
+        changes.push(emailsOutcome.value)
+      } else {
         changes.push({
           type: 'profile_emails.merge',
           from: loserId,
           to: winnerId,
           skipped: true,
-          reason: e?.message || String(e),
+          reason: emailsOutcome.error?.message || String(emailsOutcome.error),
         })
       }
 
@@ -871,13 +917,11 @@ export async function mergeProfiles(db, {
       if (billingOp) changes.push(billingOp)
 
       if (!dryRun) {
-        try {
+        await runBestEffort(tx, async () => {
           if (await tableExists(tx, 'audit_logs')) {
             await tx.prepare('UPDATE audit_logs SET profile_id = ? WHERE profile_id = ?').run(winnerId, loserId)
           }
-        } catch {
-          // ignore
-        }
+        })
       }
 
       if (dryRun) {
@@ -885,56 +929,61 @@ export async function mergeProfiles(db, {
       } else {
         // Clear user_id on loser before deletion to prevent unique constraint violations
         // (ux_profiles_user_id) if the loser still has a user_id at this point
-        try {
-          await tx.prepare('UPDATE profiles SET user_id = NULL WHERE id = ? AND user_id IS NOT NULL').run(loserId)
-        } catch { /* best effort */ }
+        await runBestEffort(tx, () =>
+          tx.prepare('UPDATE profiles SET user_id = NULL WHERE id = ? AND user_id IS NOT NULL').run(loserId))
 
-        try {
+        // The hard-delete is attempted inside a savepoint precisely so the
+        // documented FK fallback below can run: on Postgres an FK violation
+        // aborts the transaction, so without the savepoint the "soft-delete
+        // instead" recovery statement could never execute.
+        const deleteOutcome = await runBestEffort(tx, async () => {
           const deleteResult = await tx.prepare('DELETE FROM profiles WHERE id = ?').run(loserId)
-          const deletedRows = Number(deleteResult?.changes ?? 0)
-          if (deletedRows > 0) {
-            changes.push({ type: 'profiles.delete', id: loserId })
-          } else {
-            const softResult = await tx
-              .prepare("UPDATE profiles SET status = 'deleted', user_id = NULL WHERE id = ?")
-              .run(loserId)
-            if (Number(softResult?.changes ?? 0) === 0) {
-              throw new Error(`Merged profile ${loserId} could not be deleted or soft-deleted`)
-            }
-            changes.push({
-              type: 'profiles.soft_delete',
-              id: loserId,
-              reason: 'hard delete removed 0 rows',
-            })
-          }
-        } catch (deleteError) {
-          // Postgres can enforce FK constraints that SQLite doesn't. If hard-delete fails,
-          // soft-delete instead so the merge operation succeeds without leaving data inconsistent.
+          return Number(deleteResult?.changes ?? 0)
+        })
+
+        if (deleteOutcome.ok && deleteOutcome.value > 0) {
+          changes.push({ type: 'profiles.delete', id: loserId })
+        } else {
+          // Postgres can enforce FK constraints that SQLite doesn't. If hard-delete fails
+          // (or removed nothing), soft-delete instead so the merge operation succeeds
+          // without leaving data inconsistent.
           const softResult = await tx
             .prepare("UPDATE profiles SET status = 'deleted', user_id = NULL WHERE id = ?")
             .run(loserId)
           if (Number(softResult?.changes ?? 0) === 0) {
-            throw deleteError
+            if (deleteOutcome.error) throw deleteOutcome.error
+            throw new Error(`Merged profile ${loserId} could not be deleted or soft-deleted`)
           }
           changes.push({
             type: 'profiles.soft_delete',
             id: loserId,
-            reason: deleteError?.message || String(deleteError),
+            reason: deleteOutcome.error
+              ? (deleteOutcome.error?.message || String(deleteOutcome.error))
+              : 'hard delete removed 0 rows',
           })
         }
       }
 
       if (!dryRun && actorUserId) {
-        try {
+        // `audit_logs.id` is `TEXT PRIMARY KEY` with NO default on BOTH dialects.
+        // SQLite tolerates a NULL in a non-INTEGER PRIMARY KEY column, so omitting
+        // `id` inserted a NULL row locally and threw
+        // `null value in column "id" ... violates not-null constraint` on
+        // Postgres — which aborted the merge transaction and made the NEXT
+        // loser's SELECT fail with "current transaction is aborted" (the
+        // observed prod 500). Supply the id explicitly, like every other
+        // audit_logs writer in this repo.
+        await runBestEffort(tx, async () => {
           if (await tableExists(tx, 'audit_logs')) {
             await tx
               .prepare(
                 `
-                  INSERT INTO audit_logs (category, action, severity, user_id, profile_id, resource_type, resource_id, details)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  INSERT INTO audit_logs (id, category, action, severity, user_id, profile_id, resource_type, resource_id, details)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `,
               )
               .run(
+                crypto.randomUUID(),
                 'admin',
                 'profile_merge',
                 'info',
@@ -945,9 +994,7 @@ export async function mergeProfiles(db, {
                 JSON.stringify({ winner_id: winnerId, loser_id: loserId }),
               )
           }
-        } catch {
-          // ignore
-        }
+        })
       }
     }
 

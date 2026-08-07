@@ -59,15 +59,21 @@ export async function persistSourceCoverage(db, { crawlerRunId, profileId, crawl
 
   const isPg = db?.dialect === 'postgres'
   const boolVal = (v) => (isPg ? Boolean(v) : (v ? 1 : 0))
-  const sql = isPg
-    ? `INSERT INTO crawler_source_runs
-        (crawler_run_id, profile_id, crawler_type, source_id, source_label,
-         planned, queried, failed, found, directory, error)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
-    : `INSERT INTO crawler_source_runs
-        (crawler_run_id, profile_id, crawler_type, source_id, source_label,
-         planned, queried, failed, found, directory, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  const LEGACY_COLUMNS = `(crawler_run_id, profile_id, crawler_type, source_id, source_label,
+         planned, queried, failed, found, directory, error)`
+  // Migration 166 / pg 0171 added the match-telemetry columns the admin Crawl
+  // Coverage dashboard's Accepted / Rejected / Avg-match columns need. A DB that
+  // has not replayed them yet must still get the legacy row rather than lose the
+  // whole run's coverage, so the extended INSERT degrades to the legacy one once
+  // (per call), never per row.
+  const METRIC_COLUMNS = `(crawler_run_id, profile_id, crawler_type, source_id, source_label,
+         planned, queried, failed, found, directory, error,
+         parsed_candidates, rejected, accepted, match_score_sum, match_score_n)`
+  const values = (n) =>
+    isPg ? Array.from({ length: n }, (_, i) => `$${i + 1}`).join(', ') : Array.from({ length: n }, () => '?').join(', ')
+  const legacySql = `INSERT INTO crawler_source_runs\n        ${LEGACY_COLUMNS}\n       VALUES (${values(11)})`
+  const metricSql = `INSERT INTO crawler_source_runs\n        ${METRIC_COLUMNS}\n       VALUES (${values(16)})`
+  let metricsSupported = true
 
   let written = 0
   let firstFailure = null
@@ -84,29 +90,71 @@ export async function persistSourceCoverage(db, { crawlerRunId, profileId, crawl
     const label = registrySource?.name ?? s.source_id
     const directory = Boolean(registrySource?.directory)
 
-    try {
-      const stmt = db.prepare(sql)
-      await stmt.run(
-        crawlerRunId,
-        profileId ?? null,
-        crawlerType ?? null,
-        s.source_id,
-        label,
-        boolVal(planned),
-        boolVal(queried),
-        boolVal(failed),
-        Number.isFinite(found) ? found : 0,
-        boolVal(directory),
-        s.reason ?? null,
-      )
-      written += 1
-    } catch (err) {
-      if (!firstFailure) firstFailure = err
-      // Table missing (migrations not yet applied) — stop the batch quietly,
-      // matching the historical realCrawlers.js persistCoverageOutcomes behavior.
-      const msg = String(err?.message || '').toLowerCase()
-      if (msg.includes('no such table') || msg.includes('does not exist')) break
+    const baseArgs = [
+      crawlerRunId,
+      profileId ?? null,
+      crawlerType ?? null,
+      s.source_id,
+      label,
+      boolVal(planned),
+      boolVal(queried),
+      boolVal(failed),
+      Number.isFinite(found) ? found : 0,
+      boolVal(directory),
+      s.reason ?? null,
+    ]
+    // The engine's own per-source counters (pipeline.js finishSource). A source
+    // that produced no decision honestly records 0, never NULL — NULL is
+    // reserved for rows written before the metrics existed, which the dashboard
+    // reports as "not recorded" rather than as a zero.
+    const intOrZero = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0)
+    const metricArgs = [
+      ...baseArgs,
+      intOrZero(s.parsed),
+      intOrZero(s.rejected),
+      intOrZero(s.accepted),
+      Number.isFinite(Number(s.match_score_sum)) ? Number(s.match_score_sum) : 0,
+      intOrZero(s.match_score_n),
+    ]
+
+    let inserted = false
+    if (metricsSupported) {
+      try {
+        await db.prepare(metricSql).run(...metricArgs)
+        inserted = true
+      } catch (err) {
+        const msg = String(err?.message || '').toLowerCase()
+        // Only a MISSING-COLUMN error justifies dropping the metrics; anything
+        // else (missing table, constraint) must surface through the legacy path.
+        // sqlite says "table X has no column named Y"; postgres says
+        // `column "y" of relation "x" does not exist`.
+        const missingColumn =
+          msg.includes('no such column') ||
+          msg.includes('has no column named') ||
+          (msg.includes('column') && msg.includes('does not exist'))
+        if (missingColumn) {
+          metricsSupported = false
+        } else {
+          if (!firstFailure) firstFailure = err
+          if (msg.includes('no such table') || msg.includes('does not exist')) break
+          continue
+        }
+      }
     }
+
+    if (!inserted) {
+      try {
+        await db.prepare(legacySql).run(...baseArgs)
+        inserted = true
+      } catch (err) {
+        if (!firstFailure) firstFailure = err
+        // Table missing (migrations not yet applied) — stop the batch quietly,
+        // matching the historical realCrawlers.js persistCoverageOutcomes behavior.
+        const msg = String(err?.message || '').toLowerCase()
+        if (msg.includes('no such table') || msg.includes('does not exist')) break
+      }
+    }
+    if (inserted) written += 1
   }
   // Only surface a failure when NOTHING was written (a genuine schema/DB
   // problem worth logging upstream); a partial batch with a benign per-row
