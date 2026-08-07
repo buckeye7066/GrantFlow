@@ -82,6 +82,14 @@ export async function runDiscovery(deps, opts = {}) {
   const recommendationKeys = new Set();
   const storedRealKeys = new Map(); // real-world opportunity identity -> canonical stored id (cross-source dedup)
   let totalRejected = 0;
+  // Per-source ACCEPT/score tally for the DISCOVERING profile. The admin Crawl
+  // Coverage dashboard's Accepted / Avg-match columns rendered "—" for every run
+  // because nothing durable ever recorded them (the reader keyed on a
+  // crawler_jobs.result_meta.crawler_run_id that 0 of 15,740 prod rows carry).
+  // The engine already knows these numbers here; this is where they become
+  // recordable. Attribution follows the CANONICAL row's source_id so a
+  // cross-source-deduped match is credited to the source that owns the row.
+  const matchTallyBySource = new Map(); // source_id -> { accepted, score_sum, score_n }
 
   function matchCanonicalOpportunity(opp, canonicalId) {
     const canonicalOpp = canonicalId && canonicalId !== opp.id ? { ...opp, id: canonicalId } : opp;
@@ -101,6 +109,18 @@ export async function runDiscovery(deps, opts = {}) {
       // the SOURCE that produced the match is knowable (web lane sets both
       // source_query and discovered_via; here only the source id applies).
       upsertMatch(store, { ...decision, discovered_via: canonicalOpp.source_id ?? null });
+      if (mp.profile_id === thesis.profile_id) {
+        const tallyKey = canonicalOpp.source_id ?? null;
+        if (tallyKey) {
+          const tally = matchTallyBySource.get(tallyKey) ?? { accepted: 0, score_sum: 0, score_n: 0 };
+          if (decision.decision === MATCH_DECISION.ACCEPT) tally.accepted += 1;
+          if (Number.isFinite(Number(decision.match_score))) {
+            tally.score_sum += Number(decision.match_score);
+            tally.score_n += 1;
+          }
+          matchTallyBySource.set(tallyKey, tally);
+        }
+      }
       const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
       if (isRecommendable(canonicalOpp, decision.decision) && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
         recommendationKeys.add(recommendationKey);
@@ -197,6 +217,14 @@ export async function runDiscovery(deps, opts = {}) {
     // the generic 'no_candidates_stored' — the dashboards keep the outage
     // visible without any failed/FETCH_ERROR mark nobody can act on.
     let benignReason = null;
+    // First ACTIONABLE failure detail for this source, so a zero-found source
+    // reports WHY (`fetch_failed:status:404`, `all_candidates_rejected:bad_url`)
+    // instead of the uninformative catch-all `no_candidates_stored`. That string
+    // is what crawler_source_runs.error carries onto the admin Crawl Coverage
+    // dashboard, and "no candidates stored" told an operator nothing they could
+    // act on (2026-08-06: a dead ACF URL + a gate rejection both surfaced as it).
+    let fetchFailureDetail = null;
+    let firstRejectReason = null;
     for (const req of requests) {
       if (req.query) sr.queries.push(req.query);
       let resp;
@@ -222,7 +250,9 @@ export async function runDiscovery(deps, opts = {}) {
           }
         }
         sawFetchError = true;
-        recordRejection(store, runId, { source_id: sourceId, reason: 'fetch_failed', detail: resp.reason ?? resp.error ?? `status:${resp.status}`, url: req.url });
+        const fetchDetail = resp.reason ?? resp.error ?? `status:${resp.status}`;
+        if (!fetchFailureDetail) fetchFailureDetail = String(fetchDetail);
+        recordRejection(store, runId, { source_id: sourceId, reason: 'fetch_failed', detail: fetchDetail, url: req.url });
         // A registry-declared candidate (parseCfg.directoryCandidate) is
         // constructed ENTIRELY from curated registry config — parseDirectory
         // never reads the body; the fetch only captures evidence. A transient
@@ -265,6 +295,7 @@ export async function runDiscovery(deps, opts = {}) {
         const verdict = enforceReality(cand, { thesis, source, evidence });
         if (!verdict.ok) {
           sr.rejected += 1; totalRejected += 1;
+          if (!firstRejectReason) firstRejectReason = String(verdict.reason ?? 'rejected');
           recordRejection(store, runId, { source_id: sourceId, reason: verdict.reason, detail: verdict.verdict_reasons?.join('; '), title: cand.title, url: cand.apply_url ?? cand.info_url });
           continue;
         }
@@ -299,6 +330,7 @@ export async function runDiscovery(deps, opts = {}) {
         }
         if (!res.stored) {
           sr.rejected += 1; totalRejected += 1;
+          if (!firstRejectReason) firstRejectReason = `not_catalog_acceptable:${res.reason ?? 'unknown'}`;
           recordRejection(store, runId, { source_id: sourceId, reason: 'not_catalog_acceptable', detail: res.reason, title: opp.title, url: opp.apply_url });
           continue;
         }
@@ -312,12 +344,23 @@ export async function runDiscovery(deps, opts = {}) {
       }
     }
 
+    const tally = matchTallyBySource.get(sourceId) ?? null;
+    sr.accepted = tally?.accepted ?? 0;
+    sr.match_score_sum = tally?.score_sum ?? 0;
+    sr.match_score_n = tally?.score_n ?? 0;
+
     const foundForProfile = sr.stored + sr.existing;
     const outcome = foundForProfile > 0 ? CRAWLER_OUTCOME.OK
       : (sawParseError ? CRAWLER_OUTCOME.PARSE_ERROR : sawFetchError ? CRAWLER_OUTCOME.FETCH_ERROR : CRAWLER_OUTCOME.EMPTY);
+    // Zero-found reason, most actionable first. `no_candidates_stored` now means
+    // exactly what it says — the source answered cleanly and had nothing —
+    // instead of doubling as "the fetch died" and "the gate rejected it".
     const reason = foundForProfile > 0 ? null
       : (sawParseError ? 'parse_error'
-        : (sr.deduped > 0 ? 'all_candidates_deduped' : (benignReason ?? 'no_candidates_stored')));
+        : sawFetchError ? `fetch_failed:${fetchFailureDetail ?? 'unknown'}`
+          : (sr.deduped > 0 ? 'all_candidates_deduped'
+            : (sr.rejected > 0 ? `all_candidates_rejected:${firstRejectReason ?? 'unknown'}`
+              : (benignReason ?? 'no_candidates_stored'))));
     finishSource(store, runId, sr, outcome, reason, clock, sourceSummaries);
   }
 
@@ -351,6 +394,12 @@ function finishSource(store, runId, sr, outcome, reason, clock, summaries) {
     stored: sr.stored,
     existing: sr.existing ?? 0,
     deduped: sr.deduped ?? 0,
+    // Match telemetry for the discovering profile (see matchTallyBySource).
+    // Sum + count travel instead of a pre-averaged number so a run-level
+    // average can be aggregated across sources without weighting bias.
+    accepted: sr.accepted ?? 0,
+    match_score_sum: sr.match_score_sum ?? 0,
+    match_score_n: sr.match_score_n ?? 0,
     queries: sr.queries ?? [],
   });
 }

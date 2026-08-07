@@ -129,7 +129,7 @@ export default function CrawlCoverage() {
       ) : (
         <>
           {/* Summary tiles */}
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-6">
             <SummaryTile label="Recent runs" value={totals.runs ?? 0} />
             <SummaryTile
               label="Sources failed"
@@ -141,6 +141,11 @@ export default function CrawlCoverage() {
               label="Stale sources"
               value={totals.stale_sources ?? 0}
               tone={Number(totals.stale_sources) > 0 ? 'text-amber-600' : 'text-emerald-600'}
+            />
+            <SummaryTile
+              label="Not crawlable"
+              value={totals.not_crawlable_sources ?? 0}
+              tone={Number(totals.not_crawlable_sources) > 0 ? 'text-slate-500' : 'text-emerald-600'}
             />
             <SummaryTile
               label="Weak-data profiles"
@@ -206,10 +211,19 @@ export default function CrawlCoverage() {
                   data.stale_sources.map((s) => {
                     const running = runSourceMutation.isPending && runSourceMutation.variables === s.source_id;
                     const result = runResults[s.source_id];
+                    // `not_crawlable` = registry drift: this display source has no
+                    // crawler-os lane, so no crawler can ever run it and "Run now"
+                    // could only return 404 source_not_crawlable. Show the reason
+                    // and withhold the button instead of blaming the scheduler.
+                    const notCrawlable = s.runnable === false || s.failure_status === 'not_crawlable';
                     return (
                       <div
                         key={s.source_id}
-                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2"
+                        className={`rounded-md border px-3 py-2 ${
+                          notCrawlable
+                            ? 'border-slate-200 bg-slate-50'
+                            : 'border-amber-200 bg-amber-50'
+                        }`}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
@@ -218,7 +232,11 @@ export default function CrawlCoverage() {
                           </div>
                           <div className="flex shrink-0 items-center gap-2">
                             <div className="text-right text-xs">
-                              {s.failure_status === 'never_run' ? (
+                              {notCrawlable ? (
+                                <span className="font-medium text-slate-600">
+                                  not crawlable — no crawler lane
+                                </span>
+                              ) : s.failure_status === 'never_run' ? (
                                 <span className="font-medium text-amber-700">never run</span>
                               ) : (
                                 <span className="font-medium text-amber-700">
@@ -226,23 +244,28 @@ export default function CrawlCoverage() {
                                 </span>
                               )}
                             </div>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 px-2 text-xs"
-                              disabled={running}
-                              onClick={() => runSourceMutation.mutate(s.source_id)}
-                            >
-                              {running ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <PlayCircle className="h-3.5 w-3.5" />
-                              )}
-                              <span className="ml-1">Run now</span>
-                            </Button>
+                            {!notCrawlable && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                disabled={running}
+                                onClick={() => runSourceMutation.mutate(s.source_id)}
+                              >
+                                {running ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <PlayCircle className="h-3.5 w-3.5" />
+                                )}
+                                <span className="ml-1">Run now</span>
+                              </Button>
+                            )}
                           </div>
                         </div>
+                        {notCrawlable && s.reason && (
+                          <div className="mt-1 text-xs text-slate-500">{s.reason}</div>
+                        )}
                         {result && (
                           <div
                             className={`mt-1.5 flex items-center gap-1.5 text-xs ${
@@ -337,10 +360,11 @@ export default function CrawlCoverage() {
             </Card>
           </div>
 
-          {!data?.optional_tables?.rejection_log && (
+          {(data?.runs ?? []).some((r) => r.metrics_status === 'not_recorded') && (
             <p className="text-xs text-slate-400">
-              Note: the optional rejection_log table is not present — rejected counts are derived
-              from found minus accepted where available.
+              Note: runs marked <span className="font-mono">n/r</span> predate per-source match
+              telemetry (migration 166) — accepted/rejected/avg-match were never recorded for them.
+              That is &quot;unknown&quot;, not zero.
             </p>
           )}
         </>
@@ -375,6 +399,7 @@ function EmptyRow({ text, ok = false }) {
 
 function RunRow({ run }) {
   const failed = Number(run.sources_failed) > 0;
+  const notRecorded = run.metrics_status === 'not_recorded';
   const queriedNoFound = Number(run.sources_queried) > 0 && Number(run.results_found) === 0;
   const rowTone = failed
     ? 'bg-red-50/60'
@@ -402,10 +427,18 @@ function RunRow({ run }) {
           {run.sources_failed}
         </td>
         <td className="py-2 pr-3 text-right">{run.results_found}</td>
-        <td className="py-2 pr-3 text-right">{run.results_accepted ?? '—'}</td>
-        <td className="py-2 pr-3 text-right">{run.results_rejected ?? '—'}</td>
+        {/* A dash must never mean both "zero" and "we never recorded it".
+            metrics_status:'not_recorded' = the run predates migration 166. */}
+        <td className="py-2 pr-3 text-right" title={notRecorded ? 'not recorded for this run' : undefined}>
+          {notRecorded ? 'n/r' : (run.results_accepted ?? 0)}
+        </td>
+        <td className="py-2 pr-3 text-right" title={notRecorded ? 'not recorded for this run' : undefined}>
+          {notRecorded ? 'n/r' : (run.results_rejected ?? 0)}
+        </td>
         <td className="py-2 pr-3 text-right">{run.avg_trust ?? '—'}</td>
-        <td className="py-2 pr-3 text-right">{run.avg_match ?? '—'}</td>
+        <td className="py-2 pr-3 text-right">
+          {notRecorded ? 'n/r' : (run.avg_match ?? '—')}
+        </td>
       </tr>
       {failed && run.failed_sources?.length > 0 && (
         <tr className="border-b border-slate-100 bg-red-50/40">

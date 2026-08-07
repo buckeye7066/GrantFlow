@@ -49,6 +49,25 @@ export function classifyApiRatePolicy(req, env = process.env) {
   ]
   if (exempt.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return null
 
+  // Read-only crawler-job TELEMETRY is not a cost driver. `crawler_jobs` reads
+  // are plain DB lookups and are already wrapped in responseCache(30s), but the
+  // bucket key below is hash(policy|principal) — it ignores method and path, so
+  // every dashboard poll of GET /api/crawlers/jobs spent the SAME 40-per-10-min
+  // budget the operator needs to actually START a crawl. An admin page left open
+  // therefore 429'd real "Run now" clicks with nobody touching anything
+  // (observed in production 2026-08-06). Charge these reads to the ordinary
+  // read budget instead. The expensive lane below is unchanged: every POST that
+  // starts a crawl, and every /api/ai, /api/anya, /api/matching and
+  // /api/real-crawlers call, still gets the full 'cost' treatment.
+  if (method === 'GET' && /^\/api\/crawlers\/jobs(?:\/|$)/.test(path)) {
+    return {
+      name: 'standard',
+      windowMs: positiveInt(env.API_STANDARD_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
+      max: positiveInt(env.API_STANDARD_RATE_LIMIT_MAX, 600),
+      shared: false,
+    }
+  }
+
   if (
     /^\/api\/(?:ai|anya|matching|real-crawlers|crawlers|geo-crawl|laptop-connector)(?:\/|$)/.test(path)
   ) {

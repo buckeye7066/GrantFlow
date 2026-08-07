@@ -2293,6 +2293,15 @@ app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
 app.use('/api/pricing', lazyRouter('./routes/pricing.js'));
+// Agreement + payment access gate. `<RequirePaidAccess>` (src/pages/index.jsx
+// withGate) calls GET /api/access-gate/status on EVERY gated route and locks
+// the workspace ("We couldn't verify your access") whenever that call does not
+// answer `{ ok: true, authenticated: true }`. This router shipped in #529 and
+// was never mounted, so the endpoint 404'd in production and the gate failed
+// closed for every authenticated user, admins included. Guard test:
+// backend/tests/accessGateAuthority.test.js ("the /api/access-gate router is
+// MOUNTED").
+app.use('/api/access-gate', lazyRouter('./routes/accessGate.js'));
 app.use('/api/sam/onboarding-audit', lazyRouter('./routes/samOnboardingAudit.js'));
 app.use('/api/funding-library', lazyRouter('./routes/fundingLibrary.js'));
 app.use('/api/programs', programsRouter);

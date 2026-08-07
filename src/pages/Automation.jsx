@@ -1688,7 +1688,16 @@ export default function Automation() {
             }
           : {},
       ),
-    refetchInterval: 30000,
+    // An idle/backgrounded tab must not keep spending the shared crawler request
+    // budget. backend/middleware/apiRateLimitPolicy.js puts every /api/crawlers,
+    // /api/anya, /api/matching and /api/ai call into ONE 'cost' bucket of 40
+    // requests per 10 minutes per user, so two unconditional 30s polls on this
+    // page were 40 requests / 10 min by themselves: a page left open exhausted
+    // the budget and the operator's next real "Run now" POST came back 429 with
+    // nobody touching anything. Metrics are a slow-moving rollup — 60s is
+    // plenty, and a hidden tab polls not at all.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const jobsQuery = useQuery({
@@ -1700,6 +1709,15 @@ export default function Automation() {
         profile_id: isAdmin && profileFilter && profileFilter !== "all" ? profileFilter : undefined,
         limit: 100,
       }),
+    // Poll fast ONLY while there is something in flight to watch; otherwise fall
+    // back to a slow refresh. Same budget reason as metricsQuery above, and it
+    // matches the pattern already used by Documents.jsx / DataSources.jsx.
+    refetchInterval: (query) => {
+      const jobs = Array.isArray(query.state.data) ? query.state.data : []
+      const active = jobs.some((job) => job?.status === "queued" || job?.status === "running")
+      return active ? 30_000 : 120_000
+    },
+    refetchIntervalInBackground: false,
   })
 
   const profileDetailQuery = useQuery({
@@ -1721,7 +1739,10 @@ export default function Automation() {
     queryKey: ["anya-profile-tasks", profileForTasks],
     queryFn: () => getAnyaProfileTasks(profileForTasks, { status: "active" }),
     enabled: Boolean(profileForTasks),
-    refetchInterval: 45000,
+    // /api/anya shares the same 40-per-10-minute 'cost' bucket as the crawler
+    // endpoints; a hidden tab must not keep drawing from it.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const sectionOptions = useMemo(
