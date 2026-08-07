@@ -27,7 +27,7 @@ jobs:
           node-version: 20.20.2
           cache: npm
 
-      - name: Apply reviewer-requested classifier and regression fixes atomically
+      - name: Apply reviewer and release-gate fixes atomically
         shell: bash
         run: |
           set -euo pipefail
@@ -71,6 +71,28 @@ jobs:
           )
 
           await stageReplace(
+            'backend/services/opportunityNormalizer.js',
+            String.raw`const WOMEN_ONLY_RESTRICTION_PATTERNS = [
+            /\bwomen[\s-]?only\b/i,
+            /\bfor\s+women\s+only\b/i,
+            /\bfemale\s+(?:students?|applicants?)\s+only\b/i,
+            /\bmust be (?:a )?(?:woman|female)\b/i,
+            /\bexclusively for (?:women|females?)\b/i,
+            /\brestricted to (?:women|females?)\b/i,
+            /\bamber grant for women\b/i,
+            /\bsociety of women engineers\b/i,
+            /\bwomen(?:'s)?\s+engineers?\b/i,
+          ]`,
+            `// Female-only detection is delegated to the shared classifier so\n// normalization and relevance filtering cannot disagree about exclusivity.`,
+          )
+
+          await stageReplace(
+            'backend/services/opportunityNormalizer.js',
+            `  else if (requiresWomen || matchesAnyRegex(text, WOMEN_ONLY_RESTRICTION_PATTERNS)) requiresGender = 'female'`,
+            `  else if (requiresWomen) requiresGender = 'female'`,
+          )
+
+          await stageReplace(
             'backend/tests/relevanceFilter.softMode.test.js',
             `  it('women-prioritized (non-exclusive) soft-fails instead of hard-rejecting', () => {\n    const o = opp({ title: 'Grant for Women Entrepreneurs' })\n    const soft = applyRelevanceFilter(o, INDIVIDUAL_TN, { mode: 'soft' })\n    expect(soft.pass).toBe(true)\n    expect(soft.softFail).toBe(true)\n    expect(soft.ruleId).toBe('demographic_women_prioritized')\n  })`,
             `  it.each([\n    'Grant for Women Entrepreneurs',\n    'Society of Women Engineers Career Development Award',\n    'Women Engineers Professional Development Grant',\n    'Scholarship for Female Students',\n    'Amber Grant for Women',\n  ])('women-prioritized non-exclusive wording soft-fails: %s', (title) => {\n    const o = opp({ title })\n    const soft = applyRelevanceFilter(o, INDIVIDUAL_TN, { mode: 'soft' })\n    expect(soft.pass).toBe(true)\n    expect(soft.softFail).toBe(true)\n    expect(soft.ruleId).toBe('demographic_women_prioritized')\n  })`,
@@ -86,6 +108,24 @@ jobs:
             'backend/tests/opportunityNormalizerEligibilityText.test.js',
             `  // Companion regression (found while writing this test): the gender gates\n  // called matchesAnyPattern — the STRING-phrase matcher, which stringifies\n  // its patterns — on RegExp lists, so they could never match ANY text and\n  // had been dead since they shipped. This is how the real prod row below\n  // reached a male student's application list untagged.\n  it('the real "Society of Women Engineers" prod row is detected as women-restricted', () => {\n    const n = normalizeOpportunity({\n      id: 'opp-swe',\n      title: 'Society of Women Engineers (SWE) Scholarships',\n      description: 'Scholarships for women in engineering programs.',\n      sponsor: 'Society of Women Engineers',\n    })\n    expect(n.requiresWomen).toBe(true)\n    expect(n.requiresGender).toBe('female')\n  })`,
             `  // A named or women-focused program is not proof of exclusivity. The\n  // normalizer may hard-gate only when the source states an explicit condition\n  // such as "women only" or "applicants must be a woman."\n  it('does not infer women-only eligibility from a sponsor name or focused copy', () => {\n    const n = normalizeOpportunity({\n      id: 'opp-swe',\n      title: 'Society of Women Engineers (SWE) Scholarships',\n      description: 'Scholarships for women in engineering programs.',\n      sponsor: 'Society of Women Engineers',\n    })\n    expect(n.requiresWomen).toBe(false)\n    expect(n.requiresGender).toBeNull()\n  })`,
+          )
+
+          await stageReplace(
+            'backend/tests/matchingZeroResultRecovery.test.js',
+            `and that the strict legacy behavior is still reachable via ?no_fallback=1.`,
+            `and that strict behavior is reachable through every documented disable alias.`,
+          )
+
+          await stageReplace(
+            'backend/tests/matchingZeroResultRecovery.test.js',
+            `.query({ min_score: 101, limit: 2000, skip_readiness_check: 1, strict: 1, allow_relax: 0 })`,
+            `.query({ min_score: 101, limit: 2000, skip_readiness_check: 1 })`,
+          )
+
+          await stageReplace(
+            'backend/tests/matchingZeroResultRecovery.test.js',
+            `  it('?no_fallback=1 preserves strict legacy behavior (returns 0 below the floor)', async () => {\n    const db = new Database(':memory:')\n    createSchema(db)\n    seedBelowFloor(db)\n    try {\n      const res = await request(createApp(db))\n        .get('/api/matching/profile/below-floor/opportunities')\n        .query({ min_score: 101, limit: 2000, skip_readiness_check: 1, no_fallback: 1 })\n\n      expect(res.status).toBe(200)\n      expect(res.body.returned).toBe(0)\n      expect(res.body.relaxation).toBeUndefined()\n      // The candidate pool is still reported so suppression is observable.\n      expect(res.body.coverage_summary.total_candidates).toBeGreaterThan(0)\n    } finally {\n      db.close()\n    }\n  })`,
+            `  it.each([\n    ['no_fallback=1', { no_fallback: 1 }],\n    ['strict=1', { strict: 1 }],\n    ['allow_relax=0', { allow_relax: 0 }],\n  ])('%s preserves strict behavior (returns 0 below the floor)', async (_label, strictQuery) => {\n    const db = new Database(':memory:')\n    createSchema(db)\n    seedBelowFloor(db)\n    try {\n      const res = await request(createApp(db))\n        .get('/api/matching/profile/below-floor/opportunities')\n        .query({ min_score: 101, limit: 2000, skip_readiness_check: 1, ...strictQuery })\n\n      expect(res.status).toBe(200)\n      expect(res.body.returned).toBe(0)\n      expect(res.body.relaxation).toBeUndefined()\n      // The candidate pool is still reported so suppression is observable.\n      expect(res.body.coverage_summary.total_candidates).toBeGreaterThan(0)\n    } finally {\n      db.close()\n    }\n  })`,
           )
 
           for (const [file, { original, next }] of changes) {
@@ -125,18 +165,20 @@ jobs:
           node --check backend/tests/relevanceFilter.softMode.test.js
           node --check backend/tests/matchEngineSoftRelevanceAndMatchFunds.test.js
           node --check backend/tests/opportunityNormalizerEligibilityText.test.js
+          node --check backend/tests/matchingZeroResultRecovery.test.js
           git diff --check
 
       - name: Install locked dependencies
         run: npm ci --include=optional
 
-      - name: Run focused matching regressions
+      - name: Run focused matching and recovery regressions
         run: >-
           node scripts/run-vitest-isolated.mjs run
           backend/tests/relevanceFilter.softMode.test.js
           backend/tests/matchEngineSoftRelevanceAndMatchFunds.test.js
           backend/tests/opportunityNormalizerEligibilityText.test.js
           backend/tests/relevanceFilterRules.test.js
+          backend/tests/matchingZeroResultRecovery.test.js
 
       - name: Publish exact verified source and remove one-shot workflow
         shell: bash
@@ -149,10 +191,11 @@ jobs:
             backend/services/opportunityNormalizer.js \
             backend/tests/relevanceFilter.softMode.test.js \
             backend/tests/matchEngineSoftRelevanceAndMatchFunds.test.js \
-            backend/tests/opportunityNormalizerEligibilityText.test.js
+            backend/tests/opportunityNormalizerEligibilityText.test.js \
+            backend/tests/matchingZeroResultRecovery.test.js
           GIT_AUTHOR_NAME="GrantFlow Match Repair" \
           GIT_AUTHOR_EMAIL="actions@users.noreply.github.com" \
           GIT_COMMITTER_NAME="GrantFlow Match Repair" \
           GIT_COMMITTER_EMAIL="actions@users.noreply.github.com" \
-            git commit -m "fix(match): keep non-exclusive women-focused programs soft [pr1179-final-review-fixes]"
+            git commit -m "fix(match): unify demographic authority and recovery aliases [pr1179-final-review-fixes]"
           git push origin HEAD:fix/match-authority-soft-penalty-and-display-parity
