@@ -2,8 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 const scriptPath = new URL('../../scripts/admin-geocrawl-until-complete.mjs', import.meta.url)
+const scriptPathStr = fileURLToPath(scriptPath)
 const source = readFileSync(scriptPath, 'utf8')
 
 test('mutating geocrawl script has no live URL or credential defaults', () => {
@@ -26,7 +28,7 @@ test('mutating geocrawl script fails before network access without explicit targ
     'GF_ADMIN_PASSWORD',
   ]) delete env[key]
 
-  const result = spawnSync(process.execPath, [scriptPath.pathname], {
+  const result = spawnSync(process.execPath, [scriptPathStr], {
     cwd: process.cwd(),
     env,
     encoding: 'utf8',
@@ -42,7 +44,7 @@ test('mutating geocrawl script requires exact host confirmation', () => {
     GF_CONFIRM_MUTATING_HOST: 'different.example.test',
     GF_ADMIN_TOKEN: 'fixture-token',
   }
-  const result = spawnSync(process.execPath, [scriptPath.pathname], {
+  const result = spawnSync(process.execPath, [scriptPathStr], {
     cwd: process.cwd(),
     env,
     encoding: 'utf8',

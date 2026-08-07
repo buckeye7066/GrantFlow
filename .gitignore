@@ -141,3 +141,4 @@ grantflow_files_with_defects.txt
 # Personal Claude Code overrides (not shared)
 CLAUDE.local.md
 
+eslint.json
