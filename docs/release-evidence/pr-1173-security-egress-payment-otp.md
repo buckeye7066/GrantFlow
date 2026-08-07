@@ -4,7 +4,7 @@
 
 This change set closes three bounded security defects:
 
-1. Outbound requests derived from untrusted or discovered URLs now use an SSRF egress chokepoint that validates every redirect hop, pins the policy-approved DNS address to the socket, preserves caller cancellation, enforces one end-to-end deadline across the entire redirect chain, caps response bytes, releases discarded bodies, normalizes redirect methods, and strips credentials across origins.
+1. Four migrated paths that request untrusted or discovered URLs, `portalCheckService`, `linkVerificationService`, `nationalPrograms/fetcher`, and `housingScholarshipCrawler`, now use an SSRF egress chokepoint that validates every redirect hop, pins the policy-approved DNS address to the socket, preserves caller cancellation, enforces one end-to-end deadline across the entire redirect chain, caps response bytes, releases discarded bodies, normalizes redirect methods, and strips credentials across origins.
 2. Hamilton payment authorization caps and revocation are rechecked atomically in the recording update so concurrent charges cannot exceed the approved envelope.
 3. Verification codes use `crypto.randomInt` rather than `Math.random`.
 
@@ -33,7 +33,8 @@ The branch was synchronized with current `main` before the security verification
 - TLS SNI is preserved for hostnames and omitted for IP literals.
 - The per-probe timeout is one deadline for DNS validation and all redirect hops; it is not renewed after a redirect.
 - The response-size cap is enforced while streaming rather than after an unbounded read.
-- The PR does not claim that every outbound call site has been migrated; hardcoded provider clients and remaining axios-based untrusted-input paths require separate review.
+- This PR protects only the four migrated paths named above. `stateOpenDataConnector`, `ecfBenefitsCrawler`, and `nationalZipCrawler` still accept configurable or discovered destinations through axios-based request paths and require a separate pinned-transport review and migration before equivalent SSRF protection can be claimed for them.
+- Hardcoded provider clients were not migrated merely to inflate coverage; each remains subject to its existing fixed-endpoint trust boundary and should be re-reviewed if its URL becomes configurable.
 
 ## Release decision
 
