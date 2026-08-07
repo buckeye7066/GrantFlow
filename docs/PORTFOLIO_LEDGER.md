@@ -13,7 +13,7 @@ Dated completion records for the App Portfolio Audit. One entry per ACTIVE_APP r
 | Repo / default branch | `buckeye7066/GrantFlow` / `main` |
 | Baseline SHA | `a236444cbcfa39a80852a065688425ce687cb529` |
 | Release SHA | *not released this run* — branch `fix/match-authority-soft-penalty-and-display-parity` pending PR merge + dual deploy |
-| Local path | `C:\Users\firer\GrantFlow` |
+| Local path | Private Windows checkout (machine-specific path intentionally omitted) |
 | Production frontend | `https://app.axiombiolabs.org/grantflow/` (Vercel) |
 | Production backend | `https://grantflow-production.up.railway.app` |
 | Deployed SHA (verified) | Railway `/api/health` + `/api/version` report `a236444c…` — **same as main** |
