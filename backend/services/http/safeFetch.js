@@ -137,11 +137,43 @@ function createPinnedAgent(targetUrl, resolved) {
     callback(null, resolved.address, resolved.family)
   }
 
+  const tlsIdentity =
+    parsed.protocol === 'https:' && net.isIP(resolved.host) === 0
+      ? { servername: resolved.host }
+      : {}
+
   return new Agent({
     keepAlive: false,
     lookup,
-    ...(parsed.protocol === 'https:' ? { servername: resolved.host } : {}),
+    ...tlsIdentity,
   })
+}
+
+function redirectRequestInit(init, status, fromUrl, toUrl) {
+  const next = { ...init }
+  const method = String(next.method || 'GET').toUpperCase()
+  const switchToGet =
+    (status === 303 && method !== 'GET' && method !== 'HEAD') ||
+    ((status === 301 || status === 302) && method === 'POST')
+
+  const headers = new Headers(next.headers || {})
+  if (switchToGet) {
+    next.method = 'GET'
+    delete next.body
+    headers.delete('content-length')
+    headers.delete('content-type')
+    headers.delete('content-encoding')
+    headers.delete('transfer-encoding')
+  }
+
+  if (new URL(fromUrl).origin !== new URL(toUrl).origin) {
+    headers.delete('authorization')
+    headers.delete('cookie')
+    headers.delete('proxy-authorization')
+  }
+
+  next.headers = Object.fromEntries(headers.entries())
+  return next
 }
 
 /**
@@ -274,6 +306,7 @@ export async function safeFetch(url, init = {}, opts = {}) {
     : DEFAULT_TIMEOUT_MS
 
   let currentUrl = String(url || '')
+  let requestInit = { ...init }
   const visited = []
 
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
@@ -286,7 +319,7 @@ export async function safeFetch(url, init = {}, opts = {}) {
     let res
     try {
       res = await doFetch(currentUrl, {
-        ...init,
+        ...requestInit,
         redirect: 'manual',
         signal: lifetime.signal,
         agent: createPinnedAgent(currentUrl, resolved),
@@ -327,6 +360,7 @@ export async function safeFetch(url, init = {}, opts = {}) {
     if (hop >= maxRedirects) {
       throw new SsrfBlockedError(`too_many_redirects:${visited.length}`, visited[0])
     }
+    requestInit = redirectRequestInit(requestInit, res.status, currentUrl, nextUrl)
     currentUrl = nextUrl
   }
 

@@ -100,6 +100,69 @@ describe('safeFetch SSRF guard', () => {
     expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
   })
 
+  it('converts POST to GET on a 303 and removes body headers', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        status: 303,
+        headers: { get: (name) => name.toLowerCase() === 'location' ? '/complete' : null },
+        body: { cancel: vi.fn().mockResolvedValue(undefined) },
+      })
+      .mockResolvedValueOnce(new Response('done', { status: 200 }))
+
+    await safeFetch(PUBLIC_URL, {
+      method: 'POST',
+      body: 'secret=form',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'content-length': '11',
+        accept: 'text/plain',
+      },
+    }, { fetchImpl: fetchMock })
+
+    const secondInit = fetchMock.mock.calls[1][1]
+    expect(secondInit.method).toBe('GET')
+    expect(secondInit.body).toBeUndefined()
+    expect(secondInit.headers['content-type']).toBeUndefined()
+    expect(secondInit.headers['content-length']).toBeUndefined()
+    expect(secondInit.headers.accept).toBe('text/plain')
+  })
+
+  it('strips credentials on a cross-origin redirect', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(redirectTo('http://93.184.216.35/next'))
+      .mockResolvedValueOnce(new Response('done', { status: 200 }))
+
+    await safeFetch(PUBLIC_URL, {
+      headers: {
+        Authorization: 'Bearer should-not-cross-origins',
+        Cookie: 'session=should-not-cross-origins',
+        Accept: 'text/html',
+      },
+    }, { fetchImpl: fetchMock })
+
+    const secondHeaders = fetchMock.mock.calls[1][1].headers
+    expect(secondHeaders.authorization).toBeUndefined()
+    expect(secondHeaders.cookie).toBeUndefined()
+    expect(secondHeaders.accept).toBe('text/html')
+  })
+
+  it('preserves credentials on a same-origin redirect', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(redirectTo('/next'))
+      .mockResolvedValueOnce(new Response('done', { status: 200 }))
+
+    await safeFetch(PUBLIC_URL, {
+      headers: {
+        Authorization: 'Bearer same-origin',
+        Cookie: 'session=same-origin',
+      },
+    }, { fetchImpl: fetchMock })
+
+    const secondHeaders = fetchMock.mock.calls[1][1].headers
+    expect(secondHeaders.authorization).toBe('Bearer same-origin')
+    expect(secondHeaders.cookie).toBe('session=same-origin')
+  })
+
   it('follows a redirect to another public host and returns the final response', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(redirectTo('http://93.184.216.35/next'))
@@ -134,6 +197,27 @@ describe('safeFetch SSRF guard', () => {
       .rejects.toThrow(/too_many_redirects/)
     expect(fetchMock).toHaveBeenCalledTimes(4)
     expect(bodies.every((body) => body.cancel.mock.calls.length === 1)).toBe(true)
+  })
+
+  it('omits TLS servername for an IP-literal URL', async () => {
+    const fetchMock = vi.fn(async (_url, init) => {
+      expect(init.agent.options.servername).toBeUndefined()
+      return new Response('ok', { status: 200 })
+    })
+
+    await safeFetch('https://93.184.216.34/start', {}, { fetchImpl: fetchMock })
+  })
+
+  it('keeps the original DNS hostname as TLS servername', async () => {
+    const resolve = vi.fn().mockResolvedValue([
+      { address: '93.184.216.34', family: 4 },
+    ])
+    const fetchMock = vi.fn(async (_url, init) => {
+      expect(init.agent.options.servername).toBe('tls.example')
+      return new Response('ok', { status: 200 })
+    })
+
+    await safeFetch('https://tls.example/start', {}, { fetchImpl: fetchMock, resolve })
   })
 
   it('pins the policy-approved DNS answer into the transport agent', async () => {
