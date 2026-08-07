@@ -1,4 +1,4 @@
-name: Verify PR 1179 structured soft artifact
+name: Verify PR 1179 structured soft repair
 
 on:
   push:
@@ -6,10 +6,11 @@ on:
       - fix/match-authority-soft-penalty-and-display-parity
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  verify-and-package:
+  verify-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[structured-soft-complete]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
@@ -17,7 +18,8 @@ jobs:
       - name: Checkout matching branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          persist-credentials: false
+          ref: fix/match-authority-soft-penalty-and-display-parity
+          persist-credentials: true
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -25,7 +27,7 @@ jobs:
           node-version: 20.20.2
           cache: npm
 
-      - name: Apply exact structured eligibility and display fixes
+      - name: Apply staged structured eligibility repair
         run: node scripts/one-shot-pr1179-structured-soft-fix.mjs
 
       - name: Parse-check modified files
@@ -48,13 +50,19 @@ jobs:
       - name: Run repository pre-push gates
         run: npm run check:prepush
 
-      - name: Package only the verified source files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pr1179-structured-soft-verified-files
-          path: |
-            backend/services/relevanceFilter.js
-            backend/services/matching/profileSpecificGate.js
+      - name: Publish exactly the verified sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm scripts/one-shot-pr1179-structured-soft-fix.mjs
+          git rm .github/workflows/verify-pr1179-structured-soft-artifact.yml
+          git add \
+            backend/services/relevanceFilter.js \
+            backend/services/matching/profileSpecificGate.js \
             backend/tests/profileSpecificGateStructuredEligibility.test.js
-          if-no-files-found: error
-          retention-days: 7
+          GIT_AUTHOR_NAME="GrantFlow Match Repair" \
+          GIT_AUTHOR_EMAIL="actions@users.noreply.github.com" \
+          GIT_COMMITTER_NAME="GrantFlow Match Repair" \
+          GIT_COMMITTER_EMAIL="actions@users.noreply.github.com" \
+            git commit -m "fix(match): preserve structured soft relevance [structured-soft-complete]"
+          git push origin HEAD:fix/match-authority-soft-penalty-and-display-parity
