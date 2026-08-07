@@ -24,7 +24,7 @@
 
 import { setTimeout as sleep } from 'node:timers/promises'
 import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl, assertSsrfSafeUrl } from '../config/urlRules.js'
-import { safeFetch, SsrfBlockedError } from './http/safeFetch.js'
+import { safeFetch, discardResponseBody, SsrfBlockedError } from './http/safeFetch.js'
 import {
   isLinkLifecycleKind,
   isPointerOpportunityRow,
@@ -191,7 +191,9 @@ export async function checkUrl(url, opts = {}) {
       // safeFetch stamps the post-redirect URL it actually settled on.
       const finalUrl = res.grantflowFinalUrl
         || (typeof res.url === 'string' && res.url ? res.url : url)
-      return { code: res.status, error: null, finalUrl, ssrfBlocked: false }
+      const code = res.status
+      await discardResponseBody(res)
+      return { code, error: null, finalUrl, ssrfBlocked: false }
     } catch (err) {
       if (err instanceof SsrfBlockedError) {
         // We refused to look. That is NOT evidence the link is dead, so it must

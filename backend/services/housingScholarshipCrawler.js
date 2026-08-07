@@ -19,7 +19,7 @@
 
 import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { createLogger } from '../utils/logger.js'
-import { safeFetch, SsrfBlockedError } from './http/safeFetch.js'
+import { safeFetch, discardResponseBody, SsrfBlockedError } from './http/safeFetch.js'
 const log = createLogger('housingScholarshipCrawler')
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -622,7 +622,9 @@ async function isLiveUrl(url, timeoutMs = 8000) {
       headers: { 'User-Agent': 'GrantFlow Housing Crawler/1.0 (https://grantflow.app)' },
     }, { timeoutMs })
     // 200, 301, 302, 405 (HEAD not allowed but server exists) all count as live
-    return res.status < 400 || res.status === 405
+    const status = res.status
+    await discardResponseBody(res)
+    return status < 400 || status === 405
   } catch (err) {
     if (err instanceof SsrfBlockedError) return false
     // Try GET fallback for sites that block HEAD
@@ -631,7 +633,9 @@ async function isLiveUrl(url, timeoutMs = 8000) {
         method: 'GET',
         headers: { 'User-Agent': 'GrantFlow Housing Crawler/1.0' },
       }, { timeoutMs })
-      return res2.status < 400
+      const status = res2.status
+      await discardResponseBody(res2)
+      return status < 400
     } catch {
       return false
     }

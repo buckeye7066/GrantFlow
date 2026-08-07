@@ -1,4 +1,3 @@
-import fetch from 'node-fetch'
 import { createLogger } from '../../utils/logger.js'
 import { safeFetch, SsrfBlockedError } from '../http/safeFetch.js'
 const qualityLog = createLogger('services:nationalPrograms:fetcher')
@@ -108,7 +107,6 @@ export class RateLimitedFetcher {
           method: options.method ?? 'GET',
           headers,
         }, {
-          fetchImpl: fetch,
           signal: controller.signal,
           timeoutMs: options.timeoutMs ?? this.timeoutMs,
         })
