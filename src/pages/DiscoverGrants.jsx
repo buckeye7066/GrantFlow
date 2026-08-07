@@ -47,7 +47,7 @@ import {
   buildResultsReconciliation,
   partitionDiscoverResults,
 } from '@/pages/discoverResultsMerge';
-import { keepDiscoverCatalogRow } from '@/lib/discoverCatalogKeep';
+import { keepDiscoverCatalogRow, isDirectoryDiscoverRow } from '@/lib/discoverCatalogKeep';
 
 // Discovery is now asynchronous: a click dispatches the profile-aware crawler
 // fleet to the background dispatcher (which runs each relevant crawler to
@@ -632,7 +632,7 @@ export default function DiscoverGrants() {
         usable_for_housing: opp.usable_for_housing ?? false,
         refund_potential: opp.refund_potential ?? false,
         funding_category: opp.funding_category ?? null,
-        is_directory: Boolean(opp.is_directory) || isDirectoryRow(opp),
+        is_directory: Boolean(opp.is_directory) || isDirectoryDiscoverRow(opp),
         threshold_relaxed: opp.threshold_relaxed ?? false,
         eligibility_relaxed: opp.eligibility_relaxed ?? false,
         geo_expanded: opp.geo_expanded ?? false,
