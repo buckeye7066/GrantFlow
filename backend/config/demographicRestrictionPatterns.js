@@ -7,7 +7,7 @@
  */
 
 export const WOMEN_EXCLUSIVE_OPPORTUNITY_PATTERN =
-  /\b(?:women[\s-]?only|female[\s-]?only|for\s+women\s+only|female\s+(?:students?|applicants?|entrepreneurs?)\s+only|must be (?:a )?(?:woman|female)|exclusively for (?:women|females?)|restricted to (?:women|females?)|amber grant for women|society of women engineers|women(?:'s)?\s+engineers?|(?:scholarships?|grants?|awards?)\s+for\s+female\s+(?:students?|applicants?))\b/i
+  /\b(?:women[\s-]?only|females?[\s-]?only|(?:for|to)\s+(?:women|females?)\s+only|(?:female|women)\s+(?:students?|applicants?|entrepreneurs?|founders?|business(?:es)?|owners?)\s+only|must\s+be\s+(?:a\s+)?(?:woman|female)|exclusively\s+for\s+(?:women|females?)|restricted\s+to\s+(?:women|females?)|open\s+only\s+to\s+(?:women|females?)|only\s+(?:women|females?)\s+(?:may|can)\s+apply)\b/i
 
 export function isWomenExclusiveOpportunityText(value) {
   return WOMEN_EXCLUSIVE_OPPORTUNITY_PATTERN.test(String(value ?? ''))

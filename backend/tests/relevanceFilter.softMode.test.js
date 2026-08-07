@@ -102,8 +102,14 @@ describe('relevanceFilter: hard rules still reject in soft mode', () => {
     expect(soft.ruleId).toBe('demographic_women_only')
   })
 
-  it('women-prioritized (non-exclusive) soft-fails instead of hard-rejecting', () => {
-    const o = opp({ title: 'Grant for Women Entrepreneurs' })
+  it.each([
+    'Grant for Women Entrepreneurs',
+    'Society of Women Engineers Career Development Award',
+    'Women Engineers Professional Development Grant',
+    'Scholarship for Female Students',
+    'Amber Grant for Women',
+  ])('women-prioritized non-exclusive wording soft-fails: %s', (title) => {
+    const o = opp({ title })
     const soft = applyRelevanceFilter(o, INDIVIDUAL_TN, { mode: 'soft' })
     expect(soft.pass).toBe(true)
     expect(soft.softFail).toBe(true)

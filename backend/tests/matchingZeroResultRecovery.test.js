@@ -20,7 +20,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
  *
  * These tests prove the zero-result recovery ladder now surfaces multiple
  * funding sources (honestly flagged as relaxed) instead of returning empty,
- * and that the strict legacy behavior is still reachable via ?no_fallback=1.
+ * and that strict behavior is reachable through every documented disable alias.
  */
 function createSchema(db) {
   db.exec(`
@@ -155,7 +155,7 @@ describe('matching zero-result recovery (no "0 included of X found")', () => {
         .get('/api/matching/profile/below-floor/opportunities')
         // Slider set above the 0–100 score scale — real candidates exist but
         // none can clear the floor (the "0 included of X found" condition).
-        .query({ min_score: 101, limit: 2000, skip_readiness_check: 1, strict: 1, allow_relax: 0 })
+        .query({ min_score: 101, limit: 2000, skip_readiness_check: 1 })
 
       expect(res.status).toBe(200)
       expect(res.body.engine).toBe('crawler-os')
@@ -223,14 +223,18 @@ describe('matching zero-result recovery (no "0 included of X found")', () => {
     expect(src).toMatch(/\.toUpperCase\(\)\s*!==\s*['"]REJECT['"]/)
   })
 
-  it('?no_fallback=1 preserves strict legacy behavior (returns 0 below the floor)', async () => {
+  it.each([
+    ['no_fallback=1', { no_fallback: 1 }],
+    ['strict=1', { strict: 1 }],
+    ['allow_relax=0', { allow_relax: 0 }],
+  ])('%s preserves strict behavior (returns 0 below the floor)', async (_label, strictQuery) => {
     const db = new Database(':memory:')
     createSchema(db)
     seedBelowFloor(db)
     try {
       const res = await request(createApp(db))
         .get('/api/matching/profile/below-floor/opportunities')
-        .query({ min_score: 101, limit: 2000, skip_readiness_check: 1, no_fallback: 1 })
+        .query({ min_score: 101, limit: 2000, skip_readiness_check: 1, ...strictQuery })
 
       expect(res.status).toBe(200)
       expect(res.body.returned).toBe(0)

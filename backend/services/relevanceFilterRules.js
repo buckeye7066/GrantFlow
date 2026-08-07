@@ -545,7 +545,7 @@ export const RELEVANCE_RULES = [
     id: 'demographic_women_prioritized',
     category: 'demographic',
     description: 'Women-prioritized (non-exclusive) programs for non-female profiles',
-    oppPattern: /\b(for women|women('s)? (entrepreneurs|business|founders|scholars|students|grants?)|female (entrepreneurs|founders|business))\b/i,
+    oppPattern: /\b(?:for women|society of women engineers|women(?:'s)?\s+(?:entrepreneurs?|business(?:es)?|founders?|scholars?|students?|grants?|engineers?)|female\s+(?:entrepreneurs?|founders?|business(?:es)?|students?|applicants?)|(?:scholarships?|grants?|awards?)\s+for\s+female\s+(?:students?|applicants?))\b/i,
     profileCheck: (pd) => {
       const g = (pd.gender || '').toLowerCase()
       return Boolean(g && g !== 'female')

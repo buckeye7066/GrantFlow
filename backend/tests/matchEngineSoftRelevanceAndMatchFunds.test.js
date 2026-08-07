@@ -160,24 +160,37 @@ describe('requires_match reduces score / REVIEW — does not hard-REJECT', () =>
 })
 
 describe('women exclusivity vs women-prioritized', () => {
-  it('uses the same hard classification for named women-restricted programs', () => {
-    const namedProgram = baseOpp({
-      title: 'Society of Women Engineers Scholarship',
-      description: 'Scholarship program for women engineers pursuing technical degrees.',
-    })
-    const strict = applyRelevanceFilter(
-      namedProgram,
+  it.each([
+    ['Society of Women Engineers Career Development Award', 'Supports professional development for women engineers in technical careers.'],
+    ['Women Engineers Professional Development Grant', 'Supports workforce training for women engineers.'],
+    ['Scholarship for Female Students', 'Provides education support for female students.'],
+    ['Amber Grant for Women', 'Supports women entrepreneurs with business development costs.'],
+  ])('treats non-exclusive women-focused wording as soft: %s', (title, description) => {
+    const opportunity = baseOpp({ title, description })
+    const soft = applyRelevanceFilter(
+      opportunity,
       { primary_type: 'individual', state: 'TN', gender: 'male' },
       { mode: 'soft' },
     )
-    const normalized = normalizeOpportunity(namedProgram)
-    const canonical = computeMatchDecision(maleTnIndividual, namedProgram)
+    const normalized = normalizeOpportunity(opportunity)
 
-    expect(strict.pass).toBe(false)
-    expect(strict.ruleId).toBe('demographic_women_only')
-    expect(normalized.requiresWomen).toBe(true)
-    expect(normalized.requiresGender).toBe('female')
-    expect(canonical.decision).toBe('REJECT')
+    expect(soft.pass).toBe(true)
+    expect(soft.softFail).toBe(true)
+    expect(soft.ruleId).toBe('demographic_women_prioritized')
+    expect(normalized.requiresWomen).toBe(false)
+    expect(normalized.requiresGender).toBeNull()
+  })
+
+  it('canonical scoring penalizes a named women-focused program without hard-rejecting it', () => {
+    const opportunity = baseOpp({
+      title: 'Society of Women Engineers Career Development Award',
+      description: 'Supports technical workforce training and professional development in Tennessee.',
+    })
+    const canonical = computeMatchDecision(maleTnIndividual, opportunity)
+
+    expect(canonical.decision).not.toBe('REJECT')
+    expect(canonical.match_explain?.soft_relevance_gate?.ruleId)
+      .toBe('demographic_women_prioritized')
   })
 
   it('hard-rejects only explicit women-only language', () => {

@@ -750,17 +750,8 @@ const MEN_ONLY_PATTERNS = [
   /\bmale\s+(?:students?|applicants?)\s+only\b/i,
   /\bmust be (?:a )?male\b/i,
 ]
-const WOMEN_ONLY_RESTRICTION_PATTERNS = [
-  /\bwomen[\s-]?only\b/i,
-  /\bfor\s+women\s+only\b/i,
-  /\bfemale\s+(?:students?|applicants?)\s+only\b/i,
-  /\bmust be (?:a )?(?:woman|female)\b/i,
-  /\bexclusively for (?:women|females?)\b/i,
-  /\brestricted to (?:women|females?)\b/i,
-  /\bamber grant for women\b/i,
-  /\bsociety of women engineers\b/i,
-  /\bwomen(?:'s)?\s+engineers?\b/i,
-]
+// Female-only detection is delegated to the shared classifier so
+// normalization and relevance filtering cannot disagree about exclusivity.
 
 // ---------------------------------------------------------------------------
 // Normalize opportunity into canonical structure
@@ -980,8 +971,9 @@ export function normalizeOpportunity(rawOpp) {
 
   const requiresWomen =
     Boolean(rawOpp.requires_women) ||
-    // One shared classifier is used here and by relevanceFilterRules. Bare
-    // "for women" remains soft, while explicit/named restrictions remain hard.
+    // One shared classifier is used here and by relevanceFilterRules. Only
+    // explicit exclusivity is hard; named or focused programs without exclusive
+    // wording remain soft relevance signals.
     isWomenExclusiveOpportunityText(text)
 
   // -- Explicit identity (ethnicity / gender) restrictions --
@@ -999,7 +991,7 @@ export function normalizeOpportunity(rawOpp) {
   if (rawRequiresGender === 'male' || rawRequiresGender === 'men') requiresGender = 'male'
   else if (rawRequiresGender === 'female' || rawRequiresGender === 'women') requiresGender = 'female'
   else if (matchesAnyRegex(text, MEN_ONLY_PATTERNS)) requiresGender = 'male'
-  else if (requiresWomen || matchesAnyRegex(text, WOMEN_ONLY_RESTRICTION_PATTERNS)) requiresGender = 'female'
+  else if (requiresWomen) requiresGender = 'female'
 
   // -- Has real application URL? --
   const hasApplicationUrl = Boolean(
