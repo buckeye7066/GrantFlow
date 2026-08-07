@@ -282,7 +282,7 @@ replaceOnce(
       }),
     )
     expect(decision.decision).toBe('REJECT')
-    expect(String(decision.explanation || '')).toMatch(/Geographic mismatch|Tennessee|TN/i)
+    expect(String(decision.explanation || '')).toMatch(/Geographic (?:mismatch|exclusivity)|Tennessee|TN/i)
   })`,
 )
 replaceOnce(
