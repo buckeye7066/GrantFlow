@@ -308,63 +308,61 @@ export async function safeFetch(url, init = {}, opts = {}) {
   let currentUrl = String(url || '')
   let requestInit = { ...init }
   const visited = []
+  // One lifetime covers DNS validation, every redirect hop, and the terminal
+  // response. A caller's per-probe timeout must never reset at a redirect.
+  const lifetime = createRequestLifetime(timeoutMs, [init.signal, opts.signal])
 
-  for (let hop = 0; hop <= maxRedirects; hop += 1) {
-    const resolved = await assertEgressAllowed(currentUrl, { resolve: opts.resolve })
-    currentUrl = resolved.url
-    visited.push(currentUrl)
+  try {
+    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      const resolved = await assertEgressAllowed(currentUrl, { resolve: opts.resolve })
+      currentUrl = resolved.url
+      visited.push(currentUrl)
 
-    const lifetime = createRequestLifetime(timeoutMs, [init.signal, opts.signal])
-
-    let res
-    try {
-      res = await doFetch(currentUrl, {
+      const res = await doFetch(currentUrl, {
         ...requestInit,
         redirect: 'manual',
         signal: lifetime.signal,
         agent: createPinnedAgent(currentUrl, resolved),
       })
-    } catch (err) {
-      lifetime.release()
-      throw err
-    }
 
-    if (!REDIRECT_STATUSES.has(res.status)) {
-      try {
-        Object.defineProperty(res, 'grantflowFinalUrl', { value: currentUrl, enumerable: false })
-      } catch {
-        // Non-fatal: some Response implementations freeze the object.
+      if (!REDIRECT_STATUSES.has(res.status)) {
+        try {
+          Object.defineProperty(res, 'grantflowFinalUrl', { value: currentUrl, enumerable: false })
+        } catch {
+          // Non-fatal: some Response implementations freeze the object.
+        }
+        releaseWhenBodyFinishes(res, lifetime.release)
+        return res
       }
-      releaseWhenBodyFinishes(res, lifetime.release)
-      return res
-    }
 
-    const location = res.headers?.get?.('location')
-    if (!location) {
-      // A 3xx with no Location is terminal; the caller owns its body.
-      releaseWhenBodyFinishes(res, lifetime.release)
-      return res
-    }
+      const location = res.headers?.get?.('location')
+      if (!location) {
+        // A 3xx with no Location is terminal; the caller owns its body.
+        releaseWhenBodyFinishes(res, lifetime.release)
+        return res
+      }
 
-    let nextUrl
-    try {
-      nextUrl = new URL(location, currentUrl).toString()
-    } catch {
+      let nextUrl
+      try {
+        nextUrl = new URL(location, currentUrl).toString()
+      } catch {
+        await discardResponseBody(res)
+        throw new SsrfBlockedError('unparseable_redirect', location)
+      }
+
       await discardResponseBody(res)
-      lifetime.release()
-      throw new SsrfBlockedError('unparseable_redirect', location)
+      if (hop >= maxRedirects) {
+        throw new SsrfBlockedError(`too_many_redirects:${visited.length}`, visited[0])
+      }
+      requestInit = redirectRequestInit(requestInit, res.status, currentUrl, nextUrl)
+      currentUrl = nextUrl
     }
 
-    await discardResponseBody(res)
+    throw new SsrfBlockedError(`too_many_redirects:${visited.length}`, visited[0])
+  } catch (err) {
     lifetime.release()
-    if (hop >= maxRedirects) {
-      throw new SsrfBlockedError(`too_many_redirects:${visited.length}`, visited[0])
-    }
-    requestInit = redirectRequestInit(requestInit, res.status, currentUrl, nextUrl)
-    currentUrl = nextUrl
+    throw err
   }
-
-  throw new SsrfBlockedError(`too_many_redirects:${visited.length}`, visited[0])
 }
 
 /**

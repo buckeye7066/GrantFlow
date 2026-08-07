@@ -290,6 +290,53 @@ describe('safeFetch cancellation', () => {
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
   })
 
+  it('uses one end-to-end deadline across redirect hops', async () => {
+    vi.useFakeTimers()
+    const signals = []
+    const fetchMock = vi.fn((_url, request = {}) => {
+      signals.push(request.signal)
+      if (signals.length === 1) {
+        return new Promise((resolve) => {
+          setTimeout(() => resolve(redirectTo('/second', {
+            cancel: vi.fn().mockResolvedValue(undefined),
+          })), 60)
+        })
+      }
+      return new Promise((_resolve, reject) => {
+        const rejectAbort = () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        }
+        if (request.signal?.aborted) rejectAbort()
+        else request.signal?.addEventListener('abort', rejectAbort, { once: true })
+      })
+    })
+
+    try {
+      const pending = safeFetch(
+        PUBLIC_URL,
+        {},
+        { fetchImpl: fetchMock, timeoutMs: 100 },
+      )
+      const rejection = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+
+      await vi.advanceTimersByTimeAsync(60)
+      for (let attempt = 0; attempt < 10 && fetchMock.mock.calls.length < 2; attempt += 1) {
+        await Promise.resolve()
+      }
+
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(signals[1]).toBe(signals[0])
+      await vi.advanceTimersByTimeAsync(39)
+      expect(signals[1].aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await rejection
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('aborts at the configured timeout', async () => {
     await expect(safeFetch(
       PUBLIC_URL,
