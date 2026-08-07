@@ -1,0 +1,46 @@
+name: One-shot PR 1179 assertion fix
+
+on:
+  push:
+    branches:
+      - fix/match-authority-soft-penalty-and-display-parity
+
+permissions:
+  contents: write
+
+jobs:
+  patch-assertion:
+    if: ${{ !contains(github.event.head_commit.message, '[assertion-fix-complete]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout matching branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/match-authority-soft-penalty-and-display-parity
+          persist-credentials: true
+
+      - name: Correct the exact failing assertion
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('scripts/one-shot-pr1179-review-fixes.mjs')
+          source = path.read_text(encoding='utf-8')
+          old = "/Geographic mismatch|Tennessee|TN/i"
+          new = "/Geographic (?:mismatch|exclusivity)|Tennessee|TN/i"
+          if source.count(old) != 1:
+              raise SystemExit(f'Expected one assertion to patch, found {source.count(old)}')
+          path.write_text(source.replace(old, new), encoding='utf-8')
+
+      - name: Commit correction and remove one-shot patch workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "GrantFlow Match Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/one-shot-pr1179-assertion-fix.yml
+          git add scripts/one-shot-pr1179-review-fixes.mjs
+          git commit -m "test(match): accept canonical geography explanation [assertion-fix-complete]"
+          git push origin HEAD:fix/match-authority-soft-penalty-and-display-parity
