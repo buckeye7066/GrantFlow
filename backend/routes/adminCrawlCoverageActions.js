@@ -38,6 +38,7 @@ import { ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
 import { getSource as getCrawlerOsSource } from '../crawler-os/sourceRegistry.js'
+import { resolveCrawlerOsSourceId } from '../services/sourceRegistryParity.js'
 import { createLogger } from '../utils/logger.js'
 
 const routeLogger = createLogger('route:adminCrawlCoverageActions')
@@ -72,7 +73,12 @@ router.post('/run-source', ensureAdmin, standardRateLimiter, async (req, res) =>
     return res.status(400).json({ error: 'source_id is required' })
   }
 
-  const source = getCrawlerOsSource(sourceId)
+  // The dashboard row carries a DISPLAY registry id; the engine only knows its
+  // own ids. Seven display ids are the SAME source under a renamed id (see
+  // sourceRegistryParity.js) — resolving them here is why "Run now" on e.g.
+  // sam_gov_assistance_listings stops 404ing when the sam_gov lane exists.
+  const resolvedSourceId = resolveCrawlerOsSourceId(sourceId) ?? sourceId
+  const source = getCrawlerOsSource(resolvedSourceId)
   if (!source) {
     // Honest, not silent: this source_id (likely from the legacy display
     // registry) has no Crawler OS adapter/registry row, so there is nothing
@@ -104,7 +110,7 @@ router.post('/run-source', ensureAdmin, standardRateLimiter, async (req, res) =>
     }
 
     const outcome = await withBudget(
-      () => runProfileDiscoveryLive({ db, profileId, onlySourceIds: [sourceId] }),
+      () => runProfileDiscoveryLive({ db, profileId, onlySourceIds: [resolvedSourceId] }),
       RUN_SOURCE_BUDGET_MS,
     )
 
@@ -120,7 +126,10 @@ router.post('/run-source', ensureAdmin, standardRateLimiter, async (req, res) =>
       })
     }
 
-    const sourceRunSummary = (outcome?.run?.sources ?? []).find((s) => s.source_id === sourceId) ?? null
+    // run.sources is keyed by the ENGINE id, so look the summary up by the id
+    // that actually ran — an aliased display id would never match here.
+    const sourceRunSummary =
+      (outcome?.run?.sources ?? []).find((s) => s.source_id === resolvedSourceId) ?? null
 
     return res.json({
       success: true,

@@ -260,12 +260,21 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
         }
         const result = await runAutonomousCrawlers(crawlerParams, context)
         report.operations.crawlers = {
-          status: 'completed',
+          // A fleet sweep can be refused by admission control (another sweep is
+          // already running, or one just ran) — that is a SKIP, never a
+          // "completed" run of zero profiles. Reporting it honestly keeps the
+          // morning report from claiming work that did not happen.
+          status: result?.skipped ? 'skipped' : 'completed',
+          ...(result?.skipped ? { skipped_reason: result.skipped_reason } : {}),
           profiles_processed: result.profiles_processed,
           jobs_created: result.jobs_created,
           jobs_completed: result.jobs_completed,
         }
-        log.info(`[Anya Scheduler] Crawlers complete: ${result.jobs_created} jobs for ${result.profiles_processed} profiles`)
+        if (result?.skipped) {
+          log.info(`[Anya Scheduler] Crawlers skipped: ${result.skipped_reason}`)
+        } else {
+          log.info(`[Anya Scheduler] Crawlers complete: ${result.jobs_created} jobs for ${result.profiles_processed} profiles`)
+        }
       } catch (error) {
         report.errors.push({ phase: 'crawlers', error: error.message })
         report.operations.crawlers = { status: 'failed', error: error.message }
