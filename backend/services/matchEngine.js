@@ -99,6 +99,7 @@ import {
   NEED_GEO_FIT_BASE, NEED_GEO_FIT_PER_HIT, NEED_GEO_FIT_MAX, NEED_GEO_FIT_MIN_GEO_SUBSCALE,
   // Data-point scoring model (owner directive 2026-07-06 evening)
   SCORING_MODEL,
+  SOFT_RELEVANCE_PENALTY,
 } from '../config/matchThresholds.js'
 import {
   buildProfileDataPointInventory,
@@ -3903,9 +3904,18 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity is a loan program, not a grant.', reasons }
   }
 
+  // Matching funds are a cost/feasibility signal, not an absolute exclusivity
+  // lock. scoreEligibilityComponent already subtracts for requires_match —
+  // hard-REJECT here discarded otherwise-fit awards without checking whether
+  // the profile can provide a match (and claimed "cannot provide" falsely).
+  // Reduce-not-discard: surface as REVIEW so the owner can decide.
   if (opp.requires_match) {
-    reasons.push('Requires matching funds')
-    return { decision: 'REJECT', explanation: 'Opportunity requires matching funds which profile cannot provide.', reasons }
+    reasons.push('Requires matching funds — review whether the applicant can meet cost-share')
+    return {
+      decision: 'REVIEW',
+      explanation: 'Opportunity requires matching funds; confirm cost-share capacity before applying.',
+      reasons,
+    }
   }
 
   if (on.requiresVeteran && !isVeteran) {
@@ -4437,6 +4447,31 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   const matchedSignalsForCap = Array.isArray(match_explain?.matchedSignals)
     ? match_explain.matchedSignals
     : []
+
+  // Soft relevance mismatches (population/eligibility) must reduce score, not
+  // discard. applyRelevanceFilter({mode:'soft'}) returns softFail+penalty for
+  // non-exclusive rules; wire that penalty into the canonical score here.
+  if (hardRelevanceEval?.pass && hardRelevanceEval?.softFail) {
+    const rawPenalty = Number(hardRelevanceEval.penalty)
+    const penalty = Number.isFinite(rawPenalty) && rawPenalty > 0
+      ? rawPenalty
+      : SOFT_RELEVANCE_PENALTY
+    if (penalty > 0) {
+      finalScore = Math.max(0, finalScore - penalty)
+      const softReason =
+        hardRelevanceEval.reason ||
+        `Soft relevance mismatch: ${hardRelevanceEval.ruleId || 'unknown'}`
+      scoreCaps.push(`Soft relevance penalty −${penalty}: ${softReason}`)
+      if (match_explain && typeof match_explain === 'object') {
+        match_explain.soft_relevance_gate = {
+          softFail: true,
+          penalty,
+          ruleId: hardRelevanceEval.ruleId || null,
+          reason: softReason,
+        }
+      }
+    }
+  }
 
   const hasMaterialProfileEvidence =
     matchedNeeds.length > 0 ||

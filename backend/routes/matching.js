@@ -544,7 +544,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
 
       // ── Score floor ─────────────────────────────────────────────────────
       // Directories always survive (mission rule). Everything else must clear
-      // the requested min_score (default 75).
+      // the requested min_score (default = DISCOVERY_MIN_SCORE_FLOOR / REVIEW).
       let qualified = mapped.filter((o) => qualifiesForDisplay(o, osMin))
 
       // ── Zero-result recovery ladder (mission rule) ──────────────────────
@@ -554,10 +554,16 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // re-surface — never return a bare `returned: 0` while `total_scored`/
       // `total_candidates` are non-zero (the "0 included of X found" bug).
       //
-      // Recovery is on by default and traceable. `?no_fallback=1` restores the
-      // strict legacy behavior for debugging.
+      // Recovery is on by default and traceable. Disable only via:
+      //   ?no_fallback=1  (legacy debug)
+      //   ?strict=1 | allow_relax=0 | relax=0  (Discover-era aliases — same effect)
       let relaxation = null
-      const allowFallback = req.query.no_fallback !== '1'
+      const q = req.query || {}
+      const allowFallback =
+        q.no_fallback !== '1' &&
+        q.strict !== '1' &&
+        q.allow_relax !== '0' &&
+        q.relax !== '0'
       // The zero-result ladder classifies rows by `kind` (direct vs directory).
       // Crawler-OS rows carry `opportunity_kind` (e.g. DIRECT_GRANT, SCHOLARSHIP,
       // DIRECTORY); normalize so non-directory funding is treated as relaxable

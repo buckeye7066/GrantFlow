@@ -521,18 +521,36 @@ export const RELEVANCE_RULES = [
     reason: 'Entity type mismatch: organization-only program for individual profile',
   },
 
-  // ── 2a. Demographic: women-only programs for non-female profiles ──────────
+  // ── 2a. Demographic: EXPLICITLY women-exclusive programs (hard) ───────────
+  // Hard reject only when exclusivity is unambiguous ("women only", "for women
+  // only", "exclusively for women"). Bare "for women" / "women entrepreneurs"
+  // copy is common on programs that are prioritized-but-not-exclusive — those
+  // must score-reduce via a soft rule, not hard-discard.
   {
     id: 'demographic_women_only',
     category: 'demographic',
-    description: 'Women-only grant programs',
-    hard: true, // explicit exclusivity
-    oppPattern: /\b(women only|for women|amber grant for women|female entrepreneurs only|women.{0,10}only)\b/i,
+    description: 'Explicitly women-only grant programs',
+    hard: true, // explicit exclusivity only
+    oppPattern: /\b(women[\s-]?only|female[\s-]?only|for women only|amber grant for women|female entrepreneurs only|women.{0,10}only|exclusively for (women|females?)|restricted to (women|females?))\b/i,
     profileCheck: (pd) => {
       const g = (pd.gender || '').toLowerCase()
       return Boolean(g && g !== 'female')
     },
-    reason: 'Demographic mismatch: women-only program, profile is not female',
+    reason: 'Demographic exclusivity: women-only program, profile is not female',
+  },
+  // Soft companion: women-prioritized (not exclusive) language for known-male
+  // profiles — reduce score, do not discard.
+  {
+    id: 'demographic_women_prioritized',
+    category: 'demographic',
+    description: 'Women-prioritized (non-exclusive) programs for non-female profiles',
+    oppPattern: /\b(for women|women('s)? (entrepreneurs|business|founders|scholars|students|grants?)|female (entrepreneurs|founders|business))\b/i,
+    profileCheck: (pd) => {
+      const g = (pd.gender || '').toLowerCase()
+      return Boolean(g && g !== 'female')
+    },
+    reason: 'Demographic mismatch: women-prioritized program, profile is not female',
+    penalty: undefined, // caller applies SOFT_RELEVANCE_PENALTY scale default
   },
 
   // ── 2b. Demographic: veteran-focused programs for non-veteran profiles ────

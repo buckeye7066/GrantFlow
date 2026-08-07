@@ -102,6 +102,14 @@ describe('relevanceFilter: hard rules still reject in soft mode', () => {
     expect(soft.ruleId).toBe('demographic_women_only')
   })
 
+  it('women-prioritized (non-exclusive) soft-fails instead of hard-rejecting', () => {
+    const o = opp({ title: 'Grant for Women Entrepreneurs' })
+    const soft = applyRelevanceFilter(o, INDIVIDUAL_TN, { mode: 'soft' })
+    expect(soft.pass).toBe(true)
+    expect(soft.softFail).toBe(true)
+    expect(soft.ruleId).toBe('demographic_women_prioritized')
+  })
+
   it('crowdfunding: rejects in both modes', () => {
     const o = opp({ title: 'Donate to Our GoFundMe' })
 

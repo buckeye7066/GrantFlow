@@ -219,6 +219,18 @@ export const ACCEPT_SCORE = 11
 /** REVIEW: some real coverage worth a human look (old 15 ≡ new 7). */
 export const REVIEW_SCORE = 7
 
+/**
+ * Soft relevance mismatch penalty (population/eligibility softFail path).
+ * Old 0–100 scale used ~25. On data_point_v1 (ACCEPT≈11), scale proportionally
+ * so soft mismatches reduce score without zeroing every near-match.
+ * Override: GRANTFLOW_SOFT_RELEVANCE_PENALTY=<number>
+ */
+export const SOFT_RELEVANCE_PENALTY = (() => {
+  const raw = Number(process.env.GRANTFLOW_SOFT_RELEVANCE_PENALTY)
+  if (Number.isFinite(raw) && raw >= 0) return raw
+  return SCORING_MODEL === 'data_point' ? 4 : 25
+})()
+
 /** Minimum score for ACCEPT in the structured decision pipeline (old 25). */
 export const DECISION_ACCEPT_MIN = 8
 

@@ -754,8 +754,11 @@ const WOMEN_ONLY_RESTRICTION_PATTERNS = [
   /\bfor\s+women\s+only\b/i,
   /\bfemale\s+(?:students?|applicants?)\s+only\b/i,
   /\bmust be (?:a )?(?:woman|female)\b/i,
-  /\bwomen\s+in\s+(?:stem|engineering|business|science|technology)\b/i,
-  /\bfor\s+women\b/i,
+  /\bexclusively for (?:women|females?)\b/i,
+  /\brestricted to (?:women|females?)\b/i,
+  /\bamber grant for women\b/i,
+  /\bsociety of women engineers\b/i,
+  /\bwomen(?:'s)?\s+engineers?\b/i,
 ]
 
 // ---------------------------------------------------------------------------
@@ -976,19 +979,20 @@ export function normalizeOpportunity(rawOpp) {
 
   const requiresWomen =
     Boolean(rawOpp.requires_women) ||
-    // matchesAnyRegex, NOT matchesAnyPattern (2026-08-03): matchesAnyPattern
-    // stringifies its patterns for phrase search, so a RegExp list passed to
-    // it can NEVER match — these gates were dead since they shipped, which is
-    // how "Society of Women Engineers" reached a male student's task list.
+    // Exclusive / named women-restricted programs. Bare "for women" stays soft
+    // (demographic_women_prioritized) so non-exclusive prioritization does not
+    // hard-REJECT. Named societies and "* only" language remain hard.
     matchesAnyRegex(text, [
-      /\bfemale\s+students?\b/i,
+      /\bwomen[\s-]?only\b/i,
+      /\bfor\s+women\s+only\b/i,
+      /\bfemale\s+(?:students?|applicants?)\s+only\b/i,
+      /\bmust be (?:a )?(?:woman|female)\b/i,
+      /\bexclusively for (?:women|females?)\b/i,
+      /\brestricted to (?:women|females?)\b/i,
+      /\bamber grant for women\b/i,
+      /\bsociety of women engineers\b/i,
       /\bwomen(?:'s)?\s+engineers?\b/i,
-      /\bwomen\s+only\b/i,
-      /\bfor\s+women\b/i,
-      /\bwomen\s+in\s+(?:stem|engineering|business)\b/i,
-    ]) ||
-    (allNeedTypes.includes('women') &&
-      (allNeedTypes.includes('education') || /\bstudents?\b/i.test(text)))
+    ])
 
   // -- Explicit identity (ethnicity / gender) restrictions --
   // Only set when EXPLICITLY exclusive (per canonical_rules G4). These are the

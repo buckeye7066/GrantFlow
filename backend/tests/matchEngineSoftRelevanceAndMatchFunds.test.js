@@ -1,0 +1,137 @@
+/**
+ * matchEngineSoftRelevanceAndMatchFunds.test.js
+ *
+ * P0 regression: soft relevance penalties must reduce score (not be ignored),
+ * and requires_match must REVIEW (not hard-REJECT with a false "cannot provide").
+ */
+import { describe, it, expect } from 'vitest'
+import { computeMatchDecision, makeDecision } from '../services/matchEngine.js'
+import { applyRelevanceFilter } from '../services/relevanceFilter.js'
+import { SOFT_RELEVANCE_PENALTY } from '../config/matchThresholds.js'
+
+const maleTnIndividual = {
+  profile: {
+    id: 'p-soft-1',
+    name: 'Test Profile',
+    primary_type: 'individual',
+    applicant_type: 'individual',
+    state: 'TN',
+    city: 'Nashville',
+    zip: '37203',
+    gender: 'male',
+    need_categories: ['education', 'workforce'],
+  },
+  sections: {
+    basic_information: {
+      gender: 'male',
+      state: 'TN',
+      city: 'Nashville',
+      profile_category: 'individual',
+    },
+  },
+}
+
+function baseOpp(overrides = {}) {
+  return {
+    id: 'opp-1',
+    title: 'Tennessee Workforce Development Grant',
+    description: 'Supports workforce training and education for Tennessee residents.',
+    application_url: 'https://example.org/apply',
+    source_url: 'https://example.org/program',
+    state: 'TN',
+    is_national: false,
+    opportunity_kind: 'DIRECT_GRANT',
+    opportunity_type: 'grant',
+    ...overrides,
+  }
+}
+
+describe('soft relevance penalty is applied by computeMatchDecision', () => {
+  it('exports a positive scale-aware soft penalty', () => {
+    expect(SOFT_RELEVANCE_PENALTY).toBeGreaterThan(0)
+    expect(SOFT_RELEVANCE_PENALTY).toBeLessThanOrEqual(25)
+  })
+
+  it('softFail from relevanceFilter reduces canonical score vs clean peer', () => {
+    // Avoid "entrepreneurs/business" (business gate) and exclusive "women only"
+    // language so softFail is the only mismatch signal.
+    const softOpp = baseOpp({
+      title: 'Tennessee Education Award for Women Scholars',
+      description: 'Supports women scholars pursuing workforce training and education in Tennessee.',
+    })
+    const cleanOpp = baseOpp({
+      title: 'Tennessee Workforce Development Grant',
+      description: 'Supports workforce training and education for Tennessee residents.',
+    })
+
+    const softFilter = applyRelevanceFilter(
+      softOpp,
+      { primary_type: 'individual', state: 'TN', gender: 'male' },
+      { mode: 'soft' },
+    )
+    expect(softFilter.pass).toBe(true)
+    expect(softFilter.softFail).toBe(true)
+    expect(softFilter.ruleId).toBe('demographic_women_prioritized')
+    expect(softFilter.penalty).toBe(SOFT_RELEVANCE_PENALTY)
+
+    const softDecision = computeMatchDecision(maleTnIndividual, softOpp)
+    const cleanDecision = computeMatchDecision(maleTnIndividual, cleanOpp)
+
+    expect(softDecision.match_explain?.soft_relevance_gate?.softFail).toBe(true)
+    expect(softDecision.decision).not.toBe('REJECT')
+    expect(softDecision.score).toBeLessThanOrEqual(cleanDecision.score)
+    const softReasons = [
+      ...(softDecision.reasons || []),
+      ...(softDecision.match_explain?.scoreCaps || []),
+    ].join(' ')
+    expect(softReasons.toLowerCase()).toMatch(/soft relevance|women/)
+  })
+})
+
+describe('requires_match reduces score / REVIEW — does not hard-REJECT', () => {
+  it('makeDecision returns REVIEW for matching-funds opportunities', () => {
+    const result = makeDecision(
+      20,
+      maleTnIndividual.profile,
+      baseOpp({ requires_match: true }),
+    )
+    expect(result.decision).toBe('REVIEW')
+    expect(String(result.explanation || '').toLowerCase()).not.toMatch(/cannot provide/)
+  })
+
+  it('computeMatchDecision does not REJECT solely for requires_match', () => {
+    const decision = computeMatchDecision(
+      maleTnIndividual,
+      baseOpp({
+        requires_match: true,
+        title: 'Tennessee Workforce Training Cost-Share Grant',
+        description: 'Local workforce support for Tennessee residents; matching funds may be required.',
+      }),
+    )
+    expect(decision.decision).not.toBe('REJECT')
+    expect(decision.decision).toBe('REVIEW')
+  })
+})
+
+describe('women exclusivity vs women-prioritized', () => {
+  it('hard-rejects only explicit women-only language', () => {
+    const exclusive = applyRelevanceFilter(
+      baseOpp({ title: 'Amber Grant for Women Only' }),
+      { primary_type: 'individual', state: 'TN', gender: 'male' },
+      { mode: 'soft' },
+    )
+    expect(exclusive.pass).toBe(false)
+    expect(exclusive.ruleId).toBe('demographic_women_only')
+  })
+
+  it('soft-penalizes non-exclusive "for women" language instead of hard reject', () => {
+    const prioritized = applyRelevanceFilter(
+      baseOpp({ title: 'Grant for Women Entrepreneurs in Tennessee' }),
+      { primary_type: 'individual', state: 'TN', gender: 'male' },
+      { mode: 'soft' },
+    )
+    expect(prioritized.pass).toBe(true)
+    expect(prioritized.softFail).toBe(true)
+    expect(prioritized.ruleId).toBe('demographic_women_prioritized')
+  })
+})

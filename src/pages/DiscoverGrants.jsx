@@ -47,6 +47,7 @@ import {
   buildResultsReconciliation,
   partitionDiscoverResults,
 } from '@/pages/discoverResultsMerge';
+import { keepDiscoverCatalogRow } from '@/lib/discoverCatalogKeep';
 
 // Discovery is now asynchronous: a click dispatches the profile-aware crawler
 // fleet to the background dispatcher (which runs each relevant crawler to
@@ -79,7 +80,12 @@ function clampMinScore(value, fallback = DEFAULT_MIN_MATCH_SCORE) {
 
 /**
  * Fetch profile-matched catalog opportunities. Shared by the live discover
- * query and the discovery poll loop so both honor the slider as a hard floor.
+ * query and the discovery poll loop.
+ *
+ * The slider is sent as `min_score` (backend `qualifiesForDisplay` floor).
+ * Zero-result recovery remains enabled on purpose (mission rule: never return
+ * empty when scored candidates exist). Pass `no_fallback=1` only from debug
+ * tooling — Discover never disables recovery.
  */
 async function fetchCatalogMatches(profileId, minMatchScore) {
   if (!profileId) return { opportunities: [] }
@@ -88,9 +94,6 @@ async function fetchCatalogMatches(profileId, minMatchScore) {
     min_score: String(ms),
     limit: '2000',
     skip_readiness_check: '1',
-    strict: '1',
-    allow_relax: '0',
-    relax: '0',
     // Keep pipeline members VISIBLE but flagged (`already_in_pipeline: true`)
     // instead of silently dropping them — the card renders "Already in
     // pipeline" so the operator sees why an item isn't addable (#5).
@@ -594,31 +597,13 @@ export default function DiscoverGrants() {
   const catalogOpportunities = useMemo(() => {
     const rows = catalogPayload?.opportunities ?? []
     if (!Array.isArray(rows)) return []
-    // The slider is the user's preferred floor, but mission rule: results the
-    // backend deliberately surfaced (zero-result recovery / relaxed threshold /
-    // directories) must NOT be re-dropped here — "found but not displayed" is a
-    // bug, not a UX choice. We keep below-floor rows only when the backend
-    // explicitly flagged them as recovered/relaxed/directory; otherwise the
-    // slider still acts as a hard floor (defense in depth).
+    // Slider is a preferred floor for undecided/REVIEW rows. Backend ACCEPT and
+    // directory/referral rows must stay visible — "found but not displayed" is
+    // a bug. Recovered/relaxed rows also survive when the backend flagged them.
     const minScoreFloor = clampMinScore(debouncedMinMatchScore)
     const recoveryApplied = Boolean(catalogPayload?.relaxation?.applied)
-    const isDirectoryRow = (opp) =>
-      Boolean(
-        opp?.is_directory ||
-          opp?.is_directory_resource ||
-          ['DIRECTORY', 'REFERRAL', 'SCHOOL_PORTAL', 'PAST_AWARD_INTEL'].includes(
-            String(opp?.opportunity_kind ?? '').toUpperCase(),
-          ),
-      )
     return dedupeFundingResults(rows
-      .filter((opp) => {
-        const score = Number(opp.match_score ?? opp.match ?? -Infinity)
-        if (Number.isFinite(score) && score >= minScoreFloor) return true
-        return (
-          recoveryApplied &&
-          (opp?.threshold_relaxed || opp?.eligibility_relaxed || opp?.geo_expanded || isDirectoryRow(opp))
-        )
-      })
+      .filter((opp) => keepDiscoverCatalogRow(opp, minScoreFloor, recoveryApplied))
       .map((opp) => ({
         id: opp.id,
         funding_opportunity_id: opp.funding_opportunity_id,
@@ -1063,12 +1048,12 @@ export default function DiscoverGrants() {
         : Array.isArray(finalPayload?.data?.opportunities)
           ? finalPayload.data.opportunities
           : []
-      // Frontend hard floor (defense in depth) \u2014 honor the slider as a hard floor.
+      // Frontend preferred floor for REVIEW/undecided rows. ACCEPT and
+      // directory rows from the backend must not be re-dropped here.
       const opportunities = strictMinScore
-        ? rawOpportunities.filter((opp) => {
-            const score = Number(opp.match_score ?? opp.match ?? -Infinity)
-            return Number.isFinite(score) && score >= effectiveMinMatchScore
-          })
+        ? rawOpportunities.filter((opp) =>
+            keepDiscoverCatalogRow(opp, effectiveMinMatchScore, Boolean(finalPayload?.relaxation?.applied)),
+          )
         : rawOpportunities
       setScoreHint(finalPayload?.score_hint || null)
       await handleCrawlerResults(opportunities, finalPayload)
