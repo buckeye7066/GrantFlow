@@ -1,0 +1,58 @@
+name: One-shot PR 1173 review fixes
+
+on:
+  push:
+    branches:
+      - fix/ssrf-egress-chokepoint-payment-cap-otp-csprng
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: ${{ !contains(github.event.head_commit.message, '[review-fixes-complete]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout security branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/ssrf-egress-chokepoint-payment-cap-otp-csprng
+          persist-credentials: true
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20.20.2
+          cache: npm
+
+      - name: Apply exact review wiring fixes
+        run: node scripts/one-shot-pr1173-review-fixes.mjs
+
+      - name: Install dependencies
+        run: npm ci --include=optional
+
+      - name: Run focused security regressions
+        run: >-
+          node scripts/run-vitest-isolated.mjs run
+          backend/tests/safeFetchSsrf.test.js
+          backend/tests/paymentAuthorizationCap.test.js
+
+      - name: Run repository pre-push gates
+        run: npm run check:prepush
+
+      - name: Commit verified fixes and remove one-shot machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "GrantFlow Security Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git rm scripts/one-shot-pr1173-review-fixes.mjs
+          git rm .github/workflows/one-shot-pr1173-review-fixes.yml
+          git add \
+            backend/services/nationalPrograms/fetcher.js \
+            backend/services/linkVerificationService.js \
+            backend/services/housingScholarshipCrawler.js
+          git commit -m "fix(security): close PR review gaps [review-fixes-complete]"
+          git push origin HEAD:fix/ssrf-egress-chokepoint-payment-cap-otp-csprng
