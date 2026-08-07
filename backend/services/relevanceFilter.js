@@ -91,6 +91,10 @@ function buildOppText(opportunity) {
     ...asTextList(opportunity.keywords),
     ...asTextList(opportunity.categories),
     ...asTextList(opportunity.eligibility_bullets),
+    // Structured eligibility is part of the same source-of-truth evidence as
+    // eligibility prose. Without it, JSON-only demographic restrictions can
+    // bypass both the canonical soft penalty and explicit hard exclusivity.
+    ...asTextList(opportunity.eligibility_json),
     ...asTextList(opportunity.tags),
   ]
     .join(' ')

@@ -459,9 +459,14 @@ export function evaluateProfileSpecificGate(profileContext, opportunity, opts = 
   // When PROFILE_GATE_TRUST_ENGINE is on (default), also relax the SOFT
   // geographic-mismatch rules for an engine-endorsed row (geography expands
   // outward; hard residents-only/rural-only exclusivity is untouched).
-  let skipRuleIds = null
+  // The canonical engine score-penalizes non-exclusive women-prioritized
+  // language. The display enrichment gate must not turn that one soft rule into
+  // a second hard eligibility trial. Other legacy soft rules retain their
+  // existing strict behavior here unless an authoritative stored decision earns
+  // the documented no-fit/geography suppression below.
+  const skipRuleIds = new Set(['demographic_women_prioritized'])
   if (storedAuthoritative) {
-    skipRuleIds = new Set(SUPPRESSIBLE_NO_FIT_RULE_IDS)
+    for (const id of SUPPRESSIBLE_NO_FIT_RULE_IDS) skipRuleIds.add(id)
     if (TRUST_ENGINE_OVER_CATEGORY_HEURISTICS) {
       for (const id of SUPPRESSIBLE_GEO_MISMATCH_RULE_IDS) skipRuleIds.add(id)
     }
