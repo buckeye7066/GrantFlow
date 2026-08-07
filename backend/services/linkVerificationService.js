@@ -187,7 +187,7 @@ export async function checkUrl(url, opts = {}) {
             Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
           },
-      }, { timeoutMs })
+      }, { timeoutMs, fetchImpl: opts.fetchImpl })
       // safeFetch stamps the post-redirect URL it actually settled on.
       const finalUrl = res.grantflowFinalUrl
         || (typeof res.url === 'string' && res.url ? res.url : url)
@@ -398,7 +398,7 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
 
 export async function runLinkVerification(
   db,
-  { limit = 100, verifiedBy = 'recurring-verifier' } = {},
+  { limit = 100, verifiedBy = 'recurring-verifier', fetchImpl } = {},
 ) {
   const cutoff = new Date(Date.now() - REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
@@ -499,7 +499,7 @@ export async function runLinkVerification(
       batch.map(async (row) => {
         const url = row.application_url || row.source_url
         const startMs = Date.now()
-        const result = await checkUrl(url)
+        const result = await checkUrl(url, { fetchImpl })
         const durationMs = Date.now() - startMs
         const now = new Date().toISOString()
         const persisted = await update.run(

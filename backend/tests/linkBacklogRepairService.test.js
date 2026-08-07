@@ -171,6 +171,7 @@ describe('link backlog repair', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => ({ status: 200, url: String(url) }))
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 10,
       concurrency: 2,
       timeoutMs: 3000,
@@ -225,6 +226,7 @@ describe('link backlog repair', () => {
     })
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 10,
       concurrency: 2,
       timeoutMs: 3000,
@@ -278,6 +280,7 @@ describe('link backlog repair', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({ status: 404, url: 'https://8.8.8.8/old-page' })
     const officialUrl = 'https://official.example.org/specific-community-scholarship'
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 10,
       concurrency: 1,
       timeoutMs: 3000,
@@ -324,6 +327,7 @@ describe('link backlog repair', () => {
     })
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 10,
       concurrency: 1,
       timeoutMs: 3000,

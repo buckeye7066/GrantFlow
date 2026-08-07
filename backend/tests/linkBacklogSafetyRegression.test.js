@@ -126,6 +126,7 @@ describe('link backlog safety regression', () => {
     const officialUrl = 'https://official.example.org/current-program'
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 1,
       concurrency: 1,
       timeoutMs: 3000,
@@ -171,6 +172,7 @@ describe('link backlog safety regression', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({ status: 403, url: 'https://8.8.8.8/blocked' })
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 1, concurrency: 1, timeoutMs: 3000, cycleId: 'selected-only',
       findOfficialUrlImpl: async () => ({ url: null, searched: false, error: 'provider unavailable' }),
     })
@@ -195,12 +197,15 @@ describe('link backlog safety regression', () => {
     const rescue = async () => ({ url: null, searched: false, error: 'provider unavailable' })
 
     const first = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 1, concurrency: 1, timeoutMs: 3000, cycleId: 'same-cycle', findOfficialUrlImpl: rescue,
     })
     const second = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 1, concurrency: 1, timeoutMs: 3000, cycleId: 'same-cycle', findOfficialUrlImpl: rescue,
     })
     const third = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 1, concurrency: 1, timeoutMs: 3000, cycleId: 'same-cycle', findOfficialUrlImpl: rescue,
     })
 
@@ -222,6 +227,7 @@ describe('link backlog safety regression', () => {
     })
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 2, concurrency: 2, timeoutMs: 3000,
       findOfficialUrlImpl: async ({ title }) => {
         if (title === 'Bad rescue') throw new Error('search provider exploded')
@@ -256,6 +262,7 @@ describe('link backlog safety regression', () => {
     })
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 1, concurrency: 1, timeoutMs: 3000,
       findOfficialUrlImpl: async () => ({ url: null, searched: true, hits: 0 }),
     })
@@ -318,6 +325,7 @@ describe('link backlog safety regression', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 1,
       concurrency: 1,
       timeoutMs: 3000,
@@ -357,6 +365,7 @@ describe('link backlog safety regression', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 10,
       concurrency: 1,
       timeoutMs: 3000,
@@ -398,6 +407,7 @@ describe('link backlog safety regression', () => {
     const officialUrl = 'https://official.example.org/current-page'
 
     const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
       limit: 1,
       concurrency: 1,
       timeoutMs: 3000,

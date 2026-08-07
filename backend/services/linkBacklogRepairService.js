@@ -233,14 +233,14 @@ function terminalFailureSet(outcomes = [], entries = []) {
   return outcomes.length === entries.length && outcomes.every((outcome) => PERMANENT_HTTP_CODES.has(Number(outcome.code)))
 }
 
-async function probeRow(row, timeoutMs) {
+async function probeRow(row, timeoutMs, fetchImpl) {
   const entries = candidateUrlEntries(row)
   const outcomes = []
   for (const entry of entries) {
     let last = null
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const started = Date.now()
-      const result = await checkUrl(entry.url, { timeoutMs })
+      const result = await checkUrl(entry.url, { timeoutMs, fetchImpl })
       last = { ...result, url: entry.url, role: entry.role, duration_ms: Date.now() - started }
       if (SUCCESS.has(String(result.status || '').toLowerCase())) {
         return { success: true, terminal: false, outcome: last, outcomes: [...outcomes, last] }
@@ -429,6 +429,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   )
   const pendingRetryCutoff = new Date(Date.now() - pendingRetryAfterMs).toISOString()
   const findOfficialUrlImpl = options.findOfficialUrlImpl || findOfficialUrlForOpportunity
+  const fetchImpl = options.fetchImpl
   const { yes, no } = bools(db)
   const before = await brokenDirectSummary(db)
   const reclassified = await reclassifyBrokenResources(db)
@@ -541,7 +542,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
     }
     let finalStatus = 'broken'
     try {
-      let result = await probeRow(row, timeoutMs)
+      let result = await probeRow(row, timeoutMs, fetchImpl)
       rowStats.checked += 1
 
       if (!result.success && String(row.title || '').trim()) {
