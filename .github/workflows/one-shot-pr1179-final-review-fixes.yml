@@ -1,0 +1,158 @@
+name: One-shot PR 1179 final review fixes
+
+on:
+  push:
+    branches:
+      - fix/match-authority-soft-penalty-and-display-parity
+
+permissions:
+  contents: write
+
+jobs:
+  apply-verify-and-publish:
+    if: ${{ contains(github.event.head_commit.message, '[apply-pr1179-final-review-fixes]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/match-authority-soft-penalty-and-display-parity
+          persist-credentials: true
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20.20.2
+          cache: npm
+
+      - name: Apply reviewer-requested classifier and regression fixes atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/pr1179-final-review-fixes.mjs <<'NODE'
+          import fs from 'node:fs/promises'
+          import path from 'node:path'
+
+          const changes = new Map()
+
+          async function stageReplace(file, before, after) {
+            const original = changes.get(file)?.original ?? await fs.readFile(file, 'utf8')
+            const current = changes.get(file)?.next ?? original
+            const first = current.indexOf(before)
+            const second = first < 0 ? -1 : current.indexOf(before, first + before.length)
+            if (first < 0) throw new Error(`Missing exact replacement anchor in ${file}`)
+            if (second >= 0) throw new Error(`Ambiguous replacement anchor in ${file}`)
+            changes.set(file, {
+              original,
+              next: current.slice(0, first) + after + current.slice(first + before.length),
+            })
+          }
+
+          await stageReplace(
+            'backend/config/demographicRestrictionPatterns.js',
+            String.raw`export const WOMEN_EXCLUSIVE_OPPORTUNITY_PATTERN =
+            /\b(?:women[\s-]?only|female[\s-]?only|for\s+women\s+only|female\s+(?:students?|applicants?|entrepreneurs?)\s+only|must be (?:a )?(?:woman|female)|exclusively for (?:women|females?)|restricted to (?:women|females?)|amber grant for women|society of women engineers|women(?:'s)?\s+engineers?|(?:scholarships?|grants?|awards?)\s+for\s+female\s+(?:students?|applicants?))\b/i`,
+            String.raw`export const WOMEN_EXCLUSIVE_OPPORTUNITY_PATTERN =
+            /\b(?:women[\s-]?only|females?[\s-]?only|(?:for|to)\s+(?:women|females?)\s+only|(?:female|women)\s+(?:students?|applicants?|entrepreneurs?|founders?|business(?:es)?|owners?)\s+only|must\s+be\s+(?:a\s+)?(?:woman|female)|exclusively\s+for\s+(?:women|females?)|restricted\s+to\s+(?:women|females?)|open\s+only\s+to\s+(?:women|females?)|only\s+(?:women|females?)\s+(?:may|can)\s+apply)\b/i`,
+          )
+
+          await stageReplace(
+            'backend/services/relevanceFilterRules.js',
+            String.raw`    oppPattern: /\b(for women|women('s)? (entrepreneurs|business|founders|scholars|students|grants?)|female (entrepreneurs|founders|business))\b/i,`,
+            String.raw`    oppPattern: /\b(?:for women|society of women engineers|women(?:'s)?\s+(?:entrepreneurs?|business(?:es)?|founders?|scholars?|students?|grants?|engineers?)|female\s+(?:entrepreneurs?|founders?|business(?:es)?|students?|applicants?)|(?:scholarships?|grants?|awards?)\s+for\s+female\s+(?:students?|applicants?))\b/i,`,
+          )
+
+          await stageReplace(
+            'backend/services/opportunityNormalizer.js',
+            `    // One shared classifier is used here and by relevanceFilterRules. Bare\n    // "for women" remains soft, while explicit/named restrictions remain hard.`,
+            `    // One shared classifier is used here and by relevanceFilterRules. Only\n    // explicit exclusivity is hard; named or focused programs without exclusive\n    // wording remain soft relevance signals.`,
+          )
+
+          await stageReplace(
+            'backend/tests/relevanceFilter.softMode.test.js',
+            `  it('women-prioritized (non-exclusive) soft-fails instead of hard-rejecting', () => {\n    const o = opp({ title: 'Grant for Women Entrepreneurs' })\n    const soft = applyRelevanceFilter(o, INDIVIDUAL_TN, { mode: 'soft' })\n    expect(soft.pass).toBe(true)\n    expect(soft.softFail).toBe(true)\n    expect(soft.ruleId).toBe('demographic_women_prioritized')\n  })`,
+            `  it.each([\n    'Grant for Women Entrepreneurs',\n    'Society of Women Engineers Career Development Award',\n    'Women Engineers Professional Development Grant',\n    'Scholarship for Female Students',\n    'Amber Grant for Women',\n  ])('women-prioritized non-exclusive wording soft-fails: %s', (title) => {\n    const o = opp({ title })\n    const soft = applyRelevanceFilter(o, INDIVIDUAL_TN, { mode: 'soft' })\n    expect(soft.pass).toBe(true)\n    expect(soft.softFail).toBe(true)\n    expect(soft.ruleId).toBe('demographic_women_prioritized')\n  })`,
+          )
+
+          await stageReplace(
+            'backend/tests/matchEngineSoftRelevanceAndMatchFunds.test.js',
+            `  it('uses the same hard classification for named women-restricted programs', () => {\n    const namedProgram = baseOpp({\n      title: 'Society of Women Engineers Scholarship',\n      description: 'Scholarship program for women engineers pursuing technical degrees.',\n    })\n    const strict = applyRelevanceFilter(\n      namedProgram,\n      { primary_type: 'individual', state: 'TN', gender: 'male' },\n      { mode: 'soft' },\n    )\n    const normalized = normalizeOpportunity(namedProgram)\n    const canonical = computeMatchDecision(maleTnIndividual, namedProgram)\n\n    expect(strict.pass).toBe(false)\n    expect(strict.ruleId).toBe('demographic_women_only')\n    expect(normalized.requiresWomen).toBe(true)\n    expect(normalized.requiresGender).toBe('female')\n    expect(canonical.decision).toBe('REJECT')\n  })`,
+            `  it.each([\n    ['Society of Women Engineers Career Development Award', 'Supports professional development for women engineers in technical careers.'],\n    ['Women Engineers Professional Development Grant', 'Supports workforce training for women engineers.'],\n    ['Scholarship for Female Students', 'Provides education support for female students.'],\n    ['Amber Grant for Women', 'Supports women entrepreneurs with business development costs.'],\n  ])('treats non-exclusive women-focused wording as soft: %s', (title, description) => {\n    const opportunity = baseOpp({ title, description })\n    const soft = applyRelevanceFilter(\n      opportunity,\n      { primary_type: 'individual', state: 'TN', gender: 'male' },\n      { mode: 'soft' },\n    )\n    const normalized = normalizeOpportunity(opportunity)\n\n    expect(soft.pass).toBe(true)\n    expect(soft.softFail).toBe(true)\n    expect(soft.ruleId).toBe('demographic_women_prioritized')\n    expect(normalized.requiresWomen).toBe(false)\n    expect(normalized.requiresGender).toBeNull()\n  })\n\n  it('canonical scoring penalizes a named women-focused program without hard-rejecting it', () => {\n    const opportunity = baseOpp({\n      title: 'Society of Women Engineers Career Development Award',\n      description: 'Supports technical workforce training and professional development in Tennessee.',\n    })\n    const canonical = computeMatchDecision(maleTnIndividual, opportunity)\n\n    expect(canonical.decision).not.toBe('REJECT')\n    expect(canonical.match_explain?.soft_relevance_gate?.ruleId)\n      .toBe('demographic_women_prioritized')\n  })`,
+          )
+
+          await stageReplace(
+            'backend/tests/opportunityNormalizerEligibilityText.test.js',
+            `  // Companion regression (found while writing this test): the gender gates\n  // called matchesAnyPattern — the STRING-phrase matcher, which stringifies\n  // its patterns — on RegExp lists, so they could never match ANY text and\n  // had been dead since they shipped. This is how the real prod row below\n  // reached a male student's application list untagged.\n  it('the real "Society of Women Engineers" prod row is detected as women-restricted', () => {\n    const n = normalizeOpportunity({\n      id: 'opp-swe',\n      title: 'Society of Women Engineers (SWE) Scholarships',\n      description: 'Scholarships for women in engineering programs.',\n      sponsor: 'Society of Women Engineers',\n    })\n    expect(n.requiresWomen).toBe(true)\n    expect(n.requiresGender).toBe('female')\n  })`,
+            `  // A named or women-focused program is not proof of exclusivity. The\n  // normalizer may hard-gate only when the source states an explicit condition\n  // such as "women only" or "applicants must be a woman."\n  it('does not infer women-only eligibility from a sponsor name or focused copy', () => {\n    const n = normalizeOpportunity({\n      id: 'opp-swe',\n      title: 'Society of Women Engineers (SWE) Scholarships',\n      description: 'Scholarships for women in engineering programs.',\n      sponsor: 'Society of Women Engineers',\n    })\n    expect(n.requiresWomen).toBe(false)\n    expect(n.requiresGender).toBeNull()\n  })`,
+          )
+
+          for (const [file, { original, next }] of changes) {
+            if (next === original) throw new Error(`No effective change staged for ${file}`)
+          }
+
+          const tempPaths = []
+          try {
+            for (const [file, { next }] of changes) {
+              const temp = `${file}.pr1179.tmp`
+              await fs.mkdir(path.dirname(temp), { recursive: true })
+              await fs.writeFile(temp, next, 'utf8')
+              tempPaths.push(temp)
+            }
+            for (const [file] of changes) {
+              await fs.rename(`${file}.pr1179.tmp`, file)
+            }
+          } catch (error) {
+            for (const [file, { original }] of changes) {
+              try { await fs.writeFile(file, original, 'utf8') } catch {}
+            }
+            for (const temp of tempPaths) {
+              try { await fs.rm(temp, { force: true }) } catch {}
+            }
+            throw error
+          }
+          NODE
+          node /tmp/pr1179-final-review-fixes.mjs
+
+      - name: Parse-check changed modules and regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check backend/config/demographicRestrictionPatterns.js
+          node --check backend/services/relevanceFilterRules.js
+          node --check backend/services/opportunityNormalizer.js
+          node --check backend/tests/relevanceFilter.softMode.test.js
+          node --check backend/tests/matchEngineSoftRelevanceAndMatchFunds.test.js
+          node --check backend/tests/opportunityNormalizerEligibilityText.test.js
+          git diff --check
+
+      - name: Install locked dependencies
+        run: npm ci --include=optional
+
+      - name: Run focused matching regressions
+        run: >-
+          node scripts/run-vitest-isolated.mjs run
+          backend/tests/relevanceFilter.softMode.test.js
+          backend/tests/matchEngineSoftRelevanceAndMatchFunds.test.js
+          backend/tests/opportunityNormalizerEligibilityText.test.js
+          backend/tests/relevanceFilterRules.test.js
+
+      - name: Publish exact verified source and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/one-shot-pr1179-final-review-fixes.yml
+          git add \
+            backend/config/demographicRestrictionPatterns.js \
+            backend/services/relevanceFilterRules.js \
+            backend/services/opportunityNormalizer.js \
+            backend/tests/relevanceFilter.softMode.test.js \
+            backend/tests/matchEngineSoftRelevanceAndMatchFunds.test.js \
+            backend/tests/opportunityNormalizerEligibilityText.test.js
+          GIT_AUTHOR_NAME="GrantFlow Match Repair" \
+          GIT_AUTHOR_EMAIL="actions@users.noreply.github.com" \
+          GIT_COMMITTER_NAME="GrantFlow Match Repair" \
+          GIT_COMMITTER_EMAIL="actions@users.noreply.github.com" \
+            git commit -m "fix(match): keep non-exclusive women-focused programs soft [pr1179-final-review-fixes]"
+          git push origin HEAD:fix/match-authority-soft-penalty-and-display-parity
