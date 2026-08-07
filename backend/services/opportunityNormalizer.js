@@ -12,6 +12,7 @@
 
 import crypto from 'crypto'
 import { normalizeNeedCategory, NEED_ALIAS_MAP } from './profileNormalizer.js'
+import { isWomenExclusiveOpportunityText } from '../config/demographicRestrictionPatterns.js'
 
 // ---------------------------------------------------------------------------
 // Safe JSON parse helper
@@ -979,20 +980,9 @@ export function normalizeOpportunity(rawOpp) {
 
   const requiresWomen =
     Boolean(rawOpp.requires_women) ||
-    // Exclusive / named women-restricted programs. Bare "for women" stays soft
-    // (demographic_women_prioritized) so non-exclusive prioritization does not
-    // hard-REJECT. Named societies and "* only" language remain hard.
-    matchesAnyRegex(text, [
-      /\bwomen[\s-]?only\b/i,
-      /\bfor\s+women\s+only\b/i,
-      /\bfemale\s+(?:students?|applicants?)\s+only\b/i,
-      /\bmust be (?:a )?(?:woman|female)\b/i,
-      /\bexclusively for (?:women|females?)\b/i,
-      /\brestricted to (?:women|females?)\b/i,
-      /\bamber grant for women\b/i,
-      /\bsociety of women engineers\b/i,
-      /\bwomen(?:'s)?\s+engineers?\b/i,
-    ])
+    // One shared classifier is used here and by relevanceFilterRules. Bare
+    // "for women" remains soft, while explicit/named restrictions remain hard.
+    isWomenExclusiveOpportunityText(text)
 
   // -- Explicit identity (ethnicity / gender) restrictions --
   // Only set when EXPLICITLY exclusive (per canonical_rules G4). These are the

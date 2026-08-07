@@ -5,7 +5,7 @@
  * and requires_match must REVIEW (not hard-REJECT with a false "cannot provide").
  */
 import { describe, it, expect } from 'vitest'
-import { computeMatchDecision, makeDecision } from '../services/matchEngine.js'
+import { computeMatchDecision, makeDecision, normalizeOpportunity } from '../services/matchEngine.js'
 import { applyRelevanceFilter } from '../services/relevanceFilter.js'
 import { SOFT_RELEVANCE_PENALTY } from '../config/matchThresholds.js'
 
@@ -50,6 +50,25 @@ describe('soft relevance penalty is applied by computeMatchDecision', () => {
   it('exports a positive scale-aware soft penalty', () => {
     expect(SOFT_RELEVANCE_PENALTY).toBeGreaterThan(0)
     expect(SOFT_RELEVANCE_PENALTY).toBeLessThanOrEqual(25)
+  })
+
+  it('does not apply soft relevance penalties to directory or referral pointers', () => {
+    for (const opportunityKind of ['DIRECTORY', 'REFERRAL']) {
+      const decision = computeMatchDecision(
+        maleTnIndividual,
+        baseOpp({
+          id: `pointer-${opportunityKind.toLowerCase()}`,
+          title: 'Education resources for women scholars',
+          description: 'A directory of education and workforce resources for women scholars.',
+          opportunity_kind: opportunityKind,
+          type: opportunityKind,
+          is_directory_resource: opportunityKind === 'DIRECTORY',
+        }),
+      )
+      expect(decision.match_explain?.soft_relevance_gate).toBeUndefined()
+      expect((decision.match_explain?.scoreCaps || []).join(' ').toLowerCase())
+        .not.toContain('soft relevance')
+    }
   })
 
   it('softFail from relevanceFilter reduces canonical score vs clean peer', () => {
@@ -111,9 +130,56 @@ describe('requires_match reduces score / REVIEW — does not hard-REJECT', () =>
     expect(decision.decision).not.toBe('REJECT')
     expect(decision.decision).toBe('REVIEW')
   })
+
+  it('rejects an out-of-state profile before matching-funds review', () => {
+    const floridaProfile = {
+      ...maleTnIndividual,
+      profile: { ...maleTnIndividual.profile, state: 'FL', city: 'Tampa', zip: '33602' },
+      sections: {
+        ...maleTnIndividual.sections,
+        basic_information: {
+          ...maleTnIndividual.sections.basic_information,
+          state: 'FL',
+          city: 'Tampa',
+        },
+      },
+    }
+    const decision = computeMatchDecision(
+      floridaProfile,
+      baseOpp({
+        requires_match: true,
+        title: 'Tennessee Residents Only Workforce Cost-Share Grant',
+        description: 'Exclusively for Tennessee residents. Matching funds are required.',
+        state: 'TN',
+        state_residents_only: true,
+      }),
+    )
+    expect(decision.decision).toBe('REJECT')
+    expect(String(decision.explanation || '')).toMatch(/Geographic (?:mismatch|exclusivity)|Tennessee|TN/i)
+  })
 })
 
 describe('women exclusivity vs women-prioritized', () => {
+  it('uses the same hard classification for named women-restricted programs', () => {
+    const namedProgram = baseOpp({
+      title: 'Society of Women Engineers Scholarship',
+      description: 'Scholarship program for women engineers pursuing technical degrees.',
+    })
+    const strict = applyRelevanceFilter(
+      namedProgram,
+      { primary_type: 'individual', state: 'TN', gender: 'male' },
+      { mode: 'soft' },
+    )
+    const normalized = normalizeOpportunity(namedProgram)
+    const canonical = computeMatchDecision(maleTnIndividual, namedProgram)
+
+    expect(strict.pass).toBe(false)
+    expect(strict.ruleId).toBe('demographic_women_only')
+    expect(normalized.requiresWomen).toBe(true)
+    expect(normalized.requiresGender).toBe('female')
+    expect(canonical.decision).toBe('REJECT')
+  })
+
   it('hard-rejects only explicit women-only language', () => {
     const exclusive = applyRelevanceFilter(
       baseOpp({ title: 'Amber Grant for Women Only' }),

@@ -1,5 +1,28 @@
 import { describe, it, expect } from 'vitest'
-import { keepDiscoverCatalogRow } from '../../src/lib/discoverCatalogKeep.js'
+import {
+  keepDiscoverCatalogRow,
+  normalizeDiscoverResultPayload,
+} from '../../src/lib/discoverCatalogKeep.js'
+
+describe('normalizeDiscoverResultPayload', () => {
+  it('returns direct response metadata and opportunities unchanged', () => {
+    const payload = {
+      opportunities: [{ id: 'direct' }],
+      relaxation: { applied: true },
+      score_hint: { floor: 7 },
+    }
+    expect(normalizeDiscoverResultPayload(payload)).toBe(payload)
+  })
+
+  it('unwraps the supported data envelope including recovery metadata', () => {
+    const inner = {
+      opportunities: [{ id: 'wrapped', threshold_relaxed: true }],
+      relaxation: { applied: true },
+      score_hint: { floor: 4 },
+    }
+    expect(normalizeDiscoverResultPayload({ data: inner })).toBe(inner)
+  })
+})
 
 describe('keepDiscoverCatalogRow', () => {
   it('keeps ACCEPT rows below the slider floor', () => {

@@ -21,6 +21,13 @@ export function isDirectoryDiscoverRow(opp) {
  * @param {boolean} recoveryApplied
  * @returns {boolean}
  */
+export function normalizeDiscoverResultPayload(payload) {
+  const normalized = payload?.data ?? payload ?? {}
+  return normalized && typeof normalized === 'object' && !Array.isArray(normalized)
+    ? normalized
+    : {}
+}
+
 export function keepDiscoverCatalogRow(opp, minScoreFloor, recoveryApplied) {
   const decision = String(opp?.match_decision ?? opp?.decision ?? '').trim().toUpperCase()
   if (decision === 'ACCEPT') return true

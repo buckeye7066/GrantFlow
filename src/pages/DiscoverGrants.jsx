@@ -47,7 +47,11 @@ import {
   buildResultsReconciliation,
   partitionDiscoverResults,
 } from '@/pages/discoverResultsMerge';
-import { keepDiscoverCatalogRow, isDirectoryDiscoverRow } from '@/lib/discoverCatalogKeep';
+import {
+  keepDiscoverCatalogRow,
+  isDirectoryDiscoverRow,
+  normalizeDiscoverResultPayload,
+} from '@/lib/discoverCatalogKeep';
 
 // Discovery is now asynchronous: a click dispatches the profile-aware crawler
 // fleet to the background dispatcher (which runs each relevant crawler to
@@ -1043,20 +1047,23 @@ export default function DiscoverGrants() {
       // slider via effectiveMinMatchScore.
       const finalPayload = await fetchCatalogMatches(pid, effectiveMinMatchScore).catch(() => null)
       if (isCancelled()) return
-      const rawOpportunities = Array.isArray(finalPayload?.opportunities)
-        ? finalPayload.opportunities
-        : Array.isArray(finalPayload?.data?.opportunities)
-          ? finalPayload.data.opportunities
-          : []
+      const finalResultPayload = normalizeDiscoverResultPayload(finalPayload)
+      const rawOpportunities = Array.isArray(finalResultPayload.opportunities)
+        ? finalResultPayload.opportunities
+        : []
       // Frontend preferred floor for REVIEW/undecided rows. ACCEPT and
       // directory rows from the backend must not be re-dropped here.
       const opportunities = strictMinScore
         ? rawOpportunities.filter((opp) =>
-            keepDiscoverCatalogRow(opp, effectiveMinMatchScore, Boolean(finalPayload?.relaxation?.applied)),
+            keepDiscoverCatalogRow(
+              opp,
+              effectiveMinMatchScore,
+              Boolean(finalResultPayload.relaxation?.applied),
+            ),
           )
         : rawOpportunities
-      setScoreHint(finalPayload?.score_hint || null)
-      await handleCrawlerResults(opportunities, finalPayload)
+      setScoreHint(finalResultPayload.score_hint || null)
+      await handleCrawlerResults(opportunities, finalResultPayload)
     } catch (error) {
       console.error('[DiscoverGrants] Search error:', error)
       const profileHint = getProfileContextIncompleteHint(error)

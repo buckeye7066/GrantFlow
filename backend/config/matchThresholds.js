@@ -226,7 +226,8 @@ export const REVIEW_SCORE = 7
  * Override: GRANTFLOW_SOFT_RELEVANCE_PENALTY=<number>
  */
 export const SOFT_RELEVANCE_PENALTY = (() => {
-  const raw = Number(process.env.GRANTFLOW_SOFT_RELEVANCE_PENALTY)
+  const rawValue = process.env.GRANTFLOW_SOFT_RELEVANCE_PENALTY?.trim()
+  const raw = rawValue ? Number(rawValue) : Number.NaN
   if (Number.isFinite(raw) && raw >= 0) return raw
   return SCORING_MODEL === 'data_point' ? 4 : 25
 })()

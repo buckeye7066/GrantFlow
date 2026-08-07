@@ -49,6 +49,7 @@ import {
   opportunityLockText,
 } from './eligibility/professionEligibility.js'
 import { isPlaceholderPlaceLabel, placePrefixOfTitle } from '../config/placeholderProfileSignals.js'
+import { isPointerOpportunityRow } from '../config/linkLifecycleKinds.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
@@ -3904,20 +3905,6 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity is a loan program, not a grant.', reasons }
   }
 
-  // Matching funds are a cost/feasibility signal, not an absolute exclusivity
-  // lock. scoreEligibilityComponent already subtracts for requires_match —
-  // hard-REJECT here discarded otherwise-fit awards without checking whether
-  // the profile can provide a match (and claimed "cannot provide" falsely).
-  // Reduce-not-discard: surface as REVIEW so the owner can decide.
-  if (opp.requires_match) {
-    reasons.push('Requires matching funds — review whether the applicant can meet cost-share')
-    return {
-      decision: 'REVIEW',
-      explanation: 'Opportunity requires matching funds; confirm cost-share capacity before applying.',
-      reasons,
-    }
-  }
-
   if (on.requiresVeteran && !isVeteran) {
     reasons.push('Veteran-only program; profile is not a veteran')
     return { decision: 'REJECT', explanation: 'Opportunity requires veteran status.', reasons }
@@ -4126,6 +4113,19 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       }
       reasons.push(`Geographic note — opportunity is in ${oppStateRaw}, profile is in ${profStateLabel} (may still be accessible)`)
       return { decision: 'REVIEW', explanation: `Opportunity is based in ${oppStateRaw} but may be accessible from ${profStateLabel}. Confirm eligibility on the program page.`, reasons }
+    }
+  }
+
+  // Matching funds are a cost/feasibility signal, not an absolute exclusivity
+  // lock. It must run only after all hard applicant and geography gates, so a
+  // state-exclusive opportunity cannot bypass rejection merely because it also
+  // requires a cost share.
+  if (opp.requires_match) {
+    reasons.push('Requires matching funds — review whether the applicant can meet cost-share')
+    return {
+      decision: 'REVIEW',
+      explanation: 'Opportunity requires matching funds; confirm cost-share capacity before applying.',
+      reasons,
     }
   }
 
@@ -4451,7 +4451,8 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // Soft relevance mismatches (population/eligibility) must reduce score, not
   // discard. applyRelevanceFilter({mode:'soft'}) returns softFail+penalty for
   // non-exclusive rules; wire that penalty into the canonical score here.
-  if (hardRelevanceEval?.pass && hardRelevanceEval?.softFail) {
+  const isPointerResource = isPointerOpportunityRow(rawOpportunity) || Boolean(oppNorm?.isDirectory)
+  if (hardRelevanceEval?.pass && hardRelevanceEval?.softFail && !isPointerResource) {
     const rawPenalty = Number(hardRelevanceEval.penalty)
     const penalty = Number.isFinite(rawPenalty) && rawPenalty > 0
       ? rawPenalty

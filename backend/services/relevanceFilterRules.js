@@ -15,6 +15,7 @@
  */
 
 import { PROCUREMENT_CONTRACT_PATTERN } from './matching/contentEligibilityPolicy.js'
+import { WOMEN_EXCLUSIVE_OPPORTUNITY_PATTERN } from '../config/demographicRestrictionPatterns.js'
 
 // ── Shared helpers (local copies to avoid circular deps with relevanceFilter.js) ─
 
@@ -531,7 +532,7 @@ export const RELEVANCE_RULES = [
     category: 'demographic',
     description: 'Explicitly women-only grant programs',
     hard: true, // explicit exclusivity only
-    oppPattern: /\b(women[\s-]?only|female[\s-]?only|for women only|amber grant for women|female entrepreneurs only|women.{0,10}only|exclusively for (women|females?)|restricted to (women|females?))\b/i,
+    oppPattern: WOMEN_EXCLUSIVE_OPPORTUNITY_PATTERN,
     profileCheck: (pd) => {
       const g = (pd.gender || '').toLowerCase()
       return Boolean(g && g !== 'female')
