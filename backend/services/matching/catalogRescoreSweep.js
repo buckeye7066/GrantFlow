@@ -338,6 +338,11 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
                 AND (
                   m.match_explain_json IS NULL
                   OR m.match_explain_json NOT LIKE '%scoring_policy_version%'
+                  -- Include explains that carry the key but no usable value
+                  OR m.match_explain_json LIKE '%"scoring_policy_version": null%'
+                  OR m.match_explain_json LIKE '%"scoring_policy_version":null%'
+                  OR m.match_explain_json LIKE '%"scoring_policy_version": ""%'
+                  OR m.match_explain_json LIKE '%"scoring_policy_version":""%'
                 )
                 AND (fo.is_active IS NULL OR fo.is_active = ${trueLit})
                 AND ${notPointer}
