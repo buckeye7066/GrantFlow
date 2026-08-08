@@ -310,11 +310,21 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   const staleExplainPred = staleCatalogRescoreExplainSql('m')
   let staleExplainProfileIds = new Set()
   try {
+    // Only consider stub-explain rows that are actually reachable by the
+    // per-profile drain query: on ACTIVE, NON-POINTER opportunities and for
+    // ACTIVE, non-synthetic profiles. This prevents a global pause being held
+    // open by stale rows we would never process in the drain.
     const staleRows = await db.prepare(
       `SELECT DISTINCT m.profile_id AS profile_id
          FROM profile_opportunity_matches m
+         JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+         JOIN profiles p ON p.id = m.profile_id
         WHERE m.matcher_version = '${CATALOG_RESCORE_MATCHER_VERSION}'
-          AND ${staleExplainPred}`,
+          AND ${staleExplainPred}
+          AND (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+          AND ${notPointer}
+          AND (p.status IS NULL OR p.status = 'active')
+          AND (p.created_by IS NULL OR p.created_by <> 'agent:amy')`,
     ).all()
     for (const row of staleRows || []) {
       if (row?.profile_id) staleExplainProfileIds.add(String(row.profile_id))
@@ -323,10 +333,33 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   } catch (err) {
     log.warn('stale-explain profile census failed (non-fatal)', { error: String(err?.message || err) })
   }
-  // Pause catalog inventory until every profile's stub explains are drained.
-  // Inventory growth under a tight boot budget was starving item-43 provenance
-  // refresh (Anastasia still 284/284 stubs after #1184 while the cursor walked
-  // fo.id watermarks on other profiles).
+  // Further narrow the pause gate to profiles this sweep will actually process:
+  // unconfigured profiles are skipped in the main loop, so they must not hold
+  // a global inventory pause open. We cheaply intersect against the active
+  // profile list, then exclude unconfigured ones via assessProfileConfiguration.
+  if (staleExplainProfileIds.size > 0) {
+    const staleIds = [...staleExplainProfileIds]
+    const activeById = new Map((profiles || []).map((p) => [String(p.id), p]))
+    const eligible = new Set()
+    for (const id of staleIds) {
+      const p = activeById.get(id)
+      if (!p) continue
+      try {
+        const ctx = await loadProfileContext(db, id)
+        const conf = assessProfileConfiguration(ctx)
+        if (!conf?.unconfigured) eligible.add(id)
+      } catch {
+        // A readable failure must not block the fleet — treat as eligible so
+        // the drain still attempts this profile rather than pausing others.
+        eligible.add(id)
+      }
+    }
+    staleExplainProfileIds = eligible
+  }
+  // Pause catalog inventory until every eligible profile's stub explains are
+  // drained. Inventory growth under a tight boot budget was starving
+  // provenance refresh; this pause now applies only when there is at least one
+  // eligible profile to drain.
   const pauseInventoryForExplainDrain = staleExplainProfileIds.size > 0 && opts.pauseInventoryForExplainDrain !== false
   summary.inventory_paused_for_explain_drain = pauseInventoryForExplainDrain
   if (pauseInventoryForExplainDrain) {
