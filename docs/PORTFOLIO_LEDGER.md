@@ -12,34 +12,35 @@ Dated completion records for the App Portfolio Audit. One entry per ACTIVE_APP r
 | Date | 2026-08-08 UTC |
 | Repo / default branch | `buckeye7066/GrantFlow` / `main` |
 | Baseline SHA (prior ledger tip) | `84dc4dc2928598553ffdb69678ca7e06548da39f` |
-| Feature merge SHA | `5ae8d5000a586ae0408d295804763fc06f009d52` (PR [#1185](https://github.com/buckeye7066/GrantFlow/pull/1185) squash; builds on #1184 `a2c7c7f1`) |
+| Feature merge SHA | `d1c45680f66b2e0fdb6b620249b871e9233c7558` (PR [#1188](https://github.com/buckeye7066/GrantFlow/pull/1188); builds on #1185/`5ae8d500`, #1184/`a2c7c7f1`, CodeQL #1186/`cfb2abd2`) |
 | Local path | Private Windows checkout (machine-specific path intentionally omitted) |
 | Production frontend | `https://app.axiombiolabs.org/grantflow` |
 | Production backend | `https://grantflow-production.up.railway.app` |
-| Deployed SHA (verified) | Railway `/api/version` + `readyz` report `5ae8d500` / ready (**verified fact**, 2026-08-08T03:53Z) |
+| Deployed SHA (verified) | Railway `/api/version` + `/api/health` report `d1c45680` / ok (**verified fact**, 2026-08-08T13:37Z); frontend HTTP 200 |
 | Data store | PostgreSQL on Railway (`dialect: postgres`) |
 | Target state | Controlled public beta: whole-profile discovery with authoritative scores, honest handoffs, proven outcomes |
 
 ### Completed this run
-- Merged PR #1184 (stub explain drain phase) then PR #1185 (pause inventory + prefer stub-bearing profiles + 90s explain-drain budget). Binding CI green; one intermittent CodeQL Analyze JS/TS sibling still flaky.
-- **Item 43 prod after #1185 boot (admin SQL):** fleet exact stubs `{"gate":"catalog_rescore"}` → **0**; catalog-rescore rows with policy key **3826/3826**; Demo STEM profile catalog-rescore rows **266/266** carry `need_first` policy (was 284/284 exact stubs). Mission gate green.
+- Merged PR #1184 → #1185 (catalog-rescore stub drain + drain-priority) then **PR #1188** (linker explain persistence + `stale_match_explain_refresh` boot net).
+- **Item 43 prod after #1188 boot (admin SQL):** `stale_match_explain_refresh` scanned/repaired **263/263**; Demo STEM active matches with missing `scoring_policy_version` → **0**; fleet residual lacking the key → **12** (next boots drain). Mission gate green; CodeQL push-lane green after #1186 schema-2 baseline.
+- Dependabot overrides PR #1189 opened (`js-yaml@4.3.1`, nested `uuid@11.1.1`).
+- Amy 50-profile cohort re-queued on prod (poll `/api/amy/status`); prior measured cohort still **21 ok / 29 weak**.
 - Prior carry-forward: item 42 link lifecycle; PR #1179 match-authority; Vercel gate hardening.
 
 ### Residual blockers (exit criteria unmet)
-- Amy 50/50 cohort + Google-bar parity (item 41) — needs search keys / consented cohort
-- Item 43 UI receipt — owner login still needed for full Funding Sources reconciliation receipt (backend provenance now current)
+- Amy 50/50 clean + Google-bar parity (item 41) — last measured 21/50; local `acceptance:amy-parity` needs search provider keys
 - Three authenticated E2E evidence chains (item 44) — needs owner credentials
-- Hamilton packet/handoff live stability proof — needs owner credentials / consented profile
-- Optional: Dependabot high/moderate alerts; intermittent CodeQL Analyze JS/TS baseline
+- Hamilton live submit/handoff proof — Demo STEM readiness shows **41 pending tasks**, most portals `needs_capture`; only a few sessions present
+- Optional: Dependabot alerts close once #1189 merges; fleet 12 residual stale explains
 
 ### Rollback point
-- Pre-#1184 main tip: `84dc4dc2` (privacy redact)
-- Earlier dual-deploy tip: `f6111def`
+- Pre-#1188 tip: `cfb2abd2` (CodeQL schema-2)
+- Pre-#1184 tip: `84dc4dc2` (privacy redact)
 
 ### Next owner actions (minimal)
-1. Provide a consented production profile (or login) for Discover crawl + three E2E evidence chains + Hamilton handoff proof.
-2. Authorize Amy 50-profile cohort + plain-web parity benchmark (or provide live search API keys for `npm run acceptance:amy-parity`).
-3. Optional: Dependabot high/moderate alerts.
+1. Provide a consented production profile (or login) for Discover crawl + three E2E evidence chains + Hamilton portal capture/submit proof.
+2. Confirm Amy overnight cohort; authorize plain-web parity (`GOOGLE_CSE_*` / SearXNG) if item 41 must close.
+3. Merge Dependabot override PR #1189 if CI green.
 
 ### Next app
 - Do **not** start next app until GrantFlow exit criteria close or owner redirects. Next incomplete priority remains GrantFlow.
@@ -48,4 +49,4 @@ Dated completion records for the App Portfolio Audit. One entry per ACTIVE_APP r
 
 ## 2026-08-07 — GrantFlow (Priority 1) — INCOMPLETE (superseded tip; history)
 
-Earlier tip recorded PR #1179 + Vercel gate on `f6111def`. See 2026-08-08 entry for current main `a2c7c7f1` / PR #1184.
+Earlier tip recorded PR #1179 + Vercel gate. See 2026-08-08 entry for current main `d1c45680` / PR #1188.
