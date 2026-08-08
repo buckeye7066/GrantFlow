@@ -12,26 +12,25 @@ Dated completion records for the App Portfolio Audit. One entry per ACTIVE_APP r
 | Date | 2026-08-08 UTC |
 | Repo / default branch | `buckeye7066/GrantFlow` / `main` |
 | Baseline SHA (prior ledger tip) | `84dc4dc2928598553ffdb69678ca7e06548da39f` |
-| Feature merge SHA | pending drain-priority PR (builds on `a2c7c7f1` / tip `ac18f59c`) |
+| Feature merge SHA | `5ae8d5000a586ae0408d295804763fc06f009d52` (PR [#1185](https://github.com/buckeye7066/GrantFlow/pull/1185) squash; builds on #1184 `a2c7c7f1`) |
 | Local path | Private Windows checkout (machine-specific path intentionally omitted) |
 | Production frontend | `https://app.axiombiolabs.org/grantflow` |
 | Production backend | `https://grantflow-production.up.railway.app` |
-| Deployed SHA (verified) | Railway tip was `a2c7c7f1`/`ac18f59c` at post-#1184 probe; re-verify after drain-priority merge |
+| Deployed SHA (verified) | Railway `/api/version` + `readyz` report `5ae8d500` / ready (**verified fact**, 2026-08-08T03:53Z) |
 | Data store | PostgreSQL on Railway (`dialect: postgres`) |
 | Target state | Controlled public beta: whole-profile discovery with authoritative scores, honest handoffs, proven outcomes |
 
 ### Completed this run
-- Merged PR #1184 after green GitHub CI (`test`, `browser-smoke`, `postgres-migrations`, `production-image`). Catalog-rescore suite then 24/24 locally.
-- **Item 43 residue (code, #1184):** catalog-rescore drains stub `{gate:catalog_rescore}` / missing-`scoring_policy_version` explains before inventory, without the inventory id watermark. Funding-sources falls back to explain JSON for policy version.
-- **Item 43 residue (prod measured after #1184):** fleet still ~2754 stale explains / Demo STEM profile (`c4a92724-…`) 284/284 stubs — 20s boot + inventory walk starved the drain. Follow-up: pause inventory while stubs remain, prefer stub-bearing profiles, raise wall clock via `CATALOG_RESCORE_EXPLAIN_TIME_BUDGET_MS` (default 90s). Suite 25/25 locally.
-- Prior run carry-forward still holds: item 42 link lifecycle gate; PR #1179 match-authority; Vercel gate hardening.
+- Merged PR #1184 (stub explain drain phase) then PR #1185 (pause inventory + prefer stub-bearing profiles + 90s explain-drain budget). Binding CI green; one intermittent CodeQL Analyze JS/TS sibling still flaky.
+- **Item 43 prod after #1185 boot (admin SQL):** fleet exact stubs `{"gate":"catalog_rescore"}` → **0**; catalog-rescore rows with policy key **3826/3826**; Demo STEM profile catalog-rescore rows **266/266** carry `need_first` policy (was 284/284 exact stubs). Mission gate green.
+- Prior carry-forward: item 42 link lifecycle; PR #1179 match-authority; Vercel gate hardening.
 
 ### Residual blockers (exit criteria unmet)
 - Amy 50/50 cohort + Google-bar parity (item 41) — needs search keys / consented cohort
-- Item 43 production proof — after drain-priority deploy, re-probe Demo STEM profile + fleet `scoring_policy_*`; owner login still needed for full UI reconciliation receipt
+- Item 43 UI receipt — owner login still needed for full Funding Sources reconciliation receipt (backend provenance now current)
 - Three authenticated E2E evidence chains (item 44) — needs owner credentials
 - Hamilton packet/handoff live stability proof — needs owner credentials / consented profile
-- One CodeQL Analyze JS/TS job failed on a prior PR while a sibling Analyze job passed — confirm baseline metadata if it keeps reddening main
+- Optional: Dependabot high/moderate alerts; intermittent CodeQL Analyze JS/TS baseline
 
 ### Rollback point
 - Pre-#1184 main tip: `84dc4dc2` (privacy redact)
