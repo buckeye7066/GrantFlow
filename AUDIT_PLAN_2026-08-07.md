@@ -65,7 +65,11 @@
 
 6. **Privacy Leakage in Tracked Files (Assessment)**
    - Risk: Hardcoded account paths/aliases in committed files
-   - Evidence: Feature branch files contain C:\Users\firer paths
+   - Evidence: Feature branch files contain `C:\Users\<local-account>` paths
+     (the literal account name is deliberately redacted here — spelling it out
+     is itself the leak this item describes, and the privacy guard in
+     `tests/unit/public-source-profile-privacy.test.mjs` scans tracked files
+     for exactly that token)
    - Status: Feature branch issue, not on main (cleaned before merge)
 
 ---
