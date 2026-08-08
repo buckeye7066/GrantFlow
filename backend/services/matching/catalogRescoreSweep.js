@@ -120,6 +120,23 @@ export function isStaleCatalogRescoreExplain(raw) {
   return false
 }
 
+/**
+ * SQL predicate (no leading AND) for catalog-rescore rows whose explain still
+ * lacks a usable scoring_policy_version. Shared by the drain query and the
+ * profile-priority census so the two cannot drift.
+ */
+export function staleCatalogRescoreExplainSql(alias = 'm') {
+  const col = `${alias}.match_explain_json`
+  return `(
+    ${col} IS NULL
+    OR ${col} NOT LIKE '%scoring_policy_version%'
+    OR ${col} LIKE '%"scoring_policy_version": null%'
+    OR ${col} LIKE '%"scoring_policy_version":null%'
+    OR ${col} LIKE '%"scoring_policy_version": ""%'
+    OR ${col} LIKE '%"scoring_policy_version":""%'
+  )`
+}
+
 function canonicalExplain(decision, evaluatedAt) {
   const explain = asObject(decision?.match_explain)
   const breakdown = asObject(explain.scoreBreakdown ?? explain.score_breakdown)
@@ -209,9 +226,15 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   const startedAt = Date.now()
   const pairBudget = Number.isFinite(opts.pairBudget) ? opts.pairBudget
     : envInt(process.env.CATALOG_RESCORE_PAIR_BUDGET, 3000)
-  const timeBudgetMs = Number.isFinite(opts.timeBudgetMs) ? opts.timeBudgetMs
+  let timeBudgetMs = Number.isFinite(opts.timeBudgetMs) ? opts.timeBudgetMs
     : envInt(process.env.CATALOG_RESCORE_TIME_BUDGET_MS, 20000)
   const writeEnabled = typeof opts.writeEnabled === 'boolean' ? opts.writeEnabled : isCatalogRescoreWriteEnabled()
+  // When the fleet still carries stub explains, inventory walks compete with
+  // provenance refresh under the 20s boot budget (prod 2026-08-08: 2754 stubs
+  // still open after #1184). Prefer drain; optionally raise the wall clock.
+  const explainDrainTimeBudgetMs = Number.isFinite(opts.explainDrainTimeBudgetMs)
+    ? opts.explainDrainTimeBudgetMs
+    : envInt(process.env.CATALOG_RESCORE_EXPLAIN_TIME_BUDGET_MS, 90000)
 
   const deps = opts.deps ?? {}
   const { computeMatchDecision } = deps.computeMatchDecision
@@ -253,6 +276,8 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     stale_removed: 0,
     explain_refreshed: 0,
     stale_explain_prioritized: 0,
+    stale_explains_at_start: 0,
+    inventory_paused_for_explain_drain: false,
     convergence_errors: 0,
     cycles_reopened: 0,
     truncated: false,
@@ -282,8 +307,47 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   const cursor = (writeEnabled ? await kvGetJson(db, CATALOG_RESCORE_KV_KEY) : null) ?? { profiles: {}, last_profile: null }
   if (!cursor.profiles || typeof cursor.profiles !== 'object') cursor.profiles = {}
 
-  const ordered = [...(profiles || [])]
-  if (cursor.last_profile) {
+  const staleExplainPred = staleCatalogRescoreExplainSql('m')
+  let staleExplainProfileIds = new Set()
+  try {
+    const staleRows = await db.prepare(
+      `SELECT DISTINCT m.profile_id AS profile_id
+         FROM profile_opportunity_matches m
+        WHERE m.matcher_version = '${CATALOG_RESCORE_MATCHER_VERSION}'
+          AND ${staleExplainPred}`,
+    ).all()
+    for (const row of staleRows || []) {
+      if (row?.profile_id) staleExplainProfileIds.add(String(row.profile_id))
+    }
+    summary.stale_explains_at_start = staleExplainProfileIds.size
+  } catch (err) {
+    log.warn('stale-explain profile census failed (non-fatal)', { error: String(err?.message || err) })
+  }
+  // Pause catalog inventory until every profile's stub explains are drained.
+  // Inventory growth under a tight boot budget was starving item-43 provenance
+  // refresh (Anastasia still 284/284 stubs after #1184 while the cursor walked
+  // fo.id watermarks on other profiles).
+  const pauseInventoryForExplainDrain = staleExplainProfileIds.size > 0 && opts.pauseInventoryForExplainDrain !== false
+  summary.inventory_paused_for_explain_drain = pauseInventoryForExplainDrain
+  if (pauseInventoryForExplainDrain) {
+    timeBudgetMs = Math.max(timeBudgetMs, explainDrainTimeBudgetMs)
+  }
+
+  let ordered = [...(profiles || [])]
+  if (pauseInventoryForExplainDrain) {
+    const staleFirst = []
+    const rest = []
+    for (const p of ordered) {
+      (staleExplainProfileIds.has(String(p.id)) ? staleFirst : rest).push(p)
+    }
+    // Rotate only within the stale cohort so a stuck inventory cursor cannot
+    // keep pushing stub-bearing profiles to the back of the queue.
+    if (cursor.last_profile) {
+      const i = staleFirst.findIndex((p) => String(p.id) === String(cursor.last_profile))
+      if (i >= 0) staleFirst.push(...staleFirst.splice(0, i + 1))
+    }
+    ordered = [...staleFirst, ...rest]
+  } else if (cursor.last_profile) {
     const i = ordered.findIndex((p) => String(p.id) === String(cursor.last_profile))
     if (i >= 0) ordered.push(...ordered.splice(0, i + 1))
   }
@@ -295,6 +359,10 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     if (outOfBudget()) { summary.truncated = true; break }
     const profileId = String(p.id)
     if (String(p.created_by ?? '') === 'agent:amy') { summary.profiles_skipped_synthetic += 1; continue }
+    if (pauseInventoryForExplainDrain && !staleExplainProfileIds.has(profileId)) {
+      // No stub explains on this profile — leave it for a later inventory pass.
+      continue
+    }
 
     let ctx
     try { ctx = await loadProfileContext(db, profileId) } catch { ctx = null }
@@ -335,15 +403,7 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
                JOIN funding_opportunities fo ON fo.id = m.opportunity_id
               WHERE m.profile_id = ?
                 AND m.matcher_version = '${CATALOG_RESCORE_MATCHER_VERSION}'
-                AND (
-                  m.match_explain_json IS NULL
-                  OR m.match_explain_json NOT LIKE '%scoring_policy_version%'
-                  -- Include explains that carry the key but no usable value
-                  OR m.match_explain_json LIKE '%"scoring_policy_version": null%'
-                  OR m.match_explain_json LIKE '%"scoring_policy_version":null%'
-                  OR m.match_explain_json LIKE '%"scoring_policy_version": ""%'
-                  OR m.match_explain_json LIKE '%"scoring_policy_version":""%'
-                )
+                AND ${staleExplainPred}
                 AND (fo.is_active IS NULL OR fo.is_active = ${trueLit})
                 AND ${notPointer}
                 ${whereExplainMark}
@@ -354,6 +414,11 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
             staleExplainDrainDone = true
             continue
           }
+        } else if (pauseInventoryForExplainDrain) {
+          // Profile's stub explains are drained. Do not resume fo.id inventory
+          // while any other profile still needs provenance refresh.
+          profileDone = false
+          break
         } else {
           // ID ordering is deliberately independent of created_at. Legacy rows
           // may have NULL timestamps; a timestamp watermark would make every
@@ -556,6 +621,7 @@ export default {
   CATALOG_RESCORE_KV_KEY,
   isCatalogRescoreWriteEnabled,
   isStaleCatalogRescoreExplain,
+  staleCatalogRescoreExplainSql,
   passesFundabilityGate,
   runCatalogRescoreSweep,
 }
