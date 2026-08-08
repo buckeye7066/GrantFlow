@@ -71,6 +71,7 @@ import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS } from '../services/sources/locatorUrlKind.js'
 import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from '../config/amountEnrichEnv.js'
 import { normalizePersistedMatchDecisionIntegrity } from '../services/matching/matchDecisionIntegrity.js'
+import { buildPersistedMatchExplain } from '../services/matching/matchExplainPersistence.js'
 import { hasFarmIdentity } from '../services/eligibility/farmIdentity.js'
 
 const log = createLogger('startup:enforceInvariants')
@@ -7440,7 +7441,7 @@ export async function enforceInstitutionAidLinkage(db) {
                 `il:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
                 decision?.explanation ?? null,
                 JSON.stringify(decision?.matchedNeeds ?? []),
-                JSON.stringify({ institution: school, gate: 'attendance' }),
+                JSON.stringify(buildPersistedMatchExplain(decision, { institution: school, gate: 'attendance' })),
                 null, 'institution_attendance_link',
               )
             const wrote = changesOf(res)
@@ -7683,7 +7684,7 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
             `pd:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
             decision?.explanation ?? null,
             JSON.stringify(decision?.matchedNeeds ?? []),
-            JSON.stringify({ gate: 'recorded_discovery_provenance', source: opp.source ?? null }),
+            JSON.stringify(buildPersistedMatchExplain(decision, { gate: 'recorded_discovery_provenance', source: opp.source ?? null })),
             null, 'profile_discovery_provenance',
           )
         const wrote = changesOf(res)
@@ -7970,7 +7971,7 @@ export async function enforceDeclaredFieldOfStudyRecall(db) {
               decision?.explanation ?? null,
               JSON.stringify(decision?.matchedNeeds ?? []),
               // PROVENANCE: which profile field authorized this look.
-              JSON.stringify({ gate: 'declared_field_of_study', term: hit.term, evidence: hit.evidence }),
+              JSON.stringify(buildPersistedMatchExplain(decision, { gate: 'declared_field_of_study', term: hit.term, evidence: hit.evidence })),
               null, 'declared_field_of_study',
             )
           const wrote = changesOf(res)
@@ -8565,7 +8566,7 @@ export async function enforceStudentAidInStateRecall(db) {
               `sa:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
               decision?.explanation ?? null,
               JSON.stringify(decision?.matchedNeeds ?? []),
-              JSON.stringify({ gate: 'student_aid_instate', state: stateName, stage, evidence: 'basic_information.location' }),
+              JSON.stringify(buildPersistedMatchExplain(decision, { gate: 'student_aid_instate', state: stateName, stage, evidence: 'basic_information.location' })),
               null, 'student_aid_instate',
             )
           const wrote = changesOf(res)
@@ -8848,14 +8849,14 @@ export async function enforceCountyCrisisNeedRecall(db) {
               `cc:${profileId}:${opp.id}`, profileId, opp.id, score, 'accept',
               decision?.explanation ?? null,
               JSON.stringify(decision?.matchedNeeds ?? []),
-              JSON.stringify({
+              JSON.stringify(buildPersistedMatchExplain(decision, {
                 gate: 'county_crisis_need',
                 county: anchor.county,
                 state: anchor.state,
                 anchor_via: anchor.via,
                 needs: [...crisisNeeds],
                 evidence: 'basic_information.location',
-              }),
+              })),
               null, 'county_crisis_need',
             )
           const wrote = changesOf(res)
@@ -8986,6 +8987,32 @@ export async function enforceCatalogRescoreConvergence(db) {
       truncated: Boolean(res.truncated),
       enforced: Boolean(res.write_enabled),
       examples: res.examples ?? [],
+    }
+  })
+}
+
+/**
+ * INVARIANT: Surfaced match rows carry scoring_policy_version when the engine
+ * measured one. Linker nets used to persist gate-only stubs; this drain
+ * refreshes residue IN PLACE without rebranding matcher_version.
+ */
+export async function enforceStaleMatchExplainRefresh(db) {
+  return runInvariant('stale_match_explain_refresh', async () => {
+    let runStaleMatchExplainRefresh
+    try {
+      ;({ runStaleMatchExplainRefresh } = await import('../services/matching/staleMatchExplainRefresh.js'))
+    } catch (err) {
+      log.warn('stale_match_explain_refresh: unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const res = await runStaleMatchExplainRefresh(db)
+    return {
+      scanned: res.scanned ?? 0,
+      repaired: res.refreshed ?? 0,
+      wouldRepair: res.would_refresh ?? 0,
+      unscorable: res.unscorable ?? 0,
+      truncated: Boolean(res.truncated),
+      enforced: Boolean(res.write_enabled),
     }
   })
 }
@@ -9233,7 +9260,7 @@ export async function enforceFunderBehaviorRecall(db) {
               `fb:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
               decision?.explanation ?? null,
               JSON.stringify(decision?.matchedNeeds ?? []),
-              JSON.stringify({
+              JSON.stringify(buildPersistedMatchExplain(decision, {
                 gate: 'funder_behavior',
                 state,
                 needs: [...needs].slice(0, 8),
@@ -9244,7 +9271,7 @@ export async function enforceFunderBehaviorRecall(db) {
                   amount: t.amount,
                   purpose: String(t.purpose ?? '').slice(0, 140),
                 })),
-              }),
+              })),
               null, 'funder_behavior',
             )
           const wrote = changesOf(res)
@@ -9495,6 +9522,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // gates so anything it links (writes env-gated) is held to the stage/scope/
   // hygiene bars below in the SAME boot.
   steps.push(await enforceCatalogRescoreConvergence(db))
+  // Linker / recall residue: refresh gate-only stubs that lack
+  // scoring_policy_version WITHOUT rebranding matcher_version (item 43).
+  steps.push(await enforceStaleMatchExplainRefresh(db))
   // ACADEMIC-STAGE scope net: remove surfaced awards the profile's derived stage
   // provably cannot receive (graduate/professional, postdoctoral, adult
   // reentry). Runs immediately AFTER the recall gates so anything they added

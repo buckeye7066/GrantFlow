@@ -1154,7 +1154,9 @@ describe('enforceInvariants — runner', () => {
     // + the funder-behavior pair (2026-08-05): the bounded 990 itemized-grant
     //   ingest and the demonstrated-giving RECALL net it feeds.
     // + the URL-less pointer-task research-lead repair (#1161 class).
-    expect(summary.ran).toBe(58)
+    // + stale match-explain refresh (2026-08-08): linker gate-only stubs
+    //   drain scoring_policy_version in place without rebranding matcher_version.
+    expect(summary.ran).toBe(59)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1228,6 +1230,9 @@ describe('enforceInvariants — runner', () => {
       // The GENERAL recall case: continuous catalog-wide re-matching, count-only
       // until the fundability chain lands (ENFORCE_CATALOG_RESCORE=1 to write).
       'catalog_rescore_convergence',
+      // Linker residue: refresh gate-only stubs lacking scoring_policy_version
+      // without rebranding matcher_version (item 43).
+      'stale_match_explain_refresh',
       'stage_of_life_match_scope',
       'no_dangling_matches',
       // RESULT FLOOR census (owner rule 2026-08-01, third clause). After every
