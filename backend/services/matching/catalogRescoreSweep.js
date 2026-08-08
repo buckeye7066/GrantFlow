@@ -76,6 +76,50 @@ function json(value, fallback) {
   try { return JSON.stringify(value) } catch { return JSON.stringify(fallback) }
 }
 
+function parseExplainJson(raw) {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw
+  if (typeof raw !== 'string') return null
+  const text = raw.trim()
+  if (!text) return null
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Early catalog-rescore writes persisted a stub
+ * `{"gate":"catalog_rescore"}` with no score-scale / policy provenance.
+ * Funding-sources then reports those rows as scoring_policy_unknown, so the
+ * owner-facing receipt cannot prove scores match the current scale even when
+ * the numeric score is correct. Detect that residue so the sweep prioritizes
+ * refreshing it with a full canonicalExplain (and never invents a policy
+ * stamp without re-running the engine).
+ */
+export function isStaleCatalogRescoreExplain(raw) {
+  const explain = parseExplainJson(raw)
+  if (!explain) return true
+  const policy = String(
+    explain.scoring_policy_version ??
+    explain.scoreBreakdown?.scoring_policy_version ??
+    explain.score_breakdown?.scoring_policy_version ??
+    '',
+  ).trim()
+  if (!policy) return true
+  // The original stub had only `{ gate: 'catalog_rescore' }`. A refreshed
+  // explain always carries scoring_policy_version + catalog_rescore metadata.
+  if (
+    Object.keys(explain).length === 1 &&
+    String(explain.gate || '') === 'catalog_rescore'
+  ) {
+    return true
+  }
+  return false
+}
+
 function canonicalExplain(decision, evaluatedAt) {
   const explain = asObject(decision?.match_explain)
   const breakdown = asObject(explain.scoreBreakdown ?? explain.score_breakdown)
@@ -207,6 +251,8 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     rejected_by_engine: 0,
     unscorable: 0,
     stale_removed: 0,
+    explain_refreshed: 0,
+    stale_explain_prioritized: 0,
     convergence_errors: 0,
     cycles_reopened: 0,
     truncated: false,
@@ -265,31 +311,72 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     const previousCycle = Number.isFinite(Number(entry.cycle)) ? Number(entry.cycle) : 0
     const cycle = Math.max(1, previousCycle + (reopeningCompletedCycle ? 1 : 0))
     let watermark = reopeningCompletedCycle ? null : (entry.watermark ?? null)
+    // Drain stale catalog-rescore explains BEFORE the inventory walk, and do
+    // NOT apply the inventory id watermark to that drain. A CASE-reorder on
+    // the inventory query + `fo.id > watermark` would permanently skip lower-id
+    // stubs once the cursor advanced past them (item 43 residue / #944 class).
+    let staleExplainDrainDone = false
+    let explainWatermark = null
     let profileDone = false
     while (!profileDone && !outOfBudget()) {
       const remaining = Math.max(1, Math.min(BATCH_SIZE, pairBudget - spent()))
       let rows
       try {
-        // ID ordering is deliberately independent of created_at. Legacy rows
-        // may have NULL timestamps; a timestamp watermark would make every
-        // later NULL row unreachable after the first batch. Repeating cycles
-        // pick up any newly inserted lower-sorting id on the next pass.
-        const whereMark = watermark ? 'AND fo.id > ?' : ''
-        const params = watermark ? [watermark.id] : []
-        rows = await db.prepare(
-          `SELECT fo.*,
-                  m.id AS existing_match_id,
-                  m.matcher_version AS existing_matcher_version,
-                  m.match_decision AS existing_match_decision
-             FROM funding_opportunities fo
-        LEFT JOIN profile_opportunity_matches m
-               ON m.profile_id = ? AND m.opportunity_id = fo.id
-            WHERE (fo.is_active IS NULL OR fo.is_active = ${trueLit})
-              AND ${notPointer}
-              ${whereMark}
-            ORDER BY fo.id
-            LIMIT ?`,
-        ).all(profileId, ...params, remaining)
+        if (!staleExplainDrainDone) {
+          const whereExplainMark = explainWatermark ? 'AND fo.id > ?' : ''
+          const explainParams = explainWatermark ? [explainWatermark.id] : []
+          rows = await db.prepare(
+            `SELECT fo.*,
+                    m.id AS existing_match_id,
+                    m.matcher_version AS existing_matcher_version,
+                    m.match_decision AS existing_match_decision,
+                    m.match_explain_json AS existing_match_explain_json
+               FROM profile_opportunity_matches m
+               JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+              WHERE m.profile_id = ?
+                AND m.matcher_version = '${CATALOG_RESCORE_MATCHER_VERSION}'
+                AND (
+                  m.match_explain_json IS NULL
+                  OR m.match_explain_json NOT LIKE '%scoring_policy_version%'
+                  -- Include explains that carry the key but no usable value
+                  OR m.match_explain_json LIKE '%"scoring_policy_version": null%'
+                  OR m.match_explain_json LIKE '%"scoring_policy_version":null%'
+                  OR m.match_explain_json LIKE '%"scoring_policy_version": ""%'
+                  OR m.match_explain_json LIKE '%"scoring_policy_version":""%'
+                )
+                AND (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+                AND ${notPointer}
+                ${whereExplainMark}
+              ORDER BY fo.id
+              LIMIT ?`,
+          ).all(profileId, ...explainParams, remaining)
+          if (!rows || rows.length === 0) {
+            staleExplainDrainDone = true
+            continue
+          }
+        } else {
+          // ID ordering is deliberately independent of created_at. Legacy rows
+          // may have NULL timestamps; a timestamp watermark would make every
+          // later NULL row unreachable after the first batch. Repeating cycles
+          // pick up any newly inserted lower-sorting id on the next pass.
+          const whereMark = watermark ? 'AND fo.id > ?' : ''
+          const params = watermark ? [watermark.id] : []
+          rows = await db.prepare(
+            `SELECT fo.*,
+                    m.id AS existing_match_id,
+                    m.matcher_version AS existing_matcher_version,
+                    m.match_decision AS existing_match_decision,
+                    m.match_explain_json AS existing_match_explain_json
+               FROM funding_opportunities fo
+          LEFT JOIN profile_opportunity_matches m
+                 ON m.profile_id = ? AND m.opportunity_id = fo.id
+              WHERE (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+                AND ${notPointer}
+                ${whereMark}
+              ORDER BY fo.id
+              LIMIT ?`,
+          ).all(profileId, ...params, remaining)
+        }
       } catch (err) {
         log.warn('candidate query failed (non-fatal)', { profile: profileId, error: String(err?.message || err) })
         summary.convergence_errors += 1
@@ -298,8 +385,11 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
 
       for (const opp of rows || []) {
         summary.scanned += 1
-        watermark = { id: opp.id }
+        if (staleExplainDrainDone) watermark = { id: opp.id }
+        else explainWatermark = { id: opp.id }
         const staleCatalogAccept = String(opp.existing_matcher_version ?? '') === CATALOG_RESCORE_MATCHER_VERSION
+        const staleExplain = staleCatalogAccept && isStaleCatalogRescoreExplain(opp.existing_match_explain_json)
+        if (staleExplain) summary.stale_explain_prioritized += 1
         const withdrawStaleCatalogAccept = async () => {
           if (!staleCatalogAccept) return 0
           if (!writeEnabled) {
@@ -389,6 +479,7 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
             summary.upserted += 1
             if (opp.existing_match_id) summary.updated += 1
             else summary.linked += 1
+            if (staleExplain) summary.explain_refreshed += 1
             if (summary.examples.length < 5) summary.examples.push(`${opp.title} (ACCEPT ${score})`)
           }
         } catch (err) {
@@ -398,6 +489,12 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
         if (outOfBudget()) break
       }
 
+      if (!staleExplainDrainDone) {
+        // Explain drain finished this batch short → move to inventory. Never
+        // mark the profile complete from the drain alone.
+        if (!rows || rows.length < remaining) staleExplainDrainDone = true
+        continue
+      }
       if (!rows || rows.length < remaining) profileDone = !outOfBudget()
       if (!rows || rows.length === 0) break
     }
@@ -458,6 +555,7 @@ export default {
   CATALOG_RESCORE_MATCHER_VERSION,
   CATALOG_RESCORE_KV_KEY,
   isCatalogRescoreWriteEnabled,
+  isStaleCatalogRescoreExplain,
   passesFundabilityGate,
   runCatalogRescoreSweep,
 }

@@ -24,6 +24,7 @@ import {
   CATALOG_RESCORE_MATCHER_VERSION,
   CATALOG_RESCORE_KV_KEY,
   isCatalogRescoreWriteEnabled,
+  isStaleCatalogRescoreExplain,
   runCatalogRescoreSweep,
 } from '../services/matching/catalogRescoreSweep.js'
 import { SURFACED_MATCHER_VERSIONS } from '../config/matchSurfacing.js'
@@ -489,6 +490,98 @@ describe('convergence', () => {
     expect(matches(db)).toHaveLength(0)
     expect(db.prepare("SELECT COUNT(*) c FROM profile_opportunity_matches WHERE matcher_version = 'crawler-os'").get().c).toBe(1)
     db.close()
+  })
+})
+
+describe('scoring-policy explain provenance (item 43 residue)', () => {
+  it('detects the early catalog_rescore stub and any explain missing a policy version', () => {
+    expect(isStaleCatalogRescoreExplain(null)).toBe(true)
+    expect(isStaleCatalogRescoreExplain('{"gate":"catalog_rescore"}')).toBe(true)
+    expect(isStaleCatalogRescoreExplain({ gate: 'catalog_rescore' })).toBe(true)
+    expect(isStaleCatalogRescoreExplain({ score_scale_id: 'v1' })).toBe(true)
+    expect(isStaleCatalogRescoreExplain({
+      scoring_policy_version: 'need_first_v2',
+      catalog_rescore: { persistence_version: CATALOG_RESCORE_MATCHER_VERSION },
+    })).toBe(false)
+  })
+
+  it('refreshes a stub explain ahead of untouched inventory when the budget is tight', async () => {
+    const db = makeDb()
+    try {
+      addProfile(db, 'p1')
+      // Fresh inventory sorts FIRST by id; the stub is a HIGHER id so only the
+      // separate explain-drain phase (not inventory ORDER BY) can win the budget.
+      const fresh = addOpp(db, { id: 'opp-aaa', title: 'Fresh HOPE Scholarship' })
+      const stale = addOpp(db, { id: 'opp-zzz', title: 'Stubbed Army ROTC Scholarships' })
+      db.prepare(
+        `INSERT INTO profile_opportunity_matches
+           (id, profile_id, opportunity_id, match_score, match_decision, match_explain_json, matcher_version, discovered_via)
+         VALUES ('stub', 'p1', ?, 100, 'accept', ?, ?, 'catalog_rescore')`,
+      ).run(stale.id, JSON.stringify({ gate: 'catalog_rescore' }), CATALOG_RESCORE_MATCHER_VERSION)
+
+      const res = await runCatalogRescoreSweep(db, {
+        writeEnabled: true,
+        pairBudget: 1,
+        deps: baseDeps(),
+      })
+      expect(res.stale_explain_prioritized).toBeGreaterThanOrEqual(1)
+      expect(res.explain_refreshed).toBe(1)
+      expect(res.updated).toBe(1)
+
+      const row = db.prepare(
+        'SELECT match_explain_json, matcher_version FROM profile_opportunity_matches WHERE opportunity_id = ?',
+      ).get(stale.id)
+      const explain = JSON.parse(row.match_explain_json)
+      expect(row.matcher_version).toBe(CATALOG_RESCORE_MATCHER_VERSION)
+      expect(explain.scoring_policy_version).toBeTruthy()
+      expect(explain.catalog_rescore?.persistence_version).toBe(CATALOG_RESCORE_MATCHER_VERSION)
+      expect(explain.gate).toBeUndefined()
+
+      // Budget exhausted on the refresh — the untouched fresh row was not linked.
+      expect(db.prepare(
+        'SELECT COUNT(*) AS c FROM profile_opportunity_matches WHERE opportunity_id = ?',
+      ).get(fresh.id).c).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('still refreshes a lower-id stub after an inventory watermark has advanced past it', async () => {
+    const db = makeDb()
+    try {
+      addProfile(db, 'p1')
+      const stale = addOpp(db, { id: 'opp-100', title: 'Stubbed Early Scholarship' })
+      addOpp(db, { id: 'opp-900', title: 'REVIEW filler past watermark' })
+      db.prepare(
+        `INSERT INTO profile_opportunity_matches
+           (id, profile_id, opportunity_id, match_score, match_decision, match_explain_json, matcher_version, discovered_via)
+         VALUES ('stub', 'p1', ?, 100, 'accept', ?, ?, 'catalog_rescore')`,
+      ).run(stale.id, JSON.stringify({ gate: 'catalog_rescore' }), CATALOG_RESCORE_MATCHER_VERSION)
+      db.prepare(
+        `INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)`,
+      ).run(
+        CATALOG_RESCORE_KV_KEY,
+        JSON.stringify({
+          profiles: { p1: { cycle: 1, watermark: { id: 'opp-500' } } },
+          last_profile: 'p1',
+        }),
+        new Date().toISOString(),
+      )
+
+      const res = await runCatalogRescoreSweep(db, {
+        writeEnabled: true,
+        pairBudget: 1,
+        deps: baseDeps(),
+      })
+      expect(res.explain_refreshed).toBe(1)
+      const explain = JSON.parse(
+        db.prepare('SELECT match_explain_json FROM profile_opportunity_matches WHERE opportunity_id = ?')
+          .get(stale.id).match_explain_json,
+      )
+      expect(explain.scoring_policy_version).toBeTruthy()
+    } finally {
+      db.close()
+    }
   })
 })
 

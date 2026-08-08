@@ -8977,6 +8977,8 @@ export async function enforceCatalogRescoreConvergence(db) {
       rejectedByEngine: res.rejected_by_engine ?? 0,
       review: res.review ?? 0,
       notFundable: res.not_fundable ?? 0,
+      explainRefreshed: res.explain_refreshed ?? 0,
+      staleExplainPrioritized: res.stale_explain_prioritized ?? 0,
       staleRemoved: res.stale_removed ?? 0,
       profilesCompleted: res.profiles_completed ?? 0,
       truncated: Boolean(res.truncated),
