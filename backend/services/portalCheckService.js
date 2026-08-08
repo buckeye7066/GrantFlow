@@ -16,9 +16,8 @@
  */
 
 import { randomUUID } from 'crypto'
-import https from 'https'
-import http from 'http'
 import { URL } from 'url'
+import { safeFetch, readTextCapped, SsrfBlockedError } from './http/safeFetch.js'
 import { SCHOLARSHIPS } from './shared/data/scholarships.js'
 import { STATE_REGISTRY } from './shared/data/stateRegistry.js'
 import ensurePortalCheckResultsTable from '../utils/ensurePortalCheckResultsTable.js'
@@ -92,65 +91,43 @@ function detectAwardKeywords(text) {
 // HTTP fetch — lightweight, no external dependencies
 // ---------------------------------------------------------------------------
 
-function fetchUrlOnce(urlString, timeoutMs = 20_000) {
-  return new Promise((resolve, reject) => {
-    let parsed
-    try {
-      parsed = new URL(urlString)
-    } catch {
-      return reject(new Error(`Invalid URL: ${urlString}`))
-    }
+const MAX_PORTAL_BODY_BYTES = 512 * 1024
 
-    const lib = parsed.protocol === 'https:' ? https : http
-    const options = {
-      hostname: parsed.hostname,
-      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-      path: parsed.pathname + parsed.search,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'GrantFlow-PortalChecker/1.0 (+https://grantflow.app)',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-    }
+/**
+ * Fetch one portal page.
+ *
+ * These URLs come from the `university_applications` profile section — i.e.
+ * user/DB-supplied and untrusted. The previous implementation drove
+ * http(s).request directly, followed 30x Location headers by RECURSING with no
+ * validation and no depth cap, and applied only a protocol check elsewhere in
+ * the file, so a portal URL of `http://169.254.169.254/` (or any public URL
+ * that redirected there) was fetched and its body captured.
+ *
+ * safeFetch enforces the SSRF policy on the initial URL AND on every redirect
+ * hop, caps the chain, and applies the timeout.
+ */
+async function fetchUrlOnce(urlString, timeoutMs = 20_000) {
+  const res = await safeFetch(urlString, {
+    method: 'GET',
+    headers: {
+      'User-Agent': 'GrantFlow-PortalChecker/1.0 (+https://grantflow.app)',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+  }, { timeoutMs })
 
-    const req = lib.request(options, (res) => {
-      if (
-        [301, 302, 303, 307, 308].includes(res.statusCode) &&
-        res.headers.location
-      ) {
-        resolve(fetchUrlOnce(res.headers.location, timeoutMs))
-        res.resume()
-        return
-      }
-
-      const chunks = []
-      res.on('data', (chunk) => {
-        chunks.push(chunk)
-        if (chunks.reduce((n, c) => n + c.length, 0) > 512 * 1024) {
-          req.destroy()
-        }
-      })
-      res.on('end', () => {
-        resolve({
-          statusCode: res.statusCode,
-          body: Buffer.concat(chunks).toString('utf8'),
-        })
-      })
-      res.on('error', reject)
-    })
-
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`Request timed out after ${timeoutMs}ms: ${urlString}`))
-    })
-    req.on('error', reject)
-    req.end()
-  })
+  return {
+    statusCode: res.status,
+    body: await readTextCapped(res, MAX_PORTAL_BODY_BYTES),
+  }
 }
 
 async function fetchUrl(urlString, timeoutMs = 20_000) {
   try {
     return await fetchUrlOnce(urlString, timeoutMs)
   } catch (firstErr) {
+    // A policy refusal is deterministic — retrying it just burns 2s and
+    // re-refuses. Only transient network failures deserve the second attempt.
+    if (firstErr instanceof SsrfBlockedError) throw firstErr
     await new Promise((r) => setTimeout(r, 2000))
     try {
       return await fetchUrlOnce(urlString, timeoutMs)

@@ -19,6 +19,7 @@
 
 import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { createLogger } from '../utils/logger.js'
+import { safeFetch, discardResponseBody, SsrfBlockedError } from './http/safeFetch.js'
 const log = createLogger('housingScholarshipCrawler')
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -610,31 +611,31 @@ const HOUSING_FUNDING_CATALOG = [
 
 async function isLiveUrl(url, timeoutMs = 8000) {
   if (!url || typeof url !== 'string') return false
+  // These URLs come from the crawl catalog. safeFetch validates the URL and
+  // every redirect hop; the previous `redirect: 'follow'` meant a catalog entry
+  // that 302'd into an internal host was probed with no check at all.
+  // A blocked URL is reported NOT live rather than throwing, matching the
+  // existing contract (this function is a boolean liveness probe).
   try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       method: 'HEAD',
-      signal: controller.signal,
       headers: { 'User-Agent': 'GrantFlow Housing Crawler/1.0 (https://grantflow.app)' },
-      redirect: 'follow',
-    })
-    clearTimeout(timer)
+    }, { timeoutMs })
     // 200, 301, 302, 405 (HEAD not allowed but server exists) all count as live
-    return res.status < 400 || res.status === 405
-  } catch {
+    const status = res.status
+    await discardResponseBody(res)
+    return status < 400 || status === 405
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) return false
     // Try GET fallback for sites that block HEAD
     try {
-      const controller2 = new AbortController()
-      const timer2 = setTimeout(() => controller2.abort(), timeoutMs)
-      const res2 = await fetch(url, {
+      const res2 = await safeFetch(url, {
         method: 'GET',
-        signal: controller2.signal,
         headers: { 'User-Agent': 'GrantFlow Housing Crawler/1.0' },
-        redirect: 'follow',
-      })
-      clearTimeout(timer2)
-      return res2.status < 400
+      }, { timeoutMs })
+      const status = res2.status
+      await discardResponseBody(res2)
+      return status < 400
     } catch {
       return false
     }

@@ -184,6 +184,21 @@ export async function canPayFor(db, {
   return { allowed: false, reason: 'amount_or_host_outside_authorization' }
 }
 
+/**
+ * Raised when a charge could not be recorded because it would breach the
+ * authorization's cap, or the authorization was revoked/removed. Callers must
+ * treat this as "the spend did not happen" and escalate to the owner.
+ */
+export class PaymentAuthorizationExceededError extends Error {
+  constructor(authorizationId, amountCents, authorization = null) {
+    super('payment_authorization_exceeded')
+    this.name = 'PaymentAuthorizationExceededError'
+    this.authorizationId = authorizationId
+    this.amountCents = amountCents
+    this.authorization = authorization
+  }
+}
+
 export async function recordCharge(db, {
   authorizationId, amountCents, taskId = null,
   portalHost = null, processorReceipt = null, metadata = {},
@@ -195,11 +210,22 @@ export async function recordCharge(db, {
   await ensureSchema(db)
   const cents = Math.floor(Number(amountCents))
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
-  await db.prepare(
+
+  // The cap is enforced IN THE UPDATE, not by the earlier canPayFor() read.
+  // canPayFor reads spent_cents and approves; recordCharge then incremented
+  // unconditionally. Two concurrent charges therefore both read the same stale
+  // spent_cents, both passed the check, and both incremented — overspending
+  // the envelope the authorization exists to bound. Re-asserting the predicate
+  // here makes the read-modify-write a single atomic statement: the second
+  // writer's WHERE no longer holds and it changes zero rows.
+  // revoked_at is re-checked for the same reason (revocation can land between).
+  const result = await db.prepare(
     `UPDATE hamilton_payment_authorizations
         SET spent_cents = spent_cents + ?, updated_at = ${nowFn},
             metadata_json = ?
-      WHERE id = ?`,
+      WHERE id = ?
+        AND revoked_at IS NULL
+        AND spent_cents + ? <= max_amount_cents`,
   ).run(
     cents,
     JSON.stringify({
@@ -210,7 +236,19 @@ export async function recordCharge(db, {
       last_charge_at: new Date().toISOString(),
     }),
     String(authorizationId),
+    cents,
   )
+
+  const changed = Number(result?.changes ?? result?.rowCount ?? 0)
+  if (changed !== 1) {
+    // Nothing was recorded. The caller must NOT treat this as a completed
+    // spend — surfacing it is what stops a silent overspend.
+    const current = rowToAuth(
+      await db.prepare('SELECT * FROM hamilton_payment_authorizations WHERE id = ?').get(String(authorizationId)),
+    )
+    throw new PaymentAuthorizationExceededError(authorizationId, cents, current)
+  }
+
   return rowToAuth(await db.prepare('SELECT * FROM hamilton_payment_authorizations WHERE id = ?').get(String(authorizationId)))
 }
 

@@ -627,7 +627,12 @@ function nowISOString() {
 }
 
 function generateSixDigitCode() {
-  return String(Math.floor(100000 + Math.random() * 900000))
+  // MUST be a CSPRNG. Math.random() is a seeded PRNG whose internal state is
+  // recoverable from observed outputs, so an attacker who can mint codes for
+  // their own address (self-service email/phone verification) can predict the
+  // code issued to somebody else's. crypto.randomInt is uniform over the range
+  // and unpredictable; the upper bound is exclusive, so this yields 100000-999999.
+  return String(crypto.randomInt(100000, 1000000))
 }
 
 function base64UrlEncode(buffer) {
