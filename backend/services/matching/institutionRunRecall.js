@@ -43,6 +43,7 @@ import {
   institutionSponsorLikePattern,
 } from '../../config/profileInstitutions.js'
 import { computeMatchDecision } from '../matchEngine.js'
+import { buildPersistedMatchExplain } from './matchExplainPersistence.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('institutionRunRecall')
@@ -159,7 +160,7 @@ export async function recallInstitutionAidForRun(db, {
               `il:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
               decision?.explanation ?? null,
               JSON.stringify(decision?.matchedNeeds ?? []),
-              JSON.stringify({ institution: school, gate: 'attendance' }),
+              JSON.stringify(buildPersistedMatchExplain(decision, { institution: school, gate: 'attendance' })),
               null, 'institution_attendance_link',
             )
           linked += 1
