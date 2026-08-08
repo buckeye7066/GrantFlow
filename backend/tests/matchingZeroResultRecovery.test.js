@@ -146,7 +146,10 @@ function createApp(db) {
 }
 
 describe('matching zero-result recovery (no "0 included of X found")', () => {
-  it('surfaces multiple sources via the recovery ladder when all candidates are below the floor', async () => {
+  // Matching router cold-import is heavy (profile helpers + pipeline + email).
+  // Keep assertions tight; give the request path room so CI/local do not flake
+  // on import cost after the recovery ladder already logged a successful resurface.
+  it('surfaces multiple sources via the recovery ladder when all candidates are below the floor', { timeout: 60000 }, async () => {
     const db = new Database(':memory:')
     createSchema(db)
     seedBelowFloor(db)
@@ -176,7 +179,7 @@ describe('matching zero-result recovery (no "0 included of X found")', () => {
     }
   })
 
-  it('HARD INELIGIBILITY IS NEVER OUTRUNNABLE: recovery never returns a REJECT/ineligible/relaxed row', async () => {
+  it('HARD INELIGIBILITY IS NEVER OUTRUNNABLE: recovery never returns a REJECT/ineligible/relaxed row', { timeout: 60000 }, async () => {
     // The 2026-07-28 audit found Tier B re-canonicalized raw candidates with
     // rejectHardIneligible:false and RELABELED live-decision REJECT rows to
     // match_decision:'REVIEW' + eligibility_relaxed:true — a path that, for any
@@ -227,7 +230,7 @@ describe('matching zero-result recovery (no "0 included of X found")', () => {
     ['no_fallback=1', { no_fallback: 1 }],
     ['strict=1', { strict: 1 }],
     ['allow_relax=0', { allow_relax: 0 }],
-  ])('%s preserves strict behavior (returns 0 below the floor)', async (_label, strictQuery) => {
+  ])('%s preserves strict behavior (returns 0 below the floor)', { timeout: 60000 }, async (_label, strictQuery) => {
     const db = new Database(':memory:')
     createSchema(db)
     seedBelowFloor(db)

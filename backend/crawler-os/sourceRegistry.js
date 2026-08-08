@@ -2253,6 +2253,9 @@ export const SOURCES = Object.freeze([
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
     base_url: 'https://www.sare.org/grants/',
+    // Official portal page is the current apply/info path until a structured
+    // regional-call scraper exists; keep DIRECT_GRANT (not directory).
+    application_url: 'https://www.sare.org/grants/',
     sponsor_name: 'USDA Sustainable Agriculture Research and Education (SARE)',
     resource_title: 'SARE grants — Farmer/Rancher, Partnership, and Producer grants',
     resource_summary: 'USDA-funded Sustainable Agriculture Research and Education grant programs. The Farmer/Rancher grant is applied for BY the producer to trial a sustainable practice on their own operation; regional offices (Southern SARE covers Kentucky) run their own calls and award ceilings.',
@@ -2270,6 +2273,7 @@ export const SOURCES = Object.freeze([
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
     base_url: 'https://www.rd.usda.gov/programs-services/business-programs/value-added-producer-grants',
+    application_url: 'https://www.rd.usda.gov/programs-services/business-programs/value-added-producer-grants',
     sponsor_name: 'USDA Rural Development',
     resource_title: 'Value-Added Producer Grant (VAPG)',
     resource_summary: 'USDA Rural Development grants to agricultural producers who process, market, or otherwise add value to what they grow — planning grants and working-capital grants, with set-asides for beginning, veteran, socially-disadvantaged and small/mid-size family farms. Requires matching funds.',
@@ -2329,6 +2333,7 @@ export const SOURCES = Object.freeze([
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
     base_url: 'https://www.kyagr.com/agpolicy/Ag-Development-Board.html',
+    application_url: 'https://www.kyagr.com/agpolicy/Ag-Development-Board.html',
     sponsor_name: 'Kentucky Department of Agriculture / Governor’s Office of Agricultural Policy',
     resource_title: 'Kentucky Agricultural Development Fund — County Agricultural Investment Program (CAIP) and state cost-share',
     resource_summary: 'Kentucky’s tobacco-settlement-funded agricultural development programs: the County Agricultural Investment Program (CAIP) and related on-farm cost-share for fencing, forage, genetics, farm infrastructure and diversification, administered county by county through the Kentucky Department of Agriculture and the Governor’s Office of Agricultural Policy.',
