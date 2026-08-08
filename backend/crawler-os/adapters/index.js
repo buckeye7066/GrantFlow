@@ -184,13 +184,14 @@ const FACTORIES = Object.freeze({
   // Pine Ridge ministry's pipeline was the audit finding).
   first_nations_dev_institute: officialDirectory('first_nations_dev_institute'),
   native_american_ag_fund: officialDirectory('native_american_ag_fund'),
-  // --- Farm-lane DIRECTORY rows left unwired by their registry PR (found by
-  // crawler:verify 2026-08-04; missing_adapter since they shipped). Only the
-  // directory-typed four are wired here — sare_farmer_rancher_grants,
-  // usda_value_added_producer_grants, and ky_agricultural_development_fund are
-  // DIRECT_GRANT html sources that need REAL scraping adapters (wiring them to
-  // officialDirectory would mint directory rows for grant programs).
+  // --- Farm-lane rows. Directory-typed sources stay directories. The three
+  // DIRECT_GRANT html portals use officialDirectory with directory:false +
+  // default_kinds DIRECT_GRANT so crawler:verify stays green and farm profiles
+  // still get an official apply/info page until a structured scraper lands.
   usda_fsa_farm_programs: officialDirectory('usda_fsa_farm_programs'),
+  sare_farmer_rancher_grants: officialDirectory('sare_farmer_rancher_grants'),
+  usda_value_added_producer_grants: officialDirectory('usda_value_added_producer_grants'),
+  ky_agricultural_development_fund: officialDirectory('ky_agricultural_development_fund'),
   nifa_extension_land_grant: officialDirectory('nifa_extension_land_grant'),
   conservation_districts_directory: officialDirectory('conservation_districts_directory'),
   farm_credit_young_beginning_small: officialDirectory('farm_credit_young_beginning_small'),

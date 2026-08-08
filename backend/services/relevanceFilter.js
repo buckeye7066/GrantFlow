@@ -15,6 +15,7 @@
 import { RELEVANCE_RULES } from './relevanceFilterRules.js'
 import { buildFlatProfileData, buildCanonicalProfileView } from './canonicalProfileView.js'
 import { normalizeProfile } from './profileNormalizer.js'
+import { SOFT_RELEVANCE_PENALTY } from '../config/matchThresholds.js'
 
 // State name → 2-letter abbreviation (uppercase) sorted by name length descending so
 // multi-word state names ("west virginia") match before single-word names ("virginia").
@@ -90,6 +91,10 @@ function buildOppText(opportunity) {
     ...asTextList(opportunity.keywords),
     ...asTextList(opportunity.categories),
     ...asTextList(opportunity.eligibility_bullets),
+    // Structured eligibility is part of the same source-of-truth evidence as
+    // eligibility prose. Without it, JSON-only demographic restrictions can
+    // bypass both the canonical soft penalty and explicit hard exclusivity.
+    ...asTextList(opportunity.eligibility_json),
     ...asTextList(opportunity.tags),
   ]
     .join(' ')
@@ -173,7 +178,13 @@ export function applyRelevanceFilter(opportunity, profileData, opts = {}) {
 
     // Soft mode: remember the first soft penalty but keep looking for a hard rule.
     if (!softMatch) {
-      softMatch = { pass: true, softFail: true, reason, ruleId: rule.id, penalty: rule.penalty ?? 25 }
+      softMatch = {
+        pass: true,
+        softFail: true,
+        reason,
+        ruleId: rule.id,
+        penalty: Number.isFinite(Number(rule.penalty)) ? Number(rule.penalty) : SOFT_RELEVANCE_PENALTY,
+      }
     }
   }
   if (softMatch) return softMatch
