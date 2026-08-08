@@ -229,7 +229,16 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         is_directory: isFundingResource(row),
         trust_tier: row.source_trust_tier ?? null,
         matcher_version: row.matcher_version ?? null,
-        scoring_policy_version: row.scoring_policy_version ?? null,
+        scoring_policy_version:
+          row.scoring_policy_version ??
+          // canonicalize spreads the mapped row, but keep the explain fallback
+          // explicit so a presentation reshape cannot silently drop provenance.
+          (typeof row.match_explain_json === 'object' && row.match_explain_json
+            ? (row.match_explain_json.scoring_policy_version ??
+              row.match_explain_json.scoreBreakdown?.scoring_policy_version ??
+              row.match_explain_json.score_breakdown?.scoring_policy_version ??
+              null)
+            : null),
         score_scale_id: row.score_scale_id ?? null,
       })
     }
