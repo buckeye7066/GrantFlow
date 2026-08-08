@@ -94,12 +94,15 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
   let rows
   try {
     rows = await db.prepare(
-      `SELECT m.id AS match_id, m.profile_id, m.opportunity_id, m.matcher_version,
+      `SELECT
+              m.id AS match_id,
+              m.opportunity_id,
+              m.matcher_version,
               m.match_explain_json AS existing_explain,
-              fo.id AS fo_id, fo.title, fo.sponsor, fo.description, fo.state,
-              fo.is_national, fo.opportunity_kind, fo.source, fo.source_url,
-              fo.application_url, fo.is_directory_resource, fo.excluded_from_grant_scoring,
-              fo.profile_id AS fo_profile_id, fo.is_active
+              m.match_decision AS stored_decision,
+              m.match_score AS stored_score,
+              fo.*,
+              m.profile_id AS profile_id
          FROM profile_opportunity_matches m
          JOIN funding_opportunities fo ON fo.id = m.opportunity_id
         WHERE ${stalePred}
@@ -152,6 +155,49 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
 
     const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
     const verdict = String(decision?.decision ?? '').toLowerCase()
+
+    // Gate-preserving write policy:
+    // - Never downgrade a linker-authored match (accept > review > reject)
+    // - ACCEPT-only lanes ('county-crisis-need-link', 'catalog-rescore-link') keep ACCEPT only
+    // - For linker lanes that allow REVIEW (e.g. 'funder-behavior-link'), refuse REJECT overwrites
+    // The refresh exists to backfill explain policy/version, not to change linker admission.
+    const matcherVersion = String(row.matcher_version || '').toLowerCase()
+    const storedDecision = String(row.stored_decision || '').toLowerCase()
+    const rank = (d) => (d === 'accept' ? 2 : d === 'review' ? 1 : 0)
+    const ACCEPT_ONLY_VERSIONS = new Set(['county-crisis-need-link', 'catalog-rescore-link'])
+    const LINKER_VERSIONS = new Set([
+      'web-llm',
+      'institution-link',
+      'profile-discovery-link',
+      'field-of-study-link',
+      'student-aid-instate-link',
+      'county-crisis-need-link',
+      'catalog-rescore-link',
+      'funder-behavior-link',
+    ])
+
+    let verdictToWrite = verdict || null
+    let scoreToWrite = Number.isFinite(score) ? score : null
+
+    // Accept-only lanes: only allow ACCEPT to be written; keep stored decision/score otherwise
+    if (ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
+      verdictToWrite = null
+      scoreToWrite = null
+    }
+    // For linker lanes in general: never allow a downgrade (e.g., accept -> review/reject)
+    if (LINKER_VERSIONS.has(matcherVersion)) {
+      if (rank(verdictToWrite) < rank(storedDecision)) {
+        verdictToWrite = null
+        // Do not lower the score alongside a downgrade; keep existing score
+        scoreToWrite = null
+      }
+      // Never let a linker row flip to REJECT in place
+      if (verdictToWrite === 'reject') {
+        verdictToWrite = null
+        scoreToWrite = null
+      }
+    }
+
     try {
       const res = await db.prepare(
         `UPDATE profile_opportunity_matches
@@ -165,8 +211,8 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
             AND matcher_version = ?`,
       ).run(
         JSON.stringify(explain),
-        score,
-        verdict || null,
+        scoreToWrite,
+        verdictToWrite,
         decision?.explanation ?? null,
         row.match_id,
         row.matcher_version,
