@@ -34,6 +34,15 @@ test('Vercel release builds serialize Vitest files to avoid worker teardown race
   assert.match(isolatedVitestRunner, /--no-file-parallelism/)
 })
 
+test('Vercel release builds use SPA production build instead of full npm test matrix', () => {
+  // Production Vercel deploys were failing Gate 1 with OTP login 503s under the
+  // build sandbox. GitHub CI remains the full-matrix authority.
+  assert.match(releaseGates, /process\.env\.VERCEL === '1'/)
+  assert.match(releaseGates, /\['run', 'build'\]/)
+  assert.match(releaseGates, /full npm test matrix is owned by GitHub CI/)
+  assert.match(releaseGates, /await run\(npmBin\(\), \['test'\], \{ label: 'quality\+build' \}\)/)
+})
+
 test('GitHub CI invokes the release gates with a read-only non-persistent token', () => {
   assert.match(ciWorkflow, /permissions:\s*\n\s+contents: read/)
   assert.match(ciWorkflow, /run: npm run release:gates/)
