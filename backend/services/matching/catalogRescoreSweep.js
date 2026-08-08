@@ -77,7 +77,7 @@ function json(value, fallback) {
 }
 
 function parseExplainJson(raw) {
-  if (raw == null) return null
+  if (raw === null || raw === undefined) return null
   if (typeof raw === 'object' && !Array.isArray(raw)) return raw
   if (typeof raw !== 'string') return null
   const text = raw.trim()
