@@ -23,12 +23,12 @@ Dated completion records for the App Portfolio Audit. One entry per ACTIVE_APP r
 ### Completed this run
 - Merged PR #1184 after green GitHub CI (`test`, `browser-smoke`, `postgres-migrations`, `production-image`). Catalog-rescore suite then 24/24 locally.
 - **Item 43 residue (code, #1184):** catalog-rescore drains stub `{gate:catalog_rescore}` / missing-`scoring_policy_version` explains before inventory, without the inventory id watermark. Funding-sources falls back to explain JSON for policy version.
-- **Item 43 residue (prod measured after #1184):** fleet still ~2754 stale explains / Anastasia 284/284 stubs — 20s boot + inventory walk starved the drain. Follow-up: pause inventory while stubs remain, prefer stub-bearing profiles, raise wall clock via `CATALOG_RESCORE_EXPLAIN_TIME_BUDGET_MS` (default 90s). Suite 25/25 locally.
+- **Item 43 residue (prod measured after #1184):** fleet still ~2754 stale explains / Demo STEM profile (`c4a92724-…`) 284/284 stubs — 20s boot + inventory walk starved the drain. Follow-up: pause inventory while stubs remain, prefer stub-bearing profiles, raise wall clock via `CATALOG_RESCORE_EXPLAIN_TIME_BUDGET_MS` (default 90s). Suite 25/25 locally.
 - Prior run carry-forward still holds: item 42 link lifecycle gate; PR #1179 match-authority; Vercel gate hardening.
 
 ### Residual blockers (exit criteria unmet)
 - Amy 50/50 cohort + Google-bar parity (item 41) — needs search keys / consented cohort
-- Item 43 production proof — after drain-priority deploy, re-probe Anastasia + fleet `scoring_policy_*`; owner login still needed for full UI reconciliation receipt
+- Item 43 production proof — after drain-priority deploy, re-probe Demo STEM profile + fleet `scoring_policy_*`; owner login still needed for full UI reconciliation receipt
 - Three authenticated E2E evidence chains (item 44) — needs owner credentials
 - Hamilton packet/handoff live stability proof — needs owner credentials / consented profile
 - One CodeQL Analyze JS/TS job failed on a prior PR while a sibling Analyze job passed — confirm baseline metadata if it keeps reddening main
