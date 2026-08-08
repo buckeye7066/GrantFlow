@@ -1,16 +1,21 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generated_from": {
     "repository": "buckeye7066/GrantFlow",
-    "commit": "4c8f3ab93b6b4f27fb4d8fcfcccf300b797a3080",
-    "workflow_run_id": 30416484693,
-    "artifact_id": 8710448020,
-    "artifact_digest": "sha256:fbf899f511a5eee4b2f435c9b6651f2f849e8fadbb3fd4e2386ea8fc1e2582b3",
-    "generated_at": "2026-07-29T02:26:33Z"
+    "commit": "d4f3b94b0ee268b48e36f4a02cccf5597a239ba4",
+    "event_name": "push",
+    "scan_mode": "full",
+    "workflow_run_id": 31238322526,
+    "artifact_id": 9016283082,
+    "artifact_digest": "sha256:603501e164e19dba77593fd28fb9b7357f8c7da6052df108823fa3a3404cfbe9",
+    "generated_at": "2026-08-08T04:30:39.760Z"
   },
   "policy": {
-    "minimum_security_severity": 7.0,
-    "allowed_precisions": ["high", "very-high"],
+    "minimum_security_severity": 7,
+    "allowed_precisions": [
+      "high",
+      "very-high"
+    ],
     "behavior": "Existing measured rule counts are tolerated temporarily. Any new qualifying rule or count increase fails CI. Reductions pass and should be captured in a reviewed baseline refresh.",
     "refresh_requires": "security review and an explicit baseline commit"
   },
@@ -18,10 +23,19 @@
     "js/bad-tag-filter": 4,
     "js/double-escaping": 10,
     "js/incomplete-multi-character-sanitization": 2,
-    "js/incomplete-sanitization": 6,
-    "js/incomplete-url-substring-sanitization": 39,
+    "js/incomplete-sanitization": 7,
+    "js/incomplete-url-substring-sanitization": 36,
     "js/insecure-helmet-configuration": 1,
-    "js/missing-rate-limiting": 429
+    "js/loop-bound-injection": 3,
+    "js/missing-rate-limiting": 448,
+    "js/path-injection": 13,
+    "js/polynomial-redos": 27,
+    "js/redos": 1,
+    "js/regex-injection": 1,
+    "js/request-forgery": 5,
+    "js/resource-exhaustion": 2,
+    "js/tainted-format-string": 12,
+    "js/type-confusion-through-parameter-tampering": 2
   },
-  "total": 491
+  "total": 574
 }
