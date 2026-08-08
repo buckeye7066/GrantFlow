@@ -40,6 +40,7 @@ test('Vercel release builds use SPA production build instead of full npm test ma
   assert.match(releaseGates, /process\.env\.VERCEL === '1'/)
   assert.match(releaseGates, /\['run', 'build'\]/)
   assert.match(releaseGates, /full npm test matrix is owned by GitHub CI/)
+  assert.match(releaseGates, /remaining release gates are owned by GitHub CI/)
   assert.match(releaseGates, /await run\(npmBin\(\), \['test'\], \{ label: 'quality\+build' \}\)/)
 })
 
