@@ -25,6 +25,7 @@ import {
   CATALOG_RESCORE_KV_KEY,
   isCatalogRescoreWriteEnabled,
   isStaleCatalogRescoreExplain,
+  staleCatalogRescoreExplainSql,
   runCatalogRescoreSweep,
 } from '../services/matching/catalogRescoreSweep.js'
 import { SURFACED_MATCHER_VERSIONS } from '../config/matchSurfacing.js'
@@ -574,6 +575,42 @@ describe('scoring-policy explain provenance (item 43 residue)', () => {
         deps: baseDeps(),
       })
       expect(res.explain_refreshed).toBe(1)
+      const explain = JSON.parse(
+        db.prepare('SELECT match_explain_json FROM profile_opportunity_matches WHERE opportunity_id = ?')
+          .get(stale.id).match_explain_json,
+      )
+      expect(explain.scoring_policy_version).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('pauses inventory and prefers stub-bearing profiles while explains remain stale', async () => {
+    const db = makeDb()
+    try {
+      // p-clean sorts first alphabetically and has only fresh inventory — without
+      // pause+priority the budget-1 pass would walk it and miss p-stale's stub.
+      addProfile(db, 'p-clean', { createdAt: '2026-01-01T00:00:00Z' })
+      addProfile(db, 'p-stale', { createdAt: '2026-01-02T00:00:00Z' })
+      const fresh = addOpp(db, { id: 'opp-aaa', title: 'Fresh HOPE Scholarship' })
+      const stale = addOpp(db, { id: 'opp-zzz', title: 'Stubbed Army ROTC Scholarships' })
+      db.prepare(
+        `INSERT INTO profile_opportunity_matches
+           (id, profile_id, opportunity_id, match_score, match_decision, match_explain_json, matcher_version, discovered_via)
+         VALUES ('stub', 'p-stale', ?, 100, 'accept', ?, ?, 'catalog_rescore')`,
+      ).run(stale.id, JSON.stringify({ gate: 'catalog_rescore' }), CATALOG_RESCORE_MATCHER_VERSION)
+
+      const res = await runCatalogRescoreSweep(db, {
+        writeEnabled: true,
+        pairBudget: 1,
+        deps: baseDeps(),
+      })
+      expect(res.inventory_paused_for_explain_drain).toBe(true)
+      expect(res.stale_explains_at_start).toBe(1)
+      expect(res.explain_refreshed).toBe(1)
+      expect(db.prepare(
+        'SELECT COUNT(*) AS c FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id = ?',
+      ).get('p-clean', fresh.id).c).toBe(0)
       const explain = JSON.parse(
         db.prepare('SELECT match_explain_json FROM profile_opportunity_matches WHERE opportunity_id = ?')
           .get(stale.id).match_explain_json,
