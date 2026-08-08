@@ -12,6 +12,7 @@
 
 import crypto from 'crypto'
 import { normalizeNeedCategory, NEED_ALIAS_MAP } from './profileNormalizer.js'
+import { isWomenExclusiveOpportunityText } from '../config/demographicRestrictionPatterns.js'
 
 // ---------------------------------------------------------------------------
 // Safe JSON parse helper
@@ -749,14 +750,8 @@ const MEN_ONLY_PATTERNS = [
   /\bmale\s+(?:students?|applicants?)\s+only\b/i,
   /\bmust be (?:a )?male\b/i,
 ]
-const WOMEN_ONLY_RESTRICTION_PATTERNS = [
-  /\bwomen[\s-]?only\b/i,
-  /\bfor\s+women\s+only\b/i,
-  /\bfemale\s+(?:students?|applicants?)\s+only\b/i,
-  /\bmust be (?:a )?(?:woman|female)\b/i,
-  /\bwomen\s+in\s+(?:stem|engineering|business|science|technology)\b/i,
-  /\bfor\s+women\b/i,
-]
+// Female-only detection is delegated to the shared classifier so
+// normalization and relevance filtering cannot disagree about exclusivity.
 
 // ---------------------------------------------------------------------------
 // Normalize opportunity into canonical structure
@@ -976,19 +971,10 @@ export function normalizeOpportunity(rawOpp) {
 
   const requiresWomen =
     Boolean(rawOpp.requires_women) ||
-    // matchesAnyRegex, NOT matchesAnyPattern (2026-08-03): matchesAnyPattern
-    // stringifies its patterns for phrase search, so a RegExp list passed to
-    // it can NEVER match — these gates were dead since they shipped, which is
-    // how "Society of Women Engineers" reached a male student's task list.
-    matchesAnyRegex(text, [
-      /\bfemale\s+students?\b/i,
-      /\bwomen(?:'s)?\s+engineers?\b/i,
-      /\bwomen\s+only\b/i,
-      /\bfor\s+women\b/i,
-      /\bwomen\s+in\s+(?:stem|engineering|business)\b/i,
-    ]) ||
-    (allNeedTypes.includes('women') &&
-      (allNeedTypes.includes('education') || /\bstudents?\b/i.test(text)))
+    // One shared classifier is used here and by relevanceFilterRules. Only
+    // explicit exclusivity is hard; named or focused programs without exclusive
+    // wording remain soft relevance signals.
+    isWomenExclusiveOpportunityText(text)
 
   // -- Explicit identity (ethnicity / gender) restrictions --
   // Only set when EXPLICITLY exclusive (per canonical_rules G4). These are the
@@ -1005,7 +991,7 @@ export function normalizeOpportunity(rawOpp) {
   if (rawRequiresGender === 'male' || rawRequiresGender === 'men') requiresGender = 'male'
   else if (rawRequiresGender === 'female' || rawRequiresGender === 'women') requiresGender = 'female'
   else if (matchesAnyRegex(text, MEN_ONLY_PATTERNS)) requiresGender = 'male'
-  else if (requiresWomen || matchesAnyRegex(text, WOMEN_ONLY_RESTRICTION_PATTERNS)) requiresGender = 'female'
+  else if (requiresWomen) requiresGender = 'female'
 
   // -- Has real application URL? --
   const hasApplicationUrl = Boolean(

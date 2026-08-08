@@ -38,20 +38,18 @@ describe('normalizeOpportunity reads eligibility_text', () => {
     expect(n.requiresGender).toBeNull()
   })
 
-  // Companion regression (found while writing this test): the gender gates
-  // called matchesAnyPattern — the STRING-phrase matcher, which stringifies
-  // its patterns — on RegExp lists, so they could never match ANY text and
-  // had been dead since they shipped. This is how the real prod row below
-  // reached a male student's application list untagged.
-  it('the real "Society of Women Engineers" prod row is detected as women-restricted', () => {
+  // A named or women-focused program is not proof of exclusivity. The
+  // normalizer may hard-gate only when the source states an explicit condition
+  // such as "women only" or "applicants must be a woman."
+  it('does not infer women-only eligibility from a sponsor name or focused copy', () => {
     const n = normalizeOpportunity({
       id: 'opp-swe',
       title: 'Society of Women Engineers (SWE) Scholarships',
       description: 'Scholarships for women in engineering programs.',
       sponsor: 'Society of Women Engineers',
     })
-    expect(n.requiresWomen).toBe(true)
-    expect(n.requiresGender).toBe('female')
+    expect(n.requiresWomen).toBe(false)
+    expect(n.requiresGender).toBeNull()
   })
 
   it('"must be a male" prose sets the male restriction (the men-only twin gate)', () => {
