@@ -29,5 +29,9 @@ export const LOGIN_MAINTENANCE = {
   title: 'GrantFlow is being upgraded',
   message:
     'We are performing a scheduled upgrade. Sign-in is temporarily disabled while we finish.',
-  etaText: 'Expected back online by 8:00 PM Eastern tonight (Monday, July 21).',
+  // Date-free by design: this is only the pre-probe/offline fallback, and a
+  // hardcoded date here goes stale silently (it read "Monday, July 21" months
+  // late). The live ETA comes from the server probe, which the owner sets with
+  // the API's LOGIN_MAINTENANCE_ETA env var.
+  etaText: 'We expect to be back online shortly.',
 }

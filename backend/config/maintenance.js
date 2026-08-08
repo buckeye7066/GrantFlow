@@ -20,14 +20,29 @@ export function isLoginMaintenanceActive() {
   return LOGIN_MAINTENANCE_ACTIVE
 }
 
+// ETA copy. A hardcoded date rots the moment the window moves: this string still
+// read "Monday, July 21" when the banner was raised on 2026-08-07, and a
+// maintenance notice that promises a time already in the past is worse than one
+// that promises no time at all. So the ETA is an env var the owner can change
+// WITHOUT a deploy (LOGIN_MAINTENANCE_ETA, read at boot like every other var on
+// this module), and the built-in default deliberately names no date — the same
+// date-free wording SermonSmith already uses.
+export function resolveLoginMaintenanceEta() {
+  const override = process.env.LOGIN_MAINTENANCE_ETA
+  if (typeof override === 'string' && override.trim()) return override.trim()
+  return 'We expect to be back online shortly.'
+}
+
+const LOGIN_MAINTENANCE_ETA = resolveLoginMaintenanceEta()
+
 export const LOGIN_MAINTENANCE_MESSAGE =
   'GrantFlow is being upgraded and sign-in is temporarily disabled. ' +
-  'Expected back online by 8:00 PM Eastern tonight (Monday, July 21).'
+  LOGIN_MAINTENANCE_ETA
 
 // Banner copy served to the frontend by GET /api/auth/maintenance.
 export const LOGIN_MAINTENANCE_COPY = {
   title: 'GrantFlow is being upgraded',
   message:
     'We are performing a scheduled upgrade. Sign-in is temporarily disabled while we finish.',
-  etaText: 'Expected back online by 8:00 PM Eastern tonight (Monday, July 21).',
+  etaText: LOGIN_MAINTENANCE_ETA,
 }
