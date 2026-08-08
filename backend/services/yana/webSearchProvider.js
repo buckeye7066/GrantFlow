@@ -145,32 +145,66 @@ export function makeHtmlFetcher({
   fetchImpl = (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : null),
   timeoutMs = 8000,
   maxBytes = 600_000,
+  assertSafeUrl = null,
+  maxRedirects = 5,
 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('makeHtmlFetcher: no fetch implementation available')
+  // Lazy default so tests that never exercise the fetcher do not need the
+  // urlRules module. Production wiring (server.js) always hits the real path.
+  const checkUrl = assertSafeUrl || (async (candidate) => {
+    const { assertSsrfSafeUrl } = await import('../../config/urlRules.js')
+    return assertSsrfSafeUrl(candidate)
+  })
   return async function fetcher(targetUrl) {
-    const url = String(targetUrl || '')
+    let url = String(targetUrl || '')
     if (!/^https?:\/\//i.test(url)) return ''
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+    const deadline = Date.now() + timeoutMs
     try {
-      const res = await fetchImpl(url, {
-        signal: ctrl.signal,
-        redirect: 'follow',
-        headers: {
-          'User-Agent': 'GrantFlowYanaBot/1.0 (+https://grantflow.app; nonprofit contact discovery)',
-          Accept: 'text/html,application/xhtml+xml',
-        },
-      })
-      if (!res.ok) return ''
-      const ct = res.headers.get('content-type') || ''
-      if (ct && !/text\/html|xml|text\/plain/i.test(ct)) return ''
-      const buf = await res.arrayBuffer()
-      return Buffer.from(buf).subarray(0, maxBytes).toString('utf8')
+      for (let hop = 0; hop <= maxRedirects; hop += 1) {
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) return ''
+        const verdict = await checkUrl(url)
+        if (!verdict?.ok) {
+          log.warn(`HTML fetch blocked for ${url}: ${verdict?.reason || 'ssrf'}`)
+          return ''
+        }
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), remaining)
+        let res
+        try {
+          // redirect:'manual' — undici/fetch would otherwise follow into
+          // private/metadata hosts after only the first hop was checked.
+          res = await fetchImpl(url, {
+            signal: ctrl.signal,
+            redirect: 'manual',
+            headers: {
+              'User-Agent': 'GrantFlowYanaBot/1.0 (+https://grantflow.app; nonprofit contact discovery)',
+              Accept: 'text/html,application/xhtml+xml',
+            },
+          })
+        } finally {
+          clearTimeout(timer)
+        }
+        if (res.status >= 300 && res.status < 400) {
+          const location = res.headers.get('location')
+          if (!location) return ''
+          try {
+            url = new URL(location, url).toString()
+          } catch {
+            return ''
+          }
+          continue
+        }
+        if (!res.ok) return ''
+        const ct = res.headers.get('content-type') || ''
+        if (ct && !/text\/html|xml|text\/plain/i.test(ct)) return ''
+        const buf = await res.arrayBuffer()
+        return Buffer.from(buf).subarray(0, maxBytes).toString('utf8')
+      }
+      return ''
     } catch (err) {
       if (err?.name !== 'AbortError') log.warn(`HTML fetch failed for ${url}: ${err?.message || err}`)
       return ''
-    } finally {
-      clearTimeout(timer)
     }
   }
 }
