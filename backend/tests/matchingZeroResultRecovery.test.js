@@ -170,6 +170,11 @@ describe('matching zero-result recovery (no "0 included of X found")', () => {
 
       // Counts map 1:1: returned can never exceed the scored pool.
       expect(res.body.returned).toBeLessThanOrEqual(res.body.total_scored)
+      // Discover Grants contract aliases (included / total_found).
+      expect(res.body.included).toBe(res.body.returned)
+      expect(res.body.included).toBe(res.body.opportunities.length)
+      expect(res.body.total_found).toBeGreaterThanOrEqual(res.body.included)
+      expect(res.body.coverage_summary.included).toBe(res.body.included)
 
       // The recovery is surfaced honestly, not silent.
       expect(res.body.relaxation).toBeTruthy()
