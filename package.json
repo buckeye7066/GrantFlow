@@ -9,15 +9,22 @@
   "overrides": {
     "fast-xml-parser": "$fast-xml-parser",
     "shell-quote": ">=1.9.0",
+    "js-yaml": "4.3.1",
     "@eslint/config-array": "^0.23.5",
     "eslint": {
       "minimatch": "^10.2.5"
     },
     "@eslint/eslintrc": {
-      "minimatch": "^10.2.5"
+      "minimatch": "^10.2.5",
+      "js-yaml": "4.3.1"
     },
     "eslint-plugin-react": {
       "minimatch": "^10.2.5"
+    },
+    "@capacitor/cli": {
+      "xcode": {
+        "uuid": "11.1.1"
+      }
     }
   },
   "scripts": {
