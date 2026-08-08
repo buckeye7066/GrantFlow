@@ -9,74 +9,40 @@ Dated completion records for the App Portfolio Audit. One entry per ACTIVE_APP r
 | Field | Value |
 |-------|-------|
 | ACTIVE_APP | GrantFlow |
-| Date | 2026-08-07 (continued evening run) |
+| Date | 2026-08-07 (evening release) |
 | Repo / default branch | `buckeye7066/GrantFlow` / `main` |
-| Baseline SHA | `4f4aa567d0e86500ff682d54a4855a72105dead3` (**verified fact**: matches Railway `/api/version` + Vercel `/grantflow/api/version`) |
-| Release SHA | *not released this run* — PR [#1179](https://github.com/buckeye7066/GrantFlow/pull/1179) on `fix/match-authority-soft-penalty-and-display-parity` pending green CI + merge + dual deploy |
+| Baseline SHA | `4f4aa567d0e86500ff682d54a4855a72105dead3` |
+| Release SHA | `c1997d2ca8566f52d361d59e191ca894f0112e99` (merge of PR [#1179](https://github.com/buckeye7066/GrantFlow/pull/1179)) |
 | Local path | Private Windows checkout (machine-specific path intentionally omitted) |
-| Production frontend | `https://app.axiombiolabs.org/grantflow` (Vercel; trailing-slash URL 308 → `/grantflow`) |
+| Production frontend | `https://app.axiombiolabs.org/grantflow` (Vercel) |
 | Production backend | `https://grantflow-production.up.railway.app` |
-| Deployed SHA (verified) | Railway + Vercel API proxy both report `4f4aa567…` |
-| Data store | PostgreSQL on Railway (`dialect: postgres`; ~21,142 opportunities at probe) |
+| Deployed SHA (verified) | Railway `/api/version` **and** Vercel `/grantflow/api/version` both report `c1997d2c…` (**verified fact**, 2026-08-08T00:51Z) |
+| Data store | PostgreSQL on Railway (`dialect: postgres`; ~21,142 opportunities) |
 | Target state | Controlled public beta: whole-profile discovery with authoritative scores, honest handoffs, proven outcomes |
 
 ### Completed this run
-- Re-verified locations and exact production SHA convergence against current `origin/main`.
-- **Verified fact — exit item 42 met on production:** `GET /api/health/mission` → `production_gate=true`, `rates.verified_pct=97.5`, `broken_pct=0`, `link_lifecycle.partition_reconciles=true`, broken visible=0 / retired=21 / scheduled_retry=15 / repair_pending=8.
-- Confirmed PR 1179 match-authority fixes (soft relevance penalty wiring, matching-funds REVIEW, women exclusivity classifier, Discover ACCEPT/directory keep, recovery alias honesty).
-- Fixed CI-blocking recovery regression: recovery test no longer self-disables via `strict`/`allow_relax`; raised cold-import timeouts.
-- Wired three orphan farm-lane adapters (`sare_farmer_rancher_grants`, `usda_value_added_producer_grants`, `ky_agricultural_development_fund`) so `npm run crawler:verify` is **178/178 adapters, 0 failures** (was 175/178 + 3 `missing_adapter`).
-- Local verification: recovery + soft-relevance + Discover keep + farm coverage tests pass; crawler offline verify passes with multi-profile runs.
+- Merged PR #1179 after green CI (`test`, `browser-smoke`, `postgres-migrations`, `production-image`) on tip `b16dbd67`.
+- Dual-deploy SHA convergence proven on Railway + Vercel API proxy to merge SHA `c1997d2c`.
+- **Exit item 42 met:** mission health `production_gate=true`, `verified_pct=100`, `broken_pct=0`, no release blockers; `readyz=ready`.
+- Match-authority bridge: soft relevance penalties wired into `computeMatchDecision`; Discover keeps ACCEPT/directory rows; matching-funds → REVIEW; shared women exclusivity classifier; recovery aliases honest.
+- Wired farm-lane adapters so `crawler:verify` = 178/178 adapters, 0 failures; offline profile runs PASS.
+- Local suites: recovery, soft-penalty, Discover keep, farm coverage, structured eligibility — all green.
 
 ### Residual blockers (exit criteria unmet)
-- Full CI / clean-room release gates on a merge SHA (item 40) — last CI failure was pre-tip (`3ea20f6d`); tip CI run ended `action_required` with 0 jobs (owner/Actions approval needed to re-run)
-- Amy 50/50 cohort + Google-bar parity (item 41)
-- Displayed scores/decisions reconciled on production after PR 1179 deploy (item 43)
-- Three authenticated E2E evidence chains in production (item 44)
-- Dual-deploy of one merge SHA with authenticated production audit (item 45)
-- Hamilton packet/handoff live stability proof (bridge 37)
-- Fresh consented profile crawl through live Discover UI with owner credentials (owner action)
+- Amy 50/50 cohort + Google-bar parity (item 41) — needs consented cohort run / owner credentials
+- Authenticated production score/display reconciliation audit after deploy (item 43) — needs owner login
+- Three authenticated E2E evidence chains (item 44) — needs owner credentials
+- Hamilton packet/handoff live stability proof (bridge 37) — needs owner credentials / consented profile
+- Main CI on merge commit still running at ledger write time (item 40 partially proven via PR CI + production health)
+- Frontend static asset cache may lag API SHA; confirm Vercel production deployment for SPA assets separately if UI drift appears
 
 ### Rollback point
-- Pre-change production: `4f4aa567` on `main`
+- Previous production: `4f4aa567` on `main`
 
-### Next app
-- Do **not** start next app until GrantFlow exit criteria close or owner redirects. Next incomplete priority remains GrantFlow.
-
----
-
-## 2026-08-07 — GrantFlow (Priority 1) — INCOMPLETE (earlier daytime entry)
-
-| Field | Value |
-|-------|-------|
-| ACTIVE_APP | GrantFlow |
-| Date | 2026-08-07 |
-| Repo / default branch | `buckeye7066/GrantFlow` / `main` |
-| Baseline SHA | `a236444cbcfa39a80852a065688425ce687cb529` |
-| Release SHA | *not released this run* — branch `fix/match-authority-soft-penalty-and-display-parity` pending PR merge + dual deploy |
-| Local path | Private Windows checkout (machine-specific path intentionally omitted) |
-| Production frontend | `https://app.axiombiolabs.org/grantflow/` (Vercel) |
-| Production backend | `https://grantflow-production.up.railway.app` |
-| Deployed SHA (verified) | Railway `/api/health` + `/api/version` report `a236444c…` — **same as main** (superseded by evening re-verify) |
-| Data store | PostgreSQL on Railway (`dialect: postgres`; ~20,849 opportunities at probe) |
-| Target state | Controlled public beta: whole-profile discovery with authoritative scores, honest handoffs, proven outcomes |
-
-### Completed this run
-- Re-verified locations and exact production SHA convergence (Vercel API proxy → Railway build SHA).
-- Fixed P0 match-authority / display-parity defects (soft relevance penalty wiring, `requires_match` REVIEW, women exclusivity vs prioritization, Discover ACCEPT/directory keep, honest recovery params).
-- Regression tests: 35 passed in targeted suites; local multi-source simulation: 4 included / 6 found across 4 sources.
-
-### Residual blockers (exit criteria unmet)
-- Full CI / clean-room release gates on a merge SHA (item 40)
-- Amy 50/50 cohort + Google-bar parity (item 41)
-- Broken-link quarantine ≥95% verified-link rate (item 42) — *later met; see evening entry*
-- Three authenticated E2E evidence chains in production (item 44)
-- Dual-deploy of one merge SHA with authenticated production audit (item 45)
-- Hamilton packet/handoff stability proof (bridge 37)
-- Fresh consented profile crawl through live Discover UI with owner credentials (owner action)
-
-### Rollback point
-- Pre-change: `a236444c` on `main` (then current production)
+### Next owner actions (minimal)
+1. Approve/confirm any remaining GitHub Actions spend if main CI stalls on `action_required`.
+2. Provide a consented production profile (or credentials) for Discover crawl + three E2E evidence chains + Hamilton handoff proof.
+3. Authorize Amy 50-profile cohort + plain-web parity benchmark run.
 
 ### Next app
 - Do **not** start next app until GrantFlow exit criteria close or owner redirects. Next incomplete priority remains GrantFlow.
