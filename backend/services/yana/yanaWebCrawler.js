@@ -110,7 +110,15 @@ export function isJunkOrg(org = {}) {
 
 async function defaultFetchImpl(url, { responseType = 'json', timeoutMs = 10_000 } = {}) {
   try {
-    const res = await getWithRetry(url, { responseType: responseType === 'json' ? 'json' : 'text', timeout: timeoutMs })
+    // ssrfSafe: these URLs are untrusted by construction — adapter feeds and
+    // candidate organisation homepages picked from search results. Without it
+    // axios follows redirects internally and a candidate host answering
+    // `302 -> 169.254.169.254` reaches cloud metadata.
+    const res = await getWithRetry(
+      url,
+      { responseType: responseType === 'json' ? 'json' : 'text', timeout: timeoutMs },
+      { ssrfSafe: true },
+    )
     const ok = res.status >= 200 && res.status < 300
     return { ok, status: res.status, json: responseType === 'json' ? res.data : undefined, text: responseType === 'text' ? res.data : undefined }
   } catch (err) {
