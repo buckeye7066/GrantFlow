@@ -155,6 +155,9 @@ async function loadProfileOsResults(req, profileId, {
     }
   })
 
+  // Preserve a copy of the PRE-canonicalized pool for Tier B recovery.
+  const rawMapped = Array.isArray(mapped) ? mapped.slice() : []
+
   const canonical = canonicalizeOpportunityList(profileContext, mapped, {
     preserveDirectories: true,
     rejectHardIneligible: true,
@@ -192,45 +195,84 @@ async function loadProfileOsResults(req, profileId, {
   let relaxation = null
 
   // Mission rule: total_found > 0 with included === 0 must log, relax, re-score.
-  // Discover-grants previously hard-filtered on minScore and could return empty
-  // while Crawler OS still had real profile matches.
-  if (qualified.length === 0 && preScoreCount > 0) {
-    const ladderInput = mapped.map((o) => ({
-      ...o,
-      kind: o.is_directory ? 'directory' : o.kind || 'direct',
-      match_score: o.match_score ?? o.os_match_score,
-    }))
-    const ladder = assembleFundingResults(ladderInput, {
-      minScore,
-      maxResults: Math.max(100, Number(perPage) || 50),
-      strictMinScore: false,
-    })
-    const recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
+  // Implement both Tier A (score relaxation) and Tier B (soft canonicalization)
+  // so Discover mirrors matching.js behavior.
+  if (qualified.length === 0 && (preScoreCount > 0 || rawMapped.length > 0)) {
+    const toLadderInput = (list) =>
+      (Array.isArray(list) ? list : []).map((o) => ({
+        ...o,
+        kind: o.is_directory ? 'directory' : o.kind || 'direct',
+        match_score: o.match_score ?? o.os_match_score,
+      }))
+
+    let recovered = []
+    let ladder = null
+
+    // Tier A — candidates survived canonicalization but scored below the floor.
+    if (preScoreCount > 0) {
+      ladder = assembleFundingResults(toLadderInput(mapped), {
+        minScore,
+        maxResults: Math.max(100, Number(perPage) || 50),
+        strictMinScore: false,
+      })
+      recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
+    }
+
+    // Tier B — canonicalization removed EVERYTHING; re-canonicalize softly and
+    // allow eligible rows + directories to survive as reviewable results.
+    if (recovered.length === 0 && rawMapped.length > 0) {
+      const soft = canonicalizeOpportunityList(profileContext, rawMapped, {
+        preserveDirectories: true,
+        rejectHardIneligible: false,
+        profileGateMode: 'fallback',
+        allowUnmatchedDirectoryFallback: true,
+      })
+      const softKept = (soft.kept || []).filter(
+        (o) => String(o.match_decision || '').toUpperCase() !== 'REJECT' && o.eligible !== false,
+      )
+      if (softKept.length > 0) {
+        ladder = assembleFundingResults(toLadderInput(softKept), {
+          minScore,
+          maxResults: Math.max(100, Number(perPage) || 50),
+          strictMinScore: false,
+        })
+        recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
+      }
+    }
+
     if (recovered.length > 0) {
       qualified = recovered
       relaxation = {
         applied: true,
-        tier: ladder.tier,
-        threshold_relaxed: Boolean(ladder.threshold_relaxed),
-        threshold_relaxed_reason: ladder.threshold_relaxed_reason || null,
-        directory_only: Boolean(ladder.directory_only),
-        geo_expanded: Boolean(ladder.geo_expanded),
+        tier: ladder?.tier,
+        threshold_relaxed: Boolean(ladder?.threshold_relaxed),
+        threshold_relaxed_reason: ladder?.threshold_relaxed_reason || null,
+        directory_only: Boolean(ladder?.directory_only),
+        geo_expanded: Boolean(ladder?.geo_expanded),
         requested_min_score: minScore,
         recovered_count: recovered.length,
-        tier_attempts: ladder.tier_attempts || [],
+        tier_attempts: ladder?.tier_attempts || [],
       }
       routeLogger.info(
         `[discover-grants] zero-result recovery for profile ${profileId}: ` +
-          `pre_score=${preScoreCount} dropped=${JSON.stringify(canonical.dropped || {})} ` +
-          `-> recovered=${recovered.length} tier=${ladder.tier}`,
+          `pre_score=${preScoreCount} raw_candidates=${rawMapped.length} dropped=${JSON.stringify(canonical.dropped || {})} ` +
+          `-> recovered=${recovered.length} tier=${ladder?.tier}`,
       )
     } else {
       routeLogger.warn(
-        `[discover-grants] suppression for profile ${profileId}: ${preScoreCount} candidate(s) ` +
+        `[discover-grants] suppression for profile ${profileId}: ${Math.max(preScoreCount, rawMapped.length)} candidate(s) ` +
           `but 0 included after score floor ${minScore}. dropped=${JSON.stringify(canonical.dropped || {})}`,
       )
     }
   }
+
+  // Final surfacing guard (defense in depth): never return REJECT/ineligible rows.
+  qualified = qualified.filter(
+    (o) =>
+      String(o.match_decision ?? o.decision ?? '').toUpperCase() !== 'REJECT' &&
+      o.eligible !== false &&
+      o.eligibility_relaxed !== true,
+  )
 
   mapped = deduplicateOpportunities(qualified).map(formatProfileSearchResult)
 
