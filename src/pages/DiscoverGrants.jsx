@@ -197,20 +197,26 @@ function profileHasSearchSignal(profileDetail, profileForSearch, selectedProfile
 
 function normalizeResultMetadata(payload, results) {
   const listLength = Array.isArray(results) ? results.length : 0
-  return {
-    returned: Number.isFinite(Number(payload?.returned))
+  // Prefer explicit `included` so UI counts map 1:1 to the backend contract.
+  const included = Number.isFinite(Number(payload?.included))
+    ? Number(payload.included)
+    : Number.isFinite(Number(payload?.returned))
       ? Number(payload.returned)
       : Number.isFinite(Number(payload?.count))
         ? Number(payload.count)
-        : listLength,
-    totalFound: Number.isFinite(Number(payload?.total_found))
-      ? Number(payload.total_found)
-      : Number.isFinite(Number(payload?.total_scored))
-        ? Number(payload.total_scored)
-        : listLength,
+        : listLength
+  const totalFound = Number.isFinite(Number(payload?.total_found))
+    ? Number(payload.total_found)
+    : Number.isFinite(Number(payload?.total_scored))
+      ? Number(payload.total_scored)
+      : included
+  return {
+    included,
+    returned: included,
+    totalFound,
     totalScored: Number.isFinite(Number(payload?.total_scored)) ? Number(payload.total_scored) : null,
     truncated: Boolean(payload?.truncated),
-    thresholdFallbackMessage: payload?.threshold_fallback_message ?? null,
+    thresholdFallbackMessage: payload?.threshold_fallback_message ?? payload?.threshold_relaxed_reason ?? null,
     // Zero-result ladder telemetry (Mission System 5, RC-12). Present only when
     // the backend ran the staged fallback ladder (matching.js / discovery.js).
     diagnostics: extractDiagnostics(payload),

@@ -728,6 +728,9 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         engine: 'crawler-os',
         min_score: osMin,
         total_scored: totalScored,
+        // 1:1 count contract for Discover Grants UI (mission rule).
+        total_found: Math.max(Number(osRows.length) || 0, Number(totalScored) || 0, qualified.length),
+        included: qualified.length,
         returned: qualified.length,
         qualified_count: qualifiedCount,
         promotion_summary: promotionSummary || undefined,
@@ -750,6 +753,8 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         },
         coverage_summary: {
           total_candidates: osRows.length,
+          total_found: Math.max(Number(osRows.length) || 0, Number(totalScored) || 0, qualified.length),
+          included: qualified.length,
           returned: qualified.length,
           source: 'profile_opportunity_matches',
         },

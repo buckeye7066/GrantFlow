@@ -24,6 +24,7 @@
 
 import { setTimeout as sleep } from 'node:timers/promises'
 import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl, assertSsrfSafeUrl } from '../config/urlRules.js'
+import { safeFetch, discardResponseBody, SsrfBlockedError } from './http/safeFetch.js'
 import {
   isLinkLifecycleKind,
   isPointerOpportunityRow,
@@ -171,13 +172,13 @@ export async function checkUrl(url, opts = {}) {
   const timeoutMs = Number.isFinite(opts?.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT_MS
 
   const tryProbe = async (method) => {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
-      const res = await fetch(url, {
+      // safeFetch re-validates EVERY redirect hop. The previous
+      // `fetch(..., { redirect: 'follow' })` cleared only the first URL, so a
+      // crawled page answering `302 -> 169.254.169.254` walked straight past
+      // the guard above. It also enforces the per-request timeout.
+      const res = await safeFetch(url, {
         method,
-        signal: controller.signal,
-        redirect: 'follow',
         headers: {
             // browser-compatible liveness probe: transparent product token plus
             // normal document headers avoids false 403/404 results from servers
@@ -186,15 +187,21 @@ export async function checkUrl(url, opts = {}) {
             Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
           },
-      })
-      clearTimeout(timer)
-      // res.url contains the URL after redirects (whatwg-fetch + node-fetch).
-      // Fall back to the original URL when undici declines to surface it.
-      const finalUrl = typeof res.url === 'string' && res.url ? res.url : url
-      return { code: res.status, error: null, finalUrl }
+      }, { timeoutMs, fetchImpl: opts.fetchImpl })
+      // safeFetch stamps the post-redirect URL it actually settled on.
+      const finalUrl = res.grantflowFinalUrl
+        || (typeof res.url === 'string' && res.url ? res.url : url)
+      const code = res.status
+      await discardResponseBody(res)
+      return { code, error: null, finalUrl, ssrfBlocked: false }
     } catch (err) {
-      clearTimeout(timer)
-      return { code: null, error: err?.message || String(err), finalUrl: null }
+      if (err instanceof SsrfBlockedError) {
+        // We refused to look. That is NOT evidence the link is dead, so it must
+        // never be reported as 'broken' — doing so would deactivate a possibly
+        // healthy opportunity on the strength of our own policy decision.
+        return { code: null, error: err.message, finalUrl: null, ssrfBlocked: true }
+      }
+      return { code: null, error: err?.message || String(err), finalUrl: null, ssrfBlocked: false }
     }
   }
 
@@ -203,9 +210,13 @@ export async function checkUrl(url, opts = {}) {
 
   // Some servers ban HEAD entirely. Retry with GET when HEAD comes back as
   // method-not-allowed / forbidden so we don't mark a working page as broken.
-  if (outcome.code === null || outcome.code < 200 || outcome.code >= 400) {
+  if (!outcome.ssrfBlocked && (outcome.code === null || outcome.code < 200 || outcome.code >= 400)) {
     outcome = await tryProbe('GET')
     method = 'get'
+  }
+
+  if (outcome.ssrfBlocked) {
+    return { status: 'skipped', code: null, method, error: outcome.error, finalUrl: null }
   }
 
   if (outcome.code !== null && outcome.code !== undefined) {
@@ -387,7 +398,7 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
 
 export async function runLinkVerification(
   db,
-  { limit = 100, verifiedBy = 'recurring-verifier' } = {},
+  { limit = 100, verifiedBy = 'recurring-verifier', fetchImpl } = {},
 ) {
   const cutoff = new Date(Date.now() - REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
@@ -488,7 +499,7 @@ export async function runLinkVerification(
       batch.map(async (row) => {
         const url = row.application_url || row.source_url
         const startMs = Date.now()
-        const result = await checkUrl(url)
+        const result = await checkUrl(url, { fetchImpl })
         const durationMs = Date.now() - startMs
         const now = new Date().toISOString()
         const persisted = await update.run(

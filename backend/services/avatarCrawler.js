@@ -5,6 +5,9 @@ import { summarizeOpenAIError } from '../utils/openaiClient.js'
 import * as cheerio from 'cheerio'
 
 const fetchImpl = globalThis.fetch
+const FETCH_TIMEOUT_MS = 12_000
+const MAX_REDIRECTS = 4
+const USER_AGENT = 'GrantFlow Avatar Lookup/1.0'
 
 export function normalizeHttpUrl(value) {
   const raw = String(value ?? '').trim()
@@ -17,6 +20,14 @@ export function normalizeHttpUrl(value) {
   } catch {
     return null
   }
+}
+
+function isLoopbackHostname(hostname) {
+  const h = String(hostname || '').trim().toLowerCase()
+  if (!h) return false
+  if (h === 'localhost' || h.endsWith('.localhost') || h === '::1') return true
+  if (h === '127.0.0.1') return true
+  return false
 }
 
 function isPrivateHostname(hostname) {
@@ -45,6 +56,67 @@ function resolveUrl(baseUrl, maybeRelative) {
   } catch {
     return null
   }
+}
+
+async function fetchOnce(url, accept) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    return await fetchImpl(url, {
+      method: 'GET',
+      // Manual redirects so every hop can be re-validated (validate-then-follow
+      // with redirect:'follow' lets a public first hop 302 into link-local /
+      // metadata IPs inside undici where the hostname guard never runs).
+      redirect: 'manual',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: accept,
+      },
+    })
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+/**
+ * SSRF-safe fetch: re-check the host before every hop and never auto-follow
+ * redirects. Returns { ok, res, finalUrl } or { ok:false, reason }.
+ */
+export async function safeAvatarFetch(startUrl, accept, { allowLocalhost = false } = {}) {
+  let current = startUrl
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    let host
+    try {
+      host = new URL(current).hostname
+    } catch {
+      return { ok: false, reason: 'invalid_url' }
+    }
+    // allowLocalhost only exempts loopback (tests). Link-local / RFC1918 /
+    // metadata IPs stay blocked even under that flag — otherwise a test
+    // convenience would re-open the redirect-to-169.254.169.254 hole.
+    if (isPrivateHostname(host) && !(allowLocalhost && isLoopbackHostname(host))) {
+      return { ok: false, reason: 'blocked_private_host' }
+    }
+    let res
+    try {
+      res = await fetchOnce(current, accept)
+    } catch {
+      return { ok: false, reason: 'fetch_failed' }
+    }
+    const status = res.status
+    if (status >= 300 && status < 400) {
+      const loc = res.headers.get('location')
+      if (!loc) return { ok: true, res, finalUrl: current }
+      const next = resolveUrl(current, loc)
+      if (!next) return { ok: false, reason: 'invalid_redirect' }
+      if (!/^https?:\/\//i.test(next)) return { ok: false, reason: 'blocked_redirect_scheme' }
+      current = next
+      continue
+    }
+    return { ok: true, res, finalUrl: current }
+  }
+  return { ok: false, reason: 'too_many_redirects' }
 }
 
 function pickWebsiteImageCandidate(html, baseUrl) {
@@ -128,28 +200,16 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
   const url = normalizeHttpUrl(imageUrl)
   if (!url) return { ok: false, reason: 'invalid_url' }
 
-  const host = new URL(url).hostname
-  if (isPrivateHostname(host)) return { ok: false, reason: 'blocked_private_host' }
-
   if (!fetchImpl) return { ok: false, reason: 'fetch_unavailable' }
 
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 12_000)
-  let res = null
-  try {
-    res = await fetchImpl(url, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'GrantFlow Avatar Lookup/1.0',
-        Accept: 'image/*,*/*;q=0.8',
-      },
-    })
-  } finally {
-    clearTimeout(timeoutId)
+  const fetched = await safeAvatarFetch(url, 'image/*,*/*;q=0.8', { allowLocalhost: false })
+  if (!fetched.ok) {
+    return {
+      ok: false,
+      reason: fetched.reason === 'blocked_private_host' ? 'blocked_private_host' : 'fetch_failed',
+    }
   }
-
+  const res = fetched.res
   if (!res || !res.ok) return { ok: false, reason: 'fetch_failed' }
 
   const contentType = String(res.headers.get('content-type') || '').toLowerCase()
@@ -214,43 +274,26 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
     return { ok: false, reason: 'no_website' }
   }
 
-  // SSRF guard (allow localhost only in tests).
+  // SSRF guard (allow localhost only in tests). Explicit false still wins.
   const allowLocalhost = process.env.NODE_ENV === 'test'
-  const websiteHost = new URL(website).hostname
-  if (!allowLocalhost && isPrivateHostname(websiteHost)) {
-    return { ok: false, reason: 'blocked_private_host' }
-  }
 
   if (!fetchImpl) {
     return { ok: false, reason: 'fetch_unavailable' }
   }
 
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 12_000)
-  let res = null
-  let finalUrl = website
-  try {
-    res = await fetchImpl(website, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'GrantFlow Avatar Lookup/1.0',
-        Accept: 'text/html,application/xhtml+xml',
-      },
-    })
-    finalUrl = res?.url || website
-  } finally {
-    clearTimeout(timeoutId)
+  const fetched = await safeAvatarFetch(website, 'text/html,application/xhtml+xml', {
+    allowLocalhost,
+  })
+  if (!fetched.ok) {
+    return {
+      ok: false,
+      reason: fetched.reason === 'blocked_private_host' ? 'blocked_private_host' : 'website_fetch_failed',
+    }
   }
-
+  const res = fetched.res
+  const finalUrl = fetched.finalUrl || website
   if (!res || !res.ok) {
     return { ok: false, reason: 'website_fetch_failed' }
-  }
-
-  const contentType = String(res.headers.get('content-type') || '')
-  if (!contentType.toLowerCase().includes('text/html')) {
-    // Some sites serve HTML as application/octet-stream; still attempt.
   }
 
   const html = await res.text().catch(() => '')
@@ -262,27 +305,21 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   const method = pick.method || 'website_cover'
 
   const coverHost = new URL(coverUrl).hostname
-  if (!allowLocalhost && isPrivateHostname(coverHost)) {
+  if (isPrivateHostname(coverHost) && !(allowLocalhost && isLoopbackHostname(coverHost))) {
     return { ok: false, reason: 'blocked_private_cover_host' }
   }
 
-  const imgController = new AbortController()
-  const imgTimeoutId = setTimeout(() => imgController.abort(), 12_000)
-  let imgRes = null
-  try {
-    imgRes = await fetchImpl(coverUrl, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: imgController.signal,
-      headers: {
-        'User-Agent': 'GrantFlow Avatar Lookup/1.0',
-        Accept: 'image/*,*/*;q=0.8',
-      },
-    })
-  } finally {
-    clearTimeout(imgTimeoutId)
+  const imgFetched = await safeAvatarFetch(coverUrl, 'image/*,*/*;q=0.8', { allowLocalhost })
+  if (!imgFetched.ok) {
+    return {
+      ok: false,
+      reason:
+        imgFetched.reason === 'blocked_private_host'
+          ? 'blocked_private_cover_host'
+          : 'cover_fetch_failed',
+    }
   }
-
+  const imgRes = imgFetched.res
   if (!imgRes || !imgRes.ok) {
     return { ok: false, reason: 'cover_fetch_failed' }
   }

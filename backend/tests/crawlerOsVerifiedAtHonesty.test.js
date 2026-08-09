@@ -18,7 +18,7 @@
  *       them (NULL → picked first by the verifier), preserves real verifications,
  *       and respects its per-boot bound.
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { persistRun } from '../services/crawlerOsPersistence.js'
 import { runLinkVerification } from '../services/linkVerificationService.js'
@@ -155,12 +155,21 @@ describe('last_verified_at honesty — only target verification sets it', () => 
        VALUES ('t-1', 'Target Grant', 'live_crawl', 'http://93.184.216.34/apply', 'unverified')`,
     ).run()
 
-    const realFetch = global.fetch
-    global.fetch = async (url) => ({ status: 200, url: String(url) })
+    // safeFetch uses node-fetch (or opts.fetchImpl), not global.fetch. Without
+    // an injected fetchImpl this probe would hit the network and exceed the
+    // default 15s vitest timeout (HEAD timeout + GET retry).
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      status: 200,
+      url: 'http://93.184.216.34/apply',
+    })
     try {
-      await runLinkVerification(db, { limit: 5, verifiedBy: 'test-verifier' })
+      await runLinkVerification(db, {
+        limit: 5,
+        verifiedBy: 'test-verifier',
+        fetchImpl: globalThis.fetch,
+      })
     } finally {
-      global.fetch = realFetch
+      fetchSpy.mockRestore()
     }
 
     const row = db.prepare('SELECT last_verified_at, link_status, verification_method, verified_by FROM funding_opportunities WHERE id = ?').get('t-1')

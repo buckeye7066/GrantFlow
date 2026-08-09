@@ -1449,15 +1449,31 @@ async function verifyOpportunityUrl(opportunity, opts = {}) {
         http_status: typeof probe.status === 'number' ? probe.status : null,
       }
     } else {
-      proof = {
-        last_verified_at: new Date().toISOString(),
-        link_status: 'broken',
-        link_status_code: probe.status ?? null,
-        verification_method: 'head',
-        verified_by: verifiedBy,
-        verification_error: probe.error || `HTTP ${probe.status ?? 'no_response'}`,
-        final_url: probe.finalUrl ?? null,
-        http_status: typeof probe.status === 'number' ? probe.status : null,
+      // SSRF policy refusals are NOT evidence that a link is dead. Treat them
+      // as 'skipped' so downstream lifecycle logic does not deactivate rows on
+      // the basis of a refused probe.
+      if (probe.blocked) {
+        proof = {
+          last_verified_at: new Date().toISOString(),
+          link_status: 'skipped',
+          link_status_code: null,
+          verification_method: 'head',
+          verified_by: verifiedBy,
+          verification_error: probe.error || `ssrf_blocked:${probe.reason || 'unknown'}`,
+          final_url: null,
+          http_status: null,
+        }
+      } else {
+        proof = {
+          last_verified_at: new Date().toISOString(),
+          link_status: 'broken',
+          link_status_code: probe.status ?? null,
+          verification_method: 'head',
+          verified_by: verifiedBy,
+          verification_error: probe.error || `HTTP ${probe.status ?? 'no_response'}`,
+          final_url: probe.finalUrl ?? null,
+          http_status: typeof probe.status === 'number' ? probe.status : null,
+        }
       }
     }
   } catch (err) {

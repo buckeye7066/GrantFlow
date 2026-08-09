@@ -89,6 +89,7 @@ describe('link verification quarantine', () => {
       insertOpportunity(db, { id: 'directory-unchecked', kind: 'directory' })
 
       const stats = await runLinkVerification(db, {
+        fetchImpl: globalThis.fetch,
         limit: 10,
         verifiedBy: 'test-quarantine',
       })
@@ -131,6 +132,7 @@ describe('link verification quarantine', () => {
       insertOpportunity(db, { id: 'direct-broken', url: 'https://8.8.8.8/missing' })
 
       const stats = await runLinkVerification(db, {
+        fetchImpl: globalThis.fetch,
         limit: 10,
         verifiedBy: 'test-broken',
       })
@@ -203,7 +205,7 @@ describe('link verification quarantine', () => {
          WHERE id='deadline-expired'
       `).run()
 
-      const stats = await runLinkVerification(db, { limit: 10, verifiedBy: 'deadline-race-test' })
+      const stats = await runLinkVerification(db, { limit: 10, verifiedBy: 'deadline-race-test', fetchImpl: globalThis.fetch })
 
       expect(stats.checked).toBe(0)
       expect(fetchSpy).not.toHaveBeenCalled()
