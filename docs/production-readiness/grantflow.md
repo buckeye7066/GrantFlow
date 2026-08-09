@@ -10,7 +10,7 @@
 | Item | Evidence |
 |------|----------|
 | Main tip (start) | `4130970bf33b9f191e20d05f13b1d3974c514ddf` — docs(portfolio): PR 1188 item-43 drain (#1190) |
-| Local path | `C:\Users\firer\GrantFlow` |
+| Local path | Private Windows checkout (machine-specific path intentionally omitted) |
 | Production FE | `https://app.axiombiolabs.org/grantflow` (alias `grant-flow-three.vercel.app`) |
 | Production BE | `https://grantflow-production.up.railway.app` |
 | **Pre-change Railway SHA** | `4130970bf33b9f191e20d05f13b1d3974c514ddf` via `GET /api/version` + `/api/health` build.commit_sha |
