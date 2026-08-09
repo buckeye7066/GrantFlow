@@ -2,12 +2,56 @@ import fs from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
+import { assertSsrfSafeUrl } from '../config/urlRules.js'
 import * as cheerio from 'cheerio'
 
 const fetchImpl = globalThis.fetch
 const FETCH_TIMEOUT_MS = 12_000
 const MAX_REDIRECTS = 4
 const USER_AGENT = 'GrantFlow Avatar Lookup/1.0'
+
+/**
+ * Map assertSsrfSafeUrl refusals onto the avatar crawler's stable reason vocab
+ * so callers/tests that key on `blocked_private_host` keep working.
+ */
+function mapSsrfReason(reason) {
+  const r = String(reason || '')
+  if (
+    r.startsWith('private_ip:') ||
+    r.startsWith('resolves_private:') ||
+    r.startsWith('blocked_host:')
+  ) {
+    return 'blocked_private_host'
+  }
+  if (r === 'unparseable_url' || r === 'empty_url') return 'invalid_url'
+  if (r.startsWith('blocked_scheme:')) return 'blocked_redirect_scheme'
+  return r || 'blocked_private_host'
+}
+
+/**
+ * Per-hop SSRF check. Hostname-string checks alone are not enough: a public
+ * DNS name whose A/AAAA record is 169.254.169.254 / 10.x / etc. must also be
+ * refused. Delegates to the shared assertSsrfSafeUrl (DNS-resolving) chokepoint
+ * used by httpClient / Yana / linkVerification. `allowLocalhost` only exempts
+ * loopback for tests — never RFC1918 / link-local / metadata.
+ */
+async function assertAvatarHopSafe(url, { allowLocalhost = false, assertSafeUrl } = {}) {
+  let host
+  try {
+    host = new URL(url).hostname
+  } catch {
+    return { ok: false, reason: 'invalid_url' }
+  }
+  if (allowLocalhost && isLoopbackHostname(host)) {
+    return { ok: true }
+  }
+  const check = typeof assertSafeUrl === 'function' ? assertSafeUrl : assertSsrfSafeUrl
+  const verdict = await check(url)
+  if (!verdict?.ok) {
+    return { ok: false, reason: mapSsrfReason(verdict?.reason) }
+  }
+  return { ok: true }
+}
 
 export function normalizeHttpUrl(value) {
   const raw = String(value ?? '').trim()
@@ -27,24 +71,6 @@ function isLoopbackHostname(hostname) {
   if (!h) return false
   if (h === 'localhost' || h.endsWith('.localhost') || h === '::1') return true
   if (h === '127.0.0.1') return true
-  return false
-}
-
-function isPrivateHostname(hostname) {
-  const h = String(hostname || '').trim().toLowerCase()
-  if (!h) return true
-  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true
-  if (h === '::1') return true
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
-    const parts = h.split('.').map((p) => Number(p))
-    const [a, b] = parts
-    if (a === 10) return true
-    if (a === 127) return true
-    if (a === 192 && b === 168) return true
-    if (a === 172 && b >= 16 && b <= 31) return true
-    if (a === 0) return true
-    if (a === 169 && b === 254) return true
-  }
   return false
 }
 
@@ -80,24 +106,22 @@ async function fetchOnce(url, accept) {
 }
 
 /**
- * SSRF-safe fetch: re-check the host before every hop and never auto-follow
- * redirects. Returns { ok, res, finalUrl } or { ok:false, reason }.
+ * SSRF-safe fetch: re-check EVERY hop (scheme + hostname + DNS→private) and
+ * never auto-follow redirects. Returns { ok, res, finalUrl } or { ok:false, reason }.
+ *
+ * The 0563eb97 fix closed validate-then-follow into literal private IPs, but
+ * still only inspected the hostname string. A public name whose DNS resolves
+ * to link-local/metadata bypassed that guard — this path now uses the same
+ * DNS-resolving assertSsrfSafeUrl chokepoint as the rest of the SSRF wave.
  */
-export async function safeAvatarFetch(startUrl, accept, { allowLocalhost = false } = {}) {
+export async function safeAvatarFetch(startUrl, accept, {
+  allowLocalhost = false,
+  assertSafeUrl = null,
+} = {}) {
   let current = startUrl
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    let host
-    try {
-      host = new URL(current).hostname
-    } catch {
-      return { ok: false, reason: 'invalid_url' }
-    }
-    // allowLocalhost only exempts loopback (tests). Link-local / RFC1918 /
-    // metadata IPs stay blocked even under that flag — otherwise a test
-    // convenience would re-open the redirect-to-169.254.169.254 hole.
-    if (isPrivateHostname(host) && !(allowLocalhost && isLoopbackHostname(host))) {
-      return { ok: false, reason: 'blocked_private_host' }
-    }
+    const hopCheck = await assertAvatarHopSafe(current, { allowLocalhost, assertSafeUrl })
+    if (!hopCheck.ok) return hopCheck
     let res
     try {
       res = await fetchOnce(current, accept)
@@ -304,9 +328,17 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   const coverUrl = pick.url
   const method = pick.method || 'website_cover'
 
-  const coverHost = new URL(coverUrl).hostname
-  if (isPrivateHostname(coverHost) && !(allowLocalhost && isLoopbackHostname(coverHost))) {
-    return { ok: false, reason: 'blocked_private_cover_host' }
+  // Cover URLs are page-derived (untrusted). Re-run the DNS-resolving hop
+  // check before the image fetch so a meta tag pointing at a public name
+  // that resolves to metadata cannot skip the guard.
+  const coverHop = await assertAvatarHopSafe(coverUrl, { allowLocalhost })
+  if (!coverHop.ok) {
+    return {
+      ok: false,
+      reason: coverHop.reason === 'blocked_private_host'
+        ? 'blocked_private_cover_host'
+        : coverHop.reason,
+    }
   }
 
   const imgFetched = await safeAvatarFetch(coverUrl, 'image/*,*/*;q=0.8', { allowLocalhost })
