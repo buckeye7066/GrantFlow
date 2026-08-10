@@ -21,6 +21,12 @@ on:
       - '.github/workflows/android-build.yml'
   workflow_dispatch:
 
+concurrency:
+  # Ensure only one run per ref publishes; cancel older in-flight runs so a
+  # slower prior build cannot supersede a newer one as "Latest".
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -44,7 +50,7 @@ jobs:
           java-version: '21'
       - run: npm ci
       - name: Run release gates
-        run: npm test --if-present
+        run: npm run release:gates
       - name: Build web application
         run: npm run build
         env:
@@ -108,10 +114,20 @@ jobs:
           This release is intended for repo-direct updating. Android will only install it over an existing copy when the signing certificate matches.
           EOF
           )
-          gh release create "$TAG" \
-            "GrantFlow-${ANDROID_VERSION_NAME}.apk" \
-            "GrantFlow-${ANDROID_VERSION_NAME}.aab" \
-            grantflow-android.sha256 \
-            --target "$GITHUB_SHA" \
-            --title "GrantFlow Android ${ANDROID_VERSION_NAME}" \
-            --notes "$NOTES"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Idempotent re-run: upload (or overwrite) assets on the existing release.
+            gh release upload "$TAG" \
+              "GrantFlow-${ANDROID_VERSION_NAME}.apk" \
+              "GrantFlow-${ANDROID_VERSION_NAME}.aab" \
+              grantflow-android.sha256 \
+              --clobber
+          else
+            # First publish for this version tag.
+            gh release create "$TAG" \
+              "GrantFlow-${ANDROID_VERSION_NAME}.apk" \
+              "GrantFlow-${ANDROID_VERSION_NAME}.aab" \
+              grantflow-android.sha256 \
+              --target "$GITHUB_SHA" \
+              --title "GrantFlow Android ${ANDROID_VERSION_NAME}" \
+              --notes "$NOTES"
+          fi
