@@ -3,6 +3,7 @@ import {
   HandCoins,
   Kanban,
   LayoutDashboard,
+  Leaf,
   LifeBuoy,
 } from 'lucide-react'
 
@@ -49,6 +50,12 @@ export const END_USER_NAV_GROUPS = Object.freeze([
         routeName: 'ItemFunding',
         url: createPageUrl('ItemFunding'),
         icon: HandCoins,
+      },
+      {
+        title: 'No-Cost Green Home Upgrades',
+        routeName: 'GreenHomePrograms',
+        url: createPageUrl('GreenHomePrograms'),
+        icon: Leaf,
       },
     ],
   },

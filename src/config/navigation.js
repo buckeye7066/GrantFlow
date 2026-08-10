@@ -28,7 +28,6 @@ import {
   Beaker,
   Shield,
   Library,
-  Leaf,
 } from "lucide-react";
 
 /** Route path (no leading slash in key) → human label for breadcrumb/phase */
@@ -44,7 +43,6 @@ export const ROUTE_LABELS = {
   FundingOpportunities: "Find Grants",
   FundingLibrary: "Funding Library",
   ItemFunding: "Item Funding",
-  GreenHomePrograms: "No-Cost Green Home Upgrades",
   ProfileMatcher: "Match to Grants",
   Pipeline: "Your Applications",
   GrantDetail: "Grant",
@@ -119,7 +117,6 @@ export const MORE_NAV = [
   { title: "Match to Grants", url: createPageUrl("ProfileMatcher"), icon: Search, route: "ProfileMatcher" },
   { title: "Smart Match", url: createPageUrl("SmartMatcher"), icon: Brain, route: "SmartMatcher" },
   { title: "Item Funding", url: createPageUrl("ItemFunding"), icon: FileText, route: "ItemFunding" },
-  { title: "No-Cost Green Home Upgrades", url: createPageUrl("GreenHomePrograms"), icon: Leaf, route: "GreenHomePrograms" },
   { title: "Funding Sources", url: createPageUrl("SourceDirectory"), icon: DatabaseZap, route: "SourceDirectory" },
   { title: "Data Sources", url: createPageUrl("DataSources"), icon: Database, route: "DataSources" },
   { title: "Parse NOFO", url: createPageUrl("NOFOParser"), icon: FileStack, route: "NOFOParser" },
