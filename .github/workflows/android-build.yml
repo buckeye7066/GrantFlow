@@ -1,12 +1,10 @@
-name: Android build
+name: Android build and repo-direct release
 
-# Builds Android binaries on every push to main and uploads them as
-# Actions artifacts, where App Store Publisher's "From GitHub" tab can
-# list and fetch them:
-#   grantflow-debug-apk   — debug-signed, installable for testing
-#   grantflow-release-aab — upload-key-signed .aab, ready for Play Store
-# Release signing uses the ANDROID_KEYSTORE_* repo secrets (upload
-# keystore lives at ~/.android-keystores/grantflow-upload.jks locally).
+# A passing main build publishes a signed APK to GitHub Releases so a
+# repo-direct updater such as Obtainium can detect and install updates.
+# IMPORTANT: the keystore secrets must represent the SAME signing key as
+# the APK already installed on the phone. The workflow fails closed if
+# signing material is unavailable.
 
 on:
   push:
@@ -24,11 +22,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  ANDROID_VERSION_CODE: ${{ github.run_number }}
+  ANDROID_VERSION_NAME: 1.0.${{ github.run_number }}
 
 jobs:
   android:
-    name: Build APK + AAB
+    name: Build signed APK + AAB and publish release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -41,33 +43,75 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
       - run: npm ci
-      # Inside Capacitor the origin is https://localhost, so the API base
-      # must be baked in at build time (client falls back to same-origin).
-      - run: npm run build
+      - name: Run release gates
+        run: npm test --if-present
+      - name: Build web application
+        run: npm run build
         env:
           VITE_API_URL: https://grantflow-production.up.railway.app
       - run: npx cap sync android
-      - run: ./gradlew assembleDebug --no-daemon
-        working-directory: android
-      - name: Decode upload keystore
-        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+      - name: Require persistent Android signing identity
+        shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      - name: Build signed release bundle
-        run: ./gradlew bundleRelease --no-daemon
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo 'ANDROID_KEYSTORE_BASE64 is missing'; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo 'ANDROID_KEYSTORE_PASSWORD is missing'; exit 1; }
+          test -n "$ANDROID_KEY_ALIAS" || { echo 'ANDROID_KEY_ALIAS is missing'; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo 'ANDROID_KEY_PASSWORD is missing'; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+      - name: Build signed release APK and AAB
+        run: ./gradlew assembleRelease bundleRelease --no-daemon
         working-directory: android
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_VERSION_CODE: ${{ env.ANDROID_VERSION_CODE }}
+          ANDROID_VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
+      - name: Verify release APK exists and record checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f android/app/build/outputs/apk/release/app-release.apk
+          sha256sum android/app/build/outputs/apk/release/app-release.apk > grantflow-android.sha256
+          cp android/app/build/outputs/apk/release/app-release.apk "GrantFlow-${ANDROID_VERSION_NAME}.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "GrantFlow-${ANDROID_VERSION_NAME}.aab"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: grantflow-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: grantflow-signed-android
+          path: |
+            GrantFlow-*.apk
+            GrantFlow-*.aab
+            grantflow-android.sha256
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: grantflow-release-aab
-          path: android/app/build/outputs/bundle/release/app-release.aab
-          if-no-files-found: error
+      - name: Publish GitHub Release for phone updater
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="android-v${ANDROID_VERSION_NAME}"
+          NOTES=$(cat <<EOF
+          Automated Android release from main.
+
+          Source SHA: ${GITHUB_SHA}
+          Android version: ${ANDROID_VERSION_NAME} (${ANDROID_VERSION_CODE})
+          Package: com.grantflow.app
+
+          This release is intended for repo-direct updating. Android will only install it over an existing copy when the signing certificate matches.
+          EOF
+          )
+          gh release create "$TAG" \
+            "GrantFlow-${ANDROID_VERSION_NAME}.apk" \
+            "GrantFlow-${ANDROID_VERSION_NAME}.aab" \
+            grantflow-android.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "GrantFlow Android ${ANDROID_VERSION_NAME}" \
+            --notes "$NOTES"
