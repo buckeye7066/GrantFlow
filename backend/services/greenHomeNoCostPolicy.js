@@ -84,20 +84,20 @@ const GREEN_HOME_PATTERNS = Object.freeze([
 ])
 
 const POSITIVE_NO_COST_PATTERNS = Object.freeze([
-  /\bno[- ]cost\b/i,
-  /\bat no cost\b/i,
-  /\bfree (?:weatherization|installation|upgrade|repair|service)s?\b/i,
-  /\bfree of charge\b/i,
-  /\bzero out[- ]of[- ]pocket\b/i,
-  /\b100% (?:covered|funded)\b/i,
-  /\bfully funded\b/i,
-  /\bdirect[- ]install(?:ation)?\b/i,
-  /\bprovided (?:free|without charge)\b/i,
-  /\bgrant[- ]funded\b/i,
-  /\bdoes not need to be repaid\b/i,
-  /\bno repayment\b/i,
-  /\bweatherization assistance program\b/i,
-  /\bliheap\b/i,
+  { pattern: /\bno[- ]cost\b/i, label: 'The source explicitly describes the service as no cost.' },
+  { pattern: /\bat no cost\b/i, label: 'The source explicitly states that the service is provided at no cost.' },
+  { pattern: /\bfree (?:weatherization|installation|upgrade|repair|service)s?\b/i, label: 'The source explicitly describes free weatherization, installation, upgrades, repairs, or services.' },
+  { pattern: /\bfree of charge\b/i, label: 'The source explicitly states that the service is free of charge.' },
+  { pattern: /\bzero out[- ]of[- ]pocket\b/i, label: 'The source explicitly states zero out-of-pocket cost.' },
+  { pattern: /\b100% (?:covered|funded)\b/i, label: 'The source states that the covered work is fully funded.' },
+  { pattern: /\bfully funded\b/i, label: 'The source states that the covered work is fully funded.' },
+  { pattern: /\bdirect[- ]install(?:ation)?\b/i, label: 'The source describes a direct-install program rather than a financing offer.' },
+  { pattern: /\bprovided (?:free|without charge)\b/i, label: 'The source states that the service is provided without charge.' },
+  { pattern: /\bgrant[- ]funded\b/i, label: 'The source describes the covered work as grant funded.' },
+  { pattern: /\bdoes not need to be repaid\b/i, label: 'The source states that the assistance does not need to be repaid.' },
+  { pattern: /\bno repayment\b/i, label: 'The source explicitly states that repayment is not required.' },
+  { pattern: /\bweatherization assistance program\b/i, label: 'The source identifies an official Weatherization Assistance Program path.' },
+  { pattern: /\bliheap\b/i, label: 'The source identifies a LIHEAP-administered energy-assistance path.' },
 ])
 
 const NEGATED_REPAYMENT_PATTERNS = Object.freeze([
@@ -122,6 +122,14 @@ const FORBIDDEN_COST_PATTERNS = Object.freeze([
 const RETIRED_PROGRAM_PATTERNS = Object.freeze([
   /\bsolar for all\b/i,
   /\bgreenhouse gas reduction fund\b/i,
+])
+
+const VERIFIED_SOURCE_TRUST = new Set([
+  'official_api',
+  'official_government',
+  'official_registry',
+  'verified',
+  'verified_source',
 ])
 
 function asText(value) {
@@ -181,10 +189,10 @@ function hasGreenHomeRelevance(text) {
 
 function noCostEvidence(text, result = {}) {
   if (result.no_cost_status === 'official_no_cost_path') {
-    return result.no_cost_evidence || 'Official no-cost assistance path'
+    return result.no_cost_evidence || 'An official source identifies this as a no-cost assistance path.'
   }
-  const matched = POSITIVE_NO_COST_PATTERNS.find((pattern) => pattern.test(text))
-  return matched ? matched.source : null
+  const matched = POSITIVE_NO_COST_PATTERNS.find(({ pattern }) => pattern.test(text))
+  return matched?.label || null
 }
 
 function structuredCostBlock(result = {}) {
@@ -206,7 +214,9 @@ function sourceTrust(result = {}) {
   const url = result.source_url || result.url || result.application_url || result.info_url
   if (isOfficialGovernmentUrl(url)) return 'official_government'
   if (result.result_source === 'official_green_home_locator') return 'official_government'
-  if (result.result_source === 'catalog' || result.result_source === 'curated') return 'catalog_reviewed'
+  const declared = String(result.source_trust || result.trust_level || '').trim().toLowerCase()
+  if (VERIFIED_SOURCE_TRUST.has(declared)) return 'verified_source'
+  if (result.result_source === 'catalog' || result.result_source === 'curated') return 'unverified_catalog'
   return 'unverified_web'
 }
 
@@ -257,7 +267,7 @@ export function classifyNoCostGreenHomeResult(result = {}) {
   }
 
   const trust = sourceTrust(result)
-  if (trust === 'unverified_web') {
+  if (!['official_government', 'verified_source'].includes(trust)) {
     return {
       status: 'review',
       reason: 'source_not_yet_verified',
