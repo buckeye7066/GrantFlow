@@ -1,3 +1,4 @@
+// Retry after explicitly typing the pure route-name registry.
 import fs from 'node:fs'
 
 const file = 'backend/db/migrate.js'
