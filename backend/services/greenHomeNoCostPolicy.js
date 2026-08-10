@@ -255,6 +255,7 @@ function hasExplicitVerification(result = {}) {
   const trust = declaredTrust(result)
   if (VERIFIED_SOURCE_TRUST.has(trust)) return true
   if (result.source_verified === true || result.link_verified === true || result.verified === true) return true
+  if (result.source_verified_at || result.last_verified_at || result.link_verified_at || result.verified_at) return true
   const origin = String(result.result_source || '').trim().toLowerCase()
   if (origin === 'official_api' || origin === 'official_registry') return true
   const status = String(
