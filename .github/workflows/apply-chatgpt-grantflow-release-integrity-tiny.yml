@@ -34,6 +34,9 @@ jobs:
             node --check "$file"
           done
 
+      - name: Extract the route registry from the React module
+        run: node scripts/chatgpt-release-fix/00-route-registry.mjs
+
       - name: Apply complete-catalog mission-health changes
         run: |
           node scripts/chatgpt-release-fix/01-mission-small.mjs
@@ -51,6 +54,7 @@ jobs:
       - name: Validate generated source and configuration
         run: |
           git diff --check
+          node --check src/pages/routeNames.js
           node --check shared/releaseIdentity.js
           node --check scripts/deployment-version-plugin.mjs
           node --check backend/routes/version.js
