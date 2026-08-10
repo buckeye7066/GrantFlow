@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Separator } from '@/components/ui/separator'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2, RotateCcw, Save, CheckCircle2 } from 'lucide-react'
+import MobileUpdateCard from '@/components/settings/MobileUpdateCard'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { env } from '@/config/env'
@@ -567,6 +568,9 @@ export default function Settings() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Native app only: manual OTA web-bundle updates (renders nothing on web). */}
+      <MobileUpdateCard />
     </div>
   )
 }

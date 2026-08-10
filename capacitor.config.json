@@ -5,5 +5,12 @@
   "server": {
     "androidScheme": "https",
     "iosScheme": "https"
+  },
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": false,
+      "statsUrl": "",
+      "updateUrl": ""
+    }
   }
 }

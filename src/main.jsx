@@ -17,6 +17,19 @@ initFrontendObservability()
 // Register global window error / unhandledrejection -> owner-email reporting (once).
 initClientErrorReporting()
 
+// Native app only: confirm the active OTA bundle booted successfully so
+// @capgo/capacitor-updater does not roll it back (manual-update mode; see
+// src/lib/mobileUpdater.js and the Settings "App Updates" card).
+import('@capacitor/core')
+  .then(async ({ Capacitor }) => {
+    if (!Capacitor.isNativePlatform()) return
+    const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
+    await CapacitorUpdater.notifyAppReady()
+  })
+  .catch(() => {
+    // Web build or plugin unavailable — nothing to confirm.
+  })
+
 // Global stale-chunk recovery. After a deploy, the open tab still references
 // chunk hashes that no longer exist; a dynamic import() then fails. lazyWithRetry
 // handles lazy routes, but raw import()s and Vite's modulepreload surface here:

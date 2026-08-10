@@ -7,8 +7,14 @@ android {
         applicationId "com.grantflow.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInteger()
-        versionName System.getenv("ANDROID_VERSION_NAME") ?: "1.0"
+        // NOTE: keep these as pre-computed locals. The previous inline form
+        // `versionCode (System.getenv(...) ?: "1").toInteger()` parses in
+        // Groovy as `versionCode(env).toInteger()` and crashes every local
+        // build with "Value is null".
+        def resolvedVersionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "2") as Integer
+        def resolvedVersionName = System.getenv("ANDROID_VERSION_NAME") ?: "1.1"
+        versionCode resolvedVersionCode
+        versionName resolvedVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
