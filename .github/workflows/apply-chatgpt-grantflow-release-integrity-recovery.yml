@@ -1,0 +1,98 @@
+name: Apply ChatGPT GrantFlow release integrity recovery
+
+on:
+  push:
+    branches:
+      - chatgpt/production-ready/grantflow
+    paths:
+      - .github/workflows/apply-chatgpt-grantflow-release-integrity-recovery.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-chatgpt-grantflow-release-integrity-recovery
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/production-ready/grantflow
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+      - name: Recover and strictly repair the historical asserted patch
+        shell: bash
+        run: |
+          git show 9666e9f3d1340ec8c24e155d33125839df578f54:scripts/apply-chatgpt-grantflow-release-integrity.mjs > /tmp/grantflow-release-integrity.mjs
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+
+          const file = '/tmp/grantflow-release-integrity.mjs'
+          const source = fs.readFileSync(file, 'utf8')
+          const replacements = new Map([
+            ['\u0441', 'c'], // Cyrillic small es accidentally substituted inside base64 text
+          ])
+          const nonAscii = [...new Set([...source].filter((char) => char.codePointAt(0) > 127))]
+          const unknown = nonAscii.filter((char) => !replacements.has(char))
+          console.log('Recovered patch non-ASCII code points:', nonAscii.map((char) => `U+${char.codePointAt(0).toString(16).toUpperCase()}`))
+          if (unknown.length > 0) {
+            throw new Error(`Refusing unknown recovered-patch characters: ${unknown.map((char) => `U+${char.codePointAt(0).toString(16).toUpperCase()}`).join(', ')}`)
+          }
+          let repaired = source
+          for (const [from, to] of replacements) repaired = repaired.split(from).join(to)
+          fs.writeFileSync(file, repaired)
+          NODE
+          node --check /tmp/grantflow-release-integrity.mjs
+      - name: Apply asserted release-integrity transformations
+        run: node /tmp/grantflow-release-integrity.mjs
+      - name: Validate changed text before dependency install
+        run: |
+          git diff --check
+          node --check shared/releaseIdentity.js
+          node --check scripts/deployment-version-plugin.mjs
+          node --check backend/routes/version.js
+          node --check backend/services/missionHealthService.js
+          node --check scripts/production-deployment-proof.mjs
+          node --check tests/unit/release-identity.test.mjs
+          node --check tests/unit/deployment-version-contract.test.mjs
+          node --check tests/mission/mission-health-dashboard.test.mjs
+          node -e "JSON.parse(require('fs').readFileSync('vercel.json','utf8'))"
+      - name: Install locked dependencies
+        run: npm ci --include=dev --include=optional --legacy-peer-deps
+      - name: Run focused release-integrity tests
+        run: >-
+          node --test
+          tests/unit/release-identity.test.mjs
+          tests/unit/deployment-version-contract.test.mjs
+          tests/mission/mission-health-dashboard.test.mjs
+      - name: Run focused lint
+        run: >-
+          npx eslint --max-warnings 0
+          shared/releaseIdentity.js
+          scripts/deployment-version-plugin.mjs
+          backend/routes/version.js
+          backend/services/missionHealthService.js
+          scripts/production-deployment-proof.mjs
+          tests/unit/release-identity.test.mjs
+          tests/unit/deployment-version-contract.test.mjs
+          tests/mission/mission-health-dashboard.test.mjs
+      - name: Run full typecheck and production build
+        run: |
+          npm run typecheck
+          npm run build
+      - name: Remove one-shot recovery workflow
+        run: rm .github/workflows/apply-chatgpt-grantflow-release-integrity-recovery.yml
+      - name: Commit validated release-integrity fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(release): bind catalog and deployment evidence"
+          git push origin HEAD:chatgpt/production-ready/grantflow
