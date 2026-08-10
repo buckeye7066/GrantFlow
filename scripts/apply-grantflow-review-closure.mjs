@@ -80,7 +80,7 @@ function expandStrictIpv6(value) {
     if (!octets) return null
     const high = ((octets[0] << 8) | octets[1]).toString(16)
     const low = ((octets[2] << 8) | octets[3]).toString(16)
-    address = `${address.slice(0, lastColon)}:${high}:${low}`
+    address = address.slice(0, lastColon) + ':' + high + ':' + low
   }
 
   const halves = address.split('::')
@@ -780,7 +780,6 @@ The classifier enforces these per-source review dates. An expired source is with
   assert.ok(h.matcher_version)
   assert.ok(h.targets)
 })`
-  source = replaceOnce(source, firstBefore, firstAfter, 'empty DB soft health test')
 
   const gateBefore = `test('mission-health: empty DB has production_gate=true and release_blockers=[]', async () => {
   const db = createDb()
