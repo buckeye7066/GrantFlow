@@ -8,3 +8,12 @@ export async function getItemSuggestions({ profileId, limit = 8 } = {}) {
   return apiFetch(`/api/items/suggestions${query ? `?${query}` : ""}`)
 }
 
+export async function searchGreenHomePrograms({ profileId } = {}) {
+  const id = String(profileId || "").trim()
+  if (!id || id === "all" || id === "__admin__") {
+    throw new Error("Select a profile before searching for no-cost green home upgrades.")
+  }
+  return apiFetch(`/api/item-needs/${encodeURIComponent(id)}/green-home`, {
+    method: "POST",
+  })
+}
