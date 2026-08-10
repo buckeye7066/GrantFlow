@@ -71,7 +71,7 @@ jobs:
             > "$RUNNER_TEMP/keystore-cert.sha256"
           test -s "$RUNNER_TEMP/keystore-cert.sha256"
 
-          BASELINE_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[] | select(.tagName | startswith("android-v")) | .tagName' | head -n 1 || true)
+          BASELINE_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '[.[] | select(.tagName | startswith("android-v"))][0].tagName // ""')
           if [ -n "$BASELINE_TAG" ]; then
             mkdir -p "$RUNNER_TEMP/signing-baseline"
             gh release download "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --pattern grantflow-signing-cert.sha256 --dir "$RUNNER_TEMP/signing-baseline"
