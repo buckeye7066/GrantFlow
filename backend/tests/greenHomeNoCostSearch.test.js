@@ -50,6 +50,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         description: 'Income-qualified households receive insulation at no cost.',
         source_url: 'https://energy.example.gov/no-cost-insulation',
         result_source: 'catalog',
+        source_verified: true,
         source_verified_at: '2026-08-09T00:00:00Z',
         need_score: 40,
       },
@@ -59,6 +60,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         description: 'Tax credit for purchasing rooftop solar panels.',
         source_url: 'https://energy.example.gov/tax-credit',
         result_source: 'catalog',
+        source_verified: true,
         source_verified_at: '2026-08-09T00:00:00Z',
         need_score: 80,
       },
@@ -68,6 +70,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         description: 'Heat pump assistance may be available. Contact the provider for cost terms.',
         source_url: 'https://energy.example.gov/heat-pump-help',
         result_source: 'catalog',
+        source_verified: true,
         source_verified_at: '2026-08-09T00:00:00Z',
         need_score: 60,
       },
@@ -166,7 +169,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         source_trust_tier: 'official_portal',
         record_origin: 'curated_verified',
         requires_match: 0,
-        match_percentage: 91,
+        match_percentage: 0,
         is_loan: 0,
         eligibility_text: 'Free weatherization at no cost for qualifying households.',
       },
@@ -182,7 +185,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         source_trust_tier: 'official_portal',
         record_origin: 'curated_verified',
         requires_match: 0,
-        match_percentage: 99,
+        match_percentage: 0,
         is_loan: 1,
         eligibility_text: 'No-cost solar marketing offer financed through a loan.',
       },
@@ -230,7 +233,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
       url: 'https://energy.example.gov/free-weatherization/apply',
       no_cost_source_trust: 'official_government',
       no_cost_source_age_days: 1,
-      match_percentage: 91,
+      match_percentage: 0,
     })
     expect(result.excluded_reasons).toContainEqual({ reason: 'loan_or_financing', count: 1 })
     expect(result.search_coverage).toMatchObject({
@@ -259,6 +262,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
       description: 'A no-cost program for qualifying households.',
       source_url: 'https://energy.example.gov/free-upgrades?utm_source=test',
       result_source: 'catalog',
+      source_verified: true,
       source_verified_at: '2026-08-09T00:00:00Z',
     }
     const searchItemNeedsImpl = vi.fn().mockResolvedValue({
@@ -296,6 +300,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         description: 'Free weatherization for qualifying households.',
         source_url: 'https://energy.example.gov/stale',
         result_source: 'catalog',
+        source_verified: true,
         source_verified_at: '2026-01-01T00:00:00Z',
       },
     ]))

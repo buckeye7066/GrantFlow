@@ -229,12 +229,11 @@ function structuredCostBlock(result = {}) {
   if (result.financing_required === true) return 'loan_or_financing'
   if (result.requires_lease_or_ppa === true) return 'lease_or_ppa'
   if (result.applicant_contribution_required === true) return 'cost_share_or_match'
+  if (positiveNumber(result.match_percentage)) return 'cost_share_or_match'
   if (positiveNumber(result.required_match_percentage)) return 'cost_share_or_match'
   if (positiveNumber(result.cost_share_percentage)) return 'cost_share_or_match'
   if (positiveNumber(result.applicant_contribution_percentage)) return 'cost_share_or_match'
   if (positiveNumber(result.customer_contribution_percentage)) return 'cost_share_or_match'
-  // `match_percentage` is GrantFlow's profile-fit score and is deliberately not
-  // interpreted as a financial matching-funds requirement.
   return null
 }
 
@@ -255,7 +254,6 @@ function hasExplicitVerification(result = {}) {
   const trust = declaredTrust(result)
   if (VERIFIED_SOURCE_TRUST.has(trust)) return true
   if (result.source_verified === true || result.link_verified === true || result.verified === true) return true
-  if (result.source_verified_at || result.last_verified_at || result.link_verified_at || result.verified_at) return true
   const origin = String(result.result_source || '').trim().toLowerCase()
   if (origin === 'official_api' || origin === 'official_registry') return true
   const status = String(

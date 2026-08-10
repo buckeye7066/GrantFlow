@@ -17,6 +17,7 @@ function official(overrides = {}) {
     description: 'Income-qualified households receive a heat pump at no cost. No repayment.',
     source_url: 'https://energy.example.gov/programs/heat-pump',
     result_source: 'catalog',
+    source_verified: true,
     source_verified_at: '2026-08-09T00:00:00Z',
     ...overrides,
   }
@@ -51,11 +52,14 @@ describe('green-home strict no-cost policy', () => {
     })
   })
 
-  it('excludes explicit structured payment fields but never treats profile match score as matching funds', () => {
+  it('excludes structured loan, matching-funds, cost-share, and upfront-payment fields', () => {
     expect(classify(official({ is_loan: true }))).toMatchObject({
       status: 'excluded', reason: 'loan_or_financing',
     })
     expect(classify(official({ requires_match: true }))).toMatchObject({
+      status: 'excluded', reason: 'cost_share_or_match',
+    })
+    expect(classify(official({ match_percentage: 20 }))).toMatchObject({
       status: 'excluded', reason: 'cost_share_or_match',
     })
     expect(classify(official({ required_match_percentage: 20 }))).toMatchObject({
@@ -66,10 +70,6 @@ describe('green-home strict no-cost policy', () => {
     })
     expect(classify(official({ requires_upfront_payment: true }))).toMatchObject({
       status: 'excluded', reason: 'applicant_payment',
-    })
-    expect(classify(official({ match_percentage: 97 }))).toMatchObject({
-      status: 'eligible',
-      reason: 'explicit_no_cost_no_loan_path',
     })
   })
 
@@ -123,6 +123,20 @@ describe('green-home strict no-cost policy', () => {
       status: 'review',
       reason: 'source_not_yet_verified',
       source_trust: 'unverified_catalog',
+    })
+  })
+
+  it('does not treat a date alone as proof that source verification passed', () => {
+    expect(classify({
+      title: 'No-cost state weatherization program',
+      description: 'Free weatherization for qualifying households.',
+      source_url: 'https://energy.example.gov/weatherization',
+      result_source: 'catalog',
+      source_verified_at: '2026-08-09T00:00:00Z',
+    })).toMatchObject({
+      status: 'review',
+      reason: 'source_not_yet_verified',
+      source_trust: 'unverified_official',
     })
   })
 
@@ -198,6 +212,7 @@ describe('green-home strict no-cost policy', () => {
       description: 'Free residential solar panels under the Greenhouse Gas Reduction Fund.',
       source_url: 'https://www.epa.gov/greenhouse-gas-reduction-fund/solar-all',
       result_source: 'catalog',
+      source_verified: true,
       source_verified_at: '2026-08-09T00:00:00Z',
     })).toMatchObject({
       status: 'excluded',
