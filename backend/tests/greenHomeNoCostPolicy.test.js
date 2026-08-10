@@ -16,13 +16,16 @@ function official(overrides = {}) {
 }
 
 describe('green-home strict no-cost policy', () => {
-  it('accepts an official, explicitly no-cost home upgrade', () => {
-    expect(classifyNoCostGreenHomeResult(official())).toMatchObject({
+  it('accepts an official, explicitly no-cost home upgrade with human-readable evidence', () => {
+    const result = classifyNoCostGreenHomeResult(official())
+    expect(result).toMatchObject({
       status: 'eligible',
       reason: 'explicit_no_cost_no_loan_path',
       source_trust: 'official_government',
       policy_version: GREEN_HOME_NO_COST_POLICY_VERSION,
     })
+    expect(result.no_cost_evidence).toMatch(/explicitly states.*no cost|explicitly describes.*no cost/i)
+    expect(result.no_cost_evidence).not.toMatch(/^\//)
   })
 
   it.each([
@@ -64,6 +67,32 @@ describe('green-home strict no-cost policy', () => {
     }))).toMatchObject({
       status: 'review',
       reason: 'no_cost_not_proven',
+    })
+  })
+
+  it('holds an unverified catalog record for review even when it claims no cost', () => {
+    expect(classifyNoCostGreenHomeResult({
+      title: 'No-cost local insulation program',
+      description: 'Free insulation installation for qualifying homeowners.',
+      source_url: 'https://community-energy.example/free-insulation',
+      result_source: 'catalog',
+    })).toMatchObject({
+      status: 'review',
+      reason: 'source_not_yet_verified',
+      source_trust: 'unverified_catalog',
+    })
+  })
+
+  it('accepts a non-government source only when the record carries verified trust', () => {
+    expect(classifyNoCostGreenHomeResult({
+      title: 'No-cost nonprofit weatherization program',
+      description: 'Free weatherization service for qualifying households.',
+      source_url: 'https://verified-community.example/weatherization',
+      result_source: 'catalog',
+      source_trust: 'verified',
+    })).toMatchObject({
+      status: 'eligible',
+      source_trust: 'verified_source',
     })
   })
 
