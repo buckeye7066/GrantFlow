@@ -147,6 +147,95 @@ describe('searchGreenHomeNoCostPrograms', () => {
       web_attempted: true,
       web_raw: 12,
       web_matched_before_no_cost_policy: 3,
+      catalog_verification_requested: 4,
+      catalog_verification_enriched: 0,
+    })
+  })
+
+  it('rehydrates persisted catalog verification and payment facts before classification', async () => {
+    const rows = [
+      {
+        id: 'catalog-free',
+        source_url: 'https://energy.example.gov/free-weatherization',
+        application_url: 'https://energy.example.gov/free-weatherization/apply',
+        final_url: 'https://energy.example.gov/free-weatherization/apply',
+        last_verified_at: '2026-08-09T00:00:00Z',
+        link_status: 'ok',
+        verified_url: 1,
+        verification_status: 'verified_live_url',
+        source_trust_tier: 'official_portal',
+        record_origin: 'curated_verified',
+        requires_match: 0,
+        match_percentage: 91,
+        is_loan: 0,
+        eligibility_text: 'Free weatherization at no cost for qualifying households.',
+      },
+      {
+        id: 'catalog-loan',
+        source_url: 'https://energy.example.gov/solar-loan',
+        application_url: 'https://energy.example.gov/solar-loan/apply',
+        final_url: 'https://energy.example.gov/solar-loan/apply',
+        last_verified_at: '2026-08-09T00:00:00Z',
+        link_status: 'ok',
+        verified_url: 1,
+        verification_status: 'verified_live_url',
+        source_trust_tier: 'official_portal',
+        record_origin: 'curated_verified',
+        requires_match: 0,
+        match_percentage: 99,
+        is_loan: 1,
+        eligibility_text: 'No-cost solar marketing offer financed through a loan.',
+      },
+    ]
+    let preparedSql = ''
+    const all = vi.fn().mockResolvedValue(rows)
+    const db = {
+      prepare: vi.fn((sql) => {
+        preparedSql = sql
+        return { all }
+      }),
+    }
+    const searchItemNeedsImpl = vi.fn().mockResolvedValue(reportWith([
+      {
+        id: 'catalog-free',
+        title: 'No-cost home weatherization',
+        description: 'Free weatherization for qualifying households.',
+        url: 'https://energy.example.gov/free-weatherization',
+        result_source: 'catalog',
+        need_score: 50,
+      },
+      {
+        id: 'catalog-loan',
+        title: 'No-cost residential solar offer',
+        description: 'No-cost solar offer for homeowners.',
+        url: 'https://energy.example.gov/solar-loan',
+        result_source: 'catalog',
+        need_score: 80,
+      },
+    ]))
+
+    const result = await searchGreenHomeNoCostPrograms(db, {
+      profileId: 'profile-1',
+      now: NOW,
+      searchItemNeedsImpl,
+      officialGreenHomePathsImpl: () => [],
+    })
+
+    expect(db.prepare).toHaveBeenCalledTimes(1)
+    expect(preparedSql).toMatch(/last_verified_at/)
+    expect(preparedSql).toMatch(/requires_match/)
+    expect(all).toHaveBeenCalledWith('catalog-free', 'catalog-loan')
+    expect(result.programs.map((program) => program.id)).toEqual(['catalog-free'])
+    expect(result.programs[0]).toMatchObject({
+      url: 'https://energy.example.gov/free-weatherization/apply',
+      no_cost_source_trust: 'official_government',
+      no_cost_source_age_days: 1,
+      match_percentage: 91,
+    })
+    expect(result.excluded_reasons).toContainEqual({ reason: 'loan_or_financing', count: 1 })
+    expect(result.search_coverage).toMatchObject({
+      catalog_verification_requested: 2,
+      catalog_verification_enriched: 2,
     })
   })
 
@@ -223,6 +312,32 @@ describe('searchGreenHomeNoCostPrograms', () => {
       { reason: 'source_verification_date_missing', count: 1 },
       { reason: 'source_verification_stale', count: 1 },
     ]))
+  })
+
+  it('surfaces catalog-verification query failure as partial source coverage', async () => {
+    const db = {
+      prepare: vi.fn(() => ({
+        all: vi.fn().mockRejectedValue(new Error('verification metadata unavailable')),
+      })),
+    }
+    const result = await searchGreenHomeNoCostPrograms(db, {
+      profileId: 'profile-1',
+      now: NOW,
+      searchItemNeedsImpl: async () => reportWith([{
+        id: 'catalog-result',
+        title: 'No-cost weatherization',
+        description: 'Free weatherization for qualifying households.',
+        source_url: 'https://energy.example.gov/program',
+        result_source: 'catalog',
+      }]),
+      officialGreenHomePathsImpl: () => [],
+    })
+
+    expect(result.programs).toHaveLength(0)
+    expect(result.search_coverage.source_errors).toContainEqual(expect.objectContaining({
+      lane: 'catalog_verification',
+      error: 'verification metadata unavailable',
+    }))
   })
 
   it('keeps stale official locators out of primary results', async () => {

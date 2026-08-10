@@ -12,6 +12,7 @@ const OUTBOUND_SEARCH_FIELDS = Object.freeze([
   'signals.location.state',
   'signals.entityType',
 ])
+const CATALOG_VERIFICATION_MAX_IDS = 200
 
 function normalizedUrl(value) {
   try {
@@ -161,6 +162,92 @@ export function minimizeGreenHomeSearchContext(profileContext = {}) {
   }
 }
 
+function catalogResultIds(report = {}) {
+  return [...new Set(
+    (report.items || [])
+      .flatMap((item) => item?.results || [])
+      .filter((result) => result?.result_source === 'catalog' && result?.id)
+      .map((result) => String(result.id)),
+  )].slice(0, CATALOG_VERIFICATION_MAX_IDS)
+}
+
+function booleanColumn(value) {
+  return value === true || value === 1 || value === '1'
+}
+
+/**
+ * Item search intentionally returns a compact result shape. The green-home
+ * policy needs the persisted verification and payment fields as well, so it
+ * rehydrates those fields by immutable opportunity id before classification.
+ */
+export async function loadGreenHomeCatalogVerification(db, report = {}) {
+  const ids = catalogResultIds(report)
+  const byId = new Map()
+  if (ids.length === 0 || !db || typeof db.prepare !== 'function') {
+    return { byId, requested: ids.length, enriched: 0, error: null }
+  }
+
+  const placeholders = ids.map(() => '?').join(', ')
+  try {
+    const rows = await db.prepare(
+      `SELECT id, source_url, application_url, final_url,
+              last_verified_at, link_status, link_status_code,
+              verification_method, verified_by, verified_url,
+              verification_status, source_trust_tier, record_origin,
+              reality_status, http_status,
+              requires_match, match_percentage, is_loan,
+              funding_type, opportunity_type,
+              eligibility_text, eligibility_bullets,
+              page_fact_schema_version, field_provenance
+         FROM funding_opportunities
+        WHERE id IN (${placeholders})`,
+    ).all(...ids)
+
+    for (const row of rows || []) {
+      const id = String(row?.id || '')
+      if (!id) continue
+      const verifiedStatus =
+        booleanColumn(row.verified_url) ||
+        ['ok', 'redirect'].includes(String(row.link_status || '').toLowerCase()) ||
+        String(row.verification_status || '').toLowerCase() === 'verified_live_url'
+      byId.set(id, {
+        source_url: row.source_url || null,
+        application_url: row.application_url || null,
+        final_url: row.final_url || null,
+        source_verified_at: row.last_verified_at || null,
+        last_verified_at: row.last_verified_at || null,
+        link_status: row.link_status || null,
+        link_status_code: row.link_status_code ?? null,
+        verification_method: row.verification_method || null,
+        verified_by: row.verified_by || null,
+        source_verified: verifiedStatus,
+        verification_status: row.verification_status || null,
+        source_trust_tier: row.source_trust_tier || null,
+        record_origin: row.record_origin || null,
+        reality_status: row.reality_status || null,
+        http_status: row.http_status ?? null,
+        requires_match: booleanColumn(row.requires_match),
+        match_percentage: row.match_percentage ?? null,
+        is_loan: booleanColumn(row.is_loan),
+        funding_type: row.funding_type || null,
+        opportunity_type: row.opportunity_type || null,
+        eligibility_text: row.eligibility_text || null,
+        eligibility_bullets: row.eligibility_bullets || null,
+        page_fact_schema_version: row.page_fact_schema_version ?? null,
+        field_provenance: row.field_provenance || null,
+      })
+    }
+    return { byId, requested: ids.length, enriched: byId.size, error: null }
+  } catch (error) {
+    return {
+      byId,
+      requested: ids.length,
+      enriched: 0,
+      error: error?.message || String(error),
+    }
+  }
+}
+
 function summarizeLanes(report = {}) {
   const items = Array.isArray(report.items) ? report.items : []
   return {
@@ -217,6 +304,7 @@ export async function searchGreenHomeNoCostPrograms(db, {
     variant: 'funding',
     timeoutMs,
   })
+  const verification = await loadGreenHomeCatalogVerification(db, report)
 
   const eligible = new Map()
   const review = new Map()
@@ -224,11 +312,19 @@ export async function searchGreenHomeNoCostPrograms(db, {
 
   for (const itemReport of report.items || []) {
     for (const result of itemReport.results || []) {
-      const classification = classifyNoCostGreenHomeResult(result, { now })
+      const persisted = result?.id ? verification.byId.get(String(result.id)) : null
+      const enriched = persisted
+        ? {
+            ...result,
+            ...persisted,
+            url: persisted.final_url || persisted.application_url || persisted.source_url || result.url,
+          }
+        : result
+      const classification = classifyNoCostGreenHomeResult(enriched, { now })
       if (classification.status === 'eligible') {
-        addCandidate(eligible, result, classification, itemReport.item)
+        addCandidate(eligible, enriched, classification, itemReport.item)
       } else if (classification.status === 'review') {
-        addCandidate(review, result, classification, itemReport.item)
+        addCandidate(review, enriched, classification, itemReport.item)
       } else {
         excludedCounts.set(
           classification.reason,
@@ -278,6 +374,15 @@ export async function searchGreenHomeNoCostPrograms(db, {
 
   const reviewRows = [...review.values()]
   const laneSummary = summarizeLanes(report)
+  laneSummary.catalog_verification_requested = verification.requested
+  laneSummary.catalog_verification_enriched = verification.enriched
+  if (verification.error) {
+    laneSummary.source_errors.push({
+      item: 'green_home_catalog_verification',
+      lane: 'catalog_verification',
+      error: verification.error,
+    })
+  }
 
   return {
     success: true,
