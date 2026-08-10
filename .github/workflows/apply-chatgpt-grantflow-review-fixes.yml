@@ -6,6 +6,7 @@ on:
       - chatgpt/production-ready/grantflow
     paths:
       - scripts/apply-chatgpt-grantflow-review-fixes.mjs
+      - .github/workflows/apply-chatgpt-grantflow-review-fixes.yml
 
 permissions:
   contents: write
@@ -28,6 +29,8 @@ jobs:
           node-version: 20.19.0
       - name: Apply asserted source transformations
         run: node scripts/apply-chatgpt-grantflow-review-fixes.mjs
+      - name: Normalize generated Markdown whitespace
+        run: sed -i 's/[[:space:]]\+$//' docs/green-home-no-cost-programs.md
       - name: Validate generated source syntax and JSON
         run: |
           node --check backend/config/urlRules.js
