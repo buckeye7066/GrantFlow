@@ -6,6 +6,7 @@ on:
       - chatgpt/production-ready/grantflow
     paths:
       - scripts/one-shot-grantflow-avatar-hardening.mjs
+      - scripts/run-one-shot-grantflow-avatar-hardening.mjs
       - .github/workflows/chatgpt-grantflow-avatar-hardening.yml
 
 permissions:
@@ -34,7 +35,7 @@ jobs:
         run: npm ci --include=optional
 
       - name: Apply guarded transformation
-        run: node scripts/one-shot-grantflow-avatar-hardening.mjs
+        run: node scripts/run-one-shot-grantflow-avatar-hardening.mjs
 
       - name: Verify intended file scope
         shell: bash
@@ -63,6 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           rm scripts/one-shot-grantflow-avatar-hardening.mjs
+          rm scripts/run-one-shot-grantflow-avatar-hardening.mjs
           rm .github/workflows/chatgpt-grantflow-avatar-hardening.yml
           git diff --check
           git config user.name 'ChatGPT'
@@ -72,6 +74,7 @@ jobs:
                   backend/tests/safeFetchSsrf.test.js \
                   backend/tests/avatarCrawlerSsrf.test.js \
                   scripts/one-shot-grantflow-avatar-hardening.mjs \
+                  scripts/run-one-shot-grantflow-avatar-hardening.mjs \
                   .github/workflows/chatgpt-grantflow-avatar-hardening.yml
           git commit -m 'fix(security): pin avatar egress and cap response bodies [chatgpt-one-shot-done]'
           git push origin HEAD:chatgpt/production-ready/grantflow
