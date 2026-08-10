@@ -7,8 +7,8 @@ android {
         applicationId "com.grantflow.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInteger()
+        versionName System.getenv("ANDROID_VERSION_NAME") ?: "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,9 +16,9 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    // Upload-key signing for Play Store builds. Keystore path/passwords come
-    // from env vars (set by CI from repo secrets); without them, release
-    // builds stay unsigned and local dev is unaffected.
+    // Upload-key signing for Play Store builds and repo-direct APK updates.
+    // The same keystore must be used for every update installed over an
+    // existing Android app. Secrets are injected by CI and never committed.
     signingConfigs {
         release {
             if (System.getenv("ANDROID_KEYSTORE_PATH")) {
