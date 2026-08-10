@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import {
   buildDatabaseMigrationIdentity,
+  buildEvidenceArtifact,
   buildMigrationSetManifest,
   buildRepositoryReleaseIdentity,
   canonicalJson,
@@ -39,11 +40,17 @@ function fixtureRepo() {
   return repoRoot
 }
 
-function fakeDb(rows, dialect = 'postgres') {
+function fakeDb(rows, {
+  dialect = 'postgres',
+  checksumColumns = true,
+} = {}) {
   return {
     dialect,
     prepare(sql) {
       assert.match(sql, /FROM _migrations/)
+      if (!checksumColumns && /checksum_sha256/.test(sql)) {
+        throw new Error('no such column: checksum_sha256')
+      }
       return {
         async all() {
           return rows
@@ -51,6 +58,16 @@ function fakeDb(rows, dialect = 'postgres') {
       }
     },
   }
+}
+
+function ledgerRows(manifest, provenance = 'applied_bytes') {
+  return manifest.files.map((file, index) => ({
+    id: index + 1,
+    name: file.name,
+    checksum_sha256: file.sha256,
+    checksum_provenance: provenance,
+    applied_at: `2026-01-0${index + 1}T00:00:00Z`,
+  }))
 }
 
 test('release identity uses canonical JSON and exact provider SHAs', () => {
@@ -79,7 +96,7 @@ test('repository release identity binds commit, migration sets, and evidence art
     useCache: false,
   })
 
-  assert.equal(identity.contract, 'grantflow-release-identity-v1')
+  assert.equal(identity.contract, 'grantflow-release-identity-v2')
   assert.equal(identity.commit, commit)
   assert.equal(identity.package_version, '1.2.3')
   assert.equal(identity.migration_sets.postgres.file_count, 2)
@@ -110,6 +127,53 @@ test('repository release identity binds commit, migration sets, and evidence art
   assert.notEqual(changed.manifest_sha256, identity.manifest_sha256)
 })
 
+test('migration manifests use deterministic code-unit ordering', () => {
+  const repoRoot = fixtureRepo()
+  fs.writeFileSync(
+    path.join(repoRoot, 'backend/db/postgres/migrations/0003_z.sql'),
+    'SELECT 1;\n',
+  )
+  fs.writeFileSync(
+    path.join(repoRoot, 'backend/db/postgres/migrations/0003_ä.sql'),
+    'SELECT 2;\n',
+  )
+  const manifest = buildMigrationSetManifest({
+    repoRoot,
+    dialect: 'postgres',
+    useCache: false,
+  })
+  assert.deepEqual(
+    manifest.files.map((file) => file.name),
+    ['0001_first.sql', '0002_second.mjs', '0003_z.sql', '0003_ä.sql'],
+  )
+})
+
+test('artifact and migration hashing refuse traversal and symlink escapes', () => {
+  const repoRoot = fixtureRepo()
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grantflow-release-outside-'))
+  const outsideFile = path.join(outsideDir, 'outside.sql')
+  fs.writeFileSync(outsideFile, 'SELECT secret;\n')
+
+  assert.throws(
+    () => buildEvidenceArtifact({ repoRoot, relativePath: '../outside.sql' }),
+    /repository-relative|escapes the canonical repository root/,
+  )
+
+  const evidenceLink = path.join(repoRoot, 'docs/production-readiness/escape.md')
+  fs.symlinkSync(outsideFile, evidenceLink)
+  assert.throws(
+    () => buildEvidenceArtifact({ repoRoot, relativePath: 'docs/production-readiness/escape.md' }),
+    /escapes the canonical repository root/,
+  )
+
+  const migrationLink = path.join(repoRoot, 'backend/db/postgres/migrations/0003_escape.sql')
+  fs.symlinkSync(outsideFile, migrationLink)
+  assert.throws(
+    () => buildMigrationSetManifest({ repoRoot, dialect: 'postgres', useCache: false }),
+    /escapes the canonical repository root/,
+  )
+})
+
 test('migration-set hash changes when a migration byte changes', () => {
   const repoRoot = fixtureRepo()
   clearReleaseIdentityCaches()
@@ -131,7 +195,7 @@ test('migration-set hash changes when a migration byte changes', () => {
   assert.notEqual(after.files[0].sha256, before.files[0].sha256)
 })
 
-test('database migration identity matches only the exact ordered release set', async () => {
+test('database identity requires stored checksums matching the exact ordered release set', async () => {
   const repoRoot = fixtureRepo()
   clearReleaseIdentityCaches()
   const releaseIdentity = buildRepositoryReleaseIdentity({
@@ -139,10 +203,12 @@ test('database migration identity matches only the exact ordered release set', a
     commit: 'c'.repeat(40),
     useCache: false,
   })
-  const rows = [
-    { id: 1, name: '0001_first.sql', applied_at: '2026-01-01T00:00:00Z' },
-    { id: 2, name: '0002_second.mjs', applied_at: '2026-01-02T00:00:00Z' },
-  ]
+  const manifest = buildMigrationSetManifest({
+    repoRoot,
+    dialect: 'postgres',
+    useCache: false,
+  })
+  const rows = ledgerRows(manifest)
 
   const exact = await buildDatabaseMigrationIdentity(fakeDb(rows), {
     repoRoot,
@@ -151,14 +217,19 @@ test('database migration identity matches only the exact ordered release set', a
   assert.equal(exact.available, true)
   assert.equal(exact.matches_release, true)
   assert.equal(exact.order_matches, true)
+  assert.equal(exact.name_parity_matches, true)
+  assert.equal(exact.checksums_match, true)
+  assert.equal(exact.stored_checksum_complete, true)
+  assert.equal(exact.historical_applied_bytes_attested, true)
   assert.deepEqual(exact.pending, [])
   assert.deepEqual(exact.unexpected, [])
+  assert.deepEqual(exact.checksum_missing, [])
+  assert.deepEqual(exact.checksum_mismatches, [])
   assert.equal(exact.applied_sha256, exact.expected_sha256)
   assert.equal(exact.expected_sha256, releaseIdentity.migration_sets.postgres.manifest_sha256)
-  assert.equal(exact.historical_applied_bytes_attested, false)
   assert.equal(
     exact.hash_provenance,
-    'release_file_hashes_mapped_to_ordered_database_migration_names',
+    'stored_database_migration_checksums_compared_with_release_file_hashes',
   )
 
   const reversed = await buildDatabaseMigrationIdentity(fakeDb([...rows].reverse()), {
@@ -175,15 +246,66 @@ test('database migration identity matches only the exact ordered release set', a
   assert.equal(missing.matches_release, false)
   assert.deepEqual(missing.pending, ['0002_second.mjs'])
 
-  const unexpected = await buildDatabaseMigrationIdentity(fakeDb([
-    ...rows,
-    { id: 3, name: '9999_unknown.sql', applied_at: '2026-01-03T00:00:00Z' },
-  ]), {
+  const changedChecksumRows = rows.map((row) => ({ ...row }))
+  changedChecksumRows[0].checksum_sha256 = 'd'.repeat(64)
+  const changed = await buildDatabaseMigrationIdentity(fakeDb(changedChecksumRows), {
     repoRoot,
     releaseIdentity,
   })
-  assert.equal(unexpected.matches_release, false)
-  assert.deepEqual(unexpected.unexpected, ['9999_unknown.sql'])
+  assert.equal(changed.matches_release, false)
+  assert.equal(changed.checksums_match, false)
+  assert.deepEqual(changed.checksum_mismatches, [{
+    name: '0001_first.sql',
+    stored_sha256: 'd'.repeat(64),
+    release_sha256: manifest.files[0].sha256,
+  }])
+})
+
+test('name parity without stored checksums remains non-authoritative', async () => {
+  const repoRoot = fixtureRepo()
+  const releaseIdentity = buildRepositoryReleaseIdentity({
+    repoRoot,
+    commit: 'e'.repeat(40),
+    useCache: false,
+  })
+  const rows = [
+    { id: 1, name: '0001_first.sql', applied_at: '2026-01-01T00:00:00Z' },
+    { id: 2, name: '0002_second.mjs', applied_at: '2026-01-02T00:00:00Z' },
+  ]
+  const identity = await buildDatabaseMigrationIdentity(
+    fakeDb(rows, { checksumColumns: false }),
+    { repoRoot, releaseIdentity },
+  )
+
+  assert.equal(identity.name_parity_matches, true)
+  assert.equal(identity.checksum_columns_available, false)
+  assert.equal(identity.stored_checksum_complete, false)
+  assert.equal(identity.matches_release, false)
+  assert.deepEqual(identity.checksum_missing, ['0001_first.sql', '0002_second.mjs'])
+})
+
+test('legacy checksum baselines are transparent about historical-byte uncertainty', async () => {
+  const repoRoot = fixtureRepo()
+  const releaseIdentity = buildRepositoryReleaseIdentity({
+    repoRoot,
+    commit: 'f'.repeat(40),
+    useCache: false,
+  })
+  const manifest = buildMigrationSetManifest({
+    repoRoot,
+    dialect: 'postgres',
+    useCache: false,
+  })
+  const identity = await buildDatabaseMigrationIdentity(
+    fakeDb(ledgerRows(manifest, 'legacy_baseline_current_release')),
+    { repoRoot, releaseIdentity },
+  )
+
+  assert.equal(identity.matches_release, true)
+  assert.equal(identity.historical_applied_bytes_attested, false)
+  assert.deepEqual(identity.checksum_provenance_counts, {
+    legacy_baseline_current_release: 2,
+  })
 })
 
 test('sha256 helper is a stable content address', () => {
