@@ -8,6 +8,7 @@ on:
       - scripts/apply-grantflow-review-closure.mjs
       - scripts/apply-grantflow-liheap-review-guard.mjs
       - scripts/apply-grantflow-final-policy-fixes.mjs
+      - scripts/apply-grantflow-mission-empty-test-fix.mjs
       - .github/workflows/apply-grantflow-review-closure.yml
 
 permissions:
@@ -41,6 +42,7 @@ jobs:
           node scripts/apply-grantflow-review-closure.mjs
           node scripts/apply-grantflow-liheap-review-guard.mjs
           node scripts/apply-grantflow-final-policy-fixes.mjs
+          node scripts/apply-grantflow-mission-empty-test-fix.mjs
 
       - name: Validate generated JavaScript syntax
         run: |
@@ -89,6 +91,7 @@ jobs:
           rm -f scripts/apply-grantflow-review-closure.mjs
           rm -f scripts/apply-grantflow-liheap-review-guard.mjs
           rm -f scripts/apply-grantflow-final-policy-fixes.mjs
+          rm -f scripts/apply-grantflow-mission-empty-test-fix.mjs
           rm -f .github/workflows/apply-grantflow-review-closure.yml
 
       - name: Validate final diff
@@ -97,6 +100,7 @@ jobs:
           test ! -e scripts/apply-grantflow-review-closure.mjs
           test ! -e scripts/apply-grantflow-liheap-review-guard.mjs
           test ! -e scripts/apply-grantflow-final-policy-fixes.mjs
+          test ! -e scripts/apply-grantflow-mission-empty-test-fix.mjs
           test ! -e .github/workflows/apply-grantflow-review-closure.yml
 
       - name: Commit validated review closure
