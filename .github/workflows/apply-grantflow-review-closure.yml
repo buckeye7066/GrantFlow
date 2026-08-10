@@ -6,6 +6,7 @@ on:
       - chatgpt/production-ready/grantflow
     paths:
       - scripts/apply-grantflow-review-closure.mjs
+      - scripts/apply-grantflow-liheap-review-guard.mjs
       - .github/workflows/apply-grantflow-review-closure.yml
 
 permissions:
@@ -34,13 +35,16 @@ jobs:
           node-version: 20.20.2
           cache: npm
 
-      - name: Apply asserted review-closure patch
-        run: node scripts/apply-grantflow-review-closure.mjs
+      - name: Apply asserted review-closure patches
+        run: |
+          node scripts/apply-grantflow-review-closure.mjs
+          node scripts/apply-grantflow-liheap-review-guard.mjs
 
       - name: Validate generated JavaScript syntax
         run: |
           node --check backend/config/urlRules.js
           node --check backend/services/itemNeedSearch.js
+          node --check backend/services/greenHomeNoCostPolicy.js
           node --check backend/services/greenHomeNoCostSearch.js
           node --check backend/services/missionHealthService.js
           node --check scripts/production-deployment-proof.mjs
@@ -56,6 +60,7 @@ jobs:
         run: |
           node scripts/run-vitest-isolated.mjs run \
             backend/tests/safeFetchSsrf.test.js \
+            backend/tests/greenHomeNoCostPolicy.test.js \
             backend/tests/greenHomeNoCostSearch.test.js \
             src/pages/GreenHomePrograms.test.jsx
 
@@ -80,12 +85,14 @@ jobs:
       - name: Remove one-shot patch machinery
         run: |
           rm -f scripts/apply-grantflow-review-closure.mjs
+          rm -f scripts/apply-grantflow-liheap-review-guard.mjs
           rm -f .github/workflows/apply-grantflow-review-closure.yml
 
       - name: Validate final diff
         run: |
           git diff --check
           test ! -e scripts/apply-grantflow-review-closure.mjs
+          test ! -e scripts/apply-grantflow-liheap-review-guard.mjs
           test ! -e .github/workflows/apply-grantflow-review-closure.yml
 
       - name: Commit validated review closure
