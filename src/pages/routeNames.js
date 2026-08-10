@@ -1,3 +1,4 @@
+/** @type {Set<string>} */
 export const ROUTE_NAMES = new Set([
   "Dashboard",
   "Organizations",
