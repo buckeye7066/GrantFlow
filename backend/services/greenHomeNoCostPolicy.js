@@ -4,12 +4,15 @@ const SOURCE_MAX_AGE_DAYS = 60
 
 export const GREEN_HOME_NO_COST_POLICY_VERSION = POLICY_VERSION
 
+// Keep each request concrete and short enough for the existing item-search
+// query builder. The strict no-cost policy is applied to returned records; it
+// must not be encoded as one long quoted search phrase that starves recall.
 export const GREEN_HOME_SEARCH_ITEMS = Object.freeze([
-  'no-cost home weatherization insulation air sealing direct installation',
-  'no-cost heat pump heating and cooling replacement direct installation',
-  'no-cost geothermal heating and cooling direct installation',
-  'no-cost residential solar and battery storage direct installation',
-  'no-cost residential small wind turbine direct installation',
+  'home weatherization',
+  'heat pump replacement',
+  'geothermal home heating',
+  'residential solar installation',
+  'residential small wind turbine',
 ])
 
 export const OFFICIAL_GREEN_HOME_PATHS = Object.freeze([
