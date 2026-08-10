@@ -80,6 +80,44 @@ describe('avatarCrawler SSRF redirect guard', () => {
     expect(metadataHits).toBe(0)
   })
 
+  it('blocks a public hostname whose DNS resolves to a private/metadata IP', async () => {
+    // 0563eb97 closed literal-IP redirect follow, but hostname-string checks
+    // alone still admitted evil.example → 169.254.169.254. The hop guard must
+    // consult DNS (assertSsrfSafeUrl); inject the refusal here so the test is
+    // hermetic and does not depend on real resolver data.
+    let checked = []
+    const result = await safeAvatarFetch('http://evil.example/latest/meta-data/', 'text/html', {
+      assertSafeUrl: async (url) => {
+        checked.push(url)
+        return { ok: false, reason: 'resolves_private:169.254.169.254' }
+      },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('blocked_private_host')
+    expect(checked).toEqual(['http://evil.example/latest/meta-data/'])
+    expect(metadataHits).toBe(0)
+  })
+
+  it('re-checks DNS on every redirect hop (not only the first URL)', async () => {
+    const checked = []
+    const result = await safeAvatarFetch(`http://127.0.0.1:${redirectPort}/r`, 'text/html', {
+      allowLocalhost: true,
+      assertSafeUrl: async (url) => {
+        checked.push(url)
+        // First hop is the public redirector (allowed via allowLocalhost);
+        // the Location target must still be refused when DNS says private.
+        if (String(url).includes('169.254.169.254')) {
+          return { ok: false, reason: 'private_ip:169.254.169.254' }
+        }
+        return { ok: true }
+      },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('blocked_private_host')
+    expect(checked.some((u) => String(u).includes('169.254.169.254'))).toBe(true)
+    expect(metadataHits).toBe(0)
+  })
+
   it('blocks a website cover whose image URL redirects to a private host', async () => {
     const result = await processAvatarLookupJob({
       profileContext: {
