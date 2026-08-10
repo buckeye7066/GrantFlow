@@ -1,4 +1,4 @@
-// Retry with structural import matching and non-overlapping migration-write rewrites.
+// Retry after the repository-containment regression was fixed in shared/releaseIdentity.js.
 import fs from 'node:fs'
 
 const file = 'backend/db/migrate.js'
