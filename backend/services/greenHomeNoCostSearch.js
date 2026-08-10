@@ -6,6 +6,13 @@ import {
   officialGreenHomePaths,
 } from './greenHomeNoCostPolicy.js'
 
+const OUTBOUND_SEARCH_FIELDS = Object.freeze([
+  'profile.state',
+  'profile.primary_type',
+  'signals.location.state',
+  'signals.entityType',
+])
+
 function normalizedUrl(value) {
   try {
     const url = new URL(String(value || ''))
@@ -38,6 +45,7 @@ function addCandidate(map, result, classification, matchedItem) {
   const previous = map.get(key)
   const candidate = {
     ...result,
+    eligibility_status: 'provider_confirmation_required',
     no_cost_classification: classification.status,
     no_cost_reason: classification.reason,
     no_cost_evidence: classification.no_cost_evidence || result.no_cost_evidence || null,
@@ -60,6 +68,31 @@ function addCandidate(map, result, classification, matchedItem) {
       candidate.matched_green_home_items,
     ),
   })
+}
+
+function cleanState(value) {
+  const state = String(value || '').trim().toUpperCase()
+  return /^[A-Z]{2}$/.test(state) ? state : null
+}
+
+function broadApplicantType(profileContext = {}) {
+  const profile = profileContext.profile || profileContext || {}
+  const signals = profileContext.signals || {}
+  const raw = String(
+    profile.primary_type ||
+    profile.applicant_type ||
+    signals.entityType ||
+    '',
+  ).trim().toLowerCase().replace(/[_-]+/g, ' ')
+
+  if (/student/.test(raw)) return 'student'
+  if (/nonprofit|501|church|ministry/.test(raw)) return 'nonprofit'
+  if (/business|company|entrepreneur/.test(raw)) return 'small_business'
+  if (/school|college|university|education institution/.test(raw)) return 'school'
+  if (/municipal|government|county|city|tribe|tribal/.test(raw)) return 'government'
+  if (/family|household|caregiver/.test(raw)) return 'family'
+  if (/individual|person|homeowner|renter|tenant/.test(raw)) return 'individual'
+  return 'individual'
 }
 
 function deriveHouseholdContext(profileContext = {}) {
@@ -89,19 +122,40 @@ function deriveHouseholdContext(profileContext = {}) {
   if (explicitOwner || /owner|own home|mortgage/.test(rawStatus)) occupancy = 'homeowner'
   else if (explicitRenter || /rent|tenant/.test(rawStatus)) occupancy = 'renter'
 
-  const state = String(
+  const state = cleanState(
     profile.state ||
     profile.state_code ||
     sections.basic_information?.state ||
     sections.basic_information?.answers?.state ||
-    profileContext?.signals?.location?.state ||
-    '',
-  ).trim().toUpperCase() || null
+    profileContext?.signals?.location?.state,
+  )
 
   return {
     occupancy,
     state,
     provider_must_confirm_eligibility: true,
+  }
+}
+
+/**
+ * External search receives only a broad applicant class and two-letter state.
+ * It never receives names, contact details, exact address, income/assets,
+ * disability or medical facts, veteran identifiers, document contents, or
+ * credentials. Eligibility matching remains a provider-confirmed step.
+ */
+export function minimizeGreenHomeSearchContext(profileContext = {}) {
+  const household = deriveHouseholdContext(profileContext)
+  const type = broadApplicantType(profileContext)
+  const state = household.state
+  return {
+    profile: {
+      primary_type: type,
+      ...(state ? { state } : {}),
+    },
+    signals: {
+      entityType: type,
+      location: state ? { state } : {},
+    },
   }
 }
 
@@ -152,10 +206,12 @@ export async function searchGreenHomeNoCostPrograms(db, {
     throw error
   }
 
+  const household = deriveHouseholdContext(profileContext || {})
+  const outboundSearchContext = minimizeGreenHomeSearchContext(profileContext || {})
   const report = await searchItemNeedsImpl(db, {
     profileId,
     items: GREEN_HOME_SEARCH_ITEMS,
-    profileContext,
+    profileContext: outboundSearchContext,
     variant: 'funding',
     timeoutMs,
   })
@@ -215,7 +271,6 @@ export async function searchGreenHomeNoCostPrograms(db, {
   })
 
   const reviewRows = [...review.values()]
-  const household = deriveHouseholdContext(profileContext || {})
   const laneSummary = summarizeLanes(report)
 
   return {
@@ -224,6 +279,11 @@ export async function searchGreenHomeNoCostPrograms(db, {
     policy_version: GREEN_HOME_NO_COST_POLICY_VERSION,
     strict_no_cost: true,
     household,
+    search_privacy: {
+      outbound_fields: [...OUTBOUND_SEARCH_FIELDS],
+      sensitive_fields_transmitted: false,
+      outbound_context: outboundSearchContext,
+    },
     searched_items: [...GREEN_HOME_SEARCH_ITEMS],
     count: programs.length,
     programs,
