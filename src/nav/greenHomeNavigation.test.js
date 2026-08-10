@@ -6,6 +6,7 @@ import {
   getGroupIdForRoute,
 } from './navConfig.js'
 import { END_USER_NAV_GROUPS } from './endUserNavConfig.js'
+import { ROUTE_NAMES } from '../pages/index.jsx'
 
 function routeItems(groups, routeName) {
   return groups.flatMap((group) => group.items || []).filter((item) => item.routeName === routeName)
@@ -17,6 +18,7 @@ describe('No-Cost Green Home navigation', () => {
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({
       title: 'No-Cost Green Home Upgrades',
+      i18nKey: 'nav.greenHomePrograms',
       url: '/GreenHomePrograms',
     })
     expect(getGroupIdForRoute('/GreenHomePrograms')).toBe('find')
@@ -28,6 +30,7 @@ describe('No-Cost Green Home navigation', () => {
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({
       title: 'No-Cost Green Home Upgrades',
+      i18nKey: 'nav.greenHomePrograms',
       url: '/GreenHomePrograms',
     })
   })
@@ -41,7 +44,18 @@ describe('No-Cost Green Home navigation', () => {
     ])
     expect(crumbs.at(-1)).toMatchObject({
       path: '/GreenHomePrograms',
+      labelI18nKey: 'nav.greenHomePrograms',
       isCurrent: true,
     })
+  })
+
+  it('registers and labels every route exposed by either sidebar', () => {
+    const routeNames = [...NAV_GROUPS, ...END_USER_NAV_GROUPS]
+      .flatMap((group) => group.items || [])
+      .map((item) => item.routeName)
+    for (const routeName of new Set(routeNames)) {
+      expect(ROUTE_LABELS[routeName], 'missing label for ' + routeName).toBeTruthy()
+      expect(ROUTE_NAMES.has(routeName), 'missing route registration for ' + routeName).toBe(true)
+    }
   })
 })

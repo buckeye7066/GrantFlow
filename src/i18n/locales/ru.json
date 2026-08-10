@@ -13,7 +13,6 @@
   "nav.reports": "Отчёты и аналитика",
   "nav.billing": "Выставление счетов",
   "nav.adminPanel": "Панель администратора",
-
   "nav.group.home": "Главная",
   "nav.group.help": "Помощь",
   "nav.group.setup": "Настройка",
@@ -21,13 +20,13 @@
   "nav.group.work": "Работа",
   "nav.group.track": "Отслеживание и отчёты",
   "nav.group.admin": "Администрирование / Операции",
-
   "nav.helpCenter": "Центр помощи",
   "nav.fundingResults": "Результаты финансирования",
   "nav.smartMatcher": "Умный подбор",
   "nav.profileMatcher": "Подбор по профилю",
   "nav.fundingOpportunities": "Возможности финансирования",
   "nav.fundingLibrary": "Библиотека финансирования",
+  "nav.greenHomePrograms": "Бесплатные экологичные улучшения дома",
   "nav.foundationSearch": "Поиск фондов",
   "nav.funder": "Спонсор",
   "nav.dataSources": "Источники данных",
@@ -46,7 +45,6 @@
   "nav.diagnostics": "Диагностика",
   "nav.crawlCoverage": "Охват сканирования",
   "nav.incognito": "Инкогнито",
-
   "breadcrumb.home": "Главная",
   "route.organization": "Организация",
   "route.profile": "Профиль",
@@ -55,7 +53,6 @@
   "route.apply": "Подать заявку",
   "route.application": "Заявка",
   "route.finishApplication": "Завершить заявку",
-
   "layout.grantSuite": "Набор для управления грантами",
   "layout.headerSubtitle": "Рабочее пространство для управления грантами с помощью ИИ",
   "layout.userManual": "Руководство пользователя",
@@ -70,10 +67,8 @@
   "layout.createdBy": "Создано",
   "layout.switchToLight": "Переключиться на светлую тему",
   "layout.switchToDark": "Переключиться на тёмную тему",
-
   "language.partialTag": "частично",
   "language.partialNotice": "Меню и основные действия переведены. Часть содержимого страниц по-прежнему отображается на английском.",
-
   "common.save": "Сохранить",
   "common.cancel": "Отмена",
   "common.next": "Далее",
@@ -83,16 +78,13 @@
   "common.loading": "Загрузка…",
   "common.search": "Поиск",
   "common.close": "Закрыть",
-
   "profile.setUp": "Настройте свой профиль",
   "profile.create": "Создать профиль",
   "profile.findFunding": "Найти финансирование",
-
   "language.picker.title": "Выберите язык",
   "language.picker.subtitle": "Я могу помочь вам на удобном для вас языке. Какой вы хотите использовать?",
   "language.switcher.label": "Язык",
   "language.saved": "Язык обновлён",
-
   "anya.greeting": "Привет! Я Аня, ваш помощник в GrantFlow.",
   "anya.intro": "Я помогу вам найти гранты, подходящие вашему профилю, объясню то, что вы видите, проведу вас по воронке и отвечу на вопросы о процессе подачи заявки.",
   "anya.letsGo": "Начнём",

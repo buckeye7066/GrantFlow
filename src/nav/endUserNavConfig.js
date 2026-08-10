@@ -53,6 +53,7 @@ export const END_USER_NAV_GROUPS = Object.freeze([
       },
       {
         title: 'No-Cost Green Home Upgrades',
+        i18nKey: 'nav.greenHomePrograms',
         routeName: 'GreenHomePrograms',
         url: createPageUrl('GreenHomePrograms'),
         icon: Leaf,

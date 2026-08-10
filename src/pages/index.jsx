@@ -87,7 +87,7 @@ const HamiltonLiveLogin = lazy(() => import('./HamiltonLiveLogin'), 'HamiltonLiv
 const Landing = lazy(() => import('./Landing'), 'Landing')
 const PrivacyPolicy = lazy(() => import('./PrivacyPolicy'), 'PrivacyPolicy')
 
-const ROUTE_NAMES = new Set([
+export const ROUTE_NAMES = new Set([
   'Dashboard', 'Organizations', 'MyProfiles', 'Funder', 'DiscoverGrants',
   'FundingResults', 'SmartMatcher', 'ItemFunding', 'GreenHomePrograms', 'Pipeline',
   'HamiltonProcessing', 'Applications', 'Proposals', 'Outreach',

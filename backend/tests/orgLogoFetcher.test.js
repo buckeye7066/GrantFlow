@@ -99,7 +99,7 @@ describe('fetchOrgLogo', () => {
         allowLocalhost: true,
       })
       expect(result.ok).toBe(false)
-      expect(typeof result.reason).toBe('string')
+      expect(result.reason).toBe('image_too_small')
     } finally {
       await closeServer(server)
     }

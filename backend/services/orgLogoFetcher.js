@@ -25,7 +25,12 @@
 
 import * as cheerio from 'cheerio'
 import { normalizeHttpUrl, safeAvatarFetch } from './avatarCrawler.js'
-import { readBufferCapped } from './http/safeFetch.js'
+import { discardResponseBody, readBufferCapped } from './http/safeFetch.js'
+
+async function discardAndReturn(response, result) {
+  await discardResponseBody(response)
+  return result
+}
 
 const MAX_HTML_BYTES = 2 * 1024 * 1024
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -150,14 +155,19 @@ async function downloadImage(imageUrl, options = {}) {
   }
 
   const response = fetched.res
-  if (!response?.ok) return { ok: false, reason: 'image_fetch_failed' }
+  if (!response) return { ok: false, reason: 'image_fetch_failed' }
+  if (!response.ok) return discardAndReturn(response, { ok: false, reason: 'image_fetch_failed' })
 
   const contentType = String(response.headers.get('content-type') || '').toLowerCase()
   const looksImage = contentType.startsWith('image/') || contentType.includes('icon')
-  if (!looksImage) return { ok: false, reason: 'not_image' }
+  if (!looksImage) return discardAndReturn(response, { ok: false, reason: 'not_image' })
 
-  const imageBody = await readBufferCapped(response, MAX_IMAGE_BYTES).catch(() => null)
-  if (!imageBody) return { ok: false, reason: 'image_read_failed' }
+  let imageBody
+  try {
+    imageBody = await readBufferCapped(response, MAX_IMAGE_BYTES)
+  } catch {
+    return discardAndReturn(response, { ok: false, reason: 'image_read_failed' })
+  }
   if (imageBody.truncated) return { ok: false, reason: 'image_too_large' }
   const buffer = imageBody.buffer
   if (buffer.length < MIN_IMAGE_BYTES) return { ok: false, reason: 'image_too_small' }
@@ -212,10 +222,15 @@ export async function fetchOrgLogo(websiteUrl, opts = {}) {
 
   const pageResponse = fetched.res
   const finalUrl = fetched.finalUrl || website
-  if (!pageResponse?.ok) return { ok: false, reason: 'website_fetch_failed' }
+  if (!pageResponse) return { ok: false, reason: 'website_fetch_failed' }
+  if (!pageResponse.ok) return discardAndReturn(pageResponse, { ok: false, reason: 'website_fetch_failed' })
 
-  const pageBody = await readBufferCapped(pageResponse, MAX_HTML_BYTES).catch(() => null)
-  if (!pageBody) return { ok: false, reason: 'website_read_failed' }
+  let pageBody
+  try {
+    pageBody = await readBufferCapped(pageResponse, MAX_HTML_BYTES)
+  } catch {
+    return discardAndReturn(pageResponse, { ok: false, reason: 'website_read_failed' })
+  }
   if (pageBody.truncated) return { ok: false, reason: 'website_too_large' }
 
   const candidates = extractLogoCandidates(pageBody.buffer.toString('utf8'), finalUrl)

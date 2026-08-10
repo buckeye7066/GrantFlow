@@ -214,7 +214,7 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
   try {
     imageBody = await readBufferCapped(res, MAX_IMAGE_BYTES)
   } catch {
-    return { ok: false, reason: 'image_body_read_failed' }
+    return discardAndReturn(res, { ok: false, reason: 'image_body_read_failed' })
   }
   if (imageBody.truncated) return { ok: false, reason: 'too_large' }
   const buf = imageBody.buffer
@@ -298,7 +298,7 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   try {
     htmlBody = await readBufferCapped(res, MAX_HTML_BYTES)
   } catch {
-    return { ok: false, reason: 'website_body_read_failed' }
+    return discardAndReturn(res, { ok: false, reason: 'website_body_read_failed' })
   }
   if (htmlBody.truncated) {
     return { ok: false, reason: 'website_body_too_large' }
@@ -336,7 +336,7 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   try {
     imageBody = await readBufferCapped(imgRes, MAX_IMAGE_BYTES)
   } catch {
-    return { ok: false, reason: 'cover_body_read_failed' }
+    return discardAndReturn(imgRes, { ok: false, reason: 'cover_body_read_failed' })
   }
   if (imageBody.truncated) return { ok: false, reason: 'cover_too_large' }
   const buf = imageBody.buffer

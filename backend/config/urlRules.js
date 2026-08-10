@@ -149,10 +149,15 @@ export function isPrivateIp(ip) {
   if (mapped) addr = mapped[1]
 
   if (addr.includes(':')) {
-    // IPv6
-    if (addr === '::1' || addr === '::') return true // loopback / unspecified
-    if (addr.startsWith('fe80')) return true // link-local
-    if (addr.startsWith('fc') || addr.startsWith('fd')) return true // unique-local fc00::/7
+    // IPv6 zone identifiers (for example fe80::1%eth0) do not change the
+    // address range. Strip the zone before evaluating the first hextet.
+    const scoped = addr.split('%')[0]
+    if (scoped === '::1' || scoped === '::') return true // loopback / unspecified
+    const firstText = scoped.split(':')[0]
+    const first = Number.parseInt(firstText || '0', 16)
+    if (!Number.isFinite(first)) return true // malformed IPv6 literal -> fail closed
+    if ((first & 0xffc0) === 0xfe80) return true // link-local fe80::/10 (fe80-febf)
+    if ((first & 0xfe00) === 0xfc00) return true // unique-local fc00::/7
     return false
   }
 

@@ -1,9 +1,9 @@
 # GrantFlow No-Cost Green Home Programs
 
-**Feature status:** In implementation and review. This document does not establish Production Ready status.  
-**Policy version:** `green_home_no_cost_v1`  
-**Source review date:** 2026-08-09  
-**User route:** `/GreenHomePrograms`  
+**Feature status:** In implementation and review. This document does not establish Production Ready status.
+**Policy version:** `green_home_no_cost_v2`
+**Source review date:** 2026-08-10
+**User route:** `/GreenHomePrograms`
 **API route:** `POST /api/item-needs/:profileId/green-home`
 
 ## Purpose
@@ -28,7 +28,7 @@ A technology appearing in the search list is not a promise that a local program 
 A record may appear in the primary `programs` list only when all of the following are true:
 
 1. It concerns a supported residential energy or home-efficiency upgrade.
-2. The source explicitly says that the assistance or covered work is free, no cost, fully funded, grant funded, direct install, or does not require repayment.
+2. The reviewed source explicitly establishes that the applicant pays nothing for the covered assistance or work. “Grant funded,” “direct install,” and non-repayment wording are supporting signals only; they are not sufficient when an applicant contribution, purchase, fee, or other payment may still be required.
 3. The source is an official government source or carries an explicit verified-source trust state.
 4. The source has not exceeded the configured review-freshness window.
 5. No text or structured field indicates a prohibited payment model.
@@ -74,9 +74,9 @@ Official program and current federal fact sheet:
 - https://www.acf.hhs.gov/ocs/programs/liheap
 - https://ocsannualreport.acf.hhs.gov/annual-report-fy24/liheap-fact-sheet
 
-HHS states that LIHEAP may weatherize homes or provide minor energy-related home repairs. Available work, eligibility rules, and application procedures vary by the state, territory, or Tribe administering the benefit.
+HHS states that LIHEAP may weatherize homes or provide minor energy-related home repairs. Available work, eligibility rules, application procedures, and household costs vary by the state, territory, or Tribe administering the benefit. The federal LIHEAP page is therefore retained as a review-only starting path until a state, Tribal, or local source explicitly proves that the particular service requires no household payment.
 
-These are typed as a provider/application directory and a public-benefit path. Their presence does not claim that the selected household is approved or that a particular technology will be installed.
+WAP is typed as an official provider/application directory with explicit federal no-cost evidence. LIHEAP is typed as a public-benefit locator and remains review-only at the federal level. Neither path claims that the selected household is approved or that a particular technology will be installed.
 
 ## Terminated-program guard
 
@@ -135,7 +135,7 @@ The release suite includes tests for:
 - repayment-negation language;
 - official, verified, unverified-catalog, and unverified-web trust states;
 - terminated-program exclusion;
-- source-review freshness;
+- independently recorded content-review freshness and link-verification freshness;
 - deduplication across upgrade searches;
 - profile and tenant authorization;
 - tier enforcement;

@@ -13,7 +13,6 @@
   "nav.reports": "Relatórios e análises",
   "nav.billing": "Faturamento",
   "nav.adminPanel": "Painel de administração",
-
   "nav.group.home": "Início",
   "nav.group.help": "Ajuda",
   "nav.group.setup": "Configuração",
@@ -21,13 +20,13 @@
   "nav.group.work": "Trabalho",
   "nav.group.track": "Acompanhamento e relatórios",
   "nav.group.admin": "Administração / Operações",
-
   "nav.helpCenter": "Central de ajuda",
   "nav.fundingResults": "Resultados de financiamento",
   "nav.smartMatcher": "Correspondência inteligente",
   "nav.profileMatcher": "Correspondência de perfis",
   "nav.fundingOpportunities": "Oportunidades de financiamento",
   "nav.fundingLibrary": "Biblioteca de financiamento",
+  "nav.greenHomePrograms": "Melhorias sustentáveis sem custo",
   "nav.foundationSearch": "Busca de fundações",
   "nav.funder": "Financiador",
   "nav.dataSources": "Fontes de dados",
@@ -46,7 +45,6 @@
   "nav.diagnostics": "Diagnóstico",
   "nav.crawlCoverage": "Cobertura de rastreamento",
   "nav.incognito": "Anônimo",
-
   "breadcrumb.home": "Início",
   "route.organization": "Organização",
   "route.profile": "Perfil",
@@ -55,7 +53,6 @@
   "route.apply": "Inscrever-se",
   "route.application": "Inscrição",
   "route.finishApplication": "Concluir inscrição",
-
   "layout.grantSuite": "Suite de gestão de subsídios",
   "layout.headerSubtitle": "Espaço de gestão de subsídios assistido por IA",
   "layout.userManual": "Manual do usuário",
@@ -70,10 +67,8 @@
   "layout.createdBy": "Criado por",
   "layout.switchToLight": "Alternar para modo claro",
   "layout.switchToDark": "Alternar para modo escuro",
-
   "language.partialTag": "parcial",
   "language.partialNotice": "Os menus e as ações comuns estão traduzidos. Parte do conteúdo das páginas ainda é exibida em inglês.",
-
   "common.save": "Salvar",
   "common.cancel": "Cancelar",
   "common.next": "Próximo",
@@ -83,16 +78,13 @@
   "common.loading": "Carregando…",
   "common.search": "Pesquisar",
   "common.close": "Fechar",
-
   "profile.setUp": "Configure seu perfil",
   "profile.create": "Criar perfil",
   "profile.findFunding": "Encontrar financiamento",
-
   "language.picker.title": "Escolha seu idioma",
   "language.picker.subtitle": "Posso ajudá-lo no seu idioma preferido. Qual você gostaria de usar?",
   "language.switcher.label": "Idioma",
   "language.saved": "Idioma atualizado",
-
   "anya.greeting": "Olá! Eu sou a Anya, sua guia do GrantFlow.",
   "anya.intro": "Posso ajudá-lo a encontrar subsídios que combinem com o seu perfil, explicar o que você está vendo, orientá-lo pelo seu funil e responder a perguntas sobre o processo de inscrição.",
   "anya.letsGo": "Vamos lá",

@@ -13,6 +13,7 @@ export * from './navConfigBase.js'
 
 const GREEN_HOME_ITEM = Object.freeze({
   title: 'No-Cost Green Home Upgrades',
+  i18nKey: 'nav.greenHomePrograms',
   routeName: 'GreenHomePrograms',
   url: createPageUrl('GreenHomePrograms'),
   icon: Leaf,
@@ -33,6 +34,7 @@ export const ROUTE_LABELS = Object.freeze({
 
 export const ROUTE_LABEL_I18N = Object.freeze({
   ...base.ROUTE_LABEL_I18N,
+  GreenHomePrograms: 'nav.greenHomePrograms',
 })
 
 export function getGroupIdForRoute(pathname) {

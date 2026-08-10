@@ -13,7 +13,6 @@
   "nav.reports": "रिपोर्ट और विश्लेषण",
   "nav.billing": "बिलिंग",
   "nav.adminPanel": "एडमिन पैनल",
-
   "nav.group.home": "होम",
   "nav.group.help": "सहायता",
   "nav.group.setup": "सेटअप",
@@ -21,13 +20,13 @@
   "nav.group.work": "कार्य",
   "nav.group.track": "ट्रैक और रिपोर्ट",
   "nav.group.admin": "एडमिन / संचालन",
-
   "nav.helpCenter": "सहायता केंद्र",
   "nav.fundingResults": "वित्तपोषण परिणाम",
   "nav.smartMatcher": "स्मार्ट मैचर",
   "nav.profileMatcher": "प्रोफ़ाइल मैचर",
   "nav.fundingOpportunities": "वित्तपोषण अवसर",
   "nav.fundingLibrary": "वित्तपोषण लाइब्रेरी",
+  "nav.greenHomePrograms": "बिना लागत के हरित गृह सुधार",
   "nav.foundationSearch": "फाउंडेशन खोज",
   "nav.funder": "वित्तपोषक",
   "nav.dataSources": "डेटा स्रोत",
@@ -46,7 +45,6 @@
   "nav.diagnostics": "निदान",
   "nav.crawlCoverage": "क्रॉल कवरेज",
   "nav.incognito": "इनकॉग्निटो",
-
   "breadcrumb.home": "होम",
   "route.organization": "संगठन",
   "route.profile": "प्रोफ़ाइल",
@@ -55,7 +53,6 @@
   "route.apply": "आवेदन करें",
   "route.application": "आवेदन",
   "route.finishApplication": "आवेदन पूरा करें",
-
   "layout.grantSuite": "अनुदान प्रबंधन सूट",
   "layout.headerSubtitle": "AI-सहायता प्राप्त अनुदान प्रबंधन कार्यक्षेत्र",
   "layout.userManual": "उपयोगकर्ता पुस्तिका",
@@ -70,10 +67,8 @@
   "layout.createdBy": "द्वारा निर्मित",
   "layout.switchToLight": "लाइट मोड पर स्विच करें",
   "layout.switchToDark": "डार्क मोड पर स्विच करें",
-
   "language.partialTag": "आंशिक",
   "language.partialNotice": "मेन्यू और सामान्य क्रियाएं अनुवादित हैं। कुछ पृष्ठ सामग्री अभी भी अंग्रेज़ी में दिखाई जाती है।",
-
   "common.save": "सहेजें",
   "common.cancel": "रद्द करें",
   "common.next": "आगे",
@@ -83,16 +78,13 @@
   "common.loading": "लोड हो रहा है…",
   "common.search": "खोजें",
   "common.close": "बंद करें",
-
   "profile.setUp": "अपनी प्रोफ़ाइल सेट करें",
   "profile.create": "प्रोफ़ाइल बनाएं",
   "profile.findFunding": "वित्तपोषण खोजें",
-
   "language.picker.title": "अपनी भाषा चुनें",
   "language.picker.subtitle": "मैं आपकी पसंदीदा भाषा में आपकी मदद कर सकती हूँ। आप किसका उपयोग करना चाहेंगे?",
   "language.switcher.label": "भाषा",
   "language.saved": "भाषा अपडेट की गई",
-
   "anya.greeting": "नमस्ते! मैं Anya हूँ, आपकी GrantFlow गाइड।",
   "anya.intro": "मैं आपकी प्रोफ़ाइल से मेल खाने वाले अनुदान खोजने, आप जो देख रहे हैं उसे समझाने, आपकी पाइपलाइन में मार्गदर्शन करने और आवेदन प्रक्रिया से जुड़े सवालों का जवाब देने में मदद कर सकती हूँ।",
   "anya.letsGo": "चलिए शुरू करें",

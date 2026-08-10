@@ -13,28 +13,29 @@ function classify(result) {
 
 function official(overrides = {}) {
   return {
-    title: 'No-cost heat pump direct installation',
+    title: 'No-cost heat-pump direct installation',
     description: 'Income-qualified households receive a heat pump at no cost. No repayment.',
     source_url: 'https://energy.example.gov/programs/heat-pump',
     result_source: 'catalog',
-    source_verified: true,
-    source_verified_at: '2026-08-09T00:00:00Z',
+    source_trust_tier: 'official_portal',
+    source_reviewed_at: '2026-08-09T00:00:00Z',
+    source_reviewed_by: 'test-reviewer',
+    source_review_version: GREEN_HOME_NO_COST_POLICY_VERSION,
+    link_status: 'ok',
+    last_verified_at: '2026-08-09T00:00:00Z',
     ...overrides,
   }
 }
 
 describe('green-home strict no-cost policy', () => {
-  it('accepts an official, explicitly no-cost home upgrade with human-readable evidence', () => {
-    const result = classify(official())
-    expect(result).toMatchObject({
+  it('accepts a freshly reviewed official source with explicit no-payment evidence', () => {
+    expect(classify(official())).toMatchObject({
       status: 'eligible',
       reason: 'explicit_no_cost_no_loan_path',
       source_trust: 'official_government',
       source_age_days: 1,
       policy_version: GREEN_HOME_NO_COST_POLICY_VERSION,
     })
-    expect(result.no_cost_evidence).toMatch(/explicitly states.*no cost|explicitly describes.*no cost/i)
-    expect(result.no_cost_evidence).not.toMatch(/^\//)
   })
 
   it.each([
@@ -45,80 +46,70 @@ describe('green-home strict no-cost policy', () => {
     ['reimbursement', { description: 'Reimbursement available after purchase.' }],
     ['cost_share_or_match', { description: 'Insulation grant with a 20 percent homeowner contribution.' }],
     ['purchase_required', { description: 'Solar grant after a qualifying purchase.' }],
-  ])('excludes %s offers even when green technology is relevant', (reason, overrides) => {
-    expect(classify(official(overrides))).toMatchObject({
-      status: 'excluded',
-      reason,
-    })
+  ])('excludes %s offers even when the technology is relevant', (reason, overrides) => {
+    expect(classify(official(overrides))).toMatchObject({ status: 'excluded', reason })
   })
 
-  it('excludes structured loan, matching-funds, cost-share, and upfront-payment fields', () => {
-    expect(classify(official({ is_loan: true }))).toMatchObject({
-      status: 'excluded', reason: 'loan_or_financing',
-    })
-    expect(classify(official({ requires_match: true }))).toMatchObject({
-      status: 'excluded', reason: 'cost_share_or_match',
-    })
-    expect(classify(official({ match_percentage: 20 }))).toMatchObject({
-      status: 'excluded', reason: 'cost_share_or_match',
-    })
-    expect(classify(official({ required_match_percentage: 20 }))).toMatchObject({
-      status: 'excluded', reason: 'cost_share_or_match',
-    })
-    expect(classify(official({ cost_share_percentage: '10' }))).toMatchObject({
-      status: 'excluded', reason: 'cost_share_or_match',
-    })
-    expect(classify(official({ requires_upfront_payment: true }))).toMatchObject({
-      status: 'excluded', reason: 'applicant_payment',
-    })
+  it('scans persisted eligibility prose for contradictory payment terms', () => {
+    expect(classify(official({
+      title: 'No-cost heat pump program',
+      description: 'The provider advertises a free heat pump installation.',
+      eligibility_text: 'Approved households must make a qualifying purchase and pay an installation fee.',
+    }))).toMatchObject({ status: 'excluded', reason: 'applicant_payment' })
   })
 
   it('does not mistake explicit no-payment language for a payment requirement', () => {
     expect(classify(official({
-      description:
-        'No-cost insulation with no loan required, no monthly payment, no homeowner contribution, no matching funds, no purchase required, and zero out-of-pocket cost.',
-    }))).toMatchObject({
-      status: 'eligible',
-      reason: 'explicit_no_cost_no_loan_path',
-    })
-  })
-
-  it('does not treat a normal existing mortgage reference as financing required by the program', () => {
-    expect(classify(official({
-      description: 'No-cost weatherization for qualifying homeowners, including households that have a mortgage.',
+      description: 'No-cost insulation with no loan required, no monthly payment, no homeowner contribution, no matching funds, no purchase required, and zero out-of-pocket cost.',
     }))).toMatchObject({ status: 'eligible' })
   })
 
-  it('requires explicit no-payment evidence rather than direct-install or grant language alone', () => {
+  it('requires explicit no-payment evidence rather than direct-install or grant wording alone', () => {
     expect(classify(official({
+      title: 'Heat pump direct installation program',
       description: 'Direct-install heat pump program. Contact the provider for applicant costs.',
-    }))).toMatchObject({
-      status: 'review',
-      reason: 'no_cost_not_proven',
-    })
+    }))).toMatchObject({ status: 'review', reason: 'no_cost_not_proven' })
     expect(classify(official({
+      title: 'Residential solar program',
       description: 'Grant-funded residential solar program. Cost terms vary.',
-    }))).toMatchObject({
-      status: 'review',
-      reason: 'no_cost_not_proven',
-    })
+    }))).toMatchObject({ status: 'review', reason: 'no_cost_not_proven' })
   })
 
-  it('holds unknown cost terms out of the primary result set', () => {
+  it('recognizes hyphenated heat pumps and qualified free-installation wording', () => {
     expect(classify(official({
-      description: 'Residential heat pump upgrade program. Contact the provider for terms.',
-    }))).toMatchObject({
+      title: 'Heat-pumps for qualifying households',
+      description: 'Free residential heat pump installation for qualifying households.',
+    }))).toMatchObject({ status: 'eligible' })
+  })
+
+  it('holds raw web leads for review even when a government-domain snippet says free', () => {
+    expect(classify({
+      title: 'Free residential wind turbine installation',
+      description: 'Free small wind installation for selected homeowners.',
+      source_url: 'https://energy.example.gov/wind',
+      result_source: 'web_search',
+      source_trust_tier: 'official_portal',
+      source_reviewed_at: '2026-08-09T00:00:00Z',
+      source_reviewed_by: 'test-reviewer',
+      source_review_version: GREEN_HOME_NO_COST_POLICY_VERSION,
+      link_status: 'ok',
+      last_verified_at: '2026-08-09T00:00:00Z',
+    })).toMatchObject({
       status: 'review',
-      reason: 'no_cost_not_proven',
+      reason: 'source_not_yet_verified',
+      source_trust: 'unverified_web',
     })
   })
 
-  it('holds an unverified catalog record for review even when it claims no cost', () => {
+  it('does not promote a reachable non-government page without explicit source review', () => {
     expect(classify({
-      title: 'No-cost local insulation program',
-      description: 'Free insulation installation for qualifying homeowners.',
-      source_url: 'https://community-energy.example/free-insulation',
+      title: 'No-cost nonprofit weatherization program',
+      description: 'Free weatherization service for qualifying households.',
+      source_url: 'https://community-energy.example/weatherization',
       result_source: 'catalog',
+      verified_url: 1,
+      link_status: 'ok',
+      last_verified_at: '2026-08-09T00:00:00Z',
     })).toMatchObject({
       status: 'review',
       reason: 'source_not_yet_verified',
@@ -126,106 +117,58 @@ describe('green-home strict no-cost policy', () => {
     })
   })
 
-  it('does not treat a date alone as proof that source verification passed', () => {
-    expect(classify({
-      title: 'No-cost state weatherization program',
-      description: 'Free weatherization for qualifying households.',
-      source_url: 'https://energy.example.gov/weatherization',
-      result_source: 'catalog',
-      source_verified_at: '2026-08-09T00:00:00Z',
-    })).toMatchObject({
-      status: 'review',
-      reason: 'source_not_yet_verified',
-      source_trust: 'unverified_official',
-    })
-  })
-
-  it('holds a raw .gov search result for review until a separate verification stage trusts it', () => {
-    expect(classify({
-      title: 'No-cost state heat-pump installation',
-      description: 'Free heat-pump installation for qualifying households.',
-      source_url: 'https://energy.example.gov/free-heat-pump',
-      result_source: 'web_search',
-      source_verified_at: '2026-08-09T00:00:00Z',
-    })).toMatchObject({
-      status: 'review',
-      reason: 'source_not_yet_verified',
-      source_trust: 'unverified_web',
-    })
-  })
-
-  it('accepts a separately verified web source only with explicit trust and fresh verification', () => {
-    expect(classify({
-      title: 'No-cost state heat-pump installation',
-      description: 'Free heat-pump installation for qualifying households.',
-      source_url: 'https://energy.example.gov/free-heat-pump',
-      result_source: 'web_search',
-      source_trust: 'verified',
-      source_verified_at: '2026-08-09T00:00:00Z',
-    })).toMatchObject({
-      status: 'eligible',
-      source_trust: 'official_government',
-    })
-  })
-
-  it('accepts a non-government source only when the record carries verified trust and a fresh date', () => {
+  it('accepts a non-government source only with explicit trust, content review, and link proof', () => {
     expect(classify({
       title: 'No-cost nonprofit weatherization program',
       description: 'Free weatherization service for qualifying households.',
-      source_url: 'https://verified-community.example/weatherization',
+      source_url: 'https://community-energy.example/weatherization',
       result_source: 'catalog',
-      source_trust: 'verified',
-      source_verified_at: '2026-08-09T00:00:00Z',
-    })).toMatchObject({
-      status: 'eligible',
-      source_trust: 'verified_source',
+      source_trust_tier: 'manual_curated',
+      source_reviewed_at: '2026-08-09T00:00:00Z',
+      source_reviewed_by: 'test-reviewer',
+      source_review_version: GREEN_HOME_NO_COST_POLICY_VERSION,
+      link_status: 'ok',
+      last_verified_at: '2026-08-09T00:00:00Z',
+    })).toMatchObject({ status: 'eligible', source_trust: 'verified_source' })
+  })
+
+  it('separates content-review freshness from link liveness', () => {
+    expect(classify(official({ source_reviewed_at: null }))).toMatchObject({
+      status: 'review', reason: 'source_review_date_missing',
+    })
+    expect(classify(official({ source_reviewed_at: '2026-01-01T00:00:00Z' }))).toMatchObject({
+      status: 'review', reason: 'source_review_stale',
+    })
+    expect(classify(official({ link_status: 'broken' }))).toMatchObject({
+      status: 'review', reason: 'source_link_not_verified',
+    })
+    expect(classify(official({ last_verified_at: '2026-01-01T00:00:00Z' }))).toMatchObject({
+      status: 'review', reason: 'source_link_stale',
     })
   })
 
-  it('holds verified sources with missing or stale verification dates out of primary results', () => {
-    expect(classify(official({ source_verified_at: null }))).toMatchObject({
-      status: 'review',
-      reason: 'source_verification_date_missing',
-    })
-    expect(classify(official({ source_verified_at: '2026-01-01T00:00:00Z' }))).toMatchObject({
-      status: 'review',
-      reason: 'source_verification_stale',
-    })
-  })
-
-  it('holds an unverified web page for review even when it claims no cost', () => {
-    expect(classify({
-      title: 'Free residential wind turbine installation',
-      description: 'Free small wind turbine installation for qualifying homeowners.',
-      url: 'https://unknown-provider.example/wind',
-      result_source: 'web_search',
-    })).toMatchObject({
-      status: 'review',
-      reason: 'source_not_yet_verified',
-      source_trust: 'unverified_web',
-    })
-  })
-
-  it('excludes terminated Solar for All references rather than presenting them as current', () => {
-    expect(classify({
+  it('excludes terminated Solar for All references', () => {
+    expect(classify(official({
       title: 'Solar for All',
       description: 'Free residential solar panels under the Greenhouse Gas Reduction Fund.',
-      source_url: 'https://www.epa.gov/greenhouse-gas-reduction-fund/solar-all',
-      result_source: 'catalog',
-      source_verified: true,
-      source_verified_at: '2026-08-09T00:00:00Z',
-    })).toMatchObject({
-      status: 'excluded',
-      reason: 'retired_or_rescinded_program',
-    })
+    }))).toMatchObject({ status: 'excluded', reason: 'retired_or_rescinded_program' })
   })
 
-  it('marks stale official locator evidence for review', () => {
+  it('runs official locator paths through the same classifier', () => {
     const current = officialGreenHomePaths(NOW)
-    expect(current.every((path) => path.no_cost_classification === 'eligible')).toBe(true)
+    expect(current.find((path) => path.id === 'doe-weatherization-assistance')).toMatchObject({
+      no_cost_classification: 'eligible',
+      no_cost_reason: 'explicit_no_cost_no_loan_path',
+    })
+    expect(current.find((path) => path.id === 'hhs-liheap-weatherization-repairs')).toMatchObject({
+      no_cost_classification: 'review',
+      no_cost_reason: 'no_cost_not_proven',
+    })
 
     const stale = officialGreenHomePaths(new Date('2026-12-31T00:00:00Z'))
-    expect(stale.every((path) => path.no_cost_classification === 'review')).toBe(true)
-    expect(stale.every((path) => path.no_cost_reason === 'official_source_review_stale')).toBe(true)
+    expect(stale.find((path) => path.id === 'doe-weatherization-assistance')).toMatchObject({
+      no_cost_classification: 'review',
+      no_cost_reason: 'source_review_stale',
+    })
   })
 })

@@ -14,6 +14,7 @@ import {
   discardResponseBody,
   mergeAbortSignals,
 } from '../services/http/safeFetch.js'
+import { isPrivateIp } from '../config/urlRules.js'
 
 const PUBLIC_URL = 'http://93.184.216.34/start'
 const METADATA_URL = 'http://169.254.169.254/latest/meta-data/'
@@ -420,4 +421,21 @@ describe('response body cleanup and caps', () => {
     expect(housing).toMatch(/await discardResponseBody\(res2\)/)
     expect(verifier).toMatch(/await discardResponseBody\(res\)/)
   })
+})
+
+
+describe('canonical IPv6 private-range classification', () => {
+  it.each(['fe80::1', 'fe90::1', 'fea0::1', 'febf::1', 'fe80::1%eth0'])(
+    'blocks the complete link-local range for %s',
+    (address) => {
+      expect(isPrivateIp(address)).toBe(true)
+    },
+  )
+
+  it.each(['fc00::1', 'fdff::1'])(
+    'continues to block unique-local IPv6 address %s',
+    (address) => {
+      expect(isPrivateIp(address)).toBe(true)
+    },
+  )
 })

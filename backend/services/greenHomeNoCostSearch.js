@@ -1,4 +1,5 @@
 import { searchItemNeeds } from './itemNeedSearch.js'
+import { computeMatchDecision } from './matchEngine.js'
 import {
   GREEN_HOME_NO_COST_POLICY_VERSION,
   GREEN_HOME_SEARCH_ITEMS,
@@ -12,6 +13,7 @@ const OUTBOUND_SEARCH_FIELDS = Object.freeze([
   'signals.location.state',
   'signals.entityType',
 ])
+const HOUSEHOLD_APPLICANT_TYPES = new Set(['individual', 'family', 'student'])
 const CATALOG_VERIFICATION_MAX_IDS = 200
 
 function normalizedUrl(value) {
@@ -31,10 +33,10 @@ function keyFor(result = {}) {
   const urlKey = normalizedUrl(
     result.source_url || result.url || result.application_url || result.info_url,
   )
-  if (urlKey) return `url:${urlKey}`
+  if (urlKey) return 'url:' + urlKey
   const title = String(result.title || result.name || '').trim().toLowerCase()
   const sponsor = String(result.sponsor || result.source || '').trim().toLowerCase()
-  return `text:${title}|${sponsor}`
+  return 'text:' + title + '|' + sponsor
 }
 
 function mergeMatchedItems(existing = [], incoming = []) {
@@ -84,6 +86,7 @@ function broadApplicantType(profileContext = {}) {
   const raw = String(
     profile.primary_type ||
     profile.applicant_type ||
+    profile.profile_type ||
     signals.entityType ||
     '',
   ).trim().toLowerCase().replace(/[_-]+/g, ' ')
@@ -132,10 +135,13 @@ function deriveHouseholdContext(profileContext = {}) {
     sections.basic_information?.answers?.state ||
     profileContext?.signals?.location?.state,
   )
+  const applicantType = broadApplicantType(profileContext)
 
   return {
     occupancy,
     state,
+    applicant_type: applicantType,
+    household_profile: HOUSEHOLD_APPLICANT_TYPES.has(applicantType),
     provider_must_confirm_eligibility: true,
   }
 }
@@ -144,11 +150,12 @@ function deriveHouseholdContext(profileContext = {}) {
  * External search receives only a broad applicant class and two-letter state.
  * It never receives names, contact details, exact address, income/assets,
  * disability or medical facts, veteran identifiers, document contents, or
- * credentials. Eligibility matching remains a provider-confirmed step.
+ * credentials. Catalog candidates are subsequently reloaded and evaluated
+ * against the full server-side profile before promotion.
  */
 export function minimizeGreenHomeSearchContext(profileContext = {}) {
   const household = deriveHouseholdContext(profileContext)
-  const type = broadApplicantType(profileContext)
+  const type = household.applicant_type
   const state = household.state
   return {
     profile: {
@@ -175,10 +182,59 @@ function booleanColumn(value) {
   return value === true || value === 1 || value === '1'
 }
 
+function parseArray(value) {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return value.split(',').map((item) => item.trim()).filter(Boolean)
+  }
+}
+
 /**
- * Item search intentionally returns a compact result shape. The green-home
- * policy needs the persisted verification and payment fields as well, so it
- * rehydrates those fields by immutable opportunity id before classification.
+ * Re-evaluate a persisted catalog candidate with the full server-side profile.
+ * The generic item probe receives the privacy-minimized shape because it also
+ * drives the external web lane. No catalog result can reach the no-cost policy
+ * until this second canonical match has seen the complete profile.
+ */
+export function canonicalGreenHomeProfileRecheck(
+  result,
+  profileContext,
+  computeMatchDecisionImpl = computeMatchDecision,
+) {
+  if (!profileContext?.profile) {
+    return { ok: false, reason: 'canonical_profile_context_missing' }
+  }
+  try {
+    const match = computeMatchDecisionImpl(profileContext, {
+      ...result,
+      categories: parseArray(result.categories),
+      keywords: parseArray(result.keywords),
+      entity_types_allowed: parseArray(result.entity_types_allowed),
+      need_types_supported: parseArray(result.need_types_supported),
+    })
+    if (!match || !match.decision) {
+      return { ok: false, reason: 'canonical_profile_recheck_failed' }
+    }
+    if (String(match.decision).toUpperCase() === 'REJECT') {
+      return { ok: false, reason: 'canonical_profile_reject', match }
+    }
+    return { ok: true, match }
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'canonical_profile_recheck_failed',
+      error: error?.message || String(error),
+    }
+  }
+}
+
+/**
+ * The item-search response is intentionally compact. Reload the persisted row
+ * so payment flags, page-fact evidence, link state, source-trust tier, and every
+ * canonical matching field are available before promotion.
  */
 export async function loadGreenHomeCatalogVerification(db, report = {}) {
   const ids = catalogResultIds(report)
@@ -190,50 +246,29 @@ export async function loadGreenHomeCatalogVerification(db, report = {}) {
   const placeholders = ids.map(() => '?').join(', ')
   try {
     const rows = await db.prepare(
-      `SELECT id, source_url, application_url, final_url,
-              last_verified_at, link_status, link_status_code,
-              verification_method, verified_by, verified_url,
-              verification_status, source_trust_tier, record_origin,
-              reality_status, http_status,
-              requires_match, match_percentage, is_loan,
-              funding_type, opportunity_type,
-              eligibility_text, eligibility_bullets,
-              page_fact_schema_version, field_provenance
-         FROM funding_opportunities
-        WHERE id IN (${placeholders})`,
+      'SELECT * FROM funding_opportunities WHERE id IN (' + placeholders + ')',
     ).all(...ids)
 
     for (const row of rows || []) {
       const id = String(row?.id || '')
       if (!id) continue
-      const verifiedStatus =
-        booleanColumn(row.verified_url) ||
-        ['ok', 'redirect'].includes(String(row.link_status || '').toLowerCase()) ||
-        String(row.verification_status || '').toLowerCase() === 'verified_live_url'
       byId.set(id, {
+        ...row,
         source_url: row.source_url || null,
         application_url: row.application_url || null,
         final_url: row.final_url || null,
-        source_verified_at: row.last_verified_at || null,
         last_verified_at: row.last_verified_at || null,
         link_status: row.link_status || null,
         link_status_code: row.link_status_code ?? null,
         verification_method: row.verification_method || null,
         verified_by: row.verified_by || null,
-        source_verified: verifiedStatus,
         verification_status: row.verification_status || null,
         source_trust_tier: row.source_trust_tier || null,
         record_origin: row.record_origin || null,
-        reality_status: row.reality_status || null,
-        http_status: row.http_status ?? null,
         requires_match: booleanColumn(row.requires_match),
-        match_percentage: row.match_percentage ?? null,
         is_loan: booleanColumn(row.is_loan),
-        funding_type: row.funding_type || null,
-        opportunity_type: row.opportunity_type || null,
         eligibility_text: row.eligibility_text || null,
         eligibility_bullets: row.eligibility_bullets || null,
-        page_fact_schema_version: row.page_fact_schema_version ?? null,
         field_provenance: row.field_provenance || null,
       })
     }
@@ -267,15 +302,6 @@ function summarizeLanes(report = {}) {
   }
 }
 
-/**
- * Strict homeowner green-upgrade lane.
- *
- * This lane is intentionally narrower than ordinary item funding. It returns
- * only sources with explicit no-cost evidence and no loan, financing, lease,
- * tax-credit, rebate, reimbursement, match, contribution, or purchase signal.
- * Unknown cost models stay out of the primary results rather than being
- * optimistically presented as free.
- */
 export async function searchGreenHomeNoCostPrograms(db, {
   profileId,
   profileContext = null,
@@ -283,19 +309,31 @@ export async function searchGreenHomeNoCostPrograms(db, {
   now = new Date(),
   searchItemNeedsImpl = searchItemNeeds,
   officialGreenHomePathsImpl = officialGreenHomePaths,
+  computeMatchDecisionImpl = computeMatchDecision,
 } = {}) {
   if (!profileId) {
     const error = new Error('profileId is required')
     error.statusCode = 400
     throw error
   }
-  if (typeof searchItemNeedsImpl !== 'function' || typeof officialGreenHomePathsImpl !== 'function') {
+  if (
+    typeof searchItemNeedsImpl !== 'function' ||
+    typeof officialGreenHomePathsImpl !== 'function' ||
+    typeof computeMatchDecisionImpl !== 'function'
+  ) {
     const error = new TypeError('green-home search dependencies must be functions')
     error.statusCode = 500
     throw error
   }
 
   const household = deriveHouseholdContext(profileContext || {})
+  if (!household.household_profile) {
+    const error = new Error('Select an individual, family, or student household profile for no-cost home upgrades.')
+    error.code = 'green_home_household_profile_required'
+    error.statusCode = 422
+    throw error
+  }
+
   const outboundSearchContext = minimizeGreenHomeSearchContext(profileContext || {})
   const report = await searchItemNeedsImpl(db, {
     profileId,
@@ -309,6 +347,7 @@ export async function searchGreenHomeNoCostPrograms(db, {
   const eligible = new Map()
   const review = new Map()
   const excludedCounts = new Map()
+  let canonicalRechecks = 0
 
   for (const itemReport of report.items || []) {
     for (const result of itemReport.results || []) {
@@ -317,9 +356,36 @@ export async function searchGreenHomeNoCostPrograms(db, {
         ? {
             ...result,
             ...persisted,
+            result_source: result.result_source,
             url: persisted.final_url || persisted.application_url || persisted.source_url || result.url,
           }
         : result
+
+      if (persisted && result.result_source === 'catalog') {
+        canonicalRechecks += 1
+        const recheck = canonicalGreenHomeProfileRecheck(
+          enriched,
+          profileContext,
+          computeMatchDecisionImpl,
+        )
+        if (!recheck.ok) {
+          if (recheck.reason === 'canonical_profile_reject') {
+            excludedCounts.set(recheck.reason, (excludedCounts.get(recheck.reason) || 0) + 1)
+          } else {
+            addCandidate(review, enriched, {
+              status: 'review',
+              reason: recheck.reason,
+              source_trust: null,
+            }, itemReport.item)
+          }
+          continue
+        }
+        enriched.match_decision = recheck.match.decision
+        enriched.match_score = recheck.match.score ?? enriched.match_score ?? null
+        enriched.match_explanation = recheck.match.explanation ?? enriched.match_explanation ?? null
+        enriched.matcher_version = recheck.match.matcher_version || 'green-home-full-profile-recheck'
+      }
+
       const classification = classifyNoCostGreenHomeResult(enriched, { now })
       if (classification.status === 'eligible') {
         addCandidate(eligible, enriched, classification, itemReport.item)
@@ -334,29 +400,9 @@ export async function searchGreenHomeNoCostPrograms(db, {
     }
   }
 
-  // Current official locator paths ensure a qualified household receives a
-  // truthful starting point even when the generic web provider is unavailable.
-  // They are directories/benefits, not claims that a particular upgrade has
-  // already been approved.
   const officialPaths = officialGreenHomePathsImpl(now)
   for (const program of officialPaths) {
-    const classification = program.no_cost_classification === 'eligible'
-      ? {
-          status: 'eligible',
-          reason: program.no_cost_reason,
-          no_cost_evidence: program.no_cost_evidence,
-          source_trust: 'official_government',
-          source_verified_at: program.reviewed_at || null,
-          source_age_days: program.source_age_days ?? null,
-        }
-      : {
-          status: 'review',
-          reason: program.no_cost_reason,
-          no_cost_evidence: program.no_cost_evidence,
-          source_trust: 'official_government',
-          source_verified_at: program.reviewed_at || null,
-          source_age_days: program.source_age_days ?? null,
-        }
+    const classification = classifyNoCostGreenHomeResult(program, { now })
     addCandidate(
       classification.status === 'eligible' ? eligible : review,
       program,
@@ -366,6 +412,9 @@ export async function searchGreenHomeNoCostPrograms(db, {
   }
 
   const programs = [...eligible.values()].sort((a, b) => {
+    const aLocator = a.result_source === 'official_green_home_locator' ? 1 : 0
+    const bLocator = b.result_source === 'official_green_home_locator' ? 1 : 0
+    if (aLocator !== bLocator) return bLocator - aLocator
     const aOfficial = a.no_cost_source_trust === 'official_government' ? 1 : 0
     const bOfficial = b.no_cost_source_trust === 'official_government' ? 1 : 0
     if (aOfficial !== bOfficial) return bOfficial - aOfficial
@@ -376,6 +425,7 @@ export async function searchGreenHomeNoCostPrograms(db, {
   const laneSummary = summarizeLanes(report)
   laneSummary.catalog_verification_requested = verification.requested
   laneSummary.catalog_verification_enriched = verification.enriched
+  laneSummary.catalog_full_profile_rechecks = canonicalRechecks
   if (verification.error) {
     laneSummary.source_errors.push({
       item: 'green_home_catalog_verification',
@@ -394,6 +444,7 @@ export async function searchGreenHomeNoCostPrograms(db, {
       outbound_fields: [...OUTBOUND_SEARCH_FIELDS],
       sensitive_fields_transmitted: false,
       outbound_context: outboundSearchContext,
+      catalog_matching_context: 'full_server_side_profile_recheck',
     },
     searched_items: [...GREEN_HOME_SEARCH_ITEMS],
     count: programs.length,
@@ -416,12 +467,14 @@ export async function searchGreenHomeNoCostPrograms(db, {
       reviewed_at: path.reviewed_at,
       fresh: path.source_fresh,
       age_days: path.source_age_days,
+      classification: path.no_cost_classification,
+      reason: path.no_cost_reason,
     })),
     retired_program_guard: {
       solar_for_all: 'excluded_as_terminated_or_rescinded',
     },
     notice:
-      'Only explicitly no-cost, non-loan paths are shown. Tax credits, rebates, reimbursement-only offers, leases, financing, required contributions, and sources with unknown or stale verification are withheld from the primary results.',
+      'Only explicitly no-cost, non-loan paths are shown. Link liveness alone never establishes source trust or content freshness. Tax credits, rebates, reimbursement-only offers, leases, financing, required contributions, and sources with unknown, stale, or unreviewed terms are withheld from primary results.',
     searched_at: new Date().toISOString(),
   }
 }

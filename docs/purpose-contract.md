@@ -121,6 +121,8 @@ The frontend, API, workers, database schema, and release evidence must identify 
 - GitHub `main` is the reconciled source of truth.
 - No production-required work remains in an open PR, abandoned branch, patch, or undeployed commit.
 - Vercel frontend, frontend deployment metadata, Railway `/api/version`, Railway health and readiness, and production workers identify the exact final `main` SHA.
+- The production database reports a canonical migration-set identity derived from the ordered applied migration filenames and file hashes, and that identity matches the release manifest generated for the same SHA.
+- The release-evidence packet is a content-addressed artifact whose SHA-256 is recorded in the release manifest and returned by the deployment-proof check; a mutable document title or health response is not artifact identity.
 
 ### 11.2 Engineering gates
 

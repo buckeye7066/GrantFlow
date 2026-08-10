@@ -44,6 +44,13 @@ const REVIEW_REASON_LABELS = {
   no_cost_not_proven: 'Cost terms were not clear enough to show',
   source_not_yet_verified: 'Source still needs verification',
   official_source_review_stale: 'Official source review needs refreshing',
+  source_review_date_missing: 'No current content review is recorded',
+  source_review_stale: 'The source content review is stale',
+  source_link_not_verified: 'The source link has not been verified',
+  source_link_date_missing: 'The source link has no verification date',
+  source_link_stale: 'The source link verification is stale',
+  canonical_profile_context_missing: 'The full profile could not be rechecked',
+  canonical_profile_recheck_failed: 'The full profile recheck could not be completed',
 }
 
 function safeExternalUrl(value) {
@@ -75,6 +82,9 @@ function ProgramCard({ program }) {
   const eligibility = Array.isArray(program.eligibility_bullets)
     ? program.eligibility_bullets
     : []
+  const sourceLabel = program.no_cost_source_trust === 'official_government'
+    ? 'Open official source'
+    : 'Open reviewed source'
 
   return (
     <Card className="flex h-full flex-col border-emerald-200 bg-white shadow-sm">
@@ -139,7 +149,7 @@ function ProgramCard({ program }) {
           {url ? (
             <Button asChild className="w-full bg-emerald-700 text-white hover:bg-emerald-800">
               <a href={url} target="_blank" rel="noopener noreferrer">
-                Open official source
+                {sourceLabel}
                 <ExternalLink className="ml-2 h-4 w-4" aria-hidden="true" />
               </a>
             </Button>
@@ -203,6 +213,7 @@ export default function GreenHomePrograms() {
     }
     setLoading(true)
     setError(null)
+    setResult(null)
     try {
       const data = await searchGreenHomePrograms({ profileId })
       setResult(data)
@@ -214,6 +225,7 @@ export default function GreenHomePrograms() {
       }
     } catch (searchError) {
       const message = searchError?.message || 'The green-home search could not be completed.'
+      setResult(null)
       setError(message)
       toast({ variant: 'destructive', title: 'Search failed', description: message })
     } finally {

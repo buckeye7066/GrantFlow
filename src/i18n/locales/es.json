@@ -13,7 +13,6 @@
   "nav.reports": "Informes y análisis",
   "nav.billing": "Facturación",
   "nav.adminPanel": "Panel de administración",
-
   "nav.group.home": "Inicio",
   "nav.group.help": "Ayuda",
   "nav.group.setup": "Configuración",
@@ -21,13 +20,13 @@
   "nav.group.work": "Trabajo",
   "nav.group.track": "Seguimiento e informes",
   "nav.group.admin": "Administración / Operaciones",
-
   "nav.helpCenter": "Centro de ayuda",
   "nav.fundingResults": "Resultados de financiación",
   "nav.smartMatcher": "Emparejador inteligente",
   "nav.profileMatcher": "Emparejador de perfiles",
   "nav.fundingOpportunities": "Oportunidades de financiación",
   "nav.fundingLibrary": "Biblioteca de financiación",
+  "nav.greenHomePrograms": "Mejoras ecológicas del hogar sin costo",
   "nav.foundationSearch": "Búsqueda de fundaciones",
   "nav.funder": "Financiador",
   "nav.dataSources": "Fuentes de datos",
@@ -46,7 +45,6 @@
   "nav.diagnostics": "Diagnóstico",
   "nav.crawlCoverage": "Cobertura de rastreo",
   "nav.incognito": "Incógnito",
-
   "breadcrumb.home": "Inicio",
   "route.organization": "Organización",
   "route.profile": "Perfil",
@@ -55,7 +53,6 @@
   "route.apply": "Solicitar",
   "route.application": "Solicitud",
   "route.finishApplication": "Finalizar solicitud",
-
   "layout.grantSuite": "Suite de gestión de subvenciones",
   "layout.headerSubtitle": "Espacio de gestión de subvenciones asistido por IA",
   "layout.userManual": "Manual del usuario",
@@ -70,10 +67,8 @@
   "layout.createdBy": "Creado por",
   "layout.switchToLight": "Cambiar a modo claro",
   "layout.switchToDark": "Cambiar a modo oscuro",
-
   "language.partialTag": "parcial",
   "language.partialNotice": "Los menús y las acciones comunes están traducidos. Parte del contenido de las páginas todavía se muestra en inglés.",
-
   "common.save": "Guardar",
   "common.cancel": "Cancelar",
   "common.next": "Siguiente",
@@ -83,16 +78,13 @@
   "common.loading": "Cargando…",
   "common.search": "Buscar",
   "common.close": "Cerrar",
-
   "profile.setUp": "Configura tu perfil",
   "profile.create": "Crear perfil",
   "profile.findFunding": "Buscar financiación",
-
   "language.picker.title": "Elige tu idioma",
   "language.picker.subtitle": "Puedo ayudarte en tu idioma preferido. ¿Cuál te gustaría usar?",
   "language.switcher.label": "Idioma",
   "language.saved": "Idioma actualizado",
-
   "anya.greeting": "¡Hola! Soy Anya, tu guía de GrantFlow.",
   "anya.intro": "Puedo ayudarte a encontrar subvenciones que coincidan con tu perfil, explicarte lo que ves, guiarte por tu flujo de trabajo y responder preguntas sobre el proceso de solicitud.",
   "anya.letsGo": "Empecemos",
