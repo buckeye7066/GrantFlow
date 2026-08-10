@@ -4,21 +4,24 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
+import {
+  buildDatabaseMigrationIdentity,
+  buildRepositoryReleaseIdentity,
+  resolveReleaseCommit,
+} from '../../shared/releaseIdentity.js'
 import { createLogger } from '../utils/logger.js'
-const routeLogger = createLogger('route:version')
 
+const routeLogger = createLogger('route:version')
 const router = express.Router()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-// Cache version info to avoid repeated git/fs operations
 let cachedVersion = null
 
 function getVersionInfo() {
   if (cachedVersion) return cachedVersion
 
-  // Read version from package.json
   let pkgVersion = 'unknown'
   try {
     const pkgPath = path.resolve(__dirname, '../../package.json')
@@ -28,57 +31,75 @@ function getVersionInfo() {
     console.warn('[version] Could not read package.json:', error.message)
   }
 
+  const providerCommit = resolveReleaseCommit(process.env)
   const version = {
     version: pkgVersion,
-    commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || 'unknown',
+    commit: providerCommit.commit || 'unknown',
+    commitSource: providerCommit.source,
     commitShort: 'unknown',
     branch: process.env.RAILWAY_GIT_BRANCH || process.env.GIT_BRANCH || 'unknown',
     environment: process.env.NODE_ENV || 'development',
-    railway: !!process.env.RAILWAY_ENVIRONMENT,
+    railway: Boolean(process.env.RAILWAY_ENVIRONMENT),
     railwayEnv: process.env.RAILWAY_ENVIRONMENT || null,
     buildTime: process.env.BUILD_TIME || new Date().toISOString(),
     nodeVersion: process.version,
   }
 
-  // Try to get git info if not in env vars
   if (version.commit === 'unknown') {
     try {
       const gitDir = path.resolve(__dirname, '../..')
-      version.commit = execSync('git rev-parse HEAD', { cwd: gitDir, encoding: 'utf8' }).trim()
-      version.commitShort = execSync('git rev-parse --short HEAD', { cwd: gitDir, encoding: 'utf8' }).trim()
-      version.branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: gitDir, encoding: 'utf8' }).trim()
-    } catch (err) {
-      console.warn('[version] Git commands failed:', err.message)
+      version.commit = execSync('git rev-parse HEAD', {
+        cwd: gitDir,
+        encoding: 'utf8',
+      }).trim()
+      version.commitShort = execSync('git rev-parse --short HEAD', {
+        cwd: gitDir,
+        encoding: 'utf8',
+      }).trim()
+      version.branch = execSync('git rev-parse --abbrev-ref HEAD', {
+        cwd: gitDir,
+        encoding: 'utf8',
+      }).trim()
+      version.commitSource = 'git_worktree'
+    } catch (error) {
+      console.warn('[version] Git commands failed:', error.message)
       version.commitShort = version.commit.substring(0, 7)
     }
   } else {
     version.commitShort = version.commit.substring(0, 7)
   }
 
-  cachedVersion = version
-  return version
+  const releaseIdentity = buildRepositoryReleaseIdentity({
+    commit: version.commit === 'unknown' ? null : version.commit,
+    packageVersion: pkgVersion,
+  })
+
+  cachedVersion = { ...version, releaseIdentity }
+  return cachedVersion
 }
 
 /**
  * GET /api/version
- * 
- * Returns deployment version information including:
- * - commit SHA (full and short)
- * - git branch
- * - environment (production/staging/development)
- * - build time
- * - Node.js version
- * 
- * This endpoint is used to verify which code is deployed in production.
+ *
+ * Returns the exact code SHA plus a content-addressed release manifest. The
+ * database section compares the ordered _migrations rows with the migration
+ * filenames and file hashes shipped in this same release.
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const version = getVersionInfo()
-    // Lets operators confirm Railway/Vercel picked up a build without reading 404s in the browser.
+    const databaseMigrations = await buildDatabaseMigrationIdentity(req.db, {
+      releaseIdentity: version.releaseIdentity,
+    })
+    const { releaseIdentity, ...publicVersion } = version
     res.json({
-      ...version,
+      ...publicVersion,
+      release_identity: releaseIdentity,
+      database_migrations: databaseMigrations,
       contracts: {
         geo_crawl_unknown_run: '200_missing_payload',
+        release_identity: releaseIdentity.contract,
+        database_migrations: databaseMigrations.contract || null,
       },
     })
   } catch (error) {
