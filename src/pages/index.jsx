@@ -17,6 +17,7 @@ const Funder = lazy(() => import('./Funder'), 'Funder')
 const DiscoverGrants = lazy(() => import('./DiscoverGrants'), 'DiscoverGrants')
 const SmartMatcher = lazy(() => import('./SmartMatcher'), 'SmartMatcher')
 const ItemFunding = lazy(() => import('./ItemFunding'), 'ItemFunding')
+const GreenHomePrograms = lazy(() => import('./GreenHomePrograms'), 'GreenHomePrograms')
 const Pipeline = lazy(() => import('./Pipeline'), 'Pipeline')
 const EndUserPipeline = lazy(() => import('./EndUserPipeline'), 'EndUserPipeline')
 const HamiltonProcessing = lazy(() => import('./HamiltonProcessing'), 'HamiltonProcessing')
@@ -88,7 +89,7 @@ const PrivacyPolicy = lazy(() => import('./PrivacyPolicy'), 'PrivacyPolicy')
 
 const ROUTE_NAMES = new Set([
   'Dashboard', 'Organizations', 'MyProfiles', 'Funder', 'DiscoverGrants',
-  'FundingResults', 'SmartMatcher', 'ItemFunding', 'Pipeline',
+  'FundingResults', 'SmartMatcher', 'ItemFunding', 'GreenHomePrograms', 'Pipeline',
   'HamiltonProcessing', 'Applications', 'Proposals', 'Outreach',
   'GrantDeadline', 'Budgets', 'Documents', 'Calendar', 'Reports',
   'AdvancedAnalytics', 'Billing', 'Automation', 'NewProject', 'GrantDetail',
@@ -173,6 +174,7 @@ function LayoutRoutes() {
           <Route path="/FundingResults" element={withGate(<FundingResults />, 'FundingResults')} />
           <Route path="/SmartMatcher" element={withGate(<SmartMatcher />, 'SmartMatcher')} />
           <Route path="/ItemFunding" element={withGate(<ItemFunding />, 'ItemFunding')} />
+          <Route path="/GreenHomePrograms" element={withGate(<GreenHomePrograms />, 'GreenHomePrograms')} />
           <Route path="/Pipeline" element={withGate(pipelinePage, 'Pipeline')} />
           <Route path="/HamiltonProcessing" element={withGate(<HamiltonProcessing />, 'HamiltonProcessing')} />
           <Route path="/Applications" element={withGate(<Applications />, 'Applications')} />
