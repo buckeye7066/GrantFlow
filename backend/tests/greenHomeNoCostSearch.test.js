@@ -1,0 +1,174 @@
+import { describe, expect, it, vi } from 'vitest'
+import { searchGreenHomeNoCostPrograms } from '../services/greenHomeNoCostSearch.js'
+
+function reportWith(results) {
+  return {
+    profile_id: 'profile-1',
+    items: [
+      {
+        item: 'no-cost home weatherization insulation air sealing direct installation',
+        results,
+        lanes: {
+          catalog: { scanned: 9, matched: 4, error: null },
+          web: { attempted: true, raw_results: 12, matched: 3, error: null },
+        },
+      },
+    ],
+  }
+}
+
+const currentOfficialPaths = () => [
+  {
+    id: 'doe-weatherization-assistance',
+    title: 'Weatherization Assistance Program',
+    description: 'Official free weatherization assistance path.',
+    url: 'https://www.energy.gov/cmei/scep/wap/how-apply-weatherization-assistance',
+    source_url: 'https://www.energy.gov/cmei/scep/wap/how-apply-weatherization-assistance',
+    result_source: 'official_green_home_locator',
+    opportunity_kind: 'directory',
+    is_pointer: true,
+    no_cost_classification: 'eligible',
+    no_cost_reason: 'explicit_no_cost_no_loan_path',
+    no_cost_evidence: 'Official free weatherization assistance path.',
+    reviewed_at: '2026-08-09',
+    source_fresh: true,
+    source_age_days: 1,
+  },
+]
+
+describe('searchGreenHomeNoCostPrograms', () => {
+  it('returns only proven no-cost sources and aggregates withheld reasons', async () => {
+    const searchItemNeedsImpl = vi.fn().mockResolvedValue(reportWith([
+      {
+        id: 'direct-install',
+        title: 'No-cost insulation direct install',
+        description: 'Income-qualified households receive insulation at no cost.',
+        source_url: 'https://energy.example.gov/no-cost-insulation',
+        result_source: 'catalog',
+        need_score: 40,
+      },
+      {
+        id: 'tax-credit',
+        title: 'Residential clean energy tax credit',
+        description: 'Tax credit for purchasing rooftop solar panels.',
+        source_url: 'https://energy.example.gov/tax-credit',
+        result_source: 'catalog',
+        need_score: 80,
+      },
+      {
+        id: 'unknown-cost',
+        title: 'Heat pump assistance program',
+        description: 'Heat pump assistance may be available. Contact the provider for cost terms.',
+        source_url: 'https://energy.example.gov/heat-pump-help',
+        result_source: 'catalog',
+        need_score: 60,
+      },
+      {
+        id: 'unknown-web',
+        title: 'Free residential wind installation',
+        description: 'Free small wind installation for selected homeowners.',
+        url: 'https://unknown.example/wind',
+        result_source: 'web_search',
+        need_score: 70,
+      },
+    ]))
+
+    const result = await searchGreenHomeNoCostPrograms(null, {
+      profileId: 'profile-1',
+      profileContext: {
+        profile: { id: 'profile-1', state: 'TN', is_homeowner: true },
+      },
+      now: new Date('2026-08-10T00:00:00Z'),
+      searchItemNeedsImpl,
+      officialGreenHomePathsImpl: currentOfficialPaths,
+    })
+
+    expect(searchItemNeedsImpl).toHaveBeenCalledTimes(1)
+    expect(searchItemNeedsImpl.mock.calls[0][1]).toMatchObject({
+      profileId: 'profile-1',
+      variant: 'funding',
+    })
+    expect(result.strict_no_cost).toBe(true)
+    expect(result.household).toMatchObject({ occupancy: 'homeowner', state: 'TN' })
+    expect(result.programs.map((program) => program.id)).toEqual([
+      'doe-weatherization-assistance',
+      'direct-install',
+    ])
+    expect(result.programs.every((program) => program.no_cost_classification === 'eligible')).toBe(true)
+    expect(result.review_count).toBe(2)
+    expect(result.review_reasons).toEqual(expect.arrayContaining([
+      { reason: 'no_cost_not_proven', count: 1 },
+      { reason: 'source_not_yet_verified', count: 1 },
+    ]))
+    expect(result.excluded_reasons).toContainEqual({ reason: 'tax_credit', count: 1 })
+    expect(result.search_coverage).toMatchObject({
+      searched_items: 1,
+      catalog_scanned: 9,
+      catalog_matched_before_no_cost_policy: 4,
+      web_attempted: true,
+      web_raw: 12,
+      web_matched_before_no_cost_policy: 3,
+    })
+  })
+
+  it('deduplicates the same official source while retaining all matched upgrade searches', async () => {
+    const shared = {
+      id: 'shared',
+      title: 'Free weatherization and heat-pump installation',
+      description: 'A no-cost direct-install program for qualifying households.',
+      source_url: 'https://energy.example.gov/free-upgrades?utm_source=test',
+      result_source: 'catalog',
+    }
+    const searchItemNeedsImpl = vi.fn().mockResolvedValue({
+      items: [
+        { item: 'weatherization', results: [{ ...shared, need_score: 25 }], lanes: {} },
+        { item: 'heat pump', results: [{ ...shared, source_url: 'https://energy.example.gov/free-upgrades', need_score: 45 }], lanes: {} },
+      ],
+    })
+
+    const result = await searchGreenHomeNoCostPrograms(null, {
+      profileId: 'profile-1',
+      searchItemNeedsImpl,
+      officialGreenHomePathsImpl: () => [],
+    })
+
+    expect(result.programs).toHaveLength(1)
+    expect(result.programs[0].need_score).toBe(45)
+    expect(result.programs[0].matched_green_home_items).toEqual(['weatherization', 'heat pump'])
+  })
+
+  it('keeps stale official locators out of primary results', async () => {
+    const result = await searchGreenHomeNoCostPrograms(null, {
+      profileId: 'profile-1',
+      searchItemNeedsImpl: async () => ({ items: [] }),
+      officialGreenHomePathsImpl: () => [{
+        id: 'stale-path',
+        title: 'Old weatherization page',
+        description: 'Free weatherization.',
+        url: 'https://energy.example.gov/old',
+        no_cost_classification: 'review',
+        no_cost_reason: 'official_source_review_stale',
+        no_cost_evidence: 'Prior official evidence',
+        reviewed_at: '2025-01-01',
+        source_fresh: false,
+        source_age_days: 500,
+      }],
+    })
+
+    expect(result.programs).toHaveLength(0)
+    expect(result.review_count).toBe(1)
+    expect(result.review_reasons).toEqual([
+      { reason: 'official_source_review_stale', count: 1 },
+    ])
+  })
+
+  it('requires a profile id and valid injected dependencies', async () => {
+    await expect(searchGreenHomeNoCostPrograms(null, {})).rejects.toMatchObject({
+      statusCode: 400,
+    })
+    await expect(searchGreenHomeNoCostPrograms(null, {
+      profileId: 'profile-1',
+      searchItemNeedsImpl: null,
+    })).rejects.toMatchObject({ statusCode: 500 })
+  })
+})
