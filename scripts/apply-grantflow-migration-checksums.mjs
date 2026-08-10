@@ -1,4 +1,4 @@
-// Retry with a structural import match; all substantive source blocks remain exact assertions.
+// Retry with structural import matching and non-overlapping migration-write rewrites.
 import fs from 'node:fs'
 
 const file = 'backend/db/migrate.js'
@@ -80,20 +80,14 @@ replaceOnce(
 replaceCount(
   "await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename)",
   'await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE)',
-  2,
-  'procedural migration ledger writes',
-)
-replaceCount(
-  "await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);",
-  'await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE);',
-  1,
-  'Postgres SQL migration ledger write',
+  3,
+  'asynchronous migration ledger writes',
 )
 replaceCount(
   "tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);",
   'await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE);',
   2,
-  'SQLite SQL migration ledger writes',
+  'synchronous SQLite migration ledger writes',
 )
 
 replaceOnce(
