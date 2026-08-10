@@ -3,8 +3,8 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
 import {
+  discardResponseBody,
   readBufferCapped,
-  readTextCapped,
   safeFetch,
   SsrfBlockedError,
 } from './http/safeFetch.js'
@@ -31,6 +31,11 @@ function mapSsrfReason(reason) {
   if (value === 'embedded_credentials') return 'blocked_embedded_credentials'
   if (value.startsWith('dns_')) return 'dns_failed'
   return value || 'fetch_failed'
+}
+
+async function discardAndReturn(res, result) {
+  if (res) await discardResponseBody(res)
+  return result
 }
 
 export function normalizeHttpUrl(value) {
@@ -197,13 +202,20 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
     }
   }
   const res = fetched.res
-  if (!res || !res.ok) return { ok: false, reason: 'fetch_failed' }
+  if (!res) return { ok: false, reason: 'fetch_failed' }
+  if (!res.ok) return discardAndReturn(res, { ok: false, reason: 'fetch_failed' })
 
   const contentType = String(res.headers.get('content-type') || '').toLowerCase()
-  if (!contentType.startsWith('image/')) return { ok: false, reason: 'not_image' }
+  if (!contentType.startsWith('image/')) {
+    return discardAndReturn(res, { ok: false, reason: 'not_image' })
+  }
 
-  const imageBody = await readBufferCapped(res, MAX_IMAGE_BYTES).catch(() => null)
-  if (!imageBody) return { ok: false, reason: 'fetch_failed' }
+  let imageBody
+  try {
+    imageBody = await readBufferCapped(res, MAX_IMAGE_BYTES)
+  } catch {
+    return { ok: false, reason: 'image_body_read_failed' }
+  }
   if (imageBody.truncated) return { ok: false, reason: 'too_large' }
   const buf = imageBody.buffer
   if (buf.length < 100) return { ok: false, reason: 'too_small' }
@@ -277,11 +289,21 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   }
   const res = fetched.res
   const finalUrl = fetched.finalUrl || website
-  if (!res || !res.ok) {
-    return { ok: false, reason: 'website_fetch_failed' }
+  if (!res) return { ok: false, reason: 'website_fetch_failed' }
+  if (!res.ok) {
+    return discardAndReturn(res, { ok: false, reason: 'website_fetch_failed' })
   }
 
-  const html = await readTextCapped(res, MAX_HTML_BYTES).catch(() => '')
+  let htmlBody
+  try {
+    htmlBody = await readBufferCapped(res, MAX_HTML_BYTES)
+  } catch {
+    return { ok: false, reason: 'website_body_read_failed' }
+  }
+  if (htmlBody.truncated) {
+    return { ok: false, reason: 'website_body_too_large' }
+  }
+  const html = htmlBody.buffer.toString('utf8')
   const pick = pickWebsiteImageCandidate(html, finalUrl)
   if (!pick?.url) {
     return { ok: false, reason: 'no_cover_meta' }
@@ -300,17 +322,22 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
     }
   }
   const imgRes = imgFetched.res
-  if (!imgRes || !imgRes.ok) {
-    return { ok: false, reason: 'cover_fetch_failed' }
+  if (!imgRes) return { ok: false, reason: 'cover_fetch_failed' }
+  if (!imgRes.ok) {
+    return discardAndReturn(imgRes, { ok: false, reason: 'cover_fetch_failed' })
   }
 
   const imgType = String(imgRes.headers.get('content-type') || '').toLowerCase()
   if (!imgType.startsWith('image/') && !imgType.includes('icon')) {
-    return { ok: false, reason: 'cover_not_image' }
+    return discardAndReturn(imgRes, { ok: false, reason: 'cover_not_image' })
   }
 
-  const imageBody = await readBufferCapped(imgRes, MAX_IMAGE_BYTES).catch(() => null)
-  if (!imageBody) return { ok: false, reason: 'cover_fetch_failed' }
+  let imageBody
+  try {
+    imageBody = await readBufferCapped(imgRes, MAX_IMAGE_BYTES)
+  } catch {
+    return { ok: false, reason: 'cover_body_read_failed' }
+  }
   if (imageBody.truncated) return { ok: false, reason: 'cover_too_large' }
   const buf = imageBody.buffer
 
