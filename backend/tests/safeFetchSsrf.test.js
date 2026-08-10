@@ -10,6 +10,7 @@ import {
   safeFetchOrNull,
   SsrfBlockedError,
   readTextCapped,
+  readBufferCapped,
   discardResponseBody,
   mergeAbortSignals,
 } from '../services/http/safeFetch.js'
@@ -381,6 +382,27 @@ describe('response body cleanup and caps', () => {
     const text = await readTextCapped({ body: stream }, 100)
 
     expect(Buffer.byteLength(text)).toBe(100)
+    expect(destroy).toHaveBeenCalled()
+  })
+
+  it('caps Web binary bodies while reporting truncation', async () => {
+    const res = new Response(Buffer.alloc(256, 7), { status: 200 })
+    const result = await readBufferCapped(res, 100)
+    expect(result.buffer.length).toBe(100)
+    expect(result.truncated).toBe(true)
+  })
+
+  it('caps Node binary streams incrementally and destroys them', async () => {
+    const stream = Readable.from([
+      Buffer.alloc(80, 1),
+      Buffer.alloc(80, 2),
+    ])
+    const destroy = vi.spyOn(stream, 'destroy')
+
+    const result = await readBufferCapped({ body: stream }, 100)
+
+    expect(result.buffer.length).toBe(100)
+    expect(result.truncated).toBe(true)
     expect(destroy).toHaveBeenCalled()
   })
 

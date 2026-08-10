@@ -2,55 +2,35 @@ import fs from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
-import { assertSsrfSafeUrl } from '../config/urlRules.js'
+import {
+  readBufferCapped,
+  readTextCapped,
+  safeFetch,
+  SsrfBlockedError,
+} from './http/safeFetch.js'
 import * as cheerio from 'cheerio'
 
-const fetchImpl = globalThis.fetch
 const FETCH_TIMEOUT_MS = 12_000
 const MAX_REDIRECTS = 4
+const MAX_HTML_BYTES = 2 * 1024 * 1024
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const USER_AGENT = 'GrantFlow Avatar Lookup/1.0'
 
-/**
- * Map assertSsrfSafeUrl refusals onto the avatar crawler's stable reason vocab
- * so callers/tests that key on `blocked_private_host` keep working.
- */
+/** Map shared SSRF refusals onto the avatar crawler's stable reason vocabulary. */
 function mapSsrfReason(reason) {
-  const r = String(reason || '')
+  const value = String(reason || '')
   if (
-    r.startsWith('private_ip:') ||
-    r.startsWith('resolves_private:') ||
-    r.startsWith('blocked_host:')
-  ) {
-    return 'blocked_private_host'
-  }
-  if (r === 'unparseable_url' || r === 'empty_url') return 'invalid_url'
-  if (r.startsWith('blocked_scheme:')) return 'blocked_redirect_scheme'
-  return r || 'blocked_private_host'
-}
-
-/**
- * Per-hop SSRF check. Hostname-string checks alone are not enough: a public
- * DNS name whose A/AAAA record is 169.254.169.254 / 10.x / etc. must also be
- * refused. Delegates to the shared assertSsrfSafeUrl (DNS-resolving) chokepoint
- * used by httpClient / Yana / linkVerification. `allowLocalhost` only exempts
- * loopback for tests — never RFC1918 / link-local / metadata.
- */
-async function assertAvatarHopSafe(url, { allowLocalhost = false, assertSafeUrl } = {}) {
-  let host
-  try {
-    host = new URL(url).hostname
-  } catch {
-    return { ok: false, reason: 'invalid_url' }
-  }
-  if (allowLocalhost && isLoopbackHostname(host)) {
-    return { ok: true }
-  }
-  const check = typeof assertSafeUrl === 'function' ? assertSafeUrl : assertSsrfSafeUrl
-  const verdict = await check(url)
-  if (!verdict?.ok) {
-    return { ok: false, reason: mapSsrfReason(verdict?.reason) }
-  }
-  return { ok: true }
+    value.startsWith('private_ip:') ||
+    value.startsWith('resolves_private:') ||
+    value.startsWith('blocked_host:')
+  ) return 'blocked_private_host'
+  if (value === 'empty_url' || value === 'unparseable_url') return 'invalid_url'
+  if (value.startsWith('unparseable_redirect')) return 'invalid_redirect'
+  if (value.startsWith('blocked_scheme:')) return 'blocked_redirect_scheme'
+  if (value.startsWith('too_many_redirects:')) return 'too_many_redirects'
+  if (value === 'embedded_credentials') return 'blocked_embedded_credentials'
+  if (value.startsWith('dns_')) return 'dns_failed'
+  return value || 'fetch_failed'
 }
 
 export function normalizeHttpUrl(value) {
@@ -66,14 +46,6 @@ export function normalizeHttpUrl(value) {
   }
 }
 
-function isLoopbackHostname(hostname) {
-  const h = String(hostname || '').trim().toLowerCase()
-  if (!h) return false
-  if (h === 'localhost' || h.endsWith('.localhost') || h === '::1') return true
-  if (h === '127.0.0.1') return true
-  return false
-}
-
 function resolveUrl(baseUrl, maybeRelative) {
   const raw = String(maybeRelative ?? '').trim()
   if (!raw) return null
@@ -84,63 +56,56 @@ function resolveUrl(baseUrl, maybeRelative) {
   }
 }
 
-async function fetchOnce(url, accept) {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-  try {
-    return await fetchImpl(url, {
-      method: 'GET',
-      // Manual redirects so every hop can be re-validated (validate-then-follow
-      // with redirect:'follow' lets a public first hop 302 into link-local /
-      // metadata IPs inside undici where the hostname guard never runs).
-      redirect: 'manual',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: accept,
-      },
-    })
-  } finally {
-    clearTimeout(timeoutId)
-  }
-}
-
 /**
- * SSRF-safe fetch: re-check EVERY hop (scheme + hostname + DNS→private) and
- * never auto-follow redirects. Returns { ok, res, finalUrl } or { ok:false, reason }.
- *
- * The 0563eb97 fix closed validate-then-follow into literal private IPs, but
- * still only inspected the hostname string. A public name whose DNS resolves
- * to link-local/metadata bypassed that guard — this path now uses the same
- * DNS-resolving assertSsrfSafeUrl chokepoint as the rest of the SSRF wave.
+ * Avatar egress delegates to GrantFlow's single socket-pinned safeFetch
+ * chokepoint. DNS is resolved once per hop, the approved address is pinned to
+ * the connection, redirects are revalidated, and one deadline spans the chain.
+ * Test-only transport/resolver injection is forwarded to safeFetch.
  */
-export async function safeAvatarFetch(startUrl, accept, {
-  allowLocalhost = false,
-  assertSafeUrl = null,
-} = {}) {
-  let current = startUrl
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    const hopCheck = await assertAvatarHopSafe(current, { allowLocalhost, assertSafeUrl })
-    if (!hopCheck.ok) return hopCheck
-    let res
-    try {
-      res = await fetchOnce(current, accept)
-    } catch {
-      return { ok: false, reason: 'fetch_failed' }
+export async function safeAvatarFetch(startUrl, accept, options = {}) {
+  const egress = typeof options.safeFetchImpl === 'function'
+    ? options.safeFetchImpl
+    : safeFetch
+  try {
+    const res = await egress(
+      startUrl,
+      {
+        method: 'GET',
+        headers: {
+          'User-Agent': USER_AGENT,
+          Accept: accept,
+        },
+      },
+      {
+        maxRedirects: MAX_REDIRECTS,
+        timeoutMs: FETCH_TIMEOUT_MS,
+        signal: options.signal,
+        resolve: options.resolve,
+        fetchImpl: options.fetchImpl,
+        allowTestLoopback:
+          options.allowLocalhost === true && process.env.NODE_ENV === 'test',
+      },
+    )
+    return {
+      ok: true,
+      res,
+      finalUrl: res?.grantflowFinalUrl || startUrl,
     }
-    const status = res.status
-    if (status >= 300 && status < 400) {
-      const loc = res.headers.get('location')
-      if (!loc) return { ok: true, res, finalUrl: current }
-      const next = resolveUrl(current, loc)
-      if (!next) return { ok: false, reason: 'invalid_redirect' }
-      if (!/^https?:\/\//i.test(next)) return { ok: false, reason: 'blocked_redirect_scheme' }
-      current = next
-      continue
+  } catch (error) {
+    const message = String(error?.message || '')
+    if (
+      error instanceof SsrfBlockedError ||
+      error?.name === 'SsrfBlockedError' ||
+      message.startsWith('ssrf_blocked:')
+    ) {
+      const reason = error?.reason || message.replace(/^ssrf_blocked:/, '')
+      return { ok: false, reason: mapSsrfReason(reason) }
     }
-    return { ok: true, res, finalUrl: current }
+    return {
+      ok: false,
+      reason: error?.name === 'AbortError' ? 'fetch_timeout_or_cancelled' : 'fetch_failed',
+    }
   }
-  return { ok: false, reason: 'too_many_redirects' }
 }
 
 function pickWebsiteImageCandidate(html, baseUrl) {
@@ -224,8 +189,6 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
   const url = normalizeHttpUrl(imageUrl)
   if (!url) return { ok: false, reason: 'invalid_url' }
 
-  if (!fetchImpl) return { ok: false, reason: 'fetch_unavailable' }
-
   const fetched = await safeAvatarFetch(url, 'image/*,*/*;q=0.8', { allowLocalhost: false })
   if (!fetched.ok) {
     return {
@@ -239,8 +202,10 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
   const contentType = String(res.headers.get('content-type') || '').toLowerCase()
   if (!contentType.startsWith('image/')) return { ok: false, reason: 'not_image' }
 
-  const buf = Buffer.from(await res.arrayBuffer())
-  if (buf.length > 10 * 1024 * 1024) return { ok: false, reason: 'too_large' }
+  const imageBody = await readBufferCapped(res, MAX_IMAGE_BYTES).catch(() => null)
+  if (!imageBody) return { ok: false, reason: 'fetch_failed' }
+  if (imageBody.truncated) return { ok: false, reason: 'too_large' }
+  const buf = imageBody.buffer
   if (buf.length < 100) return { ok: false, reason: 'too_small' }
 
   const ext = extensionFromContentType(contentType)
@@ -301,10 +266,6 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   // SSRF guard (allow localhost only in tests). Explicit false still wins.
   const allowLocalhost = process.env.NODE_ENV === 'test'
 
-  if (!fetchImpl) {
-    return { ok: false, reason: 'fetch_unavailable' }
-  }
-
   const fetched = await safeAvatarFetch(website, 'text/html,application/xhtml+xml', {
     allowLocalhost,
   })
@@ -320,26 +281,13 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
     return { ok: false, reason: 'website_fetch_failed' }
   }
 
-  const html = await res.text().catch(() => '')
+  const html = await readTextCapped(res, MAX_HTML_BYTES).catch(() => '')
   const pick = pickWebsiteImageCandidate(html, finalUrl)
   if (!pick?.url) {
     return { ok: false, reason: 'no_cover_meta' }
   }
   const coverUrl = pick.url
   const method = pick.method || 'website_cover'
-
-  // Cover URLs are page-derived (untrusted). Re-run the DNS-resolving hop
-  // check before the image fetch so a meta tag pointing at a public name
-  // that resolves to metadata cannot skip the guard.
-  const coverHop = await assertAvatarHopSafe(coverUrl, { allowLocalhost })
-  if (!coverHop.ok) {
-    return {
-      ok: false,
-      reason: coverHop.reason === 'blocked_private_host'
-        ? 'blocked_private_cover_host'
-        : coverHop.reason,
-    }
-  }
 
   const imgFetched = await safeAvatarFetch(coverUrl, 'image/*,*/*;q=0.8', { allowLocalhost })
   if (!imgFetched.ok) {
@@ -361,11 +309,10 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
     return { ok: false, reason: 'cover_not_image' }
   }
 
-  const buf = Buffer.from(await imgRes.arrayBuffer())
-  // Safety cap: 10MB
-  if (buf.length > 10 * 1024 * 1024) {
-    return { ok: false, reason: 'cover_too_large' }
-  }
+  const imageBody = await readBufferCapped(imgRes, MAX_IMAGE_BYTES).catch(() => null)
+  if (!imageBody) return { ok: false, reason: 'cover_fetch_failed' }
+  if (imageBody.truncated) return { ok: false, reason: 'cover_too_large' }
+  const buf = imageBody.buffer
 
   const ext = extensionFromContentType(imgType)
   const filename = `${Date.now()}-${randomUUID()}.${ext}`
