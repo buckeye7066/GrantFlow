@@ -6,7 +6,7 @@ import {
   getGroupIdForRoute,
 } from './navConfig.js'
 import { END_USER_NAV_GROUPS } from './endUserNavConfig.js'
-import { ROUTE_NAMES } from '../pages/index.jsx'
+import { ROUTE_NAMES } from '../pages/routeNames.js'
 
 function routeItems(groups, routeName) {
   return groups.flatMap((group) => group.items || []).filter((item) => item.routeName === routeName)

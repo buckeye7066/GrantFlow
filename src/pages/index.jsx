@@ -9,6 +9,7 @@ import AdminPricingToastListener from '@/components/admin/AdminPricingToastListe
 import RouteDocumentMetadata from '@/components/shared/RouteDocumentMetadata.jsx'
 import { hasFullAdminWorkspace } from '@/lib/workspaceAccess'
 import Layout from './Layout.jsx'
+import { ROUTE_NAMES } from './routeNames.js'
 
 const Dashboard = lazy(() => import('./Dashboard'), 'Dashboard')
 const Organizations = lazy(() => import('./Organizations'), 'Organizations')
@@ -86,25 +87,6 @@ const CheckoutRequired = lazy(() => import('./CheckoutRequired'), 'CheckoutRequi
 const HamiltonLiveLogin = lazy(() => import('./HamiltonLiveLogin'), 'HamiltonLiveLogin')
 const Landing = lazy(() => import('./Landing'), 'Landing')
 const PrivacyPolicy = lazy(() => import('./PrivacyPolicy'), 'PrivacyPolicy')
-
-export const ROUTE_NAMES = new Set([
-  'Dashboard', 'Organizations', 'MyProfiles', 'Funder', 'DiscoverGrants',
-  'FundingResults', 'SmartMatcher', 'ItemFunding', 'GreenHomePrograms', 'Pipeline',
-  'HamiltonProcessing', 'Applications', 'Proposals', 'Outreach',
-  'GrantDeadline', 'Budgets', 'Documents', 'Calendar', 'Reports',
-  'AdvancedAnalytics', 'Billing', 'Automation', 'NewProject', 'GrantDetail',
-  'Apply', 'VNextApplication', 'VNextFinishPacket', 'InvoiceView',
-  'CreateInvoice', 'NOFOParser', 'AIGrantScorer', 'BudgetDetail',
-  'PrintPipeline', 'PrintProfilePacket', 'PrintAwardSummary', 'OneTimeFix',
-  'DataSources', 'SourceRegistry', 'BackfillContacts', 'Stewardship',
-  'Settings', 'Help', 'Incognito', 'Diagnostics', 'CrawlCoverage',
-  'CoverageEvidence', 'ComplianceReportDetail', 'ProfileMatcher',
-  'SourceDirectory', 'FundingOpportunities', 'FundingLibrary',
-  'GrantMonitoring', 'PrintableApplication', 'BillingSheet', 'ProfileDetail',
-  'OrganizationProfile', 'Admin', 'Pricing', 'Services', 'SavedGrants',
-  'FoundationSearch', 'AnyaIntakeResults', 'PricingRequired',
-  'ServiceAgreement', 'CheckoutRequired',
-])
 
 function RouteLoading() {
   return (

@@ -334,6 +334,8 @@ test('mission-health: verification_events_24h uses the canonical ts column', asy
 
 test('mission-health: targets export matches the production minimums', () => {
   assert.equal(MISSION_TARGETS.verified_pct_min, 95)
+  assert.equal(MISSION_TARGETS.release_catalog_verified_pct_min, 95)
+  assert.equal(MISSION_TARGETS.visible_direct_verified_pct_min, 100)
   assert.equal(MISSION_TARGETS.verified_max_age_days, 30)
   assert.equal(MISSION_TARGETS.broken_pct_max, 5)
   assert.equal(MISSION_TARGETS.placeholder_max, 0)
@@ -417,4 +419,71 @@ test('mission-health: TARGETS exposes the release-gate code list', () => {
   assert.ok(MISSION_TARGETS.release_blocking_codes.includes('pii_external_query_violation'))
   assert.ok(MISSION_TARGETS.release_blocking_codes.includes('crawler_source_outcomes_stale'))
   assert.equal(typeof MISSION_TARGETS.crawler_source_runs_max_age_hours, 'number')
+})
+
+test('mission-health: complete release catalog denominator includes pointer resources', async () => {
+  const db = createDb()
+  for (let i = 0; i < 18; i++) {
+    seedRow(db, { id: `verified-direct-${i}`, kind: 'direct', link_status: 'verified' })
+  }
+  seedRow(db, { id: 'unverified-directory', kind: 'directory', link_status: 'unverified' })
+  seedRow(db, { id: 'stale-referral', kind: 'referral', link_status: 'verified', last_verified_at: '2020-01-01T00:00:00Z' })
+
+  const h = await buildMissionHealth(db)
+
+  assert.equal(h.release_catalog.denominator_total, 20)
+  assert.equal(h.release_catalog.verified_fresh, 18)
+  assert.equal(h.release_catalog.unverified_or_stale, 2)
+  assert.equal(h.release_catalog.visible_direct.total, 18)
+  assert.equal(h.release_catalog.visible_direct.all_verified, true)
+  assert.equal(h.release_catalog.visible_pointer.total, 2)
+  assert.equal(h.rates.release_catalog_verified_pct, 90)
+  assert.ok(h.release_blockers.some(
+    (blocker) => blocker.code === 'release_catalog_verified_pct_below_target',
+  ))
+})
+
+test('mission-health: every visible direct opportunity must be freshly verified', async () => {
+  const db = createDb()
+  for (let i = 0; i < 19; i++) {
+    seedRow(db, { id: `verified-${i}`, kind: 'direct', link_status: 'verified' })
+  }
+  seedRow(db, { id: 'one-unverified-direct', kind: 'direct', link_status: 'unverified' })
+
+  const h = await buildMissionHealth(db)
+
+  assert.equal(h.rates.release_catalog_verified_pct, 95)
+  assert.equal(h.release_catalog.visible_direct.verified_pct, 95)
+  assert.equal(h.release_catalog.visible_direct.all_verified, false)
+  assert.equal(
+    h.release_blockers.some(
+      (blocker) => blocker.code === 'release_catalog_verified_pct_below_target',
+    ),
+    false,
+    '95% complete-catalog verification meets the catalog threshold',
+  )
+  assert.ok(h.release_blockers.some(
+    (blocker) => blocker.code === 'visible_direct_link_requirement_failed',
+  ))
+})
+
+test('mission-health: release-catalog snapshot failure blocks release', async () => {
+  const healthyDb = createDb()
+  const db = {
+    ...healthyDb,
+    prepare(sql) {
+      if (String(sql).includes('WITH visible_catalog AS')) {
+        throw new Error('forced release catalog snapshot failure')
+      }
+      return healthyDb.prepare(sql)
+    },
+  }
+
+  const h = await buildMissionHealth(db)
+
+  assert.match(h.release_catalog.error, /forced release catalog snapshot failure/)
+  assert.equal(h.production_gate, false)
+  assert.ok(h.release_blockers.some(
+    (blocker) => blocker.code === 'release_catalog_snapshot_unavailable',
+  ))
 })

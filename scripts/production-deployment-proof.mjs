@@ -15,6 +15,8 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 
+import { buildRepositoryReleaseIdentity } from '../shared/releaseIdentity.js'
+
 const WRITE_REPORT = process.argv.includes('--write')
 const REQUIRE_CLEAN = process.argv.includes('--require-clean')
 const TARGET_BRANCH = readArgValue('--target-branch', 'branch name')
@@ -225,6 +227,16 @@ async function main() {
   })
 
   const productionBaseUrl = normalizeBaseUrl(PRODUCTION_URL)
+  let localReleaseIdentity = null
+  let localReleaseIdentityError = null
+  try {
+    localReleaseIdentity = buildRepositoryReleaseIdentity({
+      commit: normalizeSha(expectedHead) || null,
+    })
+  } catch (error) {
+    localReleaseIdentityError = error?.message || String(error)
+  }
+
   const frontendVersionUrl = `${productionBaseUrl}/deployment-version.json`
   let frontendVersion = null
   try {
@@ -238,14 +250,48 @@ async function main() {
     'Vercel frontend commit matches certified branch',
     `GET ${frontendVersionUrl}`,
     frontendVersion.ok
-      && frontendVersion?.data?.contract === 'grantflow-frontend-deployment-version-v1'
-      && shaMatches(expectedHead, frontendCommit),
+      && frontendVersion?.data?.contract === 'grantflow-frontend-deployment-version-v2'
+      && shaMatches(expectedHead, frontendCommit)
+      && frontendVersion?.data?.release_manifest_sha256 === localReleaseIdentity?.manifest_sha256,
     {
       expected_head: expectedHead || null,
       frontend_commit: frontendCommit,
       source: frontendVersion?.data?.source || null,
+      release_manifest_sha256: frontendVersion?.data?.release_manifest_sha256 || null,
+      local_release_manifest_sha256: localReleaseIdentity?.manifest_sha256 || null,
       status: frontendVersion?.status ?? null,
-      error: frontendVersion?.fetch_error || frontendVersion?.parse_error || null,
+      error: frontendVersion?.fetch_error
+        || frontendVersion?.parse_error
+        || localReleaseIdentityError
+        || null,
+    },
+  )
+
+  const frontendReleaseUrl = `${productionBaseUrl}/release-identity.json`
+  let frontendRelease = null
+  try {
+    frontendRelease = await fetchJson(frontendReleaseUrl)
+  } catch (error) {
+    frontendRelease = { ok: false, status: null, fetch_error: error?.message || String(error) }
+  }
+  addAsync(
+    checks,
+    'Vercel frontend release manifest matches local release',
+    `GET ${frontendReleaseUrl}`,
+    frontendRelease.ok
+      && frontendRelease?.data?.contract === 'grantflow-release-identity-v1'
+      && shaMatches(expectedHead, frontendRelease?.data?.commit)
+      && frontendRelease?.data?.manifest_sha256 === localReleaseIdentity?.manifest_sha256,
+    {
+      expected_head: expectedHead || null,
+      frontend_commit: frontendRelease?.data?.commit || null,
+      frontend_manifest_sha256: frontendRelease?.data?.manifest_sha256 || null,
+      local_manifest_sha256: localReleaseIdentity?.manifest_sha256 || null,
+      status: frontendRelease?.status ?? null,
+      error: frontendRelease?.fetch_error
+        || frontendRelease?.parse_error
+        || localReleaseIdentityError
+        || null,
     },
   )
 
@@ -266,6 +312,86 @@ async function main() {
     status: liveVersion?.status ?? null,
     error: liveVersion?.fetch_error || liveVersion?.parse_error || null,
   })
+
+  const backendReleaseIdentity = liveVersion?.data?.release_identity || null
+  addAsync(
+    checks,
+    'Railway backend release manifest matches Vercel',
+    `GET ${liveVersionUrl}`,
+    liveVersion.ok
+      && backendReleaseIdentity?.contract === 'grantflow-release-identity-v1'
+      && shaMatches(expectedHead, backendReleaseIdentity?.commit)
+      && backendReleaseIdentity?.manifest_sha256 === frontendRelease?.data?.manifest_sha256
+      && backendReleaseIdentity?.manifest_sha256 === localReleaseIdentity?.manifest_sha256,
+    {
+      backend_manifest_sha256: backendReleaseIdentity?.manifest_sha256 || null,
+      frontend_manifest_sha256: frontendRelease?.data?.manifest_sha256 || null,
+      local_manifest_sha256: localReleaseIdentity?.manifest_sha256 || null,
+      backend_commit: backendReleaseIdentity?.commit || null,
+    },
+  )
+
+  const databaseMigrations = liveVersion?.data?.database_migrations || null
+  const databaseDialect = databaseMigrations?.dialect || null
+  const backendMigrationSet = databaseDialect
+    ? backendReleaseIdentity?.migration_sets?.[databaseDialect]
+    : null
+  addAsync(
+    checks,
+    'Production database migration identity matches release',
+    `GET ${liveVersionUrl}`,
+    liveVersion.ok
+      && databaseMigrations?.available === true
+      && databaseMigrations?.matches_release === true
+      && databaseMigrations?.order_matches === true
+      && Array.isArray(databaseMigrations?.pending)
+      && databaseMigrations.pending.length === 0
+      && Array.isArray(databaseMigrations?.unexpected)
+      && databaseMigrations.unexpected.length === 0
+      && databaseMigrations?.applied_sha256 === databaseMigrations?.expected_sha256
+      && databaseMigrations?.expected_sha256 === backendMigrationSet?.manifest_sha256,
+    {
+      dialect: databaseDialect,
+      applied_count: databaseMigrations?.applied_count ?? null,
+      expected_count: databaseMigrations?.expected_count ?? null,
+      applied_sha256: databaseMigrations?.applied_sha256 || null,
+      expected_sha256: databaseMigrations?.expected_sha256 || null,
+      release_migration_set_sha256: backendMigrationSet?.manifest_sha256 || null,
+      pending: databaseMigrations?.pending || null,
+      unexpected: databaseMigrations?.unexpected || null,
+      order_matches: databaseMigrations?.order_matches ?? null,
+      hash_provenance: databaseMigrations?.hash_provenance || null,
+      historical_applied_bytes_attested:
+        databaseMigrations?.historical_applied_bytes_attested ?? null,
+      error: databaseMigrations?.error || null,
+    },
+  )
+
+  const localEvidence = localReleaseIdentity?.evidence_artifact || null
+  const frontendEvidence = frontendRelease?.data?.evidence_artifact || null
+  const backendEvidence = backendReleaseIdentity?.evidence_artifact || null
+  addAsync(
+    checks,
+    'Release evidence artifact hash matches',
+    `GET ${frontendReleaseUrl} + GET ${liveVersionUrl}`,
+    Boolean(
+      localEvidence?.sha256
+        && localEvidence.path === 'docs/production-readiness/grantflow.md'
+        && frontendEvidence?.path === localEvidence.path
+        && backendEvidence?.path === localEvidence.path
+        && frontendEvidence?.sha256 === localEvidence.sha256
+        && backendEvidence?.sha256 === localEvidence.sha256
+        && frontendVersion?.data?.evidence_artifact_sha256 === localEvidence.sha256,
+    ),
+    {
+      path: localEvidence?.path || null,
+      local_sha256: localEvidence?.sha256 || null,
+      frontend_sha256: frontendEvidence?.sha256 || null,
+      backend_sha256: backendEvidence?.sha256 || null,
+      deployment_receipt_sha256:
+        frontendVersion?.data?.evidence_artifact_sha256 || null,
+    },
+  )
 
   const failures = checks.filter((check) => !check.pass)
   const report = {
