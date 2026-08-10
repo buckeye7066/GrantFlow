@@ -86,39 +86,52 @@ const GREEN_HOME_PATTERNS = Object.freeze([
   /\benergy[- ]efficient windows?\b/i,
 ])
 
+// A primary result needs explicit evidence that the household does not have to
+// pay. “Direct install,” “grant funded,” or “does not need to be repaid” alone
+// are insufficient because a program may still require a contribution or an
+// up-front purchase.
 const POSITIVE_NO_COST_PATTERNS = Object.freeze([
   { pattern: /\bno[- ]cost\b/i, label: 'The source explicitly describes the service as no cost.' },
   { pattern: /\bat no cost\b/i, label: 'The source explicitly states that the service is provided at no cost.' },
   { pattern: /\bfree (?:weatherization|installation|upgrade|repair|service)s?\b/i, label: 'The source explicitly describes free weatherization, installation, upgrades, repairs, or services.' },
   { pattern: /\bfree of charge\b/i, label: 'The source explicitly states that the service is free of charge.' },
-  { pattern: /\bzero out[- ]of[- ]pocket\b/i, label: 'The source explicitly states zero out-of-pocket cost.' },
+  { pattern: /\b(?:zero|no) out[- ]of[- ]pocket (?:costs?|expense)\b/i, label: 'The source explicitly states that the household has no out-of-pocket cost.' },
   { pattern: /\b100% (?:covered|funded)\b/i, label: 'The source states that the covered work is fully funded.' },
   { pattern: /\bfully funded\b/i, label: 'The source states that the covered work is fully funded.' },
-  { pattern: /\bdirect[- ]install(?:ation)?\b/i, label: 'The source describes a direct-install program rather than a financing offer.' },
+  { pattern: /\ball (?:eligible )?costs? (?:are )?covered\b/i, label: 'The source states that all eligible costs are covered.' },
   { pattern: /\bprovided (?:free|without charge)\b/i, label: 'The source states that the service is provided without charge.' },
-  { pattern: /\bgrant[- ]funded\b/i, label: 'The source describes the covered work as grant funded.' },
-  { pattern: /\bdoes not need to be repaid\b/i, label: 'The source states that the assistance does not need to be repaid.' },
-  { pattern: /\bno repayment\b/i, label: 'The source explicitly states that repayment is not required.' },
-  { pattern: /\bweatherization assistance program\b/i, label: 'The source identifies an official Weatherization Assistance Program path.' },
-  { pattern: /\bliheap\b/i, label: 'The source identifies a LIHEAP-administered energy-assistance path.' },
+  { pattern: /\bnothing (?:for (?:the )?(?:applicant|homeowner|household) )?to pay\b/i, label: 'The source explicitly states that the household has nothing to pay.' },
 ])
 
-const NEGATED_REPAYMENT_PATTERNS = Object.freeze([
+// Remove explicit negative statements before scanning for forbidden payment
+// models. This prevents text such as “no loan, no monthly payment, and no
+// homeowner contribution” from being misclassified as requiring those items.
+const NEGATED_COST_PATTERNS = Object.freeze([
   /\bdoes not need to be repaid\b/gi,
   /\bno repayment\b/gi,
-  /\bnot a loan\b/gi,
+  /\bnot (?:a )?loan\b/gi,
   /\bno loan required\b/gi,
   /\bwithout financing\b/gi,
+  /\b(?:zero|no) out[- ]of[- ]pocket (?:costs?|expense)\b/gi,
+  /\bno (?:down|monthly|up[- ]front) payments?\b/gi,
+  /\bno (?:applicant|homeowner|household|customer|participant) contributions?\b/gi,
+  /\bwithout (?:an? )?(?:applicant|homeowner|household|customer|participant) contribution\b/gi,
+  /\bno cost[- ]?share(?:ing)?\b/gi,
+  /\bno matching funds?\b/gi,
+  /\bno (?:required )?match\b/gi,
+  /\bno purchase required\b/gi,
+  /\bnot (?:a )?(?:tax credit|rebate|reimbursement|lease|power purchase agreement|ppa)\b/gi,
+  /\bno (?:loans?|financing|leases?|power purchase agreements?|tax credits?|rebates?|reimbursements?)\b/gi,
 ])
 
 const FORBIDDEN_COST_PATTERNS = Object.freeze([
-  { code: 'loan_or_financing', pattern: /\b(?:loan|financing|finance plan|line of credit|credit product|mortgage|property assessed clean energy|pace financing)\b/i },
+  { code: 'loan_or_financing', pattern: /\b(?:loan|financing|finance plan|line of credit|credit product|mortgage financing|mortgage loan|property assessed clean energy|pace financing)\b/i },
   { code: 'lease_or_ppa', pattern: /\b(?:lease|leasing|power purchase agreement|solar ppa|\bppa\b)\b/i },
   { code: 'tax_credit', pattern: /\b(?:tax credit|tax deduction|tax incentive)\b/i },
   { code: 'rebate', pattern: /\brebate\b/i },
   { code: 'reimbursement', pattern: /\b(?:reimbursement|reimburse after|post[- ]purchase reimbursement)\b/i },
-  { code: 'applicant_payment', pattern: /\b(?:down payment|monthly payment|interest rate|\bapr\b|repayment term|repay the|customer payment|homeowner payment|participant payment)\b/i },
-  { code: 'cost_share_or_match', pattern: /\b(?:cost[- ]share|cost sharing|matching funds?|match required|required match|customer contribution|homeowner contribution|applicant contribution|participant contribution|co[- ]?pay|out[- ]of[- ]pocket cost)\b/i },
+  { code: 'applicant_payment', pattern: /\b(?:down payment|monthly payment|up[- ]front payment|application fee|installation fee|interest rate|\bapr\b|repayment term|repay the|customer payment|homeowner payment|participant payment)\b/i },
+  { code: 'cost_share_or_match', pattern: /\b(?:cost[- ]share|cost sharing|matching funds?|match required|required match|customer contribution|homeowner contribution|household contribution|applicant contribution|participant contribution|co[- ]?pay|out[- ]of[- ]pocket cost)\b/i },
   { code: 'purchase_required', pattern: /\b(?:purchase required|must purchase|buy first|after purchase|qualifying purchase)\b/i },
 ])
 
@@ -134,6 +147,8 @@ const VERIFIED_SOURCE_TRUST = new Set([
   'verified',
   'verified_source',
 ])
+
+const WEB_ORIGIN_PATTERN = /\b(?:web[_ -]?search|live[_ -]?web|web[_ -]?lead|search[_ -]?result|searx|duckduckgo|google|bing)\b/i
 
 function asText(value) {
   if (value === null || value === undefined) return ''
@@ -159,8 +174,8 @@ function resultText(result = {}) {
   ].map(asText).join(' ').replace(/\s+/g, ' ').trim()
 }
 
-function cleanNegatedRepayment(text) {
-  return NEGATED_REPAYMENT_PATTERNS.reduce(
+function cleanNegatedCost(text) {
+  return NEGATED_COST_PATTERNS.reduce(
     (current, pattern) => current.replace(pattern, ' '),
     String(text || ''),
   )
@@ -198,10 +213,14 @@ function noCostEvidence(text, result = {}) {
   return matched?.label || null
 }
 
+function positiveNumber(value) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0
+}
+
 function structuredCostBlock(result = {}) {
   if (result.is_loan === true) return 'loan_or_financing'
   if (result.requires_match === true) return 'cost_share_or_match'
-  if (Number(result.match_percentage) > 0) return 'cost_share_or_match'
   if (result.requires_cost_share === true) return 'cost_share_or_match'
   if (result.requires_upfront_payment === true) return 'applicant_payment'
   if (result.reimbursement_only === true) return 'reimbursement'
@@ -210,20 +229,89 @@ function structuredCostBlock(result = {}) {
   if (result.financing_required === true) return 'loan_or_financing'
   if (result.requires_lease_or_ppa === true) return 'lease_or_ppa'
   if (result.applicant_contribution_required === true) return 'cost_share_or_match'
+  if (positiveNumber(result.required_match_percentage)) return 'cost_share_or_match'
+  if (positiveNumber(result.cost_share_percentage)) return 'cost_share_or_match'
+  if (positiveNumber(result.applicant_contribution_percentage)) return 'cost_share_or_match'
+  if (positiveNumber(result.customer_contribution_percentage)) return 'cost_share_or_match'
+  // `match_percentage` is GrantFlow's profile-fit score and is deliberately not
+  // interpreted as a financial matching-funds requirement.
   return null
 }
 
-function sourceTrust(result = {}) {
-  const url = result.source_url || result.url || result.application_url || result.info_url
-  if (isOfficialGovernmentUrl(url)) return 'official_government'
-  if (result.result_source === 'official_green_home_locator') return 'official_government'
-  const declared = String(result.source_trust || result.trust_level || '').trim().toLowerCase()
-  if (VERIFIED_SOURCE_TRUST.has(declared)) return 'verified_source'
-  if (result.result_source === 'catalog' || result.result_source === 'curated') return 'unverified_catalog'
-  return 'unverified_web'
+function originText(result = {}) {
+  return [
+    result.result_source,
+    result.record_origin,
+    result.source_type,
+    result.ingest_source,
+  ].map(asText).join(' ').toLowerCase()
 }
 
-export function classifyNoCostGreenHomeResult(result = {}) {
+function declaredTrust(result = {}) {
+  return String(result.source_trust || result.trust_level || '').trim().toLowerCase()
+}
+
+function hasExplicitVerification(result = {}) {
+  const trust = declaredTrust(result)
+  if (VERIFIED_SOURCE_TRUST.has(trust)) return true
+  if (result.source_verified === true || result.link_verified === true || result.verified === true) return true
+  const origin = String(result.result_source || '').trim().toLowerCase()
+  if (origin === 'official_api' || origin === 'official_registry') return true
+  const status = String(
+    result.verification_status || result.link_status || result.source_status || '',
+  ).trim().toLowerCase()
+  return ['verified', 'valid', 'live', 'success', 'ok'].includes(status)
+}
+
+function sourceTrust(result = {}) {
+  if (result.result_source === 'official_green_home_locator') return 'official_government'
+
+  const trust = declaredTrust(result)
+  const webOrigin = result.is_lead === true || WEB_ORIGIN_PATTERN.test(originText(result))
+  // A raw search snippet remains unverified even when it points to a .gov URL.
+  // It may be promoted only after a separate verification stage records an
+  // explicit trusted source state.
+  if (webOrigin && !VERIFIED_SOURCE_TRUST.has(trust)) return 'unverified_web'
+
+  const url = result.source_url || result.url || result.application_url || result.info_url
+  if (hasExplicitVerification(result)) {
+    return isOfficialGovernmentUrl(url) ? 'official_government' : 'verified_source'
+  }
+  if (result.result_source === 'catalog' || result.result_source === 'curated') {
+    return isOfficialGovernmentUrl(url) ? 'unverified_official' : 'unverified_catalog'
+  }
+  return isOfficialGovernmentUrl(url) ? 'unverified_official' : 'unverified_web'
+}
+
+function verificationDate(result = {}) {
+  const value =
+    result.source_verified_at ||
+    result.last_verified_at ||
+    result.link_verified_at ||
+    result.verified_at ||
+    result.reviewed_at ||
+    null
+  if (!value) return null
+  const parsed = value instanceof Date ? value : new Date(value)
+  return Number.isFinite(parsed.getTime()) ? parsed : null
+}
+
+function sourceFreshness(result = {}, now = new Date()) {
+  const verified = verificationDate(result)
+  if (!verified) return { ok: false, reason: 'source_verification_date_missing' }
+  const current = now instanceof Date ? now : new Date(now)
+  if (!Number.isFinite(current.getTime())) {
+    return { ok: false, reason: 'source_verification_date_invalid' }
+  }
+  const ageDays = Math.floor((current.getTime() - verified.getTime()) / 86_400_000)
+  if (ageDays < -1) return { ok: false, reason: 'source_verification_date_invalid' }
+  if (ageDays > SOURCE_MAX_AGE_DAYS) {
+    return { ok: false, reason: 'source_verification_stale', age_days: ageDays }
+  }
+  return { ok: true, age_days: Math.max(0, ageDays), verified_at: verified.toISOString() }
+}
+
+export function classifyNoCostGreenHomeResult(result = {}, { now = new Date() } = {}) {
   const text = resultText(result)
   if (!hasGreenHomeRelevance(text)) {
     return {
@@ -250,7 +338,7 @@ export function classifyNoCostGreenHomeResult(result = {}) {
     }
   }
 
-  const costScanText = cleanNegatedRepayment(text)
+  const costScanText = cleanNegatedCost(text)
   const forbidden = FORBIDDEN_COST_PATTERNS.find(({ pattern }) => pattern.test(costScanText))
   if (forbidden) {
     return {
@@ -280,11 +368,25 @@ export function classifyNoCostGreenHomeResult(result = {}) {
     }
   }
 
+  const freshness = sourceFreshness(result, now)
+  if (!freshness.ok) {
+    return {
+      status: 'review',
+      reason: freshness.reason,
+      no_cost_evidence: evidence,
+      source_trust: trust,
+      source_age_days: freshness.age_days ?? null,
+      policy_version: POLICY_VERSION,
+    }
+  }
+
   return {
     status: 'eligible',
     reason: 'explicit_no_cost_no_loan_path',
     no_cost_evidence: evidence,
     source_trust: trust,
+    source_verified_at: freshness.verified_at,
+    source_age_days: freshness.age_days,
     policy_version: POLICY_VERSION,
   }
 }

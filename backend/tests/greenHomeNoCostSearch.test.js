@@ -4,12 +4,14 @@ import {
   searchGreenHomeNoCostPrograms,
 } from '../services/greenHomeNoCostSearch.js'
 
+const NOW = new Date('2026-08-10T00:00:00Z')
+
 function reportWith(results) {
   return {
     profile_id: 'profile-1',
     items: [
       {
-        item: 'no-cost home weatherization insulation air sealing direct installation',
+        item: 'home weatherization',
         results,
         lanes: {
           catalog: { scanned: 9, matched: 4, error: null },
@@ -40,7 +42,7 @@ const currentOfficialPaths = () => [
 ]
 
 describe('searchGreenHomeNoCostPrograms', () => {
-  it('returns only proven no-cost sources and aggregates withheld reasons', async () => {
+  it('returns only proven, freshly verified no-cost sources and aggregates withheld reasons', async () => {
     const searchItemNeedsImpl = vi.fn().mockResolvedValue(reportWith([
       {
         id: 'direct-install',
@@ -48,6 +50,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         description: 'Income-qualified households receive insulation at no cost.',
         source_url: 'https://energy.example.gov/no-cost-insulation',
         result_source: 'catalog',
+        source_verified_at: '2026-08-09T00:00:00Z',
         need_score: 40,
       },
       {
@@ -56,6 +59,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         description: 'Tax credit for purchasing rooftop solar panels.',
         source_url: 'https://energy.example.gov/tax-credit',
         result_source: 'catalog',
+        source_verified_at: '2026-08-09T00:00:00Z',
         need_score: 80,
       },
       {
@@ -64,6 +68,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
         description: 'Heat pump assistance may be available. Contact the provider for cost terms.',
         source_url: 'https://energy.example.gov/heat-pump-help',
         result_source: 'catalog',
+        source_verified_at: '2026-08-09T00:00:00Z',
         need_score: 60,
       },
       {
@@ -95,7 +100,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
           documents: { uploaded_text: 'private uploaded document content' },
         },
       },
-      now: new Date('2026-08-10T00:00:00Z'),
+      now: NOW,
       searchItemNeedsImpl,
       officialGreenHomePathsImpl: currentOfficialPaths,
     })
@@ -128,6 +133,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
     ])
     expect(result.programs.every((program) => program.no_cost_classification === 'eligible')).toBe(true)
     expect(result.programs.every((program) => program.eligibility_status === 'provider_confirmation_required')).toBe(true)
+    expect(result.programs.every((program) => program.no_cost_source_age_days === 1)).toBe(true)
     expect(result.review_count).toBe(2)
     expect(result.review_reasons).toEqual(expect.arrayContaining([
       { reason: 'no_cost_not_proven', count: 1 },
@@ -157,13 +163,14 @@ describe('searchGreenHomeNoCostPrograms', () => {
     })
   })
 
-  it('deduplicates the same official source while retaining all matched upgrade searches', async () => {
+  it('deduplicates the same fresh official source while retaining all matched upgrade searches', async () => {
     const shared = {
       id: 'shared',
       title: 'Free weatherization and heat-pump installation',
-      description: 'A no-cost direct-install program for qualifying households.',
+      description: 'A no-cost program for qualifying households.',
       source_url: 'https://energy.example.gov/free-upgrades?utm_source=test',
       result_source: 'catalog',
+      source_verified_at: '2026-08-09T00:00:00Z',
     }
     const searchItemNeedsImpl = vi.fn().mockResolvedValue({
       items: [
@@ -174,6 +181,7 @@ describe('searchGreenHomeNoCostPrograms', () => {
 
     const result = await searchGreenHomeNoCostPrograms(null, {
       profileId: 'profile-1',
+      now: NOW,
       searchItemNeedsImpl,
       officialGreenHomePathsImpl: () => [],
     })
@@ -183,9 +191,44 @@ describe('searchGreenHomeNoCostPrograms', () => {
     expect(result.programs[0].matched_green_home_items).toEqual(['weatherization', 'heat pump'])
   })
 
+  it('holds otherwise valid sources out of primary results when verification is missing or stale', async () => {
+    const searchItemNeedsImpl = vi.fn().mockResolvedValue(reportWith([
+      {
+        id: 'missing-date',
+        title: 'No-cost insulation installation',
+        description: 'Free insulation installation for qualifying households.',
+        source_url: 'https://energy.example.gov/missing-date',
+        result_source: 'catalog',
+        source_verified: true,
+      },
+      {
+        id: 'stale-date',
+        title: 'No-cost weatherization',
+        description: 'Free weatherization for qualifying households.',
+        source_url: 'https://energy.example.gov/stale',
+        result_source: 'catalog',
+        source_verified_at: '2026-01-01T00:00:00Z',
+      },
+    ]))
+
+    const result = await searchGreenHomeNoCostPrograms(null, {
+      profileId: 'profile-1',
+      now: NOW,
+      searchItemNeedsImpl,
+      officialGreenHomePathsImpl: () => [],
+    })
+
+    expect(result.programs).toHaveLength(0)
+    expect(result.review_reasons).toEqual(expect.arrayContaining([
+      { reason: 'source_verification_date_missing', count: 1 },
+      { reason: 'source_verification_stale', count: 1 },
+    ]))
+  })
+
   it('keeps stale official locators out of primary results', async () => {
     const result = await searchGreenHomeNoCostPrograms(null, {
       profileId: 'profile-1',
+      now: NOW,
       searchItemNeedsImpl: async () => ({ items: [] }),
       officialGreenHomePathsImpl: () => [{
         id: 'stale-path',

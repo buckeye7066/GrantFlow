@@ -50,6 +50,8 @@ function addCandidate(map, result, classification, matchedItem) {
     no_cost_reason: classification.reason,
     no_cost_evidence: classification.no_cost_evidence || result.no_cost_evidence || null,
     no_cost_source_trust: classification.source_trust || null,
+    no_cost_source_verified_at: classification.source_verified_at || null,
+    no_cost_source_age_days: classification.source_age_days ?? null,
     no_cost_policy: GREEN_HOME_NO_COST_POLICY_VERSION,
     matched_green_home_items: mergeMatchedItems(result.matched_green_home_items, [matchedItem]),
   }
@@ -222,7 +224,7 @@ export async function searchGreenHomeNoCostPrograms(db, {
 
   for (const itemReport of report.items || []) {
     for (const result of itemReport.results || []) {
-      const classification = classifyNoCostGreenHomeResult(result)
+      const classification = classifyNoCostGreenHomeResult(result, { now })
       if (classification.status === 'eligible') {
         addCandidate(eligible, result, classification, itemReport.item)
       } else if (classification.status === 'review') {
@@ -248,12 +250,16 @@ export async function searchGreenHomeNoCostPrograms(db, {
           reason: program.no_cost_reason,
           no_cost_evidence: program.no_cost_evidence,
           source_trust: 'official_government',
+          source_verified_at: program.reviewed_at || null,
+          source_age_days: program.source_age_days ?? null,
         }
       : {
           status: 'review',
           reason: program.no_cost_reason,
           no_cost_evidence: program.no_cost_evidence,
           source_trust: 'official_government',
+          source_verified_at: program.reviewed_at || null,
+          source_age_days: program.source_age_days ?? null,
         }
     addCandidate(
       classification.status === 'eligible' ? eligible : review,
@@ -310,7 +316,7 @@ export async function searchGreenHomeNoCostPrograms(db, {
       solar_for_all: 'excluded_as_terminated_or_rescinded',
     },
     notice:
-      'Only explicitly no-cost, non-loan paths are shown. Tax credits, rebates, reimbursement-only offers, leases, financing, required contributions, and sources with unknown cost terms are withheld from the primary results.',
+      'Only explicitly no-cost, non-loan paths are shown. Tax credits, rebates, reimbursement-only offers, leases, financing, required contributions, and sources with unknown or stale verification are withheld from the primary results.',
     searched_at: new Date().toISOString(),
   }
 }
