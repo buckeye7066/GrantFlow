@@ -1,34 +1,21 @@
 name: Android build and repo-direct release
 
 # A passing main build publishes a signed APK to GitHub Releases so a
-# repo-direct updater such as Obtainium can detect and install updates.
-# IMPORTANT: the keystore secrets must represent the SAME signing key as
-# the APK already installed on the phone. The workflow fails closed if
-# signing material is unavailable.
+# repo-direct updater can detect and install updates. The first signed release
+# establishes the persistent signing certificate; later releases verify that
+# certificate before producing an update.
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'public/**'
-      - 'android/**'
-      - 'index.html'
-      - 'vite.config.*'
-      - 'capacitor.config.json'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/android-build.yml'
   workflow_dispatch:
 
 concurrency:
-  # Ensure only one run per ref publishes; cancel older in-flight runs so a
-  # slower prior build cannot supersede a newer one as "Latest".
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   ANDROID_VERSION_CODE: ${{ github.run_number }}
@@ -36,10 +23,15 @@ env:
 
 jobs:
   android:
-    name: Build signed APK + AAB and publish release
+    name: Build signed APK + AAB
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '22'
@@ -49,13 +41,12 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
       - run: npm ci
-      - name: Run release gates
-        run: npm run release:gates
-      - name: Build web application
-        run: npm run build
+      - name: Run authoritative release gates
         env:
           VITE_API_URL: https://grantflow-production.up.railway.app
-      - run: npx cap sync android
+        run: node scripts/release-gates.mjs
+      - name: Sync verified web build into Android
+        run: npx cap sync android
       - name: Require persistent Android signing identity
         shell: bash
         env:
@@ -63,6 +54,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "$ANDROID_KEYSTORE_BASE64" || { echo 'ANDROID_KEYSTORE_BASE64 is missing'; exit 1; }
@@ -70,6 +62,24 @@ jobs:
           test -n "$ANDROID_KEY_ALIAS" || { echo 'ANDROID_KEY_ALIAS is missing'; exit 1; }
           test -n "$ANDROID_KEY_PASSWORD" || { echo 'ANDROID_KEY_PASSWORD is missing'; exit 1; }
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          keytool -list -v \
+            -keystore "$RUNNER_TEMP/upload.jks" \
+            -alias "$ANDROID_KEY_ALIAS" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -keypass "$ANDROID_KEY_PASSWORD" \
+            | awk -F': ' '/SHA256:/{gsub(":", "", $2); print tolower($2); exit}' \
+            > "$RUNNER_TEMP/keystore-cert.sha256"
+          test -s "$RUNNER_TEMP/keystore-cert.sha256"
+
+          BASELINE_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[] | select(.tagName | startswith("android-v")) | .tagName' | head -n 1 || true)
+          if [ -n "$BASELINE_TAG" ]; then
+            mkdir -p "$RUNNER_TEMP/signing-baseline"
+            gh release download "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --pattern grantflow-signing-cert.sha256 --dir "$RUNNER_TEMP/signing-baseline"
+            test -s "$RUNNER_TEMP/signing-baseline/grantflow-signing-cert.sha256" || { echo "Existing Android release lacks signing fingerprint"; exit 1; }
+            cmp "$RUNNER_TEMP/signing-baseline/grantflow-signing-cert.sha256" "$RUNNER_TEMP/keystore-cert.sha256" || { echo 'Configured keystore certificate differs from prior Android releases'; exit 1; }
+          else
+            echo 'No prior signed Android release: this main build will establish the signing fingerprint bootstrap.'
+          fi
       - name: Build signed release APK and AAB
         run: ./gradlew assembleRelease bundleRelease --no-daemon
         working-directory: android
@@ -80,14 +90,24 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_VERSION_CODE: ${{ env.ANDROID_VERSION_CODE }}
           ANDROID_VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
-      - name: Verify release APK exists and record checksum
+      - name: Verify signing certificate and prepare release assets
         shell: bash
         run: |
           set -euo pipefail
-          test -f android/app/build/outputs/apk/release/app-release.apk
-          sha256sum android/app/build/outputs/apk/release/app-release.apk > grantflow-android.sha256
-          cp android/app/build/outputs/apk/release/app-release.apk "GrantFlow-${ANDROID_VERSION_NAME}.apk"
-          cp android/app/build/outputs/bundle/release/app-release.aab "GrantFlow-${ANDROID_VERSION_NAME}.aab"
+          APK='android/app/build/outputs/apk/release/app-release.apk'
+          AAB='android/app/build/outputs/bundle/release/app-release.aab'
+          test -f "$APK"
+          test -f "$AAB"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --print-certs "$APK" > "$RUNNER_TEMP/apk-certs.txt"
+          awk -F': ' '/Signer #1 certificate SHA-256 digest:/{gsub(":", "", $2); print tolower($2); exit}' "$RUNNER_TEMP/apk-certs.txt" > "$RUNNER_TEMP/apk-cert.sha256"
+          test -s "$RUNNER_TEMP/apk-cert.sha256"
+          cmp "$RUNNER_TEMP/keystore-cert.sha256" "$RUNNER_TEMP/apk-cert.sha256" || { echo 'Built APK signing certificate does not match configured persistent keystore'; exit 1; }
+          cp "$APK" "GrantFlow-${ANDROID_VERSION_NAME}.apk"
+          cp "$AAB" "GrantFlow-${ANDROID_VERSION_NAME}.aab"
+          cp "$RUNNER_TEMP/apk-cert.sha256" grantflow-signing-cert.sha256
+          sha256sum "GrantFlow-${ANDROID_VERSION_NAME}.apk" > grantflow-android.sha256
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: grantflow-signed-android
@@ -95,9 +115,21 @@ jobs:
             GrantFlow-*.apk
             GrantFlow-*.aab
             grantflow-android.sha256
+            grantflow-signing-cert.sha256
           if-no-files-found: error
+
+  publish:
+    name: Publish repo-direct Android release
+    needs: android
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: grantflow-signed-android
       - name: Publish GitHub Release for phone updater
-        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -111,22 +143,31 @@ jobs:
           Android version: ${ANDROID_VERSION_NAME} (${ANDROID_VERSION_CODE})
           Package: com.grantflow.app
 
-          This release is intended for repo-direct updating. Android will only install it over an existing copy when the signing certificate matches.
+          Android requires the same signing certificate as the installed copy. If the phone currently has an older CI debug-signed APK, follow docs/android-repo-update.md for the one-time signed bootstrap.
           EOF
           )
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            # Idempotent re-run: upload (or overwrite) assets on the existing release.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            TARGET=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)
+            test "$TARGET" = "$GITHUB_SHA" || { echo "Existing $TAG targets $TARGET, expected $GITHUB_SHA"; exit 1; }
             gh release upload "$TAG" \
               "GrantFlow-${ANDROID_VERSION_NAME}.apk" \
               "GrantFlow-${ANDROID_VERSION_NAME}.aab" \
               grantflow-android.sha256 \
+              grantflow-signing-cert.sha256 \
+              --repo "$GITHUB_REPOSITORY" \
               --clobber
+            gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "GrantFlow Android ${ANDROID_VERSION_NAME}" \
+              --notes "$NOTES" \
+              --draft=false
           else
-            # First publish for this version tag.
             gh release create "$TAG" \
               "GrantFlow-${ANDROID_VERSION_NAME}.apk" \
               "GrantFlow-${ANDROID_VERSION_NAME}.aab" \
               grantflow-android.sha256 \
+              grantflow-signing-cert.sha256 \
+              --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "GrantFlow Android ${ANDROID_VERSION_NAME}" \
               --notes "$NOTES"
