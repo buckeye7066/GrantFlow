@@ -67,6 +67,9 @@ function resolveContainedExistingPath(repoRoot, relativePath, label) {
     throw new Error(`${label} must be a non-empty repository-relative path`)
   }
   const requested = path.resolve(root, normalized)
+  if (!isContained(root, requested)) {
+    throw new Error(`${label} escapes the canonical repository root: ${normalized}`)
+  }
   const resolved = fs.realpathSync(requested)
   if (!isContained(root, resolved)) {
     throw new Error(`${label} escapes the canonical repository root: ${normalized}`)
