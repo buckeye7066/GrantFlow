@@ -1,4 +1,4 @@
-// Retry after explicitly typing the pure route-name registry.
+// Retry with a structural import match; all substantive source blocks remain exact assertions.
 import fs from 'node:fs'
 
 const file = 'backend/db/migrate.js'
@@ -22,8 +22,13 @@ function replaceCount(before, after, expectedCount, label) {
   source = parts.join(after)
 }
 
-replaceOnce(
-  "import { getDb } from './index.js';",
+const importPattern = /import\s*\{\s*getDb\s*\}\s*from\s*['"]\.\/index\.js['"]\s*;?/
+const importMatches = source.match(new RegExp(importPattern.source, 'g')) || []
+if (importMatches.length !== 1) {
+  throw new Error(`Expected one getDb import; found ${importMatches.length}`)
+}
+source = source.replace(
+  importPattern,
   `import { getDb } from './index.js';
 import {
   APPLIED_BYTES_PROVENANCE,
@@ -33,7 +38,6 @@ import {
   recordMigrationApplied,
   verifyOrBaselineMigrationLedger,
 } from './migrationIntegrity.js';`,
-  'migration-integrity imports',
 )
 
 const ensureStart = source.indexOf('async function ensureMigrationsTable() {')
