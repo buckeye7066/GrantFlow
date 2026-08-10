@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { searchGreenHomeNoCostPrograms } from '../services/greenHomeNoCostSearch.js'
+import {
+  minimizeGreenHomeSearchContext,
+  searchGreenHomeNoCostPrograms,
+} from '../services/greenHomeNoCostSearch.js'
 
 function reportWith(results) {
   return {
@@ -76,7 +79,21 @@ describe('searchGreenHomeNoCostPrograms', () => {
     const result = await searchGreenHomeNoCostPrograms(null, {
       profileId: 'profile-1',
       profileContext: {
-        profile: { id: 'profile-1', state: 'TN', is_homeowner: true },
+        profile: {
+          id: 'profile-1',
+          display_name: 'Private Household Name',
+          primary_email: 'private@example.com',
+          street_address: '123 Private Lane',
+          state: 'TN',
+          exact_income: 12345,
+          disability_diagnosis: 'private diagnosis',
+          veteran_service_number: 'private veteran identifier',
+          is_homeowner: true,
+          primary_type: 'family',
+        },
+        sections: {
+          documents: { uploaded_text: 'private uploaded document content' },
+        },
       },
       now: new Date('2026-08-10T00:00:00Z'),
       searchItemNeedsImpl,
@@ -84,17 +101,33 @@ describe('searchGreenHomeNoCostPrograms', () => {
     })
 
     expect(searchItemNeedsImpl).toHaveBeenCalledTimes(1)
-    expect(searchItemNeedsImpl.mock.calls[0][1]).toMatchObject({
+    const searchOptions = searchItemNeedsImpl.mock.calls[0][1]
+    expect(searchOptions).toMatchObject({
       profileId: 'profile-1',
       variant: 'funding',
+      profileContext: {
+        profile: { primary_type: 'family', state: 'TN' },
+        signals: { entityType: 'family', location: { state: 'TN' } },
+      },
     })
+    expect(JSON.stringify(searchOptions.profileContext)).not.toMatch(
+      /Private Household|private@example|Private Lane|12345|diagnosis|veteran identifier|uploaded document/i,
+    )
     expect(result.strict_no_cost).toBe(true)
     expect(result.household).toMatchObject({ occupancy: 'homeowner', state: 'TN' })
+    expect(result.search_privacy).toMatchObject({
+      sensitive_fields_transmitted: false,
+      outbound_context: {
+        profile: { primary_type: 'family', state: 'TN' },
+        signals: { entityType: 'family', location: { state: 'TN' } },
+      },
+    })
     expect(result.programs.map((program) => program.id)).toEqual([
       'doe-weatherization-assistance',
       'direct-install',
     ])
     expect(result.programs.every((program) => program.no_cost_classification === 'eligible')).toBe(true)
+    expect(result.programs.every((program) => program.eligibility_status === 'provider_confirmation_required')).toBe(true)
     expect(result.review_count).toBe(2)
     expect(result.review_reasons).toEqual(expect.arrayContaining([
       { reason: 'no_cost_not_proven', count: 1 },
@@ -108,6 +141,19 @@ describe('searchGreenHomeNoCostPrograms', () => {
       web_attempted: true,
       web_raw: 12,
       web_matched_before_no_cost_policy: 3,
+    })
+  })
+
+  it('minimizes malformed and organization profile values to a safe broad search context', () => {
+    expect(minimizeGreenHomeSearchContext({
+      profile: {
+        primary_type: 'Church Ministry 501(c)(3)',
+        state: 'Tennessee',
+        display_name: 'Should never leave the server',
+      },
+    })).toEqual({
+      profile: { primary_type: 'nonprofit' },
+      signals: { entityType: 'nonprofit', location: {} },
     })
   })
 
