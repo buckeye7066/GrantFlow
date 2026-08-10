@@ -138,14 +138,21 @@ export async function searchGreenHomeNoCostPrograms(db, {
   profileContext = null,
   timeoutMs = 12000,
   now = new Date(),
+  searchItemNeedsImpl = searchItemNeeds,
+  officialGreenHomePathsImpl = officialGreenHomePaths,
 } = {}) {
   if (!profileId) {
     const error = new Error('profileId is required')
     error.statusCode = 400
     throw error
   }
+  if (typeof searchItemNeedsImpl !== 'function' || typeof officialGreenHomePathsImpl !== 'function') {
+    const error = new TypeError('green-home search dependencies must be functions')
+    error.statusCode = 500
+    throw error
+  }
 
-  const report = await searchItemNeeds(db, {
+  const report = await searchItemNeedsImpl(db, {
     profileId,
     items: GREEN_HOME_SEARCH_ITEMS,
     profileContext,
@@ -177,7 +184,7 @@ export async function searchGreenHomeNoCostPrograms(db, {
   // truthful starting point even when the generic web provider is unavailable.
   // They are directories/benefits, not claims that a particular upgrade has
   // already been approved.
-  const officialPaths = officialGreenHomePaths(now)
+  const officialPaths = officialGreenHomePathsImpl(now)
   for (const program of officialPaths) {
     const classification = program.no_cost_classification === 'eligible'
       ? {
