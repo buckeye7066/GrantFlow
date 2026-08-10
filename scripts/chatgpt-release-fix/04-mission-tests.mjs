@@ -32,6 +32,6 @@ const source = fs.readFileSync(file, 'utf8')
 if (source.includes('complete release catalog denominator includes pointer resources')) {
   throw new Error('mission release-catalog tests already exist')
 }
-fs.writeFileSync(file, source.trimEnd() + APPEND + '\n')
+fs.writeFileSync(file, source.trimEnd() + APPEND.trimEnd() + '\n')
 
 console.log('Applied mission-tests.')
