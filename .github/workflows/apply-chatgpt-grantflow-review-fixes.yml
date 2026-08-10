@@ -1,0 +1,50 @@
+name: Apply ChatGPT GrantFlow review fixes
+
+on:
+  push:
+    branches:
+      - chatgpt/production-ready/grantflow
+    paths:
+      - scripts/apply-chatgpt-grantflow-review-fixes.mjs
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-chatgpt-grantflow-review-fixes
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/production-ready/grantflow
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+      - name: Apply asserted source transformations
+        run: node scripts/apply-chatgpt-grantflow-review-fixes.mjs
+      - name: Validate generated source syntax and JSON
+        run: |
+          node --check backend/config/urlRules.js
+          node --check backend/services/greenHomeNoCostPolicy.js
+          node --check backend/services/greenHomeNoCostSearch.js
+          node --check backend/services/avatarCrawler.js
+          node --check backend/services/orgLogoFetcher.js
+          node -e "for (const f of require('fs').readdirSync('src/i18n/locales')) JSON.parse(require('fs').readFileSync('src/i18n/locales/'+f,'utf8'))"
+      - name: Remove one-shot patch machinery
+        run: |
+          rm scripts/apply-chatgpt-grantflow-review-fixes.mjs
+          rm .github/workflows/apply-chatgpt-grantflow-review-fixes.yml
+      - name: Commit review fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(grantflow): resolve green-home and egress review blockers"
+          git push origin HEAD:chatgpt/production-ready/grantflow
