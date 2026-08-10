@@ -25,7 +25,6 @@ export const CANONICAL_NEED_CATEGORIES = [
   { id: 'housing',              label: 'Housing & Rent',           icon: '\u{1F3E0}', query: 'housing rent eviction mortgage homeless',              group: 'basic_needs' },
   { id: 'food',                 label: 'Food Assistance',          icon: '\u{1F957}', query: 'food snap nutrition groceries hunger',                 group: 'basic_needs' },
   { id: 'utilities',            label: 'Energy & Utilities',       icon: '\u{26A1}',  query: 'utility energy liheap heating electric water',        group: 'basic_needs' },
-  { id: 'green_home',           label: 'No-Cost Green Home Upgrades', icon: '\u{1F3E1}', query: 'no-cost free weatherization insulation air sealing heat pump hvac geothermal solar battery small residential wind direct installation', group: 'basic_needs' },
   { id: 'transportation',       label: 'Transportation',           icon: '\u{1F68C}', query: 'transportation vehicle car transit bus',               group: 'basic_needs' },
   { id: 'clothing_goods',       label: 'Clothing & Household',     icon: '\u{1F45A}', query: 'clothing furniture household goods appliances',        group: 'basic_needs' },
   { id: 'cash_assistance',      label: 'Cash Assistance',          icon: '\u{1F4B5}', query: 'cash assistance financial aid tanf ssi ssdi',          group: 'basic_needs' },
