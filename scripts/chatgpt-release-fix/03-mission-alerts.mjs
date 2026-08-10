@@ -1,0 +1,29 @@
+import fs from 'node:fs'
+
+const decode = (value) => Buffer.from(value, 'base64').toString('utf8')
+const REPLACEMENTS = [
+  {
+    "path": "backend/services/missionHealthService.js",
+    "before": "ICBpZiAodG90YWxEaXJlY3QgPiAwICYmIGJyb2tlblBjdCA+IFRBUkdFVFMuYnJva2VuX3BjdF9tYXgpIHsKICAgIGFsZXJ0cy5wdXNoKHsKICAgICAgbGV2ZWw6ICd3YXJuJywKICAgICAgY29kZTogJ2Jyb2tlbl9wY3RfYWJvdmVfdGFyZ2V0JywKICAgICAgZGV0YWlsOiBgJHticm9rZW5QY3R9JSBvZiBkaXJlY3Qgb3Bwb3J0dW5pdGllcyBhcmUgbGluay1icm9rZW4gKHRhcmdldCDiiaQgJHtUQVJHRVRTLmJyb2tlbl9wY3RfbWF4fSUpLmAsCiAgICB9KQogIH0KICBpZiAocGxhY2Vob2xkZXJDb3VudCA+IFRBUkdFVFMucGxhY2Vob2xkZXJfbWF4KSB7",
+    "after": "ICBpZiAodG90YWxEaXJlY3QgPiAwICYmIGJyb2tlblBjdCA+IFRBUkdFVFMuYnJva2VuX3BjdF9tYXgpIHsKICAgIGFsZXJ0cy5wdXNoKHsKICAgICAgbGV2ZWw6ICd3YXJuJywKICAgICAgY29kZTogJ2Jyb2tlbl9wY3RfYWJvdmVfdGFyZ2V0JywKICAgICAgZGV0YWlsOiBgJHticm9rZW5QY3R9JSBvZiBkaXJlY3Qgb3Bwb3J0dW5pdGllcyBhcmUgbGluay1icm9rZW4gKHRhcmdldCDiiaQgJHtUQVJHRVRTLmJyb2tlbl9wY3RfbWF4fSUpLmAsCiAgICB9KQogIH0KICBpZiAoIXJlbGVhc2VDYXRhbG9nQXZhaWxhYmxlKSB7CiAgICBhbGVydHMucHVzaCh7CiAgICAgIGxldmVsOiAnd2FybicsCiAgICAgIGNvZGU6ICdyZWxlYXNlX2NhdGFsb2dfc25hcHNob3RfdW5hdmFpbGFibGUnLAogICAgICBkZXRhaWw6IGBDb21wbGV0ZSByZWxlYXNlLWNhdGFsb2cgdmVyaWZpY2F0aW9uIHNuYXBzaG90IGlzIHVuYXZhaWxhYmxlOiAke3JlbGVhc2VDYXRhbG9nLmVycm9yfWAsCiAgICB9KQogIH0gZWxzZSB7CiAgICBpZiAoCiAgICAgIHJlbGVhc2VDYXRhbG9nVG90YWwgPiAwCiAgICAgICYmIHJlbGVhc2VDYXRhbG9nVmVyaWZpZWRQY3QgPCBUQVJHRVRTLnJlbGVhc2VfY2F0YWxvZ192ZXJpZmllZF9wY3RfbWluCiAgICApIHsKICAgICAgYWxlcnRzLnB1c2goewogICAgICAgIGxldmVsOiAnd2FybicsCiAgICAgICAgY29kZTogJ3JlbGVhc2VfY2F0YWxvZ192ZXJpZmllZF9wY3RfYmVsb3dfdGFyZ2V0JywKICAgICAgICBkZXRhaWw6IGBPbmx5ICR7cmVsZWFzZUNhdGFsb2dWZXJpZmllZFBjdH0lIG9mIHRoZSBjb21wbGV0ZSB2aXNpYmxlIGNhdGFsb2cgaXMgZnJlc2hseSBsaW5rLXZlcmlmaWVkICh0YXJnZXQg4omlICR7VEFSR0VUUy5yZWxlYXNlX2NhdGFsb2dfdmVyaWZpZWRfcGN0X21pbn0lKS4gVGhlIGRlbm9taW5hdG9yIGluY2x1ZGVzIGRpcmVjdCBvcHBvcnR1bml0aWVzLCBiZW5lZml0cywgZGlyZWN0b3JpZXMsIHJlZmVycmFscywgYW5kIHBvcnRhbHMuYCwKICAgICAgfSkKICAgIH0KICAgIGlmICh2aXNpYmxlRGlyZWN0VG90YWwgPiAwICYmICF2aXNpYmxlRGlyZWN0QWxsVmVyaWZpZWQpIHsKICAgICAgYWxlcnRzLnB1c2goewogICAgICAgIGxldmVsOiAnd2FybicsCiAgICAgICAgY29kZTogJ3Zpc2libGVfZGlyZWN0X2xpbmtfcmVxdWlyZW1lbnRfZmFpbGVkJywKICAgICAgICBkZXRhaWw6IGAke3Zpc2libGVEaXJlY3RWZXJpZmllZH0gb2YgJHt2aXNpYmxlRGlyZWN0VG90YWx9IHZpc2libGUgZGlyZWN0IG9wcG9ydHVuaXRpZXMgYXJlIGZyZXNobHkgbGluay12ZXJpZmllZC4gRXZlcnkgdmlzaWJsZSBkaXJlY3Qgb3Bwb3J0dW5pdHkgbXVzdCBtZWV0IHRoZSBsaW5rIHJlcXVpcmVtZW50LmAsCiAgICAgIH0pCiAgICB9CiAgfQogIGlmIChwbGFjZWhvbGRlckNvdW50ID4gVEFSR0VUUy5wbGFjZWhvbGRlcl9tYXgpIHs=",
+    "label": "release catalog alerts"
+  }
+]
+
+function replaceOnce(path, beforeEncoded, afterEncoded, label) {
+  const before = decode(beforeEncoded)
+  const after = decode(afterEncoded)
+  const source = fs.readFileSync(path, 'utf8')
+  const first = source.indexOf(before)
+  if (first < 0) throw new Error(path + ': missing expected source for ' + label)
+  if (source.indexOf(before, first + before.length) >= 0) {
+    throw new Error(path + ': expected exactly one source block for ' + label)
+  }
+  fs.writeFileSync(path, source.slice(0, first) + after + source.slice(first + before.length))
+}
+
+for (const replacement of REPLACEMENTS) {
+  replaceOnce(replacement.path, replacement.before, replacement.after, replacement.label)
+}
+
+console.log('Applied mission-alerts.')
