@@ -20,6 +20,9 @@ export const UPDATE_BASE_URL = 'https://axiombiolabs.org'
  */
 export const FEED_URL_OVERRIDE_KEY = 'grantflow.mobileUpdateFeedUrl'
 
+/** A manual update check must not leave the Settings action spinning forever. */
+export const UPDATE_MANIFEST_TIMEOUT_MS = 12_000
+
 /**
  * Parse a semver-ish version string into numeric parts.
  * Returns null when the input is not a dotted numeric version (e.g. capgo's
@@ -78,7 +81,16 @@ export function parseUpdateManifest(raw) {
   if (!parseVersion(version)) {
     throw new Error('Update feed has an invalid version field.')
   }
-  if (typeof url !== 'string' || !/^https:\/\//.test(url)) {
+  if (typeof url !== 'string') {
+    throw new Error('Update feed has an invalid bundle URL (must be absolute https).')
+  }
+  let bundleUrl
+  try {
+    bundleUrl = new URL(url)
+  } catch {
+    throw new Error('Update feed has an invalid bundle URL (must be absolute https).')
+  }
+  if (bundleUrl.protocol !== 'https:' || !bundleUrl.hostname) {
     throw new Error('Update feed has an invalid bundle URL (must be absolute https).')
   }
   return {
@@ -106,18 +118,34 @@ export function resolveFeedUrl({ localStorage: ls } = {}) {
 
 /**
  * Fetch and validate the update manifest (no-cache).
- * @param {{ fetchImpl?: typeof fetch, feedUrl?: string }} [opts]
+ * @param {{ fetchImpl?: typeof fetch, feedUrl?: string, timeoutMs?: number }} [opts]
  * @returns {Promise<{ version: string, url: string, notes: string, builtAt: string }>}
  */
-export async function fetchUpdateManifest({ fetchImpl, feedUrl } = {}) {
+export async function fetchUpdateManifest({ fetchImpl, feedUrl, timeoutMs = UPDATE_MANIFEST_TIMEOUT_MS } = {}) {
   const doFetch = fetchImpl ?? fetch
   const url = feedUrl ?? resolveFeedUrl()
   const sep = url.includes('?') ? '&' : '?'
+  const controller = typeof AbortController === 'undefined' ? null : new AbortController()
+  let timedOut = false
+  let timeoutId
   let response
   try {
-    response = await doFetch(`${url}${sep}ts=${Date.now()}`, { cache: 'no-store' })
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true
+        controller?.abort()
+        reject(new Error('Update check timed out. Please try again.'))
+      }, timeoutMs)
+    })
+    response = await Promise.race([
+      doFetch(`${url}${sep}ts=${Date.now()}`, { cache: 'no-store', signal: controller?.signal }),
+      timeout,
+    ])
   } catch {
+    if (timedOut) throw new Error('Update check timed out. Please try again.')
     throw new Error('Could not reach the update server. Check your connection and try again.')
+  } finally {
+    clearTimeout(timeoutId)
   }
   if (!response.ok) {
     throw new Error(`Update check failed (HTTP ${response.status}).`)

@@ -9,6 +9,7 @@ import {
   resolveFeedUrl,
   FEED_URL_OVERRIDE_KEY,
   UPDATE_BASE_URL,
+  UPDATE_MANIFEST_TIMEOUT_MS,
 } from './mobileUpdater.js'
 
 describe('parseVersion', () => {
@@ -65,6 +66,7 @@ describe('parseUpdateManifest', () => {
   it('rejects bad versions and non-https URLs', () => {
     expect(() => parseUpdateManifest({ version: 'builtin', url: 'https://x/y.zip' })).toThrow(/invalid version/)
     expect(() => parseUpdateManifest({ version: '1.0.2', url: 'http://x/y.zip' })).toThrow(/absolute https/)
+    expect(() => parseUpdateManifest({ version: '1.0.2', url: 'https://' })).toThrow(/absolute https/)
   })
 })
 
@@ -95,7 +97,8 @@ describe('fetchUpdateManifest', () => {
     const manifest = await fetchUpdateManifest({ fetchImpl, feedUrl: 'https://example.test/mobile/latest.json' })
     expect(manifest.version).toBe('9.9.9')
     expect(seenUrl).toMatch(/^https:\/\/example\.test\/mobile\/latest\.json\?ts=\d+$/)
-    expect(seenInit).toEqual({ cache: 'no-store' })
+    expect(seenInit.cache).toBe('no-store')
+    expect(seenInit.signal).toBeInstanceOf(AbortSignal)
   })
 
   it('reports HTTP failures with the status code', async () => {
@@ -108,6 +111,24 @@ describe('fetchUpdateManifest', () => {
       throw new TypeError('Failed to fetch')
     }
     await expect(fetchUpdateManifest({ fetchImpl, feedUrl: 'https://example.test/latest.json' })).rejects.toThrow(/Could not reach/)
+  })
+
+  it('aborts a stalled check and gives the user a clear timeout message', async () => {
+    let receivedSignal
+    const fetchImpl = (_url, init) => {
+      receivedSignal = init.signal
+      return new Promise(() => {})
+    }
+    await expect(fetchUpdateManifest({
+      fetchImpl,
+      feedUrl: 'https://example.test/latest.json',
+      timeoutMs: 1,
+    })).rejects.toThrow(/timed out/)
+    expect(receivedSignal.aborted).toBe(true)
+  })
+
+  it('exposes a finite default timeout', () => {
+    expect(UPDATE_MANIFEST_TIMEOUT_MS).toBeGreaterThan(0)
   })
 
   it('reports an HTML body (SPA fallback) as "feed not available yet"', async () => {
