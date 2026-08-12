@@ -107,7 +107,7 @@ The release candidate now binds:
 - the SHA-256 of this release-evidence artifact;
 - one canonical release-manifest SHA-256.
 
-Vite emits `/deployment-version.json` and `/release-identity.json`. The backend `/api/version` returns the same release identity plus a database migration comparison against ordered `_migrations` rows. The comparison explicitly states that historical applied bytes are not independently attested; it proves that the production migration names and order map exactly to the migration files and hashes shipped in the release.
+Vite emits `/deployment-version.json` and `/release-identity.json`. The backend `/api/version` returns the same release identity plus a database migration comparison against ordered `_migrations` rows. The comparison explicitly states that historical applied bytes are not independently attested; it proves that the production migration-name set maps exactly to the checksummed migration files shipped in the release; historical insertion order remains a separate diagnostic.
 
 The deployment-proof script now requires agreement among the certified Git branch, Vercel receipt, Railway receipt, database migration identity, and evidence-artifact hash.
 
