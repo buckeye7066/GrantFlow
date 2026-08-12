@@ -120,7 +120,10 @@ const DEMOGRAPHIC_TAGS = {
 // ---------------------------------------------------------------------------
 function pickFromRecord(record, aliases) {
   if (!record || typeof record !== 'object') return undefined
-  const lcMap = {}
+  // CodeQL js/remote-property-injection (#751): plain-object accumulator
+  // built from a partner SIS record with no key guard — Object.create(null)
+  // has no prototype for a "__proto__" key to swap.
+  const lcMap = Object.create(null)
   for (const [k, v] of Object.entries(record)) lcMap[k.toLowerCase()] = v
   for (const alias of aliases) {
     const v = lcMap[alias.toLowerCase()]

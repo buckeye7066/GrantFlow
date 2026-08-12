@@ -1,6 +1,7 @@
 import express from 'express'
 import { validatePagination } from '../utils/validation.js'
 import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { sanitizeLogValue } from '../utils/logger.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:programs')
@@ -28,7 +29,9 @@ function normalizeTrack(track) {
   if (t === 'client' || t === 'a' || t === 'beneficiary') return 'CLIENT'
   if (t === 'provider' || t === 'b' || t === 'caregiver') return 'PROVIDER'
   // Unrecognised but non-empty track: log so operators can detect bad callers
-  console.warn('[programs] normalizeTrack: unrecognised track value:', track)
+  // CodeQL js/log-injection (#590): raw query/route param logged on the
+  // branch where it just failed the recognized-track check.
+  console.warn('[programs] normalizeTrack: unrecognised track value:', sanitizeLogValue(track))
   return null
 }
 

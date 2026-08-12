@@ -48,7 +48,17 @@ export function isMondayPortalReminderEnabled() {
   return String(process.env.MONDAY_PORTAL_REMINDER_ENABLED ?? 'true').toLowerCase() !== 'false'
 }
 
-const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+// CodeQL js/incomplete-html-attribute-sanitization (#385): this helper feeds
+// href="${esc(p.loginUrl)}" below, but omitted `"` — an unescaped double
+// quote in loginUrl (a portal URL sourced from crawled/registry data, not
+// something this module controls) could break out of the attribute and
+// inject arbitrary markup/event-handler attributes.
+const esc = (s) => String(s || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
 
 /**
  * Compute the NOT-merged portals for one profile. Returns an array of

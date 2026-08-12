@@ -40,7 +40,7 @@ import { ensureProfileEmailSchema } from '../utils/accessControl.js'
 import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
 import bcrypt from 'bcryptjs'
 
-import { createLogger } from '../utils/logger.js'
+import { createLogger, sanitizeLogValue } from '../utils/logger.js'
 import { isLoginMaintenanceActive, LOGIN_MAINTENANCE_MESSAGE, LOGIN_MAINTENANCE_COPY } from '../config/maintenance.js'
 const routeLogger = createLogger('route:auth')
 
@@ -2368,7 +2368,9 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     
     const email = normalizeEmail(emailRaw)
     if (!isValidEmail(email)) {
-      console.warn('[auth/email/start] Invalid email format:', emailRaw)
+      // CodeQL js/log-injection (#567): logs the RAW value on the branch
+      // where it just failed isValidEmail — by definition unsanitized.
+      console.warn('[auth/email/start] Invalid email format:', sanitizeLogValue(emailRaw))
       return res.status(400).json({ 
         error: 'Invalid email address',
         error_type: 'validation_error'
@@ -3627,7 +3629,9 @@ router.get('/:provider/start', async (req, res) => {
   routeLogger.info(`[auth] OAuth start requested for provider: ${provider}`)
   
   if (!OAUTH_PROVIDERS[provider]) {
-    console.warn(`[auth] Unsupported OAuth provider requested: ${provider}`)
+    // CodeQL js/log-injection (#578): logs the raw route param on the
+    // branch where it just failed the OAUTH_PROVIDERS whitelist check.
+    console.warn(`[auth] Unsupported OAuth provider requested: ${sanitizeLogValue(provider)}`)
     return res.status(404).json({ error: 'Unsupported provider' })
   }
 

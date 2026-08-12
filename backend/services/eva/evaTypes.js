@@ -133,7 +133,10 @@ export function redactDeep(value) {
   if (typeof value === 'string') return redactText(value)
   if (Array.isArray(value)) return value.map(redactDeep)
   if (value && typeof value === 'object') {
-    const out = {}
+    // CodeQL js/remote-property-injection (#750): plain-object accumulator
+    // built from EVA run data with no key guard — Object.create(null) has no
+    // prototype for a "__proto__" key to swap.
+    const out = Object.create(null)
     for (const [k, v] of Object.entries(value)) out[k] = redactDeep(v)
     return out
   }

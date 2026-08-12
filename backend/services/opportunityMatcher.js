@@ -14,6 +14,7 @@
  */
 
 import crypto from 'crypto'
+import { sanitizeLogValue } from '../utils/logger.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
 import {
   evaluatePipelineSource,
@@ -343,10 +344,13 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         }
         // Tombstone lookup failure must never block a save — recall over
         // suppression. Log it and proceed.
+        // CodeQL js/log-injection (#609/#610): opportunity.title is
+        // externally-sourced crawled text — any site a crawler visits
+        // controls this field.
         if (!quiet) console.warn(
           '[opportunityMatcher] Gate:DISMISSED check failed for profile %s, opp "%s":',
           profileId,
-          opportunity?.title,
+          sanitizeLogValue(opportunity?.title),
           dismissErr?.message || dismissErr,
         )
       }
@@ -378,7 +382,7 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       try {
         decision = computeMatchDecision(rawProfile, opportunity, { profileSections })
       } catch (decisionErr) {
-        if (!quiet) console.warn('[opportunityMatcher] computeMatchDecision threw for "%s" — treating as REJECT to avoid inserting unscored opportunity:', opportunity?.title, decisionErr?.message)
+        if (!quiet) console.warn('[opportunityMatcher] computeMatchDecision threw for "%s" — treating as REJECT to avoid inserting unscored opportunity:', sanitizeLogValue(opportunity?.title), decisionErr?.message)
         return denied('error:transient', {
           saved: false,
           reason: `Decision engine error: ${decisionErr?.message ?? 'unknown'}`,
@@ -921,7 +925,7 @@ export async function saveToProfilePipeline(
     }
     // FK violation — the funding_opportunity was deleted or never upserted
     if (msg.includes('foreign key') || msg.includes('fkey')) {
-      if (!outcomeSink?.quiet) console.warn(`[opportunityMatcher] FK miss for "${opportunity.title}" — funding_opportunity_id not found, skipping`)
+      if (!outcomeSink?.quiet) console.warn(`[opportunityMatcher] FK miss for "${sanitizeLogValue(opportunity.title)}" — funding_opportunity_id not found, skipping`)
       const result = { saved: false, reason: 'Funding opportunity not yet in database', matchPercentage }
       await emitPromotionOutcome(outcomeSink, {
         ...(admission || pipelineAdmissionFingerprints(profileContext, opportunity)),

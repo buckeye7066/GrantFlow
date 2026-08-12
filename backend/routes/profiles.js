@@ -17,7 +17,7 @@ import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { isMissingSchoolBridgeTable } from '../utils/schoolBridgeErrors.js'
-import { createLogger } from '../utils/logger.js'
+import { createLogger, sanitizeLogValue } from '../utils/logger.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { applicationStatusToStage } from '../../shared/pipelineStages.js'
 import { reconcileProfileFieldsToTasks } from '../services/hamilton/applicationTaskStore.js'
@@ -2586,6 +2586,16 @@ router.delete('/:id', async (req, res) => {
  * @param {string|null} [args.previousAvatarUrl] - prior avatar_url to clean up
  */
 async function persistAvatarBytes({ req, id, buffer, contentType, ext = 'png', previousAvatarUrl = null }) {
+  // CodeQL js/path-injection (#199-#201): id flows unvalidated into a
+  // filename used for fs.writeFile/fs.unlink. Not reachable today — every
+  // caller mints ids only via crypto.randomUUID(), and both avatar routes
+  // require a prior `SELECT ... WHERE id = ?` match (404 otherwise), so a
+  // traversal string in `id` can never reach here. Validated anyway as
+  // defense-in-depth in case a future caller (bulk import, admin tooling)
+  // ever accepts a client-supplied profile id.
+  if (!/^[0-9a-f-]{1,64}$/i.test(String(id || ''))) {
+    throw new Error(`persistAvatarBytes: invalid profile id shape: ${JSON.stringify(id)}`)
+  }
   const safeExt = String(ext || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png'
   const filename = `avatar_${String(id)}_${Date.now()}.${safeExt}`
   const publicPath = `/uploads/${filename}`
@@ -3314,7 +3324,10 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   try {
     syncProfileFieldsFromSection(req.db, id, sectionKey, guardedData)
   } catch (syncErr) {
-    console.warn('[profiles] Section sync failed for %s/%s:', id, sectionKey, syncErr?.message)
+    // CodeQL js/log-injection (#598): sectionKey is never whitelisted before
+    // this log call (unlike `id`, which is already confirmed safe by the
+    // prior successful row lookup — a traversal payload would 404 first).
+    console.warn('[profiles] Section sync failed for %s/%s:', id, sanitizeLogValue(sectionKey), syncErr?.message)
   }
 
   // Keep profile_emails in sync with the profile's own email (basic_information.email) and contacts.

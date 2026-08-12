@@ -1,4 +1,5 @@
 import zipcodes from 'zipcodes'
+import { sanitizeLogValue } from '../utils/logger.js'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
 import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
@@ -352,10 +353,12 @@ export async function loadProfileContext(db, profileId) {
       // format-string injection: a request for `?profileId=%s%o` would consume
       // the following arguments as substitutions and print unintended values
       // into the logs. `profileId` reaches here straight from HTTP query
-      // parameters (CodeQL js/tainted-format-string, PR #1081).
+      // parameters (CodeQL js/tainted-format-string, PR #1081; the sibling
+      // js/log-injection finding — a %0A in that same query param forging a
+      // fake log line — is fixed here too via sanitizeLogValue).
       console.warn(
         '[loadProfileContext] organization lookup failed for profile=%s org=%s:',
-        profileId,
+        sanitizeLogValue(profileId),
         profile.organization_id,
         err?.message || err,
       )

@@ -81,20 +81,22 @@ export function classifyFundingSourcesError(error) {
   const code = String(error?.code || '')
   const message = String(error?.message || error || '')
 
-  // Bounded (`.{1,200}?`) rather than unbounded `.+` between two `\s+`
-  // boundaries: an unbounded `.` (which also matches whitespace) sandwiched
-  // between two `\s+` quantifiers lets the regex engine try many equivalent
-  // ways to split a long run of whitespace, which is a polynomial ReDoS
-  // shape. `message` is a DB driver error string, not attacker-length-bounded
-  // by anything upstream, so cap the work the same way the intent (a short
-  // identifier/name) already implies.
-  if (/^Profile\s+.{1,200}?\s+not found$/i.test(message)) {
+  // `.{1,200}?` alone did NOT fix the ReDoS the earlier comment claimed it
+  // did (CodeQL js/polynomial-redos #547-#549): `.` still matches whitespace,
+  // so it overlaps the flanking `\s+` groups and the engine can still try
+  // many equivalent ways to split a long whitespace run before failing.
+  // Verified empirically: the old `.{1,200}?` pattern hangs >30s against a
+  // ~50KB non-matching whitespace-heavy payload; `[^\s]{1,200}` (disjoint
+  // from `\s+`, so no split ambiguity at all) resolves the same adversarial
+  // input in 0ms. `message` is a DB driver error string, not
+  // attacker-length-bounded by anything upstream.
+  if (/^Profile\s+[^\s]{1,200}\s+not found$/i.test(message)) {
     return { status: 404, error: 'PROFILE_NOT_FOUND', failureClass: 'profile_not_found' }
   }
-  if (code === '42703' || /no such column|column\s+.{1,200}?\s+does not exist/i.test(message)) {
+  if (code === '42703' || /no such column|column\s+[^\s]{1,200}\s+does not exist/i.test(message)) {
     return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'schema_projection_drift' }
   }
-  if (code === '42P01' || /no such table|relation\s+.{1,200}?\s+does not exist/i.test(message)) {
+  if (code === '42P01' || /no such table|relation\s+[^\s]{1,200}\s+does not exist/i.test(message)) {
     return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'schema_table_missing' }
   }
   if (code === '57014' || /statement timeout|database is locked|SQLITE_BUSY/i.test(message)) {

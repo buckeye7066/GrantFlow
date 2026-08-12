@@ -563,11 +563,12 @@ export function buildPacketNarrativeOverrides(proposal) {
 
 // ── public: persist ──────────────────────────────────────────────────
 
+// Delegates to the packet generator's storage-dir resolver so the two never
+// diverge (CodeQL js/insecure-temporary-file #626-#628: this used to be a
+// byte-identical copy carrying the SAME unfixed-in-prod tmpdir fallback bug —
+// see hamiltonApplicationPacketGenerator.getPacketStorageDir for the fix).
 function getProposalStorageDir() {
-  const base = process.env.HAMILTON_PACKET_STORAGE_DIR
-    || path.join(os.tmpdir(), 'grantflow-hamilton-packets')
-  try { fs.mkdirSync(base, { recursive: true }) } catch { /* ignore */ }
-  return base
+  return packetInternal.getPacketStorageDir()
 }
 
 function proposalTitle({ opportunity, grant, proposal }) {

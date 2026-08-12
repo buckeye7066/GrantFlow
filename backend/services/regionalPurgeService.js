@@ -23,6 +23,7 @@
 import { detectMaterialChange } from './purgeMaterialChange.js'
 import { verifyOpportunityUrl } from './purgeVerification.js'
 import { stableTextHash } from './purgeDiffUtils.js'
+import { sanitizeLogValue } from '../utils/logger.js'
 import { randomUUID } from 'crypto'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('regionalPurgeService')
@@ -278,8 +279,10 @@ export async function runRegionalPurge(db, options = {}) {
   ensureSuppressionEventsTable(db)
 
   if (opportunities.length === 0) {
+    // CodeQL js/log-injection (#614): targetStates is req.body.states on an
+    // admin-only route, with no per-element format check before logging.
     console.warn(
-      `[regionalPurge] No candidate opportunities returned for states: ${targetStates.join(', ')}. ` +
+      `[regionalPurge] No candidate opportunities returned for states: ${sanitizeLogValue(targetStates.join(', '))}. ` +
       `candidateFilter=${candidateFilter.replace(/\s+/g, ' ')} onlySuppressedCandidates=${onlySuppressedCandidates}`
     )
   }
