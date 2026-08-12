@@ -1,7 +1,7 @@
 {
   "name": "grant-flow",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "engines": {
     "node": ">=20.19.0 <21"
@@ -31,6 +31,8 @@
     "dev": "vite",
     "prebuild": "node scripts/ensure-build-natives.mjs",
     "build": "vite build",
+    "postbuild": "node scripts/build-mobile-bundle.mjs",
+    "build:mobile-bundle": "npm run build",
     "quality:gate": "node scripts/code-quality-gate.mjs",
     "quality:report": "node scripts/code-quality-gate.mjs --report",
     "metadata:audit": "node scripts/audit-section-metadata.mjs",
@@ -121,6 +123,7 @@
     "@capacitor/android": "8.5.0",
     "@capacitor/core": "8.5.0",
     "@capacitor/ios": "8.5.0",
+    "@capgo/capacitor-updater": "^8.51.3",
     "@sentry/node": "10.69.0",
     "acorn": "^8.18.0",
     "axios": "^1.19.0",
@@ -191,6 +194,7 @@
     "@types/node": "20.19.43",
     "@vitejs/plugin-react": "^6.0.5",
     "@vitest/coverage-v8": "^4.1.10",
+    "adm-zip": "^0.5.18",
     "autoprefixer": "^10.5.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
