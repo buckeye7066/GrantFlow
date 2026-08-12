@@ -17,6 +17,15 @@ test('extracts SDK-range signer labels emitted for rotated signing lineages', ()
   assert.deepEqual(extractApkSignerSha256Digests(output), ['abcd01', 'ef02'])
 })
 
+test('extracts signature-scheme labels emitted by current Android build tools', () => {
+  const output = [
+    'V2 Signer: certificate DN: CN=GrantFlow',
+    'V2 Signer: certificate SHA-256 digest: BD:72:EA',
+  ].join('\n')
+
+  assert.deepEqual(extractApkSignerSha256Digests(output), ['bd72ea'])
+})
+
 test('ignores source-stamp and non-SHA-256 certificate lines', () => {
   const output = [
     'Source Stamp Signer certificate SHA-256 digest: DEAD',
