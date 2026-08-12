@@ -4,11 +4,9 @@ import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
 import AuthErrorBoundary from '@/components/auth/AuthErrorBoundary'
 import { useAuthStore } from '@/stores/authStore'
-import { ArrowRight, Wrench } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { isNativeApp } from '@/lib/platform'
-import { LOGIN_MAINTENANCE } from '@/config/maintenance'
-import { get as apiGet } from '@/api/apiClient'
 
 const AUTH_TABS = new Set(['email'])
 
@@ -17,22 +15,6 @@ export default function Login() {
     const location = useLocation()
     const [devLoading, setDevLoading] = useState(false)
 
-  // Runtime maintenance status. Render the static fallback immediately (no
-  // flash of the wrong state), then follow the server's answer — the switch
-  // is the backend's LOGIN_MAINTENANCE env var, so flipping it needs no
-  // frontend rebuild. If the probe fails the fallback stands: with the API
-  // unreachable, sign-in couldn't succeed anyway.
-  const [maintenance, setMaintenance] = useState(LOGIN_MAINTENANCE)
-  useEffect(() => {
-        let cancelled = false
-        apiGet('/api/auth/maintenance')
-              .then((status) => {
-                      if (cancelled || !status || typeof status.active !== 'boolean') return
-                      setMaintenance({ ...LOGIN_MAINTENANCE, ...status })
-              })
-              .catch(() => { /* keep the static fallback */ })
-        return () => { cancelled = true }
-  }, [])
 
   // FIX: Use individual selectors instead of an object selector.
   // An object selector (state => ({ ... })) creates a new object reference on
@@ -106,18 +88,6 @@ export default function Login() {
         }
   }
 
-  if (maintenance.active) {
-        return (
-              <AuthErrorBoundary onReset={handleErrorReset}>
-                      <AuthShell
-                                title={maintenance.title}
-                                subtitle="Thanks for your patience while we make GrantFlow better."
-                              >
-                              <MaintenanceBanner maintenance={maintenance} />
-                      </AuthShell>
-              </AuthErrorBoundary>
-            )
-  }
 
   return (
         <AuthErrorBoundary onReset={handleErrorReset}>
@@ -146,27 +116,6 @@ export default function Login() {
                 </AuthShell>
         </AuthErrorBoundary>
       )
-}
-
-function MaintenanceBanner({ maintenance = LOGIN_MAINTENANCE }) {
-    return (
-          <div
-                  role="status"
-                  className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
-                >
-                <div className="flex items-start gap-3">
-                        <Wrench className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden="true" />
-                        <div>
-                                <p className="font-semibold">{maintenance.title}</p>
-                                <p className="mt-1">{maintenance.message}</p>
-                                <p className="mt-2 font-medium">{maintenance.etaText}</p>
-                                <p className="mt-2 text-amber-800">
-                                        Sign-in is disabled until the upgrade completes. No action is needed on your part.
-                                </p>
-                        </div>
-                </div>
-          </div>
-        )
 }
 
 function AuthMethodExpiryNotice() {
