@@ -498,9 +498,34 @@ async function tryBuildPdfFromHtml(html) {
 
 // ── Document persistence ────────────────────────────────────────────
 
+// Resolution mirrors hamiltonConfirmationArtifacts.confirmationCaptureDirPath:
+// an explicit override, else the persistent UPLOADS_DIR volume, else the
+// production floor `/data/uploads/...`, and ONLY dev/test falls back to
+// os.tmpdir() — CodeQL js/insecure-temporary-file (#619-#630): the old
+// unconditional `os.tmpdir()` fallback put every generated packet/proposal
+// in prod into a fixed, predictable, world-guessable directory name with no
+// entropy, unlike this same repo's already-hardened confirmation-artifact
+// path.
+const HAMILTON_PACKET_DIR_NAME = 'hamilton-packets'
+const DEFAULT_PRODUCTION_UPLOADS_DIR = '/data/uploads'
+
+function isProductionRuntime(env = process.env) {
+  const truthy = (value) => /^(1|true|yes|on)$/i.test(String(value || '').trim())
+  const isTestLike = String(env.NODE_ENV || '').trim().toLowerCase() === 'test' ||
+    truthy(env.SMOKE_MODE) || truthy(env.ALLOW_EPHEMERAL_SQLITE)
+  return String(env.NODE_ENV || '').trim().toLowerCase() === 'production' && !isTestLike
+}
+
 function getPacketStorageDir() {
-  const base = process.env.HAMILTON_PACKET_STORAGE_DIR
-    || path.join(os.tmpdir(), 'grantflow-hamilton-packets')
+  const explicit = String(process.env.HAMILTON_PACKET_STORAGE_DIR || '').trim()
+  const uploadsDir = String(process.env.UPLOADS_DIR || '').trim()
+  const base = explicit
+    ? path.resolve(explicit)
+    : (uploadsDir && path.isAbsolute(uploadsDir))
+      ? path.join(uploadsDir, HAMILTON_PACKET_DIR_NAME)
+      : isProductionRuntime()
+        ? path.join(DEFAULT_PRODUCTION_UPLOADS_DIR, HAMILTON_PACKET_DIR_NAME)
+        : fs.mkdtempSync(path.join(os.tmpdir(), 'grantflow-hamilton-packets-'))
   try { fs.mkdirSync(base, { recursive: true }) } catch { /* ignore */ }
   return base
 }

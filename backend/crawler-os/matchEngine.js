@@ -208,7 +208,13 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
   const needs = uniqueStrings(opportunity.need_categories);
   const geography = opportunity.geography ?? {};
   const states = uniqueStrings(geography.states);
-  const isNational = Boolean(geography.national) || states.some((state) => /^national|nationwide$/i.test(state));
+  // Alternation binds looser than anchors: the old /^national|nationwide$/i
+  // was (^national)|(nationwide$), so a state value merely STARTING WITH
+  // "national" (e.g. "National Capital Region") or ENDING WITH "nationwide"
+  // (e.g. "non-nationwide") wrongly widened an opportunity to nationwide
+  // eligibility (CodeQL js/regex/missing-regexp-anchor #657) — exactly the
+  // geo-scope-leakage bug class this file's own invariants exist to prevent.
+  const isNational = Boolean(geography.national) || states.some((state) => /^(national|nationwide)$/i.test(state));
   const description = [
     opportunity.summary,
     applicantTypes.filter((value) => value !== '*').length
