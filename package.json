@@ -144,7 +144,7 @@
     "node-fetch": "^3.3.2",
     "openai": "^6.49.0",
     "pdf-parse": "^1.1.1",
-    "pg": "^8.22.0",
+    "pg": "^8.23.0",
     "playwright": "^1.62.1",
     "psl": "1.15.0",
     "resend": "^6.18.1",
@@ -238,7 +238,7 @@
     "zustand": "^4.5.7"
   },
   "optionalDependencies": {
-    "@esbuild/linux-x64": "^0.28.1",
+    "@esbuild/linux-x64": "^0.28.2",
     "@rollup/rollup-linux-x64-gnu": "^4.62.4"
   }
 }
