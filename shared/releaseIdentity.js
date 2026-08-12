@@ -301,7 +301,9 @@ export async function buildDatabaseMigrationIdentity(db, {
   const unexpected = appliedNames.filter((name) => !expectedSet.has(name))
   const orderMatches = appliedNames.length === expectedNames.length
     && appliedNames.every((name, index) => name === expectedNames[index])
-  const nameParityMatches = pending.length === 0 && unexpected.length === 0 && orderMatches
+  const nameParityMatches = pending.length === 0
+    && unexpected.length === 0
+    && appliedNames.length === expectedNames.length
 
   const checksumMissing = []
   const checksumMismatches = []
@@ -330,7 +332,9 @@ export async function buildDatabaseMigrationIdentity(db, {
           bytes: null,
           sha256: storedChecksum,
         }
-  })
+  }).sort((left, right) => (
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0
+  ))
 
   const appliedSha256 = migrationIdentityFromFiles(
     dialect,

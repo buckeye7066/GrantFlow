@@ -27,15 +27,11 @@ jobs:
   analyze:
     name: Analyze JavaScript and TypeScript
     runs-on: ubuntu-latest
-    # 25 was sized for "evaluate queries + local baseline check" only, from
-    # when `upload: never` skipped the SARIF upload + GitHub processing-wait
-    # tail entirely. Restoring the upload (see the `upload: always` step below)
-    # exercised the full push/full-scan pipeline for the first time and it
-    # measured well past 25 min under ordinary runner load (two consecutive
-    # push-triggered runs on 2026-08-12 were still inside `codeql database
-    # run-queries` at the 25-minute mark and got cancelled, never reaching the
-    # export/upload steps at all). Give the full-scan lane real headroom;
-    # pull_request's diff-informed runs finish in minutes either way.
+    # Full push/schedule/manual scans have measured beyond 25 minutes under
+    # ordinary runner load while still inside `codeql database run-queries`.
+    # Keep enough headroom for query evaluation, local SARIF export, reviewed
+    # baseline enforcement, and artifact retention. Pull-request diff-informed
+    # runs finish in minutes.
     timeout-minutes: 50
 
     steps:
@@ -60,17 +56,14 @@ jobs:
         id: analyze
         uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
-          # This repo is PUBLIC, so Code Scanning / GitHub Advanced Security is
-          # free and unrestricted — no purchase needed. `upload: never` was set
-          # 2026-06-28 when the repo was private and uploads genuinely failed
-          # with a configuration error; that premise is stale now that the repo
-          # is public (verified live via `gh api repos/.../GrantFlow` ->
-          # visibility: public). Uploading keeps the Security tab's alert set
-          # reconciled against real code instead of frozen against whatever was
-          # last uploaded (2026-03-12, five months of drift). Keep the local
-          # baseline enforcement below in addition — it is a stricter pre-merge
-          # gate than what Security-tab reconciliation alone provides.
-          upload: always
+          # The repository is private and GitHub code scanning is not enabled,
+          # so SARIF upload fails with a configuration error even though query
+          # evaluation and export complete successfully. Keep the generated
+          # SARIF local to the job, retain it as an Actions artifact below, and
+          # enforce the reviewed full-scan baseline on push/schedule/manual
+          # runs. If code scanning is enabled later, upload can be restored
+          # without changing the baseline gate.
+          upload: never
 
       - name: Require full-scan SARIF output
         if: github.event_name != 'pull_request'

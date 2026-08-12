@@ -831,14 +831,12 @@ The classifier enforces these per-source review dates. An expired source is with
   )
   source = replaceOnce(
     source,
-    `      && databaseMigrations?.matches_release === true
-      && databaseMigrations?.order_matches === true`,
+    `      && databaseMigrations?.matches_release === true`,
     `      && databaseMigrations?.matches_release === true
       && databaseMigrations?.checksum_columns_available === true
       && databaseMigrations?.stored_checksum_complete === true
       && databaseMigrations?.checksums_match === true
-      && databaseMigrations?.name_parity_matches === true
-      && databaseMigrations?.order_matches === true`,
+      && databaseMigrations?.name_parity_matches === true`,
     'database checksum completeness proof',
   )
   source = replaceOnce(

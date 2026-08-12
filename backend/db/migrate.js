@@ -18,6 +18,7 @@ import {
   ensureMigrationIntegrityColumns,
   migrationFileChecksum,
   recordMigrationApplied,
+  verifyMigrationLedgerBeforeReadApplied,
   verifyOrBaselineMigrationLedger,
 } from './migrationIntegrity.js';
 
@@ -386,8 +387,14 @@ export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
   if (!ensureDirExists(migrationsDir)) return { ran: 0, drift: null }
   await ensureSqliteBaseSchema()
   await ensureMigrationsTable()
-  const applied = await getAppliedSet()
   const files = listSqlMigrations(migrationsDir)
+  const { applied } = await verifyMigrationLedgerBeforeReadApplied({
+    db,
+    migrationsDir,
+    files,
+    logger,
+    readApplied: getAppliedSet,
+  })
   const pending = files.filter((f) => !applied.has(f))
   let ran = 0
   // Round 30: TRACK the files that failed to apply so they can be SURFACED (a queryable
