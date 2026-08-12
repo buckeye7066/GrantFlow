@@ -5,6 +5,9 @@
 # so the blast radius is exactly one subdomain CNAME record set.
 name: Set subdomain CNAME (guarded)
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:

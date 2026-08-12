@@ -36,7 +36,9 @@ function clean(value, { stripTags = false } = {}) {
   if (value == null) return null;
   let s = String(value);
   s = s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1'); // unwrap CDATA
-  if (stripTags) s = s.replace(/<[^>]+>/g, ' ');       // drop HTML tags
+  // Decode entities BEFORE stripping tags: decoding after strip lets inert
+  // encoded text ("&lt;script&gt;") reappear as a live tag the strip step
+  // already ran past (js/double-escaping + js/bad-tag-filter).
   s = s
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -44,6 +46,7 @@ function clean(value, { stripTags = false } = {}) {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ');
+  if (stripTags) s = s.replace(/<[^>]+>/g, ' ');       // drop HTML tags
   s = s.replace(/\s+/g, ' ').trim();
   return s.length ? s : null;
 }

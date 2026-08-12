@@ -233,7 +233,14 @@ const storage = multer.diskStorage({
   destination: (req, _file, cb) => cb(null, getUploadsDir(req)),
   filename: (_req, file, cb) => {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : '';
+    // The client-supplied originalname is untrusted. Taking the raw
+    // "last dot-separated segment" as the extension lets a name with no dot
+    // AFTER a slash (e.g. "x.tar/../../evil") smuggle "/" and ".." into the
+    // generated filename, which multer then joins onto the uploads dir
+    // (path injection). Strip everything but safe filename characters and
+    // cap the length so the extension can never carry a path separator.
+    const rawExtension = file.originalname.includes('.') ? file.originalname.split('.').pop() : '';
+    const extension = rawExtension ? `.${String(rawExtension).replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)}` : '';
     cb(null, `${unique}${extension}`);
   },
 });

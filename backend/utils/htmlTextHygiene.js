@@ -104,4 +104,42 @@ export function cleanExtractedText(value) {
     .trim()
 }
 
-export default { decodeHtmlEntities, cleanExtractedText }
+const SCRIPT_OR_STYLE_RX = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi
+const TAG_RX = /<[^>]+>/g
+const MAX_STRIP_PASSES = 5
+
+/**
+ * Convert untrusted HTML (crawled/scraped page bodies, remote portal content)
+ * to plain text for downstream parsing/LLM input — NOT for re-rendering as
+ * HTML. Two defects a naive single-pass `.replace(/<[^>]+>/g, ' ')` has:
+ *
+ * 1. bad-tag-filter (nested reconstitution): removing an INNER `<script>`
+ *    match can leave behind fragments that reassemble into a live tag, e.g.
+ *    `<scr<script></script>ipt>alert(1)</scr<script></script>ipt>` — a single
+ *    pass removes the two empty `<script></script>` pairs and leaves a live
+ *    `<script>alert(1)</script>` that was never itself matched. Looping the
+ *    removal until a pass changes nothing closes that reconstitution gap.
+ * 2. double-escaping: decoding HTML entities AFTER stripping tags lets inert
+ *    encoded text ("&lt;script&gt;") come back out as a live tag the strip
+ *    step already ran past. Decoding first (via decodeHtmlEntities, which is
+ *    itself bounded) and stripping the decoded text second closes that gap.
+ *
+ * Non-strings pass through as ''.
+ */
+export function stripHtmlToPlainText(value) {
+  if (typeof value !== 'string' || !value) return ''
+  let text = decodeHtmlEntities(value)
+  for (let pass = 0; pass < MAX_STRIP_PASSES; pass += 1) {
+    const next = text.replace(SCRIPT_OR_STYLE_RX, ' ')
+    if (next === text) break
+    text = next
+  }
+  for (let pass = 0; pass < MAX_STRIP_PASSES; pass += 1) {
+    const next = text.replace(TAG_RX, ' ')
+    if (next === text) break
+    text = next
+  }
+  return text.replace(CONTROL_RX, ' ').replace(/\s+/g, ' ').trim()
+}
+
+export default { decodeHtmlEntities, cleanExtractedText, stripHtmlToPlainText }

@@ -19,7 +19,9 @@
 import crypto from 'crypto'
 import { ensureYanaLeadSchema } from './yanaLeadDiscovery.js'
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// Bounded quantifiers avoid a polynomial ReDoS shape (see the identical
+// pattern in backend/routes/auth.js).
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{1,24}$/
 
 function nameFromEmail(email) {
   const local = String(email).split('@')[0] || ''

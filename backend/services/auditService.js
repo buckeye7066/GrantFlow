@@ -103,7 +103,7 @@ export async function logAuditEvent(db, {
     
     // Log critical events to console as well
     if (severity === SEVERITY.CRITICAL || severity === SEVERITY.ERROR) {
-      console.error(`[Audit][${severity.toUpperCase()}] ${category}:${action}`, {
+      console.error('[Audit][%s] %s:%s', severity.toUpperCase(), category, action, {
         userId,
         resourceType,
         resourceId,

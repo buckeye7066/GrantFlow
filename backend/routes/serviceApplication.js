@@ -122,7 +122,7 @@ router.post('/', sensitiveRateLimiter, async (req, res) => {
       }
 
       // Validate email format
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      const emailRegex = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{1,24}$/
       if (!emailRegex.test(email)) {
         return res.status(400).json({
           success: false,
@@ -204,7 +204,7 @@ router.post('/submit', sensitiveRateLimiter, async (req, res) => {
     }
 
     // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    const emailRegex = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{1,24}$/
     if (!emailRegex.test(email)) {
       return res.status(400).json({
         success: false,

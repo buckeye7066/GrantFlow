@@ -104,7 +104,10 @@ router.post('/', async (req, res) => {
     if (!validTypes.includes(type)) return res.status(400).json({ error: 'Invalid contact type' })
     const value = String(data.value || '').trim()
     if (!type || !value) return res.status(400).json({ error: 'type and value required' })
-    if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return res.status(400).json({ error: 'Invalid email format' })
+    // Bounded quantifiers (RFC-plausible length caps) to avoid a polynomial
+    // ReDoS shape: an unbounded run of chars on both sides of the literal
+    // `.` gives many equivalent split points on a long, dot-heavy string.
+    if (type === 'email' && !/^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{1,24}$/.test(value)) return res.status(400).json({ error: 'Invalid email format' })
     if (type === 'phone' && !/^[\d\s\-()+]+$/.test(value)) return res.status(400).json({ error: 'Invalid phone format' })
 
     const id = data.id ? String(data.id) : crypto.randomUUID()

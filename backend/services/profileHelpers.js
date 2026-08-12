@@ -1094,7 +1094,7 @@ export function extractCityFromContext({ profile, sections, jobParameters = {} }
 function extractStateFromAddress(address) {
   if (!address || typeof address !== 'string') return null
   // Match 2-letter state code before ZIP (e.g., "TN 38501" or "TN, 38501")
-  const match = address.match(/\b([A-Z]{2})\s*,?\s*\d{5}/)
+  const match = address.match(/\b([A-Z]{2})\s{0,10},?\s{0,10}\d{5}/)
   return match ? match[1] : null
 }
 
@@ -1192,12 +1192,17 @@ function extractCityFromAddress(address) {
   if (!address || typeof address !== 'string') return null
   const normalized = address.replace(/\r/g, '').trim()
   // Prefer "City, ST ZIP" on one line (common in multiline addresses).
-  const cityStateZip = normalized.match(/\b([A-Za-z][A-Za-z\s.'-]+),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b/)
+  // Bounded (`{1,100}`) rather than unbounded `+`: the character class
+  // includes whitespace, so an unbounded run right next to a `\s*`/`\s+`
+  // quantifier is an overlapping-quantifier shape a regex engine can
+  // backtrack through in polynomial time on a long, non-matching string. A
+  // real city name is never anywhere close to 100 characters.
+  const cityStateZip = normalized.match(/\b([A-Za-z][A-Za-z\s.'-]{1,100}),\s{0,20}([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b/)
   if (cityStateZip) return cityStateZip[1].trim()
   // Split by newlines, look for line with city, state ZIP pattern
   const lines = normalized.split(/\n/).map((l) => l.trim()).filter(Boolean)
   for (const line of lines) {
-    const match = line.match(/^([A-Za-z][A-Za-z\s.'-]+),?\s+[A-Z]{2}\s*\d{5}/)
+    const match = line.match(/^([A-Za-z][A-Za-z\s.'-]{1,100}),?\s+[A-Z]{2}\s*\d{5}/)
     if (match) return match[1].trim()
   }
   return null

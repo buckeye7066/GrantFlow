@@ -194,7 +194,7 @@
     "@types/node": "20.19.43",
     "@vitejs/plugin-react": "^6.0.5",
     "@vitest/coverage-v8": "^4.1.10",
-    "adm-zip": "^0.5.18",
+    "adm-zip": "^0.6.0",
     "autoprefixer": "^10.5.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

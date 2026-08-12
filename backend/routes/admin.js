@@ -495,7 +495,14 @@ const storage = multer.diskStorage({
   destination: (req, _file, cb) => cb(null, getUploadsDir(req)),
   filename: (_req, file, cb) => {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : '';
+    // The client-supplied originalname is untrusted. Taking the raw
+    // "last dot-separated segment" as the extension lets a name with no dot
+    // AFTER a slash (e.g. "x.tar/../../evil") smuggle "/" and ".." into the
+    // generated filename, which multer then joins onto the uploads dir
+    // (path injection). Strip everything but safe filename characters and
+    // cap the length so the extension can never carry a path separator.
+    const rawExtension = file.originalname.includes('.') ? file.originalname.split('.').pop() : '';
+    const extension = rawExtension ? `.${String(rawExtension).replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)}` : '';
     cb(null, `admin-upload-${unique}${extension}`);
   },
 });
@@ -561,7 +568,10 @@ const knowledgeUpload = multer({
     destination: (req, _file, cb) => cb(null, getUploadsDir(req)),
     filename: (_req, file, cb) => {
       const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
-      const extension = file.originalname.includes('.') ? `.${file.originalname.split('.').pop()}` : ''
+      // See the admin-upload storage config above: sanitize the client-supplied
+      // extension so it can never carry a path separator into the generated name.
+      const rawExtension = file.originalname.includes('.') ? file.originalname.split('.').pop() : ''
+      const extension = rawExtension ? `.${String(rawExtension).replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)}` : ''
       cb(null, `kb-${unique}${extension}`)
     },
   }),
@@ -4100,6 +4110,13 @@ router.post('/crawlers/audit-live', async (req, res) => {
       item_request = null,
     } = req.body ?? {};
 
+    // Bound the caller-supplied timeout on both ends: a floor so the audit
+    // still means something, and a ceiling (2 min) so a very large or
+    // malformed value can't wedge a timer/promise open for hours-to-days per
+    // profile/crawler-type combination (resource exhaustion), even though
+    // this route is already admin-only.
+    const boundedTimeoutMs = Math.min(Math.max(1000, Number(timeout_ms) || 20000), 120_000);
+
     const types = Array.isArray(crawler_types) && crawler_types.length
       ? crawler_types.filter((t) => CRAWLER_AUDIT_TYPES.includes(t))
       : [...CRAWLER_AUDIT_TYPES];
@@ -4146,7 +4163,7 @@ router.post('/crawlers/audit-live', async (req, res) => {
           if (crawlerType === 'item_matching') {
             const itemResult = await withTimeout(
               crawlItemFunding({ id: profileId }, { item_request }),
-              Math.max(1000, Number(timeout_ms) || 20000),
+              boundedTimeoutMs,
               `audit:item_matching`,
             );
             opportunities = Array.isArray(itemResult) ? itemResult : [];
@@ -4163,7 +4180,7 @@ router.post('/crawlers/audit-live', async (req, res) => {
                 ),
                 maxResults: 100,
               }),
-              Math.max(1000, Number(timeout_ms) || 20000),
+              boundedTimeoutMs,
               `audit:${crawlerType}`,
             );
             opportunities = Array.isArray(curatedResult?.results) ? curatedResult.results : [];
@@ -4224,7 +4241,7 @@ router.post('/crawlers/audit-live', async (req, res) => {
       profiles: results.length,
       crawler_types: types,
       min_match_score,
-      timeout_ms,
+      timeout_ms: boundedTimeoutMs,
       duration_ms: durationMs,
       results,
     });

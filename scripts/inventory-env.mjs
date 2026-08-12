@@ -59,7 +59,12 @@ function groupByVar(usages) {
 }
 
 function mdEscape(s) {
-  return String(s).replace(/\|/g, '\\|')
+  // Escape backslashes FIRST: escaping `|` alone lets a pre-existing literal
+  // backslash right before a pipe combine with the `\` this function just
+  // inserted (e.g. input `\|` -> `\\|`), which a markdown renderer reads as
+  // an escaped backslash followed by an UNescaped pipe — the table delimiter
+  // reappears (js/incomplete-sanitization: backslash not escaped).
+  return String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|')
 }
 
 function formatLineRange(lines) {

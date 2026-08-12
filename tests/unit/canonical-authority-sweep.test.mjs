@@ -366,7 +366,9 @@ test('docs/matching-architecture.md references the current MATCHER_VERSION', asy
   )
   assert.match(
     doc,
-    new RegExp(`MATCHER_VERSION[^\\n]{0,80}${MATCHER_VERSION.replace(/\./g, '\\.')}`),
+    // Escape every regex metacharacter (incl. backslash), not just `.`
+    // (js/incomplete-sanitization).
+    new RegExp(`MATCHER_VERSION[^\\n]{0,80}${MATCHER_VERSION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
     `docs must reference the current MATCHER_VERSION (${MATCHER_VERSION}) near the top`,
   )
   assert.match(

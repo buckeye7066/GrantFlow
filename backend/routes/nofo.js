@@ -121,18 +121,26 @@ async function fetchPdfTextFromUrl(fileUrl) {
     return { text, contentType, bytes: buf.length }
   }
 
-  // HTML/text fallback
+  // HTML/text fallback.
+  //
+  // Order matters here: decoding HTML entities (&lt; -> <) AFTER stripping
+  // tags can reintroduce tag-like structure the strip step already ran past
+  // (e.g. literal "&lt;script&gt;" text — safely inert at strip time — comes
+  // back out as a live "<script>" in the final output). Decode entities
+  // FIRST, then strip tags on the decoded text, so nothing sneaks through
+  // (CodeQL js/double-escaping + js/bad-tag-filter).
   const raw = asString()
-  const withoutScripts = raw
+  const decoded = raw
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+  const withoutScripts = decoded
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<\/(p|div|br|li|tr|h\d)>/gi, '\n')
     .replace(/<[^>]+>/g, ' ')
   const text = withoutScripts
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
     .replace(/\s+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')

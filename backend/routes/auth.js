@@ -438,7 +438,12 @@ function normalizeSixDigitCode(value) {
 }
 
 function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  // Bounded quantifiers (RFC-plausible local/domain/TLD length caps) instead
+  // of unbounded `+`: an unbounded run of `[^\s@]` chars before AND after a
+  // literal `.` gives the regex engine many equivalent split points to try
+  // when a long attacker-supplied string has several dots and no match at
+  // the end, which is a polynomial ReDoS shape.
+  return /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{1,24}$/.test(email)
 }
 
 function hashValue(value) {
@@ -3785,7 +3790,7 @@ router.get('/:provider/callback', async (req, res) => {
         uploadDir,
         getOpenAI,
         userId: user.id,
-      }).catch((err) => console.error(`[auth/oauth/${provider}] admin geo crawl scheduler:`, err))
+      }).catch((err) => console.error('[auth/oauth/%s] admin geo crawl scheduler:', provider, err))
     }
 
     // Admin notice on successful sign-in (OAuth)
@@ -3807,7 +3812,7 @@ router.get('/:provider/callback', async (req, res) => {
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
     if (activeProfileId) {
       runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId }).catch(err => {
-        console.error(`[auth/${provider}] Failed to queue auto-discovery crawlers:`, err)
+        console.error('[auth/%s] Failed to queue auto-discovery crawlers:', provider, err)
       })
     }
 
@@ -3826,7 +3831,7 @@ router.get('/:provider/callback', async (req, res) => {
     completedRedirect.hash = new URLSearchParams({ handoff }).toString()
     return res.redirect(completedRedirect.toString())
   } catch (oauthError) {
-    console.error(`[auth] ${provider} oauth callback failed:`, oauthError)
+    console.error('[auth] %s oauth callback failed:', provider, oauthError)
     return redirectWithParams({ error: 'oauth_exchange_failed' })
   }
 })

@@ -521,7 +521,7 @@ function deathSurvivorRestriction(text) {
 
 function professionDependentContext(text) {
   return /\b(children?|dependents?|spouses?|famil(?:y|ies)|sons?|daughters?|grandchildren)\s+(?:of|for)\b/i.test(text) ||
-    /\b(?:child|dependent|spouse|family)\s+of\s+(?:a|an)?\s*(?:nurse|emt|paramedic|teacher|veteran|first responder)\b/i.test(text)
+    /\b(?:child|dependent|spouse|family)\s+of\s+(?:a|an)?\s{0,10}(?:nurse|emt|paramedic|teacher|veteran|first responder)\b/i.test(text)
 }
 
 export function evaluateNeedFirstMatchPolicy({

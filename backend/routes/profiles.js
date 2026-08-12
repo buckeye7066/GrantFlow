@@ -2330,7 +2330,7 @@ router.put('/:id', async (req, res) => {
     try {
       await syncDisplayNameToBasicInformation(req.db, id, display_name)
     } catch (syncErr) {
-      console.warn(`[profiles] display_name → basic_information sync failed for ${id}:`, syncErr?.message)
+      console.warn('[profiles] display_name -> basic_information sync failed for %s:', id, syncErr?.message)
     }
   }
 
@@ -3314,7 +3314,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   try {
     syncProfileFieldsFromSection(req.db, id, sectionKey, guardedData)
   } catch (syncErr) {
-    console.warn(`[profiles] Section sync failed for ${id}/${sectionKey}:`, syncErr?.message)
+    console.warn('[profiles] Section sync failed for %s/%s:', id, sectionKey, syncErr?.message)
   }
 
   // Keep profile_emails in sync with the profile's own email (basic_information.email) and contacts.

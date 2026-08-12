@@ -344,7 +344,9 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         // Tombstone lookup failure must never block a save — recall over
         // suppression. Log it and proceed.
         if (!quiet) console.warn(
-          `[opportunityMatcher] Gate:DISMISSED check failed for profile ${profileId}, opp "${opportunity?.title}":`,
+          '[opportunityMatcher] Gate:DISMISSED check failed for profile %s, opp "%s":',
+          profileId,
+          opportunity?.title,
           dismissErr?.message || dismissErr,
         )
       }
@@ -376,7 +378,7 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       try {
         decision = computeMatchDecision(rawProfile, opportunity, { profileSections })
       } catch (decisionErr) {
-        if (!quiet) console.warn(`[opportunityMatcher] computeMatchDecision threw for "${opportunity?.title}" â treating as REJECT to avoid inserting unscored opportunity:`, decisionErr?.message)
+        if (!quiet) console.warn('[opportunityMatcher] computeMatchDecision threw for "%s" — treating as REJECT to avoid inserting unscored opportunity:', opportunity?.title, decisionErr?.message)
         return denied('error:transient', {
           saved: false,
           reason: `Decision engine error: ${decisionErr?.message ?? 'unknown'}`,

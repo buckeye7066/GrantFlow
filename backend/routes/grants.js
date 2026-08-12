@@ -499,7 +499,13 @@ router.get('/', async (req, res) => {
     // guard causes a hard 500. Keep this self-healing and non-fatal.
     await ensureGrantAiColumns(req.db)
 
-    const { organization_id, status } = req.query;
+    const { organization_id } = req.query;
+    // Express parses `?status[]=a&status[]=b` or `?status[x]=y` into an array
+    // or object rather than a string; calling String methods (.includes,
+    // .split) on that without a type guard is the parameter-tampering /
+    // type-confusion class (crash or unexpected query behavior). Match the
+    // typeof-guard pattern already used for profile_id/url below.
+    const status = typeof req.query.status === 'string' ? req.query.status : null;
     const sortCol = normalizeSortColumn(req.query.sort)
     const sortOrder = normalizeSortOrder(req.query.order)
     const headerProfileId = typeof req.headers['x-profile-id'] === 'string' ? req.headers['x-profile-id'] : null

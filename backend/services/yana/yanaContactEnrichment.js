@@ -58,16 +58,19 @@ export function extractEmailsFromHtml(html) {
  */
 export function htmlToText(html, maxChars = 1200) {
   if (!html || typeof html !== 'string') return null
+  // Decode entities BEFORE stripping tags: decoding after strip lets inert
+  // encoded text ("&lt;script&gt;") reappear as a live tag the strip step
+  // already ran past (js/double-escaping + js/bad-tag-filter).
   const text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&#39;|&apos;/gi, "'")
     .replace(/&quot;/gi, '"')
     .replace(/&[a-z]+;/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   if (!text) return null
