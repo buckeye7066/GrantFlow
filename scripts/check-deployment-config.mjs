@@ -60,6 +60,44 @@ const nvmrc = readText('.nvmrc').trim()
 const nodeRuntimeVersion = '20.20.2'
 const nodeEngineRange = '>=20.19.0 <21'
 
+function checkWorkflowNodeRuntimePins() {
+  const workflowsDir = path.join(root, '.github', 'workflows')
+  let workflowNames = []
+  try {
+    workflowNames = fs.readdirSync(workflowsDir).filter((name) => /\.ya?ml$/i.test(name))
+  } catch (error) {
+    failures.push(`.github/workflows: could not enumerate workflows (${error?.message || error})`)
+    return
+  }
+
+  for (const workflowName of workflowNames) {
+    const relativePath = path.join('.github', 'workflows', workflowName)
+    const source = readText(relativePath)
+    if (!source.includes('actions/setup-node@')) continue
+
+    const setupNodeCount = (source.match(/actions\/setup-node@/g) || []).length
+    const inlinePins = [...source.matchAll(/^\s*node-version:\s*['"]?([^'"\s#]+)['"]?/gm)]
+      .map((match) => match[1])
+    const nvmrcPins = [...source.matchAll(/^\s*node-version-file:\s*['"]?([^'"\s#]+)['"]?/gm)]
+      .map((match) => match[1])
+    const invalidInlinePins = inlinePins.filter((version) => version !== nodeRuntimeVersion)
+    const invalidFilePins = nvmrcPins.filter((file) => file !== '.nvmrc')
+
+    assert(
+      inlinePins.length + nvmrcPins.length === setupNodeCount,
+      `${relativePath} must provide exactly one runtime pin for each setup-node step (${setupNodeCount} steps, ${inlinePins.length + nvmrcPins.length} pins)`,
+    )
+    assert(
+      invalidInlinePins.length === 0,
+      `${relativePath} must pin Node ${nodeRuntimeVersion}; found ${invalidInlinePins.join(', ')}`,
+    )
+    assert(
+      invalidFilePins.length === 0,
+      `${relativePath} must use .nvmrc for node-version-file; found ${invalidFilePins.join(', ')}`,
+    )
+  }
+}
+
 const railwayApi = 'https://grantflow-production.up.railway.app/api/:path*'
 const railwayUploads = 'https://grantflow-production.up.railway.app/uploads/:path*'
 
@@ -198,6 +236,7 @@ assert(Number(railway?.deploy?.restartPolicyMaxRetries || 0) >= 3, 'Railway rest
 assert(pkg?.engines?.node === nodeEngineRange, `package.json must require the supported Node range ${nodeEngineRange}`)
 assert(lock?.packages?.['']?.engines?.node === pkg?.engines?.node, 'package-lock root engine must match package.json')
 assert(nvmrc === nodeRuntimeVersion, `.nvmrc must pin the verified Node runtime ${nodeRuntimeVersion}`)
+checkWorkflowNodeRuntimePins()
 // Escape every regex metacharacter, not just `.` (js/incomplete-sanitization)
 // — nodeRuntimeVersion is a trusted local config value today, but a helper
 // that escapes only one character is the wrong general habit to establish.
