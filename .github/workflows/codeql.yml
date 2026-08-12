@@ -51,10 +51,17 @@ jobs:
         id: analyze
         uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
-          # This private repo does not currently have GitHub Advanced Security
-          # purchased, so Code Scanning uploads fail with a configuration error.
-          # Keep the analysis real, retain SARIF, and enforce the measured baseline.
-          upload: never
+          # This repo is PUBLIC, so Code Scanning / GitHub Advanced Security is
+          # free and unrestricted — no purchase needed. `upload: never` was set
+          # 2026-06-28 when the repo was private and uploads genuinely failed
+          # with a configuration error; that premise is stale now that the repo
+          # is public (verified live via `gh api repos/.../GrantFlow` ->
+          # visibility: public). Uploading keeps the Security tab's alert set
+          # reconciled against real code instead of frozen against whatever was
+          # last uploaded (2026-03-12, five months of drift). Keep the local
+          # baseline enforcement below in addition — it is a stricter pre-merge
+          # gate than what Security-tab reconciliation alone provides.
+          upload: always
 
       - name: Require full-scan SARIF output
         if: github.event_name != 'pull_request'
