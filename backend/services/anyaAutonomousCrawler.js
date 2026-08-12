@@ -38,6 +38,13 @@ async function resolveTrustedScanRoot(directory, context = {}) {
     ? (path.isAbsolute(directory) ? path.resolve(directory) : path.resolve(trustedRoot, directory))
     : trustedRoot
 
+  // Validate the RAW resolved path is inside the trusted root before it ever
+  // touches the filesystem (fs.realpath below still re-checks after symlink
+  // resolution, since a symlink inside the trusted root could point outside it).
+  if (!pathIsInside(trustedRoot, requested)) {
+    throw pathScopeError('Requested scan directory is outside the trusted repository root')
+  }
+
   let rootDir
   try {
     rootDir = await fs.realpath(requested)

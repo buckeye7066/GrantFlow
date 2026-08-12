@@ -100,12 +100,21 @@ const DIRECTORY_HOSTS = Object.freeze([
   'disabilityincomespecialists.com',
 ])
 
+// Escape EVERY regex metacharacter, not just `.` — the hostname lists above
+// are hardcoded today, but a helper that only escapes one character reads to
+// CodeQL as incomplete sanitization (js/incomplete-sanitization), and a
+// future entry containing e.g. `+` or `(` would otherwise corrupt the regex
+// instead of being matched literally.
+function escapeRegExpForHost(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 const RE_BENEFIT_HOST = new RegExp(
-  `^https?:\\/\\/(?:www\\.)?(?:${BENEFIT_HOSTS.map((h) => h.replace(/\./g, '\\.')).join('|')})(?:[/?#]|$)`,
+  `^https?:\\/\\/(?:www\\.)?(?:${BENEFIT_HOSTS.map((h) => escapeRegExpForHost(h)).join('|')})(?:[/?#]|$)`,
   'i',
 )
 const RE_DIRECTORY_HOST = new RegExp(
-  `^https?:\\/\\/(?:www\\.)?(?:${DIRECTORY_HOSTS.map((h) => h.replace(/\./g, '\\.')).join('|')})(?:[/?#]|$)`,
+  `^https?:\\/\\/(?:www\\.)?(?:${DIRECTORY_HOSTS.map((h) => escapeRegExpForHost(h)).join('|')})(?:[/?#]|$)`,
   'i',
 )
 

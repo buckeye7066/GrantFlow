@@ -234,7 +234,10 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
       const failedCount = dispatchResults.filter(r => !r.dispatched).length
       if (failedCount > 0) {
         console.warn(
-          `[anyaLoginTrigger] ${failedCount}/${dispatchResults.length} crawler jobs failed to dispatch for profileId=${profileId}`,
+          '[anyaLoginTrigger] %s/%s crawler jobs failed to dispatch for profileId=%s',
+          failedCount,
+          dispatchResults.length,
+          profileId,
           dispatchResults.filter(r => !r.dispatched)
         )
       } else {

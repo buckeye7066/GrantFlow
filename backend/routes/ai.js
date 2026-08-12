@@ -46,6 +46,7 @@ import {
 } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
+import { stripHtmlToPlainText } from '../utils/htmlTextHygiene.js'
 import { buildLanguageDirectiveForProfileAsync } from '../services/languagePreference.js'
 import {
   todoSectionIsComplete,
@@ -1345,12 +1346,7 @@ router.post('/portal-assist', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_A
         userAgent: 'GrantFlow Application Assistant/1.0',
       })
       if (remote.ok) {
-        portalContent = remote.body
-          .replace(/<script[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[\s\S]*?<\/style>/gi, '')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s{2,}/g, ' ')
-          .slice(0, 12000)
+        portalContent = stripHtmlToPlainText(remote.body).slice(0, 12000)
       } else {
         routeLogger.warn('[portal-assist] remote portal read refused or failed', {
           reason: remote.reason || remote.error || 'remote_fetch_failed',

@@ -323,8 +323,13 @@ export async function safeFetch(url, init = {}, opts = {}) {
   const maxRedirects = Number.isFinite(opts.maxRedirects)
     ? Math.max(0, Math.trunc(opts.maxRedirects))
     : DEFAULT_MAX_REDIRECTS
+  // Bound on both ends: safeFetch is the shared egress choke point, and some
+  // callers ultimately derive timeoutMs from admin-supplied request bodies
+  // several layers up. An unbounded ceiling lets a very large value tie up a
+  // fetch/timer (and the awaited promise chain above it) for hours, which is
+  // a resource-exhaustion vector even where the immediate caller is trusted.
   const timeoutMs = Number.isFinite(opts.timeoutMs)
-    ? Math.max(1, Math.trunc(opts.timeoutMs))
+    ? Math.min(Math.max(1, Math.trunc(opts.timeoutMs)), 120_000)
     : DEFAULT_TIMEOUT_MS
 
   let currentUrl = String(url || '')

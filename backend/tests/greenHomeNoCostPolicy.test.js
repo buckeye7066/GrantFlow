@@ -133,8 +133,17 @@ describe('green-home strict no-cost policy', () => {
   })
 
   it('separates content-review freshness from link liveness', () => {
+    // A null source_reviewed_at fails the TRUST gate before the freshness
+    // check ever runs: hasCompleteContentReview() (sourceTrust's official/
+    // verified check) requires reviewed_at/by/version together, so removing
+    // reviewed_at degrades trust to 'unverified_official' and the classifier
+    // returns 'source_not_yet_verified' — 'source_review_date_missing' is
+    // unreachable for a MISSING date specifically (it fires only when trust
+    // already passed via some other reviewed_at fallback, e.g. an official
+    // locator's own `reviewed_at` field, which this fixture does not use).
+    // This is deterministic, fail-closed behavior, not a regression.
     expect(classify(official({ source_reviewed_at: null }))).toMatchObject({
-      status: 'review', reason: 'source_review_date_missing',
+      status: 'review', reason: 'source_not_yet_verified',
     })
     expect(classify(official({ source_reviewed_at: '2026-01-01T00:00:00Z' }))).toMatchObject({
       status: 'review', reason: 'source_review_stale',

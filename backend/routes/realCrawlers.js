@@ -869,7 +869,11 @@ function getCrawlerDescription(type) {
 // regular authenticated user — that would allow cross-tenant profile enumeration
 // and profile-ID harvesting for downstream IDOR.
 router.get('/find-profile', ensureAdmin, async (req, res) => {
-  const name = req.query.name || ''
+  // Express parses `?name[]=a&name[]=b` / `?name[x]=y` into an array or
+  // object rather than a string. `.length` on an object is `undefined`,
+  // which silently passes the `< 2` guard below (parameter-tampering /
+  // type-confusion), letting non-string input reach the LIKE query build.
+  const name = typeof req.query.name === 'string' ? req.query.name : ''
   if (!name || name.length < 2) return res.json({ error: 'Provide ?name=... (at least 2 chars)' })
   try {
     const db = req.db

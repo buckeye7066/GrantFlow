@@ -123,12 +123,12 @@ assert(csp.includes("default-src 'self'"), 'CSP must default to self')
 assert(csp.includes("object-src 'none'"), 'CSP must block plugin/object execution')
 assert(csp.includes("frame-ancestors 'none'"), 'CSP must block clickjacking via frame-ancestors')
 assert(csp.includes("connect-src 'self'"), 'CSP must allow same-origin API calls')
-assert(csp.includes('https://grantflow-production.up.railway.app'), 'CSP must allow the production Railway backend')
 // Exact-token check, not a substring: `csp.includes('ingest.sentry.io')` would
 // pass with the host in the wrong directive (or inside another host), and it
 // reads to CodeQL as incomplete URL substring sanitization. Browser Sentry
 // ingestion specifically needs the wildcard token in connect-src.
 const connectSrcTokens = String(csp.split(';').map((d) => d.trim()).find((d) => d.startsWith('connect-src')) || '').split(/\s+/).slice(1)
+assert(connectSrcTokens.includes('https://grantflow-production.up.railway.app'), 'CSP connect-src must carry the exact production Railway backend token')
 assert(connectSrcTokens.includes('https://*.ingest.sentry.io'), 'CSP connect-src must carry the exact https://*.ingest.sentry.io token for browser Sentry ingestion')
 assert(!/script-src[^;]*\*/.test(csp), 'CSP script-src must not use a wildcard')
 assert(!/script-src[^;]*unsafe-eval/.test(csp), 'CSP script-src must not allow unsafe-eval')
@@ -198,8 +198,12 @@ assert(Number(railway?.deploy?.restartPolicyMaxRetries || 0) >= 3, 'Railway rest
 assert(pkg?.engines?.node === nodeEngineRange, `package.json must require the supported Node range ${nodeEngineRange}`)
 assert(lock?.packages?.['']?.engines?.node === pkg?.engines?.node, 'package-lock root engine must match package.json')
 assert(nvmrc === nodeRuntimeVersion, `.nvmrc must pin the verified Node runtime ${nodeRuntimeVersion}`)
+// Escape every regex metacharacter, not just `.` (js/incomplete-sanitization)
+// — nodeRuntimeVersion is a trusted local config value today, but a helper
+// that escapes only one character is the wrong general habit to establish.
+const escapedNodeRuntimeVersion = nodeRuntimeVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 assert(
-  (dockerfile.match(new RegExp(`FROM node:${nodeRuntimeVersion.replace(/\./g, '\\.')}\\-slim`, 'g')) || []).length === 2,
+  (dockerfile.match(new RegExp(`FROM node:${escapedNodeRuntimeVersion}\\-slim`, 'g')) || []).length === 2,
   `both Docker build and runtime stages must use Node ${nodeRuntimeVersion}`,
 )
 

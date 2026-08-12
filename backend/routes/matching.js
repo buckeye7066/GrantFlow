@@ -799,7 +799,7 @@ router.get('/profile/:profileId/matching-gaps', async (req, res) => {
         .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
         .all(String(profileId))
     } catch (err) {
-      console.warn(`[matching] profile_sections load failed for profile=${profileId}:`, err?.message || err)
+      console.warn('[matching] profile_sections load failed for profile=%s:', profileId, err?.message || err)
       sectionRows = []
     }
 
@@ -808,7 +808,9 @@ router.get('/profile/:profileId/matching-gaps', async (req, res) => {
         acc[row.section_key] = row.data ? JSON.parse(row.data) : {}
       } catch (err) {
         console.warn(
-          `[matching] profile_sections JSON parse failed profile=${profileId} section=${row.section_key}:`,
+          '[matching] profile_sections JSON parse failed profile=%s section=%s:',
+          profileId,
+          row.section_key,
           err?.message || err,
         )
         acc[row.section_key] = {}
@@ -867,7 +869,7 @@ router.get('/profile/:profileId/matching-gaps', async (req, res) => {
       ).get(String(profileId))
       docCount = docRow?.cnt ?? 0
     } catch (err) {
-      console.warn(`[matching] documents count failed for profile=${profileId}:`, err?.message || err)
+      console.warn('[matching] documents count failed for profile=%s:', profileId, err?.message || err)
       docCount = 0
     }
 

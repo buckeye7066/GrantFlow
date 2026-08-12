@@ -169,7 +169,15 @@ export async function checkUrl(url, opts = {}) {
     return { status: 'skipped', code: null, method: null, error: `ssrf_blocked:${ssrf.reason}` }
   }
 
-  const timeoutMs = Number.isFinite(opts?.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT_MS
+  // Bound whatever the caller passes: `checkUrl` is exported and reused by
+  // several callers (some derive `timeoutMs` from an admin-supplied request
+  // body several layers up), so this shared choke point must not trust an
+  // unbounded value even when a specific caller already clamps its own copy
+  // — an untrusted, very large timeout ties up a fetch/timer for a long time
+  // per call (resource exhaustion).
+  const timeoutMs = Number.isFinite(opts?.timeoutMs)
+    ? Math.max(1000, Math.min(60_000, opts.timeoutMs))
+    : REQUEST_TIMEOUT_MS
 
   const tryProbe = async (method) => {
     try {

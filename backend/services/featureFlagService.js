@@ -374,10 +374,18 @@ export function getFlagOverrides(db, { userId = null, profileId = null }) {
 /**
  * Simple hash function for percentage rollout
  */
+// Cap iteration to a sane bound: `str` is built from userId+flagKey, and an
+// unbounded loop count derived from external input is a resource-exhaustion
+// vector (js/loop-bound-injection) even though both inputs are normally
+// short. Anything past this length is truncated for hashing purposes only —
+// rollout bucketing degrading slightly on a pathological input is fine.
+const SIMPLE_HASH_MAX_CHARS = 4096
+
 function simpleHash(str) {
   let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i)
+  const bounded = str.length > SIMPLE_HASH_MAX_CHARS ? str.slice(0, SIMPLE_HASH_MAX_CHARS) : str
+  for (let i = 0; i < bounded.length; i++) {
+    const char = bounded.charCodeAt(i)
     hash = ((hash << 5) - hash) + char
     hash = hash & hash // Convert to 32-bit integer
   }

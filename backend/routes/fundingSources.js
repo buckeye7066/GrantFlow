@@ -81,13 +81,20 @@ export function classifyFundingSourcesError(error) {
   const code = String(error?.code || '')
   const message = String(error?.message || error || '')
 
-  if (/^Profile\s+.+\s+not found$/i.test(message)) {
+  // Bounded (`.{1,200}?`) rather than unbounded `.+` between two `\s+`
+  // boundaries: an unbounded `.` (which also matches whitespace) sandwiched
+  // between two `\s+` quantifiers lets the regex engine try many equivalent
+  // ways to split a long run of whitespace, which is a polynomial ReDoS
+  // shape. `message` is a DB driver error string, not attacker-length-bounded
+  // by anything upstream, so cap the work the same way the intent (a short
+  // identifier/name) already implies.
+  if (/^Profile\s+.{1,200}?\s+not found$/i.test(message)) {
     return { status: 404, error: 'PROFILE_NOT_FOUND', failureClass: 'profile_not_found' }
   }
-  if (code === '42703' || /no such column|column\s+.+\s+does not exist/i.test(message)) {
+  if (code === '42703' || /no such column|column\s+.{1,200}?\s+does not exist/i.test(message)) {
     return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'schema_projection_drift' }
   }
-  if (code === '42P01' || /no such table|relation\s+.+\s+does not exist/i.test(message)) {
+  if (code === '42P01' || /no such table|relation\s+.{1,200}?\s+does not exist/i.test(message)) {
     return { status: 503, error: 'FUNDING_SOURCES_UNAVAILABLE', failureClass: 'schema_table_missing' }
   }
   if (code === '57014' || /statement timeout|database is locked|SQLITE_BUSY/i.test(message)) {

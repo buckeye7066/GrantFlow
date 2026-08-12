@@ -23,14 +23,17 @@ const log = createLogger('service:outlookGrantFeeder')
 const GRANT_HINTS = /\b(grant|grants|funding|fund |rfp|rfa|nofo|notice of funding|foundation|scholarship|fellowship|award|solicitation|call for proposals|application deadline|apply by|request for (proposals|applications))\b/i
 
 function stripHtml(html) {
+  // Decode entities BEFORE stripping tags: decoding after strip lets inert
+  // encoded text ("&lt;script&gt;") reappear as a live tag the strip step
+  // already ran past (js/double-escaping + js/bad-tag-filter).
   return String(html || '')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }

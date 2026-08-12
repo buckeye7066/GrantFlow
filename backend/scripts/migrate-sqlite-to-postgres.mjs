@@ -27,10 +27,21 @@ function isTruthy(v) {
 
 function shouldUseSsl(connectionString) {
   if (!connectionString) return false
+  // Parse the actual host/query instead of substring-matching the raw
+  // connection string, so a value like "postgres://x@evil-proxy.rlwy.net.attacker.example/db"
+  // or a password/db-name that happens to contain "localhost" can't flip the
+  // SSL decision the wrong way.
+  let parsed
+  try {
+    parsed = new URL(connectionString)
+  } catch {
+    return true
+  }
+  const host = (parsed.hostname || '').toLowerCase()
   // Railway public proxy almost always requires SSL.
-  if (connectionString.includes('proxy.rlwy.net')) return true
-  if (connectionString.includes('sslmode=require')) return true
-  if (connectionString.includes('localhost') || connectionString.includes('127.0.0.1')) return false
+  if (host === 'proxy.rlwy.net' || host.endsWith('.proxy.rlwy.net')) return true
+  if ((parsed.searchParams.get('sslmode') || '').toLowerCase() === 'require') return true
+  if (host === 'localhost' || host === '127.0.0.1') return false
   return true
 }
 

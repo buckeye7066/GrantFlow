@@ -154,9 +154,25 @@ function normalizePostgresParams(values) {
   })
 }
 
+// A hand-written or template-built SQL statement is always far smaller than
+// this. Some callers build an IN-clause placeholder list whose length scales
+// with a caller-supplied array (e.g. a bulk id list from a request body), so
+// the character-by-character scan below has a loop bound that can trace back
+// to external input with no cap (js/loop-bound-injection / resource
+// exhaustion). Reject outright rather than silently truncate — a truncated
+// SQL string is a corrupted, potentially unsafe query, not a safe fallback.
+const MAX_SQL_STATEMENT_LENGTH = 500_000;
+
+function assertSqlWithinLengthBudget(sql) {
+  if (typeof sql === 'string' && sql.length > MAX_SQL_STATEMENT_LENGTH) {
+    throw new Error(`SQL statement exceeds ${MAX_SQL_STATEMENT_LENGTH} characters (${sql.length}) — refusing to prepare`);
+  }
+}
+
 // Convert SQLite-style `?` placeholders to Postgres-style `$1, $2, ...`.
 // We only replace placeholders that are outside of single/double-quoted strings.
 function qmarkToDollarPlaceholders(sql) {
+  assertSqlWithinLengthBudget(sql);
   let out = '';
   let idx = 0;
   let inSingle = false;
@@ -231,6 +247,7 @@ function qmarkToDollarPlaceholders(sql) {
 // Convert SQLite-style named parameters (e.g. @id) to Postgres-style ($1, $2, ...).
 // Returns the ordered parameter name list to map object bindings to an array.
 function atNameToDollarPlaceholders(sql) {
+  assertSqlWithinLengthBudget(sql);
   let out = '';
   const names = [];
   let inSingle = false;

@@ -431,11 +431,48 @@ try {
 }
 
 // Security headers (must run early, before routes).
-// Keep CSP behavior unchanged (some deployments may already set CSP at a proxy/CDN layer).
 // Allow cross-origin resource loading (e.g., Vercel frontend loading /uploads from Railway API origin).
+//
+// CSP: the primary user-facing domain (axiombiolabs.org, via Vercel) already
+// gets a reviewed CSP from the `Content-Security-Policy` header block in
+// vercel.json. This backend ALSO serves the built SPA directly as a fallback
+// (see `express.static(distPath, ...)` + `spaEntryDocument` below), which is
+// reachable straight off the Railway domain — bypassing Vercel's edge CSP
+// entirely — so a request there previously got zero CSP protection (CodeQL
+// js/insecure-helmet-configuration). Mirror the SAME proven vercel.json
+// policy here (kept in sync manually; both were live-verified against the
+// real app) instead of inventing a new, untested one. This has no effect on
+// JSON API responses (CSP only governs how a browser renders/executes a
+// navigated-to HTML document, not how it treats a fetch/XHR JSON body).
+const CONTENT_SECURITY_POLICY_DIRECTIVES = {
+  defaultSrc: ["'self'"],
+  baseUri: ["'self'"],
+  objectSrc: ["'none'"],
+  frameAncestors: ["'none'"],
+  formAction: ["'self'", 'https://checkout.stripe.com'],
+  scriptSrc: ["'self'", 'https://js.stripe.com'],
+  styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+  fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+  imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+  connectSrc: [
+    "'self'",
+    'https://grantflow-production.up.railway.app',
+    'https://*.axiombiolabs.org',
+    'https://*.vercel.app',
+    'https://*.ingest.sentry.io',
+    'https://*.ingest.us.sentry.io',
+    'wss:',
+  ],
+  frameSrc: ["'self'", 'blob:', 'https://js.stripe.com', 'https://hooks.stripe.com'],
+  mediaSrc: ["'self'", 'blob:', 'data:', 'https:'],
+  workerSrc: ["'self'", 'blob:'],
+  manifestSrc: ["'self'"],
+  upgradeInsecureRequests: [],
+};
+
 app.use(
   helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: { directives: CONTENT_SECURITY_POLICY_DIRECTIVES, useDefaults: false },
     crossOriginEmbedderPolicy: false,
     crossOriginResourcePolicy: { policy: 'cross-origin' },
     crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
@@ -534,6 +571,27 @@ app.use((req, res, next) => {
   req.storageStatus = app.locals.uploads?.storageStatus || null;
   next();
 });
+
+// Global floor rate limiter for every /api/* route (CodeQL js/missing-rate-limiting:
+// ~145 handlers had no rate-limiting middleware anywhere in their chain). This is a
+// generous per-IP ceiling meant to stop abuse/DoS, not to throttle normal use; routes
+// that need a STRICTER bound (auth/me, client-error reports, the SPA fallback, etc.)
+// layer their own tighter limiter on top via their route-specific middleware — this
+// floor still applies underneath those. Mounted here, BEFORE the raw-body webhook
+// routes below (it only counts requests; it never touches the body), so every router
+// registered anywhere after this point — including the Stripe/EVA/Twilio raw-body
+// endpoints and every JSON API router mounted much further down (health, auth, admin,
+// profiles, documents, ai, crawlers, …) — is covered without touching each route file.
+const GLOBAL_API_RATE_LIMIT_WINDOW_MS = parseInt(process.env.GLOBAL_API_RATE_LIMIT_WINDOW_MS || '60000', 10); // 1 minute
+const GLOBAL_API_RATE_LIMIT_MAX = parseInt(process.env.GLOBAL_API_RATE_LIMIT_MAX || '600', 10); // 600 req/min/IP
+const globalApiLimiter = rateLimit({
+  windowMs: GLOBAL_API_RATE_LIMIT_WINDOW_MS,
+  limit: GLOBAL_API_RATE_LIMIT_MAX,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many requests, please try again later.', error_type: 'rate_limited' },
+});
+app.use('/api', globalApiLimiter);
 
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter)
 

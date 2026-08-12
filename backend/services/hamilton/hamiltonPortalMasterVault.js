@@ -310,7 +310,9 @@ export async function getMasterVaultStatus(db, profileId) {
 export async function setAutopilotIdentity(db, { profileId, identityEmail } = {}) {
   if (!db || !profileId) throw new Error('profileId required')
   const email = identityEmail ? String(identityEmail).trim() : null
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('identityEmail must be a valid email')
+  // Bounded quantifiers avoid a polynomial ReDoS shape (see the identical
+  // pattern in backend/routes/auth.js).
+  if (email && !/^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{1,24}$/.test(email)) throw new Error('identityEmail must be a valid email')
   await ensureMasterVaultSchema(db)
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
   const existing = await getMasterVault(db, profileId)

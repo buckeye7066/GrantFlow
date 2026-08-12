@@ -650,7 +650,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
         state = la.state ?? la.primary_state ?? addrObj?.state ?? null
         // Parse state from a string address like "123 Main St, Nashville, TN 37201"
         if (!state && typeof la.address === 'string') {
-          const m = la.address.match(/\b([A-Z]{2})\s*,?\s*\d{5}/)
+          const m = la.address.match(/\b([A-Z]{2})\s{0,10},?\s{0,10}\d{5}/)
           if (m) state = m[1]
         }
       }
@@ -686,7 +686,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   if (_secondary && typeof _secondary === 'object') {
     _addState(_secondary.state ?? _secondary.region ?? null)
   } else if (typeof _secondary === 'string') {
-    const m = _secondary.match(/\b([A-Za-z]{2})\s*,?\s*\d{5}/)
+    const m = _secondary.match(/\b([A-Za-z]{2})\s{0,10},?\s{0,10}\d{5}/)
     if (m) _addState(m[1])
   }
   // Explicit states[] arrays on the profile, basic_information, or location_focus.

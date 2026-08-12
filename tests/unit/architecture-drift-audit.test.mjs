@@ -354,7 +354,10 @@ test('docs/matching-architecture.md reflects current code truth', () => {
   assert.match(
     doc,
     new RegExp(
-      'MATCHER_VERSION[^\\n]{0,80}' + MATCHER_VERSION.replace(/\./g, '\\.'),
+      // Escape every regex metacharacter (incl. backslash), not just `.`
+      // (js/incomplete-sanitization) — MATCHER_VERSION is a trusted internal
+      // semver constant today, but the narrow escape is the wrong habit.
+      'MATCHER_VERSION[^\\n]{0,80}' + MATCHER_VERSION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
     ),
     `docs must reference MATCHER_VERSION = ${MATCHER_VERSION}`,
   )
@@ -368,7 +371,7 @@ test('docs/matching-architecture.md reflects current code truth', () => {
   // Reject stale MATCHER_VERSION strings.
   for (const stale of ['2.0.0', '3.0.0']) {
     if (stale === MATCHER_VERSION) continue
-    const staleRx = new RegExp('MATCHER_VERSION[^\\n]{0,40}' + stale.replace(/\./g, '\\.'))
+    const staleRx = new RegExp('MATCHER_VERSION[^\\n]{0,40}' + stale.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     assert.equal(
       staleRx.test(doc),
       false,

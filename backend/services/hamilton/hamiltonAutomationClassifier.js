@@ -62,9 +62,17 @@ const NO_APPLICATION_RESULT_KINDS = new Set(['directory', 'awareness', 'referenc
 const FAFSA_RX = /\bfafsa\b|free\s+application\s+for\s+federal\s+student\s+aid/i
 const NOMINATION_RX = /nominat(ion|ed|or)/i
 const INSTITUTIONAL_RX = /institutional\s+aid|automatic\s+award|need-\s*based\s+aid|verified\s+by\s+the\s+(school|college|university)/i
-const SUBMIT_EMAIL_RX = /(submit|send|return|email)\s*(this|the|completed)?\s*(application|form|packet|materials|documents)?\s*(by|via|to)?\s*e[-\s]?mail/i
-const SUBMIT_FAX_RX = /(submit|send|return|fax)\s*(this|the|completed)?\s*(application|form|packet|materials|documents)?\s*(by|via|to)?\s*fax/i
-const SUBMIT_MAIL_RX = /(mail|post|send)\s*(application|form|packet|materials|documents)?\s*(to|via|by)\s*(post|mail|usps)|return\s*(this|the)\s*(application|form|packet)\s*by\s*mail|(must\s*be\s*)?postmarked/i
+// These test against crawled/scraped portal page text — untrusted, adversarial
+// input. Chaining several `(optional)?\s*` groups back to back (each of which
+// can match empty) gives the regex engine an exponential number of equivalent
+// ways to partition a run of whitespace, which is a classic polynomial/
+// catastrophic ReDoS shape. Bounding every whitespace gap to `\s{0,20}` keeps
+// the same practical matching behavior (real text never has runs of 20+
+// whitespace chars where these expect a gap) while making the state space
+// provably small regardless of input length.
+const SUBMIT_EMAIL_RX = /(submit|send|return|email)\s{0,20}(this|the|completed)?\s{0,20}(application|form|packet|materials|documents)?\s{0,20}(by|via|to)?\s{0,20}e[-\s]?mail/i
+const SUBMIT_FAX_RX = /(submit|send|return|fax)\s{0,20}(this|the|completed)?\s{0,20}(application|form|packet|materials|documents)?\s{0,20}(by|via|to)?\s{0,20}fax/i
+const SUBMIT_MAIL_RX = /(mail|post|send)\s{0,20}(application|form|packet|materials|documents)?\s{0,20}(to|via|by)\s{0,20}(post|mail|usps)|return\s{0,20}(this|the)\s{0,20}(application|form|packet)\s{0,20}by\s{0,20}mail|(must\s{0,20}be\s{0,20})?postmarked/i
 
 const PDF_DOCX_RX = /\.(pdf|docx?|rtf)(\?|#|$)/i
 const FAX_NUMBER_RX = /\bfax(?:[\s:.]+)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/i

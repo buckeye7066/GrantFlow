@@ -125,7 +125,11 @@ export const MAX_FROM_HEADER_LENGTH = 1024
 function parseFromHeader(from) {
   const raw = str(from, MAX_FROM_HEADER_LENGTH)
   if (!raw) return { email: null, name: null }
-  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<\s*([^>]+?)\s*>\s*$/)
+  // Bounded groups (matching MAX_FROM_HEADER_LENGTH above) rather than
+  // unbounded `*?`/`+?`: `\s*` sitting next to `[^"<]*?` (whose class
+  // includes whitespace) is an overlapping-quantifier shape a regex engine
+  // can backtrack through in polynomial time on a long, malformed header.
+  const m = raw.match(/^\s{0,64}"?([^"<]{0,1024}?)"?\s{0,64}<\s{0,64}([^>]{1,1024}?)\s{0,64}>\s{0,64}$/)
   if (m) return { name: str(m[1]), email: str(m[2])?.toLowerCase() ?? null }
   if (raw.includes('@')) return { email: raw.toLowerCase(), name: null }
   return { email: null, name: raw }

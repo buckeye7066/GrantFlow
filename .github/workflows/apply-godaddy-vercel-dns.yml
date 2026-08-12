@@ -11,6 +11,9 @@
 # touch the lab apex unless an operator explicitly acknowledges the consequence.
 name: Apply GoDaddy DNS for Vercel (GUARDED)
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:

@@ -49,7 +49,15 @@ export const APPLICATION_TASK_STATUSES = Object.freeze([
   'blocked',
 ])
 
-const STATUS_CHECK_RX = /CHECK\s*\(\s*status\s+IN\s*\((?:\s*'[^']*'\s*,?)+\s*\)\s*\)/i
+// The previous shape — `(?:\s*'[^']*'\s*,?)+` — put an optional `\s*` on
+// BOTH sides of every repeated iteration, so a long run of whitespace with
+// no valid trailing quote gives the engine an exponential number of
+// equivalent ways to attribute each whitespace char to iteration N's
+// trailing `\s*` vs iteration N+1's leading `\s*` (catastrophic backtracking
+// / ReDoS). Moving the whitespace to a single spot per iteration (after the
+// optional comma) removes the ambiguous seam: the next iteration must start
+// immediately with a quote, so there is nothing left to backtrack over.
+const STATUS_CHECK_RX = /CHECK\s*\(\s*status\s+IN\s*\(\s*(?:'[^']*',?\s*)*\)\s*\)/i
 
 function quotedStatusList() {
   return APPLICATION_TASK_STATUSES

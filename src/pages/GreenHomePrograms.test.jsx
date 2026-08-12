@@ -56,6 +56,13 @@ function successfulResponse() {
       source_url: 'https://www.energy.gov/cmei/scep/wap/how-apply-weatherization-assistance',
       opportunity_kind: 'directory',
       no_cost_classification: 'eligible',
+      // The real backend (greenHomeNoCostPolicy.js) only classifies a program
+      // 'eligible' after its source_trust gate passes 'official_government' or
+      // 'verified_source' — an eligible-classified fixture without this field
+      // is not a realistic backend response shape, and the component's link
+      // label (GreenHomePrograms.jsx) reads it to decide "Open official
+      // source" vs "Open reviewed source".
+      no_cost_source_trust: 'official_government',
       no_cost_evidence: 'Official free weatherization assistance path.',
       upgrades: ['energy audit', 'insulation', 'air sealing'],
       eligibility_bullets: ['The local provider determines eligibility and covered work.'],
