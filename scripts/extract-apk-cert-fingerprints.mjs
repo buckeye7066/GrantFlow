@@ -2,7 +2,7 @@ import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
 const SIGNER_SHA256_LINE =
-  /^Signer(?: #\d+| \([^\r\n]*\)) certificate SHA-256 digest:\s*([0-9a-f:]+)\s*$/i
+  /^(?:Signer(?: #\d+| \([^\r\n]*\))|V\d+ Signer:) certificate SHA-256 digest:\s*([0-9a-f:]+)\s*$/i
 
 export function extractApkSignerSha256Digests(output) {
   return [...new Set(
