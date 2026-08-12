@@ -195,7 +195,7 @@ test('migration-set hash changes when a migration byte changes', () => {
   assert.notEqual(after.files[0].sha256, before.files[0].sha256)
 })
 
-test('database identity requires stored checksums matching the exact ordered release set', async () => {
+test('database identity requires stored checksums matching the exact canonical release set', async () => {
   const repoRoot = fixtureRepo()
   clearReleaseIdentityCaches()
   const releaseIdentity = buildRepositoryReleaseIdentity({
@@ -236,8 +236,10 @@ test('database identity requires stored checksums matching the exact ordered rel
     repoRoot,
     releaseIdentity,
   })
-  assert.equal(reversed.matches_release, false)
+  assert.equal(reversed.matches_release, true)
   assert.equal(reversed.order_matches, false)
+  assert.equal(reversed.name_parity_matches, true)
+  assert.equal(reversed.applied_sha256, reversed.expected_sha256)
 
   const missing = await buildDatabaseMigrationIdentity(fakeDb(rows.slice(0, 1)), {
     repoRoot,
