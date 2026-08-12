@@ -13,7 +13,6 @@
   "nav.reports": "Звіти та аналітика",
   "nav.billing": "Виставлення рахунків",
   "nav.adminPanel": "Панель адміністратора",
-
   "nav.group.home": "Головна",
   "nav.group.help": "Довідка",
   "nav.group.setup": "Налаштування",
@@ -21,13 +20,13 @@
   "nav.group.work": "Робота",
   "nav.group.track": "Відстеження та звіти",
   "nav.group.admin": "Адміністрування / Операції",
-
   "nav.helpCenter": "Центр довідки",
   "nav.fundingResults": "Результати фінансування",
   "nav.smartMatcher": "Розумний підбір",
   "nav.profileMatcher": "Підбір за профілем",
   "nav.fundingOpportunities": "Можливості фінансування",
   "nav.fundingLibrary": "Бібліотека фінансування",
+  "nav.greenHomePrograms": "Безкоштовні екологічні покращення оселі",
   "nav.foundationSearch": "Пошук фондів",
   "nav.funder": "Донор",
   "nav.dataSources": "Джерела даних",
@@ -46,7 +45,6 @@
   "nav.diagnostics": "Діагностика",
   "nav.crawlCoverage": "Охоплення сканування",
   "nav.incognito": "Інкогніто",
-
   "breadcrumb.home": "Головна",
   "route.organization": "Організація",
   "route.profile": "Профіль",
@@ -55,7 +53,6 @@
   "route.apply": "Подати заявку",
   "route.application": "Заявка",
   "route.finishApplication": "Завершити заявку",
-
   "layout.grantSuite": "Набір для управління грантами",
   "layout.headerSubtitle": "Робочий простір для управління грантами за допомогою ШІ",
   "layout.userManual": "Посібник користувача",
@@ -70,10 +67,8 @@
   "layout.createdBy": "Створено",
   "layout.switchToLight": "Перемкнути на світлу тему",
   "layout.switchToDark": "Перемкнути на темну тему",
-
   "language.partialTag": "частково",
   "language.partialNotice": "Меню та основні дії перекладено. Частина вмісту сторінок усе ще відображається англійською.",
-
   "common.save": "Зберегти",
   "common.cancel": "Скасувати",
   "common.next": "Далі",
@@ -83,16 +78,13 @@
   "common.loading": "Завантаження…",
   "common.search": "Пошук",
   "common.close": "Закрити",
-
   "profile.setUp": "Налаштуйте свій профіль",
   "profile.create": "Створити профіль",
   "profile.findFunding": "Знайти фінансування",
-
   "language.picker.title": "Виберіть мову",
   "language.picker.subtitle": "Я можу допомогти вам зручною для вас мовою. Яку ви хочете використовувати?",
   "language.switcher.label": "Мова",
   "language.saved": "Мову оновлено",
-
   "anya.greeting": "Привіт! Я Аня, ваш помічник у GrantFlow.",
   "anya.intro": "Я допоможу вам знайти гранти, що відповідають вашому профілю, поясню те, що ви бачите, проведу вас по воронці та відповім на запитання про процес подання заявки.",
   "anya.letsGo": "Почнемо",

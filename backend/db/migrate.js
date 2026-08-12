@@ -12,6 +12,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { getDb } from './index.js';
+import {
+  APPLIED_BYTES_PROVENANCE,
+  IDEMPOTENT_RECORD_PROVENANCE,
+  ensureMigrationIntegrityColumns,
+  migrationFileChecksum,
+  recordMigrationApplied,
+  verifyOrBaselineMigrationLedger,
+} from './migrationIntegrity.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,25 +86,7 @@ function listSqlMigrations(dir) {
 }
 
 async function ensureMigrationsTable() {
-  if (db.dialect === 'postgres') {
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS _migrations (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE,
-        applied_at TIMESTAMPTZ DEFAULT now()
-      );
-    `);
-    return;
-  }
-
-  // sqlite
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS _migrations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+  await ensureMigrationIntegrityColumns(db)
 }
 
 async function getAppliedSet() {
@@ -106,6 +96,7 @@ async function getAppliedSet() {
 
 async function applyMigration(filename) {
   const fullPath = path.join(migrationsDir, filename);
+  const checksumSha256 = migrationFileChecksum(fullPath);
 
   console.log(`Applying: ${filename}`);
 
@@ -125,12 +116,12 @@ async function applyMigration(filename) {
     if (db.dialect === 'postgres') {
       await db.withTransaction(async (tx) => {
         await fn(tx)
-        await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename)
+        await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE)
       })
     } else {
       await db.withTransaction(async (tx) => {
         await fn(tx)
-        await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename)
+        await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE)
       })
     }
     return
@@ -141,10 +132,10 @@ async function applyMigration(filename) {
   if (db.dialect === 'postgres') {
     await db.withTransaction(async (tx) => {
       await tx.exec(sql);
-      await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+      await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE);
     });
   } else if (sql.includes('@sqlite-continue-on-idempotent-errors')) {
-    await db.withTransaction((tx) => {
+    await db.withTransaction(async (tx) => {
       const statements = sql
         .split('\n')
         .filter((line) => !line.trimStart().startsWith('--'))
@@ -160,16 +151,16 @@ async function applyMigration(filename) {
           console.log(`  ↪ Skipped already-applied statement (${err?.message || err})`)
         }
       }
-      tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+      await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE);
     });
   } else {
     // IMPORTANT: must await — the sqlite withTransaction is async (manual
     // BEGIN/COMMIT) and without awaiting we'd return before COMMIT, which
     // previously caused the caller to log "Success" while the INSERT into
     // _migrations never landed, looping the same migration every boot.
-    await db.withTransaction((tx) => {
+    await db.withTransaction(async (tx) => {
       tx.exec(sql);
-      tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+      await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE);
     });
   }
 }
@@ -295,7 +286,14 @@ export function summarizeBootHealthLine({ missingCols = [], missingTables = [], 
 
 async function recordAsApplied(filename, note) {
   try {
-    await db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+    const fullPath = path.join(migrationsDir, filename)
+    const checksumSha256 = migrationFileChecksum(fullPath)
+    await recordMigrationApplied(
+      db,
+      filename,
+      checksumSha256,
+      IDEMPOTENT_RECORD_PROVENANCE,
+    );
     console.log(`  ↪ Recorded as applied (${note})`);
   } catch (e) {
     // If it was recorded concurrently, treat as success.
@@ -324,8 +322,12 @@ async function main() {
   await ensureSqliteBaseSchema()
   await ensureMigrationsTable();
 
-  const applied = await getAppliedSet();
   const files = listSqlMigrations(migrationsDir);
+  const integrity = await verifyOrBaselineMigrationLedger(db, migrationsDir, files)
+  console.log(
+    `Migration checksum ledger: checked=${integrity.checked} applied_bytes=${integrity.applied_bytes} baselined=${integrity.baselined} legacy_or_idempotent=${integrity.legacy_or_idempotent}`,
+  )
+  const applied = await getAppliedSet();
   const pending = files.filter((f) => !applied.has(f));
 
   console.log(`Applied migrations: ${applied.size}`);

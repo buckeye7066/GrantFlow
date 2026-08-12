@@ -10,9 +10,11 @@ import {
   safeFetchOrNull,
   SsrfBlockedError,
   readTextCapped,
+  readBufferCapped,
   discardResponseBody,
   mergeAbortSignals,
 } from '../services/http/safeFetch.js'
+import { isPrivateIp } from '../config/urlRules.js'
 
 const PUBLIC_URL = 'http://93.184.216.34/start'
 const METADATA_URL = 'http://169.254.169.254/latest/meta-data/'
@@ -384,6 +386,27 @@ describe('response body cleanup and caps', () => {
     expect(destroy).toHaveBeenCalled()
   })
 
+  it('caps Web binary bodies while reporting truncation', async () => {
+    const res = new Response(Buffer.alloc(256, 7), { status: 200 })
+    const result = await readBufferCapped(res, 100)
+    expect(result.buffer.length).toBe(100)
+    expect(result.truncated).toBe(true)
+  })
+
+  it('caps Node binary streams incrementally and destroys them', async () => {
+    const stream = Readable.from([
+      Buffer.alloc(80, 1),
+      Buffer.alloc(80, 2),
+    ])
+    const destroy = vi.spyOn(stream, 'destroy')
+
+    const result = await readBufferCapped({ body: stream }, 100)
+
+    expect(result.buffer.length).toBe(100)
+    expect(result.truncated).toBe(true)
+    expect(destroy).toHaveBeenCalled()
+  })
+
   it('returns short bodies intact', async () => {
     const res = new Response('short', { status: 200 })
     await expect(readTextCapped(res, 1000)).resolves.toBe('short')
@@ -398,4 +421,21 @@ describe('response body cleanup and caps', () => {
     expect(housing).toMatch(/await discardResponseBody\(res2\)/)
     expect(verifier).toMatch(/await discardResponseBody\(res\)/)
   })
+})
+
+
+describe('canonical IPv6 private-range classification', () => {
+  it.each(['fe80::1', 'fe90::1', 'fea0::1', 'febf::1', 'fe80::1%eth0'])(
+    'blocks the complete link-local range for %s',
+    (address) => {
+      expect(isPrivateIp(address)).toBe(true)
+    },
+  )
+
+  it.each(['fc00::1', 'fdff::1'])(
+    'continues to block unique-local IPv6 address %s',
+    (address) => {
+      expect(isPrivateIp(address)).toBe(true)
+    },
+  )
 })

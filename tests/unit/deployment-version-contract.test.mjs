@@ -8,6 +8,7 @@ import {
   deploymentVersionPlugin,
   resolveDeploymentCommit,
 } from '../../scripts/deployment-version-plugin.mjs'
+import { buildRepositoryReleaseIdentity } from '../../shared/releaseIdentity.js'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -23,28 +24,61 @@ test('frontend deployment receipt accepts only an exact provider commit SHA', ()
   })
 })
 
-test('Vite emits a privacy-safe exact frontend deployment receipt', () => {
-  let emitted = null
-  deploymentVersionPlugin({ env: { VERCEL_GIT_COMMIT_SHA: 'b'.repeat(40) } })
-    .generateBundle.call({ emitFile: (asset) => { emitted = asset } })
+test('Vite emits matching deployment and release-identity receipts', () => {
+  const commit = 'b'.repeat(40)
+  const emitted = []
+  deploymentVersionPlugin({
+    env: { VERCEL_GIT_COMMIT_SHA: commit },
+    repoRoot,
+  }).generateBundle.call({
+    emitFile(asset) {
+      emitted.push(asset)
+    },
+  })
 
-  assert.equal(emitted.fileName, 'assets/deployment-version.json')
-  const receipt = JSON.parse(emitted.source)
+  const byName = new Map(emitted.map((asset) => [asset.fileName, asset]))
+  assert.deepEqual([...byName.keys()].sort(), [
+    'assets/deployment-version.json',
+    'assets/release-identity.json',
+  ])
+
+  const releaseIdentity = JSON.parse(byName.get('assets/release-identity.json').source)
+  const expectedIdentity = buildRepositoryReleaseIdentity({ repoRoot, commit })
+  assert.deepEqual(releaseIdentity, expectedIdentity)
+
+  const receipt = JSON.parse(byName.get('assets/deployment-version.json').source)
   assert.deepEqual(receipt, {
-    contract: 'grantflow-frontend-deployment-version-v1',
-    commit: 'b'.repeat(40),
+    contract: 'grantflow-frontend-deployment-version-v2',
+    commit,
     source: 'VERCEL_GIT_COMMIT_SHA',
+    release_manifest_sha256: expectedIdentity.manifest_sha256,
+    evidence_artifact_sha256: expectedIdentity.evidence_artifact.sha256,
   })
 })
 
-test('deployment proof independently checks the frontend artifact and backend API', () => {
-  const proof = fs.readFileSync(path.join(repoRoot, 'scripts/production-deployment-proof.mjs'), 'utf8')
+test('deployment proof binds frontend, backend, database migrations, and evidence artifact', () => {
+  const proof = fs.readFileSync(
+    path.join(repoRoot, 'scripts/production-deployment-proof.mjs'),
+    'utf8',
+  )
   const config = JSON.parse(fs.readFileSync(path.join(repoRoot, 'vercel.json'), 'utf8'))
-  assert.match(proof, /Vercel frontend commit matches certified branch/)
-  assert.match(proof, /Railway backend commit matches certified branch/)
-  assert.match(proof, /\/deployment-version\.json/)
+  const dockerfile = fs.readFileSync(path.join(repoRoot, 'Dockerfile'), 'utf8')
+
+  assert.match(proof, /Vercel frontend release manifest matches local release/)
+  assert.match(proof, /Railway backend release manifest matches Vercel/)
+  assert.match(proof, /Production database migration identity matches release/)
+  assert.match(proof, /Release evidence artifact hash matches/)
+  assert.match(proof, /\/release-identity\.json/)
   assert.ok(config.rewrites.some((rule) => rule.source === '/deployment-version.json'))
-  assert.ok(config.headers.some((rule) =>
-    rule.source === '/deployment-version.json'
-    && rule.headers?.some((header) => header.key === 'Cache-Control' && /no-store/.test(header.value))))
+  assert.ok(config.rewrites.some((rule) => rule.source === '/release-identity.json'))
+  for (const source of ['/deployment-version.json', '/release-identity.json']) {
+    assert.ok(config.headers.some((rule) =>
+      rule.source === source
+      && rule.headers?.some((header) =>
+        header.key === 'Cache-Control' && /no-store/.test(header.value))))
+  }
+  assert.match(
+    dockerfile,
+    /docs\/production-readiness\/grantflow\.md\s+\.\/docs\/production-readiness\/grantflow\.md/,
+  )
 })

@@ -66,6 +66,18 @@ function normalizeResolution(records) {
     .filter((record) => record.address && (record.family === 4 || record.family === 6))
 }
 
+/** True only for loopback names or addresses. */
+function isLoopbackOnly(value) {
+  let address = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
+  if (!address) return false
+  if (address === 'localhost' || address.endsWith('.localhost') || address === '::1') return true
+  const mapped = address.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  if (mapped) address = mapped[1]
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(address)) return false
+  const octets = address.split('.').map(Number)
+  return octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) && octets[0] === 127
+}
+
 /**
  * Validate and resolve a single URL. The returned address is the exact address
  * that must be used for the socket connection; callers must not resolve again.
@@ -73,6 +85,7 @@ function normalizeResolution(records) {
  * @param {string} url
  * @param {Object} [opts]
  * @param {Function} [opts.resolve] testable DNS resolver
+ * @param {boolean} [opts.allowTestLoopback] ignored unless NODE_ENV=test and the URL host itself is loopback
  * @returns {Promise<{ url: string, host: string, address: string, family: 4|6 }>}
  */
 export async function assertEgressAllowed(url, opts = {}) {
@@ -95,7 +108,14 @@ export async function assertEgressAllowed(url, opts = {}) {
   }
 
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  if (SSRF_BLOCKED_HOSTS.has(host)) {
+  // Hermetic tests may opt into the loopback interface only. The exemption is
+  // ignored outside NODE_ENV=test and never applies to a public name that
+  // resolves to loopback, RFC1918, link-local, or metadata space.
+  const allowTestLoopback =
+    opts.allowTestLoopback === true &&
+    process.env.NODE_ENV === 'test' &&
+    isLoopbackOnly(host)
+  if (SSRF_BLOCKED_HOSTS.has(host) && !allowTestLoopback) {
     throw new SsrfBlockedError(`blocked_host:${host}`, url)
   }
 
@@ -112,7 +132,8 @@ export async function assertEgressAllowed(url, opts = {}) {
   }
 
   for (const record of records) {
-    if (isPrivateIp(record.address)) {
+    const permittedTestLoopback = allowTestLoopback && isLoopbackOnly(record.address)
+    if (isPrivateIp(record.address) && !permittedTestLoopback) {
       throw new SsrfBlockedError(`resolves_private:${record.address}`, url)
     }
   }
@@ -293,6 +314,7 @@ export async function discardResponseBody(res) {
  * @param {number} [opts.timeoutMs]
  * @param {AbortSignal} [opts.signal]
  * @param {Function} [opts.resolve]
+ * @param {boolean} [opts.allowTestLoopback] test-only loopback exemption; ignored outside NODE_ENV=test
  * @param {Function} [opts.fetchImpl] test-only fetch implementation
  * @returns {Promise<Response>}
  */
@@ -314,7 +336,10 @@ export async function safeFetch(url, init = {}, opts = {}) {
 
   try {
     for (let hop = 0; hop <= maxRedirects; hop += 1) {
-      const resolved = await assertEgressAllowed(currentUrl, { resolve: opts.resolve })
+      const resolved = await assertEgressAllowed(currentUrl, {
+        resolve: opts.resolve,
+        allowTestLoopback: opts.allowTestLoopback,
+      })
       currentUrl = resolved.url
       visited.push(currentUrl)
 
@@ -366,13 +391,17 @@ export async function safeFetch(url, init = {}, opts = {}) {
 }
 
 /**
- * Read a response body as text with a hard byte cap.
+ * Read a response body as bytes with a hard streaming cap.
+ *
+ * Real network responses expose a Web or Node stream, so oversized bodies are
+ * cancelled or destroyed before the process buffers the remainder. Bodyless
+ * mocks fall back to arrayBuffer/text and are capped after conversion.
  *
  * @param {Response|Object} res
  * @param {number} [maxBytes]
- * @returns {Promise<string>}
+ * @returns {Promise<{ buffer: Buffer, truncated: boolean }>}
  */
-export async function readTextCapped(res, maxBytes = DEFAULT_MAX_BYTES) {
+export async function readBufferCapped(res, maxBytes = DEFAULT_MAX_BYTES) {
   const cap = Number.isFinite(maxBytes) ? Math.max(0, Math.trunc(maxBytes)) : DEFAULT_MAX_BYTES
   const body = res?.body
 
@@ -380,58 +409,81 @@ export async function readTextCapped(res, maxBytes = DEFAULT_MAX_BYTES) {
     const reader = body.getReader()
     const chunks = []
     let total = 0
+    let truncated = false
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       const buffer = Buffer.from(value || [])
       const remaining = cap - total
       if (remaining <= 0) {
+        truncated = true
         try { await reader.cancel() } catch { /* already closed */ }
         break
       }
       if (buffer.length > remaining) {
         chunks.push(buffer.subarray(0, remaining))
         total += remaining
+        truncated = true
         try { await reader.cancel() } catch { /* already closed */ }
         break
       }
       chunks.push(buffer)
       total += buffer.length
     }
-    return Buffer.concat(chunks, total).toString('utf8')
+    return { buffer: Buffer.concat(chunks, total), truncated }
   }
 
   if (body && typeof body[Symbol.asyncIterator] === 'function') {
     const chunks = []
     let total = 0
-    let capped = false
+    let truncated = false
     try {
       for await (const value of body) {
         const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value)
         const remaining = cap - total
         if (remaining <= 0) {
-          capped = true
+          truncated = true
           break
         }
         if (buffer.length > remaining) {
           chunks.push(buffer.subarray(0, remaining))
           total += remaining
-          capped = true
+          truncated = true
           break
         }
         chunks.push(buffer)
         total += buffer.length
       }
     } finally {
-      if (capped && typeof body.destroy === 'function') body.destroy()
+      if (truncated && typeof body.destroy === 'function') body.destroy()
     }
-    return Buffer.concat(chunks, total).toString('utf8')
+    return { buffer: Buffer.concat(chunks, total), truncated }
   }
 
-  // Simple bodyless mocks are bounded after conversion. Real network responses
-  // use one of the streaming branches above and never read an unbounded body.
-  const text = typeof res?.text === 'function' ? await res.text() : ''
-  return Buffer.from(String(text)).subarray(0, cap).toString('utf8')
+  let raw
+  if (typeof res?.arrayBuffer === 'function') {
+    raw = Buffer.from(await res.arrayBuffer())
+  } else if (typeof res?.text === 'function') {
+    raw = Buffer.from(String(await res.text()))
+  } else {
+    raw = Buffer.alloc(0)
+  }
+  return {
+    buffer: raw.subarray(0, cap),
+    truncated: raw.length > cap,
+  }
+}
+
+/**
+ * Read a response body as text with a hard byte cap.
+ *
+ * @param {Response|Object} res
+ * @param {number} [maxBytes]
+ * @returns {Promise<string>}
+ */
+export async function readTextCapped(res, maxBytes = DEFAULT_MAX_BYTES) {
+  const { buffer } = await readBufferCapped(res, maxBytes)
+  return buffer.toString('utf8')
 }
 
 /**

@@ -11,4 +11,5 @@ export function resolveDeploymentCommit(
 
 export function deploymentVersionPlugin(options?: {
   env?: Record<string, string | undefined>
+  repoRoot?: string
 }): Plugin

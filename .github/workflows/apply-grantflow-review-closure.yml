@@ -1,0 +1,125 @@
+name: Apply final GrantFlow review closure
+
+on:
+  push:
+    branches:
+      - chatgpt/production-ready/grantflow
+    paths:
+      - scripts/apply-grantflow-review-closure.mjs
+      - scripts/apply-grantflow-liheap-review-guard.mjs
+      - scripts/apply-grantflow-final-policy-fixes.mjs
+      - scripts/apply-grantflow-mission-empty-test-fix.mjs
+      - scripts/apply-grantflow-deployment-contract-test-fix.mjs
+      - .github/workflows/apply-grantflow-review-closure.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-grantflow-review-closure
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact review branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: chatgpt/production-ready/grantflow
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20.20.2
+          cache: npm
+
+      - name: Apply asserted review-closure patches
+        run: |
+          node scripts/apply-grantflow-review-closure.mjs
+          node scripts/apply-grantflow-liheap-review-guard.mjs
+          node scripts/apply-grantflow-final-policy-fixes.mjs
+          node scripts/apply-grantflow-mission-empty-test-fix.mjs
+          node scripts/apply-grantflow-deployment-contract-test-fix.mjs
+
+      - name: Validate generated JavaScript syntax
+        run: |
+          node --check backend/config/urlRules.js
+          node --check backend/services/itemNeedSearch.js
+          node --check backend/services/greenHomeNoCostPolicy.js
+          node --check backend/services/greenHomeNoCostSearch.js
+          node --check backend/services/missionHealthService.js
+          node --check scripts/production-deployment-proof.mjs
+          node --check backend/tests/safeFetchSsrf.test.js
+          node --check backend/tests/greenHomeNoCostSearch.test.js
+          node --check tests/mission/mission-health-dashboard.test.mjs
+          node --check tests/unit/no-fake-production-rule.test.mjs
+          node --check tests/unit/deployment-version-contract.test.mjs
+
+      - name: Install locked dependencies
+        run: npm ci --include=optional
+
+      - name: Run focused security, policy, and rendered-flow tests
+        run: |
+          node scripts/run-vitest-isolated.mjs run \
+            backend/tests/safeFetchSsrf.test.js \
+            backend/tests/greenHomeNoCostPolicy.test.js \
+            backend/tests/greenHomeNoCostSearch.test.js \
+            src/pages/GreenHomePrograms.test.jsx
+
+      - name: Run mission and release-proof contract tests
+        run: |
+          node --test \
+            tests/mission/mission-health-dashboard.test.mjs \
+            tests/unit/no-fake-production-rule.test.mjs \
+            tests/unit/deployment-version-contract.test.mjs
+
+      - name: Run full lint
+        run: npm run lint
+
+      - name: Run full typecheck
+        run: npm run typecheck
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Run full release gates
+        run: npm run release:gates
+
+      - name: Remove one-shot patch machinery
+        run: |
+          rm -f scripts/apply-grantflow-review-closure.mjs
+          rm -f scripts/apply-grantflow-liheap-review-guard.mjs
+          rm -f scripts/apply-grantflow-final-policy-fixes.mjs
+          rm -f scripts/apply-grantflow-mission-empty-test-fix.mjs
+          rm -f scripts/apply-grantflow-deployment-contract-test-fix.mjs
+          rm -f .github/workflows/apply-grantflow-review-closure.yml
+
+      - name: Validate final diff
+        run: |
+          git diff --check
+          test ! -e scripts/apply-grantflow-review-closure.mjs
+          test ! -e scripts/apply-grantflow-liheap-review-guard.mjs
+          test ! -e scripts/apply-grantflow-final-policy-fixes.mjs
+          test ! -e scripts/apply-grantflow-mission-empty-test-fix.mjs
+          test ! -e scripts/apply-grantflow-deployment-contract-test-fix.mjs
+          test ! -e .github/workflows/apply-grantflow-review-closure.yml
+
+      - name: Commit validated review closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "fix(review): close GrantFlow release-blocking findings"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            HEAD:chatgpt/production-ready/grantflow

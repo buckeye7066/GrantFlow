@@ -5,85 +5,208 @@
   "outputDirectory": "dist",
   "trailingSlash": false,
   "redirects": [
-    { "source": "/grantflow/welcome", "destination": "/welcome", "permanent": true },
-    { "source": "/grantflow/privacy", "destination": "/privacy", "permanent": true }
+    {
+      "source": "/grantflow/welcome",
+      "destination": "/welcome",
+      "permanent": true
+    },
+    {
+      "source": "/grantflow/privacy",
+      "destination": "/privacy",
+      "permanent": true
+    }
   ],
   "rewrites": [
     {
       "source": "/grantflow/api/:path*",
-      "has": [{ "type": "host", "value": "(?:app|www|grantflow)\\.axiombiolabs\\.org" }],
+      "has": [
+        {
+          "type": "host",
+          "value": "(?:app|www|grantflow)\\.axiombiolabs\\.org"
+        }
+      ],
       "destination": "https://grantflow-production.up.railway.app/api/:path*"
     },
     {
       "source": "/api/:path*",
-      "has": [{ "type": "host", "value": "(?:app|www|grantflow)\\.axiombiolabs\\.org" }],
+      "has": [
+        {
+          "type": "host",
+          "value": "(?:app|www|grantflow)\\.axiombiolabs\\.org"
+        }
+      ],
       "destination": "https://grantflow-production.up.railway.app/api/:path*"
     },
     {
       "source": "/grantflow/uploads/:path*",
-      "has": [{ "type": "host", "value": "(?:app|www|grantflow)\\.axiombiolabs\\.org" }],
+      "has": [
+        {
+          "type": "host",
+          "value": "(?:app|www|grantflow)\\.axiombiolabs\\.org"
+        }
+      ],
       "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
     },
     {
       "source": "/uploads/:path*",
-      "has": [{ "type": "host", "value": "(?:app|www|grantflow)\\.axiombiolabs\\.org" }],
+      "has": [
+        {
+          "type": "host",
+          "value": "(?:app|www|grantflow)\\.axiombiolabs\\.org"
+        }
+      ],
       "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
     },
-    { "source": "/grantflow/api/:path*", "destination": "/api/preview-backend-disabled" },
-    { "source": "/api/:path((?!preview-backend-disabled$).*)", "destination": "/api/preview-backend-disabled" },
-    { "source": "/grantflow/uploads/:path*", "destination": "/api/preview-backend-disabled" },
-    { "source": "/uploads/:path*", "destination": "/api/preview-backend-disabled" },
-    { "source": "/welcome", "destination": "/welcome.html" },
-    { "source": "/privacy", "destination": "/privacy.html" },
-    { "source": "/deployment-version.json", "destination": "/assets/deployment-version.json" },
-    { "source": "/grantflow/((?!assets/).*)", "destination": "/index.html" },
-    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+    {
+      "source": "/grantflow/api/:path*",
+      "destination": "/api/preview-backend-disabled"
+    },
+    {
+      "source": "/api/:path((?!preview-backend-disabled$).*)",
+      "destination": "/api/preview-backend-disabled"
+    },
+    {
+      "source": "/grantflow/uploads/:path*",
+      "destination": "/api/preview-backend-disabled"
+    },
+    {
+      "source": "/uploads/:path*",
+      "destination": "/api/preview-backend-disabled"
+    },
+    {
+      "source": "/welcome",
+      "destination": "/welcome.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/privacy.html"
+    },
+    {
+      "source": "/deployment-version.json",
+      "destination": "/assets/deployment-version.json"
+    },
+    {
+      "source": "/release-identity.json",
+      "destination": "/assets/release-identity.json"
+    },
+    {
+      "source": "/grantflow/((?!assets/).*)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/((?!assets/).*)",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), bluetooth=(), payment=(self \"https://checkout.stripe.com\")" },
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://checkout.stripe.com; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://grantflow-production.up.railway.app https://*.axiombiolabs.org https://*.vercel.app https://*.ingest.sentry.io https://*.ingest.us.sentry.io wss:; frame-src 'self' blob: https://js.stripe.com https://hooks.stripe.com; media-src 'self' blob: data: https:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests" }
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains; preload"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), bluetooth=(), payment=(self \"https://checkout.stripe.com\")"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://checkout.stripe.com; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://grantflow-production.up.railway.app https://*.axiombiolabs.org https://*.vercel.app https://*.ingest.sentry.io https://*.ingest.us.sentry.io wss:; frame-src 'self' blob: https://js.stripe.com https://hooks.stripe.com; media-src 'self' blob: data: https:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
+        }
       ]
     },
     {
       "source": "/api/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store" },
-        { "key": "x-vercel-enable-rewrite-caching", "value": "0" }
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "x-vercel-enable-rewrite-caching",
+          "value": "0"
+        }
       ]
     },
     {
       "source": "/grantflow/api/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store" },
-        { "key": "x-vercel-enable-rewrite-caching", "value": "0" }
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "x-vercel-enable-rewrite-caching",
+          "value": "0"
+        }
       ]
     },
     {
       "source": "/deployment-version.json",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/release-identity.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
     },
     {
       "source": "/assets/(.*)",
-      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
     },
     {
       "source": "/index.html",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
     },
     {
       "source": "/welcome",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
     },
     {
       "source": "/privacy",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
     }
   ]
 }

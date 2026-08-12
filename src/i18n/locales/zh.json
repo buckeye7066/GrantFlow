@@ -13,7 +13,6 @@
   "nav.reports": "报告与分析",
   "nav.billing": "账单",
   "nav.adminPanel": "管理面板",
-
   "nav.group.home": "主页",
   "nav.group.help": "帮助",
   "nav.group.setup": "设置",
@@ -21,13 +20,13 @@
   "nav.group.work": "工作",
   "nav.group.track": "跟踪与报告",
   "nav.group.admin": "管理 / 运营",
-
   "nav.helpCenter": "帮助中心",
   "nav.fundingResults": "资助结果",
   "nav.smartMatcher": "智能匹配器",
   "nav.profileMatcher": "档案匹配器",
   "nav.fundingOpportunities": "资助机会",
   "nav.fundingLibrary": "资助库",
+  "nav.greenHomePrograms": "免费绿色住宅升级",
   "nav.foundationSearch": "基金会搜索",
   "nav.funder": "资助方",
   "nav.dataSources": "数据来源",
@@ -46,7 +45,6 @@
   "nav.diagnostics": "诊断",
   "nav.crawlCoverage": "抓取覆盖范围",
   "nav.incognito": "隐身",
-
   "breadcrumb.home": "主页",
   "route.organization": "组织",
   "route.profile": "档案",
@@ -55,7 +53,6 @@
   "route.apply": "申请",
   "route.application": "申请",
   "route.finishApplication": "完成申请",
-
   "layout.grantSuite": "资助管理套件",
   "layout.headerSubtitle": "AI 辅助的资助管理工作区",
   "layout.userManual": "用户手册",
@@ -70,10 +67,8 @@
   "layout.createdBy": "创建者",
   "layout.switchToLight": "切换到浅色模式",
   "layout.switchToDark": "切换到深色模式",
-
   "language.partialTag": "部分",
   "language.partialNotice": "菜单和常用操作已翻译。部分页面内容仍以英文显示。",
-
   "common.save": "保存",
   "common.cancel": "取消",
   "common.next": "下一步",
@@ -83,16 +78,13 @@
   "common.loading": "加载中…",
   "common.search": "搜索",
   "common.close": "关闭",
-
   "profile.setUp": "设置您的档案",
   "profile.create": "创建档案",
   "profile.findFunding": "查找资金",
-
   "language.picker.title": "选择您的语言",
   "language.picker.subtitle": "我可以用您偏好的语言为您提供帮助。您想使用哪种语言？",
   "language.switcher.label": "语言",
   "language.saved": "语言已更新",
-
   "anya.greeting": "你好！我是 Anya，您的 GrantFlow 向导。",
   "anya.intro": "我可以帮您找到与您档案匹配的资助、解释您所看到的内容、引导您完成流程，并解答有关申请流程的问题。",
   "anya.letsGo": "开始吧",

@@ -13,7 +13,6 @@
   "nav.reports": "Reports & Analytics",
   "nav.billing": "Billing & Invoicing",
   "nav.adminPanel": "Admin Panel",
-
   "nav.group.home": "Home",
   "nav.group.help": "Help",
   "nav.group.setup": "Setup",
@@ -21,13 +20,13 @@
   "nav.group.work": "Work",
   "nav.group.track": "Track & Report",
   "nav.group.admin": "Admin / Operations",
-
   "nav.helpCenter": "Help Center",
   "nav.fundingResults": "Funding Results",
   "nav.smartMatcher": "Smart Matcher",
   "nav.profileMatcher": "Profile Matcher",
   "nav.fundingOpportunities": "Funding Opportunities",
   "nav.fundingLibrary": "Funding Library",
+  "nav.greenHomePrograms": "No-Cost Green Home Upgrades",
   "nav.foundationSearch": "Foundation Search",
   "nav.funder": "Funder",
   "nav.dataSources": "Data Sources",
@@ -46,7 +45,6 @@
   "nav.diagnostics": "Diagnostics",
   "nav.crawlCoverage": "Crawl Coverage",
   "nav.incognito": "Incognito",
-
   "breadcrumb.home": "Home",
   "route.organization": "Organization",
   "route.profile": "Profile",
@@ -55,7 +53,6 @@
   "route.apply": "Apply",
   "route.application": "Application",
   "route.finishApplication": "Finish Application",
-
   "layout.grantSuite": "Grant Management Suite",
   "layout.headerSubtitle": "AI-assisted grant management workspace",
   "layout.userManual": "User Manual",
@@ -70,10 +67,8 @@
   "layout.createdBy": "Created by",
   "layout.switchToLight": "Switch to light mode",
   "layout.switchToDark": "Switch to dark mode",
-
   "language.partialTag": "partial",
   "language.partialNotice": "Menus and common actions are translated. Some page content is still shown in English.",
-
   "common.save": "Save",
   "common.cancel": "Cancel",
   "common.next": "Next",
@@ -83,16 +78,13 @@
   "common.loading": "Loading…",
   "common.search": "Search",
   "common.close": "Close",
-
   "profile.setUp": "Set up your profile",
   "profile.create": "Create profile",
   "profile.findFunding": "Find Funding",
-
   "language.picker.title": "Choose your language",
   "language.picker.subtitle": "I can help you in your preferred language. Which would you like to use?",
   "language.switcher.label": "Language",
   "language.saved": "Language updated",
-
   "anya.greeting": "Hi! I'm Anya, your GrantFlow guide.",
   "anya.intro": "I can help you find grants that match your profile, explain what you're seeing, walk you through your pipeline, and answer questions about the application process.",
   "anya.letsGo": "Let's go",

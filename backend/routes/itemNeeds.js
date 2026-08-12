@@ -1,26 +1,23 @@
 /**
- * itemNeeds.js — the profile's ITEM LIST, and an on-demand crawl for it.
+ * itemNeeds.js — the profile's ITEM LIST, and on-demand searches for it.
  *
  * ACCESS: every route is `ensureProfileAccess` (owner-or-admin, the same gate
  * every other profile mutation uses). The profile id is a PATH parameter that
  * is checked against the caller's accessible set — never a guessable id, never
  * an unauthenticated lookup.
  *
- *   GET  /api/item-needs/:profileId          — derived + declared item list
- *   POST /api/item-needs/:profileId/search   — crawl one item or a list
+ *   GET  /api/item-needs/:profileId             — derived + declared item list
+ *   POST /api/item-needs/:profileId/search      — crawl one item or a list
+ *   POST /api/item-needs/:profileId/green-home  — strict no-cost green upgrades
  *
- * The search route is additionally held to the SAME tier capability as the
- * existing item-funding lane (`TIER_CAPABILITIES.ITEM_FUNDING`), so the two
+ * Search routes are additionally held to the SAME tier capability as the
+ * existing item-funding lane (`TIER_CAPABILITIES.ITEM_FUNDING`), so the paths
  * cannot diverge into different entitlement stories.
  *
- * RATE LIMITED, and the search route more strictly than the read. CodeQL's
- * `js/missing-rate-limiting` flagged both on first submission (429 → 431
- * high-confidence findings, which blocks the baseline gate), and the search
- * route deserves the stricter lane on its own merits: one call fans out to five
- * LIVE web queries per item, for up to `ITEM_SEARCH_MAX_ITEMS` items, against a
- * SHARED search backend whose datacenter-IP anti-bot behaviour already silently
- * zeroed item search once (documented in `itemFundingCrawler.js`'s own header).
- * An unthrottled loop here is how that wall gets rebuilt.
+ * RATE LIMITED, and search routes more strictly than the read. One request can
+ * fan out to several live web queries against a shared search backend. An
+ * unthrottled loop here would rebuild the anti-bot wall that previously made
+ * item search appear to complete with false zero results.
  */
 
 import express from 'express'
@@ -31,6 +28,7 @@ import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
 import { searchItemNeeds, ITEM_SEARCH_MAX_ITEMS } from '../services/itemNeedSearch.js'
+import { searchGreenHomeNoCostPrograms } from '../services/greenHomeNoCostSearch.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -38,7 +36,7 @@ const routeLogger = createLogger('route:itemNeeds')
 const router = express.Router()
 
 /**
- * Load the profile + sections once; both routes read the same canonical view.
+ * Load the profile + sections once; all routes read the same canonical view.
  *
  * A NON-EXISTENT ID IS A 404, NEVER A 500. `loadProfileContext` assumes the
  * profile exists and throws on a missing row, so probing this route with a
@@ -92,6 +90,36 @@ router.get('/:profileId', ensureAuth, standardRateLimiter, async (req, res) => {
   } catch (error) {
     routeLogger.error('[item-needs] list error', error)
     return res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * POST /api/item-needs/:profileId/green-home
+ *
+ * A deliberately strict homeowner/household lane. The service searches
+ * weatherization, insulation, heat pumps, geothermal, solar/storage, and small
+ * residential wind, then withholds every result that requires a loan,
+ * financing, lease/PPA, tax credit, rebate, reimbursement, purchase, match,
+ * cost share, or applicant contribution. Unknown cost terms are review-only and
+ * are not returned in `programs`.
+ */
+router.post('/:profileId/green-home', ensureAuth, mutationRateLimiter, async (req, res) => {
+  const profileId = String(req.params.profileId ?? '').trim()
+  if (!(await ensureProfileAccess(req, res, profileId))) return
+  if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.ITEM_FUNDING))) return
+
+  try {
+    const ctx = await loadContext(req.db, profileId)
+    if (!ctx.profile) return res.status(404).json({ error: 'Profile not found' })
+
+    const report = await searchGreenHomeNoCostPrograms(req.db, {
+      profileId,
+      profileContext: ctx,
+    })
+    return res.json(report)
+  } catch (error) {
+    routeLogger.error('[item-needs] green-home search error', error)
+    return res.status(error?.statusCode || 500).json(formatError(error))
   }
 })
 

@@ -2,12 +2,41 @@ import fs from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
+import {
+  discardResponseBody,
+  readBufferCapped,
+  safeFetch,
+  SsrfBlockedError,
+} from './http/safeFetch.js'
 import * as cheerio from 'cheerio'
 
-const fetchImpl = globalThis.fetch
 const FETCH_TIMEOUT_MS = 12_000
 const MAX_REDIRECTS = 4
+const MAX_HTML_BYTES = 2 * 1024 * 1024
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const USER_AGENT = 'GrantFlow Avatar Lookup/1.0'
+
+/** Map shared SSRF refusals onto the avatar crawler's stable reason vocabulary. */
+function mapSsrfReason(reason) {
+  const value = String(reason || '')
+  if (
+    value.startsWith('private_ip:') ||
+    value.startsWith('resolves_private:') ||
+    value.startsWith('blocked_host:')
+  ) return 'blocked_private_host'
+  if (value === 'empty_url' || value === 'unparseable_url') return 'invalid_url'
+  if (value.startsWith('unparseable_redirect')) return 'invalid_redirect'
+  if (value.startsWith('blocked_scheme:')) return 'blocked_redirect_scheme'
+  if (value.startsWith('too_many_redirects:')) return 'too_many_redirects'
+  if (value === 'embedded_credentials') return 'blocked_embedded_credentials'
+  if (value.startsWith('dns_')) return 'dns_failed'
+  return value || 'fetch_failed'
+}
+
+async function discardAndReturn(res, result) {
+  if (res) await discardResponseBody(res)
+  return result
+}
 
 export function normalizeHttpUrl(value) {
   const raw = String(value ?? '').trim()
@@ -22,32 +51,6 @@ export function normalizeHttpUrl(value) {
   }
 }
 
-function isLoopbackHostname(hostname) {
-  const h = String(hostname || '').trim().toLowerCase()
-  if (!h) return false
-  if (h === 'localhost' || h.endsWith('.localhost') || h === '::1') return true
-  if (h === '127.0.0.1') return true
-  return false
-}
-
-function isPrivateHostname(hostname) {
-  const h = String(hostname || '').trim().toLowerCase()
-  if (!h) return true
-  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true
-  if (h === '::1') return true
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
-    const parts = h.split('.').map((p) => Number(p))
-    const [a, b] = parts
-    if (a === 10) return true
-    if (a === 127) return true
-    if (a === 192 && b === 168) return true
-    if (a === 172 && b >= 16 && b <= 31) return true
-    if (a === 0) return true
-    if (a === 169 && b === 254) return true
-  }
-  return false
-}
-
 function resolveUrl(baseUrl, maybeRelative) {
   const raw = String(maybeRelative ?? '').trim()
   if (!raw) return null
@@ -58,65 +61,56 @@ function resolveUrl(baseUrl, maybeRelative) {
   }
 }
 
-async function fetchOnce(url, accept) {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-  try {
-    return await fetchImpl(url, {
-      method: 'GET',
-      // Manual redirects so every hop can be re-validated (validate-then-follow
-      // with redirect:'follow' lets a public first hop 302 into link-local /
-      // metadata IPs inside undici where the hostname guard never runs).
-      redirect: 'manual',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: accept,
-      },
-    })
-  } finally {
-    clearTimeout(timeoutId)
-  }
-}
-
 /**
- * SSRF-safe fetch: re-check the host before every hop and never auto-follow
- * redirects. Returns { ok, res, finalUrl } or { ok:false, reason }.
+ * Avatar egress delegates to GrantFlow's single socket-pinned safeFetch
+ * chokepoint. DNS is resolved once per hop, the approved address is pinned to
+ * the connection, redirects are revalidated, and one deadline spans the chain.
+ * Test-only transport/resolver injection is forwarded to safeFetch.
  */
-export async function safeAvatarFetch(startUrl, accept, { allowLocalhost = false } = {}) {
-  let current = startUrl
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    let host
-    try {
-      host = new URL(current).hostname
-    } catch {
-      return { ok: false, reason: 'invalid_url' }
+export async function safeAvatarFetch(startUrl, accept, options = {}) {
+  const egress = typeof options.safeFetchImpl === 'function'
+    ? options.safeFetchImpl
+    : safeFetch
+  try {
+    const res = await egress(
+      startUrl,
+      {
+        method: 'GET',
+        headers: {
+          'User-Agent': USER_AGENT,
+          Accept: accept,
+        },
+      },
+      {
+        maxRedirects: MAX_REDIRECTS,
+        timeoutMs: FETCH_TIMEOUT_MS,
+        signal: options.signal,
+        resolve: options.resolve,
+        fetchImpl: options.fetchImpl,
+        allowTestLoopback:
+          options.allowLocalhost === true && process.env.NODE_ENV === 'test',
+      },
+    )
+    return {
+      ok: true,
+      res,
+      finalUrl: res?.grantflowFinalUrl || startUrl,
     }
-    // allowLocalhost only exempts loopback (tests). Link-local / RFC1918 /
-    // metadata IPs stay blocked even under that flag — otherwise a test
-    // convenience would re-open the redirect-to-169.254.169.254 hole.
-    if (isPrivateHostname(host) && !(allowLocalhost && isLoopbackHostname(host))) {
-      return { ok: false, reason: 'blocked_private_host' }
+  } catch (error) {
+    const message = String(error?.message || '')
+    if (
+      error instanceof SsrfBlockedError ||
+      error?.name === 'SsrfBlockedError' ||
+      message.startsWith('ssrf_blocked:')
+    ) {
+      const reason = error?.reason || message.replace(/^ssrf_blocked:/, '')
+      return { ok: false, reason: mapSsrfReason(reason) }
     }
-    let res
-    try {
-      res = await fetchOnce(current, accept)
-    } catch {
-      return { ok: false, reason: 'fetch_failed' }
+    return {
+      ok: false,
+      reason: error?.name === 'AbortError' ? 'fetch_timeout_or_cancelled' : 'fetch_failed',
     }
-    const status = res.status
-    if (status >= 300 && status < 400) {
-      const loc = res.headers.get('location')
-      if (!loc) return { ok: true, res, finalUrl: current }
-      const next = resolveUrl(current, loc)
-      if (!next) return { ok: false, reason: 'invalid_redirect' }
-      if (!/^https?:\/\//i.test(next)) return { ok: false, reason: 'blocked_redirect_scheme' }
-      current = next
-      continue
-    }
-    return { ok: true, res, finalUrl: current }
   }
-  return { ok: false, reason: 'too_many_redirects' }
 }
 
 function pickWebsiteImageCandidate(html, baseUrl) {
@@ -200,8 +194,6 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
   const url = normalizeHttpUrl(imageUrl)
   if (!url) return { ok: false, reason: 'invalid_url' }
 
-  if (!fetchImpl) return { ok: false, reason: 'fetch_unavailable' }
-
   const fetched = await safeAvatarFetch(url, 'image/*,*/*;q=0.8', { allowLocalhost: false })
   if (!fetched.ok) {
     return {
@@ -210,13 +202,22 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
     }
   }
   const res = fetched.res
-  if (!res || !res.ok) return { ok: false, reason: 'fetch_failed' }
+  if (!res) return { ok: false, reason: 'fetch_failed' }
+  if (!res.ok) return discardAndReturn(res, { ok: false, reason: 'fetch_failed' })
 
   const contentType = String(res.headers.get('content-type') || '').toLowerCase()
-  if (!contentType.startsWith('image/')) return { ok: false, reason: 'not_image' }
+  if (!contentType.startsWith('image/')) {
+    return discardAndReturn(res, { ok: false, reason: 'not_image' })
+  }
 
-  const buf = Buffer.from(await res.arrayBuffer())
-  if (buf.length > 10 * 1024 * 1024) return { ok: false, reason: 'too_large' }
+  let imageBody
+  try {
+    imageBody = await readBufferCapped(res, MAX_IMAGE_BYTES)
+  } catch {
+    return discardAndReturn(res, { ok: false, reason: 'image_body_read_failed' })
+  }
+  if (imageBody.truncated) return { ok: false, reason: 'too_large' }
+  const buf = imageBody.buffer
   if (buf.length < 100) return { ok: false, reason: 'too_small' }
 
   const ext = extensionFromContentType(contentType)
@@ -277,10 +278,6 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   // SSRF guard (allow localhost only in tests). Explicit false still wins.
   const allowLocalhost = process.env.NODE_ENV === 'test'
 
-  if (!fetchImpl) {
-    return { ok: false, reason: 'fetch_unavailable' }
-  }
-
   const fetched = await safeAvatarFetch(website, 'text/html,application/xhtml+xml', {
     allowLocalhost,
   })
@@ -292,22 +289,27 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   }
   const res = fetched.res
   const finalUrl = fetched.finalUrl || website
-  if (!res || !res.ok) {
-    return { ok: false, reason: 'website_fetch_failed' }
+  if (!res) return { ok: false, reason: 'website_fetch_failed' }
+  if (!res.ok) {
+    return discardAndReturn(res, { ok: false, reason: 'website_fetch_failed' })
   }
 
-  const html = await res.text().catch(() => '')
+  let htmlBody
+  try {
+    htmlBody = await readBufferCapped(res, MAX_HTML_BYTES)
+  } catch {
+    return discardAndReturn(res, { ok: false, reason: 'website_body_read_failed' })
+  }
+  if (htmlBody.truncated) {
+    return { ok: false, reason: 'website_body_too_large' }
+  }
+  const html = htmlBody.buffer.toString('utf8')
   const pick = pickWebsiteImageCandidate(html, finalUrl)
   if (!pick?.url) {
     return { ok: false, reason: 'no_cover_meta' }
   }
   const coverUrl = pick.url
   const method = pick.method || 'website_cover'
-
-  const coverHost = new URL(coverUrl).hostname
-  if (isPrivateHostname(coverHost) && !(allowLocalhost && isLoopbackHostname(coverHost))) {
-    return { ok: false, reason: 'blocked_private_cover_host' }
-  }
 
   const imgFetched = await safeAvatarFetch(coverUrl, 'image/*,*/*;q=0.8', { allowLocalhost })
   if (!imgFetched.ok) {
@@ -320,20 +322,24 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
     }
   }
   const imgRes = imgFetched.res
-  if (!imgRes || !imgRes.ok) {
-    return { ok: false, reason: 'cover_fetch_failed' }
+  if (!imgRes) return { ok: false, reason: 'cover_fetch_failed' }
+  if (!imgRes.ok) {
+    return discardAndReturn(imgRes, { ok: false, reason: 'cover_fetch_failed' })
   }
 
   const imgType = String(imgRes.headers.get('content-type') || '').toLowerCase()
   if (!imgType.startsWith('image/') && !imgType.includes('icon')) {
-    return { ok: false, reason: 'cover_not_image' }
+    return discardAndReturn(imgRes, { ok: false, reason: 'cover_not_image' })
   }
 
-  const buf = Buffer.from(await imgRes.arrayBuffer())
-  // Safety cap: 10MB
-  if (buf.length > 10 * 1024 * 1024) {
-    return { ok: false, reason: 'cover_too_large' }
+  let imageBody
+  try {
+    imageBody = await readBufferCapped(imgRes, MAX_IMAGE_BYTES)
+  } catch {
+    return discardAndReturn(imgRes, { ok: false, reason: 'cover_body_read_failed' })
   }
+  if (imageBody.truncated) return { ok: false, reason: 'cover_too_large' }
+  const buf = imageBody.buffer
 
   const ext = extensionFromContentType(imgType)
   const filename = `${Date.now()}-${randomUUID()}.${ext}`

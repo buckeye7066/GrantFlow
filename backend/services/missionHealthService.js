@@ -42,6 +42,8 @@ import { buildProductionReadinessReport } from './productionReadinessChecks.js'
 
 const TARGETS = Object.freeze({
   verified_pct_min: 95,
+  release_catalog_verified_pct_min: 95,
+  visible_direct_verified_pct_min: 100,
   verified_max_age_days: REVERIFY_AFTER_DAYS_CONST,
   broken_pct_max: 5,
   placeholder_max: 0,
@@ -58,6 +60,9 @@ const TARGETS = Object.freeze({
     'profile_types_below_source_minimum',
     'mission_service_not_globally_integrated',
     'link_lifecycle_partition_mismatch',
+    'release_catalog_snapshot_unavailable',
+    'release_catalog_verified_pct_below_target',
+    'visible_direct_link_requirement_failed',
     'verified_pct_below_target',
     'broken_pct_above_target',
     'crawler_source_outcomes_stale',
@@ -303,6 +308,73 @@ export async function buildMissionHealth(db) {
        AND COALESCE(is_hidden, FALSE) = FALSE`,
   ))?.n)
 
+  // Complete release-catalog denominator. Every active, non-hidden row is
+  // counted, including directories, referrals, benefits, portals, legacy rows,
+  // and rows with a missing URL. Non-direct classification can never be used to
+  // make a visible resource disappear from the 95% verification measurement.
+  const releaseCatalogSnapshot = await safeGet(
+    db,
+    `WITH visible_catalog AS (
+       SELECT CASE WHEN (${pointerOpportunityRowSql()}) THEN 1 ELSE 0 END AS is_pointer,
+              CASE
+                WHEN LOWER(TRIM(COALESCE(link_status, ''))) IN ('ok', 'redirect', 'verified')
+                 AND last_verified_at IS NOT NULL
+                 AND last_verified_at >= ?
+                  THEN 1
+                ELSE 0
+              END AS is_verified_fresh
+         FROM funding_opportunities
+        WHERE COALESCE(is_active, TRUE) = TRUE
+          AND COALESCE(is_hidden, FALSE) = FALSE
+     )
+     SELECT COUNT(*) AS total,
+            SUM(is_verified_fresh) AS verified_fresh,
+            SUM(CASE WHEN is_verified_fresh = 0 THEN 1 ELSE 0 END) AS unverified_or_stale,
+            SUM(CASE WHEN is_pointer = 0 THEN 1 ELSE 0 END) AS direct_total,
+            SUM(CASE WHEN is_pointer = 0 AND is_verified_fresh = 1 THEN 1 ELSE 0 END) AS direct_verified_fresh,
+            SUM(CASE WHEN is_pointer = 1 THEN 1 ELSE 0 END) AS pointer_total,
+            SUM(CASE WHEN is_pointer = 1 AND is_verified_fresh = 1 THEN 1 ELSE 0 END) AS pointer_verified_fresh
+       FROM visible_catalog`,
+    [verificationFreshCutoff],
+  )
+  const releaseCatalogAvailable = !releaseCatalogSnapshot?.__error
+  const releaseCatalogTotal = normalizeCount(releaseCatalogSnapshot?.total)
+  const releaseCatalogVerified = normalizeCount(releaseCatalogSnapshot?.verified_fresh)
+  const releaseCatalogUnverified = normalizeCount(releaseCatalogSnapshot?.unverified_or_stale)
+  const visibleDirectTotal = normalizeCount(releaseCatalogSnapshot?.direct_total)
+  const visibleDirectVerified = normalizeCount(releaseCatalogSnapshot?.direct_verified_fresh)
+  const visiblePointerTotal = normalizeCount(releaseCatalogSnapshot?.pointer_total)
+  const visiblePointerVerified = normalizeCount(releaseCatalogSnapshot?.pointer_verified_fresh)
+  const releaseCatalogVerifiedPct = pct(releaseCatalogVerified, releaseCatalogTotal)
+  const visibleDirectVerifiedPct = pct(visibleDirectVerified, visibleDirectTotal)
+  const visibleDirectAllVerified = releaseCatalogAvailable
+    && visibleDirectVerified === visibleDirectTotal
+  const releaseCatalog = {
+    denominator_total: releaseCatalogTotal,
+    verified_fresh: releaseCatalogVerified,
+    unverified_or_stale: releaseCatalogUnverified,
+    verified_pct: releaseCatalogVerifiedPct,
+    target_pct: TARGETS.release_catalog_verified_pct_min,
+    visible_direct: {
+      total: visibleDirectTotal,
+      verified_fresh: visibleDirectVerified,
+      unverified_or_stale: Math.max(0, visibleDirectTotal - visibleDirectVerified),
+      verified_pct: visibleDirectTotal > 0 ? visibleDirectVerifiedPct : null,
+      all_verified: visibleDirectAllVerified,
+      target_pct: TARGETS.visible_direct_verified_pct_min,
+    },
+    visible_pointer: {
+      total: visiblePointerTotal,
+      verified_fresh: visiblePointerVerified,
+      unverified_or_stale: Math.max(0, visiblePointerTotal - visiblePointerVerified),
+      verified_pct: visiblePointerTotal > 0 ? pct(visiblePointerVerified, visiblePointerTotal) : null,
+    },
+    verification_fresh_after: verificationFreshCutoff,
+    error: releaseCatalogAvailable
+      ? null
+      : releaseCatalogSnapshot?.__error || 'release_catalog_snapshot_unavailable',
+  }
+
   const placeholderCount = normalizeCount((await safeGet(
     db,
     `SELECT COUNT(*) AS n FROM funding_opportunities
@@ -438,6 +510,31 @@ export async function buildMissionHealth(db) {
       code: 'broken_pct_above_target',
       detail: `${brokenPct}% of direct opportunities are link-broken (target ≤ ${TARGETS.broken_pct_max}%).`,
     })
+  }
+  if (!releaseCatalogAvailable) {
+    alerts.push({
+      level: 'warn',
+      code: 'release_catalog_snapshot_unavailable',
+      detail: `Complete release-catalog verification snapshot is unavailable: ${releaseCatalog.error}`,
+    })
+  } else {
+    if (
+      releaseCatalogTotal > 0
+      && releaseCatalogVerifiedPct < TARGETS.release_catalog_verified_pct_min
+    ) {
+      alerts.push({
+        level: 'warn',
+        code: 'release_catalog_verified_pct_below_target',
+        detail: `Only ${releaseCatalogVerifiedPct}% of the complete visible catalog is freshly link-verified (target ≥ ${TARGETS.release_catalog_verified_pct_min}%). The denominator includes direct opportunities, benefits, directories, referrals, and portals.`,
+      })
+    }
+    if (visibleDirectTotal > 0 && !visibleDirectAllVerified) {
+      alerts.push({
+        level: 'warn',
+        code: 'visible_direct_link_requirement_failed',
+        detail: `${visibleDirectVerified} of ${visibleDirectTotal} visible direct opportunities are freshly link-verified. Every visible direct opportunity must meet the link requirement.`,
+      })
+    }
   }
   if (placeholderCount > TARGETS.placeholder_max) {
     alerts.push({
@@ -587,6 +684,13 @@ export async function buildMissionHealth(db) {
       retired_broken_direct_opportunities: retiredBrokenDirect,
       scheduled_retry_broken_direct_opportunities: scheduledRetryBrokenDirect,
       directory_opportunities_total: totalDirectory,
+      release_catalog_visible_total: releaseCatalogTotal,
+      release_catalog_verified_fresh: releaseCatalogVerified,
+      release_catalog_unverified_or_stale: releaseCatalogUnverified,
+      visible_direct_opportunities_total: visibleDirectTotal,
+      visible_direct_opportunities_verified_fresh: visibleDirectVerified,
+      visible_pointer_resources_total: visiblePointerTotal,
+      visible_pointer_resources_verified_fresh: visiblePointerVerified,
       placeholder_opportunities: placeholderCount,
       verification_events_24h: events24h,
     },
@@ -594,7 +698,10 @@ export async function buildMissionHealth(db) {
       verified_pct: verifiedPct,
       verified_fresh_visible_pct: verifiedPct,
       broken_pct: brokenPct,
+      release_catalog_verified_pct: releaseCatalogVerifiedPct,
+      visible_direct_verified_pct: visibleDirectTotal > 0 ? visibleDirectVerifiedPct : null,
     },
+    release_catalog: releaseCatalog,
     link_lifecycle: linkLifecycle,
     coverage_by_source: normalizedCoverage,
     application_funnel: normalizedFunnel,
