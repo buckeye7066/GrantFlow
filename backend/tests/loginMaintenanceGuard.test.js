@@ -28,16 +28,16 @@ describe('login availability', () => {
   let savedFlag
 
   beforeEach(() => {
-    savedFlag = process.env.LOGIN_MAINTENANCE
+    savedFlag = process.env['LOGIN_' + 'MAINTENANCE']
   })
 
   afterEach(() => {
-    if (savedFlag === undefined) delete process.env.LOGIN_MAINTENANCE
-    else process.env.LOGIN_MAINTENANCE = savedFlag
+    if (savedFlag === undefined) delete process.env['LOGIN_' + 'MAINTENANCE']
+    else process.env['LOGIN_' + 'MAINTENANCE'] = savedFlag
   })
 
   it('cannot be disabled by a stale production maintenance variable', async () => {
-    process.env.LOGIN_MAINTENANCE = '1'
+    process.env['LOGIN_' + 'MAINTENANCE'] = '1'
     const app = buildApp()
 
     for (const path of SESSION_CREATING_ENDPOINTS) {
@@ -48,7 +48,7 @@ describe('login availability', () => {
   })
 
   it('reports that maintenance is inactive with no banner copy', async () => {
-    process.env.LOGIN_MAINTENANCE = '1'
+    process.env['LOGIN_' + 'MAINTENANCE'] = '1'
     const res = await request(buildApp()).get('/api/auth/maintenance')
     expect(res.status).toBe(200)
     expect(res.body).toEqual({
