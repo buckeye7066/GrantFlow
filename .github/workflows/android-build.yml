@@ -105,13 +105,14 @@ jobs:
           test -f "$AAB"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)
           test -n "$APKSIGNER"
-          "$APKSIGNER" verify --print-certs "$APK" > "$RUNNER_TEMP/apk-certs.txt"
-          awk -F': ' '/Signer #1 certificate SHA-256 digest:/{gsub(":", "", $2); print tolower($2); exit}' "$RUNNER_TEMP/apk-certs.txt" > "$RUNNER_TEMP/apk-cert.sha256"
-          test -s "$RUNNER_TEMP/apk-cert.sha256"
-          cmp "$RUNNER_TEMP/keystore-cert.sha256" "$RUNNER_TEMP/apk-cert.sha256" || { echo 'Built APK signing certificate does not match configured persistent keystore'; exit 1; }
+          "$APKSIGNER" verify --print-certs "$APK" | tee "$RUNNER_TEMP/apk-certs.txt"
+          node scripts/extract-apk-cert-fingerprints.mjs \
+            < "$RUNNER_TEMP/apk-certs.txt" \
+            > "$RUNNER_TEMP/apk-cert-candidates.sha256"
+          grep -Fqx -- "$(cat "$RUNNER_TEMP/keystore-cert.sha256")" "$RUNNER_TEMP/apk-cert-candidates.sha256" || { echo 'Built APK signing certificates do not include the configured persistent keystore certificate'; exit 1; }
           cp "$APK" "GrantFlow-${ANDROID_VERSION_NAME}.apk"
           cp "$AAB" "GrantFlow-${ANDROID_VERSION_NAME}.aab"
-          cp "$RUNNER_TEMP/apk-cert.sha256" grantflow-signing-cert.sha256
+          cp "$RUNNER_TEMP/keystore-cert.sha256" grantflow-signing-cert.sha256
           sha256sum "GrantFlow-${ANDROID_VERSION_NAME}.apk" > grantflow-android.sha256
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
