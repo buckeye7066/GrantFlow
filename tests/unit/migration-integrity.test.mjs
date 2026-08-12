@@ -10,6 +10,7 @@ import {
   ensureMigrationIntegrityColumns,
   migrationFileChecksum,
   recordMigrationApplied,
+  verifyMigrationLedgerBeforeReadApplied,
   verifyOrBaselineMigrationLedger,
 } from '../../backend/db/migrationIntegrity.js'
 
@@ -157,18 +158,25 @@ test('a changed or missing applied migration fails closed', async () => {
   )
 })
 
-test('boot migration path verifies or baselines the ledger before reading applied rows', () => {
-  const source = fs.readFileSync(
-    new URL('../../backend/db/migrate.js', import.meta.url),
-    'utf8',
-  )
-  const bootStart = source.indexOf('export async function runPendingMigrationsOnBoot')
-  const bootSource = source.slice(bootStart)
-  const verifyIndex = bootSource.indexOf('verifyOrBaselineMigrationLedger(')
-  const appliedIndex = bootSource.indexOf('getAppliedSet()')
+test('boot migration path verifies or baselines the ledger before reading applied rows', async () => {
+  const calls = []
+  const expectedApplied = new Set(['0001_first.sql'])
+  const result = await verifyMigrationLedgerBeforeReadApplied({
+    db: { dialect: 'postgres' },
+    migrationsDir: '/repo/backend/db/postgres/migrations',
+    files: ['0001_first.sql'],
+    logger: { info(message) { calls.push(['log', message]) } },
+    async verifyLedger(db, directory, files) {
+      calls.push(['verify', db.dialect, directory, files])
+      return { checked: 1, applied_bytes: 0, baselined: 1, legacy_or_idempotent: 1 }
+    },
+    async readApplied() {
+      calls.push(['read'])
+      return expectedApplied
+    },
+  })
 
-  assert.notEqual(bootStart, -1)
-  assert.notEqual(verifyIndex, -1)
-  assert.notEqual(appliedIndex, -1)
-  assert.ok(verifyIndex < appliedIndex)
+  assert.deepEqual(calls.map(([name]) => name), ['verify', 'log', 'read'])
+  assert.equal(result.applied, expectedApplied)
+  assert.equal(result.integrity.baselined, 1)
 })
