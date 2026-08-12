@@ -3,7 +3,7 @@
 This repo is a single Node workspace (frontend + backend run from the repo root).
 
 ## Prereqs
-- Node.js **20.20.2** (the release/runtime pin; Android/iOS tooling uses Node 22)
+- Node.js **20.20.2** for tests and web builds (the `.nvmrc` release/runtime pin); Capacitor commands use Node **22.22.0** from `.node-version-mobile`
 - npm
 - (Optional) Postgres, if you want `DB_PROVIDER=postgres`
 

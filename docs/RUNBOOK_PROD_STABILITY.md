@@ -6,7 +6,7 @@ This runbook is focused on **deployment sanity**, **database safety**, and **fas
 
 ## Prereqs
 
-- Node **20.20.2** (see `.nvmrc`; Android/iOS tooling is the Node 22 exception)
+- Node **20.20.2** for web/release work (see `.nvmrc`); Capacitor commands use Node **22.22.0** from `.node-version-mobile`
 - `npm ci` works locally
 - Access to:
   - Vercel project (frontend)
