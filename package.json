@@ -9,7 +9,7 @@
   "overrides": {
     "fast-xml-parser": "$fast-xml-parser",
     "shell-quote": ">=1.9.0",
-    "js-yaml": "4.3.1",
+    "js-yaml": "5.2.3",
     "@eslint/config-array": "^0.23.5",
     "eslint": {
       "minimatch": "^10.2.5"
@@ -211,7 +211,7 @@
     "framer-motion": "^13.0.0",
     "globals": "^17.9.0",
     "input-otp": "^1.4.2",
-    "js-yaml": "4.3.1",
+    "js-yaml": "5.2.3",
     "jsdom": "^29.1.1",
     "lucide-react": "^1.30.0",
     "next-themes": "^0.4.4",
