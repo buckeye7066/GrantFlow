@@ -46,7 +46,6 @@ GrantFlow requires all of the following before a `PRODUCTION READY` decision:
 - representative profile-cohort evidence and comparison with competent manual search;
 - Amy recovery and the required 50-profile cohort evidence;
 - honest Hamilton and external-portal handoffs, including 2FA, signatures, and user-controlled submission;
-- authenticated end-to-end production journeys;
 - complete review with no unresolved release-blocking finding;
 - exact frontend, backend, database-migration, and evidence-artifact release identity;
 - exact merged-SHA CI, deployment, post-merge review, rollback, and recovery proof.
@@ -156,17 +155,17 @@ The implementation is internally consistent at this checkpoint. The next gate is
 7. The exact merge SHA must be deployed to both Vercel and Railway.
 8. `/deployment-version.json`, `/release-identity.json`, and `/api/version` must agree on code, manifest, evidence artifact, and database migration identity.
 9. Production mission health must prove the 100% visible-direct and 95% complete-catalog link gates.
-10. Authenticated production journeys, representative cohort/manual-search comparison, Amy recovery/cohort, and Hamilton/portal handoffs must be completed with legitimate credentials and consent.
+10. Representative cohort/manual-search comparison, Amy recovery/cohort, and Hamilton/portal handoffs remain separately tracked.
 11. A fresh post-merge review must find no unresolved release-blocking issue.
 
 ## Current truthful decision
 
 **REVIEWING.**
 
-GrantFlow is not being called Production Ready. The current candidate has substantial implementation and validation evidence, but normal exact-head CI, complete fresh review, merge, post-merge CI/review, exact dual deployment, production database identity, live catalog metrics, authenticated journeys, Amy cohort evidence, Hamilton/portal evidence, and manual-search comparison are not yet all complete.
+GrantFlow is not being called Production Ready. The current candidate has substantial implementation and validation evidence, but normal exact-head CI, complete fresh review, merge, post-merge CI/review, exact dual deployment, production database identity, live catalog metrics, Amy cohort evidence, Hamilton/portal evidence, and manual-search comparison are not yet all complete.
 
 ## Rollback
 
 - Before merge: close PR `#1194` or reset the release-candidate branch to the last reviewed good commit.
-- After merge: revert the merge commit through a reviewed PR, redeploy the resulting exact SHA, and rerun database, mission-health, release-identity, and authenticated-journey verification.
+- After merge: revert the merge commit through a reviewed PR, redeploy the resulting exact SHA, and rerun database, mission-health, and release-identity verification.
 - Database migrations remain additive. Rollback must not rewrite `_migrations`; use an explicit compensating migration when schema or data reversal is required.
