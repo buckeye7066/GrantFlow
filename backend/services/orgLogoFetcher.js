@@ -236,7 +236,15 @@ export async function fetchOrgLogo(websiteUrl, opts = {}) {
   const candidates = extractLogoCandidates(pageBody.buffer.toString('utf8'), finalUrl)
   if (candidates.length === 0) return { ok: false, reason: 'no_logo_found' }
 
-  let lastReason = 'no_logo_found'
+  // Report the FIRST candidate's failure reason, not the last. Candidates are
+  // ordered most- to least-specific (og:image before the generic favicon.ico
+  // fallback), so the first failure is the most diagnostic one — a real image
+  // that was found but rejected (e.g. 'image_too_small') is a far more useful
+  // answer than a later fallback candidate simply not existing
+  // ('image_fetch_failed' from a 404 on /favicon.ico), which used to
+  // overwrite it and hide what actually happened.
+  let firstReason = 'no_logo_found'
+  let haveReason = false
   for (const candidate of candidates) {
     const result = await downloadImage(candidate.url, options)
     if (result.ok) {
@@ -249,10 +257,13 @@ export async function fetchOrgLogo(websiteUrl, opts = {}) {
         website: finalUrl,
       }
     }
-    lastReason = result.reason
+    if (!haveReason) {
+      firstReason = result.reason
+      haveReason = true
+    }
   }
 
-  return { ok: false, reason: lastReason }
+  return { ok: false, reason: firstReason }
 }
 
 export default { fetchOrgLogo, extractLogoCandidates }

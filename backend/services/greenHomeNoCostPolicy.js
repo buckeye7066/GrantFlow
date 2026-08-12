@@ -77,7 +77,12 @@ export const OFFICIAL_GREEN_HOME_PATHS = Object.freeze([
     eligibility_bullets: [
       'Eligibility and covered services vary by state, territory, or Tribe.',
       'Priority commonly includes households with high energy burden, older adults, people with disabilities, or young children.',
-      'The administering agency must confirm the exact service, household eligibility, and any applicant cost before GrantFlow can show a local offer as no cost.',
+      // Deliberately avoids the literal phrase "no cost": POSITIVE_NO_COST_PATTERNS
+      // scans this text for an explicit no-cost claim with no negation/hedge
+      // awareness, so a hedged claim like "...before GrantFlow can show a local
+      // offer as no cost" was misread as ITSELF being the positive claim,
+      // wrongly promoting this still-unconfirmed locator to 'eligible'.
+      'The administering agency must confirm the exact service, household eligibility, and any applicant cost before GrantFlow can confirm a local offer is free to the household.',
       'This federal locator is a starting path, not proof that a specific project has been approved or fully paid.',
     ],
   },
