@@ -386,8 +386,12 @@ export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
   if (!ensureDirExists(migrationsDir)) return { ran: 0, drift: null }
   await ensureSqliteBaseSchema()
   await ensureMigrationsTable()
-  const applied = await getAppliedSet()
   const files = listSqlMigrations(migrationsDir)
+  const integrity = await verifyOrBaselineMigrationLedger(db, migrationsDir, files, { logger })
+  logger.info?.(
+    `[migrate:boot] checksum ledger: checked=${integrity.checked} applied_bytes=${integrity.applied_bytes} baselined=${integrity.baselined} legacy_or_idempotent=${integrity.legacy_or_idempotent}`,
+  )
+  const applied = await getAppliedSet()
   const pending = files.filter((f) => !applied.has(f))
   let ran = 0
   // Round 30: TRACK the files that failed to apply so they can be SURFACED (a queryable
