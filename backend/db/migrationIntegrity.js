@@ -124,6 +124,31 @@ export async function verifyOrBaselineMigrationLedger(
   return summary
 }
 
+
+/**
+ * Verify or baseline the checksum ledger before reading the applied-name set.
+ * Dependency injection keeps this ordering invariant executable in unit tests
+ * without opening a production database connection.
+ */
+export async function verifyMigrationLedgerBeforeReadApplied({
+  db,
+  migrationsDir,
+  files,
+  logger = console,
+  verifyLedger = verifyOrBaselineMigrationLedger,
+  readApplied,
+} = {}) {
+  if (typeof readApplied !== 'function') {
+    throw new TypeError('readApplied must be a function')
+  }
+  const integrity = await verifyLedger(db, migrationsDir, files, { logger })
+  logger.info?.(
+    `[migrate:boot] checksum ledger: checked=${integrity.checked} applied_bytes=${integrity.applied_bytes} baselined=${integrity.baselined} legacy_or_idempotent=${integrity.legacy_or_idempotent}`,
+  )
+  const applied = await readApplied()
+  return { integrity, applied }
+}
+
 export default {
   APPLIED_BYTES_PROVENANCE,
   IDEMPOTENT_RECORD_PROVENANCE,
@@ -132,5 +157,6 @@ export default {
   migrationFileChecksum,
   normalizeMigrationChecksum,
   recordMigrationApplied,
+  verifyMigrationLedgerBeforeReadApplied,
   verifyOrBaselineMigrationLedger,
 }
