@@ -1,37 +1,13 @@
-// Login maintenance mode — frontend.
-//
-// The backend (backend/config/maintenance.js) is the single source of truth:
-// LOGIN_MAINTENANCE=1 makes every session-creating auth endpoint return 503.
-// The frontend reflects that in two ways, both defaults OFF so normal CI/dev
-// builds exercise the real auth flows:
-//   • isLoginMaintenanceActive() is the BUILD-TIME opt-in
-//     (VITE_LOGIN_MAINTENANCE === '1' | 'true'). It seeds the Login page's
-//     INITIAL paint via LOGIN_MAINTENANCE.active so a maintenance build never
-//     flashes the normal login form, and gates the secondary auth surfaces
-//     that render synchronously without a probe — AuthCallback, SetPassword,
-//     and SessionExpiredDialog.
-//   • The Login page then probes GET /api/auth/maintenance at runtime and
-//     follows the server's answer, so flipping the backend env var needs no
-//     frontend rebuild — the build-time flag only avoids the initial flash
-//     and stays consistent with the runtime truth in normal builds.
-// LOGIN_MAINTENANCE (below) is the runtime fallback (and the probe's shape);
-// when the API is unreachable the fallback stands — sign-in couldn't succeed
-// anyway, so showing the banner is the safe default.
+// Login maintenance is permanently disabled.
+// This static fallback cannot hide or replace the normal sign-in experience.
+
 export function isLoginMaintenanceActive() {
-  return (
-    import.meta.env.VITE_LOGIN_MAINTENANCE === '1' ||
-    import.meta.env.VITE_LOGIN_MAINTENANCE === 'true'
-  )
+  return false
 }
 
 export const LOGIN_MAINTENANCE = {
-  active: isLoginMaintenanceActive(),
-  title: 'GrantFlow is being upgraded',
-  message:
-    'We are performing a scheduled upgrade. Sign-in is temporarily disabled while we finish.',
-  // Date-free by design: this is only the pre-probe/offline fallback, and a
-  // hardcoded date here goes stale silently (it read "Monday, July 21" months
-  // late). The live ETA comes from the server probe, which the owner sets with
-  // the API's LOGIN_MAINTENANCE_ETA env var.
-  etaText: 'We expect to be back online shortly.',
+  active: false,
+  title: '',
+  message: '',
+  etaText: '',
 }
