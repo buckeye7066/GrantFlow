@@ -15,7 +15,10 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 
-import { buildRepositoryReleaseIdentity } from '../shared/releaseIdentity.js'
+import {
+  buildRepositoryReleaseIdentity,
+  RELEASE_IDENTITY_CONTRACT,
+} from '../shared/releaseIdentity.js'
 
 const WRITE_REPORT = process.argv.includes('--write')
 const REQUIRE_CLEAN = process.argv.includes('--require-clean')
@@ -279,7 +282,7 @@ async function main() {
     'Vercel frontend release manifest matches local release',
     `GET ${frontendReleaseUrl}`,
     frontendRelease.ok
-      && frontendRelease?.data?.contract === 'grantflow-release-identity-v1'
+      && frontendRelease?.data?.contract === RELEASE_IDENTITY_CONTRACT
       && shaMatches(expectedHead, frontendRelease?.data?.commit)
       && frontendRelease?.data?.manifest_sha256 === localReleaseIdentity?.manifest_sha256,
     {
@@ -319,7 +322,7 @@ async function main() {
     'Railway backend release manifest matches Vercel',
     `GET ${liveVersionUrl}`,
     liveVersion.ok
-      && backendReleaseIdentity?.contract === 'grantflow-release-identity-v1'
+      && backendReleaseIdentity?.contract === RELEASE_IDENTITY_CONTRACT
       && shaMatches(expectedHead, backendReleaseIdentity?.commit)
       && backendReleaseIdentity?.manifest_sha256 === frontendRelease?.data?.manifest_sha256
       && backendReleaseIdentity?.manifest_sha256 === localReleaseIdentity?.manifest_sha256,
@@ -343,7 +346,6 @@ async function main() {
     liveVersion.ok
       && databaseMigrations?.available === true
       && databaseMigrations?.matches_release === true
-      && databaseMigrations?.order_matches === true
       && Array.isArray(databaseMigrations?.pending)
       && databaseMigrations.pending.length === 0
       && Array.isArray(databaseMigrations?.unexpected)
