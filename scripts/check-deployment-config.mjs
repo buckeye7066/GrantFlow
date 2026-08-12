@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { validateWorkflowNodeRuntime } from './lib/workflow-node-runtime.mjs'
 
 const root = process.cwd()
 const failures = []
@@ -57,8 +58,47 @@ const dockerignore = readText('.dockerignore')
 const envGenerator = readText('scripts/generate-env-examples.mjs')
 const healthRoutes = readText('backend/routes/health.js')
 const nvmrc = readText('.nvmrc').trim()
+const mobileNodeRuntime = readText('.node-version-mobile').trim()
 const nodeRuntimeVersion = '20.20.2'
+const mobileNodeRuntimeVersion = '22.22.0'
 const nodeEngineRange = '>=20.19.0 <21'
+
+function checkWorkflowNodeRuntimePins() {
+  const workflowsDir = path.join(root, '.github', 'workflows')
+  let workflowNames = []
+  try {
+    workflowNames = fs.readdirSync(workflowsDir).filter((name) => /\.ya?ml$/i.test(name))
+  } catch (error) {
+    failures.push(`.github/workflows: could not enumerate workflows (${error?.message || error})`)
+    return
+  }
+
+  for (const workflowName of workflowNames) {
+    const relativePath = path.join('.github', 'workflows', workflowName)
+    const source = readText(relativePath)
+    const mobileRequirements = workflowName === 'android-build.yml'
+      ? [
+          { job: 'android', command: 'node scripts/release-gates.mjs', field: 'node-version-file', value: '.nvmrc' },
+          { job: 'android', command: 'npx cap sync android', field: 'node-version-file', value: '.node-version-mobile' },
+        ]
+      : workflowName === 'ios-build.yml'
+        ? [
+            { job: 'ios', command: 'npm run build', field: 'node-version-file', value: '.nvmrc' },
+            { job: 'ios', command: 'npx cap sync ios', field: 'node-version-file', value: '.node-version-mobile' },
+          ]
+        : []
+    const allowedNodeVersionFiles = mobileRequirements.length
+      ? ['.nvmrc', '.node-version-mobile']
+      : ['.nvmrc']
+
+    failures.push(...validateWorkflowNodeRuntime(source, {
+      workflowPath: relativePath,
+      allowedInlineVersions: [nodeRuntimeVersion],
+      allowedNodeVersionFiles,
+      requiredRuntimeBeforeCommands: mobileRequirements,
+    }))
+  }
+}
 
 const railwayApi = 'https://grantflow-production.up.railway.app/api/:path*'
 const railwayUploads = 'https://grantflow-production.up.railway.app/uploads/:path*'
@@ -198,6 +238,11 @@ assert(Number(railway?.deploy?.restartPolicyMaxRetries || 0) >= 3, 'Railway rest
 assert(pkg?.engines?.node === nodeEngineRange, `package.json must require the supported Node range ${nodeEngineRange}`)
 assert(lock?.packages?.['']?.engines?.node === pkg?.engines?.node, 'package-lock root engine must match package.json')
 assert(nvmrc === nodeRuntimeVersion, `.nvmrc must pin the verified Node runtime ${nodeRuntimeVersion}`)
+assert(
+  mobileNodeRuntime === mobileNodeRuntimeVersion,
+  `.node-version-mobile must pin the verified Capacitor runtime ${mobileNodeRuntimeVersion}`,
+)
+checkWorkflowNodeRuntimePins()
 // Escape every regex metacharacter, not just `.` (js/incomplete-sanitization)
 // — nodeRuntimeVersion is a trusted local config value today, but a helper
 // that escapes only one character is the wrong general habit to establish.

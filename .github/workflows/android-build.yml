@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: 'npm'
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
@@ -45,6 +45,11 @@ jobs:
         env:
           VITE_API_URL: https://grantflow-production.up.railway.app
         run: node scripts/release-gates.mjs
+      - name: Switch to Capacitor Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version-mobile
+          cache: 'npm'
       - name: Sync verified web build into Android
         run: npx cap sync android
       - name: Require persistent Android signing identity
