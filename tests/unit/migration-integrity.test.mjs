@@ -156,3 +156,19 @@ test('a changed or missing applied migration fails closed', async () => {
     /file not present in this release/,
   )
 })
+
+test('boot migration path verifies or baselines the ledger before reading applied rows', () => {
+  const source = fs.readFileSync(
+    new URL('../../backend/db/migrate.js', import.meta.url),
+    'utf8',
+  )
+  const bootStart = source.indexOf('export async function runPendingMigrationsOnBoot')
+  const bootSource = source.slice(bootStart)
+  const verifyIndex = bootSource.indexOf('verifyOrBaselineMigrationLedger(')
+  const appliedIndex = bootSource.indexOf('getAppliedSet()')
+
+  assert.notEqual(bootStart, -1)
+  assert.notEqual(verifyIndex, -1)
+  assert.notEqual(appliedIndex, -1)
+  assert.ok(verifyIndex < appliedIndex)
+})
