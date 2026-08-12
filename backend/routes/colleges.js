@@ -8,6 +8,7 @@ import express from 'express'
 import zipcodes from 'zipcodes'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
+import { sanitizeLogValue } from '../utils/logger.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -32,7 +33,10 @@ function normalizeZip(value) {
  * Response: { success, zip, radiusMiles, radiusFilteringApplied, results: [{ title, url, source, distanceMiles? }] }
  */
 router.get('/local-funding', async (req, res) => {
-  const requestId = req.get(REQUEST_ID_HEADER) || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  // CodeQL js/log-injection (#562/#563/#564): sanitized once at the source
+  // since this value (raw client-supplied X-Request-Id header when present)
+  // is logged repeatedly throughout this handler.
+  const requestId = sanitizeLogValue(req.get(REQUEST_ID_HEADER) || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
   const zipParam = req.query.zip
   const radiusParam = req.query.radiusMiles ?? req.query.radius_miles ?? 25
   const radiusMiles = Math.min(100, Math.max(1, parseInt(String(radiusParam), 10) || 25))
@@ -49,7 +53,7 @@ router.get('/local-funding', async (req, res) => {
 
   const zip = normalizeZip(zipParam)
   if (!zip) {
-    console.warn(`[colleges/local-funding] ${requestId} invalid zip: ${zipParam}`)
+    console.warn(`[colleges/local-funding] ${requestId} invalid zip: ${sanitizeLogValue(zipParam)}`)
     return res.status(400).json({
       success: false,
       error: 'zip_invalid',

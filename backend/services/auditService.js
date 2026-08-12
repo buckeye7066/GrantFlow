@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'crypto'
-import { createLogger } from '../utils/logger.js'
+import { createLogger, sanitizeLogValue } from '../utils/logger.js'
 const log = createLogger('auditService')
 
 // Audit event categories
@@ -103,7 +103,9 @@ export async function logAuditEvent(db, {
     
     // Log critical events to console as well
     if (severity === SEVERITY.CRITICAL || severity === SEVERITY.ERROR) {
-      console.error('[Audit][%s] %s:%s', severity.toUpperCase(), category, action, {
+      // CodeQL js/log-injection (#604): category/action are caller-supplied
+      // strings with no whitelist at this shared choke point.
+      console.error('[Audit][%s] %s:%s', severity.toUpperCase(), sanitizeLogValue(category), sanitizeLogValue(action), {
         userId,
         resourceType,
         resourceId,

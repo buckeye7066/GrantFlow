@@ -153,7 +153,11 @@ function selfTargetFor(key) {
 
 function normalizeProfileSectionAliases(data, sectionKey) {
   const aliases = PROFILE_FIELD_ALIASES[sectionKey] ?? {}
-  const normalized = {}
+  // CodeQL js/remote-property-injection (#752): a plain-object accumulator
+  // built from remote-shaped data with no key guard lets a "__proto__" key
+  // swap the object's prototype. Object.create(null) has no prototype to
+  // swap.
+  const normalized = Object.create(null)
   const aliasRejections = []
   for (const [rawKey, value] of Object.entries(data ?? {})) {
     const key = aliases[rawKey] ?? rawKey

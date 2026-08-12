@@ -1,4 +1,5 @@
 import { apiRateLimitMiddleware } from './apiRateLimitPolicy.js'
+import { sanitizeLogValue } from '../utils/logger.js'
 
 /**
  * Lightweight production monitoring for matching/discovery endpoints.
@@ -120,12 +121,15 @@ export function pipelineMonitor() {
             ? ' â  SUPPRESSION DETECTED: candidates found but none included â check relevanceFilter/matchEngine gates'
             : ''
         console.warn(
-          `[pipeline-monitor] ZERO RESULTS ${req.method} ${req.path} (${elapsed}ms) ` +
+          // CodeQL js/log-injection (#558): req.path is URL-decoded by
+          // Express (unlike req.url/originalUrl), so a %0A in the request
+          // path would otherwise land as a raw newline in this log line.
+          `[pipeline-monitor] ZERO RESULTS ${req.method} ${sanitizeLogValue(req.path)} (${elapsed}ms) ` +
           `total_found=${totalFound} included=${included} status=${res.statusCode}${suppressionNote}`
         )
       }
       if (slow) {
-        console.warn(`[pipeline-monitor] SLOW ${req.method} ${req.path} (${elapsed}ms)`)
+        console.warn(`[pipeline-monitor] SLOW ${req.method} ${sanitizeLogValue(req.path)} (${elapsed}ms)`)
       }
 
       return originalJson.call(this, body)

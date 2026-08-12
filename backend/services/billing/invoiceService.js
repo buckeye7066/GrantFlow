@@ -149,7 +149,15 @@ export function buildInvoiceEmail({ orgName, amountCents, periodStart, periodEnd
     `We bill transparently — no percentage-of-award fees, ever — and we're glad to talk through anything.`, '',
     'With appreciation,', 'The GrantFlow team',
   ].filter((l) => l !== undefined).join('\n')
-  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // CodeQL js/incomplete-html-attribute-sanitization (#384): this helper
+  // feeds href="${esc(paymentLink)}" below, but omitted `"` — an unescaped
+  // double quote in paymentLink could break out of the attribute.
+  const esc = (s) => String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
   const html = `<!doctype html><html><body style="font-family:system-ui,Arial,sans-serif;color:#0f172a;line-height:1.5">
     <p>${esc(greeting)}</p>
     <p>${esc(lead)}</p>

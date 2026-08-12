@@ -1,6 +1,7 @@
 import express from 'express'
 import pdfParse from 'pdf-parse'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import { sanitizeLogValue } from '../utils/logger.js'
 import { requireAuthenticatedUser, ensureOrganizationAccess } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { parseGrantsGovDigest } from '../../shared/grantsGovDigestParser.js'
@@ -220,7 +221,9 @@ router.post('/parseNOFO', standardRateLimiter, async (req, res) => {
 
     const { text, contentType } = await fetchPdfTextFromUrl(fileUrl)
     if (!text) {
-      console.warn('[parseNOFO] Empty text extracted from URL:', fileUrl, '| contentType:', contentType)
+      // CodeQL js/log-injection (#585): raw req.body.file_url, no URL-format
+      // validation before this log call.
+      console.warn('[parseNOFO] Empty text extracted from URL:', sanitizeLogValue(fileUrl), '| contentType:', contentType)
       return res.status(422).json({
         success: false,
         message: contentType.includes('pdf')

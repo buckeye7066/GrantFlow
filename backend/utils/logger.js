@@ -98,9 +98,37 @@ export function clearRecentLogs() {
   _records.length = 0
 }
 
+// CodeQL js/log-injection (CWE-117): a raw string containing newline/
+// carriage-return/other control characters, interpolated straight into a
+// log line, lets an attacker forge fake log entries (e.g. inject a fake
+// "ERROR: admin login succeeded" line) or corrupt log-shipping parsers.
+// Escapes control characters to a visible backslash-n / backslash-r / hex
+// form instead of stripping them, so the value stays legible for debugging
+// but can never break out of its own line. Exported so call sites that log
+// via raw console.* (bypassing createLogger entirely) can apply the same
+// protection at the point they interpolate tainted data.
+const CONTROL_CHAR_CODES = [
+  0,1,2,3,4,5,6,7,8, // 0x00-0x08
+  0x0b, 0x0c,
+  0x0e,0x0f,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f, // 0x0e-0x1f
+  0x7f,
+]
+const CONTROL_CHAR_RX = new RegExp(
+  '[' + CONTROL_CHAR_CODES.map((c) => String.fromCharCode(c)).join('') + ']',
+  'g',
+)
+
+export function sanitizeLogValue(value) {
+  const str = typeof value === 'string' ? value : String(value ?? '')
+  return str
+    .split('\n').join('\\n')
+    .split('\r').join('\\r')
+    .replace(CONTROL_CHAR_RX, (ch) => '\\x' + ch.charCodeAt(0).toString(16).padStart(2, '0'))
+}
+
 function formatContext(ctx) {
   if (ctx === undefined || ctx === null) return ''
-  if (typeof ctx === 'string') return ` ${ctx}`
+  if (typeof ctx === 'string') return ` ${sanitizeLogValue(ctx)}`
   if (ctx instanceof Error) {
     return ` ${ctx.message}${ctx.stack ? `\n${ctx.stack}` : ''}`
   }
@@ -132,7 +160,7 @@ export function createLogger(namespace) {
 
   function emit(level, sink, event, rest) {
     if (LEVELS[level] > _threshold) return
-    const message = `${tag} ${String(event || '')}`.trim()
+    const message = `${tag} ${sanitizeLogValue(String(event || ''))}`.trim()
     const ctxString = rest.map(formatContext).join('')
     const line = `${message}${ctxString}`
     pushRecord({

@@ -613,8 +613,20 @@ function mergeUniqueStrings(existing = [], incoming = []) {
   return [...set]
 }
 
+// CodeQL js/xss-through-dom (#190): these hrefs come from AI/web-enrichment
+// -sourced fields (website_url, admissions_url, etc.) with no scheme check —
+// a `javascript:` URI would execute on click. Only allow http(s).
+function isSafeExternalHref(href) {
+  try {
+    const url = new URL(String(href), window.location.origin)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 function ExternalLinkButton({ href, children }) {
-  if (!href) return null
+  if (!href || !isSafeExternalHref(href)) return null
   return (
     <Button asChild variant="outline" size="sm">
       <a href={href} target="_blank" rel="noopener noreferrer">
