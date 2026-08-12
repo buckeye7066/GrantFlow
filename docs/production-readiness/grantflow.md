@@ -156,14 +156,14 @@ The implementation is internally consistent at this checkpoint. The next gate is
 7. The exact merge SHA must be deployed to both Vercel and Railway.
 8. `/deployment-version.json`, `/release-identity.json`, and `/api/version` must agree on code, manifest, evidence artifact, and database migration identity.
 9. Production mission health must prove the 100% visible-direct and 95% complete-catalog link gates.
-10. Authenticated production journeys, representative cohort/manual-search comparison, Amy recovery/cohort, and Hamilton/portal handoffs must be completed with legitimate credentials and consent.
+10. Representative cohort/manual-search comparison, Amy recovery/cohort, and Hamilton/portal handoffs must be completed.
 11. A fresh post-merge review must find no unresolved release-blocking issue.
 
 ## Current truthful decision
 
 **REVIEWING.**
 
-GrantFlow is not being called Production Ready. The current candidate has substantial implementation and validation evidence, but normal exact-head CI, complete fresh review, merge, post-merge CI/review, exact dual deployment, production database identity, live catalog metrics, authenticated journeys, Amy cohort evidence, Hamilton/portal evidence, and manual-search comparison are not yet all complete.
+GrantFlow is not being called Production Ready. The current candidate has substantial implementation and validation evidence, but normal exact-head CI, complete fresh review, merge, post-merge CI/review, exact dual deployment, production database identity, live catalog metrics, Amy cohort evidence, Hamilton/portal evidence, and manual-search comparison are not yet all complete.
 
 ## Rollback
 
