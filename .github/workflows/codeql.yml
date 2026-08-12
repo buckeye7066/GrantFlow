@@ -27,7 +27,16 @@ jobs:
   analyze:
     name: Analyze JavaScript and TypeScript
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 25 was sized for "evaluate queries + local baseline check" only, from
+    # when `upload: never` skipped the SARIF upload + GitHub processing-wait
+    # tail entirely. Restoring the upload (see the `upload: always` step below)
+    # exercised the full push/full-scan pipeline for the first time and it
+    # measured well past 25 min under ordinary runner load (two consecutive
+    # push-triggered runs on 2026-08-12 were still inside `codeql database
+    # run-queries` at the 25-minute mark and got cancelled, never reaching the
+    # export/upload steps at all). Give the full-scan lane real headroom;
+    # pull_request's diff-informed runs finish in minutes either way.
+    timeout-minutes: 50
 
     steps:
       - name: Checkout
