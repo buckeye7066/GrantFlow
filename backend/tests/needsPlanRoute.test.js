@@ -251,6 +251,53 @@ describe('POST /api/item-needs/:profileId/needs-plan/search', () => {
     expect(res.body.search_backends.verdict).toBe('healthy')
   })
 
+  it('joins results to needs by SUBJECT, so a reordered/deduped response cannot mislabel', async () => {
+    // `searchItemNeeds` dedupes its `items` by normalized text and could in
+    // principle return them in a different order. An index-based join would
+    // silently attach the wrong need identity to a result — a mislabelled
+    // funding source is worse than a missing one. Returning the items REVERSED
+    // is the cheapest way to prove the join does not depend on position.
+    let passedItems = []
+    searchItemNeedsMock.mockImplementation(async (_db, args) => {
+      passedItems = args.items
+      return {
+        profile_id: 'lab-1',
+        requested_count: args.items.length,
+        searched_count: args.items.length,
+        truncated: 0,
+        total_found: 0,
+        total_awardable: 0,
+        total_pointer: 0,
+        items: [...args.items].reverse().map((item) => ({ item, found: 0, results: [] })),
+      }
+    })
+
+    // Ground truth: the plan itself maps each search subject to its label.
+    const planRes = await request(app).get('/api/item-needs/lab-1/needs-plan').expect(200)
+    const labelBySubject = new Map(
+      [...planRes.body.open, ...planRes.body.user_added].map((n) => [n.search_subject, n.label]),
+    )
+
+    const res = await request(app).post('/api/item-needs/lab-1/needs-plan/search').send({}).expect(200)
+    expect(res.body.items.length).toBeGreaterThan(1)
+    expect(res.body.items[0].item).toBe(passedItems[passedItems.length - 1])
+
+    // THE ASSERTION THAT MATTERS: every row's label must be the label of ITS
+    // OWN subject. Under an index join the rows are reversed relative to the
+    // labels, so every row is mislabelled and this fails.
+    for (const row of res.body.items) {
+      expect(row.need_label, `row "${row.item}" must carry its own need's label`).toBe(
+        labelBySubject.get(row.item),
+      )
+    }
+  })
+
+  it('never sends the same search subject twice in one run', async () => {
+    await request(app).post('/api/item-needs/lab-1/needs-plan/search').send({}).expect(200)
+    const passed = searchItemNeedsMock.mock.calls[0][1].items
+    expect(new Set(passed.map((s) => s.toLowerCase())).size).toBe(passed.length)
+  })
+
   it('attaches the need identity to each searched item', async () => {
     searchItemNeedsMock.mockResolvedValue({
       profile_id: 'lab-1',

@@ -189,10 +189,23 @@ router.post('/:profileId/needs-plan/search', ensureAuth, mutationRateLimiter, as
 
     // The searchable set, in plan order: open blueprint needs first (they are
     // ordered blockers-first), then the owner's own words.
-    let selectable = [
+    //
+    // DEDUPED BY SUBJECT ON PURPOSE. `searchItemNeeds` dedupes its `items` by
+    // normalized text before searching, so two needs that resolve to the same
+    // search phrase would come back as ONE result — silently shortening the
+    // response relative to what we asked for and (before this) shifting the
+    // need identities we re-attach below. Collapsing here instead keeps
+    // `plan_size`, `remaining`, and `next_offset` truthful.
+    const bySubject = new Map()
+    for (const entry of [
       ...plan.open.map((need) => ({ code: need.code, label: need.label, subject: need.search_subject, source: need.source })),
       ...(includeUser ? plan.user_added.map((need) => ({ code: null, label: need.label, subject: need.search_subject, source: 'user_added' })) : []),
-    ]
+    ]) {
+      const key = String(entry.subject ?? '').trim().toLowerCase()
+      if (!key || bySubject.has(key)) continue
+      bySubject.set(key, entry)
+    }
+    let selectable = [...bySubject.values()]
 
     // An explicit `codes` filter narrows to those needs. A code the plan does
     // not contain is REPORTED, never silently ignored.
@@ -262,14 +275,22 @@ router.post('/:profileId/needs-plan/search', ensureAuth, mutationRateLimiter, as
       variant: body.variant === 'gift' ? 'gift' : 'funding',
     })
 
-    // Re-attach the need identity to each searched item. `searchItemNeeds`
-    // echoes the subject string it was given, so index alignment is exact.
-    const items = (report.items ?? []).map((item, index) => ({
-      need_code: window[index]?.code ?? null,
-      need_label: window[index]?.label ?? null,
-      need_source: window[index]?.source ?? null,
-      ...item,
-    }))
+    // Re-attach the need identity to each searched item BY SUBJECT, not by
+    // index. `searchItemNeed` echoes back the exact string it was handed, so
+    // the join is exact — and unlike an index join it cannot mislabel a result
+    // if the service ever reorders or drops an entry. `index` is only a
+    // last-resort fallback so an unmatched row is still labelled rather than
+    // silently anonymous.
+    const windowBySubject = new Map(window.map((w) => [String(w.subject).trim().toLowerCase(), w]))
+    const items = (report.items ?? []).map((item, index) => {
+      const need = windowBySubject.get(String(item?.item ?? '').trim().toLowerCase()) ?? window[index] ?? null
+      return {
+        need_code: need?.code ?? null,
+        need_label: need?.label ?? null,
+        need_source: need?.source ?? null,
+        ...item,
+      }
+    })
 
     return res.json({
       success: true,
