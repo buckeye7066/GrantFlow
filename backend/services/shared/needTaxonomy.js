@@ -283,6 +283,70 @@ function wordMatchesSynonym(synonym, word) {
 }
 
 /**
+ * Does `text` state `phrase` AT TOKEN BOUNDARIES?
+ *
+ * WHY THIS REPLACED `text.includes(phrase)` (2026-08-13). The primary branch of
+ * `expandNeed` tested bare substring containment against the RAW request text.
+ * `EXPAND_NEED_STOPWORDS` could not save it — stopwords are applied only to
+ * `contentWords`, never to that raw scan. So the 3-character taxonomy key `ssi`
+ * matched inside the word "a-SSI-stance", and because "cost assistance" is
+ * ordinary funding language, EVERY need phrased that way resolved to the
+ * DISABILITY/SSI taxonomy. Measured live 2026-08-13 on the research-lab plan:
+ *
+ *   "hazardous waste disposal cost assistance small laboratory" -> SSI/SSDI
+ *   "IRB review cost assistance small research organization"    -> SSI/SSDI
+ *   "patent filing cost assistance program startup"             -> SSI/SSDI
+ *   "laboratory facility utility cost assistance"               -> SSI/SSDI
+ *
+ * expanding each to "adaptive equipment / vocational rehabilitation / home
+ * modification" and feeding those terms to the catalog LIKE scan and one of the
+ * four live web queries. This is the one-shared-substring floor this repo has
+ * now hit in `conditionCoveredBySource`, `enforceLeadContactPlausibility` and
+ * `declaredFieldOfStudyRecall` — the same rule, one door over.
+ *
+ * A snake_case KEY is an internal identifier, so it is also matched in its
+ * spoken form ("safety_certification" -> "safety certification"); that is how a
+ * key can legitimately match text a person actually typed.
+ */
+function phraseStatedIn(text, phrase) {
+  const norm = String(phrase ?? '').toLowerCase().trim()
+  if (!norm) return false
+  const spoken = norm.replace(/_/g, ' ')
+  for (const candidate of new Set([norm, spoken])) {
+    if (!candidate) continue
+    const re = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(candidate)}(?:[^a-z0-9]|$)`, 'i')
+    if (re.test(text)) return true
+  }
+  return false
+}
+
+/**
+ * Words that are ordinary FUNDING language rather than evidence of a need.
+ *
+ * These may not, ALONE, elect a taxonomy entry in the fallback branch. The
+ * fallback used to pick its primary by KEY-NAME LENGTH — a property of our
+ * internal identifier, not of the request — so the ubiquitous word "grant"
+ * elected whichever long-named entry happened to list the most "…grant"
+ * synonyms. Measured 2026-08-13: "NIH research grant", "wet lab space grant
+ * startup" and "laboratory reagent grant small research lab" ALL resolved to
+ * `safety_certification` (CPR/AED, fire-department training, Rotary Club).
+ *
+ * Distinct from EXPAND_NEED_STOPWORDS, which is applied to `contentWords` and
+ * therefore also removes these words from `mustTerms`. These stay available as
+ * must-terms — they are just not sufficient to CHOOSE a taxonomy.
+ */
+const GENERIC_FUNDING_WORDS = new Set([
+  'grant', 'grants', 'program', 'programs', 'support', 'cost', 'costs',
+  'aid', 'award', 'awards', 'money', 'financial', 'small', 'new',
+  // Entity words describe WHO is asking, never WHAT they need. Measured
+  // 2026-08-13: "IRB review cost assistance small research organization"
+  // resolved to TRANSPORTATION because "organization" matched the synonym
+  // "organization vehicle" — a 15-passenger van offered for an ethics review.
+  'organization', 'organizations', 'org', 'nonprofit', 'company', 'agency',
+  'review', 'general', 'annual', 'local',
+])
+
+/**
  * Expand a free-text need into taxonomy terms.
  *
  * @param {string} needText - e.g. "emergency rent", "PROBE class", "utility shutoff"
@@ -305,7 +369,7 @@ export function expandNeed(needText) {
   // Direct key match — a taxonomy KEY is an internal snake_case identifier.
   const keyMatches = [];
   for (const [key, entry] of Object.entries(TAXONOMY)) {
-    if (text.includes(key)) {
+    if (phraseStatedIn(text, key)) {
       keyMatches.push({ key, entry });
     }
   }
@@ -313,7 +377,7 @@ export function expandNeed(needText) {
   // Synonym match — a SYNONYM is the language a real person types.
   const synMatches = [];
   for (const [syn, entry] of KEYWORD_INDEX.entries()) {
-    if (text.includes(syn)) {
+    if (phraseStatedIn(text, syn)) {
       synMatches.push({ syn, entry });
     }
   }
@@ -359,22 +423,35 @@ export function expandNeed(needText) {
   // Sort by key length descending before iterating so longer (more specific) keys win
   // when we later pick the primary canonical need.
   const taxonomyEntries = Object.entries(TAXONOMY).sort((a, b) => b[0].length - a[0].length);
-  const seenFallbackKeys = new Set();
+  const seenFallbackKeys = new Map();
   for (const word of words) {
+    // A generic funding word is not evidence of WHICH need this is, so it may
+    // not elect an entry on its own (see GENERIC_FUNDING_WORDS).
+    const generic = GENERIC_FUNDING_WORDS.has(word);
     for (const [key, entry] of taxonomyEntries) {
-      if (!seenFallbackKeys.has(key) &&
-          (wordMatchesTaxonomyKey(key, word) ||
-            entry.synonyms.some((s) => wordMatchesSynonym(s, word)))) {
-        fallbackMatches.push({ key, entry });
-        seenFallbackKeys.add(key);
+      if (wordMatchesTaxonomyKey(key, word) ||
+          entry.synonyms.some((s) => wordMatchesSynonym(s, word))) {
+        const seen = seenFallbackKeys.get(key);
+        if (seen) { if (!generic) seen.specificWords.add(word); continue; }
+        const record = { key, entry, specificWords: new Set(generic ? [] : [word]) };
+        seenFallbackKeys.set(key, record);
+        fallbackMatches.push(record);
         // Do NOT break â a single word may match multiple taxonomy keys;
         // we want all of them for maximum recall (Goal 7)
       }
     }
   }
+  // An entry explained ONLY by generic funding language is not a match at all.
+  // This is what stops the word "grant" from electing `safety_certification`
+  // (CPR/AED, fire-department training, Rotary Club) for "NIH research grant".
+  const specificMatches = fallbackMatches.filter((m) => m.specificWords.size > 0);
+  fallbackMatches.length = 0;
+  fallbackMatches.push(...specificMatches);
   if (fallbackMatches.length > 0) {
-    // Primary canonical need from the first (longest-key) match
-    fallbackMatches.sort((a, b) => b.key.length - a.key.length);
+    // Rank by EVIDENCE — how many distinct specific words the entry explains —
+    // and only then by key length as a stable tie-break. Ranking by key length
+    // alone let an internal identifier's spelling decide the canonical need.
+    fallbackMatches.sort((a, b) => (b.specificWords.size - a.specificWords.size) || (b.key.length - a.key.length));
     const primary = fallbackMatches[0];
     const mergedCats = new Set(primary.entry.programCategories);
     for (const fm of fallbackMatches.slice(1)) {

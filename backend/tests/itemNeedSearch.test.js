@@ -338,12 +338,24 @@ describe('the whole-request behaviour', () => {
     })
     expect(out.results.map((r) => r.title)).toEqual([REAL_CPEP.title])
     expect(out.found).toBe(1)
-    // A web lead's kind was never classified, so it is UNCLASSIFIED — never
-    // counted as awardable. `isPointerKind(null)` is false, and publishing that
-    // as "awardable" is the Number(null)===0 class.
+    // THE LOAD-BEARING GUARD, UNCHANGED: a web lead is NEVER counted as
+    // awardable. `isPointerKind(null)` is false, and publishing that as
+    // "awardable" is the Number(null)===0 class.
     expect(out.awardable_count).toBe(0)
-    expect(out.pointer_count).toBe(0)
-    expect(out.unclassified_count).toBe(1)
+    // CONTRACT CHANGED 2026-08-13. This used to assert `pointer 0 /
+    // unclassified 1` on the reasoning that a web lead's kind "was never
+    // classified". That was not true: `searchWebLane` runs the canonical
+    // `classifyFundingResult` on every lead — it is how NOT_A_GRANT rows are
+    // refused — and then discarded the verdict. So EVERY surviving web lead
+    // fell into `unclassified`, which meant the per-item counts could never
+    // describe an open-web answer at all (measured live on the research-lab
+    // plan: found=3, awardable=0, pointer=0, unclassified=3 on every need).
+    // A raw SERP lead carries no apply URL, amount, deadline or program id, so
+    // the canonical chain returns RESOURCE, and "this is a pointer worth
+    // opening" is a TRUE statement where "unknown" was a discarded measurement.
+    expect(out.pointer_count).toBe(1)
+    expect(out.unclassified_count).toBe(0)
+    expect(out.results[0].result_bucket).toBe('resource')
     // Every one of the 5 refusals is ATTRIBUTED, so "5 dropped" is explainable:
     //   Merriam-Webster  -> need-score floor (states only 'probe' = 5 pts; it
     //                       used to clear 10 by also crediting the stopword
