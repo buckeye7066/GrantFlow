@@ -73,7 +73,7 @@ const MATCH_TIER_STYLES = {
 
 const getMatchScoreColor = (score) => {
     const label = scoreToMatchLabel(score);
-    const tier = MATCH_TIER_STYLES[scoreToMatchTier(score)];
+    const tier = MATCH_TIER_STYLES[scoreToMatchTier(score)] || { bg: 'from-slate-400 to-slate-500', icon: '❓' };
     return { bg: tier.bg, text: 'text-white', label, icon: tier.icon };
 };
 

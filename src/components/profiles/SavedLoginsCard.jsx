@@ -59,7 +59,7 @@ export default function SavedLoginsCard({ profileId }) {
     let changed = false
     const next = {}
     if (suggestion.portalHost && !current.portalHost.trim()) { next.portalHost = suggestion.portalHost; changed = true }
-    if (suggestion.loginUrl && !current.login_url.trim()) { next.login_url = suggestion.loginUrl; changed = true }
+    if ((suggestion.login_url || suggestion.loginUrl) && !current.login_url.trim()) { next.login_url = suggestion.login_url || suggestion.loginUrl; changed = true }
     if (suggestion.username && !current.username.trim()) { next.username = suggestion.username; changed = true }
     if (suggestion.label && !current.label.trim()) { next.label = suggestion.label; changed = true }
     if (changed) applyFn(next)

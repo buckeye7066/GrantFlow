@@ -199,7 +199,7 @@ class APIClient {
 
   async handleUnauthorized(originalRequest) {
     // If the original request was to /refresh, don't try again - just fail
-    if (originalRequest?.endpoint?.includes('/auth/refresh')) {
+    if (originalRequest?.endpoint?.startsWith('/api/auth/refresh')) {
       console.warn('[APIClient] Refresh endpoint failed, clearing auth state');
       this.clearToken();
       if (this.onAuthFailure && !this._suppressAuthFailureCount) {
@@ -520,7 +520,7 @@ class APIClient {
         //
         // EXCEPTION: `/api/auth/me` is the canonical "who am I" bootstrap and SHOULD
         // attempt refresh+retry when the access token expires.
-        if (endpoint.startsWith('/api/auth/') && !endpoint.startsWith('/api/auth/me')) {
+        if (endpoint.startsWith('/api/auth/') && !endpoint.startsWith('/api/auth/me') && endpoint !== '/api/auth/logout') {
           const errorBody = await response.json().catch(() => ({ error: response.statusText }))
           const message =
             typeof errorBody?.message === 'string' && errorBody.message.trim()

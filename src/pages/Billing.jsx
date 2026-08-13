@@ -400,7 +400,11 @@ function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRev
     // Generate a more robust invoice number with timestamp and cryptographically secure random component
     const timestamp = Date.now()
     const randomBytes = new Uint8Array(4)
-    crypto.getRandomValues(randomBytes)
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      crypto.getRandomValues(randomBytes)
+    } else {
+      for (let i = 0; i < randomBytes.length; i++) randomBytes[i] = Math.floor(Math.random() * 256)
+    }
     const randomPart = Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase()
     const invoiceNumber = `INV-${timestamp}-${randomPart}`
     
