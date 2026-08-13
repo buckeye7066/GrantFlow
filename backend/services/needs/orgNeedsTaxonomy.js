@@ -673,8 +673,44 @@ function evaluateApplicability(code, sections) {
  * expands synonyms. Stacking a third rewriting layer here is how a query turns
  * into soup that matches nothing.
  */
-export function buildSearchSubject(code) {
+/**
+ * Blueprint-scoped subject overrides.
+ *
+ * WHY THIS EXISTS. `example_search_terms[0]` is a property of the NEED, but the
+ * need definitions in `profileIntelligence/needsTaxonomy.js` are SHARED across
+ * entity types, and their first example is written for whichever entity the
+ * author had in mind. `staffing_salary`'s is "SAFER grant fire department";
+ * `training`'s is "firefighter training grant"; `utilities_support`'s is the
+ * household program "LIHEAP utility assistance". Handing those to the crawler
+ * for a research lab does not merely miss — it confidently searches for the
+ * WRONG THING and returns real, reachable, useless results (measured live
+ * 2026-08-13: the biolab staffing subject returned FEMA SAFER, IAFF firefighter
+ * guidance, and a state firefighters' association).
+ *
+ * ONLY PROVABLY-FOREIGN subjects are overridden. A merely GENERIC subject
+ * ("equipment grant nonprofit") is left alone — a nonprofit lab may legitimately
+ * use it, and inventing a narrower claim is the failure mode this file's own
+ * suppression rules exist to avoid. Positive evidence acts; silence does not.
+ */
+const BLUEPRINT_SEARCH_SUBJECTS = Object.freeze({
+  research: Object.freeze({
+    staffing_salary: 'research staff salary support grant laboratory',
+    training: 'laboratory staff training certification grant',
+    utilities_support: 'laboratory facility utility cost assistance',
+  }),
+  research_lab: Object.freeze({
+    staffing_salary: 'research staff salary support grant laboratory',
+    training: 'laboratory staff training certification grant',
+    utilities_support: 'laboratory facility utility cost assistance',
+  }),
+})
+
+export { BLUEPRINT_SEARCH_SUBJECTS }
+
+export function buildSearchSubject(code, blueprintKey = null) {
   const def = getNeedDefinition(code)
+  const override = blueprintKey ? BLUEPRINT_SEARCH_SUBJECTS[blueprintKey]?.[code] : null
+  if (override) return override
   if (!def) return String(code ?? '').replace(/_/g, ' ').trim()
   const example = Array.isArray(def.example_search_terms) ? def.example_search_terms[0] : null
   return example || def.label || String(code).replace(/_/g, ' ')
@@ -781,7 +817,7 @@ export function deriveOrgNeeds({ profile = {}, sections = {} } = {}) {
       is_capital: Boolean(def.is_capital),
       is_operational: Boolean(def.is_operational),
       funding_categories: [...(def.funding_categories ?? [])],
-      search_subject: buildSearchSubject(def.code),
+      search_subject: buildSearchSubject(def.code, blueprint.key),
       source: 'profile_type_blueprint',
       blueprint: blueprint.key,
     }
