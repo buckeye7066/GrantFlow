@@ -182,7 +182,7 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
   const busy = validateMutation.isPending || exportMutation.isPending || submitMutation.isPending || autoPopulateMutation.isPending
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <Dialog open={open} onOpenChange={onClose ?? (() => {})}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

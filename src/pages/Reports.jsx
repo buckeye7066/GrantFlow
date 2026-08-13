@@ -175,7 +175,7 @@ export default function Reports() {
     return !isNaN(date.getTime());
   };
 
-  const filteredGrants = selectedOrgId === "all" ? grants : grants.filter(g => g.organization_id === selectedOrgId);
+  const filteredGrants = selectedOrgId === "all" ? grants : grants.filter(g => String(g.organization_id) === selectedOrgId);
   const awardedGrants = filteredGrants.filter(g => canonicalStage(g.status) === 'awarded');
 
   // Analytics calculations.
@@ -294,7 +294,7 @@ export default function Reports() {
               <CardContent>
                 <div className="space-y-2">
                   {overdueReports.map(report => {
-                    const grant = grants.find(g => g.id === report.grant_id);
+                    const grant = grants.find(g => String(g.id) === String(report.grant_id));
                     const daysOverdue = isValidDate(report.due_date) ? Math.abs(differenceInDays(new Date(), new Date(report.due_date))) : null;
                     return (
                       <div key={report.id} className="flex items-center justify-between p-3 bg-white rounded-lg">
@@ -332,7 +332,7 @@ export default function Reports() {
               ) : (
                 <div className="space-y-3">
                   {upcomingReports.map(report => {
-                    const grant = grants.find(g => g.id === report.grant_id);
+                    const grant = grants.find(g => String(g.id) === String(report.grant_id));
                     const daysUntilDue = isValidDate(report.due_date) 
                       ? differenceInDays(new Date(report.due_date), new Date())
                       : null;
