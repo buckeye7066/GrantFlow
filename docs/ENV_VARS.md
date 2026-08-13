@@ -550,7 +550,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `LINK_VERIFICATION_INTERVAL_MS` | Yes | Yes | Backend/Node |
 | `LLM_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `LOCATOR_KIND_BOOT_LIMIT` | Yes | Yes | Backend/Node |
-| `LOGIN_MAINTENANCE` | Yes | Yes | Backend/Node |
 | `LOG_BUFFER_SIZE` | Yes | Yes | Backend/Node |
 | `LOG_LEVEL` | Yes | Yes | Backend/Node |
 | `MAINTENANCE_ESTIMATED_MINUTES` | Yes | Yes | Backend/Node |
@@ -896,7 +895,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `VITE_ENABLE_CLICK_TRACER` | Yes | Yes | Frontend (Vite) |
 | `VITE_ENABLE_CLIENT_LOGS` | Yes | Yes | Frontend (Vite) |
 | `VITE_FORCE_RAILWAY_API` | Yes | Yes | Frontend (Vite) |
-| `VITE_LOGIN_MAINTENANCE` | Yes | Yes | Frontend (Vite) |
 | `VITE_PREVIEW_API_URL` | Yes | Yes | Frontend (Vite) |
 | `VITE_SENTRY_DSN` | Yes | Yes | Frontend (Vite) |
 | `VITE_SENTRY_ENVIRONMENT` | Yes | Yes | Frontend (Vite) |
@@ -5727,15 +5725,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L3487` (process.env)
 
-### `LOGIN_MAINTENANCE`
-
-- **Templates**:
-  - `.env.example:573` = ``
-  - `backend/.env.example:542` = ``
-- **Code references**:
-  - `backend/config/maintenance.js:L18–L19` (process.env)
-  - `backend/tests/loginMaintenanceGuard.test.js:L49–L110` (process.env)
-
 ### `LOG_BUFFER_SIZE`
 
 - **Templates**:
@@ -8859,13 +8848,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 - **Code references**:
   - `src/components/auth/SocialSignInButtons.jsx:L127` (import.meta.env)
   - `src/config/env.js:L42–L117` (import.meta.env)
-
-### `VITE_LOGIN_MAINTENANCE`
-
-- **Templates**:
-  - `.env.example:27` = ``
-- **Code references**:
-  - `src/config/maintenance.js:L22–L23` (import.meta.env)
 
 ### `VITE_PREVIEW_API_URL`
 
