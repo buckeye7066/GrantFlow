@@ -103,12 +103,22 @@ export const BUSINESS_TYPES = Object.freeze([
   'small_business',
 ])
 
+/**
+ * Research / laboratory entities. Kept as their own group (rather than folded
+ * into BUSINESS_TYPES) because their funding chain is distinct: they carry
+ * biosafety/CLIA licensing, IRB/IACUC approvals, BSL-rated space and capital
+ * instrumentation that no other org group needs, and the needs taxonomy keys
+ * its biolab blueprint off this group.
+ */
+export const RESEARCH_ORG_TYPES = Object.freeze(['research_lab'])
+
 /** Entity-style profiles that should capture org registration, EIN, budget, etc. */
 export const ORGANIZATION_DETAILS_TYPES = Object.freeze([
   ...MISSION_ORG_TYPES,
   ...PUBLIC_ORG_TYPES,
   ...EDUCATION_ORG_TYPES,
   ...BUSINESS_TYPES,
+  ...RESEARCH_ORG_TYPES,
   ...LEGACY_ORG_TYPES,
 ])
 

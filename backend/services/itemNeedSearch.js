@@ -633,7 +633,22 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
       url: lead.url ?? null,
       state: lead.state ?? null,
       opportunity_kind: null,
-      is_pointer: null,
+      // MEASURED, not unknown (2026-08-13). `classifyFundingResult` already ran
+      // on this lead above — it is how NOT_A_GRANT was refused — and it returns
+      // FUNDABLE / RESOURCE from the canonical chain. Publishing `null` here
+      // DISCARDED a verdict we had just computed, so every surviving web lead
+      // landed in `unclassified_count` and the lane could never state what it
+      // had found. That is the mirror of the honesty rule, not an instance of
+      // it: reporting "unknown" about something measured is as wrong as
+      // reporting a measurement nobody took.
+      //
+      // A raw SERP lead carries `application_url: null` and no amount, deadline
+      // or program id, so `hasFundableSignal` is false and the honest verdict is
+      // RESOURCE — a POINTER worth opening, never an award. A lead that DOES
+      // carry a fundable signal is classified FUNDABLE by the same chain and
+      // counts as awardable. No new vocabulary, no second authority.
+      is_pointer: junkVerdict.bucket === RESULT_BUCKETS.RESOURCE,
+      result_bucket: junkVerdict.bucket,
       need_score: score,
       matched_terms: needMatch?.matchedTerms ?? [],
       result_source: 'web_search',
@@ -708,10 +723,16 @@ export async function searchItemNeed(db, {
     .slice(0, Math.max(1, Math.min(Number(maxResults) || ITEM_SEARCH_MAX_RESULTS, 40)))
 
   // AWARDABLE vs POINTER, from the registry (`isPointerKind`), never a
-  // hand-typed kind list. A row whose kind was never classified — every web
-  // lead, and any catalog row with a NULL `opportunity_kind` — is counted
-  // SEPARATELY as `unclassified`, never folded into either bucket: an
-  // unmeasured value must not be published as a measurement.
+  // hand-typed kind list. A row whose kind was never classified — a catalog row
+  // with a NULL `opportunity_kind` — is counted SEPARATELY as `unclassified`,
+  // never folded into either bucket: an unmeasured value must not be published
+  // as a measurement.
+  //
+  // WEB LEADS ARE NO LONGER IN THAT BUCKET (2026-08-13). They are not
+  // unmeasured: `searchWebLane` runs the canonical `classifyFundingResult` on
+  // every one of them and now publishes that verdict instead of discarding it.
+  // Before this, `unclassified` silently meant "the entire web lane", so the
+  // per-item counts could never describe an open-web answer.
   const awardable = merged.filter((r) => r.is_pointer === false).length
   const pointer = merged.filter((r) => r.is_pointer === true).length
   const unclassified = merged.filter((r) => r.is_pointer === null || r.is_pointer === undefined).length

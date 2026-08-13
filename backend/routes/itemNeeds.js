@@ -6,9 +6,11 @@
  * is checked against the caller's accessible set — never a guessable id, never
  * an unauthenticated lookup.
  *
- *   GET  /api/item-needs/:profileId             — derived + declared item list
- *   POST /api/item-needs/:profileId/search      — crawl one item or a list
- *   POST /api/item-needs/:profileId/green-home  — strict no-cost green upgrades
+ *   GET  /api/item-needs/:profileId                    — derived + declared item list
+ *   POST /api/item-needs/:profileId/search             — crawl one item or a list
+ *   POST /api/item-needs/:profileId/green-home         — strict no-cost green upgrades
+ *   GET  /api/item-needs/:profileId/needs-plan         — org-type needs taxonomy
+ *   POST /api/item-needs/:profileId/needs-plan/search  — search the plan's needs
  *
  * Search routes are additionally held to the SAME tier capability as the
  * existing item-funding lane (`TIER_CAPABILITIES.ITEM_FUNDING`), so the paths
@@ -29,6 +31,8 @@ import { loadProfileContext } from '../services/profileHelpers.js'
 import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
 import { searchItemNeeds, ITEM_SEARCH_MAX_ITEMS } from '../services/itemNeedSearch.js'
 import { searchGreenHomeNoCostPrograms } from '../services/greenHomeNoCostSearch.js'
+import { deriveOrgNeeds } from '../services/needs/orgNeedsTaxonomy.js'
+import { probeSearchProviderHealth } from '../services/searchProviderHealth.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -89,6 +93,224 @@ router.get('/:profileId', ensureAuth, standardRateLimiter, async (req, res) => {
     })
   } catch (error) {
     routeLogger.error('[item-needs] list error', error)
+    return res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * GET /api/item-needs/:profileId/needs-plan
+ *
+ * THE PREDETERMINED NEEDS LIST for an entity applicant (owner directive
+ * 2026-08-12). A profile that says it is a research lab gets the research-lab
+ * need list without typing anything; a volunteer fire department gets the
+ * public-safety list; and so on down `orgNeedsTaxonomy.NEED_BLUEPRINTS`.
+ *
+ * Read-only and cheap — it runs NO searches, so it sits on the standard limiter
+ * with the other read.
+ *
+ * The response deliberately returns FOUR buckets rather than one list, because
+ * "this need is gone" has three different honest meanings that must not blur:
+ *   open           — ask about it
+ *   suppressed     — you already have it, and here is the field + value proving it
+ *   not_applicable — this need does not apply to your kind of org at all
+ *   user_added     — you typed this yourself; it is never suppressed by us
+ * `candidate_count` is returned so a caller can verify nothing was silently
+ * dropped: open + suppressed + not_applicable + truncated must equal it.
+ */
+router.get('/:profileId/needs-plan', ensureAuth, standardRateLimiter, async (req, res) => {
+  const profileId = String(req.params.profileId ?? '').trim()
+  if (!(await ensureProfileAccess(req, res, profileId))) return
+  try {
+    const ctx = await loadContext(req.db, profileId)
+    if (!ctx.profile) return res.status(404).json({ error: 'Profile not found' })
+
+    const plan = deriveOrgNeeds({ profile: ctx.profile, sections: ctx.sections ?? {} })
+    return res.json({
+      success: true,
+      profile_id: profileId,
+      display_name: ctx.profile.display_name ?? null,
+      primary_type: ctx.profile.primary_type ?? null,
+      ...plan,
+      // Named so the UI can point the owner at the exact boxes that control
+      // suppression instead of leaving a vanished need unexplained.
+      evidence_fields: [
+        'organization_details.licenses_held',
+        'organization_details.insurance_held',
+        'organization_details.equipment_owned',
+        'organization_details.regulatory_approvals_held',
+        'organization_details.facility_status',
+      ],
+      free_text_field: 'financial_information.item_needs',
+      generated_at: new Date().toISOString(),
+    })
+  } catch (error) {
+    routeLogger.error('[item-needs] needs-plan error', error)
+    return res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * POST /api/item-needs/:profileId/needs-plan/search
+ *
+ * Run a REAL search for the plan's needs. Body:
+ *   `{ codes?: string[], include_user_needs?: boolean, offset?: number, variant?: 'funding'|'gift' }`
+ *
+ * Each need is searched through the SAME `searchItemNeeds` two-lane engine the
+ * item scanner already uses (catalog SQL + live web leads) — there is no second
+ * search path to drift, `matchEngine.computeMatchDecision` stays the sole
+ * relevance authority, and nothing here manufactures a score or a percentage.
+ *
+ * BACKEND HONESTY. `searchWeb` reports provider status on a NON-ENUMERABLE
+ * `searchMeta` that `collectWebLeads` drops when it maps the array, so by the
+ * time results reach here a 402'd Brave over a dead SearXNG is indistinguishable
+ * from "searched, found nothing". Rather than let a dark backend read as a
+ * genuine zero, this route probes the providers directly
+ * (`probeSearchProviderHealth`, 10-min cached) and returns the verdict as
+ * `search_backends`. A `down`/`unconfigured` verdict is stated plainly in
+ * `search_backends.message` so the caller can say so instead of showing an
+ * empty list as if it were an answer.
+ *
+ * `searchItemNeeds` caps a run at ITEM_SEARCH_MAX_ITEMS; the response reports
+ * `truncated` and `next_offset` so the rest of a long plan is reachable rather
+ * than quietly discarded.
+ */
+router.post('/:profileId/needs-plan/search', ensureAuth, mutationRateLimiter, async (req, res) => {
+  const profileId = String(req.params.profileId ?? '').trim()
+  if (!(await ensureProfileAccess(req, res, profileId))) return
+  if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.ITEM_FUNDING))) return
+
+  try {
+    const ctx = await loadContext(req.db, profileId)
+    if (!ctx.profile) return res.status(404).json({ error: 'Profile not found' })
+
+    const body = req.body ?? {}
+    const plan = deriveOrgNeeds({ profile: ctx.profile, sections: ctx.sections ?? {} })
+    const includeUser = body.include_user_needs !== false
+
+    // The searchable set, in plan order: open blueprint needs first (they are
+    // ordered blockers-first), then the owner's own words.
+    //
+    // DEDUPED BY SUBJECT ON PURPOSE. `searchItemNeeds` dedupes its `items` by
+    // normalized text before searching, so two needs that resolve to the same
+    // search phrase would come back as ONE result — silently shortening the
+    // response relative to what we asked for and (before this) shifting the
+    // need identities we re-attach below. Collapsing here instead keeps
+    // `plan_size`, `remaining`, and `next_offset` truthful.
+    const bySubject = new Map()
+    for (const entry of [
+      ...plan.open.map((need) => ({ code: need.code, label: need.label, subject: need.search_subject, source: need.source })),
+      ...(includeUser ? plan.user_added.map((need) => ({ code: null, label: need.label, subject: need.search_subject, source: 'user_added' })) : []),
+    ]) {
+      const key = String(entry.subject ?? '').trim().toLowerCase()
+      if (!key || bySubject.has(key)) continue
+      bySubject.set(key, entry)
+    }
+    let selectable = [...bySubject.values()]
+
+    // An explicit `codes` filter narrows to those needs. A code the plan does
+    // not contain is REPORTED, never silently ignored.
+    let unknownCodes = []
+    if (Array.isArray(body.codes) && body.codes.length > 0) {
+      const wanted = body.codes.map((c) => String(c ?? '').trim()).filter(Boolean)
+      const wantedSet = new Set(wanted)
+      const present = new Set(selectable.map((s) => s.code).filter(Boolean))
+      unknownCodes = wanted.filter((c) => !present.has(c))
+      selectable = selectable.filter((s) => s.code && wantedSet.has(s.code))
+    }
+
+    const offset = Number.isFinite(Number(body.offset)) ? Math.max(0, Math.floor(Number(body.offset))) : 0
+    const window = selectable.slice(offset, offset + ITEM_SEARCH_MAX_ITEMS)
+    const remaining = Math.max(0, selectable.length - (offset + window.length))
+
+    // Probe the providers regardless of outcome, so a zero-result run always
+    // carries the reason it might be zero.
+    const backends = await probeSearchProviderHealth().catch((error) => ({
+      verdict: 'unknown',
+      detail: `probe failed: ${error?.message || error}`,
+    }))
+    const backendsBlock = {
+      verdict: backends?.verdict ?? 'unknown',
+      detail: backends?.detail ?? null,
+      probed_at: backends?.probed_at ?? null,
+      message:
+        backends?.verdict === 'unconfigured'
+          ? 'No web-search backend is configured (SEARXNG_URL / BRAVE_SEARCH_API_KEY are unset). Web results are unavailable — catalog results only. A zero here does not mean nothing exists.'
+          : backends?.verdict === 'down'
+            ? 'The web-search backend is not responding. Web results are unavailable — catalog results only. A zero here does not mean nothing exists.'
+            : backends?.verdict === 'degraded'
+              ? 'The web-search backend is degraded; web results may be incomplete.'
+              : null,
+    }
+
+    if (window.length === 0) {
+      // HONEST EMPTY. Nothing was searched, and the reason is named — never a
+      // fabricated default need and never a bare zero.
+      return res.json({
+        success: true,
+        profile_id: profileId,
+        subject: 'needs_plan',
+        taxonomy_version: plan.taxonomy_version,
+        blueprint: plan.blueprint,
+        requested_count: 0,
+        searched_count: 0,
+        searched_needs: [],
+        remaining,
+        next_offset: null,
+        unknown_codes: unknownCodes,
+        search_backends: backendsBlock,
+        items: [],
+        note:
+          selectable.length === 0
+            ? (plan.blueprint.source === 'not_an_organization'
+              ? 'This profile is not an organization, so it has no org-type needs plan. Use POST /api/item-needs/:id/search for person-shaped item needs.'
+              : 'Every need in this plan is either already held or not applicable. Nothing to search.')
+            : `Offset ${offset} is past the end of the ${selectable.length}-need plan.`,
+      })
+    }
+
+    const report = await searchItemNeeds(req.db, {
+      profileId,
+      items: window.map((w) => w.subject),
+      profileContext: ctx,
+      variant: body.variant === 'gift' ? 'gift' : 'funding',
+    })
+
+    // Re-attach the need identity to each searched item BY SUBJECT, not by
+    // index. `searchItemNeed` echoes back the exact string it was handed, so
+    // the join is exact — and unlike an index join it cannot mislabel a result
+    // if the service ever reorders or drops an entry. `index` is only a
+    // last-resort fallback so an unmatched row is still labelled rather than
+    // silently anonymous.
+    const windowBySubject = new Map(window.map((w) => [String(w.subject).trim().toLowerCase(), w]))
+    const items = (report.items ?? []).map((item, index) => {
+      const need = windowBySubject.get(String(item?.item ?? '').trim().toLowerCase()) ?? window[index] ?? null
+      return {
+        need_code: need?.code ?? null,
+        need_label: need?.label ?? null,
+        need_source: need?.source ?? null,
+        ...item,
+      }
+    })
+
+    return res.json({
+      success: true,
+      subject: 'needs_plan',
+      taxonomy_version: plan.taxonomy_version,
+      blueprint: plan.blueprint,
+      max_items_per_run: ITEM_SEARCH_MAX_ITEMS,
+      plan_size: selectable.length,
+      offset,
+      remaining,
+      next_offset: remaining > 0 ? offset + window.length : null,
+      unknown_codes: unknownCodes,
+      suppressed_count: plan.suppressed.length,
+      not_applicable_count: plan.not_applicable.length,
+      search_backends: backendsBlock,
+      ...report,
+      items,
+    })
+  } catch (error) {
+    routeLogger.error('[item-needs] needs-plan search error', error)
     return res.status(500).json(formatError(error))
   }
 })

@@ -95,6 +95,7 @@ export const PROFILE_TYPE_OPTIONS = Object.freeze([
   { id: 'business',                       group: 'Business',   label: 'Small Business',                  description: 'For-profit small business or sole proprietorship.' },
   { id: 'minority_owned_business',        group: 'Business',   label: 'Minority-Owned Business',         description: 'Minority-owned for-profit business.' },
   { id: 'women_owned_business',           group: 'Business',   label: 'Women-Owned Business',            description: 'Women-owned for-profit business.' },
+  { id: 'research_lab',                   group: 'Business',   label: 'Research Lab / Biolab',           description: 'Research or clinical laboratory (biosafety, CLIA, instrumentation).' },
 
   // Catch-all
   { id: 'other',                          group: 'Other',      label: 'Other',                           description: 'None of these fit \u2014 we\u2019ll still match what we can.' },
@@ -139,6 +140,15 @@ export const PROFILE_TYPE_UI_ALIASES = Object.freeze({
   // Faith / clergy
   minister: 'ministry',
   clergy: 'ministry',
+  // Research / laboratory variants
+  biolab: 'research_lab',
+  bio_lab: 'research_lab',
+  laboratory: 'research_lab',
+  lab: 'research_lab',
+  research_laboratory: 'research_lab',
+  research_institute: 'research_lab',
+  clinical_lab: 'research_lab',
+  clinical_laboratory: 'research_lab',
 })
 
 const CANONICAL_IDS = new Set(PROFILE_TYPE_OPTIONS.map((option) => option.id))

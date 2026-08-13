@@ -31,6 +31,7 @@ import { listOpportunities, listOpportunityStates } from "@/api/opportunities"
 import ProfileSelect from "@/components/shared/ProfileSelect"
 import { getItemSuggestions } from "@/api/items"
 import NeedsDiscoveryPanel from "@/components/ai/NeedsDiscoveryPanel"
+import NeedsPlanCard from "@/components/funding/NeedsPlanCard"
 
 const NOT_AVAILABLE = 'N/A'
 import { getProfile } from "@/api/profiles"
@@ -832,6 +833,19 @@ export default function ItemFunding() {
           </CardContent>
           </form>
         </Card>
+
+        {/*
+          THE PREDETERMINED NEEDS LIST (owner directive 2026-08-12). An
+          organization should not have to already know what to ask for: the
+          profile's own type produces the candidate need list, minus anything
+          the profile shows it already has. Each chip drops its need into the
+          SAME search box + search path above, so there is one search lane, not
+          two that can drift.
+        */}
+        <NeedsPlanCard
+          profileId={filters.profileId}
+          onSearchNeed={(subject) => applySuggestedItem(subject)}
+        />
       </header>
 
       {/* AI Needs Discovery \u2014 only shows when a profile is selected */}

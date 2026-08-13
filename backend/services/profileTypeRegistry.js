@@ -287,6 +287,17 @@ export const PROFILE_TYPES = Object.freeze({
     anyaLabel: 'Women-owned business',
     summary: 'Women-owned business looking for WOSB, SBA, and women\'s grant funding.',
   },
+  research_lab: {
+    id: 'research_lab',
+    aliases: ['biolab', 'bio_lab', 'lab', 'laboratory', 'research_laboratory', 'research_institute', 'clinical_lab', 'clinical_laboratory'],
+    parentTypes: ['business'],
+    defaultNeeds: ['research_funding', 'equipment', 'facilities_lease'],
+    requiredProfileFields: ['state'],
+    recommendedSources: [SOURCE_IDS.GRANTS_GOV, SOURCE_IDS.SBA_GRANTS, SOURCE_IDS.STATE_PORTAL],
+    recommendedStrategy: 'comprehensive',
+    anyaLabel: 'Research lab / biolab',
+    summary: 'Research or clinical laboratory needing licensing, BSL-rated space, instrumentation, and research funding.',
+  },
 
   // ---------------------------------------------------------------------
   // Faith / nonprofit / community organizations
