@@ -67,6 +67,10 @@ export const IMMIGRATION_STATUS_OPTIONS = [
 ]
 export const PLAN_TYPE_OPTIONS = ['HMO', 'PPO', 'Medicaid', 'Medicare', 'Marketplace', 'other', 'unknown']
 export const HOUSING_STATUS_OPTIONS = ['stable', 'at_risk', 'homeless', 'temporary', 'unknown']
+// Org facility tenure. Drives needs-taxonomy suppression: an org that OWNS or
+// LEASES adequate space no longer has an open "facility / building" need.
+// `unknown` (the default) is NOT evidence of having one — it never suppresses.
+export const FACILITY_STATUS_OPTIONS = ['owned', 'leased', 'shared', 'none', 'unknown']
 export const HOUSING_TYPE_OPTIONS = ['rent', 'own', 'shelter', 'transitional', 'temporary', 'unknown']
 export const ECF_CHOICES_ROLE_OPTIONS = ['participant', 'caregiver', 'provider', 'unknown']
 // profile_type lives on the profiles table (primary_type column), not in a
@@ -81,7 +85,7 @@ export const PROFILE_TYPE_OPTIONS = [
   'special_education_program', 'museum', 'parks_department', 'community_center', 'reentry_program',
   'substance_recovery_org', 'mental_health_nonprofit', 'local_housing_authority', 'regional_planning_agency',
   'economic_development_agency', 'medical_need', 'homeschool_family', 'organization', 'small_business',
-  'government', 'medical_assistance', 'individual_need', 'other',
+  'government', 'medical_assistance', 'individual_need', 'research_lab', 'other',
 ]
 
 export const PROFILE_SCHEMA = {
@@ -172,6 +176,65 @@ export const PROFILE_SCHEMA = {
       is_msi_hbcu: { type: 'boolean', default: false, description: 'True if the org is a Minority-Serving Institution (MSI) or Historically Black College/University (HBCU).' },
       is_rural_health_clinic: { type: 'boolean', default: false, description: 'True if the org is a federally designated Rural Health Clinic.' },
       is_cooperative: { type: 'boolean', default: false, description: 'True if the org is structured as a cooperative (co-op); eligible for USDA rural co-op programs.' },
+      // --- ALREADY-HELD CAPACITY (needs-taxonomy suppression evidence) ---
+      //
+      // Owner rule 2026-08-12: a predetermined need must NOT be surfaced as an
+      // OPEN need "if already shown to have" it. Before this block the schema
+      // could express registrations, certifications, tax status and geographic
+      // designations, but had NO way to say the org already HOLDS a physical or
+      // operating asset (a CLIA licence, its building, a −80 freezer, D&O
+      // cover, an approved IACUC protocol). Physical assets existed in the
+      // model only on the NEED side (`is_capital` in needsTaxonomy) — so the
+      // taxonomy could only ever ask, never observe.
+      //
+      // All five are DELIBERATELY `scored: false`, for the #1067 reason spelled
+      // out on financial_information.item_needs below: `isFieldScored` defaults
+      // every PROFILE_SCHEMA field to SCORED and `match_score` is matched data
+      // points ÷ TOTAL data points, so a new scored field lands in every
+      // existing profile's DENOMINATOR on deploy and shifts rows across the
+      // recalibrated bands. These are also the wrong KIND of fact for scoring:
+      // they record what the applicant already HAS so we can stop asking, not
+      // an eligibility fact that makes them a better match.
+      //
+      // Absence is NOT evidence of absence: an empty list never proves the org
+      // lacks the item, it only fails to suppress. Suppression is one-way.
+      licenses_held: {
+        type: 'array<string>',
+        scored: false,
+        default: [],
+        description:
+          'Operating licences, permits and certifications the organization ALREADY HOLDS, in plain words (e.g. "CLIA certificate of compliance", "state biosafety permit", "DEA Schedule II registration", "business licence"). Used to suppress the matching licensing/permit need — never to score.',
+      },
+      insurance_held: {
+        type: 'array<string>',
+        scored: false,
+        default: [],
+        description:
+          'Insurance policies ALREADY IN FORCE (e.g. "general liability", "professional liability / E&O", "property", "workers compensation", "D&O"). Suppresses the matching insurance need — never scored.',
+      },
+      equipment_owned: {
+        type: 'array<string>',
+        scored: false,
+        default: [],
+        description:
+          'Major equipment or instruments the organization ALREADY OWNS or has reliable access to (e.g. "−80 freezer", "biosafety cabinet", "qPCR thermocycler", "passenger van"). Suppresses the matching equipment need — never scored.',
+      },
+      regulatory_approvals_held: {
+        type: 'array<string>',
+        scored: false,
+        default: [],
+        description:
+          'Regulatory or ethics approvals ALREADY IN PLACE (e.g. "IRB approval", "IACUC protocol", "IBC registration", "FDA IND"). Suppresses the matching regulatory/compliance need — never scored.',
+      },
+      facility_status: {
+        type: 'string',
+        format: 'enum',
+        options: FACILITY_STATUS_OPTIONS,
+        scored: false,
+        default: '',
+        description:
+          'Whether the organization already has operating space: owned / leased / shared / none / unknown. Only "owned" and "leased" suppress the facility need; "" and "unknown" never do. Not scored.',
+      },
     },
   },
 

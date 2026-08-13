@@ -181,6 +181,7 @@ export const SECTION_METADATA = {
           "large_corporation",
           "minority_owned_business",
           "women_owned_business",
+          "research_lab",
           "senior",
           "veteran",
           "disabled_adult",
@@ -487,6 +488,37 @@ export const SECTION_METADATA = {
         "label": "Cooperative (ag/electric/housing/worker)",
         "format": "boolean_tri",
         "help": "True if cooperative organization."
+      },
+      {
+        "name": "licenses_held",
+        "label": "Licences & permits already held",
+        "format": "string_array",
+        "help": "Licences, permits and certifications you ALREADY hold (e.g. CLIA certificate, state biosafety permit, DEA registration). Anything listed here stops being shown as an open need."
+      },
+      {
+        "name": "insurance_held",
+        "label": "Insurance already in force",
+        "format": "string_array",
+        "help": "Policies you already carry (general liability, professional/E&O, property, workers comp, D&O). Listed coverage stops being shown as an open need."
+      },
+      {
+        "name": "equipment_owned",
+        "label": "Equipment already owned",
+        "format": "string_array",
+        "help": "Major equipment or instruments you already own or can reliably access (e.g. −80 freezer, biosafety cabinet, passenger van). Listed items stop being shown as open needs."
+      },
+      {
+        "name": "regulatory_approvals_held",
+        "label": "Regulatory approvals already in place",
+        "format": "string_array",
+        "help": "Approvals already granted (IRB, IACUC, IBC registration, FDA IND). Listed approvals stop being shown as an open need."
+      },
+      {
+        "name": "facility_status",
+        "label": "Facility status",
+        "format": "enum",
+        "options": ["owned", "leased", "shared", "none", "unknown"],
+        "help": "Whether you already have operating space. Only \"owned\" or \"leased\" removes the facility need; leaving it unknown never does."
       },
       {
         "name": "notes",
