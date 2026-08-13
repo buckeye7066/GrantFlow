@@ -451,7 +451,9 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
   // Previously we hard-coded `user.is_admin`, which greyed out admin-only
   // quick actions when the user object carried the camelCase flag from a
   // fresh `/api/auth/me` bootstrap — violating Anya goals 4 and 8.
-  const isAdmin = normalizeUserAdmin(user)
+  // Guard against user being undefined (e.g. before auth data loads) so
+  // normalizeUserAdmin never throws and crashes the panel.
+  const isAdmin = user ? normalizeUserAdmin(user) : false
   const { t, setLanguage, languages } = useLanguage()
   // Filter out the UI-only admin sentinel ('__admin__') — it is NOT a real
   // profile UUID. Leaking it into the Anya bootstrap causes createSession to
