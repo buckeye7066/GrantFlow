@@ -12,7 +12,7 @@ This document describes how GrantFlow enforces non-negotiable business rules acr
 
 ## What Changed
 
-1. **Centralised policy** — `backend/services/crawlers/opportunityPolicy.js` is the single source of truth:
+1. **Centralised policy** — `backend/services/shared/opportunityPolicy.js` is the single source of truth:
    - `isValidRealUrl(url)` — strict http/https only; rejects example.com, localhost, placeholder domains.
    - `isPlaceholderOpportunity(opp)` — detects lorem, “coming soon”, stub text, missing/short title.
    - `isLoanLike(opp)` — `opportunity_type` in [loan, loan_program, microloan] + keyword heuristics (loan, financing, APR, repayment, etc.).
@@ -84,7 +84,7 @@ node scripts/check-crawler-results.mjs --response /path/to/response.json
 
 | Path | Where policy is enforced |
 |------|---------------------------|
-| Live normalization | `normalizeLiveOpportunity()` → `enforceOpportunityPolicy(raw)` |
+| Live normalization | `normalizeLiveOpportunity()` → `enforceOpportunityPolicy(raw)` (imported from `backend/services/shared/opportunityPolicy.js`) |
 | Live after rescoring | `filterByPolicy` + `.filter(enforceOpportunityPolicy)` |
 | DB candidate query | `buildCandidateOpportunityQuery()` SQL conditions (loans, requires_match, match_percentage, is_loan) |
 | DB format | `formatDbOpportunity()` → `enforceOpportunityPolicy(formatted)` |
