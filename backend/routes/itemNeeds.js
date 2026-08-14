@@ -268,9 +268,18 @@ router.post('/:profileId/needs-plan/search', ensureAuth, mutationRateLimiter, as
       })
     }
 
+    // CARRY THE NEED'S IDENTITY, NOT JUST ITS WORDS. Handing the search only
+    // `subject` threw away the one thing this route already knew — WHICH
+    // curated `ORG_NEED_DEFINITIONS` entry the subject came from — and forced
+    // the search to re-derive the need from the string with the household
+    // taxonomy, which carries no research, laboratory or regulatory vocabulary.
+    // See `orgNeedsTaxonomy.needSearchVocabulary`. A `user_added` need has no
+    // code and correctly keeps the inferred expansion: the owner's own words
+    // are not a taxonomy entry.
     const report = await searchItemNeeds(req.db, {
       profileId,
-      items: window.map((w) => w.subject),
+      items: window.map((w) => ({ item: w.subject, code: w.code })),
+      blueprintKey: plan.blueprint?.key ?? null,
       profileContext: ctx,
       variant: body.variant === 'gift' ? 'gift' : 'funding',
     })

@@ -58,6 +58,7 @@
  */
 
 import { expandNeed, scoreNeedMatch } from './shared/needTaxonomy.js'
+import { needSearchVocabulary } from './needs/orgNeedsTaxonomy.js'
 import { computeMatchDecision } from './matchEngine.js'
 import { searchNeedWebLeads } from './shared/liveWebSearch.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
@@ -672,6 +673,53 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
 }
 
 /**
+ * THE NEED EXPANSION USED BY BOTH LANES.
+ *
+ * A DECLARED NEED CODE OUTRANKS A STRING INFERENCE. When the caller knows which
+ * `ORG_NEED_DEFINITIONS` entry produced this subject — which
+ * `routes/itemNeeds.js` always does on the needs-plan path, because it built the
+ * subject from `need.code` — the need's OWN curated phrases are authoritative
+ * and REPLACE the synonyms `expandNeed` guessed from the subject string.
+ *
+ * WHY REPLACE RATHER THAN MERGE. The guess is not merely thinner, it is
+ * sometimes from another field entirely, and merging would keep the wrong
+ * vocabulary alive in the endorsement-phrase gate. Measured on the repo's own
+ * `research_lab` blueprint subjects (2026-08-14): "biosafety level 2 laboratory
+ * certification grant" and "research computing cloud credits grant" both
+ * expanded to `professional_development_continuing_education` — 36 nursing /
+ * continuing-education synonyms — so a merge would let a nursing CE page
+ * endorse a biosafety need. The structured code is a DECLARATION; the string
+ * match is an INFERENCE, and this repo's standing rule is that the flag is the
+ * fact (`structuredMilitaryApplicantTypes`, `declaredCrisisNeeds`).
+ *
+ * `mustTerms` are KEPT from the inference: they are the request's own content
+ * words, not a taxonomy claim. `programCategories` are kept too — with the
+ * fragment-evidence bar in `expandNeed`, a subject the household taxonomy
+ * cannot honestly place now yields `[]` rather than another domain's categories.
+ *
+ * Returns the plain `expandNeed` output unchanged when no code is supplied or
+ * the code carries no multi-word vocabulary, so every existing caller — the
+ * free-text item box, `/specific-need`, `greenHomeNoCostSearch` — is untouched.
+ */
+export function resolveNeedExpansion(itemText, needCode = null, blueprintKey = null) {
+  const base = expandNeed(itemText)
+  if (!needCode) return base
+  let curated = []
+  try {
+    curated = needSearchVocabulary(needCode, blueprintKey) ?? []
+  } catch { curated = [] }
+  if (curated.length === 0) return base
+  return {
+    canonicalNeed: base?.canonicalNeed ?? String(needCode),
+    matchedKey: base?.matchedKey ?? null,
+    synonyms: curated,
+    mustTerms: base?.mustTerms ?? [],
+    programCategories: base?.programCategories ?? [],
+    curatedNeedCode: String(needCode),
+  }
+}
+
+/**
  * Search ONE item for ONE profile.
  *
  * @returns {Promise<Object>} an honest per-item answer, including `found: 0`.
@@ -679,6 +727,8 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
 export async function searchItemNeed(db, {
   profileId,
   item,
+  needCode = null,
+  blueprintKey = null,
   profileContext = null,
   variant = 'funding',
   timeoutMs = 12000,
@@ -691,7 +741,7 @@ export async function searchItemNeed(db, {
     throw err
   }
 
-  const expanded = expandNeed(itemText)
+  const expanded = resolveNeedExpansion(itemText, needCode, blueprintKey)
   const phrases = buildEndorsementPhrases(itemText, expanded)
   const [catalog, web] = await Promise.all([
     searchCatalogLane(db, { profileId, itemText, expanded, phrases, profileContext }),
@@ -744,6 +794,10 @@ export async function searchItemNeed(db, {
       matchedKey: expanded?.matchedKey ?? null,
       synonyms: (expanded?.synonyms ?? []).slice(0, 10),
       programCategories: expanded?.programCategories ?? [],
+      // PROVENANCE: null means the vocabulary was INFERRED from the subject
+      // string; a code means it came from that need's curated definition. A
+      // reader must always be able to tell a declaration from a guess.
+      curated_need_code: expanded?.curatedNeedCode ?? null,
     },
     endorsement_phrases: phrases,
     found: merged.length,
@@ -792,20 +846,33 @@ export async function searchItemNeed(db, {
 export async function searchItemNeeds(db, {
   profileId,
   items,
+  blueprintKey = null,
   profileContext = null,
   variant = 'funding',
   timeoutMs = 12000,
 } = {}) {
+  // An item is either a bare STRING (the free-text box, `/specific-need`) or a
+  // `{item, code}` pair from the needs plan, where `code` names the curated
+  // `ORG_NEED_DEFINITIONS` entry the subject was built from. Both shapes are
+  // accepted so no existing caller changes; a string simply carries no code and
+  // keeps the inferred expansion it has always had.
   const requested = (Array.isArray(items) ? items : [items])
-    .map((i) => String(i ?? '').trim())
-    .filter(Boolean)
-  const unique = [...new Map(requested.map((i) => [norm(i), i])).values()]
+    .map((entry) => {
+      if (entry && typeof entry === 'object') {
+        return { item: String(entry.item ?? '').trim(), code: entry.code ?? null }
+      }
+      return { item: String(entry ?? '').trim(), code: null }
+    })
+    .filter((e) => e.item)
+  const unique = [...new Map(requested.map((e) => [norm(e.item), e])).values()]
   const searched = unique.slice(0, ITEM_SEARCH_MAX_ITEMS)
 
   const results = []
-  for (const item of searched) {
+  for (const { item, code } of searched) {
     try {
-      results.push(await searchItemNeed(db, { profileId, item, profileContext, variant, timeoutMs }))
+      results.push(await searchItemNeed(db, {
+        profileId, item, needCode: code, blueprintKey, profileContext, variant, timeoutMs,
+      }))
     } catch (err) {
       results.push({
         item,
@@ -836,6 +903,7 @@ export async function searchItemNeeds(db, {
 export default {
   searchItemNeed,
   searchItemNeeds,
+  resolveNeedExpansion,
   buildItemLikeTerms,
   buildEndorsementPhrases,
   statesEndorsingPhrase,
