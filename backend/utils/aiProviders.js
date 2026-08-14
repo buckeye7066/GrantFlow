@@ -11,7 +11,7 @@ async function getAnthropicClient() {
   const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
   if (!key) {
     if (cachedAnthropic) {
-      console.warn('[aiProviders] ANTHROPIC_API_KEY removed after init â clearing cached client')
+      console.warn('[aiProviders] ANTHROPIC_API_KEY removed after init – clearing cached client')
       cachedAnthropic = null
       cachedAnthropicKey = null
     }
@@ -19,7 +19,7 @@ async function getAnthropicClient() {
   }
   if (cachedAnthropic && cachedAnthropicKey === key) return cachedAnthropic
   if (cachedAnthropic && cachedAnthropicKey !== key) {
-    console.warn('[aiProviders] ANTHROPIC_API_KEY changed â rebuilding Anthropic client')
+    console.warn('[aiProviders] ANTHROPIC_API_KEY changed – rebuilding Anthropic client')
   }
   const Anthropic = (await import('@anthropic-ai/sdk')).default
   const client = new Anthropic({

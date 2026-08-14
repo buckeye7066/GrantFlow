@@ -147,7 +147,7 @@ export async function searchStateBenefits(state, profile = {}) {
  */
 export async function getBenefitDetails(benefitId, state) {
   if (!benefitId || typeof benefitId !== 'string' || !benefitId.trim()) {
-    console.warn('[Benefits.gov] getBenefitDetails called with empty benefitId â returning null (Goal 1 guard)');
+    console.warn('[Benefits.gov] getBenefitDetails called with empty benefitId — returning null (Goal 1 guard)');
     return null;
   }
   const safeBenefitId = encodeURIComponent(benefitId.trim());

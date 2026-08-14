@@ -1506,7 +1506,7 @@ router.post('/', createProfileLimiter, async (req, res) => {
       requestedBy: req.ctx?.userId ?? 'system',
     })
     // Dispatch the local job immediately (fire-and-forget)
-    // dispatchCrawlerJob is already imported at the top of this module â no re-import needed.
+    // dispatchCrawlerJob is already imported at the top of this module — no re-import needed.
     const localJob = await req.db
       .prepare(
         `SELECT id FROM crawler_jobs WHERE profile_id = ? AND type = 'local' AND status = 'queued' ORDER BY created_at DESC LIMIT 1`,
@@ -1980,7 +1980,7 @@ router.get('/:id', async (req, res) => {
       updated_by: section.updated_by,
     }))
   } catch (error) {
-    // Never 500 just because sections are missing/migrating â return empty array.
+    // Never 500 just because sections are missing/migrating — return empty array.
     console.warn('[profiles] Unable to load profile sections:', id, error?.message)
     sections = []
   }
