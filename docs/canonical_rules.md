@@ -1,8 +1,12 @@
 # GrantFlow Canonical Rules & Goals
 
-_Last updated: 2026-07-07_
+_Last updated: 2026-07-07 (this file's own INVARIANTS table below has not been
+kept current — see the note at the top of that section)._
 
-This document is the **single source of truth** for GrantFlow’s product rules, correctness invariants, and acceptance criteria.
+This document is the **single source of truth** for GrantFlow's product rules
+(the G0–G8 goals and the product thesis above). For the INVARIANTS table
+specifically, `CLAUDE.md` at the repo root is now the more current and complete
+copy — see the note there.
 
 If a rule is uncertain, it is marked explicitly as an **Assumption**. **Do not change behavior** that depends on an assumption until the assumption is either confirmed or replaced with an explicit rule.
 
@@ -371,6 +375,14 @@ Hard rules:
 - Auth/session tokens handled securely; avoid leaking across accounts.
 
 ## INVARIANTS — enforce at a choke point, never trust per-call discipline
+
+> **This table is stale relative to the live enforcer.** `backend/startup/enforceInvariants.js`
+> has grown far beyond the ~11 rows below — CLAUDE.md's "INVARIANTS" section documents
+> 50+ enforced invariants added through 2026-08-03, each with its own row in that file's
+> table. This section was not kept in lockstep as new invariants shipped (a two-source-of-truth
+> drift the rest of this doc explicitly warns against — see "MIGRATION PARITY" in CLAUDE.md).
+> Treat the table below as a partial, dated snapshot of the *pattern*, and read CLAUDE.md's
+> INVARIANTS table for the current, complete list.
 
 **Why this section exists:** The same class of bug kept recurring because a
 canonical rule above was enforced only by *convention* ("remember to check the
