@@ -23,6 +23,29 @@ function isActiveFlag(value) {
 const log = createLogger('ingestionService')
 
 /**
+ * Run `fn` inside a transaction using the only API that is async-safe on BOTH
+ * database shims.
+ *
+ * `db.transaction(fn)()` (better-sqlite3's shape) CANNOT be used here: the
+ * native wrapper rejects an async callback outright ("Transaction function
+ * cannot return a promise"), and on the Postgres shim every prepared statement
+ * is async — so the old un-awaited call site silently did nothing in prod (see
+ * the long note in ingestOpportunities). `withTransaction` exists on both
+ * shim classes and its SQLite implementation deliberately uses manual
+ * BEGIN/COMMIT precisely so it "works for both sync and async callbacks".
+ *
+ * FALLBACK: some callers (unit tests, one-off scripts) hand in a RAW
+ * better-sqlite3 handle that has no `withTransaction`. Its statements are
+ * synchronous, so awaiting them is a harmless no-op and the loop is already
+ * correct — we simply run without the wrapping transaction rather than
+ * throwing, which is exactly the guarantee such a caller already had.
+ */
+async function runInTransaction(db, fn) {
+  if (typeof db?.withTransaction === 'function') return db.withTransaction(fn);
+  return fn(db);
+}
+
+/**
  * Ingest opportunities into the database
  * @param {object} db - Database connection
  * @param {array} opportunities - Array of normalized opportunities
@@ -231,19 +254,41 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
     log.info(`[ingestion] Pre-filtered ${realitySkipped} opportunities by canonical reality gate`);
   }
 
-  // Process in a transaction for performance
-  const ingest = db.transaction(() => {
+  // Process in a transaction for performance.
+  //
+  // ASYNC-SAFETY (the #946 / migration-0143 "green on SQLite, inert on prod
+  // Postgres" class). `db.prepare().get/run` is SYNCHRONOUS on the SQLite shim
+  // and ASYNC on the Postgres shim (backend/db/index.js: PostgresDatabase
+  // returns `async (...)` for get/all/run). This block used the better-sqlite3
+  // `db.transaction(fn)()` shape with no awaits anywhere, so under Postgres —
+  // i.e. PRODUCTION — every statement here evaluated to a pending Promise:
+  //
+  //   - `checkExists.get(...)` returned a Promise, which is ALWAYS TRUTHY, so
+  //     `if (existing)` always took the UPDATE branch and `insertStmt` was
+  //     UNREACHABLE. No government opportunity could ever be INSERTED; the
+  //     UPDATE matched zero rows and the run still reported `updated++`.
+  //   - the un-awaited `run()` calls became unhandled rejections that the
+  //     `catch` below could never see, so `errors` was permanently 0 and the
+  //     ">10 errors" abort was dead code.
+  //   - the un-awaited `ingest()` let the run be stamped 'completed' with a
+  //     record count before the transaction had executed at all.
+  //
+  // `withTransaction` is the API that is async-safe on BOTH shims — its own
+  // header notes better-sqlite3's native wrapper "rejects async callbacks with
+  // 'Transaction function cannot return a promise'" while the manual
+  // BEGIN/COMMIT path "works for both sync and async callbacks".
+  const ingest = () => runInTransaction(db, async () => {
     for (const opp of validated) {
       try {
         // Check if exists before upsert to track insert vs update
         // Validate input parameters before SQL execution
-if (!opp.source || !opp.source_id) {
-  throw new Error('Invalid opportunity: missing source or source_id');
-}
-const existing = checkExists.get(opp.source, opp.source_id);
+        if (!opp.source || !opp.source_id) {
+          throw new Error('Invalid opportunity: missing source or source_id');
+        }
+        const existing = await checkExists.get(opp.source, opp.source_id);
 
         if (existing) {
-          updateStmt.run(
+          await updateStmt.run(
             opp.title,
             opp.sponsor,
             opp.description,
@@ -275,7 +320,7 @@ const existing = checkExists.get(opp.source, opp.source_id);
           );
           updated++;
         } else {
-          insertStmt.run(
+          await insertStmt.run(
             opp.id,
             opp.source,
             opp.source_id,
@@ -323,8 +368,8 @@ const existing = checkExists.get(opp.source, opp.source_id);
   });
   
   try {
-    ingest();
-    
+    await ingest();
+
     // Update ingestion run as completed
     const completeRun = db.prepare(`
       UPDATE ingestion_runs
@@ -335,7 +380,7 @@ const existing = checkExists.get(opp.source, opp.source_id);
       WHERE id = ?
     `);
     
-    completeRun.run(new Date().toISOString(), inserted, updated, runId);
+    await completeRun.run(new Date().toISOString(), inserted, updated, runId);
 
     // Capture per-result evidence snippets for every persisted opportunity
     // (best-effort, outside the write transaction so it can never block or
@@ -343,7 +388,12 @@ const existing = checkExists.get(opp.source, opp.source_id);
     // the upsert keys on (source, source_id).
     for (const opp of validated) {
       try {
-        const existing = checkExists.get(opp.source, opp.source_id);
+        // Awaited for the same reason as the ingest loop: on Postgres this is a
+        // Promise, so `existing?.id` was ALWAYS undefined and every evidence row
+        // was written against `opp.id` — an id the (unreachable) insert never
+        // stored. That is orphan provenance on the one table whose entire job is
+        // to preserve provenance.
+        const existing = await checkExists.get(opp.source, opp.source_id);
         const oppId = existing?.id ?? opp.id;
         if (oppId) {
           await persistEvidence(db, oppId, opp);
@@ -382,7 +432,7 @@ const existing = checkExists.get(opp.source, opp.source_id);
       WHERE id = ?
     `);
     
-    failRun.run(new Date().toISOString(), error.message, runId);
+    await failRun.run(new Date().toISOString(), error.message, runId);
     
     console.error(`[ingestion] Failed run ${runId}:`, error.message);
     
@@ -405,17 +455,22 @@ const existing = checkExists.get(opp.source, opp.source_id);
  * @param {object} db - Database connection
  * @returns {object} Status by source
  */
-export function getIngestionStatus(db) {
-  // Derive the source list dynamically from what is actually in the DB
-const sourceRows = db.prepare(
-  `SELECT DISTINCT source FROM ingestion_runs ORDER BY source`
-).all();
-const sources = sourceRows.map(r => r.source);
+export async function getIngestionStatus(db) {
+  // ASYNC-SAFETY: same dual-shim rule as ingestOpportunities above. Under
+  // Postgres `.all()`/`.get()` return Promises, so the un-awaited version threw
+  // `TypeError: sourceRows.map is not a function` on the very first line in
+  // production while passing every SQLite test. The sole caller
+  // (backend/routes/opportunities.js:1055) already `await`s this function, so
+  // the async signature is what it always expected.
+  const sourceRows = await db.prepare(
+    `SELECT DISTINCT source FROM ingestion_runs ORDER BY source`
+  ).all();
+  const sources = sourceRows.map(r => r.source);
   const status = {};
-  
+
   for (const source of sources) {
     // Get last successful run
-    const lastRun = db.prepare(`
+    const lastRun = await db.prepare(`
       SELECT *
       FROM ingestion_runs
       WHERE source = ? AND status = 'completed'
@@ -424,14 +479,14 @@ const sources = sourceRows.map(r => r.source);
     `).get(source);
     
     // Get count of opportunities from this source
-    const count = db.prepare(`
+    const count = await db.prepare(`
       SELECT COUNT(*) as count
       FROM funding_opportunities
       WHERE source = ? AND is_active = 1
     `).get(source);
     
     // Get last error if any
-    const lastError = db.prepare(`
+    const lastError = await db.prepare(`
       SELECT error_message, completed_at
       FROM ingestion_runs
       WHERE source = ? AND status = 'failed'
@@ -450,7 +505,7 @@ const sources = sourceRows.map(r => r.source);
   }
   
   // Get total count
-  const total = db.prepare(`
+  const total = await db.prepare(`
     SELECT COUNT(*) as count
     FROM funding_opportunities
     WHERE is_active = 1
