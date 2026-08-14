@@ -25,9 +25,33 @@
 // Statuses where the ball is in the HUMAN's court and a guide applies.
 // (blocked_* / waiting_* / needs_* / ready_to_* are matched by prefix too.)
 const HANDBACK_PREFIXES = ['blocked', 'waiting', 'needs', 'ready_to']
+
+/**
+ * Hand-back statuses that carry NO blocked/waiting/needs/ready_to prefix and so
+ * could never be reached by the prefix rule above.
+ *
+ * `submission_verification_required` is the durable quarantine the orchestrator
+ * sets when the irreversible submit boundary may have been crossed but no
+ * confirmation evidence was captured (`applicationTaskStore`'s
+ * SUBMISSION_UNCERTAIN_STATUSES; CLAUDE.md: "a submit-click without evidence is
+ * a blocker, never 'submitted', and `submit_unconfirmed` is never blindly
+ * retried"). Hamilton is provably NOT going to move it again, and the owner is
+ * the only one who can look at the portal and settle what happened — which is
+ * exactly the owner's manual-handoff directive. It produced NO guide at all,
+ * contradicting this module's own stated totality contract.
+ *
+ * `submit_attempt_started` / `submit_evidence_pending` deliberately stay OUT:
+ * they are in-flight states a live run transitions through in seconds, and
+ * listing them would flood the owner's "needs you" list with work in progress.
+ */
+const HANDBACK_STATUSES = new Set([
+  'submission_verification_required',
+])
+
 const ACTIVE_STATUSES = new Set([
   'ready_to_start', 'queued', 'running', 'launching_portal', 'filling_portal',
   'preflight', 'in_progress',
+  'submit_attempt_started', 'submit_evidence_pending',
 ])
 const TERMINAL_STATUSES = new Set([
   'submitted', 'completed', 'complete', 'done', 'failed', 'cancelled',
@@ -37,6 +61,7 @@ const TERMINAL_STATUSES = new Set([
 export function taskNeedsHumanFinish(status) {
   const s = String(status || '').toLowerCase()
   if (!s || TERMINAL_STATUSES.has(s) || ACTIVE_STATUSES.has(s)) return false
+  if (HANDBACK_STATUSES.has(s)) return true
   return HANDBACK_PREFIXES.some((p) => s.startsWith(p))
 }
 
@@ -165,6 +190,22 @@ export function buildManualCompletionGuide(task, extras = {}) {
     })
     const pk = packetStep(task)
     if (pk) steps.push(pk)
+    steps.push(MARK_SUBMITTED_STEP)
+  } else if (status === 'submission_verification_required') {
+    headline = 'A submit may have gone through — please check the portal and confirm'
+    why = task.last_agent_message
+      || 'Hamilton reached the Submit step but captured no confirmation from the portal, so GrantFlow will not claim this was submitted. It is quarantined rather than retried, because re-submitting could file a duplicate application.'
+    steps.push(portalStep(portalUrl, { title }))
+    steps.push({
+      action: 'verify_submission',
+      text: 'Sign in and look for this application under the portal’s "My applications" / submission history (or a confirmation email from the funder). That is the only thing that settles whether it went through.',
+    })
+    const pk = packetStep(task)
+    if (pk) steps.push(pk)
+    steps.push({
+      action: 'submit',
+      text: 'If the portal shows NO submission, complete and submit it there yourself (the packet above has the drafted answers). If it DOES show one, do not submit again — a duplicate application can disqualify you with some funders.',
+    })
     steps.push(MARK_SUBMITTED_STEP)
   } else if (status === 'blocked_terms_or_policy') {
     headline = 'The portal requires terms only you can accept'
