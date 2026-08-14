@@ -1,12 +1,19 @@
 # PR #302: Comprehensive Code Quality and Security Hardening
 
+> **HISTORICAL RECORD (flagged 2026-08-14).** This is a merged PR description
+> from 2026-02-02, not a live status page. `backend/services/crawlers/nationalCrawlerV2.js`,
+> one of the "Files Modified" named below, no longer exists in the repo — the
+> crawler-os agents (`backend/crawler-os/agents/`) are the current discovery
+> system per `CLAUDE.md`. Read this file as "what PR #302 changed at the
+> time", not as a description of the codebase today.
+
 ## Overview
 This PR implements comprehensive code quality improvements discovered during a systematic audit of the GrantFlow codebase. All improvements focus on production hardening, better error handling, defensive programming, and enhanced maintainability.
 
 ## Audit Date
 February 2, 2026
 
-## Status: PRODUCTION READY ✅
+## Status (at time of this PR): PRODUCTION READY ✅
 - All 8 critical backend routes verified secure ✅
 - 100% async/await conversion complete (PR #301 merged) ✅
 - Data isolation properly enforced ✅
