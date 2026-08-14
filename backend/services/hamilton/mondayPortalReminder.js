@@ -102,8 +102,14 @@ export async function selectUnmergedPortals(db, profileId) {
     }
     return [...out.values()].sort((a, b) => a.label.localeCompare(b.label))
   } catch (err) {
-    log.warn('select_unmerged_failed', { profileId: String(profileId), err: err?.message })
-    return []
+    // A FAILED READ IS NOT AN EMPTY RESULT. The caller counts `[]` as
+    // `skippedNoPortals`, so a getProfilePortals/getPortalStatusMap failure was
+    // indistinguishable in the run summary from a genuinely clean profile — the
+    // sweep reported success while a portal that needed merging never got its
+    // reminder. Throwing routes this profile into the caller's `errors` counter,
+    // which is the honest bucket.
+    log.error('select_unmerged_failed', { profileId: String(profileId), err: err?.message })
+    throw err
   }
 }
 
@@ -173,8 +179,23 @@ export async function runMondayPortalReminder(db, { force = false, profileIds = 
       profiles = await db.prepare(
         `SELECT id FROM profiles WHERE (status IS NULL OR status NOT IN ('deleted','suspended')) AND (created_by IS NULL OR created_by <> 'agent:amy')`,
       ).all()
-    } catch {
-      try { profiles = await db.prepare('SELECT id FROM profiles').all() } catch { profiles = [] }
+    } catch (err) {
+      // NEVER FALL BACK TO THE UNGUARDED QUERY. The old fallback was
+      // `SELECT id FROM profiles` with no WHERE, so ONE error on the guarded
+      // statement (a missing `status`/`created_by` column on a drifted
+      // instance) silently dropped BOTH exclusions and mailed everything —
+      // deleted/suspended clients and the ~50-a-night Amy synthetic QA
+      // fixtures this file's own comment says "must never receive a portal
+      // reminder" — while the summary still reported `ran: true`. Sending real
+      // mail to real people is not a best-effort operation: if we cannot prove
+      // who is excluded, we send to nobody and say why.
+      log.error('profile_selection_failed_no_reminders_sent', { error: err?.message || String(err) })
+      return {
+        ran: false,
+        reason: 'profile_selection_failed',
+        error: String(err?.message || err),
+        at: now.toISOString(),
+      }
     }
   }
 
@@ -182,6 +203,7 @@ export async function runMondayPortalReminder(db, { force = false, profileIds = 
   let portalsReminded = 0
   let skippedNoPortals = 0
   let skippedNoContact = 0
+  let sendFailed = 0
   let errors = 0
 
   for (const p of profiles || []) {
@@ -203,6 +225,17 @@ export async function runMondayPortalReminder(db, { force = false, profileIds = 
         channel,
       })
       const anySent = (res?.results || []).some((r) => r.ok)
+      if (!anySent) {
+        // A SEND THAT DELIVERED NOTHING USED TO INCREMENT NOTHING — a profile
+        // whose every channel bounced vanished from the summary arithmetic
+        // entirely (profiles !== reminded + skipped + errors), so a total
+        // delivery outage read as a quiet, successful Monday.
+        sendFailed += 1
+        log.error('reminder_send_delivered_nothing', {
+          profile_id: p.id,
+          channels: (res?.results || []).map((r) => `${r.channel ?? '?'}:${r.error ?? 'failed'}`),
+        })
+      }
       if (anySent) {
         reminded += 1
         portalsReminded += unmerged.length
@@ -225,6 +258,7 @@ export async function runMondayPortalReminder(db, { force = false, profileIds = 
     portals_reminded: portalsReminded,
     skipped_no_portals: skippedNoPortals,
     skipped_no_contact: skippedNoContact,
+    send_failed: sendFailed,
     errors,
     at: now.toISOString(),
   }

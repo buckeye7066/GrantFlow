@@ -104,7 +104,14 @@ function buildApplicationsList(sections = {}) {
       const key = name.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({ name, status: app?.status || null, source: 'university_applications' })
+      out.push({
+        name,
+        status: app?.status || null,
+        source: 'university_applications',
+        // A real application row is at least a DECLARED relationship with the
+        // school. Whether it is ATTENDANCE is decided by its status below.
+        aspirational: false,
+      })
     }
   }
 
@@ -116,11 +123,27 @@ function buildApplicationsList(sections = {}) {
       const key = name.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({ name, status: 'planning', source: 'target_colleges' })
+      // ASPIRATION, NEVER ATTENDANCE. `education.target_colleges` is the
+      // canonical aspiration field (backend/config/profileInstitutions.js tags
+      // it `aspiration`, and one real prod student lists NINETEEN of them).
+      // The canonical rule is explicit: aspiration seeds discovery QUERIES and
+      // never authorizes an institution-specific claim. These templates mint
+      // per-school funding pointers (Dean of Students Emergency Fund, the
+      // school's housing portal), so letting an aspirational entry win produces
+      // a funding source at a school the student does not attend.
+      out.push({ name, status: 'planning', source: 'target_colleges', aspirational: true })
     }
   }
 
   return out
+}
+
+/** Statuses that assert the student is AT (or committed to) the school. */
+const ATTENDANCE_STATUS_MIN_RANK = STATUS_RANK.committed // 90 — committed/deposited/enrolled/attending
+
+function isAttendanceAuthorized(app) {
+  if (!app || app.aspirational) return false
+  return rankStatus(app.status) >= ATTENDANCE_STATUS_MIN_RANK
 }
 
 /**
@@ -133,17 +156,29 @@ export function resolveTargetSchool({ profile, sections = {} }) {
   const apps = buildApplicationsList(sections)
   if (apps.length === 0) return null
 
-  // Score: status rank + bonus for being in KNOWN_SCHOOLS (so we have real URLs).
+  // PROVENANCE OUTRANKS CONVENIENCE. The old score was
+  // `rankStatus(status) + (known ? 10 : 0)`, so KNOWN-ness — which only means
+  // "we happen to have curated URLs for this school" — could beat a real
+  // application: a KNOWN aspirational `target_colleges` entry scored 30+10=40
+  // and outranked a status-less row in `university_applications` (25), i.e. an
+  // actual application the student filed. Provenance is now the PRIMARY key and
+  // the KNOWN_SCHOOLS bonus is only a tie-breaker WITHIN a tier.
   const scored = apps.map((app) => {
     const known = getKnownSchool(app.name)
     return {
       ...app,
       known,
-      score: rankStatus(app.status) + (known ? 10 : 0),
+      attendance: isAttendanceAuthorized(app),
+      score: rankStatus(app.status),
+      knownBonus: known ? 1 : 0,
     }
   })
 
-  scored.sort((a, b) => b.score - a.score)
+  scored.sort((a, b) =>
+    (Number(b.attendance) - Number(a.attendance)) ||
+    (Number(a.aspirational === true) - Number(b.aspirational === true)) ||
+    (b.score - a.score) ||
+    (b.knownBonus - a.knownBonus))
   const winner = scored[0]
   if (!winner) return null
 
@@ -165,6 +200,15 @@ export function resolveTargetSchool({ profile, sections = {} }) {
     selectionScore: winner.score,
     selectionSource: winner.source,
     candidatesConsidered: scored.length,
+    // HONEST PROVENANCE OF THE PICK. `attendance:true` means the profile
+    // declared it is AT (or committed to) this school; `aspirational:true`
+    // means the ONLY evidence is `education.target_colleges`, which the
+    // canonical rule says may seed queries but never authorize an
+    // institution-specific claim. A consumer that mints a per-school funding
+    // pointer must check this — see the cross-batch note for
+    // studentBridgeFunding/expander.js.
+    attendance: winner.attendance === true,
+    aspirational: winner.aspirational === true,
   }
 }
 

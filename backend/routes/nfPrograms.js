@@ -103,7 +103,13 @@ router.get('/', async (req, res) => {
 
       const rows = await req.db
         .prepare(
-          `SELECT * FROM ${table} ${clause} ORDER BY last_verified DESC, updated_at DESC LIMIT ? OFFSET ?`,
+          // NULLS LAST is explicit because the dialects disagree: Postgres
+          // defaults to NULLS FIRST on DESC, SQLite puts NULLs last. Without it
+          // the "freshest VERIFIED programs" list was headed in PROD by rows
+          // that were NEVER verified, while every local/SQLite test showed the
+          // intended order — provenance ordering must mean the same thing on
+          // both dialects.
+          `SELECT * FROM ${table} ${clause} ORDER BY last_verified DESC NULLS LAST, updated_at DESC NULLS LAST LIMIT ? OFFSET ?`,
         )
         .all(...params, limit, offset)
       const total = (await req.db

@@ -87,9 +87,17 @@ async function countGeoIndexHits(db, zips) {
         AND fo.is_active = ${activeVal}
     `
     const row = await db.prepare(sql).get(...zips)
-    return Number(row?.cnt ?? 0)
-  } catch {
-    return 0
+    return { count: Number(row?.cnt ?? 0), error: null }
+  } catch (err) {
+    // "WE COULD NOT READ IT" IS NOT "THERE IS NOTHING". A missing
+    // funding_opportunity_geo_index table, a dialect mismatch, or any query
+    // fault used to return a bare 0, so resolveGeoCoverage walked straight down
+    // to tier 'national' and LOGGED IT AS A LEGITIMATE FALLBACK — the profile's
+    // entire local/expanded coverage vanished and the log line read exactly like
+    // a genuinely sparse rural area. The error is now surfaced to the caller and
+    // recorded on the result so a geo-index outage is visible, not silent.
+    log.error(`[GeoCoverage] geo-index count FAILED (coverage unknown, not zero): ${err?.message || err}`)
+    return { count: 0, error: String(err?.message || err) }
   }
 }
 
@@ -116,7 +124,10 @@ async function fetchGeoIndexIds(db, zips, limit = 3000) {
     `
     const rows = await db.prepare(sql).all(...zips)
     return (rows || []).map((r) => r.opportunity_id).filter(Boolean)
-  } catch {
+  } catch (err) {
+    // Same rule as countGeoIndexHits: an unreadable index is reported, never
+    // silently rendered as "no local opportunities exist".
+    log.error(`[GeoCoverage] geo-index id fetch FAILED (returning empty, coverage unknown): ${err?.message || err}`)
     return []
   }
 }
@@ -135,9 +146,10 @@ async function countStateHits(db, states) {
       WHERE state IN (${ph}) AND is_active = ${activeVal}
     `
     const row = await db.prepare(sql).get(...states)
-    return Number(row?.cnt ?? 0)
-  } catch {
-    return 0
+    return { count: Number(row?.cnt ?? 0), error: null }
+  } catch (err) {
+    log.error(`[GeoCoverage] state count FAILED (coverage unknown, not zero): ${err?.message || err}`)
+    return { count: 0, error: String(err?.message || err) }
   }
 }
 
@@ -164,7 +176,10 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
     expandedZips: [],
     nearbyStates: new Set(),
     tier: 'national',
-    stats: { local: 0, expanded: 0, state: 0 },
+    // `unavailable` names every tier whose count could NOT BE READ. An empty
+    // array means every tier answered; a non-empty one means the national
+    // fallback below is a "we could not look", NOT a measured "nothing here".
+    stats: { local: 0, expanded: 0, state: 0, unavailable: [] },
   }
 
   if (state) result.nearbyStates.add(String(state).toUpperCase())
@@ -172,9 +187,10 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
   if (!zip) {
     // No ZIP — skip radius tiers, go straight to state/national
     if (state) {
-      const stateCount = await countStateHits(db, [String(state).toUpperCase()])
-      result.stats.state = stateCount
-      if (stateCount >= MIN_STATE_RESULTS) {
+      const stateRes = await countStateHits(db, [String(state).toUpperCase()])
+      result.stats.state = stateRes.count
+      if (stateRes.error) result.stats.unavailable.push({ tier: 'state', error: stateRes.error })
+      if (stateRes.count >= MIN_STATE_RESULTS) {
         result.tier = 'state'
       }
     }
@@ -189,8 +205,10 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
     if (z.state) result.nearbyStates.add(z.state)
   }
 
-  const localCount = await countGeoIndexHits(db, result.localZips)
+  const localRes = await countGeoIndexHits(db, result.localZips)
+  const localCount = localRes.count
   result.stats.local = localCount
+  if (localRes.error) result.stats.unavailable.push({ tier: 'local', error: localRes.error })
 
   if (localCount >= MIN_LOCAL_RESULTS) {
     result.tier = 'local'
@@ -207,8 +225,10 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
     if (z.state) result.nearbyStates.add(z.state)
   }
 
-  const expandedCount = await countGeoIndexHits(db, result.expandedZips)
+  const expandedRes = await countGeoIndexHits(db, result.expandedZips)
+  const expandedCount = expandedRes.count
   result.stats.expanded = expandedCount
+  if (expandedRes.error) result.stats.unavailable.push({ tier: 'expanded', error: expandedRes.error })
 
   if (expandedCount >= MIN_EXPANDED_RESULTS) {
     result.tier = 'expanded'
@@ -220,8 +240,10 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
 
   // ── Tier 3: State ──
   if (result.nearbyStates.size > 0) {
-    const stateCount = await countStateHits(db, [...result.nearbyStates])
+    const stateRes = await countStateHits(db, [...result.nearbyStates])
+    const stateCount = stateRes.count
     result.stats.state = stateCount
+    if (stateRes.error) result.stats.unavailable.push({ tier: 'state', error: stateRes.error })
     if (stateCount >= MIN_STATE_RESULTS) {
       result.tier = 'state'
       log.info(
@@ -232,9 +254,18 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
   }
 
   // ── Tier 4: National (always included) ──
-  log.info(
-    `[GeoCoverage] zip=${zip} tier=national (local=${localCount} expanded=${expandedCount} state=${result.stats.state})`,
-  )
+  // Say out loud when this fallback is "we could not look" rather than
+  // "we looked and this area is sparse" — the two are different facts.
+  if (result.stats.unavailable.length > 0) {
+    log.error(
+      `[GeoCoverage] zip=${zip} tier=national BUT ${result.stats.unavailable.length} tier(s) were UNREADABLE ` +
+        `(${result.stats.unavailable.map((u) => `${u.tier}:${u.error}`).join(' | ')}) — this is NOT evidence of sparse coverage`,
+    )
+  } else {
+    log.info(
+      `[GeoCoverage] zip=${zip} tier=national (local=${localCount} expanded=${expandedCount} state=${result.stats.state})`,
+    )
+  }
   return result
 }
 
@@ -300,7 +331,12 @@ export function buildGeoCoverageClause(db, geoCoverage) {
  * Returns a list of states that need geo crawling.
  */
 export async function findStatesNeedingCoverage(db) {
-  if (!db) return []
+  // SHAPE: every exit returns { all, covered, uncovered }. This used to return
+  // a bare `[]` with no db, while the only consumer
+  // (backend/scripts/populate-geo-coverage.mjs) destructures the object and
+  // reads `.length` on each field — so the no-db path handed it three
+  // `undefined`s and the geo backfill threw or silently no-opped.
+  if (!db) return { all: [], covered: [], uncovered: [] }
 
   try {
     const profileStatesRaw = await db

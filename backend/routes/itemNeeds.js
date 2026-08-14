@@ -40,6 +40,29 @@ const routeLogger = createLogger('route:itemNeeds')
 const router = express.Router()
 
 /**
+ * ONE renderer for the web-search provider verdict, so every search route in
+ * this file says the same thing about the same outage. A zero-result run must
+ * always carry the reason it might be zero — "the backend is dark" and "we
+ * searched and there is nothing" are different facts and the owner's whole bar
+ * (beat a free Google search) turns on telling them apart.
+ */
+function buildSearchBackendsBlock(backends) {
+  return {
+    verdict: backends?.verdict ?? 'unknown',
+    detail: backends?.detail ?? null,
+    probed_at: backends?.probed_at ?? null,
+    message:
+      backends?.verdict === 'unconfigured'
+        ? 'No web-search backend is configured (SEARXNG_URL / BRAVE_SEARCH_API_KEY are unset). Web results are unavailable — catalog results only. A zero here does not mean nothing exists.'
+        : backends?.verdict === 'down'
+          ? 'The web-search backend is not responding. Web results are unavailable — catalog results only. A zero here does not mean nothing exists.'
+          : backends?.verdict === 'degraded'
+            ? 'The web-search backend is degraded; web results may be incomplete.'
+            : null,
+  }
+}
+
+/**
  * Load the profile + sections once; all routes read the same canonical view.
  *
  * A NON-EXISTENT ID IS A 404, NEVER A 500. `loadProfileContext` assumes the
@@ -228,19 +251,7 @@ router.post('/:profileId/needs-plan/search', ensureAuth, mutationRateLimiter, as
       verdict: 'unknown',
       detail: `probe failed: ${error?.message || error}`,
     }))
-    const backendsBlock = {
-      verdict: backends?.verdict ?? 'unknown',
-      detail: backends?.detail ?? null,
-      probed_at: backends?.probed_at ?? null,
-      message:
-        backends?.verdict === 'unconfigured'
-          ? 'No web-search backend is configured (SEARXNG_URL / BRAVE_SEARCH_API_KEY are unset). Web results are unavailable — catalog results only. A zero here does not mean nothing exists.'
-          : backends?.verdict === 'down'
-            ? 'The web-search backend is not responding. Web results are unavailable — catalog results only. A zero here does not mean nothing exists.'
-            : backends?.verdict === 'degraded'
-              ? 'The web-search backend is degraded; web results may be incomplete.'
-              : null,
-    }
+    const backendsBlock = buildSearchBackendsBlock(backends)
 
     if (window.length === 0) {
       // HONEST EMPTY. Nothing was searched, and the reason is named — never a
@@ -402,13 +413,30 @@ router.post('/:profileId/search', ensureAuth, mutationRateLimiter, async (req, r
       })
     }
 
+    // A ZERO FROM A DARK BACKEND IS NOT "NOTHING EXISTS". This is the route the
+    // item scanner actually calls, and `searchItemNeeds` carries no provider
+    // verdict of its own — so a 402'd Brave over a dead SearXNG rendered exactly
+    // like a genuine "we searched and there is nothing for your need". The
+    // sibling /needs-plan/search route already probes for precisely this reason;
+    // the same block is attached here so the honest reason travels with the
+    // zero.
+    const backends = await probeSearchProviderHealth().catch((error) => ({
+      verdict: 'unknown',
+      detail: `probe failed: ${error?.message || error}`,
+    }))
     const report = await searchItemNeeds(req.db, {
       profileId,
       items,
       profileContext: ctx,
       variant: body.variant === 'gift' ? 'gift' : 'funding',
     })
-    return res.json({ success: true, subject, max_items_per_run: ITEM_SEARCH_MAX_ITEMS, ...report })
+    return res.json({
+      success: true,
+      subject,
+      max_items_per_run: ITEM_SEARCH_MAX_ITEMS,
+      search_backends: buildSearchBackendsBlock(backends),
+      ...report,
+    })
   } catch (error) {
     routeLogger.error('[item-needs] search error', error)
     return res.status(500).json(formatError(error))

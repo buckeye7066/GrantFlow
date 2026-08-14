@@ -33,6 +33,16 @@ import { checkDomainRateLimit, recordDomainRequest, upsertProspectCandidate } fr
  */
 export function planProspectFetches({ applicantTypes = [], maxSources = 5, includeNational = true } = {}) {
   const filtered = getSourcesForApplicantTypes(applicantTypes)
+  // AN UNSERVED APPLICANT TYPE IS A COVERAGE GAP, NOT A LICENCE TO PROSPECT
+  // EVERYTHING. The old fallback silently substituted the FULL source list
+  // whenever `getSourcesForApplicantTypes` matched nothing, so an applicant
+  // type the registry does not serve produced a maximal, entirely unrelated
+  // prospect run that looked like a success. Fall back only when the caller
+  // named no applicant type at all (a deliberately unscoped run).
+  const askedForTypes = Array.isArray(applicantTypes) && applicantTypes.length > 0
+  if (askedForTypes && filtered.length === 0) {
+    return []
+  }
   const candidates = filtered.length > 0 ? filtered : [...LARRY_PUBLIC_PROSPECT_SOURCES]
 
   // Prefer national + high-trust sources first, then add coverage variety.
@@ -50,8 +60,14 @@ export function planProspectFetches({ applicantTypes = [], maxSources = 5, inclu
     applicant_types: applicantTypes.length > 0 ? applicantTypes : src.applicant_types,
   }))
 
+  // `includeNational: false` used to be a SILENT NO-OP — both branches returned
+  // the same plan, so a caller that asked to exclude national sources got them
+  // anyway (and the national-first sort put them at the front of the slice).
   if (!includeNational) {
-    return plan
+    return plan.filter((entry) => {
+      const src = sorted.find((s) => s.id === entry.source_id)
+      return src?.coverage !== 'national'
+    })
   }
   return plan
 }
