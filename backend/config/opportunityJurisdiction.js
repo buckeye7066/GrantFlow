@@ -113,6 +113,40 @@ export const FOREIGN_FUNDER_SPONSORS = Object.freeze({
   'tata trusts': 'IN',
 })
 
+/**
+ * Separator for joining INDEPENDENT identity fragments (title, sponsor) before
+ * running the funder-identity patterns over them.
+ *
+ * WHY THIS IS NOT A BARE SPACE (the #1086 fabricated-phrase class, CLAUDE.md:
+ * "A gate's PHRASE is a statement the SOURCE made, never one a JOIN created").
+ * `${title} ${sponsor}` makes the boundary between two independent fields
+ * indistinguishable from the space inside a real phrase, so any two adjacent
+ * tokens fabricate a phrase no funder ever wrote. Measured against this file's
+ * own registry, the bare-space join declared these REAL US rows FOREIGN:
+ *   - "Community Development Grants — Shreveport, LA" + "Flex Fund of Louisiana"
+ *     -> fabricated "la flex" -> GB
+ *   - "Hospitality Workforce Grant — U.S." + "Embassy Suites Community Foundation"
+ *     -> fabricated "u.s. embassy" -> U.S. diplomatic mission abroad
+ *   - "Small Business Aid U.S." + "Consulate Health Care Foundation"
+ *     -> fabricated "u.s. consulate" -> U.S. diplomatic mission abroad
+ * A foreign verdict is a REJECT in `matchEngine.makeDecision` AND a purge in
+ * `enforceForeignJurisdictionMatches`, so each false positive destroys a real
+ * US funding source for a real profile.
+ *
+ * A pipe is not a word character and appears in none of the patterns above, so
+ * every `\b`-anchored phrase that lives INSIDE one fragment still matches
+ * exactly as before — the only strings removed are ones that span a boundary.
+ *
+ * STATIC DRIFT NOTE: this is deliberately the same ' | ' literal as
+ * `TEXT_FRAGMENT_SEPARATOR` in `backend/services/matching/needFirstMatchPolicyV2.js`.
+ * It is re-declared rather than imported because this module is `config/` and is
+ * imported BY `services/matchEngine.js`; importing back into `services/` would
+ * close an import cycle (the ESM import-time boot-crash class). A drift tripwire
+ * pins the two literals together in
+ * `backend/tests/needFirstFabricatedPhrase.test.js`.
+ */
+export const IDENTITY_FRAGMENT_SEPARATOR = ' | '
+
 /** Every url field a catalog row may carry, in the order the row prefers them. */
 const URL_FIELDS = Object.freeze([
   'source_url',
@@ -201,7 +235,9 @@ export function detectForeignOpportunity(row) {
       funder: sponsor,
     }
   }
-  const identity = `${title} ${sponsor}`.trim()
+  // Independent fields, joined by a NON-WORD separator so the boundary between
+  // them can never spell a phrase either field alone does not state (#1086).
+  const identity = [title, sponsor].filter(Boolean).join(IDENTITY_FRAGMENT_SEPARATOR)
   if (identity) {
     for (const entry of FOREIGN_FUNDER_NAMES) {
       if (entry.rx.test(identity)) {
@@ -293,6 +329,7 @@ export default {
   FOREIGN_FUNDER_HOSTS,
   FOREIGN_FUNDER_NAMES,
   FOREIGN_FUNDER_SPONSORS,
+  IDENTITY_FRAGMENT_SEPARATOR,
   US_MISSION_ABROAD_RX,
   hostnameOf,
   foreignCctldOfHost,

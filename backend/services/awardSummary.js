@@ -38,7 +38,16 @@ function aidIsSecured(status) {
  * @param {Array} args.aidEntries  committed-college financial_aid_pipeline entries
  * @param {string|null} args.collegeName
  * @param {Array} args.grantRows   rows from grants (joined to funding_opportunities)
- * @returns {{ awarded:{count,total,items}, applied:{count,total,items}, total_in_play:number, all:Array }}
+ * @returns {{
+ *   awarded:{count,total,amount_unknown_count,items},
+ *   applied:{count,total,amount_unknown_count,items},
+ *   total_in_play:number,
+ *   amount_unknown_count:number,
+ *   all:Array
+ * }}
+ * Each item carries `amount_basis`: 'awarded' | 'reported' | 'requested' |
+ * 'ceiling' | 'floor' | null. A `null` basis with a `null` amount means the
+ * figure is UNKNOWN — it is never counted as $0 in any total.
  */
 export function buildAwardSummary({ aidEntries = [], collegeName = null, grantRows = [] } = {}) {
   const items = []
@@ -48,6 +57,9 @@ export function buildAwardSummary({ aidEntries = [], collegeName = null, grantRo
     items.push({
       name: a?.name || a?.title || 'Scholarship',
       amount: num(a?.amount),
+      // Self-reported by the student on the committed-college aid pipeline —
+      // never a figure this system derived.
+      amount_basis: num(a?.amount) === null ? null : 'reported',
       status: normStatus(a?.status) || 'awarded',
       secured,
       source: a?.source || null,
@@ -58,12 +70,43 @@ export function buildAwardSummary({ aidEntries = [], collegeName = null, grantRo
 
   for (const g of Array.isArray(grantRows) ? grantRows : []) {
     const awardedAmt = num(g?.amount_awarded)
-    const amount = awardedAmt ?? num(g?.amount_requested) ?? num(g?.amount_max) ?? num(g?.amount_min)
     const status = normStatus(g?.status)
     const secured = awardedAmt !== null || SECURED_STATUSES.has(status)
+
+    // AWARDED MONEY IS ONLY WHAT WAS AWARDED.
+    // The old chain was `amount_awarded ?? amount_requested ?? amount_max ??
+    // amount_min` applied to EVERY row, so a grant marked 'awarded' whose
+    // amount_awarded is NULL reported the applicant's ASK — or, worse, the
+    // funder's published CEILING off the catalog row — as money received, and
+    // that figure was summed into `awarded.total` on the printable packet.
+    // A request and a ceiling are claims about what was possible, never about
+    // what was granted (same rule as enforceGrantAmountBackfill, which never
+    // invents a value). An awarded row with no awarded figure now reports a
+    // NULL amount and is counted in `amount_unknown_count`, so "we do not know
+    // the figure" can never read as "$0" or as an invented total.
+    let amount = null
+    let amountBasis = null
+    if (secured) {
+      amount = awardedAmt
+      amountBasis = awardedAmt === null ? null : 'awarded'
+    } else if (num(g?.amount_requested) !== null) {
+      amount = num(g.amount_requested)
+      amountBasis = 'requested'
+    } else if (num(g?.amount_max) !== null) {
+      amount = num(g.amount_max)
+      amountBasis = 'ceiling'
+    } else if (num(g?.amount_min) !== null) {
+      amount = num(g.amount_min)
+      amountBasis = 'floor'
+    }
+
     items.push({
       name: g?.title || 'Grant / funding',
       amount,
+      // Names WHERE the number came from so a surface can label an ask or a
+      // published ceiling as such instead of rendering it as a plain dollar
+      // figure beside real awarded money.
+      amount_basis: amountBasis,
       status: status || (secured ? 'awarded' : 'applied'),
       secured,
       // "From where": prefer the opportunity sponsor/funder; source = the portal/URL.
@@ -76,11 +119,25 @@ export function buildAwardSummary({ aidEntries = [], collegeName = null, grantRo
   const awarded = items.filter((i) => i.secured)
   const applied = items.filter((i) => !i.secured)
   const sum = (arr) => arr.reduce((s, i) => s + (i.amount || 0), 0)
+  // A row whose figure we do not know is NOT a $0 row. Reporting the count
+  // beside the total is what stops a partial total reading as a complete one.
+  const unknown = (arr) => arr.filter((i) => i.amount === null || i.amount === undefined).length
 
   return {
-    awarded: { count: awarded.length, total: sum(awarded), items: awarded },
-    applied: { count: applied.length, total: sum(applied), items: applied },
+    awarded: {
+      count: awarded.length,
+      total: sum(awarded),
+      amount_unknown_count: unknown(awarded),
+      items: awarded,
+    },
+    applied: {
+      count: applied.length,
+      total: sum(applied),
+      amount_unknown_count: unknown(applied),
+      items: applied,
+    },
     total_in_play: sum(items),
+    amount_unknown_count: unknown(items),
     all: items,
   }
 }

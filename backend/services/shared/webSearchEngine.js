@@ -515,6 +515,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   // 2. Brave API (fallback, only when keyed): a metered backstop with its own
   // budget breaker — a paused/exhausted key returns [] and costs nothing here.
   const brave = getBraveProvider()
+  let braveAllFiltered = false
   if (brave) {
     try {
       const results = await brave({ query: q })
@@ -531,12 +532,17 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
             provider_mode: 'api_fallback',
           })
         }
-        return withSearchMeta(cleaned, {
-          provider: 'brave',
-          provenance: 'live',
-          status: 'empty',
-          provider_mode: 'api_fallback',
-        })
+        // Brave answered, but EVERY row was skip-listed. This rung used to
+        // `return` an empty set here, which terminated the ladder: it threw away
+        // a real HELD SearXNG set (line ~"heldDegenerate" below) and skipped the
+        // DuckDuckGo rung entirely — the gate LOSING results instead of
+        // rerouting them, which this module's own contract two rungs down
+        // forbids. The Google rung (`if (cleaned.length)` only) and
+        // `searxngClean` (returns null on an empty clean) both already fall
+        // through on the identical condition; Brave was the lone rung that did
+        // not. Fall through and record the fact for the terminal telemetry.
+        braveAllFiltered = true
+        log.warn(`[webSearchEngine] Brave returned ${results.length} row(s) for "${q}" but every one was skip-listed — continuing down the ladder`)
       }
     } catch (err) {
       log.warn(`[webSearchEngine] Brave search failed for "${q}": ${err?.message ?? err}`)

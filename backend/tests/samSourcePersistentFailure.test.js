@@ -26,7 +26,14 @@ function makeDb() {
   return db
 }
 
-const seed = (db, { source = 'tn_state_portal', failed = 1, error = null, at = '2026-07-25T00:00:00Z', queried = 1 } = {}) =>
+// findPersistentlyFailingSources bounds its query to a recency window
+// (default 14d, gf-batch-02) so a retired/unqueried source cannot red this
+// check forever. Fixtures must therefore be dated relative to NOW, never to
+// a hardcoded calendar date — a fixed '2026-07-2X' date silently ages out of
+// the window as real time passes, which is exactly what broke this file.
+const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString()
+
+const seed = (db, { source = 'tn_state_portal', failed = 1, error = null, at = daysAgo(0), queried = 1 } = {}) =>
   db.prepare(
     `INSERT INTO crawler_source_runs (crawler_run_id, source_id, source_label, planned, queried, failed, found, directory, error, created_at)
      VALUES ('run', ?, ?, 1, ?, ?, 0, 0, ?, ?)`,
@@ -40,9 +47,9 @@ describe('crawler.sourcePersistentFailure', () => {
   it('names a source whose last N queried runs ALL failed — invisible to the fleet average', async () => {
     const db = makeDb()
     // 5 consecutive failures on one source (100%)…
-    for (let i = 0; i < 5; i++) seed(db, { failed: 1, error: 'ENOTFOUND portal.example.gov', at: `2026-07-2${i}T00:00:00Z` })
+    for (let i = 0; i < 5; i++) seed(db, { failed: 1, error: 'ENOTFOUND portal.example.gov', at: daysAgo(i) })
     // …drowned in 45 healthy runs from other sources (fleet rate 10%).
-    for (let i = 0; i < 45; i++) seed(db, { source: `healthy_${i % 9}`, failed: 0, at: `2026-07-2${i % 5}T01:00:00Z` })
+    for (let i = 0; i < 45; i++) seed(db, { source: `healthy_${i % 9}`, failed: 0, at: daysAgo(i % 5) })
     const res = await check.run({ db })
     expect(res.ok).toBe(false)
     expect(res.summary).toContain('tn_state_portal')
@@ -52,22 +59,22 @@ describe('crawler.sourcePersistentFailure', () => {
 
   it('stays green when the streak is broken by a success (transient noise, the ×2 cohort class)', async () => {
     const db = makeDb()
-    for (let i = 0; i < 4; i++) seed(db, { failed: 1, at: `2026-07-2${i}T00:00:00Z` })
-    seed(db, { failed: 0, at: '2026-07-25T00:00:00Z' }) // one success inside the window
+    for (let i = 0; i < 4; i++) seed(db, { failed: 1, at: daysAgo(i + 1) })
+    seed(db, { failed: 0, at: daysAgo(0) }) // one success, most recent — inside the window
     const res = await check.run({ db })
     expect(res.ok).toBe(true)
   })
 
   it('stays green for a source with too few queried runs (no reliable signal yet)', async () => {
     const db = makeDb()
-    for (let i = 0; i < 3; i++) seed(db, { failed: 1, at: `2026-07-2${i}T00:00:00Z` })
+    for (let i = 0; i < 3; i++) seed(db, { failed: 1, at: daysAgo(i) })
     const res = await check.run({ db })
     expect(res.ok).toBe(true)
   })
 
   it('ignores never-queried (skipped) rows and fails open without the table', async () => {
     const db = makeDb()
-    for (let i = 0; i < 5; i++) seed(db, { failed: 1, queried: 0, at: `2026-07-2${i}T00:00:00Z` })
+    for (let i = 0; i < 5; i++) seed(db, { failed: 1, queried: 0, at: daysAgo(i) })
     expect((await check.run({ db })).ok).toBe(true)
     const bare = new Database(':memory:')
     bare.dialect = 'sqlite'

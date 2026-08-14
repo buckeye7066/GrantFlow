@@ -394,7 +394,16 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // institution entity lane instead.
   if (!isStudent && !isOrgProfile) {
     const needSet = needs.map((n) => n.toLowerCase());
-    const kw = (Array.isArray(thesis.keywords) ? thesis.keywords : []).join(' ').toLowerCase();
+    // FRAGMENT-SAFE HAYSTACK (#1086, the fabricated-phrase class). `thesis.keywords`
+    // is the undifferentiated signal bag — CLAUDE.md measures 453 INDEPENDENT
+    // entries for one real profile. Joining them with a BARE SPACE made the
+    // boundary between two members indistinguishable from a space inside a real
+    // phrase, so adjacent members spelled phrases no profile ever stated:
+    // `family` + `violence` fabricated "family violence" and fired the
+    // domestic-violence lane (a CORE slot) for any family profile. A pipe is not
+    // a word character, so every phrase INSIDE one keyword still matches; only
+    // boundary-spanning matches are removed.
+    const kw = (Array.isArray(thesis.keywords) ? thesis.keywords : []).join(' | ').toLowerCase();
     const signal = (re) => re.test(kw) || needSet.some((n) => re.test(n));
 
     // Universal safety-net locators — apply to ANY low-income individual, so they
@@ -417,21 +426,32 @@ export function buildWebQueries(thesis = {}, opts = {}) {
       add(extra, `${state} SNAP food assistance`);
     }
     // Senior-specific safety net.
-    if (signal(/senior|aging|elder|\b6[25]\+|older adult/)) {
+    // LEFT word boundary on every alternative below (#937 substring-floor class).
+    // These are deliberately STEMS (`utilit` -> utility/utilities, `disab` ->
+    // disability/disabled, `caregiv` -> caregiver/caregiving), so a TRAILING \b
+    // would break them — but with no LEADING one they matched inside unrelated
+    // words and spent CORE query slots the profile never earned. Measured against
+    // the live regexes: `aging` fires on "managing"/"packaging"/"engaging";
+    // `rent` on "parent"/"current"/"different"; `food` on "seafood"; `medical` on
+    // "biomedical"; `heating` on "cheating". A family profile carrying the
+    // keyword "parent" therefore triggered the crisis safety-net lane, and at the
+    // live cap (maxQueries 14) each mis-fired CORE slot DISPLACES a real
+    // school/county/topical query — recall loss, not just noise.
+    if (signal(/\bsenior|\baging|\belder|\b6[25]\+|\bolder adult/)) {
       if (state) add(core, `Area Agency on Aging ${state}`);
       add(extra, `senior services ${county || geo}`);
       add(extra, `Meals on Wheels ${geo}`);
       add(extra, `senior housing assistance ${state || geo}`);
     }
     // Disability-specific.
-    if (signal(/disab|blind|deaf|wheelchair|adaptive|assistive|mobility/)) {
+    if (signal(/\bdisab|\bblind|\bdeaf|\bwheelchair|\badaptive|\bassistive|\bmobility/)) {
       if (state) add(core, `${state} vocational rehabilitation services`);
       add(extra, `disability assistance grants ${state || geo}`);
       add(extra, `assistive technology funding ${state || geo}`);
       add(extra, `disability employment support ${geo}`);
     }
     // Caregiver-specific.
-    if (signal(/caregiv|respite|kinship|foster/)) {
+    if (signal(/\bcaregiv|\brespite|\bkinship|\bfoster/)) {
       if (state) add(core, `caregiver support program ${state}`);
       add(extra, `respite care assistance ${geo}`);
     }
@@ -440,7 +460,7 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     // transport, emergency) must NOT stop at state/national programs: churches,
     // county emergency funds, and utility assistance funds are where local help
     // actually lives, and only entity-phrased searches reach them.
-    const safetyNet = signal(/food|housing|rent|energy|utilit|medical|transport|emergency|homeless/);
+    const safetyNet = signal(/\bfood|\bhousing|\brent|\benergy|\butilit|\bmedical|\btransport|\bemergency|\bhomeless/);
     if (safetyNet && (geo || county)) {
       const topNeed = needs[0] || 'emergency';
       // "churches that help with X near Y" is the real-world search phrasing
@@ -451,27 +471,27 @@ export function buildWebQueries(thesis = {}, opts = {}) {
       add(extra, `St Vincent de Paul assistance ${geo}`);
       add(extra, `church assistance programs ${county || geo}`);
     }
-    if (signal(/energy|utilit|electric|heating/) && (geo || state)) {
+    if (signal(/\benergy|\butilit|\belectric|\bheating/) && (geo || state)) {
       add(extra, `utility bill assistance ${geo || state}`);
       if (state) add(extra, `${state} weatherization assistance program`);
     }
-    if (signal(/food|nutrition|grocer/) && (county || geo)) {
+    if (signal(/\bfood|\bnutrition|\bgrocer/) && (county || geo)) {
       add(extra, `food pantry ${county || geo}`);
     }
-    if (signal(/housing|rent|homeless/) && (county || geo)) {
+    if (signal(/\bhousing|\brent|\bhomeless/) && (county || geo)) {
       add(extra, `housing assistance programs ${county || geo}`);
     }
-    if (signal(/transport/) && (county || geo)) {
+    if (signal(/\btransport/) && (county || geo)) {
       add(extra, `transportation assistance ${county || geo}`);
     }
     // Employment/workforce → the local workforce board / American Job Center.
-    if (signal(/employ|workforce|job|career/) && (county || state)) {
+    if (signal(/\bemploy|\bworkforce|\bjob|\bcareer/) && (county || state)) {
       add(extra, `workforce development board ${county || state}`);
       add(extra, `American Job Center ${geo || state}`);
     }
     // Domestic-violence survivor lane (relevance_precision archetype fix):
     // victim services are county/state-programmatic, never generic "grants".
-    if (signal(/domestic violence|family violence|abuse|victim/)) {
+    if (signal(/\bdomestic violence|\bfamily violence|\babuse|\bvictim/)) {
       add(core, `domestic violence assistance ${county || geo || state}`);
       if (state) add(extra, `crime victim compensation ${state}`);
       add(extra, `domestic violence shelter services ${geo || state}`);

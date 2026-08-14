@@ -119,7 +119,17 @@ const LOAN_PHRASE_RX = [
   /\bmonthly\s+payment\b/i,
   /\bborrower\b/i,
   /\brepay\s+(the\s+)?loan\b/i,
-  /\bloan\s+repayment\s+(schedule|terms)\b/i,
+  // KNOWN DEFECT, NOT FIXED HERE (cross-batch): the `funds?` alternative makes
+  // this match standard federal GRANT clawback language — "the recipient may be
+  // required to make repayment of funds if the award is terminated" — and
+  // `enforceOpportunityPolicy` DROPS a loan-like row at the ingest choke point,
+  // so a real, fully-open grant is deleted before the match engine can see it.
+  // Narrowing to `loan` loses no genuine loan (loan program/application/fund,
+  // microloan, APR, borrower, "repay the loan", "loan repayment schedule/terms"
+  // all still fire), but it reddens `tests/unit/opportunityPolicy.test.mjs`
+  // ("isLoanLike: detects repayment of funds"), whose fixture is the synthetic
+  // string 'No repayment required... wait, repayment of funds'. That test file
+  // is owned by another batch, so the two must change together.
   /\brepayment\s+(of\s+)?(the\s+)?(loan|funds?)\b/i,
 ]
 
@@ -140,6 +150,49 @@ const MATCH_KEYWORD_RX = [
   /1:1 match/,
   /dollar.?for.?dollar/,
 ]
+
+/**
+ * A MENTION IS NOT A DECLARATION (the repo's recurring negation trap — the
+ * `military_service.notes` "No military affiliation … indicating **veteran**
+ * status" class, one subsystem over).
+ *
+ * Federal funding notices routinely state the OPPOSITE of a requirement in the
+ * same words: "Cost Sharing or Matching Requirement: No", "Cost sharing is not
+ * required", "No match required". `enforceOpportunityPolicy` DROPS a
+ * matching-funds row at the ingest choke point (`upsertFundingOpportunity`, the
+ * only admission gate), so a bare substring test deleted fully-open grants from
+ * the catalog BEFORE the match engine could ever see them — a recall hole the
+ * engine can never recover from, because the row never exists.
+ *
+ * Negation is decided PER SEGMENT, never over the whole document: a notice that
+ * says "a 25% cost share is required. Cost sharing is waived for tribes." still
+ * declares a requirement through its first, un-negated segment.
+ *
+ * The failure direction is deliberate: an over-eager exemption ADMITS a row that
+ * really does require a match (it is still carried honestly as
+ * `requires_match` / `requires_cost_share` on the row and surfaced downstream),
+ * whereas an over-eager requirement DELETES a real grant. Admitting is
+ * recoverable; deleting at ingest is not.
+ */
+const MATCH_NEGATION_RX = /\b(?:no|not|none|never|without|waived|waiver|exempt|n\/?a)\b/i
+
+/** Split on sentence/clause terminators so one clause's "no" cannot exempt another. */
+function textSegments(text) {
+  return String(text || '').split(/[.;!?\n\r|]+/)
+}
+
+/**
+ * True when at least one segment states a matching/cost-share keyword WITHOUT a
+ * negation marker in that same segment.
+ */
+function declaresMatchRequirement(text) {
+  for (const segment of textSegments(text)) {
+    if (!MATCH_KEYWORD_RX.some((rx) => rx.test(segment))) continue
+    if (MATCH_NEGATION_RX.test(segment)) continue
+    return true
+  }
+  return false
+}
 
 /**
  * Returns true if the opportunity is a loan, microloan, or financing product.
@@ -163,10 +216,15 @@ export function isLoanLike(opp) {
 export function isMatchingFunds(opp) {
   if (!opp || typeof opp !== 'object') return false
   if (opp.requires_match === true) return true
+  // `requires_cost_share` is the crawler-os page-fact contract's own tri-state
+  // for this fact (blindPageFactExtractor / the adapters emit it). It was never
+  // read here, so a page that STATED the requirement structurally was decided
+  // by prose alone. A structured `false` is a denial and never asserts.
+  if (opp.requires_cost_share === true) return true
   if (typeof opp.match_percentage === 'number' && opp.match_percentage > 0) return true
   const text =
     `${opp.title || ''} ${opp.description || ''} ${opp.eligibility || ''} ${opp.eligibility_criteria || ''}`.toLowerCase()
-  return MATCH_KEYWORD_RX.some((rx) => rx.test(text))
+  return declaresMatchRequirement(text)
 }
 
 // ─── PLACEHOLDER TEXT DETECTION ──────────────────────────────────────────────

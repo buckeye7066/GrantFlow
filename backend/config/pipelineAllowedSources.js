@@ -140,6 +140,14 @@ export const PIPELINE_ALLOWED_SOURCES = [
   // Foundation 990 data
   'propublica.990',
 
+  // Opt-in clinical-trials connector (services/connectors/clinicalTrialsConnector.js
+  // writes source `clinicaltrials.gov`). The brand string carries no
+  // funding-domain token, so the TRUSTED_LABEL heuristic alone rejects it.
+  // Listed by source as well as by origin for the same reason `web_search` is:
+  // an explicit save must still pass when the client omits `record_origin`.
+  'clinicaltrials.gov',
+  'clinical_trials',
+
   // Local Directories
   'local_directory_united_way',
   'local_directory_feeding_america',
@@ -345,6 +353,16 @@ const TRUSTED_ORIGIN_SET = new Set([
   'verified_real',
   'cof_foundation_locator',
   'funding_api',
+  // Opt-in clinical-trials connector. This is an ALLOWED_RECORD_ORIGIN in
+  // utils/recordOrigins.js and is NOT one of the two deliberately excluded
+  // untrusted markers ('synthetic', 'manual') — it was simply never mirrored
+  // here. The connector writes record_origin 'clinical_trials' + source
+  // 'clinicaltrials.gov', and neither string carries a TRUSTED_LABEL token, so
+  // evaluatePipelineSource returned {allowed:false, reason:'unknown_source'}:
+  // a study a profile had EXPLICITLY OPTED INTO surfaced in Discover and then
+  // 400'd on "Add to Pipeline" — the exact defect this module's header says it
+  // was rewritten to eliminate.
+  'clinical_trials',
   'url_import',
   'directory_resource',
   'directory:health_resources',

@@ -707,6 +707,63 @@ const BLUEPRINT_SEARCH_SUBJECTS = Object.freeze({
 
 export { BLUEPRINT_SEARCH_SUBJECTS }
 
+/**
+ * THE CURATED VOCABULARY OF ONE NEED — the phrases the search may treat as this
+ * need being STATED, sourced from the need's own definition.
+ *
+ * WHY THIS EXISTS (2026-08-14). `ORG_NEED_DEFINITIONS` already curates exactly
+ * the right words for every organisational need — `lab_consumables` carries
+ * 'lab supplies' / 'assay kits' / 'pipette tips', `regulatory_compliance`
+ * carries 'institutional review board' / 'human subjects', `facility_space`
+ * carries 'wet lab space' / 'tenant improvement', `data_infrastructure` carries
+ * 'cloud credits' / 'hipaa compliant storage'. NOTHING CONSUMED ANY OF IT.
+ * `routes/itemNeeds.js` knows each need's `code` but hands `searchItemNeeds`
+ * only the `search_subject` STRING, and the search then re-derives the need
+ * from that string with the HOUSEHOLD taxonomy in
+ * `services/shared/needTaxonomy.js` — which has no research, laboratory or
+ * regulatory vocabulary at all. So the curated terms never reached the
+ * endorsement-phrase gate, the catalog LIKE scan, or the synonym score. This is
+ * the write-only-registry shape this repo has now hit four times
+ * (`web_parity_gap_queue`, the adapter wishlist, stored task authorization,
+ * `setChecklistItem`): a registry that is right every night and has no reader.
+ *
+ * MULTI-WORD ONLY, DELIBERATELY. The definitions also carry single-token
+ * synonyms ('irb', 'ip', 'lease', 'rent', 'server', 'compute'). Those are
+ * consumed downstream by `scoreNeedMatch` (bare `String.includes`) and by
+ * `statesEndorsingPhrase`, where 'ip' sits inside "equIPment" and 'irb' inside
+ * any word containing it — the `ssi`-inside-"a-SSI-stance" defect of
+ * 2026-08-13, one door over. A single word is a coincidence magnet; the repo's
+ * standing rule (`profileDerivedFacts.isTopicalTerm`, `buildItemLikeTerms`,
+ * `declaredFieldOfStudyRecall`) is multi-word only, and it holds here.
+ *
+ * This SUPPLIES vocabulary; it LOWERS no bar. Every phrase returned still has
+ * to be STATED by a row before `statesEndorsingPhrase` endorses it, a web lead
+ * still has to state funding intent, and a catalog row is still adjudicated by
+ * the canonical `computeMatchDecision`. Nothing here admits anything.
+ *
+ * @param {string} code a need code from `ORG_NEED_DEFINITIONS`/`NEEDS_TAXONOMY`
+ * @param {string|null} blueprintKey the profile's blueprint, for the scoped subject
+ * @returns {string[]} multi-word phrases, deduped, lowercased, order-stable
+ */
+export function needSearchVocabulary(code, blueprintKey = null) {
+  const def = getNeedDefinition(code)
+  if (!def) return []
+  const out = new Set()
+  const add = (value) => {
+    const v = String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+    // Multi-word only — see the header. A hyphenated token ('bsl-2', 'build-out')
+    // is ONE word to a reader and is excluded with the rest.
+    if (v.includes(' ')) out.add(v)
+  }
+  for (const syn of Array.isArray(def.synonyms) ? def.synonyms : []) add(syn)
+  for (const term of Array.isArray(def.example_search_terms) ? def.example_search_terms : []) add(term)
+  // The blueprint-scoped subject is itself a curated phrase for THIS entity
+  // type, and it is the one phrase we already trust enough to search on.
+  const scoped = blueprintKey ? BLUEPRINT_SEARCH_SUBJECTS[blueprintKey]?.[code] : null
+  if (scoped) add(scoped)
+  return [...out]
+}
+
 export function buildSearchSubject(code, blueprintKey = null) {
   const def = getNeedDefinition(code)
   const override = blueprintKey ? BLUEPRINT_SEARCH_SUBJECTS[blueprintKey]?.[code] : null
@@ -874,5 +931,6 @@ export default {
   evaluateSatisfaction,
   collectUserNeeds,
   buildSearchSubject,
+  needSearchVocabulary,
   deriveOrgNeeds,
 }

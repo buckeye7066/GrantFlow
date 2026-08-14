@@ -37,6 +37,16 @@ import MatchScoreGuidanceBand from "@/components/discovery/MatchScoreGuidanceBan
 
 const NEEDS_STORAGE_PREFIX = "grantflow:matcher-needs:"
 
+// A MISSING score is not a zero. `?? 0` on a NULL match_score renders
+// "Score 0" — a claim that the engine looked and measured nothing — which is
+// indistinguishable from a row nothing ever scored (the Number(null) === 0
+// class this repo has been burned by). An unscored row says so.
+function scoreBadgeText(score) {
+    if (score === null || score === undefined || score === "") return "Not scored"
+    const n = Number(score)
+    return Number.isFinite(n) ? `Score ${n}` : "Not scored"
+}
+
 // Collision-resistant id generator for custom needs. Combines a timestamp with
 // an always-incrementing counter (and crypto.randomUUID when available) so two
 // needs created in the same millisecond never share an id.
@@ -1263,7 +1273,7 @@ export default function SmartMatcher() {
                                         <div className="flex items-center gap-2 mb-2">
                                           <h3 className="font-semibold text-slate-900">{opp.title}</h3>
                                           <Badge variant="default" className="bg-green-600">
-                                            Score {opp.match_score ?? 0}
+                                            {scoreBadgeText(opp.match_score)}
                                           </Badge>
                                         </div>
                                         <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>
@@ -1309,7 +1319,7 @@ export default function SmartMatcher() {
                                         <div className="flex items-center gap-2 mb-2">
                                           <h3 className="font-semibold text-slate-900">{opp.title}</h3>
                                           <Badge variant={(opp.match_score ?? 0) >= STRONG_MATCH_SCORE ? "default" : "secondary"}>
-                                            Score {opp.match_score ?? 0}
+                                            {scoreBadgeText(opp.match_score)}
                                           </Badge>
                                         </div>
                                         <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>

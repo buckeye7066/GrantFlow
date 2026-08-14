@@ -25,7 +25,13 @@ router.get('/health', async (req, res) => {
       )
       .get()
 
-    const running = await req.db
+    // PRECEDENCE TRAP: `await x.get()?.count` parses as `await (x.get()?.count)`.
+    // On the SQLite shim `.get()` is synchronous so `?.count` reads a real row;
+    // on prod Postgres `.get()` returns a PROMISE, `?.count` is `undefined`, and
+    // `Number(undefined ?? 0)` is 0 — so this whole health endpoint reported
+    // "0 running runs / 0 stale programs" permanently in production while doing
+    // nothing. Await the row FIRST, then read the column.
+    const runningRow = await req.db
       .prepare(
         `
           SELECT COUNT(*) AS count
@@ -33,7 +39,8 @@ router.get('/health', async (req, res) => {
           WHERE status = 'running'
         `,
       )
-      .get()?.count
+      .get()
+    const running = runningRow?.count
 
     const staleDays = Math.max(1, Number.parseInt(process.env.CRAWLER_STALE_DAYS || '30', 10) || 30)
     const isPostgres = req.db?.dialect === 'postgres'
@@ -44,8 +51,10 @@ router.get('/health', async (req, res) => {
       ? `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`
       : `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`
     const staleParam = isPostgres ? staleDays : `-${staleDays} day`
-    const staleA = await req.db.prepare(staleSqlA).get(staleParam)?.count
-    const staleB = await req.db.prepare(staleSqlB).get(staleParam)?.count
+    const staleARow = await req.db.prepare(staleSqlA).get(staleParam)
+    const staleBRow = await req.db.prepare(staleSqlB).get(staleParam)
+    const staleA = staleARow?.count
+    const staleB = staleBRow?.count
 
     res.json({
       status: 'ok',

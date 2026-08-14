@@ -241,8 +241,17 @@ function needMatchesHit(hit, needs = []) {
     .filter(Boolean)
   if (normalizedNeeds.length === 0) return true
 
+  // TOKEN BOUNDARY, NOT SUBSTRING, for the whole-phrase branch below. It was a
+  // bare `.includes(need)`, which is the 'ssi'-inside-'assistance' shape: the
+  // canonical need `legal` matched "illegal", `food` matched "seafood". Its own
+  // sibling two lines down already matches tokens with `\b…\b`, so the loose
+  // branch contradicted the rule beside it. Punctuation is folded to spaces on
+  // BOTH sides first (the haystack carries snippet punctuation and a raw URL),
+  // so "…food-assistance/" and "food." still state the need `food`.
+  const phraseHaystack = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()} `
   for (const need of normalizedNeeds) {
-    if (need.length >= 3 && text.toLowerCase().includes(need.toLowerCase())) return true
+    const phrase = need.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+    if (phrase.length >= 3 && phraseHaystack.includes(` ${phrase} `)) return true
     if (NEED_SEMANTIC_RULES.some((rule) => rule.need.test(need) && rule.hit.test(text))) return true
     const tokens = need
       .toLowerCase()

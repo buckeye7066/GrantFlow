@@ -127,11 +127,26 @@ export function createHamilton(deps = {}) {
           // refuse unsafe actions; Hamilton only forwards the prepared packet.
           try {
             const sub = await portalDriver.submit({ opportunity: opp, profile, packet: docs, authorize });
-            outcome = sub?.submitted ? 'portal_submitted' : 'portal_draft_saved';
+            // `=== true`, never truthy. Claiming a portal SUBMISSION is the
+            // strongest assertion this system makes, and the canonical rule
+            // (#1105/#1107) is that it is reported only on a positive signal —
+            // a driver returning {submitted:'pending'} or {submitted:1} must not
+            // become 'portal_submitted'. Likewise a driver that returns NOTHING
+            // is silence, not evidence of a saved draft, so the outcome stays
+            // 'packet_ready' rather than a positive claim about the portal.
+            if (sub?.submitted === true) outcome = 'portal_submitted';
+            else if (sub?.draft_saved === true) outcome = 'portal_draft_saved';
+            else outcome = 'packet_ready';
             if (sub?.hard_stops?.length) hardStops.push(...sub.hard_stops);
           } catch (e) {
             outcome = 'packet_ready';
-            hardStops.push({ category: HARD_STOP.PORTAL_TOS, detail: `portal driver error: ${e?.message ?? e}` });
+            // A driver EXCEPTION is a fault on our side (network timeout,
+            // Playwright crash, null deref) — it is NOT evidence about the
+            // funder's terms of service. Filing it as PORTAL_TOS asserted
+            // "this portal forbids automation", which hamiltonBlockerClassifier
+            // turns into a permanent posture, so one transient fault
+            // permanently mislabelled a reachable portal.
+            hardStops.push({ category: HARD_STOP.UNKNOWN_METHOD, detail: `portal driver error: ${e?.message ?? e}` });
           }
         } else {
           // Honest: no live driver here. Packet is complete; portal step deferred.

@@ -146,4 +146,4 @@ export default function AdminDataIntegrity() {
   );
 }
 
-// Loader2 is now imported from lucide-react above â local definition removed.
+// Loader2 is now imported from lucide-react above — local definition removed.

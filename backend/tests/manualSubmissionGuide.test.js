@@ -33,6 +33,18 @@ describe('taskNeedsHumanFinish', () => {
       expect(taskNeedsHumanFinish(s), String(s)).toBe(false)
     }
   })
+
+  it('submission_verification_required is a HAND-BACK, not silent work-in-progress', () => {
+    // The durable quarantine the orchestrator sets when the submit boundary may
+    // have been crossed with no confirmation evidence. It carries no
+    // blocked/waiting/needs prefix, so the prefix rule alone produced NO guide —
+    // the exact "silent parked task" this module exists to prevent.
+    expect(taskNeedsHumanFinish('submission_verification_required')).toBe(true)
+    // The in-flight halves of the same state machine stay OUT (a live run
+    // passes through them in seconds; listing them would flood needs_you).
+    expect(taskNeedsHumanFinish('submit_attempt_started')).toBe(false)
+    expect(taskNeedsHumanFinish('submit_evidence_pending')).toBe(false)
+  })
 })
 
 describe('buildManualCompletionGuide', () => {
@@ -105,6 +117,25 @@ describe('buildManualCompletionGuide', () => {
     })
     expect(`${guide.headline} ${guide.why}`).toMatch(/two-factor|2FA/i)
     expect(guide.steps.some((s) => s.action === 'sign_in')).toBe(true)
+    expect(guide.steps[guide.steps.length - 1].action).toBe('record')
+  })
+
+  it('submission_verification_required: verify first, never blind-resubmit, honest record LAST', () => {
+    const guide = buildManualCompletionGuide(
+      baseTask({ status: 'submission_verification_required', output_pdf_document_id: 'doc-3' }),
+      { title: 'NAEMT EMS Scholarship', portalUrl: 'https://naemt.org/apply' },
+    )
+    expect(guide).toBeTruthy()
+    const text = allText(guide)
+    // The owner is told to CHECK, and told why we refuse to claim submitted.
+    expect(guide.steps.some((s) => s.action === 'verify_submission')).toBe(true)
+    expect(text).toMatch(/confirmation/i)
+    // Duplicate-submission warning: the reason this state is quarantined and
+    // never blindly retried must reach the human doing the retry.
+    expect(text).toMatch(/duplicate/i)
+    // The prepared packet and the real portal link both ride along.
+    expect(guide.steps.some((s) => s.action === 'download_packet' && s.document_id === 'doc-3')).toBe(true)
+    expect(guide.steps.map((s) => s.url).filter(Boolean)).toContain('https://naemt.org/apply')
     expect(guide.steps[guide.steps.length - 1].action).toBe('record')
   })
 

@@ -69,8 +69,19 @@ const AWARD_LINK_TEXT_RX = /\b(scholarship|fellowship|grant|award|bursary)s?\b/i
  * slips past the award-noun test as a false per-item link. */
 const NAV_LINK_TEXT_RX = /^(home|about( us)?|contact( us)?|log ?in|sign ?(in|up)|register|apply now|search|browse|next|previous|back|more|see all|view all|faq|help|privacy|terms|donate|blog|news|scholarships?\s+(search|directory|database|finder|list(ings?)?))$/i
 
-/** Award-phrase occurrences in text (bounded scan — the NGWeb catalog is 323k chars). */
-const AWARD_PHRASE_RX = /\b(scholarship|fellowship|grant|award|bursary)\b/gi
+/** Award-phrase occurrences in text (bounded scan — the NGWeb catalog is 323k chars).
+ *
+ * The `s?` is load-bearing and was MISSING here while its sibling
+ * AWARD_LINK_TEXT_RX above has always carried it. Without it the trailing `\b`
+ * fails against the `s` in "Scholarships", so every PLURAL occurrence was
+ * invisible to countAwardPhrases — and this text-density count is the ONLY
+ * signal that catches the NGWeb-class catalog this module exists for (557 text
+ * rows behind 5 nav anchors, per the file header). Scored against a hard
+ * MIN_AWARD_PHRASES_WITH_URL = 25 bar, a category page that writes
+ * "…Scholarships" in its headings and row labels could undercount straight past
+ * the threshold and be classified NO_APPLICATION_SURFACE — the exact dead-end
+ * listing decomposition was built to eliminate. */
+const AWARD_PHRASE_RX = /\b(scholarship|fellowship|grant|award|bursary)s?\b/gi
 const MAX_TEXT_SCAN = 200_000
 
 export const PAGE_SURFACES = Object.freeze({

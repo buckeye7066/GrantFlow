@@ -15,11 +15,20 @@ import {
 
 const SEARCH_ENDPOINT = 'https://api.grants.gov/v1/api/search2';
 const DETAIL_BASE = 'https://www.grants.gov/search-results-detail';
+// NOTE the deliberate absence of the `i` flag on the two ACRONYMS. These are
+// tested by `agencyLooksLike` against a haystack that joins title + summary +
+// sponsor + agency + number + description, so `/\bSAFER\b/i` matched the
+// ordinary comparative adjective "safer" ("make communities safer", "safer
+// streets") — extremely common in DOT/HHS/DOJ abstracts — and admitted
+// arbitrary federal grants into the `fema_afg` lane as DIRECT_GRANTs. AFG and
+// SAFER are always upper-case in this feed, so case-sensitivity costs no real
+// FEMA row and is strictly more precise. The multi-word phrases keep `i`
+// because they cannot collide with an unrelated word.
 const FEMA_PATTERNS = [
   /\bFEMA\b/i,
   /assistance to firefighters/i,
-  /\bAFG\b/i,
-  /\bSAFER\b/i,
+  /\bAFG\b/,
+  /\bSAFER\b/,
   /firefighters? grants?/i,
   /fire prevention/i,
 ];

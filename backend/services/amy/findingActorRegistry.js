@@ -273,9 +273,17 @@ export function unregisteredLevers() {
  * The single safety gate. Throws when a lever whose surface is on the autonomy
  * denylist is declared AUTO.
  *
- * Called at module load of the registry test AND from `buildApprovalQueue`'s
- * totality path, so a future edit that quietly makes the eligibility gate
- * auto-appliable cannot ship.
+ * WHERE IT ACTUALLY RUNS (corrected 2026-08-14 — this comment used to claim it
+ * was "called at module load of the registry test AND from `buildApprovalQueue`'s
+ * totality path". It is NOT called from `buildApprovalQueue`, or from any other
+ * runtime path: `grep -rn assertAutonomyBoundary backend/` returns this file and
+ * `backend/tests/amyFindingActorTotality.test.js` and nothing else). The boundary
+ * is therefore enforced at BUILD time by that totality test, which is a real gate
+ * — a forbidden-surface lever flipped to AUTO reddens CI and cannot merge — but
+ * it is NOT a runtime assertion, so do not read this function's existence as a
+ * guarantee that a running Amy re-checks the boundary before applying a lever.
+ * The runtime property that does hold is `leverActionability()`'s fail-closed
+ * default: an unregistered lever resolves to CODE_CHANGE, never AUTO.
  */
 export function assertAutonomyBoundary(registry = LEVER_REGISTRY, surfaces = LEVER_SURFACE) {
   const violations = []

@@ -1054,7 +1054,7 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       
       const msg = String(error?.message || error)
       if (msg.includes('documents_status_check')) {
-        // Retry without the status field â use a SQL variant that omits status entirely
+        // Retry without the status field — use a SQL variant that omits status entirely
         // so the DB default applies and avoids the constraint violation.
         // The documents_status_check constraint is on the `status` column.
         // Our INSERT does not include `status` at all, so this constraint

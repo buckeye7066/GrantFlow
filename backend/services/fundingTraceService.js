@@ -356,6 +356,16 @@ export function traceSourceToOpportunity(source, entity) {
     eligibility_bullets: [],
     opportunity_type: 'grant',
     type: 'DIRECTORY',
+    // A traced funder is a POINTER — it names an agency that has funded someone,
+    // never an award anyone can apply to. `type:'DIRECTORY'` alone is invisible
+    // to every pointer predicate in the product: `isPointerKind`
+    // (config/opportunityKindClasses.js), the awardable census
+    // (coverageAudit/profileResultCoverageAudit.js) and the amount-answer census
+    // all read `opportunity_kind`, and a NULL kind is UNCLASSIFIED — never
+    // "awardable". Declaring the canonical lowercase kind here is what makes
+    // these rows count honestly as directories instead of inflating the
+    // apply-to headline.
+    opportunity_kind: 'directory',
     record_origin: 'funding_trace',
     funding_source_type: fundingType,
     requires_501c3: false,

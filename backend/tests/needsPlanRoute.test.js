@@ -268,7 +268,12 @@ describe('POST /api/item-needs/:profileId/needs-plan/search', () => {
         total_found: 0,
         total_awardable: 0,
         total_pointer: 0,
-        items: [...args.items].reverse().map((item) => ({ item, found: 0, results: [] })),
+        // The route now hands `searchItemNeeds` `{item, code}` pairs so the
+        // need's CURATED vocabulary reaches the search (see
+        // `orgNeedsTaxonomy.needSearchVocabulary`). The real service echoes back
+        // the item TEXT, so this fixture must too — otherwise the join under
+        // test is exercised against a shape the service never produces.
+        items: [...args.items].reverse().map((entry) => ({ item: entry.item, found: 0, results: [] })),
       }
     })
 
@@ -280,7 +285,16 @@ describe('POST /api/item-needs/:profileId/needs-plan/search', () => {
 
     const res = await request(app).post('/api/item-needs/lab-1/needs-plan/search').send({}).expect(200)
     expect(res.body.items.length).toBeGreaterThan(1)
-    expect(res.body.items[0].item).toBe(passedItems[passedItems.length - 1])
+    expect(res.body.items[0].item).toBe(passedItems[passedItems.length - 1].item)
+
+    // Each blueprint need must travel WITH its code, or the search falls back
+    // to inferring the need from the subject string with the household
+    // taxonomy — which has no research/laboratory vocabulary at all.
+    for (const entry of passedItems) {
+      expect(entry).toHaveProperty('item')
+      expect(entry).toHaveProperty('code')
+    }
+    expect(passedItems.some((e) => e.code)).toBe(true)
 
     // THE ASSERTION THAT MATTERS: every row's label must be the label of ITS
     // OWN subject. Under an index join the rows are reversed relative to the
@@ -295,7 +309,7 @@ describe('POST /api/item-needs/:profileId/needs-plan/search', () => {
   it('never sends the same search subject twice in one run', async () => {
     await request(app).post('/api/item-needs/lab-1/needs-plan/search').send({}).expect(200)
     const passed = searchItemNeedsMock.mock.calls[0][1].items
-    expect(new Set(passed.map((s) => s.toLowerCase())).size).toBe(passed.length)
+    expect(new Set(passed.map((e) => e.item.toLowerCase())).size).toBe(passed.length)
   })
 
   it('attaches the need identity to each searched item', async () => {

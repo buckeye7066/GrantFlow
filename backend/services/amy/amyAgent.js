@@ -85,6 +85,34 @@ const DEFAULT_MESH = Object.freeze({
 const defaultLog = createLogger('services:amy:agent')
 
 /**
+ * The honest outcome of ONE auto-applied lever.
+ *
+ * `'none'` means NOTHING WAS WRITTEN — and it must keep meaning exactly that.
+ * The run summary previously computed
+ *   `kept ? 'kept' : applied?.applied ? 'reverted' : 'none'`
+ * which has no way to say "written and still on disk". Combined with a catch
+ * block that replaced the tuning object wholesale (destroying `applied`), an
+ * edit to `backend/config/matchThresholds.js` that survived a thrown re-crawl
+ * was reported as `'none'`. There is no boot net for levers, so nothing
+ * downstream would have corrected that reading.
+ *
+ * `applied_unvalidated` = written, and the evidence that it helped was never
+ * obtained. `applied_REVERT_FAILED` = written, and we could not undo it; that
+ * is an operator-visible incident, never a quiet state.
+ *
+ * @param {object|null} tuning the lever's own record
+ * @returns {'none'|'kept'|'reverted'|'applied_unvalidated'|'applied_REVERT_FAILED'}
+ */
+export function describeLeverOutcome(tuning) {
+  if (!tuning) return 'none'
+  if (tuning.revert_failed) return 'applied_REVERT_FAILED'
+  if (tuning.validation?.kept) return 'kept'
+  if (tuning.validation?.reverted) return 'reverted'
+  if (tuning.applied?.applied) return 'applied_unvalidated'
+  return 'none'
+}
+
+/**
  * Read profiles.last_discovery_at for one profile (tolerant: older/test
  * schemas without the column read as null). Used as the belt-and-suspenders
  * "the crawl really happened" signal: persistRun stamps last_discovery_at on
@@ -642,7 +670,17 @@ export async function runAmyTraining(options = {}) {
   }
 
   // ── IMPROVE: scoring weights (empirical re-crawl validation + auto-revert) ──
+  //
+  // `'none'` must mean NOTHING WAS WRITTEN. The previous expression could only
+  // say kept / reverted / none, so an edit that was applied and then lost its
+  // record to a catch — or one whose revert itself failed — reported as
+  // `'none'` while the file on disk was still changed. Two more outcomes are
+  // real and both are now nameable.
   let weightTuning = null
+  // The apply→validate→revert window is the one place a lever can outlive the
+  // run. Held OUTSIDE the try so the `finally` can still see a successful apply
+  // after the catch has run — see the block's own note below.
+  let weightAppliedRef = null
   if (improve && applyWeights && crawledProfileIds.length >= (tuningOpts.weights?.minCohort ?? 12)) {
     try {
       const currentWeights = await weightEditor.read()
@@ -650,6 +688,7 @@ export async function runAmyTraining(options = {}) {
       weightTuning = { ...wd, applied: null, validation: null }
       if (wd.change) {
         const applied = await weightEditor.apply(wd.to, { now: clock() })
+        weightAppliedRef = applied
         weightTuning.applied = applied
         if (applied?.applied) {
           // Topical lens (see the scale-split note in crawlerMetrics.js):
@@ -670,12 +709,48 @@ export async function runAmyTraining(options = {}) {
       }
     } catch (err) {
       logger.warn('Amy weight tuning failed', { error: err?.message })
-      weightTuning = { change: false, error: err?.message }
+      // PRESERVE `applied`. Assigning a FRESH object here destroyed the record
+      // that an edit had been written to `backend/config/matchThresholds.js`,
+      // and the run summary then read `weights_tuned: 'none'` while the edit was
+      // still live on disk — a silent no-op reported as success, inverted: real
+      // work reported as no work.
+      weightTuning = { ...(weightTuning ?? { change: false }), error: err?.message }
+    } finally {
+      // AN APPLIED EDIT THAT WAS NEVER VALIDATED MUST NOT SURVIVE THE RUN.
+      // The revert used to sit only on the else-branch of the validation `if`,
+      // so anything that threw between `apply()` and that branch — the re-crawl,
+      // the metric computation, the restore itself — left the scoring weights
+      // mutated with only a `.bak` nobody reads. There is no boot net for
+      // levers (`enforceAmySyntheticExpiry` covers Amy's PROFILES, not her
+      // edits), so this `finally` is the only thing standing between a thrown
+      // re-crawl and a permanently changed scoring contract.
+      if (weightAppliedRef?.applied && !weightTuning?.validation) {
+        try {
+          await weightEditor.restore(weightAppliedRef)
+          weightTuning = {
+            ...(weightTuning ?? {}),
+            validation: { kept: false, reverted: true, reason: 'unvalidated_after_error' },
+          }
+          logger.warn('Amy reverted an UNVALIDATED scoring-weight change', { run_id: runId })
+        } catch (restoreErr) {
+          // The loudest honest state there is: the config is still edited and we
+          // could not undo it. Never let this read as 'none'.
+          weightTuning = { ...(weightTuning ?? {}), revert_failed: restoreErr?.message ?? String(restoreErr) }
+          logger.error('Amy could NOT revert an APPLIED scoring-weight change — matchThresholds.js is still edited', {
+            run_id: runId,
+            error: restoreErr?.message ?? String(restoreErr),
+            backup_path: weightAppliedRef?.backup_path ?? null,
+          })
+        }
+      }
     }
   }
 
   // ── IMPROVE: source coverage (empirical re-crawl validation + auto-revert) ──
   let coverageTuning = null
+  // Same apply→validate→revert window as the weights lever above; same reason
+  // the reference is held outside the try.
+  let coverageAppliedRef = null
   if (improve && applyCoverage && crawledProfileIds.length >= (tuningOpts.coverage?.minCohort ?? 12)) {
     try {
       const liveOverrides = await coverageEditor.read()
@@ -683,6 +758,7 @@ export async function runAmyTraining(options = {}) {
       coverageTuning = { change: cp.change, additions: cp.additions, reason: cp.reason, applied: null, validation: null }
       if (cp.change) {
         const applied = await coverageEditor.apply(cp.next, { now: clock(), db })
+        coverageAppliedRef = applied
         coverageTuning.applied = applied
         if (applied?.applied) {
           const rv = await recrawlQuality()
@@ -699,7 +775,27 @@ export async function runAmyTraining(options = {}) {
       }
     } catch (err) {
       logger.warn('Amy coverage tuning failed', { error: err?.message })
-      coverageTuning = { change: false, error: err?.message }
+      // PRESERVE `applied` — see the weights lever above for why a fresh object
+      // here is a lie about what is on disk.
+      coverageTuning = { ...(coverageTuning ?? { change: false }), error: err?.message }
+    } finally {
+      if (coverageAppliedRef?.applied && !coverageTuning?.validation) {
+        try {
+          await coverageEditor.revert(coverageAppliedRef.from, coverageAppliedRef.backup_path, { db })
+          coverageTuning = {
+            ...(coverageTuning ?? {}),
+            validation: { kept: false, reverted: true, reason: 'unvalidated_after_error' },
+          }
+          logger.warn('Amy reverted an UNVALIDATED source-coverage change', { run_id: runId })
+        } catch (revertErr) {
+          coverageTuning = { ...(coverageTuning ?? {}), revert_failed: revertErr?.message ?? String(revertErr) }
+          logger.error('Amy could NOT revert an APPLIED source-coverage change — the override is still live', {
+            run_id: runId,
+            error: revertErr?.message ?? String(revertErr),
+            backup_path: coverageAppliedRef?.backup_path ?? null,
+          })
+        }
+      }
     }
   }
 
@@ -1143,8 +1239,8 @@ export async function runAmyTraining(options = {}) {
     ...summary,
     crawled: crawledProfileIds.length,
     floor_tuned: tuningApplied?.applied ? `${decision.from}->${decision.to}` : 'none',
-    weights_tuned: weightTuning?.validation?.kept ? 'kept' : weightTuning?.applied?.applied ? 'reverted' : 'none',
-    coverage_tuned: coverageTuning?.validation?.kept ? 'kept' : coverageTuning?.applied?.applied ? 'reverted' : 'none',
+    weights_tuned: describeLeverOutcome(weightTuning),
+    coverage_tuned: describeLeverOutcome(coverageTuning),
     archetypes_learned: Object.keys(effectiveArchetypeUpdate).length,
     fleet_gap_classes: fleetGaps ? (fleetGaps.gaps?.length || 0) : null,
     gap_weighted_cohort: Boolean(categoryWeights),

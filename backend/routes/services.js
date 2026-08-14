@@ -138,7 +138,7 @@ router.post('/purchases', ensureAuth, async (req, res) => {
     }
   }
 
-  // All prices confirmed â now write atomically
+  // All prices confirmed — now write atomically
   const insertPurchase = req.db.prepare(
     `
       INSERT INTO service_purchases (

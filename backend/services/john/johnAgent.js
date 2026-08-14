@@ -295,8 +295,13 @@ export async function runJohn({
       }
 
       if (dryRun) {
-        summary.drafts_created += 0
-        summary.errors.push({ lead_id: lead.lead_id, dry_run: true })
+        // A DRY-RUN SKIP IS NOT AN ERROR. These entries used to be pushed onto
+        // `summary.errors` while the run still returned `ok: true`, so a clean
+        // dry run reported N failures and a real failure was indistinguishable
+        // from a deliberate skip in the same array. (`drafts_created += 0` was
+        // dead arithmetic saying the same thing in the wrong place.)
+        summary.dry_run_skipped = (summary.dry_run_skipped ?? 0) + 1
+        ;(summary.dry_run_leads ??= []).push({ lead_id: lead.lead_id })
         remaining -= 1
         continue
       }

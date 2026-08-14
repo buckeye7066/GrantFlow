@@ -26,7 +26,38 @@ function ensureFile(filePath, description) {
   }
 }
 
-function main() {
+/**
+ * WHY THIS WAS REWRITTEN (2026-08-14) — the script could not do its stated job.
+ *
+ * Three defects compounded, and every one of them was invisible in the output:
+ *
+ * 1. `runComprehensiveCrawler` is `async`, and the old loop never awaited it.
+ *    `result?.inserted` was therefore read off a PROMISE, so `totalInserted` and
+ *    `totalEvaluated` were ALWAYS 0: every ZIP printed "(BELOW MINIMUM)" and the
+ *    final report claimed "Total opportunities inserted: 0" for a full 43,859-ZIP
+ *    crawl. The try/catch could not catch a rejected promise either, so the
+ *    documented "Stop immediately on error" guarantee never held — failures
+ *    surfaced as unhandled rejections.
+ *
+ * 2. Because it was `Array.prototype.forEach` over a non-awaited async call, all
+ *    43,859 crawls were launched at once rather than sequenced — a fetch storm
+ *    against grants.gov/Overpass that would earn a rate-limit or bot wall long
+ *    before it earned any data.
+ *
+ * 3. The ZIP lane never ran AT ALL. `runComprehensiveCrawler` only reads
+ *    `zip_list` / `min_sources_per_zip` inside its `parameters.mode === 'geo'`
+ *    branch; without that flag it falls through to profile matching, which was
+ *    then handed `profileContext: null`. So the "crawl ALL USA ZIP codes" script
+ *    ran profile matching against an empty profile, once per ZIP, and ignored
+ *    the ZIP list entirely. (`dataDir` was passed and never read.)
+ *
+ * The geo lane already batches, paces, resumes and enforces a per-ZIP minimum
+ * internally, so the correct shape is ONE call carrying the whole ZIP list —
+ * not one call per ZIP. Counters are read from the keys that branch actually
+ * returns (`inserted` = sources, `evaluated` = ZIPs processed, plus
+ * `result_meta.failed` / `.skipped`).
+ */
+async function main() {
   const dbPath = path.resolve(projectRoot, 'backend', 'data', 'grantflow.db')
   const dataDir = path.resolve(projectRoot, 'backend', 'data', 'crawlers')
   const zipFile = path.join(dataDir, 'zip_coordinates.json')
@@ -36,106 +67,102 @@ function main() {
 
   const zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
   const zipCodes = Object.keys(zipMap)
-  
+
   if (zipCodes.length === 0) {
     console.error('[nationwide-crawler] ERROR: No ZIP codes found in zip_coordinates.json')
     process.exit(1)
   }
 
+  const minSourcesPerZip = Number(process.env.NATIONWIDE_MIN_SOURCES_PER_ZIP || 3)
+  const batchSize = Number(process.env.NATIONWIDE_BATCH_SIZE || 50)
+  const rateLimitMs = Number(process.env.NATIONWIDE_RATE_LIMIT_MS || 250)
+
   console.log(`[nationwide-crawler] Starting comprehensive nationwide crawl`)
   console.log(`[nationwide-crawler] Total ZIP codes to process: ${zipCodes.length.toLocaleString()}`)
-  console.log(`[nationwide-crawler] Minimum opportunities per ZIP: 3`)
+  console.log(`[nationwide-crawler] Minimum opportunities per ZIP: ${minSourcesPerZip}`)
+  console.log(`[nationwide-crawler] Batch size: ${batchSize}, pacing: ${rateLimitMs}ms/ZIP`)
   console.log(`[nationwide-crawler] No upper limit - comprehensive coverage\n`)
 
   const db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
 
   const startedAt = Date.now()
-  let totalInserted = 0
-  let totalEvaluated = 0
-  let failures = 0
-  let zipsWithLessThan3 = 0
-
   console.log(`Starting crawl at ${new Date().toISOString()}\n`)
 
-  zipCodes.forEach((zip, index) => {
-    const job = {
-      id: `nationwide-comprehensive-${zip}-${Date.now()}`,
-      type: 'comprehensive',
-      parameters: {
-        zip_list: [zip],
-        // No limit per zip - comprehensive crawl
-        limit_per_zip: 999999, // Effectively unlimited
-        fallback_zip_limit: 1,
-      },
-    }
+  const job = {
+    id: `nationwide-comprehensive-${Date.now()}`,
+    type: 'comprehensive',
+    parameters: {
+      // REQUIRED: without mode:'geo' the ZIP list below is never read.
+      mode: 'geo',
+      zip_list: zipCodes,
+      // No cap — this script exists to be exhaustive.
+      max_zips: null,
+      batch_size: batchSize,
+      rate_limit_ms: rateLimitMs,
+      min_sources_per_zip: minSourcesPerZip,
+      // Hit the real upstream sources; offline_only would make this a no-op crawl.
+      offline_only: false,
+      discover_local_resources: true,
+      // Pick up where a previous interrupted run stopped instead of restarting.
+      resume: true,
+    },
+  }
 
-    try {
-      const result = processComprehensiveCrawlerJob({
-        db,
-        job,
-        dataDir,
-        profileContext: null, // null means opportunities are visible to ALL profiles
-      })
-
-      const inserted = Number(result?.inserted ?? 0)
-      const evaluated = Number(result?.evaluated ?? 0)
-      
-      totalInserted += inserted
-      totalEvaluated += evaluated
-
-      if (inserted < 3) {
-        zipsWithLessThan3++
-        console.log(
-          `⚠️  [${index + 1}/${zipCodes.length}] ZIP ${zip.padEnd(5)} → inserted ${inserted}, evaluated ${evaluated} (BELOW MINIMUM)`
-        )
-      } else if ((index + 1) % 100 === 0 || inserted >= 10) {
-        // Log progress every 100 zips or when we find many opportunities
-        console.log(
-          `✓  [${index + 1}/${zipCodes.length}] ZIP ${zip.padEnd(5)} → inserted ${inserted}, evaluated ${evaluated}`
-        )
-      }
-    } catch (error) {
-      failures++
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`❌ [${index + 1}/${zipCodes.length}] ZIP ${zip} FAILED: ${message}`)
-      
-      // Stop immediately on error as per requirement
-      console.error('\n[nationwide-crawler] ERROR DETECTED - Stopping immediately')
-      db.close()
-      process.exit(1)
-    }
-  })
+  let result
+  try {
+    result = await processComprehensiveCrawlerJob({
+      db,
+      job,
+      profileContext: null, // null means opportunities are visible to ALL profiles
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`\n[nationwide-crawler] CRAWL FAILED: ${message}`)
+    console.error(error instanceof Error ? error.stack : '')
+    db.close()
+    process.exit(1)
+  }
 
   db.close()
+
+  const meta = result?.result_meta ?? {}
+  const totalInserted = Number(result?.inserted ?? meta.sources ?? 0)
+  const totalEvaluated = Number(result?.evaluated ?? meta.processed ?? 0)
+  const failures = Number(meta.failed ?? 0)
+  const skipped = Number(meta.skipped ?? 0)
 
   const durationSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000))
   const durationMinutes = Math.floor(durationSeconds / 60)
   const durationHours = Math.floor(durationMinutes / 60)
-  
+
   console.log('\n' + '='.repeat(80))
   console.log('NATIONWIDE COMPREHENSIVE CRAWL COMPLETE')
   console.log('='.repeat(80))
-  console.log(`Total ZIP codes processed: ${zipCodes.length.toLocaleString()}`)
-  console.log(`Total opportunities inserted: ${totalInserted.toLocaleString()}`)
-  console.log(`Total opportunities evaluated: ${totalEvaluated.toLocaleString()}`)
-  console.log(`Failed ZIP codes: ${failures}`)
-  console.log(`ZIP codes with <3 opportunities: ${zipsWithLessThan3}`)
+  console.log(`ZIP codes offered:          ${zipCodes.length.toLocaleString()}`)
+  console.log(`ZIP codes processed:        ${totalEvaluated.toLocaleString()}`)
+  console.log(`ZIP codes skipped (resume): ${skipped.toLocaleString()}`)
+  console.log(`ZIP codes failed:           ${failures.toLocaleString()}`)
+  console.log(`Opportunities inserted:     ${totalInserted.toLocaleString()}`)
   console.log(`Duration: ${durationHours}h ${durationMinutes % 60}m ${durationSeconds % 60}s`)
   console.log(`Completed at: ${new Date().toISOString()}`)
   console.log('='.repeat(80))
 
+  // An exhaustive crawl that processed NOTHING is a failure, not a success —
+  // say so with a non-zero exit rather than printing a clean summary of zeros.
+  if (totalEvaluated === 0 && skipped === 0) {
+    console.error('\n[nationwide-crawler] NO ZIP CODES WERE PROCESSED — treating this run as failed.')
+    process.exit(1)
+  }
   if (failures > 0) {
-    console.error('\n⚠️  Some ZIP codes failed to process')
+    console.error(`\n[nationwide-crawler] ${failures} ZIP code(s) failed to process`)
     process.exit(1)
   }
 }
 
-try {
-  main()
-} catch (error) {
+main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error)
   console.error('\n[nationwide-crawler] FATAL ERROR:', message)
-  console.error(error.stack)
+  console.error(error instanceof Error ? error.stack : '')
   process.exit(1)
-}
+})

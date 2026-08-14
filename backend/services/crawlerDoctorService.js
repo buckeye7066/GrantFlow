@@ -19,6 +19,7 @@ import { buildThesisForProfile } from './crawlerOsService.js'
 import { buildWebQueries } from '../crawler-os/webQueries.js'
 import { auditProfileResultCoverage } from './coverageAudit/profileResultCoverageAudit.js'
 import { qualifiesForDisplay, SURFACED_MATCHER_VERSIONS } from '../config/matchSurfacing.js'
+import { isPointerKind } from '../config/opportunityKindClasses.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -46,7 +47,12 @@ function explainMatchRow(row, floor) {
   const explain = jparse(row.match_explain_json, {})
   const decision = String(row.match_decision || '').toLowerCase()
   const score = Number(row.match_score)
-  const isDirectory = ['DIRECTORY', 'PAST_AWARD_INTEL'].includes(String(row.opportunity_kind || '').toUpperCase())
+  // Use the canonical pointer registry, not a hand-typed subset. The literal
+  // list omitted `referral` and `school_portal`, so those rows were handed to
+  // `qualifiesForDisplay` with `is_directory:false` and the doctor reported
+  // "below display gate" for rows the real read path DOES surface — a
+  // diagnostic contradicting the product it diagnoses.
+  const isDirectory = isPointerKind(row.opportunity_kind)
   const surfaced = qualifiesForDisplay(
     { is_directory: isDirectory, match_decision: row.match_decision, match_score: row.match_score },
     floor,
@@ -140,6 +146,7 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
   // Stored matches with provenance + amount visibility, best first.
   const versions = SURFACED_MATCHER_VERSIONS.map(() => '?').join(', ')
   let rows = []
+  let matchesError = null
   try {
     rows = await db
       .prepare(
@@ -159,6 +166,13 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
   } catch (err) {
     log.warn('doctor match query failed', { profileId, error: err?.message })
     rows = []
+    // A FAILED read is not the fact "this profile has no matches" — and this
+    // report exists precisely to explain WHY a profile has none. The query
+    // selects migration-gated columns (`fo.amount_status`, `m.source_query`),
+    // so one schema drift used to turn the diagnostic into a confident
+    // "total_matches: 0". Carry the failure into the payload; the sibling
+    // coverage catch below is already honest (it leaves `coverage: null`).
+    matchesError = err?.message || String(err)
   }
 
   // Coverage audit → gap classes + the expansions the closed loop will add.
@@ -202,8 +216,11 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
     },
     next_queries: nextQueries,
     matches,
+    matches_error: matchesError,
     summary: {
-      total_matches: matches.length,
+      // NULL (not 0) when the match read failed: "we could not look" and
+      // "there is nothing" are different facts.
+      total_matches: matchesError ? null : matches.length,
       surfaced: matches.filter((m) => m.surfaced).length,
       with_query_provenance: withProvenance,
       with_amount: withAmount,

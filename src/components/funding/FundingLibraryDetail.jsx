@@ -14,8 +14,15 @@ import { formatAmount, formatDeadline } from './fundingLibraryFormatters'
 
 export default function FundingLibraryDetail({ item, open, onClose }) {
   if (!item) return null
-  const applyUrl = item.apply_url || item.application_url || item.source_url
+  // An APPLY url and a SOURCE url are different claims. `source_url` is where
+  // this record was read from — a listing, a directory page, a press release —
+  // and calling it "Open application" tells the owner they are one click from
+  // applying when they are not. Fall back to it (a real link beats none) but
+  // label it for what it is.
+  const directApplyUrl = item.apply_url || item.application_url
+  const applyUrl = directApplyUrl || item.source_url
   const showApply = Boolean(applyUrl)
+  const applyLabel = directApplyUrl ? 'Open application' : 'Open source page'
 
   return (
     <Dialog open={Boolean(open)} onOpenChange={(o) => (o ? null : onClose?.())}>
@@ -79,7 +86,7 @@ export default function FundingLibraryDetail({ item, open, onClose }) {
           {showApply ? (
             <Button asChild>
               <a href={applyUrl} target="_blank" rel="noreferrer">
-                Open application <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                {applyLabel} <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
               </a>
             </Button>
           ) : null}

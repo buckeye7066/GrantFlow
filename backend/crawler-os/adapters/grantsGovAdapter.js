@@ -50,6 +50,34 @@ const UNRESTRICTED_ELIGIBILITY = '99';
 export function eligibilitiesFor(thesis = {}) {
   const types = Array.isArray(thesis.applicant_types) ? thesis.applicant_types : [];
   if (types.length === 0 || types.includes('*')) return '';
+
+  // A PARTIAL MAP CANNOT DESCRIBE THE PROFILE, SO IT MUST NOT NARROW THE QUERY.
+  //
+  // `GRANTS_GOV_ELIGIBILITY_CODES` covers 12 of the canonical applicant buckets.
+  // `profileIntelligence.js` also emits `tribal` and `law_enforcement`
+  // (ORG_APPLICANT_TYPES) and `teacher`, `candidate`, `active_duty`,
+  // `guard_reserve`, `transitioning_service_member`, `military_spouse`,
+  // `widow`/`widower`/`surviving_spouse`, `patient`, `dementia_patient`
+  // (INDIVIDUAL_APPLICANT_TYPES) — none of which appear above.
+  //
+  // The old rule only skipped the filter when NOTHING mapped. So a tribal
+  // organization that is also a nonprofit resolved to `99|12|13` and grants.gov
+  // was asked, server-side, for nonprofit grants ONLY — silently excluding the
+  // tribal-specific federal funding that is the whole reason that bucket exists.
+  // Same for a teacher who is also a student, or a police/fire agency that is
+  // also a government body. The profile lost the grants its own declared
+  // identity qualifies it for, and nothing reported a gap.
+  //
+  // The fix is the posture this function already documents for the unknown case:
+  // when we cannot express the profile, DO NOT CONSTRAIN — preserve recall and
+  // let `matchEngine.computeMatchDecision` (the sole relevance authority) decide.
+  // Deliberately NOT fixed by inventing codes: the mappings above are documented
+  // as verified against the live Search2 facets, and guessing a code here would
+  // be a fabricated claim about the API. Extending the map is a follow-up that
+  // needs a live verification, not a guess.
+  const unmapped = types.filter((t) => !GRANTS_GOV_ELIGIBILITY_CODES[String(t).toLowerCase()]);
+  if (unmapped.length > 0) return '';
+
   const codes = new Set([UNRESTRICTED_ELIGIBILITY]);
   for (const t of types) {
     for (const c of GRANTS_GOV_ELIGIBILITY_CODES[String(t).toLowerCase()] ?? []) codes.add(c);

@@ -75,16 +75,31 @@ test('ladder: drops to RELAXED_DIRECT and marks rows when minScore unmet but low
 })
 
 test('ladder: relaxation is GRADUATED on the canonical data-point ladder — the best non-empty band wins, not one jump to zero', () => {
-  // Data-point bar (8) unmet; a review-worthy 7 and a floor-level 3 exist.
-  // The canonical RELAX_THRESHOLDS ([7, 4, 0]) must surface ONLY the 7 —
-  // the retired hardcoded [40, 30, 20, 10, 0] tiers were all >= 8-bar
-  // minScores and degenerated into a single jump to 0 (returning the 3 too).
-  const result = assembleFundingResults([direct(7), direct(3)], { minScore: DEFAULT_MIN_SCORE })
+  // The bar is unmet; a top-band 7 and a below-every-band 3 exist. The
+  // canonical RELAX_THRESHOLDS ([7, 4, 0]) must surface ONLY the 7 — the
+  // retired hardcoded [40, 30, 20, 10, 0] tiers were all >= the bar and
+  // degenerated into a single jump to 0 (returning the 3 too).
+  //
+  // The bar is derived from the ladder itself (top band + 1), NOT from
+  // DEFAULT_MIN_SCORE. This fixture originally passed `DEFAULT_MIN_SCORE`
+  // while its own comment asserted "Data-point bar (8) unmet" — true when the
+  // discovery floor was 8, but #1135 deliberately lowered
+  // DISCOVERY_MIN_SCORE_FLOOR to 7 to equal REVIEW_SCORE. From that commit on,
+  // `direct(7)` CLEARED the bar, the ladder correctly returned STRONG_DIRECT,
+  // and this test asserted RELAXED_DIRECT against a scenario it no longer
+  // constructed — it was measuring the floor constant, not graduated
+  // relaxation. Anchoring to RELAX_THRESHOLDS keeps the real invariant under
+  // test and makes it immune to the next deliberate floor move.
+  // (The floor default itself keeps its own dedicated test, immediately below.)
+  const barAboveTopBand = RELAX_THRESHOLDS[0] + 1
+  const result = assembleFundingResults([direct(7), direct(3)], { minScore: barAboveTopBand })
   assert.equal(result.tier, TIERS.RELAXED_DIRECT)
   assert.equal(result.opportunities.length, 1, 'only the best relax band surfaces')
   assert.equal(result.opportunities[0].match_score, 7)
   // and the graduated steps ARE the canonical ladder (no second relaxation authority)
   assert.ok(RELAX_THRESHOLDS.includes(7) && RELAX_THRESHOLDS.includes(0))
+  // The ladder must have MORE than one step, or "graduated" is vacuous.
+  assert.ok(RELAX_THRESHOLDS.length >= 2, 'a single-step ladder is one jump to zero')
 })
 
 test('ladder: the default minScore is the canonical discovery bar (data-point scale), not a retired-scale constant', () => {

@@ -99,6 +99,43 @@ const MANUAL_ORIGINS = new Set([
 
 const BENEFIT_TYPE_KEYWORDS = ['benefit', 'assistance', 'program', 'snap', 'medicaid', 'tanf', 'wic']
 
+/**
+ * The ONLY `link_status` values that record a link we actually reached.
+ * `checkUrl` (services/linkVerificationService.js) emits
+ * `ok | redirect | broken | skipped`; `verified` is the legacy spelling on
+ * older curated rows.
+ */
+export const VERIFIED_LINK_STATUSES = Object.freeze(new Set(['ok', 'redirect', 'verified']))
+
+/**
+ * A link we have NOT confirmed. Positive-observation rule: a status is only
+ * "verified" if it names a real successful probe — everything else (a blank, a
+ * default, an SSRF/skip-listed `skipped`, the explicit `unverified`) is
+ * silence, and silence is never confirmation. `broken` is excluded because it
+ * is a stronger, separately-handled verdict, not an absence of one.
+ *
+ * WHY THIS IS A SET AND NOT `=== 'unverified'` (2026-08-14): the column's
+ * DEFAULT DIFFERS BY DIALECT. `backend/db/schema.sql` (SQLite — tests and dev)
+ * declares `link_status TEXT DEFAULT 'unverified'`, while the production
+ * Postgres migration `0059_funding_opportunities_link_status_repair.sql`
+ * declares `DEFAULT 'unknown'`. The gate tested the literal `'unverified'`, so
+ * in PROD every row written by a producer that does not set the column read
+ * `'unknown'`, matched neither branch, and was displayed with NO
+ * `link_unverified` reason and NO downgrade — while the identical row in CI
+ * was correctly marked. The guard tests run on SQLite and therefore cannot see
+ * it. `'skipped'` (SSRF-blocked / skip-listed, persisted by
+ * `opportunityInserter`) and NULL fell through the same hole. Two other
+ * modules already knew the vocabulary was plural: `opportunityInserter.js`
+ * tests both spellings and `linkVerificationService.js` uses a NOT IN list —
+ * so the re-verification sweep knew a row was unverified while the display
+ * said nothing.
+ */
+export function isUnverifiedLinkStatus(status) {
+  const s = String(status ?? '').trim().toLowerCase()
+  if (s === 'broken') return false
+  return !VERIFIED_LINK_STATUSES.has(s)
+}
+
 /** Lower-case + trim wrapper that always returns a string. */
 function lc(value) {
   if (value === null || value === undefined) return ''
@@ -362,7 +399,7 @@ export function assessReality(opp, opts = {}) {
     reasons.push('link_marked_broken')
     downgrade = true
   }
-  if (linkStatus === 'unverified') {
+  if (isUnverifiedLinkStatus(linkStatus)) {
     reasons.push('link_unverified')
     downgrade = true
   }
@@ -380,6 +417,8 @@ export function assessReality(opp, opts = {}) {
 export default {
   OPPORTUNITY_KINDS,
   SOURCE_TRUST_TIERS,
+  VERIFIED_LINK_STATUSES,
+  isUnverifiedLinkStatus,
   classifyOpportunityKind,
   classifySourceTrustTier,
   assessReality,

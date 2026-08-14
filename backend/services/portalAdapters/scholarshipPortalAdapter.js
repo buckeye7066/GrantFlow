@@ -69,11 +69,23 @@ export const scholarshipPortalAdapter = Object.freeze({
     })
   },
 
+  // EVERY STALL HANDS BACK INSTRUCTIONS **AND A LINK** (owner rule; 2026-08-14).
+  // Both branches below are stalls, and the FIRST is the common one — auto-submit
+  // is OFF by default — yet it used to return a bare "the student must approve
+  // the draft" with no destination, while `portalLink` (carrying the very
+  // `application_url` the second branch uses two lines down) sat unused in the
+  // same signature. The URL-less fallback named nothing at all. A stall the
+  // owner cannot act on is indistinguishable from a silent failure.
   submitApplication({ portalLink, options }) {
+    const applyUrl = portalLink?.application_url || portalLink?.portal_url || portalLink?.url || null
+    const manualStep = applyUrl
+      ? ` To finish it yourself now, open ${applyUrl}, sign in with the student's own account, and submit.`
+      : ` No portal URL is on file for this scholarship — search the school's financial-aid site for "${portalLink?.portal_name || portalLink?.funder || 'the scholarship portal'}" and submit there, then mark it submitted here.`
+
     if (!options?.allowSubmit) {
       return makeAdapterResult({
         outcome: ADAPTER_OUTCOMES.WAITING_FOR_USER,
-        message: 'Auto-submit not enabled — the student must approve the draft before submission.',
+        message: `Auto-submit not enabled — the student must approve the draft before submission.${manualStep}`,
         safeToProceed: false,
         blockingReason: 'auto_submit_disabled',
       })
@@ -82,10 +94,7 @@ export const scholarshipPortalAdapter = Object.freeze({
     // require a student-owned login + attestation.
     return makeAdapterResult({
       outcome: ADAPTER_OUTCOMES.BLOCKED_LOGIN,
-      message:
-        portalLink?.application_url
-          ? `Open ${portalLink.application_url} and submit the application; the school portal requires the student's own login + attestation.`
-          : 'School scholarship portal requires the student to submit. Yana drafts but does not submit on the student\'s behalf.',
+      message: `The school portal requires the student's own login + attestation, so Hamilton drafts but does not submit on the student's behalf.${manualStep}`,
       safeToProceed: false,
       blockingReason: 'institutional_login_required',
     })
