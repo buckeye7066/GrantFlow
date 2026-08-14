@@ -12,7 +12,7 @@ import SamErrorPanel from '@/components/admin/agents/SamErrorPanel'
 import AnyaInteractionPanel from '@/components/admin/agents/AnyaInteractionPanel'
 import JohnDraftMetrics from '@/components/admin/agents/JohnDraftMetrics'
 import AgentActivityTimeline from '@/components/admin/agents/AgentActivityTimeline'
-import AgentControlCenter from '@/components/admin/agents/AgentControlCenter.jsx'
+import AgentControlCenter from '@/components/admin/agentControl/AgentControlCenter.jsx'
 
 const DEFAULT_REFRESH_MS = 45_000
 
