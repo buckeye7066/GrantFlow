@@ -62,6 +62,20 @@ test('getMatchesForProfile can filter by minimum score', () => {
   assert.equal(strong[0].opportunity_id, 'o1');
 });
 
+test('getMatchesForProfile never drops a NULL match_score under a minScore filter (unscored is not junk)', () => {
+  const store = createMemoryStore();
+  storage.upsertOpportunity(store, opp('o1'));
+  storage.upsertOpportunity(store, opp('o2'));
+  storage.upsertMatch(store, { profile_id: 'A', opportunity_id: 'o1', match_score: 85, decision: 'accept' });
+  // an unscored row — match_score explicitly NULL, e.g. discovered but not yet run through the engine
+  storage.upsertMatch(store, { profile_id: 'A', opportunity_id: 'o2', match_score: null, decision: null });
+  const strong = storage.getMatchesForProfile(store, 'A', { minScore: 70 });
+  const ids = strong.map((m) => m.opportunity_id).sort();
+  assert.deepEqual(ids, ['o1', 'o2']);
+  const unscored = strong.find((m) => m.opportunity_id === 'o2');
+  assert.equal(unscored.match_score, null);
+});
+
 test('saved and hidden items are profile-scoped (one profile cannot see another’s)', () => {
   const store = createMemoryStore();
   storage.upsertOpportunity(store, opp('o1'));

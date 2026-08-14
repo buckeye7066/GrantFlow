@@ -24,7 +24,6 @@ export async function runHealthClinicalEngine(profile, options = {}) {
   try {
     const needs = profile.needs || []
     const conditions = profile.health?.conditions || []
-    const isRural = profile.location?.rural === true
 
     const HEALTH_NEED_SIGNALS = ['health', 'medical', 'mental_health', 'prescription', 'behavioral_health', 'clinical']
     const hasHealthNeed = needs.length === 0 || needs.some(n => HEALTH_NEED_SIGNALS.includes(n))
@@ -32,7 +31,7 @@ export async function runHealthClinicalEngine(profile, options = {}) {
     let candidates = DIRECTORY_RESOURCES
 
     if (!hasHealthNeed) {
-      console.warn(`[${ENGINE_ID}] profile has no health need signals â returning empty candidate set`)
+      console.warn(`[${ENGINE_ID}] profile has no health need signals — returning empty candidate set`)
       return []
     }
 
@@ -43,10 +42,6 @@ export async function runHealthClinicalEngine(profile, options = {}) {
       const isDiseaseSpecific = DISEASE_SPECIFIC.some(d => resourceKeywords.includes(d))
       if (isDiseaseSpecific) {
         return conditions.some(c => DISEASE_SPECIFIC.includes(c.toLowerCase()))
-      }
-      if (resource.categories.includes('rural') && !isRural) {
-        // Still include rural resources for non-rural â let decision engine weight them
-        return true
       }
       return true
     })

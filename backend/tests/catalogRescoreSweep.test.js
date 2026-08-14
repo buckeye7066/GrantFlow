@@ -203,19 +203,24 @@ describe('ACCEPT-only writes under the reconcile-surviving version', () => {
     db.close()
   })
 
-  it('revisits an existing pair and replaces stale persisted truth with the current canonical ACCEPT', async () => {
+  it('revisits an existing pair UNDER ITS OWN MATCHER VERSION and replaces stale persisted truth with the current canonical ACCEPT', async () => {
+    // The pre-existing row is stamped CATALOG_RESCORE_MATCHER_VERSION itself —
+    // i.e. this sweep's own prior link for this pair. Re-asserting its OWN row
+    // is the legitimate case; see the sibling test below for a row owned by a
+    // DIFFERENT lane, which must be left alone.
     const db = makeDb()
     addProfile(db, 'p1')
     const opp = addOpp(db, { title: 'HOPE Scholarship' })
     db.prepare(
       `INSERT INTO profile_opportunity_matches
          (id, profile_id, opportunity_id, match_decision, matcher_version, source_query, discovered_via)
-       VALUES ('existing', 'p1', ?, 'reject', 'crawler-os', 'housing scholarship', 'serpapi')`,
+       VALUES ('existing', 'p1', ?, 'reject', '${CATALOG_RESCORE_MATCHER_VERSION}', 'housing scholarship', 'serpapi')`,
     ).run(opp.id)
     const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
     expect(res.scanned).toBe(1)
     expect(res.adjudicated).toBe(1)
     expect(res.updated).toBe(1)
+    expect(res.foreign_lane_skipped).toBe(0)
     const current = matches(db)
     expect(current).toHaveLength(1)
     expect(current[0]).toMatchObject({
@@ -226,6 +231,46 @@ describe('ACCEPT-only writes under the reconcile-surviving version', () => {
       match_explanation: 'accept',
       source_query: 'housing scholarship',
       discovered_via: 'serpapi',
+    })
+    db.close()
+  })
+
+  it('NEVER rebrands a row that belongs to another recall lane (fleet-wide fix, #catalogRescoreSweep-foreign-lane)', async () => {
+    // Before this fix, the ON CONFLICT UPDATE unconditionally stamped
+    // matcher_version = 'catalog-rescore-link' on ANY existing (profile,
+    // opportunity) row, including ones owned by institution-link,
+    // county-crisis-need-link, crawler-os, etc. That rebranding makes the row
+    // unreachable to its OWN lane's withdrawal sweep and lets it survive a
+    // rolling-snapshot DELETE that should have retired it (see
+    // staleMatchExplainRefresh.js's header comment for the invariant: a lane's
+    // stub must keep ITS OWN matcher_version, never be routed through
+    // catalog-rescore). This pins the fix: an engine ACCEPT on a pair already
+    // owned by 'crawler-os' must leave that row COMPLETELY untouched.
+    const db = makeDb()
+    addProfile(db, 'p1')
+    const opp = addOpp(db, { title: 'HOPE Scholarship' })
+    db.prepare(
+      `INSERT INTO profile_opportunity_matches
+         (id, profile_id, opportunity_id, match_score, match_decision, matcher_version, source_query, discovered_via, updated_at)
+       VALUES ('existing', 'p1', ?, 42, 'reject', 'crawler-os', 'housing scholarship', 'serpapi', '2020-01-01T00:00:00.000Z')`,
+    ).run(opp.id)
+    const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
+    expect(res.scanned).toBe(1)
+    expect(res.adjudicated).toBe(1)
+    expect(res.updated).toBe(0)
+    expect(res.linked).toBe(0)
+    expect(res.foreign_lane_skipped).toBe(1)
+    const rows = db.prepare('SELECT * FROM profile_opportunity_matches').all()
+    expect(rows).toHaveLength(1)
+    // Completely untouched: still 'crawler-os', still its own stale score/decision.
+    expect(rows[0]).toMatchObject({
+      id: 'existing',
+      matcher_version: 'crawler-os',
+      match_score: 42,
+      match_decision: 'reject',
+      source_query: 'housing scholarship',
+      discovered_via: 'serpapi',
+      updated_at: '2020-01-01T00:00:00.000Z',
     })
     db.close()
   })
