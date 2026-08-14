@@ -676,7 +676,15 @@ function mapOsmElementToOpportunity({ element, zip, coords }) {
     const osmType = ['node', 'way', 'relation'].includes(String(element?.type || '').toLowerCase())
       ? String(element.type).toLowerCase()
       : null
-    const osmId = /^d+$/.test(String(element?.id || '')) ? String(element.id) : null
+    // `/^d+$/` (no backslash) matches only literal "d" characters, so an OSM
+    // element id — always numeric — never matched, `url` was always null, and
+    // EVERY Overpass element was dropped at the `if (!url) return null` below.
+    // The lane still made the (rate-limited, retried) network call and the ZIP
+    // still reported `status:'completed'` off the other lanes, so the whole
+    // local-resource lane read as healthy while storing nothing: the repo's
+    // silent-no-op-reported-as-success class. `?? ''` (not `|| ''`) so a
+    // legitimate id `0` is not coerced away.
+    const osmId = /^\d+$/.test(String(element?.id ?? '')) ? String(element.id) : null
     const url = osmType && osmId ? `https://www.openstreetmap.org/${osmType}/${osmId}` : null
     if (!url) return null
 
@@ -2049,4 +2057,7 @@ export const __test = {
   buildBaselineDirectorySources,
   buildCanadianBaselineDirectorySources,
   searchGrantsGovByZip,
+  // Exposed so a guard test can prove a real Overpass element maps to a row.
+  // A typo in the id regex silently dropped 100% of them with no error signal.
+  mapOsmElementToOpportunity,
 }

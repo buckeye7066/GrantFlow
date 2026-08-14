@@ -1,6 +1,6 @@
 import express from 'express';
 import crypto from 'crypto';
-import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, ensureProfileAccess } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isExpiredOpportunity, isDirectoryLike } from './opportunityHelpers.js'
 import {
@@ -1662,6 +1662,18 @@ router.get('/:id/explain', async (req, res) => {
     if (!profileId) {
       return res.status(400).json({ error: 'profileId query param is required' })
     }
+
+    // This route reads a NAMED profile and answers with that profile's own
+    // declared facts: `buildMatchExplanation` -> `computeMatchDecision` ->
+    // `matched_profile_facts`, which carry "Profile state:", "Profile ZIP:",
+    // "Applicant type:" and "Need: …". It had NO auth gate at all — every
+    // sibling route in this file calls requireAuthenticatedUser, and the router
+    // is mounted without router-level auth — so any caller could read an
+    // arbitrary profile id's location and declared needs. Gate it through the
+    // same canonical helper the other profile-scoped routes use (401 for an
+    // anonymous caller, 403 for an inaccessible profile) BEFORE any profile row
+    // is loaded.
+    if (!(await ensureProfileAccess(req, res, String(profileId)))) return
 
     const opp = await req.db.prepare(`
       SELECT * FROM funding_opportunities
