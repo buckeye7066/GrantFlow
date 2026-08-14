@@ -54,12 +54,22 @@ function guessMethodFromSignals({ applicationUrl, portalUrl, description, contac
     text.includes('log in') ||
     text.includes('login')
 
+  // WORD BOUNDARIES, not substrings. `text.includes('mail')` is true for every
+  // description containing "email"/"e-mail", so a grant whose stated method is
+  // "submit your application by email to grants@…" classified as
+  // `print_and_mail` and the `email_contact` arm below became unreachable for
+  // exactly the descriptions it targets. The verdict is persisted to
+  // `grants.application_method` and drives the user-facing application steps
+  // ("download and print the form"), so the applicant was told to do the wrong
+  // thing. Same substring class as `print` inside "fingerprint"/"blueprint".
+  // The lookbehind excludes a preceding word char OR hyphen so both "email"
+  // and "e-mail" are correctly rejected.
   const looksPdfOrPrint =
     app.endsWith('.pdf') ||
     app.includes('.pdf?') ||
-    text.includes('print') ||
-    text.includes('mail') ||
-    text.includes('fax') ||
+    /\bprint/.test(text) ||
+    /(?<![\w-])mail\b/.test(text) ||
+    /\bfax/.test(text) ||
     text.includes('postmark') ||
     text.includes('paper application')
 
