@@ -17,7 +17,20 @@ export function normalizeForCanonicalInsert(candidate, { now = new Date() } = {}
   if (!candidate) return null
 
   const geo = candidate.geography || {}
-  const isNational = Boolean(geo.is_national) || (!geo.state && (Array.isArray(candidate.applicant_types) ? candidate.applicant_types.length === 0 : true))
+  // GEOGRAPHIC SCOPE IS DECLARED, NEVER INFERRED FROM SILENCE.
+  //
+  // This used to read `Boolean(geo.is_national) || (!geo.state && applicant_types
+  // is empty)` — two defects in one expression. (1) `applicant_types` says WHO may
+  // apply, not WHERE; a candidate that simply carried no applicant types was
+  // stamped nationwide on the strength of an unrelated field. (2) A row with no
+  // state was not merely un-scoped, it was promoted to a fully-eligible NATIONWIDE
+  // US program — the exact class CLAUDE.md records as the 2026-08-01 GeneMac
+  // finding ("osOppToLiveRow stamps is_national whenever the lane supplies no
+  // geography"). MISSING = NEUTRAL: an undeclared scope is left UNSET (stripped
+  // below) so the canonical gates treat it as unknown rather than as a claim.
+  const isNational = typeof geo.is_national === 'boolean'
+    ? geo.is_national
+    : (geo.state ? false : undefined)
 
   const normalized = {
     title: trim(candidate.title),
@@ -42,8 +55,34 @@ export function normalizeForCanonicalInsert(candidate, { now = new Date() } = {}
     source_id: trim(candidate.source_url) || trim(candidate.application_url) || null,
     record_origin: RECORD_ORIGIN,
     raw_source_payload: candidate.raw_payload || null,
-    verification_method: trim(candidate.extraction_method) || 'robert_extractor',
-    last_verified_at: now.toISOString(),
+    // EXTRACTION IS NOT VERIFICATION. This used to emit
+    //   verification_method: extraction_method || 'robert_extractor'
+    //   last_verified_at:    now
+    // on every candidate, before any probe had run. That is the one combination
+    // the canonical inserter's own reality gate cannot defend against:
+    // `applyVerificationGate` (services/opportunityInserter.js) strips a
+    // caller-supplied `last_verified_at` UNLESS the caller also supplies a
+    // non-empty `verification_method` as proof — so supplying an EXTRACTION
+    // label as the verification method made the fabricated timestamp survive.
+    // Robert's bridge calls the inserter with `verifyUrl: false`, so no probe
+    // ever happened. Three downstream harms followed, all of them documented
+    // invariants of this repo:
+    //   - schema.sql: "last_verified_at = last time the URL was actually probed
+    //     … Crawlers are NOT allowed to stamp this without a network check";
+    //   - linkVerificationService re-verifies after 30d and SKIPS rows that look
+    //     freshly verified, so the row's real target was never probed;
+    //   - the boot net `enforceLiveCrawlVerifiedAtHonesty` cannot repair these:
+    //     its predicate requires `verification_method IS NULL` AND
+    //     `record_origin = 'live_crawl'`, and a Robert row satisfies neither.
+    // Both fields are now OMITTED. The inserter then marks the row
+    // `link_status: 'unverified'` with a NULL `last_verified_at`, which is what
+    // puts it at the FRONT of the real verifier's candidate queue. The
+    // extraction method is not lost — it stays on the robert_opportunity_candidates
+    // row and inside `normalized_opportunity_json`.
+    // WHEN A REAL PROBE HAPPENS: robertVerification.verifyOpportunity already
+    // returns a live `link` result under allowLiveWeb + requireRealApplicationUrl,
+    // and robertAgent currently DISCARDS it. Stamping the verification fields
+    // from that probe is the correct place to earn the timestamp back.
     discovered_at: now.toISOString(),
   }
 

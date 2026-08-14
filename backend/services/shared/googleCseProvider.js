@@ -49,8 +49,20 @@ export function makeGoogleCseProvider({ count = 8 } = {}) {
       // only spends latency the ladder will spend better on the next rung.
       response = await getWithRetry(url, { headers: { Accept: 'application/json' } }, { timeoutMs, retries: 0 })
     } catch (err) {
-      log.warn(`[googleCseProvider] request failed for "${q}": ${err?.message ?? err}`)
-      return []
+      // `getWithRetry` RETURNS only 2xx — every other status is thrown as an
+      // Error carrying `.status` + `.response` (httpClient.requestWithRetry).
+      // A quota refusal is therefore a THROW, not a resolved 403, so reading
+      // the status only off a resolved response made the `google_quota`
+      // degrade signal below unreachable: the ladder never learned the rung
+      // was dead and re-paid the budget + the API call on every query for the
+      // rest of the UTC day. Re-adopt the carried response so the status
+      // branches decide; a real transport failure (no response) still returns [].
+      if (err?.response && Number.isFinite(Number(err.status ?? err.response.status))) {
+        response = err.response
+      } else {
+        log.warn(`[googleCseProvider] request failed for "${q}": ${err?.message ?? err}`)
+        return []
+      }
     }
 
     const status = Number(response?.status)

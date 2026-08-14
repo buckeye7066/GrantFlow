@@ -172,6 +172,14 @@ router.post('/students/sync', requireSchoolPartner, async (req, res) => {
  *
  * Returns the merged GrantFlow view of this student so the school portal
  * can show "what GrantFlow sees" for transparency.
+ *
+ * CONSENT IS ENFORCED ON EVERY READ OF THE STUDENT'S DATA, not just on
+ * /matches. A revoked link previously still served the FULL merged profile —
+ * every `profile_sections` row (financial, health, demographics) — because only
+ * the /matches route checked `consent_status`. Revocation that does not stop
+ * the partner reading the record is not revocation. The LINK itself is still
+ * returned (it is the partner's own bookkeeping, and it is how the school sees
+ * that the student revoked); only the student's profile content is withheld.
  */
 router.get('/students/:external_student_id', requireSchoolPartner, async (req, res) => {
   const externalId = String(req.params.external_student_id || '').trim()
@@ -179,6 +187,25 @@ router.get('/students/:external_student_id', requireSchoolPartner, async (req, r
 
   const link = await findLink(req.db, req.schoolPartner.id, externalId)
   if (!link) return res.status(404).json({ ok: false, error: 'Student not linked.' })
+
+  const consentRevoked = link.consent_status === 'revoked'
+  if (consentRevoked) {
+    return res.json({
+      ok: true,
+      code: 'CONSENT_REVOKED',
+      link: {
+        id: link.id,
+        external_student_id: link.external_student_id,
+        profile_id: link.profile_id,
+        consent_status: link.consent_status,
+        consented_at: link.consented_at,
+        revoked_at: link.revoked_at,
+        last_synced_at: link.last_synced_at,
+      },
+      profile: null,
+      profile_withheld: 'Student has revoked consent for school-portal sharing.',
+    })
+  }
 
   const profile = link.profile_id ? await loadProfile(req.db, link.profile_id) : null
   return res.json({

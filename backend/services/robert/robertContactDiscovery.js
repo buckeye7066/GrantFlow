@@ -179,17 +179,50 @@ export function extractContactsFromMessages(messages, { selfMailbox = '' } = {})
   return found
 }
 
-/** Is this email already a GrantFlow user/profile contact? (don't pitch clients) */
-async function isExistingClient(db, email) {
-  try {
-    const u = await db.prepare('SELECT 1 FROM users WHERE lower(primary_email) = ? LIMIT 1').get(email)
-    if (u) return true
-  } catch { /* ignore */ }
-  try {
-    const p = await db.prepare('SELECT 1 FROM profile_emails WHERE lower(email) = ? LIMIT 1').get(email)
-    if (p) return true
-  } catch { /* ignore */ }
-  return false
+/**
+ * A table this DB simply does not have is a SHAPE fact (bare fixture/minimal
+ * DB), not a read failure. Anything else — a connection drop, a permission
+ * error, a shim fault — is a failure and must not be read as "no clients".
+ */
+function isMissingTableError(err) {
+  return /no such table|does not exist|undefined_?table|relation .* does not exist/i.test(
+    String(err?.message || err),
+  )
+}
+
+/**
+ * The set of emails that already belong to a GrantFlow user/profile — the
+ * "never pitch GrantFlow to an existing client" gate.
+ *
+ * THIS USED TO FAIL OPEN. `isExistingClient` ran two per-email SELECTs each
+ * wrapped in `catch { /* ignore * / }` and returned `false` on error, so ANY DB
+ * fault silently disabled the safety check and every contact was tagged as a
+ * fresh prospect — handing John a promo email addressed to a paying client. The
+ * index is now loaded ONCE (2 queries instead of 2×N) and read failures are
+ * REPORTED, so the caller can refuse to tag rather than guess.
+ *
+ * @returns {{index: Set<string>, errors: Array<{table, error}>}}
+ */
+async function loadClientEmailIndex(db) {
+  const index = new Set()
+  const errors = []
+  const reads = [
+    ['users', 'SELECT LOWER(primary_email) AS email FROM users WHERE primary_email IS NOT NULL'],
+    ['profile_emails', 'SELECT LOWER(email) AS email FROM profile_emails WHERE email IS NOT NULL'],
+  ]
+  for (const [table, sql] of reads) {
+    try {
+      const rows = await db.prepare(sql).all()
+      for (const row of rows || []) {
+        const email = String(row?.email || '').trim().toLowerCase()
+        if (email) index.add(email)
+      }
+    } catch (err) {
+      if (isMissingTableError(err)) continue // this DB has no such client index
+      errors.push({ table, error: String(err?.message || err).slice(0, 200) })
+    }
+  }
+  return { index, errors }
 }
 
 /**
@@ -274,11 +307,27 @@ export async function runContactScanForRobert(db, { force = false, mailbox = nul
     }
   }
 
+  // Load the existing-client index ONCE, before anything is written. If a real
+  // read failed we cannot tell a client from a prospect, so we tag NOTHING and
+  // say so — the alternative (the old per-email fail-open) is John drafting a
+  // GrantFlow sales email to a paying client.
+  const { index: clientEmails, errors: clientIndexErrors } = await loadClientEmailIndex(db)
+  if (clientIndexErrors.length > 0) {
+    log.warn('contact scan aborted: existing-client index unreadable', { errors: clientIndexErrors })
+    return {
+      ran: false,
+      reason: 'client_index_unreadable',
+      client_index_errors: clientIndexErrors,
+      contacts: candidates.size,
+      sources,
+    }
+  }
+
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
   let tagged = 0, skippedClient = 0
 
   for (const [email, info] of candidates) {
-    if (await isExistingClient(db, email)) { skippedClient += 1; continue }
+    if (clientEmails.has(email)) { skippedClient += 1; continue }
 
     const orgName = String(info.company || info.name || email.split('@')[1] || 'Contact').slice(0, 200)
     const lead = {

@@ -48,12 +48,31 @@ async function main() {
     GRANTFLOW_TEST_RUNNER: process.env.GRANTFLOW_TEST_RUNNER || '1',
   })
 
-  const child = spawn(process.execPath, ['--test', `--test-concurrency=${concurrency}`, ...testFiles], {
+  // Pass paths RELATIVE to `root` (and set cwd) instead of absolute ones.
+  // Windows CreateProcess caps a command line at 32,767 characters, and this
+  // suite is 354 files: measured 2026-08-14 from a git worktree whose root path
+  // is 66 chars, the absolute-path argv is 39,252 chars and `spawn` throws
+  // `ENAMETOOLONG` — so the ENTIRE node:test lane silently failed to run
+  // anywhere except the short main checkout (~23.7k chars there, which is why
+  // CI never saw it). The relative form of the same 354 files is 15,534 chars,
+  // i.e. under half the limit and independent of how deep the checkout sits.
+  // A test lane that cannot execute is not a passing test lane.
+  const relativeTestFiles = testFiles.map((file) => path.relative(root, file))
+
+  const child = spawn(process.execPath, ['--test', `--test-concurrency=${concurrency}`, ...relativeTestFiles], {
     stdio: 'inherit',
     env: testEnv,
+    cwd: root,
   })
 
   let exited = false
+  // Without this, a spawn failure emits an 'error' event with no listener.
+  // Report it and FAIL — never let "the runner could not start" read as a pass.
+  child.on('error', (error) => {
+    exited = true
+    console.error('[unit] Failed to start the node:test runner:', error?.message || error)
+    process.exitCode = 1
+  })
   child.on('exit', (code) => {
     exited = true
     process.exitCode = code ?? 1

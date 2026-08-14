@@ -294,6 +294,41 @@ describe('/api/school-portal', () => {
     expect(matches.body.code).toBe('CONSENT_REVOKED')
   })
 
+  it('a REVOKED link stops the partner reading the student record, not just /matches', async () => {
+    const { rawKey } = insertPartnerWithKey(rawDb, { slug: 'memphis', name: 'University of Memphis' })
+    await request(app)
+      .post('/api/school-portal/students/sync')
+      .set('Authorization', `Bearer ${rawKey}`)
+      .send({
+        external_student_id: 'U004',
+        school_email: 'priya@memphis.edu',
+        full_name: 'Priya Rao',
+        student_level: 'Undergraduate',
+      })
+
+    // Before revoking, the record reads normally.
+    const before = await request(app)
+      .get('/api/school-portal/students/U004')
+      .set('Authorization', `Bearer ${rawKey}`)
+    expect(before.status).toBe(200)
+    expect(before.body.profile.sections.basic_information.email).toBe('priya@memphis.edu')
+
+    await request(app)
+      .post('/api/school-portal/students/U004/revoke')
+      .set('Authorization', `Bearer ${rawKey}`)
+
+    // Revocation must cut off the student's DATA, not only the match list. The
+    // link itself still reports its revoked state so the school can see why.
+    const after = await request(app)
+      .get('/api/school-portal/students/U004')
+      .set('Authorization', `Bearer ${rawKey}`)
+    expect(after.status).toBe(200)
+    expect(after.body.code).toBe('CONSENT_REVOKED')
+    expect(after.body.profile).toBeNull()
+    expect(after.body.link.consent_status).toBe('revoked')
+    expect(JSON.stringify(after.body)).not.toContain('priya@memphis.edu')
+  })
+
   it('rejects sync records missing external_student_id', async () => {
     const { rawKey } = insertPartnerWithKey(rawDb, { slug: 'memphis', name: 'University of Memphis' })
     const res = await request(app)
