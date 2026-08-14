@@ -4,7 +4,15 @@ import { auditLog } from './audit.js'
 import { createLogger } from '../../utils/logger.js'
 import { runWithSchedulerLock, reportBackgroundError } from '../schedulerLock.js'
 import { maybeCleanupStaleRunningJobs } from '../crawlerConcurrencyGuard.js'
+import { isSupersededCrawlerType, SUPERSEDED_REASON } from '../../../shared/supersededCrawlerTypes.js'
 const qualityLog = createLogger('services:nationalPrograms:continuousRunner')
+
+/**
+ * The crawler_jobs.type this runner drives. Kept as a named constant so the
+ * superseded check in `startNationalProgramsCrawler` states plainly which type
+ * it is asserting about; the SQL below embeds the same literal.
+ */
+const NATIONAL_JOB_TYPE = 'national'
 
 function minutes(ms) {
   return Math.round(ms / 60000)
@@ -78,6 +86,39 @@ export function startNationalProgramsCrawler({
   agents = null,
 } = {}) {
   if (!db || typeof db.prepare !== 'function') throw new Error('Database connection required for national programs crawler')
+
+  // A ZERO-WORK LOOP MUST BE LOUD, NOT SCHEDULED.
+  //
+  // This runner enqueues `crawler_jobs.type = 'national'` with a RAW INSERT,
+  // which bypasses `createCrawlerJob` — the choke point that refuses retired
+  // discovery types. `'national'` is in `shared/supersededCrawlerTypes.js`, so
+  // `crawlerDispatcher` short-circuits every one of these jobs to
+  // `status='completed', error=SUPERSEDED_REASON` without executing anything.
+  //
+  // The net effect before this guard: every `intervalMinutes` (default 360) the
+  // lane wrote `continuous_job_created` and `continuous_tick_complete` to the
+  // audit log and discovered exactly zero national programs — a lane that reads
+  // as running while doing nothing. (It also made `reclaimWedgedNationalJob` and
+  // the whole NATIONAL_JOB_WEDGE_MS machinery unreachable: a job can never
+  // linger in queued/running when the dispatcher completes it synchronously.)
+  //
+  // Refuse to schedule, say so once at full volume, and record it — rather than
+  // manufacturing an audit trail of work that cannot happen. Grant discovery is
+  // the Crawler OS's job now; re-enabling this lane means giving it a live job
+  // type, not silencing this check.
+  if (isSupersededCrawlerType(NATIONAL_JOB_TYPE)) {
+    qualityLog.error(
+      `[national-programs] NOT STARTED: crawler job type '${NATIONAL_JOB_TYPE}' is superseded (${SUPERSEDED_REASON}). ` +
+        'Every tick would enqueue a job the dispatcher completes without running it. ' +
+        'National program discovery runs through the Crawler OS; this lane stays off until it has a live job type.',
+    )
+    auditLog({
+      action: 'continuous_disabled_superseded',
+      job_type: NATIONAL_JOB_TYPE,
+      reason: SUPERSEDED_REASON,
+    }).catch(() => {})
+    return () => {}
+  }
 
   const intervalMs = Math.max(5, intervalMinutes) * 60 * 1000
 

@@ -238,6 +238,21 @@ export function areDuplicateFundingResults(a = {}, b = {}) {
   const bTitleFunder = titleFunderKey(b)
   if (aTitleFunder && bTitleFunder && aTitleFunder === bTitleFunder) return true
 
+  // A DIFFERENT NUMBER IN THE TITLE IS A DIFFERENT PROGRAM — on this branch too.
+  //
+  // `compatibleSharedUrlIdentity` (the same-URL branch above) consults
+  // `hasConflictingNumericTitleTokens`; this terminal family branch never did —
+  // and it is the branch reached when the two rows' URLs DIFFER, i.e. where they
+  // are most likely to be two distinct real-world programs. Same funder + same
+  // acronym anchor + same kind + boilerplate-similar descriptions was enough to
+  // merge "…Grant 2025" into "…Grant 2026" and drop one from the results list.
+  //
+  // Mirrors the identical guard in backend/utils/grantFingerprint.js — these two
+  // files are forked copies of one identity rule and must be changed together.
+  const aTitleText = normalizeText(a.title || a.program_name || a.name || '')
+  const bTitleText = normalizeText(b.title || b.program_name || b.name || '')
+  if (hasConflictingNumericTitleTokens(aTitleText, bTitleText)) return false
+
   return sameFamily(a, b)
 }
 

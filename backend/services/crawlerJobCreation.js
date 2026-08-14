@@ -42,9 +42,23 @@ async function postgresHasProfileContextSnapshotColumn(db) {
         .get()
       return Boolean(row?.ok)
     } catch (error) {
-      console.warn(
-        '[createCrawlerJob] Unable to probe crawler_jobs.profile_context_snapshot; assuming missing to avoid 500s during migration catch-up.',
-        error?.message || String(error),
+      // A FAILED PROBE IS NOT AN ANSWER, SO IT MUST NOT BE CACHED.
+      //
+      // The cache holds the PROMISE, so a `false` produced by a caught error
+      // used to become this process's permanent verdict: every later job took
+      // the branch that omits `profile_context_snapshot` entirely, i.e. the
+      // profile facts the crawler is supposed to reason from were dropped from
+      // every job for the life of the instance, with one console.warn at boot
+      // as the only trace. One transient blip on the information_schema read
+      // (a deploy-time connection reset) silently de-personalised discovery.
+      //
+      // Clear the cache so the NEXT call re-probes. `false` is still returned
+      // for this call — that is the safe answer during migration catch-up — but
+      // it is now a per-call fallback rather than a process-wide conclusion.
+      postgresHasProfileContextSnapshotColumnPromise = null
+      log.error(
+        '[createCrawlerJob] Unable to probe crawler_jobs.profile_context_snapshot; omitting the profile snapshot for THIS job only and re-probing on the next one.',
+        { error: error?.message || String(error) },
       )
       return false
     }

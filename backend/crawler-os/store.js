@@ -86,10 +86,31 @@ function assertIdents(names, role) {
 
 export function createSqlStore(db) {
   if (!db || typeof db.prepare !== 'function') throw new Error('createSqlStore: db with .prepare required');
+  // A NULL WHERE-VALUE MEANS "THIS COLUMN IS NULL", NOT "MATCH NOTHING".
+  //
+  // The memory store compares `row[k] === v`, so `null === null` MATCHES. This
+  // adapter emitted `col = ?` for every key, and in SQL `col = NULL` is never
+  // true — so the two stores, which this file's own header says run "the same
+  // semantics", disagreed on exactly the values most likely to be null.
+  //
+  // That divergence is load-bearing on the dedup path: `storage.js` looks rows
+  // up by `{ canonical_opportunity_key }` and `{ id }`, and a null-valued key
+  // silently returned "no existing row" under createSqlStore while the offline
+  // suite — which runs the memory store — stayed green. The result in
+  // production is a duplicate catalog row no test can see. Same shape as the
+  // `amount_confidence:'high'` REAL-column incident, where a typeless test DB
+  // hid a Postgres-only failure.
+  //
+  // Emitting `IS NULL` makes the SQL adapter agree with the semantics the
+  // memory store proves, in both dialects.
   const whereClause = (where) => {
     const keys = assertIdents(Object.keys(where ?? {}), 'column');
     if (!keys.length) return { sql: '', params: [] };
-    return { sql: ' WHERE ' + keys.map((k) => `${k} = ?`).join(' AND '), params: keys.map((k) => where[k]) };
+    const isNullish = (k) => where[k] === null || where[k] === undefined;
+    return {
+      sql: ' WHERE ' + keys.map((k) => (isNullish(k) ? `${k} IS NULL` : `${k} = ?`)).join(' AND '),
+      params: keys.filter((k) => !isNullish(k)).map((k) => where[k]),
+    };
   };
   return {
     insert(table, row) {
