@@ -547,13 +547,35 @@ export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection
  *
  * Idempotent and graceful: missing row / missing table both return
  * false silently.
+ *
+ * PROFILE SCOPING (the delete half of the G4/G8 pair above). `award.id` is a
+ * CONTENT fingerprint over (provider, external_id, title, amount, school,
+ * year) — deliberately profile-independent, so two students at the same school
+ * importing the same award produce the SAME id. The upsert's
+ * `profile_id = COALESCE(profile_id, ?)` means the first writer owns the row;
+ * an unscoped DELETE then let either student's unlink destroy the other
+ * student's award row.
+ *
+ * The predicate is `profile_id IS NULL OR profile_id = ?`, not a bare equality:
+ * rows written before the scoping fix carry NULL and must still be unlinkable
+ * by their owner. A row scoped to a DIFFERENT profile is never touched.
+ * Omitting profileId preserves the old unscoped behaviour for callers that
+ * genuinely have no profile in hand.
  */
-export async function removeSchoolPortalAwardOpportunity(db, awardId) {
+export async function removeSchoolPortalAwardOpportunity(db, awardId, { profileId = null } = {}) {
   if (!db || !awardId) return false
   try {
-    const result = await db
-      .prepare(`DELETE FROM funding_opportunities WHERE id = ? AND source = 'school_portal'`)
-      .run(awardId)
+    const result = profileId
+      ? await db
+        .prepare(
+          `DELETE FROM funding_opportunities
+            WHERE id = ? AND source = 'school_portal'
+              AND (profile_id IS NULL OR profile_id = ?)`,
+        )
+        .run(awardId, String(profileId))
+      : await db
+        .prepare(`DELETE FROM funding_opportunities WHERE id = ? AND source = 'school_portal'`)
+        .run(awardId)
     return Boolean(result?.changes)
   } catch {
     return false
@@ -771,7 +793,13 @@ export async function mergeSchoolPortalAwards(db, profileId, payload, updatedBy)
   // merge — the section save above is the source of truth.
   let opportunitiesUpserted = 0
   for (const award of selectedAwards) {
-    const ok = await upsertSchoolPortalAwardAsOpportunity(db, award, connection)
+    // profileId is REQUIRED here (G4/G8 cross-profile-bleed class, see the
+    // upsert's own header): an award read from ONE student's authenticated
+    // portal is that student's fact. Omitting it wrote profile_id NULL, and
+    // every catalog read treats NULL as globally visible — at
+    // source_trust_tier 'official_portal', the highest tier there is. The
+    // portalSync caller has always passed it; this manual-merge path did not.
+    const ok = await upsertSchoolPortalAwardAsOpportunity(db, award, connection, { profileId })
     if (ok) opportunitiesUpserted += 1
   }
 
@@ -817,7 +845,7 @@ export async function removeMergedSchoolPortalAward(db, profileId, payload, upda
   // Mirror the in-section removal into the global funding_opportunities
   // table so the unlinked award stops showing up in Discover Grants.
   // Idempotent & graceful — missing row / missing table both no-op.
-  const opportunityRemoved = await removeSchoolPortalAwardOpportunity(db, awardId)
+  const opportunityRemoved = await removeSchoolPortalAwardOpportunity(db, awardId, { profileId })
 
   return {
     opportunity_removed: opportunityRemoved,
