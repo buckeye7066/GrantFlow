@@ -117,6 +117,17 @@ const ABBR_TO_NAME = {
 const STATE_CODES = new Set(Object.keys(ABBR_TO_NAME));
 const NATIONWIDE_TOKEN = 'nationwide';
 
+// Longest-name-first ordering for normalizeStateFromText()'s free-text scan.
+// Object.entries() order alone put 'VA' -> 'Virginia' ahead of
+// 'WV' -> 'West Virginia' (alphabetical-by-abbreviation), so "West Virginia
+// Housing Fund" matched the word-boundary pattern for "Virginia" (a real
+// substring of "West Virginia") and resolved to VA before "West Virginia"
+// was ever checked. Sorting by name length descending guarantees the more
+// specific/longer name always wins when one name is a substring of another.
+const ABBR_TO_NAME_ENTRIES_BY_LENGTH = Object.entries(ABBR_TO_NAME).sort(
+  (a, b) => b[1].length - a[1].length,
+);
+
 /**
  * Normalize a state value to a 2-letter uppercase abbreviation.
  * Returns null if the input cannot be resolved.
@@ -135,12 +146,12 @@ export function normalizeStateFromText(input) {
   const text = input.trim();
   if (!text) return null;
 
-  for (const [abbr, name] of Object.entries(ABBR_TO_NAME)) {
+  for (const [abbr, name] of ABBR_TO_NAME_ENTRIES_BY_LENGTH) {
     const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if (new RegExp(`\\b${escapedName}\\b`, 'i').test(text)) return abbr;
   }
 
-  const codeMatch = text.match(/\b([A-Z]{2})\b/i);
+  const codeMatch = text.match(/\b([A-Z]{2})\b/);
   if (codeMatch) return normalizeState(codeMatch[1]);
   return normalizeState(text);
 }

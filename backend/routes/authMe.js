@@ -176,7 +176,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             try {
               await ensureProfileEmailSchema(db)
             } catch (schemaErr) {
-              console.warn('[/api/auth/me] ensureProfileEmailSchema failed â falling back to user_id-only profile query', {
+              console.warn('[/api/auth/me] ensureProfileEmailSchema failed – falling back to user_id-only profile query', {
                 error: schemaErr?.message || String(schemaErr),
                 user_id: dbUser?.id ?? null,
               })
@@ -239,7 +239,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
       }
 
       if (req.ctx?.isAdmin === true) {
-        console.warn('[/api/auth/me] Admin token has no userId â returning profile-less response', {
+        console.warn('[/api/auth/me] Admin token has no userId – returning profile-less response', {
           email: user.email ?? null,
         })
         return res.json({
@@ -251,7 +251,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         })
       }
 
-      console.warn('[/api/auth/me] Non-admin token has no userId â returning profile-less response', {
+      console.warn('[/api/auth/me] Non-admin token has no userId – returning profile-less response', {
         role: user.role ?? null,
         profileId: user.profileId ?? null,
       })

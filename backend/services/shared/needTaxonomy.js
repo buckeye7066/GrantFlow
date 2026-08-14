@@ -484,7 +484,7 @@ export function expandNeed(needText) {
         };
         seenFallbackKeys.set(key, record);
         fallbackMatches.push(record);
-        // Do NOT break â a single word may match multiple taxonomy keys;
+        // Do NOT break — a single word may match multiple taxonomy keys;
         // we want all of them for maximum recall (Goal 7)
       }
     }
@@ -552,7 +552,7 @@ export function scoreNeedMatch(program, expandedNeed) {
   let score = 0;
   const matchedTerms = [];
 
-  // Category overlap â capped at 40 pts total to prevent broad-category programs
+  // Category overlap — capped at 40 pts total to prevent broad-category programs
   // from reaching acceptance thresholds on category tags alone (Goal 3).
   const cats = new Set((program.categories || []).map((c) => String(c).toLowerCase()));
   let catScore = 0;

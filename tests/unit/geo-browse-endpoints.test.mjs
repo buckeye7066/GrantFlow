@@ -114,7 +114,7 @@ test('geo/scored: response shape contract with match scores', () => {
     assert.ok(item.title, 'title required')
     assert.ok(typeof item.match_score === 'number', 'match_score must be a number when profile_id provided')
     assert.ok(Array.isArray(item.match_reasons), 'match_reasons must be an array')
-assert.ok(item.match_reasons.length > 0, 'match_reasons must be non-empty â reasons must come from the decision engine')
+assert.ok(item.match_reasons.length > 0, 'match_reasons must be non-empty — reasons must come from the decision engine')
 for (const reason of item.match_reasons) {
   assert.equal(typeof reason, 'string', 'each match_reason must be a human-readable string')
   assert.ok(reason.length > 0, 'match_reason string must not be empty')

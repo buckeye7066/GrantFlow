@@ -145,7 +145,7 @@ const budgetRemaining = awardAmount - totalSpent;
                     <ul className="space-y-2">
                         {expenses.map(ex => (
                             <li key={ex.id} className="flex justify-between p-2 border-b">
-                                <span>{ex.date ? ex.date : 'â'}: {ex.description || '(no description)'}{ex.category ? ` [${ex.category}]` : ''}</span>
+                                <span>{ex.date ? ex.date : '—'}: {ex.description || '(no description)'}{ex.category ? ` [${ex.category}]` : ''}</span>
                                 <span>${(parseFloat(ex.amount) || 0).toLocaleString()}</span>
                             </li>
                         ))}

@@ -137,8 +137,36 @@ test('isLoanLike: detects borrower keyword', () => {
   assert.equal(isLoanLike({ title: 'Capital Access', description: 'Requirements for borrower eligibility' }), true)
 })
 
-test('isLoanLike: detects repayment of funds', () => {
-  assert.equal(isLoanLike({ title: 'Capital Program', description: 'No repayment required... wait, repayment of funds' }), true)
+test('isLoanLike: detects repayment of the loan (narrowed from generic "funds")', () => {
+  // Fixture uses explicit loan terminology (a promissory note + "repayment
+  // of the loan") instead of the old generic "repayment of funds", which
+  // matched federal grant clawback language and dropped real grants at the
+  // ingest choke point (enforceOpportunityPolicy). See opportunityPolicy.js
+  // LOAN_PHRASE_RX for the fix.
+  assert.equal(
+    isLoanLike({
+      title: 'Capital Program',
+      description: 'Recipients sign a promissory note; repayment of the loan begins after a 6-month grace period.',
+    }),
+    true,
+  )
+})
+
+test('isLoanLike: does NOT false-positive on standard grant clawback language', () => {
+  // Regression for the bug the regex narrowing above fixes: federal grant
+  // notices routinely warn that funds must be repaid if award conditions are
+  // violated. That is clawback language, not a loan product, and must not be
+  // classified as loan-like (it was previously being dropped at the ingest
+  // choke point via enforceOpportunityPolicy -> isLoanLike).
+  assert.equal(
+    isLoanLike({
+      title: 'Community Health Access Grant',
+      description:
+        'This is a grant, not a loan. The grantee must make repayment of funds if award conditions are violated or the project is terminated early.',
+      opportunity_type: 'grant',
+    }),
+    false,
+  )
 })
 
 test('isLoanLike: exempts loan repayment assistance (grants that help repay loans)', () => {

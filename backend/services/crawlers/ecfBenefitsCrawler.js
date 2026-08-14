@@ -696,7 +696,7 @@ function calculateECFMatchScore(benefit, profile, type) {
     score += 15
   }
   
-  // Category matching â read from normalised sections first, fall back to legacy flat fields.
+  // Category matching — read from normalised sections first, fall back to legacy flat fields.
   const sections = profile?.sections ?? {}
   const signals = profile?.signals
   const profileNeeds = [
@@ -715,7 +715,7 @@ function calculateECFMatchScore(benefit, profile, type) {
     score += Math.min(20, matchedCategories.length * 10)
   }
 
-  // State match â read from signals.location first, then flat field.
+  // State match — read from signals.location first, then flat field.
   // Multi-address aware: in-state if ANY of the profile's states is TN. Reads
   // signals.states (all addresses) and falls back to the single primary/flat
   // state so single-address profiles behave exactly as before.
@@ -733,7 +733,7 @@ function calculateECFMatchScore(benefit, profile, type) {
     score += 10
   }
 
-  // Disability type match â read from sections.health_medical first, then flat field.
+  // Disability type match — read from sections.health_medical first, then flat field.
   const disabilityTypes = Array.isArray(sections?.health_medical?.disability_type)
     ? sections.health_medical.disability_type
     : (profile.disability_type ? [profile.disability_type] : [])

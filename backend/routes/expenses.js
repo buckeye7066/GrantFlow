@@ -72,7 +72,7 @@ router.get('/', async (req, res) => {
         params.push(...Array.from(orgIds))
       }
       // When grant_id or organization_id IS supplied, ensureGrantAccess /
-      // ensureOrganizationAccess above already verified access â no extra
+      // ensureOrganizationAccess above already verified access — no extra
       // row-level restriction needed.
     }
 

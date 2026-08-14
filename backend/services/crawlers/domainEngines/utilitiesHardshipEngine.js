@@ -61,7 +61,7 @@ export async function runUtilitiesHardshipEngine(profile, options = {}) {
         });
         // Only filter if we are highly confident the user has NO utility need at all.
         // Prefer passing to normalizeAndFilter (recall > suppression per Goal 7).
-        // Do NOT return false here â let the decision engine reject non-matches.
+        // Do NOT return false here — let the decision engine reject non-matches.
         if (!hasUtilityNeed) {
           // Log the suppression so it is visible (Goal 8), but still pass through
           // because profile.needs may be incomplete (Goal 7, Goal 10).

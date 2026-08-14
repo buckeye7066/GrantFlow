@@ -47,7 +47,7 @@ export async function runWorkforceUnionEngine(profile, options = {}) {
       }
       // Location filtering: if a resource description or title mentions a specific
       // state/city that does NOT match userLocation, deprioritise (but do not hard-drop
-      // national resources â Goal 7: prefer false positives over false negatives).
+      // national resources — Goal 7: prefer false positives over false negatives).
       // We only drop resources that explicitly name a different geographic scope.
       // National/general resources (no location tokens) are always kept.
       return true; // engineHelper normalizeAndFilter applies further location logic
@@ -61,7 +61,7 @@ export async function runWorkforceUnionEngine(profile, options = {}) {
       workforceNeeds
     })
   } catch (error) {
-    qualityLog.error(`[${ENGINE_ID}] Engine failed â returning 0 of ${DIRECTORY_RESOURCES.length} resources. Reason:`, error?.message ?? error);
+    qualityLog.error(`[${ENGINE_ID}] Engine failed — returning 0 of ${DIRECTORY_RESOURCES.length} resources. Reason:`, error?.message ?? error);
     // Return structured failure metadata so callers can log suppression context
     // and the observability layer can record why candidates were lost (Goal 8).
     return [

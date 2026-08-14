@@ -30,7 +30,7 @@ export function getDeadlineStatus(grant) {
 /**
  * Check if a grant deadline has expired.
  * NOTE: Returns false for 'rolling' and 'active' deadlines only.
- * Returns false for 'unknown' deadlines â callers MUST handle 'unknown'
+ * Returns false for 'unknown' deadlines — callers MUST handle 'unknown'
  * separately rather than treating it as confirmed-open.
  * @param {Object} grant
  * @returns {boolean}

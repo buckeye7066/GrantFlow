@@ -71,7 +71,7 @@ const col = alias ? `${alias}.record_origin` : 'record_origin'
  */
 // 'comprehensive_crawler' was previously blocked here, which silently excluded
 // all opportunities discovered by the primary crawler (comprehensiveCrawlerOptimized.js)
-// from every user-facing query â a guaranteed recall loss for Goal 7.
+// from every user-facing query — a guaranteed recall loss for Goal 7.
 // Removed from the blocklist. If specific crawler records are untrustworthy,
 // they must be rejected at insertion time by relevanceFilter / opportunityMatcher
 // (Goals 3, 4) and logged with a reason (Goal 8).

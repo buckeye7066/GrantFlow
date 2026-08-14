@@ -66,7 +66,7 @@ export default function TimeTrackingTab({ grantId, organizationId }) {
                 <div key={log.id} className="p-3 border rounded-md bg-slate-50">
                   <div className="flex justify-between items-center">
                     <p className="font-semibold">{log.note || 'General Activity'}</p>
-                    <span className="font-bold text-lg">{log.rounded_minutes !== null ? (log.rounded_minutes / 60).toFixed(2) + 'h' : 'â'}</span>
+                    <span className="font-bold text-lg">{log.rounded_minutes !== null ? (log.rounded_minutes / 60).toFixed(2) + 'h' : '—'}</span>
                   </div>
                   <div className="text-sm text-slate-500 mt-1">
                     <span>{isValidDate(log.start_at) ? format(new Date(log.start_at), 'MMM d, yyyy') : 'Unknown date'}</span> | <span>{log.task_category || 'Uncategorized'}</span>

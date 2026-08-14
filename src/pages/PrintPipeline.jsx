@@ -160,7 +160,7 @@ export default function PrintPipelinePage() {
     // but also log for observability so server-side monitoring can detect empty prints.
     console.warn(
       `[PrintPipeline] Rendering empty pipeline report for organizationId=${organizationId}. ` +
-      'No grants found â printed report will show empty state.'
+      'No grants found – printed report will show empty state.'
     );
   }
 

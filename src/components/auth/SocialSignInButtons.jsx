@@ -165,7 +165,7 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
           // Abort stale retry if user cancelled or switched provider
           setActiveProvider((current) => {
             if (current !== scheduledProviderId) {
-              // Provider changed â do not retry
+              // Provider changed — do not retry
               return current
             }
             // Schedule the retry outside the setter so we only call it when still active

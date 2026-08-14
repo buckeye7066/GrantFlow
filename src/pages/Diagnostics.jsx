@@ -25,8 +25,8 @@ const Diagnostics = () => {
   const runTests = async () => {
     if (!grants || grants.length === 0) {
       const reason = !grants
-        ? 'Grant query returned undefined â possible API or auth error'
-        : 'Grant list is empty â pipeline may be suppressing all records or DB is unpopulated';
+        ? 'Grant query returned undefined — possible API or auth error'
+        : 'Grant list is empty — pipeline may be suppressing all records or DB is unpopulated';
       alert(`No grants found to test. Reason: ${reason}`);
       console.warn('[Diagnostics] runTests aborted:', reason);
       return;
@@ -155,7 +155,7 @@ const Diagnostics = () => {
         applicationUrl: parsedUrl,
         missingApplicationUrl: missingUrl,
         message: missingUrl
-          ? 'Parsed successfully but no application_url found â record would be REJECTED by Goal 1 gate'
+          ? 'Parsed successfully but no application_url found — record would be REJECTED by Goal 1 gate'
           : `application_url present: ${parsedUrl}`,
         data: response
       });

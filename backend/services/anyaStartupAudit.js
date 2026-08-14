@@ -31,7 +31,7 @@ let _auditRunning = false
  */
 export function triggerStartupAudit(db, opts = {}) {
   if (!db) {
-    console.warn('[anyaStartupAudit] No DB connection provided â audit skipped')
+    console.warn('[anyaStartupAudit] No DB connection provided — audit skipped')
     return
   }
   if (_auditRunning) return

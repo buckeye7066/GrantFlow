@@ -26,6 +26,7 @@ import { stableTextHash } from './purgeDiffUtils.js'
 import { sanitizeLogValue } from '../utils/logger.js'
 import { randomUUID } from 'crypto'
 import { createLogger } from '../utils/logger.js'
+import { pickRealUrl } from '../config/urlRules.js'
 const log = createLogger('regionalPurgeService')
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -260,7 +261,8 @@ export async function runRegionalPurge(db, options = {}) {
   let opportunities
   try {
     opportunities = db.prepare(`
-      SELECT id, title, source_url, description, status, deadline,
+      SELECT id, title, source_url, application_url, apply_url, url, evidence_url,
+             description, status, deadline,
              suppression_state, last_seen_hash, last_seen_text,
              last_status, last_deadline, source_tier, state
       FROM funding_opportunities
@@ -313,6 +315,15 @@ export async function runRegionalPurge(db, options = {}) {
 
 async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
   const sourceUrl = opp.source_url
+  // MISSING = NEUTRAL (CLAUDE.md invariants): `source_url` alone is not the
+  // opportunity's only real link. A row can be discovered via
+  // application_url/apply_url/url/evidence_url and legitimately carry no
+  // `source_url` (e.g. a benefit/locator program with no single canonical
+  // "apply here" page). `verifyUrl` picks the best REAL url across every
+  // field the same way the ingest gate does (opportunityPolicy.pickRealUrl /
+  // config/urlRules.pickRealUrl), so a row is only treated as "unverifiable"
+  // when NONE of its URL fields resolve to a real link.
+  const verifyUrl = pickRealUrl(opp)
   const currentText = opp.description || ''
   const previousText = opp.last_seen_text || ''
   const previousHash = opp.last_seen_hash || ''
@@ -321,7 +332,7 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
   // Determine effective tier
   const tier = opp.source_tier && opp.source_tier !== 'unknown'
     ? opp.source_tier
-    : inferSourceTier(sourceUrl)
+    : inferSourceTier(verifyUrl || sourceUrl)
 
   // ── Step 1: detect material change ──────────────────────────────────────
   const changeResult = detectMaterialChange(
@@ -339,21 +350,33 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
 
   // ── Step 2: verify change via primary source ─────────────────────────────
   let verificationResult = { verified: false, signals: [], verificationLevel: 'none', statusHint: 'unknown' }
-  if (!sourceUrl) {
-    // GOAL 1/3: No application URL — treat as suppression candidate immediately.
-    // Store a specific reason so the audit trail is clear (Goal 8).
+  if (!verifyUrl) {
+    // FIXED (was: fabricated a `verified:true, statusHint:'closed'` result
+    // for ANY row missing `source_url` alone, which fed straight into the
+    // "primary-source CLOSED" branch below and hard-suppressed the row —
+    // even when the row had a perfectly good application_url/apply_url/
+    // evidence_url, and even when it had no URL of any kind because it is a
+    // benefit/locator program that was never wrong to begin with. No URL to
+    // check is a fact about OUR DATA, not a claim that the funder closed it.
+    // Leave verificationResult at its neutral "none" default: unverified,
+    // status unknown. Step 3 below then falls through to
+    // `changeResult.changed && !verificationResult.verified` (→ WATCH, for
+    // human review) when something else DID change, or to the final
+    // "no signal either way" branch (→ keep current state) otherwise —
+    // exactly the same MISSING = NEUTRAL handling already used for a
+    // material-change-detected-but-unconfirmed row.
     verificationResult = {
-      verified: true,
-      signals: ['no_source_url'],
-      verificationLevel: 'primary',
-      statusHint: 'closed',
+      verified: false,
+      signals: ['no_verifiable_url'],
+      verificationLevel: 'none',
+      statusHint: 'unknown',
     }
   } else if (changeResult.changed) {
-    verificationResult = await verifyOpportunityUrl(sourceUrl, { fetchFn })
+    verificationResult = await verifyOpportunityUrl(verifyUrl, { fetchFn })
   } else {
     // Lightweight check even when no material change detected.
     try {
-      verificationResult = await verifyOpportunityUrl(sourceUrl, { fetchFn })
+      verificationResult = await verifyOpportunityUrl(verifyUrl, { fetchFn })
     } catch { /* non-fatal */ }
   }
 

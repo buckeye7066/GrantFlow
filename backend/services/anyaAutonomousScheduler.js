@@ -695,7 +695,7 @@ export function updateAutonomousConfig(updates) {
       if (BLOCKED_CONFIG_KEYS.has(key)) {
         console.warn(
           `[anyaAutonomousScheduler] updateAutonomousConfig: refusing blocked key "${key}" ` +
-          'â pre-filter thresholds must not override computeMatchDecision() (Goals 4, 7)'
+          '— pre-filter thresholds must not override computeMatchDecision() (Goals 4, 7)'
         )
         return
       }

@@ -45,12 +45,12 @@ export function evaluateStateWaiverEligibility(profile) {
 // They must be tagged record_type:'directory_resource' and record_status:'informational'
 // so relevanceFilter can hard-reject them from ACCEPT and they surface only as REVIEW/INFO.
 const GENERIC_DIRECTORY = [
-  { title: 'Medicaid Home and Community-Based Services (Directory)', description: 'HCBS waiver programs by state â find your state program via this index', url: 'https://www.medicaid.gov/medicaid/home-community-based-services/index.html', categories: ['waiver', 'medicaid'], keywords: ['HCBS', 'waiver'], record_type: 'directory_resource', record_status: 'informational' },
-  { title: 'State Long-Term Services and Supports (Directory)', description: 'State LTSS and waiver information â navigational index', url: 'https://www.medicaid.gov/medicaid/long-term-services-supports/index.html', categories: ['LTSS'], keywords: ['LTSS', 'long-term'], record_type: 'directory_resource', record_status: 'informational' },
-  { title: 'Eldercare Locator (Directory)', description: 'Area Agency on Aging and community services â find local agency', url: 'https://eldercare.acl.gov/Public/Index.aspx', categories: ['aging', 'AAA'], keywords: ['Area Agency', 'Aging'], record_type: 'directory_resource', record_status: 'informational' },
-  { title: '211 Community Services (Directory)', description: 'Local community services and referral â navigational index', url: 'https://www.211.org/', categories: ['community'], keywords: ['211', 'referral'], record_type: 'directory_resource', record_status: 'informational' },
-  { title: 'Disability Benefits and Services (Directory)', description: 'SSA and disability-related programs â navigational index', url: 'https://www.ssa.gov/disability/', categories: ['disability'], keywords: ['disability', 'benefits'], record_type: 'directory_resource', record_status: 'informational' },
-  { title: 'ACL Disability and Independent Living (Directory)', description: 'Programs for people with disabilities â navigational index', url: 'https://acl.gov/programs/independent-living', categories: ['disability'], keywords: ['independent living'], record_type: 'directory_resource', record_status: 'informational' },
+  { title: 'Medicaid Home and Community-Based Services (Directory)', description: 'HCBS waiver programs by state — find your state program via this index', url: 'https://www.medicaid.gov/medicaid/home-community-based-services/index.html', categories: ['waiver', 'medicaid'], keywords: ['HCBS', 'waiver'], record_type: 'directory_resource', record_status: 'informational' },
+  { title: 'State Long-Term Services and Supports (Directory)', description: 'State LTSS and waiver information — navigational index', url: 'https://www.medicaid.gov/medicaid/long-term-services-supports/index.html', categories: ['LTSS'], keywords: ['LTSS', 'long-term'], record_type: 'directory_resource', record_status: 'informational' },
+  { title: 'Eldercare Locator (Directory)', description: 'Area Agency on Aging and community services — find local agency', url: 'https://eldercare.acl.gov/Public/Index.aspx', categories: ['aging', 'AAA'], keywords: ['Area Agency', 'Aging'], record_type: 'directory_resource', record_status: 'informational' },
+  { title: '211 Community Services (Directory)', description: 'Local community services and referral — navigational index', url: 'https://www.211.org/', categories: ['community'], keywords: ['211', 'referral'], record_type: 'directory_resource', record_status: 'informational' },
+  { title: 'Disability Benefits and Services (Directory)', description: 'SSA and disability-related programs — navigational index', url: 'https://www.ssa.gov/disability/', categories: ['disability'], keywords: ['disability', 'benefits'], record_type: 'directory_resource', record_status: 'informational' },
+  { title: 'ACL Disability and Independent Living (Directory)', description: 'Programs for people with disabilities — navigational index', url: 'https://acl.gov/programs/independent-living', categories: ['disability'], keywords: ['independent living'], record_type: 'directory_resource', record_status: 'informational' },
 ]
 
 /**
@@ -76,7 +76,7 @@ export async function crawlStateWaiverBenefits(profile, options = {}) {
       }))
       const validEcf = mapped.filter((r) => r.url && (r.url.startsWith('https://') || r.url.startsWith('http://')))
       if (mapped.length !== validEcf.length) {
-        console.warn(`[${CRAWLER_ID}] TN: ${mapped.length - validEcf.length} ECF record(s) dropped â missing or invalid URL`)
+        console.warn(`[${CRAWLER_ID}] TN: ${mapped.length - validEcf.length} ECF record(s) dropped — missing or invalid URL`)
       }
       return validEcf
     }
@@ -95,7 +95,7 @@ export async function crawlStateWaiverBenefits(profile, options = {}) {
           state: state ?? 'nationwide',
           record_type: 'directory_resource',
           record_status: 'informational',
-          // Do NOT set application_url for directory resources â they are not
+          // Do NOT set application_url for directory resources — they are not
           // application paths.  Downstream relevanceFilter must see no application_url
           // so Goal 1 check correctly flags them as non-actionable.
           application_url: null,
