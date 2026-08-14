@@ -24,10 +24,10 @@
  */
 
 const HUMAN_TEXT_KEYS = [
+  'reason',
   'label',
   'text',
   'message',
-  'reason',
   'name',
   'title',
   'description',

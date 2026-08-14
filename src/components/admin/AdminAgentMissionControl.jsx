@@ -12,7 +12,7 @@ import SamErrorPanel from '@/components/admin/agents/SamErrorPanel'
 import AnyaInteractionPanel from '@/components/admin/agents/AnyaInteractionPanel'
 import JohnDraftMetrics from '@/components/admin/agents/JohnDraftMetrics'
 import AgentActivityTimeline from '@/components/admin/agents/AgentActivityTimeline'
-import AgentControlCenter from '@/components/admin/agentControl/AgentControlCenter.jsx'
+import AgentControlCenter from '@/components/admin/agents/AgentControlCenter.jsx'
 
 const DEFAULT_REFRESH_MS = 45_000
 
@@ -48,6 +48,7 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
   const [health, setHealth] = useState(null)
 
   const inFlight = useRef(false)
+  const isMounted = useRef(true)
 
   const buildParams = useCallback(() => {
     return {
@@ -77,24 +78,30 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
         safe(agentTelemetryApi.john(params)),
         safe(agentTelemetryApi.health()),
       ])
-      setSummary(s)
-      setTimeline(t)
-      setYana(y)
-      setHamilton(h2)
-      setRobert(r)
-      setRobertMap(rm)
-      setSam(sa)
-      setAnya(an)
-      setJohn(jo)
-      setHealth(he)
-      setLastRefreshedAt(new Date().toISOString())
+      if (isMounted.current) {
+        setSummary(s)
+        setTimeline(t)
+        setYana(y)
+        setHamilton(h2)
+        setRobert(r)
+        setRobertMap(rm)
+        setSam(sa)
+        setAnya(an)
+        setJohn(jo)
+        setHealth(he)
+        setLastRefreshedAt(new Date().toISOString())
+      }
     } catch (err) {
-      setGlobalError(err?.message || String(err))
+      if (isMounted.current) setGlobalError(err?.message || String(err))
     } finally {
-      setRefreshing(false)
+      if (isMounted.current) setRefreshing(false)
       inFlight.current = false
     }
   }, [buildParams])
+
+  useEffect(() => () => {
+    isMounted.current = false
+  }, [])
 
   useEffect(() => {
     fetchAll()

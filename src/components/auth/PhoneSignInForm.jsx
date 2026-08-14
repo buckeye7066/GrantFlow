@@ -75,8 +75,8 @@ export default function PhoneSignInForm({ onComplete }) {
       setNormalizedPhone(formatted)
       setStep('code')
       setResendCountdown(60)
-      if (response?.previewCode) {
-        console.info('[auth] preview sms code:', response.previewCode)
+      if (response?.previewCode && import.meta.env?.DEV) {
+        console.info('[auth] preview sms code: ********')
       }
       setStatus({
         type: 'success',

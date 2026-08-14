@@ -4,10 +4,14 @@
  */
 
 class EmailService {
-    constructor(apiBaseUrl = '/api') {
-          this.apiBaseUrl = apiBaseUrl;
+    constructor(apiBaseUrl) {
+          this.apiBaseUrl = apiBaseUrl || (typeof window !== 'undefined' ? '/api' : 'http://localhost:3000/api');
           this.maxRetries = 3;
           this.retryDelay = 1000;
+    }
+
+  escapeHtml(value) {
+          return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
     }
 
   /**
@@ -20,6 +24,9 @@ class EmailService {
      * @returns {Promise<Object>} Result with success status
      */
   async sendProfileUpdateNotification(params) {
+        if (!params) {
+              return { success: false, error: 'Missing parameters' };
+        }
         const { profileId, recipients, updateType, updateDetails } = params;
 
       if (!recipients || recipients.length === 0) {
@@ -63,12 +70,12 @@ class EmailService {
         const templates = {
                 PROFILE_UPDATED: {
                           subject: 'Profile Update Completed',
-                          html: `<h2>Profile Update Completed</h2><p>Your profile has been updated with new information:</p><pre>${JSON.stringify(updateDetails, null, 2)}</pre>`,
+                          html: `<h2>Profile Update Completed</h2><p>Your profile has been updated with new information:</p><pre>${this.escapeHtml(JSON.stringify(updateDetails, null, 2))}</pre>`,
                           text: 'Your profile has been updated with new information.'
                 },
                 STATUS_CHANGED: {
                           subject: 'Student Status Updated',
-                          html: `<h2>Student Status Changed</h2><p>Your student status has been updated to: ${updateDetails.newStatus}</p>`,
+                          html: `<h2>Student Status Changed</h2><p>Your student status has been updated to: ${this.escapeHtml(updateDetails.newStatus)}</p>`,
                           text: `Your student status has been updated to: ${updateDetails.newStatus}`
                 },
                 GRANTS_MATCHED: {
@@ -122,6 +129,9 @@ class EmailService {
      * @returns {Promise<Object>} Batch send result
      */
   async sendBatchEmails(emailList) {
+        if (!Array.isArray(emailList)) {
+              return { success: false, error: 'emailList must be an array' };
+        }
         try {
                 const results = await Promise.all(
                           emailList.map(email => this.sendEmailWithRetry(email))
