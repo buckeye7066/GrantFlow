@@ -1,6 +1,22 @@
 # Nationwide Zip Code Coverage Implementation
 
-## Overview
+> **STALE — describes a retired implementation (verified 2026-08-14).** This
+> document describes `backend/services/comprehensiveCrawler.js`,
+> `backend/data/crawlers/zip_coordinates.json`, and
+> `backend/data/crawlers/comprehensive_templates.json`. None of these three
+> paths exist in the repo anymore (the crawler was renamed/replaced by
+> `backend/services/comprehensiveCrawlerOptimized.js`, which is itself on the
+> legacy list in `scripts/check-runtime-imports.mjs`, and neither data file
+> has a successor under `backend/data/crawlers/`). The approach this doc
+> describes — generating templated per-zip listings like `"Community Anchor
+> Impact Grant (ZIP {zip})"` for a profile-free national sweep — is also the
+> exact anti-pattern `docs/CRAWLER_SOURCES.md` and CLAUDE.md's crawler-os
+> rules now forbid ("Sources are selected from the active profile thesis, not
+> from a profile-free national sweep"; "The old National Crawler V2 registry
+> is not the live source registry. Do not add new discovery sources there.").
+> Left here for history; do not treat any claim below as current behavior.
+
+## Overview (historical — see notice above)
 
 The comprehensive crawler has been successfully updated to enable **nationwide funding source discovery** across all 42,249+ US zip codes, expanding from the previous default limitation of 100 zip codes.
 

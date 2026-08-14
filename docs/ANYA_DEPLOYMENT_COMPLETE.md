@@ -1,6 +1,18 @@
 # 🚀 ANYA AI ASSISTANT - DEPLOYMENT COMPLETE
 
-**Status:** ✅ READY FOR PRODUCTION  
+> **UNVERIFIED CLAIM (flagged 2026-08-14).** This file's "COMPLETE AND READY"
+> / "PRODUCTION READY" status has no current evidence behind it — no test
+> run, deploy log, or live probe in this repo confirms Anya is operational
+> today. Treat this as a historical setup note from 2026-02-02, not a current
+> status claim. **The example values below (`AUTH_JWT_SECRET`,
+> `ADMIN_TOKEN`, `ANYA_ADMIN_TOKEN`) are illustrative placeholders, not real
+> deployed secrets — never copy them into a live `.env`.** They also violate
+> the repo's own guidance: real secrets belong in `.env` (git-ignored) or a
+> secrets manager, never hardcoded in a committed doc. For the current,
+> flag-gated behavior of Anya-adjacent features, see `docs/canonical_rules.md`
+> ("Feature flags" section) and `CLAUDE.md`.
+
+**Status:** ✅ READY FOR PRODUCTION (unverified — see notice above)
 **Date:** 2026-02-02  
 **All Environment & Configuration Requirements: FIXED**
 
