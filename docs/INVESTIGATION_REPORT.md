@@ -1,5 +1,14 @@
 # GrantFlow Operational Investigation Report
 
+> **SUPERSEDED / HISTORICAL — verified stale 2026-08-14.** Both findings below
+> describe a since-fixed point-in-time state and no longer match the current
+> codebase: `backend/db/schema.sql`'s `record_origin` CHECK constraint now
+> allows 22 values (not the 4-value set this report started from), and
+> `backend/startup/queueRecovery.js` runs a real `setInterval`-based queue
+> poller (`QUEUE_POLL_INTERVAL_MS`, default 60s) — the "no persistent worker
+> process" finding in §2 is no longer true. Kept for historical context only;
+> do not treat this file as a description of the current system.
+
 ## 1. record_origin CHECK Constraint Mismatch (CRITICAL — Root Cause of Insert Failures)
 
 ### The constraint (defined in `0001_init.sql` and `schema.sql`):

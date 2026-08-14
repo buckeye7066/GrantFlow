@@ -2,6 +2,17 @@
 
 Read-only audit of `backend/` core infrastructure: entry points, middleware, config/constants, db layer, startup, jobs, apply, vnext, and prompts. Findings tagged `[critical]` / `[important]` / `[nit]` with `file:line`.
 
+> **Point-in-time snapshot — no generation date recorded, verified partially
+> stale 2026-08-14.** At least one finding below (`scopedQuery.js:147-197`,
+> "assertProfileScopedSql only logs a warning for an unscoped query") no
+> longer matches the current code: `backend/db/scopedQuery.js` now enforces a
+> tiered blocking/warn-only violation model (`coreViolation` gates a throw in
+> strict scope, not just `NODE_ENV=test`), consistent with the cross-tenant
+> grant-deletion fix already shipped. This audit was not re-run line-by-line
+> against the current tree — treat every `file:line` reference here as a lead
+> to re-verify against the live source before acting on it, not as a
+> confirmed-current defect list.
+
 ---
 
 ## Entry points
