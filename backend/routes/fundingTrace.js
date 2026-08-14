@@ -8,8 +8,8 @@
  */
 
 import express from 'express'
-import crypto from 'crypto'
 import { FUNDING_TRACE_ENTITY_TYPES, traceFunding, traceSourceToOpportunity } from '../services/fundingTraceService.js'
+import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -44,6 +44,13 @@ router.post('/', async (req, res) => {
 /**
  * Add a single traced source to the funding_opportunities catalog.
  * Reuses the same payload shape as POST /api/opportunities for consistency.
+ *
+ * Routed through the canonical upsertFundingOpportunity() admission gate
+ * (per docs/canonical_rules.md's single-admission-gate rule) instead of a
+ * raw INSERT - gets canonicalOpportunityKey dedup, URL hygiene, the reality
+ * gate, and resolveOpportunityAmounts() for free. A traced row is a
+ * DIRECTORY pointer (see traceSourceToOpportunity's opportunity_kind), so
+ * allowDirectories is passed explicitly even though it already defaults true.
  */
 router.post('/add', async (req, res) => {
   const { source, entity } = req.body || {}
@@ -53,24 +60,14 @@ router.post('/add', async (req, res) => {
 
   try {
     const payload = traceSourceToOpportunity(source, entity || source.name)
-    const id = crypto.randomUUID()
+    const result = await upsertFundingOpportunity(req.db, payload, { allowDirectories: true })
 
-    const arrayFields = ['categories', 'keywords', 'eligibility_bullets']
-    const data = { ...payload }
-    for (const f of arrayFields) {
-      if (Array.isArray(data[f])) data[f] = JSON.stringify(data[f])
+    if (result.skipped) {
+      return res.status(422).json({ ok: false, skipped: true, reason: result.reason })
     }
-    const entries = Object.entries(data).filter(([, v]) => v !== undefined)
-    const columns = ['id', ...entries.map(([k]) => k)]
-    const values = [id, ...entries.map(([, v]) => v)]
-    const placeholders = columns.map(() => '?').join(', ')
 
-    await req.db
-      .prepare(`INSERT INTO funding_opportunities (${columns.join(', ')}) VALUES (${placeholders})`)
-      .run(...values)
-
-    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(id)
-    return res.status(201).json({ ok: true, opportunity: opp })
+    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(result.id)
+    return res.status(result.inserted ? 201 : 200).json({ ok: true, opportunity: opp })
   } catch (error) {
     routeLogger.error('[funding-trace/add] failed', error?.message)
     return res.status(500).json({ error: error?.message || 'Failed to add source' })
