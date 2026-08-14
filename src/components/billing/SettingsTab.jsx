@@ -43,7 +43,7 @@ export default function SettingsTab() {
   });
 
   const handleSave = () => {
-    if (!settings || Object.keys(settings).length === 0) {
+    if (!settings) {
       return;
     }
     mutation.mutate(settings);
