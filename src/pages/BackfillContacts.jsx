@@ -28,15 +28,18 @@ export default function BackfillContacts() {
 
       log('Fetching all existing contact methods to prevent duplicates...');
       const existingContacts = await client.entities.ContactMethod.list();
-      const existingSet = new Set(existingContacts.map(c => `${c.organization_id}-${c.type}-${c.value.trim().toLowerCase()}`));
+      const existingSet = new Set(existingContacts.map(c => {
+        const val = typeof c.value === 'string' ? c.value.trim().toLowerCase() : '';
+        return `${c.organization_id}-${c.type}-${val}`;
+      }));
       log(`Found ${existingContacts.length} existing contact methods.`);
 
       const newContactMethods = [];
       let processedCount = 0;
 
       for (const org of organizations) {
-        const legacyEmails = org.email || [];
-        const legacyPhones = org.phone || [];
+        const legacyEmails = Array.isArray(org.email) ? org.email : org.email ? [org.email] : [];
+        const legacyPhones = Array.isArray(org.phone) ? org.phone : org.phone ? [org.phone] : [];
 
         const allLegacy = [...legacyEmails.map(e => ({ type: 'email', value: e })), ...legacyPhones.map(p => ({ type: 'phone', value: p }))];
 

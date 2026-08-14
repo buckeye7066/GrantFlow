@@ -29,7 +29,7 @@ function FindingDetailDialog({ finding, open, onOpenChange, onChanged }) {
 
   if (!finding) return null
 
-  async function setStatus(status) {
+  async function updateFindingStatus(status) {
     setBusy(status)
     setError(null)
     try {
@@ -57,7 +57,7 @@ function FindingDetailDialog({ finding, open, onOpenChange, onChanged }) {
       const res = await samApi.run({ mode: 'observe', checks: [finding.event_type], dryRun: true })
       const stillFailing = (res?.findings || []).some((f) => f.event_type === finding.event_type || f.title === finding.title)
       setRecheckResult(stillFailing ? 'still_failing' : 'resolved')
-      if (!stillFailing) await setStatus('resolved')
+      if (!stillFailing) await updateFindingStatus('resolved')
     } catch (err) {
       setError(err?.message || 'Re-check failed')
     } finally {
@@ -113,11 +113,11 @@ function FindingDetailDialog({ finding, open, onOpenChange, onChanged }) {
             {busy === 'recheck' ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
             Re-check now
           </Button>
-          <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => setStatus('ignored')}>
+          <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => updateFindingStatus('ignored')}>
             {busy === 'ignore' ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
             Mark ignored
           </Button>
-          <Button size="sm" disabled={Boolean(busy)} onClick={() => setStatus('resolved')}>
+          <Button size="sm" disabled={Boolean(busy)} onClick={() => updateFindingStatus('resolved')}>
             {busy === 'resolve' ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
             Mark resolved
           </Button>

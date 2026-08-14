@@ -123,7 +123,7 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
             <Button
               variant="ghost"
               size="icon"
-              onClick={(e) => { e.stopPropagation(); onEdit(organization); }}
+              onClick={(e) => { e.stopPropagation(); onEdit && onEdit(organization); }}
               className="h-8 w-8 hover:bg-slate-100"
               title="Edit Profile"
             >
@@ -143,7 +143,7 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
             <Button
               variant="ghost"
               size="icon"
-              onClick={(e) => { e.stopPropagation(); onDelete(organization); }}
+              onClick={(e) => { e.stopPropagation(); onDelete && onDelete(organization); }}
               className="h-8 w-8 hover:bg-red-100"
               title="Delete Profile"
             >

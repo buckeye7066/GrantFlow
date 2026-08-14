@@ -23,9 +23,11 @@ const ORIGIN_META = {
 
 function formatAmount(amt) {
   if (!amt) return null
-  if (amt >= 1_000_000) return `$${(amt / 1_000_000).toFixed(1)}M`
-  if (amt >= 1_000) return `$${(amt / 1_000).toFixed(0)}K`
-  return `$${Number(amt).toLocaleString()}`
+  const num = typeof amt === 'string' ? Number(amt.replace(/[,]/g, '')) : Number(amt)
+  if (Number.isNaN(num)) return null
+  if (num >= 1_000_000) return `$${(num / 1_000_000).toFixed(1)}M`
+  if (num >= 1_000) return `$${(num / 1_000).toFixed(0)}K`
+  return `$${num.toLocaleString()}`
 }
 
 export default function AdminFundingTrace() {
@@ -37,6 +39,7 @@ export default function AdminFundingTrace() {
   const { toast } = useToast()
 
   const runTrace = useCallback(async () => {
+    if (loading) return
     const q = entity.trim()
     if (!q) return
     setLoading(true)
@@ -52,7 +55,7 @@ export default function AdminFundingTrace() {
     } finally {
       setLoading(false)
     }
-  }, [entity, entityType, toast])
+  }, [entity, entityType, loading, toast])
 
   const handleAdd = useCallback(async (source) => {
     setAdding((prev) => ({ ...prev, [source.key]: 'pending' }))

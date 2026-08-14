@@ -41,16 +41,20 @@ function buildAuthStartUrl(providerId, redirectTo) {
  * Check if backend is available by pinging the health endpoint
  */
 async function checkBackendHealth() {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 5000)
   try {
     const base = getAbsoluteApiRootForOAuth()
     const response = await fetch(`${base}/api/health`, {
       method: 'GET',
-      signal: AbortSignal.timeout(5000) // 5 second timeout
+      signal: controller.signal
     })
     return response.ok
   } catch (error) {
     console.error('[SocialSignIn] Backend health check failed:', error)
     return false
+  } finally {
+    clearTimeout(timeout)
   }
 }
 

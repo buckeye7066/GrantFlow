@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, RefreshCw, Trash2, Users } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -15,10 +15,17 @@ async function post(path, body) {
 
 export default function AdminProfileDedupe() {
   const { toast } = useToast()
+  const mountedRef = useRef(true)
   const [strategy, setStrategy] = useState('similar_name')
   const [loading, setLoading] = useState(false)
   const [groups, setGroups] = useState([])
   const [output, setOutput] = useState(null)
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const summary = useMemo(() => {
     const totalGroups = Array.isArray(groups) ? groups.length : 0
@@ -33,13 +40,17 @@ export default function AdminProfileDedupe() {
       const res = await apiFetch(
         `/api/admin/profiles/duplicates?strategy=${encodeURIComponent(strategy)}&limitGroups=50&minGroupSize=2`,
       )
-      setGroups(res?.groups || [])
-      toast({ title: 'Loaded', description: `Found ${res?.groups?.length || 0} duplicate groups` })
+      if (mountedRef.current) {
+        setGroups(res?.groups || [])
+        toast({ title: 'Loaded', description: `Found ${res?.groups?.length || 0} duplicate groups` })
+      }
     } catch (err) {
-      toast({ title: 'Failed', description: err.message, variant: 'destructive' })
-      setGroups([])
+      if (mountedRef.current) {
+        toast({ title: 'Failed', description: err.message, variant: 'destructive' })
+        setGroups([])
+      }
     } finally {
-      setLoading(false)
+      if (mountedRef.current) setLoading(false)
     }
   }, [strategy, toast])
 
@@ -57,23 +68,25 @@ export default function AdminProfileDedupe() {
         limitGroups: 2000,
         minGroupSize: 2,
       })
-      setOutput(res)
+      if (mountedRef.current) setOutput(res)
       if (dryRun) {
-        toast({ title: 'Preview ready', description: `Prepared ${res?.merged_groups ?? 0} group(s)` })
+        if (mountedRef.current) toast({ title: 'Preview ready', description: `Prepared ${res?.merged_groups ?? 0} group(s)` })
       } else {
-        toast({ title: 'Done', description: `Merged ${res?.merged_groups ?? 0} group(s)` })
-        await refresh()
+        if (mountedRef.current) toast({ title: 'Done', description: `Merged ${res?.merged_groups ?? 0} group(s)` })
+        if (mountedRef.current) await refresh()
       }
     } catch (err) {
       const requestId = err?.requestId || err?.details?.request_id || null
-      toast({
-        title: 'Bulk merge failed',
-        description: requestId ? `${err.message} (request_id=${requestId})` : err.message,
-        variant: 'destructive',
-      })
-      setOutput({ ok: false, error: err.message, request_id: requestId })
+      if (mountedRef.current) {
+        toast({
+          title: 'Bulk merge failed',
+          description: requestId ? `${err.message} (request_id=${requestId})` : err.message,
+          variant: 'destructive',
+        })
+        setOutput({ ok: false, error: err.message, request_id: requestId })
+      }
     } finally {
-      setLoading(false)
+      if (mountedRef.current) setLoading(false)
     }
   }
 
@@ -81,38 +94,42 @@ export default function AdminProfileDedupe() {
     try {
       setLoading(true)
       const res = await post('/api/admin/profiles/merge', { winnerId, loserIds, dryRun })
-      setOutput(res)
+      if (mountedRef.current) setOutput(res)
       if (dryRun) {
-        toast({ title: 'Preview ready', description: 'Dry-run completed' })
+        if (mountedRef.current) toast({ title: 'Preview ready', description: 'Dry-run completed' })
       } else {
-        toast({ title: 'Merged', description: 'Profiles merged successfully' })
-        await refresh()
+        if (mountedRef.current) toast({ title: 'Merged', description: 'Profiles merged successfully' })
+        if (mountedRef.current) await refresh()
       }
     } catch (err) {
       const requestId = err?.requestId || err?.details?.request_id || null
-      toast({
-        title: 'Merge failed',
-        description: requestId ? `${err.message} (request_id=${requestId})` : err.message,
-        variant: 'destructive',
-      })
+      if (mountedRef.current) {
+        toast({
+          title: 'Merge failed',
+          description: requestId ? `${err.message} (request_id=${requestId})` : err.message,
+          variant: 'destructive',
+        })
 
-      const base = { ok: false, error: err.message, request_id: requestId }
-      setOutput(base)
+        const base = { ok: false, error: err.message, request_id: requestId }
+        setOutput(base)
 
-      // Best-effort: fetch server-side error details (in-memory store) for quicker debugging.
-      if (requestId) {
-        try {
-          const details = await apiFetch(`/api/admin/errors/${encodeURIComponent(requestId)}`)
-          setOutput({ ...base, server_error: details })
-        } catch (lookupErr) {
-          setOutput({
-            ...base,
-            server_error_lookup_failed: lookupErr?.message || String(lookupErr),
-          })
+        // Best-effort: fetch server-side error details (in-memory store) for quicker debugging.
+        if (requestId) {
+          try {
+            const details = await apiFetch(`/api/admin/errors/${encodeURIComponent(requestId)}`)
+            if (mountedRef.current) setOutput({ ...base, server_error: details })
+          } catch (lookupErr) {
+            if (mountedRef.current) {
+              setOutput({
+                ...base,
+                server_error_lookup_failed: lookupErr?.message || String(lookupErr),
+              })
+            }
+          }
         }
       }
     } finally {
-      setLoading(false)
+      if (mountedRef.current) setLoading(false)
     }
   }
 

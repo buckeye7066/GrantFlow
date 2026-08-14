@@ -51,6 +51,9 @@ export default function VNextApplication() {
         body: JSON.stringify({ targetState }),
       })
     },
+    onSuccess: () => {
+      setLastBlockers([])
+    },
     onError: (err) => {
       try {
         const data = err?.data ?? err?.response ?? null
