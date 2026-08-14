@@ -89,7 +89,10 @@ export const LEAD_GEN_SCHOLARSHIP_PATTERNS = Object.freeze([
 
 export function isLeadGenScholarship(row) {
   if (!row || typeof row !== 'object') return null
-  const identity = `${row.title ?? ''} ${row.sponsor ?? row.funder ?? ''}`
+  // `||` on the sponsor/funder pair: a row whose `sponsor` column is an empty
+  // string (not NULL) would stop `??` from ever reading `funder`, so the
+  // identity these registries match against silently lost the funder's name.
+  const identity = `${row.title ?? ''} ${row.sponsor || row.funder || ''}`
   if (!identity.trim()) return null
   for (const entry of LEAD_GEN_SCHOLARSHIP_PATTERNS) {
     if (entry.rx.test(identity)) return entry.label
@@ -165,13 +168,17 @@ export function fundableSignalsOf(row) {
   const amt = (v) => Number.isFinite(Number(v)) && Number(v) > 0
   if (amt(row.amount_min) || amt(row.amount_max) || amt(row.amount_requested)) signals.push('award_amount')
   else if (typeof row.amount_text === 'string' && row.amount_text.trim()) signals.push('award_amount_text')
-  if (String(row.application_url ?? row.apply_url ?? '').trim()) signals.push('apply_url')
+  // `||`, NOT `??`: a normalizer that coerces an absent column to '' would stop
+  // `??` from ever reaching the second field, so a row carrying ONLY `apply_url`
+  // (the crawler-os page-fact field name) lost its apply signal and was routed
+  // to "Directories & resources" instead of the direct results the owner reads.
+  if (String(row.application_url || row.apply_url || '').trim()) signals.push('apply_url')
   if (row.deadline) signals.push('deadline')
   // EXPLICIT rolling only. Read surfaces fabricate `is_rolling: !deadline`
   // ("no deadline stated" is silence, not a statement of rolling), so that
   // flag would make every signal-less row read as fundable.
   else if (String(row.deadline_type ?? '').toLowerCase() === 'rolling') signals.push('rolling')
-  if (String(row.external_id ?? row.opportunity_number ?? '').trim()) signals.push('program_id')
+  if (String(row.external_id || row.opportunity_number || '').trim()) signals.push('program_id')
   return signals
 }
 
@@ -222,7 +229,7 @@ export function classifyFundingResult(row, { now = new Date() } = {}) {
   if (leadGen) reasons.push(`lead_gen:${leadGen}`)
   const expired = isClearlyExpiredProgram(row, now)
   if (expired) reasons.push(`expired:${expired}`)
-  if (isAnonymizedFunder(row.sponsor ?? row.funder)) reasons.push('unresolvable_funder')
+  if (isAnonymizedFunder(row.sponsor || row.funder)) reasons.push('unresolvable_funder')
   if (reasons.length > 0) {
     return { bucket: RESULT_BUCKETS.NOT_A_GRANT, reasons, stale: Boolean(expired) }
   }
@@ -279,7 +286,10 @@ export const INSTITUTIONAL_PASS_THROUGH_PATTERNS = Object.freeze([
 
 export function institutionalPassThroughConflict(row) {
   if (!row || typeof row !== 'object') return null
-  const identity = `${row.title ?? ''} ${row.sponsor ?? row.funder ?? ''}`
+  // `||` on the sponsor/funder pair: a row whose `sponsor` column is an empty
+  // string (not NULL) would stop `??` from ever reading `funder`, so the
+  // identity these registries match against silently lost the funder's name.
+  const identity = `${row.title ?? ''} ${row.sponsor || row.funder || ''}`
   if (!identity.trim()) return null
   for (const entry of INSTITUTIONAL_PASS_THROUGH_PATTERNS) {
     if (entry.rx.test(identity)) return entry.label
@@ -300,7 +310,10 @@ export const GOVERNMENT_AGENCY_PROGRAM_PATTERNS = Object.freeze([
 
 export function agencyOnlyProgramConflict(row) {
   if (!row || typeof row !== 'object') return null
-  const identity = `${row.title ?? ''} ${row.sponsor ?? row.funder ?? ''}`
+  // `||` on the sponsor/funder pair: a row whose `sponsor` column is an empty
+  // string (not NULL) would stop `??` from ever reading `funder`, so the
+  // identity these registries match against silently lost the funder's name.
+  const identity = `${row.title ?? ''} ${row.sponsor || row.funder || ''}`
   if (!identity.trim()) return null
   for (const entry of GOVERNMENT_AGENCY_PROGRAM_PATTERNS) {
     if (entry.rx.test(identity)) return entry.label
