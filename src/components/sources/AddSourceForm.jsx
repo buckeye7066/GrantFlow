@@ -64,7 +64,7 @@ export default function AddSourceForm({ source, organizationId, onSuccess, onCan
   const mutation = useMutation({
     mutationFn: async (data) => {
       // FIXED: Check if source has an ID to determine create vs update
-      if (source && source.id != undefined) {
+      if (source && source.id !== null && source.id !== undefined) {
         log.debug('updating source', { id: source.id })
         return client.entities.SourceDirectory.update(source.id, data);
       } else {

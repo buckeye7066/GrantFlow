@@ -17,7 +17,7 @@ export async function listProfiles(params = {}) {
   // query-params input. Non-object values (strings, numbers, arrays) would
   // otherwise produce malformed query strings or throw inside Object.entries.
   const effectiveParams =
-    rawParams == null || typeof rawParams !== 'object' || Array.isArray(rawParams)
+    rawParams === null || rawParams === undefined || typeof rawParams !== 'object' || Array.isArray(rawParams)
       ? {}
       : rawParams
 
