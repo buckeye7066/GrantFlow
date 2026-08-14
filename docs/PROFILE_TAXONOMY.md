@@ -7,9 +7,10 @@ This document describes the canonical profile taxonomy used by crawler discovery
 - `backend/services/profile/applicationSchema.json`
 - `backend/services/profile/profileTaxonomy.js`
 - `backend/services/crawlers/queryPlanner.js`
-- `backend/services/crawlers/crawlerOpportunityContract.js`
+- `backend/services/shared/crawlerOpportunityContract.js`
 - `backend/routes/realCrawlers.js`
-- `backend/services/matchingEngine.js`
+- `backend/services/matchEngine.js` (canonical; `backend/services/matchingEngine.js`
+  is a DEPRECATED non-authoritative compatibility shim — see that file's header)
 
 ## Canonical Inputs
 
@@ -76,7 +77,9 @@ Intent disambiguation includes targeted rules for:
 
 ## Matching Engine Facet Scoring
 
-`calculateMatchScore()` applies deterministic scoring plus `calculateFacetAdjustments()`:
+`calculateFacetAdjustments()` in the canonical `backend/services/matchEngine.js`
+(NOT `matchingEngine.js`, which is a deprecated non-authoritative shim — see
+that file's header) feeds into scoring:
 
 - facet intent/category boosts
 - keyword overlap boosts
@@ -88,14 +91,14 @@ Existing loan/credit-repair penalties are preserved.
 
 Debug toggle:
 
-- `MATCHING_ENGINE_FACET_DEBUG=true` logs per-opportunity facet adjustment summaries.
+- `MATCHING_ENGINE_FACET_DEBUG=true` logs per-opportunity facet adjustment summaries
+  (`backend/services/matchEngine.js`, log tag `[matchEngine] facet adjustments`).
 
 ## Real Crawler Route Observability
 
-`/api/real-crawlers/run` adds `debug_meta` (when `admin=true`) with:
-
-- `used_facets`
-- `query_plan`
-- `validation_rejection_counts`
-
-This keeps the extraction -> planning -> filtering path traceable without changing the API success shape.
+UNVERIFIED as of this pass — no `debug_meta`/`used_facets`/`query_plan`/
+`validation_rejection_counts` shape was found in `backend/routes/realCrawlers.js`'s
+response objects. `backend/scripts/check-crawler-results.mjs` reads a similarly
+named `result.debug.live.validation_rejection_counts`, which may be what this
+section originally described, but the route-level `debug_meta` contract as
+written here could not be confirmed against the current code.

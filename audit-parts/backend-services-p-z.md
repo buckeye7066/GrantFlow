@@ -1,5 +1,17 @@
 # Backend Services Audit — Loose service files p–z (`backend/services/*.js`, maxdepth 1)
 
+> **Point-in-time snapshot, partially superseded.** This audit describes a
+> specific past commit's code, not current behavior. Spot-checking during a
+> 2026-08 purpose-alignment pass found the `universityDocumentClassifier.js:71`
+> hex-id digit-stripping bug and the `portalCheckService.js` SSRF gap (both
+> flagged **critical** below) already fixed in the current tree (`safeFetch`
+> now enforces an SSRF policy on every redirect hop; the classifier no longer
+> strips non-digit characters from hex profile ids). The
+> `regionalPurgeService.js:339-347` `no_source_url` → hard-suppress finding was
+> re-checked and is still present as described. The remaining findings were
+> **not** re-verified — treat every line reference as a claim about the
+> audited commit and re-check against the current file before acting on it.
+
 Scope: top-level `.js` files in `backend/services/` whose filename starts with letters p–z (case-insensitive). Subdirectories excluded. 46 files reviewed function-by-function.
 
 Severity legend: **critical** (data loss / security / correctness that breaks core behavior) · **important** (real bug or risk, narrower blast radius) · **nit** (style, dead code, minor robustness).

@@ -10,10 +10,18 @@ This file is the single source of truth for that shape. Tests in
 
 ## Endpoints that follow this shape
 
-- `GET  /api/matching/match/:profileId`
-- `POST /api/discovery/comprehensiveMatch`
-- `POST /api/discovery/searchOpportunities`
+- `GET  /api/matching/profile/:profileId/opportunities`
+- `POST /api/comprehensiveMatch`
+- `POST /api/searchOpportunities`
 - Anya tool `grants.summarizeMatches` (per-opportunity sub-payload)
+
+(Verified 2026-08-14 against `backend/server.js` route mounts + `backend/routes/matching.js`
+and `backend/routes/discovery.js`: `matchingRouter` mounts at `/api/matching` and exposes
+`GET /profile/:profileId/opportunities`, not a `/match/:profileId` route; `discoveryRouter`
+mounts at bare `/api` and exposes `/comprehensiveMatch` / `/searchOpportunities` directly,
+not under an `/api/discovery` prefix. The frontend confirms this via
+`src/api/matching.js` and `client.functions.invoke()` in `src/api/client.js`, which POSTs to
+`/api/${functionName}`.)
 
 ## Response envelope
 

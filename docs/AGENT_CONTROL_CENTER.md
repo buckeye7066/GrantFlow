@@ -23,16 +23,19 @@ Admin Mission Control and is restricted to a single operator account.
 
 ## Who can use it
 
-There is **one** GrantFlow admin/operator:
-
-```
-owner@example.invalid
-```
-
-Override env vars (default to the same address):
+There is **one** GrantFlow admin/operator, resolved as
+`AGENT_CONTROL_ADMIN_EMAIL || ADMIN_EMAIL || CANONICAL_ADMIN_EMAIL_DEFAULT`
+(`backend/services/agentControl/agentControlOrchestrator.js`,
+`backend/services/agentControl/agentControlTypes.js`):
 
 - `AGENT_CONTROL_ADMIN_EMAIL` — preferred override
 - `ADMIN_EMAIL` — fallback
+- `CANONICAL_ADMIN_EMAIL_DEFAULT` (`admin@grantflow.local`) — a **local/test
+  fixture only**. In a deployed runtime (production, or any Railway
+  environment) that fixture default is **not** used — the effective default
+  collapses to an empty string, so `AGENT_CONTROL_ADMIN_EMAIL` or
+  `ADMIN_EMAIL` **must** be set explicitly or no email will ever match the
+  canonical-admin check.
 
 The router gate is `isControlCenterAdmin(req.user)`, which compares
 `user.email` (or `user.primary_email`) directly to the canonical
@@ -192,8 +195,8 @@ liberally; the timeline + progress UI relies on them.
 ## Notifications
 
 Every lifecycle transition creates one persistent
-`notifications` row addressed to the canonical admin
-(`owner@example.invalid`). Types:
+`notifications` row addressed to the canonical admin (see "Who can use it"
+above for how that address is resolved). Types:
 
 - `agent_control_started`
 - `agent_control_completed`
@@ -237,8 +240,11 @@ Sam owns two checks specific to the Control Center:
 
 ## Manual verification checklist
 
-1. Sign in as `owner@example.invalid`. Open Admin → Mission Control.
-   The Agent Control Center renders at the top of the page.
+1. Sign in as the resolved canonical admin (see "Who can use it" above —
+   in local/test this is `admin@grantflow.local`; in production it is
+   whatever `AGENT_CONTROL_ADMIN_EMAIL`/`ADMIN_EMAIL` is set to). Open
+   Admin → Mission Control. The Agent Control Center renders at the top
+   of the page.
 2. Click **Start full cycle** with the default options. The card shows
    the active run id, runtime ticking, and a step-by-step timeline.
 3. While the run is in flight, click **Pause**. The status badge
@@ -261,7 +267,7 @@ Sam owns two checks specific to the Control Center:
 |---|---|---|
 | `Lock "agent_control:full_cycle" already held` | Previous full_cycle didn't release the lock (process crashed) | The `tryAcquireLock` function already sweeps expired locks, but you can manually `DELETE FROM agent_control_locks WHERE lock_name = 'agent_control:full_cycle'` |
 | Run stuck in `pausing` or `stopping` | Adapter not polling `signal.shouldStop()` / `signal.shouldPause()` | Edit the adapter to poll between every atomic operation |
-| Buttons greyed out for a logged-in user | Email is not `owner@example.invalid` | Set `AGENT_CONTROL_ADMIN_EMAIL` env override or sign in as the canonical operator |
+| Buttons greyed out for a logged-in user | Email does not match the resolved canonical admin | Set `AGENT_CONTROL_ADMIN_EMAIL` env override or sign in as the canonical operator |
 | Hamilton step counts the same task twice | `application_tasks` query returned a row that was already running | The adapter only picks up `queued` and `running` rows in a single batch; reduce `hamilton_batch_size` or add `WHERE control_run_id IS NULL` if you assign per-run task ownership |
 
 ## Related docs

@@ -68,8 +68,9 @@ All env vars default to the safest possible value.
 | `SAM_RUN_ON_STARTUP`      | `false`       | If true and `SAM_ENABLED=true`, run a dry observe pass on boot. |
 | `SAM_RUN_ON_SCHEDULE`     | `false`       | If true and `SAM_ENABLED=true`, run on a recurring schedule. |
 | `SAM_SCHEDULE`            | `0 4 * * *`   | Cron-style. We support the daily-at-HH:MM subset. Anything else falls back to `04:00`. |
-| `SAM_MODE`                | `observe`     | Mode for scheduled runs. `repair-safe` is REJECTED here — the scheduler will never silently mutate code. |
+| `SAM_MODE`                | `observe`     | Mode for scheduled runs. `repair-safe` requested directly here is REJECTED (falls back to `observe`) — the ONLY way the scheduler runs `repair-safe` is `SAM_SCHEDULE_AUTOFIX=true` below. |
 | `SAM_ALLOW_SAFE_REPAIR`   | `false`       | Even when admin clicks "Apply Safe Fixes", Sam refuses unless this is `true`. |
+| `SAM_SCHEDULE_AUTOFIX`    | `false`       | **OPT-IN, autonomous mutation.** When `true`, the daily scheduled run performs the full code/function sweep AND applies Sam's whitelisted safe fixes (eslint --fix, readiness logs) with no admin in the loop, then emails the operator the issues + corrections. Still bounded by `samSafeFixes`' allowlist, forbidden paths, and policy gate (`src/`, `docs/`, `backend/services/sam` only) — see `backend/services/sam/samScheduler.js`. |
 | `SAM_MAX_FIXES_PER_RUN`   | `10`          | Hard cap on how many safe fixes Sam will apply in one run. |
 | `SAM_FAIL_ON_CRITICAL`    | `true`        | If `true`, any critical finding flips `production_ready` to `false`. |
 
@@ -212,7 +213,11 @@ pointing at the canonical Sam route.
    least one weeks of advise-mode reports and confirmed the safe-fix
    registry is conservative enough.
 4. Never set `SAM_MODE=repair-safe` for the scheduler — Sam will reject
-   that and fall back to observe.
+   that and fall back to observe. Note this does not close off autonomous
+   mutation entirely: `SAM_SCHEDULE_AUTOFIX=true` is a separate opt-in that
+   authorizes the scheduled run to apply safe fixes with no admin in the
+   loop (see the env var table above) — leave it unset unless that
+   autonomous behavior is specifically wanted.
 
 ## Rollback plan
 

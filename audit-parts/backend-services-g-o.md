@@ -1,5 +1,11 @@
 # Backend Services Audit — Loose files g–o (`backend/services/*.js`, maxdepth 1)
 
+> **Historical snapshot — not current release evidence.** This part-file is
+> merged into `AUDIT.md` (generated 2026-06-19) and inherits that document's
+> disclaimer: many findings below have since been remediated or had their
+> line references drift. Reproduce a finding against the current commit
+> before relying on it.
+
 Read-only audit. Scope: top-level service files in `backend/services/` whose filename starts with letters g–o. Subdirectories excluded.
 
 Severity legend: **critical** (exploitable / data-loss / cross-tenant), **important** (real bug or security gap, conditional on caller), **nit** (minor / cosmetic / latent trap).

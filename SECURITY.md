@@ -2,9 +2,11 @@
 
 ## Reporting a Vulnerability
 
-Please email **security@grantflow.app** with details (or open a private
-GitHub security advisory on `buckeye7066/GrantFlow`). Do **not** file a
-public issue for security-relevant findings.
+Please open a private GitHub security advisory on `buckeye7066/GrantFlow`
+(the verified channel), or email **security@axiombiolabs.org** (the
+product's live domain — see `vercel.json`; `grantflow.app` is not the
+production domain and should not be used). Do **not** file a public issue
+for security-relevant findings.
 
 We aim to acknowledge reports within 48 business hours.
 

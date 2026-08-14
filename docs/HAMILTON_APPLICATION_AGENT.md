@@ -67,9 +67,13 @@ When Hamilton reaches a required human boundary, it stops in
 
 ## Database surface
 
-Migrations: `backend/db/migrations/085_hamilton_student_portals_and_application_tasks.sql`
-(SQLite) and `backend/db/postgres/migrations/0081_hamilton_student_portals_and_application_tasks.sql`
-(Postgres). Both are idempotent and update `backend/db/schema.sql`.
+Migrations: `backend/db/migrations/085_yana_student_portals_and_application_tasks.sql`
+(SQLite) and `backend/db/postgres/migrations/0081_yana_student_portals_and_application_tasks.sql`
+(Postgres) — the filenames still carry the pre-rename `yana` prefix even though
+the tables and application layer are Hamilton's (see
+`scripts/rename-schema-yana-to-hamilton.ps1`, which renamed the autopilot table
+names inside `schema.sql` but not these two migration filenames). Both are
+idempotent and update `backend/db/schema.sql`.
 
 Tables:
 
@@ -98,7 +102,7 @@ exposes `classifyFundingPortal({ profile, opportunity, ... })` and
    - `exact_school_name_match` (boosted toward whichever portal type the
      opportunity text already implies — FAFSA stays in financial aid),
    - `knownSchools_match` (lookup against
-     `backend/services/crawlers/data/knownSchools.js`),
+     `backend/services/shared/data/knownSchools.js`),
    - `profile_school_committed` (the student picked this school as
      their target),
    - `source_url_host_match_school`,

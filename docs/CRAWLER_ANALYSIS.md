@@ -3,6 +3,20 @@
 **Date:** February 28, 2026  
 **Scope:** `backend/routes/realCrawlers.js`, `backend/services/crawlers/*`, `backend/services/matchingEngine.js`, `backend/services/opportunityInserter.js`
 
+> **Historical snapshot — not current status.** Line references below have
+> drifted (`backend/services/opportunityInserter.js` has grown substantially
+> since this pass) and at least one finding has since shipped: **Issue #7**
+> (deadline included in the `source_id` hash) is fixed —
+> `stableSourceIdFromOpportunity()` (now ~line 353) explicitly excludes the
+> deadline with the comment "Exclude deadline so deadline-only updates (e.g.
+> extensions) don't create new records." `matchingEngine.js` is also since
+> documented elsewhere (`docs/GRANTFLOW_MISSION_FIX_PLAN.md`) as "a deprecated
+> shim" over `backend/services/matchEngine.js`, the canonical scorer — so
+> Issue #2's premise (two competing live scoring engines) needs re-verification
+> against the current call graph before treating it as an open defect.
+> Reproduce each remaining issue against the current commit before acting on
+> it; do not treat this document as a live defect list.
+
 ---
 
 ## Executive Summary

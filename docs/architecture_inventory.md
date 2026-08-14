@@ -2,6 +2,21 @@
 
 _Last updated: 2026-01-28_
 
+> **STALE — historical snapshot, not current state.** This document has not
+> been updated since 2026-01-28 and predates major subsystem rewrites
+> (verified 2026-08-14): the crawler layer described below (`localCrawler.js`,
+> `scholarshipCrawler.js`, `comprehensiveCrawler.js`, `itemCrawler.js`) has
+> been superseded by `backend/crawler-os/*` (planner, matchEngine, per-agent
+> crawlers under `backend/crawler-os/agents/`); "Stripe integration not
+> present yet" is now FALSE — `backend/routes/stripe.js`,
+> `backend/routes/stripeWebhook.js`, and a full pricing/catalog subsystem
+> exist (see `docs/PRICING_STRIPE_HARDENING.md`); Anya is no longer a
+> placeholder chat response (see `backend/services/anyaOrchestrator.js` and
+> `backend/services/anyaToolRegistry.js`, which now expose a large tool
+> catalog). Treat every claim below as unverified against current code;
+> `docs/CRAWLER_ARCHITECTURE.md` and `CLAUDE.md` are closer to current truth
+> for the crawler/matching subsystem.
+
 This document inventories the current GrantFlow system **as implemented** (not as intended), including stack, modules, routes, data models, and key UI surfaces/actions.
 
 ## Tech stack detection

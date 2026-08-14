@@ -1,5 +1,7 @@
 /* Print styles for various GrantFlow components */
-/* Used by BillingSheet, PrintablePipeline, PrintableProfile, and PrintableApplication */
+/* Used by PrintablePipeline, PrintProfilePacket, and PrintAwardSummary
+   (verified 2026-08-14: BillingSheet, PrintableProfile, and PrintableApplication
+   no longer import this file) */
 
 @media print {
   .no-print { 
