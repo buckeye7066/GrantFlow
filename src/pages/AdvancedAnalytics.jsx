@@ -9,6 +9,12 @@ import { apiFetch } from "@/api/client"
 import { differenceInDays, format } from "date-fns"
 import { canonicalStage } from "../../shared/pipelineStages.js"
 
+// Window lengths for the time-range selector. The selector was wired to state
+// but that state reached NOTHING - changing it re-rendered the same numbers, so
+// every metric on this page silently reported all-time regardless of the
+// selection (the "wired-but-unreachable" class).
+const TIME_RANGE_DAYS = { '30d': 30, '3m': 90, '6m': 180, '12m': 365, all: null }
+
 export default function AdvancedAnalytics() {
   const [timeRange, setTimeRange] = useState("12m")
 
@@ -24,8 +30,27 @@ export default function AdvancedAnalytics() {
     staleTime: 60_000,
   })
 
+  // Apply the selected window. A grant is dated by the most meaningful stamp it
+  // carries (award -> submission -> creation). A grant with NO usable date is
+  // KEPT in every window: this repo's standing rule is that silence is not a
+  // denial, and silently dropping undated rows would make the portfolio shrink
+  // for a reason the page never states.
+  const scopedGrants = useMemo(() => {
+    const days = TIME_RANGE_DAYS[timeRange] ?? null
+    if (days === null) return grants
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+    return grants.filter(g => {
+      const raw = g.award_date || g.submitted_date || g.created_date
+      if (!raw) return true
+      const dated = new Date(raw)
+      if (isNaN(dated.getTime())) return true
+      return dated.getTime() >= cutoff
+    })
+  }, [grants, timeRange])
+
   // Calculate metrics
   const metrics = useMemo(() => {
+    const grants = scopedGrants
     // Bucket by CANONICAL stage so legacy statuses (auto_applied,
     // pending_review, under_review → submitted; rejected → declined) are
     // counted the same way the Pipeline Kanban counts them. Comparing raw
@@ -72,12 +97,12 @@ export default function AdvancedAnalytics() {
       active: active.length,
       rejected: grants.filter(g => canonicalStage(g.status) === 'declined').length,
     }
-  }, [grants])
+  }, [scopedGrants])
 
   // Group grants by status for portfolio view
   const grantsByStatus = useMemo(() => {
     const statusGroups = {}
-    grants.forEach(grant => {
+    scopedGrants.forEach(grant => {
       const status = grant.status || 'unknown'
       if (!statusGroups[status]) {
         statusGroups[status] = []
@@ -85,12 +110,12 @@ export default function AdvancedAnalytics() {
       statusGroups[status].push(grant)
     })
     return statusGroups
-  }, [grants])
+  }, [scopedGrants])
 
   // Group by state for geographic analysis
   const grantsByState = useMemo(() => {
     const stateMap = new Map()
-    grants.forEach(grant => {
+    scopedGrants.forEach(grant => {
       // grant.state is surfaced by GET /api/grants as
       // COALESCE(funding_opportunity.state, organization.state). Fall back to
       // any other location hint the row may carry before "Unknown".
@@ -106,7 +131,7 @@ export default function AdvancedAnalytics() {
       }
     })
     return Array.from(stateMap.values()).sort((a, b) => b.count - a.count)
-  }, [grants])
+  }, [scopedGrants])
 
   return (
     <div className="p-6 md:p-8">

@@ -115,7 +115,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       toast({
         variant: "destructive",
         title: "Failed to Save Time",
-        description: error.message,
+        description: error?.message ?? 'Unknown error',
       });
     }
   });
@@ -278,6 +278,11 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   const handleResume = () => {
     setIsPaused(false);
     lastActivityRef.current = Date.now();
+    // Clear the pause stamp: handleSave/auto-save both compute
+    // `endTime = pauseTimeRef.current || now`, so leaving it set made a
+    // pause -> resume -> work -> stop cycle write the OLD PAUSE TIME as the
+    // entry's end_at, under-billing every resumed session.
+    pauseTimeRef.current = null;
   };
 
   const handleStop = () => {
