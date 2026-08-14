@@ -13,11 +13,27 @@ import { getSamGovApiKey } from '../../config/grantsGovEndpoints.js'
 import { createLogger } from '../../utils/logger.js'
 const log = createLogger('samGov')
 
-async function fetchWithRetry(url, options, maxRetries = 3) {
+// node-fetch v3 REMOVED the v2 `options.timeout` setting and silently ignores
+// it (verified: no `timeout` handling exists anywhere in node-fetch@3's
+// request/index sources). This request therefore had NO time bound at all — a
+// SAM.gov socket that never answers held the connection open for the life of
+// the process, three times over. `AbortSignal` is what v3 honours, so the
+// caller's declared budget is translated into one here; callers keep passing
+// `timeout` and nothing else changes.
+const DEFAULT_FETCH_TIMEOUT_MS = 30000;
+
+async function fetchWithRetry(url, options = {}, maxRetries = 3) {
+  const { timeout, ...fetchOptions } = options || {};
+  const timeoutNum = Number(timeout);
+  const timeoutMs = Number.isFinite(timeoutNum) && timeoutNum > 0 ? timeoutNum : DEFAULT_FETCH_TIMEOUT_MS;
   let lastError;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, {
+        ...fetchOptions,
+        // A caller-supplied signal always wins; otherwise bound the request.
+        signal: fetchOptions.signal ?? AbortSignal.timeout(timeoutMs),
+      });
       if (response.status === 429 || response.status === 503) {
         const backoffMs = attempt * 2000;
         console.warn(`[sam.gov] HTTP ${response.status} on attempt ${attempt}/${maxRetries}, retrying in ${backoffMs}ms`);
