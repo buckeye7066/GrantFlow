@@ -247,7 +247,7 @@ export async function crawlStateCounties(db, state, options = {}) {
       else if (result.updated) updated++;
       else if (result.error) errors++;
       else if (result.rejected) {
-        log.info(`[CountyCrawler] Suppressed (relevanceFilter): ${opp.id} â ${result.reason}`);
+        log.info(`[CountyCrawler] Suppressed (relevanceFilter): ${opp.id} — ${result.reason}`);
       }
     }
   }

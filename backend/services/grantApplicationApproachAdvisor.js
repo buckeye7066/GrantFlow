@@ -144,12 +144,12 @@ async function updateGrantGuidance(db, grantId, payload) {
   if (payload.portal_url) {
     setIf('portal_url', payload.portal_url)
   } else {
-    log.debug('[grant-application-approach] portal_url not set â value was empty or invalid', { grantId })
+    log.debug('[grant-application-approach] portal_url not set — value was empty or invalid', { grantId })
   }
   if (payload.application_url) {
     setIf('application_url', payload.application_url)
   } else {
-    console.warn('[grant-application-approach] application_url not set â grant may lack a valid application path', { grantId })
+    console.warn('[grant-application-approach] application_url not set — grant may lack a valid application path', { grantId })
   }
 
   if (updates.length === 0) return

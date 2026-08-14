@@ -187,7 +187,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                 }
                 handled = true
               } else {
-                // JWT verified but has no sub â treat as guest to avoid identity confusion
+                // JWT verified but has no sub — treat as guest to avoid identity confusion
                 user = { role: 'guest', profileId: null }
                 handled = true
               }
@@ -246,7 +246,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
           }
         }
 
-        // 3d. (Intentionally removed â admin/bulk token check already handled in 3a.
+        // 3d. (Intentionally removed — admin/bulk token check already handled in 3a.
         //      Keeping a duplicate branch here creates a false sense of fallback
         //      and risks divergence if 3a is ever modified.)
 

@@ -32,7 +32,7 @@ export const clearAccessToken = () => {
   if (typeof client.clearToken === 'function') {
     client.clearToken()
   } else {
-    // client.clearToken is not available â log a warning so this gap is caught
+    // client.clearToken is not available — log a warning so this gap is caught
     // during development rather than silently leaving stale auth state.
     console.warn('[apiClient] client.clearToken is not a function; token state may be incomplete. Upgrade client.js to expose clearToken().')
     if (typeof client.setToken === 'function') {

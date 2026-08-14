@@ -804,7 +804,7 @@ export function buildProfileIntelligence(profile, profileSections) {
     // flagged by admin.code.missionAudit as "missing matcher inputs". Reads
     // stay best-effort (null when absent) so existing profiles don't regress.
     demographics: buildDemographicProfile(profile, sections),
-    financialFlags: new Set(hardshipFlags),  // shallow copy â prevents mutation aliasing
+    financialFlags: new Set(hardshipFlags),  // shallow copy – prevents mutation aliasing
   }
 
   // Infer needs

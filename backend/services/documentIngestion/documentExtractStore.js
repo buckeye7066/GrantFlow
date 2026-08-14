@@ -91,7 +91,7 @@ export async function ensureDocumentExtract(db, {
   // remapped to 'text' here (not rejected).
   sourceType = assertValidSourceType(sourceType)
   if (!fileHash) {
-    console.warn('[documentExtractStore] ensureDocumentExtract called without fileHash for document', documentId, 'â hash-reuse will be unavailable')
+    console.warn('[documentExtractStore] ensureDocumentExtract called without fileHash for document', documentId, '— hash-reuse will be unavailable')
   }
 
   const existing = await getDocumentExtract(db, documentId)

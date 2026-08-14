@@ -1221,10 +1221,31 @@ function profileNormStateList(profileNorm) {
     : (profileNorm?.state ? [normalizeState(profileNorm.state)] : [])
 }
 
+// A state NAME used as the name of a COUNTY/CITY/PARISH is a place inside
+// some OTHER state, not a claim about this one ("Delaware County, OH",
+// "Washington County, PA", "Indiana County, PA", "Ohio County, WV",
+// "Kansas City, MO" are all real places a bare substring test resolved to
+// DE/WA/IN/OH/KS). Mirrors the fix in relevanceFilterRules.js
+// (_extractStateNameFromTitle) — same bug, same shape, both forks of one
+// original bare-substring implementation.
+const _PLACE_QUALIFIER_AFTER_STATE_NAME =
+  /^\s*(county|counties|parish|borough|municipio|city|township|village|town|district)\b/i
+
 function _extractStateNameFromTitle(title) {
-  const lower = (title || '').toLowerCase()
+  const raw = String(title || '')
+  const lower = raw.toLowerCase()
   for (const [name, abbr] of _STATE_NAME_ENTRIES) {
-    if (lower.includes(name)) return abbr
+    let from = 0
+    for (;;) {
+      const at = lower.indexOf(name, from)
+      if (at === -1) break
+      const before = at === 0 ? '' : lower[at - 1]
+      const after = lower.slice(at + name.length)
+      const boundedLeft = at === 0 || !/[a-z0-9]/.test(before)
+      const boundedRight = after === '' || !/^[a-z0-9]/.test(after)
+      if (boundedLeft && boundedRight && !_PLACE_QUALIFIER_AFTER_STATE_NAME.test(after)) return abbr
+      from = at + 1
+    }
   }
   return null
 }

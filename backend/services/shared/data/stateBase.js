@@ -209,7 +209,7 @@ export function generateStatePrograms(stateCode) {
     for (const ep of reg.extraPrograms) {
       // Goal 1: skip extra programs that have no valid application URL at source
       if (!ep.url || typeof ep.url !== 'string' || !/^https?:\/\//i.test(ep.url.trim())) {
-        console.warn(`[stateBase] ${stateCode}: extraProgram '${ep.id || ep.name}' skipped â missing or invalid URL`);
+        console.warn(`[stateBase] ${stateCode}: extraProgram '${ep.id || ep.name}' skipped — missing or invalid URL`);
         continue;
       }
       benefits.push({
@@ -233,7 +233,7 @@ export function generateStatePrograms(stateCode) {
   if (droppedBenefits.length > 0) {
     // Goal 8: log suppressed entries so pipeline observers know why recall was reduced
     console.warn(
-      `[stateBase] ${stateCode}: ${droppedBenefits.length} baseline program(s) dropped â no valid application URL`,
+      `[stateBase] ${stateCode}: ${droppedBenefits.length} baseline program(s) dropped — no valid application URL`,
       droppedBenefits
     );
   }

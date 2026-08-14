@@ -26,7 +26,7 @@ export const DOMAIN_ENGINES = [
 
 export async function runAllDomainEngines(profile, options = {}) {
   if (!profile || typeof profile !== 'object') {
-    qualityLog.error('[domainEngines] runAllDomainEngines called without a valid profile â aborting crawl')
+    qualityLog.error('[domainEngines] runAllDomainEngines called without a valid profile — aborting crawl')
     return []
   }
   const results = []
@@ -35,7 +35,7 @@ export async function runAllDomainEngines(profile, options = {}) {
       const opps = await run(profile, options)
       for (const o of opps) {
         if (!o.application_url || typeof o.application_url !== 'string' || !o.application_url.startsWith('http')) {
-          console.warn(`[domainEngines] Engine "${id}" returned record without valid application_url â skipped:`, o.title ?? '(untitled)')
+          console.warn(`[domainEngines] Engine "${id}" returned record without valid application_url — skipped:`, o.title ?? '(untitled)')
           continue
         }
         results.push({ ...o, crawler_type: id, source: id })

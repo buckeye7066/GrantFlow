@@ -35,7 +35,7 @@ export function createTesseractProvider() {
             await worker.loadLanguage(lang)
             await worker.initialize(lang)
           } catch (langErr) {
-            warnings.push(`Language init failed for '${lang}': ${langErr?.message ?? langErr} â OCR quality may be degraded`)
+            warnings.push(`Language init failed for '${lang}': ${langErr?.message ?? langErr} — OCR quality may be degraded`)
           }
         }
 

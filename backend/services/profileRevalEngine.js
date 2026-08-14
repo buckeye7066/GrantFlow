@@ -63,7 +63,7 @@ export function decideRevalAction({
     action = 're-score'
   } else if (trigger === 'deep_profile_change' || trigger === 'profile_field_change') {
     // Deep profile changes (veteran, disability, housing, etc.) require at minimum
-    // a targeted crawl so new-category opportunities are discovered â not just rescored.
+    // a targeted crawl so new-category opportunities are discovered — not just rescored.
     action = 'targeted_reval'
   } else {
     if (fanout_pct <= FANOUT_LOW && affected_items <= MAX_ITEMS_LOW) action = 're-score'

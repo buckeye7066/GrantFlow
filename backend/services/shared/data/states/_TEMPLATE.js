@@ -198,7 +198,7 @@ export const STATE_BENEFITS = [
     description: '',
     url: '', // REQUIRED
     categories: ['utilities', 'housing', 'food', 'healthcare', 'cash_assistance', 'employment', 'mental_health', 'legal', 'transportation', 'childcare'],
-    // applicantTypes: who can use this â fill in for each concrete state file
+    // applicantTypes: who can use this — fill in for each concrete state file
     // e.g. ['individual', 'family', 'senior', 'veteran', 'disabled', 'student', 'nonprofit']
     applicantTypes: [], // REQUIRED: fill for each state
     eligibility: {}, // REQUIRED: fill for each state
@@ -223,7 +223,7 @@ export const COUNTY_RESOURCES = {
 const _validatedBenefits = STATE_BENEFITS.filter(entry => {
   if (!entry.url || entry.url.trim() === '') {
     console.warn(
-      `[STATE TEMPLATE] Skipping entry '${entry.id}' â url is empty. ` +
+      `[STATE TEMPLATE] Skipping entry '${entry.id}' — url is empty. ` +
       'Fill in a verified URL before activating this state file.'
     );
     return false;

@@ -426,7 +426,7 @@ export function filterEligibility(intel, opportunity) {
   }
 
   // ── Compute verdict ───────────────────────────────────────────────────────
-  // Hard failures are absolute blockers â any single one means ineligible.
+  // Hard failures are absolute blockers — any single one means ineligible.
   // Soft warnings reduce score but never block outright.
   let score
   let verdict
@@ -460,7 +460,7 @@ export function filterEligibility(intel, opportunity) {
 export function shouldHardReject(intel, opportunity) {
   const result = filterEligibility(intel, opportunity)
   // Hard-reject ONLY when the verdict is definitively ineligible.
-  // Do NOT add per-failure-code overrides here â that fragments decision
+  // Do NOT add per-failure-code overrides here — that fragments decision
   // authority away from computeMatchDecision() and over-suppresses
   // 'probably_ineligible' cases that the decision engine should still
   // evaluate (Goal 4, Goal 7).

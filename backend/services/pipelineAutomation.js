@@ -522,7 +522,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                                                   appliedStatus: grant.status,
                                                   confidence: null,
                                                   handoffRequired: true,
-                                                  handoffReason: 'Both OpenAI and Anthropic failed â manual review required.',
+                                                  handoffReason: 'Both OpenAI and Anthropic failed — manual review required.',
                                                   recommendedActions: ['review_ai_failure', 'manually_advance_status'],
                                                   aiSummary: `Automation failed (both providers): ${
                                                                   anthropicError instanceof Error ? anthropicError.message : String(anthropicError)
@@ -540,7 +540,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                                     appliedStatus: grant.status,
                                     confidence: null,
                                     handoffRequired: true,
-                                    handoffReason: 'No AI provider available â manual review required.',
+                                    handoffReason: 'No AI provider available — manual review required.',
                                     recommendedActions: ['configure_ai_provider', 'manually_advance_status'],
                                     aiSummary: `Automation failed (no provider): ${error instanceof Error ? error.message : String(error)}`,
                         })
@@ -561,7 +561,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                               appliedStatus: grant.status,
                               confidence: null,
                               handoffRequired: true,
-                              handoffReason: 'AI response could not be parsed as JSON â manual review required.',
+                              handoffReason: 'AI response could not be parsed as JSON — manual review required.',
                               recommendedActions: ['review_ai_response', 'manually_advance_status'],
                               aiSummary: `Automation parse failure: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
                     })

@@ -134,7 +134,7 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
     const existingStageIndex = pipeline.findIndex((s) => String(s?.label || '').toLowerCase() === label.toLowerCase())
     const now = new Date().toISOString().slice(0, 10)
     const confidenceNote = scholarship.lowConfidence
-      ? `Possible award amount (low confidence â no keyword context): ${scholarship.raw}`
+      ? `Possible award amount (low confidence — no keyword context): ${scholarship.raw}`
       : `Detected award amount: ${scholarship.raw}`
     const nextStage =
       existingStageIndex === -1

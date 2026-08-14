@@ -65,7 +65,7 @@ function isZeroResult(body) {
   if (body.included === 0) return true
   if (body.count === 0) return true
   // Only treat body.total as a zero-result signal when no array payload
-  // contradicts it â prevents false positives from paginated/crawl responses.
+  // contradicts it — prevents false positives from paginated/crawl responses.
   if (body.total === 0) {
     const arrayFields2 = ['opportunities', 'results', 'grants', 'matches', 'items']
     const hasItems = arrayFields2.some(f => Array.isArray(body[f]) && body[f].length > 0)

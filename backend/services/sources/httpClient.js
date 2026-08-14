@@ -121,9 +121,9 @@ export async function fetchWithRetry(url, options = {}) {
       if (error.response?.status >= 400 && error.response?.status < 500) {
         const status = error.response.status;
         if (status === 401 || status === 403) {
-          console.error(`[httpClient] Auth error ${status} for ${url} â credentials may need rotation, not retrying`);
+          console.error(`[httpClient] Auth error ${status} for ${url} — credentials may need rotation, not retrying`);
         } else if (status === 404 || status === 410) {
-          console.warn(`[httpClient] Resource not found (${status}) for ${url} â URL may be stale or dead`);
+          console.warn(`[httpClient] Resource not found (${status}) for ${url} — URL may be stale or dead`);
         } else {
           console.error(`[httpClient] Client error ${status} for ${url}, not retrying`);
         }

@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 export default function StatCard({ title, value, icon: Icon, color, link }) {
   const CardWrapper = link ? Link : 'div';
   const wrapperProps = link ? { to: link } : {};
-  const displayValue = typeof value === 'number' ? value.toLocaleString() : (value ?? 'â');
+  const displayValue = typeof value === 'number' ? value.toLocaleString() : (value ?? '—');
 
   return (
     <CardWrapper {...wrapperProps}>

@@ -132,7 +132,7 @@ export async function runSmartCrawler({
  * (SearXNG/Brave) whose hits come back as labeled leads
  * (result_source='web_search'). Pass variant='gift' to bias the web queries
  * toward donation / in-kind programs ("organizations that donate X").
- * profile_id is required â throws early if missing.
+ * profile_id is required — throws early if missing.
  * @param {Object} opts
  * @param {string} opts.profileId - Required. Profile ID for context/signals.
  * @param {string} opts.needText - Required. Human-readable need description.
@@ -174,7 +174,7 @@ export async function searchSpecificNeed({
 
 /**
  * Run a named real crawler (local_funding, student_grants, health_resources, etc.).
- * profile_id is required â throws early if missing (developer error).
+ * profile_id is required — throws early if missing (developer error).
  * @param {Object} opts
  * @param {string} opts.profileId - Required. Profile ID for context/signals.
  * @param {string} opts.crawlerType - Crawler type key.

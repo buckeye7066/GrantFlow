@@ -137,7 +137,7 @@ export function parsePaymentSheetExtract(markdown) {
       const cents = parseMoneyToCents(amountRaw)
       if (cents === null) {
         console.warn(
-          `[serviceCatalogExtractParser] skipping price tier '${label}' for '${currentService.title}' â could not parse: ${amountRaw}`
+          `[serviceCatalogExtractParser] skipping price tier '${label}' for '${currentService.title}' — could not parse: ${amountRaw}`
         )
       } else if (label === 'flat') {
         currentService.prices = {
