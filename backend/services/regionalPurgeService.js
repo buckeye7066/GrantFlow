@@ -29,6 +29,22 @@ import { createLogger } from '../utils/logger.js'
 import { pickRealUrl } from '../config/urlRules.js'
 const log = createLogger('regionalPurgeService')
 
+/**
+ * Run `fn` inside a transaction using the app-level shim's `withTransaction`
+ * (async-safe and atomic on BOTH the SQLite and Postgres shims -- see the
+ * long note on `runInTransaction` in backend/services/sources/ingestionService.js
+ * for why `db.transaction(fn)()` is unsafe here).
+ *
+ * FALLBACK: some callers (unit tests, the CLI script) hand in a RAW
+ * better-sqlite3 handle that has no `withTransaction`. Its statements are
+ * synchronous, so calling `fn(db)` directly is a harmless no-op wrapper --
+ * exactly the guarantee such a caller already had.
+ */
+async function runInTransaction(db, fn) {
+  if (typeof db?.withTransaction === 'function') return db.withTransaction(fn)
+  return fn(db)
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const SUPPRESSION_STATES = {
@@ -75,12 +91,12 @@ export function inferSourceTier(sourceUrl) {
  * @param {object} db  - DB wrapper (better-sqlite3 or pg-compatible)
  * @returns {string[]} - deduped, sorted array of uppercase 2-letter state codes
  */
-export function discoverActiveProfileStates(db) {
+export async function discoverActiveProfileStates(db) {
   const states = new Set()
 
   // 1. Direct profiles.state column
   try {
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT DISTINCT state
       FROM profiles
       WHERE state IS NOT NULL AND state != ''
@@ -92,7 +108,7 @@ export function discoverActiveProfileStates(db) {
 
   // 2. profile_sections basic_information
   try {
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT data
       FROM profile_sections
       WHERE section_key = 'basic_information'
@@ -114,7 +130,7 @@ export function discoverActiveProfileStates(db) {
 
   // 3. Organizations linked to profiles
   try {
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT DISTINCT o.state
       FROM organizations o
       JOIN profiles p ON p.organization_id = o.id
@@ -231,7 +247,7 @@ export async function runRegionalPurge(db, options = {}) {
 
   const targetStates = explicitStates?.length
     ? explicitStates.map((s) => String(s).trim().toUpperCase())
-    : discoverActiveProfileStates(db)
+    : await discoverActiveProfileStates(db)
 
   const summary = {
     statesProcessed: targetStates,
@@ -260,7 +276,7 @@ export async function runRegionalPurge(db, options = {}) {
 
   let opportunities
   try {
-    opportunities = db.prepare(`
+    opportunities = await db.prepare(`
       SELECT id, title, source_url, application_url, apply_url, url, evidence_url,
              description, status, deadline,
              suppression_state, last_seen_hash, last_seen_text,
@@ -278,7 +294,7 @@ export async function runRegionalPurge(db, options = {}) {
   }
 
   // Ensure the suppression event table exists
-  ensureSuppressionEventsTable(db)
+  await ensureSuppressionEventsTable(db)
 
   if (opportunities.length === 0) {
     // CodeQL js/log-injection (#614): targetStates is req.body.states on an
@@ -431,7 +447,7 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
       ` similarity=${changeResult.similarity?.toFixed(3) ?? 'n/a'}`
     )
   } else if (nextState !== previousState) {
-    persistSuppressionTransition(db, {
+    await persistSuppressionTransition(db, {
       opportunity: opp,
       previousState,
       nextState,
@@ -451,7 +467,7 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
-function persistSuppressionTransition(db, {
+async function persistSuppressionTransition(db, {
   opportunity, previousState, nextState, reason,
   changeResult, verificationResult, currentHash, currentText,
 }) {
@@ -465,66 +481,71 @@ function persistSuppressionTransition(db, {
   // Only hard-delete or deactivation workflows should touch is_active.
   const isActive = isPg ? true : 1
 
-  const transaction = db.transaction(() => {
-    db.prepare(`
-      UPDATE funding_opportunities
-      SET suppression_state    = ?,
-          suppression_reason   = ?,
-          suppression_metadata = ?,
-          last_seen_hash       = ?,
-          last_seen_text       = ?,
-          last_checked_at      = ?,
-          last_status          = ?,
-          last_deadline        = ?,
-          source_tier          = ?,
-          is_active            = ?,
-          updated_at           = ?
-      WHERE id = ?
-    `).run(
-      nextState,
-      reason,
-      JSON.stringify({
-        similarity: changeResult.similarity,
-        tokenDiffRatio: changeResult.tokenDiffRatio,
-        fieldChanges: changeResult.fieldChanges,
-        verificationLevel: verificationResult.verificationLevel,
-        statusHint: verificationResult.statusHint,
-      }),
-      currentHash,
-      currentText?.slice(0, 20000) || null, // cap stored text size
-      now,
-      opportunity.status || null,
-      opportunity.deadline || null,
-      inferSourceTier(opportunity.source_url),
-      isActive,
-      now,
-      opportunity.id,
-    )
-
-    const eventId = randomUUID()
-    db.prepare(`
-      INSERT INTO opportunity_suppression_events
-        (id, opportunity_id, previous_state, new_state, reason,
-         similarity, token_diff_ratio, verification_signals,
-         source_url, checked_at, actor, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'regional_purge', ?)
-    `).run(
-      eventId,
-      opportunity.id,
-      previousState,
-      nextState,
-      reason,
-      changeResult.similarity,
-      changeResult.tokenDiffRatio,
-      JSON.stringify(verificationResult.signals),
-      opportunity.source_url || null,
-      now,
-      JSON.stringify({ statusHint: verificationResult.statusHint }),
-    )
-  })
-
+  // dialect-divergence fix (the ingestionService/#946 class): `db.transaction(fn)()`
+  // is better-sqlite3's sync shape; on the Postgres shim `db.prepare().run()` is
+  // async, so a sync callback that never awaits its own statements lets the
+  // transaction resolve (and this function's try/catch "succeed") before the
+  // UPDATE/INSERT actually ran, and the un-awaited rejections were unreachable
+  // by this catch block. `withTransaction` with an async, tx-bound callback is
+  // async-safe (and atomic) on both shims.
   try {
-    transaction()
+    await runInTransaction(db, async (tx) => {
+      await tx.prepare(`
+        UPDATE funding_opportunities
+        SET suppression_state    = ?,
+            suppression_reason   = ?,
+            suppression_metadata = ?,
+            last_seen_hash       = ?,
+            last_seen_text       = ?,
+            last_checked_at      = ?,
+            last_status          = ?,
+            last_deadline        = ?,
+            source_tier          = ?,
+            is_active            = ?,
+            updated_at           = ?
+        WHERE id = ?
+      `).run(
+        nextState,
+        reason,
+        JSON.stringify({
+          similarity: changeResult.similarity,
+          tokenDiffRatio: changeResult.tokenDiffRatio,
+          fieldChanges: changeResult.fieldChanges,
+          verificationLevel: verificationResult.verificationLevel,
+          statusHint: verificationResult.statusHint,
+        }),
+        currentHash,
+        currentText?.slice(0, 20000) || null, // cap stored text size
+        now,
+        opportunity.status || null,
+        opportunity.deadline || null,
+        inferSourceTier(opportunity.source_url),
+        isActive,
+        now,
+        opportunity.id,
+      )
+
+      const eventId = randomUUID()
+      await tx.prepare(`
+        INSERT INTO opportunity_suppression_events
+          (id, opportunity_id, previous_state, new_state, reason,
+           similarity, token_diff_ratio, verification_signals,
+           source_url, checked_at, actor, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'regional_purge', ?)
+      `).run(
+        eventId,
+        opportunity.id,
+        previousState,
+        nextState,
+        reason,
+        changeResult.similarity,
+        changeResult.tokenDiffRatio,
+        JSON.stringify(verificationResult.signals),
+        opportunity.source_url || null,
+        now,
+        JSON.stringify({ statusHint: verificationResult.statusHint }),
+      )
+    })
   } catch (err) {
     log.error('[regionalPurge] Failed to persist suppression transition:', err?.message)
     throw err
@@ -560,10 +581,10 @@ function updateLastChecked(db, opportunity, currentHash, currentText) {
  * This is the "app-level" migration for environments that don't run
  * the SQL migration runner (e.g. test in-memory DBs).
  */
-export function ensureSuppressionSchema(db) {
+export async function ensureSuppressionSchema(db) {
   // New table
   try {
-    db.exec(`
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS opportunity_suppression_events (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         opportunity_id TEXT NOT NULL,
@@ -587,7 +608,7 @@ export function ensureSuppressionSchema(db) {
     `CREATE INDEX IF NOT EXISTS idx_suppression_events_checked ON opportunity_suppression_events(checked_at)`,
     `CREATE INDEX IF NOT EXISTS idx_suppression_events_state ON opportunity_suppression_events(new_state)`,
   ]) {
-    try { db.exec(ddl) } catch { /* ignore */ }
+    try { await db.exec(ddl) } catch { /* ignore */ }
   }
 
   // Columns on funding_opportunities
@@ -603,13 +624,13 @@ export function ensureSuppressionSchema(db) {
     `ALTER TABLE funding_opportunities ADD COLUMN source_tier TEXT DEFAULT 'unknown'`,
   ]
   for (const ddl of newCols) {
-    try { db.prepare(ddl).run() } catch { /* column already exists */ }
+    try { await db.prepare(ddl).run() } catch { /* column already exists */ }
   }
 }
 
-function ensureSuppressionEventsTable(db) {
+async function ensureSuppressionEventsTable(db) {
   try {
-    db.exec(`
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS opportunity_suppression_events (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         opportunity_id TEXT NOT NULL,
@@ -631,16 +652,16 @@ function ensureSuppressionEventsTable(db) {
 /**
  * Get a summary of recent purge events from the DB.
  */
-export function getPurgeSummary(db) {
+export async function getPurgeSummary(db) {
   try {
-    ensureSuppressionEventsTable(db)
-    const totals = db.prepare(`
+    await ensureSuppressionEventsTable(db)
+    const totals = await db.prepare(`
       SELECT new_state, COUNT(*) AS cnt
       FROM opportunity_suppression_events
       GROUP BY new_state
     `).all()
 
-    const recent = db.prepare(`
+    const recent = await db.prepare(`
       SELECT e.*, o.state as opp_state, o.title
       FROM opportunity_suppression_events e
       LEFT JOIN funding_opportunities o ON o.id = e.opportunity_id
@@ -657,9 +678,9 @@ export function getPurgeSummary(db) {
 /**
  * Get paginated suppression events.
  */
-export function getPurgeEvents(db, { page = 1, pageSize = 50, state } = {}) {
+export async function getPurgeEvents(db, { page = 1, pageSize = 50, state } = {}) {
   try {
-    ensureSuppressionEventsTable(db)
+    await ensureSuppressionEventsTable(db)
     const offset = (Math.max(1, page) - 1) * pageSize
 
     // Validate state is a clean 2-letter code before using it
@@ -668,7 +689,7 @@ export function getPurgeEvents(db, { page = 1, pageSize = 50, state } = {}) {
       : null
 
     if (validState) {
-      const rows = db.prepare(`
+      const rows = await db.prepare(`
         SELECT e.*, o.state as opp_state, o.title
         FROM opportunity_suppression_events e
         LEFT JOIN funding_opportunities o ON o.id = e.opportunity_id
@@ -677,7 +698,7 @@ export function getPurgeEvents(db, { page = 1, pageSize = 50, state } = {}) {
         LIMIT ? OFFSET ?
       `).all(validState, pageSize, offset)
 
-      const countRow = db.prepare(`
+      const countRow = await db.prepare(`
         SELECT COUNT(*) AS total
         FROM opportunity_suppression_events e
         LEFT JOIN funding_opportunities o ON o.id = e.opportunity_id
@@ -687,7 +708,7 @@ export function getPurgeEvents(db, { page = 1, pageSize = 50, state } = {}) {
       return { rows, total: Number(countRow?.total ?? 0), page, pageSize }
     }
 
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT e.*, o.state as opp_state, o.title
       FROM opportunity_suppression_events e
       LEFT JOIN funding_opportunities o ON o.id = e.opportunity_id
@@ -695,7 +716,7 @@ export function getPurgeEvents(db, { page = 1, pageSize = 50, state } = {}) {
       LIMIT ? OFFSET ?
     `).all(pageSize, offset)
 
-    const countRow = db.prepare(`
+    const countRow = await db.prepare(`
       SELECT COUNT(*) AS total
       FROM opportunity_suppression_events e
     `).get()

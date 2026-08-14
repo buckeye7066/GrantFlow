@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import Database from 'better-sqlite3'
 import { runRegionalPurge, ensureSuppressionSchema } from '../services/regionalPurgeService.js'
 
-function makeDb() {
+async function makeDb() {
   const db = new Database(':memory:')
   db.exec(`
     CREATE TABLE funding_opportunities (
@@ -40,7 +40,10 @@ function makeDb() {
       updated_at TEXT
     )
   `)
-  ensureSuppressionSchema(db)
+  // ensureSuppressionSchema is genuinely async (ALTER TABLE via await db.exec),
+  // so it MUST be awaited before any insert - a fire-and-forget call here
+  // races the schema migration against the test's own INSERTs.
+  await ensureSuppressionSchema(db)
   db.dialect = 'sqlite'
   return db
 }
@@ -84,8 +87,8 @@ function insertOpp(db, overrides = {}) {
 describe('regionalPurgeService — no_source_url is not a hard-suppress signal', () => {
   let db
 
-  beforeEach(() => {
-    db = makeDb()
+  beforeEach(async () => {
+    db = await makeDb()
   })
 
   it('verifies via application_url when source_url is missing, instead of assuming closed', async () => {

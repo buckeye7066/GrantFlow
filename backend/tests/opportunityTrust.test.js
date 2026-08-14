@@ -253,4 +253,26 @@ describe('assessOpportunityTrust — broken link handling (reality gate)', () =>
     expect(trust.downgrade).toBe(true)
     expect(trust.reasons).toContain('link_unverified')
   })
+
+  // Dialect divergence regression (2026-08-14): prod Postgres migration
+  // 0059_funding_opportunities_link_status_repair.sql declares the column
+  // DEFAULT 'unknown', while SQLite's schema.sql declares DEFAULT 'unverified'.
+  // A bare `linkStatus === 'unverified'` check matched only the SQLite/test
+  // default and silently missed every prod row defaulted to 'unknown' - no
+  // link_unverified reason, no downgrade. isUnverifiedLinkStatus() is the
+  // canonical helper (opportunityRealityGate.js) that treats both defaults
+  // (and NULL) as unverified; this test fails on the old bare comparison.
+  it('treats the Postgres default link_status of "unknown" the same as "unverified"', () => {
+    const trust = assessOpportunityTrust(baseOpp({ link_status: 'unknown' }))
+    expect(trust.display).toBe(true)
+    expect(trust.downgrade).toBe(true)
+    expect(trust.reasons).toContain('link_unverified')
+  })
+
+  it('treats a missing/NULL link_status the same as "unverified"', () => {
+    const trust = assessOpportunityTrust(baseOpp({ link_status: null }))
+    expect(trust.display).toBe(true)
+    expect(trust.downgrade).toBe(true)
+    expect(trust.reasons).toContain('link_unverified')
+  })
 })

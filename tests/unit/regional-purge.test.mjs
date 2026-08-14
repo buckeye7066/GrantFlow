@@ -45,6 +45,10 @@ function makeDb(seed = true) {
       description TEXT,
       source TEXT,
       source_url TEXT,
+      application_url TEXT,
+      apply_url TEXT,
+      url TEXT,
+      evidence_url TEXT,
       status TEXT,
       deadline TEXT,
       is_active INTEGER DEFAULT 1,
@@ -84,9 +88,9 @@ function makeDb(seed = true) {
     db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1', 'TN')`).run()
     db.prepare(`INSERT INTO profiles (id, state) VALUES ('p2', 'OH')`).run()
     db.prepare(`INSERT INTO funding_opportunities (id, title, state, source_url, description, status, is_active)
-      VALUES ('opp1', 'Test Grant TN', 'TN', 'http://example.com/opp1', 'Apply now for funding.', 'open', 1)`).run()
+      VALUES ('opp1', 'Test Grant TN', 'TN', 'https://grants.tn-testfixture.gov/opp1', 'Apply now for funding.', 'open', 1)`).run()
     db.prepare(`INSERT INTO funding_opportunities (id, title, state, source_url, description, status, is_active)
-      VALUES ('opp2', 'Test Grant OH', 'OH', 'http://example.com/opp2', 'Open applications available.', 'open', 1)`).run()
+      VALUES ('opp2', 'Test Grant OH', 'OH', 'https://grants.oh-testfixture.gov/opp2', 'Open applications available.', 'open', 1)`).run()
   }
 
   return db
@@ -222,43 +226,46 @@ test('purgeMaterialChange (B): same hash → no material change', () => {
 
 // ─── C) discoverActiveProfileStates ──────────────────────────────────────────
 
-test('discoverActiveProfileStates (C): discovers from profiles.state', () => {
+// discoverActiveProfileStates is async (dialect divergence fix: db.prepare().all()
+// is synchronous on the SQLite shim but ASYNC on the Postgres shim, so the
+// function now awaits its own queries and callers must await it too).
+test('discoverActiveProfileStates (C): discovers from profiles.state', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1', 'TN'), ('p2', 'OH')`).run()
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   assert.ok(states.includes('TN'), 'Should include TN')
   assert.ok(states.includes('OH'), 'Should include OH')
 })
 
-test('discoverActiveProfileStates (C): deduplicates states', () => {
+test('discoverActiveProfileStates (C): deduplicates states', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1','TN'),('p2','TN'),('p3','OH')`).run()
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   const tnCount = states.filter((s) => s === 'TN').length
   assert.equal(tnCount, 1, 'TN should appear only once')
 })
 
-test('discoverActiveProfileStates (C): excludes empty/invalid states', () => {
+test('discoverActiveProfileStates (C): excludes empty/invalid states', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1',''), ('p2', NULL), ('p3','INVALID'), ('p4', 'GA')`).run()
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   assert.ok(!states.includes(''), 'Empty string should be excluded')
   assert.ok(!states.includes('INVALID'), 'Non-2-letter values should be excluded')
   assert.ok(states.includes('GA'), 'Valid state GA should be included')
 })
 
-test('discoverActiveProfileStates (C): discovers state from profile_sections.basic_information', () => {
+test('discoverActiveProfileStates (C): discovers state from profile_sections.basic_information', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1', NULL)`).run()
   db.prepare(`INSERT INTO profile_sections (profile_id, section_key, data)
     VALUES ('p1', 'basic_information', ?)`).run(JSON.stringify({ state: 'FL' }))
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   assert.ok(states.includes('FL'), 'State from basic_information section should be included')
 })
 
-test('discoverActiveProfileStates (C): returns empty array when no profiles', () => {
+test('discoverActiveProfileStates (C): returns empty array when no profiles', async () => {
   const db = makeDb(false)
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   assert.deepEqual(states, [])
 })
 
@@ -315,7 +322,7 @@ test('regionalPurge (D): ambiguous change → watch (no verification)', async ()
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('px', 'GA')`).run()
   db.prepare(`INSERT INTO funding_opportunities (id, title, state, source_url, description, status, last_seen_text, is_active)
-    VALUES ('oppG', 'GA Grant', 'GA', 'http://example.com/ga',
+    VALUES ('oppG', 'GA Grant', 'GA', 'https://grants.ga-testfixture.gov/ga',
             'Completely different content that changes materially',
             'open',
             'Original content that is completely different to trigger diff',
@@ -343,7 +350,7 @@ test('regionalPurge (D): no suppression on trivial text changes', async () => {
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('py', 'NC')`).run()
   const stableText = 'Apply now for NC community grants assistance program.'
   db.prepare(`INSERT INTO funding_opportunities (id, title, state, source_url, description, status, last_seen_text, is_active)
-    VALUES ('oppNC', 'NC Grant', 'NC', 'http://example.com/nc', ?, 'open', ?, 1)`).run(
+    VALUES ('oppNC', 'NC Grant', 'NC', 'https://grants.nc-testfixture.gov/nc', ?, 'open', ?, 1)`).run(
     stableText + '  ',  // trivial whitespace change
     stableText,
   )
@@ -363,7 +370,7 @@ test('regionalPurge (D): suppression on status change + verified', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('pz', 'WA')`).run()
   db.prepare(`INSERT INTO funding_opportunities (id, title, state, source_url, description, status, last_status, is_active)
-    VALUES ('oppWA', 'WA Grant', 'WA', 'http://example.com/wa', 'Apply now.', 'closed', 'open', 1)`).run()
+    VALUES ('oppWA', 'WA Grant', 'WA', 'https://grants.wa-testfixture.gov/wa', 'Apply now.', 'closed', 'open', 1)`).run()
 
   // Verification returns explicit closed signal
   const fakeFetch = async () => ({
