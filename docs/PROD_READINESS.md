@@ -1,25 +1,40 @@
 # GrantFlow Production Readiness (Reality Report)
 
-**Last updated:** 2026-01-15
+**Investigation snapshot:** 2026-01-15 (see staleness note below — this page was not kept current).
 
-This is the production-readiness “reality report� for GrantFlow: what’s deployed, what’s broken, and what we verify before shipping changes.
+**Staleness note (added 2026-08-14, gf-phase2-batch-02 purpose-alignment pass):** the "Known
+Production Issues" section below documents a specific incident investigated on 2026-01-15 and
+was written in the present tense ("live") even though it was never updated after that date —
+this file WAS touched as recently as 2026-08-06 (env-example filename fix) without anyone
+correcting the stale incident content. Treat it as a historical snapshot, not current status.
+**[`ERROR_LEDGER.md`](ERROR_LEDGER.md)** is the actively-maintained incident tracker and is the
+authoritative source for whether E-001/E-002 are still open. A live spot-check run today
+(2026-08-14) confirmed `https://app.axiombiolabs.org/grantflow/api/health` currently returns
+`200` with a healthy JSON body (23,848 opportunities tracked, Postgres/Railway, "System is
+operating normally") — so at minimum the `app.axiombiolabs.org` path described as working below
+is still working. The `www.axiombiolabs.org` 404 claim below was **not** independently
+re-verified in this pass (an automated fetch of that host returned an ambiguous bundled-SPA
+response, not a clean signal either way) — do not treat it as confirmed fixed or still broken
+without checking `ERROR_LEDGER.md` or re-probing directly.
+
+This is the production-readiness "reality report" for GrantFlow: what's deployed, what's broken, and what we verify before shipping changes.
 
 ## Current Deployment Topology (observed)
 
 - **Frontend SPA**: Vite build hosted on **Vercel**, intended to be served from **`/grantflow`**
 - **Backend API**: Node/Express hosted on **Railway**
 
-## Known Production Issues (live)
+## Known Production Issues (as investigated 2026-01-15 — current status is in ERROR_LEDGER.md)
 
-See **[`ERROR_LEDGER.md`](ERROR_LEDGER.md)**.
+See **[`ERROR_LEDGER.md`](ERROR_LEDGER.md)** for current status.
 
-### Key finding (2026-01-15)
+### Key finding (2026-01-15, historical)
 
 - `app.axiombiolabs.org/grantflow/*` works (login + API health).
-- `www.axiombiolabs.org/grantflow/login` returns a static “File not found (404 error)� page.
+- `www.axiombiolabs.org/grantflow/login` returns a static "File not found (404 error)" page.
 - `www.axiombiolabs.org/grantflow/api/health` also 404s.
 
-This strongly suggests a **domain routing / rewrites** problem for `www.axiombiolabs.org` (not an SPA/router code bug).
+This strongly suggested a **domain routing / rewrites** problem for `www.axiombiolabs.org` (not an SPA/router code bug) as of the investigation date above.
 
 ## Baseline Quality Gate (local)
 
@@ -58,7 +73,7 @@ This runs: env inventory → lint → typecheck → unit → build → start bac
 
 ## What still needs log access to complete Phase 0.4
 
-To fully complete the live “Error Ledger� phase we need:
+To fully complete the live “Error Ledger” phase we need:
 
 - Vercel logs (prod) for `www.axiombiolabs.org` requests and rewrite behavior
 - Railway logs for `/api/*` around the same times

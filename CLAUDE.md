@@ -71,6 +71,31 @@ npm run opps:ensure-national-minimum  # Ensure national opportunity floor
 
 ## Portal automation chain (2026-08-03) — REQUIRED READING before touching Hamilton portal work
 
+**SUPERSEDED IN PART by the 2026-08-06 `bfeae548` "harden GrantFlow controlled
+beta release" commit (added, gf-phase2-batch-02 purpose-alignment pass,
+2026-08-14):** the narrative below (and the entries after it) describes live
+Hamilton Playwright automation reaching real funder/portal domains
+(scholarships.com, `<school>.scholarships.ngwebsolutions.com`,
+`*.academicworks.com`, etc.) as of 2026-08-01→2026-08-03. As of the 2026-08-06
+hardening commit, `backend/services/hamilton/controlledBetaBrowserPolicy.js`
+enforces a hard technical boundary: every Hamilton browser context is confined
+to a single reserved `https://hamilton-submit-fixture.invalid` origin (a
+Playwright route-level egress guard aborts any other request), and
+`backend/services/hamilton/browserLaunch.js` consults it before launch. No
+environment allowlist, saved credential, or profile URL can widen this. That
+means Hamilton currently CANNOT open a real portal site in a server browser at
+all — the real-domain bot-wall/session/portal-fill mechanics documented below
+are current explanations of the ENGINE's decision logic (still real, still
+tested), but the "reaches a real domain" premise is stale until a reviewed
+real-portal adapter ships. **`docs/HAMILTON_AUTOMATION_AGENT.md` reflects the
+current (post-hardening) boundary and is the authority for what Hamilton can
+reach today** — read it, not just this section, before assuming any of the
+scenarios below still execute against a live funder site. This repo's own
+`git log` shows CLAUDE.md was NOT updated with this fact when the hardening
+commit landed (it only got a cosmetic real-name→placeholder rename that same
+commit), so treat the "live" framing below as historical unless corroborated
+against `controlledBetaBrowserPolicy.js`.
+
 Five merged + deploy-verified PRs (#1103-#1108) changed how portals sync, how
 proposals are drafted, and what auto-submit means. Every agent working in this
 repo MUST know these; the old semantics appear in older comments/tests — the
