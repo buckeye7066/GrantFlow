@@ -14,6 +14,7 @@ function formatRelativeTime(dateStr) {
   if (!dateStr) return ''
   const now = new Date()
   const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return ''
   const diffMs = now - date
   const diffMin = Math.floor(diffMs / 60000)
   if (diffMin < 1) return 'just now'
@@ -28,7 +29,7 @@ function resolveNotificationTarget(notification) {
   const data = notification?.data || {}
   const type = String(notification?.type || '')
   const explicitRoute = data.route_to_resolve || data.add_credential_link || data.route_to_admin_task
-  if (typeof explicitRoute === 'string' && explicitRoute.startsWith('/')) {
+  if (typeof explicitRoute === 'string' && explicitRoute.startsWith('/') && !explicitRoute.startsWith('//')) {
     return explicitRoute
   }
   const profileId = data.profile_id || data.profileId || notification?.profile_id || null
@@ -67,7 +68,7 @@ function resolveNotificationTarget(notification) {
   }
 
   if (/hamilton_/.test(type)) {
-    return createPageUrl('Pipeline', { profile_id: profileId })
+    return createPageUrl('Pipeline', { id: profileId })
   }
 
   return null

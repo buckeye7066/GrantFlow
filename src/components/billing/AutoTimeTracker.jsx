@@ -73,6 +73,8 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   const lastSaveRef = useRef(null);
   const intervalRef = useRef(null);
   const activityCheckRef = useRef(null);
+  const elapsedSecondsRef = useRef(0);
+  const handleAutoSaveRef = useRef(null);
   
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -161,7 +163,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       raw_minutes: Math.round(rawMinutes),
       rounded_minutes: roundedMinutes,
       note: note || `Work on ${organizationName}`,
-      activity_hints: [window.location.pathname],
+      activity_hints: [typeof window !== 'undefined' ? window.location.pathname : ''],
       source: 'auto',
       invoiced: false,
     };
@@ -195,18 +197,32 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       lastActivityRef.current = Date.now();
     };
 
-    window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('keydown', handleActivity);
-    window.addEventListener('click', handleActivity);
-    window.addEventListener('scroll', handleActivity);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('mousemove', handleActivity);
+      window.addEventListener('keydown', handleActivity);
+      window.addEventListener('click', handleActivity);
+      window.addEventListener('scroll', handleActivity);
+    }
 
     return () => {
-      window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('keydown', handleActivity);
-      window.removeEventListener('click', handleActivity);
-      window.removeEventListener('scroll', handleActivity);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('mousemove', handleActivity);
+        window.removeEventListener('keydown', handleActivity);
+        window.removeEventListener('click', handleActivity);
+        window.removeEventListener('scroll', handleActivity);
+      }
     };
   }, []);
+
+  // Keep refs in sync so the interval callback reads fresh values without
+  // re-creating the interval every second.
+  useEffect(() => {
+    elapsedSecondsRef.current = elapsedSeconds;
+  }, [elapsedSeconds]);
+
+  useEffect(() => {
+    handleAutoSaveRef.current = handleAutoSave;
+  }, [handleAutoSave]);
 
   // Check for idle and auto-save
   useEffect(() => {
@@ -236,8 +252,8 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       // Check for auto-save interval
       if (lastSaveRef.current) {
         const timeSinceLastSave = now - lastSaveRef.current;
-        if (timeSinceLastSave >= SAVE_INTERVAL && elapsedSeconds > 60) {
-          handleAutoSave();
+        if (timeSinceLastSave >= SAVE_INTERVAL && elapsedSecondsRef.current > 60) {
+          handleAutoSaveRef.current();
         }
       }
     }, ACTIVITY_CHECK_INTERVAL);
@@ -247,7 +263,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
         clearInterval(activityCheckRef.current);
       }
     };
-  }, [isTracking, isPaused, elapsedSeconds]);
+  }, [isTracking, isPaused, toast]);
 
   // Update elapsed time
   useEffect(() => {
@@ -313,7 +329,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       raw_minutes: Math.round(rawMinutes),
       rounded_minutes: roundedMinutes,
       note: note || `Work on ${organizationName}`,
-      activity_hints: [window.location.pathname],
+      activity_hints: [typeof window !== 'undefined' ? window.location.pathname : ''],
       source: 'auto',
       invoiced: false,
     };

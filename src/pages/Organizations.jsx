@@ -115,7 +115,7 @@ const matchesSearch =
       })
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
+      queryClient.invalidateQueries({ queryKey: ['profiles', isAdmin] })
       useAuthStore.getState().refreshProfiles({ reason: 'profile-created', force: true })
       toast({
         title: "Profile created",
@@ -145,7 +145,7 @@ const matchesSearch =
 
       const profileId = result?.profile_id ?? null
 
-      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
+      queryClient.invalidateQueries({ queryKey: ['profiles', isAdmin] })
       useAuthStore.getState().refreshProfiles({ reason: 'profile-created-comprehensive', force: true })
 
       toast({
@@ -210,7 +210,7 @@ const matchesSearch =
         }
       }
       
-      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
+      queryClient.invalidateQueries({ queryKey: ['profiles', isAdmin] })
       useAuthStore.getState().refreshProfiles({ reason: 'profile-created-quick', force: true })
 
       toast({
@@ -256,7 +256,7 @@ const matchesSearch =
         throw new Error('Document upload succeeded but no profile ID was returned')
       }
       
-      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
+      queryClient.invalidateQueries({ queryKey: ['profiles', isAdmin] })
       useAuthStore.getState().refreshProfiles({ reason: 'profile-created-upload', force: true })
 
       toast({

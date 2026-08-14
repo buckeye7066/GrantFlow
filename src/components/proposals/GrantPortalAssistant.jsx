@@ -46,12 +46,20 @@ export default function GrantPortalAssistant({ open, onClose, grant, organizatio
   const portalUrl = grant.url;
   const hasPortalUrl = portalUrl && portalUrl.startsWith('http');
 
-  const handleCopyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
-    toast({
-      title: "Copied!",
-      description: "Text copied to clipboard"
-    });
+  const handleCopyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: "Copied!",
+        description: "Text copied to clipboard"
+      });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Copy Failed",
+        description: e.message
+      });
+    }
   };
 
   const handleAskAI = async () => {
@@ -250,7 +258,7 @@ INSTRUCTIONS:
                     src={portalUrl}
                     className="w-full h-full border-0"
                     title="Application Portal"
-                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
+                    sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
                     onError={() => setIframeError(true)}
                   />
                 ) : (

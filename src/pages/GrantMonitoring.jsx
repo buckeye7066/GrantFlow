@@ -490,7 +490,7 @@ try {
                 </div>
                 <div>
                   <Label className="text-sm text-slate-500">Occurred</Label>
-                  <p className="text-sm">{format(new Date(selectedEvent.created_date), 'PPpp')}</p>
+                  <p className="text-sm">{(() => { const created = new Date(selectedEvent.created_date); return isNaN(created.getTime()) ? 'Unknown time' : format(created, 'PPpp'); })()}</p>
                 </div>
                 {selectedEvent.acknowledged && selectedEvent.acknowledged_at && (
                   <div>

@@ -200,7 +200,7 @@ export default function AdminHamiltonHardStops() {
                   <div className="font-medium text-slate-900">{b.blocker_title || b.blocker_type}</div>
                   <div className="text-xs text-slate-500">{b.blocker_message || ''}</div>
                   <span className={`mt-1 inline-block text-[10px] px-2 py-0.5 rounded border ${severityClass(b.severity)}`}>
-                    {b.blocker_type.replace(/_/g, ' ')}
+                    {(b.blocker_type ?? '').replace(/_/g, ' ')}
                   </span>
                   {/* Inline fix: for a missing/ambiguous field, type the value here
                       and it's saved back to the profile + Hamilton resumes. */}
