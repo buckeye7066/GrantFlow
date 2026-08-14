@@ -39,7 +39,7 @@ function NeedChip({ need, onSearch, disabled }) {
       size="sm"
       disabled={disabled}
       className="h-auto py-1.5 px-3 text-xs text-left whitespace-normal"
-      onClick={() => onSearch(need.search_subject, need)}
+      onClick={() => onSearch(need.search_subject ?? need.label, need)}
       title={need.description || need.label}
     >
       <Search className="h-3 w-3 mr-1.5 shrink-0" aria-hidden="true" />

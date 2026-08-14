@@ -20,8 +20,8 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
         throw new Error('Invalid organizationId provided.');
       }
       // Pull recent real project activity, then let the LLM draft invoice lines from it.
-      const grants = await client.entities.Grant.list(`-updated_date`, 10, { organization_id: organizationId });
-      const docs = await client.entities.Document.list(`-updated_date`, 10, { organization_id: organizationId });
+      const grants = await client.entities.Grant.list(`-updated_date`, 10, { organization_id: organizationId, project_id: projectId });
+      const docs = await client.entities.Document.list(`-updated_date`, 10, { organization_id: organizationId, project_id: projectId });
       return { grants, docs };
     },
     enabled: !!organizationId,
@@ -132,7 +132,7 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
   };
   
   const handleRemoveItem = (index) => {
-    setProposedItems(proposedItems.filter((_, i) => i !== index));
+    setProposedItems(prev => prev.filter((_, i) => i !== index));
   };
 
   return (

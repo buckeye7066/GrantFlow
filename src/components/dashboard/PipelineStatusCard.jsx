@@ -55,7 +55,7 @@ function grantValue(grant) {
 
 export default function PipelineStatusCard({ stats = {}, isLoading, hasError = false }) {
   const user = useAuthStore((state) => state.user)
-  const isAdmin = hasFullAdminWorkspace(user)
+  const isAdmin = user ? hasFullAdminWorkspace(user) : false
   const grantsQuery = useQuery({
     queryKey: ['grants'],
     queryFn: async () => {
