@@ -340,7 +340,7 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
   // ── Step 2: verify change via primary source ─────────────────────────────
   let verificationResult = { verified: false, signals: [], verificationLevel: 'none', statusHint: 'unknown' }
   if (!sourceUrl) {
-    // GOAL 1/3: No application URL â treat as suppression candidate immediately.
+    // GOAL 1/3: No application URL — treat as suppression candidate immediately.
     // Store a specific reason so the audit trail is clear (Goal 8).
     verificationResult = {
       verified: true,
@@ -376,7 +376,7 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
     nextState = SUPPRESSION_STATES.SUPPRESSED
     reason = changeResult.reason || 'text_diff_verified_closed'
   } else if (isMaterialAndVerified && !isVerifiedClosed) {
-    // Material change detected but source does NOT confirm closed â hold at WATCH.
+    // Material change detected but source does NOT confirm closed — hold at WATCH.
     nextState = SUPPRESSION_STATES.WATCH
     reason = 'material_change_unconfirmed_closed'
   } else if (changeResult.changed && !verificationResult.verified) {
@@ -419,7 +419,7 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
       currentText,
     })
   } else {
-    // State unchanged â update heartbeat columns only.
+    // State unchanged — update heartbeat columns only.
     updateLastChecked(db, opp, currentHash, currentText)
   }
 

@@ -3,7 +3,7 @@ export function evaluateExclusion(opportunity, rules) {
 
   for (const rule of (rules || [])) {
     if (!rule.pattern) {
-  console.warn(`[exclusionEngine] Rule ${rule.rule_id} has no pattern â skipping`)
+  console.warn(`[exclusionEngine] Rule ${rule.rule_id} has no pattern — skipping`)
   continue
 }
 let regex

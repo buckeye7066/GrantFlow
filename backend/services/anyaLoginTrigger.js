@@ -137,7 +137,7 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
           db,
           guidanceSessionId,
           'assistant',
-          `Welcome! To find funding opportunities for you, I need a little more information. Please complete your profile â including your location, household needs, and applicant type â so I can start searching. Go to Profile to get started.`
+          `Welcome! To find funding opportunities for you, I need a little more information. Please complete your profile — including your location, household needs, and applicant type — so I can start searching. Go to Profile to get started.`
         )
         return { sessionId: guidanceSessionId, jobIds: {}, profileId: null }
       } catch (guidanceErr) {
