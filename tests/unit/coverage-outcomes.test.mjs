@@ -42,13 +42,23 @@ test('deriveCoverageOutcomes: federal candidate group maps to multiple SOURCE_ID
   }
 })
 
-test('deriveCoverageOutcomes: candidate count = 0 does NOT mark the group as queried', () => {
+// This assertion used to say the opposite (`!sba` / "must not produce a
+// queried outcome"). That encoded the exact bug deriveCoverageOutcomes' own
+// header now documents: crawlerManager.loadCandidates writes `business = 0`
+// INSIDE the branch it executed, so a present key with count 0 means the
+// lane ran and found nothing, not that it never ran. Collapsing that into
+// "not queried" is what made real coverage gaps invisible. Fixed alongside
+// the source change (gf-batch-00); this test now pins the corrected contract.
+test('deriveCoverageOutcomes: candidate count = 0 (key present) marks the group queried, with zero found', () => {
   const outcomes = deriveCoverageOutcomes({
     coveragePlan: { sources_planned: [SOURCE_IDS.SBA_GRANTS] },
     runResult: makeRunResult({ business: 0, federal: 5 }),
   })
   const sba = outcomes.find((o) => o.source_id === SOURCE_IDS.SBA_GRANTS)
-  assert.ok(!sba, 'business=0 must not produce a queried outcome for SBA')
+  assert.ok(sba, 'business=0 (lane ran, found nothing) must still produce an outcome for SBA')
+  assert.equal(sba.queried, true)
+  assert.equal(sba.queried_evidence, 'run')
+  assert.equal(sba.found, 0)
 })
 
 test('deriveCoverageOutcomes: opportunities with explicit source field tally as found per-id', () => {
