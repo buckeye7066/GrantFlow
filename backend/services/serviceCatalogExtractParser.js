@@ -196,7 +196,8 @@ export function parsePaymentSheetExtract(markdown) {
 
   // Terms: store everything from "IMPORTANT NOTE" onward (human-readable, canonical)
   const idx = text.indexOf('## IMPORTANT NOTE')
-  const fullText = idx >= 0 ? text.slice(idx).trim() : text.trim()
+  const rawFullText = idx >= 0 ? text.slice(idx).trim() : text.trim()
+  const { redacted: fullText, warnings: paymentMethodWarnings } = redactPlaceholderPaymentMethods(rawFullText)
   const policySnippet = [
     'Milestone-based payments: 40% kickoff, 40% draft delivery, 20% submission/handoff.',
     'Standard terms: Net 15. Late fees: 1.5% monthly interest.',
@@ -210,8 +211,33 @@ export function parsePaymentSheetExtract(markdown) {
       version,
       policy_snippet: policySnippet,
       full_text: fullText,
+      payment_method_warnings: paymentMethodWarnings,
     },
   }
+}
+
+// A placeholder payment handle left in the extract (e.g. "$example-payment-handle")
+// must never be served verbatim to a client as a real payment instruction. This
+// is a display-text guard, not a Stripe checkout guard - chargeResolver.js and
+// routes/stripe.js never read terms.full_text, so no live charge is affected;
+// this exists because backend/routes/services.js GET /api/services/terms
+// (ensureAuth-gated) returns full_text verbatim to any logged-in client.
+const PLACEHOLDER_HANDLE_RE = /\$\s*(example|your|replace[-_]?me|placeholder|todo|xxx+|handle[-_]?here|sample)[a-z0-9-]*/i
+
+function redactPlaceholderPaymentMethods(text) {
+  const warnings = []
+  const redacted = text.replace(
+    /^(\s*-\s*(CashApp|Venmo|Zelle|PayPal)\s*:\s*)(.+)$/gim,
+    (line, prefix, method, value) => {
+      if (!PLACEHOLDER_HANDLE_RE.test(value)) return line
+      warnings.push({ method, placeholder_value: value.trim() })
+      qualityLog.error(
+        `[serviceCatalogExtractParser] placeholder payment handle for ${method}: "${value.trim()}" redacted from client-facing terms text.`,
+      )
+      return `${prefix}[payment handle not yet configured — contact GrantFlow]`
+    },
+  )
+  return { redacted, warnings }
 }
 
 export function loadPaymentSheetExtractFromDisk() {
