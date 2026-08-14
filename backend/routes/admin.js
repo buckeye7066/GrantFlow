@@ -5361,7 +5361,7 @@ router.post('/purge/regional/run', async (req, res) => {
 router.get('/purge/regional/summary', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
   try {
-    const summary = getPurgeSummary(req.db)
+    const summary = await getPurgeSummary(req.db)
     res.json({ ok: true, ...summary })
   } catch (err) {
     routeLogger.error('[admin/purge/regional/summary] Error:', err)
@@ -5384,7 +5384,7 @@ router.get('/purge/regional/events', async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1)
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
     const state = req.query.state ? String(req.query.state).toUpperCase() : undefined
-    const result = getPurgeEvents(req.db, { page, pageSize, state })
+    const result = await getPurgeEvents(req.db, { page, pageSize, state })
     res.json({ ok: true, ...result })
   } catch (err) {
     routeLogger.error('[admin/purge/regional/events] Error:', err)

@@ -64,7 +64,7 @@ async function main() {
 
   // Ensure suppression schema is present
   try {
-    ensureSuppressionSchema(db)
+    await ensureSuppressionSchema(db)
   } catch (err) {
     console.error('[regional-purge] FATAL: Failed to initialise suppression schema:', err?.message)
     process.exit(1)
@@ -74,7 +74,7 @@ async function main() {
   let targetStates = states
   if (!targetStates || targetStates.length === 0) {
     try {
-      targetStates = discoverActiveProfileStates(db)
+      targetStates = await discoverActiveProfileStates(db)
     } catch (err) {
       console.error('[regional-purge] FATAL: Failed to discover states:', err?.message)
       process.exit(1)

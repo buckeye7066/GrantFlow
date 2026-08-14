@@ -222,43 +222,46 @@ test('purgeMaterialChange (B): same hash → no material change', () => {
 
 // ─── C) discoverActiveProfileStates ──────────────────────────────────────────
 
-test('discoverActiveProfileStates (C): discovers from profiles.state', () => {
+// discoverActiveProfileStates is async (dialect divergence fix: db.prepare().all()
+// is synchronous on the SQLite shim but ASYNC on the Postgres shim, so the
+// function now awaits its own queries and callers must await it too).
+test('discoverActiveProfileStates (C): discovers from profiles.state', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1', 'TN'), ('p2', 'OH')`).run()
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   assert.ok(states.includes('TN'), 'Should include TN')
   assert.ok(states.includes('OH'), 'Should include OH')
 })
 
-test('discoverActiveProfileStates (C): deduplicates states', () => {
+test('discoverActiveProfileStates (C): deduplicates states', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1','TN'),('p2','TN'),('p3','OH')`).run()
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   const tnCount = states.filter((s) => s === 'TN').length
   assert.equal(tnCount, 1, 'TN should appear only once')
 })
 
-test('discoverActiveProfileStates (C): excludes empty/invalid states', () => {
+test('discoverActiveProfileStates (C): excludes empty/invalid states', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1',''), ('p2', NULL), ('p3','INVALID'), ('p4', 'GA')`).run()
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   assert.ok(!states.includes(''), 'Empty string should be excluded')
   assert.ok(!states.includes('INVALID'), 'Non-2-letter values should be excluded')
   assert.ok(states.includes('GA'), 'Valid state GA should be included')
 })
 
-test('discoverActiveProfileStates (C): discovers state from profile_sections.basic_information', () => {
+test('discoverActiveProfileStates (C): discovers state from profile_sections.basic_information', async () => {
   const db = makeDb(false)
   db.prepare(`INSERT INTO profiles (id, state) VALUES ('p1', NULL)`).run()
   db.prepare(`INSERT INTO profile_sections (profile_id, section_key, data)
     VALUES ('p1', 'basic_information', ?)`).run(JSON.stringify({ state: 'FL' }))
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   assert.ok(states.includes('FL'), 'State from basic_information section should be included')
 })
 
-test('discoverActiveProfileStates (C): returns empty array when no profiles', () => {
+test('discoverActiveProfileStates (C): returns empty array when no profiles', async () => {
   const db = makeDb(false)
-  const states = discoverActiveProfileStates(db)
+  const states = await discoverActiveProfileStates(db)
   assert.deepEqual(states, [])
 })
 
