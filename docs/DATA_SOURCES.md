@@ -2,6 +2,12 @@
 
 This document describes all real data sources used by the GrantFlow crawler system. All sources are legitimate, production-ready APIs and services that provide actual funding opportunity data.
 
+> **Authoritative registry:** the live per-source list (access method, trust
+> tier, applicant/need/geography gating) is `backend/crawler-os/sourceRegistry.js`,
+> as documented in [`docs/CRAWLERS.md`](./CRAWLERS.md). This document is a
+> narrative overview and can drift from the registry (see the NIH note below,
+> corrected 2026-08-14); when the two disagree, the registry wins.
+
 ## Table of Contents
 1. [Federal Sources](#federal-sources)
 2. [State Sources](#state-sources)
@@ -62,17 +68,23 @@ This document describes all real data sources used by the GrantFlow crawler syst
 
 ### 2. NIH Grants
 
-**Endpoint:** `https://grants.nih.gov/grants/guide/search_results.cfm`
+**Endpoint (current, `nih_guide` in `sourceRegistry.js`):**
+`https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml`
 
-**Access Method:** Web scraping (HTML parsing)
+**Access Method:** XML feed (`crawler_method: 'html'`/`feed_url` in the
+registry, but the URL fetched is the NIH Guide funding-opportunities RSS/XML
+feed, not HTML page scraping). The `.grant-listing`/`.grant-title` CSS
+selectors and the `search_results.cfm` HTML endpoint previously documented
+here described an earlier scraping approach and are no longer what the
+crawler fetches — corrected 2026-08-14 against the live registry entry.
 
-**Rate Limits:** 
+**Rate Limits:**
 - Recommended: 1 request per 2 seconds
 - Be respectful of NIH servers
 
 **Throttling Strategy:**
-- 2000ms delay between requests
-- Cache for 24 hours
+- Registry `refresh_frequency_days: 7` (weekly refetch of the feed)
+- Cache for 24 hours between refreshes
 - Process during off-peak hours
 
 **Data Fields Extracted:**
@@ -87,13 +99,6 @@ This document describes all real data sources used by the GrantFlow crawler syst
 - `source`: "nih.gov"
 - `source_id`: Grant number
 - `source_url`: Full URL to announcement
-
-**Selectors (as of 2026-01-09):**
-- `.grant-listing` - Each grant item
-- `.grant-title` - Title
-- `.grant-number` - Number
-- `.grant-description` - Description
-- `.deadline` - Deadline date
 
 **Documentation:** https://grants.nih.gov/grants/guide/
 
