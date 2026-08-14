@@ -115,7 +115,12 @@ const matchesSearch =
       })
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['profiles', isAdmin] })
+      // Invalidate the WHOLE 'profiles' family by PREFIX. React Query v5 matches
+      // query keys by prefix, so ['profiles'] covers this page's key AND the
+      // other pages' ('profiles', isAdmin / 'profiles','summary',...). Narrowing
+      // this to one exact key leaves the other views stale after a mutation, and
+      // dropping refetchType:'all' stops inactive queries from refetching.
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
       useAuthStore.getState().refreshProfiles({ reason: 'profile-created', force: true })
       toast({
         title: "Profile created",
@@ -145,7 +150,7 @@ const matchesSearch =
 
       const profileId = result?.profile_id ?? null
 
-      queryClient.invalidateQueries({ queryKey: ['profiles', isAdmin] })
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
       useAuthStore.getState().refreshProfiles({ reason: 'profile-created-comprehensive', force: true })
 
       toast({
@@ -210,7 +215,7 @@ const matchesSearch =
         }
       }
       
-      queryClient.invalidateQueries({ queryKey: ['profiles', isAdmin] })
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
       useAuthStore.getState().refreshProfiles({ reason: 'profile-created-quick', force: true })
 
       toast({
@@ -256,7 +261,7 @@ const matchesSearch =
         throw new Error('Document upload succeeded but no profile ID was returned')
       }
       
-      queryClient.invalidateQueries({ queryKey: ['profiles', isAdmin] })
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
       useAuthStore.getState().refreshProfiles({ reason: 'profile-created-upload', force: true })
 
       toast({

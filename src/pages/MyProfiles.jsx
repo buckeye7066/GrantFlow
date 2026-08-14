@@ -83,7 +83,12 @@ export default function MyProfiles() {
         title: "Profile deleted",
         description: "The profile has been successfully removed.",
       });
-      queryClient.invalidateQueries({ queryKey: ['profiles', 'summary', viewMode, includeDeleted], refetchType: 'all' });
+      // Invalidate the WHOLE 'profiles' family by PREFIX. React Query v5 matches
+      // query keys by prefix, so ['profiles'] covers this page's key AND the
+      // other pages' ('profiles', isAdmin / 'profiles','summary',...). Narrowing
+      // this to one exact key leaves the other views stale after a mutation, and
+      // dropping refetchType:'all' stops inactive queries from refetching.
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
       useAuthStore.getState().refreshProfiles({ reason: 'profile-deleted', force: true });
       setProfileToDelete(null);
     },
@@ -103,7 +108,7 @@ export default function MyProfiles() {
         title: "Profile hard-deleted",
         description: "The profile was permanently removed and tombstoned so it cannot return.",
       });
-      queryClient.invalidateQueries({ queryKey: ['profiles', 'summary', viewMode, includeDeleted], refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
       if (vars?.id) queryClient.invalidateQueries({ queryKey: ['profile', vars.id] });
       useAuthStore.getState().refreshProfiles({ reason: 'profile-hard-deleted', force: true });
       setProfileToHardDelete(null);
@@ -128,7 +133,7 @@ export default function MyProfiles() {
         title: "Profile restored",
         description: "The profile was restored and should now appear in the main list.",
       })
-      queryClient.invalidateQueries({ queryKey: ['profiles', 'summary', viewMode, includeDeleted], refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
       useAuthStore.getState().refreshProfiles({ reason: 'profile-restored', force: true });
     },
     onError: (error) => {
