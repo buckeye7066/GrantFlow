@@ -9,6 +9,7 @@ import { apiFetch } from '@/api/client'
 async function post(path, body) {
   return apiFetch(path, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   })
 }

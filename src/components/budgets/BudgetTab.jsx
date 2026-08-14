@@ -16,7 +16,7 @@ import AddExpenseForm from "./AddExpenseForm";
 const BUDGET_CATEGORIES = ["personnel", "fringe", "travel", "equipment", "supplies", "contractual", "construction", "other_direct", "indirect"];
 
 export default function BudgetTab({ grant }) {
-    const grantId = grant.id;
+    const grantId = grant?.id;
     const queryClient = useQueryClient(); // FIX: Changed useQuery() to useQueryClient()
 
     const [showAddItem, setShowAddItem] = useState(false);
@@ -35,6 +35,10 @@ export default function BudgetTab({ grant }) {
     });
 
     const isLoading = isLoadingBudget || isLoadingExpenses;
+
+    if (!grantId) {
+        return null;
+    }
 
     if (isLoading) {
         return (
@@ -66,6 +70,11 @@ export default function BudgetTab({ grant }) {
     const totalExpenses = sumBy(expenses, 'amount');
     const remainingBudget = totalBudget - totalExpenses;
     const budgetByCategory = groupBy(budgetItems, 'category');
+
+    const formatDate = (dateStr) => {
+        const date = new Date(dateStr);
+        return !isNaN(date) ? format(date, 'MMM d, yyyy') : '—';
+    };
 
     return (
         <div className="space-y-6">
@@ -155,7 +164,7 @@ export default function BudgetTab({ grant }) {
                                     <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Description</TableHead><TableHead>Category</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
                                     <TableBody>
                                         {expenses.map(expense => (
-                                            <TableRow key={expense.id}><TableCell>{format(new Date(expense.date), 'MMM d, yyyy')}</TableCell><TableCell>{expense.description}</TableCell><TableCell className="capitalize">{expense.category?.replace(/_/g, ' ')}</TableCell><TableCell className="text-right">${expense.amount.toLocaleString()}</TableCell></TableRow>
+                                            <TableRow key={expense.id}><TableCell>{formatDate(expense.date)}</TableCell><TableCell>{expense.description}</TableCell><TableCell className="capitalize">{expense.category?.replace(/_/g, ' ')}</TableCell><TableCell className="text-right">${expense.amount.toLocaleString()}</TableCell></TableRow>
                                         ))}
                                     </TableBody>
                                      <TableFooter>

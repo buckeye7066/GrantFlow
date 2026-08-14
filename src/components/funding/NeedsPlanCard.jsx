@@ -53,7 +53,7 @@ function NeedChip({ need, onSearch, disabled }) {
   )
 }
 
-export default function NeedsPlanCard({ profileId, onSearchNeed, searchBackends = null }) {
+export default function NeedsPlanCard({ profileId, onSearchNeed = () => {}, searchBackends = null }) {
   const [showSuppressed, setShowSuppressed] = useState(false)
   const [showNotApplicable, setShowNotApplicable] = useState(false)
 

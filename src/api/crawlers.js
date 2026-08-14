@@ -7,7 +7,7 @@ export async function listCrawlerJobs(params = {}) {
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
     .forEach(([key, value]) => searchParams.set(key, String(value)))
   const query = searchParams.toString()
-  return apiFetch(`/api/crawlers/jobs${query ? `?${query}` : ""}`)
+  return apiFetch(`/api/crawlers/jobs${query ? `?${query}` : ``}`)
 }
 
 export async function getCrawlerJob(id) {

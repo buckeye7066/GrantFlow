@@ -91,6 +91,7 @@ export function AnyaIntakeResults({
               ? res
               : []
         setMatches(list)
+        setError(null)
       })
       .catch((err) => !cancelled && setError(err?.message || String(err)))
       .finally(() => !cancelled && setLoadingMatches(false))

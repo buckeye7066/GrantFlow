@@ -39,7 +39,7 @@ function resolveCount(stats, key) {
   if (!stats) return 0
   const value = stats[key]
   if (value === undefined || value === null) return 0
-  return value
+  return Number(value)
 }
 
 function grantValue(grant) {

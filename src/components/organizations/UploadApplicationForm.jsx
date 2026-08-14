@@ -26,15 +26,14 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         'image/jpg',
         'image/png',
         'image/heic',
-        'image/heif',
-        'application/octet-stream',
-        ''
+        'image/heif'
       ];
       const validExtensions = ['.jpg', '.jpeg', '.png', '.heic', '.heif'];
       const fileName = selectedFile.name.toLowerCase();
       const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
 
       if (!validTypes.includes(selectedFile.type) && !hasValidExtension) {
+        setFile(null);
         toast({
           variant: 'destructive',
           title: 'Invalid File Type',
@@ -45,6 +44,7 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
 
       // Check file size (max 50MB)
       if (selectedFile.size > 50 * 1024 * 1024) {
+        setFile(null);
         toast({
           variant: 'destructive',
           title: 'File Too Large',

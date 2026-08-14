@@ -99,7 +99,6 @@ function firstAcronymAnchor(title) {
     if (cleaned.length >= 3 && cleaned.length <= 12 && /[A-Za-z]/.test(cleaned) && cleaned === cleaned.toUpperCase()) {
       return normalizeToken(cleaned.toLowerCase())
     }
-    break
   }
   return ''
 }
@@ -210,7 +209,8 @@ function sameFamily(a = {}, b = {}) {
 function compatibleSharedUrlIdentity(a = {}, b = {}) {
   const aTitle = normalizeText(a.title || a.program_name || a.name)
   const bTitle = normalizeText(b.title || b.program_name || b.name)
-  if (!aTitle || !bTitle || aTitle === bTitle) return true
+  if (!aTitle && !bTitle) return true
+  if (aTitle === bTitle && aTitle) return true
   if (hasConflictingNumericTitleTokens(aTitle, bTitle)) return false
   const titleScore = tokenSimilarity(
     coreTitleTokens(a.title || a.program_name || a.name || ''),
@@ -247,7 +247,7 @@ function scoreOf(result = {}) {
 }
 
 function hasApplyLink(result = {}) {
-  return Boolean(resultUrlKey({ application_url: result.application_url || result.applicationUrl || result.url }))
+  return Boolean(resultUrlKey(result))
 }
 
 function textRichness(result = {}) {
