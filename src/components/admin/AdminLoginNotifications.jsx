@@ -52,7 +52,12 @@ function mergeNewestById(incoming, previous, limit) {
     ...(Array.isArray(previous) ? previous : []),
   ]
   combined.forEach((event) => {
-    if (event?.id && !byId.has(event.id)) byId.set(event.id, event)
+    if (event?.id) {
+      const existing = byId.get(event.id)
+      if (!existing || eventTimeMs(event) > eventTimeMs(existing)) {
+        byId.set(event.id, event)
+      }
+    }
   })
   return Array.from(byId.values())
     .sort((a, b) => eventTimeMs(b) - eventTimeMs(a))
