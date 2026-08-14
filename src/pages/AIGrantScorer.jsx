@@ -34,6 +34,10 @@ export default function AIGrantScorer() {
       setError("Please select a grant and paste your proposal text.");
       return;
     }
+    if (!selectedGrant) {
+      setError("Selected grant not found");
+      return;
+    }
     setIsScoring(true);
     setError(null);
     setScoringResult(null);

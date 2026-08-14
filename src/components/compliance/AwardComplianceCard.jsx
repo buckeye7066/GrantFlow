@@ -24,7 +24,7 @@ function fmtCents(cents) {
 }
 
 function dollarsToCents(value) {
-  const n = Number(String(value).replace(/[^0-9.]/g, ''))
+  const n = Number(String(value).replace(/[^-0-9.]/g, ''))
   if (!Number.isFinite(n)) return null
   return Math.round(n * 100)
 }
@@ -100,7 +100,7 @@ function LogSpendForm({ rule, profileId, onLogged }) {
       className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2"
       onSubmit={(e) => {
         e.preventDefault()
-        mutation.mutate()
+        if (!mutation.isPending) mutation.mutate()
       }}
     >
       <div>

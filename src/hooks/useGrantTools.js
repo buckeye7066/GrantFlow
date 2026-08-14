@@ -264,38 +264,109 @@ export function parseBooleanQuery(query) {
     }
   }
 
-  // Parse boolean expression
-  // Split on AND/OR/NOT while preserving operators
-  const tokens = trimmed.split(/\b(AND|OR|NOT)\b/i).map((t) => t.trim()).filter(Boolean)
+  // Tokenize: keywords (AND/OR/NOT), parentheses, and terms
+  const rawTokens = trimmed
+    .replace(/\(/g, " ( ")
+    .replace(/\)/g, " ) ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => {
+      const upper = t.toUpperCase()
+      if (upper === "AND" || upper === "OR" || upper === "NOT") {
+        return { type: "op", value: upper }
+      }
+      if (t === "(") return { type: "lparen" }
+      if (t === ")") return { type: "rparen" }
+      return { type: "term", value: t.toLowerCase() }
+    })
 
-  const conditions = []
-  let currentOp = "AND"
-
-  for (const token of tokens) {
-    const upper = token.toUpperCase()
-    if (upper === "AND" || upper === "OR" || upper === "NOT") {
-      currentOp = upper
-      continue
+  // Insert implicit AND between consecutive operands (e.g., "small business")
+  const tokens = []
+  for (let i = 0; i < rawTokens.length; i++) {
+    tokens.push(rawTokens[i])
+    const curr = rawTokens[i]
+    const next = rawTokens[i + 1]
+    if (!next) continue
+    const currIsOperand = curr.type === "term" || curr.type === "rparen"
+    const nextStartsOperand =
+      next.type === "term" || next.type === "lparen" || (next.type === "op" && next.value === "NOT")
+    if (currIsOperand && nextStartsOperand) {
+      tokens.push({ type: "op", value: "AND" })
     }
-    const word = token.toLowerCase().replace(/[()]/g, "").trim()
-    if (!word) continue
-    conditions.push({ op: currentOp, word })
+  }
+
+  let pos = 0
+
+  // Recursive descent parser with precedence: NOT > AND > OR
+  function parseOr() {
+    let node = parseAnd()
+    while (pos < tokens.length && tokens[pos].type === "op" && tokens[pos].value === "OR") {
+      pos++
+      node = { type: "or", left: node, right: parseAnd() }
+    }
+    return node
+  }
+
+  function parseAnd() {
+    let node = parseNot()
+    while (pos < tokens.length && tokens[pos].type === "op" && tokens[pos].value === "AND") {
+      pos++
+      node = { type: "and", left: node, right: parseNot() }
+    }
+    return node
+  }
+
+  function parseNot() {
+    if (pos < tokens.length && tokens[pos].type === "op" && tokens[pos].value === "NOT") {
+      pos++
+      return { type: "not", child: parseNot() }
+    }
+    return parsePrimary()
+  }
+
+  function parsePrimary() {
+    if (pos >= tokens.length) return null
+    const tok = tokens[pos]
+    if (tok.type === "lparen") {
+      pos++
+      const node = parseOr()
+      if (pos < tokens.length && tokens[pos].type === "rparen") {
+        pos++
+      }
+      return node
+    }
+    if (tok.type === "rparen") {
+      return null
+    }
+    if (tok.type === "op") {
+      // Operator where a term is expected — treat as a literal term
+      pos++
+      return { type: "term", value: tok.value.toLowerCase() }
+    }
+    pos++
+    return { type: "term", value: tok.value }
+  }
+
+  const ast = parseOr()
+
+  function evaluate(node, text) {
+    if (!node) return true
+    switch (node.type) {
+      case "term":
+        return text.includes(node.value)
+      case "not":
+        return !evaluate(node.child, text)
+      case "and":
+        return evaluate(node.left, text) && evaluate(node.right, text)
+      case "or":
+        return evaluate(node.left, text) || evaluate(node.right, text)
+      default:
+        return true
+    }
   }
 
   return (text) => {
     const lower = String(text || "").toLowerCase()
-    let result = true
-
-    for (const cond of conditions) {
-      const matches = lower.includes(cond.word)
-      if (cond.op === "AND") {
-        result = result && matches
-      } else if (cond.op === "OR") {
-        result = result || matches
-      } else if (cond.op === "NOT") {
-        result = result && !matches
-      }
-    }
-    return result
+    return evaluate(ast, lower)
   }
 }

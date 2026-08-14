@@ -28,7 +28,7 @@ function RecipientRow({ r, selected, onToggle, channel, onAddPhone, onToggleProx
   const auto = autoChannelFor(r)
   const effective = channel === 'auto' ? auto : channel
   const reachable = effective === 'email'
-    ? r.emails.some((e) => !e.is_proxy) || r.emails.length > 0
+    ? r.emails.some((e) => !e.is_proxy)
     : effective === 'sms'
       ? Boolean(r.sms_phone)
       : auto !== 'none'

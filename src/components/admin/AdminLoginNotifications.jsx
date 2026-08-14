@@ -18,7 +18,16 @@ function maskIp(ip) {
   }
   if (s.includes(':')) {
     const parts = s.split(':')
-    if (parts.length > 1) { parts[parts.length - 1] = '•'; return parts.join(':') }
+    if (parts.length > 1) {
+      // IPv6 hosts are identified by the trailing 64-bit interface
+      // identifier (last 4 hextets); hide those so a screenshot can't
+      // leak the full address.
+      const maskCount = Math.min(4, parts.length - 1)
+      for (let i = parts.length - 1; i >= parts.length - maskCount; i--) {
+        parts[i] = '•'
+      }
+      return parts.join(':')
+    }
   }
   return s
 }
