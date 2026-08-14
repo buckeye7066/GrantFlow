@@ -95,6 +95,7 @@ async function readState(db, now) {
   }
 }
 
+/** @returns {Promise<boolean>} true only when the new state was actually stored. */
 async function writeState(db, state, now) {
   try {
     const iso = new Date(now).toISOString()
@@ -103,8 +104,10 @@ async function writeState(db, state, now) {
     if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
       await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(KV_KEY, value, iso)
     }
+    return true
   } catch (err) {
-    log.warn('brave budget persist failed (non-fatal)', { error: err?.message })
+    log.warn('brave budget persist failed', { error: err?.message })
+    return false
   }
 }
 
@@ -149,7 +152,22 @@ export async function tryConsumeBraveQuery({ db = null, now = Date.now() } = {})
   // Retain ~40 day keys (month view + a little history for dashboards).
   const keys = Object.keys(state.days).sort()
   while (keys.length > 40) delete state.days[keys.shift()]
-  await writeState(liveDb, state, now)
+  // A SPEND THAT WAS NOT RECORDED IS NOT A SPEND THE PACER CAN BOUND
+  // (2026-08-14). `writeState` used to swallow its failure and this function
+  // returned `allowed: true` regardless — so a PERSISTENT write failure (KV
+  // row contention, a failing INSERT on a concurrent create, a schema or
+  // permissions problem) let the pacer authorize UNLIMITED Brave queries for
+  // the rest of the month while `getBraveBudgetState` kept reporting `used: 0`.
+  // A limiter that reads green while bounding nothing is the exact shape this
+  // module exists to prevent, and the 402/429 wall it is pacing away from is
+  // what takes over instead. Refusing is the safe direction: the search ladder
+  // already degrades to the other providers on a refusal, whereas an unbounded
+  // spend cannot be undone. `readState` failing still fails OPEN above — that
+  // is a read we could not make, not a spend we could not count.
+  const persisted = await writeState(liveDb, state, now)
+  if (!persisted) {
+    return { allowed: false, reason: 'budget_unpersistable', state: summarize(state, budget, now) }
+  }
   return { allowed: true, state: summarize(state, budget, now) }
 }
 
