@@ -107,7 +107,24 @@ const TEXT_RULES = Object.freeze([
   { rx: /\b(penalty\s*of\s*perjury|under\s*oath|i\s*certify|i\s*swear|i\s*understand|i\s*am\s*the\s*applicant|legal\s*attestation|i\s*affirm|i\s*declare\s*under\s*penalty)\b/i, category: 'legal_attestation_required' },
   { rx: /(automated\s*(submissions?|access|completion)|automation)\s*(is\s+|are\s+)?(prohibit|forbid|not\s*permit|not\s*allow)|no\s*bots?\s*allowed|robots\s*not\s*allowed|terms\s*of\s*service\s*prohibit|third[-\s]*party\s*agent\s*submission/i, category: 'portal_terms_block' },
   { rx: /\b(access\s*denied|forbidden|too\s*many\s*requests|rate[-\s]*limit|blocked\s*for\s*automated|cloudflare\s*ray\s*id|akamai|imperva|datadome|perimeterx)\b/i, category: 'portal_anti_bot_block' },
-  { rx: /\b(deadline\s*has\s*passed|application\s*closed|no\s*longer\s*accepting|past\s*due|submissions\s*closed|expired)\b/i, category: 'deadline_expired' },
+  // A DEAD SESSION IS NOT A DEAD DEADLINE (2026-08-14). `TEXT_RULES` is
+  // first-match-wins, and the deadline rule below used to carry a BARE
+  // `expired` alternative — so every "Your session has expired, please sign in
+  // again" page classified `deadline_expired` and the `login_required` rule at
+  // the bottom of this list was unreachable for it. Two harms, both measured:
+  //  (1) `hamiltonSessionKeepAlive` treats `deadline_expired` as neither an
+  //      auth challenge nor inconclusive, so a portal that had just SAID the
+  //      session was dead fell through to the re-persist branch, returned
+  //      `refreshed`, and stamped `keepalive_confirmed_alive_at` — the exact
+  //      manufactured liveness that module exists to prevent.
+  //  (2) `hamiltonHardStopResolver` told the owner "the application deadline
+  //      has passed … Hamilton suggests related opportunities and stops on
+  //      this one" and set `required_action: 'find_alternate'` — abandoning a
+  //      LIVE opportunity whose real fix is one sign-in.
+  // Session wording is therefore claimed FIRST, and `expired` only counts as a
+  // deadline when the thing that expired is the application/opportunity.
+  { rx: /\b(session\s*(?:has\s*)?(?:is\s*)?expired|session\s*timed?\s*out|session\s*timeout|logged\s*out\s*due\s*to\s*inactivity|signed?\s*out\s*for\s*(?:your\s*)?security|your\s*login\s*session)\b/i, category: 'login_required' },
+  { rx: /\b(deadline\s*has\s*passed|application\s*closed|no\s*longer\s*accepting|past\s*due|submissions\s*closed|(?:application|submission|opportunity|deadline|posting|competition)\s*(?:has\s*)?expired|expired\s*(?:on|deadline))\b/i, category: 'deadline_expired' },
   { rx: /\b(review\s*and\s*submit|application\s*review|final\s*review|review\s*your\s*application|please\s*review)\b/i, category: 'final_review_screen' },
   { rx: /\b(transcript|tax\s*return|tax\s*form|w[-\s]?2|fafsa\s*confirmation|acceptance\s*letter|recommendation\s*letter|letter\s*of\s*recommendation|resume|cv\b|government\s*id|driver'?s\s*license|passport|proof\s*of\s*residence|utility\s*bill|birth\s*certificate)\b/i, category: 'missing_required_document' },
   { rx: /\b(login\s*required|password|sign\s*in|log\s*in\s*to\s*continue|please\s*authenticate|account\s*credentials)\b/i, category: 'login_required' },
@@ -153,6 +170,44 @@ function safeText(v) {
 }
 
 /**
+ * The signature/attestation slice of TEXT_RULES, in that list's own order
+ * (wet -> digital -> legal attestation). Derived, never re-typed, so a change
+ * to the shared vocabulary cannot leave this refinement behind.
+ */
+const SIGNATURE_REFINEMENT_RULES = TEXT_RULES.filter((rule) => (
+  rule.category === 'wet_signature_required' ||
+  rule.category === 'digital_signature_required' ||
+  rule.category === 'legal_attestation_required'
+))
+
+/**
+ * The portal's OWN field label out of the engine's signature detail. The detail
+ * is `Wet/digital signature attestation present: "<label>"`; that boilerplate
+ * prefix contains the phrase "digital signature", so only the quoted span is
+ * evidence about the portal. Falls back to `input.text` when there is no quote
+ * (a hand-built or future detail shape) — never to the whole detail.
+ */
+function signatureEvidenceText(input = {}) {
+  const detail = safeText(input.detail)
+  const quoted = detail.match(/"([^"]*)"/)
+  const label = quoted ? quoted[1] : ''
+  return `${safeText(input.text)} ${label}`.trim()
+}
+
+/**
+ * Refine an ambiguous `kind:'signature'` blocker from the portal's own field
+ * label. Returns a category, or null when the label proves nothing.
+ */
+function refineSignatureCategory(input = {}) {
+  const evidence = signatureEvidenceText(input)
+  if (!evidence) return null
+  for (const rule of SIGNATURE_REFINEMENT_RULES) {
+    if (rule.rx.test(evidence)) return rule.category
+  }
+  return null
+}
+
+/**
  * Classify a blocker signal.
  *
  * @param {object} input
@@ -172,6 +227,41 @@ function safeText(v) {
 export function classifyBlocker(input = {}) {
   const reasons = []
   const text = `${safeText(input.text)} ${safeText(input.detail)} ${safeText(input.url)}`.trim()
+
+  // 0. AMBIGUOUS ENGINE KIND: `signature` (2026-08-14).
+  //
+  // `hamiltonAutopilotEngine.detectAttestationGate` emits ONE kind,
+  // `signature`, for every member of its `HARD_ATTESTATION_PATTERNS` list —
+  // and that list is `electronic signature`, `sign here|below|name`,
+  // `penalty of perjury`, `under oath`, `digital signature`. NOT ONE of them
+  // is wet-ink evidence, yet `ENGINE_KIND_MAP` resolved the ambiguity to
+  // `wet_signature_required`, whose resolver returns `degraded(...)`. That is
+  // not an alerting outcome, so the run built a MAILING packet, set the task
+  // `waiting_for_review`, and recorded the autopilot run `completed` —
+  // reporting success while handing the owner instructions that cannot finish
+  // an in-portal e-signature, with no portal URL. The correct branch,
+  // `resolveDigitalSignature`, escalates (`ask_user_to_esign`) and keeps the
+  // task resumable.
+  //
+  // The engine's detail carries the portal's OWN field label inside quotes
+  // (`Wet/digital signature attestation present: "<label>"`). Only that label
+  // is evidence — the boilerplate prefix literally contains the words
+  // "digital signature", so testing the whole detail would flip every blocker
+  // the other way. Refinement uses the SAME vocabulary the text path already
+  // uses, in the same precedence, so it can only ever be more precise; when
+  // the label says nothing the historical `wet` default is kept.
+  if (input.kind === 'signature') {
+    const refined = refineSignatureCategory(input)
+    if (refined && refined !== ENGINE_KIND_MAP.signature) {
+      return {
+        category: refined,
+        confidence: 0.9,
+        reasons: ['engine_kind=signature', 'refined_from_portal_field_label'],
+        source: 'engine',
+        raw: input,
+      }
+    }
+  }
 
   // 1. Engine kind takes precedence — it's already structured.
   if (input.kind && ENGINE_KIND_MAP[input.kind]) {

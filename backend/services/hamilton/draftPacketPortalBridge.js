@@ -55,7 +55,19 @@ const GOALS_SECTION_SOURCES = Object.freeze([
 
 // Never type an unfinished placeholder into a live portal form. Mirrors the
 // MBA-proposal path's hasEvidencePlaceholder posture.
-const PLACEHOLDER_RX = /\[\s*(?:INSERT|EVIDENCE\s+NEEDED|TODO|TBD|PLACEHOLDER|YOUR\s)/i
+//
+// `REVIEW` is the one the DRAFTER actually emits (2026-08-14). The proposal
+// prompt in `backend/apply/applyEngine.js` instructs the model verbatim: "If
+// the funder's mission or priorities are NOT stated in the context, write
+// '[review: confirm funder priority]' where an alignment claim would go" —
+// and nothing between generation and `application_sections.content` strips
+// that marker. It was absent from this alternation, so `usableSectionContent`
+// returned the text, `buildPortalAnswersFromDraftPacket` put it in
+// `answers.essay`/`answers.goals`, and the autopilot typed
+// "[review: confirm funder priority]" into a live funder's essay field —
+// contradicting both this file's own header and the canonical rule in
+// CLAUDE.md ("placeholder text like '[review: …]' is REFUSED").
+const PLACEHOLDER_RX = /\[\s*(?:INSERT|EVIDENCE\s+NEEDED|TODO|TBD|PLACEHOLDER|REVIEW\b|YOUR\s)/i
 
 function usableSectionContent(section) {
   const text = String(section?.content || '').trim()
