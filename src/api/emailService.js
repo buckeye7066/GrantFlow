@@ -75,8 +75,8 @@ class EmailService {
                 },
                 STATUS_CHANGED: {
                           subject: 'Student Status Updated',
-                          html: `<h2>Student Status Changed</h2><p>Your student status has been updated to: ${this.escapeHtml(updateDetails.newStatus)}</p>`,
-                          text: `Your student status has been updated to: ${updateDetails.newStatus}`
+                          html: `<h2>Student Status Changed</h2><p>Your student status has been updated to: ${this.escapeHtml(updateDetails && updateDetails.newStatus)}</p>`,
+                          text: `Your student status has been updated to: ${updateDetails && updateDetails.newStatus}`
                 },
                 GRANTS_MATCHED: {
                           subject: 'New Grants Matched for Your Profile',

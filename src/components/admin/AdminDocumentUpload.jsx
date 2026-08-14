@@ -21,7 +21,7 @@ export default function AdminDocumentUpload() {
   const user = useAuthStore((state) => state.user);
 
   // Use Boolean coercion to align with backend truthy checks - not strict equality
-  const isAdmin = Boolean(user?.is_admin) || user?.role === 'admin';
+  const isAdmin = Boolean(user?.is_admin) || (user?.role === 'admin');
 
   const uploadMutation = useMutation({
     mutationFn: async (file) => {

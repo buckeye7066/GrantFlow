@@ -40,10 +40,12 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
   const [minScore, setMinScore] = useState(PLATFORM_DEFAULT_MIN_SCORE);
   const [runResult, setRunResult] = useState(null);
 
+  const orgId = organization?.id;
+
   const { data: prefs, isLoading: isLoadingConfig } = useQuery({
-    queryKey: ['discoveryPreferences', organization.id],
-    queryFn: () => apiFetch(`/api/profiles/${organization.id}/discovery-preferences`),
-    enabled: !!organization.id && open,
+    queryKey: ['discoveryPreferences', orgId],
+    queryFn: () => apiFetch(`/api/profiles/${orgId}/discovery-preferences`),
+    enabled: !!orgId && open,
   });
 
   useEffect(() => {
@@ -52,17 +54,17 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
     // Old-scale stored preferences (>30, e.g. a stuck 85) are translated to
     // the equivalent data-point band on read — the backend persists the
     // translation, this keeps the dialog honest even against a stale response.
-    setMinScore(typeof stored === 'number' ? translateLegacyMinScore(stored) : PLATFORM_DEFAULT_MIN_SCORE);
+    setMinScore(typeof stored === 'number' || !isNaN(Number(stored)) ? translateLegacyMinScore(Number(stored)) : PLATFORM_DEFAULT_MIN_SCORE);
   }, [prefs, open]);
 
   const saveMutation = useMutation({
     mutationFn: (value) =>
-      apiFetch(`/api/profiles/${organization.id}/discovery-preferences`, {
+      apiFetch(`/api/profiles/${orgId}/discovery-preferences`, {
         method: 'PUT',
         body: JSON.stringify({ min_match_score: value }),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['discoveryPreferences', organization.id] });
+      queryClient.invalidateQueries({ queryKey: ['discoveryPreferences', orgId] });
       onClose();
     },
   });
@@ -71,7 +73,7 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
     // No explicit minMatchScore: the server applies this profile's stored
     // preference, which is exactly the wiring this dialog configures.
     mutationFn: async () => {
-      await apiFetch(`/api/profiles/${organization.id}/discovery-preferences`, {
+      await apiFetch(`/api/profiles/${orgId}/discovery-preferences`, {
         method: 'PUT',
         body: JSON.stringify({ min_match_score: minScore }),
       });
@@ -79,13 +81,13 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
       // preference — proving the end-to-end wiring this dialog configures.
       return apiFetch('/api/real-crawlers/run-smart', {
         method: 'POST',
-        body: JSON.stringify({ profile_id: organization.id }),
+        body: JSON.stringify({ profile_id: orgId }),
       });
     },
     onSuccess: (response) => {
       setRunResult({ count: Number(response?.count ?? 0), partial: Boolean(response?.partial) });
       queryClient.invalidateQueries({ queryKey: ['grants'] });
-      queryClient.invalidateQueries({ queryKey: ['discoveryPreferences', organization.id] });
+      queryClient.invalidateQueries({ queryKey: ['discoveryPreferences', orgId] });
     },
   });
 
@@ -101,7 +103,7 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
             Discovery Settings
           </DialogTitle>
           <DialogDescription>
-            Set the minimum match score for "{organization.name}". Smart funding searches for this profile
+            Set the minimum match score for "{organization?.name}". Smart funding searches for this profile
             will only return opportunities scoring at or above this threshold.
           </DialogDescription>
         </DialogHeader>
