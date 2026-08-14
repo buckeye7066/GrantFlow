@@ -138,7 +138,13 @@ describe('traceSourceToOpportunity', () => {
     assert.equal(opp.sponsor, 'Navy')
     assert.equal(opp.funding_source_type, 'government')
     assert.equal(opp.source, 'funding_trace.usaspending')
-    assert.equal(opp.amount_max, 1_750_000)
+    // amount_max must NOT carry a multi-year cumulative USASpending total -
+    // that is not a per-award ceiling (the Coca-Cola "$42M appropriation is
+    // not a per-award ceiling" class). The real figure stays as text.
+    assert.equal(opp.amount_max, null)
+    assert.equal(opp.amount_min, null)
+    assert.equal(opp.amount_description, 'Traced total: $1,750,000')
+    assert.equal(opp.opportunity_kind, 'directory')
     assert.equal(opp.record_origin, 'funding_trace')
     assert.ok(opp.description.includes('Department of Defense'))
   })

@@ -228,7 +228,7 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       enrichmentLog.push({
         section_key: sectionKey,
         updated_fields: [],
-        notes: 'AI returned only invented keys â skipped to prevent hallucination',
+        notes: 'AI returned only invented keys – skipped to prevent hallucination',
       })
       continue
     }

@@ -156,7 +156,7 @@ export async function extractTextWithFallback({
         } else {
           warnings.push('OCR completed but produced little text; keeping PDF text extraction result.')
           if (!ocrText && rasterFiles.length > 0) {
-            warnings.push(`OCR_EMPTY: processed ${rasterFiles.length} page(s) but extracted zero characters â document may be a scanned image with unrecognised content.`)
+            warnings.push(`OCR_EMPTY: processed ${rasterFiles.length} page(s) but extracted zero characters — document may be a scanned image with unrecognised content.`)
           }
         }
       } catch (error) {

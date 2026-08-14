@@ -303,7 +303,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     const title = opp?.title ? String(opp.title) : ''
     if (!title) continue
     if (!opp?.application_url || typeof opp.application_url !== 'string' || !opp.application_url.trim()) {
-      console.warn(`[localCrawler] Skipping "${title}" â missing application_url (Goal 1)`)
+      console.warn(`[localCrawler] Skipping "${title}" — missing application_url (Goal 1)`)
       continue
     }
     if (!seenTitles.has(title)) {
@@ -322,7 +322,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     const title = opp?.title ? String(opp.title) : ''
     if (!title) continue
     if (!opp?.application_url || typeof opp.application_url !== 'string' || !opp.application_url.trim()) {
-      console.warn(`[localCrawler] Skipping DB opp "${title}" â missing application_url (Goal 1)`)
+      console.warn(`[localCrawler] Skipping DB opp "${title}" — missing application_url (Goal 1)`)
       continue
     }
     if (!seenTitles.has(title)) {
@@ -452,7 +452,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
       // Save to profile pipeline using the relaxed threshold (topOpps already passed it)
       if (profileId && autoAddOk) {
         const oppWithId = { ...opp, id: result.id, source: 'local_foundation' }
-        // Do NOT pass pre-computed score â let saveToProfilePipeline run
+        // Do NOT pass pre-computed score — let saveToProfilePipeline run
         // computeMatchDecision() as the single canonical authority (Goal 4).
         // relevanceFilter hard-rejection, audit metadata, and ACCEPT/REVIEW
         // decisions are all produced inside that call (Goals 3, 8).

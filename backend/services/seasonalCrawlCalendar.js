@@ -461,7 +461,7 @@ export function getSeasonalCrawlBoosts(profileContext, month) {
         : []
       // If profileState is unknown, exclude state-specific programs to avoid wrong-state junk
       if (!profileState) {
-  // State unknown â skipping state-specific program to avoid wrong-state matches
+  // State unknown — skipping state-specific program to avoid wrong-state matches
   // (Goal 10: caller should prompt user to complete state field)
   return false;
 }

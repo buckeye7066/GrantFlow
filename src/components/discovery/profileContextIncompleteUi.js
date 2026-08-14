@@ -28,7 +28,7 @@ function uniqueStrings(values = []) {
 
 function toChecklist(requiredMissing = []) {
   const normalized = uniqueStrings(requiredMissing)
-  // Do NOT substitute defaults when the list is empty â an empty list means
+  // Do NOT substitute defaults when the list is empty — an empty list means
   // the server fired PROFILE_CONTEXT_INCOMPLETE but did not specify which
   // facets are missing.  Returning an empty checklist forces the caller to
   // display a generic "complete your profile" message rather than misleading
@@ -77,7 +77,7 @@ export function getProfileContextIncompleteHint(errorLike) {
       headline:
         knownMissing.length > 0
           ? 'Complete profile sections: ' + knownMissing.map((f) => REQUIRED_FACET_LABELS[f] || f).join(' + ')
-          : 'Your profile needs more detail before searching â open your profile to review missing sections.',
+          : 'Your profile needs more detail before searching — open your profile to review missing sections.',
     }
   }
 

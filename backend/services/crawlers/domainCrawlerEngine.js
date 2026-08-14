@@ -271,7 +271,7 @@ export async function runDomainCrawler({ profile, config, options = {} }) {
   const scored = deduped.map((opp) => ({
     ...opp,
     pre_score: lightPreScore(opp, profile, config),
-    pre_score_note: 'crawler_prescore_only â will be overwritten by computeMatchDecision()',
+    pre_score_note: 'crawler_prescore_only — will be overwritten by computeMatchDecision()',
     match_score: null,
     match_reasons: [],
     match_explanation: null,

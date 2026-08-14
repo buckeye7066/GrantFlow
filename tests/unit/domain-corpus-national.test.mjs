@@ -175,14 +175,14 @@ test('business_startup_grants excludes loans and matching funds', async () => {
   )
   assert.ok(
     results.length > 0,
-    `business_startup_grants crawler returned 0 results â possible suppression bug (Goal 7/Goal 8)`
+    `business_startup_grants crawler returned 0 results — possible suppression bug (Goal 7/Goal 8)`
   )
 
   for (const opp of results) {
     // Goal 1: every returned opportunity must have an application path
     assert.ok(
       opp.application_url || opp.source_url || opp.url,
-      `Opportunity "${opp.title}" lacks any URL â violates Goal 1`
+      `Opportunity "${opp.title}" lacks any URL — violates Goal 1`
     )
     const text = [opp.title, opp.description, ...(opp.eligibility_bullets || []), ...(opp.keywords || [])]
       .filter(Boolean)
@@ -201,7 +201,7 @@ test('verified_url remains 0 when skipVerification=true', async () => {
     // Goal 1 / Goal 8: if anything was inserted it must have verified_url=0
     assert.ok(
       allRows.length > 0,
-      'skipVerification crawl inserted 0 rows â corpus may be empty or crawler broken'
+      'skipVerification crawl inserted 0 rows — corpus may be empty or crawler broken'
     )
     for (const row of allRows) {
       assert.strictEqual(

@@ -200,10 +200,10 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication,
                         onClick={handleAnalyzeClick}
                         disabled={loading}
                         size="sm"
-                        title={loading ? 'Analysis is in progress â wait for it to finish or time out before retrying.' : undefined}
+                        title={loading ? 'Analysis is in progress — wait for it to finish or time out before retrying.' : undefined}
                     >
                         <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-                        {loading ? 'In progressâ¦' : 'Retry if Stuck'}
+                        {loading ? 'In progress…' : 'Retry if Stuck'}
                     </Button>
                 </div>
             );

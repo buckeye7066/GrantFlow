@@ -311,7 +311,7 @@ if (
   process.argv[1].includes('pipelineLifecycleService')
 ) {
   // Dynamic import to avoid loading DB in non-standalone contexts
-  const { createRequire } = await import('module') // removed â createRequire is not used anywhere below; delete this line entirely
+  const { createRequire } = await import('module') // removed — createRequire is not used anywhere below; delete this line entirely
   const require = createRequire(import.meta.url)
 
   let db

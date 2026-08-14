@@ -105,6 +105,7 @@ import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
 import {
   isControlledBetaSyntheticBrowserUrl,
 } from './controlledBetaBrowserPolicy.js'
+import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
@@ -297,6 +298,35 @@ async function maybeUpdateGrantStage(db, grantId, newStage) {
 }
 
 /**
+ * Cross-tenant ownership gate for automateSingleSource. `userId` here is the
+ * ACTOR who triggered this run (e.g. getAuthUserId(user) from a route); when
+ * it is null the caller is an internal/system driver operating on an
+ * already-scoped record (e.g. hamiltonAgentAdapter.js re-processing an
+ * existing application_tasks row by its own profile_id) and is trusted, the
+ * same "MISSING = NEUTRAL" posture the rest of this codebase uses for
+ * internal callers. When a userId IS asserted, it must resolve to either a
+ * DB-confirmed admin or one of the profile's owner/creator/allowlisted-email
+ * accounts (getUserIdsWithProfileAccess — the same primitive
+ * userMayAccessProfile's route-level checks are built on), mirroring the
+ * ensureProfileAccess(ctx, profileId) pattern anyaToolRegistry.js's tool
+ * handlers already use as a service-level (non-route) ownership gate.
+ */
+async function isUserAuthorizedForProfile(db, userId, profileId) {
+  if (!userId) return true
+  if (!db || !profileId) return false
+  try {
+    const adminRow = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(String(userId))
+    if (adminRow && (adminRow.is_admin === true || adminRow.is_admin === 1)) return true
+  } catch { /* users table absent in some fixtures — fall through to ownership */ }
+  try {
+    const allowed = await getUserIdsWithProfileAccess(db, profileId)
+    return allowed.has(String(userId))
+  } catch {
+    return false
+  }
+}
+
+/**
  * Process ONE selected source. Designed to be called in a loop by
  * `automateSelected`.
  */
@@ -305,6 +335,18 @@ export async function automateSingleSource(db, {
 } = {}) {
   if (!profile && !profileId) throw new Error('profile or profileId required')
   const resolvedProfileId = profileId || profile.id
+
+  // Cross-tenant gate BEFORE any profile hydration, task creation, or PII
+  // packet generation. loadProfileBundle below is a bare `WHERE id = ?` with
+  // no ownership check of its own — this is the ONE place that check must
+  // hold regardless of which caller reaches this function.
+  if (!(await isUserAuthorizedForProfile(db, userId, resolvedProfileId))) {
+    const err = new Error(`user ${userId} is not authorized for profile ${resolvedProfileId}`)
+    err.status = 403
+    err.code = 'profile_access_denied'
+    throw err
+  }
+
   // If only the id was given, hydrate the profile bundle now so the
   // document/portal pathways can grab basic_information / essays /
   // university_applications without re-querying.

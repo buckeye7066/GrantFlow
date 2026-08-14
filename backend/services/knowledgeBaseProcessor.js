@@ -270,7 +270,7 @@ export async function extractFundingOpportunitiesFromKB(db) {
           // Reject the whole record if there are URLs but none are valid (Goal 1, Goal 3)
           if (fundingUrls.length > 0 && validatedUrls.length === 0) {
             console.warn('[KB Processor] Skipping opportunity from doc', doc.id,
-              'â funding_urls present but none are valid URLs (Goal 1 guard)')
+              '— funding_urls present but none are valid URLs (Goal 1 guard)')
             continue
           }
 
@@ -291,7 +291,7 @@ export async function extractFundingOpportunitiesFromKB(db) {
             _requires_decision_engine: true,
             // Emit a structured warning so monitoring can detect if this record
             // reaches the DB without a decision_engine audit trail (Goal 4, Goal 8).
-            _kb_source_warning: `KB-extracted opportunity from doc ${doc.id} â must be routed through opportunityMatcher gate before pipeline insert`,
+            _kb_source_warning: `KB-extracted opportunity from doc ${doc.id} — must be routed through opportunityMatcher gate before pipeline insert`,
             // Preserve raw metadata so the decision engine can compute fingerprints
             // and full audit fields (Goal 8, Goal 9)
             _raw_metadata: metadata,

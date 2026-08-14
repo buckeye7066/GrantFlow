@@ -478,7 +478,7 @@ const FOUNDATION_REGISTRY = [
   },
 
   // ── National: Financial Literacy ────────────────────────────────────────
-  // REMOVED: NFCC is a counseling service, not a grant (grantRange 0â0, no application cycle).
+  // REMOVED: NFCC is a counseling service, not a grant (grantRange 0–0, no application cycle).
   // It violates Goal 1 (no real funding path) and Goal 3 (non-grant junk).
   // If re-added, it must be typed as 'service' not 'grant' and excluded from grant pipeline.
 
@@ -698,7 +698,7 @@ export async function crawlPrivateFoundations(profileContext, db = null) {
     const score = scoreFoundation(foundation, signals)
     // Log suppression so observability is preserved (Goals 7, 8)
     if (score === 0) {
-      // score === 0 means explicit geographic mismatch â safe to skip
+      // score === 0 means explicit geographic mismatch — safe to skip
       continue
     }
     // All other candidates must reach the decision engine; do NOT hard-suppress on score here

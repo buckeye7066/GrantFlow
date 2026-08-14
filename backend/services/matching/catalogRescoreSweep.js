@@ -275,6 +275,7 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     unscorable: 0,
     stale_removed: 0,
     explain_refreshed: 0,
+    foreign_lane_skipped: 0,
     stale_explain_prioritized: 0,
     stale_explains_at_start: 0,
     inventory_paused_for_explain_drain: false,
@@ -543,6 +544,14 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
             ? decision.reasons
             : (Array.isArray(decision?.matchedNeeds) ? decision.matchedNeeds : [])
           const explain = canonicalExplain(decision, evaluatedAt)
+          // A row that ALREADY exists under a DIFFERENT lane (institution-link,
+          // county-crisis-need-link, crawler-os, ...) is not this sweep's to
+          // rebrand — see staleMatchExplainRefresh.js's header comment for the
+          // invariant: routing another lane's stub through catalog-rescore
+          // rebrands it and strips its gate provenance, making it unreachable
+          // to its own lane's withdrawal sweep.
+          const conflictsWithOtherLane = Boolean(opp.existing_match_id) &&
+            String(opp.existing_matcher_version ?? '') !== CATALOG_RESCORE_MATCHER_VERSION
           const res = await db.prepare(
             `INSERT INTO profile_opportunity_matches
                (id, profile_id, opportunity_id, match_score, match_confidence, match_decision, match_explanation,
@@ -559,7 +568,8 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
                matcher_version = excluded.matcher_version,
                computed_at = excluded.computed_at,
                updated_at = excluded.updated_at,
-               evaluated_at = excluded.evaluated_at`,
+               evaluated_at = excluded.evaluated_at
+             WHERE profile_opportunity_matches.matcher_version = '${CATALOG_RESCORE_MATCHER_VERSION}'`,
           ).run(
             `cr:${profileId}:${opp.id}`, profileId, opp.id, score,
             confidence,
@@ -579,6 +589,8 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
             else summary.linked += 1
             if (staleExplain) summary.explain_refreshed += 1
             if (summary.examples.length < 5) summary.examples.push(`${opp.title} (ACCEPT ${score})`)
+          } else if (conflictsWithOtherLane) {
+            summary.foreign_lane_skipped += 1
           }
         } catch (err) {
           log.warn('insert failed (non-fatal)', { profile: profileId, opportunity: opp.id, error: String(err?.message || err) })

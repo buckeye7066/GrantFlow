@@ -89,12 +89,35 @@ const STATE_NAME_TO_ABBR = [
   ['nevada', 'NV'], ['oregon', 'OR'], ['alaska', 'AK'],
   ['hawaii', 'HI'], ['idaho', 'ID'], ['maine', 'ME'],
   ['texas', 'TX'], ['utah', 'UT'], ['iowa', 'IA'], ['ohio', 'OH'],
+  // FIXED: 'washington' was missing (a real omission, not deliberate --
+  // see relevanceFilter.js's identical fix for the rationale).
+  ['washington', 'WA'],
 ]
 
+// A state NAME used as the name of a COUNTY/CITY/PARISH is a place inside
+// some OTHER state, not a claim about this one ("Delaware County, OH",
+// "Washington County, PA", "Indiana County, PA", "Ohio County, WV" are all
+// real places a bare substring test resolved to DE/WA/IN/OH). Mirrors the
+// fix already applied in relevanceFilterRules.js's _extractStateNameFromTitle
+// -- this file forked from the same original bare-substring implementation.
+const PLACE_QUALIFIER_AFTER_STATE_NAME =
+  /^\s*(county|counties|parish|borough|municipio|city|township|village|town|district)\b/i
+
 function extractStateNameFromTitle(title) {
-  const lower = (title || '').toLowerCase()
+  const raw = String(title || '')
+  const lower = raw.toLowerCase()
   for (const [name, abbr] of STATE_NAME_TO_ABBR) {
-    if (lower.includes(name)) return abbr
+    let from = 0
+    for (;;) {
+      const at = lower.indexOf(name, from)
+      if (at === -1) break
+      const before = at === 0 ? '' : lower[at - 1]
+      const after = lower.slice(at + name.length)
+      const boundedLeft = at === 0 || !/[a-z0-9]/.test(before)
+      const boundedRight = after === '' || !/^[a-z0-9]/.test(after)
+      if (boundedLeft && boundedRight && !PLACE_QUALIFIER_AFTER_STATE_NAME.test(after)) return abbr
+      from = at + 1
+    }
   }
   return null
 }

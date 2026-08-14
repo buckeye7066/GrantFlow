@@ -161,9 +161,12 @@ export function upsertMatch(store, match) {
 
 /** Matches for ONE profile only — enforces isolation at the query boundary. */
 export function getMatchesForProfile(store, profileId, { minScore = 0 } = {}) {
+  // NULL match_score is not junk (CLAUDE.md invariant table, "Every pipeline
+  // grant carries a match score when computable"): an unscored row must be
+  // surfaced as unscored, never silently dropped by a minScore filter.
   const rows = store.all('profile_opportunity_matches', { profile_id: profileId })
-    .filter((m) => m.match_score >= minScore)
-    .sort((a, b) => b.match_score - a.match_score);
+    .filter((m) => m.match_score == null || m.match_score >= minScore)
+    .sort((a, b) => (b.match_score ?? -Infinity) - (a.match_score ?? -Infinity));
   return rows.map((m) => {
     const o = store.get('funding_opportunities', { id: m.opportunity_id }) ?? {};
     return { ...m, title: o.title, sponsor: o.sponsor, kind: o.kind, apply_url: o.apply_url, reality_status: o.reality_status };

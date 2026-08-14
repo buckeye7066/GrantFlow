@@ -649,7 +649,7 @@ export function analyzeSystemHealth(diagnostics) {
       if (Array.isArray(missing) && missing.length > 0) {
         warnings.push(`funding_opportunities missing columns: ${missing.join(', ')}`);
       } else if (!Array.isArray(missing)) {
-        warnings.push('Schema check did not return column details â audit incomplete');
+        warnings.push('Schema check did not return column details — audit incomplete');
       }
     }
   }

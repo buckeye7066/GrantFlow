@@ -84,7 +84,7 @@ export default function Proposals() {
       filtered = filtered.filter(p => p.organization_id === filterOrg);
     }
 
-    // Deadline status filters â mutually exclusive; showOnlyExpired takes precedence
+    // Deadline status filters — mutually exclusive; showOnlyExpired takes precedence
     if (filters.showOnlyExpired) {
       filtered = filtered.filter(proposal => isExpired(proposal));
     } else if (filters.hideExpired) {

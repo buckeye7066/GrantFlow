@@ -96,17 +96,19 @@ router.post('/', async (req, res) => {
           if (!knownPhases.includes(phase)) {
             console.warn('Stripe webhook: unrecognised milestone_phase; skipping purchase state update', { purchaseId, phase, eventId: event?.id })
           }
-          const transaction = req.db.transaction(() => {
-            req.db.prepare(
+          // dialect-divergence fix (the ingestionService/#946 class): use
+          // withTransaction with an async, tx-bound callback so the writes are
+          // truly atomic and awaited on both the SQLite and Postgres shims.
+          await req.db.withTransaction(async (tx) => {
+            await tx.prepare(
               `UPDATE milestone_payments SET status = 'paid', stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?), paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE purchase_id = ? AND phase = ?`
             ).run(paymentIntent, purchaseId, phase)
             if (newStatus) {
-              req.db.prepare(
+              await tx.prepare(
                 `UPDATE service_purchases SET status = ?, stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`
               ).run(newStatus, paymentIntent, purchaseId)
             }
           })
-          transaction()
 
           if (phase === 'submission') {
             const purchaseRow = await req.db
@@ -132,9 +134,12 @@ router.post('/', async (req, res) => {
       } else if (kind === 'hourly_invoice') {
         const invoiceId = String(metadata.hourly_invoice_id || '').trim()
         const purchaseId = String(metadata.purchase_id || '').trim()
-        const hourlyTransaction = req.db.transaction(() => {
+        // dialect-divergence fix (the ingestionService/#946 class): same as
+        // the milestone_payment branch above — withTransaction + tx-bound,
+        // awaited statements instead of the sync `db.transaction(fn)()` shape.
+        await req.db.withTransaction(async (tx) => {
           if (invoiceId) {
-            req.db.prepare(
+            await tx.prepare(
               `UPDATE hourly_invoices
                SET status = 'paid',
                    stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
@@ -143,7 +148,7 @@ router.post('/', async (req, res) => {
             ).run(paymentIntent, invoiceId)
           }
           if (purchaseId) {
-            req.db.prepare(
+            await tx.prepare(
               `UPDATE service_purchases
                SET status = 'paid',
                    stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
@@ -152,7 +157,6 @@ router.post('/', async (req, res) => {
             ).run(paymentIntent, purchaseId)
           }
         })
-        hourlyTransaction()
 
         if (purchaseId) {
           const purchaseRow = await req.db

@@ -111,7 +111,7 @@ test('security: legacy profile-id bearer token requires explicit opt-in', async 
   try {
     Database = (await import('better-sqlite3')).default
   } catch (importErr) {
-    throw new Error(`better-sqlite3 not available in test environment â cannot seed profile row: ${importErr.message}`)
+    throw new Error(`better-sqlite3 not available in test environment – cannot seed profile row: ${importErr.message}`)
   }
   const db = new Database(dbPath)
   try {

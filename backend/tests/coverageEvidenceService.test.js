@@ -357,6 +357,54 @@ describe('match evidence extraction', () => {
     expect(extractMatchEvidence('not-json', {}).matched_needs).toEqual([])
     expect(extractMatchEvidence(null, {}).data_points).toBeNull()
   })
+
+  it('reads the REAL PERSISTED shape (crawler-os/matchEngine.js) — the dominant real-world case, not just the camelCase live-recompute shape', () => {
+    // Verbatim shape of crawler-os/matchEngine.js's `match_explain` (the ONLY
+    // thing crawler-os/storage.js ever persists to match_explain_json): the
+    // whole scoreBreakdown object copied verbatim under snake_case
+    // `score_breakdown`, plus pre-reduced top-level facts. Before the fix,
+    // this exact shape measured ALL-DEAD: need_coverage null,
+    // applicant_type.matched false, geography.tier null, eligibility.factor
+    // null, matched_needs empty.
+    const persistedExplain = {
+      matched_profile_type: true,
+      matched_location: 'state',
+      eligibility_fit: true,
+      why: 'Canonical decision: ACCEPT',
+      warnings: [],
+      matched_needs: ['housing', 'utilities'],
+      matched_profile_facts: [],
+      missing_eligibility_fields: ['income_eligibility'],
+      dataPointEvidence: {},
+      score_breakdown: {
+        need_coverage: 62,
+        eligibility_factor: 0.75,
+        eligibility_mismatches: ['income_over_limit'],
+        geo_factor: 1,
+        applicant_type: 25,
+      },
+      scoring_policy_version: 'need_first_v2',
+      canonical_decision: 'ACCEPT',
+      canonical_score: 71,
+      matcher_version: 'crawler-os-need-first-v2',
+      evaluated_at: '2026-08-14T00:00:00.000Z',
+    }
+    const evidence = extractMatchEvidence(JSON.stringify(persistedExplain), { source: 'liheap' })
+    expect(evidence.need_coverage).toBe(62)
+    expect(evidence.applicant_type.matched).toBe(true)
+    expect(evidence.geography.tier).toBe('state')
+    expect(evidence.eligibility.factor).toBe(0.75)
+    expect(evidence.eligibility.mismatches).toEqual(['income_over_limit'])
+    expect(evidence.eligibility.missing_fields).toEqual(['income_eligibility'])
+    expect(evidence.matched_needs).toEqual(['housing', 'utilities'])
+  })
+
+  it('reports an honest unknown geography tier on the persisted shape when matched_location is unknown/none/absent', () => {
+    const noGeo = { matched_location: 'unknown', score_breakdown: {} }
+    expect(extractMatchEvidence(JSON.stringify(noGeo), {}).geography.tier).toBeNull()
+    const missingGeo = { score_breakdown: {} }
+    expect(extractMatchEvidence(JSON.stringify(missingGeo), {}).geography.tier).toBeNull()
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

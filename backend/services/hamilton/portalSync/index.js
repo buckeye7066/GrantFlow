@@ -722,6 +722,15 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
     const result = { ok: true, direction: dir, connectorId, runId }
     if (!runId) result.bookkeeping_degraded = true
     const summary = { connector: connectorId }
+    // hit_login_wall: set when markSessionDeadAfterWall() proves the saved
+    // session never cleared the portal's sign-in wall. The run below still
+    // finishes its bookkeeping normally, but MUST NOT be recorded 'completed'
+    // — a completed run is what portalSyncStaleness.js's
+    // loadLastSuccessfulSyncByHost() reads as "just synced" (status='completed'
+    // is its explicit, deliberate filter), so a fake-completed wall run
+    // suppressed the login prompt for 7 days on a session that was already
+    // dead, and portalSyncHealth.js's Mission Control view showed it green.
+    let hitLoginWall = false
 
     if (dir === 'read' || dir === 'both') {
       const readResult = await connector.read(page, ctx)
@@ -741,6 +750,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       // BLOCK ('blocked' — a datacenter/WAF refusal) is OUR reachability
       // problem and must never burn a working session.
       if (readResult?.access === 'signin_wall' && savedSession?.id) {
+        hitLoginWall = true
         await markSessionDeadAfterWall(db, savedSession, host).catch(() => {})
       }
       const persisted = await persistReadResult(db, { profileId, portalHost: host, actorUserId, readResult })
@@ -860,8 +870,20 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       summary.write = result.write
     }
 
-    await finishRun(db, runId, { status: 'completed', summary }).catch(() => {})
+    // hit_login_wall_never_completed: mirrors the file's own early-exit
+    // vocabulary (the fail() helper above always finishes a run 'failed') so
+    // portalSyncStaleness.js's status='completed' filter and
+    // portalSyncHealth.js's failing-count (status==='failed' || Boolean(error))
+    // both correctly stop treating a dead-session wall-hit as a real sync.
+    await finishRun(db, runId, {
+      status: hitLoginWall ? 'failed' : 'completed',
+      summary,
+      error: hitLoginWall
+        ? 'portal sync reached the sign-in wall — saved session not accepted'
+        : undefined,
+    }).catch(() => {})
     await recordStudentPortalChecks(db, { profileId, host, status: 'completed' })
+    if (hitLoginWall) result.hit_login_wall = true
     return result
   } catch (err) {
     return fail(err?.message || String(err))

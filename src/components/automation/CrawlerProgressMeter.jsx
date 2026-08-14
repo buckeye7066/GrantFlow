@@ -263,7 +263,7 @@ export default function CrawlerProgressMeter({ jobId, onClose }) {
                 </CardTitle>
                 <CardDescription className="text-xs">
                   {isError
-                    ? (meta.error || job.error || "Job failed â check server logs for details")
+                    ? (meta.error || job.error || "Job failed — check server logs for details")
                     : `Finished: ${inserted} opportunit${inserted === 1 ? "y" : "ies"} added, ${evaluated} records evaluated`}
                 </CardDescription>
               </div>
@@ -405,7 +405,7 @@ export default function CrawlerProgressMeter({ jobId, onClose }) {
             <div>
               <span className="text-slate-500">Job ID:</span>
               <p className="font-mono text-xs text-slate-700">
-                {(() => { const s = String(job.id ?? ""); return s.length > 16 ? s.slice(0, 16) + "â¦" : s; })()}
+                {(() => { const s = String(job.id ?? ""); return s.length > 16 ? s.slice(0, 16) + "…" : s; })()}
               </p>
             </div>
             <div>

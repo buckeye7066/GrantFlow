@@ -92,8 +92,8 @@ if (!trimmedUrl && urlRequired) {
 }
 if (!trimmedUrl && !urlRequired) {
     toast({
-        title: 'No URL â method noted',
-        description: `This opportunity uses "${formData.application_method}" â no URL required. Instructions field will guide applicants.`
+        title: 'No URL — method noted',
+        description: `This opportunity uses "${formData.application_method}" — no URL required. Instructions field will guide applicants.`
     });
 }
 // Outcome fields are optional: send an explicit null for blanks so a cleared

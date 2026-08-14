@@ -119,18 +119,18 @@ const LOAN_PHRASE_RX = [
   /\bmonthly\s+payment\b/i,
   /\bborrower\b/i,
   /\brepay\s+(the\s+)?loan\b/i,
-  // KNOWN DEFECT, NOT FIXED HERE (cross-batch): the `funds?` alternative makes
-  // this match standard federal GRANT clawback language — "the recipient may be
-  // required to make repayment of funds if the award is terminated" — and
-  // `enforceOpportunityPolicy` DROPS a loan-like row at the ingest choke point,
-  // so a real, fully-open grant is deleted before the match engine can see it.
-  // Narrowing to `loan` loses no genuine loan (loan program/application/fund,
-  // microloan, APR, borrower, "repay the loan", "loan repayment schedule/terms"
-  // all still fire), but it reddens `tests/unit/opportunityPolicy.test.mjs`
-  // ("isLoanLike: detects repayment of funds"), whose fixture is the synthetic
-  // string 'No repayment required... wait, repayment of funds'. That test file
-  // is owned by another batch, so the two must change together.
-  /\brepayment\s+(of\s+)?(the\s+)?(loan|funds?)\b/i,
+  // FIXED (was: the `funds?` alternative matched standard federal GRANT
+  // clawback language — "the recipient may be required to make repayment of
+  // funds if the award is terminated" — and `enforceOpportunityPolicy` DROPS
+  // a loan-like row at the ingest choke point, so a real, fully-open grant
+  // was deleted before the match engine could ever see it. Narrowed to
+  // `loan` specifically; both word orders ("repayment of the loan" and
+  // "loan repayment schedule/terms") still fire, and no genuine loan phrase
+  // (loan program/application/fund, microloan, APR, borrower, "repay the
+  // loan") is lost. `tests/unit/opportunityPolicy.test.mjs`'s
+  // "isLoanLike: detects repayment of funds" fixture was updated in the same
+  // commit to a genuinely loan-shaped string.
+  /\b(?:repayment\s+(?:of\s+)?(?:the\s+)?loan|loan\s+repayment)\b/i,
 ]
 
 /** Grant-friendly contexts: mention of loans in assistance/forgiveness context — do not treat as loan product. */

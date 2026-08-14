@@ -79,7 +79,23 @@ export async function runDomainCorpusCrawl(db, options = {}) {
   const verifyHead = options.headForVerification ?? headForVerification
   // Resolve the profile signals (dispatcher passes profileContext.signals).
   const signals = options.signals ?? options.profileContext?.signals ?? null
-  const profileForCrawl = signals ? { signals } : MINIMAL_PROFILE
+  // Domain engines (healthClinicalEngine, housingCommunityFinanceEngine,
+  // utilitiesHardshipEngine, ...) read `profile.needs` / `profile.health.conditions` /
+  // `profile.location` / `profile.states` directly off the profile object passed to
+  // runAllDomainEngines below — NOT off `signals`. Handing them only `{ signals }`
+  // left every engine seeing an empty needs/health/location profile, so the entire
+  // profile-aware domain engine layer produced identical results regardless of what
+  // a profile actually declared. `needs`/`health_conditions` are Sets on `signals`
+  // (no .length/.some) so they must be converted to arrays here.
+  const profileForCrawl = signals
+    ? {
+        signals,
+        needs: Array.from(signals.needs ?? []),
+        health: { conditions: Array.from(signals.health_conditions ?? []) },
+        location: signals.location ?? {},
+        states: Array.isArray(signals.states) ? signals.states : [],
+      }
+    : MINIMAL_PROFILE
 
   // Decide which corpora to run. Explicit options.domainIds wins; otherwise
   // derive from the profile; with no profile, run the whole registry.

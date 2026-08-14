@@ -44,7 +44,7 @@ export class RateLimitedFetcher {
       state.queue.push({ url, options, resolve, reject })
       this._pump(host).catch((err) => {
         qualityLog.error(`[RateLimitedFetcher] Pump error for ${host}:`, err)
-        // Do NOT resolve here â the task itself carries resolve/reject.
+        // Do NOT resolve here — the task itself carries resolve/reject.
         // A pump-level crash that was not tied to a specific task is just logged.
       })
     })

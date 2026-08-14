@@ -402,12 +402,12 @@ test('same profile+opp pair produces valid scores through matchingEngine and mat
   // Both paths must produce scores in valid range; large divergence indicates a rogue scoring path
   assert.ok(path1.score >= 0 && path1.score <= 100, 'matchingEngine score in valid range')
   assert.ok(path2.score >= 0 && path2.score <= 100, 'matchDecisionEngine score in valid range')
-  // Goal 4: single decision authority â scores must not diverge by more than 20 points
+  // Goal 4: single decision authority — scores must not diverge by more than 20 points
   // If they do, matchingEngine has diverged from the canonical computeMatchDecision path
   assert.ok(
     Math.abs(path1.score - path2.score) <= 20,
     `Score divergence too large: matchingEngine=${path1.score}, matchDecisionEngine=${path2.score}. ` +
-    'Goal 4 requires a single canonical scoring authority â divergence >20 points suggests a rogue path.'
+    'Goal 4 requires a single canonical scoring authority — divergence >20 points suggests a rogue path.'
   )
 })
 
