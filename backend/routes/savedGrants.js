@@ -198,6 +198,17 @@ router.post('/', async (req, res) => {
       })
     }
 
+    // KNOWN GAP, deliberately NOT gated here yet: `activeProfileId` comes
+    // verbatim from `?profile_id` / `X-Profile-Id`, so a caller can write a
+    // `saved_grants` row TAGGED WITH A PROFILE THEY DO NOT OWN. Every row is
+    // also `user_id`-scoped and the GET/PATCH/DELETE paths all constrain on
+    // `user_id`, so this is a mis-attribution, never a cross-user read or write.
+    // The obvious fix — `ensureProfileAccess(req, res, activeProfileId)` — was
+    // written and REVERTED: it reaches `getAccessibleProfileIds`, which throws
+    // `no such column: user_id` on a drifted/minimal schema, turning every save
+    // into a 500 (reproduced against backend/tests/savedGrantsSchema.test.js).
+    // Hardening that resolver is the prerequisite; see the batch report.
+
     const id = crypto.randomUUID()
     // audit:allow unscoped-profile-query -- INSERT includes profile_id and is scoped by activeProfileId.
     // ON CONFLICT targets the partial unique index keyed on

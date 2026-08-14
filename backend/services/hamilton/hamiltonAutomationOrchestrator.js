@@ -1241,7 +1241,17 @@ async function runAutopilotPathway(db, {
       ? `portal terms forbid agent automation (${portalHostForPolicy || 'this host'}); Hamilton respects the site's ToS and uses the lawful ${portalPolicy.fallback_path || 'pdf_docx'} packet instead`
       : !isBrowserAutomationEnabled()
         ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
-        : 'portal host is not on the allowlist and the profile has no declared portal or saved credential for it'
+        // AN INSTRUCTION THAT CANNOT BE SATISFIED IS WORSE THAN NO INSTRUCTION.
+        // This branch used to read "portal host is not on the allowlist and the
+        // profile has no declared portal or saved credential for it", which told
+        // the owner to add the host to HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST
+        // or save a credential. Neither can EVER satisfy
+        // `browserAutomationPermittedForUrl`: it `void`s `extraAllowedHosts`
+        // entirely and returns true only for the ONE reserved synthetic fixture
+        // origin (isControlledBetaSyntheticBrowserUrl). So for every real portal
+        // the owner was chasing a fix that does not exist. State the real reason
+        // and the real next step.
+        : `this bounded release has no reviewed real-portal submission adapter, so Hamilton does not drive a browser on ${portalHostForPolicy || 'this host'} — a lawful packet was prepared instead; use side-by-side co-browse or apply manually. (No allowlist entry or saved credential can change this: the controlled-beta boundary permits only the reserved synthetic fixture origin.)`
     const packet = await generateAndSavePacket(db, {
       profile, opportunity, grant, automationType: 'pdf_docx', taskId: task.id, userId,
     }).catch((err) => ({ error: err?.message || String(err) }))

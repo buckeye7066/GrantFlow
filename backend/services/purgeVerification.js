@@ -60,12 +60,8 @@ export async function verifyOpportunityUrl(sourceUrl, { fetchFn, timeoutMs = 120
   }
 
   const fetch_ = fetchFn ?? globalThis.fetch
-if (!fetch_) {
-  signals.push({ type: 'fetch_unavailable', value: 'error', detail: 'No fetch implementation available â inject fetchFn or run in an environment with globalThis.fetch' })
-  return { verified: false, signals, verificationLevel, statusHint }
-}
   if (!fetch_) {
-    signals.push({ type: 'fetch_unavailable', value: 'error', detail: 'No fetch implementation available' })
+    signals.push({ type: 'fetch_unavailable', value: 'error', detail: 'No fetch implementation available - inject fetchFn or run in an environment with globalThis.fetch' })
     return { verified: false, signals, verificationLevel, statusHint }
   }
 
@@ -194,8 +190,24 @@ function extractTextSignals(html) {
   const signals = []
   let statusHint = 'unknown'
 
-  // Strip tags for plain text analysis
-  const plainText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+  // Strip tags for plain text analysis.
+  //
+  // NON-PROSE BODIES MUST GO FIRST. `html.replace(/<[^>]+>/g, ' ')` removes the
+  // <script>/<style> TAGS but leaves their BODIES in the text — so a JS string
+  // literal, an analytics payload, a templating stub, or an HTML comment could
+  // supply a CLOSED_PHRASES hit. That hit sets verificationLevel='primary' →
+  // verified:true, which the purge system treats as authoritative evidence that
+  // the opportunity is dead. A funder's live page that merely SHIPS the words
+  // "no longer accepting applications" inside a script bundle would have had its
+  // real funding source deleted. Verification evidence must come from copy a
+  // human could actually read on the page.
+  const visibleHtml = String(html ?? '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, ' ')
+    .replace(/<template\b[^>]*>[\s\S]*?<\/template\s*>/gi, ' ')
+  const plainText = visibleHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
 
   for (const phrase of CLOSED_PHRASES) {
     if (phrase.test(plainText)) {

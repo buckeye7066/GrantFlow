@@ -811,7 +811,17 @@ export async function processDocumentIngestionJob({
       })
       await syncProfileDisplayNameFromSections(db, profile?.id, sections)
     } catch (error) {
-      console.warn('[documentIngestion] deterministic section extract failed:', error?.message || error)
+      // RECORD THE FAILURE — this is the NON-AI path that writes the DECLARED
+      // profile facts (basic_information / organization_details /
+      // medical_insurance / government_assistance) that every downstream
+      // crawler-selection and eligibility gate reads. A bare console.warn let
+      // the job continue to `processing_status='completed'` with
+      // `processing_error = null` and a summary of "No new structured data
+      // extracted from this document", so an upload that FAILED to populate the
+      // profile was indistinguishable from a document that genuinely contained
+      // nothing. Stamp it where the ingest record can be read back.
+      console.error('[documentIngestion] deterministic section extract FAILED:', error?.message || error)
+      aiSectionsLog._deterministic_extract_error = String(error?.message || error)
     }
 
     // Extraction-only mode (skip LLM parsing, but keep heuristic section writes above).
@@ -971,7 +981,13 @@ export async function processDocumentIngestionJob({
           aiSectionsLog._openai_auth_error = summary.message
           openai = null
         }
-        // If AI is unstable, stop looping to avoid repeated failures.
+        // If AI is unstable, stop looping to avoid repeated failures — but SAY
+        // SO. One section's error used to `break` the loop over all TARGET_SECTIONS
+        // silently, so every section after the failure was never attempted while
+        // the job still completed with a partial `sections_updated` that read
+        // like the document simply had nothing more in it.
+        aiSectionsLog._aborted_after_section = sectionKey
+        aiSectionsLog._aborted_reason = summary.message || String(error?.message || error)
         break
       }
     }
