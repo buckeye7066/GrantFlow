@@ -11,7 +11,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuthStore } from '@/stores/authStore';
 import { apiFetch } from '@/api/client';
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 export default function AdminDocumentUpload() {
   const [file, setFile] = useState(null);

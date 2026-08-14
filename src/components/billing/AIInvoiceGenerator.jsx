@@ -15,6 +15,10 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
   const { data: activities } = useQuery({
     queryKey: ['activitiesForBilling', organizationId, projectId],
     queryFn: async () => {
+      // Validate input parameters to prevent injection and unexpected behavior.
+      if (!organizationId || (typeof organizationId !== 'string' && typeof organizationId !== 'number')) {
+        throw new Error('Invalid organizationId provided.');
+      }
       // Pull recent real project activity, then let the LLM draft invoice lines from it.
       const grants = await client.entities.Grant.list(`-updated_date`, 10, { organization_id: organizationId });
       const docs = await client.entities.Document.list(`-updated_date`, 10, { organization_id: organizationId });
@@ -37,12 +41,21 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
       return;
     }
 
+    const grantsText = grants.map(g => `- Grant "${g.title ?? 'Untitled'}" status changed to ${g.status ?? 'unknown'} on ${g.updated_date ? new Date(g.updated_date).toLocaleDateString() : 'unknown date'}`).join('\n');
+    const docsText = docs.map(d => `- Uploaded "${d.title ?? 'Untitled'}" (${d.document_type ?? 'unknown type'}) on ${d.created_date ? new Date(d.created_date).toLocaleDateString() : 'unknown date'}`).join('\n');
+
+    if (!grantsText.trim() && !docsText.trim()) {
+      setError('Unable to build an activity summary from recent project activity. Please try again or add items manually.');
+      setIsLoading(false);
+      return;
+    }
+
     const activitySummary = `
       Recent Grant Updates:
-      ${grants.map(g => `- Grant "${g.title ?? 'Untitled'}" status changed to ${g.status ?? 'unknown'} on ${g.updated_date ? new Date(g.updated_date).toLocaleDateString() : 'unknown date'}`).join('\n')}
+      ${grantsText}
 
       Recent Document Uploads:
-      ${docs.map(d => `- Uploaded "${d.title ?? 'Untitled'}" (${d.document_type ?? 'unknown type'}) on ${d.created_date ? new Date(d.created_date).toLocaleDateString() : 'unknown date'}`).join('\n')}
+      ${docsText}
     `;
     
     const prompt = `You are an expert grant writer's billing assistant. Based on the following recent activity for a client, generate a list of billable line items for an invoice.
@@ -94,15 +107,19 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
   };
 
   const handleItemChange = (index, field, value) => {
-    const newItems = [...proposedItems];
-    newItems[index][field] = value;
-    setProposedItems(newItems);
+    setProposedItems(prev => {
+      const newItems = [...prev];
+      newItems[index] = { ...newItems[index], [field]: value };
+      return newItems;
+    });
   };
   
   const toggleEdit = (index) => {
-    const newItems = [...proposedItems];
-    newItems[index].isEditing = !newItems[index].isEditing;
-    setProposedItems(newItems);
+    setProposedItems(prev => {
+      const newItems = [...prev];
+      newItems[index] = { ...newItems[index], isEditing: !newItems[index].isEditing };
+      return newItems;
+    });
   };
 
   const handleApproveAll = () => {

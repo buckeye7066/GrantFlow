@@ -34,7 +34,7 @@ function buildSummary(grant) {
 }
 
 const formatMoney = (amount) => {
-    if (typeof amount !== 'number') return 'N/A';
+    if (typeof amount !== 'number' || !isFinite(amount)) return 'N/A';
     return '$' + amount.toLocaleString('en-US');
 };
 
@@ -42,10 +42,10 @@ const DetailRow = ({ label, value }) => {
     if (!value || (Array.isArray(value) && value.length === 0)) return null;
     const displayValue = Array.isArray(value) ? value.join(', ') : value;
     return (
-        <div>
+        <>
             <dt>{label}</dt>
             <dd>{displayValue}</dd>
-        </div>
+        </>
     );
 };
 
@@ -65,7 +65,7 @@ export default function PrintableProfile({ organization, grants = [], contactMet
         grouped[grant.status].grants.push(grant);
       } else {
         // Distinguish missing status from unrecognised status for observability
-        if (process.env.NODE_ENV !== 'production') {
+        if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') {
            
           console.warn('[PrintableProfile] Grant with unexpected status:', grant.id, grant.status);
         }

@@ -42,7 +42,7 @@ export default function AIApplicationAssistant({ open, onClose, grant, organizat
 
   useEffect(() => {
     setContent(active?.content ?? '')
-  }, [active?.section_key])
+  }, [active?.section_key, active?.content])
 
   const autoPopulateMutation = useMutation({
     mutationFn: () => autoPopulate(applicationId),

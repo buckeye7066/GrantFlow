@@ -51,12 +51,12 @@ const ChartStyle = ({
   config
 }) => {
   const colorConfig = React.useMemo(
-    () => Object.entries(config).filter(([, itemCfg]) => itemCfg.theme || itemCfg.color),
+    () => config ? Object.entries(config).filter(([, itemCfg]) => itemCfg.theme || itemCfg.color) : [],
     [config]
   )
 
   React.useEffect(() => {
-    if (!colorConfig.length) return
+    if (!config || !colorConfig.length) return
     Object.entries(THEMES).forEach(([theme, prefix]) => {
       const selector = prefix
         ? `${prefix} [data-chart="${id}"]`

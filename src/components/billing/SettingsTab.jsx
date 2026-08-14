@@ -54,13 +54,13 @@ export default function SettingsTab() {
   };
 
   const handleNumberChange = (field, value) => {
-    const num = parseFloat(value);
-    setSettings(prev => ({ ...prev, [field]: isNaN(num) ? 0 : num }));
+    const num = value === "" ? null : parseFloat(value);
+    setSettings(prev => ({ ...prev, [field]: isNaN(num) ? null : num }));
   };
   
   const handleIntChange = (field, value) => {
-    const num = parseInt(value, 10);
-    setSettings(prev => ({ ...prev, [field]: isNaN(num) ? 0 : num }));
+    const num = value === "" ? null : parseInt(value, 10);
+    setSettings(prev => ({ ...prev, [field]: isNaN(num) ? null : num }));
   };
 
   if (isLoading || !settings) {
@@ -80,16 +80,16 @@ export default function SettingsTab() {
             <Card>
               <CardHeader><CardTitle className="text-lg">Rates & Currency</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div><Label>Default Hourly Rate</Label><Input type="number" value={settings.default_hourly_rate || ''} onChange={e => handleNumberChange('default_hourly_rate', e.target.value)} /></div>
-                <div><Label>Travel Hourly Rate</Label><Input type="number" value={settings.travel_hourly_rate || ''} onChange={e => handleNumberChange('travel_hourly_rate', e.target.value)} /></div>
-                <div><Label>Admin Hourly Rate</Label><Input type="number" value={settings.admin_hourly_rate || ''} onChange={e => handleNumberChange('admin_hourly_rate', e.target.value)} /></div>
+                <div><Label>Default Hourly Rate</Label><Input type="number" value={settings.default_hourly_rate ?? ""} onChange={e => handleNumberChange('default_hourly_rate', e.target.value)} /></div>
+                <div><Label>Travel Hourly Rate</Label><Input type="number" value={settings.travel_hourly_rate ?? ""} onChange={e => handleNumberChange('travel_hourly_rate', e.target.value)} /></div>
+                <div><Label>Admin Hourly Rate</Label><Input type="number" value={settings.admin_hourly_rate ?? ""} onChange={e => handleNumberChange('admin_hourly_rate', e.target.value)} /></div>
                 <div><Label>Currency</Label><Input value={settings.currency || ''} onChange={e => handleInputChange('currency', e.target.value)} /></div>
               </CardContent>
             </Card>
             <Card>
               <CardHeader><CardTitle className="text-lg">Time Tracking</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div><Label>Time Increment (minutes)</Label><Input type="number" value={settings.time_increment_minutes || ''} onChange={e => handleIntChange('time_increment_minutes', e.target.value)} /></div>
+                <div><Label>Time Increment (minutes)</Label><Input type="number" value={settings.time_increment_minutes ?? ""} onChange={e => handleIntChange('time_increment_minutes', e.target.value)} /></div>
                 <div><Label>Minimum Billable (minutes)</Label><Input type="number" value={settings.minimum_billable_minutes || ''} onChange={e => handleIntChange('minimum_billable_minutes', e.target.value)} /></div>
                 <div><Label>Idle Timeout (minutes)</Label><Input type="number" value={settings.idle_timeout_minutes || ''} onChange={e => handleIntChange('idle_timeout_minutes', e.target.value)} /></div>
               </CardContent>
