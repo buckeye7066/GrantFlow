@@ -40,6 +40,8 @@ import {
   filterByPolicy,
   getPolicyRejectionCounts,
   resetPolicyRejectionCounts,
+  isMatchingFunds,
+  isLoanLike,
 } from '../../backend/services/shared/opportunityPolicy.js'
 import {
   upsertFundingOpportunity,
@@ -110,6 +112,77 @@ test('P1: enforceOpportunityPolicy rejects every forbidden opportunity class wit
   })
   assert.equal(ok.ok, true)
   assert.equal(ok.reason, null)
+})
+
+// ---------------------------------------------------------------------------
+// P1b. A MENTION is not a DECLARATION.
+//
+// enforceOpportunityPolicy is the ingest choke point (upsertFundingOpportunity
+// is the ONLY admission gate), so a false `matching_funds` / `loan_like`
+// verdict DELETES a real grant before the match engine can ever see it. Federal
+// notices state the opposite of a requirement in the same words, and grant
+// terms routinely use loan-shaped clawback language. Each case below FAILS on
+// the pre-fix substring rules.
+// ---------------------------------------------------------------------------
+
+test('P1b: a NEGATED cost-share/matching statement is not a matching-funds requirement', () => {
+  const negated = [
+    'Cost Sharing or Matching Requirement: No',
+    'Cost sharing is not required for this program.',
+    'No match required.',
+    'Applicants are exempt from cost share.',
+    'Matching funds: none',
+    'The cost-share requirement is waived for all applicants.',
+  ]
+  for (const description of negated) {
+    assert.equal(
+      isMatchingFunds({ title: 'Community Infrastructure Grant', description }),
+      false,
+      `must not read a denial as a requirement: ${description}`,
+    )
+    const r = enforceOpportunityPolicy({
+      url: 'https://grants.gov/g',
+      title: 'Community Infrastructure Grant',
+      description,
+    })
+    assert.equal(r.ok, true, `must not be dropped at ingest: ${description}`)
+  }
+})
+
+test('P1b: a REAL matching requirement still declares itself, negation elsewhere notwithstanding', () => {
+  const declared = [
+    'A 25% cost share is required.',
+    'Requires matching funds 1:1 cost-share.',
+    'Applicants must provide dollar-for-dollar matching funds. No exceptions.',
+    // First clause declares; a later waiver clause must not exempt the notice.
+    'A 25% cost share is required. Cost sharing is waived for tribal applicants.',
+  ]
+  for (const description of declared) {
+    assert.equal(
+      isMatchingFunds({ title: 'Community Grant', description }),
+      true,
+      `must still detect a real requirement: ${description}`,
+    )
+  }
+  // Structured declarations remain authoritative and are never softened.
+  assert.equal(isMatchingFunds({ requires_match: true }), true)
+  assert.equal(isMatchingFunds({ requires_cost_share: true }), true)
+  assert.equal(isMatchingFunds({ match_percentage: 25 }), true)
+  assert.equal(isMatchingFunds({ requires_cost_share: false, description: 'Community grant.' }), false)
+})
+
+test('P1b: genuine loan shapes still classify as loans', () => {
+  assert.equal(
+    isLoanLike({ title: 'Microloan Program', description: 'Borrower repays the loan at an APR of 8%.' }),
+    true,
+  )
+  assert.equal(isLoanLike({ opportunity_type: 'loan', title: 'X', description: 'y' }), true)
+  // NOTE — an OPEN defect deliberately left unpinned here: LOAN_PHRASE_RX's
+  // `repayment of funds` alternative also matches federal GRANT clawback
+  // language, dropping real grants at ingest. Fixing it requires changing
+  // tests/unit/opportunityPolicy.test.mjs ("isLoanLike: detects repayment of
+  // funds"), which is owned by another batch — see the cross-batch note in
+  // backend/services/shared/opportunityPolicy.js.
 })
 
 // ---------------------------------------------------------------------------
