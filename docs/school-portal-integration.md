@@ -229,7 +229,7 @@ A minimal nightly export from your SIS to GrantFlow:
 ```javascript
 import fetch from 'node-fetch'
 
-const API = 'https://app.grantflow.com/api/school-portal'
+const API = 'https://app.axiombiolabs.org/grantflow/api/school-portal'
 const KEY = process.env.GRANTFLOW_SCHOOL_API_KEY
 
 async function syncRoster(students) {

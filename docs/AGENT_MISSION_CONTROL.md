@@ -68,7 +68,7 @@ system — activity, productivity, outcomes, errors, recent events.
 | Filter | Values |
 |---|---|
 | Range | `24h`, `7d`, `30d`, `custom` (`?start=` `?end=`) |
-| Agent | `all`, `anya`, `sam`, `robert`, `yana`, `john` |
+| Agent | `all`, `anya`, `sam`, `robert`, `yana`, `john`, `hamilton` |
 | Status | `all`, `succeeded`, `failed`, `blocked`, `warning` |
 | Severity (Sam) | `critical`, `high`, `medium`, `low` |
 
@@ -96,6 +96,7 @@ tenant filter for cross-profile reads (e.g. `anya_sessions`).
 | GET | `/api/admin/agent-telemetry/sam` | `{ ok, summary, findings: { findings, counts } }` |
 | GET | `/api/admin/agent-telemetry/anya` | `{ ok, summary, panel }` |
 | GET | `/api/admin/agent-telemetry/john` | `{ ok, summary }` |
+| GET | `/api/admin/agent-telemetry/hamilton` | `{ ok, summary }` |
 | GET | `/api/admin/agent-telemetry/health` | `{ ok, overall, agents, diagnostics, unified_table_present, rollup_table_present }` |
 
 Query params accepted on every endpoint:

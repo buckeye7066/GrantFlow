@@ -1,5 +1,14 @@
 # Backend Crawler / Ingestion Subsystem Audit
 
+> **STALE FILE PATHS (found 2026-08-14).** This audit predates a
+> `backend/services/crawlers/` reorganization: `backend/services/crawlers/httpClient.js`
+> and `backend/services/crawlers/grantsGovClient.js`, both cited repeatedly below,
+> no longer exist at those paths — the equivalents now live at
+> `backend/services/shared/httpClient.js` / `backend/services/sources/httpClient.js`
+> and `backend/services/shared/grantsGovClient.js`. Other file:line references in
+> this doc were NOT individually re-verified in this pass; treat every finding
+> below as a historical lead to re-check against current code, not a live map.
+
 Read-only audit of `backend/services/{crawlers,connectors,geo,nationalCrawlerV2,nationalPrograms,sources,portalAdapters}`.
 Findings tagged `[critical|important|nit]` with real `file:line`. Static data-only fixtures under `crawlers/data/**` were skimmed (no logic; noted at end).
 
