@@ -26,6 +26,8 @@ export default function MobileUpdateCard() {
   const [error, setError] = useState('')
   const [progress, setProgress] = useState(0)
   const listenerRef = useRef(null)
+  const checkingRef = useRef(false)
+  const downloadingRef = useRef(false)
 
   useEffect(() => {
     if (!isNative) return undefined
@@ -40,8 +42,9 @@ export default function MobileUpdateCard() {
         const v = current?.bundle?.version
         setBundleVersion(parseVersion(v) ? v : APP_VERSION)
         if (current?.native) setNativeVersion(String(current.native))
-      } catch {
+      } catch (err) {
         // Plugin unavailable (e.g. old APK without it) — keep baked version.
+        console.warn('CapacitorUpdater unavailable:', err?.message || err)
       }
     })()
     return () => {
@@ -51,6 +54,8 @@ export default function MobileUpdateCard() {
   }, [isNative])
 
   const checkForUpdates = useCallback(async () => {
+    if (checkingRef.current) return
+    checkingRef.current = true
     setPhase('checking')
     setError('')
     setManifest(null)
@@ -65,11 +70,14 @@ export default function MobileUpdateCard() {
     } catch (err) {
       setError(err?.message || 'Update check failed.')
       setPhase('error')
+    } finally {
+      checkingRef.current = false
     }
   }, [bundleVersion])
 
   const downloadAndApply = useCallback(async () => {
-    if (!manifest) return
+    if (!manifest || downloadingRef.current) return
+    downloadingRef.current = true
     setPhase('downloading')
     setError('')
     setProgress(0)
@@ -89,6 +97,8 @@ export default function MobileUpdateCard() {
       listenerRef.current = null
       setError(err?.message || 'Update download failed.')
       setPhase('error')
+    } finally {
+      downloadingRef.current = false
     }
   }, [manifest])
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Loader2, Hourglass } from 'lucide-react'
@@ -21,29 +21,36 @@ export function ProfilePricingGate({ profileId, children, onUnlocked }) {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
   const [agreementAccepted, setAgreementAccepted] = useState(false)
+  const isMounted = useRef(true)
+  const activeProfileId = useRef(profileId)
 
-  async function refresh() {
-    if (!profileId) {
-      setLoading(false)
+  async function refresh(pid = profileId) {
+    if (!pid) {
+      if (isMounted.current) setLoading(false)
       return
     }
     try {
-      const r = await accessGateApi.status(profileId)
+      const r = await accessGateApi.status(pid)
+      if (!isMounted.current || activeProfileId.current !== pid) return
       setStatus(r)
       setAgreementAccepted(Boolean(r?.agreement_accepted))
       if (r?.access_granted && typeof onUnlocked === 'function') onUnlocked(r)
     } catch (err) {
+      if (!isMounted.current || activeProfileId.current !== pid) return
       setStatus({ ok: false, access_granted: false, blocking_reason: err?.message })
     } finally {
-      setLoading(false)
+      if (isMounted.current && activeProfileId.current === pid) setLoading(false)
     }
   }
 
   useEffect(() => {
-    let cancelled = false
+    isMounted.current = true
+    activeProfileId.current = profileId
     setLoading(true)
-    refresh().catch(() => !cancelled && setLoading(false))
-    return () => { cancelled = true }
+    refresh(profileId).catch(() => {
+      if (isMounted.current && activeProfileId.current === profileId) setLoading(false)
+    })
+    return () => { isMounted.current = false }
   }, [profileId])
 
   if (loading) {

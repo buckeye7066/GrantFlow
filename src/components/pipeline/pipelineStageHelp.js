@@ -14,7 +14,7 @@
  * through to the default helper at the bottom of this file.
  */
 
-export const PIPELINE_STAGE_HELP = {
+export const PIPELINE_STAGE_HELP = Object.freeze({
   discovery: {
     label: 'Discovery',
     plainEnglish: 'GrantFlow found this opportunity, but no one has reviewed it yet.',
@@ -127,13 +127,13 @@ export const PIPELINE_STAGE_HELP = {
     plainEnglish: 'This opportunity is no longer being worked on.',
     nextStep: 'No further action needed. Move on to other pipeline items.',
   },
-}
+})
 
-const DEFAULT_HELP = {
+const DEFAULT_HELP = Object.freeze({
   label: 'Unknown status',
   plainEnglish: 'GrantFlow does not have a description for this status yet.',
   nextStep: 'Open the card and review where this opportunity stands.',
-}
+})
 
 /**
  * Look up help for a status. Always returns an object so callers don't
@@ -141,7 +141,9 @@ const DEFAULT_HELP = {
  */
 export function getStageHelp(status) {
   const key = String(status || '').toLowerCase()
-  return PIPELINE_STAGE_HELP[key] || DEFAULT_HELP
+  return key in PIPELINE_STAGE_HELP
+    ? { ...PIPELINE_STAGE_HELP[key] }
+    : { ...DEFAULT_HELP }
 }
 
 /**

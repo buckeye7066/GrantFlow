@@ -16,6 +16,7 @@ export default function JohnDraftDetails({ draftId, onClose, onChanged }) {
   const [saving, setSaving] = useState(false)
   const [subject, setSubject] = useState("")
   const [body, setBody] = useState("")
+  const safeOnClose = onClose ?? (() => {})
 
   const load = useCallback(async () => {
     if (!draftId) return
@@ -89,7 +90,7 @@ export default function JohnDraftDetails({ draftId, onClose, onChanged }) {
               ) : null}
             </div>
           </div>
-          <Button onClick={onClose} variant="ghost" size="icon">
+          <Button onClick={safeOnClose} variant="ghost" size="icon">
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -151,7 +152,7 @@ export default function JohnDraftDetails({ draftId, onClose, onChanged }) {
         </div>
 
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
-          <Button onClick={onClose} variant="outline" disabled={saving}>
+          <Button onClick={safeOnClose} variant="outline" disabled={saving}>
             Close
           </Button>
           <Button onClick={revise} disabled={saving || loading}>
