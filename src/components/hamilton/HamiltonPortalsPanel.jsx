@@ -102,7 +102,7 @@ export default function HamiltonPortalsPanel({ profileId }) {
               )}
               <Badge variant="outline" className={`text-[10px] ${credentialsBadgeClass(p.credentials_status)}`}>
                 {p.credentials_status === 'needed' && (<ShieldAlert className="w-3 h-3 mr-0.5" />)}
-                {p.credentials_status.replace(/_/g, ' ')}
+                {p.credentials_status?.replace(/_/g, ' ') || ''}
               </Badge>
               <Badge variant="outline" className="text-[10px]">
                 source: {p.source}
@@ -114,7 +114,7 @@ export default function HamiltonPortalsPanel({ profileId }) {
             {p.reason && (
               <p className="text-xs text-slate-500 italic">{p.reason}</p>
             )}
-            {p.portal_url && (
+            {p.portal_url && (p.portal_url.startsWith('http://') || p.portal_url.startsWith('https://')) && (
               <a
                 href={p.portal_url}
                 target="_blank"

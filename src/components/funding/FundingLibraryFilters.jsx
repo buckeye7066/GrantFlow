@@ -49,7 +49,7 @@ const APPLICANT_OPTIONS = [
   { value: 'business', label: 'Business' },
 ]
 
-export default function FundingLibraryFilters({ filters, onChange, onReset, onRefresh, loading }) {
+export default function FundingLibraryFilters({ filters = {}, onChange, onReset, onRefresh, loading }) {
   const set = (k, v) => onChange({ ...filters, [k]: v })
 
   return (
@@ -58,7 +58,7 @@ export default function FundingLibraryFilters({ filters, onChange, onReset, onRe
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">Filter the library</CardTitle>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={onReset}>Reset</Button>
+            <Button variant="outline" size="sm" onClick={() => onReset?.()}>Reset</Button>
             <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
               <RotateCw className={`mr-1 h-3 w-3 ${loading ? 'animate-spin' : ''}`} /> Refresh
             </Button>

@@ -26,7 +26,9 @@ const VALID_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
  */
 function normalizeBackendDecision(...candidates) {
   for (const c of candidates) {
-    if (!c) continue
+    // Explicitly guard null/undefined/empty before coercion so a null
+    // candidate can never reach String() and cause a runtime error.
+    if (c === null || c === undefined || c === '') continue
     const up = String(c).toUpperCase()
     if (VALID_DECISIONS.has(up)) return up
   }

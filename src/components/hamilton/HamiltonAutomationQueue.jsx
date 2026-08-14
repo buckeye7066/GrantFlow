@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useCallback } from 'react'
+﻿import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -41,17 +41,24 @@ export default function HamiltonAutomationQueue({ profileId }) {
   const [loading, setLoading] = useState(false)
   const [openTask, setOpenTask] = useState(null)
 
+  // Guard against overlapping polls — the 15s tick can fire while a previous
+  // fetch is still pending. Each call names itself with an incrementing run id;
+  // only the newest run is allowed to update tasks/loading, so a slow older
+  // response can't clobber fresher data with stale tasks.
+  const runIdRef = useRef(0)
   const load = useCallback(async () => {
     if (!profileId) return
+    const runId = ++runIdRef.current
     setLoading(true)
     try {
       const params = new URLSearchParams({ profile_id: String(profileId) })
       const res = await client.get(`/api/hamilton/automation/tasks?${params.toString()}`)
+      if (runId !== runIdRef.current) return
       setTasks(Array.isArray(res?.tasks) ? res.tasks : [])
     } catch {
       // Network errors shouldn't tear the panel down — leave the prior list visible.
     } finally {
-      setLoading(false)
+      if (runId === runIdRef.current) setLoading(false)
     }
   }, [profileId])
 

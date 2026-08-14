@@ -154,6 +154,7 @@ export async function requestProfileFieldAI(context) {
 }
 
 export async function hardDeleteProfileAdmin(profileId, payload = {}) {
+  assertRealProfileId(profileId, 'hardDeleteProfileAdmin')
   return apiFetch(`/api/admin/profiles/${profileId}/hard-delete`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -161,6 +162,7 @@ export async function hardDeleteProfileAdmin(profileId, payload = {}) {
 }
 
 export async function restoreProfileAccessAdmin(profileId, payload = {}) {
+  assertRealProfileId(profileId, 'restoreProfileAccessAdmin')
   return apiFetch(`/api/admin/profiles/${profileId}/restore-access`, {
     method: 'POST',
     body: JSON.stringify(payload),

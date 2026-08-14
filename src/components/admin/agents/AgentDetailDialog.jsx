@@ -38,11 +38,13 @@ export default function AgentDetailDialog({ agent, open, onOpenChange, onStarted
 
   useEffect(() => {
     if (!open || !agent || agent.agent_name === 'anya') return
+    let active = true
     setError(null)
     setNotice(null)
     agentControlApi.getDirective(agent.agent_name)
-      .then((res) => setExistingDirective(res?.directive || null))
-      .catch(() => setExistingDirective(null))
+      .then((res) => { if (active) setExistingDirective(res?.directive || null) })
+      .catch(() => { if (active) setExistingDirective(null) })
+    return () => { active = false }
   }, [open, agent])
 
   if (!agent) return null

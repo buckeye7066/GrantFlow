@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -11,21 +11,27 @@ export default function ReverseLookup({ profileId, profileName }) {
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const { toast } = useToast()
+  const requestIdRef = useRef(0)
 
   const handleSearch = useCallback(async () => {
     if (!profileId) return
+    const currentRequestId = ++requestIdRef.current
     setLoading(true)
     try {
       const data = await reverseLookup(profileId)
+      if (currentRequestId !== requestIdRef.current) return
       setResults(data)
       setExpanded(true)
       if ((data.suggested_funders?.length ?? 0) === 0) {
         toast({ title: 'No funders found', description: 'Try completing more profile fields for better matches.' })
       }
     } catch (err) {
+      if (currentRequestId !== requestIdRef.current) return
       toast({ title: 'Error', description: err.message, variant: 'destructive' })
     } finally {
-      setLoading(false)
+      if (currentRequestId === requestIdRef.current) {
+        setLoading(false)
+      }
     }
   }, [profileId, toast])
 
