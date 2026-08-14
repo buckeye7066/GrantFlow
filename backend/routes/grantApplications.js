@@ -218,7 +218,7 @@ router.post('/', async (req, res) => {
 
     if (!req.ctx?.isAdmin) {
       const canAccess = await ensureProfileAccess(req, res, profileId)
-      if (!canAccess) return
+      if (!canAccess) return res.status(403).json({ error: 'Forbidden' })
     }
 
     const id = crypto.randomUUID()

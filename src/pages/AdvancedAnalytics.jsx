@@ -264,7 +264,7 @@ export default function AdvancedAnalytics() {
                             <div className="text-sm text-slate-600">{statusGrants.length} grants</div>
                           </div>
                           <div className="text-sm font-semibold">
-                            {((statusGrants.length / grants.length) * 100).toFixed(0)}%
+                            {((statusGrants.length / scopedGrants.length) * 100).toFixed(0)}%
                           </div>
                         </div>
                       ))}

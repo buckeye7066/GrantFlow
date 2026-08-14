@@ -12,7 +12,14 @@ export async function listProfiles(params = {}) {
       Object.prototype.hasOwnProperty.call(params, 'signal') ||
       Object.prototype.hasOwnProperty.call(params, 'meta'))
 
-  const effectiveParams = looksLikeQueryContext ? {} : params
+  const rawParams = looksLikeQueryContext ? {} : params
+  // Defensive validation: only a plain object (or null/undefined) is a valid
+  // query-params input. Non-object values (strings, numbers, arrays) would
+  // otherwise produce malformed query strings or throw inside Object.entries.
+  const effectiveParams =
+    rawParams == null || typeof rawParams !== 'object' || Array.isArray(rawParams)
+      ? {}
+      : rawParams
 
   const searchParams = new URLSearchParams()
   Object.entries(effectiveParams)
