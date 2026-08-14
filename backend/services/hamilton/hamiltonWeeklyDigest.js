@@ -23,6 +23,9 @@
 import { createOutlookProvider } from '../john/johnOutlookProvider.js'
 import { getJohnConfig } from '../john/johnOutreachSafety.js'
 import { resolveProfileContacts, sendBroadcast } from '../comms/commsService.js'
+// The SINGLE canonical "did this actually reach the funder" predicate — never
+// re-derive one here (CLAUDE.md: a packet is never proof).
+import { taskHasVerifiedExternalSubmission } from './submissionProofPredicate.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('hamiltonWeeklyDigest')
@@ -115,12 +118,33 @@ async function gatherProfileSignals(db, profileId, now) {
 
   try {
     out.submittedThisWeek = await db.prepare(
-      `SELECT t.id, t.submitted_at, g.title, g.funder
+      `SELECT t.*, g.title, g.funder
          FROM application_tasks t
          LEFT JOIN grants g ON g.id = t.grant_id
         WHERE t.profile_id = ? AND t.submitted_at IS NOT NULL AND t.submitted_at >= ?
         ORDER BY t.submitted_at DESC LIMIT 25`,
     ).all(String(profileId), since)
+
+    // "SUBMITTED" HAS TWO HONEST MEANINGS (CLAUDE.md, owner North Star
+    // 2026-08-03) and this digest is AUTO-SENT to the profile's contacts, so it
+    // is the last surface that may blur them. `submitted_at` is stamped by the
+    // internal tracker click (routes/grantApplications.js, `manual_submit`)
+    // with no external evidence — the prod audit found 43 tasks at
+    // status='submitted' and ZERO with durable external proof — yet this line
+    // read "N applications submitted", telling a household its applications
+    // had reached the funder when nothing had been transmitted. Split on the
+    // SINGLE canonical predicate rather than re-deriving one here.
+    const verified = []
+    const internal = []
+    for (const row of out.submittedThisWeek) {
+      let isExternal = false
+      try {
+        isExternal = await taskHasVerifiedExternalSubmission(db, row)
+      } catch { isExternal = false } // unreadable proof is NOT proof
+      ;(isExternal ? verified : internal).push(row)
+    }
+    out.submittedExternallyThisWeek = verified
+    out.markedSubmittedThisWeek = internal
   } catch { /* application_tasks may be absent in some envs */ }
 
   try {
@@ -138,7 +162,18 @@ async function gatherProfileSignals(db, profileId, now) {
 
 /** Build the digest content (sections + rendered text/html) for one profile. */
 export function buildDigest({ displayName, signals, now = new Date() }) {
-  const { grants, openInvoices, newGrants = [], submittedThisWeek = [], draftsReadyThisWeek = [] } = signals
+  const {
+    grants, openInvoices, newGrants = [], submittedThisWeek = [], draftsReadyThisWeek = [],
+    // Set by gatherProfileSignals via the canonical submission-proof predicate.
+    // When ABSENT (a hand-built signals object), every row falls to the
+    // INTERNAL-RECORD bucket — the honest default, since an unclassified row is
+    // one nothing proved was externally submitted.
+    submittedExternallyThisWeek = null, markedSubmittedThisWeek = null,
+  } = signals
+  const externallySubmitted = Array.isArray(submittedExternallyThisWeek) ? submittedExternallyThisWeek : []
+  const markedSubmitted = Array.isArray(markedSubmittedThisWeek)
+    ? markedSubmittedThisWeek
+    : (Array.isArray(submittedExternallyThisWeek) ? [] : submittedThisWeek)
 
   // "What happened this week" — the movement since the last digest.
   const nameOf = (g) => `“${g.title || 'Untitled'}”${g.funder ? ` (${g.funder})` : ''}`
@@ -146,8 +181,11 @@ export function buildDigest({ displayName, signals, now = new Date() }) {
   if (newGrants.length) {
     thisWeek.push(`${newGrants.length} new funding source${newGrants.length === 1 ? '' : 's'} added to your pipeline: ${newGrants.slice(0, 6).map(nameOf).join('; ')}${newGrants.length > 6 ? `; +${newGrants.length - 6} more` : ''}.`)
   }
-  if (submittedThisWeek.length) {
-    thisWeek.push(`${submittedThisWeek.length} application${submittedThisWeek.length === 1 ? '' : 's'} submitted: ${submittedThisWeek.slice(0, 6).map(nameOf).join('; ')}.`)
+  if (externallySubmitted.length) {
+    thisWeek.push(`${externallySubmitted.length} application${externallySubmitted.length === 1 ? '' : 's'} submitted to the funder, with a portal confirmation on file: ${externallySubmitted.slice(0, 6).map(nameOf).join('; ')}.`)
+  }
+  if (markedSubmitted.length) {
+    thisWeek.push(`${markedSubmitted.length} application${markedSubmitted.length === 1 ? '' : 's'} marked submitted in your tracker (internal record — no funder confirmation captured): ${markedSubmitted.slice(0, 6).map(nameOf).join('; ')}.`)
   }
   if (draftsReadyThisWeek.length) {
     thisWeek.push(`${draftsReadyThisWeek.length} application draft${draftsReadyThisWeek.length === 1 ? '' : 's'} prepared and waiting for your review: ${draftsReadyThisWeek.slice(0, 6).map(nameOf).join('; ')}.`)

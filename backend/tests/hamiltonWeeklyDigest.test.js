@@ -188,7 +188,20 @@ describe('weekly digest — "what happened this week" delta section (2026-07-05)
     })
     expect(text).toMatch(/WHAT HAPPENED THIS WEEK/)
     expect(text).toMatch(/2 new funding sources added.*NAEMT EMS Scholarship/)
-    expect(text).toMatch(/1 application submitted:.*FSEOG/)
+    // CORRECTED 2026-08-14 (gf-batch-05). This previously asserted
+    // `/1 application submitted:.*FSEOG/`. That assertion was INVALID: this
+    // digest is AUTO-SENT to the profile's contacts, and `submittedThisWeek` is
+    // built purely from `application_tasks.submitted_at`, which the internal
+    // tracker click stamps with no external evidence (the prod audit found 43
+    // such tasks and ZERO with durable external proof). Telling a household its
+    // application was "submitted" when nothing reached the funder is the exact
+    // overstatement CLAUDE.md's "SUBMITTED HAS TWO HONEST MEANINGS" rule
+    // forbids. A signals object carrying no proof classification falls to the
+    // internal-record bucket — the honest default.
+    expect(text).toMatch(/1 application marked submitted in your tracker/)
+    expect(text).toMatch(/no funder confirmation captured/)
+    expect(text).toMatch(/FSEOG/)
+    expect(text).not.toMatch(/1 application submitted:/)
     expect(text).toMatch(/1 application draft prepared and waiting for your review:.*Coca-Cola Scholars/)
     expect(html).toMatch(/What happened this week/)
     expect(counts.this_week).toBe(3)
