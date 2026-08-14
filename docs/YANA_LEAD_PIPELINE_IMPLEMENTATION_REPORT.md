@@ -7,6 +7,22 @@
 > story. Wherever this report references a `larry_*` filename, table, or
 > route, that is the spelling on disk; the user-facing component is
 > "Yana".
+>
+> **STALE — the service/route layer described below has since moved.**
+> Verified 2026-08-14: `backend/services/larry/` no longer exists — none of
+> the ~14 files listed under "Files added → Backend services" (`larryTypes.js`,
+> `larrySafety.js`, `larryRunStore.js`, `larryAgent.js`, etc.) or
+> `backend/routes/larry.js` are present in the current tree. The equivalent
+> functionality now lives under `backend/services/yana/*.js`
+> (`yanaProspectSources.js`, `yanaContactEnrichment.js`, `yanaLeadDiscovery.js`,
+> `yanaScheduler.js`, and siblings) and `backend/routes/yanaOutreach.js`,
+> mounted at `/api/yana-leads` in `backend/server.js` (the `/api/larry` legacy
+> alias this report describes is also gone). The DB layer is the one part that
+> did stay as documented — the `larry_*` tables from
+> `backend/db/migrations/082_larry_tables.sql` are still present in
+> `backend/db/schema.sql`. Treat this report as a record of the pipeline's
+> first implementation, not the current file layout; `docs/AGENT_NOOP_CONDITIONS.md`
+> describes the current Yana behavior and cites the real `yana*` filenames.
 
 ## Files added
 

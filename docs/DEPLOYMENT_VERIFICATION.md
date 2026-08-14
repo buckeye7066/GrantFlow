@@ -25,7 +25,7 @@ This PR fixes critical 500 errors in the `/api/grants/from-opportunity` endpoint
 npm run unit
 
 # Run the comprehensive integration test
-ADMIN_TOKEN=test-admin-token node test-from-opportunity-comprehensive.mjs
+ADMIN_TOKEN=test-admin-token node tests/manual/test-from-opportunity-comprehensive.mjs
 
 # Run the verification script
 PROFILE_ID=profile-demo-tennessee-stem-student ADMIN_TOKEN=test-admin-token \
