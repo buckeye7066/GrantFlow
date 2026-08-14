@@ -37,11 +37,13 @@ router.get('/suggestions', async (req, res) => {
     // what the profile actually DECLARED, each carrying the field id it was
     // read from. Response shape is unchanged so the existing chips render as-is.
     let derived = null
+    let derivationError = null
     try {
       const ctx = await loadProfileContext(req.db, String(profileId))
       derived = deriveProfileItemNeeds(ctx?.profile ?? {}, ctx?.sections ?? {})
     } catch (err) {
-      routeLogger.warn(`[items/suggestions] derivation failed: ${err?.message ?? err}`)
+      derivationError = err?.message ?? String(err)
+      routeLogger.warn(`[items/suggestions] derivation failed: ${derivationError}`)
     }
 
     if (derived) {
@@ -68,10 +70,22 @@ router.get('/suggestions', async (req, res) => {
       })
     }
 
-    // Derivation unavailable (profile load failed) — fall back to the legacy
-    // catalog scorer rather than returning nothing.
+    // Derivation unavailable (the profile could not be READ) — fall back to the
+    // legacy catalog scorer rather than returning nothing. But SAY SO: that
+    // scorer is the nine-row fixture described above, which offered hearing
+    // aids to a building-supplies ministry. Handing those back silently, in the
+    // exact response shape the derived (evidence-carrying) answer uses, makes a
+    // failed read indistinguishable from a real reading of the profile. The
+    // caller now gets the flag and the reason.
     const response = await suggestItemsForProfile(req.db, { profileId, limit: safeLimit })
-    return res.json(response)
+    return res.json({
+      ...response,
+      derivation_failed: true,
+      derivation_error: derivationError,
+      suggestion_basis: 'legacy_catalog_scorer',
+      warning:
+        'These are generic catalog suggestions, not facts read from this profile: the profile could not be loaded. Do not treat them as declared needs.',
+    })
   } catch (error) {
     routeLogger.error('[items/suggestions] error', error)
     return res.status(500).json(formatError(error))

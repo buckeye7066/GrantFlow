@@ -118,7 +118,7 @@ export function pipelineMonitor() {
         const included = body?.included ?? body?.returned ?? body?.count ?? 0
         const suppressionNote =
           (typeof totalFound === 'number' && totalFound > 0 && included === 0)
-            ? ' â  SUPPRESSION DETECTED: candidates found but none included â check relevanceFilter/matchEngine gates'
+            ? ' !! SUPPRESSION DETECTED: candidates found but none included - check relevanceFilter/matchEngine gates'
             : ''
         console.warn(
           // CodeQL js/log-injection (#558): req.path is URL-decoded by

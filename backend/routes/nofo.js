@@ -303,7 +303,7 @@ router.post('/parseNOFO', standardRateLimiter, async (req, res) => {
       ai_provider: 'fallback',
       partial: true,
       warning:
-        'AI provider unavailable. Heuristic preview is for display only â it must not be stored or matched without full AI extraction and manual review.',
+        'AI provider unavailable. Heuristic preview is for display only - it must not be stored or matched without full AI extraction and manual review.',
     })
   } catch (error) {
     console.error('[parseNOFO] Failed:', error)

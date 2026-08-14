@@ -44,6 +44,10 @@ function humanize(id) {
 const STATUS_META = {
   queried_with_results: { variant: 'default',     icon: CheckCircle2, color: 'text-emerald-700' },
   queried_no_results:   { variant: 'secondary',   icon: MinusCircle,  color: 'text-slate-700'   },
+  // Legacy-backend inference only: we know the family was reached, we do NOT
+  // know whether it returned anything. Claiming "returned results" here is the
+  // same overstatement this panel exists to prevent.
+  queried_unknown_results: { variant: 'secondary', icon: Info,        color: 'text-slate-700'   },
   failed:               { variant: 'destructive', icon: AlertOctagon, color: 'text-red-700'     },
   not_yet_queried:      { variant: 'outline',     icon: AlertTriangle, color: 'text-amber-700'  },
   planned:              { variant: 'secondary',   icon: Info,         color: 'text-slate-600'   },
@@ -146,14 +150,24 @@ export default function SearchCoveragePanel({
   // priority order: failures first (need attention), then "queried but
   // empty" (honest), then "queried with results", then "not yet
   // queried" / planned.
-  const grouped = { failed: [], queried_with_results: [], queried_no_results: [], not_yet_queried: [], planned: [] }
+  const grouped = {
+    failed: [],
+    queried_with_results: [],
+    queried_no_results: [],
+    queried_unknown_results: [],
+    not_yet_queried: [],
+    planned: [],
+  }
   for (const id of allIds) {
     const outcome = outcomeBySourceId.get(id)
     let status
     if (outcome) {
       status = classifyOutcome(outcome)
     } else if (outcomes.length === 0) {
-      status = fallbackInferred.has(id) ? 'queried_with_results' : 'not_yet_queried'
+      // Legacy shape: `sources_queried` / `coverage_gaps` say only whether the
+      // family was REACHED. They carry no result count, so this row may not be
+      // reported as "returned results".
+      status = fallbackInferred.has(id) ? 'queried_unknown_results' : 'not_yet_queried'
     } else {
       status = 'not_yet_queried'
     }
@@ -214,6 +228,7 @@ export default function SearchCoveragePanel({
           {renderGroup('failed', 'Source families that failed', 'we tried but the source returned an error')}
           {renderGroup('queried_with_results', 'Source families that returned results', null)}
           {renderGroup('queried_no_results', 'Source families queried but empty', 'we ran the search; no matching opportunities surfaced this run')}
+          {renderGroup('queried_unknown_results', 'Source families queried', 'this run did not report per-source result counts')}
           {renderGroup('not_yet_queried', 'Coverage gaps', 'planned for this profile but not reached this run')}
           {renderGroup('planned', 'Other planned source families', null)}
 
