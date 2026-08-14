@@ -17,6 +17,7 @@
  */
 
 import {
+  FLOOR_OUTCOME,
   RESULT_FLOOR_KV_KEY,
   applyFloorAttempt,
   buildFloorFingerprint,
@@ -148,6 +149,20 @@ export function recordFloorAttempt(ledger, profileId, outcome) {
  * boot net, which counts but never crawls: it must be able to record that a
  * profile has reached its target (clearing any stale exhaustion) without that
  * looking like a discovery attempt.
+ *
+ * `fingerprint` BELONGS TO THE VERDICT, NOT TO THE OBSERVATION — this is the
+ * whole reason the drift-reopen path exists. `evaluateFloorEligibility`
+ * (config/profileResultFloor.js) decides `drifted` by comparing the CURRENT
+ * world fingerprint against `entry.fingerprint`, the one the last ATTEMPT was
+ * made in, and only `applyFloorAttempt` may advance it. This function used to
+ * write it too — and it runs for EVERY profile on EVERY boot
+ * (startup/enforceInvariants.js `enforceProfileResultFloor`), so by the time
+ * the nightly heal sweep read the ledger `entry.fingerprint` had already been
+ * advanced to the current bucket and `drifted` was ALWAYS false. Catalog growth
+ * past `RESULT_FLOOR_CATALOG_DRIFT_STEP` and a changed target could therefore
+ * never re-open an exhausted profile (only the 14-day cooldown could), and the
+ * `drifted && attempts > 0` non-exhausted reset was dead code. The observation
+ * is recorded under its own key so the census keeps its telemetry.
  */
 export function refreshFloorObservation(ledger, profileId, { target, awardable, fingerprint, at = new Date().toISOString() }) {
   const key = String(profileId)
@@ -161,14 +176,19 @@ export function refreshFloorObservation(ledger, profileId, { target, awardable, 
     awardable: count,
     best_awardable: Math.max(Number(prev?.best_awardable) || 0, count),
     observed_at: at,
-    ...(fingerprint ? { fingerprint } : {}),
+    ...(fingerprint ? { observed_fingerprint: fingerprint } : {}),
   }
   if (met) {
     // Served. A stale "exhausted" verdict from when it was short would suppress
-    // every future pass, so reaching the target must clear it outright.
+    // every future pass, so reaching the target must clear it outright. The
+    // attempt fingerprint goes with the verdict it belonged to.
     next.attempts = 0
     next.exhausted_at = null
     next.exhausted_evidence = null
+    next.fingerprint = fingerprint ?? prev?.fingerprint ?? null
+    // A served profile must not keep reporting the outcome of the pass that
+    // failed it — `applyFloorAttempt` stamps ADDED in its own met-branch.
+    next.last_outcome = FLOOR_OUTCOME.ADDED
   } else {
     next.attempts = Number(prev?.attempts) || 0
   }

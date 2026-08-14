@@ -92,10 +92,56 @@ function _isNationalOpportunity(opportunity) {
   return false
 }
 
+// A state NAME used as the name of a COUNTY/CITY/PARISH is a place inside some
+// OTHER state, not a claim about this one. "Delaware County, OH",
+// "Washington County, PA", "Indiana County, PA", "Ohio County, WV",
+// "Kansas City, MO" and "Nevada, IA" are all real places whose titles the old
+// bare-substring rule resolved to DE/WA/IN/OH/KS/NV.
+const _PLACE_QUALIFIER_AFTER_STATE_NAME =
+  /^\s*(county|counties|parish|borough|municipio|city|township|village|town|district)\b/i
+
+/**
+ * Resolve the state a TITLE claims for itself.
+ *
+ * Two rules, in order, and both are narrower than what they replaced:
+ *  1. An EXPLICIT `", XX"` / `", XX —"` declaration wins. That is the canonical
+ *     shape the rest of the product uses (`config/opportunityJurisdiction.js`
+ *     `declaredStateFromTitle`) and it is the row making a claim about itself.
+ *  2. Otherwise a state NAME must appear at a WORD BOUNDARY and must NOT be
+ *     immediately followed by a place qualifier.
+ *
+ * This matters because the result feeds the HARD rule
+ * `geographic_residents_only_exclusive`, whose target is `oppState || titleAbbr`
+ * — and county/city locator rows are minted with `state NULL` (CLAUDE.md), so
+ * the title was the only input. "Delaware County, OH — … residents only" for an
+ * OHIO household resolved to DE and HARD-rejected the household's OWN county
+ * program. A genuine state claim ("Tennessee Promise Scholarship") still
+ * resolves, because rule 2 keeps state names that are not place qualifiers.
+ */
 function _extractStateNameFromTitle(title) {
-  const lower = (title || '').toLowerCase()
+  const raw = String(title || '')
+  const lower = raw.toLowerCase()
+
+  // 1. The row's own explicit "<Place>, XX" declaration.
+  const declared = raw.match(/,\s*([A-Za-z]{2})\b(?=\s*(?:[—–\-|:(]|$))/)
+  if (declared) {
+    const abbr = declared[1].toUpperCase()
+    if (Object.values(_STATE_ABBREVIATIONS).includes(abbr.toLowerCase())) return abbr
+  }
+
+  // 2. A state name at a word boundary that is not naming a county/city.
   for (const [name, abbr] of _STATE_NAME_TO_ABBR_ENTRIES) {
-    if (lower.includes(name)) return abbr
+    let from = 0
+    for (;;) {
+      const at = lower.indexOf(name, from)
+      if (at === -1) break
+      const before = at === 0 ? '' : lower[at - 1]
+      const after = lower.slice(at + name.length)
+      const boundedLeft = at === 0 || !/[a-z0-9]/.test(before)
+      const boundedRight = after === '' || !/^[a-z0-9]/.test(after)
+      if (boundedLeft && boundedRight && !_PLACE_QUALIFIER_AFTER_STATE_NAME.test(after)) return abbr
+      from = at + 1
+    }
   }
   return null
 }

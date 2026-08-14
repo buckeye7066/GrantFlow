@@ -494,11 +494,27 @@ describe('the floor ledger', () => {
 
   it('recordFloorAttempt and refreshFloorObservation do not clobber each other', () => {
     let ledger = { targets: {}, profiles: {} }
-    ledger = recordFloorAttempt(ledger, 'p', { outcome: FLOOR_OUTCOME.NO_NEW_RESULTS, target: 10, awardable: 2, at: 't1' })
+    ledger = recordFloorAttempt(ledger, 'p', {
+      outcome: FLOOR_OUTCOME.NO_NEW_RESULTS, target: 10, awardable: 2, at: 't1', fingerprint: 'f0',
+    })
     expect(ledger.profiles.p.attempts).toBe(1)
     ledger = refreshFloorObservation(ledger, 'p', { target: 10, awardable: 2, fingerprint: 'f' })
     // An OBSERVATION must never spend or reset an attempt.
     expect(ledger.profiles.p.attempts).toBe(1)
-    expect(ledger.profiles.p.fingerprint).toBe('f')
+    // ...NOR advance the ATTEMPT's fingerprint. CORRECTED 2026-08-14 (gf-batch-05):
+    // this line previously asserted `fingerprint === 'f'`, i.e. that the
+    // observation OVERWRITES the attempt's fingerprint — which is exactly the
+    // clobber the test's own name forbids, and it made the documented
+    // "catalog drift re-opens an exhausted profile" rule unreachable:
+    // `evaluateFloorEligibility` decides `drifted` by comparing the current
+    // world against `entry.fingerprint`, and the boot net
+    // (`enforceProfileResultFloor`) calls refreshFloorObservation for EVERY
+    // profile on EVERY boot, so `entry.fingerprint` was always already current
+    // and `drifted` was always false. The observation now records its own world
+    // under `observed_fingerprint`; only `applyFloorAttempt` writes the verdict's.
+    expect(ledger.profiles.p.fingerprint).toBe('f0')
+    expect(ledger.profiles.p.observed_fingerprint).toBe('f')
+    // The drift is now VISIBLE to the eligibility rule — the whole point.
+    expect(evaluateFloorEligibility(ledger.profiles.p, { fingerprint: 'f' }).reason).toBe('reopened_drift')
   })
 })
