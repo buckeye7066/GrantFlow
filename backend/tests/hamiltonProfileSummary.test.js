@@ -97,6 +97,34 @@ describe('GET /api/hamilton/automation/profile-summary', () => {
     expect(res.body.counts.needs).toBe(res.body.needs_you.length)
   })
 
+  it('surfaces submission_verification_required with a manual hand-back guide', async () => {
+    // This status carries none of the blocked/waiting/needs prefixes
+    // taskNeedsUser() otherwise matches on, so it needs its own explicit
+    // entry — it's the durable quarantine the orchestrator sets when the
+    // irreversible submit boundary may have been crossed but no confirmation
+    // was captured (manualSubmissionGuide.js's HANDBACK_STATUSES). Without
+    // the fix, this task is silently dropped from needs_you and Hamilton's
+    // manual-hand-back guide (which manualSubmissionGuide.js already builds
+    // for this status) is never surfaced to the owner.
+    const t = await ensureApplicationTask(db, {
+      profileId: PROFILE_ID, grantId: 'g4', automationType: 'portal', initialStatus: 'queued',
+    })
+    await updateApplicationTask(db, t.id, { status: 'submission_verification_required' })
+
+    const res = await request(createApp(db))
+      .get(`/api/hamilton/automation/profile-summary?profileId=${PROFILE_ID}`)
+    expect(res.status).toBe(200)
+
+    // Not "working on" — Hamilton is provably not going to move it again.
+    expect(res.body.working_on.map((tk) => tk.id)).not.toContain(t.id)
+
+    // Surfaced in needs_you with the manual hand-back guide's headline.
+    const item = res.body.needs_you.find((n) => n.task_id === t.id)
+    expect(item).toBeTruthy()
+    expect(item.kind).toBe('task_blocked')
+    expect(item.title).toMatch(/submit may have gone through/i)
+  })
+
   it('omits resolved missing info and terminal tasks', async () => {
     const done = await ensureApplicationTask(db, {
       profileId: PROFILE_ID, grantId: 'g3', automationType: 'pdf_docx', initialStatus: 'queued',
