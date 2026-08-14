@@ -31,7 +31,14 @@
  * These tests all FAIL on the pre-fix `join(' ')`.
  */
 import { describe, expect, it } from 'vitest'
-import { evaluateNeedFirstMatchPolicy } from '../services/matching/needFirstMatchPolicyV2.js'
+import {
+  TEXT_FRAGMENT_SEPARATOR,
+  evaluateNeedFirstMatchPolicy,
+} from '../services/matching/needFirstMatchPolicyV2.js'
+import {
+  IDENTITY_FRAGMENT_SEPARATOR,
+  detectForeignOpportunity,
+} from '../config/opportunityJurisdiction.js'
 
 /**
  * The EXACT arrays `crawler-os/matchEngine.opportunityToCanonicalOpportunity`
@@ -167,5 +174,86 @@ describe('a phrase the source never wrote never gates a match', () => {
       state: 'TN',
     })
     expect(hard(result)).not.toContain('Caregiver-only program requires a caregiver signal')
+  })
+})
+
+/**
+ * THE SAME CLASS, ONE DOOR OVER: the FOREIGN-JURISDICTION funder-identity gate.
+ *
+ * `detectForeignOpportunity` built its identity haystack as
+ * `` `${title} ${sponsor}` `` and ran the `FOREIGN_FUNDER_NAMES` registry and
+ * `US_MISSION_ABROAD_RX` over it — the identical bare-space join, so the
+ * boundary between two independent fields spelled phrases neither field states.
+ *
+ * This gate is STRICTLY more destructive than the audience gates above: a
+ * `foreign: true` verdict is a REJECT inside `matchEngine.makeDecision` AND the
+ * candidate key for `enforceForeignJurisdictionMatches`, whose whole job is to
+ * DELETE the match row. So every fabricated phrase here silently removes a real
+ * US funding source from a real profile and keeps removing it every boot.
+ *
+ * The three FAIL cases below were measured against the real registry on the
+ * pre-fix code: all three returned `foreign: true`. They pass only with the
+ * non-word `IDENTITY_FRAGMENT_SEPARATOR` join.
+ */
+describe('a FOREIGN verdict is a statement the row made, never one a join created', () => {
+  const foreign = (row) => detectForeignOpportunity(row).foreign
+
+  it('does not call a Louisiana row British by fusing "LA" + "Flex"', () => {
+    // "…, LA" (Shreveport) + a sponsor starting "Flex" fabricated "la flex",
+    // the UK Local Authority Flexible Eligibility scheme.
+    expect(foreign({
+      title: 'Community Development Grants — Shreveport, LA',
+      sponsor: 'Flex Fund of Louisiana',
+    })).toBe(false)
+  })
+
+  it('does not call a US row a diplomatic post by fusing "U.S." + "Embassy Suites"', () => {
+    expect(foreign({
+      title: 'Hospitality Workforce Grant — U.S.',
+      sponsor: 'Embassy Suites Community Foundation',
+    })).toBe(false)
+  })
+
+  it('does not call a US row a diplomatic post by fusing "U.S." + "Consulate Health Care"', () => {
+    expect(foreign({
+      title: 'Small Business Aid U.S.',
+      sponsor: 'Consulate Health Care Foundation',
+    })).toBe(false)
+  })
+
+  it('KEEPS ITS TEETH: a funder whose own field states the identity is still foreign', () => {
+    // Each of these is a single field making the claim about itself, so the
+    // separator changes nothing. If any of these flips, the fix went inert.
+    const stillForeign = [
+      { title: 'LA Flex ECO4 Insulation Scheme', sponsor: 'UK Local Authority' },
+      { title: 'Individual Medical Grants', sponsor: 'Tata Trusts' },
+      { title: 'Tata Trusts Individual Medical Grants', sponsor: '' },
+      { title: 'U.S. Embassy Luanda Small Grants Program', sponsor: 'Dept of State' },
+      { title: 'U.S. Mission to Azerbaijan — English-Language Program', sponsor: '' },
+      { title: 'Energy Saving Grants — ECO4 scheme', sponsor: '' },
+      { title: 'Housing Adaptation Grant', sponsor: 'Citizens Information', source_url: 'https://citizensinformation.ie/x' },
+    ]
+    for (const row of stillForeign) {
+      expect(foreign(row), `${row.title} / ${row.sponsor} must stay FOREIGN`).toBe(true)
+    }
+  })
+
+  it('the ordinary-English guard on "mission" still holds', () => {
+    expect(foreign({
+      title: 'Grant supporting our U.S. mission statement',
+      sponsor: 'Community Fund',
+    })).toBe(false)
+  })
+
+  it('STATIC DRIFT TRIPWIRE: both fragment separators are the same non-word literal', () => {
+    // `config/opportunityJurisdiction.js` re-declares the separator instead of
+    // importing it, because it is imported BY `services/matchEngine.js` and the
+    // reverse import would close a cycle (the ESM import-time boot-crash class).
+    // If the two ever drift, one gate silently regains the fabrication bug while
+    // both still "work" — pin them here.
+    expect(IDENTITY_FRAGMENT_SEPARATOR).toBe(TEXT_FRAGMENT_SEPARATOR)
+    // The property that actually matters: the separator contains no word
+    // character, so no `\b`-anchored phrase can straddle two fragments.
+    expect(/\w/.test(IDENTITY_FRAGMENT_SEPARATOR)).toBe(false)
   })
 })
