@@ -112,6 +112,27 @@ function tokenSimilarity(aTokens, bTokens) {
   return overlap / Math.max(a.size, b.size)
 }
 
+/**
+ * The FIRST token of the title that is an acronym — not "the first token, if it
+ * happens to be an acronym".
+ *
+ * TRAP THIS FIXES (2026-08-14): the loop carried an UNCONDITIONAL `break` at the
+ * end of its body, so it ran exactly one iteration and only ever inspected
+ * `rawTokens[0]`. Any title with a leading article or adjective ("The AFTE
+ * Forensic Science Scholarship", "New NAEMT Paramedic Scholarship") therefore
+ * resolved to an EMPTY anchor here, `grantFamilyKey` returned null, and
+ * `likelySameGrantOpportunity` fell straight out at the `!sameFamily` guard.
+ *
+ * The identical function in `src/utils/fundingDedupe.js` has no `break` and DOES
+ * scan every token, so the two copies of one identity rule disagreed: the same
+ * pair of rows collapsed in the discovery UI while the backend catalog, the
+ * pipeline-exclusion index and the boot invariant sweeps kept them as two
+ * separate opportunities. Aligning on the scanning form makes catalog dedup
+ * (criterion 4) agree with what the user is already shown.
+ *
+ * Widening the anchor is only safe because the numeric-conflict guard now also
+ * covers the family branch of `likelySameGrantOpportunity` — see below.
+ */
 function firstAcronymAnchor(title) {
   const rawTokens = String(title ?? '').match(/[A-Za-z][A-Za-z0-9-]*/g) || []
   for (const raw of rawTokens) {
@@ -119,7 +140,6 @@ function firstAcronymAnchor(title) {
     if (cleaned.length >= 3 && cleaned.length <= 12 && /[A-Za-z]/.test(cleaned) && cleaned === cleaned.toUpperCase()) {
       return normalizeToken(cleaned.toLowerCase())
     }
-    break
   }
   return ''
 }
@@ -227,6 +247,23 @@ export function likelySameGrantOpportunity(a = {}, b = {}) {
   }
 
   if (!sameFamily) return false
+
+  // A DIFFERENT NUMBER IN THE TITLE IS A DIFFERENT PROGRAM — on this branch too.
+  //
+  // The same-URL branch above has consulted `hasConflictingNumericTitleTokens`
+  // since the "numbered awards on one landing page" fix, but the FAMILY branch
+  // never did — and this is the branch reached when the two rows' URLs DIFFER or
+  // are missing, i.e. precisely the case where they are most likely to be two
+  // distinct real-world programs. Same funder + same acronym anchor + same kind
+  // + boilerplate-similar descriptions was enough to collapse "…Grant 2025" into
+  // "…Grant 2026", or mechanism 1 into mechanism 2, and the losing row then
+  // disappears from the catalog and the pipeline entirely.
+  //
+  // Titles with no numerals are unaffected (the helper returns false when either
+  // side has no numeric token), so every existing family collapse still holds.
+  const aTitleText = normalizeSearchText(a.title || a.program_name || a.name || '')
+  const bTitleText = normalizeSearchText(b.title || b.program_name || b.name || '')
+  if (hasConflictingNumericTitleTokens(aTitleText, bTitleText)) return false
 
   return (
     titleScore >= 0.55 ||
