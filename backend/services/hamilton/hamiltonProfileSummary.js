@@ -37,6 +37,19 @@ const NEEDS_USER_TASK_STATUS = new Set([
   ...TASK_BLOCKED_STATUSES,
   'needs_user', 'needs_info', 'blocked', 'awaiting_user', 'paused',
   'needs_authorization', 'waiting_on_user', 'waiting_for_user', 'action_required',
+  // 'submission_verification_required' carries none of the blocked/waiting/
+  // needs prefixes below, so it needs an explicit entry here — same reasoning
+  // as manualSubmissionGuide.js's HANDBACK_STATUSES: it's the durable
+  // quarantine the orchestrator sets when the irreversible submit boundary
+  // may have been crossed with no confirmation evidence. Hamilton is
+  // provably not going to move it again; only the owner can look at the
+  // portal and settle it. This is the ONLY caller of
+  // buildManualCompletionGuide, so without this entry that guide is built
+  // but never reached for this status.
+  // 'submit_attempt_started' / 'submit_evidence_pending' deliberately stay
+  // OUT — in-flight states a live run passes through in seconds; listing
+  // them would flood needs_you with active work.
+  'submission_verification_required',
 ])
 
 function taskNeedsUser(status) {

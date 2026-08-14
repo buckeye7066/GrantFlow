@@ -1,4 +1,5 @@
 import express from 'express'
+import crypto from 'node:crypto'
 import {
   brokenDirectSummary,
   estimateRepairLockTtlMs,
@@ -83,6 +84,16 @@ router.post('/run', async (req, res) => {
   try {
     const cycleId = cleanCycleId(req.body?.cycle_id)
     const actor = req.ctx?.email || req.ctx?.userId || 'admin'
+    // link_backlog_distinct_verified_by_per_run: linkBacklogRepairService relies
+    // on COUNT(DISTINCT verified_by) to detect that a row has been repeatedly,
+    // genuinely re-verified before quarantining/retrying it (see
+    // scheduleRetryableBrokenRows). Without a cycle_id, `admin-link-repair:${actor}`
+    // was a CONSTANT for the same admin across every run, so repeated real
+    // verifications by that admin collapsed onto one identity and could never
+    // satisfy a >=2 distinct-identity quorum. A per-run token (timestamp +
+    // short random suffix) keeps verified_by traceable to the admin while
+    // guaranteeing each run mints a genuinely distinct identity.
+    const runToken = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`
     const repairOptions = {
       limit: req.body?.limit,
       concurrency: req.body?.concurrency,
@@ -91,7 +102,7 @@ router.post('/run', async (req, res) => {
       cycleId,
       verifiedBy: cycleId
         ? `admin-link-repair:${cycleId}`
-        : `admin-link-repair:${actor}`,
+        : `admin-link-repair:${actor}:${runToken}`,
     }
     const result = await runWithSchedulerLock(req.db, {
       lockName: LOCK_NAME,
