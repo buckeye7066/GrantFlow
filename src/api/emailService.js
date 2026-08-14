@@ -11,7 +11,7 @@ class EmailService {
     }
 
   escapeHtml(value) {
-          return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
+          return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
     }
 
   /**
@@ -75,8 +75,8 @@ class EmailService {
                 },
                 STATUS_CHANGED: {
                           subject: 'Student Status Updated',
-                          html: `<h2>Student Status Changed</h2><p>Your student status has been updated to: ${this.escapeHtml(updateDetails.newStatus)}</p>`,
-                          text: `Your student status has been updated to: ${updateDetails.newStatus}`
+                          html: `<h2>Student Status Changed</h2><p>Your student status has been updated to: ${this.escapeHtml(updateDetails && updateDetails.newStatus)}</p>`,
+                          text: `Your student status has been updated to: ${updateDetails && updateDetails.newStatus}`
                 },
                 GRANTS_MATCHED: {
                           subject: 'New Grants Matched for Your Profile',

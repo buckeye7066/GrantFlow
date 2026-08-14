@@ -55,15 +55,28 @@ function parseJsonArray(v) {
 
 /** Is this email already a GrantFlow user/profile contact? (never pitch clients) */
 async function isExistingClient(db, email) {
+  // "CANNOT TELL" IS NOT "NOT A CLIENT". Both probes used to swallow every
+  // error and fall through to `false`, so a DB fault (not just the bare-test-DB
+  // missing table the comments describe) turned an unanswerable question into a
+  // confident "this address does not belong to a client" — and the caller then
+  // let the lead proceed toward outreach, i.e. we pitch our own customer.
+  // A probe that ERRORS is reported as unknown so the caller can refuse.
+  let anyProbeAnswered = false
+  let anyProbeFailed = null
   try {
     const u = await db.prepare('SELECT 1 FROM users WHERE lower(primary_email) = ? LIMIT 1').get(email)
-    if (u) return true
-  } catch { /* table absent in bare test DBs */ }
+    anyProbeAnswered = true
+    if (u) return { isClient: true, known: true }
+  } catch (err) { anyProbeFailed = err }
   try {
     const p = await db.prepare('SELECT 1 FROM profile_emails WHERE lower(email) = ? LIMIT 1').get(email)
-    if (p) return true
-  } catch { /* table absent */ }
-  return false
+    anyProbeAnswered = true
+    if (p) return { isClient: true, known: true }
+  } catch (err) { anyProbeFailed = anyProbeFailed ?? err }
+  if (!anyProbeAnswered) {
+    return { isClient: false, known: false, error: String(anyProbeFailed?.message || anyProbeFailed || 'unknown') }
+  }
+  return { isClient: false, known: true }
 }
 
 /**
@@ -83,7 +96,11 @@ export async function verifyHarvestCandidate(db, row) {
     if (isNonHumanEmail(email)) reasons.push('non_human_address')
     if (isListAddress(email)) reasons.push('list_address')
     if (isExcludedEmail(email)) reasons.push('excluded_domain')
-    if (await isExistingClient(db, email)) reasons.push('existing_client')
+    const clientCheck = await isExistingClient(db, email)
+    if (clientCheck.isClient) reasons.push('existing_client')
+    // Refuse rather than guess: an unanswerable client check must not verify a
+    // candidate we might then pitch to our own customer.
+    else if (!clientCheck.known) reasons.push('existing_client_check_unavailable')
   }
   if (!isUsableName(name, email)) reasons.push('missing_name')
 

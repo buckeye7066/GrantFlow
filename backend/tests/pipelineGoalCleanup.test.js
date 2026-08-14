@@ -215,6 +215,35 @@ describe('classifyPipelineItem — Goal 6 (geographic match)', () => {
     })
     expect(result.verdict).toBe('keep')
   })
+
+  it('does NOT treat a county/city NAME sharing a state name as a state claim (county-as-state guard)', () => {
+    // "Delaware County, Ohio" is a real place inside Ohio -- the bare
+    // substring "delaware" must not be read as a claim about the state of
+    // Delaware. A bare-substring extractStateNameFromTitle would have
+    // resolved this to 'DE' and wrongly rejected a legitimate Ohio county
+    // resource for an Ohio profile as wrong_state.
+    const row = makeRow({ title: 'Delaware County, Ohio 211 Community Resources' })
+    const result = classifyPipelineItem(row, {
+      profile: { id: 'p2', primary_type: 'individual', tags: [] },
+      sections: { basic_information: { state: 'OH' } },
+      seenTitles: new Set(),
+    })
+    expect(result.verdict).not.toBe('wrong_state')
+  })
+
+  it('resolves a title naming the state of Washington (was previously missing from the state-name list)', () => {
+    // Washington was omitted entirely from STATE_NAME_TO_ABBR, so a title
+    // naming it could never trigger the wrong_state check for any profile
+    // (extractStateNameFromTitle returned null -> treated as neutral).
+    const row = makeRow({ title: 'Washington State Housing Assistance Program' })
+    const result = classifyPipelineItem(row, {
+      profile: TN_PROFILE,
+      sections: TN_SECTIONS,
+      seenTitles: new Set(),
+    })
+    expect(result.verdict).toBe('wrong_state')
+    expect(result.ruleId).toBe('goal6.geographic_match')
+  })
 })
 
 describe('classifyPipelineItem — recall over suppression (Goal 8)', () => {

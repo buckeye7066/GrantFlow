@@ -274,11 +274,22 @@ export async function searchForMissingConditionSources(db, wishlist, opts = {}) 
       }
     }
     let appended = 0
+    // A WRITE FAILURE IS NOT A SEARCH RESULT (2026-08-14). This catch used to
+    // leave `appended` at 0 and fall straight into the exhaustion test below,
+    // so a DB blip / KV contention while queueing counted as "we searched and
+    // found nothing usable" — even though `real_hits` in the very same record
+    // proves real sources WERE found. Three such runs write `exhausted: true`,
+    // and `isDueForSearch` refuses an exhausted record FOREVER, so the
+    // condition is never searched again. Identical shape to the
+    // `enforceAmountEnrichment` rule this repo already fixed: a permanent mark
+    // is written only for an outcome that was actually PERSISTED.
+    let queueFailed = false
     if (candidates.length) {
       try {
         const res = await appendCandidates(db, candidates, { now })
         appended = Number(res?.appended ?? 0)
       } catch (err) {
+        queueFailed = true
         log.warn('queueing condition candidates failed (non-fatal)', { condition, error: String(err?.message || err) })
       }
     }
@@ -290,7 +301,9 @@ export async function searchForMissingConditionSources(db, wishlist, opts = {}) 
     // here, which is the same answer as finding nothing. The wishlist entry stays;
     // it just stops being re-searched and starts telling the truth about why it is
     // still open.
-    const exhausted = appended === 0 && attempts >= MAX_ATTEMPTS
+    // `!queueFailed` mirrors the provider-outage rule directly above: an
+    // infrastructure failure on OUR side never spends a condition's chance.
+    const exhausted = !queueFailed && appended === 0 && attempts >= MAX_ATTEMPTS
     if (exhausted) exhaustedTotal += 1
 
     evidence[key] = {
@@ -300,9 +313,10 @@ export async function searchForMissingConditionSources(db, wishlist, opts = {}) 
       queries_run: queries.length,
       real_hits: deduped.length,
       candidates_queued: appended,
+      queue_failed: queueFailed,
       exhausted,
     }
-    report.push({ condition, searched: true, real_hits: deduped.length, candidates_queued: appended, attempts, exhausted })
+    report.push({ condition, searched: true, real_hits: deduped.length, candidates_queued: appended, attempts, queue_failed: queueFailed, exhausted })
   }
 
   if (skippedOutOfState > 0) {

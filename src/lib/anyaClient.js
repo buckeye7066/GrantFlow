@@ -13,7 +13,7 @@ function deduplicatedFetch(key, fn) {
 
 export async function getAnyaSessions({ limit } = {}) {
   const searchParams = new URLSearchParams()
-  if (limit != null) {
+  if (limit !== null && limit !== undefined) {
     searchParams.set("limit", String(limit))
   }
   const query = searchParams.toString()
@@ -43,7 +43,7 @@ export async function deleteAnyaSession(sessionId) {
 export async function getAnyaMessages(sessionId, { limit, direction } = {}) {
   if (!sessionId) return []
   const searchParams = new URLSearchParams()
-  if (limit != null) searchParams.set("limit", String(limit))
+  if (limit !== null && limit !== undefined) searchParams.set("limit", String(limit))
   if (direction) searchParams.set("direction", direction)
   const query = searchParams.toString()
   const url = `/api/anya/sessions/${sessionId}/messages${query ? `?${query}` : ""}`

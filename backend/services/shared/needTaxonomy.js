@@ -283,6 +283,44 @@ function wordMatchesSynonym(synonym, word) {
 }
 
 /**
+ * Does this word match the taxonomy target AS THE WHOLE TARGET, rather than as
+ * one word inside a longer phrase?
+ *
+ * WHY THIS DISTINCTION EXISTS (2026-08-14). The fallback branch let ONE word
+ * elect an entry, and `wordMatchesSynonym` is satisfied by that word appearing
+ * anywhere inside a multi-word synonym. So a word from an entirely different
+ * domain elects the entry because it happens to be one word of one of its
+ * phrases. Measured against the repo's OWN `research_lab` blueprint subjects
+ * (`orgNeedsTaxonomy.NEEDS_TAXONOMY.example_search_terms`), not invented input:
+ *
+ *   "biosafety level 2 laboratory certification grant"
+ *       -> professional_development_continuing_education
+ *          (the word `certification` inside 'certification exam fees')
+ *   "research computing cloud credits grant"
+ *       -> professional_development_continuing_education
+ *          (the word `credits` inside 'CE credits' / 'CME credits')
+ *
+ * Both then carried the 36 nursing / continuing-education synonyms into the
+ * search: `liveWebSearch.buildNeedWebQueries` spends one of its ~4 live query
+ * slots on the first synonym, so a BIOSAFETY certification need issued
+ * "professional development grant", and `scoreNeedMatch` credited 25 points per
+ * overlapping nursing category. This is the one-shared-word floor this repo has
+ * already fixed in `conditionCoveredBySource`, `enforceLeadContactPlausibility`,
+ * `declaredFieldOfStudyRecall` and (twice) in this very function — the same
+ * rule, one door over. A word matched as a FRAGMENT of a phrase is weaker
+ * evidence than a word that IS the taxonomy's own term, and the election bar
+ * below treats it that way.
+ */
+function wordIsWholeTaxonomyTerm(key, entry, word) {
+  const spokenKey = String(key).toLowerCase().replace(/_/g, ' ')
+  if (spokenKey === word) return true
+  for (const syn of entry.synonyms ?? []) {
+    if (String(syn).toLowerCase().trim() === word) return true
+  }
+  return false
+}
+
+/**
  * Does `text` state `phrase` AT TOKEN BOUNDARIES?
  *
  * WHY THIS REPLACED `text.includes(phrase)` (2026-08-13). The primary branch of
@@ -431,12 +469,22 @@ export function expandNeed(needText) {
     for (const [key, entry] of taxonomyEntries) {
       if (wordMatchesTaxonomyKey(key, word) ||
           entry.synonyms.some((s) => wordMatchesSynonym(s, word))) {
+        const whole = !generic && wordIsWholeTaxonomyTerm(key, entry, word);
         const seen = seenFallbackKeys.get(key);
-        if (seen) { if (!generic) seen.specificWords.add(word); continue; }
-        const record = { key, entry, specificWords: new Set(generic ? [] : [word]) };
+        if (seen) {
+          if (!generic) seen.specificWords.add(word);
+          if (whole) seen.wholeWords.add(word);
+          continue;
+        }
+        const record = {
+          key,
+          entry,
+          specificWords: new Set(generic ? [] : [word]),
+          wholeWords: new Set(whole ? [word] : []),
+        };
         seenFallbackKeys.set(key, record);
         fallbackMatches.push(record);
-        // Do NOT break â a single word may match multiple taxonomy keys;
+        // Do NOT break — a single word may match multiple taxonomy keys;
         // we want all of them for maximum recall (Goal 7)
       }
     }
@@ -444,14 +492,32 @@ export function expandNeed(needText) {
   // An entry explained ONLY by generic funding language is not a match at all.
   // This is what stops the word "grant" from electing `safety_certification`
   // (CPR/AED, fire-department training, Rotary Club) for "NIH research grant".
-  const specificMatches = fallbackMatches.filter((m) => m.specificWords.size > 0);
+  //
+  // ELECTION BAR: an entry must be explained either by a word that IS one of
+  // its own terms (WHOLE evidence), or by TWO distinct words that appear inside
+  // its phrases (corroborated FRAGMENT evidence). One fragment alone is a
+  // coincidence — see `wordIsWholeTaxonomyTerm`. This is strictly NARROWER than
+  // the previous `specificWords.size > 0`: every entry it now refuses was
+  // elected before by exactly one fragment word, and a refusal here returns the
+  // honest null expansion rather than a wrong-domain one. Silence is not a
+  // denial, but a wrong domain is worse than silence: it spends a live web
+  // query slot and awards category points on another field's vocabulary.
+  const specificMatches = fallbackMatches.filter(
+    (m) => m.wholeWords.size > 0 || m.specificWords.size >= 2,
+  );
   fallbackMatches.length = 0;
   fallbackMatches.push(...specificMatches);
   if (fallbackMatches.length > 0) {
     // Rank by EVIDENCE — how many distinct specific words the entry explains —
     // and only then by key length as a stable tie-break. Ranking by key length
     // alone let an internal identifier's spelling decide the canonical need.
-    fallbackMatches.sort((a, b) => (b.specificWords.size - a.specificWords.size) || (b.key.length - a.key.length));
+    // WHOLE evidence outranks fragment evidence, then evidence COUNT, then key
+    // length purely as a stable tie-break (never as evidence — an internal
+    // identifier's spelling is not a fact about the request).
+    fallbackMatches.sort((a, b) =>
+      (b.wholeWords.size - a.wholeWords.size) ||
+      (b.specificWords.size - a.specificWords.size) ||
+      (b.key.length - a.key.length));
     const primary = fallbackMatches[0];
     const mergedCats = new Set(primary.entry.programCategories);
     for (const fm of fallbackMatches.slice(1)) {
@@ -486,7 +552,7 @@ export function scoreNeedMatch(program, expandedNeed) {
   let score = 0;
   const matchedTerms = [];
 
-  // Category overlap â capped at 40 pts total to prevent broad-category programs
+  // Category overlap — capped at 40 pts total to prevent broad-category programs
   // from reaching acceptance thresholds on category tags alone (Goal 3).
   const cats = new Set((program.categories || []).map((c) => String(c).toLowerCase()));
   let catScore = 0;

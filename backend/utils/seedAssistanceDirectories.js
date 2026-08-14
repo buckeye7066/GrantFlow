@@ -62,7 +62,7 @@ const upsertOne = async (item, source) => {
   if (!url) {
     skipped++
     console.warn(
-      `[seedAssistanceDirectories] Skipping record with no URL (source=${source}, title=${item?.title || item?.name || 'unknown'}) â violates Goal 1 (no application path)`,
+      `[seedAssistanceDirectories] Skipping record with no URL (source=${source}, title=${item?.title || item?.name || 'unknown'}) — violates Goal 1 (no application path)`,
     )
     return
   }

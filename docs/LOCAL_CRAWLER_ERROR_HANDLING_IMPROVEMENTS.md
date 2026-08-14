@@ -1,5 +1,16 @@
 # Local Crawler Error Handling Improvements - Summary
 
+> **Historical snapshot — the described system is superseded.** Verified
+> 2026-08-14: `backend/services/localFundingCrawler.js` and
+> `governmentFundingCrawler.js` no longer exist in the tree, and
+> `backend/services/localCrawler.js` is listed in
+> `archive/legacy-crawlers/README.md` as **runtime-unreachable** — the local
+> crawler engine described below was fully replaced by the Crawler OS
+> (`backend/crawler-os/`). The "Conclusion" claim that "the local crawler
+> system is now more resilient, maintainable, and user-friendly" describes a
+> system that no longer runs in production; treat this as a record of a past
+> remediation pass, not a claim about current behavior.
+
 ## Overview
 This document summarizes the comprehensive error handling improvements made to the local funding crawler system to address runtime errors and improve reliability.
 

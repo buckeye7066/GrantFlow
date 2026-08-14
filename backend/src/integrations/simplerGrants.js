@@ -185,7 +185,21 @@ function normalizeSimplerOpportunity(row) {
     description,
     amount_min: awardFloor,
     amount_max: awardCeiling,
-    amount_description: toTrimmedStringOrNull(summary?.funding_category_description),
+    // NOT `funding_category_description` (2026-08-14). That field is HHS's
+    // free-text note about the funding CATEGORY (the "Other" category blurb),
+    // not an award figure — but `amount_description` is an AMOUNT channel:
+    // `resolveOpportunityAmounts` runs the award extractor over
+    // `title + amount_description + description`, and when nothing else is
+    // found it promotes a short `amount_description` straight into the row's
+    // displayed `amount_text` and can flip `amount_status` to
+    // `varies`/`contact_required` on words inside it. So a category blob
+    // mentioning a program total became this row's per-award answer — and it
+    // bit hardest exactly when the API published NO award_floor/award_ceiling,
+    // i.e. the case where a fabricated amount most damages the amount-answer
+    // census. The category text already reaches the row through
+    // `funding_categories` -> `categories` below, where it belongs. This API
+    // publishes no per-award prose field, so the honest value is null.
+    amount_description: null,
     deadline: closeDate,
     // Canonical deadline_type set is fixed|rolling|ongoing|unknown (DB CHECK
     // constraint). A forecasted opportunity has no firm deadline yet, so it

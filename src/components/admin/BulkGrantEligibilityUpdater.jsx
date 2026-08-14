@@ -74,7 +74,7 @@ const failed = results.filter(r => r.status === 'rejected');
 const succeeded = results.filter(r => r.status === 'fulfilled');
 if (failed.length > 0) {
   console.error('[BulkGrantEligibilityUpdater] partial failure:', failed.map(f => f.reason?.message));
-  message.warning(`Updated ${succeeded.length} grants; ${failed.length} failed â check console for details`);
+  message.warning(`Updated ${succeeded.length} grants; ${failed.length} failed — check console for details`);
 } else {
   message.success(`Successfully updated ${succeeded.length} grants`);
 }

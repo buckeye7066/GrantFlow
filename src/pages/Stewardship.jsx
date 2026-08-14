@@ -28,7 +28,7 @@ const EmptyState = () => (
 export default function Stewardship() {
     const [selectedGrantId, setSelectedGrantId] = useState(null);
 
-    const { data, isLoading } = useQuery({
+    const { data, isLoading, error } = useQuery({
         queryKey: ['stewardshipData'],
         queryFn: async () => {
             const [grants, milestones, reports, budgets, expenses] = await Promise.all([
@@ -44,7 +44,7 @@ export default function Stewardship() {
 
     const selectedGrant = useMemo(() => {
         if (!data || !selectedGrantId) return null;
-        return data.grants.find(g => g.id === selectedGrantId);
+        return data.grants.find(g => Number(g.id) === Number(selectedGrantId));
     }, [data, selectedGrantId]);
     
     // Set the first grant as selected by default
@@ -66,6 +66,14 @@ export default function Stewardship() {
 
     if (isLoading) return <PageLoading />;
     
+    if (error) {
+        return (
+            <div className="p-6 md:p-8">
+                <p className="text-slate-600">Error loading stewardship data.</p>
+            </div>
+        );
+    }
+
     if (!data || data.grants.length === 0) {
         return (
             <div className="p-6 md:p-8">
@@ -86,7 +94,7 @@ export default function Stewardship() {
                     <p className="text-slate-600 mt-2">Manage compliance, reporting, and budgets for your awarded grants.</p>
                 </div>
                 <div className="w-full md:w-80">
-                    <Select onValueChange={setSelectedGrantId} value={selectedGrantId}>
+                    <Select onValueChange={v => setSelectedGrantId(Number(v))} value={selectedGrantId}>
                         <SelectTrigger className="w-full">
                             <SelectValue placeholder="Select an awarded grant..." />
                         </SelectTrigger>

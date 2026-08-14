@@ -135,12 +135,16 @@ router.get('/:taskId', async (req, res) => {
     const task = await getApplicationTask(req.db, taskId)
     if (!task) return res.status(404).json({ error: 'task_not_found' })
     if (!(await userMayAccessTask(req, user, task))) return res.status(403).json({ error: 'Forbidden' })
-    if (task.submission_proof?.source === 'owner_attested_manual_receipt') {
-      return res.status(409).json({
-        error: 'manual_submission_receipt_active',
-        message: 'Revoke the active portal receipt before cancelling this submitted task.',
-      })
-    }
+    // NO receipt guard here. This is the READ path. A copy of the
+    // manual-receipt 409 used to sit on this handler — its own message says
+    // "before CANCELLING this submitted task" — so the instant an owner filed a
+    // manual submission receipt, every subsequent open of the task drawer
+    // (`HamiltonTaskDrawer` -> `hamiltonApi.getApplicationTask`) 409'd and
+    // rendered "could not load task": the proof they had just filed became
+    // invisible and the revoke action unreachable. The guard belongs on
+    // MUTATIONS only, and it is already there — the canonical throw lives in
+    // `applicationTaskStore` (code `manual_submission_receipt_active`) and this
+    // router's cancel handler maps it to a 409 further down.
     const [events, missingInfo] = await Promise.all([
       listTaskEvents(req.db, taskId),
       listMissingInfo(req.db, taskId),

@@ -30,7 +30,7 @@ async function hardDeleteProfileWithFallback(db, profileId) {
   if (!id) return { ok: false, error: 'profile_id_required' }
 
   const dialect = db?.dialect || 'sqlite'
-  // nowSql removed â inline literals are used directly in both UPDATE statements below
+  // nowSql removed — inline literals are used directly in both UPDATE statements below
 
   // Designated/demo profiles should never be hard-deleted (boot seeding may resurrect).
   if (isDesignatedProfileId(id)) {
@@ -94,7 +94,7 @@ async function saveApplicationToDb(db, data) {
     if (!error.message?.includes('no such table') && !error.message?.includes('does not exist')) {
       throw error
     }
-    console.error('[serviceApplication] service_applications table missing â submission NOT persisted to DB. applicationId will be null.', { type: data.type, email: data.email })
+    console.error('[serviceApplication] service_applications table missing — submission NOT persisted to DB. applicationId will be null.', { type: data.type, email: data.email })
     return null
   }
 }
@@ -109,7 +109,7 @@ async function saveApplicationToDb(db, data) {
 // storage-exhaustion by anonymous callers.
 router.post('/', sensitiveRateLimiter, async (req, res) => {
   try {
-    const { type, name, email, subject, message } = req.body // recipient intentionally omitted â always use SERVICE_APPLICATION_EMAIL
+    const { type, name, email, subject, message } = req.body // recipient intentionally omitted — always use SERVICE_APPLICATION_EMAIL
 
     // Handle contact_admin type
     if (type === 'contact_admin') {

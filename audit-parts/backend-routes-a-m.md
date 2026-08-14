@@ -1,5 +1,15 @@
 # Backend Routes Audit (A–M)
 
+> **STALE — verify before acting.** Spot-checked 2026-08-14: this audit's line
+> numbers and at least one flagged finding no longer match current code.
+> `discovery.js:30` is cited as the `GET /discover-grants` IDOR site, but the
+> current file has a helper function at line 30 and the real route (now at
+> line 310) already calls `ensureProfileAccess(req, res, profileId)` before
+> reading another profile's data — that specific finding is FIXED. Treat every
+> line reference and unresolved-looking finding below as a lead to re-verify
+> against the current file, not as a current-state fact. This document was not
+> re-audited in full for this pass; only the one example above was checked.
+
 Read-only audit of `backend/routes/*.js` files whose names begin with a letter A–M.
 
 Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`/`ensureAuth`; authenticated context on `req.ctx` (`userId`, `activeProfileId`, `email`, `isAdmin` — DB-backed canonical admin); DB via `req.db.prepare(sql).get/all/run(...args)` (parameterized); tenant data queries scoped to the caller's profile/org; admin endpoints require admin authz.

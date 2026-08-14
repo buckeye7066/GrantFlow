@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { scoreToMatchLabel, scoreToMatchTier } from '@/lib/matchDisplayThresholds';
+import { canonicalMatchDisplay } from '@/lib/matchDisplayThresholds';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, Target, AlertTriangle, CheckCircle2, Calendar, DollarSign, ExternalLink, Sparkles, User, Plus, Check } from 'lucide-react';
@@ -143,19 +143,28 @@ export default function ProfileMatcher() {
     }
   };
 
-  // Bands come from the canonical scoreToMatchTier — never inline cutoffs.
-  const getMatchColor = (score) => {
-    const tierClasses = {
-      excellent: 'text-emerald-600 bg-emerald-50 border-emerald-200',
-      good: 'text-blue-600 bg-blue-50 border-blue-200',
-      fair: 'text-amber-600 bg-amber-50 border-amber-200',
-      potential: 'text-amber-600 bg-amber-50 border-amber-200',
-      low: 'text-slate-600 bg-slate-50 border-slate-200',
-    };
-    return tierClasses[scoreToMatchTier(score)];
+  // Bands come from the canonical display contract — never inline cutoffs, and
+  // never a tier derived from the score ALONE. `canonicalMatchDisplay` refuses
+  // to promote a row the backend never decided on: a missing/unknown
+  // match_decision reads "Unrated", not "Low Match" (which asserts a verdict
+  // the engine never issued), and a REVIEW row reads "Needs review" instead of
+  // borrowing an ACCEPT-band label off its number.
+  const TIER_CLASSES = {
+    excellent: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+    good: 'text-blue-600 bg-blue-50 border-blue-200',
+    fair: 'text-amber-600 bg-amber-50 border-amber-200',
+    potential: 'text-amber-600 bg-amber-50 border-amber-200',
+    low: 'text-slate-600 bg-slate-50 border-slate-200',
+    review: 'text-amber-600 bg-amber-50 border-amber-200',
+    rejected: 'text-red-600 bg-red-50 border-red-200',
+    unrated: 'text-slate-400 bg-slate-50 border-slate-200',
   };
 
-  const getMatchLabel = (score) => scoreToMatchLabel(score);
+  const matchDisplayFor = (opp) =>
+    canonicalMatchDisplay({
+      score: opp?.match_score,
+      decision: opp?.match_decision ?? opp?.decision,
+    });
 
   const addableMatches = matches?.filter((m) => m.id && !addedIds.has(m.id)) ?? [];
 
@@ -313,6 +322,7 @@ export default function ProfileMatcher() {
               {matches.map((opp) => {
                 const isSelected = selectedIds.has(opp.id);
                 const wasAdded = addedIds.has(opp.id);
+                const fit = matchDisplayFor(opp);
 
                 return (
                   <Card
@@ -344,15 +354,15 @@ export default function ProfileMatcher() {
 
                         {/* Match Score */}
                         <div className="flex-shrink-0">
-                          <div className={`relative w-16 h-16 rounded-full border-[3px] flex items-center justify-center ${opp.match_score !== null ? getMatchColor(opp.match_score) : 'text-slate-400 bg-slate-50 border-slate-200'}`}>
+                          <div className={`relative w-16 h-16 rounded-full border-[3px] flex items-center justify-center ${TIER_CLASSES[fit.tier] ?? TIER_CLASSES.unrated}`}>
                             <div className="text-center">
-                              <div className="text-lg font-bold">{opp.match_score ?? '-'}</div>
+                              <div className="text-lg font-bold">{fit.score ?? '-'}</div>
                               <div className="text-[9px] font-medium uppercase">Match</div>
                             </div>
                           </div>
                           <div className="text-center mt-1">
                             <Badge variant="outline" className="text-[10px] px-1">
-                              {getMatchLabel(opp.match_score)}
+                              {fit.label}
                             </Badge>
                           </div>
                         </div>

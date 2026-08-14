@@ -348,6 +348,40 @@ describe('resolveProfileSyncNeeds', () => {
     expect(res.needs_sync_count).toBe(1)
   })
 
+  it('reads a zone-less SQLite CURRENT_TIMESTAMP as UTC, exactly like the same instant in ISO', async () => {
+    // portal_sync_runs.finished_at is written with `CURRENT_TIMESTAMP` on
+    // SQLite, i.e. the ZONE-LESS UTC string 'YYYY-MM-DD HH:MM:SS'. Date.parse
+    // reads a zone-less date-TIME as LOCAL time, so the pre-fix reader shifted
+    // every sync timestamp by the host's UTC offset.
+    //
+    // The assertion is machine-independent: the SAME instant written two ways
+    // must produce the SAME verdict. Under the pre-fix parser this fails in any
+    // non-UTC zone (verified with TZ=America/Chicago); on a UTC host both
+    // parsers agree and it is vacuously true.
+    const now = Date.now()
+    // Whole seconds: SQLite's CURRENT_TIMESTAMP has no sub-second component, so
+    // the two spellings must describe the SAME instant to be comparable.
+    const instant = new Date(Math.floor((now - 9 * DAY) / 1000) * 1000)
+    const isoZ = instant.toISOString()                       // '…T…Z'
+    const sqliteUtc = isoZ.replace('T', ' ').replace(/\.\d+Z$/, '') // '… …' no zone
+
+    addRun(db, { profileId: 'pIso', host: 'studentaid.gov', at: isoZ })
+    addRun(db, { profileId: 'pSql', host: 'studentaid.gov', at: sqliteUtc })
+
+    const viaIso = await resolveProfileSyncNeeds(db, {
+      profileId: 'pIso', nowMs: now, loadPortals: portalsStub([portals[0]]),
+    })
+    const viaSqlite = await resolveProfileSyncNeeds(db, {
+      profileId: 'pSql', nowMs: now, loadPortals: portalsStub([portals[0]]),
+    })
+
+    expect(viaSqlite.portals[0].reason_codes).toEqual(viaIso.portals[0].reason_codes)
+    expect(viaSqlite.portals[0].last_successful_sync_at)
+      .toBe(viaIso.portals[0].last_successful_sync_at)
+    // And the verdict itself is the honest one: 9 days > the 7-day limit.
+    expect(viaSqlite.portals[0].reason_codes).toEqual([SYNC_NEED_REASON.STALE])
+  })
+
   it('a FAILED run is not a sync — 4 failures do not make a portal fresh', async () => {
     const now = Date.now()
     // Mirrors prod: collegefortn.org holds 4 completed + 4 failed runs.

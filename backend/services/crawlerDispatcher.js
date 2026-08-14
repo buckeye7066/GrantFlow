@@ -13,7 +13,7 @@ import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processAnyaMatchScoutJob } from './anyaMatchScout.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
-import { runPortalCheck } from './portalCheckService.js'
+import { runPortalCheck, markDeadPortalLinks } from './portalCheckService.js'
 import { isSupersededCrawlerType, SUPERSEDED_CRAWLER_JOB_TYPES, SUPERSEDED_REASON } from '../../shared/supersededCrawlerTypes.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('crawlerDispatcher')
@@ -128,11 +128,21 @@ async function processPortalCheckJob({ db, job }) {
   }).catch(error => {
     throw new Error(`Portal check failed: ${error.message}`);
   })
+  // dead_portal_link_status_persisted: a portal runPortalCheck found
+  // unreachable used to be reported and discarded — nothing ever wrote a
+  // link_status, so a known-dead portal kept resurfacing every run.
+  const deadPortalStats = await markDeadPortalLinks(db, result.publicSignals, {
+    verifiedBy: 'portal-check-dispatcher',
+  }).catch((error) => {
+    log.warn('dead_portal_mark_failed', { error: error?.message || String(error) })
+    return { marked: 0 }
+  })
   return {
     result_count: result.awardsDetected,
     result_meta: {
       portals_checked: result.portalsChecked,
       awards_detected: result.awardsDetected,
+      dead_portals_marked: deadPortalStats.marked,
       updates: result.updates.map((u) => ({
         portalName: u.portalName,
         updateType: u.updateType,

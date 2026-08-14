@@ -273,14 +273,45 @@ async function rescueOfficialUrl(row, findOfficialUrlImpl) {
     }
   }
   const probe = rescue.probe || {}
+  const probeStatus = String(probe.status || '').toLowerCase()
+
+  // A LIVENESS VERDICT MUST BE OBSERVED, NEVER MANUFACTURED.
+  //
+  // This used to read `SUCCESS.has(probeStatus) ? probe.status : 'ok'` with
+  // `code: probe.code ?? 200` — i.e. ANY status outside {ok, redirect, verified},
+  // including a MISSING one and `checkUrl`'s `'skipped'` (SSRF-blocked or
+  // robots-refused, so never actually fetched), was rewritten to a clean
+  // `ok / 200`. That value flows straight into the restore UPDATE
+  // (link_status='ok', last_verified_at=now, is_hidden=0, is_active=1) and into
+  // `recordVerificationEvent` with `verification_error: null`, so an UNPROVEN
+  // URL was republished and audited as verified-live: a dead-link check that
+  // could not fail on this branch.
+  //
+  // Now the rescue only counts when the probe positively succeeded. Anything
+  // else is reported as "not rescued, with the reason" and the row stays in the
+  // repair queue where a human or a later pass can still reach it. On the live
+  // path this is a no-op — `findOfficialUrlForOpportunity` already returns a URL
+  // only after a real ok|redirect probe — so this closes the hole for any other
+  // injected `findOfficialUrlImpl` rather than changing today's behaviour.
+  if (!SUCCESS.has(probeStatus)) {
+    return {
+      rescued: false,
+      searched: true,
+      unavailable: false,
+      hits: Number(rescue?.hits || 0),
+      unproven_url: rescue.url,
+      unproven_reason: probeStatus || 'no_probe',
+    }
+  }
+
   return {
     rescued: true,
     searched: true,
     unavailable: false,
     hits: Number(rescue?.hits || 0),
     outcome: {
-      status: SUCCESS.has(String(probe.status || '').toLowerCase()) ? probe.status : 'ok',
-      code: probe.code ?? 200,
+      status: probe.status,
+      code: probe.code ?? null,
       method: probe.method || 'official_search',
       error: null,
       finalUrl: probe.finalUrl || rescue.url,

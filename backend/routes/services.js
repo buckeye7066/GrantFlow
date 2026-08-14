@@ -138,35 +138,42 @@ router.post('/purchases', ensureAuth, async (req, res) => {
     }
   }
 
-  // All prices confirmed â now write atomically
-  const insertPurchase = req.db.prepare(
-    `
-      INSERT INTO service_purchases (
-        id, user_id, profile_id, organization_id,
-        service_id, client_category, pricing_model,
-        status, agreed_terms_version, agreed_at,
-        created_at, updated_at
-      ) VALUES (
-        ?, ?, ?, (SELECT organization_id FROM profiles WHERE id = ?),
-        ?, ?, ?,
-        'draft', ?, CURRENT_TIMESTAMP,
-        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-      )
-    `,
-  )
+  // All prices confirmed — now write atomically.
+  // NOTE (dialect divergence, the #946/ingestionService class): `req.db.transaction(fn)()`
+  // is better-sqlite3's SYNC shape. On the Postgres shim `db.prepare().run()` is ASYNC, so a
+  // synchronous callback that does not await its own statements lets `withTransaction`'s COMMIT
+  // race ahead of the writes, and the statements would run on the pool rather than the
+  // transactional client. `withTransaction` is the API that is async-safe (and truly atomic) on
+  // BOTH shims — its callback receives `tx`, whose `prepare()` is bound to the transactional
+  // connection.
+  await req.db.withTransaction(async (tx) => {
+    const insertPurchase = tx.prepare(
+      `
+        INSERT INTO service_purchases (
+          id, user_id, profile_id, organization_id,
+          service_id, client_category, pricing_model,
+          status, agreed_terms_version, agreed_at,
+          created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, (SELECT organization_id FROM profiles WHERE id = ?),
+          ?, ?, ?,
+          'draft', ?, CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+      `,
+    )
 
-  const insertMilestone = req.db.prepare(
-    `
-      INSERT INTO milestone_payments (
-        id, purchase_id, phase, amount_cents, currency, status, created_at, updated_at
-      ) VALUES (
-        ?, ?, ?, ?, 'usd', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-      )
-    `,
-  )
+    const insertMilestone = tx.prepare(
+      `
+        INSERT INTO milestone_payments (
+          id, purchase_id, phase, amount_cents, currency, status, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, 'usd', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+      `,
+    )
 
-  const runTransaction = req.db.transaction(() => {
-    insertPurchase.run(
+    await insertPurchase.run(
       purchaseId,
       req.ctx?.userId ?? req.user?.userId ?? null,
       profileId || null,
@@ -177,11 +184,9 @@ router.post('/purchases', ensureAuth, async (req, res) => {
       terms?.version || null,
     )
     for (const { phase, amount_cents } of milestonePrices) {
-      insertMilestone.run(crypto.randomUUID(), purchaseId, phase, amount_cents)
+      await insertMilestone.run(crypto.randomUUID(), purchaseId, phase, amount_cents)
     }
   })
-
-  runTransaction()
 
   res.status(201).json({
     ok: true,

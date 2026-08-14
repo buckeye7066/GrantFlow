@@ -766,7 +766,7 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
         fundingUpserted++;
       } catch (e) {
         log.error(`[CrawlerManager] upsert failed for ${result.id}: ${e.message}`);
-        // Do not modify fundingUpserted â it counts successes only
+        // Do not modify fundingUpserted — it counts successes only
       }
     }
     log.info(`[CrawlerManager] Stored ${results.length} crawl_results + ${fundingUpserted} funding_opportunities`);

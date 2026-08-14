@@ -148,8 +148,23 @@ export async function preflightAndResolveSource(db, {
     })
     paymentReadiness = { needed: true, ...decision }
     if (!decision.allowed) {
+      // The blocker object IS the `context` handed to `resolvePayment`
+      // (see the resolveBlocker call below: `context: b`), and that resolver
+      // reads `context.category` / `context.amount_cents`. Omitting them made
+      // `Number(undefined)` -> NaN -> the generic escalation "Hamilton could not
+      // read the payment amount. Confirm and re-authorize." — for a fee this
+      // same block computed from `opportunity.application_fee_cents` one line
+      // earlier. That message is what reached the owner's and admins'
+      // notifications, naming nothing they could act on. Carrying the facts
+      // authorizes nothing: `canPayFor` has ALREADY denied above (that is why
+      // this blocker exists), so the resolver still escalates — now with the
+      // actionable "needs payment authorization for application_fee at <host>
+      // (N USD)".
       base.blockers.push({
         kind: 'payment_required', key: 'application_fee',
+        category: 'application_fee',
+        amount_cents: feeCents,
+        portal_host: host || null,
         label: `Application fee ${(feeCents / 100).toFixed(2)} USD not pre-authorized`,
         detail: `Authorize Hamilton to charge ${(feeCents / 100).toFixed(2)} USD to ${host || 'this portal'} before launch.`,
       })

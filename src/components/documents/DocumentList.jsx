@@ -59,7 +59,7 @@ export default function DocumentList({ profileId }) {
           return fileUri;
         }
       } catch (_) {
-        // malformed URL â fall through to return null
+        // malformed URL — fall through to return null
       }
       console.warn(`[DocumentList] Rejected malformed URL for doc id=${doc.id}: ${fileUri}`);
       return null;

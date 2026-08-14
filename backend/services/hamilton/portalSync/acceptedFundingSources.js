@@ -91,7 +91,16 @@ export async function collectAcceptedFundingSources(db, { profileId, education =
           AND (LOWER(COALESCE(status,'')) = 'awarded' OR COALESCE(amount_awarded, 0) > 0)`,
     ).all(String(profileId))
     for (const r of rows || []) {
-      push(r.title, r.amount_awarded ?? r.amount_requested, r.funder, 'pipeline')
+      // amount_AWARDED only — never fall back to amount_REQUESTED. This list is
+      // filed with a school's financial-aid office as outside aid the student
+      // RECEIVED; an ask is not a receipt, and `amount_requested` is routinely
+      // defaulted at save time while `amount_awarded` stays NULL, so the
+      // fallback reported a fabricated figure on the `status='awarded'` half of
+      // the predicate above. This module's own header states the rule: telling a
+      // school you received aid you have only applied for is a false statement
+      // on a financial-aid record. A null amount is honest and `num()` already
+      // returns null cleanly — the title is still disclosed.
+      push(r.title, r.amount_awarded, r.funder, 'pipeline')
     }
   } catch (err) {
     // A schema mismatch must never silence the whole write side.

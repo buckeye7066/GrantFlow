@@ -12,9 +12,8 @@ When the backend is unavailable, users see:
 │           Enter your email address to get started.         │
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ℹ️  We'll send a 6-digit verification code to your email │
-│     for secure authentication. The code expires after 10   │
-│     minutes.                                               │
+│  ℹ️  We'll email you a one-time link to set your          │
+│     password on first sign-in.                             │
 │                                                             │
 ├────────────────────────────────────────────────────────────┤
 │  Prefer single sign-on? Connect with Google, Facebook, or │
@@ -106,9 +105,8 @@ When everything is working correctly:
 │           Enter your email address to get started.         │
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ℹ️  We'll send a 6-digit verification code to your email │
-│     for secure authentication. The code expires after 10   │
-│     minutes.                                               │
+│  ℹ️  We'll email you a one-time link to set your          │
+│     password on first sign-in.                             │
 │                                                             │
 ├────────────────────────────────────────────────────────────┤
 │  Prefer single sign-on? Connect with Google, Facebook, or │

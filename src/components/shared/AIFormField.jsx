@@ -102,7 +102,7 @@ ${isIndividual ? 'REMEMBER: You are writing as ONE INDIVIDUAL PERSON. Use I, my,
       onChange({ target: { name, value: generatedText.trim() } });
     } catch (error) {
       console.error('AI generation failed:', error);
-      // Do NOT overwrite the field â preserve whatever the user already typed.
+      // Do NOT overwrite the field – preserve whatever the user already typed.
       // Surface the failure through an optional onError prop so the parent can
       // display a plain-language toast/alert without losing field content.
       if (typeof onError === 'function') {

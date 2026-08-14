@@ -21,6 +21,7 @@ import { safeFetch, readTextCapped, SsrfBlockedError } from './http/safeFetch.js
 import { SCHOLARSHIPS } from './shared/data/scholarships.js'
 import { STATE_REGISTRY } from './shared/data/stateRegistry.js'
 import ensurePortalCheckResultsTable from '../utils/ensurePortalCheckResultsTable.js'
+import { recordVerificationEvent, mutableLinkLifecycleSql } from './linkVerificationService.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('portalCheckService')
 
@@ -455,6 +456,105 @@ async function checkPortal(portal) {
 // authenticated connector (hamilton/portalSync) may create a personal award.
 // mergePortalAwardIntoApplications stays exported for the user-driven route
 // (routes/profiles.js) where the OWNER records an award deliberately.
+
+// ---------------------------------------------------------------------------
+// Dead-portal link-status persistence
+// ---------------------------------------------------------------------------
+
+function normalizeUrlForPortalMatch(value) {
+  return String(value || '').trim().toLowerCase().replace(/\/+$/, '')
+}
+
+/**
+ * Persist portalCheckService's own liveness finding onto any funding_opportunities
+ * row that shares the SAME URL as a portal it just found unreachable.
+ *
+ * Owner directive: a known-dead portal must not keep resurfacing. Before this,
+ * runPortalCheck's publicSignals (which portal URLs are unreachable) were
+ * computed every run and then DISCARDED by both callers
+ * (crawlerDispatcher.js's processPortalCheckJob and
+ * anyaAutonomousScheduler.js's nightly Phase 5 loop) — no link_status was
+ * ever written from this signal, so a dead portal was re-checked,
+ * re-found-dead, and re-discarded forever.
+ *
+ * Writes the SAME shape linkVerificationService.js's recurring verifier uses
+ * (link_status / link_status_code / verification_method / verified_by /
+ * verification_error / last_verified_at), gated by the SAME
+ * mutableLinkLifecycleSql() predicate so a terminal/expired/
+ * permanently-retired row is never touched, plus the same append-only
+ * verification_events audit row (recordVerificationEvent). This deliberately
+ * does NOT hide/deactivate the row or run the two-strikes quarantine logic —
+ * that stays owned by the recurring verifier / linkBacklogRepairService; this
+ * only makes the signal durable so those existing sweeps can act on it.
+ */
+export async function markDeadPortalLinks(db, publicSignals = [], options = {}) {
+  const verifiedBy = String(options.verifiedBy || 'portal-check-service')
+  const stats = { candidates: 0, matched: 0, marked: 0 }
+  if (!db || typeof db.prepare !== 'function') return stats
+
+  const unreachable = (publicSignals || []).filter(
+    (s) => s?.status === 'unreachable' && s?.portalUrl,
+  )
+  stats.candidates = unreachable.length
+  if (!unreachable.length) return stats
+
+  const findStmt = db.prepare(`
+    SELECT id FROM funding_opportunities
+     WHERE RTRIM(LOWER(application_url), '/') = ?
+        OR RTRIM(LOWER(apply_url), '/') = ?
+        OR RTRIM(LOWER(apply_guidelines_url), '/') = ?
+        OR RTRIM(LOWER(source_url), '/') = ?
+        OR RTRIM(LOWER(evidence_url), '/') = ?
+        OR RTRIM(LOWER(final_url), '/') = ?
+  `)
+  const updateStmt = db.prepare(`
+    UPDATE funding_opportunities
+       SET last_verified_at = ?, link_status = 'broken', link_status_code = NULL,
+           verification_method = 'portal_check', verified_by = ?, verification_error = ?
+     WHERE id = ? AND ${mutableLinkLifecycleSql()}
+  `)
+
+  const now = new Date().toISOString()
+  for (const signal of unreachable) {
+    const key = normalizeUrlForPortalMatch(signal.portalUrl)
+    if (!key) continue
+    let rows = []
+    try {
+      rows = await findStmt.all(key, key, key, key, key, key)
+    } catch (err) {
+      console.warn('[portal-check] dead-portal lookup failed:', err?.message)
+      continue
+    }
+    if (!rows?.length) continue
+    stats.matched += rows.length
+
+    const errorText = `portal_check_unreachable: ${String(signal.error || 'fetch failed').slice(0, 160)}`
+    for (const row of rows) {
+      try {
+        const result = await updateStmt.run(now, verifiedBy, errorText, row.id)
+        const changed = Number(result?.changes ?? result?.rowCount ?? 0)
+        if (changed > 0) {
+          stats.marked += changed
+          await recordVerificationEvent(db, {
+            opportunity_id: row.id,
+            source: 'portal_check',
+            url: signal.portalUrl,
+            link_status: 'broken',
+            link_status_code: null,
+            verification_method: 'portal_check',
+            verified_by: verifiedBy,
+            verification_error: errorText,
+            duration_ms: 0,
+          })
+        }
+      } catch (err) {
+        console.warn('[portal-check] dead-portal mark failed for', row.id, err?.message)
+      }
+    }
+  }
+
+  return stats
+}
 
 // ---------------------------------------------------------------------------
 // Store portal check result

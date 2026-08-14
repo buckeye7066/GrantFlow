@@ -482,7 +482,7 @@ export function getStrategy(crawlerType) {
  * Check whether a strategy's hard gates are satisfied by profile intents.
  * A strategy is gated only when EVERY hard gate is missing from the profile.
  * If at least one gate is present, the strategy proceeds (partial match is
- * better than full suppression â final decisions belong to computeMatchDecision).
+ * better than full suppression — final decisions belong to computeMatchDecision).
  * Returns { gated: false } if OK, or { gated: true, reason, missingGates } if blocked.
  *
  * Goals served: 3 (legitimate hard-reject only), 5 (intent set from full profile),
@@ -496,7 +496,7 @@ export function getStrategy(crawlerType) {
  * Per-opportunity filtering remains the responsibility of relevanceFilter and
  * computeMatchDecision (Goals 3, 4). This gate is ONLY applied when the profile
  * has NO signal whatsoever for the strategy domain AND the intents Set is non-empty
- * (i.e., the profile was actually evaluated â an empty intents Set means the profile
+ * (i.e., the profile was actually evaluated — an empty intents Set means the profile
  * was not fully processed and gating must be skipped to avoid suppressing due to
  * incomplete extraction).
  *
@@ -508,7 +508,7 @@ export function checkGates(strategy, intents) {
   }
 
   // If the intents Set is empty, the profile may not have been fully extracted.
-  // Do NOT gate on an empty profile â surface results so the user can see options
+  // Do NOT gate on an empty profile — surface results so the user can see options
   // and improve their profile (Goals 7, 10).
   if (!intents || intents.size === 0) {
     return { gated: false };
@@ -523,7 +523,7 @@ export function checkGates(strategy, intents) {
     const reason =
       `Strategy "${strategy.id}" requires at least one of [${strategy.hardGates.join(', ')}] ` +
       `but profile has none. Profile intents: [${[...intents].join(', ')}]. ` +
-      `Strategy skipped â per-opportunity filtering remains with relevanceFilter/computeMatchDecision (Goals 3, 4, 7).`;
+      `Strategy skipped — per-opportunity filtering remains with relevanceFilter/computeMatchDecision (Goals 3, 4, 7).`;
     return {
       gated: true,
       missingGates,
@@ -547,7 +547,7 @@ export function listStrategies() {
 
 /**
  * Returns true only if the decision engine's score meets the strategy floor.
- * MUST be called AFTER computeMatchDecision() â never before.
+ * MUST be called AFTER computeMatchDecision() — never before.
  * Using this as a pre-engine filter violates Goals 4 and 7.
  */
 export function meetsMinScore(strategy, engineScore) {

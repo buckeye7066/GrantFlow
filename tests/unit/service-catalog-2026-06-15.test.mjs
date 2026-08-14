@@ -121,3 +121,32 @@ test('every legacy alias maps to a canonical slug', () => {
     assert.ok(CANONICAL_SLUGS.has(canonical), `legacy ${legacy} -> non-canonical ${canonical}`)
   }
 })
+
+// The real on-disk extract currently carries a placeholder CashApp handle
+// ("$example-payment-handle") - backend/routes/services.js GET
+// /api/services/terms serves terms.full_text verbatim to any logged-in
+// client, so this must never reach a client unredacted. Runs against the
+// REAL file, not a synthetic fixture, so it fails the moment someone fixes
+// the placeholder in the source doc (a reminder to relax this test then).
+test('a placeholder payment handle in the real extract is redacted, never served verbatim', () => {
+  const md = loadPaymentSheetExtractFromDisk()
+  const parsed = parsePaymentSheetExtract(md)
+  assert.ok(
+    !parsed.terms.full_text.includes('$example-payment-handle'),
+    'placeholder CashApp handle leaked into client-facing terms.full_text',
+  )
+  assert.ok(
+    parsed.terms.payment_method_warnings.some((w) => w.method === 'CashApp'),
+    'expected a payment_method_warnings entry naming CashApp',
+  )
+})
+
+test('redactPlaceholderPaymentMethods leaves a real handle untouched', () => {
+  const md = loadPaymentSheetExtractFromDisk().replace(
+    '$example-payment-handle',
+    '$RealHandle123',
+  )
+  const parsed = parsePaymentSheetExtract(md)
+  assert.ok(parsed.terms.full_text.includes('$RealHandle123'))
+  assert.equal(parsed.terms.payment_method_warnings.length, 0)
+})

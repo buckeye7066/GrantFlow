@@ -429,7 +429,19 @@ function containsSearchPhrase(lower, phrase) {
   if (/^[a-z0-9]+$/.test(p)) {
     return new RegExp(`\\b${escapeRegex(p)}s?\\b`, 'i').test(lower)
   }
-  return lower.includes(p)
+  // Multi-word / punctuated phrases need the SAME boundary rule. A bare
+  // substring test matches a phrase that only exists INSIDE a longer word:
+  // 'in kind' (IN_KIND_PATTERNS) fires on "students in kindergarten", which is
+  // ordinary K-12 education copy — and isInKind pushes the hard reason
+  // 'Opportunity provides in-kind goods/services, not direct financial
+  // assistance' into evaluateEligibility for every non-individual profile.
+  // Anchors are added only on the sides that start/end with a word character,
+  // so punctuated phrases ('501(c)(3)', '65+', 'k-12') keep matching, and the
+  // trailing 's?' preserves the same plural tolerance the single-word branch
+  // has ("family caregiver" must still match "family caregivers").
+  const lead = /^[a-z0-9]/.test(p) ? '\\b' : ''
+  const tail = /[a-z0-9]$/.test(p) ? 's?\\b' : ''
+  return new RegExp(`${lead}${escapeRegex(p)}${tail}`, 'i').test(lower)
 }
 
 function matchesAnyPattern(text, patterns) {
@@ -456,13 +468,30 @@ function extractNeedTypesFromText(text) {
 // ---------------------------------------------------------------------------
 // Determine deadline status
 // ---------------------------------------------------------------------------
+// A deadline stated as a DATE with no time of day means "you may still apply
+// THROUGH THE END of that day". `new Date('2026-08-14')` is 00:00:00Z, so the
+// old `d < new Date()` comparison flipped the row to 'closed' from the first
+// second of the deadline day — and `evaluateEligibility` turns 'closed' into
+// the hard reason 'Application deadline has passed', so a still-open
+// opportunity was rejected for its entire final day.
+//
+// Every other authority in the product treats today as OPEN:
+// deadlineExpiryService expires on `deadline < CURRENT_DATE`, the read queries
+// keep `deadline >= CURRENT_DATE`, and crawlerOsPersistenceCore deliberately
+// writes deadline_status NULL for fixed deadlines so that sweep decides. This
+// matches them. A deadline that carries a real time of day is still compared
+// instant-to-instant.
+const DEADLINE_TIME_OF_DAY_RX = /\d{1,2}:\d{2}/
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+
 function normalizeDeadlineStatus(deadline, deadlineType) {
   if (deadlineType === 'rolling' || deadlineType === 'ongoing') return 'rolling'
   if (!deadline) return 'unknown'
-  const d = new Date(deadline)
-  if (isNaN(d.getTime())) return 'unknown'
-  if (d < new Date()) return 'closed'
-  return 'open'
+  const raw = String(deadline).trim()
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return 'unknown'
+  const closesAt = DEADLINE_TIME_OF_DAY_RX.test(raw) ? d.getTime() : d.getTime() + ONE_DAY_MS
+  return closesAt <= Date.now() ? 'closed' : 'open'
 }
 
 // ---------------------------------------------------------------------------

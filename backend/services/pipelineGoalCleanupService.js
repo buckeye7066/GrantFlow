@@ -89,12 +89,35 @@ const STATE_NAME_TO_ABBR = [
   ['nevada', 'NV'], ['oregon', 'OR'], ['alaska', 'AK'],
   ['hawaii', 'HI'], ['idaho', 'ID'], ['maine', 'ME'],
   ['texas', 'TX'], ['utah', 'UT'], ['iowa', 'IA'], ['ohio', 'OH'],
+  // FIXED: 'washington' was missing (a real omission, not deliberate --
+  // see relevanceFilter.js's identical fix for the rationale).
+  ['washington', 'WA'],
 ]
 
+// A state NAME used as the name of a COUNTY/CITY/PARISH is a place inside
+// some OTHER state, not a claim about this one ("Delaware County, OH",
+// "Washington County, PA", "Indiana County, PA", "Ohio County, WV" are all
+// real places a bare substring test resolved to DE/WA/IN/OH). Mirrors the
+// fix already applied in relevanceFilterRules.js's _extractStateNameFromTitle
+// -- this file forked from the same original bare-substring implementation.
+const PLACE_QUALIFIER_AFTER_STATE_NAME =
+  /^\s*(county|counties|parish|borough|municipio|city|township|village|town|district)\b/i
+
 function extractStateNameFromTitle(title) {
-  const lower = (title || '').toLowerCase()
+  const raw = String(title || '')
+  const lower = raw.toLowerCase()
   for (const [name, abbr] of STATE_NAME_TO_ABBR) {
-    if (lower.includes(name)) return abbr
+    let from = 0
+    for (;;) {
+      const at = lower.indexOf(name, from)
+      if (at === -1) break
+      const before = at === 0 ? '' : lower[at - 1]
+      const after = lower.slice(at + name.length)
+      const boundedLeft = at === 0 || !/[a-z0-9]/.test(before)
+      const boundedRight = after === '' || !/^[a-z0-9]/.test(after)
+      if (boundedLeft && boundedRight && !PLACE_QUALIFIER_AFTER_STATE_NAME.test(after)) return abbr
+      from = at + 1
+    }
   }
   return null
 }
@@ -427,11 +450,31 @@ async function buildSelectSql(db) {
     .map(([col, alias]) => `fo.${col} AS ${alias}`)
 
   const selectClause = [...grantsSelect, ...foSelect].join(', ')
+  // PROFILE SCOPE IS THE BOUNDARY (repo invariant: "no cross-profile /
+  // cross-tenant bleed"; this file's own contract says duplicate_title means
+  // "same title already seen earlier in THIS profile's pipeline").
+  //
+  // The org branch used to be a bare `g.organization_id = ?`, so every profile
+  // sharing an organization pulled in EVERY org-mate's grants, judged them
+  // against ITS OWN sections/state/seenTitles, and — in non-dry-run mode
+  // (`POST /api/admin/clean-pipelines-against-goals` with `dry_run:false`) —
+  // ran `DELETE FROM grants WHERE id = ?` on them. Two org-mates holding the
+  // same real program was enough: the second row read as `duplicate_title` in
+  // the first profile's pass and was deleted out of the OTHER profile's
+  // pipeline. `wrong_state` had the same shape (profile A in TN deleting
+  // profile B's Ohio grant).
+  //
+  // The branch exists to reach ORG-LEVEL ORPHANS — grants that belong to the
+  // organization and name no profile (the `enforceProfileScopedPipeline`
+  // legacy shape). Requiring `g.profile_id IS NULL` keeps exactly that reach
+  // and removes the cross-profile bleed: a grant that explicitly names another
+  // profile is never loaded, so it can never be classified or deleted here.
   return `
     SELECT ${selectClause}
     FROM grants g
     LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
-    WHERE g.profile_id = ? OR (g.organization_id IS NOT NULL AND g.organization_id = ?)
+    WHERE g.profile_id = ?
+       OR (g.profile_id IS NULL AND g.organization_id IS NOT NULL AND g.organization_id = ?)
     ORDER BY g.created_at ASC, g.id ASC
   `
 }

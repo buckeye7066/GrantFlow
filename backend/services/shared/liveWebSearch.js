@@ -135,27 +135,68 @@ export function buildLocalFundingQueries(profileContext = {}, maxQueries = 8) {
  * @param {string|null} [opts.state]
  * @param {number} [opts.perQueryCount=6]
  * @param {number} [opts.timeoutMs=9000] Overall wall-clock budget.
- * @returns {Promise<{ opportunities: Object[], raw: number }>}
+ * @returns {Promise<{ opportunities: Object[], raw: number, search: Object }>}
  */
 async function collectWebLeads(queries, { state = null, perQueryCount = 6, timeoutMs = 9000 } = {}) {
   const deadline = Date.now() + Math.max(1000, Math.min(Number(timeoutMs) || 9000, 25000))
   let raw = 0
 
+  // "NOBODY FUNDS THIS" AND "WE COULD NOT LOOK" ARE DIFFERENT FACTS.
+  //
+  // Every provider failure here is swallowed into `[]` — deliberately, because
+  // this lane must never fail its caller. But the OUTCOME was reported as a
+  // bare count, so a total backend outage (SearXNG unreachable + Brave budget
+  // paused + the DuckDuckGo breaker open) rendered byte-identically to a
+  // successful search of an empty world: `raw: 0, deduped: 0`. Downstream that
+  // reads as "the open web has no local/item funding for this profile", which
+  // is a claim we have no evidence for.
+  //
+  // `searchWeb` already tells us which it was: webSearchEngine attaches a
+  // non-enumerable `searchMeta` whose `status` is 'unavailable' (with a reason
+  // like process_breaker_open / request_failed) or 'degraded_results'. Read it
+  // and carry the verdict out, so a caller can say "we could not look" instead
+  // of "there is nothing".
+  const tally = { attempted: 0, ok: 0, empty: 0, unavailable: 0, degraded: 0, skipped_deadline: 0 }
+  const reasons = new Set()
+
   const perQuery = await Promise.all(
     queries.map(async (query) => {
       const remaining = deadline - Date.now()
-      if (remaining <= 0) return []
+      if (remaining <= 0) {
+        tally.skipped_deadline += 1
+        return []
+      }
+      tally.attempted += 1
       // try/catch (not .catch chaining) so a synchronous throw from the search
       // engine is swallowed too — this lane must NEVER fail the caller.
       let results = []
       try {
         results = await searchWeb(query, { count: perQueryCount, timeoutMs: Math.min(remaining, 8000) })
-      } catch {
+        const status = String(results?.searchMeta?.status || (results?.length ? 'ok' : 'empty'))
+        if (results?.searchMeta?.reason) reasons.add(String(results.searchMeta.reason))
+        if (status === 'unavailable') tally.unavailable += 1
+        else if (status === 'degraded_results') tally.degraded += 1
+        else if (status === 'empty') tally.empty += 1
+        else tally.ok += 1
+      } catch (err) {
+        // A throw is an outage too — never an empty world.
+        tally.unavailable += 1
+        reasons.add(`threw:${err?.message || String(err)}`.slice(0, 120))
         results = []
       }
       return (results || []).map((r) => ({ ...r, _query: query }))
     }),
   )
+
+  // The lane could genuinely look iff at least one query reached a provider and
+  // got a real answer (ok, degraded, or an honest empty). If every attempted
+  // query was unavailable, a zero result is a MEASUREMENT FAILURE, not a fact.
+  const reached = tally.ok + tally.degraded + tally.empty
+  const searchStatus =
+    tally.attempted === 0 ? 'not_attempted'
+      : reached === 0 ? 'unavailable'
+        : tally.unavailable > 0 || tally.degraded > 0 ? 'degraded'
+          : 'ok'
 
   // Merge + dedupe by URL across queries, recording every query that surfaced it.
   const byUrl = new Map()
@@ -195,7 +236,20 @@ async function collectWebLeads(queries, { state = null, perQueryCount = 6, timeo
     is_lead: true,
   }))
 
-  return { opportunities, raw }
+  return {
+    opportunities,
+    raw,
+    search: {
+      status: searchStatus,
+      queries_total: queries.length,
+      queries_attempted: tally.attempted,
+      providers_reached: reached,
+      providers_unavailable: tally.unavailable,
+      providers_degraded: tally.degraded,
+      queries_skipped_deadline: tally.skipped_deadline,
+      reasons: Array.from(reasons).slice(0, 5),
+    },
+  }
 }
 
 /**
@@ -218,11 +272,24 @@ export async function searchLocalWebByProfile(profileContext = {}, opts = {}) {
   if (queries.length === 0) return { opportunities: [], debug }
 
   const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
-  const { opportunities, raw } = await collectWebLeads(queries, { state, perQueryCount, timeoutMs })
+  const { opportunities, raw, search } = await collectWebLeads(queries, { state, perQueryCount, timeoutMs })
 
   debug.raw = raw
   debug.deduped = opportunities.length
-  log.info(`[liveWebSearch] ${queries.length} queries → ${debug.raw} raw → ${debug.deduped} unique local leads`)
+  // Carry the outage/empty distinction out to the caller (see collectWebLeads).
+  debug.search_status = search.status
+  debug.search = search
+  if (search.status === 'unavailable') {
+    log.error(
+      `[liveWebSearch] SEARCH UNAVAILABLE: all ${search.queries_attempted} local-funding queries failed to reach a provider — ` +
+        `0 leads here means we could NOT LOOK, not that none exist. reasons=${JSON.stringify(search.reasons)}`,
+    )
+  } else {
+    log.info(
+      `[liveWebSearch] ${queries.length} queries → ${debug.raw} raw → ${debug.deduped} unique local leads ` +
+        `(search ${search.status}, ${search.providers_unavailable} unavailable)`,
+    )
+  }
   return { opportunities, debug }
 }
 
@@ -346,7 +413,7 @@ export async function searchNeedWebLeads({
   if (queries.length === 0) return { opportunities: [], debug }
 
   const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
-  const { opportunities, raw } = await collectWebLeads(queries, {
+  const { opportunities, raw, search } = await collectWebLeads(queries, {
     state,
     perQueryCount: Math.max(1, Math.min(Number(perQueryCount) || 6, 15)),
     timeoutMs,
@@ -354,9 +421,21 @@ export async function searchNeedWebLeads({
 
   debug.raw = raw
   debug.deduped = opportunities.length
-  log.info(
-    `[liveWebSearch] need "${String(needText).slice(0, 60)}" (${variant}): ${queries.length} queries → ${debug.raw} raw → ${debug.deduped} unique leads`,
-  )
+  // Same outage-vs-empty distinction as the profile lane (see collectWebLeads).
+  debug.search_status = search.status
+  debug.search = search
+  if (search.status === 'unavailable') {
+    log.error(
+      `[liveWebSearch] SEARCH UNAVAILABLE for need "${String(needText).slice(0, 60)}" (${variant}): ` +
+        `all ${search.queries_attempted} queries failed to reach a provider — 0 leads means we could NOT LOOK. ` +
+        `reasons=${JSON.stringify(search.reasons)}`,
+    )
+  } else {
+    log.info(
+      `[liveWebSearch] need "${String(needText).slice(0, 60)}" (${variant}): ${queries.length} queries → ${debug.raw} raw → ${debug.deduped} unique leads ` +
+        `(search ${search.status}, ${search.providers_unavailable} unavailable)`,
+    )
+  }
   return { opportunities, debug }
 }
 

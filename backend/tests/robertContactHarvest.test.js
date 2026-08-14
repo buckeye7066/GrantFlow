@@ -47,6 +47,14 @@ const AXIOM = 'demo.owner-graph@example.invalid'
 
 function makeDb() {
   const sqlite = new Database(':memory:')
+  // isExistingClient (yanaHarvestVerification.js) distinguishes "queried and
+  // found nothing" from "the probe itself errored" — a real GrantFlow DB
+  // always has these tables, so a bare fixture with no tables at all makes
+  // every probe genuinely fault, which the (correct) new behavior then
+  // refuses as unanswerable rather than guessing "not a client". Creating
+  // them empty here matches production shape without asserting any client.
+  sqlite.exec('CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, primary_email TEXT)')
+  sqlite.exec('CREATE TABLE IF NOT EXISTS profile_emails (id TEXT PRIMARY KEY, email TEXT)')
   _resetYanaSchemaCache()
   return wrapSqlite(sqlite)
 }
@@ -326,7 +334,7 @@ describe('yana verification of harvested contacts', () => {
 
   it('verifies a real contact to qualified (clearing John\'s score floor) and rejects the rest with reasons', async () => {
     const db = makeDb()
-    db.exec('CREATE TABLE users (id TEXT PRIMARY KEY, primary_email TEXT)')
+    // makeDb() already creates an empty `users` table; just seed the one row.
     db.raw.prepare('INSERT INTO users (id, primary_email) VALUES (?, ?)').run('u1', 'client@already.org')
 
     await seedCandidate(db, { name: 'Jane Fund', email: 'jane@nonprofit.org' })

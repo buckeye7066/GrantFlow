@@ -88,7 +88,7 @@ function scoreSourceQuality(opportunity) {
   // Placeholder strings are not real application paths
   const PLACEHOLDER_PATTERNS = /^(tbd|n\/a|na|contact|see website|pending|unknown|none|#)$/i
   if (!isValidHttpUrl || PLACEHOLDER_PATTERNS.test(urlLower.trim())) {
-    // Fall back to record_origin trust only â no URL bonus
+    // Fall back to record_origin trust only — no URL bonus
     const origin = String(opportunity.record_origin || '').toLowerCase()
     if (origin === 'grants_gov' || origin === 'verified_real') return 50
     if (origin === 'curated_verified') return 40
@@ -519,7 +519,7 @@ export function scoreOpportunity(intel, opportunity) {
   // Hard reject on eligibility failures
   // Only hard-reject on objectively unrecoverable failures.
   // 'requires_veteran', 'requires_student', and 'geographic_mismatch' are
-  // scored dimensionally below; do NOT short-circuit here â let the weighted
+  // scored dimensionally below; do NOT short-circuit here — let the weighted
   // total reach the caller (computeMatchDecision) which is the sole authority.
   const HARD_REJECT_CODES = ['deadline_expired']
   const hasHardFailure = eligResult.verdict === 'ineligible' ||

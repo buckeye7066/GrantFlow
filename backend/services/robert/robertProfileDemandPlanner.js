@@ -10,6 +10,8 @@
  * Robert pulls only the fields it needs for query generation.
  */
 
+import { isRegionCode } from '../../../shared/usStateCodes.js'
+
 const STATE_ABBREV_MAP = {
   alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR',
   california: 'CA', colorado: 'CO', connecticut: 'CT', delaware: 'DE',
@@ -132,12 +134,27 @@ function pickLocation(profile, sections, signals) {
   }
 }
 
+/**
+ * A state code, or NULL — never the caller's junk echoed back (2026-08-14).
+ *
+ * This used to `return STATE_ABBREV_MAP[lower] || v`, passing an unmappable
+ * value through VERBATIM as `location.state`, and accepted ANY two characters
+ * as a code. Prod carries the junk state `"USA"`, so Robert built search
+ * queries and coverage scopes for the "state" of USA — the same shape as the
+ * documented `"USA"` -> `"SA"` incident, which is exactly why
+ * `shared/usStateCodes.isRegionCode` exists ("two letters is a SHAPE,
+ * REGION_CODES is the AUTHORITY"). `STATE_ABBREV_MAP` also holds the 50 states
+ * only, so DC and the territories had to come through the 2-letter branch —
+ * `isRegionCode` covers them, so this is strictly MORE permissive there while
+ * refusing junk. MISSING = NEUTRAL: a null state gates nothing downstream,
+ * which is the honest outcome for a value we cannot resolve.
+ */
 function normalizeState(value) {
   if (!value) return null
   const v = String(value).trim()
-  if (v.length === 2) return v.toUpperCase()
+  if (isRegionCode(v)) return v.toUpperCase()
   const lower = v.toLowerCase()
-  return STATE_ABBREV_MAP[lower] || v
+  return STATE_ABBREV_MAP[lower] ?? null
 }
 
 function pickBool(obj, keys) {

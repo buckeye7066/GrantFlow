@@ -71,6 +71,7 @@ import {
   classifyOpportunityKind,
   classifySourceTrustTier,
   OPPORTUNITY_KINDS,
+  isUnverifiedLinkStatus,
 } from './opportunityRealityGate.js'
 
 const OFFICIAL_HOST_SUFFIXES = [
@@ -320,7 +321,7 @@ export function assessOpportunityTrust(opp, opts = {}) {
   }
   // Track an explicitly "never verified" state so the trust tier can reflect
   // it. We do NOT hard-block on this — the recurring verifier owns freshness.
-  const linkUnverified = linkStatus === 'unverified'
+  const linkUnverified = isUnverifiedLinkStatus(linkStatus)
   if (linkUnverified) {
     reasons.push('link_unverified')
   }

@@ -1,4 +1,7 @@
 import { isControlledBetaSyntheticBrowserUrl } from './controlledBetaBrowserPolicy.js'
+import { createLogger } from '../../utils/logger.js'
+
+const log = createLogger('service:browserLaunch')
 
 /**
  * browserLaunch.js — the single source of truth for Chromium launch args used by
@@ -58,8 +61,17 @@ export async function launchPortalBrowser(chromium, { headless = true, extraArgs
   try {
     const browser = await chromium.launch({ headless, channel: 'chromium', args })
     return { browser, engine: 'chromium-new-headless' }
-  } catch {
+  } catch (err) {
+    // NAME THE DOWNGRADE. This file's own header records that `headless-shell`
+    // is killed at the CONNECTION level by Akamai-class walls
+    // (net::ERR_HTTP2_PROTOCOL_ERROR before a page exists). Discarding the
+    // first error meant an image missing the full Chromium build silently ran
+    // on the engine that CANNOT reach real portals, and every later failure got
+    // attributed to the PORTAL instead of to the deployment. The reason is now
+    // logged and returned so a caller can say which it was.
+    const downgradeReason = String(err?.message || err)
+    log.warn(`[browserLaunch] full-Chromium launch FAILED, downgrading to headless-shell (this engine is blocked by Akamai-class walls): ${downgradeReason}`)
     const browser = await chromium.launch({ headless, args })
-    return { browser, engine: 'headless-shell' }
+    return { browser, engine: 'headless-shell', downgraded_from: 'chromium-new-headless', downgrade_reason: downgradeReason }
   }
 }

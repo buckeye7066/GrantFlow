@@ -2104,10 +2104,14 @@ router.post('/admin/hard-stops/dismiss-all', async (req, res) => {
   // with Hamilton" page passes this so it only empties that profile's list).
   const scopeProfileId = req.body?.profileId ? String(req.body.profileId) : null
   try {
-    const all = await listOpenAdminBlockers(req.db, { limit: 500 })
-    const open = scopeProfileId
-      ? all.filter((b) => String(b.profile_id) === scopeProfileId)
-      : all
+    // The scope MUST be a SQL predicate, not a post-LIMIT JS filter. The old
+    // code took the newest 500 stops FLEET-WIDE and then filtered in JS, so a
+    // profile whose open stops fell outside that window got
+    // `{ok:true, dismissed:0, total:0}` — the button reported success and
+    // cleared nothing (the `scanned === bound` signature CLAUDE.md names).
+    // `listOpenAdminBlockers` already accepts `profileId` and the sibling
+    // GET /admin/hard-stops route passes it correctly.
+    const open = await listOpenAdminBlockers(req.db, { limit: 500, profileId: scopeProfileId })
     let dismissed = 0
     const notifIds = []
     for (const b of open) {

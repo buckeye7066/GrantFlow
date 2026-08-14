@@ -176,7 +176,7 @@ async function ensureGeoCrawlSchema(db) {
       // Allow future calls to retry schema creation.
       if (ensurePromise === p) ensurePromise = null
       ensured = false
-      qualityLog.error('[geoCrawlRunStore] Schema creation failed â future calls will retry:', error?.message || error)
+      qualityLog.error('[geoCrawlRunStore] Schema creation failed — future calls will retry:', error?.message || error)
       throw error
     }
   })()
@@ -334,7 +334,7 @@ export async function appendGeoCrawlEvent(
   { level = 'info', state = null, zip = null, county = null, source = null, message = '', foundCountDelta = 0 } = {},
 ) {
   if (!runId) {
-    console.warn('[geoCrawlRunStore] appendGeoCrawlEvent called without runId â event lost:', { level, state, zip, message })
+    console.warn('[geoCrawlRunStore] appendGeoCrawlEvent called without runId — event lost:', { level, state, zip, message })
     return null
   }
   await ensureGeoCrawlSchema(db)

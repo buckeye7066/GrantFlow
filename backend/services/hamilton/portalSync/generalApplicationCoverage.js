@@ -90,6 +90,11 @@ const ADVANCEABLE_GRANT_STATUSES = Object.freeze([
   'discovered', 'pending_review', 'portal', 'researching', 'preparing', 'ready_to_submit',
 ])
 
+/** Rows an UPDATE actually touched. SQLite reports `changes`, pg `rowCount`. */
+function rowsChanged(result) {
+  return Number(result?.changes ?? result?.rowCount ?? 0)
+}
+
 /**
  * Apply verified general-application coverage for one profile + tenant.
  *
@@ -110,6 +115,7 @@ export async function applyGeneralApplicationCoverage(db, {
     applied: false,
     portal_marked_complete: false,
     grants_advanced: [],
+    grants_advance_conflicted: 0,
     grants_skipped_not_governed: 0,
     tasks_completed: [],
   }
@@ -152,7 +158,7 @@ export async function applyGeneralApplicationCoverage(db, {
     if (!ADVANCEABLE_GRANT_STATUSES.includes(status)) continue // already progressed or terminal — never touched
     const note = `Covered by the school's General Scholarship Application (verified submitted via Hamilton portal sync${syncRunId ? ` ${syncRunId}` : ''} on ${nowIso}): the portal states scholarships cannot be applied to individually. Evidence: "${generalApplication.evidence}"`
     try {
-      await db.prepare(
+      const res = await db.prepare(
         `UPDATE grants
             SET status = 'submitted',
                 submitted_date = COALESCE(submitted_date, ?),
@@ -160,7 +166,22 @@ export async function applyGeneralApplicationCoverage(db, {
                 updated_at = CURRENT_TIMESTAMP
           WHERE id = ? AND status = ?`,
       ).run(nowIso, note, note, String(g.id), g.status)
-      out.grants_advanced.push({ id: String(g.id), title: g.title, from: g.status })
+      // A STATUS CLAIM IS ONLY TRUE IF THE WRITE LANDED (2026-08-14). The
+      // optimistic `AND status = ?` guard is correct — it refuses to advance a
+      // row someone else moved mid-run — but its result was DISCARDED and
+      // `grants_advanced` was pushed unconditionally. So a 0-row update (a
+      // concurrent status change, or stored casing differing from the
+      // lowercased `status` the eligibility check used) still reported the
+      // grant advanced to `submitted` to the run summary and every surface
+      // reading it. That is a submission claim made without verifying it
+      // happened — the same class as the packet-as-proof defect. A refused
+      // update is now counted as a CONFLICT, never as an advance.
+      if (rowsChanged(res) > 0) {
+        out.grants_advanced.push({ id: String(g.id), title: g.title, from: g.status })
+      } else {
+        out.grants_advance_conflicted += 1
+        log.warn('grant_advance_no_rows', { grantId: String(g.id), expectedStatus: g.status })
+      }
     } catch (err) {
       log.warn('grant_advance_failed', { grantId: String(g.id), err: err?.message })
     }

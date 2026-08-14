@@ -30,6 +30,9 @@ import { getJohnConfig } from './johnOutreachSafety.js'
 import { makeSuppressionChecker } from './johnSuppressionService.js'
 import { isValidEmail } from './johnOutreachSafety.js'
 import { isExcludedEmail, isExcludedUrl } from '../yana/prospectExclusions.js'
+import { createLogger } from '../../utils/logger.js'
+
+const log = createLogger('john:yana-bridge')
 
 /**
  * The default lead source — empty. Real deployments should register a
@@ -52,11 +55,22 @@ export const NULL_LEAD_SOURCE = Object.freeze({
  * sources) register here at boot. The registry is therefore a LIST.
  *
  * Each source owns daily-cap enforcement: John does NOT re-enforce caps, he
- * trusts whatever each registered source returns. Yana applies the
- * ≤50-per-rolling-24h cap in pushQualifiedToJohn (charter §4) before a lead is
- * ever visible here; Robert's source applies its own cap. Any future source
- * MUST do the same. The contract is both methods the bridge calls —
- * listQualifiedLeads() and markQueuedForReview().
+ * trusts whatever each registered source returns. The contract is both methods
+ * the bridge calls — listQualifiedLeads() and markQueuedForReview().
+ *
+ * HONEST LIMIT ON THAT CLAIM (verified 2026-08-14, do not restore the old
+ * wording): this header used to say Yana applies the ≤50-per-rolling-24h cap
+ * "before a lead is ever visible here". She does not. `pushQualifiedToJohn`
+ * (services/yana/yanaLeadDiscovery.js) enforces the rolling cap by setting the
+ * `pushed_to_john` flag — but the lead source John actually reads,
+ * `listQualifiedLeadPackets`, selects on `qualification_status = 'qualified'`
+ * ALONE and never consults that flag. So (a) the operative bound on outreach
+ * volume is John's own `computeRunBudget` daily limit, not Yana's charter §4
+ * cap, and (b) `YANA_ALLOW_LEADS=false` ("observe only, never push") does not
+ * stop a qualified lead reaching John. Making the read path honor the flag is a
+ * one-line change with real blast radius — if Yana's scheduled run is off in an
+ * environment, it would take John's Yana lane dark — so it is REPORTED here
+ * rather than flipped blind. Do not rely on this bridge for a rolling cap.
  */
 const registeredSources = []
 
@@ -189,6 +203,15 @@ export async function fetchLeadsForJohn({
   // Pull from each source, tagging every raw lead with its owning source so we
   // can route hooks + report per-source provenance after filtering.
   const tagged = []
+  // A DARK SOURCE MUST BE REPORTED AS DARK, NEVER AS A CLEAN ZERO. The catch
+  // below used to be a bare `catch { rows = [] }` — no log, no counter, nothing
+  // on the return value. So when Yana's (or Robert's) lead source threw, John
+  // reported `considered: 0` and johnAgent wrote the note "No qualified leads to
+  // draft … Yana must produce leads that are qualified AND …", blaming the
+  // upstream agent's OUTPUT for what was actually a failed READ. Recall-over-
+  // suppression still holds — one broken source must not blind John to the
+  // others — but the failure is now named.
+  const source_errors = []
   for (const src of sources) {
     let rows = []
     try {
@@ -197,9 +220,10 @@ export async function fetchLeadsForJohn({
         leadIds: Array.isArray(leadIds) && leadIds.length > 0 ? leadIds : null,
         includeUnqualified,
       })
-    } catch {
-      // A failing source must not blind John to the others. Recall-over-
-      // suppression: skip this source's leads, keep going.
+    } catch (err) {
+      const entry = { source: src.name || 'unknown', error: String(err?.message || err).slice(0, 300) }
+      source_errors.push(entry)
+      log.warn('lead source listQualifiedLeads failed — its leads are UNREAD this run, not absent', entry)
       rows = []
     }
     for (const raw of rows || []) tagged.push({ raw, src })
@@ -281,6 +305,10 @@ export async function fetchLeadsForJohn({
     // Back-compat: singular name = first source when aggregating, else the one.
     source_name: sourceNames[0] || 'unknown',
     source_names: sourceNames,
+    // [] when every source answered. A non-empty list means `considered` is a
+    // FLOOR, not a count — some source could not be read at all.
+    source_errors,
+    sources_unread: source_errors.length,
   }
 }
 

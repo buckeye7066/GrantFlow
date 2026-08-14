@@ -105,6 +105,11 @@ export function deriveCoverageOutcomes({
       outcomeBySourceId.set(sourceId, {
         source_id: sourceId,
         queried: false,
+        // 'run' — a lane actually executed for this source in THIS run.
+        // 'stored_rows' — the source only appears because durable catalog rows
+        //                 attributed to it are in the displayed list.
+        // null — neither.
+        queried_evidence: null,
         failed: false,
         found: 0,
         duration_ms: null,
@@ -117,7 +122,16 @@ export function deriveCoverageOutcomes({
   }
 
   for (const [group, count] of Object.entries(candidateCounts)) {
-    if (!Number.isFinite(count) || count <= 0) continue
+    // A KEY PRESENT in candidateCounts means crawlerManager EXECUTED that
+    // group's lane — `loadCandidates` only assigns a key inside the branch it
+    // ran, and it deliberately writes 0 when a lane ran and loaded nothing
+    // (crawlerManager.js: `candidateCounts.business = 0`,
+    // `candidateCounts.scholarships = 0`). The old `count <= 0 → continue`
+    // therefore collapsed "we looked and there is nothing" into "we never
+    // looked": those SOURCE_IDS stayed `queried:false` and surfaced as coverage
+    // gaps — the exact conflation this module's header says it exists to fix.
+    // Only a MALFORMED count (non-finite / negative) is skipped now.
+    if (!Number.isFinite(count) || count < 0) continue
     const sourceIds = STRATEGY_GROUP_TO_SOURCE_IDS[group] ?? []
     if (sourceIds.length === 0) {
       // Unmapped group — record it with a synthetic id so the UI can
@@ -128,6 +142,7 @@ export function deriveCoverageOutcomes({
       const syntheticId = `curated_${group}`
       const o = ensure(syntheticId)
       o.queried = true
+      o.queried_evidence = 'run'
       o.duration_ms = totalDurationMs
       o.directory = false
       continue
@@ -135,6 +150,7 @@ export function deriveCoverageOutcomes({
     for (const sourceId of sourceIds) {
       const o = ensure(sourceId)
       o.queried = true
+      o.queried_evidence = 'run'
       o.duration_ms = totalDurationMs
     }
   }
@@ -144,19 +160,36 @@ export function deriveCoverageOutcomes({
   //    output — keeps the report honest).
   for (const [sourceId, count] of foundBySourceId) {
     const o = ensure(sourceId)
-    o.queried = true
     o.found = count
+    // PROVENANCE, not a claim about THIS run. `opportunities` is the DISPLAYED
+    // list, which includes durable catalog rows persisted by EARLIER runs (the
+    // catalog is durable; only the match store is a rolling snapshot). Stamping
+    // `queried:true` from a stored row manufactures crawl evidence in the one
+    // artifact meant to prove what actually ran. The run-evidence loop above is
+    // the only thing allowed to assert `queried`; here we record WHY the source
+    // shows a count so a reader can tell the two apart.
+    o.queried_evidence = o.queried ? 'run' : 'stored_rows'
+    if (!o.queried) o.queried = true
   }
 
   // 3) Apply explicit error reports (e.g. an HTTP source that timed
   //    out). These override `failed` to true and capture the message.
   for (const err of errors ?? []) {
     if (!err) continue
-    const targetIds = err.source_id
+    let targetIds = err.source_id
       ? [err.source_id]
       : err.group
         ? STRATEGY_GROUP_TO_SOURCE_IDS[err.group] ?? []
         : []
+    // AN ERROR THAT CANNOT BE ATTRIBUTED IS STILL AN ERROR. `targetIds` is
+    // empty whenever the crawler reported a failure with neither `source_id`
+    // nor a `group` present in STRATEGY_GROUP_TO_SOURCE_IDS — and the loop
+    // below then executed ZERO times, so the failure vanished and
+    // summariseOutcomes reported `sources_failed: 0` for a run that failed.
+    // Park it on a synthetic id so a real failure can never read as a clean run.
+    if (targetIds.length === 0) {
+      targetIds = [err.group ? `unattributed_${err.group}` : 'unattributed_crawler_error']
+    }
     for (const sourceId of targetIds) {
       const o = ensure(sourceId)
       o.failed = true
@@ -173,12 +206,16 @@ export function deriveCoverageOutcomes({
  */
 export function summariseOutcomes(outcomes = []) {
   let queried = 0
+  let queriedFromRun = 0
+  let queriedFromStoredRowsOnly = 0
   let failed = 0
   let totalFound = 0
   let directoryFound = 0
   let directFound = 0
   for (const o of outcomes) {
     if (o.queried) queried++
+    if (o.queried_evidence === 'run') queriedFromRun++
+    else if (o.queried_evidence === 'stored_rows') queriedFromStoredRowsOnly++
     if (o.failed) failed++
     totalFound += Number(o.found || 0)
     if (o.directory) directoryFound += Number(o.found || 0)
@@ -187,6 +224,12 @@ export function summariseOutcomes(outcomes = []) {
   return {
     sources_total: outcomes.length,
     sources_queried: queried,
+    // The honest split behind `sources_queried`: how many of those claims come
+    // from a lane that ran in THIS run vs. from durable rows an earlier run
+    // stored. A large `sources_queried_from_stored_rows_only` means the report
+    // is describing the catalog, not this crawl.
+    sources_queried_from_run: queriedFromRun,
+    sources_queried_from_stored_rows_only: queriedFromStoredRowsOnly,
     sources_failed: failed,
     direct_found: directFound,
     directory_found: directoryFound,

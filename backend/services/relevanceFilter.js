@@ -37,19 +37,49 @@ const STATE_NAME_TO_ABBR_ENTRIES = [
   ['alaska', 'AK'], ['hawaii', 'HI'], ['idaho', 'ID'],
   ['maine', 'ME'], ['texas', 'TX'], ['utah', 'UT'],
   ['iowa', 'IA'], ['ohio', 'OH'],
+  // FIXED: 'washington' was missing from this list entirely (a real US state
+  // omission, not a deliberate DC-ambiguity exclusion -- matchEngine.js's own
+  // STATE_MAPPING and relevanceFilterRules.js's _STATE_ABBREVIATIONS both
+  // already carry it without issue, and "washington, d.c." / "district of
+  // columbia" is handled as its own separate DC concept elsewhere -- so a
+  // title naming the state of Washington was silently unresolvable here).
+  ['washington', 'WA'],
 ] // entries are already ordered longest-first; no runtime sort needed
+
+// A state NAME used as the name of a COUNTY/CITY/PARISH is a place inside
+// some OTHER state, not a claim about this one ("Delaware County, OH",
+// "Washington County, PA", "Indiana County, PA", "Ohio County, WV",
+// "Kansas City, MO" are all real places a bare substring test resolved to
+// DE/WA/IN/OH/KS). Mirrors the fix already applied in relevanceFilterRules.js
+// (_extractStateNameFromTitle) -- both files forked from the same original
+// bare-substring implementation and carried the same bug.
+const PLACE_QUALIFIER_AFTER_STATE_NAME =
+  /^\s*(county|counties|parish|borough|municipio|city|township|village|town|district)\b/i
 
 /**
  * Detect a US state name embedded in an opportunity title.
  * "Ohio Family and Children First" → "OH"
  * "New York Tuition Assistance Program" → "NY"
+ * "Delaware County, OH Assistance Program" → "OH" (county-name guard; the
+ * bare "delaware" substring is a PLACE inside Ohio, not a claim about DE).
  *
  * Returns the 2-letter uppercase state abbreviation or null.
  */
 export function extractStateNameFromTitle(title) {
-  const lower = (title || '').toLowerCase()
+  const raw = String(title || '')
+  const lower = raw.toLowerCase()
   for (const [name, abbr] of STATE_NAME_TO_ABBR_ENTRIES) {
-    if (lower.includes(name)) return abbr
+    let from = 0
+    for (;;) {
+      const at = lower.indexOf(name, from)
+      if (at === -1) break
+      const before = at === 0 ? '' : lower[at - 1]
+      const after = lower.slice(at + name.length)
+      const boundedLeft = at === 0 || !/[a-z0-9]/.test(before)
+      const boundedRight = after === '' || !/^[a-z0-9]/.test(after)
+      if (boundedLeft && boundedRight && !PLACE_QUALIFIER_AFTER_STATE_NAME.test(after)) return abbr
+      from = at + 1
+    }
   }
   return null
 }

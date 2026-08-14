@@ -275,6 +275,23 @@ async function ingestGrantsGov(db, plan, limits, row) {
       eligibilities: plan.ggEligibility,
       rows: limits.rowsPerQuery,
     })
+    // AN OUTAGE ON THE LARGEST FEDERAL SOURCE MUST NOT READ AS "ok, 0 found"
+    // (2026-08-14). Every other connector in this file throws on failure
+    // (`requestJson`), so the catch in `ingestFromConnectors` marks the row
+    // `error`. `fetchGrantsGov` is the exception: it returns `null` for a WAF
+    // block, a 4xx, a 5xx after all retries, and a DNS failure alike — the
+    // SAME value the loop would see for an empty body. `row.status` was
+    // initialised 'ok' and only ever changed in that unreachable catch, so a
+    // total grants.gov outage was reported as
+    // `{source:'grants.gov', fetched:0, inserted:0, status:'ok'}` — the one
+    // federal source whose failure was invisible to the coverage report.
+    if (!data) {
+      row.status = 'error'
+      row.lastError = `grants.gov returned no body for query "${keyword || '(broad)'}" (see grantsGovApiClient logs for the status)`
+      log.warn(`[connectorIngest] grants.gov fetch returned no body; keyword="${keyword || '(broad)'}"`)
+      await sleep(limits.delayMs)
+      continue
+    }
     const hits = Array.isArray(data?.oppHits) ? data.oppHits : []
     row.fetched += hits.length
     const transformed = hits

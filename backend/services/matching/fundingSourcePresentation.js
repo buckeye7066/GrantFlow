@@ -37,11 +37,14 @@ export function isFundingResource(source = {}) {
  */
 function completenessOf(row = {}) {
   let score = 0
+  // `||` throughout: an empty-string column is as absent as NULL for the
+  // purpose of "how complete is this record", and `??` would stop the fallback
+  // field from ever being read — making the LESS complete duplicate win.
   if (Number(row.amount_min) > 0 || Number(row.amount_max) > 0) score += 4
-  if (String(row.url ?? row.application_url ?? '').trim()) score += 3
+  if (String(row.url || row.application_url || row.apply_url || '').trim()) score += 3
   if (row.deadline) score += 2
-  if (String(row.sponsor ?? '').trim()) score += 2
-  if (String(row.summary ?? row.description ?? '').trim().length > 80) score += 1
+  if (String(row.sponsor || row.funder || '').trim()) score += 2
+  if (String(row.summary || row.description || '').trim().length > 80) score += 1
   return score
 }
 

@@ -152,18 +152,48 @@ function safeJsonParse(raw) {
  *    matchedNeeds / scoreBreakdown remain the fallback evidence.
  *  - missing eligibility fields are read from missingEligibilityFields OR
  *    missingFields (both spellings have shipped).
+ *
+ * TWO SHAPES SHIP, AND THE PERSISTED ONE IS THE COMMON CASE (identical root
+ * cause + fix pattern to reasons.js's deriveMatchReasonCodes/resolveExplain).
+ * services/matchEngine.js (live recompute) emits camelCase
+ * scoreBreakdown/matchedSignals/matchedNeeds. crawler-os/matchEngine.js
+ * re-wraps the SAME canonical verdict into the shape actually PERSISTED to
+ * profile_opportunity_matches.match_explain_json (crawler-os/storage.js is
+ * the only writer of that column): snake_case score_breakdown — the WHOLE
+ * scoreBreakdown object copied verbatim under that key, so its inner fields
+ * (need_coverage, eligibility_factor, eligibility_mismatches, geo_factor,
+ * applicant_type) keep their original names — plus pre-reduced top-level
+ * facts matched_profile_type / matched_location / matched_needs /
+ * missing_eligibility_fields. Reading only the camelCase shape measured
+ * ALL-DEAD against a real persisted row: need_coverage null,
+ * applicant_type.matched false, geography.tier null, eligibility.factor
+ * null, matched_needs empty.
  */
+const NON_COMMITTAL_LOCATION = new Set(['', 'unknown', 'none', 'no_match', 'null', 'undefined']);
+
 export function extractMatchEvidence(explainRaw, opp = {}) {
   const explain = safeJsonParse(explainRaw) ?? {};
-  const sb = explain.scoreBreakdown ?? {};
+  const sb = explain.scoreBreakdown ?? explain.score_breakdown ?? {};
   const cc = explain.confidence_components ?? {};
   const matchedSignals = Array.isArray(explain.matchedSignals) ? explain.matchedSignals : [];
   const geoSignal = matchedSignals.find((s) => typeof s === 'string' && s.startsWith('geo:')) || null;
+  // matched_location is the persisted shape's tier NAME directly
+  // ('state'/'national'/'county'/'partial'/'unknown'), not a matchedSignals
+  // entry — see crawler-os/matchEngine.js's describeLocationMatch().
+  const matchedLocation = String(explain.matched_location ?? '').trim().toLowerCase();
+  const geoTier = geoSignal
+    ? geoSignal.slice(4)
+    : (matchedLocation && !NON_COMMITTAL_LOCATION.has(matchedLocation) ? matchedLocation : null);
+  const matchedNeeds = Array.isArray(explain.matchedNeeds)
+    ? explain.matchedNeeds
+    : Array.isArray(explain.matched_needs) ? explain.matched_needs : [];
   const missingFields = Array.isArray(explain.missingEligibilityFields)
     ? explain.missingEligibilityFields
     : Array.isArray(explain.missingFields)
       ? explain.missingFields
-      : [];
+      : Array.isArray(explain.missing_eligibility_fields)
+        ? explain.missing_eligibility_fields
+        : [];
 
   const registrySource = opp.source ? allSources().find((s) => s.source_id === opp.source) : null;
 
@@ -171,13 +201,13 @@ export function extractMatchEvidence(explainRaw, opp = {}) {
     // NEW dataPointEvidence key ({ total, matched_count, credit, matched:[...] })
     // — render when present; null means "fall back to matched_needs/breakdown".
     data_points: explain.dataPointEvidence ?? null,
-    matched_needs: Array.isArray(explain.matchedNeeds) ? explain.matchedNeeds : [],
+    matched_needs: matchedNeeds,
     need_coverage: Number.isFinite(Number(sb.need_coverage)) ? Number(sb.need_coverage) : null,
     applicant_type: {
-      matched: matchedSignals.includes('applicant_type') || Number(sb.applicant_type) > 0,
+      matched: matchedSignals.includes('applicant_type') || Number(sb.applicant_type) > 0 || explain.matched_profile_type === true,
     },
     geography: {
-      tier: geoSignal ? geoSignal.slice(4) : null,
+      tier: geoTier,
       factor: sb.geo_factor ?? null,
     },
     eligibility: {

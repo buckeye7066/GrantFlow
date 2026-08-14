@@ -417,10 +417,16 @@ export async function getUserIdsWithProfileAccess(db, profileId) {
   const ids = new Set()
   if (!db || !profileId) return ids
 
-  // 1. Owner + creator on the profile row.
+  // 1. Owner + creator on the profile row. Queried as two separate
+  // statements — a schema missing the secondary `created_by` column (some
+  // minimal fixtures never added it) must not also swallow the primary
+  // `user_id` ownership signal, which a single combined SELECT would do.
   try {
-    const row = await db.prepare('SELECT user_id, created_by FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+    const row = await db.prepare('SELECT user_id FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
     if (row?.user_id) ids.add(String(row.user_id))
+  } catch { /* older schema / missing column */ }
+  try {
+    const row = await db.prepare('SELECT created_by FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
     if (row?.created_by) ids.add(String(row.created_by))
   } catch { /* older schema / missing column */ }
 

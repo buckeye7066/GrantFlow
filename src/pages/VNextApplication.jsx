@@ -53,6 +53,7 @@ export default function VNextApplication() {
     },
     onSuccess: () => {
       setLastBlockers([])
+      appQuery.refetch()
     },
     onError: (err) => {
       try {

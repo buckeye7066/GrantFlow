@@ -16,11 +16,20 @@ import {
 
 export const POINTER_TASK_REPAIR_VERSION = 'pointer-task-repair-v1'
 
+// What this set protects is SUBMISSION EVIDENCE — a row that already recorded
+// an outcome, or one sitting on the submit boundary where a rewrite could
+// destroy proof. `failed` was in here and does not belong (2026-08-14): a
+// FAILED pointer task is exactly the population this module exists for — a row
+// with no application surface that already died silently, carrying no evidence
+// to protect. Excluding it meant the tasks most in need of a
+// `blocked` / `no_application_surface` handoff with real instructions were
+// counted `protected_terminal` and left holding a stale, non-actionable
+// message forever. The sibling policy module's terminal set
+// (`hamiltonFundingSourcePolicy`) is `submitted/completed/cancelled` only.
 const PROTECTED_TASK_STATUSES = new Set([
   'submitted',
   'completed',
   'cancelled',
-  'failed',
   'submit_attempt_started',
   'submit_evidence_pending',
   'submission_verification_required',

@@ -254,7 +254,15 @@ async function ensureGrantAiColumns(db) {
       const colName = assertSafeIdentifier(c.name, 'identifier')
       const colType = assertSafeIdentifier(String(c.sqlite).split(' ')[0], 'identifier')
       const tail = String(c.sqlite).slice(colType.length).replace(/[^A-Za-z0-9 \t_'"-]/g, '')
-      await db.prepare(`ALTER TABLE grants ADD COLUMN ${colName} ${colType}${tail};`).run()
+      try {
+        await db.prepare(`ALTER TABLE grants ADD COLUMN ${colName} ${colType}${tail};`).run()
+      } catch (alterErr) {
+        // Concurrent ensureGrantAiColumns calls may have already added this column.
+        // Re-check so a duplicate-column error doesn't leave the schema incomplete.
+        const recheckInfo = await db.prepare('PRAGMA table_info(grants)').all()
+        const recheckExisting = new Set((recheckInfo || []).map((r) => String(r?.name || '').toLowerCase()))
+        if (!recheckExisting.has(String(c.name).toLowerCase())) throw alterErr
+      }
       if (c.name === 'profile_id') sqliteHasGrantsProfileIdColumn = true
     }
   } catch (error) {
@@ -922,8 +930,8 @@ router.get('/:id', async (req, res) => {
       FROM grants g
       LEFT JOIN organizations o ON g.organization_id = o.id
       WHERE g.id = ?
-        AND (g.profile_id = ? OR g.profile_id IS NULL)
-    `).get(req.params.id, grantAccess.profile_id ?? null);
+        AND (? IS NULL OR g.profile_id = ?)
+    `).get(req.params.id, grantAccess.profile_id ?? null, grantAccess.profile_id ?? null);
     
     if (!grant) {
       return res.status(404).json({ error: 'Grant not found' });

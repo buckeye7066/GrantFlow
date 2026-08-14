@@ -36,7 +36,7 @@ export function normalizeDateToIso(value) {
       if (testDate.getFullYear() !== yyyy || testDate.getMonth() !== mm - 1 || testDate.getDate() !== dd) return null
       return `${String(yyyy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
     }
-    // Range check failed for a string that matched MM/DD/YYYY pattern â reject
+    // Range check failed for a string that matched MM/DD/YYYY pattern — reject
     // rather than falling through to the permissive last-resort parser.
     return null
   }

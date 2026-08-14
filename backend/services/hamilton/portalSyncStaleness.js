@@ -180,10 +180,29 @@ export function maxPromptedPortals() {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_MAX_PROMPTED_PORTALS
 }
 
+/**
+ * Epoch ms from whatever the driver handed back.
+ *
+ * TRAP (the canonical one, already recorded for `samRegistry.rowTimestampMs`):
+ * prod Postgres returns a Date, but SQLite stores `CURRENT_TIMESTAMP` as the
+ * ZONE-LESS string `'YYYY-MM-DD HH:MM:SS'` — in UTC — and `Date.parse` reads a
+ * zone-less date-TIME as LOCAL time. `portal_sync_runs.finished_at`,
+ * `grants.updated_at` and `profile_sections.updated_at` are all written that way
+ * on SQLite, so every timestamp read here was shifted by the host's UTC offset:
+ * west of UTC the last sync lands in the FUTURE and the 7-day staleness age is
+ * short by that offset. Pin a zone-less value to UTC before parsing.
+ */
 function parseTime(v) {
   if (!v) return NaN
-  if (v instanceof Date) return v.getTime()
-  const t = Date.parse(String(v))
+  if (v instanceof Date) {
+    const t = v.getTime()
+    return Number.isFinite(t) ? t : NaN
+  }
+  const raw = String(v).trim()
+  if (!raw) return NaN
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+  const iso = hasZone ? raw.replace(' ', 'T') : `${raw.replace(' ', 'T')}Z`
+  const t = Date.parse(iso)
   return Number.isFinite(t) ? t : NaN
 }
 
@@ -430,13 +449,23 @@ export async function resolveProfileSyncNeeds(db, {
     // out every portal we could actually keep fresh today. Within a group,
     // oldest sync first.
     const actionRank = (a) => (a === SYNC_NEED_ACTION.SYNC_NOW ? 0 : 1)
+    // Never-synced sorts as "infinitely old" so the comparator stays CONSISTENT.
+    // The previous form returned -1 whenever `ta` was NaN and 1 whenever `tb`
+    // was — so for two never-synced portals cmp(a,b) and cmp(b,a) were BOTH -1,
+    // an asymmetric comparator whose result V8 leaves implementation-defined.
+    // With the prompt capped at 5, that arbitrary order decided which portals
+    // the owner actually saw.
+    // (`-Infinity - -Infinity` is NaN, so the ranks are compared, not subtracted.)
+    const syncRank = (p) => {
+      const t = parseTime(p.last_successful_sync_at)
+      return Number.isFinite(t) ? t : -Infinity
+    }
     out.sort((a, b) => {
       if (a.action !== b.action) return actionRank(a.action) - actionRank(b.action)
-      const ta = parseTime(a.last_successful_sync_at)
-      const tb = parseTime(b.last_successful_sync_at)
-      if (!Number.isFinite(ta)) return -1
-      if (!Number.isFinite(tb)) return 1
-      return ta - tb
+      const ta = syncRank(a)
+      const tb = syncRank(b)
+      if (ta === tb) return 0
+      return ta < tb ? -1 : 1
     })
 
     // Bound the prompt, but never hide the remainder: the counts below describe

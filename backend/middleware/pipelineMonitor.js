@@ -65,7 +65,7 @@ function isZeroResult(body) {
   if (body.included === 0) return true
   if (body.count === 0) return true
   // Only treat body.total as a zero-result signal when no array payload
-  // contradicts it â prevents false positives from paginated/crawl responses.
+  // contradicts it — prevents false positives from paginated/crawl responses.
   if (body.total === 0) {
     const arrayFields2 = ['opportunities', 'results', 'grants', 'matches', 'items']
     const hasItems = arrayFields2.some(f => Array.isArray(body[f]) && body[f].length > 0)
@@ -118,7 +118,7 @@ export function pipelineMonitor() {
         const included = body?.included ?? body?.returned ?? body?.count ?? 0
         const suppressionNote =
           (typeof totalFound === 'number' && totalFound > 0 && included === 0)
-            ? ' â  SUPPRESSION DETECTED: candidates found but none included â check relevanceFilter/matchEngine gates'
+            ? ' !! SUPPRESSION DETECTED: candidates found but none included - check relevanceFilter/matchEngine gates'
             : ''
         console.warn(
           // CodeQL js/log-injection (#558): req.path is URL-decoded by

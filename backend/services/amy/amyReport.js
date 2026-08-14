@@ -19,6 +19,7 @@ import { FINDING_TYPES, SEVERITY, SEARCH_KIND, CODE_TARGETS, ORIGIN_AGENT } from
 import { isGenericTitle, isGenericOnly } from '../../config/genericTitleVocabulary.js'
 import { AMOUNT_STATUS_NONE_PUBLISHED } from '../awardAmountExtractor.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
+import { titleStatesTerm } from '../../config/profileDerivedFacts.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
 const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
@@ -607,8 +608,16 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     )
   }
 
+  // TOKEN BOUNDARY, NOT SUBSTRING. This used to ask `t.includes(thesisCounty)`,
+  // which SUPPRESSES the finding on a coincidence: a Kent County profile reads as
+  // hyperlocally covered by "Kentucky Housing Corporation", an Ida County one by
+  // anything naming "Florida". That is the 'ssi'-inside-'assistance' class, and
+  // here it fails in the direction that HIDES a real recall gap. The canonical
+  // rule is `titleStatesTerm` (config/profileDerivedFacts.js) — the same
+  // term-inside-title matcher `crisisNeedRecall.rowNamesProfileCounty` uses for
+  // exactly this question — so the two can never drift.
   const thesisCounty = thesis?.location?.county ? normLower(thesis.location.county).replace(/\b(county|parish|borough)\b/g, '').trim() : ''
-  if (thesisCounty && recommendations.length > 0 && !recTitles.some((t) => t.includes(thesisCounty))) {
+  if (thesisCounty && recommendations.length > 0 && !recTitles.some((t) => titleStatesTerm(thesisCounty, t))) {
     findings.push(
       makeFinding(FINDING_TYPES.HYPERLOCAL_RECALL_MISS, {
         message: `${scenario.label}: profile in ${thesis.location.county} but 0 of ${recommendations.length} results are county/hyperlocal.`,

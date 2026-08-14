@@ -401,23 +401,29 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir, onDe
 
   // ── 7. Faith-based housing seeding ───────────────────────────────────────
   try {
+    // dialect-divergence fix: db.prepare().get() is SYNC on the SQLite shim
+    // but ASYNC on the Postgres shim, and this block (unlike the two
+    // dialect-gated seeders above) is NOT skipped on Postgres. The un-awaited
+    // `.get()?.count` read `.count` off a pending Promise (always undefined),
+    // so `faithCount` was always 0 and seedFaithBasedHousing() ran on EVERY
+    // boot under Postgres/production instead of only when genuinely short.
     const faithCount =
-      db
+      (await db
         .prepare(
           "SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND is_active = 1",
         )
-        .get()?.count ?? 0;
+        .get())?.count ?? 0;
 
     if (faithCount < 6) {
       console.info(
         '[startup] Seeding faith-based housing assistance (Lorain County OH)...',
       );
       const result = await seedFaithBasedHousing(db);
-      const afterCount = db
+      const afterCount = (await db
         .prepare(
           "SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1",
         )
-        .get()?.count;
+        .get())?.count;
       console.info('[startup] Seeded faith-based housing', {
         ...result,
         after: afterCount,
@@ -436,11 +442,12 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir, onDe
 
   // ── Housing funding opportunities (TN HOPE, faith-based, talent-based, COA) ──
   try {
-    const housingCount = db
+    // Same dialect-divergence fix as the faith-based block above.
+    const housingCount = (await db
       .prepare(
         "SELECT COUNT(*) as count FROM funding_opportunities WHERE funding_category IS NOT NULL AND usable_for_housing = 1 AND is_active = 1",
       )
-      .get()?.count ?? 0;
+      .get())?.count ?? 0;
 
     if (housingCount < 5) {
       console.info('[startup] Seeding housing-eligible funding opportunities...');

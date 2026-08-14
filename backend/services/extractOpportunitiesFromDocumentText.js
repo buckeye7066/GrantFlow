@@ -45,6 +45,11 @@ function extractUrlsWithContext(text) {
 export async function extractAndUpsertOpportunitiesFromText(db, text, profile = null) {
     const entries = extractUrlsWithContext(text)
     const results = { inserted: 0, skipped: 0, errors: [] }
+    // Provenance: `profile` was accepted and never read. `funding_opportunities.profile_id`
+    // is the one key `enforceProfileDiscoveredCatalogLinkage` uses to re-offer a
+    // discovered row to the profile it was discovered FOR, so dropping it made an
+    // imported row permanently unreachable by that recall net.
+    const profileId = (typeof profile === 'string' ? profile : profile?.id ?? profile?.profile_id) ?? null
     for (const { url, title } of entries) {
           try {
                   const opportunity = {
@@ -55,7 +60,14 @@ export async function extractAndUpsertOpportunitiesFromText(db, text, profile = 
   source: 'url_import',
   record_origin: 'url_import',
   opportunity_type: 'grant',
-  is_national: true,
+  profile_id: profileId,
+  // NO `is_national` claim. This used to assert `is_national: true` for EVERY
+  // URL found in ANY uploaded document, and `deriveIsNational` honors an
+  // explicit `true` verbatim — so a link pasted into a digest was persisted as a
+  // fully-eligible NATIONWIDE US program with no state, and every state-keyed
+  // geo gate fell open for it (the documented "a row with no geography scored
+  // as nationwide" class). We do not know this link's scope; silence is the
+  // honest answer and `deriveIsNational` resolves it from the row's own state.
   eligibility_status: 'pending',
   match_decision: 'PENDING',
   match_explanation: 'Imported from URL; pending full evaluation by matchEngine.',

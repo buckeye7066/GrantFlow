@@ -96,7 +96,7 @@ export function isJunkOpportunity(opp, hints = {}) {
     // Explicit denial: profile says no health needs â filter
     if (hasHealthNeeds === false) return true
     // Unknown profile: keep all copay records and let the decision engine decide (Goal 7)
-    // Do not filter when profile health status is unknown â recall is preferred at this stage
+    // Do not filter when profile health status is unknown — recall is preferred at this stage
     // hasHealthNeeds === true â always keep
   }
 

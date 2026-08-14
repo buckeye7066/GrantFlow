@@ -96,7 +96,7 @@ const ChartTooltipContent = React.forwardRef((
   },
   ref
 ) => {
-  const { config } = useChart()
+  const { config = {} } = useChart()
 
   const tooltipLabel = React.useMemo(() => {
     if (hideLabel || !payload?.length) {
@@ -152,7 +152,7 @@ const ChartTooltipContent = React.forwardRef((
         {payload.map((item, index) => {
           const key = `${nameKey || item.name || item.dataKey || "value"}`
           const itemConfig = getPayloadConfigFromPayload(config, item, key)
-          const indicatorColor = color || item.payload.fill || item.color
+          const indicatorColor = color ?? (item.payload && item.payload.fill) ?? item.color
 
           return (
             (<div
@@ -239,7 +239,7 @@ const ChartLegendContent = React.forwardRef((
 
         return (
           (<div
-            key={item.value}
+            key={item.dataKey ?? item.name ?? item.value}
             className={cn(
               "flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground"
             )}>

@@ -161,9 +161,12 @@ Each phase is a callable mode. `full-cycle` runs them in order.
 
 ## API endpoints
 
-The canonical paths are `/api/yana-leads/*`. The legacy `/api/larry/*`
-paths are still mounted at the same router for backward compatibility
-(both URL prefixes resolve to the same handlers).
+The paths are `/api/yana-leads/*` (`backend/routes/yanaOutreach.js`, mounted
+in `backend/server.js`). UNVERIFIED/STALE: this doc previously claimed a
+legacy `/api/larry/*` prefix is also mounted for backward compatibility — as
+of this pass, `server.js` mounts only `/api/yana-leads`; no `/api/larry` app
+mount exists anywhere in `backend/`. Only the DB tables, env vars, and
+internal action-log prefix (`larry:*`) still carry the old spelling.
 
 Public:
 

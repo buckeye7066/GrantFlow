@@ -345,7 +345,11 @@ export function traceSourceToOpportunity(source, entity) {
     source_url: source.sample_url || null,
     description: descBits.join(' '),
     amount_min: null,
-    amount_max: source.total_amount || null,
+    // A multi-year cumulative USASpending total is not a per-award ceiling
+    // (the Coca-Cola "$42M appropriation is not a per-award ceiling" class).
+    // The real figure stays as text in amount_description, never a fabricated
+    // numeric ceiling other surfaces would read as "up to $X per award".
+    amount_max: null,
     amount_description: source.total_amount ? `Traced total: $${Number(source.total_amount).toLocaleString()}` : null,
     deadline: null,
     deadline_type: 'rolling',
@@ -356,6 +360,16 @@ export function traceSourceToOpportunity(source, entity) {
     eligibility_bullets: [],
     opportunity_type: 'grant',
     type: 'DIRECTORY',
+    // A traced funder is a POINTER — it names an agency that has funded someone,
+    // never an award anyone can apply to. `type:'DIRECTORY'` alone is invisible
+    // to every pointer predicate in the product: `isPointerKind`
+    // (config/opportunityKindClasses.js), the awardable census
+    // (coverageAudit/profileResultCoverageAudit.js) and the amount-answer census
+    // all read `opportunity_kind`, and a NULL kind is UNCLASSIFIED — never
+    // "awardable". Declaring the canonical lowercase kind here is what makes
+    // these rows count honestly as directories instead of inflating the
+    // apply-to headline.
+    opportunity_kind: 'directory',
     record_origin: 'funding_trace',
     funding_source_type: fundingType,
     requires_501c3: false,

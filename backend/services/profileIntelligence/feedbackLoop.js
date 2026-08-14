@@ -172,7 +172,7 @@ export function applyFeedbackToScore(scoreResult, feedbackSignals, opportunityId
   if (!scoreResult || !feedbackSignals) return scoreResult
 
   // Hard block: signal that this opportunity is blocked by prior feedback.
-  // Do NOT emit a final verdict here â return a score of 0 with a flag so that
+  // Do NOT emit a final verdict here — return a score of 0 with a flag so that
   // computeMatchDecision() receives the signal and issues the authoritative REJECT
   // with proper ineligibility_reasons, matcher_version, and evaluated_at.
   if (feedbackSignals.blocked_opportunities.includes(opportunityId)) {
@@ -205,7 +205,7 @@ export function applyFeedbackToScore(scoreResult, feedbackSignals, opportunityId
 
   // Downweight for matched downweighted needs.
   // Cap total downweight penalty at 20 pts (2 needs max) to avoid suppressing
-  // opportunities the user genuinely qualifies for â Goal 7 (recall over suppression).
+  // opportunities the user genuinely qualifies for — Goal 7 (recall over suppression).
   const downweightedMatches = scoreResult.matched_needs.filter(
     n => feedbackSignals.downweighted_needs.includes(n))
   if (downweightedMatches.length > 0) {
@@ -228,13 +228,13 @@ export function applyFeedbackToScore(scoreResult, feedbackSignals, opportunityId
   return {
     ...scoreResult,
     total_score: Math.round(adjusted_score),
-    // Preserve the original verdict â caller must re-run computeMatchDecision()
+    // Preserve the original verdict — caller must re-run computeMatchDecision()
     // to produce an authoritative verdict from the adjusted score.
     verdict: scoreResult.verdict,
     feedback_adjusted: true,
     feedback_adjustment_delta: Math.round(adjusted_score) - scoreResult.total_score,
     match_explanation: scoreResult.match_explanation
       ? `${scoreResult.match_explanation} [Feedback-adjusted by ${Math.round(adjusted_score - scoreResult.total_score) >= 0 ? '+' : ''}${Math.round(adjusted_score - scoreResult.total_score)} pts based on prior interactions]`
-      : '[Feedback-adjusted score â re-run through computeMatchDecision for full explanation]',
+      : '[Feedback-adjusted score — re-run through computeMatchDecision for full explanation]',
   }
 }

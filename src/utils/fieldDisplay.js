@@ -233,7 +233,7 @@ export function cleanStringArrayForDisplay(value) {
     // newlines. We deliberately do NOT split on spaces — multi-word tags like
     // "youth ministry" are legitimate single keywords.
     const tokens = String(entry)
-      .split(/[,;|\/\n]+/)
+      .split(/[,;|/\n]+/)
       .map((t) => t.trim())
       .filter(Boolean)
     for (const token of tokens) {

@@ -148,7 +148,11 @@ async function loadPipelineOpportunityIds(db, profileId) {
     return new Set((rows || []).map((r) => String(r.id)))
   } catch (err) {
     log.warn('pipeline ids load failed', { profile_id: profileId, err: err?.message })
-    return new Set()
+    // An EXCLUSION set that fails to load must not read as "nothing to
+    // exclude" — that re-suggests everything already on the user's board. The
+    // caller records the degradation and skips the run rather than reporting a
+    // clean pass built on an exclusion list it never actually read.
+    return { error: err?.message || String(err) }
   }
 }
 
@@ -170,7 +174,10 @@ async function loadSuppressedOpportunityIds(db, profileId) {
     return new Set((rows || []).map((r) => String(r.opportunity_id)))
   } catch (err) {
     log.warn('suppressed ids load failed', { profile_id: profileId, err: err?.message })
-    return new Set()
+    // Same rule as loadPipelineOpportunityIds: an unread suppression list is
+    // UNKNOWN, never empty. Returning an empty Set here re-popped every
+    // suggestion the user had already dismissed.
+    return { error: err?.message || String(err) }
   }
 }
 
@@ -206,9 +213,19 @@ async function insertSuggestion(db, row) {
   // prevents two PENDING rows for the same (profile, opportunity). We
   // catch the unique violation and return null so the caller treats it as
   // a skip rather than a failure.
+  // A SUPPRESSED conflict is not an exception. `ON CONFLICT DO NOTHING` /
+  // `INSERT OR IGNORE` never throw, so the catch below could only ever fire for
+  // a DIFFERENT constraint — and `return id` ran unconditionally. The caller's
+  // `if (!suggestionId) continue` guard therefore never tripped: a suppressed
+  // insert was counted as `stats.created`, listed in `stats.suggestions`, and
+  // handed to `insertNotification`, which wrote a user-visible notification
+  // whose accept/dismiss links point at a suggestion row that does not exist.
+  // The affected-row count is the only honest signal, and both drivers expose it
+  // (`changes` on better-sqlite3, `rowCount` on pg).
+  let result = null
   try {
     if (isPostgres) {
-      await db
+      result = await db
         .prepare(
           `INSERT INTO anya_match_suggestions
              (id, profile_id, user_id, opportunity_id, title, funder, match_score,
@@ -230,7 +247,7 @@ async function insertSuggestion(db, row) {
           jsonOrNull(row.opportunity_data),
         )
     } else {
-      await db
+      result = await db
         .prepare(
           `INSERT OR IGNORE INTO anya_match_suggestions
              (id, profile_id, user_id, opportunity_id, title, funder, match_score,
@@ -250,6 +267,16 @@ async function insertSuggestion(db, row) {
           jsonOrNull(row.search_strategy),
           jsonOrNull(row.opportunity_data),
         )
+    }
+    const written = Number(result?.changes ?? result?.rowCount ?? NaN)
+    // A driver that reports NO count is unknown, not zero — fall back to the
+    // previous behavior rather than silently dropping every real suggestion.
+    if (Number.isFinite(written) && written < 1) {
+      log.debug('suggestion insert suppressed by conflict — not reporting it as created', {
+        profile_id: row.profile_id,
+        opportunity_id: row.opportunity_id,
+      })
+      return null
     }
     return id
   } catch (err) {
@@ -344,6 +371,10 @@ export async function runMatchScoutForProfile(db, profileId, options = {}) {
     skipped_existing: 0,
     skipped_dismissed: 0,
     suppressed_muted: false,
+    // Non-null when the run stopped early because a fact it depends on could
+    // not be read. A degraded run must never be indistinguishable from a clean
+    // one that simply found nothing.
+    degraded_reason: null,
     suggestions: [],
   }
 
@@ -364,11 +395,25 @@ export async function runMatchScoutForProfile(db, profileId, options = {}) {
     return stats
   }
 
-  const [candidates, pipelineIds, suppressedIds] = await Promise.all([
+  const [candidates, pipelineIdsOrError, suppressedIdsOrError] = await Promise.all([
     loadCandidateOpportunities(db, profileContext),
     loadPipelineOpportunityIds(db, profileId),
     loadSuppressedOpportunityIds(db, profileId),
   ])
+  // Both loaders return a Set on success and `{ error }` when the read failed.
+  // A failed EXCLUSION read is a hard stop for this profile: proceeding would
+  // re-suggest pipeline members and already-dismissed rows while the run
+  // reported itself clean.
+  const exclusionErrors = [pipelineIdsOrError, suppressedIdsOrError]
+    .filter((v) => !(v instanceof Set))
+    .map((v) => v?.error || 'unknown')
+  if (exclusionErrors.length > 0) {
+    stats.degraded_reason = `exclusion_load_failed: ${exclusionErrors.join('; ')}`
+    log.warn('skip: exclusion sets unreadable', { profile_id: profileId, reason: stats.degraded_reason })
+    return stats
+  }
+  const pipelineIds = pipelineIdsOrError
+  const suppressedIds = suppressedIdsOrError
   stats.scanned = candidates.length
 
   // ── 1. Junk + trust gate (same gates Discover Grants uses) ──

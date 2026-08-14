@@ -433,7 +433,15 @@ export function resolveProcessPortals(profileSignals) {
     // The student's own high school / institution — declarative SCHOOL tile.
     // We list it even when we can't resolve a login URL (loginUrl stays null and
     // the tile still shows, so the user knows it belongs in their portal list).
-    if (ps.isStudent && ps.schoolName) {
+    // `isStudentLike`, not `isStudent` (2026-08-14). Every other student tile
+    // (FAFSA / ACT / SAT / CSS) gates on `isStudentLike` precisely because "a
+    // profile can be a real student without being TYPED one" — but this tile,
+    // the one that surfaces the institution portal a student must actually go
+    // through, kept the narrow flag. A student-like profile with a known
+    // school therefore received the four federal tiles and not its own school.
+    // `isStudentLike` already excludes orgs, so an org naming a school in its
+    // sections still gets no student school tile.
+    if (ps.isStudentLike && ps.schoolName) {
       out.push({
         id: `school:${ps.schoolName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
         portalHost: null,

@@ -15,6 +15,7 @@ import {
   GRANTS_GOV_SEARCH2_URL as GRANTS_GOV_SEARCH2,
   GRANTS_GOV_DETAIL_URL as GRANTS_GOV_VIEW,
 } from '../../config/grantsGovEndpoints.js';
+import { parseApiAmount } from '../sources/grantsGovAmountAdapter.js';
 
 const log = createLogger('grantsGovApiClient');
 const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || '';
@@ -94,7 +95,14 @@ export function transformGrantsGovOpportunity(opp) {
   return {
     id,
     title: opp?.title || opp?.opportunityTitle || opp?.oppTitle || 'Federal Grant Opportunity',
-    sponsor: agencyName || agencyCode || 'Federal Agency',
+    // NULL, never an anonymized placeholder (2026-08-14). "Federal Agency" is
+    // the fabricated-funder class the owner banned on 2026-08-03; the
+    // crawler-os federalRegisterAdapter was fixed to keep a NULL sponsor and
+    // this client was missed. A NULL rides the existing no-sponsor handling;
+    // an invented name states a fact about the funder that nobody verified —
+    // and `ANONYMIZED_FUNDER_RX` is anchored on a `U.S.` prefix this string
+    // lacks, so the boot net could never catch it either.
+    sponsor: agencyName || agencyCode || null,
     source: 'grants.gov',
     source_id: oppNumber || null,
     source_url: detailUrl,
@@ -130,10 +138,27 @@ function cryptoSafeId(opp) {
     return String(Date.now());
   }
 }
+/**
+ * Award figures come from the ONE canonical parser (2026-08-14).
+ *
+ * The local implementation this replaces STRIPPED every non-digit instead of
+ * REFUSING a value it could not parse, so it concatenated numbers rather than
+ * failing:
+ *     "$50,000-$100,000" -> 50000100000   (fifty billion dollars)
+ *     "1,000 to 5,000"   -> 10005000
+ *     "1.5M"             -> 1.5
+ *     "0"                -> 0
+ * Nothing downstream catches these: grants.gov is an `isOfficialAmountSource`,
+ * which CLAUDE.md records as DELIBERATELY EXEMPT from the $100–$10M
+ * plausibility demotion, so a fabricated ceiling persists unchallenged onto the
+ * catalog row and into every "Pipeline $" surface.
+ *
+ * `parseApiAmount` (services/sources/grantsGovAmountAdapter.js) is the parser
+ * written for exactly this API and already handles the `"none"` / `"0"` trap
+ * documented in that module's header. Delegating keeps ONE rule instead of two.
+ */
 function parseAmount(val) {
-  if (!val) return null;
-  const num = parseFloat(String(val).replace(/[^0-9.]/g, ''));
-  return Number.isNaN(num) ? null : num;
+  return parseApiAmount(val);
 }
 function extractKeywords(opp) {
   const keywords = [];

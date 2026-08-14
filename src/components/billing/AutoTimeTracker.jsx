@@ -169,6 +169,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     };
 
     saveTimeMutation.mutate(timeData);
+    startTimeRef.current = endTime;
     lastSaveRef.current = now;
   }, [
     elapsedSeconds,
@@ -302,6 +303,8 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   };
 
   const handleStop = () => {
+    setIsPaused(true);
+    pauseTimeRef.current = Date.now();
     setShowSaveDialog(true);
   };
 

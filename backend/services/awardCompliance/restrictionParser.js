@@ -175,7 +175,19 @@ export function parseRestrictionPhrases(text) {
     //     "at least $500 for supplies", "spend $500 on supplies" ---
     const cents = parseMoneyToCents(clause)
     const category = detectCategory(clause)
-    const mentionsSpend = /\b(spend|spent|must be (?:used|spent)|used (?:for|on|toward)|allocated|reserved|earmarked|go(?:es)? toward|for)\b/.test(lower)
+    // A SPEND DIRECTIVE, NOT THE WORD "for". The trailing bare `|for` in the
+    // previous alternation made this predicate true for ANY clause containing
+    // the commonest preposition in English, so a clause that merely happened to
+    // carry a money token and a category word minted a hard
+    // `category_exact` rule with `required_amount_cents`:
+    //   "Awards of $5,000 for students in nursing, travel required"
+    //     -> a $5,000 EXACT TRAVEL restriction the funder never stated.
+    // This module's own header promises it "prefers MISSING a restriction to
+    // FABRICATING one", and this is real compliance money. `for` now only
+    // counts when it is bound to a spend/earmark verb ("earmarked for",
+    // "designated for", "set aside for", "used for"), which is what actually
+    // directs a spend.
+    const mentionsSpend = /\b(spend|spent|must be (?:used|spent)|used (?:for|on|toward)|allocated|reserved|earmarked|go(?:es)? toward|(?:designated|earmarked|reserved|allocated|set aside|budgeted|restricted|applied|put) (?:for|to|toward|towards|on))\b/.test(lower)
 
     if (cents !== null && category && mentionsSpend) {
       // "at least" / "minimum" / "no less than" => minimum; otherwise treat a

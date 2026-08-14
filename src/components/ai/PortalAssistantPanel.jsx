@@ -140,7 +140,7 @@ if (validatedPortalUrl && storedUrl) {
       });
     }
   } catch (_) {
-    // one of the URLs failed to parse â ignore the comparison
+    // one of the URLs failed to parse — ignore the comparison
   }
 }
 
@@ -213,7 +213,7 @@ const resp = await apiFetch('/api/ai/portal-assist', {
                       safeLinkUrl = parsed.href;
                     }
                   } catch (_) {
-                    // not a valid URL â suppress the link
+                    // not a valid URL – suppress the link
                   }
                   return safeLinkUrl ? (
                     <Button variant="outline" size="icon" asChild>
