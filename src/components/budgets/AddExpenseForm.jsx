@@ -117,7 +117,7 @@ export default function AddExpenseForm({ grantId, onSuccess }) {
         </Select>
       </div>
       <div className="flex justify-end">
-        <Button type="submit" disabled={mutation.isPending || !formData.grant_id || !formData.vendor || !formData.category || !(formData.amount > 0)}>
+        <Button type="submit" disabled={mutation.isPending || !formData.grant_id || !formData.vendor || !formData.category || !formData.payment_method || !(formData.amount > 0)}>
           {mutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
           Add Expense
         </Button>

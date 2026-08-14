@@ -52,22 +52,32 @@ export function mapAIDataToApplicationPatch(aiData, existingApplication = null) 
 
   const patch = {}
 
-  if (aiData.acceptanceRate && aiData.acceptanceRate !== '—')
-    patch.acceptance_rate = parsePercent(aiData.acceptanceRate)
+  if (aiData.acceptanceRate && aiData.acceptanceRate !== '—') {
+    const val = parsePercent(aiData.acceptanceRate)
+    if (val !== null) patch.acceptance_rate = val
+  }
   if (aiData.avgGPA && aiData.avgGPA !== '—')
     patch.avg_gpa = parseFloat(aiData.avgGPA) || null
   if (aiData.satRange && aiData.satRange !== '—')
     patch.sat_range = aiData.satRange
-  if (aiData.tuition && aiData.tuition !== '—')
-    patch.tuition = parseCurrency(aiData.tuition)
+  if (aiData.tuition && aiData.tuition !== '—') {
+    const val = parseCurrency(aiData.tuition)
+    if (val !== null) patch.tuition = val
+  }
   if (aiData.fafsaCode && aiData.fafsaCode !== '—')
     patch.fafsa_code = aiData.fafsaCode
-  if (aiData.graduationRate && aiData.graduationRate !== '—')
-    patch.graduation_rate = parsePercent(aiData.graduationRate)
-  if (aiData.studentTeacher && aiData.studentTeacher !== '—')
-    patch.student_teacher_ratio = parseRatio(aiData.studentTeacher)
-  if (aiData.avgClassSize && aiData.avgClassSize !== '—')
-    patch.avg_class_size = parseRatio(aiData.avgClassSize)
+  if (aiData.graduationRate && aiData.graduationRate !== '—') {
+    const val = parsePercent(aiData.graduationRate)
+    if (val !== null) patch.graduation_rate = val
+  }
+  if (aiData.studentTeacher && aiData.studentTeacher !== '—') {
+    const val = parseRatio(aiData.studentTeacher)
+    if (val !== null) patch.student_teacher_ratio = val
+  }
+  if (aiData.avgClassSize && aiData.avgClassSize !== '—') {
+    const val = parseRatio(aiData.avgClassSize)
+    if (val !== null) patch.avg_class_size = val
+  }
   if (aiData.estCost && aiData.estCost !== '—') {
     const cost = parseCurrency(aiData.estCost)
     if (cost) {

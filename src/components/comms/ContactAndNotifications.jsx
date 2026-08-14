@@ -59,7 +59,7 @@ export default function ContactAndNotifications({ profileId }) {
           <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject (optional)" />
           <Textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder="How can we help?" className="min-h-[120px]" />
           <div className="flex justify-end">
-            <Button onClick={() => sendMutation.mutate()} disabled={!message.trim() || sendMutation.isPending} className="gap-2">
+            <Button onClick={() => sendMutation.mutate()} disabled={!profileId || !message.trim() || sendMutation.isPending} className="gap-2">
               {sendMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               Send
             </Button>

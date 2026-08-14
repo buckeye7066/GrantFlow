@@ -21,9 +21,11 @@ export default function TagInput({ value = [], onChange, placeholder, className 
   const [suggestion, setSuggestion] = useState(null);
   const [originalWord, setOriginalWord] = useState('');
 
+  const onChangeSafe = typeof onChange === "function" ? onChange : () => {};
+
   const addTagDirectly = (tag) => {
     if (tag.trim() && !value.includes(tag.trim())) {
-      onChange([...value, tag.trim()]);
+      onChangeSafe([...value, tag.trim()]);
     }
     setInputValue('');
   };
@@ -76,7 +78,7 @@ Return a JSON object with the following structure:
   };
 
   const handleRemoveTag = (tagToRemove) => {
-    onChange(value.filter(tag => tag !== tagToRemove));
+    onChangeSafe(value.filter(tag => tag !== tagToRemove));
   };
 
   const handleKeyDown = (e) => {

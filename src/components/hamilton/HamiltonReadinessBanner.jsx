@@ -68,8 +68,8 @@ export default function HamiltonReadinessBanner({ profileId }) {
             <div className="space-y-1.5 text-sm">
               <p className="flex items-center gap-1.5">
                 <RefreshCw className="h-4 w-4" />
-                {totalNeedingSync} portal{totalNeedingSync === 1 ? "" : "s"} need
-                {totalNeedingSync === 1 ? "s" : ""} a sync:
+                {totalNeedingSync} portal{totalNeedingSync === 1 ? "" : "s"}{" "}
+                {totalNeedingSync === 1 ? "needs" : "need"} a sync:
               </p>
               <ul className="ml-6 list-disc space-y-1">
                 {syncPortals.map((p) => (

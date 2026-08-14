@@ -1,19 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useLocation, useNavigate, Link } from 'react-router-dom'
 import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
 import AuthErrorBoundary from '@/components/auth/AuthErrorBoundary'
 import { useAuthStore } from '@/stores/authStore'
 import { ArrowRight } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { isNativeApp } from '@/lib/platform'
 
 const AUTH_TABS = new Set(['email'])
 
 export default function Login() {
     const navigate = useNavigate()
     const location = useLocation()
-    const [devLoading, setDevLoading] = useState(false)
 
 
   // FIX: Use individual selectors instead of an object selector.
@@ -22,18 +19,6 @@ export default function Login() {
   // default equality check (Object.is) always sees a new object.
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
     const closeSessionExpired = useAuthStore((state) => state.closeSessionExpired)
-    const loginWithTokens = useAuthStore((state) => state.loginWithTokens)
-
-  const showDevAdminShortcut = useMemo(() => {
-        if (typeof window === 'undefined') return false
-        // The Capacitor app's origin IS https://localhost, so a bare
-        // hostname check showed this dev-only button to every mobile-app
-        // user (harmless without VITE_DEV_ADMIN_TOKEN, but it reads like a
-        // debug backdoor to a store reviewer).
-        if (isNativeApp()) return false
-        const host = window.location.hostname
-        return host === 'localhost' || host === '127.0.0.1'
-  }, [])
 
   // Clear any stale sessionExpired state on mount only.
   // We do this once at mount (not reactively) to avoid the state oscillation
@@ -68,26 +53,6 @@ export default function Login() {
         // Optional: Add any cleanup or state reset logic here
   }
 
-  const handleDevAdminLogin = async () => {
-        if (!showDevAdminShortcut) return
-        setDevLoading(true)
-        try {
-                // Dev-only convenience: requires explicit token, never a default.
-          const token = import.meta.env.VITE_DEV_ADMIN_TOKEN
-                if (!token) {
-                          window.alert('Missing VITE_DEV_ADMIN_TOKEN. Set it in your `.env.local` to use Dev Admin Login.')
-                          return
-                }
-                await loginWithTokens({ accessToken: token })
-                navigate(redirectTarget, { replace: true })
-        } catch (error) {
-                console.error('[Login] Dev admin login failed:', error)
-                window.alert(`Dev admin login failed: ${error?.message || error}`)
-        } finally {
-                setDevLoading(false)
-        }
-  }
-
 
   return (
         <AuthErrorBoundary onReset={handleErrorReset}>
@@ -105,13 +70,6 @@ export default function Login() {
                                               New to GrantFlow? Take the 2-minute quiz with Anya
                                               <ArrowRight className="h-4 w-4" />
                                   </Link>
-                          {showDevAdminShortcut ? (
-                                      <div className="mt-4 flex justify-center">
-                                                    <Button variant="outline" onClick={handleDevAdminLogin} disabled={devLoading}>
-                                                      {devLoading ? 'Logging in…' : 'Dev: Login as Admin'}
-                                                    </Button>
-                                      </div>
-                                    ) : null}
                         </div>
                 </AuthShell>
         </AuthErrorBoundary>

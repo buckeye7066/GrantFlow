@@ -39,7 +39,7 @@ const useProfileEmails = (initialEmails = []) => {
                                      }
 
                                      const newEmail = {
-                                             id: Date.now().toString(),
+                                             id: `${Date.now()}-${Math.random().toString(36).substring(2)}`,
                                              address: emailAddress,
                                              accessLevel: options.accessLevel || 'edit',
                                              canReceiveNotifications: options.canReceiveNotifications !== false,
@@ -65,6 +65,7 @@ const useProfileEmails = (initialEmails = []) => {
           if (!emailToRemove) return false;
 
                                         setEmails(prev => prev.filter(e => e.id !== emailId));
+                                        setErrors(prev => { const { [emailToRemove.address]: _, ...rest } = prev; return rest; });
 
                                         if (primaryEmailId === emailId) {
                                                 const remaining = emails.filter(e => e.id !== emailId);

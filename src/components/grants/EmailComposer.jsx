@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import client from '@/api/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,11 @@ export default function EmailComposer({ grant, organization, open, onClose }) {
   const [body, setBody] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState(null);
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    return () => { isMounted.current = false; };
+  }, []);
 
   useEffect(() => {
     if (open && organization) {
@@ -69,13 +74,19 @@ export default function EmailComposer({ grant, organization, open, onClose }) {
         emailBody = emailBody.substring(0, closingIndex).trim();
       }
 
-      setSubject(response.subject);
-      setBody(emailBody);
+      if (isMounted.current) {
+        setSubject(response.subject);
+        setBody(emailBody);
+      }
 
     } catch (err) {
-      setError(`Failed to generate AI draft: ${err.message}`);
+      if (isMounted.current) {
+        setError(`Failed to generate AI draft: ${err.message}`);
+      }
     } finally {
-      setIsGenerating(false);
+      if (isMounted.current) {
+        setIsGenerating(false);
+      }
     }
   };
 
