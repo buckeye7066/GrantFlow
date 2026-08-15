@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import os from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import * as cheerio from 'cheerio'
 import pdfParse from 'pdf-parse'
 import mammoth from 'mammoth'
 import { createWorker } from 'tesseract.js'
@@ -88,6 +89,37 @@ function stripRtfToText(rtf) {
     .trim()
 }
 
+function isHtmlMime(mimeType) {
+  const safe = String(mimeType || '').toLowerCase().trim()
+  return safe === 'text/html' || safe === 'application/xhtml+xml'
+}
+
+/**
+ * Strip an HTML document down to readable text (same chrome-removal posture as
+ * webGrantExtractor.htmlToText, unbounded here — the caller clamps). The page
+ * <title> is prepended when the body does not already open with it, so a saved
+ * web page keeps its own name inside the knowledge text.
+ */
+function htmlDocumentToText(html) {
+  if (!html || typeof html !== 'string') return ''
+  let $
+  try {
+    $ = cheerio.load(html)
+  } catch {
+    return ''
+  }
+  $('script, style, noscript, svg, header, footer, nav, form, iframe').remove()
+  const title = String($('title').first().text() || '').replace(/\s+/g, ' ').trim()
+  const body = ($('main').text() || $('body').text() || $.root().text() || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!body) return title
+  if (title && !body.toLowerCase().startsWith(title.toLowerCase())) {
+    return `${title}\n\n${body}`
+  }
+  return body
+}
+
 function normalizeOcrLanguage(value) {
   const lang = String(value || 'eng').trim()
   // Tesseract expects language codes like "eng" or "eng+spa"
@@ -133,7 +165,7 @@ async function tryExtractPdfWithPdftotext({ filePath, timeoutMs }) {
 
 /**
  * Extract plaintext from an uploaded file.
- * - Supports: PDF, DOCX, TXT, and image OCR (jpg/png/webp/gif/bmp/tiff)
+ * - Supports: PDF, DOCX, TXT, HTML, and image OCR (jpg/png/webp/gif/bmp/tiff)
  * - Returns: { text, method, warnings: string[] }
  */
 export async function extractTextFromFile({
@@ -211,6 +243,17 @@ export async function extractTextFromFile({
       const text = clampText(stripRtfToText(raw), maxChars)
       if (!text) warnings.push('RTF parsed, but no readable text was detected.')
       return { text, method: 'rtf', warnings }
+    }
+
+    // HTML (web pages ingested by URL, or uploaded .html files)
+    if (isHtmlMime(safeMime) || ext === 'html' || ext === 'htm') {
+      const raw = await withTimeout(fsp.readFile(filePath, 'utf8'), {
+        ms: timeoutMs,
+        label: 'Read HTML',
+      })
+      const text = clampText(htmlDocumentToText(raw), maxChars)
+      if (!text) warnings.push('HTML parsed, but no readable text was detected.')
+      return { text, method: 'html', warnings }
     }
 
     // TXT
@@ -298,7 +341,7 @@ export async function extractTextFromFile({
     text: null,
     method: null,
     warnings: [
-      `Unsupported file type${mimeType ? ` (${mimeType})` : ''}. Upload PDF, DOCX, TXT, or an image (JPG/PNG) for OCR.`,
+      `Unsupported file type${mimeType ? ` (${mimeType})` : ''}. Upload PDF, DOCX, TXT, HTML, or an image (JPG/PNG) for OCR.`,
     ],
   }
 }
