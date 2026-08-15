@@ -1217,6 +1217,7 @@ router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req,
       const ocrLanguage = safeTrim(req.body?.ocr_language) || 'eng'
       const result = await extractTextFromFile({
         filePath: file.path,
+        baseDir: getUploadsDir(req),
         mimeType: file.mimetype,
         fileName: file.originalname,
         ocr,
@@ -1293,6 +1294,7 @@ router.post('/knowledge/ingest-url', async (req, res) => {
       const ocrLanguage = safeTrim(req.body?.ocr_language) || 'eng'
       const result = await extractTextFromFile({
         filePath: file.path,
+        baseDir: getUploadsDir(req),
         mimeType: file.mimetype,
         fileName: file.originalname,
         ocr,

@@ -1,7 +1,7 @@
 import { promises as fsp } from 'fs'
 import { execFile } from 'node:child_process'
 import os from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import * as cheerio from 'cheerio'
 import pdfParse from 'pdf-parse'
@@ -89,6 +89,16 @@ function stripRtfToText(rtf) {
     .trim()
 }
 
+/**
+ * The single filesystem read used by every extraction branch. Callers must
+ * hand it the containment-checked path produced at the top of
+ * extractTextFromFile — never a raw request-derived value.
+ */
+async function readDocumentFile(containedPath, { encoding = null, ms, label } = {}) {
+  const read = encoding ? fsp.readFile(containedPath, encoding) : fsp.readFile(containedPath)
+  return withTimeout(read, { ms, label })
+}
+
 function isHtmlMime(mimeType) {
   const safe = String(mimeType || '').toLowerCase().trim()
   return safe === 'text/html' || safe === 'application/xhtml+xml'
@@ -170,6 +180,7 @@ async function tryExtractPdfWithPdftotext({ filePath, timeoutMs }) {
  */
 export async function extractTextFromFile({
   filePath,
+  baseDir = null,
   mimeType,
   fileName,
   ocr = false,
@@ -183,6 +194,22 @@ export async function extractTextFromFile({
     return { text: null, method: null, warnings: ['Missing filePath'] }
   }
 
+  // Path containment: canonicalize once, and when the caller names the
+  // directory the file must live in (uploads dir), refuse anything that
+  // escapes it. Every filesystem sink below uses ONLY this contained path,
+  // never the raw request-derived value.
+  const containedPath = resolve(String(filePath))
+  if (baseDir) {
+    const containedBase = resolve(String(baseDir))
+    if (containedPath !== containedBase && !containedPath.startsWith(containedBase + sep)) {
+      return {
+        text: null,
+        method: null,
+        warnings: ['File path escapes the permitted base directory; refusing to read it.'],
+      }
+    }
+  }
+
   const safeMime = String(mimeType || '').trim()
   const ext = normalizeExtension(fileName)
 
@@ -190,7 +217,7 @@ export async function extractTextFromFile({
     // PDFs
     if (safeMime === 'application/pdf' || ext === 'pdf') {
       try {
-        const buffer = await withTimeout(fsp.readFile(filePath), {
+        const buffer = await readDocumentFile(containedPath, {
           ms: timeoutMs,
           label: 'Read PDF',
         })
@@ -209,7 +236,7 @@ export async function extractTextFromFile({
         const errorMsg = error instanceof Error ? error.message : String(error)
         warnings.push(`PDF extraction failed: ${errorMsg}, trying fallback...`)
 
-        const fallback = await tryExtractPdfWithPdftotext({ filePath, timeoutMs })
+        const fallback = await tryExtractPdfWithPdftotext({ filePath: containedPath, timeoutMs })
         const text = clampText(fallback, maxChars)
         if (text) return { text, method: 'pdftotext', warnings }
 
@@ -222,7 +249,7 @@ export async function extractTextFromFile({
       safeMime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
       ext === 'docx'
     ) {
-      const buffer = await withTimeout(fsp.readFile(filePath), {
+      const buffer = await readDocumentFile(containedPath, {
         ms: timeoutMs,
         label: 'Read DOCX',
       })
@@ -236,7 +263,8 @@ export async function extractTextFromFile({
 
     // RTF
     if (isRtfMime(safeMime) || ext === 'rtf') {
-      const raw = await withTimeout(fsp.readFile(filePath, 'utf8'), {
+      const raw = await readDocumentFile(containedPath, {
+        encoding: 'utf8',
         ms: timeoutMs,
         label: 'Read RTF',
       })
@@ -247,7 +275,8 @@ export async function extractTextFromFile({
 
     // HTML (web pages ingested by URL, or uploaded .html files)
     if (isHtmlMime(safeMime) || ext === 'html' || ext === 'htm') {
-      const raw = await withTimeout(fsp.readFile(filePath, 'utf8'), {
+      const raw = await readDocumentFile(containedPath, {
+        encoding: 'utf8',
         ms: timeoutMs,
         label: 'Read HTML',
       })
@@ -258,7 +287,8 @@ export async function extractTextFromFile({
 
     // TXT
     if (safeMime === 'text/plain' || ext === 'txt') {
-      const raw = await withTimeout(fsp.readFile(filePath, 'utf8'), {
+      const raw = await readDocumentFile(containedPath, {
+        encoding: 'utf8',
         ms: timeoutMs,
         label: 'Read TXT',
       })
@@ -317,7 +347,7 @@ export async function extractTextFromFile({
         } catch {
           // ignore parameter errors; OCR should still run
         }
-        const res = await withTimeout(worker.recognize(filePath), {
+        const res = await withTimeout(worker.recognize(containedPath), {
           ms: Math.max(timeoutMs, 45_000),
           label: 'OCR',
         })

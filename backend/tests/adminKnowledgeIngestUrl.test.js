@@ -30,9 +30,10 @@ import express from 'express'
 import request from 'supertest'
 import { promises as fsp } from 'node:fs'
 import os from 'node:os'
-import { join } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { extractTextFromFile } from '../services/documentTextExtraction.js'
 
 // Route the real fetchPublicResource pipeline (isSafeUrl, https-only, redirect
 // and content-type policy) over a canned transport + DNS resolver, so the
@@ -222,6 +223,68 @@ describe('POST /api/admin/knowledge/ingest-url', () => {
       expect(res.body.error).toMatch(/valid URL/i)
     } finally {
       db.close()
+    }
+  })
+
+  it('stores a hostile URL path under the uploads dir with a server-generated name', async () => {
+    fakeTransport = async () => htmlResponse(SAMPLE_PAGE)
+    const db = createDb()
+    try {
+      const res = await request(createApp(db))
+        .post('/api/admin/knowledge/ingest-url')
+        .send({ url: 'https://example.org/a/..%2f..%2f..%2fevil.x.html?y=1' })
+
+      expect(res.status).toBe(201)
+      const storedPath = res.body.document.file_path
+      // The on-disk path must stay contained in the uploads dir...
+      expect(resolve(storedPath).startsWith(resolve(uploadsDir) + sep)).toBe(true)
+      // ...and the filename must be entirely server-generated (kb-<ts>-<rand>.<safe ext>).
+      expect(basename(storedPath)).toMatch(/^kb-\d+-\d+\.html$/)
+      expect(res.body.document.file_url).toMatch(/^\/uploads\/kb-\d+-\d+\.html$/)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('extractTextFromFile refuses a path that escapes its baseDir (containment)', async () => {
+    // A real, readable file OUTSIDE the permitted base directory must be
+    // refused without being read.
+    const outsideDir = await fsp.mkdtemp(join(os.tmpdir(), 'gf-kb-outside-'))
+    const outsideFile = join(outsideDir, 'secret.txt')
+    try {
+      await fsp.writeFile(outsideFile, 'sensitive material that must not be extracted', 'utf8')
+
+      const refused = await extractTextFromFile({
+        filePath: outsideFile,
+        baseDir: uploadsDir,
+        mimeType: 'text/plain',
+        fileName: 'secret.txt',
+      })
+      expect(refused.text).toBeNull()
+      expect(refused.warnings.join(' ')).toMatch(/escapes the permitted base directory/)
+
+      // Traversal segments that resolve outside the base are refused too.
+      const traversal = await extractTextFromFile({
+        filePath: join(uploadsDir, '..', basename(outsideDir), 'secret.txt'),
+        baseDir: uploadsDir,
+        mimeType: 'text/plain',
+        fileName: 'secret.txt',
+      })
+      expect(traversal.text).toBeNull()
+      expect(traversal.warnings.join(' ')).toMatch(/escapes the permitted base directory/)
+
+      // The same file INSIDE the base dir extracts normally.
+      const insideFile = join(uploadsDir, 'kb-contained-check.txt')
+      await fsp.writeFile(insideFile, 'contained text reads fine', 'utf8')
+      const allowed = await extractTextFromFile({
+        filePath: insideFile,
+        baseDir: uploadsDir,
+        mimeType: 'text/plain',
+        fileName: 'kb-contained-check.txt',
+      })
+      expect(allowed.text).toBe('contained text reads fine')
+    } finally {
+      await fsp.rm(outsideDir, { recursive: true, force: true }).catch(() => {})
     }
   })
 
