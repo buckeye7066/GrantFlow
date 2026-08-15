@@ -159,8 +159,8 @@
       "repo": "local-only",
       "local_path": "~/local-ai-factory",
       "runtime_type": "web",
-      "runtime_status": "blocked_by_external_service",
-      "blocker": "Anthropic account credits empty; AI provider must be mocked. UI/API launch smoke is feasible; any journey requiring a real model call is blocked.",
+      "runtime_status": "available",
+      "$status_note": "Un-blocked 2026-08-15: the owner's console shows $89 in credits and a live 1-token API call with the machine's ANTHROPIC_API_KEY succeeded the same hour — the 'credits empty' blocker was a stale HAND-WRITTEN field, not a live probe. EVA journeys still avoid real model spend by design (see manifest prohibited_actions); this only restores launch smoke + non-AI journeys.",
       "concurrency_class": "default",
       "notes": "local-ai-factory. Express 127.0.0.1:5179 + Vite 5180. DRY_RUN_COMMANDS=true default. Safety: NO deployment or publication."
     },
