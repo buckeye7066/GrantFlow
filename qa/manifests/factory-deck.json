@@ -7,7 +7,7 @@
   "start_command": "pnpm dev",
   "stop_command": "taskkill-by-port",
   "readiness_probe": { "type": "http", "path": "/api/health", "port": 5179, "timeout_ms": 90000 },
-  "base_url": "http://localhost:5180",
+  "base_url": "http://localhost:5190",
   "test_target": "disposable-local-instance",
   "required_env": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DRY_RUN_COMMANDS", "WORKSPACE_ROOT", "FACTORY_DATA_DIR"],
   "seed_command": "none (pnpm — NOT npm; leave AI keys UNSET, keep DRY_RUN_COMMANDS=true, point WORKSPACE_ROOT and FACTORY_DATA_DIR at throwaway paths under the disposable data root; 'pnpm demo' = offline stub run with zero API calls)",
@@ -25,7 +25,7 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
-    "ports": [5179, 5180],
+    "ports": [5179, 5190],
     "routes": ["/", "/api/health"],
     "file_roots": [".eva-tmp/factory-deck"],
     "processes": ["node", "pnpm"]

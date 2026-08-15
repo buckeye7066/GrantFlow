@@ -67,6 +67,19 @@ jobs:
       - name: Release gates
         run: npm run release:gates
 
+      # EVA edge-runner guard suite. This suite carries the totality tripwire
+      # that bans machine-specific user paths / sanitizer placeholders in
+      # qa/portfolio-registry.json + qa/manifests/*.json — the 2026-08-06
+      # "example_user" sanitization broke the ENTIRE nightly portfolio fleet
+      # for 9 nights (every app spawn ENOENT) and no CI job ran these tests,
+      # so the break shipped green. It also pins the pinned-PORT/readiness-
+      # probe agreement across every manifest. Runs here so the next
+      # sanitization or manifest edit reds the PR instead of the fleet.
+      - name: EVA edge-runner guards (registry/manifest totality)
+        run: |
+          npm --prefix tools/eva-edge-runner ci
+          npm --prefix tools/eva-edge-runner test
+
   postgres-migrations:
     runs-on: ubuntu-latest
     timeout-minutes: 15
