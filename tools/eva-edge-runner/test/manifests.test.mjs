@@ -120,3 +120,43 @@ test('an explicitly declared wait state still wins, and a real element still nee
   assert.equal(resolveWaitState({ selector: 'input[type=email]' }), 'visible', 'the fix lowers no bar for real elements')
   assert.equal(resolveWaitState({ selector: '#root' }), 'visible', 'an app mount point is a real element, not the document')
 })
+
+// DOCKER-PUBLISHED PORT TOTALITY (2026-08-15). Docker Desktop publishes a
+// compose stack's container ports through com.docker.backend for as long as the
+// daemon runs, and the launcher's PROTECTED_PORT_HOLDERS rule (correctly)
+// refuses to kill it — so any OTHER app pinning one of those ports can NEVER
+// bind it on a machine where Docker is up. This is not hypothetical: are-we-mice
+// and mind-over-math both pinned 3001 (family-stewardship-navigator's published
+// server port) and failed EVERY nightly run with "PORT HELD BY A PROTECTED
+// PROCESS", and factory-deck sat on the published 5180 as a latent copy of the
+// same defect (masked only by its credits block). The docker-owned set is
+// DERIVED from the registry itself — every `allowlist.ports` entry of a
+// manifest declaring a docker-type prerequisite — so a new compose app extends
+// the guard automatically and a new claimant reds CI instead of the fleet.
+test('no manifest claims a port a docker-prerequisite app publishes machine-wide', () => {
+  const dockerApps = manifests.filter(({ manifest }) =>
+    (manifest.prerequisites || []).some((p) => p?.type === 'docker'),
+  )
+  assert.ok(dockerApps.length > 0, 'the guard must have a docker app to derive from (FSN)')
+  const published = new Map() // port -> docker app file
+  for (const { file, manifest } of dockerApps) {
+    for (const port of manifest.allowlist?.ports || []) published.set(Number(port), file)
+  }
+  for (const { file, manifest } of manifests) {
+    if (dockerApps.some((d) => d.file === file)) continue
+    const declared = new Set(
+      [
+        manifest.readiness_probe?.port,
+        ...(manifest.allowlist?.ports || []),
+        Number(manifest.launch_env?.PORT),
+        (() => { try { return Number(new URL(manifest.base_url).port) } catch { return NaN } })(),
+      ].map(Number).filter((p) => Number.isFinite(p) && p > 0),
+    )
+    for (const port of declared) {
+      assert.ok(
+        !published.has(port),
+        `${file}: declares port ${port}, which ${published.get(port)} publishes through Docker (com.docker.backend) — the app can never bind it while Docker runs; pick an unclaimed port`,
+      )
+    }
+  }
+})
