@@ -143,6 +143,16 @@ const CATEGORY_COVERAGE = Object.freeze({
   // that cannot move the final score. See the locator-only routing below.
   housing_authority: { applicant_types: ['government', 'nonprofit'], need_categories: ['housing', 'housing_development'], source: 'hud_homeless_assistance' },
   tribal_org: { applicant_types: ['government', 'nonprofit'], need_categories: ['programs', 'housing', 'economic_development'], source: 'bia_tribal_programs' },
+  // 2026-08-15: three categories from the flywheel's persistent weak_match set
+  // had NO coverage lane at all, so their findings dead-ended in the approval
+  // queue (the housing_authority/tribal_org class, again). homeschool_family's
+  // direct-grant anchor has existed since 2026-07-13 and was simply unmapped;
+  // renter_eviction rides the 2026-08-02 housing-loss lane; individual_assistance
+  // rides the community-action lane (CAAs administer direct emergency
+  // assistance — the honest national surface for a generic individual in need).
+  homeschool_family: { applicant_types: ['individual', 'family'], need_categories: ['education', 'curriculum'], source: 'hslda_compassion_grants' },
+  renter_eviction: { applicant_types: ['individual', 'family'], need_categories: ['housing', 'emergency'], source: 'cfpb_rent_and_housing_help' },
+  individual_assistance: { applicant_types: ['individual', 'family'], need_categories: ['emergency', 'cash_assistance'], source: 'community_action' },
 })
 
 /**

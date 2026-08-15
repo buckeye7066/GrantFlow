@@ -4422,17 +4422,57 @@ describe('enforceDeadUrlRepair', () => {
     expect(res.repaired).toBe(0)
   })
 
-  it('a burned row with a NON-dead reason (thin_page) is never a candidate', async () => {
+  // The WRONG-CONTENT class (2026-08-15). thin_page used to be excluded
+  // outright ("adapter work, not URL rot") — but prod's residue after the
+  // adapters shipped is rows whose alive URL is simply NOT the program's page:
+  // "Tennessee Reconnect" burned on a college's alumna-SPOTLIGHT article,
+  // "FTA Grant Programs" on a GAO PDF (fetch_failed:200). These rows repair by
+  // the identity search — with the alive-recovery shortcut explicitly OFF,
+  // because their URL answering is the problem, not the recovery.
+  it('an UNREADABLE row (thin_page) goes straight to search — no alive-probe — and repairs onto the found page', async () => {
     const db = makeRealDb()
-    const gId = insDeadOrphan(db, { reason: 'thin_page' })
+    const gId = insDeadOrphan(db, {
+      reason: 'thin_page',
+      url: 'https://www.clevelandstatecc.edu/cna-to-ceo-nursing-alumna-spotlight/',
+      title: 'Tennessee Reconnect',
+    })
     let probes = 0
     const res = await enforceDeadUrlRepair(db, {
-      checkUrlImpl: async () => { probes++; return DEAD },
+      checkUrlImpl: async () => { probes++; return ALIVE },
+      findOfficialUrl: async () => ({ url: 'https://tnreconnect.gov/', searched: true, hits: 3 }),
+    })
+    expect(probes, 'the alive-recovery shortcut must not run for the unreadable class').toBe(0)
+    const g = grantRow(db, gId)
+    expect(g.url).toBe('https://tnreconnect.gov/')
+    expect(g.amount_enrich_attempted_at, 'a new URL is a new claim — the burn resets').toBeNull()
+    expect(g.amount_enrich_last_reason).toBe('unreadable_url_repaired')
+    expect(res.repaired).toBe(1)
+  })
+
+  it('an UNREADABLE row whose official page IS the unreadable page stays burned (no re-read tug-of-war)', async () => {
+    const db = makeRealDb()
+    const gId = insDeadOrphan(db, { reason: 'thin_page', url: 'https://cig.sc.egov.usda.gov/' , title: 'Conservation Innovation Grants'})
+    const res = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => ALIVE,
+      findOfficialUrl: async () => ({ url: 'https://cig.sc.egov.usda.gov/', searched: true, hits: 2 }),
+    })
+    const g = grantRow(db, gId)
+    expect(g.url).toBe('https://cig.sc.egov.usda.gov/')
+    expect(g.amount_enrich_attempted_at, 'the burn must NOT reset — un-burning an unreadable page re-burns nightly forever').not.toBeNull()
+    expect(res.notFound).toBe(1)
+    expect(res.repaired).toBe(0)
+    expect(res.recoveredAlive).toBe(0)
+  })
+
+  it('a DEAD-class row still takes the alive-recovery shortcut (unchanged semantics)', async () => {
+    const db = makeRealDb()
+    const gId = insDeadOrphan(db, { reason: 'fetch_failed:404' })
+    const res = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => ALIVE,
       findOfficialUrl: async () => ({ url: 'https://real.org/x', searched: true, hits: 1 }),
     })
-    expect(probes, 'a JS-shell burn is adapter work, not URL rot').toBe(0)
-    expect(res.scanned).toBe(0)
-    expect(grantRow(db, gId).url).toBe('https://pacfcf.org/scholarships')
+    expect(grantRow(db, gId).amount_enrich_attempted_at).toBeNull()
+    expect(res.recoveredAlive).toBe(1)
   })
 
   it('count-only mode scans without probing, searching, or writing', async () => {

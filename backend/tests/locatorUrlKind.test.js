@@ -160,6 +160,42 @@ describe('classifyLocatorKindFromUrl — fix-cycle-5 ORG/aggregator shapes (prod
   })
 })
 
+describe('classifyLocatorKindFromUrl — fix-cycle-6 HUD/FCC/NeedyMeds/TN-DHS shapes (prod census 2026-08-15)', () => {
+  // The four hud.gov rows + needymeds.org + fcc.gov/broadbandbenefits +
+  // tn.gov/humanservices.html sat in the census's unanswered_unreadable bucket
+  // (kind NULL), redding the owner's report as "needs an API adapter" — for
+  // consumer benefit pages, office directories, and a counselor LOCATOR that
+  // publish no per-award figure by design. Real prod URLs verbatim.
+  it('HUD consumer topic pages are BENEFIT (rental assistance, Section 8 vouchers)', () => {
+    expect(classifyLocatorKindFromUrl('https://www.hud.gov/topics/rental_assistance')).toMatchObject({ kind: 'benefit' })
+    expect(classifyLocatorKindFromUrl('https://www.hud.gov/topics/housing_choice_voucher_program_section_8')).toMatchObject({ kind: 'benefit' })
+  })
+
+  it('HUD office pages and the counselor locator are DIRECTORY', () => {
+    expect(classifyLocatorKindFromUrl('https://www.hud.gov/program_offices/comm_planning')).toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://www.hud.gov/findacounselor')).toMatchObject({ kind: 'directory' })
+  })
+
+  it('the rest of hud.gov keeps its ordinary read (no host-wide claim — HUD posts real NOFOs)', () => {
+    expect(classifyLocatorKindFromUrl('https://www.hud.gov/grants/nofo-listing')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.hud.gov/topicsX/imposter')).toBeNull()
+  })
+
+  it('NeedyMeds is a whole-host DIRECTORY (a database of other funders programs)', () => {
+    expect(classifyLocatorKindFromUrl('https://www.needymeds.org/')).toMatchObject({ kind: 'directory' })
+  })
+
+  it('the FCC ACP consumer page is BENEFIT; unrelated fcc.gov pages make no claim', () => {
+    expect(classifyLocatorKindFromUrl('https://www.fcc.gov/broadbandbenefits')).toMatchObject({ kind: 'benefit' })
+    expect(classifyLocatorKindFromUrl('https://www.fcc.gov/licensing')).toBeNull()
+  })
+
+  it('the TN DHS department homepage is DIRECTORY — exact page only', () => {
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/humanservices.html')).toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/humanservices/for-families/some-real-program.html')).toBeNull()
+  })
+})
+
 describe('classifyLocatorKindFromRow — the AUTHORITATIVE source_url rule', () => {
   it('a real award source_url is never demoted by a secondary locator URL', () => {
     expect(classifyLocatorKindFromRow({
