@@ -1,0 +1,436 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id              String   @id @default(cuid())
+  name            String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  users           User[]
+  profiles        ApplicantProfile[]
+  applications    Application[]
+  savedSearches   SavedSearch[]
+  knowledgeAssets KnowledgeAsset[]
+  tasks           Task[]
+  auditLogs       AuditLog[]
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  MEMBER
+  VIEWER
+}
+
+model User {
+  id          String   @id @default(cuid())
+  tenantId    String
+  email       String
+  passwordHash String
+  displayName String?
+  role        Role     @default(MEMBER)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions    Session[]
+  auditLogs   AuditLog[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  csrfToken String
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@index([userId])
+  @@index([token])
+}
+
+model SourceConnector {
+  id                      String    @id @default(cuid())
+  name                    String    @unique
+  sourceType              String
+  authType                String    @default("none")
+  requiredCredentialKey   String?
+  isCredentialSatisfied   Boolean   @default(false)
+  baseUrl                 String
+  rateLimitPerMin         Int       @default(300)
+  syncStrategy            String    @default("incremental")
+  checkpointCursor        String?
+  lastSuccessfulSyncAt    DateTime?
+  lastError               String?
+  healthStatus            String    @default("unknown")
+  enabled                 Boolean   @default(true)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  rawRecords              RawSourceRecord[]
+  opportunities           Opportunity[]
+  @@index([sourceType])
+  @@index([healthStatus])
+  @@index([enabled])
+}
+
+model RawSourceRecord {
+  id            String   @id @default(cuid())
+  connectorId   String
+  externalId    String
+  fetchedAt     DateTime
+  contentHash   String
+  rawFormat     String   @default("json")
+  rawPayloadRef String
+  parseStatus   String   @default("pending")
+  changeDetected Boolean @default(false)
+  connector     SourceConnector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  versions      OpportunityVersion[]
+  @@unique([connectorId, externalId])
+  @@index([connectorId])
+  @@index([contentHash])
+  @@index([parseStatus])
+}
+
+model Opportunity {
+  id                      String   @id @default(cuid())
+  canonicalId             String   @unique
+  title                   String
+  opportunityNumber       String?
+  assistanceListingNumber String?
+  funderId                String?
+  programName             String?
+  sourceConnectorId       String
+  sourceUrl               String?
+  canonicalApplicationUrl String?
+  applicantTypes          String[]
+  taxStatusRequirements   String[]
+  geographicEligibility   Json
+  subjectAreas            String[]
+  populationsServed       String[]
+  awardMin                Int?
+  awardMax                Int?
+  estimatedTotal          Int?
+  costShareRequired       Boolean  @default(false)
+  status                  String   @default("open")
+  openingDate             DateTime?
+  loiDate                 DateTime?
+  deadline                DateTime?
+  expectedAwardDate       DateTime?
+  eligibilityRules        Json
+  requiredRegistrations   String[]
+  requiredAttachments     String[]
+  applicationMethod       String?
+  contactInfo             Json
+  lastRetrievedAt         DateTime?
+  lastChangedAt           DateTime?
+  lastVerifiedAt          DateTime?
+  provenance              Json
+  confidence              Float    @default(0.0)
+  funder                  Funder?  @relation(fields: [funderId], references: [id])
+  sourceConnector         SourceConnector @relation(fields: [sourceConnectorId], references: [id])
+  versions                OpportunityVersion[]
+  matchResults            MatchResult[]
+  applications            Application[]
+  requirementMatrices     RequirementMatrix[]
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  @@index([status])
+  @@index([deadline])
+  @@index([sourceConnectorId])
+  @@index([funderId])
+}
+
+model OpportunityVersion {
+  id              String   @id @default(cuid())
+  opportunityId   String
+  versionNumber   Int
+  changeType      String
+  changedFields   String[]
+  amendmentNotice String?
+  capturedAt      DateTime
+  rawSourceRecordId String?
+  opportunity     Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  rawSourceRecord RawSourceRecord? @relation(fields: [rawSourceRecordId], references: [id])
+  @@index([opportunityId])
+  @@index([versionNumber])
+}
+
+model Funder {
+  id                     String   @id @default(cuid())
+  legalName              String
+  aliases                String[]
+  ein                    String?
+  funderType             String?
+  parentFunderId         String?
+  website                String?
+  geographicGiving       Json
+  subjectGiving         String[]
+  typicalAwardMin        Int?
+  typicalAwardMax        Int?
+  awardFrequency        String?
+  repeatRecipientRate   Float?
+  newRecipientRate      Float?
+  applicationPreferences Json?
+  givingTrends          Json?
+  keyContacts           String[]
+  form990DataRef        String?
+  provenance             Json
+  opportunities         Opportunity[]
+  historicalAwards      HistoricalAward[]
+  similarFunders        FunderSimilarity[]
+  peersOf               FunderSimilarity[]
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  @@index([legalName])
+  @@index([funderType])
+}
+
+model FunderSimilarity {
+  id        String @id @default(cuid())
+  funderId   String
+  similarFunderId String
+  similarityScore Float
+  reason    String?
+  funder    Funder @relation("SimilarFunderA", fields: [funderId], references: [id], onDelete: Cascade)
+  similarFunder Funder @relation("SimilarFunderB", fields: [similarFunderId], references: [id], onDelete: Cascade)
+  @@unique([funderId, similarFunderId])
+  @@index([funderId])
+  @@index([similarFunderId])
+}
+
+model HistoricalAward {
+  id            String   @id @default(cuid())
+  funderId      String
+  recipientName  String
+  recipientEin   String?
+  amount         Int?
+  fiscalYear      Int?
+  purpose         String?
+  subjectArea    String?
+  geography      String?
+  sourceRef      String?
+  isOpenOpportunity Boolean @default(false)
+  funder         Funder  @relation(fields: [funderId], references: [id], onDelete: Cascade)
+  @@index([funderId])
+  @@index([fiscalYear])
+  @@index([recipientName])
+}
+
+model ApplicantProfile {
+  id                      String   @id @default(cuid())
+  tenantId                String
+  applicantType          String
+  orgName                String?
+  ein                    String?
+  taxStatus              String?
+  missionStatement       String?
+  geographicServiceArea  String[]
+  subjectAreas           String[]
+  populationsServed       String[]
+  annualBudget           Int?
+  researcherInterests   String[]
+  publications            Json
+  careerStage            String?
+  requestedAmountRange   Json?
+  registrations          String[]
+  aiUsageConsent        Boolean  @default(false)
+  completenessScore     Float    @default(0.0)
+  uploadedDocumentRefs   String[]
+  tenant                 Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  matchResults           MatchResult[]
+  savedSearches          SavedSearch[]
+  applications           Application[]
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  @@index([tenantId])
+  @@index([applicantType])
+}
+
+model MatchResult {
+  id                     String   @id @default(cuid())
+  applicantProfileId     String
+  opportunityId          String
+  overallScore           Float
+  eligibilityResult      String
+  programRelevanceScore  Float
+  competitivenessScore   Float
+  readinessScore         Float
+  factorContributions    Json
+  matchReasons           String[]
+  mismatchReasons        String[]
+  missingProfileFields   String[]
+  disqualifyingConditions String[]
+  sourceEvidence         Json
+  confidence             Float
+  recommendedAction      String?
+  generatedAt            DateTime @default(now())
+  applicantProfile       ApplicantProfile @relation(fields: [applicantProfileId], references: [id], onDelete: Cascade)
+  opportunity            Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  @@unique([applicantProfileId, opportunityId])
+  @@index([applicantProfileId])
+  @@index([opportunityId])
+  @@index([overallScore])
+}
+
+model SavedSearch {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  applicantProfileId  String?
+  name                String
+  filters             Json
+  negativeKeywords    String[]
+  geoRadius           Float?
+  alertNewMatches      Boolean  @default(false)
+  alertDeadlineChanges Boolean  @default(false)
+  followedFunderIds   String[]
+  lastRunAt           DateTime?
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  applicantProfile    ApplicantProfile? @relation(fields: [applicantProfileId], references: [id])
+  @@index([tenantId])
+}
+
+model KnowledgeAsset {
+  id              String   @id @default(cuid())
+  tenantId        String
+  assetType       String
+  title           String
+  content         String
+  version         Int      @default(1)
+  citations       String[]
+  aiUsageAllowed  Boolean  @default(false)
+  uploadedFileRef String?
+  createdBy       String?
+  isActive        Boolean  @default(true)
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  @@index([tenantId])
+  @@index([assetType])
+}
+
+model RequirementMatrix {
+  id                  String   @id @default(cuid())
+  opportunityId       String
+  applicationId       String?
+  extractedFromRef    String?
+  requirements        Json
+  charWordLimits      Json
+  evaluationCriteria Json
+  requiredAttachments String[]
+  certifications     String[]
+  sourcePassages      Json
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  opportunity         Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  application         Application? @relation(fields: [applicationId], references: [id])
+  @@index([opportunityId])
+  @@index([applicationId])
+}
+
+model Application {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  opportunityId      String
+  applicantProfileId String
+  stage              String   @default("prospect")
+  assignedOwners     String[]
+  submissionChecklist Json
+  confirmationNumber String?
+  submittedAt        DateTime?
+  submissionVerified Boolean  @default(false)
+  outcome            String?
+  notes              String?
+  activityHistory    Json
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  opportunity        Opportunity @relation(fields: [opportunityId], references: [id])
+  applicantProfile   ApplicantProfile @relation(fields: [applicantProfileId], references: [id])
+  proposalSections   ProposalSection[]
+  tasks              Task[]
+  requirementMatrix  RequirementMatrix?
+  awardManagement    AwardManagement?
+  @@index([tenantId])
+  @@index([stage])
+  @@index([applicantProfileId])
+  @@index([opportunityId])
+}
+
+model ProposalSection {
+  id                    String   @id @default(cuid())
+  applicationId         String
+  sectionType           String
+  content               String   @default("")
+  version               Int      @default(1)
+  charLimit             Int?
+  wordLimit              Int?
+  mappedCriteria        String[]
+  unsupportedClaimFlags String[]
+  reusedLanguageFlags   String[]
+  citations            String[]
+  reviewStatus          String   @default("draft")
+  comments             Json
+  assignedTo           String?
+  application          Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  @@index([applicationId])
+}
+
+model AwardManagement {
+  id                String   @id @default(cuid())
+  applicationId     String   @unique
+  awardConditions   String[]
+  reportingSchedule Json
+  deliverables      Json
+  spenddown         Json
+  costShareTracked  Json
+  budgetVsActual    Json
+  renewalReminderAt DateTime?
+  outcomes          Json
+  application       Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Task {
+  id           String   @id @default(cuid())
+  tenantId     String
+  applicationId String?
+  title        String
+  ownerId      String?
+  dependsOn    String[]
+  dueDate      DateTime?
+  reminderAt   DateTime?
+  status       String   @default("pending")
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  application  Application? @relation(fields: [applicationId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  @@index([tenantId])
+  @@index([applicationId])
+  @@index([status])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  actorId   String?
+  action    String
+  entityType String
+  entityId  String?
+  metadata  Json
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User?    @relation(fields: [actorId], references: [id])
+  @@index([tenantId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}

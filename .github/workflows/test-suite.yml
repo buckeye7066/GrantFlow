@@ -1,0 +1,30 @@
+name: test-suite
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - name: unit + endpoint suites
+        run: npm run unit
+      - name: endpoint suites
+        run: npm run test:endpoints
+      - name: regression / contract / security / grounding / queue suites
+        run: node ./node_modules/vitest/vitest.mjs run --config vitest.suite.config.js
+      - name: install playwright browsers
+        run: node ./node_modules/playwright/cli.js install --with-deps chromium
+      - name: accessibility + user-journey smoke
+        run: node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs tests/smoke/accessibility.spec.mjs tests/smoke/userJourneys.spec.mjs
