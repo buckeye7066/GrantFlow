@@ -1,8 +1,9 @@
 import { promises as fsp } from 'fs'
 import { execFile } from 'node:child_process'
 import os from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
+import * as cheerio from 'cheerio'
 import pdfParse from 'pdf-parse'
 import mammoth from 'mammoth'
 import { createWorker } from 'tesseract.js'
@@ -88,6 +89,47 @@ function stripRtfToText(rtf) {
     .trim()
 }
 
+/**
+ * The single filesystem read used by every extraction branch. Callers must
+ * hand it the containment-checked path produced at the top of
+ * extractTextFromFile — never a raw request-derived value.
+ */
+async function readDocumentFile(containedPath, { encoding = null, ms, label } = {}) {
+  const read = encoding ? fsp.readFile(containedPath, encoding) : fsp.readFile(containedPath)
+  return withTimeout(read, { ms, label })
+}
+
+function isHtmlMime(mimeType) {
+  const safe = String(mimeType || '').toLowerCase().trim()
+  return safe === 'text/html' || safe === 'application/xhtml+xml'
+}
+
+/**
+ * Strip an HTML document down to readable text (same chrome-removal posture as
+ * webGrantExtractor.htmlToText, unbounded here — the caller clamps). The page
+ * <title> is prepended when the body does not already open with it, so a saved
+ * web page keeps its own name inside the knowledge text.
+ */
+function htmlDocumentToText(html) {
+  if (!html || typeof html !== 'string') return ''
+  let $
+  try {
+    $ = cheerio.load(html)
+  } catch {
+    return ''
+  }
+  $('script, style, noscript, svg, header, footer, nav, form, iframe').remove()
+  const title = String($('title').first().text() || '').replace(/\s+/g, ' ').trim()
+  const body = ($('main').text() || $('body').text() || $.root().text() || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!body) return title
+  if (title && !body.toLowerCase().startsWith(title.toLowerCase())) {
+    return `${title}\n\n${body}`
+  }
+  return body
+}
+
 function normalizeOcrLanguage(value) {
   const lang = String(value || 'eng').trim()
   // Tesseract expects language codes like "eng" or "eng+spa"
@@ -133,11 +175,12 @@ async function tryExtractPdfWithPdftotext({ filePath, timeoutMs }) {
 
 /**
  * Extract plaintext from an uploaded file.
- * - Supports: PDF, DOCX, TXT, and image OCR (jpg/png/webp/gif/bmp/tiff)
+ * - Supports: PDF, DOCX, TXT, HTML, and image OCR (jpg/png/webp/gif/bmp/tiff)
  * - Returns: { text, method, warnings: string[] }
  */
 export async function extractTextFromFile({
   filePath,
+  baseDir = null,
   mimeType,
   fileName,
   ocr = false,
@@ -151,6 +194,22 @@ export async function extractTextFromFile({
     return { text: null, method: null, warnings: ['Missing filePath'] }
   }
 
+  // Path containment: canonicalize once, and when the caller names the
+  // directory the file must live in (uploads dir), refuse anything that
+  // escapes it. Every filesystem sink below uses ONLY this contained path,
+  // never the raw request-derived value.
+  const containedPath = resolve(String(filePath))
+  if (baseDir) {
+    const containedBase = resolve(String(baseDir))
+    if (containedPath !== containedBase && !containedPath.startsWith(containedBase + sep)) {
+      return {
+        text: null,
+        method: null,
+        warnings: ['File path escapes the permitted base directory; refusing to read it.'],
+      }
+    }
+  }
+
   const safeMime = String(mimeType || '').trim()
   const ext = normalizeExtension(fileName)
 
@@ -158,7 +217,7 @@ export async function extractTextFromFile({
     // PDFs
     if (safeMime === 'application/pdf' || ext === 'pdf') {
       try {
-        const buffer = await withTimeout(fsp.readFile(filePath), {
+        const buffer = await readDocumentFile(containedPath, {
           ms: timeoutMs,
           label: 'Read PDF',
         })
@@ -177,7 +236,7 @@ export async function extractTextFromFile({
         const errorMsg = error instanceof Error ? error.message : String(error)
         warnings.push(`PDF extraction failed: ${errorMsg}, trying fallback...`)
 
-        const fallback = await tryExtractPdfWithPdftotext({ filePath, timeoutMs })
+        const fallback = await tryExtractPdfWithPdftotext({ filePath: containedPath, timeoutMs })
         const text = clampText(fallback, maxChars)
         if (text) return { text, method: 'pdftotext', warnings }
 
@@ -190,7 +249,7 @@ export async function extractTextFromFile({
       safeMime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
       ext === 'docx'
     ) {
-      const buffer = await withTimeout(fsp.readFile(filePath), {
+      const buffer = await readDocumentFile(containedPath, {
         ms: timeoutMs,
         label: 'Read DOCX',
       })
@@ -204,7 +263,8 @@ export async function extractTextFromFile({
 
     // RTF
     if (isRtfMime(safeMime) || ext === 'rtf') {
-      const raw = await withTimeout(fsp.readFile(filePath, 'utf8'), {
+      const raw = await readDocumentFile(containedPath, {
+        encoding: 'utf8',
         ms: timeoutMs,
         label: 'Read RTF',
       })
@@ -213,9 +273,22 @@ export async function extractTextFromFile({
       return { text, method: 'rtf', warnings }
     }
 
+    // HTML (web pages ingested by URL, or uploaded .html files)
+    if (isHtmlMime(safeMime) || ext === 'html' || ext === 'htm') {
+      const raw = await readDocumentFile(containedPath, {
+        encoding: 'utf8',
+        ms: timeoutMs,
+        label: 'Read HTML',
+      })
+      const text = clampText(htmlDocumentToText(raw), maxChars)
+      if (!text) warnings.push('HTML parsed, but no readable text was detected.')
+      return { text, method: 'html', warnings }
+    }
+
     // TXT
     if (safeMime === 'text/plain' || ext === 'txt') {
-      const raw = await withTimeout(fsp.readFile(filePath, 'utf8'), {
+      const raw = await readDocumentFile(containedPath, {
+        encoding: 'utf8',
         ms: timeoutMs,
         label: 'Read TXT',
       })
@@ -274,7 +347,7 @@ export async function extractTextFromFile({
         } catch {
           // ignore parameter errors; OCR should still run
         }
-        const res = await withTimeout(worker.recognize(filePath), {
+        const res = await withTimeout(worker.recognize(containedPath), {
           ms: Math.max(timeoutMs, 45_000),
           label: 'OCR',
         })
@@ -298,7 +371,7 @@ export async function extractTextFromFile({
     text: null,
     method: null,
     warnings: [
-      `Unsupported file type${mimeType ? ` (${mimeType})` : ''}. Upload PDF, DOCX, TXT, or an image (JPG/PNG) for OCR.`,
+      `Unsupported file type${mimeType ? ` (${mimeType})` : ''}. Upload PDF, DOCX, TXT, HTML, or an image (JPG/PNG) for OCR.`,
     ],
   }
 }

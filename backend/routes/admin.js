@@ -526,6 +526,8 @@ const KB_ALLOWED_MIME_TYPES = new Set([
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
+  'text/html',
+  'application/xhtml+xml',
   'application/rtf',
   'text/rtf',
   'image/jpeg',
@@ -543,6 +545,8 @@ const KB_ALLOWED_EXTENSIONS = new Set([
   'doc',
   'docx',
   'txt',
+  'html',
+  'htm',
   'rtf',
   'jpg',
   'jpeg',
@@ -620,17 +624,84 @@ function extractAnthropicText(response) {
     .trim()
 }
 
+// Normalize what an admin types into the "Ingest by URL" box into the https
+// URL the SSRF-safe fetcher requires. A bare domain ("example.org/grants") gets
+// the https scheme prepended, and http:// is upgraded to https:// (the fetcher
+// refuses plain http outright, so the upgrade is the only way the URL can
+// work). Any other explicit scheme is left alone so the fetcher can refuse it
+// with an honest reason.
+function normalizeKnowledgeIngestUrl(raw) {
+  let value = safeTrim(raw)
+  if (!value) return ''
+  if (/^http:\/\//i.test(value)) return `https://${value.slice('http://'.length)}`
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return `https://${value}`
+  return value
+}
+
+// Turn a safeRemoteFetch failure into a message an admin can act on. The bare
+// reason tokens ("unsupported_content_type") told the owner nothing.
+function describeKnowledgeFetchFailure(remote = {}) {
+  const reason = String(remote?.reason || '')
+  switch (reason) {
+    case 'unsupported_content_type':
+      return `That URL returned "${remote?.contentType || 'an unknown content type'}", which is not a supported document type. Ingest a web page (HTML) or a direct link to a PDF, Word, text, RTF, or image file.`
+    case 'response_too_large':
+      return `The file at that URL is larger than the ${Math.round(KB_MAX_FILE_BYTES / (1024 * 1024))}MB ingest limit.`
+    case 'timeout':
+      return 'The remote server took too long to respond. Try again, or download the file and upload it directly.'
+    case 'http_error':
+      return `The remote server responded with HTTP ${remote?.status || 'error'} for that URL. Check that the link is public and still valid.`
+    case 'https_required':
+      return 'Only public https:// URLs can be ingested. The site does not appear to support https.'
+    case 'unparseable':
+    case 'empty':
+      return 'That does not look like a valid URL. Paste a full web address such as https://example.org/grants.'
+    case 'private_host':
+    case 'dns_resolves_private':
+      return 'That URL points at a private or internal address, which cannot be ingested.'
+    case 'embedded_credentials':
+      return 'URLs with embedded credentials (user:pass@) cannot be ingested.'
+    case 'too_many_redirects':
+      return 'The URL redirected too many times. Try the final destination URL directly.'
+    default:
+      if (reason.startsWith('bad_protocol:')) {
+        return `Unsupported URL scheme "${reason.slice('bad_protocol:'.length)}". Only https:// URLs can be ingested.`
+      }
+      if (reason.startsWith('dns_error:') || reason === 'dns_no_records') {
+        return 'That domain could not be found (DNS lookup failed). Check the address for typos.'
+      }
+      return `Unable to download that URL: ${reason || 'fetch failed'}.`
+  }
+}
+
+const KB_HTML_CONTENT_TYPES = new Set(['text/html', 'application/xhtml+xml'])
+
+function extractHtmlTitle(html) {
+  const match = /<title[^>]*>([\s\S]{0,500}?)<\/title>/i.exec(String(html || '').slice(0, 200_000))
+  if (!match) return null
+  const title = match[1]
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return title || null
+}
+
 async function downloadRemoteFileToUploads({ url, req }) {
   const remote = await fetchPublicResource(url, {
     timeoutMs: 20_000,
     maxBytes: KB_MAX_FILE_BYTES,
     allowedContentTypes: [...KB_ALLOWED_MIME_TYPES, 'application/octet-stream'],
     userAgent: 'GrantFlow Knowledge Ingest (+https://app.axiombiolabs.org)',
-    accept: 'application/pdf,text/plain,text/html,application/octet-stream;q=0.8,*/*;q=0.5',
+    accept: 'text/html,application/xhtml+xml,application/pdf,text/plain,application/octet-stream;q=0.8,*/*;q=0.5',
   })
   if (!remote.ok) {
-    const status = remote.status ? ` (${remote.status})` : ''
-    const error = new Error(`Unable to download public HTTPS resource${status}: ${remote.reason}`)
+    const error = new Error(describeKnowledgeFetchFailure(remote))
     error.status = publicFetchFailureStatus(remote)
     error.code = `REMOTE_FETCH_${String(remote.reason || 'FAILED').toUpperCase()}`
     throw error
@@ -639,13 +710,17 @@ async function downloadRemoteFileToUploads({ url, req }) {
   let contentType = remote.contentType || 'application/octet-stream'
   if (contentType === 'application/octet-stream') {
     if (remote.body.length < 5 || remote.body.subarray(0, 5).toString('ascii') !== '%PDF-') {
-      const error = new Error('Remote server returned an unverified binary document type.')
+      const error = new Error(
+        'The remote server did not say what kind of file that is, and it is not a PDF. Download the file and upload it directly instead.',
+      )
       error.status = 415
       error.code = 'REMOTE_DOCUMENT_TYPE_UNVERIFIED'
       throw error
     }
     contentType = 'application/pdf'
   }
+  const isHtml = KB_HTML_CONTENT_TYPES.has(contentType)
+  const pageTitle = isHtml ? extractHtmlTitle(remote.body.toString('utf8')) : null
   const fileNameFromUrl = (() => {
     try {
       const parsed = new URL(remote.finalUrl || url)
@@ -663,7 +738,9 @@ async function downloadRemoteFileToUploads({ url, req }) {
     ? candidateExtension
     : contentType === 'application/pdf'
       ? 'pdf'
-      : ''
+      : isHtml
+        ? 'html'
+        : ''
   const extension = safeExtension ? `.${safeExtension}` : ''
   const filename = `kb-${unique}${extension}`
   const absPath = join(getUploadsDir(req), filename)
@@ -679,6 +756,8 @@ async function downloadRemoteFileToUploads({ url, req }) {
       filename,
     },
     publicUrl: `/uploads/${filename}`,
+    pageTitle,
+    finalUrl: remote.finalUrl || url,
   }
 }
 
@@ -1138,6 +1217,7 @@ router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req,
       const ocrLanguage = safeTrim(req.body?.ocr_language) || 'eng'
       const result = await extractTextFromFile({
         filePath: file.path,
+        baseDir: getUploadsDir(req),
         mimeType: file.mimetype,
         fileName: file.originalname,
         ocr,
@@ -1194,13 +1274,17 @@ router.post('/knowledge/ingest-url', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
   let downloaded = null
   try {
-    const url = safeTrim(req.body?.url)
+    const url = normalizeKnowledgeIngestUrl(req.body?.url)
     if (!url) return res.status(400).json({ ok: false, error: 'url is required' })
 
     downloaded = await downloadRemoteFileToUploads({ url, req })
     const file = downloaded.file
 
-    const name = safeTrim(req.body?.name) || safeTrim(file.originalname) || 'Knowledge Document'
+    const name =
+      safeTrim(req.body?.name) ||
+      safeTrim(downloaded.pageTitle) ||
+      safeTrim(file.originalname) ||
+      'Knowledge Document'
     const notes = safeTrim(req.body?.notes) || null
 
     let extractedText = null
@@ -1210,6 +1294,7 @@ router.post('/knowledge/ingest-url', async (req, res) => {
       const ocrLanguage = safeTrim(req.body?.ocr_language) || 'eng'
       const result = await extractTextFromFile({
         filePath: file.path,
+        baseDir: getUploadsDir(req),
         mimeType: file.mimetype,
         fileName: file.originalname,
         ocr,

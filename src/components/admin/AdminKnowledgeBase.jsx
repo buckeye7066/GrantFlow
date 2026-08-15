@@ -204,7 +204,7 @@ export default function AdminKnowledgeBase() {
               <FileText className="w-5 h-5 text-blue-600" />
               Upload a document
             </CardTitle>
-            <CardDescription>PDF, DOC/DOCX, TXT/RTF, or images up to 50MB.</CardDescription>
+            <CardDescription>PDF, DOC/DOCX, TXT/RTF, HTML, or images up to 50MB.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -243,12 +243,12 @@ export default function AdminKnowledgeBase() {
               <LinkIcon className="w-5 h-5 text-blue-600" />
               Ingest from URL
             </CardTitle>
-            <CardDescription>Downloads the file server-side (SSRF-protected) and stores it as a Knowledge Base doc.</CardDescription>
+            <CardDescription>Fetches the page or file server-side (SSRF-protected) and stores it as a Knowledge Base doc. Works for web pages (HTML) and direct PDF/Word/text/image links.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label>URL *</Label>
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} disabled={busy} placeholder="https://example.com/file.pdf" />
+              <Input value={url} onChange={(e) => setUrl(e.target.value)} disabled={busy} placeholder="https://example.org/grants (web page or direct file link)" />
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
