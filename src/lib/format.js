@@ -122,16 +122,6 @@ export function truncate(value, maxLength = 120) {
   return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
-export function titleCase(value) {
-  if (isNil(value)) {
-    return '';
-  }
-
-  return String(value)
-    .toLowerCase()
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
 export default {
   formatCurrency,
   formatNumber,
@@ -140,5 +130,4 @@ export default {
   formatDateTime,
   formatBytes,
   truncate,
-  titleCase,
 };
