@@ -1,0 +1,31 @@
+name: test-suite
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20.20.2
+          cache: 'npm'
+      - run: npm ci --include=optional
+      - run: npm run lint
+      - run: npm run typecheck
+      - name: unit suites (node:test + vitest isolated)
+        run: npm run unit
+      - name: regression / contract / security / grounding / queue suites
+        run: node scripts/run-vitest-isolated.mjs run --config vitest.suite.config.js
+      # The accessibility + user-journey Playwright specs added alongside this
+      # workflow run under the existing CI "browser-smoke" job (npm run smoke
+      # executes every spec in tests/smoke with the fully provisioned
+      # Postgres + secrets environment) — they are deliberately not duplicated
+      # here where no database or runtime secrets are available.
