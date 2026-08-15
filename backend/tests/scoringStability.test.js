@@ -64,7 +64,22 @@ describe('calibration benchmark', () => {
   it('the production match engine, if present, exposes a deterministic scoring entrypoint', async () => {
     const engine = await load('../crawler-os/matchEngine.js');
     if (!engine || engine.__loadError) return;
-    const fn = engine.score ?? engine.default;
+    // The real entrypoint is computeMatchDecision(opportunity, thesis) — the
+    // sole decision authority per docs/canonical_rules.md.
+    const fn = engine.computeMatchDecision ?? engine.score;
     expect(typeof fn).toBe('function');
+    // Determinism: identical inputs must yield identical decisions.
+    const opportunity = {
+      title: 'Community Health Grant',
+      sponsor: 'Example Foundation',
+      summary: 'Grants for nonprofit community health programs.',
+    };
+    const thesis = { tags: ['health'], states: [] };
+    // evaluated_at is a wall-clock stamp, not part of the decision — strip it
+    // wherever it appears before comparing.
+    const strip = (obj) => JSON.parse(JSON.stringify(obj, (k, v) => (k === 'evaluated_at' ? undefined : v)));
+    const a = strip(fn(opportunity, thesis));
+    const b = strip(fn(opportunity, thesis));
+    expect(b).toEqual(a);
   });
 });

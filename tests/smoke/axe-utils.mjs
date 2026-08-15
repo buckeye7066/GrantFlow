@@ -45,5 +45,8 @@ export async function assertNoViolations(page, options = {}) {
 }
 
 export function baseUrl() {
-  return process.env.SMOKE_BASE_URL || process.env.VITE_API_BASE_URL?.replace(/\/api$/, '') || 'http://localhost:5173';
+  // Match tests/smoke/playwright.config.mjs, which self-starts the Express
+  // server on 8080 — defaulting to the Vite dev port here would point every
+  // spec at a server nothing started.
+  return process.env.SMOKE_BASE_URL || process.env.API_BASE_URL || 'http://127.0.0.1:8080';
 }

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from 'playwright/test';
 import { baseUrl } from './axe-utils.mjs';
 
 const APPLICANT_TYPES = [

@@ -29,7 +29,9 @@ function isNonprofitEligible(eligibilityText) {
  * Backslashes are represented safely via String.raw to avoid escape errors.
  */
 function isValidAmount(amountText) {
-  const amountPattern = new RegExp(String.raw`^\$\d{1,3}(,\d{3})*(\.\d{2})?$`);
+  // Accept either comma-grouped ("$50,000") or plain-digit ("$1000") amounts;
+  // reject mixed European-style separators ("$50.000,00").
+  const amountPattern = new RegExp(String.raw`^\$(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?$`);
   return amountPattern.test(String(amountText || '').trim());
 }
 

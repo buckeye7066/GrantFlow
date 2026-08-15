@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from 'playwright/test';
 import { assertNoViolations, baseUrl } from './axe-utils.mjs';
 
 const ROUTES = [

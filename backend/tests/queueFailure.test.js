@@ -93,9 +93,12 @@ describe('queue failure / retry behavior', () => {
   });
 
   it('the crawler fetcher, if present, exposes retry/backoff behavior', async () => {
-    const fetcher = await load('../crawler-os/fetcher.js');
-    if (!fetcher || fetcher.__loadError) return;
-    const fn = fetcher.fetchWithRetry ?? fetcher.fetch ?? fetcher.default;
-    expect(typeof fn).toBe('function');
+    const mod = await load('../crawler-os/fetcher.js');
+    if (!mod || mod.__loadError) return;
+    // Real contract: createFetcher({ doFetch, maxRetries, retryBaseMs,
+    // retryMaxMs, ... }) -> { fetch } with bounded retries + backoff built in.
+    expect(typeof mod.createFetcher).toBe('function');
+    const fetcher = mod.createFetcher({ doFetch: async () => ({ ok: true, status: 200 }) });
+    expect(typeof fetcher.fetch).toBe('function');
   });
 });
