@@ -27,7 +27,7 @@
  */
 
 import { SAM_CATEGORIES, SEVERITY } from './samTypes.js'
-import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql } from '../../config/pipelineValue.js'
+import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, pipelineValueWithCatalogSql } from '../../config/pipelineValue.js'
 import { ORIGIN_CREATED_BY as AMY_ORIGIN_CREATED_BY } from '../amy/amyConstants.js'
 // Shared with the enrichment sweeps (config/amountEnrichEnv.js) so the WRITER
 // of the env-failure counter and this READER of the `unanswered_blocked` state
@@ -667,7 +667,17 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         // rule — the catalog row's mark when linked, the grant's own mark when an
         // orphan — so a read-but-silent row is `unreadable` regardless of which
         // path read it, and a never-looked-at row is `never_read` backlog.
-        const V = pipelineValueSql('g')
+        // The ANSWER predicate reads the value off EITHER side — the grant's own
+        // columns OR the linked catalog row's — exactly as this census's header
+        // documents. It used to read only the grant (`pipelineValueSql('g')`),
+        // so a nightly-crawl grant whose catalog row already carried an
+        // adapter-fetched grants.gov figure (52 prod rows on 2026-08-15, incl.
+        // a $2,500 scholarship) spent the boot-gap before
+        // `enforceGrantAmountBackfill` inherited it in `unanswered_unreadable`,
+        // and the owner's report demanded "an API adapter" for rows the adapter
+        // had already answered. The HEADLINE above and the wipe RATCHET keep the
+        // grant-only figure on purpose — their history is in those units.
+        const V = pipelineValueWithCatalogSql('g', 'fo')
         // No-amount-BY-DESIGN kinds: a DIRECTORY/REFERRAL/SCHOOL_PORTAL/
         // PAST_AWARD_INTEL row is a POINTER to somewhere else, and a BENEFIT
         // program (SSA survivor/disability, FAFSA/Pell/SSI class) has no fixed

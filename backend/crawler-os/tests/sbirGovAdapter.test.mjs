@@ -114,3 +114,21 @@ test('the SBIR API outage banner is a BENIGN skip with an honest reason — a re
   assert.equal(adapter.benignFetchFailure({ ok: false, status: 429, body: '' }), false);
   assert.equal(adapter.benignFetchFailure({ ok: false, status: 403, body: '<html>blocked</html>' }), false);
 });
+
+test('the 2026-08 outage costume — 403 + bare JSON "Forbidden" — is the SAME honest api_outage skip', () => {
+  // Verified live 2026-08-15: every public endpoint (solicitations AND awards)
+  // answers HTTP 403 {"message":"Forbidden"} regardless of UA or params, the
+  // legacy host no longer resolves, and www.sbir.gov/api's own docs state the
+  // APIs are "currently undergoing maintenance". This fired Sam's
+  // "source persistently failing" finding (fetch_failed:status:403) nightly —
+  // for an external outage no registry work can fix.
+  const adapter = createSbirGovAdapter();
+  assert.equal(
+    adapter.benignFetchFailure({ ok: false, status: 403, body: '{"message":"Forbidden"}' }),
+    'api_outage:sbir_public_api_403_forbidden',
+  );
+  // Precision: ONLY the exact 403 + bare-"Forbidden" JSON shape qualifies.
+  assert.equal(adapter.benignFetchFailure({ ok: false, status: 500, body: '{"message":"Forbidden"}' }), false, 'a 500 with the same body is NOT the outage shape');
+  assert.equal(adapter.benignFetchFailure({ ok: false, status: 403, body: '{"message":"Access denied for key"}' }), false, 'a different 403 message stays a real failure');
+  assert.equal(adapter.benignFetchFailure({ ok: false, status: 403, body: 'Forbidden' }), false, 'a non-JSON body stays a real failure');
+});

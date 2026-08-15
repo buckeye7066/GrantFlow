@@ -2,7 +2,7 @@
   "app_id": "family-castle-clash",
   "display_name": "Family Castle Clash",
   "repo": "buckeye7066/family-castle-clash",
-  "local_path": "C:/Users/example_user/family-castle-clash",
+  "local_path": "~/family-castle-clash",
   "runtime_type": "web",
   "start_command": "npm run build && node tools/eva-reset-fixture.mjs && npm start",
   "stop_command": "taskkill-by-port",

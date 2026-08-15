@@ -215,6 +215,36 @@ describe('extractAwardAmountsFromText — per-award dollar extraction', () => {
       expect(r.amount_max).toBe(5250)
       expect(r.amount_status).toBe('range')
     })
+
+    // "TUITION-FREE" — the Tennessee Promise class (Amy
+    // amount_recall_miss:high_school_student, 2026-08-15). The claim is stated
+    // as an ADJECTIVE, so the coverage-verb rule cannot reach it, yet it is the
+    // same explicit no-fixed-figure per-award semantic.
+    it('reads "tuition-free" as an explicit varies award (the real Tennessee Promise ingest text)', () => {
+      const r = extractAwardAmountsFromText(
+        'A scholarship providing two years of tuition-free college for eligible students in Tennessee.',
+      )
+      expect(r.amount_status).toBe('varies')
+      expect(r.amount_text).toMatch(/tuition-free/i)
+      expect(r.amount_min).toBeNull()
+      expect(r.amount_max).toBeNull()
+    })
+
+    it('reads the space form "tuition free" too, and a NUMERIC figure still wins over it', () => {
+      expect(extractAwardAmountsFromText('Attend college tuition free through this program.').amount_status)
+        .toBe('varies')
+      const r = extractAwardAmountsFromText('Tuition-free enrollment plus a stipend award of $1,500 per year.')
+      expect(r.amount_status).toBe('known')
+      expect(r.amount_min).toBe(1500)
+    })
+
+    it('NEVER claims tuition-free from a negated claim or a bare "tuition"/"free" mention', () => {
+      expect(extractAwardAmountsFromText('This program is not tuition-free; students pay standard rates.').amount_status)
+        .toBe('not_listed')
+      // Bare mentions with no compound and no coverage verb stay silence.
+      expect(extractAwardAmountsFromText('Standard tuition rates apply, and the application itself is free.').amount_status)
+        .toBe('not_listed')
+    })
   })
 })
 

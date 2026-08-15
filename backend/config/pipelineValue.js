@@ -68,6 +68,38 @@ export function pipelineValueSql(alias = 'g') {
   return `COALESCE(NULLIF(${p}amount_requested, 0), NULLIF(${p}amount_max, 0), NULLIF(${p}amount_min, 0), 0)`
 }
 
+/**
+ * SQL expression for a grant row's pipeline dollar value INCLUDING the value
+ * its linked catalog row already carries (the ANSWER-census variant).
+ *
+ * WHY THIS EXISTS (2026-08-15, the "grants.gov ×38 need an API adapter" false
+ * alarm): the amountCoverage census documents that "the predicates read an
+ * answer off EITHER the grant itself OR its linked catalog row" — but its
+ * value predicate was `pipelineValueSql('g')`, which reads ONLY the grant's own
+ * columns. A nightly-crawl grant linked to a catalog row whose figure the
+ * grants.gov API adapter had ALREADY fetched (measured in prod: 52 rows incl.
+ * a $2,500 scholarship and a $629,042 award, catalog `amount_status`
+ * 'known'/'range', `amount_enrich_last_reason` 'grants_gov_api') therefore
+ * counted as `unanswered_unreadable` — the one bucket that reds the owner's
+ * report and NAMES ADAPTER WORK — for work the adapter had already done. The
+ * inheritance sweep (`enforceGrantAmountBackfill` step 1) copies the figure
+ * onto the grant a boot later; until then the row HAS an answer and the census
+ * must say so.
+ *
+ * Grant-side values keep precedence (a user-entered ask outranks a catalog
+ * ceiling). This is a CENSUS/answer predicate — "Pipeline $" dollar SURFACES
+ * keep reading `pipelineValueSql`, because a dollar card must never display a
+ * value the grant row itself does not yet carry.
+ */
+export function pipelineValueWithCatalogSql(alias = 'g', foAlias = 'fo') {
+  const p = alias ? `${alias}.` : ''
+  const f = foAlias ? `${foAlias}.` : ''
+  return (
+    `COALESCE(NULLIF(${p}amount_requested, 0), NULLIF(${p}amount_max, 0), NULLIF(${p}amount_min, 0), ` +
+    `NULLIF(${f}amount_max, 0), NULLIF(${f}amount_min, 0), 0)`
+  )
+}
+
 /** JS twin of pipelineValueSql for rows already in memory. */
 export function grantPipelineValue(grant) {
   for (const key of ['amount_requested', 'amount_max', 'amount_min']) {

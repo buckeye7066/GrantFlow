@@ -2,7 +2,7 @@
   "app_id": "flexfactor",
   "display_name": "FlexFactor",
   "repo": "local-only",
-  "local_path": "C:/Users/example_user/flexfactor",
+  "local_path": "~/flexfactor",
   "runtime_type": "python-cli",
   "start_command": "python flexfactor.py --help",
   "stop_command": "n/a",

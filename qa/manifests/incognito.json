@@ -2,7 +2,7 @@
   "app_id": "incognito",
   "display_name": "Incognito",
   "repo": "buckeye7066/incognito",
-  "local_path": "C:/Users/example_user/incognito",
+  "local_path": "~/incognito",
   "runtime_type": "web",
   "start_command": "npm run dev",
   "stop_command": "taskkill-by-port",

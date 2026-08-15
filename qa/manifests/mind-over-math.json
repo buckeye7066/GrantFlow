@@ -2,7 +2,7 @@
   "app_id": "mind-over-math",
   "display_name": "Mind Over Math",
   "repo": "buckeye7066/mind-over-math",
-  "local_path": "C:/Users/example_user/mind-over-math",
+  "local_path": "~/mind-over-math",
   "runtime_type": "web",
   "start_command": "cd backend && npm run dev & npm run dev",
   "stop_command": "taskkill-by-port",
