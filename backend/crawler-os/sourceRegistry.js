@@ -2373,7 +2373,10 @@ export const SOURCES = Object.freeze([
     name: 'HSLDA Compassion Grants',
     source_type: 'html',
     trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
-    base_url: 'https://hslda.org/compassion-grants',
+    // 2026-08-15: /compassion-grants now 301s to the grants-for-homeschooling
+    // page (with tracking params) — recorded POST-redirect, tracking stripped,
+    // fetch-verified 200 the same day.
+    base_url: 'https://hslda.org/explore/grants-for-homeschooling',
     sponsor_name: 'Home School Legal Defense Association',
     resource_title: 'HSLDA Compassion Grants (homeschool families)',
     resource_summary: 'Direct grants for homeschooling families facing financial hardship: curriculum and educational materials support so families can keep homeschooling through crisis.',
@@ -2383,6 +2386,51 @@ export const SOURCES = Object.freeze([
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECT_GRANT],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  // ── DIRECT-AWARD anchors for Amy's persistent weak_match categories
+  //    (2026-08-15). The flywheel's locator-only weak_match findings ("stored
+  //    real candidates but recommended ONLY DIRECTORY locators") have fired
+  //    across military_family and foster_youth for weeks — both categories'
+  //    mapped lanes are benefit/locator surfaces (military_onesource, Chafee),
+  //    so a probe profile could never be handed a direct award. These two are
+  //    the national direct-assistance anchors for those situations; both
+  //    base_urls fetch-verified 200 on 2026-08-15 (recorded post-redirect).
+  //    modestneeds.org (the individual_assistance candidate) did NOT verify —
+  //    connection refused from two egress paths — and is deliberately absent:
+  //    an unverified source is a guess, not coverage. ──────────────────────────
+  {
+    source_id: 'operation_homefront',
+    name: 'Operation Homefront — Critical Financial Assistance',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
+    base_url: 'https://operationhomefront.org/critical-financial-assistance/',
+    sponsor_name: 'Operation Homefront',
+    resource_title: 'Critical Financial Assistance for military families',
+    resource_summary: 'Direct emergency financial assistance grants (not loans) to military and veteran families: rent/mortgage, utilities, vehicle repair, food, and home items — paid to the provider on the family’s behalf.',
+    directory: false, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran', 'military_spouse'],
+    need_categories: ['emergency', 'housing', 'utilities', 'military_spouse_support', 'veterans'],
+    keywords: ['military family', 'veteran family', 'critical financial assistance', 'emergency grant', 'rent assistance', 'utility assistance'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECT_GRANT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 74,
+  },
+  {
+    source_id: 'fc2success_scholarships',
+    name: 'Foster Care to Success — Scholarships & Grants',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
+    base_url: 'https://www.fc2success.org/programs/scholarships-and-grants/',
+    sponsor_name: 'Foster Care to Success',
+    resource_title: 'Scholarships and grants for youth from foster care',
+    resource_summary: 'Direct scholarships and grants for young people who spent their teen years in foster care: college scholarships, Education & Training Voucher administration, and student support funds.',
+    directory: false, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'student'],
+    need_categories: ['education', 'scholarship'],
+    keywords: ['foster care', 'foster youth', 'aged out', 'scholarship', 'education and training voucher'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECT_GRANT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 74,
   },
   // ── HOUSING-LOSS lane (2026-08-02) ───────────────────────────────────────
   // Two whole real-world situations had NO source in this registry: a HOMEOWNER

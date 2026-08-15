@@ -171,6 +171,11 @@ const FACTORIES = Object.freeze({
   farmers_gov_heirs_property: officialDirectory('farmers_gov_heirs_property'),
   farmers_gov_beginning_farmers: officialDirectory('farmers_gov_beginning_farmers'),
   hslda_compassion_grants: officialDirectory('hslda_compassion_grants'),
+  // --- Direct-award anchors for the locator-only weak_match categories
+  // (2026-08-15): DIRECT_GRANT html portals via officialDirectory with
+  // directory:false, same posture as the farm-lane rows below.
+  operation_homefront: officialDirectory('operation_homefront'),
+  fc2success_scholarships: officialDirectory('fc2success_scholarships'),
   // --- Housing-loss lane (2026-08-02): a homeowner in foreclosure and a renter
   //     facing eviction had NO source at all before these.
   hud_avoiding_foreclosure: officialDirectory('hud_avoiding_foreclosure'),

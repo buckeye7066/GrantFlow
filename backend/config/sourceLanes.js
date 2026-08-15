@@ -192,6 +192,11 @@ export const LANE_OF_SOURCE = Object.freeze({
   feeding_america: 'private_charities',
   // Benchmark-gap lane (2026-07-13): the homeschool-family direct-grant anchor.
   hslda_compassion_grants: 'private_charities',
+  // Direct-award anchors for Amy's persistent locator-only weak_match
+  // categories (2026-08-15): military_family and foster_youth had only
+  // benefit/locator lanes, so no probe could ever be handed a direct award.
+  operation_homefront: 'private_charities',
+  fc2success_scholarships: 'private_charities',
   // IRS 990 grantmakers (ProPublica) — the private-foundation funder universe.
   propublica_990: 'private_charities',
   // Farm Credit — the producer-owned private lending system's YBS locator. Not

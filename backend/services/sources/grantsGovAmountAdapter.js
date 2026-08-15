@@ -276,8 +276,24 @@ export async function fetchGrantsGovAward(opportunityId, { fetchImpl = fetch } =
   }
 
   const data = res.data?.data ?? null
+  // The API's own "this record is gone" answer (verified live 2026-08-15 on
+  // ids 338441/355786/360509): HTTP 200, "Webservice Succeeds", and a data
+  // node whose errorMessages read "There is no record found for your search."
+  // — grants.gov has RETIRED/ARCHIVED the listing. That is a definitive fact
+  // about the row, not a parse failure: reporting it as
+  // `no_synopsis_or_forecast` made 6 active-pipeline rows red the owner's
+  // report as "needs an API adapter" forever, for records the adapter had
+  // asked about and been answered about. Marked (not returned as ok) so the
+  // Simpler Grants second door still gets its chance — its archive can carry
+  // records grants.gov no longer lists.
+  const apiErrors = Array.isArray(data?.errorMessages) ? data.errorMessages : []
+  const recordRetired = apiErrors.some((m) => /no record found/i.test(String(m ?? '')))
   const node = data?.synopsis ?? data?.forecast ?? null
-  if (!node) return { ok: false, transient: false, amount_min: null, amount_max: null, reason: 'no_synopsis_or_forecast' }
+  if (!node) {
+    return recordRetired
+      ? { ok: false, transient: false, record_retired: true, amount_min: null, amount_max: null, reason: 'record_not_found' }
+      : { ok: false, transient: false, amount_min: null, amount_max: null, reason: 'no_synopsis_or_forecast' }
+  }
 
   return {
     ok: true,
@@ -430,6 +446,22 @@ export async function enrichAmountViaGrantsGovApi(row, deps = {}) {
       }
     }
     if (!award.ok) {
+      // The primary API definitively answered "no record found" (retired /
+      // archived listing) and the fallback could not improve on it: that is a
+      // READ, not a failure. page_read:true burns the row — re-asking an
+      // authoritative API nightly about a record it says is gone cannot change
+      // the answer — and the honest label rides amount_text so the row reads
+      // as answered (none published; listing retired), never as adapter work.
+      if (award.record_retired === true) {
+        return {
+          attempted: true,
+          page_read: true,
+          transient: false,
+          found: false,
+          reason: 'grants_gov_record_retired',
+          amount_text: 'grants.gov no longer lists this opportunity (retired or archived listing)',
+        }
+      }
       return {
         attempted: true,
         page_read: false,

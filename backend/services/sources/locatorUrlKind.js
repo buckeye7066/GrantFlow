@@ -98,6 +98,10 @@ const DIRECTORY_HOSTS = Object.freeze([
   // forbids.
   'grantsfordisabled.org',
   'disabilityincomespecialists.com',
+  // NeedyMeds (fix-cycle-6, prod census 2026-08-15): a sitewide DATABASE of
+  // other funders' patient-assistance/co-pay programs — every page is a pointer
+  // to someone else's program, never an award of its own.
+  'needymeds.org',
 ])
 
 // Escape EVERY regex metacharacter, not just `.` — the hostname lists above
@@ -147,8 +151,11 @@ export const STATE_GOV_PATH_RULES = Object.freeze([
     // TennCare (Medicaid — Katie Beckett class) + TCAD service programs
     // (National Family Caregiver Support class), seen in the 2026-07-26 census.
     benefitPrefixes: Object.freeze(['tenncare', 'aging/our-programs']),
-    // DIDD department homepage + the TN grant-opportunities portal index.
-    directoryPages: Object.freeze(['didd', 'finance/grants']),
+    // DIDD department homepage + the TN grant-opportunities portal index +
+    // the DHS department homepage (fix-cycle-6, 2026-08-15: a "Families First
+    // Community Grant Program" row pointed at /humanservices.html — the
+    // DEPARTMENT's front page, a pointer to its programs, never an award page).
+    directoryPages: Object.freeze(['didd', 'finance/grants', 'humanservices']),
   },
 ])
 
@@ -180,6 +187,29 @@ export const ORG_PATH_RULES = Object.freeze([
     host: 'nsc.org',
     // NSC training catalog subtree — courses/products, never an award.
     directoryPrefixes: Object.freeze(['safety-training']),
+  },
+  {
+    // HUD (fix-cycle-6, prod census 2026-08-15): hud.gov mixes real NOFO/grant
+    // content with consumer program pages, so no host-wide claim — only the
+    // three structurally-safe shapes seen in prod:
+    //   /topics/… — consumer information pages describing HUD assistance
+    //     programs (rental assistance, Section 8 vouchers): the program's help
+    //     varies by applicant and no page under the subtree states a per-award
+    //     figure — the benefit class exactly.
+    //   /program_offices/… — office/administration pages (Community Planning &
+    //     Development) that LIST programs: a pointer by construction.
+    //   /findacounselor — the housing-counselor LOCATOR (a find-a-service tool).
+    host: 'hud.gov',
+    benefitPrefixes: Object.freeze(['topics']),
+    directoryPrefixes: Object.freeze(['program_offices']),
+    directoryPages: Object.freeze(['findacounselor']),
+  },
+  {
+    // FCC Affordable Connectivity Program consumer page (fix-cycle-6): a
+    // federal benefit (household internet subsidy — ended May 2024, but the
+    // KIND is about what the page IS); no per-award figure by design.
+    host: 'fcc.gov',
+    benefitPrefixes: Object.freeze(['broadbandbenefits']),
   },
 ])
 

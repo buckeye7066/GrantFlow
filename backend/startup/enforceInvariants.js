@@ -4729,6 +4729,20 @@ const DEAD_URL_REASON_PREDICATE = (alias) =>
   `(COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'fetch_failed:404%'
     OR COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'fetch_failed:410%'
     OR COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'fetch_failed:ssrf_guard%')`
+// WRONG-CONTENT class (2026-08-15): the URL ANSWERS but the answer can never
+// state an award — a JS shell (`thin_page`) or a 200 whose body failed the
+// read (`fetch_failed:200`, e.g. a row pointing at a PDF report). Measured in
+// prod: "Tennessee Reconnect" pointed at a college's alumna-SPOTLIGHT article,
+// "FTA Grant Programs" at a GAO PDF — real programs whose stored URL is simply
+// not the program's page, permanently red in the census's unanswered_unreadable
+// bucket with no lane able to reach them (source_url_self_repair repairs
+// REGISTRY sources; the dead-URL class above requires the URL to be DEAD).
+// These rows go straight to the identity search: the alive-recovery shortcut
+// must NOT apply (their URL being alive is the problem, and un-burning it for
+// a re-read would re-burn nightly — a tug-of-war by construction).
+const UNREADABLE_URL_REASON_PREDICATE = (alias) =>
+  `(COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'thin_page%'
+    OR COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'fetch_failed:200%')`
 
 export async function enforceDeadUrlRepair(db, deps = {}) {
   return runInvariant('dead_url_repair', async () => {
@@ -4752,7 +4766,8 @@ export async function enforceDeadUrlRepair(db, deps = {}) {
       const orphans = await db
         .prepare(
           `SELECT 'grant' AS lane, g.id, g.title, g.funder AS sponsor,
-                  COALESCE(g.url, g.application_url) AS dead_url
+                  COALESCE(g.url, g.application_url) AS dead_url,
+                  CASE WHEN ${DEAD_URL_REASON_PREDICATE('g')} THEN 'dead' ELSE 'unreadable' END AS klass
              FROM grants g
             WHERE g.status IN (${statuses})
               AND g.funding_opportunity_id IS NULL
@@ -4760,7 +4775,7 @@ export async function enforceDeadUrlRepair(db, deps = {}) {
               AND (g.amount_status IS NULL OR g.amount_status = 'not_listed')
               AND (g.amount_text IS NULL OR g.amount_text = '')
               AND g.amount_enrich_attempted_at IS NOT NULL
-              AND ${DEAD_URL_REASON_PREDICATE('g')}
+              AND (${DEAD_URL_REASON_PREDICATE('g')} OR ${UNREADABLE_URL_REASON_PREDICATE('g')})
               AND COALESCE(g.url, g.application_url, '') <> ''
               AND ${NON_SYNTH}
             LIMIT ?`,
@@ -4770,7 +4785,8 @@ export async function enforceDeadUrlRepair(db, deps = {}) {
       const catalogRows = await db
         .prepare(
           `SELECT 'fo' AS lane, fo.id, fo.title, fo.sponsor,
-                  COALESCE(fo.source_url, fo.application_url) AS dead_url
+                  COALESCE(fo.source_url, fo.application_url) AS dead_url,
+                  CASE WHEN ${DEAD_URL_REASON_PREDICATE('fo')} THEN 'dead' ELSE 'unreadable' END AS klass
              FROM funding_opportunities fo
             WHERE fo.is_active
               AND COALESCE(fo.amount_min, 0) <= 0
@@ -4779,7 +4795,7 @@ export async function enforceDeadUrlRepair(db, deps = {}) {
               AND (fo.amount_text IS NULL OR fo.amount_text = '')
               AND LOWER(COALESCE(fo.opportunity_kind, '')) NOT IN ('directory', 'benefit')
               AND fo.amount_enrich_attempted_at IS NOT NULL
-              AND ${DEAD_URL_REASON_PREDICATE('fo')}
+              AND (${DEAD_URL_REASON_PREDICATE('fo')} OR ${UNREADABLE_URL_REASON_PREDICATE('fo')})
               AND COALESCE(fo.source_url, fo.application_url, '') <> ''
               AND EXISTS (SELECT 1 FROM grants g
                            WHERE g.funding_opportunity_id = fo.id
@@ -4856,15 +4872,22 @@ export async function enforceDeadUrlRepair(db, deps = {}) {
       if (entry.exhausted) { skippedCooldown++; continue }
       if (entry.last_at && COOLDOWN_MS > 0 && nowMs - Date.parse(entry.last_at) < COOLDOWN_MS) { skippedCooldown++; continue }
       try {
-        // 1. RE-PROVE deadness. 'skipped' covers an unresolvable domain (the
-        //    probe's own SSRF/DNS guard) — dead for our purposes; ok/redirect
-        //    means the URL answers today and needs no repair, only a re-read.
-        const probe = await checkUrlImpl(cand.dead_url, { timeoutMs: 8000 })
-        if (probe && (probe.status === 'ok' || probe.status === 'redirect')) {
-          await db.prepare(unburnSqlFor(cand.lane)).run('dead_url_recovered_alive', cand.id)
-          recoveredAlive++
-          delete state.entries[stateKey]
-          continue
+        // 1. RE-PROVE deadness — DEAD class only. 'skipped' covers an
+        //    unresolvable domain (the probe's own SSRF/DNS guard) — dead for
+        //    our purposes; ok/redirect means the URL answers today and needs
+        //    no repair, only a re-read. The UNREADABLE class must NEVER take
+        //    this shortcut: its URL being alive is the very problem (a JS
+        //    shell / wrong-content page answers every probe), and an un-burn
+        //    here would re-read → re-burn nightly, a tug-of-war by
+        //    construction. Those rows go straight to the identity search.
+        if (cand.klass !== 'unreadable') {
+          const probe = await checkUrlImpl(cand.dead_url, { timeoutMs: 8000 })
+          if (probe && (probe.status === 'ok' || probe.status === 'redirect')) {
+            await db.prepare(unburnSqlFor(cand.lane)).run('dead_url_recovered_alive', cand.id)
+            recoveredAlive++
+            delete state.entries[stateKey]
+            continue
+          }
         }
         // 2. Search for the row's REAL page by its own identity.
         const found = await findOfficialUrl({ title: cand.title, sponsor: cand.sponsor ?? '' })
@@ -4880,12 +4903,20 @@ export async function enforceDeadUrlRepair(db, deps = {}) {
         if (isSearchEngineUrl(found.url)) { refused++; continue }
         const norm = (u) => String(u ?? '').trim().toLowerCase().replace(/\/+$/, '')
         if (norm(found.url) === norm(cand.dead_url)) {
+          if (cand.klass === 'unreadable') {
+            // The identity search found the SAME unreadable page: the official
+            // page IS this page and it cannot state an award. A real dead end
+            // — the attempt is spent (bounded by MAX_ATTEMPTS → exhausted) and
+            // the burn stays, so the row can never re-enter a re-read loop.
+            notFound++
+            continue
+          }
           await db.prepare(unburnSqlFor(cand.lane)).run('dead_url_recovered_alive', cand.id)
           recoveredAlive++
           delete state.entries[stateKey]
           continue
         }
-        const wrote = await db.prepare(resetSqlFor(cand.lane)).run(found.url, 'dead_url_repaired', cand.id)
+        const wrote = await db.prepare(resetSqlFor(cand.lane)).run(found.url, cand.klass === 'unreadable' ? 'unreadable_url_repaired' : 'dead_url_repaired', cand.id)
         if (changesOf(wrote) > 0) {
           repaired++
           delete state.entries[stateKey]

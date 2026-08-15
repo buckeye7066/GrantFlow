@@ -174,6 +174,25 @@ describe('fetchGrantsGovAward — synopsis vs forecast', () => {
     expect(res.ok).toBe(false)
     expect(res.transient).toBe(false)
   })
+
+  it('marks the API\'s own "no record found" answer as record_retired (verified live 2026-08-15)', async () => {
+    // The exact live shape for retired/archived listings (ids 338441/355786/
+    // 360509): HTTP 200, "Webservice Succeeds", a data node with NO synopsis or
+    // forecast, and errorMessages carrying the API's own statement.
+    const f = fakeFetch(() => ({
+      ok: true,
+      json: { errorcode: 0, msg: 'Webservice Succeeds', data: { revision: 0, errorMessages: ['There is no record found for your search.'] } },
+    }))
+    const res = await fetchGrantsGovAward('338441', { fetchImpl: f })
+    expect(res).toMatchObject({ ok: false, transient: false, record_retired: true, reason: 'record_not_found' })
+  })
+
+  it('a node-less response WITHOUT the no-record message stays the old no_synopsis_or_forecast failure', async () => {
+    const f = fakeFetch(() => ({ ok: true, json: { errorcode: 0, data: { revision: 0 } } }))
+    const res = await fetchGrantsGovAward('999999', { fetchImpl: f })
+    expect(res).toMatchObject({ ok: false, reason: 'no_synopsis_or_forecast' })
+    expect(res.record_retired).toBeUndefined()
+  })
 })
 
 describe('enrichAmountViaGrantsGovApi — the sweep contract', () => {
@@ -217,6 +236,49 @@ describe('enrichAmountViaGrantsGovApi — the sweep contract', () => {
     const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
     expect(res).toMatchObject({ attempted: true, page_read: true, found: false, reason: 'no_award_amount_published' })
     expect(res.amounts).toBeUndefined()
+  })
+
+  it('a RETIRED record is a READ with an honest label, never "needs an adapter" (2026-08-15)', async () => {
+    // 6 active-pipeline rows sat in the census's unanswered_unreadable bucket
+    // as `grants_gov_api_failed:no_synopsis_or_forecast` while the API had
+    // definitively answered "There is no record found for your search." —
+    // the listing is retired/archived. page_read:true burns the row (the
+    // answer cannot change) and the label rides amount_text so the row reads
+    // as ANSWERED. (Simpler Grants fallback key unset here — the archive door
+    // gets its chance in the next test.)
+    delete process.env.SIMPLER_GRANTS_API_KEY
+    const f = fakeFetch(() => ({
+      ok: true,
+      json: { errorcode: 0, msg: 'Webservice Succeeds', data: { revision: 0, errorMessages: ['There is no record found for your search.'] } },
+    }))
+    const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+    expect(res).toMatchObject({ attempted: true, page_read: true, transient: false, found: false, reason: 'grants_gov_record_retired' })
+    expect(res.amount_text).toMatch(/no longer lists/i)
+    expect(res.amounts).toBeUndefined()
+  })
+
+  it('the Simpler Grants archive door still WINS over a retired primary record', async () => {
+    // grants.gov retiring a listing does not erase the historical figures —
+    // Simpler Grants serves archived records. A real archived answer must beat
+    // the retirement label.
+    process.env.SIMPLER_GRANTS_API_KEY = 'test-key'
+    try {
+      const f = vi.fn(async (url, init) => {
+        if (String(url).includes('simpler')) {
+          return { ok: true, status: 200, json: async () => ({ data: { summary: { award_floor: '1000', award_ceiling: '5000' } } }) }
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ errorcode: 0, msg: 'Webservice Succeeds', data: { revision: 0, errorMessages: ['There is no record found for your search.'] } }),
+        }
+      })
+      const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+      expect(res).toMatchObject({ attempted: true, page_read: true, found: true })
+      expect(res.amounts).toMatchObject({ amount_min: 1000, amount_max: 5000 })
+    } finally {
+      delete process.env.SIMPLER_GRANTS_API_KEY
+    }
   })
 
   it('reports a 503 as transient so an outage never burns the row', async () => {
