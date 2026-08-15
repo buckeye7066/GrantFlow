@@ -2,7 +2,7 @@
   "app_id": "sermonsmith",
   "display_name": "SermonSmith",
   "repo": "buckeye7066/sermonsmith",
-  "local_path": "C:/Users/example_user/sermonsmith",
+  "local_path": "~/sermonsmith",
   "runtime_type": "web",
   "start_command": "npm run dev:api & npm run dev",
   "stop_command": "taskkill-by-port",

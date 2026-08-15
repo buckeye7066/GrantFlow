@@ -2,7 +2,7 @@
   "app_id": "crispr-compass",
   "display_name": "CRISPR Compass",
   "repo": "local-git",
-  "local_path": "C:/Users/example_user/crispr-compass",
+  "local_path": "~/crispr-compass",
   "runtime_type": "web",
   "start_command": "streamlit run app.py --server.port 8501 --server.headless true",
   "stop_command": "taskkill-by-port",

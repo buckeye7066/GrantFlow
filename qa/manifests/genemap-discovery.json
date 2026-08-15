@@ -2,7 +2,7 @@
   "app_id": "genemap-discovery",
   "display_name": "GeneMap Discovery",
   "repo": "buckeye7066/genemap-discovery",
-  "local_path": "C:/Users/example_user/genemap-discovery",
+  "local_path": "~/genemap-discovery",
   "runtime_type": "web",
   "start_command": "pnpm dev",
   "stop_command": "taskkill-by-port",

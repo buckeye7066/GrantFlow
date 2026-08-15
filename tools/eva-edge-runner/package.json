@@ -10,7 +10,7 @@
   "scripts": {
     "selftest": "node bin/eva-runner.mjs --selftest",
     "dry-run": "node bin/eva-runner.mjs --dry-run",
-    "test": "node --test test/sign.test.mjs test/runner.test.mjs test/launcher.test.mjs test/manifests.test.mjs"
+    "test": "node --test test/sign.test.mjs test/runner.test.mjs test/launcher.test.mjs test/manifests.test.mjs test/config.test.mjs"
   },
   "engines": {
     "node": ">=20"

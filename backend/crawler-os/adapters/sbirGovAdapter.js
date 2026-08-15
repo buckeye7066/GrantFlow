@@ -105,6 +105,20 @@ export function createSbirGovAdapter() {
         const parsed = JSON.parse(resp.body);
         const msg = String(parsed?.Message ?? parsed?.message ?? '');
         if (/public api is not available/i.test(msg)) return 'api_outage:sbir_public_api_unavailable';
+        // Second outage costume (verified live 2026-08-15): the API now answers
+        // HTTP 403 with the bare JSON body {"message":"Forbidden"} for EVERY
+        // public endpoint (solicitations AND awards, any UA, any params), while
+        // www.sbir.gov/api's own docs state "the SBIR.gov APIs are currently
+        // undergoing maintenance" and the legacy host no longer resolves. That
+        // is the service refusing its public API wholesale — not a key we lack,
+        // not registry work, and not something a retry can fix — so it is the
+        // same honest api_outage skip as the banner above. Precision: ONLY the
+        // exact 403+bare-"Forbidden" JSON shape qualifies; an HTML WAF page, a
+        // 5xx, or any other 403 body stays a genuine FETCH_ERROR, and the first
+        // real response parses normally when the service returns.
+        if (Number(resp.status) === 403 && /^forbidden$/i.test(msg.trim())) {
+          return 'api_outage:sbir_public_api_403_forbidden';
+        }
       } catch { /* not the banner */ }
       return false;
     },

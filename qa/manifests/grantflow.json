@@ -2,7 +2,7 @@
   "app_id": "grantflow",
   "display_name": "GrantFlow",
   "repo": "buckeye7066/GrantFlow",
-  "local_path": "C:/Users/example_user/GrantFlow",
+  "local_path": "~/GrantFlow",
   "runtime_type": "web",
   "start_command": "npm run dev:full",
   "stop_command": "taskkill-by-port",

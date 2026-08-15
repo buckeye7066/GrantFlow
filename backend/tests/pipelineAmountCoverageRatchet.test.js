@@ -270,6 +270,30 @@ describe('pipeline.amountCoverage ratchet', () => {
     expect(res.evidence).toMatchObject({ unanswered_unreadable: 10, answered_none_published: 75 })
   })
 
+  it('a grant whose LINKED CATALOG row already carries an adapter-fetched figure is ANSWERED, never "needs an API adapter"', async () => {
+    // The 2026-08-15 false alarm: nightly-crawl grants (own amounts not yet
+    // inherited by enforceGrantAmountBackfill) linked to catalog rows whose
+    // figures the grants.gov API adapter had ALREADY fetched were reported as
+    // "38 AWARD-BEARING grants … need an API adapter". The census's own header
+    // says answers are read off EITHER the grant OR its linked catalog row —
+    // the value predicate must honor that too. (Measured in prod: 52 such
+    // rows, incl. a $2,500 scholarship and a $629,042 award, catalog
+    // amount_status 'known'/'range', amount_enrich_last_reason
+    // 'grants_gov_api'.)
+    seedHistory([])
+    seedGrants(20, 20)
+    const insFo = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_min, amount_max, amount_status, amount_enrich_attempted_at, source_url) VALUES (1, ?, ?, ?, '2026-07-25T00:00:00Z', 'https://www.grants.gov/search-results-detail/361349')",
+    )
+    const insG = db.prepare("INSERT INTO grants (status, funding_opportunity_id, profile_id) VALUES ('discovered', ?, 'real-1')")
+    insG.run(insFo.run(2500, 2500, 'known').lastInsertRowid)
+    insG.run(insFo.run(null, 629042, 'range').lastInsertRowid)
+    const res = await check().run({ db })
+    expect(res.evidence.unanswered_unreadable).toBe(0)
+    expect(res.evidence.award_bearing_with_value).toBe(22)
+    expect(res.summary).not.toMatch(/need an API adapter/)
+  })
+
   it('groups the unreadable bucket by host in evidence.unreadable_hosts and names the top host in the summary', async () => {
     // The recommended_fix has always said "group the unreadable rows by
     // source_url host" so a real concentration can be told apart from a long

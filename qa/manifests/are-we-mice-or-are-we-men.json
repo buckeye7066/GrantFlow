@@ -2,7 +2,7 @@
   "app_id": "are-we-mice-or-are-we-men",
   "display_name": "Are We Mice Or Are We Men",
   "repo": "buckeye7066/are-we-mice-or-are-we-men",
-  "local_path": "C:/Users/example_user/are-we-mice-or-are-we-men",
+  "local_path": "~/are-we-mice-or-are-we-men",
   "runtime_type": "web",
   "start_command": "cd backend && npm run dev & npm run dev",
   "stop_command": "taskkill-by-port",

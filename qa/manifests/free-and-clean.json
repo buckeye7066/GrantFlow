@@ -2,7 +2,7 @@
   "app_id": "free-and-clean",
   "display_name": "Free and Clean",
   "repo": "local-only",
-  "local_path": "G:/One Drive/Desktop/Free and Clean",
+  "local_path": "~/FreeAndClean",
   "runtime_type": "python-cli",
   "start_command": "python system_cleaner/cleaner.py --help (use the self-healing venv python at %LocalAppData%/FreeAndClean/.venv/Scripts/python.exe for full deps: psutil/rich/tqdm/send2trash/pywin32/Pillow)",
   "stop_command": "n/a",

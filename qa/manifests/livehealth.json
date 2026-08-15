@@ -2,7 +2,7 @@
   "app_id": "livehealth",
   "display_name": "LiveHealth",
   "repo": "base44-health (buckeye7066/livehealth)",
-  "local_path": "C:/Users/example_user/base44-health",
+  "local_path": "~/base44-health",
   "runtime_type": "web",
   "start_command": "cd server && npm run dev & npm run dev",
   "stop_command": "taskkill-by-port",

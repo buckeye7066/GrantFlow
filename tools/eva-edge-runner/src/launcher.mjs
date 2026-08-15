@@ -9,7 +9,7 @@
 // whole process tree down again. It only ever launches the declared command in
 // the declared directory — no arbitrary command execution.
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, existsSync } from 'node:fs'
 import { join, isAbsolute } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -160,6 +160,28 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
   // Nothing to launch: no command, an explicit n/a, or no directory to run in.
   if (!startCmd || startCmd === 'n/a' || !cwd) {
     return { launched: false, ready: true, baseUrl, reason: 'no start_command', outputTail: () => '', failedProbeUrl: null, stop: async () => {} }
+  }
+
+  // A cwd that does not exist on this machine can never start the app, and on
+  // Windows it surfaces as `spawn C:\…\cmd.exe ENOENT` — an error that names the
+  // SHELL, not the cause, which is how a fleet-wide bad-local_path condition
+  // (the 2026-08-06 `example_user` sanitization) read as 13 unrelated app
+  // failures for 9 nights. Name the actual defect and where to fix it.
+  if (!existsSync(cwd)) {
+    const msg = `[launcher] ${manifest.app_id || app?.app_id}: local_path does not exist on this machine: ${cwd} — fix local_path in qa/portfolio-registry.json / qa/manifests (portable form: ~/<repo-dir>)`
+    log(msg)
+    return {
+      launched: true,
+      ready: false,
+      baseUrl,
+      failedProbeUrl: null,
+      exitInfos: [null],
+      outputTail: () => msg,
+      portDrift: [],
+      blockedPorts: [],
+      declaredPorts: [],
+      stop: async () => {},
+    }
   }
 
   // Pre-launch hygiene: a prior app (or a dev server the owner left running)

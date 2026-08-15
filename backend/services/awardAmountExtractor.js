@@ -158,6 +158,19 @@ const RE_TUITION_COVERAGE = new RegExp(
 // A negated coverage claim ("does not cover tuition") is NOT a tuition award.
 const RE_TUITION_NEGATION = /\b(?:not|never|no|isn'?t|doesn'?t|don'?t|won'?t|cannot|can'?t|except(?:ing)?|excluding)\s+(?:\w+\s+){0,2}$/i
 
+// "TUITION-FREE" — the Tennessee Promise class (Amy
+// `amount_recall_miss:high_school_student`, 2026-08-15). Real prod ingest text:
+//   "A scholarship providing two years of tuition-free college for eligible
+//    students in Tennessee."
+// The coverage-verb rule above cannot reach it (there is no covers/pays/waives
+// verb — the adjective IS the claim), yet it is the same explicit per-award
+// semantic with no fixed dollar figure, so the honest result is identical:
+// status 'varies' + the phrase as amount_text, never a fabricated number. The
+// pattern requires the hyphen/space compound ("tuition-free", "tuition free")
+// so bare mentions of "tuition" or "free" can never match, and the same
+// negation window applies ("is not tuition-free" stays silence).
+const RE_TUITION_FREE = /\btuition[-\s]free\b/i
+
 // A dollar figure in these contexts is a PROGRAM total / org financial, never a
 // per-award amount. Checked in a window around the match.
 // `annual(ly) SCHOLARSHIPS/AWARDS/GRANTS of $X` (note: PLURAL award noun) is a
@@ -353,6 +366,12 @@ export function extractAwardAmountsFromText(text) {
   const tuition = RE_TUITION_COVERAGE.exec(t)
   if (tuition && !RE_TUITION_NEGATION.test(t.slice(Math.max(0, tuition.index - 40), tuition.index))) {
     return { ...none, amount_text: excerpt(tuition[0]), amount_status: 'varies' }
+  }
+  // "tuition-free" is the same per-award semantic stated as an adjective
+  // (Tennessee Promise: "two years of tuition-free college").
+  const tuitionFree = RE_TUITION_FREE.exec(t)
+  if (tuitionFree && !RE_TUITION_NEGATION.test(t.slice(Math.max(0, tuitionFree.index - 40), tuitionFree.index))) {
+    return { ...none, amount_text: excerpt(tuitionFree[0]), amount_status: 'varies' }
   }
   if (t.includes('$')) {
     const totalText = findProgramTotalText(t)

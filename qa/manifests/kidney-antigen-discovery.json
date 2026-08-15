@@ -2,7 +2,7 @@
   "app_id": "kidney-antigen-discovery",
   "display_name": "Kidney Antigen Discovery",
   "repo": "local-git-no-remote",
-  "local_path": "C:/Users/example_user/kidney-antigen-discovery",
+  "local_path": "~/kidney-antigen-discovery",
   "runtime_type": "web",
   "start_command": "cd backend && uvicorn app.main:app --port 8000 & cd frontend && npm run dev",
   "stop_command": "taskkill-by-port",

@@ -2,7 +2,7 @@
   "app_id": "factory-deck",
   "display_name": "Factory Deck",
   "repo": "local-only (not a git repo)",
-  "local_path": "C:/Users/example_user/local-ai-factory",
+  "local_path": "~/local-ai-factory",
   "runtime_type": "web",
   "start_command": "pnpm dev",
   "stop_command": "taskkill-by-port",
