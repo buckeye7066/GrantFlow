@@ -79,8 +79,8 @@ jobs:
 
       - name: Restore and verify released FlexFactor runtime
         run: |
-          base64 --decode harness/.github/flexfactor-runtime-e1f0a5f8.zip.b64 > flexfactor-runtime.zip
-          echo "8947f7b3916c90197380d613e12634ffc8f0c97edcecaa5ffed83d43f9e97369  flexfactor-runtime.zip" | sha256sum --check
+          base64 --decode harness/.github/flexfactor-runtime-2954bd5a.zip.b64 > flexfactor-runtime.zip
+          echo "3a09f8a4341d51be36107842a4493ac70161aef4d69df1f09b4aadd6ae7684a3  flexfactor-runtime.zip" | sha256sum --check
           mkdir flexfactor
           unzip -q flexfactor-runtime.zip -d flexfactor
           python3 -m py_compile flexfactor/flexfactor.py flexfactor/flexfactor_*.py
