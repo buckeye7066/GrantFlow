@@ -11,6 +11,7 @@
  */
 import crypto from 'crypto'
 import { isSyntheticIdWithoutProvenance, isReservedSyntheticUserId } from '../middleware/syntheticServiceTokens.js'
+import { withProfileScope } from '../middleware/profileContext.js'
 
 function normalizeEmail(email = '') {
   const v = String(email || '').trim().toLowerCase()
@@ -598,7 +599,18 @@ export async function ensureGrantAccess(req, res, grantId) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return null
 
-  const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(grantId)
+  // Pre-authorization lookup: this read MUST span profiles because its result
+  // is what the authorization decision below is made FROM (profile match, org
+  // match, admin). Under a non-admin tenant claim the profile-scope guard
+  // rightly rejects unscoped `grants` reads, which made every non-admin
+  // grant-by-id route (GET/PUT/PATCH status/DELETE) 500 with
+  // PROFILE_SCOPE_VIOLATION in production (observed live 2026-08-16). The
+  // sanctioned pattern for access-check reads is an explicit scope bypass
+  // (see routes/grants.js runLegacyProfilelessGrantQuery); the row is never
+  // returned to the caller unless one of the checks below passes.
+  const grant = await withProfileScope({ bypass: true }, () =>
+    req.db.prepare('SELECT * FROM grants WHERE id = ?').get(grantId),
+  )
   if (!grant) {
     res.status(404).json({ error: 'Grant not found' })
     return null
