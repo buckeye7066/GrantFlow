@@ -83,14 +83,15 @@ jobs:
       - name: Verify runtime and model credential
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           node --version
           npm --version
           python3 --version
-          test -n "$ANTHROPIC_API_KEY" || {
-            echo "::error::ANTHROPIC_API_KEY is not configured for this repository"
+          if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is configured for this repository"
             exit 78
-          }
+          fi
 
       - name: Install exact GrantFlow dependencies
         working-directory: GrantFlow
@@ -108,6 +109,7 @@ jobs:
         id: flexfactor
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PYTHONUNBUFFERED: '1'
         run: |
           git -C GrantFlow config user.name "FlexFactor CI"
@@ -117,7 +119,6 @@ jobs:
           set -o pipefail
           python3 flexfactor/flexfactor.py audit \
             --program "$GITHUB_WORKSPACE/GrantFlow" \
-            --provider anthropic \
             --model-mode paid \
             --economy \
             --yes \
