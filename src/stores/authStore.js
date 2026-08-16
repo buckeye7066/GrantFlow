@@ -15,6 +15,7 @@ import client, { apiFetch } from '@/api/client'
 import { toast } from '@/components/ui/use-toast'
 import { useFundingResultsStore } from '@/stores/fundingResultsStore'
 import { clearAllProfileScopedStorage } from '@/utils/profileScopedStorage'
+import { claimPromoTouch } from '@/utils/promoAttribution'
 
 // Wired up at app boot via registerQueryClient(qc) from src/App.jsx so we can
 // evict React-Query cache entries that include the previous profile id when
@@ -442,6 +443,11 @@ export const useAuthStore = create((set, get) => ({
           payload.forcedWelcomeVideo ?? payload.user?.forced_welcome_video ?? null,
       }))
 
+      // Fire-and-forget: claim a stored PromoPilot promo touch for this user so
+      // server-side conversion events can be attributed. Never throws, no-op
+      // without a stored touch.
+      claimPromoTouch()
+
       // Always refresh profiles after canonical auth bootstrap.
       // This keeps the sidebar selector accurate (admins should see ALL profiles).
       get()
@@ -479,6 +485,9 @@ export const useAuthStore = create((set, get) => ({
           )
 
       client.setActiveProfileId?.(activeProfileId)
+
+      // Fire-and-forget promo-touch claim (see the userId-shaped branch above).
+      claimPromoTouch()
 
       // Check if this is an admin user
       if (isAdminUser) {

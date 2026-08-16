@@ -12,8 +12,12 @@ import { migrateLegacyProfileScopedKeys } from '@/utils/profileScopedStorage'
 import { maybeReloadForStaleChunk } from '@/utils/lazyWithRetry'
 import { captureFrontendException, initFrontendObservability } from '@/utils/observability.js'
 import { initClientErrorReporting } from '@/utils/reportClientError.js'
+import { capturePromoTouchFromLocation } from '@/utils/promoAttribution.js'
 
 initFrontendObservability()
+// Remember a PromoPilot promo touch (`pp_touch` on promoted landing URLs) so
+// post-auth conversion events can be attributed. Never throws, no-op without it.
+capturePromoTouchFromLocation()
 // Register global window error / unhandledrejection -> owner-email reporting (once).
 initClientErrorReporting()
 

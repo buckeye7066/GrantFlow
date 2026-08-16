@@ -2330,6 +2330,9 @@ app.use('/api/maintenance', lazyRouter('./routes/maintenance.js'));
 // bearer token; access is by opaque random id only).
 app.use('/api/media', lazyRouter('./routes/media.js'));
 app.use('/api/onboarding', lazyRouter('./routes/onboarding.js'));
+// PromoPilot promotion-to-conversion bridge (touch claim + signup reporting).
+// Fire-and-forget by contract; env-gated no-op without PROMOPILOT_ATTRIBUTION_*.
+app.use('/api/attribution', lazyRouter('./routes/attribution.js'));
 app.use('/api/service-application', lazyRouter('./routes/serviceApplication.js'));
 app.use('/api/billing', billingRouter);
 // User-facing comms: email the owner alias from a profile + self-serve SMS opt-in.
