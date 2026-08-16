@@ -1,0 +1,24 @@
+name: flexfactor-source-export
+on:
+  pull_request:
+    paths:
+      - .github/workflows/flexfactor-source-export.yml
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6e526a868404630f6769860cb7a4afe60b10fd2b
+          fetch-depth: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grantflow-source-6e526a868404
+          path: |
+            .
+            !.git
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
