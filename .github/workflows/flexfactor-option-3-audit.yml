@@ -6,6 +6,7 @@ on:
       - '.github/workflows/flexfactor-option-3-audit.yml'
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
 
@@ -77,6 +78,39 @@ jobs:
           git branch --set-upstream-to=origin/main main
           test "$(git rev-parse HEAD)" = "1c648dd803004ee179c2b9116fd42ae4f42309c8"
 
+      - name: Restore the latest compatible FlexFactor checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          resume_dir="$RUNNER_TEMP/flexfactor-resume"
+          gh run download 31970385322 \
+            --repo buckeye7066/GrantFlow \
+            --name flexfactor-option-3-grantflow-1c648d \
+            --dir "$resume_dir"
+          checkpoint="$(find "$resume_dir/state/runs" -name checkpoint.json -type f -print -quit)"
+          test -n "$checkpoint" || {
+            echo "::error::The prior compatible FlexFactor checkpoint was not found"
+            exit 1
+          }
+          mkdir -p "$HOME/.flexfactor"
+          cp -R "$resume_dir/state/runs" "$HOME/.flexfactor/"
+          CHECKPOINT="$HOME/.flexfactor/runs/$(basename "$(dirname "$checkpoint")")/checkpoint.json" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["CHECKPOINT"])
+          data = json.loads(path.read_text(encoding="utf-8"))
+          data["status"] = "interrupted"
+          data["pid"] = 0
+          data.pop("finished_at", None)
+          path.write_text(json.dumps(data), encoding="utf-8")
+          print(f"Restored {len(data.get('reviewed') or {})} recorded reviews from {data.get('run_id')}")
+          PY
+          git -C GrantFlow apply --index \
+            --exclude=ios/App/CapApp-SPM/Package.resolved \
+            "$resume_dir/audit-index.patch"
+          git -C GrantFlow status --short
+
       - name: Restore and verify released FlexFactor runtime
         run: |
           base64 --decode harness/.github/flexfactor-runtime-9724c994.zip.b64 > flexfactor-runtime.zip
@@ -136,6 +170,7 @@ jobs:
             --single \
             --yes \
             --redact \
+            --allow-dirty \
             --no-dashboard \
             --push \
             --merge 2>&1 | tee flexfactor-option-3.log
