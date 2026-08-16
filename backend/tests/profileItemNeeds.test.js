@@ -306,6 +306,38 @@ describe('profileItemNeeds — applicability is read from the schema', () => {
     expect(PROFILE_SCHEMA.financial_information.applies_to).toBeUndefined()
     expect(ruleAppliesToProfile(freeText, 'nonprofit')).toBe(true)
   })
+
+  it('a PERSON is never refused a person-targeted section on subtype mismatch (the Gilbert McCosh case)', () => {
+    // 2026-08-15: `medical_history.applies_to` enumerates person SUBTYPES
+    // (disabled_adult, senior, medical_need, …) and the exact-token check has
+    // no hierarchy — so Gilbert, typed plain `individual`, was refused his OWN
+    // declared DME list ("Customized wheelchair", "Adaptive assistive
+    // technology"). Coarse typing must never cost a person their declared
+    // items; the person/organization boundary is the gate's real job.
+    const subtypeRule = ITEM_NEED_RULES.find(
+      (r) => Array.isArray(PROFILE_SCHEMA[r.section]?.applies_to)
+        && PROFILE_SCHEMA[r.section].applies_to.length > 0
+        && !PROFILE_SCHEMA[r.section].applies_to.includes('individual'),
+    )
+    expect(subtypeRule, 'a subtype-scoped person section exists to test against').toBeTruthy()
+    expect(ruleAppliesToProfile(subtypeRule, 'individual')).toBe(true)
+    // The org boundary is UNCHANGED: an org type still takes the exact path.
+    expect(ruleAppliesToProfile(subtypeRule, 'nonprofit')).toBe(false)
+  })
+
+  it("Gilbert's grip impairment derives the adaptive daily-living aids item (built-up utensils)", () => {
+    // Owner acceptance example 2026-08-15: "Gilbert would need built up
+    // utensils". His prod disability_type holds "Clawing effect in hands"
+    // verbatim — declared structured field content, not prose mining.
+    const out = deriveProfileItemNeeds(
+      { primary_type: 'individual' },
+      { health_medical: { disability_type: ['Clawing effect in hands'] } },
+    )
+    const adl = out.needs.find((n) => /built-up utensils/i.test(n.item))
+    expect(adl).toBeTruthy()
+    expect(adl.category).toBe('adaptive_equipment')
+    expect(adl.evidence).toBe('health_medical.disability_type')
+  })
 })
 
 describe('profileItemNeeds — precision', () => {

@@ -57,7 +57,7 @@
  * `services/matchEngine.js` stays the sole decision authority.
  */
 
-import { isProfileTypeInList, ALL_PERSON_TYPES, ALL_ORG_TYPES } from '../../shared/profileSectionApplicability.js'
+import { isProfileTypeInList, isPersonProfileType, ALL_PERSON_TYPES, ALL_ORG_TYPES } from '../../shared/profileSectionApplicability.js'
 import { PROFILE_SCHEMA } from './profileSchema.js'
 
 /**
@@ -148,6 +148,13 @@ export const DISABILITY_TYPE_ITEMS = Object.freeze({
   // 4-char word itself, never a shorter fragment.
   deaf: { item: 'Assistive technology for deafness (visual alerts, captioned phone)', needText: 'assistive technology for deaf adults', category: 'adaptive_equipment' },
   'assistive technology': { item: 'Assistive technology', needText: 'assistive technology funding', category: 'adaptive_equipment' },
+  // The Gilbert McCosh case (owner acceptance example, 2026-08-15: "Gilbert
+  // would need built up utensils"): his declared disability_type holds
+  // "Clawing effect in hands" verbatim — a grip/dexterity impairment whose
+  // concrete item class is adaptive daily-living equipment. Multi-word terms
+  // only; both spellings prod actually uses.
+  'clawing effect': { item: 'Adaptive daily-living aids (built-up utensils, grip aids, reachers)', needText: 'adaptive daily living aids grant', category: 'adaptive_equipment' },
+  'grip strength': { item: 'Adaptive daily-living aids (built-up utensils, grip aids, reachers)', needText: 'adaptive daily living aids grant', category: 'adaptive_equipment' },
 })
 
 /**
@@ -399,6 +406,18 @@ export function ruleAppliesToProfile(rule, primaryType) {
   if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
   const t = String(primaryType ?? '').trim()
   if (!t) return true
+  // A PERSON is never refused a PERSON-targeted section (2026-08-15, the
+  // Gilbert McCosh case). `medical_history.applies_to` enumerates person
+  // SUBTYPES (`disabled_adult`, `senior`, `medical_need`, …) and
+  // `isProfileTypeInList` is an exact-token check with no hierarchy — so
+  // Gilbert, typed plain `individual`, was refused his OWN declared DME list
+  // ("Customized wheelchair", "Adaptive assistive technology") because his
+  // type is the ANCESTOR of every listed subtype. For the item lane that is
+  // the wrong failure direction: coarse typing must never cost a person their
+  // declared items. The person/organization boundary — the gate's real job,
+  // which keeps Focus Forward Ministry's imported health sections inert —
+  // still holds, because an ORG type takes the exact-token path below.
+  if (isPersonProfileType(t) && appliesTo.some((a) => isPersonProfileType(a))) return true
   // AN UNRECOGNIZED TYPE IS NEUTRAL, exactly like a missing one. Measured in
   // prod 2026-08-02: `resolveEffectiveProfileType` resolves Focus Forward
   // Ministry to the FREE TEXT its `organization_details.organization_type`
