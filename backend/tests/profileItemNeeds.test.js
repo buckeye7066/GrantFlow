@@ -333,6 +333,42 @@ describe('profileItemNeeds — precision', () => {
     expect(out.unmapped.map((u) => u.value)).not.toContain('Discipleship')
   })
 
+  it('fleet-replay vocabulary additions (2026-08-15): REAL declared values now derive items', () => {
+    // Each of these values was measured falling out of a REAL prod profile as
+    // an unmapped gap (or a silent tag) on 2026-08-15 — the registry's own
+    // convergence contract is that an observed gap gets its vocabulary line.
+    const out = deriveProfileItemNeeds({ primary_type: 'individual' }, {
+      health_medical: {
+        support_needs: ['Rehabilitation services', 'Medical assistance'],
+        disability_type: ['deaf', 'assistive technology'],
+      },
+    })
+    const items = out.needs.map((n) => n.item)
+    expect(items).toContain('Rehabilitation services')
+    expect(items).toContain('Medical expense assistance')
+    expect(items).toContain('Assistive technology for deafness (visual alerts, captioned phone)')
+    expect(items).toContain('Assistive technology')
+    // A Deaf declaration is NOT a hearing-aids item — different declaration.
+    expect(items.join(' ')).not.toMatch(/Hearing aids/)
+
+    // The tag lane reads `programs_services`, an ORG section — so the new tag
+    // entries fire for an organization that declares them. (The prod profiles
+    // that carried these tags were INDIVIDUALS holding an org section as an
+    // import artifact; the applicability gate refusing them there is the
+    // doctrine working, not a gap — asserted below.)
+    const org = deriveProfileItemNeeds({ primary_type: 'nonprofit' }, {
+      programs_services: { focus_areas: ['technology_equipment'], keywords: ['medical coding certification'] },
+    })
+    const orgItems = org.needs.map((n) => n.item)
+    expect(orgItems).toContain('Technology equipment (laptop or tablet)')
+    expect(orgItems).toContain('Medical coding certification course')
+
+    const student = deriveProfileItemNeeds({ primary_type: 'high_school_student' }, {
+      programs_services: { focus_areas: ['technology_equipment'] },
+    })
+    expect(student.needs, 'an org section on a person profile stays inert').toEqual([])
+  })
+
   it('token boundaries hold — a term must not match inside a longer word', () => {
     const out = deriveProfileItemNeeds({ primary_type: 'individual' }, {
       health_medical: { support_needs: ['transportational studies', 'foodie club'] },
