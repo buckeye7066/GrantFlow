@@ -11,7 +11,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: flexfactor-option-3-grantflow-1c648d
+  group: flexfactor-option-3-grantflow-main
   cancel-in-progress: true
 
 jobs:
@@ -111,12 +111,19 @@ jobs:
             "$resume_dir/audit-index.patch"
           git -C GrantFlow status --short
 
-      - name: Restore and verify released FlexFactor runtime
+      - name: Restore and verify exact FlexFactor v0.3.7 runtime
         run: |
-          base64 --decode harness/.github/flexfactor-runtime-9724c994.zip.b64 > flexfactor-runtime.zip
-          echo "b5e55c628839e50d66587abb3bf62b3b5bf31282f24d204ec182c453893f8ba5  flexfactor-runtime.zip" | sha256sum --check
+          base64 --decode harness/.github/flexfactor-runtime-af48d363.zip.b64 > flexfactor-runtime.zip
+          echo "7362c799491ff130045084328276244dd6149998e87db7abad9b811d9156eab3  flexfactor-runtime.zip" | sha256sum --check
           mkdir flexfactor
           unzip -q flexfactor-runtime.zip -d flexfactor
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "flexfactor")
+          import flexfactor
+          assert flexfactor.TOOL_VERSION == "0.3.7", flexfactor.TOOL_VERSION
+          PY
+          python3 flexfactor/flexfactor.py audit --help | grep -F -- '--single-provider-review-workers'
           python3 -m py_compile flexfactor/flexfactor.py flexfactor/flexfactor_*.py
           python3 -m pip install --disable-pip-version-check -r flexfactor/requirements.txt
 
@@ -127,16 +134,15 @@ jobs:
           cache: npm
           cache-dependency-path: GrantFlow/package-lock.json
 
-      - name: Verify runtime and model credential
+      - name: Verify runtime and rotated OpenAI credential
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           node --version
           npm --version
           python3 --version
-          if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
-            echo "::error::Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is configured for this repository"
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY is not configured for this repository"
             exit 78
           fi
 
@@ -155,7 +161,6 @@ jobs:
       - name: Run FlexFactor option 3
         id: flexfactor
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -168,7 +173,12 @@ jobs:
           timeout --signal=TERM --kill-after=2m 330m python3 flexfactor/flexfactor.py audit \
             --program "$GITHUB_WORKSPACE/GrantFlow" \
             --model-mode paid \
+            --provider openai \
+            --single \
             --economy \
+            --review-workers 8 \
+            --single-provider-review-workers 8 \
+            --review-fix-batch-size 512 \
             --yes \
             --redact \
             --allow-dirty \
@@ -180,13 +190,12 @@ jobs:
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Capture complete audit evidence
+      - name: Capture complete, sanitized audit evidence
         if: always()
         run: |
           mkdir -p flexfactor-output
           cp flexfactor-option-3.log flexfactor-output/ 2>/dev/null || true
           cp flexfactor-exit-code.txt flexfactor-output/ 2>/dev/null || true
-          cp -R "$HOME/.flexfactor" flexfactor-output/state 2>/dev/null || true
           git -C GrantFlow status --short --branch > flexfactor-output/git-status.txt
           git -C GrantFlow log --oneline --decorate --max-count=100 > flexfactor-output/git-log.txt
           git -C GrantFlow remote -v > flexfactor-output/git-remotes.txt
@@ -194,19 +203,50 @@ jobs:
           git -C GrantFlow diff --binary "1c648dd803004ee179c2b9116fd42ae4f42309c8" HEAD > flexfactor-output/audit-commits.patch
           git -C GrantFlow diff --binary > flexfactor-output/audit-working-tree.patch
           git -C GrantFlow diff --binary --cached > flexfactor-output/audit-index.patch
-          git -C GrantFlow ls-files --others --exclude-standard -z | tar --null -czf flexfactor-output/audit-untracked.tar.gz -C GrantFlow -T -
+          git -C GrantFlow ls-files --others --exclude-standard > flexfactor-output/audit-untracked-files.txt
           git -C GrantFlow rev-parse HEAD > flexfactor-output/local-head.txt
           git -C GrantFlow ls-remote origin refs/heads/main > flexfactor-output/remote-main.txt
           find GrantFlow -maxdepth 3 -type f \( -name '*flexfactor*report*' -o -name 'AUDIT_REPORT.md' \) -exec cp {} flexfactor-output/ \; 2>/dev/null || true
+          CHECKPOINT="$(find "$HOME/.flexfactor/runs" -name checkpoint.json -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)" \
+            python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          source = os.environ.get("CHECKPOINT", "")
+          if not source:
+              raise SystemExit(0)
+          sensitive = re.compile(r"(api.?key|authorization|credential|password|secret|token)", re.I)
+          token = re.compile(r"(?i)(sk-[a-z0-9_-]{12,}|bearer\s+[a-z0-9._-]{12,})")
+
+          def clean(value, key=""):
+              if sensitive.search(key):
+                  return "[REDACTED]"
+              if isinstance(value, dict):
+                  return {k: clean(v, str(k)) for k, v in value.items()}
+              if isinstance(value, list):
+                  return [clean(v) for v in value]
+              if isinstance(value, str):
+                  return token.sub("[REDACTED]", value)
+              return value
+
+          data = clean(json.loads(Path(source).read_text(encoding="utf-8")))
+          Path("flexfactor-output/checkpoint.json").write_text(
+              json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+          PY
+          if grep -RIEq '(sk-[A-Za-z0-9_-]{12,}|Bearer[[:space:]]+[A-Za-z0-9._-]{12,})' flexfactor-output; then
+            echo "::error::Potential credential material found in the evidence bundle"
+            exit 1
+          fi
 
       - name: Upload complete audit evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: flexfactor-option-3-grantflow-1c648d
+          name: flexfactor-option-3-v037-grantflow-1c648d
           path: flexfactor-output
           if-no-files-found: error
-          include-hidden-files: true
           retention-days: 14
 
       - name: Enforce FlexFactor result and publication
