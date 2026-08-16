@@ -921,6 +921,20 @@ export async function markSubmitted({ db, applicationId, method, metadata, confi
     }
   }
 
+  // Non-blocking: an application recorded as submitted is a conversion moment
+  // for the PromoPilot attribution bridge (covers BOTH the manual submit route
+  // and Hamilton's server-side mirror, which funnel through this function).
+  // The service never throws and no-ops without env config or a stored promo
+  // touch, so this can never affect submission recording.
+  ;(async () => {
+    try {
+      const { reportGrantConversion } = await import('../services/promoAttribution.js')
+      await reportGrantConversion(db, { grantId: app.grant_id ?? null, eventClass: 'submitted' })
+    } catch {
+      // Attribution never affects the submit response.
+    }
+  })()
+
   const finalRow = await db
     .prepare('SELECT * FROM applications WHERE id = ?')
     .get(String(applicationId))

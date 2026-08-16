@@ -277,6 +277,29 @@ export async function setApplicationStatus(db, applicationId, status) {
   await db
     .prepare('UPDATE grant_applications SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(status, applicationId)
+
+  // Non-blocking: a workflow application reaching 'submitted' or 'awarded' is
+  // a conversion moment for the PromoPilot attribution bridge. Fire-and-forget
+  // by contract — the service never throws and no-ops without env config or a
+  // stored promo touch, so this can never affect the status update.
+  if (status === 'submitted' || status === 'awarded') {
+    ;(async () => {
+      try {
+        const row = await db
+          .prepare('SELECT profile_id FROM grant_applications WHERE id = ? LIMIT 1')
+          .get(String(applicationId))
+        if (!row?.profile_id) return
+        const { reportGrantConversion } = await import('./promoAttribution.js')
+        await reportGrantConversion(db, {
+          grantId: applicationId,
+          profileId: row.profile_id,
+          eventClass: status,
+        })
+      } catch {
+        // Attribution never affects the workflow status update.
+      }
+    })()
+  }
 }
 
 export { APPLICATION_STATES, PIPELINE_STAGES }

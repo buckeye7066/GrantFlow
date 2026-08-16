@@ -1488,6 +1488,25 @@ router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
       })()
     }
 
+    // Non-blocking: a grant reaching 'submitted' or 'awarded' is a conversion
+    // moment — report it to the PromoPilot attribution bridge. The service
+    // never throws and no-ops without env config or a stored promo touch, so
+    // this can never affect the status update response.
+    if ((status === 'submitted' || status === 'awarded') && grant?.id) {
+      ;(async () => {
+        try {
+          const { reportGrantConversion } = await import('../services/promoAttribution.js')
+          await reportGrantConversion(req.db, {
+            grantId: grant.id,
+            profileId: grant.profile_id ?? null,
+            eventClass: status,
+          })
+        } catch {
+          // Attribution must never affect the status update response.
+        }
+      })()
+    }
+
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant status:', error);
