@@ -55,29 +55,30 @@ jobs:
           path: harness
           persist-credentials: false
 
-      - name: Check out exact GrantFlow main target
+      - name: Check out exact GrantFlow main GrantFlow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: buckeye7066/GrantFlow
           ref: 6e526a868404630f6769860cb7a4afe60b10fd2b
-          path: target
+          path: GrantFlow
           fetch-depth: 0
           persist-credentials: false
 
       - name: Restore and verify released FlexFactor runtime
         run: |
           base64 --decode harness/.github/flexfactor-runtime-2622d415.zip.b64 > flexfactor-runtime.zip
-          echo "e1864aac3b4420067d2c79af0df1c9ddfef4a46d049a919e872c61c480e2b041  flexfactor-runtime.zip" | sha256sum --check
+          echo "770cc50c5497cdabe37ee7b57b6c5e200e5543dfb903a93f215db1a9d90e137f  flexfactor-runtime.zip" | sha256sum --check
           mkdir flexfactor
           unzip -q flexfactor-runtime.zip -d flexfactor
           python3 -m py_compile flexfactor/flexfactor.py flexfactor/flexfactor_*.py
+          python3 -m pip install --disable-pip-version-check -r flexfactor/requirements.txt
 
       - name: Set up Node 20
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 20.20.2
           cache: npm
-          cache-dependency-path: target/package-lock.json
+          cache-dependency-path: GrantFlow/package-lock.json
 
       - name: Verify runtime and model credential
         env:
@@ -92,11 +93,11 @@ jobs:
           }
 
       - name: Install exact GrantFlow dependencies
-        working-directory: target
+        working-directory: GrantFlow
         run: npm ci --include=optional
 
       - name: Prepare disposable integration database and browser
-        working-directory: target
+        working-directory: GrantFlow
         run: |
           mkdir -p "$UPLOADS_DIR"
           npm run migrate
@@ -109,13 +110,13 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PYTHONUNBUFFERED: '1'
         run: |
-          git -C target config user.name "FlexFactor CI"
-          git -C target config user.email "flexfactor-ci@localhost"
-          git -C target switch -c flexfactor-run
+          git -C GrantFlow config user.name "FlexFactor CI"
+          git -C GrantFlow config user.email "flexfactor-ci@localhost"
+          git -C GrantFlow switch -c flexfactor-run
           set +e
           set -o pipefail
           python3 flexfactor/flexfactor.py audit \
-            --program "$GITHUB_WORKSPACE/target" \
+            --program "$GITHUB_WORKSPACE/GrantFlow" \
             --provider anthropic \
             --model-mode paid \
             --economy \
@@ -136,11 +137,11 @@ jobs:
           cp flexfactor-option-3.log flexfactor-output/ 2>/dev/null || true
           cp flexfactor-exit-code.txt flexfactor-output/ 2>/dev/null || true
           cp -R "$HOME/.flexfactor" flexfactor-output/state 2>/dev/null || true
-          git -C target status --short --branch > flexfactor-output/git-status.txt
-          git -C target log --oneline --decorate --max-count=50 > flexfactor-output/git-log.txt
-          git -C target diff --stat 6e526a868404630f6769860cb7a4afe60b10fd2b HEAD > flexfactor-output/audit-diff-stat.txt
-          git -C target diff --binary 6e526a868404630f6769860cb7a4afe60b10fd2b HEAD > flexfactor-output/audit.patch
-          find target -maxdepth 2 -type f \( -name '*flexfactor*report*' -o -name 'AUDIT_REPORT.md' \) -exec cp {} flexfactor-output/ \; 2>/dev/null || true
+          git -C GrantFlow status --short --branch > flexfactor-output/git-status.txt
+          git -C GrantFlow log --oneline --decorate --max-count=50 > flexfactor-output/git-log.txt
+          git -C GrantFlow diff --stat 6e526a868404630f6769860cb7a4afe60b10fd2b HEAD > flexfactor-output/audit-diff-stat.txt
+          git -C GrantFlow diff --binary 6e526a868404630f6769860cb7a4afe60b10fd2b HEAD > flexfactor-output/audit.patch
+          find GrantFlow -maxdepth 2 -type f \( -name '*flexfactor*report*' -o -name 'AUDIT_REPORT.md' \) -exec cp {} flexfactor-output/ \; 2>/dev/null || true
 
       - name: Upload complete audit evidence
         if: always()
