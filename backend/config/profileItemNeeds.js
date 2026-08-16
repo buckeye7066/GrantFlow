@@ -125,6 +125,12 @@ export const SUPPORT_NEED_ITEMS = Object.freeze({
   food: { item: 'Food and nutrition assistance', needText: 'food assistance program', category: 'food' },
   childcare: { item: 'Childcare assistance', needText: 'childcare assistance program', category: 'childcare' },
   utilities: { item: 'Utility bill assistance', needText: 'utility bill assistance', category: 'utilities' },
+  // Fleet-replay additions (2026-08-15): values REAL prod profiles declare in
+  // `health_medical.support_needs` that fell out as `unmapped` gaps — the
+  // registry's own convergence contract says an observed gap gets its
+  // one-line vocabulary fix, and these are those lines.
+  'rehabilitation services': { item: 'Rehabilitation services', needText: 'rehabilitation services financial assistance', category: 'medical' },
+  'medical assistance': { item: 'Medical expense assistance', needText: 'medical expense assistance program', category: 'medical' },
 })
 
 /** `health_medical.disability_type[]` → item. Canonical tokens only. */
@@ -134,6 +140,14 @@ export const DISABILITY_TYPE_ITEMS = Object.freeze({
   hearing: { item: 'Hearing aids', needText: 'hearing aid assistance program', category: 'medical_equipment' },
   vision: { item: 'Low-vision aids', needText: 'low vision aid assistance', category: 'medical_equipment' },
   visual: { item: 'Low-vision aids', needText: 'low vision aid assistance', category: 'medical_equipment' },
+  // Fleet-replay additions (2026-08-15) from REAL declared values that fell
+  // out unmapped. `deaf` maps to assistive/alerting devices, deliberately NOT
+  // "hearing aids" — deafness and hearing loss are different declarations and
+  // a Deaf person's item needs are visual-alert and communication technology.
+  // NOTE `statesTerm` has a ≥4-char floor, so the entry is the declared
+  // 4-char word itself, never a shorter fragment.
+  deaf: { item: 'Assistive technology for deafness (visual alerts, captioned phone)', needText: 'assistive technology for deaf adults', category: 'adaptive_equipment' },
+  'assistive technology': { item: 'Assistive technology', needText: 'assistive technology funding', category: 'adaptive_equipment' },
 })
 
 /**
@@ -187,6 +201,13 @@ export const ITEM_TAG_VOCABULARY = Object.freeze({
   'playground equipment': { item: 'Playground equipment', needText: 'playground equipment grant', category: 'equipment' },
   'lab equipment': { item: 'Laboratory equipment', needText: 'laboratory equipment grant', category: 'equipment' },
   'laboratory equipment': { item: 'Laboratory equipment', needText: 'laboratory equipment grant', category: 'equipment' },
+  // Fleet-replay additions (2026-08-15) from REAL prod tags that named a
+  // purchasable thing yet resolved to nothing: a high-school student's
+  // `technology_equipment` focus tag (normalizeItemTerm folds `_` to a space,
+  // so the space form below matches both spellings) and a dislocated worker's
+  // `medical coding certification` keyword — a concrete purchasable course.
+  'technology equipment': { item: 'Technology equipment (laptop or tablet)', needText: 'technology equipment grant student', category: 'technology' },
+  'medical coding certification': { item: 'Medical coding certification course', needText: 'medical coding certification scholarship', category: 'licensure' },
 })
 
 /** Broadband values that declare a connectivity NEED. */
