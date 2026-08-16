@@ -49,6 +49,7 @@ jobs:
       AUTH_JWT_SECRET: grantflow-ci-flexfactor-secret-not-for-production
       ADMIN_TOKEN: grantflow-ci-flexfactor-admin-token
       RUNTIME_SECRETS_KEY: '5555555555555555555555555555555555555555555555555555555555555555'
+      FLEXFACTOR_PURPOSE_SAMPLES: '3'
 
     steps:
       - name: Check out temporary audit harness
@@ -83,18 +84,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           resume_dir="$RUNNER_TEMP/flexfactor-resume"
-          gh run download 31970385322 \
+          gh run download 31977620982 \
             --repo buckeye7066/GrantFlow \
-            --name flexfactor-option-3-grantflow-1c648d \
+            --name flexfactor-option-3-v037-grantflow-1c648d \
             --dir "$resume_dir"
-          checkpoint="$(find "$resume_dir/state/runs" -name checkpoint.json -type f -print -quit)"
-          test -n "$checkpoint" || {
+          checkpoint="$resume_dir/checkpoint.json"
+          test -f "$checkpoint" || {
             echo "::error::The prior compatible FlexFactor checkpoint was not found"
             exit 1
           }
-          mkdir -p "$HOME/.flexfactor"
-          cp -R "$resume_dir/state/runs" "$HOME/.flexfactor/"
-          CHECKPOINT="$HOME/.flexfactor/runs/$(basename "$(dirname "$checkpoint")")/checkpoint.json" python3 - <<'PY'
+          CHECKPOINT="$checkpoint" python3 - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -103,25 +102,29 @@ jobs:
           data["status"] = "interrupted"
           data["pid"] = 0
           data.pop("finished_at", None)
-          path.write_text(json.dumps(data), encoding="utf-8")
-          print(f"Restored {len(data.get('reviewed') or {})} recorded reviews from {data.get('run_id')}")
+          destination = (Path.home() / ".flexfactor" / "runs" /
+                         str(data["run_id"]) / "checkpoint.json")
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(json.dumps(data), encoding="utf-8")
+          print(f"Restored {len(data.get('reviewed') or {})} SHA-verified reviews from {data.get('run_id')}")
           PY
-          git -C GrantFlow apply --index \
-            --exclude=ios/App/CapApp-SPM/Package.resolved \
-            "$resume_dir/audit-index.patch"
-          git -C GrantFlow status --short
+          test -z "$(git -C GrantFlow status --porcelain)" || {
+            echo "::error::Checkpoint restore altered GrantFlow; only FlexFactor may author target fixes"
+            git -C GrantFlow status --short
+            exit 1
+          }
 
-      - name: Restore and verify exact FlexFactor v0.3.7 runtime
+      - name: Restore and verify exact FlexFactor v0.3.8 runtime
         run: |
-          base64 --decode harness/.github/flexfactor-runtime-af48d363.zip.b64 > flexfactor-runtime.zip
-          echo "7362c799491ff130045084328276244dd6149998e87db7abad9b811d9156eab3  flexfactor-runtime.zip" | sha256sum --check
+          base64 --decode harness/.github/flexfactor-runtime-45dd3e741.zip.b64 > flexfactor-runtime.zip
+          echo "b937f23aa3430d3fe221774c50ee8580594e24efb782e561d394ba4d950ce2d0  flexfactor-runtime.zip" | sha256sum --check
           mkdir flexfactor
           unzip -q flexfactor-runtime.zip -d flexfactor
           python3 - <<'PY'
           import sys
           sys.path.insert(0, "flexfactor")
           import flexfactor
-          assert flexfactor.TOOL_VERSION == "0.3.7", flexfactor.TOOL_VERSION
+          assert flexfactor.TOOL_VERSION == "0.3.8", flexfactor.TOOL_VERSION
           PY
           python3 flexfactor/flexfactor.py audit --help | grep -F -- '--single-provider-review-workers'
           python3 -m py_compile flexfactor/flexfactor.py flexfactor/flexfactor_*.py
@@ -234,6 +237,13 @@ jobs:
           data = clean(json.loads(Path(source).read_text(encoding="utf-8")))
           Path("flexfactor-output/checkpoint.json").write_text(
               json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+          for path in Path("flexfactor-output").iterdir():
+              if path.is_file():
+                  try:
+                      text = path.read_text(encoding="utf-8")
+                  except UnicodeDecodeError:
+                      continue
+                  path.write_text(token.sub("[REDACTED]", text), encoding="utf-8")
           PY
           if grep -RIEq '(sk-[A-Za-z0-9_-]{12,}|Bearer[[:space:]]+[A-Za-z0-9._-]{12,})' flexfactor-output; then
             echo "::error::Potential credential material found in the evidence bundle"
@@ -244,7 +254,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: flexfactor-option-3-v037-grantflow-1c648d
+          name: flexfactor-option-3-v038-grantflow-1c648d
           path: flexfactor-output
           if-no-files-found: error
           retention-days: 14
