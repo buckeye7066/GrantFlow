@@ -1,0 +1,161 @@
+name: FlexFactor option 3 audit
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/flexfactor-option-3-audit.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flexfactor-option-3-grantflow-6e526a
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Run FlexFactor option 3 to completion
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grantflow_flexfactor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      CI: 'true'
+      NODE_ENV: development
+      SMOKE_MODE: 'true'
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_flexfactor
+      DB_PROVIDER: postgres
+      DB_DIALECT: postgres
+      MIGRATE_ON_BOOT: 'false'
+      DB_AUTO_MIGRATE: 'false'
+      ALLOW_EPHEMERAL_UPLOADS: 'true'
+      UPLOADS_DIR: /tmp/grantflow-flexfactor-uploads
+      AUTH_JWT_SECRET: grantflow-ci-flexfactor-secret-not-for-production
+      ADMIN_TOKEN: grantflow-ci-flexfactor-admin-token
+      RUNTIME_SECRETS_KEY: '5555555555555555555555555555555555555555555555555555555555555555'
+
+    steps:
+      - name: Check out exact GrantFlow main target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: buckeye7066/GrantFlow
+          ref: 6e526a868404630f6769860cb7a4afe60b10fd2b
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out released FlexFactor
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: buckeye7066/flexfactor
+          ref: 2622d4153a648efb94676cb0b56a0b3e7b5b9ffb
+          path: flexfactor
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20.20.2
+          cache: npm
+          cache-dependency-path: target/package-lock.json
+
+      - name: Verify runtime and model credential
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          node --version
+          npm --version
+          python3 --version
+          test -n "$ANTHROPIC_API_KEY" || {
+            echo "::error::ANTHROPIC_API_KEY is not configured for this repository"
+            exit 78
+          }
+
+      - name: Install exact GrantFlow dependencies
+        working-directory: target
+        run: npm ci --include=optional
+
+      - name: Prepare disposable integration database and browser
+        working-directory: target
+        run: |
+          mkdir -p "$UPLOADS_DIR"
+          npm run migrate
+          node backend/scripts/verify-pg-schema.mjs
+          node ./node_modules/playwright/cli.js install chromium --with-deps
+
+      - name: Run FlexFactor option 3
+        id: flexfactor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: |
+          git -C target config user.name "FlexFactor CI"
+          git -C target config user.email "flexfactor-ci@localhost"
+          git -C target switch -c flexfactor-run
+          set +e
+          set -o pipefail
+          python3 flexfactor/flexfactor.py audit \
+            --program "$GITHUB_WORKSPACE/target" \
+            --provider anthropic \
+            --model-mode paid \
+            --economy \
+            --yes \
+            --redact \
+            --no-dashboard \
+            --no-push \
+            --no-merge 2>&1 | tee flexfactor-option-3.log
+          code=${PIPESTATUS[0]}
+          echo "$code" > flexfactor-exit-code.txt
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Capture complete audit evidence
+        if: always()
+        run: |
+          mkdir -p flexfactor-output
+          cp flexfactor-option-3.log flexfactor-output/ 2>/dev/null || true
+          cp flexfactor-exit-code.txt flexfactor-output/ 2>/dev/null || true
+          cp -R "$HOME/.flexfactor" flexfactor-output/state 2>/dev/null || true
+          git -C target status --short --branch > flexfactor-output/git-status.txt
+          git -C target log --oneline --decorate --max-count=50 > flexfactor-output/git-log.txt
+          git -C target diff --stat 6e526a868404630f6769860cb7a4afe60b10fd2b HEAD > flexfactor-output/audit-diff-stat.txt
+          git -C target diff --binary 6e526a868404630f6769860cb7a4afe60b10fd2b HEAD > flexfactor-output/audit.patch
+          find target -maxdepth 2 -type f \( -name '*flexfactor*report*' -o -name 'AUDIT_REPORT.md' \) -exec cp {} flexfactor-output/ \; 2>/dev/null || true
+
+      - name: Upload complete audit evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flexfactor-option-3-grantflow-6e526a
+          path: flexfactor-output
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Enforce FlexFactor result
+        if: always()
+        run: |
+          test -f flexfactor-exit-code.txt || {
+            echo "::error::FlexFactor did not produce an exit code"
+            exit 1
+          }
+          code="$(tr -d '[:space:]' < flexfactor-exit-code.txt)"
+          if [ "$code" != "0" ]; then
+            echo "::error::FlexFactor option 3 failed with exit code $code; inspect the uploaded evidence"
+            exit "$code"
+          fi
+          echo "FlexFactor option 3 completed successfully"
