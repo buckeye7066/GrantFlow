@@ -29,6 +29,7 @@ import { ensureProfileAccess } from '../utils/accessControl.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
+import { resolvePlanClasses, resolveCoverageConditionClasses, annotateItemsWithCoverage } from '../config/planCoverage.js'
 import { searchItemNeeds, ITEM_SEARCH_MAX_ITEMS } from '../services/itemNeedSearch.js'
 import { searchGreenHomeNoCostPrograms } from '../services/greenHomeNoCostSearch.js'
 import { deriveOrgNeeds } from '../services/needs/orgNeedsTaxonomy.js'
@@ -100,14 +101,27 @@ router.get('/:profileId', ensureAuth, standardRateLimiter, async (req, res) => {
     const ctx = await loadContext(req.db, profileId)
     if (!ctx.profile) return res.status(404).json({ error: 'Profile not found' })
     const derived = deriveProfileItemNeeds(ctx.profile, ctx.sections ?? {})
+    // INSURANCE ELIGIBILITY HINTS (owner rule 2026-08-15): when the profile
+    // declares insurance/enrollment facts, items whose category the plan
+    // class (× declared condition class, when the rule needs medical
+    // necessity) typically covers carry an `eligibility_hint` — "what help
+    // are you already eligible for" ahead of "what needs fundraising". A
+    // labeling layer only: membership and order are unchanged, a profile
+    // with no insurance facts sees zero change, and the hint language never
+    // asserts plan-document coverage.
+    const planClasses = resolvePlanClasses(ctx.sections ?? {})
+    const conditionClasses = resolveCoverageConditionClasses(ctx.sections ?? {})
+    const needs = annotateItemsWithCoverage(derived.needs, { planClasses, conditionClasses })
     return res.json({
       success: true,
       profile_id: profileId,
       display_name: ctx.profile.display_name ?? null,
       primary_type: ctx.profile.primary_type ?? null,
-      count: derived.needs.length,
+      count: needs.length,
       truncated: derived.truncated,
-      needs: derived.needs,
+      needs,
+      plan_classes: planClasses,
+      condition_classes: conditionClasses,
       unmapped: derived.unmapped,
       consulted_fields: derived.consultedFields,
       silent_fields: derived.silentFields,
