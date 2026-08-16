@@ -49,6 +49,12 @@ jobs:
       RUNTIME_SECRETS_KEY: '5555555555555555555555555555555555555555555555555555555555555555'
 
     steps:
+      - name: Check out temporary audit harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: harness
+          persist-credentials: false
+
       - name: Check out exact GrantFlow main target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -58,13 +64,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check out released FlexFactor
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: buckeye7066/flexfactor
-          ref: 2622d4153a648efb94676cb0b56a0b3e7b5b9ffb
-          path: flexfactor
-          persist-credentials: false
+      - name: Restore and verify released FlexFactor runtime
+        run: |
+          base64 --decode harness/.github/flexfactor-runtime-2622d415.zip.b64 > flexfactor-runtime.zip
+          echo "50716e1225785c25f97978a687e0bb677a98468142590140bd02301002eaedd9  flexfactor-runtime.zip" | sha256sum --check
+          mkdir flexfactor
+          unzip -q flexfactor-runtime.zip -d flexfactor
+          python3 -m py_compile flexfactor/flexfactor.py flexfactor/flexfactor_*.py
 
       - name: Set up Node 20
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
