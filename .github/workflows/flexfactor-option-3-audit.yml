@@ -93,16 +93,15 @@ jobs:
           cache: npm
           cache-dependency-path: GrantFlow/package-lock.json
 
-      - name: Verify runtime and model credential
+      - name: Verify runtime and OpenAI credential
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           node --version
           npm --version
           python3 --version
-          if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
-            echo "::error::Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is configured for this repository"
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY is not configured for this repository"
             exit 78
           fi
 
@@ -121,7 +120,6 @@ jobs:
       - name: Run FlexFactor option 3
         id: flexfactor
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -133,8 +131,9 @@ jobs:
           set -o pipefail
           timeout --signal=TERM --kill-after=2m 330m python3 flexfactor/flexfactor.py audit \
             --program "$GITHUB_WORKSPACE/GrantFlow" \
+            --provider openai \
             --model-mode paid \
-            --economy \
+            --single \
             --yes \
             --redact \
             --no-dashboard \
