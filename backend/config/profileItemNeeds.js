@@ -148,7 +148,7 @@ export const DISABILITY_TYPE_ITEMS = Object.freeze({
   // 4-char word itself, never a shorter fragment.
   deaf: { item: 'Assistive technology for deafness (visual alerts, captioned phone)', needText: 'assistive technology for deaf adults', category: 'adaptive_equipment' },
   'assistive technology': { item: 'Assistive technology', needText: 'assistive technology funding', category: 'adaptive_equipment' },
-  // The Gilbert McCosh case (owner acceptance example, 2026-08-15: "Gilbert
+  // The owner acceptance example (2026-08-15: "[the ECF CHOICES member]
   // would need built up utensils"): his declared disability_type holds
   // "Clawing effect in hands" verbatim — a grip/dexterity impairment whose
   // concrete item class is adaptive daily-living equipment. Multi-word terms
@@ -407,10 +407,10 @@ export function ruleAppliesToProfile(rule, primaryType) {
   const t = String(primaryType ?? '').trim()
   if (!t) return true
   // A PERSON is never refused a PERSON-targeted section (2026-08-15, the
-  // Gilbert McCosh case). `medical_history.applies_to` enumerates person
+  // owner-verified ECF CHOICES profile case). `medical_history.applies_to` enumerates person
   // SUBTYPES (`disabled_adult`, `senior`, `medical_need`, …) and
   // `isProfileTypeInList` is an exact-token check with no hierarchy — so
-  // Gilbert, typed plain `individual`, was refused his OWN declared DME list
+  // that profile, typed plain `individual`, was refused his OWN declared DME list
   // ("Customized wheelchair", "Adaptive assistive technology") because his
   // type is the ANCESTOR of every listed subtype. For the item lane that is
   // the wrong failure direction: coarse typing must never cost a person their

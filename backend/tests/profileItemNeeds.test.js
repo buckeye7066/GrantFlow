@@ -307,10 +307,10 @@ describe('profileItemNeeds — applicability is read from the schema', () => {
     expect(ruleAppliesToProfile(freeText, 'nonprofit')).toBe(true)
   })
 
-  it('a PERSON is never refused a person-targeted section on subtype mismatch (the Gilbert McCosh case)', () => {
+  it('a PERSON is never refused a person-targeted section on subtype mismatch (the ECF CHOICES member case)', () => {
     // 2026-08-15: `medical_history.applies_to` enumerates person SUBTYPES
     // (disabled_adult, senior, medical_need, …) and the exact-token check has
-    // no hierarchy — so Gilbert, typed plain `individual`, was refused his OWN
+    // no hierarchy — so that member, typed plain `individual`, was refused his OWN
     // declared DME list ("Customized wheelchair", "Adaptive assistive
     // technology"). Coarse typing must never cost a person their declared
     // items; the person/organization boundary is the gate's real job.
@@ -325,8 +325,8 @@ describe('profileItemNeeds — applicability is read from the schema', () => {
     expect(ruleAppliesToProfile(subtypeRule, 'nonprofit')).toBe(false)
   })
 
-  it("Gilbert's grip impairment derives the adaptive daily-living aids item (built-up utensils)", () => {
-    // Owner acceptance example 2026-08-15: "Gilbert would need built up
+  it("the ECF CHOICES member's grip impairment derives the adaptive daily-living aids item (built-up utensils)", () => {
+    // Owner acceptance example 2026-08-15: "[he] would need built up
     // utensils". His prod disability_type holds "Clawing effect in hands"
     // verbatim — declared structured field content, not prose mining.
     const out = deriveProfileItemNeeds(
