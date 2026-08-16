@@ -84,9 +84,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           resume_dir="$RUNNER_TEMP/flexfactor-resume"
-          gh run download 31977620982 \
+          gh run download 31979038756 \
             --repo buckeye7066/GrantFlow \
-            --name flexfactor-option-3-v037-grantflow-1c648d \
+            --name flexfactor-option-3-v038-grantflow-1c648d \
             --dir "$resume_dir"
           checkpoint="$resume_dir/checkpoint.json"
           test -f "$checkpoint" || {
@@ -114,17 +114,17 @@ jobs:
             exit 1
           }
 
-      - name: Restore and verify exact FlexFactor v0.3.8 runtime
+      - name: Restore and verify exact FlexFactor v0.3.9 runtime
         run: |
-          base64 --decode harness/.github/flexfactor-runtime-45dd3e741.zip.b64 > flexfactor-runtime.zip
-          echo "b937f23aa3430d3fe221774c50ee8580594e24efb782e561d394ba4d950ce2d0  flexfactor-runtime.zip" | sha256sum --check
+          base64 --decode harness/.github/flexfactor-runtime-d7cad2c69.zip.b64 > flexfactor-runtime.zip
+          echo "1415f6571d21967d15cf4b00c243b9bedca77b53755b314a852dbf096f503e1f  flexfactor-runtime.zip" | sha256sum --check
           mkdir flexfactor
           unzip -q flexfactor-runtime.zip -d flexfactor
           python3 - <<'PY'
           import sys
           sys.path.insert(0, "flexfactor")
           import flexfactor
-          assert flexfactor.TOOL_VERSION == "0.3.8", flexfactor.TOOL_VERSION
+          assert flexfactor.TOOL_VERSION == "0.3.9", flexfactor.TOOL_VERSION
           PY
           python3 flexfactor/flexfactor.py audit --help | grep -F -- '--single-provider-review-workers'
           python3 -m py_compile flexfactor/flexfactor.py flexfactor/flexfactor_*.py
@@ -254,7 +254,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: flexfactor-option-3-v038-grantflow-1c648d
+          name: flexfactor-option-3-v039-grantflow-1c648d
           path: flexfactor-output
           if-no-files-found: error
           retention-days: 14
