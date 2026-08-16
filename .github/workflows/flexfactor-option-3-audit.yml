@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: flexfactor-option-3-grantflow-1c648d
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   audit:
