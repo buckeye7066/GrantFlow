@@ -10,7 +10,7 @@
     "fast-xml-parser": "$fast-xml-parser",
     "shell-quote": ">=1.9.0",
     "nanoid": "^3.3.18",
-    "js-yaml": "5.2.3",
+    "js-yaml": "5.3.0",
     "@eslint/config-array": "^0.23.5",
     "eslint": {
       "minimatch": "^10.2.5"
@@ -153,7 +153,7 @@
     "resend": "^6.20.0",
     "stripe": "^22.5.0",
     "tesseract.js": "^7.0.0",
-    "twilio": "^5.11.1",
+    "twilio": "^6.1.0",
     "zipcodes": "^8.0.0",
     "zipcodes-nrviens": "^8.0.6",
     "zod": "^4.4.3"
@@ -162,7 +162,7 @@
     "@capacitor/cli": "8.5.0",
     "@eslint/js": "^9.39.2",
     "@hello-pangea/dnd": "^16.5.0",
-    "@hookform/resolvers": "^5.7.1",
+    "@hookform/resolvers": "^5.8.0",
     "@radix-ui/react-accordion": "^1.2.20",
     "@radix-ui/react-alert-dialog": "^1.1.23",
     "@radix-ui/react-aspect-ratio": "^1.1.15",
@@ -211,9 +211,9 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.4",
     "framer-motion": "^13.1.0",
-    "globals": "^17.9.0",
+    "globals": "^17.11.0",
     "input-otp": "^1.4.2",
-    "js-yaml": "5.2.3",
+    "js-yaml": "5.3.0",
     "jsdom": "^29.1.1",
     "lucide-react": "^1.31.0",
     "next-themes": "^0.4.4",
