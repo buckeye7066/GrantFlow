@@ -161,6 +161,26 @@ function formatAmount(min, max) {
   return `$${amount}`
 }
 
+function lifecycleStatusClasses(code) {
+  switch (code) {
+    case "open":
+      return "bg-emerald-100 text-emerald-800 border-emerald-200"
+    case "closing_soon":
+      return "bg-amber-100 text-amber-800 border-amber-200"
+    case "closed":
+    case "archived":
+      return "bg-slate-100 text-slate-600 border-slate-200"
+    case "forecasted":
+      return "bg-blue-100 text-blue-800 border-blue-200"
+    case "rolling":
+      return "bg-violet-100 text-violet-800 border-violet-200"
+    case "paused":
+      return "bg-rose-100 text-rose-800 border-rose-200"
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200"
+  }
+}
+
 function buildOpportunitySummary(opportunity, profile, match) {
   const lines = []
   const safeTitle = opportunity.title || "Funding opportunity"
@@ -274,6 +294,8 @@ function OpportunityCard({
     ? "Review terms"
     : "Funding review"
   const opportunityTypeLabel = opportunity.opportunity_type || "Funding Opportunity"
+  const lifecycleStatus = opportunity.current_status || "unknown"
+  const lifecycleLabel = opportunity.status_label || "Status not confirmed"
   const hasUrl = Boolean(opportunity.source_url || opportunity.application_url)
   const recordOrigin = opportunity.record_origin || "live_crawl"
   const isSynthetic = recordOrigin === "synthetic"
@@ -283,7 +305,7 @@ function OpportunityCard({
     switch(type) {
       case 'OPPORTUNITY':
         return { 
-          label: 'Open Grant', 
+          label: 'Grant opportunity',
           className: 'bg-green-100 text-green-700 border-green-300' 
         }
       case 'PROGRAM':
@@ -350,6 +372,9 @@ function OpportunityCard({
                 {typeBadge.label}
               </Badge>
             )}
+            <Badge className={cn("text-xs border", lifecycleStatusClasses(lifecycleStatus))}>
+              {lifecycleLabel}
+            </Badge>
           </div>
           <div className="flex items-center gap-2">
             {opportunity.opportunity_type ? (
@@ -621,6 +646,8 @@ function OpportunityDetail({
   }
 
   const hasUrl = Boolean(opportunity.source_url || opportunity.application_url)
+  const lifecycleStatus = opportunity.current_status || "unknown"
+  const lifecycleLabel = opportunity.status_label || "Status not confirmed"
   const recordOrigin = opportunity.record_origin || "live_crawl"
   const isSynthetic = recordOrigin === "synthetic"
   let contactInfo = null
@@ -638,6 +665,9 @@ function OpportunityDetail({
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogHeader className="space-y-2">
           <DialogTitle className="text-2xl font-semibold text-slate-900">{opportunity.title}</DialogTitle>
+          <Badge className={cn("text-xs border w-fit", lifecycleStatusClasses(lifecycleStatus))}>
+            {lifecycleLabel}
+          </Badge>
           {/* Trust indicator in detail view */}
           {opportunity.last_verified_at ? (
             <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800 border border-emerald-200 w-fit">
@@ -1505,11 +1535,10 @@ export default function FundingOpportunities() {
               <Layers className="w-3 h-3" />
               Funding Catalog
             </div>
-            <h1 className="text-3xl md:text-4xl font-bold text-slate-900">Funding Opportunities</h1>
+            <h1 className="text-3xl md:text-4xl font-bold text-slate-900">Browse grant opportunities</h1>
             <p className="text-sm md:text-base text-slate-600 max-w-3xl">
-              Aggregated grants, scholarships, endowments, and benefits sourced from local crawlers, national feeds, and
-              partner portals. Filter by geography and source, then let AI score how well each opportunity matches your
-              profiles.
+              Browse persisted opportunities from GrantFlow&apos;s configured sources. Each row shows its funder, funding
+              range, deadline, and evidence-based lifecycle status; select a profile for an explainable match assessment.
             </p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white/70 backdrop-blur p-4 shadow-sm space-y-2 text-sm text-slate-600 max-w-md">

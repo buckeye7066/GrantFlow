@@ -1,195 +1,20 @@
 /**
- * Grants.gov API Crawler
- * 
- * Fetches REAL federal funding opportunities from the official Grants.gov API
- * https://www.grants.gov/web/grants/search-grants.html
- * 
- * This uses the Grants.gov API to get actual federal grant opportunities.
- * NOTE: search2 works without GRANTS_GOV_API_KEY; when set, X-API-Key is sent.
- */
-
-import axios from 'axios';
-import { upsertFundingOpportunity } from './opportunityInserter.js';
-import { createLogger } from '../utils/logger.js'
-const log = createLogger('grantsDotGovCrawler')
-import {
-  GRANTS_GOV_SEARCH2_URL as GRANTS_GOV_SEARCH2,
-  GRANTS_GOV_DETAIL_URL as GRANTS_GOV_VIEW,
-} from '../config/grantsGovEndpoints.js';
-
-// Optional: when GRANTS_GOV_API_KEY is set, search2 requests include X-API-Key.
-const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
-
-/**
- * Fetch opportunities from Grants.gov API.
+ * Grants.gov catalog crawler.
  *
- * Named-exported so legacy ingest paths (see
- * `backend/services/sources/grantsGov.js` compat shim) can reuse the same
- * canonical implementation instead of reimplementing request handling.
+ * Network/request shaping and source transformation live exclusively in the
+ * shared Grants.gov client. This module only owns catalog iteration and writes.
  */
-export async function fetchGrantsGov(params = {}) {
-  const {
-    keyword = '',
-    oppStatus = 'forecasted|posted', // posted|forecasted (public search2)
-    rows = 25,
-    startRow = 0,
-    fundingCategories = null, // Array of category codes
-    eligibilities = null, // Array of Grants.gov eligible-applicant codes (e.g. '21' individuals, '12' 501c3)
-  } = params;
 
-  const payload = {
-    rows: Number(rows) || 25,
-    oppStatuses: String(oppStatus || 'forecasted|posted'),
-    keyword: String(keyword || ''),
-    startRecordNum: Number(startRow) || 0,
-    agencies: '',
-    fundingCategories: Array.isArray(fundingCategories) ? fundingCategories.join('|') : '',
-    // Eligible-applicant filter is the single biggest relatability lever: it narrows
-    // the federal pool to programs this profile type can actually apply for.
-    eligibilities: Array.isArray(eligibilities) ? eligibilities.join('|') : '',
-    aln: '',
-    oppNum: '',
-  };
+import { upsertFundingOpportunity } from './opportunityInserter.js';
+import { createLogger } from '../utils/logger.js';
+import {
+  fetchGrantsGov,
+  transformGrantsGovOpportunity,
+} from './shared/grantsGovApiClient.js';
 
-  const MAX_RETRIES = 3;
-  const BASE_DELAY_MS = 1000;
+export { fetchGrantsGov, transformGrantsGovOpportunity } from './shared/grantsGovApiClient.js';
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      log.info(`[GrantsGov] search2 request (attempt ${attempt}/${MAX_RETRIES}):`, JSON.stringify(payload))
-      const response = await axios.post(GRANTS_GOV_SEARCH2, payload, {
-        timeout: 30000,
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(GRANTS_GOV_API_KEY ? { 'X-API-Key': GRANTS_GOV_API_KEY } : {}),
-        }
-      });
-
-      log.info('[GrantsGov] search2 HTTP status:', response.status)
-
-      const body = response?.data ?? null
-      if (!body) return null
-
-      const hitsNode = body?.data?.oppHits ? body.data : body?.data?.data?.oppHits ? body.data.data : body
-      const oppHits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : []
-      log.info('[GrantsGov] search2 oppHits returned:', oppHits.length)
-      if (oppHits.length === 0) {
-        console.warn('[GrantsGov] search2 returned 0 results; full response:', JSON.stringify(body, null, 2))
-      }
-      return hitsNode
-    } catch (error) {
-      const status = error?.response?.status;
-      const detail = error?.response?.data ? JSON.stringify(error.response.data).slice(0, 400) : null;
-
-      // Permanent failures — do not retry
-      if (status && status >= 400 && status < 500 && status !== 429) {
-        console.error('[GrantsGov] Permanent API error, not retrying:', status, detail || error.message);
-        return null;
-      }
-
-      // Transient failure — retry with exponential backoff
-      const isLastAttempt = attempt === MAX_RETRIES;
-      if (isLastAttempt) {
-        console.error('[GrantsGov] API error after all retries:', status ? `${status}` : error.message, detail || '');
-        return null;
-      }
-
-      const delayMs = BASE_DELAY_MS * (2 ** (attempt - 1));
-      console.warn(`[GrantsGov] Transient API error (${status ?? error.message}), retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
-      await new Promise(r => setTimeout(r, delayMs));
-    }
-  }
-  return null;
-}
-
-/**
- * Transform Grants.gov opportunity to our format
- */
-export function transformGrantsGovOpportunity(opp) {
-  const oppId = opp?.id ?? opp?.oppId ?? null
-  const oppNumber = opp?.number || opp?.oppNum || opp?.oppNumber || opp?.opportunityNumber || '';
-  const id = `grants-gov-${oppNumber || oppId || cryptoSafeId(opp)}`;
-  const agencyName = opp?.agencyName || opp?.agency || null
-  const agencyCode = opp?.agencyCode || null
-  const openDate = opp?.openDate || null
-  const closeDate = opp?.closeDate || null
-  const oppStatus = opp?.oppStatus || null
-  const alnlist = opp?.alnlist ?? null
-  
-  return {
-    id,
-    title: opp?.title || opp?.opportunityTitle || opp?.oppTitle || 'Federal Grant Opportunity',
-    sponsor: agencyName || agencyCode || 'Federal Agency',
-    source: 'grants.gov',
-    // De-dupe by Grants.gov opportunity number (idempotent).
-    source_id: oppNumber || null,
-    source_url: (oppId !== null && oppId !== undefined) ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null,
-    application_url: (oppId !== null && oppId !== undefined) ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null,
-    description: opp?.synopsis || opp?.description || `Grants.gov opportunity ${oppNumber}${oppStatus ? ` (${oppStatus})` : ''}`.trim(),
-    amount_min: parseAmount(opp?.awardFloor) || null,
-    amount_max: parseAmount(opp?.awardCeiling) || null,
-    deadline: closeDate || null,
-    deadline_type: closeDate ? 'fixed' : 'rolling',
-    is_national: true,
-    state: 'nationwide',
-    categories: [
-    opp?.categoryOfFunding || 'federal',
-    'government',
-    'grants.gov',
-    ...(Array.isArray(opp?.eligibilities) ? opp.eligibilities.map(e => String(e).toLowerCase()) : []),
-    ...(Array.isArray(opp?.applicantTypes) ? opp.applicantTypes.map(a => String(a).toLowerCase()) : []),
-  ].filter(Boolean),
-    keywords: extractKeywords(opp),
-    opportunity_type: 'grant',
-    type: 'OPPORTUNITY',
-    requires_501c3: false,
-    requires_match: false,
-    eligibility_bullets: buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDate, oppStatus, alnlist }),
-  };
-}
-
-function cryptoSafeId(opp) {
-  try {
-    const text = JSON.stringify(opp ?? {});
-    let hash = 0;
-    for (let i = 0; i < text.length; i += 1) {
-      hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
-    }
-    return String(hash);
-  } catch (error) {
-    console.warn('[GrantsGov] Failed to generate crypto-safe ID:', error.message);
-    return String(Date.now());
-  }
-}
-
-function parseAmount(val) {
-  if (!val) return null;
-  const num = parseFloat(String(val).replace(/[^0-9.]/g, ''));
-  return isNaN(num) ? null : num;
-}
-
-function extractKeywords(opp) {
-  const keywords = [];
-  if (opp?.categoryOfFunding) keywords.push(String(opp.categoryOfFunding).toLowerCase());
-  if (opp?.agencyName) keywords.push(String(opp.agencyName).toLowerCase());
-  if (opp?.agencyCode) keywords.push(String(opp.agencyCode).toLowerCase());
-  if (opp?.oppStatus) keywords.push(String(opp.oppStatus).toLowerCase());
-  keywords.push('grants.gov', 'federal', 'government', 'grant');
-  return keywords;
-}
-
-function buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDate, oppStatus, alnlist }) {
-  const bullets = [];
-  if (oppNumber) bullets.push(`Opportunity number: ${oppNumber}`);
-  if (agencyName) bullets.push(`Agency: ${agencyName}${agencyCode ? ` (${agencyCode})` : ''}`);
-  if (oppStatus) bullets.push(`Status: ${oppStatus}`);
-  if (openDate) bullets.push(`Open date: ${openDate}`);
-  if (closeDate) bullets.push(`Close date: ${closeDate}`);
-  if (alnlist) bullets.push(`ALN list: ${Array.isArray(alnlist) ? alnlist.join(', ') : String(alnlist)}`);
-  bullets.push('Apply through Grants.gov');
-  return bullets;
-}
+const log = createLogger('grantsDotGovCrawler');
 
 /**
  * Crawl Grants.gov and populate database

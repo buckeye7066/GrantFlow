@@ -220,7 +220,8 @@ test('the same real grant found by multiple crawlers is stored ONCE (cross-sourc
 test('existing canonical rows are still matched on a later crawl (no false zero)', async () => {
   const d = deps({
     grantsGov: [{
-      id: 'OPP-7777',
+      id: 'DETAIL-7777',
+      number: 'OPP-7777',
       title: 'Volunteer Fire Equipment Grant',
       agency: 'FEMA',
       agencyCode: 'DHS-FEMA',
@@ -231,7 +232,7 @@ test('existing canonical rows are still matched on a later crawl (no false zero)
   });
   const thesis = buildThesis(SAMPLE_VFD_PROFILE);
   const canonicalId = 'seeded-canonical-fema';
-  const applyUrl = 'https://www.grants.gov/search-results-detail/OPP-7777';
+  const applyUrl = 'https://www.grants.gov/search-results-detail/DETAIL-7777';
 
   storage.upsertOpportunity(d.store, makeOpportunity({
     id: canonicalId,

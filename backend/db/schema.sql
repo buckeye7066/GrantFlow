@@ -323,7 +323,26 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- "not stated", distinct from the boolean columns' coalesced false).
   eligibility_text TEXT,
   page_fact_schema_version INTEGER,
-  field_provenance TEXT
+  field_provenance TEXT,
+
+  -- Canonical opportunity lifecycle fields (migration 169). These columns
+  -- complete the normalized read model without replacing the mature legacy
+  -- fields above; repository code keeps both surfaces synchronized while
+  -- existing consumers migrate to the canonical contract.
+  purpose TEXT,
+  eligibility_requirements TEXT,
+  estimated_award REAL,
+  open_date DATE,
+  recurrence TEXT,
+  required_documents TEXT DEFAULT '[]',
+  application_method TEXT,
+  first_published_at DATETIME,
+  current_status TEXT NOT NULL DEFAULT 'unknown'
+    CHECK(current_status IN ('open','closing_soon','closed','forecasted','rolling','paused','archived','unknown')),
+  data_quality_score REAL
+    CHECK(data_quality_score IS NULL OR (data_quality_score >= 0 AND data_quality_score <= 1)),
+  data_quality_flags TEXT DEFAULT '[]',
+  missing_fields TEXT DEFAULT '[]'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
@@ -340,6 +359,27 @@ CREATE INDEX IF NOT EXISTS idx_funding_opportunities_reality_status
   ON funding_opportunities(reality_status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_fo_canonical_key
   ON funding_opportunities(canonical_opportunity_key);
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_current_status
+  ON funding_opportunities(current_status);
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_open_date
+  ON funding_opportunities(open_date);
+
+-- Append-only audit of normalized opportunity mutations. This is distinct
+-- from verification_events: it records field-level before/after values for
+-- all create, update, status, and verification changes.
+CREATE TABLE IF NOT EXISTS opportunity_change_history (
+  id TEXT PRIMARY KEY,
+  opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+  changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  changed_by TEXT,
+  change_type TEXT NOT NULL CHECK(change_type IN ('created','updated','status','verification')),
+  source TEXT,
+  changed_fields TEXT NOT NULL DEFAULT '[]',
+  before_values TEXT,
+  after_values TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_change_history_opportunity
+  ON opportunity_change_history(opportunity_id, changed_at DESC);
 
 -- Append-only audit log of every URL verification probe (migration 069).
 -- Lets the mission dashboard answer "when was this opportunity actually
@@ -1299,6 +1339,40 @@ CREATE TABLE IF NOT EXISTS profiles (
   avatar_data BLOB,
   avatar_content_type TEXT
 );
+
+-- Grant application tracking workflow. This table originated in SQLite
+-- migration 047 (and Postgres migration 0064), but fresh DB_AUTO_MIGRATE
+-- installs apply schema.sql before the numbered migration ledger. Keep the
+-- canonical parent in the base schema so lifecycle FKs below never point at a
+-- missing table and profile cascades remain valid on a fresh database.
+CREATE TABLE IF NOT EXISTS grant_applications (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  opportunity_id TEXT,
+  pipeline_grant_id TEXT,
+  user_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  title TEXT,
+  grant_name TEXT NOT NULL,
+  funder_name TEXT,
+  amount_requested REAL,
+  amount_awarded REAL,
+  deadline_date TEXT,
+  submitted_at TIMESTAMP,
+  response_expected_date TEXT,
+  response_received_at TIMESTAMP,
+  notes TEXT,
+  contact_name TEXT,
+  contact_email TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_user_id
+  ON grant_applications(user_id);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_profile_id
+  ON grant_applications(profile_id);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_status
+  ON grant_applications(status);
 
 -- Tombstones for hard-deleted profiles.
 -- Prevents startup seeding/ensure logic from resurrecting removed profiles.
@@ -4391,3 +4465,313 @@ CREATE TABLE IF NOT EXISTS compliance_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_compliance_reports_grant ON compliance_reports(grant_id);
 CREATE INDEX IF NOT EXISTS idx_compliance_reports_due ON compliance_reports(due_date);
+-- Canonical persisted IRS-990 grant ledger (migration 161). Kept in the
+-- fresh schema so funder intelligence is immediately usable on a clean boot.
+CREATE TABLE IF NOT EXISTS grant_transactions (
+  id TEXT PRIMARY KEY,
+  funder_ein TEXT NOT NULL,
+  funder_name TEXT,
+  recipient_name TEXT NOT NULL,
+  recipient_ein TEXT,
+  recipient_city TEXT,
+  recipient_state TEXT,
+  recipient_country TEXT,
+  amount NUMERIC,
+  purpose TEXT,
+  tax_year INTEGER,
+  form_type TEXT,
+  source_object_id TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_grant_tx_funder ON grant_transactions(funder_ein);
+CREATE INDEX IF NOT EXISTS idx_grant_tx_state ON grant_transactions(recipient_state);
+CREATE INDEX IF NOT EXISTS idx_grant_tx_object ON grant_transactions(source_object_id);
+CREATE INDEX IF NOT EXISTS idx_grant_tx_funder_year_amount
+  ON grant_transactions(funder_ein, tax_year DESC, amount DESC);
+CREATE INDEX IF NOT EXISTS idx_grant_tx_funder_recipient
+  ON grant_transactions(funder_ein, recipient_name);
+
+CREATE TABLE IF NOT EXISTS funder_990_ingest_state (
+  funder_ein TEXT PRIMARY KEY,
+  attempted_at DATETIME,
+  attempts INTEGER DEFAULT 0,
+  env_attempts INTEGER DEFAULT 0,
+  last_reason TEXT,
+  ingested_object_id TEXT,
+  tax_year INTEGER,
+  transactions_found INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Durable, revisioned applicant and organization memory (migration 170).
+CREATE TABLE IF NOT EXISTS profile_memory_entries (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+  memory_key TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('fact','preference','outcome','relationship','narrative')),
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK(status IN ('active','deleted','expired')),
+  retention_policy TEXT NOT NULL DEFAULT 'profile_lifetime'
+    CHECK(retention_policy IN ('profile_lifetime','until_date','legal_hold')),
+  retention_until DATETIME,
+  legal_hold_reason TEXT,
+  current_revision INTEGER NOT NULL DEFAULT 1 CHECK(current_revision > 0),
+  created_by_user_id TEXT,
+  updated_by_user_id TEXT,
+  deleted_by_user_id TEXT,
+  deletion_reason TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at DATETIME,
+  CHECK(retention_policy <> 'until_date' OR retention_until IS NOT NULL),
+  CHECK(retention_policy <> 'legal_hold' OR legal_hold_reason IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_profile_memory_profile
+  ON profile_memory_entries(profile_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_profile_memory_organization
+  ON profile_memory_entries(organization_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_profile_memory_retention
+  ON profile_memory_entries(status, retention_policy, retention_until);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_profile_memory_active_key
+  ON profile_memory_entries(profile_id, memory_key)
+  WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS profile_memory_revisions (
+  id TEXT PRIMARY KEY,
+  entry_id TEXT NOT NULL REFERENCES profile_memory_entries(id) ON DELETE CASCADE,
+  revision_number INTEGER NOT NULL CHECK(revision_number > 0),
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('fact','preference','outcome','relationship','narrative')),
+  value_json TEXT NOT NULL DEFAULT '{}',
+  source_kind TEXT NOT NULL DEFAULT 'user'
+    CHECK(source_kind IN ('user','document','import','system')),
+  source_ref TEXT,
+  provenance_json TEXT NOT NULL DEFAULT '{}',
+  change_kind TEXT NOT NULL CHECK(change_kind IN ('create','update','retention','delete','expire')),
+  payload_redacted INTEGER NOT NULL DEFAULT 0 CHECK(payload_redacted IN (0,1)),
+  created_by_user_id TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(entry_id, revision_number)
+);
+CREATE INDEX IF NOT EXISTS idx_profile_memory_revision_chain
+  ON profile_memory_revisions(entry_id, revision_number DESC);
+
+-- Versioned RFP/NOFO source, structured requirements, and amendment history
+-- (migration 171). Source text is stored completely in ordered chunks and
+-- each normalized requirement carries a source citation.
+CREATE TABLE IF NOT EXISTS opportunity_solicitations (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+  document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+  source_kind TEXT NOT NULL CHECK(source_kind IN ('nofo','rfp','amendment','other')),
+  source_url TEXT,
+  title TEXT,
+  created_by_user_id TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_solicitations_subject
+  ON opportunity_solicitations(profile_id, opportunity_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_opportunity_solicitations_source
+  ON opportunity_solicitations(profile_id, opportunity_id, source_kind, COALESCE(source_url, ''));
+
+CREATE TABLE IF NOT EXISTS solicitation_versions (
+  id TEXT PRIMARY KEY,
+  solicitation_id TEXT NOT NULL REFERENCES opportunity_solicitations(id) ON DELETE CASCADE,
+  version_number INTEGER NOT NULL CHECK(version_number > 0),
+  source_sha256 TEXT NOT NULL CHECK(length(source_sha256) = 64),
+  source_filename TEXT,
+  mime_type TEXT,
+  extracted_chars INTEGER NOT NULL CHECK(extracted_chars >= 0),
+  chunk_count INTEGER NOT NULL CHECK(chunk_count > 0),
+  published_at DATETIME,
+  effective_at DATETIME,
+  is_amendment INTEGER NOT NULL DEFAULT 0 CHECK(is_amendment IN (0,1)),
+  supersedes_version_id TEXT REFERENCES solicitation_versions(id) ON DELETE RESTRICT,
+  ingestion_status TEXT NOT NULL DEFAULT 'complete'
+    CHECK(ingestion_status IN ('complete','failed')),
+  validation_errors_json TEXT NOT NULL DEFAULT '[]',
+  created_by_user_id TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(solicitation_id, version_number),
+  UNIQUE(solicitation_id, source_sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_solicitation_versions_latest
+  ON solicitation_versions(solicitation_id, version_number DESC);
+
+CREATE TABLE IF NOT EXISTS solicitation_chunks (
+  id TEXT PRIMARY KEY,
+  version_id TEXT NOT NULL REFERENCES solicitation_versions(id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL CHECK(chunk_index >= 0),
+  char_start INTEGER NOT NULL CHECK(char_start >= 0),
+  char_end INTEGER NOT NULL CHECK(char_end >= char_start),
+  page_start INTEGER,
+  page_end INTEGER,
+  content TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL CHECK(length(content_sha256) = 64),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(version_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_solicitation_chunks_version
+  ON solicitation_chunks(version_id, chunk_index);
+
+CREATE TABLE IF NOT EXISTS solicitation_requirements (
+  id TEXT PRIMARY KEY,
+  version_id TEXT NOT NULL REFERENCES solicitation_versions(id) ON DELETE CASCADE,
+  canonical_key TEXT NOT NULL,
+  requirement_type TEXT NOT NULL CHECK(requirement_type IN (
+    'eligibility','submission','narrative','budget','document','deadline',
+    'format','evaluation','reporting','compliance','contact','other'
+  )),
+  title TEXT,
+  requirement_text TEXT NOT NULL,
+  normalized_value_json TEXT NOT NULL DEFAULT '{}',
+  mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+  confidence REAL NOT NULL DEFAULT 1 CHECK(confidence >= 0 AND confidence <= 1),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK(status IN ('active','withdrawn','superseded')),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(version_id, canonical_key)
+);
+CREATE INDEX IF NOT EXISTS idx_solicitation_requirements_version
+  ON solicitation_requirements(version_id, requirement_type, mandatory);
+
+CREATE TABLE IF NOT EXISTS requirement_citations (
+  id TEXT PRIMARY KEY,
+  requirement_id TEXT NOT NULL REFERENCES solicitation_requirements(id) ON DELETE CASCADE,
+  chunk_id TEXT NOT NULL REFERENCES solicitation_chunks(id) ON DELETE RESTRICT,
+  quote_text TEXT NOT NULL,
+  char_start INTEGER NOT NULL CHECK(char_start >= 0),
+  char_end INTEGER NOT NULL CHECK(char_end >= char_start),
+  page_number INTEGER,
+  source_url TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_requirement_citations_requirement
+  ON requirement_citations(requirement_id);
+
+CREATE TABLE IF NOT EXISTS solicitation_amendment_diffs (
+  id TEXT PRIMARY KEY,
+  solicitation_id TEXT NOT NULL REFERENCES opportunity_solicitations(id) ON DELETE CASCADE,
+  from_version_id TEXT NOT NULL REFERENCES solicitation_versions(id) ON DELETE RESTRICT,
+  to_version_id TEXT NOT NULL REFERENCES solicitation_versions(id) ON DELETE RESTRICT,
+  canonical_key TEXT NOT NULL,
+  change_type TEXT NOT NULL CHECK(change_type IN ('added','removed','modified')),
+  before_json TEXT,
+  after_json TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(from_version_id, to_version_id, canonical_key)
+);
+CREATE INDEX IF NOT EXISTS idx_solicitation_amendment_to_version
+  ON solicitation_amendment_diffs(to_version_id, change_type);
+
+-- One canonical aggregate root joins the existing application, opportunity,
+-- task, solicitation, and legacy pipeline authorities for lifecycle reads.
+CREATE TABLE IF NOT EXISTS application_lifecycle_subjects (
+  application_id TEXT PRIMARY KEY REFERENCES grant_applications(id) ON DELETE CASCADE,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  opportunity_id TEXT REFERENCES funding_opportunities(id) ON DELETE SET NULL,
+  pipeline_grant_id TEXT REFERENCES grants(id) ON DELETE SET NULL,
+  canonical_task_id TEXT REFERENCES application_tasks(id) ON DELETE SET NULL,
+  solicitation_id TEXT REFERENCES opportunity_solicitations(id) ON DELETE SET NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_application_lifecycle_subject
+  ON application_lifecycle_subjects(profile_id, opportunity_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_application_lifecycle_task
+  ON application_lifecycle_subjects(canonical_task_id)
+  WHERE canonical_task_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS draft_requirement_coverage (
+  id TEXT PRIMARY KEY,
+  application_id TEXT REFERENCES grant_applications(id) ON DELETE CASCADE,
+  draft_id TEXT NOT NULL REFERENCES application_drafts(id) ON DELETE CASCADE,
+  requirement_id TEXT NOT NULL REFERENCES solicitation_requirements(id) ON DELETE CASCADE,
+  coverage_status TEXT NOT NULL CHECK(coverage_status IN ('addressed','partial','missing','not_applicable')),
+  response_excerpt TEXT,
+  applicant_evidence_json TEXT NOT NULL DEFAULT '[]',
+  requirement_citations_json TEXT NOT NULL DEFAULT '[]',
+  unsupported_claims_json TEXT NOT NULL DEFAULT '[]',
+  verified_at DATETIME,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(draft_id, requirement_id)
+);
+CREATE INDEX IF NOT EXISTS idx_draft_requirement_coverage_application
+  ON draft_requirement_coverage(application_id, coverage_status);
+
+-- Outcome evidence is append-only. The only permitted mutation is an
+-- explicit one-way revocation; corrections append a replacement assertion.
+CREATE TABLE IF NOT EXISTS application_outcome_evidence (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES grant_applications(id) ON DELETE RESTRICT,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
+  document_id TEXT NOT NULL UNIQUE REFERENCES documents(id) ON DELETE RESTRICT,
+  outcome TEXT NOT NULL CHECK(outcome IN ('awarded','declined','waitlisted','withdrawn')),
+  response_received_at DATETIME NOT NULL,
+  confirmation_reference TEXT,
+  attested_by_user_id TEXT NOT NULL,
+  attested_at DATETIME NOT NULL,
+  evidence_sha256 TEXT NOT NULL CHECK(length(evidence_sha256) = 64),
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked')),
+  revoked_at DATETIME,
+  revocation_reason TEXT,
+  revoked_by_user_id TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(application_id, evidence_sha256)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_application_outcome_active
+  ON application_outcome_evidence(application_id)
+  WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_application_outcome_profile
+  ON application_outcome_evidence(profile_id, response_received_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS trg_application_outcome_evidence_no_delete
+BEFORE DELETE ON application_outcome_evidence
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'application outcome evidence is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_application_outcome_evidence_revoke_only
+BEFORE UPDATE ON application_outcome_evidence
+FOR EACH ROW
+WHEN NOT (
+  OLD.status = 'active'
+  AND NEW.status = 'revoked'
+  AND OLD.revoked_at IS NULL
+  AND OLD.revocation_reason IS NULL
+  AND OLD.revoked_by_user_id IS NULL
+  AND NEW.revoked_at IS NOT NULL
+  AND NULLIF(TRIM(NEW.revocation_reason), '') IS NOT NULL
+  AND NULLIF(TRIM(NEW.revoked_by_user_id), '') IS NOT NULL
+  AND NEW.id IS OLD.id
+  AND NEW.application_id IS OLD.application_id
+  AND NEW.profile_id IS OLD.profile_id
+  AND NEW.document_id IS OLD.document_id
+  AND NEW.outcome IS OLD.outcome
+  AND NEW.response_received_at IS OLD.response_received_at
+  AND NEW.confirmation_reference IS OLD.confirmation_reference
+  AND NEW.attested_by_user_id IS OLD.attested_by_user_id
+  AND NEW.attested_at IS OLD.attested_at
+  AND NEW.evidence_sha256 IS OLD.evidence_sha256
+  AND NEW.created_at IS OLD.created_at
+)
+BEGIN
+  SELECT RAISE(ABORT, 'application outcome evidence is append-only; only active-to-revoked is permitted');
+END;
+
+-- Migrated, cross-instance API rate-limit state (migration 172). Request
+-- middleware consumes this contract and never performs request-time DDL.
+CREATE TABLE IF NOT EXISTS api_rate_limit_buckets (
+  bucket_key TEXT PRIMARY KEY,
+  window_started_ms INTEGER NOT NULL,
+  expires_ms INTEGER NOT NULL,
+  hit_count INTEGER NOT NULL DEFAULT 0 CHECK (hit_count >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_api_rate_limit_buckets_expiry
+  ON api_rate_limit_buckets(expires_ms);

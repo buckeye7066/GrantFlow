@@ -86,10 +86,10 @@ async function loadApplication(req, res, applicationId) {
 router.post('/from-opportunity', async (req, res) => {
   try {
     const userId = getAuthUserId(req?.user ?? req?.ctx)
-    const { profile_id: profileId, opportunity } = req.body ?? {}
+    const { profile_id: profileId, pipeline_grant_id: pipelineGrantId, opportunity } = req.body ?? {}
     if (!profileId) return res.status(400).json({ error: 'profile_id required' })
-    if (!opportunity || !opportunity.title) {
-      return res.status(400).json({ error: 'opportunity.title required' })
+    if (!opportunity?.id) {
+      return res.status(400).json({ error: 'opportunity.id required' })
     }
     const ok = await ensureProfileAccess(req, res, String(profileId))
     if (!ok) return
@@ -98,13 +98,14 @@ router.post('/from-opportunity', async (req, res) => {
       profileId: String(profileId),
       userId,
       opportunity,
+      pipelineGrantId: pipelineGrantId ? String(pipelineGrantId) : null,
       profileContext,
     })
     routeLogger.info(`[applicationWorkflow] from-opportunity profile=${profileId} → application=${result.id} created=${result.created}`)
     return res.status(result.created ? 201 : 200).json(result)
   } catch (err) {
     routeLogger.error('from-opportunity failed', { err: err?.message })
-    return res.status(500).json({ error: err?.message ?? String(err) })
+    return res.status(Number(err?.status) || 500).json({ error: err?.code || err?.message || String(err), message: err?.message })
   }
 })
 
@@ -171,7 +172,7 @@ router.post('/:applicationId/steps', async (req, res) => {
     })
     return res.status(201).json({ id: stepId })
   } catch (err) {
-    return res.status(500).json({ error: err?.message ?? String(err) })
+    return res.status(Number(err?.status) || 500).json({ error: err?.code || err?.message || String(err), message: err?.message })
   }
 })
 
@@ -200,7 +201,7 @@ router.patch('/steps/:stepId/complete', async (req, res) => {
     await completeApplicationStep(req.db, String(req.params.stepId))
     return res.json({ ok: true })
   } catch (err) {
-    return res.status(500).json({ error: err?.message ?? String(err) })
+    return res.status(Number(err?.status) || 500).json({ error: err?.code || err?.message || String(err), message: err?.message })
   }
 })
 
@@ -222,7 +223,7 @@ router.post('/:applicationId/documents', async (req, res) => {
     })
     return res.status(201).json({ id })
   } catch (err) {
-    return res.status(500).json({ error: err?.message ?? String(err) })
+    return res.status(Number(err?.status) || 500).json({ error: err?.code || err?.message || String(err), message: err?.message })
   }
 })
 

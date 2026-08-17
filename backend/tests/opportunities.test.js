@@ -62,6 +62,50 @@ describe("opportunities", () => {
     const first = res.body.data[0]
     expect(first).toHaveProperty("compliance_status")
     expect(first).toHaveProperty("compliance_reasons")
+    expect(first).toHaveProperty("current_status")
+    expect(first).toHaveProperty("status_label")
+    expect(first).toHaveProperty("missing_fields")
+  })
+
+  it("upserts by source id without duplicates and exposes change history", async () => {
+    const payload = {
+      title: "Neighborhood Resilience Grant",
+      sponsor: "Community Resilience Foundation",
+      source: "integration-source",
+      source_id: "stable-source-record-1",
+      description: "Funds neighborhood preparedness and resilience work.",
+      application_url: "https://resilience-foundation.org/apply",
+      source_url: "https://resilience-foundation.org/program",
+      is_national: true,
+      opportunity_type: "grant",
+      requires_match: false,
+      open_date: "2026-08-01",
+      deadline: "2099-09-30",
+      current_status: "open",
+      required_documents: ["Project budget"],
+    }
+
+    const created = await request(app).post("/api/opportunities").set(TEST_ADMIN_AUTH_HEADER).send(payload)
+    expect(created.status).toBe(201)
+
+    const updated = await request(app).post("/api/opportunities").set(TEST_ADMIN_AUTH_HEADER).send({
+      ...payload,
+      purpose: "Expand neighborhood emergency readiness.",
+    })
+    expect(updated.status).toBe(200)
+    expect(updated.body.id).toBe(created.body.id)
+
+    const stored = db.prepare(
+      "SELECT COUNT(*) AS total FROM funding_opportunities WHERE source = ? AND source_id = ?",
+    ).get(payload.source, payload.source_id)
+    expect(Number(stored.total)).toBe(1)
+
+    const detail = await request(app).get(`/api/opportunities/${created.body.id}`)
+    expect(detail.status).toBe(200)
+    expect(detail.body.purpose).toBe("Expand neighborhood emergency readiness.")
+    expect(detail.body.status_label).toBe("Open")
+    expect(Array.isArray(detail.body.change_history)).toBe(true)
+    expect(detail.body.change_history.length).toBeGreaterThanOrEqual(2)
   })
 
   describe("/similar resolution paths", () => {
@@ -245,4 +289,3 @@ describe("opportunities", () => {
     })
   })
 })
-

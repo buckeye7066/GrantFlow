@@ -1,19 +1,20 @@
 /**
  * Centralized Grants.gov API endpoints.
  *
- * ALL Grants.gov and Simpler Grants API URLs live here. Every crawler,
- * connector, and source that talks to Grants.gov MUST import from this
- * module. Inline URL strings are forbidden.
+ * Backward-compatible application facade for Grants.gov and Simpler Grants
+ * endpoints. The dependency-free shared/grantsGovProtocol.js contract owns the
+ * Search2 URLs and is imported directly by Crawler OS; existing application
+ * callers may continue importing those re-exports here. Inline URL strings are
+ * forbidden in either runtime.
  */
 
-/** Legacy Grants.gov search API (v1) */
-export const GRANTS_GOV_SEARCH2_URL = 'https://api.grants.gov/v1/api/search2'
-
-/** Grants.gov opportunity detail URL template */
-export const GRANTS_GOV_DETAIL_URL = 'https://www.grants.gov/search-results-detail/'
-
-/** Grants.gov view opportunity URL template */
-export const GRANTS_GOV_VIEW_URL = 'https://www.grants.gov/view-opportunity/'
+// Backward-compatible endpoint exports. The dependency-free protocol module is
+// the authority shared by the Crawler OS and the live Grants.gov API client.
+export {
+  GRANTS_GOV_SEARCH2_URL,
+  GRANTS_GOV_DETAIL_URL,
+  GRANTS_GOV_VIEW_URL,
+} from '../../shared/grantsGovProtocol.js'
 
 /** Simpler Grants API - opportunity search */
 export const SIMPLER_GRANTS_SEARCH_URL = 'https://api.simpler.grants.gov/v1/opportunities/search'

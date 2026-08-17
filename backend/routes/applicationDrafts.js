@@ -1,16 +1,87 @@
 import express from 'express'
 import crypto from 'crypto'
-import { requireAuthenticatedUser, ensureGrantAccess, getAccessibleOrganizationIds } from '../utils/accessControl.js'
+import {
+  requireAuthenticatedUser,
+  ensureGrantAccess,
+  ensureProfileAccess,
+  getAccessibleOrganizationIds,
+} from '../utils/accessControl.js'
+import {
+  auditDraftAgainstStoredRequirements,
+  persistDraftRequirementCoverage,
+  resolveApplicationIdForGrant,
+} from '../services/groundedDrafting.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:applicationDrafts')
 
 const router = express.Router()
 
+async function runDraftWriteTransaction(db, work) {
+  if (typeof db?.withTransaction !== 'function') {
+    const error = new Error('Draft persistence requires an atomic database transaction')
+    error.code = 'DRAFT_TRANSACTION_UNAVAILABLE'
+    error.status = 503
+    throw error
+  }
+  return db.withTransaction(work)
+}
+
 function normalizeLimit(val, fallback = 200) {
   const n = Number.parseInt(String(val ?? ''), 10)
   if (!Number.isFinite(n) || n <= 0) return fallback
   return Math.min(500, n)
+}
+
+async function prepareGroundingAudit(req, res, {
+  grantId,
+  draftText,
+  targetStatus,
+  requirementResponses = [],
+  claimEvidence = [],
+} = {}) {
+  if (!['review', 'final'].includes(String(targetStatus || '').toLowerCase())) return null
+  if (!String(draftText || '').trim()) {
+    return {
+      applicationId: null,
+      audit: {
+        can_finalize: false,
+        blockers: [{ code: 'DRAFT_TEXT_REQUIRED', message: 'Draft text is required before review or finalization.' }],
+      },
+    }
+  }
+  const applicationId = await resolveApplicationIdForGrant(req.db, grantId)
+  if (!applicationId) {
+    return {
+      applicationId: null,
+      audit: {
+        can_finalize: false,
+        blockers: [{
+          code: 'APPLICATION_LIFECYCLE_REQUIRED',
+          message: 'Start an application workflow before reviewing or finalizing this draft.',
+        }],
+      },
+    }
+  }
+  const applicationScope = await req.db.prepare(
+    'SELECT profile_id, pipeline_grant_id FROM grant_applications WHERE id = ? LIMIT 1',
+  ).get(applicationId)
+  if (!applicationScope || String(applicationScope.pipeline_grant_id || '') !== String(grantId)) {
+    const error = new Error('Resolved application does not belong to the authorized grant')
+    error.code = 'APPLICATION_GRANT_SCOPE_MISMATCH'
+    error.status = 409
+    throw error
+  }
+  if (!(await ensureProfileAccess(req, res, String(applicationScope.profile_id || '')))) {
+    return { responseSent: true }
+  }
+  const result = await auditDraftAgainstStoredRequirements(req.db, {
+    applicationId,
+    draftText,
+    requirementResponses,
+    claimEvidence,
+  })
+  return { applicationId, audit: result.audit }
 }
 
 router.get('/', async (req, res) => {
@@ -98,9 +169,25 @@ router.post('/', async (req, res) => {
     if (!grant) return
 
     const id = data.id ? String(data.id) : crypto.randomUUID()
+    const targetStatus = data.status ?? 'draft'
+    const grounding = await prepareGroundingAudit(req, res, {
+      grantId,
+      draftText: data.content ?? '',
+      targetStatus,
+      requirementResponses: data.requirement_responses || [],
+      claimEvidence: data.claim_evidence || [],
+    })
+    if (grounding?.responseSent) return
+    if (targetStatus === 'final' && grounding && !grounding.audit.can_finalize) {
+      return res.status(422).json({
+        error: 'draft_grounding_failed',
+        message: 'Draft cannot be finalized until mandatory requirements and applicant claims are grounded.',
+        audit: grounding.audit,
+      })
+    }
 
-    await req.db
-      .prepare(
+    const row = await runDraftWriteTransaction(req.db, async (tx) => {
+      await tx.prepare(
         `
           INSERT INTO application_drafts (
             id, grant_id,
@@ -110,8 +197,7 @@ router.post('/', async (req, res) => {
             status
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
-      )
-      .run(
+      ).run(
         id,
         grantId,
         data.section_name ?? null,
@@ -121,14 +207,22 @@ router.post('/', async (req, res) => {
         data.ai_suggestions ?? null,
         data.word_limit ?? null,
         data.word_count ?? null,
-        data.status ?? 'draft',
+        targetStatus,
       )
-
-    const row = await req.db.prepare('SELECT * FROM application_drafts WHERE id = ?').get(id)
-    return res.status(201).json(row)
+      if (grounding?.applicationId) {
+        await persistDraftRequirementCoverage(tx, {
+          applicationId: grounding.applicationId,
+          draftId: id,
+          audit: grounding.audit,
+        })
+      }
+      return tx.prepare('SELECT * FROM application_drafts WHERE id = ?').get(id)
+    })
+    return res.status(201).json({ ...row, grounding_audit: grounding?.audit || null })
   } catch (error) {
     routeLogger.error('[application-drafts] create error:', error)
-    return res.status(500).json({ error: error?.message || String(error) })
+    const status = error?.name === 'ZodError' ? 400 : (Number(error?.status) || 500)
+    return res.status(status).json({ error: error?.code || error?.message || String(error), details: error?.issues })
   }
 })
 
@@ -143,9 +237,26 @@ router.put('/:id', async (req, res) => {
     if (!grant) return
 
     const data = req.body ?? {}
+    const targetStatus = data.status ?? existing.status
+    const targetContent = data.content ?? existing.content ?? ''
+    const grounding = await prepareGroundingAudit(req, res, {
+      grantId: String(existing.grant_id),
+      draftText: targetContent,
+      targetStatus,
+      requirementResponses: data.requirement_responses || [],
+      claimEvidence: data.claim_evidence || [],
+    })
+    if (grounding?.responseSent) return
+    if (targetStatus === 'final' && grounding && !grounding.audit.can_finalize) {
+      return res.status(422).json({
+        error: 'draft_grounding_failed',
+        message: 'Draft cannot be finalized until mandatory requirements and applicant claims are grounded.',
+        audit: grounding.audit,
+      })
+    }
 
-    await req.db
-      .prepare(
+    const row = await runDraftWriteTransaction(req.db, async (tx) => {
+      await tx.prepare(
         `
           UPDATE application_drafts
           SET updated_at = CURRENT_TIMESTAMP,
@@ -159,8 +270,7 @@ router.put('/:id', async (req, res) => {
               status = COALESCE(?, status)
           WHERE id = ?
         `,
-      )
-      .run(
+      ).run(
         data.section_name ?? null,
         data.section_order ?? null,
         data.prompt ?? null,
@@ -171,12 +281,20 @@ router.put('/:id', async (req, res) => {
         data.status ?? null,
         String(req.params.id),
       )
-
-    const row = await req.db.prepare('SELECT * FROM application_drafts WHERE id = ?').get(String(req.params.id))
-    return res.json(row)
+      if (grounding?.applicationId) {
+        await persistDraftRequirementCoverage(tx, {
+          applicationId: grounding.applicationId,
+          draftId: String(req.params.id),
+          audit: grounding.audit,
+        })
+      }
+      return tx.prepare('SELECT * FROM application_drafts WHERE id = ?').get(String(req.params.id))
+    })
+    return res.json({ ...row, grounding_audit: grounding?.audit || null })
   } catch (error) {
     routeLogger.error('[application-drafts] update error:', error)
-    return res.status(500).json({ error: error?.message || String(error) })
+    const status = error?.name === 'ZodError' ? 400 : (Number(error?.status) || 500)
+    return res.status(status).json({ error: error?.code || error?.message || String(error), details: error?.issues })
   }
 })
 
@@ -199,4 +317,3 @@ router.delete('/:id', async (req, res) => {
 })
 
 export default router
-

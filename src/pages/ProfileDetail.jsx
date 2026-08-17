@@ -36,6 +36,7 @@ import { ingestDocument } from "@/api/documents"
 import ProfileOverview from "@/components/profiles/ProfileOverview"
 import ProfileSectionEditor from "@/components/profiles/ProfileSectionEditor"
 import ApplicationEssaysCard from "@/components/profiles/ApplicationEssaysCard"
+import ProfileMemoryPanel from "@/components/profiles/ProfileMemoryPanel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -1562,6 +1563,7 @@ export default function ProfileDetail() {
               onSaveField={handleInlineSaveField}
               isSaving={savingSectionKey === "essays"}
             />
+            <ProfileMemoryPanel profileId={profileId} />
           </TabsContent>
 
           <TabsContent value="pipeline" className="mt-6 space-y-6">

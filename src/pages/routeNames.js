@@ -12,6 +12,7 @@ export const ROUTE_NAMES = new Set([
   "Pipeline",
   "HamiltonProcessing",
   "Applications",
+  "GrantLifecycle",
   "Proposals",
   "Outreach",
   "GrantDeadline",

@@ -45,14 +45,6 @@ import { useAuthStore } from '@/stores/authStore';
 
 const toMessage = (e) => (e instanceof Error ? e.message : String(e ?? ''));
 
-// Crawler-minted funding_opportunities rows use deterministicOpportunityId —
-// a 64-char sha256 hex (backend/crawler-os/contract.js) — while pipeline
-// grants use crypto.randomUUID(). Several surfaces (Similar Opportunities,
-// CoverageEvidence) link here with the CATALOG id; fetching /api/grants/:id
-// with one is a guaranteed 404, so the page must branch on the id shape and
-// read the catalog instead.
-const CATALOG_OPPORTUNITY_ID_RX = /^[0-9a-fA-F]{64}$/;
-
 const VALID_TABS = ['coach', 'workflow', 'checklist', 'budget', 'timelogs', 'compliance'];
 
 function MatchIntelligenceBanner({ grant }) {
@@ -200,7 +192,7 @@ function SimilarGrants({ grant }) {
           return (
             <Link
               key={opp.id}
-              to={createPageUrl("GrantDetail", { id: opp.id })}
+              to={createPageUrl("GrantDetail", { id: opp.id, source: 'catalog' })}
               className="block rounded-lg border border-slate-200 bg-white p-4 hover:border-blue-300 hover:shadow-sm transition-all"
             >
               <p className="font-medium text-sm text-slate-900 line-clamp-2 mb-1">{opp.title}</p>
@@ -406,11 +398,12 @@ export default function GrantDetail() {
   // Read query params reactively so in-place navigation updates the page.
   const [searchParams] = useSearchParams();
   const grantId = searchParams.get('id');
-  // A 64-hex id is a CATALOG opportunity id, never a grants.id (those are
-  // UUIDs) — fetching /api/grants/:id with it is a guaranteed 404, so those
-  // ids branch to the read-only catalog view instead (see the early return
-  // below the hooks).
-  const isCatalogOpportunityId = Boolean(grantId) && CATALOG_OPPORTUNITY_ID_RX.test(grantId);
+  // Opportunity ids are intentionally opaque: crawler ids, curated ids and
+  // repository-created UUIDs all exist in production. Known catalog links set
+  // an explicit discriminator; unlabelled/stale links fall back to the catalog
+  // only after the pipeline lookup returns a real 404. Never infer record type
+  // from the id's shape.
+  const hasCatalogSourceHint = searchParams.get('source') === 'catalog';
   const rawTab = searchParams.get('tab');
   const initialTab = VALID_TABS.includes(rawTab) ? rawTab : 'coach';
 
@@ -464,7 +457,7 @@ export default function GrantDetail() {
         if (!grantId) return null;
         return client.entities.Grant.get(grantId);
     },
-    enabled: !!grantId && !isCatalogOpportunityId,
+    enabled: !!grantId && !hasCatalogSourceHint,
     refetchInterval: (query) => {
       if (analysisTimedOut) return false;
       const grantData = query.state?.data;
@@ -483,6 +476,18 @@ export default function GrantDetail() {
     },
   });
 
+  const pipelineGrantNotFound = isErrorGrant && Number(grantError?.status) === 404;
+  const shouldLoadCatalogOpportunity = Boolean(grantId) && (hasCatalogSourceHint || pipelineGrantNotFound);
+  // Prime the exact cache key used by CatalogOpportunityView. This makes an
+  // unlabelled UUID/arbitrary catalog id resolve after the pipeline 404 and
+  // avoids a duplicate request when the catalog view mounts.
+  useQuery({
+    queryKey: ['catalog-opportunity', grantId],
+    queryFn: () => apiFetch(`/api/opportunities/${encodeURIComponent(grantId)}`),
+    enabled: shouldLoadCatalogOpportunity,
+    retry: false,
+  });
+
   const { data: organization, isLoading: isLoadingOrg, isError: isErrorOrg, error: orgError } = useQuery({
     queryKey: ['organization', grant?.organization_id],
     queryFn: () => client.entities.Organization.get(grant?.organization_id),
@@ -495,7 +500,7 @@ export default function GrantDetail() {
   const { data: existingChecklistItems = [] } = useQuery({
     queryKey: ['checklistItems', grantId],
     queryFn: () => client.entities.ChecklistItem.filter({ grant_id: grantId }),
-    enabled: !!grantId && !isCatalogOpportunityId,
+    enabled: Boolean(grant),
   });
 
   const updateGrantMutation = useMutation({
@@ -755,9 +760,10 @@ export default function GrantDetail() {
     }
   };
   
-  // Catalog ids get the read-only opportunity view. This return sits AFTER
-  // every hook above so the hook order stays stable across renders.
-  if (isCatalogOpportunityId) {
+  // Explicit catalog links and opaque ids that were not pipeline grants get
+  // the read-only opportunity view. This return sits after every hook so hook
+  // order stays stable across route transitions.
+  if (shouldLoadCatalogOpportunity) {
     return <CatalogOpportunityView oppId={grantId} />;
   }
 
@@ -931,7 +937,7 @@ export default function GrantDetail() {
               <ErrorBoundary>
                 <ApplicationWorkflowPanel
                   opportunity={{
-                    id: grant.opportunity_id || grant.id,
+                    id: grant.funding_opportunity_id || grant.opportunity_id || grant.id,
                     title: grant.title || grant.grant_name,
                     sponsor: grant.funder || grant.sponsor || grant.funder_name,
                     application_url: grant.application_url || grant.url,
@@ -939,6 +945,7 @@ export default function GrantDetail() {
                     kind: grant.opportunity_kind || 'direct',
                   }}
                   profileId={grant.profile_id}
+                  pipelineGrantId={grant.id}
                   applicationId={grant.application_id || null}
                 />
               </ErrorBoundary>

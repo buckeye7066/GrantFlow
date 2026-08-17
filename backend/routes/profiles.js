@@ -43,6 +43,7 @@ import { normalizeLanguageCode, isSupportedLanguage } from '../../shared/languag
 // Never re-inline a status list or a SUM(amount_requested) here.
 import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue, unvaluedCountSql } from '../config/pipelineValue.js'
 import { buildAwardSummary } from '../services/awardSummary.js'
+import { redactProfileMemoryForProfile } from '../services/profileMemoryRepository.js'
 import { resolveCommittedCollege } from '../services/college/committedCollege.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
@@ -2427,21 +2428,63 @@ async function writeProfileTombstone(db, profileId, deletedBy, reason) {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const authUserId = req.ctx?.userId ?? null
-  const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
-  // Check authorization - user must be admin or the profile must belong to them
-  const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  // Destructive authorization depends only on the persisted ownership fields.
+  // Do not use the presentation join here: a drifted/minimal database may not
+  // have the optional organizations table, and ownership must still fail
+  // closed with 403 rather than crashing before the persisted-owner check.
+  const existing = await req.db
+    .prepare('SELECT id, user_id, created_by, status FROM profiles WHERE id = ?')
+    .get(id)
   if (!existing) {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
   const admin = req.ctx?.isAdmin === true
-  if (!admin) {
-    const matchesProfileId = authProfileId === String(id)
-    const matchesUserId = authUserId && existing.user_id && String(authUserId) === String(existing.user_id)
-    if (!matchesProfileId && !matchesUserId) {
-      return denyAuth(req, res)
+  const trustedOwner = Boolean(
+    req.ctx?.identityResolved === true
+    && authUserId
+    && (
+      (existing.user_id && String(authUserId) === String(existing.user_id))
+      || (existing.created_by && String(authUserId) === String(existing.created_by))
+    ),
+  )
+  // Active/shared profile access permits collaboration, never destructive
+  // ownership. Deletion requires the persisted owner (including the verified
+  // created_by legacy-owner path) or a database-verified administrator.
+  if (!admin && !trustedOwner) {
+    return denyAuth(req, res)
+  }
+
+  // Slice 5 deletion choke point. Erase eligible memory payloads before either
+  // the designated-profile tombstone path or hard-delete path runs. Legal and
+  // time-based retention holds fail closed. Strict ownership is based on the
+  // persisted profiles.user_id (an active-profile collaborator is not an owner).
+  const memoryActorIsOwner = trustedOwner
+  try {
+    await redactProfileMemoryForProfile(req.db, {
+      profileId: String(id),
+      actorUserId: authUserId,
+      actorIsAdmin: admin,
+      actorIsOwner: memoryActorIsOwner,
+      reason: 'profile_deleted',
+    })
+  } catch (memoryError) {
+    if (memoryError?.code === 'MEMORY_RETENTION_HOLD') {
+      return res.status(409).json({
+        error: 'Profile deletion is blocked by a memory retention policy',
+        code: memoryError.code,
+        details: memoryError.details ?? undefined,
+      })
     }
+    if (memoryError?.code === 'MEMORY_OWNER_REQUIRED') {
+      return res.status(403).json({
+        error: 'Only the profile owner or an administrator may erase profile memory',
+        code: memoryError.code,
+      })
+    }
+    console.error('[profiles] profile-memory deletion contract failed:', memoryError?.message || memoryError)
+    return res.status(500).json({ error: 'Could not safely erase profile memory' })
   }
 
   // Designated/demo profiles are intentionally "ensured" by boot-time seeding.

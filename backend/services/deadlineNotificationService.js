@@ -10,6 +10,8 @@
 import { randomUUID } from 'crypto'
 import { dispatchDeadlineAlerts } from './deadlineEmailSmsService.js'
 import { getProfileLanguage, getUserLanguage } from './comms/profileLanguage.js'
+import { ensureNotificationsTable } from './notificationService.js'
+export { emitOpportunityChangeNotifications } from './notificationService.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('deadlineNotificationService')
 
@@ -43,33 +45,6 @@ const ACTIVE_STATUSES = [
   'auto_applied',
   'report',
 ]
-
-/**
- * Ensure the notifications table exists (idempotent).
- */
-async function ensureNotificationsTable(db) {
-  try {
-    await db.prepare('SELECT 1 FROM notifications LIMIT 1').get()
-  } catch {
-    // Table missing — create it.
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS notifications (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        data TEXT,
-        read INTEGER NOT NULL DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        expires_at TIMESTAMP
-      );
-      CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
-      CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
-      CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
-    `)
-  }
-}
 
 // Application-tracker statuses that are still actively working toward a deadline.
 // grant_applications is a distinct feature from the grants pipeline (see RC-13);

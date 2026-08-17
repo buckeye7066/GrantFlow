@@ -13,6 +13,7 @@ import { buildMissionHealth } from '../services/missionHealthService.js'
 import { looksUnsafeJwtSecret } from '../config/env.js'
 import { BOOT_ID } from '../config/bootId.js'
 import { TASK_STATUSES } from '../services/hamilton/applicationTaskStore.js'
+import { getOperationalMetricsSnapshot } from '../services/operationalMetrics.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:health')
@@ -118,6 +119,25 @@ function redactFilesystemError(error) {
   return 'upload_storage_unavailable'
 }
 
+function checkUploadSecurityPolicy() {
+  const scannerConfigured = Boolean(String(process.env.CLAMAV_HOST || '').trim())
+  const scannerRequired = /^(1|true|yes|on)$/i.test(String(process.env.CLAMAV_REQUIRED || '').trim())
+  if (scannerRequired && !scannerConfigured) {
+    return {
+      ok: false,
+      reason: 'malware_scanner_required_but_unconfigured',
+      scanner_configured: false,
+      scanner_required: true,
+    }
+  }
+  return {
+    ok: true,
+    content_type_verification: true,
+    scanner_configured: scannerConfigured,
+    scanner_required: scannerRequired,
+  }
+}
+
 async function checkRequiredSchema(db) {
   const required = [
     { table: 'users', column: 'is_admin' },
@@ -128,6 +148,18 @@ async function checkRequiredSchema(db) {
     { table: 'dead_letter_queue', column: 'job_id' },
     { table: 'anya_runs', column: 'status' },
     { table: 'anya_run_logs', column: 'run_id' },
+    { table: 'funding_opportunities', column: 'current_status' },
+    { table: 'opportunity_change_history', column: 'changed_fields' },
+    { table: 'profile_memory_entries', column: 'current_revision' },
+    { table: 'profile_memory_revisions', column: 'payload_redacted' },
+    { table: 'grant_transactions', column: 'source_object_id' },
+    { table: 'opportunity_solicitations', column: 'opportunity_id' },
+    { table: 'solicitation_versions', column: 'source_sha256' },
+    { table: 'solicitation_requirements', column: 'normalized_value_json' },
+    { table: 'application_lifecycle_subjects', column: 'canonical_task_id' },
+    { table: 'draft_requirement_coverage', column: 'coverage_status' },
+    { table: 'application_outcome_evidence', column: 'evidence_sha256' },
+    { table: 'api_rate_limit_buckets', column: 'hit_count' },
   ]
 
   try {
@@ -147,7 +179,6 @@ async function checkRequiredSchema(db) {
           .get(item.table, item.column)
         if (!row) return { ok: false, reason: 'missing_schema', missing: item }
       } else {
-        if (!/^[a-zA-Z0-9_]+$/.test(item.table)) return { ok: false, reason: 'invalid_table_identifier', table: item.table }
         if (!/^[a-zA-Z0-9_]+$/.test(item.table)) return { ok: false, reason: 'invalid_table_identifier', table: item.table }
         if (!/^[a-zA-Z0-9_]+$/.test(item.column)) return { ok: false, reason: 'invalid_column_identifier', column: item.column }
         const stmt = db.prepare('SELECT * FROM pragma_table_info(?)')
@@ -299,10 +330,18 @@ router.get('/api/health', async (req, res) => {
       rawStatus === status
         ? healthSummary
         : { ...healthSummary, status, legacy_status: rawStatus }
+    const slo = getOperationalMetricsSnapshot()
 
     return res.status(statusCode).json({
       ...body,
       build: getBuildInfo(),
+      slo: {
+        status: slo.overall.status,
+        requests: slo.overall.requests,
+        availability: slo.overall.availability,
+        latency_p95_ms: slo.overall.latency_p95_ms,
+        window_ms: slo.window_ms,
+      },
     })
   } catch (error) {
     routeLogger.error('public health summary failed', { error: error?.message || String(error) })
@@ -377,10 +416,12 @@ router.get('/api/health/storage', async (req, res) => {
   const missingEnv = isProd && !String(process.env.UPLOADS_DIR || '').trim()
 
   const degraded = !ok || (isProd && (!likelyPersistent || missingEnv) && !allowEphemeral)
+  const uploadSecurity = checkUploadSecurityPolicy()
+  const unavailable = degraded || !uploadSecurity.ok
 
-  return res.status(degraded ? 503 : 200).json({
-    ok: !degraded,
-    status: degraded ? 'degraded' : 'ok',
+  return res.status(unavailable ? 503 : 200).json({
+    ok: !unavailable,
+    status: unavailable ? 'degraded' : 'ok',
     configured,
     writable: ok,
     likely_persistent: likelyPersistent,
@@ -388,6 +429,7 @@ router.get('/api/health/storage', async (req, res) => {
     allow_ephemeral_uploads: allowEphemeral,
     file_count: fileCount,
     last_error: ok ? null : (redactFilesystemError(writableCheck?.error) || null),
+    upload_security: uploadSecurity,
     details_redacted: true,
     timestamp: new Date().toISOString(),
   })
@@ -458,6 +500,19 @@ router.get('/readyz', async (req, res) => {
     })
   }
 
+  const uploadSecurity = checkUploadSecurityPolicy()
+  if (!uploadSecurity.ok) {
+    return res.status(503).json({
+      ok: false,
+      status: 'not_ready',
+      reason: uploadSecurity.reason,
+      scanner_required: uploadSecurity.scanner_required,
+      scanner_configured: uploadSecurity.scanner_configured,
+      details_redacted: true,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
   const isProduction = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
   const skipMissionGate =
     String(process.env.GRANTFLOW_SKIP_MISSION_GATE || '').toLowerCase() === 'true' ||
@@ -480,12 +535,15 @@ router.get('/readyz', async (req, res) => {
   }
 
   const pipeline = getPipelineHealth()
+  const slo = getOperationalMetricsSnapshot()
 
   return res.status(200).json({
     ok: true,
     status: 'ready',
     dialect: dbCheck.dialect ?? null,
     pipeline_status: pipeline.overall,
+    slo_status: slo.overall.status,
+    upload_security: uploadSecurity,
     mission_gate: isProduction && !skipMissionGate ? 'passed' : 'not_enforced',
     timestamp: new Date().toISOString(),
   })

@@ -5,11 +5,13 @@
 // opportunity_identity_conflicts — see the opportunity_identity_tables
 // migration twins + schema.sql).
 //
-// ADDITIVE, default-off: NOTHING in the live code path calls this module yet —
-// it is wired in a later sub-PR. This file adds ONLY injectable-DB accessors
-// (the repo's dialect-agnostic shim OR a raw better-sqlite3 handle in tests;
-// `?` placeholders and `ON CONFLICT ... DO UPDATE` work on both SQLite and
-// Postgres).
+// ADDITIVE: the alias/conflict tables remain default-off for general identity
+// claiming, while crawler persistence reuses `withIdentityTxn` as a keyed
+// serializer for rolling Grants.gov identity migration. That lock-only use
+// does not read or write either identity table. The remaining exports are
+// injectable-DB accessors (the repo's dialect-agnostic shim OR a raw
+// better-sqlite3 handle in tests; `?` placeholders and
+// `ON CONFLICT ... DO UPDATE` work on both SQLite and Postgres).
 //
 // Identity model:
 //   - An ALIAS maps a (scheme, identity_key) — e.g. a normalized URL or an
@@ -30,9 +32,10 @@
 // key (taken INSIDE the transaction, before any dual-read), SQLite via a
 // BEGIN IMMEDIATE transaction (the write lock is taken up front) — and on a
 // unique-constraint violation OF THE ALIAS CONSTRAINT SPECIFICALLY (never an
-// unrelated table's) retries the callback ONCE: the loser's re-read
+// unrelated table's) retries an alias-claim callback ONCE: the loser's re-read
 // (`getAlias` first, per the callback contract below) then sees the winner's
-// row instead of colliding again.
+// row instead of colliding again. Keyed-lock-only callbacks cannot enter that
+// alias-specific retry path.
 
 import { randomUUID } from 'crypto'
 
@@ -360,12 +363,15 @@ async function runIdentityTxnOnce(db, scheme, identityKey, fn) {
  * lost-race case.
  *
  * CALLBACK CONTRACT: `fn(tx)` receives the transaction handle and MUST perform
- * its reads through it, starting with `getAlias` — the retry semantics depend
- * on the second attempt re-reading the alias and seeing the winner's row.
- * The callback must do TRANSACTION-LOCAL, IDEMPOTENT work ONLY: no writes
- * through other connections, no telemetry emission, no external service calls.
- * A retried callback runs in FULL a second time, and anything that escaped the
- * rolled-back transaction would be double-applied.
+ * all database reads and writes through it. Alias-claim callbacks MUST start
+ * with `getAlias`: their retry semantics depend on the second attempt
+ * re-reading the alias and seeing the winner's row. Keyed-lock-only callbacks
+ * that never touch the alias table do not need that pre-read because they
+ * cannot trigger the alias-specific retry below. Every callback must do
+ * TRANSACTION-LOCAL, IDEMPOTENT work ONLY: no writes through other connections,
+ * no telemetry emission, no external service calls. A retried alias callback
+ * runs in FULL a second time, and anything that escaped the rolled-back
+ * transaction would be double-applied.
  *
  * On a unique violation OF THE ALIAS CONSTRAINT (two logical writers claimed
  * the same key; the serialization window was missed — e.g. a caller outside

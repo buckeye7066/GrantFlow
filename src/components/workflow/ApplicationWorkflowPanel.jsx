@@ -10,6 +10,7 @@
  * Props:
  *   opportunity    — canonical funding-result object (used to seed/save)
  *   profileId      — required to start a plan
+ *   pipelineGrantId — optional tracked-grant id that owns drafts/documents
  *   applicationId  — optional. If known, panel loads steps/docs/deadlines.
  *
  * If neither applicationId nor opportunity is provided, the panel is a
@@ -18,6 +19,7 @@
 
 import React, { useState, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { apiFetch } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -26,8 +28,7 @@ import { Loader2, CheckSquare, Square, Calendar, FileText, Target, Plus, Upload 
 import { useToast } from '@/components/ui/use-toast'
 
 const ALLOWED_STATUSES = [
-  'discovered',
-  'interested',
+  'draft',
   'in_progress',
   'submitted',
   'under_review',
@@ -48,7 +49,7 @@ function formatDeadline(value) {
   }
 }
 
-export default function ApplicationWorkflowPanel({ opportunity, profileId, applicationId: applicationIdProp }) {
+export default function ApplicationWorkflowPanel({ opportunity, profileId, pipelineGrantId, applicationId: applicationIdProp }) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [applicationId, setApplicationId] = useState(applicationIdProp || null)
@@ -73,7 +74,7 @@ export default function ApplicationWorkflowPanel({ opportunity, profileId, appli
   const saveMut = useMutation({
     mutationFn: () => apiFetch('/api/application-workflow/from-opportunity', {
       method: 'POST',
-      body: JSON.stringify({ profile_id: profileId, opportunity }),
+      body: JSON.stringify({ profile_id: profileId, pipeline_grant_id: pipelineGrantId || null, opportunity }),
     }),
     onSuccess: (data) => {
       setApplicationId(data?.id)
@@ -207,6 +208,10 @@ export default function ApplicationWorkflowPanel({ opportunity, profileId, appli
                 </Button>
               ))}
             </div>
+
+            <Button asChild size="sm" variant="outline">
+              <Link to={`/GrantLifecycle/${encodeURIComponent(applicationId)}`}>Open lifecycle workspace</Link>
+            </Button>
 
             {/* Steps */}
             <section>
