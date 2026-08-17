@@ -40,6 +40,59 @@ function parseJobParameters(raw) {
   }
 }
 
+function finiteCount(value) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+}
+
+function discoveryResultMeta(result = {}, context = {}) {
+  return {
+    completed: context.status === 'completed',
+    engine: result.engine ?? 'crawler-os',
+    trigger: 'scheduled_daily',
+    duration_ms: Math.max(0, Number(context.durationMs) || 0),
+    profile_digest: context.digest ?? null,
+    planned: finiteCount(result.planned),
+    stored: finiteCount(result.stored),
+    opportunities: finiteCount(result.opportunities),
+    matches: finiteCount(result.matches),
+    rejected: finiteCount(result.rejected),
+    sources: finiteCount(result.sources),
+    source_runs: finiteCount(result.source_runs),
+    error: context.error ?? null,
+  }
+}
+
+/** Persist one terminal audit marker for every scheduled profile attempt. */
+async function writeScheduledDiscoveryMarker(db, profileId, context = {}) {
+  const status = context.status === 'failed' ? 'failed' : 'completed'
+  const result = context.result ?? {}
+  const resultCount = finiteCount(result.opportunities ?? result.stored ?? result.result_count)
+  const parameters = {
+    _profile_digest: context.digest ?? null,
+    _trigger: 'scheduled_daily',
+    _engine: result.engine ?? 'crawler-os',
+  }
+  const resultMeta = discoveryResultMeta(result, { ...context, status })
+
+  await db.prepare(
+    `INSERT INTO crawler_jobs
+      (id, type, status, profile_id, parameters, result_count, result_meta, error,
+       requested_by, started_at, completed_at)
+     VALUES (?, 'local', ?, ?, ?, ?, ?, ?, 'scheduled-auto-discovery', ?, ?)`,
+  ).run(
+    randomUUID(),
+    status,
+    profileId,
+    JSON.stringify(parameters),
+    resultCount,
+    JSON.stringify(resultMeta),
+    context.error ?? null,
+    context.startedAt ?? new Date().toISOString(),
+    context.completedAt ?? new Date().toISOString(),
+  )
+}
+
 export function getScheduledAutoDiscoveryConfig() {
   return { ...CONFIG }
 }
@@ -54,7 +107,7 @@ export async function shouldRunProfileDailyDiscovery(db, profileId) {
   const last = await db
     .prepare(
       `
-        SELECT created_at, parameters
+        SELECT created_at, parameters, status
         FROM crawler_jobs
         WHERE profile_id = ?
           AND requested_by IN (${placeholders})
@@ -73,6 +126,10 @@ export async function shouldRunProfileDailyDiscovery(db, profileId) {
 
   if (lastDigest && digest && lastDigest !== digest) {
     return { run: true, digest, reason: 'profile_changed' }
+  }
+
+  if (last.status === 'failed') {
+    return { run: true, digest, reason: 'previous_failed' }
   }
 
   const lastAt = new Date(last.created_at)
@@ -94,6 +151,7 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
     enabled,
     profiles_total: 0,
     profiles_queued: 0,
+    profiles_failed: 0,
     profiles_skipped: 0,
     skip_reasons: {},
     errors: [],
@@ -111,15 +169,17 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
   const runDiscovery = options.runDiscovery || triggerAutoDiscoveryCrawlers
 
   for (const profile of profiles || []) {
+    const attemptStartedAt = new Date()
+    let decision = null
     try {
-      const decision = await shouldRunProfileDailyDiscovery(db, profile.id)
+      decision = await shouldRunProfileDailyDiscovery(db, profile.id)
       if (!decision.run) {
         report.profiles_skipped += 1
         report.skip_reasons[decision.reason] = (report.skip_reasons[decision.reason] || 0) + 1
         continue
       }
 
-      await runDiscovery(db, profile.id, {
+      const discoveryResult = await runDiscovery(db, profile.id, {
         uploadDir: options.uploadDir,
         getOpenAI: options.getOpenAI,
         fetcher: options.fetcher,
@@ -128,41 +188,36 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
         trigger: 'scheduled_daily',
       })
 
-      // Stamp a digest-aware marker row so shouldRunProfileDailyDiscovery
-      // (which still queries crawler_jobs) can see "ran today" + "ran for
-      // this profile snapshot" on the next batch. The OS shim no longer
-      // writes crawler_jobs rows, so without this marker the scheduler
-      // would re-run discovery for every active profile every batch
-      // regardless of whether the profile changed.
-      //
-      // status='completed' so the dispatcher never picks it up. type='local'
-      // is used because crawler_jobs.type has a CHECK constraint and 'local'
-      // is the canonical lightweight discovery marker (the legacy fleet's
-      // first job was always 'local'); the scheduler keys off created_at +
-      // parameters._profile_digest, not the type. The _engine field records
-      // that the OS actually ran, for audits.
       try {
-        await db.prepare(
-          `INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by, completed_at)
-           VALUES (?, 'local', 'completed', ?, ?, 'scheduled-auto-discovery',
-                   ${db?.dialect === 'postgres' ? 'now()' : `datetime('now')`})`,
-        ).run(
-          randomUUID(),
-          profile.id,
-          JSON.stringify({
-            _profile_digest: decision.digest ?? null,
-            _trigger: 'scheduled_daily',
-            _engine: 'crawler-os',
-          }),
-        )
+        const completedAt = new Date()
+        await writeScheduledDiscoveryMarker(db, profile.id, {
+          status: 'completed',
+          digest: decision.digest,
+          result: discoveryResult,
+          startedAt: attemptStartedAt.toISOString(),
+          completedAt: completedAt.toISOString(),
+          durationMs: completedAt.getTime() - attemptStartedAt.getTime(),
+        })
       } catch (markerErr) {
-        // Marker is best-effort; scheduling still works (just less efficient)
-        // if this fails.
         log.warn(`[scheduled-auto-discovery] marker insert failed for ${profile.id}: ${markerErr?.message || markerErr}`)
       }
 
       report.profiles_queued += 1
     } catch (err) {
+      report.profiles_failed += 1
+      const completedAt = new Date()
+      try {
+        await writeScheduledDiscoveryMarker(db, profile.id, {
+          status: 'failed',
+          digest: decision?.digest ?? null,
+          error: err?.message || String(err),
+          startedAt: attemptStartedAt.toISOString(),
+          completedAt: completedAt.toISOString(),
+          durationMs: completedAt.getTime() - attemptStartedAt.getTime(),
+        })
+      } catch (markerErr) {
+        log.warn(`[scheduled-auto-discovery] failed marker insert failed for ${profile.id}: ${markerErr?.message || markerErr}`)
+      }
       report.errors.push({
         profile_id: profile.id,
         error: err?.message || String(err),
@@ -171,6 +226,7 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
   }
 
   report.completed_at = new Date().toISOString()
+  report.duration_ms = Math.max(0, Date.parse(report.completed_at) - Date.parse(report.started_at))
 
   try {
     await logAuditEvent(db, {

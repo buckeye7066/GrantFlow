@@ -23,6 +23,7 @@ const Pipeline = lazy(() => import('./Pipeline'), 'Pipeline')
 const EndUserPipeline = lazy(() => import('./EndUserPipeline'), 'EndUserPipeline')
 const HamiltonProcessing = lazy(() => import('./HamiltonProcessing'), 'HamiltonProcessing')
 const Applications = lazy(() => import('./Applications'), 'Applications')
+const GrantLifecycle = lazy(() => import('./GrantLifecycle'), 'GrantLifecycle')
 const Proposals = lazy(() => import('./Proposals'), 'Proposals')
 const Outreach = lazy(() => import('./Outreach'), 'Outreach')
 const GrantDeadline = lazy(() => import('./GrantDeadline'), 'GrantDeadline')
@@ -160,6 +161,7 @@ function LayoutRoutes() {
           <Route path="/Pipeline" element={withGate(pipelinePage, 'Pipeline')} />
           <Route path="/HamiltonProcessing" element={withGate(<HamiltonProcessing />, 'HamiltonProcessing')} />
           <Route path="/Applications" element={withGate(<Applications />, 'Applications')} />
+          <Route path="/GrantLifecycle/:applicationId" element={withGate(<GrantLifecycle />, 'GrantLifecycle')} />
           <Route path="/Proposals" element={withGate(<Proposals />, 'Proposals')} />
           <Route path="/Outreach" element={withGate(<Outreach />, 'Outreach')} />
           <Route path="/GrantDeadline" element={withGate(<GrantDeadline />, 'GrantDeadline')} />

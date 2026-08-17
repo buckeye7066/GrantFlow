@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { SqliteDb } from '../../backend/db/index.js'
 import {
   apiRateLimitMiddleware,
@@ -76,9 +77,13 @@ test('cloud-login live input/stream ride the real-time lane, not the 25/10min au
   }
 })
 
-test('cost limits are shared through the database across middleware instances', async () => {
+test('cost limits are shared through the migrated database authority across middleware instances', async () => {
   resetApiRateLimitStateForTests()
   const db = new SqliteDb(':memory:')
+  db.exec(readFileSync(
+    new URL('../../backend/db/migrations/172_reliability_security_observability.sql', import.meta.url),
+    'utf8',
+  ))
   const env = { API_COST_RATE_LIMIT_MAX: '1', API_COST_RATE_LIMIT_WINDOW_MS: '60000' }
   const firstInstance = apiRateLimitMiddleware({ env, clock: () => 1000 })
   const secondInstance = apiRateLimitMiddleware({ env, clock: () => 1000 })

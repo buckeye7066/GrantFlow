@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import {
   requireAuthenticatedUser,
   ensureProfileAccess,
+  ensureGrantAccess,
 } from '../utils/accessControl.js'
 import { mapHamiltonStatus } from '../services/hamilton/applicationStatusPresentation.js'
 import {
@@ -27,7 +28,7 @@ router.use((req, res, next) => {
 })
 
 const VALID_STATUSES = new Set([
-  'draft', 'in_progress', 'submitted', 'under_review', 'awarded', 'denied', 'withdrawn',
+  'draft', 'in_progress', 'submitted', 'under_review', 'awarded', 'denied', 'withdrawn', 'closed',
 ])
 
 function normalizeLimit(val, fallback = 200) {
@@ -59,6 +60,53 @@ function mapRow(row) {
     contact_email: row.contact_email ?? null,
     created_at: row.created_at ?? null,
     updated_at: row.updated_at ?? null,
+  }
+}
+
+async function resolveCreateReferences(req, res, { profileId, pipelineGrantId, opportunityId }) {
+  let resolvedOpportunityId = opportunityId
+
+  if (pipelineGrantId) {
+    const grant = await ensureGrantAccess(req, res, pipelineGrantId)
+    if (!grant) return null
+
+    // ensureGrantAccess deliberately permits organization-level access. An
+    // application, however, is a profile-owned aggregate: its persisted grant
+    // pointer must bind to that exact submitted profile, even for admins and
+    // users who can access multiple profiles in the same organization.
+    if (!grant.profile_id || String(grant.profile_id) !== profileId) {
+      res.status(403).json({ error: 'Pipeline grant does not belong to the submitted profile' })
+      return null
+    }
+
+    const grantOpportunityId = grant.funding_opportunity_id
+      ? String(grant.funding_opportunity_id)
+      : null
+    if (resolvedOpportunityId && grantOpportunityId !== resolvedOpportunityId) {
+      res.status(403).json({ error: 'Opportunity does not belong to the submitted pipeline grant' })
+      return null
+    }
+    if (!resolvedOpportunityId) resolvedOpportunityId = grantOpportunityId
+  } else if (resolvedOpportunityId) {
+    // Catalog opportunities are global. Treat one as belonging to a profile
+    // only when that profile already has the corresponding pipeline grant;
+    // otherwise a caller could attach another tenant's opportunity to its
+    // application and later cross that boundary through legacy joins.
+    const scopedGrant = await req.db.prepare(
+      `SELECT id
+         FROM grants
+        WHERE profile_id = ? AND funding_opportunity_id = ?
+        LIMIT 1`,
+    ).get(profileId, resolvedOpportunityId)
+    if (!scopedGrant) {
+      res.status(403).json({ error: 'Opportunity does not belong to the submitted profile' })
+      return null
+    }
+  }
+
+  return {
+    pipelineGrantId,
+    opportunityId: resolvedOpportunityId,
   }
 }
 
@@ -216,10 +264,15 @@ router.post('/', async (req, res) => {
     const profileId = data.profile_id ? String(data.profile_id) : null
     if (!profileId) return res.status(400).json({ error: 'profile_id is required' })
 
-    if (!req.ctx?.isAdmin) {
-      const canAccess = await ensureProfileAccess(req, res, profileId)
-      if (!canAccess) return res.status(403).json({ error: 'Forbidden' })
-    }
+    const canAccess = await ensureProfileAccess(req, res, profileId)
+    if (!canAccess) return
+
+    const references = await resolveCreateReferences(req, res, {
+      profileId,
+      pipelineGrantId: data.pipeline_grant_id ? String(data.pipeline_grant_id) : null,
+      opportunityId: data.opportunity_id ? String(data.opportunity_id) : null,
+    })
+    if (!references) return
 
     const id = crypto.randomUUID()
     const now = new Date().toISOString()
@@ -237,8 +290,8 @@ router.post('/', async (req, res) => {
       .run(
         id,
         profileId,
-        data.opportunity_id ? String(data.opportunity_id) : null,
-        data.pipeline_grant_id ? String(data.pipeline_grant_id) : null,
+        references.opportunityId,
+        references.pipelineGrantId,
         String(userId),
         'draft',
         data.title ? String(data.title).trim() : null,
@@ -488,6 +541,8 @@ router.post('/:id/outcome', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' })
     }
 
+    if (!(await ensureProfileAccess(req, res, String(row.profile_id)))) return
+
     const data = req.body ?? {}
     const outcome = data.outcome ? String(data.outcome) : null
 
@@ -495,72 +550,26 @@ router.post('/:id/outcome', async (req, res) => {
       return res.status(400).json({ error: 'outcome must be "awarded" or "denied"' })
     }
 
-    const now = new Date().toISOString()
-    await req.db
-      .prepare(
-        `UPDATE grant_applications SET
-          status = ?,
-          amount_awarded = ?,
-          notes = ?,
-          response_received_at = ?,
-          updated_at = ?
-        WHERE id = ?`,
-      )
-      .run(
-        outcome,
-        (data.amount_awarded !== null && data.amount_awarded !== undefined) ? Number(data.amount_awarded) : row.amount_awarded,
-        data.notes !== undefined ? (data.notes ? String(data.notes) : null) : row.notes,
-        now,
-        now,
-        String(req.params.id),
-      )
-
-    // Propagate to the linked pipeline grant. Without this the award is
-    // recorded only on grant_applications, so the pipeline card, the "funds
-    // secured" rollup (which sums grants.amount_awarded) and every
-    // find->apply->submit->confirmed report stay blank even though the user
-    // just told us they were funded. Failure here must not lose the outcome we
-    // already committed above, so it is reported rather than thrown.
-    let pipelineGrantUpdated = false
-    let pipelineGrantError = null
+    // Validate a legacy/corrupted pointer before mutating either row. Merely
+    // having access to both profiles (or being an admin) must not let an
+    // application in profile A drive a grant in profile B.
     if (row.pipeline_grant_id) {
-      const grantStatus = outcome === 'awarded' ? 'awarded' : 'declined'
-      const awardedAmount = (data.amount_awarded !== null && data.amount_awarded !== undefined)
-        ? Number(data.amount_awarded)
-        : row.amount_awarded
-      const awardDate = outcome === 'awarded' ? now.slice(0, 10) : null
-      try {
-        const result = await req.db
-          .prepare(
-            `UPDATE grants SET
-              status = ?,
-              amount_awarded = COALESCE(?, amount_awarded),
-              award_date = COALESCE(?, award_date),
-              updated_at = ?
-            WHERE id = ?`,
-          )
-          .run(
-            grantStatus,
-            outcome === 'awarded' && Number.isFinite(awardedAmount) ? awardedAmount : null,
-            awardDate,
-            now,
-            String(row.pipeline_grant_id),
-          )
-        pipelineGrantUpdated = Number(result?.changes ?? 0) > 0
-      } catch (grantError) {
-        pipelineGrantError = grantError?.message || String(grantError)
-        routeLogger.error('[grant-applications] outcome grant sync failed:', grantError)
+      const linkedGrant = await ensureGrantAccess(req, res, String(row.pipeline_grant_id))
+      if (!linkedGrant) return
+      if (!linkedGrant.profile_id || String(linkedGrant.profile_id) !== String(row.profile_id)) {
+        return res.status(403).json({ error: 'Linked pipeline grant does not belong to this application profile' })
       }
     }
 
-    const updated = await req.db
-      .prepare('SELECT * FROM grant_applications WHERE id = ?')
-      .get(String(req.params.id))
-
-    return res.json({
-      ...mapRow(updated),
-      pipeline_grant_updated: pipelineGrantUpdated,
-      pipeline_grant_error: pipelineGrantError,
+    // A reported result is not proof of a funder decision. This legacy route
+    // used to mark the application and pipeline terminal (and count funds
+    // secured) from an unaudited click. Outcome assertions now go through the
+    // lifecycle endpoint, which requires exact-profile durable document bytes
+    // and records immutable evidence before changing either status.
+    return res.status(422).json({
+      error: 'OUTCOME_EVIDENCE_REQUIRED',
+      message: 'Verify the outcome with a durable funder response in the lifecycle workspace.',
+      lifecycle_url: `/GrantLifecycle/${encodeURIComponent(row.id)}`,
     })
   } catch (error) {
     routeLogger.error('[grant-applications] outcome error:', error)

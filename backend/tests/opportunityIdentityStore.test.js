@@ -1,7 +1,8 @@
 /**
  * Phase 2.1 web-lane de-contamination — opportunity identity schema + accessors.
  *
- * ADDITIVE, default-off, ZERO behavior change. These tests pin that:
+ * ADDITIVE: alias/conflict claiming remains default-off; Crawler OS persistence
+ * uses only the keyed transaction serializer. These tests pin that:
  *   (a) an alias round-trips (insert → get) and touch bumps last_seen_at ONLY;
  *   (b) upsertOpenConflict is idempotent per (scheme, identity_key): a second
  *       observation lands on the SAME row id with updated evidence — never a
@@ -19,8 +20,9 @@
  *       while an UNRELATED unique violation is never retried;
  *   (e) the migration twins exist, apply on a fresh DB, and are idempotent;
  *       schema.sql (fresh-install bootstrap) creates the same tables; and
- *   (f) NOTHING in the live code path imports the accessor yet (wired in a
- *       later sub-PR).
+ *   (f) the ONLY live integration is Crawler OS persistence using
+ *       withIdentityTxn to serialize the reviewed Grants.gov legacy-identity
+ *       migration; no alias/conflict accessor is otherwise wired.
  *
  * POSTGRES COVERAGE DISPOSITION: the Postgres path (advisory lock, ON CONFLICT
  * partial-index upsert, error.constraint) is exercised here only against a
@@ -632,15 +634,15 @@ describe('migration twins — opportunity identity tables', () => {
   })
 })
 
-describe('zero behavior change — nothing live calls the accessor yet', () => {
-  // Walk the live source dirs (NOT tests) for any import/require of the
-  // accessor module. Doc-comment MENTIONS of the module path (schema.sql, the
-  // migrations) are fine — those are the additive registration points, not
-  // callers; we assert only that no live code IMPORTS/CALLS it (wired in a
-  // later sub-PR).
+describe('live integration boundary — Grants.gov legacy identity migration only', () => {
+  // Walk the live source dirs (NOT tests) for every import/require or accessor
+  // call. The reviewed rolling migration deliberately reuses withIdentityTxn
+  // as a keyed serializer, but the alias/conflict accessors remain default-off.
+  // Pinning the exact file, import, and call prevents a future caller from
+  // silently widening this security-sensitive identity surface.
   const LIVE_DIRS = ['backend', 'src', 'shared']
   const CODE_EXT = /\.(js|mjs|cjs|jsx|ts|tsx)$/
-  const IMPORT_RE = /(?:from\s+['"][^'"]*opportunityIdentityStore|require\(\s*['"][^'"]*opportunityIdentityStore)/
+  const IMPORT_RE = /(?:from\s+['"][^'"]*opportunityIdentityStore|require\(\s*['"][^'"]*opportunityIdentityStore|import\(\s*['"][^'"]*opportunityIdentityStore)/
   const CALL_RE = /\b(?:getAlias|insertAlias|touchAlias|upsertOpenConflict|resolveConflict|withIdentityTxn)\s*\(/
 
   function walk(dir, out) {
@@ -664,8 +666,9 @@ describe('zero behavior change — nothing live calls the accessor yet', () => {
     return out
   }
 
-  it('no live source file imports OR calls the accessor (wired in a later sub-PR)', () => {
+  it('allows exactly crawlerOsPersistenceCore to import and call withIdentityTxn', () => {
     const modulePath = 'backend/services/opportunityIdentityStore.js'
+    const expectedCaller = 'backend/services/crawlerOsPersistenceCore.js'
     const files = LIVE_DIRS.flatMap((d) => walk(path.join(process.cwd(), d), []))
     const offenders = []
     for (const f of files) {
@@ -674,6 +677,19 @@ describe('zero behavior change — nothing live calls the accessor yet', () => {
       const src = fs.readFileSync(f, 'utf8')
       if (IMPORT_RE.test(src) || CALL_RE.test(src)) offenders.push(rel)
     }
-    expect(offenders, `unexpected live import/call of opportunityIdentityStore: ${offenders.join(', ')}`).toEqual([])
+
+    expect(
+      offenders.sort(),
+      `unexpected live import/call of opportunityIdentityStore: ${offenders.join(', ')}`,
+    ).toEqual([expectedCaller])
+
+    const callerSource = fs.readFileSync(path.join(process.cwd(), expectedCaller), 'utf8')
+    expect(callerSource).toMatch(
+      /import\s*\{\s*withIdentityTxn\s*\}\s*from\s*['"]\.\/opportunityIdentityStore\.js['"]\s*;?/,
+    )
+    expect(callerSource.match(/\bwithIdentityTxn\s*\(/g)).toHaveLength(1)
+    expect(callerSource).not.toMatch(
+      /\b(?:getAlias|insertAlias|touchAlias|upsertOpenConflict|resolveConflict)\s*\(/,
+    )
   })
 })

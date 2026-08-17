@@ -31,6 +31,22 @@ function createDb() {
   const raw = new Database(':memory:')
   raw.exec(`
     CREATE TABLE profiles (id TEXT PRIMARY KEY);
+    CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      sponsor TEXT,
+      opportunity_kind TEXT,
+      deadline TEXT,
+      application_url TEXT,
+      source_url TEXT,
+      is_active INTEGER DEFAULT 1,
+      is_hidden INTEGER DEFAULT 0
+    );
+    CREATE TABLE grants (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT,
+      funding_opportunity_id TEXT
+    );
     CREATE TABLE grant_applications (
       id TEXT PRIMARY KEY,
       profile_id TEXT NOT NULL,
@@ -94,6 +110,29 @@ function createDb() {
       outcome TEXT,
       recorded_by TEXT
     );
+    CREATE TABLE opportunity_solicitations (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      source_kind TEXT,
+      source_url TEXT,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE solicitation_versions (
+      id TEXT PRIMARY KEY,
+      solicitation_id TEXT NOT NULL,
+      version_number INTEGER NOT NULL
+    );
+    CREATE TABLE application_lifecycle_subjects (
+      application_id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT,
+      pipeline_grant_id TEXT,
+      canonical_task_id TEXT,
+      solicitation_id TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
     INSERT INTO profiles (id) VALUES ('p-test');
   `)
 
@@ -111,7 +150,36 @@ function wrapDb(raw) {
         async run(...args) { return stmt.run(...args) },
       }
     },
+    async withTransaction(work) {
+      raw.exec('BEGIN IMMEDIATE')
+      try {
+        const result = await work(this)
+        raw.exec('COMMIT')
+        return result
+      } catch (error) {
+        try { raw.exec('ROLLBACK') } catch { /* preserve the original failure */ }
+        throw error
+      }
+    },
   }
+}
+
+async function createCanonicalApplication(db, args) {
+  const opportunity = args?.opportunity || {}
+  await db.prepare(
+    `INSERT OR IGNORE INTO funding_opportunities
+      (id, title, sponsor, opportunity_kind, deadline, application_url, source_url, is_active, is_hidden)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)`,
+  ).run(
+    opportunity.id,
+    opportunity.title,
+    opportunity.sponsor ?? null,
+    opportunity.kind ?? opportunity.opportunity_kind ?? 'direct',
+    opportunity.deadline ?? null,
+    opportunity.application_url ?? null,
+    opportunity.source_url ?? null,
+  )
+  return createApplicationFromOpportunity(db, args)
 }
 
 // ── Pure planner tests ──────────────────────────────────────────────────
@@ -161,7 +229,7 @@ test('persist: createApplicationFromOpportunity persists the application + steps
     deadline: '2099-12-31T00:00:00.000Z',
     application_url: 'https://www.fema.gov/grants/preparedness/firefighters',
   }
-  const result = await createApplicationFromOpportunity(db, {
+  const result = await createCanonicalApplication(db, {
     profileId: 'p-test',
     userId: 'u-test',
     opportunity: opp,
@@ -173,7 +241,7 @@ test('persist: createApplicationFromOpportunity persists the application + steps
   const app = await db.prepare('SELECT * FROM grant_applications WHERE id = ?').get(result.id)
   assert.equal(app.profile_id, 'p-test')
   assert.equal(app.opportunity_id, 'opp-fire-1')
-  assert.equal(app.status, 'discovered')
+  assert.equal(app.status, 'draft')
 
   const steps = await db.prepare('SELECT * FROM application_steps WHERE application_id = ?').all(result.id)
   assert.ok(steps.length >= 3)
@@ -186,16 +254,51 @@ test('persist: createApplicationFromOpportunity persists the application + steps
 test('persist: createApplicationFromOpportunity is idempotent on (profile_id, opportunity_id)', async () => {
   const db = createDb()
   const opp = { id: 'opp-2', title: 'Some Grant', kind: 'direct' }
-  const a = await createApplicationFromOpportunity(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
-  const b = await createApplicationFromOpportunity(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
+  const a = await createCanonicalApplication(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
+  const b = await createCanonicalApplication(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
   assert.equal(a.id, b.id)
   assert.equal(b.created, false)
+})
+
+test('persist: canonical catalog facts override caller-spoofed application facts', async () => {
+  const db = createDb()
+  await db.prepare(
+    `INSERT INTO funding_opportunities
+      (id, title, sponsor, opportunity_kind, deadline, is_active, is_hidden)
+     VALUES (?, ?, ?, ?, ?, 1, 0)`,
+  ).run('opp-canonical', 'Canonical title', 'Canonical funder', 'direct', '2099-09-30T00:00:00.000Z')
+
+  const created = await createApplicationFromOpportunity(db, {
+    profileId: 'p-test',
+    userId: 'u-test',
+    opportunity: {
+      id: 'opp-canonical',
+      title: 'Spoofed title',
+      sponsor: 'Spoofed funder',
+      deadline: '2000-01-01T00:00:00.000Z',
+    },
+  })
+  const row = await db.prepare(
+    'SELECT opportunity_id, grant_name, funder_name, deadline_date FROM grant_applications WHERE id = ?',
+  ).get(created.id)
+  assert.deepEqual(row, {
+    opportunity_id: 'opp-canonical',
+    grant_name: 'Canonical title',
+    funder_name: 'Canonical funder',
+    deadline_date: '2099-09-30T00:00:00.000Z',
+  })
+  await assert.rejects(
+    () => createApplicationFromOpportunity(db, {
+      profileId: 'p-test', userId: 'u-test', opportunity: { id: 'missing', title: 'Invented' },
+    }),
+    (error) => error?.code === 'OPPORTUNITY_NOT_FOUND' && error?.status === 404,
+  )
 })
 
 test('persist: completeApplicationStep marks step status=completed', async () => {
   const db = createDb()
   const opp = { id: 'opp-3', title: 'Step Test', kind: 'direct' }
-  const { id: appId } = await createApplicationFromOpportunity(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
+  const { id: appId } = await createCanonicalApplication(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
   const stepId = await addApplicationStep(db, appId, { title: 'Custom step' })
   await completeApplicationStep(db, stepId)
   const row = await db.prepare('SELECT * FROM application_steps WHERE id = ?').get(stepId)
@@ -206,7 +309,7 @@ test('persist: completeApplicationStep marks step status=completed', async () =>
 test('persist: addApplicationDocument attaches document metadata', async () => {
   const db = createDb()
   const opp = { id: 'opp-4', title: 'Doc Test', kind: 'direct' }
-  const { id: appId } = await createApplicationFromOpportunity(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
+  const { id: appId } = await createCanonicalApplication(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
   const docId = await addApplicationDocument(db, appId, {
     filename: 'budget.pdf',
     documentType: 'budget',
@@ -218,10 +321,31 @@ test('persist: addApplicationDocument attaches document metadata', async () => {
   assert.equal(row.document_type, 'budget')
 })
 
+test('persist: addApplicationDocument rejects a step from another application', async () => {
+  const db = createDb()
+  const first = await createCanonicalApplication(db, {
+    profileId: 'p-test', userId: 'u', opportunity: { id: 'opp-doc-a', title: 'First', kind: 'direct' },
+  })
+  const second = await createCanonicalApplication(db, {
+    profileId: 'p-test', userId: 'u', opportunity: { id: 'opp-doc-b', title: 'Second', kind: 'direct' },
+  })
+  const otherStep = await db.prepare(
+    'SELECT id FROM application_steps WHERE application_id = ? ORDER BY step_order LIMIT 1',
+  ).get(second.id)
+  await assert.rejects(
+    () => addApplicationDocument(db, first.id, { filename: 'cross-application.pdf', stepId: otherStep.id }),
+    (error) => error?.code === 'APPLICATION_DOCUMENT_STEP_SCOPE_MISMATCH' && error?.status === 409,
+  )
+  const count = await db.prepare(
+    'SELECT COUNT(*) AS n FROM application_documents WHERE application_id = ?',
+  ).get(first.id)
+  assert.equal(count.n, 0)
+})
+
 test('persist: recordSubmissionEvent + setApplicationStatus cycle through valid states', async () => {
   const db = createDb()
   const opp = { id: 'opp-5', title: 'Cycle Test', kind: 'direct' }
-  const { id: appId } = await createApplicationFromOpportunity(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
+  const { id: appId } = await createCanonicalApplication(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
 
   await setApplicationStatus(db, appId, 'in_progress')
   await recordSubmissionEvent(db, appId, { eventType: 'submitted', notes: 'Submitted via portal' })
@@ -239,13 +363,24 @@ test('persist: recordSubmissionEvent + setApplicationStatus cycle through valid 
 test('persist: setApplicationStatus rejects invalid statuses', async () => {
   const db = createDb()
   const opp = { id: 'opp-6', title: 'Bad Status', kind: 'direct' }
-  const { id: appId } = await createApplicationFromOpportunity(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
+  const { id: appId } = await createCanonicalApplication(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
   await assert.rejects(() => setApplicationStatus(db, appId, 'totally-invalid-status'), /invalid/i)
 })
 
+test('persist: compatibility export does not widen grant_applications mutations', async () => {
+  const db = createDb()
+  const opp = { id: 'opp-compat-status', title: 'Compatibility Status Test', kind: 'direct' }
+  const { id: appId } = await createCanonicalApplication(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
+
+  assert.ok(APPLICATION_STATES.includes('interested'), 'pipeline compatibility value must remain exported')
+  await assert.rejects(() => setApplicationStatus(db, appId, 'interested'), /invalid application status/i)
+  const app = await db.prepare('SELECT status FROM grant_applications WHERE id = ?').get(appId)
+  assert.equal(app.status, 'draft')
+})
+
 test('persist: APPLICATION_STATES is a stable, complete lifecycle (mission spec)', () => {
-  // Mission roadmap explicitly lists Discovered → Interested → ... → Awarded/Denied/Closed
-  for (const required of ['discovered', 'interested', 'in_progress', 'submitted', 'under_review', 'awarded', 'denied', 'closed']) {
+  // One vocabulary is shared by both application APIs and the tracker.
+  for (const required of ['draft', 'in_progress', 'submitted', 'under_review', 'awarded', 'denied', 'withdrawn', 'closed']) {
     assert.ok(APPLICATION_STATES.includes(required), `APPLICATION_STATES must include ${required}`)
   }
 })

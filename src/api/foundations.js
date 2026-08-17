@@ -16,6 +16,17 @@ export async function getFoundation(ein) {
   return apiFetch(`/api/foundations/${ein}`)
 }
 
+/** Read persisted IRS-990 grant transactions and their filing provenance. */
+export async function getFunderIntelligence(ein, { taxYear, recipientState, limit = 25, offset = 0 } = {}) {
+  const params = new URLSearchParams()
+  if (taxYear) params.set('tax_year', String(taxYear))
+  if (recipientState) params.set('recipient_state', String(recipientState))
+  if (limit !== 25) params.set('limit', String(limit))
+  if (offset) params.set('offset', String(offset))
+  const query = params.toString()
+  return apiFetch(`/api/foundations/${ein}/intelligence${query ? `?${query}` : ''}`)
+}
+
 /** Get specific 990 filing */
 export async function getFiling(ein, taxPeriod) {
   return apiFetch(`/api/foundations/${ein}/filing/${taxPeriod}`)

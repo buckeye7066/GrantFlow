@@ -14,9 +14,13 @@
 import { createBaseAdapter } from './baseAdapter.js';
 import { OPPORTUNITY_KIND } from '../contract.js';
 import { buildCrawlerQueries, inferCandidateProfile, inferFundingFlags } from '../crawlerVocabulary.js';
-
-const SEARCH_ENDPOINT = 'https://api.grants.gov/v1/api/search2';
-const DETAIL_BASE = 'https://www.grants.gov/search-results-detail';
+import {
+  GRANTS_GOV_SEARCH2_URL,
+  buildGrantsGovSearchPayload,
+  normalizeGrantsGovDate,
+  normalizeGrantsGovStatus,
+  resolveGrantsGovIdentity,
+} from '../../../shared/grantsGovProtocol.js';
 
 // Map our canonical applicant buckets → grants.gov applicant-eligibility codes
 // (verified against the live Search2 eligibility facets). Filtering the query by
@@ -98,7 +102,7 @@ export function createGrantsGovAdapter() {
     buildRequests(thesis, source) {
       const eligibilities = eligibilitiesFor(thesis);
       return buildCrawlerQueries(thesis, source, { limit: 4 }).map((keyword) => ({
-        url: SEARCH_ENDPOINT,
+        url: GRANTS_GOV_SEARCH2_URL,
         query: keyword,
         init: {
           method: 'POST',
@@ -106,35 +110,43 @@ export function createGrantsGovAdapter() {
           // Server-side eligibility filter scopes results to what the profile can
           // actually apply for (precision); omitted entirely for broad/unknown
           // profiles to preserve recall.
-          body: JSON.stringify({
+          body: JSON.stringify(buildGrantsGovSearchPayload({
             keyword,
-            oppStatuses: 'posted',
+            oppStatus: 'posted',
             rows: 25,
-            startRecordNum: 0,
-            ...(eligibilities ? { eligibilities } : {}),
-          }),
+            startRow: 0,
+            eligibilities,
+          })),
         },
         parseCfg: grantsSearchParseCfg(),
       }));
     },
     mapCandidate(raw, { source } = {}) {
       if (!raw || (!raw.external_id && !raw.title)) return null;
-      const id = raw.external_id != null ? String(raw.external_id) : null;
-      const applyUrl = id ? `${DETAIL_BASE}/${encodeURIComponent(id)}` : null;
+      // Search2 exposes both an internal numeric detail id and the public
+      // opportunity number. The public number is the canonical source identity
+      // used by the direct Grants.gov ingester; retaining the numeric id here
+      // created two source identities for the same federal opportunity. Keep
+      // the internal id only for the authoritative detail URL.
+      const identity = resolveGrantsGovIdentity(raw);
       const profile = inferCandidateProfile(raw, source);
       const fundingFlags = inferFundingFlags(raw);
       return {
-        external_id: id,
+        external_id: identity.sourceId,
         kind: OPPORTUNITY_KIND.DIRECT_GRANT,
         title: raw.title ?? null,
         // Owner rule 2026-08-03: never anonymize the funder — a missing agency
         // stays NULL (honest missing) and rides the no-sponsor handling.
         sponsor: raw.sponsor ?? null,
         summary: raw.summary ?? (raw.number ? `Funding opportunity ${raw.number} (${raw.opp_status ?? 'posted'}).` : null),
-        deadline: normalizeGrantsDate(raw.deadline),
+        open_date: normalizeGrantsGovDate(raw.open_date),
+        deadline: normalizeGrantsGovDate(raw.deadline),
+        source_status: normalizeGrantsGovStatus(raw.opp_status),
+        first_published_at: normalizeGrantsGovDate(raw.posted_date),
         is_rolling: false,
-        apply_url: applyUrl,
-        info_url: applyUrl,
+        application_method: 'grants.gov',
+        apply_url: identity.detailUrl,
+        info_url: identity.detailUrl,
         applicant_types: profile.applicant_types,
         need_categories: profile.need_categories,
         geography: source?.geography ?? { national: true, states: [] },
@@ -159,20 +171,10 @@ export function grantsSearchParseCfg() {
       agency_code: 'agencyCode',
       deadline: 'closeDate',
       open_date: 'openDate',
+      posted_date: 'postedDate',
       opp_status: 'oppStatus',
     },
   };
-}
-
-// Grants.gov closeDate often arrives as MM/DD/YYYY; normalize to ISO date.
-function normalizeGrantsDate(d) {
-  if (!d) return null;
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(d).trim());
-  if (m) {
-    const [, mm, dd, yyyy] = m;
-    return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
-  }
-  return String(d);
 }
 
 export default { createGrantsGovAdapter };

@@ -23,6 +23,7 @@ import {
 } from './provenanceAudit.js'
 import { maybeEmbedOpportunity } from './embeddings/embeddingService.js'
 import { canonicalOpportunityKey } from '../crawler-os/contract.js'
+import { syncOpportunityContractProjection } from './opportunityRepository.js'
 const log = createLogger('opportunityInserter')
 
 /**
@@ -703,7 +704,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   // Check if record exists and if it's verified
   const existing = await db
     .prepare(
-      `SELECT id, last_verified_at FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1`,
+      `SELECT * FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1`,
     )
     .get(source, sourceId)
 
@@ -971,6 +972,15 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.notes,
       existing.id,
     )
+
+    // Additive normalized contract + append-only change history. Kept after
+    // the established writer so schema.sql-only fixtures and rolling deploys
+    // can degrade through the repository's migration-not-applied guard while
+    // migrated databases receive the complete Slice 1–3 projection.
+    await syncOpportunityContractProjection(db, existing.id, opportunity, {
+      beforeRow: existing,
+      changedBy: opts.changedBy ?? opts.verifiedBy ?? 'opportunity_inserter',
+    })
 
     // Capture per-result evidence snippets (best-effort, never blocks).
     await persistEvidence(db, existing.id, opportunity)
@@ -1401,6 +1411,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     }
     throw err
   }
+
+  await syncOpportunityContractProjection(db, id, opportunity, {
+    beforeRow: null,
+    changeType: 'created',
+    changedBy: opts.changedBy ?? opts.verifiedBy ?? 'opportunity_inserter',
+  })
 
   // Capture per-result evidence snippets (best-effort, never blocks). The
   // evidence is the source text (title + matched description / eligibility)

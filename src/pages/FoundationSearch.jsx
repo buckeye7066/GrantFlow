@@ -18,6 +18,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog"
 import { humanizeMatchReason } from "@/utils/reasonText"
+import FunderIntelligencePanel from "@/components/funding/FunderIntelligencePanel"
 import {
   Search, Building2, DollarSign, FileText, ExternalLink,
   Loader2, MapPin, TrendingUp, Database, Beaker, Landmark,
@@ -874,6 +875,7 @@ function DetailDialog({ target, onClose, foundationDetail, detailLoading, scores
                   </div>
                 </div>
               )}
+              <FunderIntelligencePanel ein={fd.ein} />
             </div>
           ) : null
         )}

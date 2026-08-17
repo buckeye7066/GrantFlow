@@ -39,6 +39,12 @@ import { restoreProfileSectionsFromLinkedOrganizations } from '../services/profi
 import { runAutonomousCodeCrawl } from '../services/anyaAutonomousCrawler.js'
 import { auditPipelinesAgainstGoals } from '../services/pipelineGoalCleanupService.js'
 import { fetchPublicResource, publicFetchFailureStatus } from '../utils/safeRemoteFetch.js'
+import { redactProfileMemoryForProfile } from '../services/profileMemoryRepository.js'
+import {
+  UploadValidationError,
+  validateUploadBufferSecure,
+  validateUploadedFile,
+} from '../utils/uploadFileValidation.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:admin')
@@ -583,6 +589,40 @@ const knowledgeUpload = multer({
   limits: { fileSize: KB_MAX_FILE_BYTES },
 })
 
+function secureUploadSingle(uploader, fieldName, allowedKinds) {
+  const middleware = uploader.single(fieldName)
+  return (req, res, next) => {
+    middleware(req, res, async (uploadError) => {
+      if (uploadError) {
+        return res.status(uploadError?.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({
+          ok: false,
+          error: uploadError?.message || 'Upload failed',
+          code: uploadError?.code || 'UPLOAD_FAILED',
+        })
+      }
+      if (!req.file) return next()
+      try {
+        req.file.securityValidation = await validateUploadedFile(req.file, { allowedKinds })
+        return next()
+      } catch (validationError) {
+        try {
+          await fsp.unlink(req.file.path)
+        } catch {
+          // Best-effort quarantine cleanup. The request remains rejected.
+        }
+        const status = validationError instanceof UploadValidationError
+          ? validationError.statusCode
+          : 415
+        return res.status(status).json({
+          ok: false,
+          error: validationError?.message || 'The file type could not be verified.',
+          code: validationError?.code || 'UPLOAD_SECURITY_VALIDATION_FAILED',
+        })
+      }
+    })
+  }
+}
+
 // Helper function to extract text from PDF
 async function extractTextFromPDF(filePath) {
   try {
@@ -745,6 +785,16 @@ async function downloadRemoteFileToUploads({ url, req }) {
   const filename = `kb-${unique}${extension}`
   const absPath = join(getUploadsDir(req), filename)
 
+  const hasExtension = Boolean(fileNameFromUrl.includes('.') && candidateExtension)
+  const validationName = !hasExtension
+    ? `${fileNameFromUrl}.${contentType === 'application/pdf' ? 'pdf' : isHtml ? 'html' : ''}`.replace(/\.$/, '')
+    : fileNameFromUrl
+  const securityValidation = await validateUploadBufferSecure({
+    buffer: remote.body,
+    originalName: validationName,
+    mimetype: contentType,
+  })
+
   await fsp.writeFile(absPath, remote.body)
 
   return {
@@ -752,8 +802,9 @@ async function downloadRemoteFileToUploads({ url, req }) {
       path: absPath,
       size: remote.body.length,
       mimetype: contentType,
-      originalname: fileNameFromUrl,
+      originalname: validationName,
       filename,
+      securityValidation,
     },
     publicUrl: `/uploads/${filename}`,
     pageTitle,
@@ -1198,7 +1249,10 @@ router.get('/knowledge/:id', async (req, res) => {
 
 // POST /api/admin/knowledge/upload
 // multipart/form-data: document=<file>, name?, notes?, ocr?, handwriting?, ocr_language?
-router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req, res) => {
+router.post(
+  '/knowledge/upload',
+  secureUploadSingle(knowledgeUpload, 'document', ['pdf', 'doc', 'docx', 'text', 'html', 'rtf', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'heic']),
+  async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) {
     if (req.file?.path) safeDeleteFile(req, req.file.path)
     return
@@ -1266,7 +1320,8 @@ router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req,
     if (req.file?.path) safeDeleteFile(req, req.file.path)
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
-})
+  },
+)
 
 // POST /api/admin/knowledge/ingest-url
 // Body: { url, name?, notes?, ocr?, handwriting?, ocr_language? }
@@ -1534,7 +1589,7 @@ Be conservative - only include information you are confident about from the docu
 
 // POST /api/admin/upload-profile-document
 // Upload a PDF document, extract text, use AI to parse it, and create a profile
-router.post('/upload-profile-document', upload.single('document'), async (req, res) => {
+router.post('/upload-profile-document', secureUploadSingle(upload, 'document', ['pdf']), async (req, res) => {
   try {
     // Check admin access using centralized admin enforcement
     const adminCheck = req.ctx?.isAdmin === true;
@@ -4438,6 +4493,23 @@ async function hardDeleteProfileById({ db, profileId, actorUserId, reason, tombs
   }
 
   await db.withTransaction(async (tx) => {
+    // Keep memory erasure and the profile hard-delete in one database
+    // transaction. Hiding withTransaction from this scoped view is
+    // intentional: SQLite passes its root adapter into the callback, and the
+    // memory repository would otherwise try to open a nested async transaction.
+    // Postgres already supplies a transaction-scoped adapter, so the same view
+    // preserves parity on both dialects.
+    const memoryTx = {
+      dialect: tx?.dialect,
+      prepare: (...args) => tx.prepare(...args),
+    }
+    await redactProfileMemoryForProfile(memoryTx, {
+      profileId: pid,
+      actorUserId,
+      actorIsAdmin: true,
+      reason: 'profile_deleted',
+    })
+
     if (tombstone) {
       await tx.prepare(
         `
@@ -4539,13 +4611,25 @@ router.post('/profiles/:id/hard-delete', async (req, res) => {
     }
   }
 
-  await hardDeleteProfileById({
-    db: req.db,
-    profileId,
-    actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
-    reason,
-    tombstone,
-  })
+  try {
+    await hardDeleteProfileById({
+      db: req.db,
+      profileId,
+      actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
+      reason,
+      tombstone,
+    })
+  } catch (error) {
+    if (error?.code === 'MEMORY_RETENTION_HOLD') {
+      return res.status(409).json({
+        ok: false,
+        error: 'Profile deletion is blocked by a memory retention policy',
+        code: error.code,
+        details: error.details ?? undefined,
+      })
+    }
+    throw error
+  }
 
   try {
     logAuditEvent(req.db, {

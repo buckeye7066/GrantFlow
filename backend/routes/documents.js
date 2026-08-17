@@ -16,9 +16,15 @@ import { getDefaultSectionData } from '../config/profileSchema.js'
 import { hasTierCapability, requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
+import { readValidatedUploadBytes } from '../services/durableDocumentBytes.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { getTrustedUserEmails } from '../utils/accessControl.js'
 import { fetchPublicResource, publicFetchFailureStatus } from '../utils/safeRemoteFetch.js'
+import {
+  UploadValidationError,
+  validateUploadBufferSecure,
+  validateUploadedFile,
+} from '../utils/uploadFileValidation.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:documents')
@@ -326,9 +332,27 @@ function respondMulterError(res, err) {
 function runUploadSingle(fieldName) {
   const middleware = upload.single(fieldName);
   return (req, res, next) => {
-    middleware(req, res, (err) => {
+    middleware(req, res, async (err) => {
       if (err) return respondMulterError(res, err);
-      return next();
+      if (!req.file) return next();
+      try {
+        req.file.securityValidation = await validateUploadedFile(req.file)
+        return next();
+      } catch (validationError) {
+        try {
+          await fs.promises.unlink(req.file.path)
+        } catch {
+          // Best-effort quarantine cleanup. The request is rejected either way.
+        }
+        const status = validationError instanceof UploadValidationError
+          ? validationError.statusCode
+          : 415
+        return res.status(status).json({
+          ok: false,
+          error: validationError?.message || 'The file type could not be verified.',
+          code: validationError?.code || 'UPLOAD_SECURITY_VALIDATION_FAILED',
+        })
+      }
     });
   };
 }
@@ -425,6 +449,16 @@ async function downloadRemoteFileToUploads({ url, req }) {
     };
   }
 
+  const hasExtension = Boolean(fileNameFromUrl.includes('.') && candidateExtension)
+  const validationName = !hasExtension && contentType === 'application/pdf'
+    ? `${fileNameFromUrl}.pdf`
+    : fileNameFromUrl
+  const securityValidation = await validateUploadBufferSecure({
+    buffer: buf,
+    originalName: validationName,
+    mimetype: contentType,
+  })
+
   await fs.promises.writeFile(absPath, buf);
 
   const publicUrl = `/uploads/${filename}`;
@@ -433,8 +467,9 @@ async function downloadRemoteFileToUploads({ url, req }) {
       path: absPath,
       size: buf.length,
       mimetype: contentType,
-      originalname: fileNameFromUrl,
+      originalname: validationName,
       filename,
+      securityValidation,
     },
     publicUrl,
     source: { downloaded: true, url, finalUrl: remote.finalUrl, contentType },
@@ -993,6 +1028,19 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
     const docType = rawType || (shouldRunAi ? 'source_material' : 'profile_file');
     const processingStatus = extractedText ? 'completed' : 'pending';
 
+    // A local upload must remain usable after a deploy or an on-disk cleanup.
+    // Persist the exact, security-validated bytes alongside their digest rather
+    // than treating the public /uploads path as the durable authority. Re-read
+    // after validation and compare the digest so a file changed between the
+    // malware/type scan and persistence fails closed.
+    let durableFileBytes = null
+    let durableContentHash = null
+    if (file?.path) {
+      const durableUpload = await readValidatedUploadBytes(file)
+      durableFileBytes = durableUpload.bytes
+      durableContentHash = durableUpload.contentHash
+    }
+
     // Auto-classify to a university application when possible (if caller didn't specify one).
     if (profileId && !universityApplicationId && extractedText) {
       try {
@@ -1017,9 +1065,9 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
     const insertDocumentSql = `
       INSERT INTO documents (
         id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
-        file_url, file_path, file_size, mime_type,
+        file_url, file_path, file_size, mime_type, file_bytes, content_hash,
         extracted_text, processing_status, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 
     const insertDocumentArgs = [
@@ -1033,8 +1081,10 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       docType,
       publicUrl,
       file?.path || null,
-      file?.size || null,
+      durableFileBytes?.length || file?.size || null,
       file?.mimetype || null,
+      durableFileBytes,
+      durableContentHash,
       extractedText,
       processingStatus,
       rawNotes || null,
@@ -1064,14 +1114,14 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
         const insertNoStatusSql = `
           INSERT INTO documents (
             id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
-            file_url, file_path, file_size, mime_type,
+            file_url, file_path, file_size, mime_type, file_bytes, content_hash,
             extracted_text, notes
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
-        // Build args without processing_status (index 13 in original insertDocumentArgs).
+        // Build args without processing_status (index 15 in original insertDocumentArgs).
         const safeArgs = [
-          ...insertDocumentArgs.slice(0, 13),
-          insertDocumentArgs[14], // notes
+          ...insertDocumentArgs.slice(0, 15),
+          insertDocumentArgs[16], // notes
         ]
         await req.db.prepare(insertNoStatusSql).run(...safeArgs)
       } else {

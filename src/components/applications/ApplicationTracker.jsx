@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { useToast } from '@/components/ui/use-toast'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -16,7 +17,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, Plus, Trash2, CheckCircle, XCircle, Send, Filter } from 'lucide-react'
+import { Loader2, Plus, Trash2, Send, Filter, FileCheck2 } from 'lucide-react'
 import { listProfiles } from '@/api/profiles'
 import {
   listApplications,
@@ -24,7 +25,6 @@ import {
   updateApplication,
   deleteApplication,
   submitApplication,
-  recordOutcome,
 } from '@/api/grantApplications'
 import { differenceInDays, parseISO, isValid } from 'date-fns'
 import { isValidEmail } from '@/utils/validators'
@@ -37,6 +37,8 @@ const STATUSES = [
   { key: 'under_review', label: 'Under Review', color: 'bg-yellow-100 text-yellow-700' },
   { key: 'awarded', label: 'Awarded', color: 'bg-green-100 text-green-700' },
   { key: 'denied', label: 'Denied', color: 'bg-red-100 text-red-700' },
+  { key: 'withdrawn', label: 'Withdrawn', color: 'bg-orange-100 text-orange-700' },
+  { key: 'closed', label: 'Closed', color: 'bg-slate-200 text-slate-700' },
 ]
 
 const STATUS_COLUMNS = [
@@ -46,6 +48,9 @@ const STATUS_COLUMNS = [
   { key: 'under_review', label: 'Under Review' },
   { key: 'awarded', label: 'Awarded' },
   { key: 'denied', label: 'Denied' },
+  { key: 'withdrawn', label: 'Withdrawn' },
+  { key: 'closed', label: 'Closed' },
+  { key: 'unknown', label: 'Needs review' },
 ]
 
 // Status progression — next logical status for "Move Forward" button
@@ -56,6 +61,8 @@ const NEXT_STATUS = {
   under_review: null, // uses outcome action
   awarded: null,
   denied: null,
+  withdrawn: null,
+  closed: null,
 }
 const NEXT_STATUS_LABEL = {
   draft: 'Start Application',
@@ -79,7 +86,14 @@ function formatCurrency(amount) {
 }
 
 function StatusBadge({ status }) {
-  const cfg = STATUSES.find((s) => s.key === status) || STATUSES[0]
+  const cfg = STATUSES.find((s) => s.key === status)
+  if (!cfg) {
+    return (
+      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+        Needs review: {String(status || 'missing status').replaceAll('_', ' ')}
+      </span>
+    )
+  }
   return (
     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cfg.color}`}>
       {cfg.label}
@@ -88,7 +102,7 @@ function StatusBadge({ status }) {
 }
 
 // ── Application Card ─────────────────────────────────────────────────────────
-function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveForward }) {
+function ApplicationCard({ app, onEdit, onDelete, onSubmit, onMoveForward }) {
   const days = daysUntilDeadline(app.deadline_date)
   const deadlineUrgent = days !== null && days >= 0 && days < 7
   const deadlinePast = days !== null && days < 0
@@ -97,6 +111,7 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
   // /api/grant-applications/{taskId} and 404. Only "Mark Submitted" is wired
   // for them (the backend resolves it against application_tasks).
   const isHamiltonRow = app.source === 'hamilton'
+  const lifecycleApplicationId = app.application_id || (!isHamiltonRow ? app.id : null)
 
   return (
     <Card className="mb-3 shadow-sm hover:shadow-md transition-shadow">
@@ -132,6 +147,14 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
 
         {/* Action buttons */}
         <div className="flex flex-wrap gap-1.5 mt-2">
+          {lifecycleApplicationId && (
+            <Button asChild size="sm" variant="outline" className="text-xs h-7 px-2">
+              <Link to={`/GrantLifecycle/${encodeURIComponent(lifecycleApplicationId)}`}>
+                <FileCheck2 className="w-3 h-3 mr-1" />
+                Open lifecycle workspace
+              </Link>
+            </Button>
+          )}
           {!isHamiltonRow && (
             <Button size="sm" variant="outline" className="text-xs h-7 px-2" onClick={() => onEdit(app)}>
               Edit
@@ -159,29 +182,6 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
               <Send className="w-3 h-3 mr-1" />
               Mark Submitted
             </Button>
-          )}
-
-          {!isHamiltonRow && app.status === 'under_review' && (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-xs h-7 px-2 text-green-700 border-green-200 hover:bg-green-50"
-                onClick={() => onOutcome(app, 'awarded')}
-              >
-                <CheckCircle className="w-3 h-3 mr-1" />
-                Awarded
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-xs h-7 px-2 text-red-700 border-red-200 hover:bg-red-50"
-                onClick={() => onOutcome(app, 'denied')}
-              >
-                <XCircle className="w-3 h-3 mr-1" />
-                Denied
-              </Button>
-            </>
           )}
 
           {!isHamiltonRow && app.status !== 'submitted' && (
@@ -404,55 +404,6 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
   )
 }
 
-// ── Outcome Dialog ────────────────────────────────────────────────────────────
-function OutcomeDialog({ app, outcome, onConfirm, onCancel, isSaving }) {
-  const [amountAwarded, setAmountAwarded] = useState('')
-  const [notes, setNotes] = useState(app?.notes || '')
-
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-slate-600">
-        Record <strong>{outcome === 'awarded' ? 'awarded' : 'denied'}</strong> outcome for <strong>{app?.grant_name}</strong>.
-      </p>
-
-      {outcome === 'awarded' && (
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Amount Awarded ($)</label>
-          <input
-            type="number"
-            min="0"
-            className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-            value={amountAwarded}
-            onChange={(e) => setAmountAwarded(e.target.value)}
-            placeholder="0"
-          />
-        </div>
-      )}
-
-      <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-        <textarea
-          className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-          rows={3}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-        />
-      </div>
-
-      <DialogFooter>
-        <Button variant="outline" onClick={onCancel} disabled={isSaving}>Cancel</Button>
-        <Button
-          onClick={() => onConfirm({ outcome, amount_awarded: amountAwarded !== '' ? Number(amountAwarded) : null, notes })}
-          disabled={isSaving}
-          className={outcome === 'awarded' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}
-        >
-          {isSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : `Confirm ${outcome === 'awarded' ? 'Awarded' : 'Denied'}`}
-        </Button>
-      </DialogFooter>
-    </div>
-  )
-}
-
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function ApplicationTracker() {
   const queryClient = useQueryClient()
@@ -462,7 +413,6 @@ export default function ApplicationTracker() {
   const [showNewForm, setShowNewForm] = useState(false)
   const [editingApp, setEditingApp] = useState(null)
   const [deletingApp, setDeletingApp] = useState(null)
-  const [outcomeApp, setOutcomeApp] = useState(null) // { app, outcome }
 
   // Load profiles for filter & form
   const profilesQuery = useQuery({
@@ -486,7 +436,7 @@ export default function ApplicationTracker() {
     for (const col of STATUS_COLUMNS) map[col.key] = []
     for (const app of apps) {
       if (map[app.status]) map[app.status].push(app)
-      else map['draft'].push(app) // fallback
+      else map.unknown.push(app)
     }
     return map
   }, [apps])
@@ -518,12 +468,6 @@ export default function ApplicationTracker() {
     onError: (err) => toast({ variant: 'destructive', title: 'Error', description: err?.message }),
   })
 
-  const outcomeMutation = useMutation({
-    mutationFn: ({ id, data }) => recordOutcome(id, data),
-    onSuccess: () => { invalidate(); setOutcomeApp(null); toast({ title: 'Outcome recorded' }) },
-    onError: (err) => toast({ variant: 'destructive', title: 'Error', description: err?.message }),
-  })
-
   const moveForwardMutation = useMutation({
     mutationFn: ({ id, status }) => updateApplication(id, { status }),
     onSuccess: () => { invalidate() },
@@ -535,8 +479,6 @@ export default function ApplicationTracker() {
   function handleSaveEdit(data) { updateMutation.mutate({ id: editingApp.id, data }) }
   function handleDelete() { deleteMutation.mutate(deletingApp.id) }
   function handleSubmit(app) { submitMutation.mutate(app.id) }
-  function handleOutcomeIntent(app, outcome) { setOutcomeApp({ app, outcome }) }
-  function handleOutcomeConfirm(data) { outcomeMutation.mutate({ id: outcomeApp.app.id, data }) }
   function handleMoveForward(app, status) { moveForwardMutation.mutate({ id: app.id, status }) }
 
   const isLoading = appsQuery.isLoading || profilesQuery.isLoading
@@ -605,7 +547,6 @@ export default function ApplicationTracker() {
                       onEdit={setEditingApp}
                       onDelete={setDeletingApp}
                       onSubmit={handleSubmit}
-                      onOutcome={handleOutcomeIntent}
                       onMoveForward={handleMoveForward}
                     />
                   ))
@@ -644,24 +585,6 @@ export default function ApplicationTracker() {
               onSave={handleSaveEdit}
               onCancel={() => setEditingApp(null)}
               isSaving={updateMutation.isPending}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Outcome Dialog */}
-      <Dialog open={Boolean(outcomeApp)} onOpenChange={(open) => { if (!open) setOutcomeApp(null) }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Record Outcome</DialogTitle>
-          </DialogHeader>
-          {outcomeApp && (
-            <OutcomeDialog
-              app={outcomeApp.app}
-              outcome={outcomeApp.outcome}
-              onConfirm={handleOutcomeConfirm}
-              onCancel={() => setOutcomeApp(null)}
-              isSaving={outcomeMutation.isPending}
             />
           )}
         </DialogContent>

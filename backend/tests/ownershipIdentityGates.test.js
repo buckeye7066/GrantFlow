@@ -10,7 +10,14 @@
 
 import express from 'express'
 import request from 'supertest'
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, vi } from 'vitest'
+
+vi.mock('../services/crawlerDispatcher.js', () => ({ dispatchCrawlerJob: vi.fn() }))
+vi.mock('../services/hamilton/applicationTaskStore.js', () => ({
+  reconcileProfileFieldsToTasks: vi.fn(),
+  updateApplicationTask: vi.fn(),
+  appendTaskEvent: vi.fn(),
+}))
 
 const Database = (await import('better-sqlite3')).default
 const { attachRequestContext } = await import('../middleware/requestContext.js')
@@ -32,7 +39,9 @@ function makeDb() {
     CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
     CREATE TABLE user_credentials (id TEXT PRIMARY KEY, user_id TEXT, type TEXT, identifier TEXT, verified_at DATETIME);
     CREATE TABLE grant_applications (id TEXT PRIMARY KEY, user_id TEXT, profile_id TEXT, status TEXT, created_at TEXT DEFAULT '2026-01-01', updated_at TEXT DEFAULT '2026-01-01');
-    INSERT INTO users (id, is_admin, primary_email) VALUES ('u-real', 0, 'real@x.example');
+    INSERT INTO users (id, is_admin, primary_email) VALUES
+      ('u-real', 0, 'real@x.example'),
+      ('u-collab', 0, 'collab@x.example');
     -- Self-healed reserved synthetic row (as /auth/me self-heal may create):
     INSERT INTO users (id, is_admin, primary_email) VALUES ('system_admin_token', 1, 'svc@grantflow.app');
     INSERT INTO profiles (id, user_id, created_by, display_name) VALUES ('p-real', 'u-real', 'u-real', 'Real Profile');
@@ -56,6 +65,29 @@ function appWith(db, user, router, mount) {
 const DELETED = { role: 'user', userId: 'deleted-user' }
 const SYNTH_COLLISION = { role: 'user', userId: 'system_admin_token', roles: ['admin'] } // NO serviceToken
 const REAL = { role: 'user', userId: 'u-real' }
+const COLLABORATOR = { role: 'user', userId: 'u-collab' }
+
+describe('DELETE /api/profiles/:id requires destructive ownership', () => {
+  it('DENIES a trusted collaborator whose active profile is owned by someone else', async () => {
+    const db = makeDb()
+    const app = express()
+    app.use(express.json())
+    app.use((req, _res, next) => { req.db = db; req.user = COLLABORATOR; next() })
+    app.use(attachRequestContext())
+    // Model the canonical shared-profile access computed by requestContext.
+    // It may authorize reads/edits, but must never become delete ownership.
+    app.use((req, _res, next) => {
+      req.ctx.activeProfileId = 'p-real'
+      req.ctx.accessibleProfileIds = new Set(['p-real'])
+      next()
+    })
+    app.use('/api/profiles', profilesRouter)
+
+    const response = await request(app).delete('/api/profiles/p-real')
+    expect(response.status).toBe(403)
+    expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get('p-real')).toEqual({ id: 'p-real' })
+  })
+})
 
 describe('POST /api/profiles create/adopt requires a trusted identity', () => {
   let db

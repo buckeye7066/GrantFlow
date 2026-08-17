@@ -116,7 +116,7 @@ describe('scheduledAutoDiscovery', () => {
       forceEnabled: true,
       runDiscovery: async (runDb, runProfileId, runOptions) => {
         discoveryRuns.push({ db: runDb, profileId: runProfileId, options: runOptions })
-        return { engine: 'crawler-os', synchronous: true }
+        return { engine: 'crawler-os', synchronous: true, opportunities: 4, stored: 4, matches: 2, sources: 1 }
       },
     })
     expect(report.profiles_queued).toBe(1)
@@ -138,6 +138,51 @@ describe('scheduledAutoDiscovery', () => {
       .get(profileId)
 
     expect(Number(count?.n ?? 0)).toBeGreaterThan(0)
+
+    const marker = db.prepare(
+      `SELECT status, result_count, result_meta
+         FROM crawler_jobs
+        WHERE profile_id = ? AND requested_by = 'scheduled-auto-discovery'
+        ORDER BY created_at DESC LIMIT 1`,
+    ).get(profileId)
+    expect(marker.status).toBe('completed')
+    expect(Number(marker.result_count)).toBe(4)
+    expect(JSON.parse(marker.result_meta)).toMatchObject({
+      completed: true,
+      engine: 'crawler-os',
+      trigger: 'scheduled_daily',
+      opportunities: 4,
+      matches: 2,
+      sources: 1,
+    })
+  })
+
+  it('records failed attempts as terminal telemetry and allows retry', async () => {
+    const userId = seedUser(db)
+    const profileId = seedProfile(db, userId)
+
+    const report = await runScheduledAutoDiscovery(db, {
+      forceEnabled: true,
+      runDiscovery: async () => {
+        throw new Error('simulated discovery failure')
+      },
+    })
+
+    expect(report.profiles_failed).toBe(1)
+    expect(report.errors).toHaveLength(1)
+    const marker = db.prepare(
+      `SELECT status, result_count, result_meta, error
+         FROM crawler_jobs
+        WHERE profile_id = ? AND requested_by = 'scheduled-auto-discovery'
+        ORDER BY created_at DESC LIMIT 1`,
+    ).get(profileId)
+    expect(marker.status).toBe('failed')
+    expect(Number(marker.result_count)).toBe(0)
+    expect(marker.error).toContain('simulated discovery failure')
+    expect(JSON.parse(marker.result_meta)).toMatchObject({ completed: false, trigger: 'scheduled_daily' })
+
+    const decision = await shouldRunProfileDailyDiscovery(db, profileId)
+    expect(decision).toMatchObject({ run: true, reason: 'previous_failed' })
   })
 
   it('skips inactive profiles in batch run', async () => {

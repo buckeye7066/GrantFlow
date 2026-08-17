@@ -139,8 +139,29 @@ export function extractEnvVars(source) {
   return new Set(extractEnvReferences(source).map((reference) => reference.varName))
 }
 
+// Keep documented examples aligned with the runtime's bounded, fail-safe
+// defaults. Generic placeholder inference cannot know that ClamAV speaks on
+// 3310 (rather than an HTTP port), or that the NOFO parser's values are safety
+// ceilings. Centralizing these values here also prevents a regenerated example
+// from silently weakening or obscuring those production limits.
+const DOCUMENTED_RUNTIME_DEFAULTS = Object.freeze({
+  CLAMAV_PORT: '3310',
+  CLAMAV_REQUIRED: 'false',
+  CLAMAV_TIMEOUT_MS: '10000',
+  ERROR_REPORT_LLM_ANALYSIS_ENABLED: 'false',
+  NOFO_FETCH_MAX_BYTES: '20971520',
+  NOFO_FETCH_TIMEOUT_MS: '20000',
+  NOFO_PARSE_CHUNK_CHARS: '14000',
+  NOFO_PARSE_CHUNK_OVERLAP: '600',
+  NOFO_PARSE_MAX_TEXT_CHARS: '2000000',
+  PROFILE_SCORING_MAX_CANDIDATES: '25000',
+})
+
 function placeholderFor(name) {
   const upper = String(name || '').toUpperCase()
+  if (Object.hasOwn(DOCUMENTED_RUNTIME_DEFAULTS, upper)) {
+    return DOCUMENTED_RUNTIME_DEFAULTS[upper]
+  }
   const isFlag =
     upper.startsWith('ALLOW_') ||
     upper.startsWith('ENABLE_') ||

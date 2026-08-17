@@ -12,9 +12,13 @@ import { grantsSearchParseCfg } from './grantsGovAdapter.js';
 import {
   agencyLooksLike, buildCrawlerQueries, inferCandidateProfile, inferFundingFlags,
 } from '../crawlerVocabulary.js';
+import {
+  GRANTS_GOV_SEARCH2_URL,
+  buildGrantsGovSearchPayload,
+  normalizeGrantsGovDate,
+  resolveGrantsGovIdentity,
+} from '../../../shared/grantsGovProtocol.js';
 
-const SEARCH_ENDPOINT = 'https://api.grants.gov/v1/api/search2';
-const DETAIL_BASE = 'https://www.grants.gov/search-results-detail';
 // NOTE the deliberate absence of the `i` flag on the two ACRONYMS. These are
 // tested by `agencyLooksLike` against a haystack that joins title + summary +
 // sponsor + agency + number + description, so `/\bSAFER\b/i` matched the
@@ -40,12 +44,14 @@ export function createFemaAfgAdapter() {
     requiredEnv: [], // public API
     buildRequests(thesis, source) {
       return buildCrawlerQueries(thesis, source, { limit: 4 }).map((keyword) => ({
-        url: SEARCH_ENDPOINT,
+        url: GRANTS_GOV_SEARCH2_URL,
         query: keyword,
         init: {
           method: 'POST',
           headers: { 'content-type': 'application/json', accept: 'application/json' },
-          body: JSON.stringify({ keyword, oppStatuses: 'posted', rows: 25, startRecordNum: 0 }),
+          body: JSON.stringify(buildGrantsGovSearchPayload({
+            keyword, oppStatus: 'posted', rows: 25, startRow: 0,
+          })),
         },
         parseCfg: grantsSearchParseCfg(),
       }));
@@ -53,20 +59,19 @@ export function createFemaAfgAdapter() {
     mapCandidate(raw, { source } = {}) {
       if (!raw || (!raw.external_id && !raw.title)) return null;
       if (!agencyLooksLike(raw, FEMA_PATTERNS)) return null;
-      const id = raw.external_id != null ? String(raw.external_id) : null;
-      const applyUrl = id ? `${DETAIL_BASE}/${encodeURIComponent(id)}` : null;
+      const identity = resolveGrantsGovIdentity(raw);
       const profile = inferCandidateProfile(raw, source);
       const fundingFlags = inferFundingFlags(raw);
       return {
-        external_id: id,
+        external_id: identity.sourceId,
         kind: OPPORTUNITY_KIND.DIRECT_GRANT,
         title: raw.title ?? null,
         sponsor: raw.sponsor ?? 'Federal Emergency Management Agency',
         summary: raw.summary ?? (raw.number ? `Funding opportunity ${raw.number} (${raw.opp_status ?? 'posted'}).` : null),
-        deadline: normalizeDate(raw.deadline),
+        deadline: normalizeGrantsGovDate(raw.deadline),
         is_rolling: false,
-        apply_url: applyUrl,
-        info_url: applyUrl,
+        apply_url: identity.detailUrl,
+        info_url: identity.detailUrl,
         applicant_types: profile.applicant_types,
         need_categories: profile.need_categories,
         geography: source?.geography ?? { national: true, states: [] },
@@ -76,16 +81,6 @@ export function createFemaAfgAdapter() {
       };
     },
   });
-}
-
-function normalizeDate(d) {
-  if (!d) return null;
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(d).trim());
-  if (m) {
-    const [, mm, dd, yyyy] = m;
-    return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
-  }
-  return String(d);
 }
 
 export default { createFemaAfgAdapter };
