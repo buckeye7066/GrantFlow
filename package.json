@@ -152,7 +152,7 @@
     "resend": "^6.20.0",
     "stripe": "^22.5.0",
     "tesseract.js": "^7.0.0",
-    "twilio": "^5.11.1",
+    "twilio": "^6.1.0",
     "zipcodes": "^8.0.0",
     "zipcodes-nrviens": "^8.0.6",
     "zod": "^4.4.3"
