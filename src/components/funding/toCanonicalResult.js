@@ -132,6 +132,7 @@ export function toCanonicalResult(opp) {
   const LINK_STATUS_CANONICAL = {
     ok: 'verified',
     skipped: 'unverified',
+    suspicious: 'suspicious',
     verified: 'verified',
     redirect: 'redirect',
     broken: 'broken',
@@ -179,6 +180,11 @@ export function toCanonicalResult(opp) {
     ineligibility_reasons: ineligibility,
     missing_eligibility_fields: unknownFacts,
     next_action: pickString(opp.next_action, opp.nextAction),
+    // Structured recommended next steps from nextStepGuidance (objects with
+    // id/label/detail/priority) — carried verbatim, bounded by the backend.
+    next_steps: Array.isArray(opp.next_steps)
+      ? opp.next_steps.filter((s) => s && typeof s === 'object' && typeof s.label === 'string')
+      : [],
     threshold_relaxed: Boolean(opp.threshold_relaxed || opp.threshold_relaxed_reason),
     relaxed_reason: pickString(opp.relaxed_reason, opp.threshold_relaxed_reason, opp.threshold_fallback_message),
   }

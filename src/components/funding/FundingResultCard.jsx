@@ -53,11 +53,12 @@ const LINK_STATUS_LABEL = {
   broken: 'Link reported broken',
   redirect: 'Link redirected',
   unreachable: 'Link unreachable',
-  // Backend verifier vocabulary (linkVerificationService stores ok/skipped).
-  // toCanonicalResult normalizes these, but surfaces that hand a raw row to
-  // the card must still render an honest label instead of the raw token.
+  // Backend verifier vocabulary (linkVerificationService stores ok/skipped/
+  // suspicious). toCanonicalResult normalizes these, but surfaces that hand a
+  // raw row to the card must still render an honest label, never a raw token.
   ok: 'Link verified',
   skipped: 'Link not yet verified',
+  suspicious: 'Link may not match this program',
 }
 
 // Statuses that mean "the verifier proved this link live".
@@ -287,6 +288,18 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
               <li key={i}>{r}</li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {Array.isArray(result.next_steps) && result.next_steps.length > 0 && (
+        <section data-testid="funding-result-card-next-steps">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            Recommended next step
+          </p>
+          <p className="mt-1 text-sm text-slate-700">
+            <span className="font-medium">{result.next_steps[0].label}</span>
+            {result.next_steps[0].detail ? ` — ${result.next_steps[0].detail}` : ''}
+          </p>
         </section>
       )}
 

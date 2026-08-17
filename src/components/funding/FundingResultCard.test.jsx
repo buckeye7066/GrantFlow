@@ -85,6 +85,35 @@ describe('FundingResultCard', () => {
     expect(screen.queryByText('profile.applicant_type')).toBeNull()
   })
 
+  it('renders the suspicious verdict as plain language, not a raw token (slice 2)', () => {
+    render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'suspicious' }} />)
+    expect(screen.getByText('Link may not match this program')).toBeTruthy()
+    expect(screen.queryByText('suspicious')).toBeNull()
+  })
+
+  it('renders the top recommended next step when guidance is present (slice 3)', () => {
+    render(
+      <FundingResultCard
+        result={{
+          ...BASE,
+          kind: 'direct',
+          link_status: 'verified',
+          next_steps: [
+            { id: 'verify_deadline', label: 'Confirm deadline', detail: 'Deadline is within 14 days.' },
+            { id: 'save_to_pipeline', label: 'Save to pipeline' },
+          ],
+        }}
+      />,
+    )
+    expect(screen.getByTestId('funding-result-card-next-steps')).toBeTruthy()
+    expect(screen.getByText('Confirm deadline')).toBeTruthy()
+  })
+
+  it('omits the next-step section when guidance is absent', () => {
+    render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'verified' }} />)
+    expect(screen.queryByTestId('funding-result-card-next-steps')).toBeNull()
+  })
+
   it('omits the unknown section when the engine measured no unknowns', () => {
     render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'verified' }} />)
     expect(screen.queryByTestId('funding-result-card-unknown')).toBeNull()

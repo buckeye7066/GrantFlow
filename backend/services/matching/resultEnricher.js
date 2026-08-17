@@ -14,6 +14,7 @@ import {
 } from './profileSpecificGate.js'
 import { trustedPersistedMatchConfidence } from './matchConfidenceProvenance.js'
 import { opportunityLifecycleVisibility } from '../../config/matchSurfacing.js'
+import { buildNextStepsForMatch } from '../nextStepGuidance.js'
 
 /**
  * True only for a value that is genuinely a finite number (or the string form of
@@ -52,6 +53,26 @@ export function resolveMissingEligibilityFields(opportunity, decision) {
   }
   if (raw && typeof raw === 'object') return onlyStrings(raw.missing_eligibility_fields)
   return []
+}
+
+/**
+ * Bounded, failure-isolated wrapper around the pure nextStepGuidance builder.
+ * Returns at most 4 steps; a guidance error yields [] rather than dropping or
+ * delaying the result (guidance is advisory, never load-bearing).
+ */
+function computeNextStepsSafely(rawProfile, profileSections, opportunity, decision, score) {
+  try {
+    const { steps } = buildNextStepsForMatch({
+      profile: rawProfile,
+      rawSections: profileSections,
+      opportunity,
+      matchExplain: decision?.match_explain ?? null,
+      score: Number.isFinite(score) ? score : null,
+    })
+    return Array.isArray(steps) ? steps.slice(0, 4) : []
+  } catch {
+    return []
+  }
 }
 
 const PERSISTED_CANONICAL_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
@@ -321,6 +342,11 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     // Live recomputes carry it on the decision; persisted rows carry it inside
     // match_explain_json (crawler-os/matchEngine writes missing_eligibility_fields).
     missing_eligibility_fields: resolveMissingEligibilityFields(opportunity, decision),
+    // Concrete recommended next steps (epic slice 3: "recommended next
+    // action"). nextStepGuidance was written and tested for exactly this and
+    // sat orphaned; it is pure (no DB/network), so computing it at display
+    // time is safe. Guidance failing must never drop a result.
+    next_steps: computeNextStepsSafely(rawProfile, profileSections, opportunity, decision, score),
     matcher_version: decision?.matcherVersion ?? null,
     evaluated_at: decision?.evaluatedAt ?? null,
     trust_tier: opportunity.trust_tier ?? trustMeta.trust_tier,
