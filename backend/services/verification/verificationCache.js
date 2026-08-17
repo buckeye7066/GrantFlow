@@ -21,6 +21,18 @@ import fetch from 'node-fetch'
 const MAX_ENTRIES = Number(process.env.VERIFICATION_CACHE_MAX_ENTRIES || 5000)
 
 /**
+ * The ONLY hosts the verification providers are allowed to reach. Query
+ * params legitimately carry profile-derived values (EIN, name, ZIP), so the
+ * host must be pinned here — a future caller (or a tainted interpolation)
+ * can never turn this helper into an open proxy toward internal addresses
+ * (SSRF). Growing this set is a conscious review decision.
+ */
+export const VERIFICATION_ALLOWED_HOSTS = Object.freeze(new Set([
+  'projects.propublica.org', // IRS nonprofit registry (nonprofitRegistry.js)
+  'geocoding.geo.census.gov', // Census geocoder (censusGeo.js)
+]))
+
+/**
  * Create a bounded TTL cache. Keys are strings, values are arbitrary.
  * @param {object} [opts]
  * @param {number} [opts.max] max entries before LRU eviction
@@ -73,10 +85,18 @@ export function createTtlCache({ max = MAX_ENTRIES } = {}) {
  * @returns {Promise<import('node-fetch').Response>}
  */
 export async function timedFetch(url, { timeoutMs = 4000, headers = {} } = {}) {
+  // SSRF guard: pin the request to the fixed public-API hosts. The URL's
+  // query string carries profile-derived values by design; the HOST never
+  // may. Parse-then-compare (never substring — the
+  // js/incomplete-url-substring-sanitization class), https only.
+  const parsed = new URL(String(url))
+  if (parsed.protocol !== 'https:' || !VERIFICATION_ALLOWED_HOSTS.has(parsed.hostname)) {
+    throw new Error(`verification fetch refused: host not allowlisted (${parsed.hostname})`)
+  }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs))
   try {
-    return await fetch(url, {
+    return await fetch(parsed.href, {
       signal: controller.signal,
       headers: {
         // Identify ourselves politely; both APIs are public + keyless.
