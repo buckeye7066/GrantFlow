@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { requireAuthenticatedUser, ensureProfileAccess } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isExpiredOpportunity, isDirectoryLike } from './opportunityHelpers.js'
@@ -177,6 +178,106 @@ function validateFundingTerms(payload = {}) {
   }
 
   return result;
+}
+
+function isSoftComplianceCatalogEntry(payload = {}) {
+  const type = String(payload.opportunity_type || '').trim().toLowerCase()
+  const requiresMatch = normalizeBoolean(payload.requires_match) === true
+  const matchPercentage = coercePercentage(payload.match_percentage)
+  return LOAN_TYPES.includes(type) || requiresMatch || (matchPercentage !== null && matchPercentage > 0)
+}
+
+function syntacticallyValidHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value || '').trim())
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function jsonArray(value) {
+  if (Array.isArray(value)) return JSON.stringify(value)
+  if (typeof value === 'string') {
+    const parsed = safeParseJSON(value, null)
+    if (Array.isArray(parsed)) return JSON.stringify(parsed)
+  }
+  return '[]'
+}
+
+/**
+ * Preserve the established admin catalog contract for loans and
+ * matching-funds programs. These are valid catalog/comparison records even
+ * though the crawler ingest choke point intentionally rejects them by policy.
+ * The route remains admin-only, validates a syntactic HTTP(S) target, writes a
+ * fixed column allowlist, and still projects the normalized opportunity
+ * contract. User-facing `grant_only` filtering decides whether each row is
+ * shown; crawler policy is not repurposed as a catalog storage prohibition.
+ */
+async function createAdminSoftComplianceEntry(db, payload, { changedBy } = {}) {
+  const title = String(payload.title || '').trim()
+  const applicationUrl = String(payload.application_url || '').trim()
+  const sourceUrl = String(payload.source_url || '').trim() || null
+  if (!title) {
+    const error = new Error('title is required')
+    error.status = 400
+    throw error
+  }
+  if (!syntacticallyValidHttpUrl(applicationUrl || sourceUrl)) {
+    const error = new Error('A valid HTTP(S) application_url or source_url is required')
+    error.status = 400
+    throw error
+  }
+
+  const id = crypto.randomUUID()
+  const source = String(payload.source || 'manual_entry').trim() || 'manual_entry'
+  const sourceId = String(payload.source_id || id).trim()
+  const type = String(payload.opportunity_type || 'grant').trim().toLowerCase()
+  const requiresMatch = normalizeBoolean(payload.requires_match) === true
+  const isLoan = LOAN_TYPES.includes(type)
+  const sqlBoolean = (value) => db?.dialect === 'postgres' ? Boolean(value) : (value ? 1 : 0)
+
+  return db.withTransaction(async (tx) => {
+    await tx.prepare(
+      `INSERT INTO funding_opportunities
+        (id, title, sponsor, source, source_id, source_url, record_origin,
+         description, eligibility_bullets, amount_min, amount_max, deadline,
+         deadline_type, application_url, is_national, state, categories,
+         keywords, opportunity_type, type, is_active, requires_match,
+         match_percentage, is_loan)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      title,
+      payload.sponsor ?? null,
+      source,
+      sourceId,
+      sourceUrl,
+      'url_import',
+      payload.description ?? null,
+      jsonArray(payload.eligibility_bullets),
+      payload.amount_min ?? null,
+      payload.amount_max ?? null,
+      payload.deadline ?? null,
+      payload.deadline_type ?? 'unknown',
+      applicationUrl || null,
+      sqlBoolean(normalizeBoolean(payload.is_national) === true),
+      payload.state ?? null,
+      jsonArray(payload.categories),
+      jsonArray(payload.keywords),
+      type,
+      'OPPORTUNITY',
+      sqlBoolean(normalizeBoolean(payload.is_active) !== false),
+      sqlBoolean(requiresMatch),
+      payload.match_percentage ?? null,
+      sqlBoolean(isLoan),
+    )
+    await syncOpportunityContractProjection(tx, id, payload, {
+      changedBy: changedBy ?? 'admin_api',
+      changeType: 'created',
+    })
+    return { id, inserted: true, updated: false, skipped: false }
+  })
 }
 
 function deriveCompliance(opportunity) {
@@ -1634,9 +1735,10 @@ router.post('/', async (req, res) => {
     }
 
     const data = validateFundingTerms(req.body || {});
-    const result = await createOpportunityRecord(req.db, data, {
-      changedBy: user.id ? `admin:${user.id}` : 'admin_api',
-    })
+    const changedBy = user.id ? `admin:${user.id}` : 'admin_api'
+    const result = isSoftComplianceCatalogEntry(data)
+      ? await createAdminSoftComplianceEntry(req.db, data, { changedBy })
+      : await createOpportunityRecord(req.db, data, { changedBy })
     if (result?.skipped) {
       return res.status(422).json({
         error: 'Opportunity did not pass the canonical ingest checks',
@@ -1652,7 +1754,8 @@ router.post('/', async (req, res) => {
     res.status(result.inserted ? 201 : 200).json(decorateOpportunity({ ...opp, change_history: changeHistory }));
   } catch (error) {
     console.error('Error creating opportunity:', error);
-    const status = error.message?.toLowerCase().includes('match percentage') ? 400 : 500;
+    const status = Number(error?.status)
+      || (error.message?.toLowerCase().includes('match percentage') ? 400 : 500);
     res.status(status).json({ error: error.message });
   }
 });

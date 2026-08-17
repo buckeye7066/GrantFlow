@@ -19,16 +19,17 @@
 
 import { randomUUID } from 'crypto'
 import { OPPORTUNITY_KINDS } from './opportunityRealityGate.js'
-import { PIPELINE_STAGES } from '../../shared/pipelineStages.js'
+import { PIPELINE_STAGE_ALL, PIPELINE_STAGES } from '../../shared/pipelineStages.js'
 import { linkApplicationLifecycle } from './applicationLifecycleReadModel.js'
 import { loadLatestRequirementsForApplication } from './groundedDrafting.js'
 
-// `grant_applications` is an application record, not the `grants` pipeline.
-// Its DB/UI contract deliberately includes application-specific states such as
-// in_progress, under_review, denied, and withdrawn. Reusing the grants pipeline
-// enum here made valid UI actions fail while also advertising values rejected
-// by the grant_applications CHECK constraint.
-const APPLICATION_STATES = Object.freeze([
+// `APPLICATION_STATES` is a long-standing compatibility export consumed by
+// pipeline contract tests and agent metadata, so it remains canonical+legacy
+// pipeline values plus the application-tracker vocabulary. Actual mutations
+// use the deliberately narrower set accepted by grant_applications.status.
+// This keeps the Kanban UI on PIPELINE_STAGES while preventing compatibility
+// aliases from being written into the application table.
+const APPLICATION_MUTATION_STATES = Object.freeze([
   'draft',
   'in_progress',
   'submitted',
@@ -38,7 +39,10 @@ const APPLICATION_STATES = Object.freeze([
   'withdrawn',
   'closed',
 ])
-const APPLICATION_STATE_SET = new Set(APPLICATION_STATES)
+const APPLICATION_STATES = Object.freeze([
+  ...new Set([...PIPELINE_STAGE_ALL, ...APPLICATION_MUTATION_STATES]),
+])
+const APPLICATION_STATE_SET = new Set(APPLICATION_MUTATION_STATES)
 
 const DEFAULT_DOCUMENTS_BY_TYPE = Object.freeze({
   nonprofit: ['IRS 501(c)(3) determination letter', 'Most recent Form 990', 'Annual budget', 'Board roster'],
@@ -489,7 +493,7 @@ export async function recordSubmissionEvent(db, applicationId, { eventType, note
 export async function setApplicationStatus(db, applicationId, status) {
   if (!applicationId || !status) throw new Error('applicationId and status required')
   if (!APPLICATION_STATE_SET.has(status)) {
-    throw new Error(`Invalid application status: ${status}. Allowed: ${APPLICATION_STATES.join(', ')}`)
+    throw new Error(`Invalid application status: ${status}. Allowed: ${APPLICATION_MUTATION_STATES.join(', ')}`)
   }
   await db
     .prepare('UPDATE grant_applications SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
@@ -519,10 +523,11 @@ export async function setApplicationStatus(db, applicationId, status) {
   }
 }
 
-export { APPLICATION_STATES, PIPELINE_STAGES }
+export { APPLICATION_MUTATION_STATES, APPLICATION_STATES, PIPELINE_STAGES }
 
 export default {
   APPLICATION_STATES,
+  APPLICATION_MUTATION_STATES,
   generateActionPlan,
   createApplicationFromOpportunity,
   wireApplicationLifecycleRequirements,

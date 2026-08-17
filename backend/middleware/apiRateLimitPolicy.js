@@ -130,7 +130,12 @@ export function classifyApiRatePolicy(req, env = process.env) {
       windowMs: positiveInt(env.API_MUTATION_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
       max: positiveInt(env.API_MUTATION_RATE_LIMIT_MAX, 120),
       shared: true,
-      requiredShared: true,
+      // Ordinary product mutations are bounded but not paid/security lanes.
+      // Prefer the cross-instance bucket; if a rolling/minimal deployment has
+      // not provisioned it yet, retain availability through the same bounded
+      // process-local fallback as standard reads. Auth, cost, and automation
+      // policies above remain requiredShared and continue to fail closed.
+      requiredShared: false,
     }
   }
 

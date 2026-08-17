@@ -367,6 +367,17 @@ test('persist: setApplicationStatus rejects invalid statuses', async () => {
   await assert.rejects(() => setApplicationStatus(db, appId, 'totally-invalid-status'), /invalid/i)
 })
 
+test('persist: compatibility export does not widen grant_applications mutations', async () => {
+  const db = createDb()
+  const opp = { id: 'opp-compat-status', title: 'Compatibility Status Test', kind: 'direct' }
+  const { id: appId } = await createCanonicalApplication(db, { profileId: 'p-test', userId: 'u', opportunity: opp })
+
+  assert.ok(APPLICATION_STATES.includes('interested'), 'pipeline compatibility value must remain exported')
+  await assert.rejects(() => setApplicationStatus(db, appId, 'interested'), /invalid application status/i)
+  const app = await db.prepare('SELECT status FROM grant_applications WHERE id = ?').get(appId)
+  assert.equal(app.status, 'draft')
+})
+
 test('persist: APPLICATION_STATES is a stable, complete lifecycle (mission spec)', () => {
   // One vocabulary is shared by both application APIs and the tracker.
   for (const required of ['draft', 'in_progress', 'submitted', 'under_review', 'awarded', 'denied', 'withdrawn', 'closed']) {
