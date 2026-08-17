@@ -51,6 +51,9 @@ const LEGACY_DENYLIST = [
 
 const ALLOWED_SHARED_IMPORTS = new Set([
   'shared/pipelineStages.js',
+  // Dependency-free Grants.gov protocol + identity contract. All Search2
+  // adapters and the direct transformer use this same source-id rule.
+  'shared/grantsGovProtocol.js',
   'backend/services/matchEngine.js',
   // Pure, dependency-free whole-word term matcher — the shared contract that
   // keeps need/keyword scanning precision identical across the OS thesis

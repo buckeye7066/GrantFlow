@@ -31,6 +31,8 @@ import {
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js';
 import { stampMatchConfidenceProvenance } from './matching/matchConfidenceProvenance.js';
 import { syncOpportunityContractProjection } from './opportunityRepository.js';
+import { grantsGovDetailIdFromUrl } from '../../shared/grantsGovProtocol.js';
+import { withIdentityTxn } from './opportunityIdentityStore.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -800,6 +802,93 @@ async function ensureOsTables(db) {
   try { await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_pom_profile_opp ON profile_opportunity_matches(profile_id, opportunity_id)').run(); } catch { /* ok */ }
 }
 
+const GRANTS_GOV_DERIVED_SOURCES = new Set([
+  'grants_gov',
+  'grants.gov',
+  'grants-gov',
+  'fema_afg',
+  'usda_rd',
+]);
+
+/**
+ * Rolling identity migration for Search2 rows written before the public
+ * opportunity number became the canonical source id.
+ *
+ * Old rows used Search2's internal detail id for source_id/key/id. New rows use
+ * the public opportunity number while retaining that internal id in the
+ * authoritative detail URL. Match only inside the Grants.gov-derived family and
+ * require both the old detail id and old-key-or-detail-URL evidence, so this is
+ * an alias upgrade rather than broad URL/title dedup.
+ */
+function grantsGovLegacyIdentityDescriptor(row) {
+  const source = String(row?.source ?? '').trim().toLowerCase();
+  if (!GRANTS_GOV_DERIVED_SOURCES.has(source)) return null;
+
+  const publicSourceId = String(row?.source_id ?? '').trim();
+  if (!publicSourceId) return null;
+
+  const detailUrl = [row.application_url, row.apply_url, row.source_url]
+    .find((value) => grantsGovDetailIdFromUrl(value));
+  const detailId = grantsGovDetailIdFromUrl(detailUrl);
+  if (!detailId || detailId.toLowerCase() === publicSourceId.toLowerCase()) return null;
+
+  return {
+    detailId,
+    detailUrl,
+    oldKey: `ext:${detailId.toLowerCase()}`,
+  };
+}
+
+async function findGrantsGovIdentityRow(db, row) {
+  const descriptor = grantsGovLegacyIdentityDescriptor(row);
+  if (!descriptor) return null;
+
+  const currentKey = String(row.canonical_opportunity_key ?? '').trim().toLowerCase();
+  const currentFingerprint = String(row.fingerprint ?? '').trim().toLowerCase();
+  const candidates = await db.prepare(
+    `SELECT *
+       FROM funding_opportunities
+      WHERE (
+          LOWER(COALESCE(canonical_opportunity_key, '')) = ?
+          OR LOWER(COALESCE(fingerprint, '')) = ?
+        )
+         OR (
+          LOWER(COALESCE(source, '')) IN ('grants_gov', 'grants.gov', 'grants-gov', 'fema_afg', 'usda_rd')
+          AND CAST(source_id AS TEXT) = ?
+          AND (
+            LOWER(COALESCE(canonical_opportunity_key, '')) = ?
+            OR LOWER(COALESCE(fingerprint, '')) = ?
+            OR application_url = ?
+            OR apply_url = ?
+            OR source_url = ?
+          )
+        )`,
+  ).all(
+    currentKey,
+    currentFingerprint,
+    descriptor.detailId,
+    descriptor.oldKey,
+    descriptor.oldKey,
+    descriptor.detailUrl,
+    descriptor.detailUrl,
+    descriptor.detailUrl,
+  );
+
+  const byId = new Map(
+    (candidates || [])
+      .filter((candidate) => candidate?.id)
+      .map((candidate) => [String(candidate.id), candidate]),
+  );
+  if (byId.size > 1) {
+    const error = new Error(
+      `crawler-os Grants.gov identity conflict for detail id ${descriptor.detailId}: ${[...byId.keys()].sort().join(', ')}`,
+    );
+    error.code = 'CRAWLER_OS_GRANTS_GOV_IDENTITY_CONFLICT';
+    throw error;
+  }
+  return byId.values().next().value ?? null;
+}
+
 export async function persistRun(db, memStore, run, opts = {}) {
   await ensureOsTables(db);
   const supportedOpportunityColumns = await fundingOpportunityColumns(db);
@@ -823,46 +912,56 @@ export async function persistRun(db, memStore, run, opts = {}) {
   let opportunities = 0;
   for (const o of catalog) {
     const row = osOppToLiveRow(o, supportedOpportunityColumns);
-    let targetId = o.id;
-    let beforeRow = null;
-    if (row.canonical_opportunity_key) {
-      const existing = await db
-        .prepare('SELECT * FROM funding_opportunities WHERE canonical_opportunity_key = ? LIMIT 1')
-        .get(row.canonical_opportunity_key);
-      if (existing && existing.id) {
-        targetId = existing.id;
-        beforeRow = existing;
+    const persistOpportunity = async (tx) => {
+      let targetId = o.id;
+      let beforeRow = await findGrantsGovIdentityRow(tx, row);
+      if (beforeRow?.id) targetId = beforeRow.id;
+
+      if (!beforeRow && row.canonical_opportunity_key) {
+        const existing = await tx
+          .prepare('SELECT * FROM funding_opportunities WHERE canonical_opportunity_key = ? LIMIT 1')
+          .get(row.canonical_opportunity_key);
+        if (existing?.id) {
+          targetId = existing.id;
+          beforeRow = existing;
+        }
       }
-    }
-    if (targetId === o.id && row.fingerprint) {
-      const existing = await db
-        .prepare('SELECT * FROM funding_opportunities WHERE fingerprint = ? LIMIT 1')
-        .get(row.fingerprint);
-      if (existing && existing.id) {
-        targetId = existing.id;
-        beforeRow = existing;
+      if (!beforeRow && row.fingerprint) {
+        const existing = await tx
+          .prepare('SELECT * FROM funding_opportunities WHERE fingerprint = ? LIMIT 1')
+          .get(row.fingerprint);
+        if (existing?.id) {
+          targetId = existing.id;
+          beforeRow = existing;
+        }
       }
-    }
-    if (!beforeRow) {
-      beforeRow = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(targetId);
-    }
+      if (!beforeRow) {
+        beforeRow = await tx.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(targetId);
+      }
+
+      // LIVE-DB per-key provenance merge, done ATOMICALLY inside the single
+      // UPSERT. For a legacy Grants.gov alias, this same write upgrades the
+      // numeric key/source id onto the preserved catalog id.
+      await upsertRow(tx, 'funding_opportunities', ['id'], { ...row, id: targetId }, {
+        conflictExpr: fundingOpportunityConflictExpr(tx, supportedOpportunityColumns, row),
+      });
+      await syncOpportunityContractProjection(tx, targetId, row, {
+        beforeRow: beforeRow ?? null,
+        changedBy: 'crawler_os',
+      });
+      return targetId;
+    };
+
+    const identity = grantsGovLegacyIdentityDescriptor(row);
+    const targetId = identity
+      ? await withIdentityTxn(
+        db,
+        'grants_gov_search2_detail',
+        identity.detailId.toLowerCase(),
+        persistOpportunity,
+      )
+      : await persistOpportunity(db);
     idRemap.set(o.id, targetId);
-    // LIVE-DB per-key provenance merge, done ATOMICALLY inside the single UPSERT
-    // (fundingOpportunityConflictExpr) so two concurrent persists can't
-    // read-then-clobber each other. The generic upsert would REPLACE the whole
-    // field_provenance JSON — dropping keys another extraction stored — so the
-    // conflict expression json_patch/jsonb-merges incoming over the current value
-    // (incoming wins per key, existing keys survive). A write that carries no
-    // provenance never names the column (osOppToLiveRow omits it), so stored
-    // provenance is untouched; there is no read-then-write gap and no fetch that
-    // could error into a null-clobber.
-    await upsertRow(db, 'funding_opportunities', ['id'], { ...row, id: targetId }, {
-      conflictExpr: fundingOpportunityConflictExpr(db, supportedOpportunityColumns, row),
-    });
-    await syncOpportunityContractProjection(db, targetId, row, {
-      beforeRow: beforeRow ?? null,
-      changedBy: 'crawler_os',
-    });
     opportunities += 1;
   }
 
@@ -873,6 +972,12 @@ export async function persistRun(db, memStore, run, opts = {}) {
       opportunity_id: idRemap.get(s.opportunity_id) ?? s.opportunity_id, source_id: s.source_id,
       external_id: s.external_id ?? null, apply_url: s.apply_url ?? null,
       first_seen_at: s.first_seen_at ?? nowIso(), last_seen_at: s.last_seen_at ?? nowIso(),
+    }, {
+      // An identity upgrade must not rewrite discovery history to "first seen
+      // today". Keep the original timestamp while refreshing alias + last seen.
+      conflictExpr: {
+        first_seen_at: 'COALESCE(opportunity_sources.first_seen_at, excluded.first_seen_at)',
+      },
     });
   }
 

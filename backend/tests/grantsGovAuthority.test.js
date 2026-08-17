@@ -53,6 +53,20 @@ describe('canonical Grants.gov authority', () => {
     expect(first.current_status).toBe('open')
   })
 
+  it('uses the public opportunity number as source identity while retaining the internal id for the detail URL', () => {
+    const transformed = transformGrantsGovOpportunity({
+      id: 98765,
+      number: 'PUBLIC-2026-77',
+      title: 'Federal Resilience Opportunity',
+      agency: 'Federal Resilience Agency',
+      oppStatus: 'posted',
+    })
+
+    expect(transformed.source_id).toBe('PUBLIC-2026-77')
+    expect(transformed.id).toBe('grants-gov-PUBLIC-2026-77')
+    expect(transformed.source_url).toBe('https://www.grants.gov/search-results-detail/98765')
+  })
+
   it('keeps the legacy crawler as orchestration-only delegation', async () => {
     const source = await readFile(new URL('../services/grantsDotGovCrawler.js', import.meta.url), 'utf8')
     expect(source).toContain("from './shared/grantsGovApiClient.js'")

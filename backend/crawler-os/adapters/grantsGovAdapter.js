@@ -14,13 +14,13 @@
 import { createBaseAdapter } from './baseAdapter.js';
 import { OPPORTUNITY_KIND } from '../contract.js';
 import { buildCrawlerQueries, inferCandidateProfile, inferFundingFlags } from '../crawlerVocabulary.js';
-import { GRANTS_GOV_SEARCH2_URL } from '../../config/grantsGovEndpoints.js';
 import {
+  GRANTS_GOV_SEARCH2_URL,
   buildGrantsGovSearchPayload,
-  grantsGovDetailUrl,
   normalizeGrantsGovDate,
   normalizeGrantsGovStatus,
-} from '../../services/shared/grantsGovApiClient.js';
+  resolveGrantsGovIdentity,
+} from '../../../shared/grantsGovProtocol.js';
 
 // Map our canonical applicant buckets → grants.gov applicant-eligibility codes
 // (verified against the live Search2 eligibility facets). Filtering the query by
@@ -128,14 +128,11 @@ export function createGrantsGovAdapter() {
       // used by the direct Grants.gov ingester; retaining the numeric id here
       // created two source identities for the same federal opportunity. Keep
       // the internal id only for the authoritative detail URL.
-      const detailId = raw.external_id != null ? String(raw.external_id) : null;
-      const opportunityNumber = raw.number != null ? String(raw.number).trim() : '';
-      const sourceId = opportunityNumber || detailId;
-      const applyUrl = grantsGovDetailUrl(detailId, opportunityNumber || null);
+      const identity = resolveGrantsGovIdentity(raw);
       const profile = inferCandidateProfile(raw, source);
       const fundingFlags = inferFundingFlags(raw);
       return {
-        external_id: sourceId,
+        external_id: identity.sourceId,
         kind: OPPORTUNITY_KIND.DIRECT_GRANT,
         title: raw.title ?? null,
         // Owner rule 2026-08-03: never anonymize the funder — a missing agency
@@ -148,8 +145,8 @@ export function createGrantsGovAdapter() {
         first_published_at: normalizeGrantsGovDate(raw.posted_date),
         is_rolling: false,
         application_method: 'grants.gov',
-        apply_url: applyUrl,
-        info_url: applyUrl,
+        apply_url: identity.detailUrl,
+        info_url: identity.detailUrl,
         applicant_types: profile.applicant_types,
         need_categories: profile.need_categories,
         geography: source?.geography ?? { national: true, states: [] },
