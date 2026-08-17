@@ -160,9 +160,14 @@ export function createGrantScopedRecordsRouter(resourceKey) {
         params.push(String(value))
       }
 
-      const sortCol = spec.sortable.includes(String(sort)) ? String(sort) : 'created_at'
+      // Identifiers resolve to ALLOWLIST MEMBERS (never the request string):
+      // the sort column is the matched element of the frozen sortable list,
+      // and the limit is a bound parameter — nothing request-derived is ever
+      // interpolated into the SQL text.
+      const sortCol = spec.sortable.find((c) => c === String(sort)) ?? 'created_at'
       const sortOrder = String(order).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
       const cappedLimit = Math.max(1, Math.min(500, Number(limit) || 500))
+      params.push(cappedLimit)
 
       // Tenancy is enforced ABOVE this statement: ensureGrantAccess admitted
       // the requested grant_id, or the WHERE was narrowed to the caller's
@@ -174,7 +179,7 @@ export function createGrantScopedRecordsRouter(resourceKey) {
            LEFT JOIN grants g ON g.id = r.grant_id
           ${where}
           ORDER BY r.${sortCol} ${sortOrder}
-          LIMIT ${cappedLimit}`,
+          LIMIT ?`,
       ).all(...params)
       res.json(Array.isArray(rows) ? rows : [])
     } catch (error) {
