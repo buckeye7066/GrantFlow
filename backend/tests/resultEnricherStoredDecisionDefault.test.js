@@ -37,6 +37,30 @@ describe('stored canonical decisions are authoritative by default', () => {
     expect(kept[0].match_score).toBe(40)
   })
 
+  it('every kept row carries bounded next-step guidance (nextStepGuidance resurrected, epic slice 3)', () => {
+    const { kept } = canonicalizeOpportunityList(profile, [storedOpportunity()], {
+      preserveDirectories: true,
+      rejectHardIneligible: true,
+    })
+    expect(kept).toHaveLength(1)
+    const steps = kept[0].next_steps
+    expect(Array.isArray(steps)).toBe(true)
+    expect(steps.length).toBeGreaterThan(0)
+    expect(steps.length).toBeLessThanOrEqual(4)
+    for (const step of steps) {
+      expect(typeof step.label).toBe('string')
+      expect(step.label.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('the unknown-eligibility list is always an array, never undefined', () => {
+    const { kept } = canonicalizeOpportunityList(profile, [storedOpportunity()], {
+      preserveDirectories: true,
+      rejectHardIneligible: true,
+    })
+    expect(Array.isArray(kept[0].missing_eligibility_fields)).toBe(true)
+  })
+
   it('an explicit false remains the strict unscored-lead opt-out', () => {
     const { kept, dropped } = canonicalizeOpportunityList(profile, [storedOpportunity()], {
       preserveDirectories: true,

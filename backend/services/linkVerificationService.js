@@ -9,7 +9,7 @@
  * Runs as a background task — does NOT block any request path.
  *
  * Records, per opportunity:
- *   link_status        – ok | redirect | broken | skipped | unverified
+ *   link_status        – ok | redirect | suspicious | broken | skipped | unverified
  *   link_status_code   – HTTP status code (null when no response)
  *   verification_method– 'head' | 'get' | 'manual' | 'crawler:<name>' | null
  *   verified_by        – which run/job/worker performed the check
@@ -153,8 +153,54 @@ export async function recordVerificationEvent(db, event = {}) {
  * @param {string} url
  * @param {Object} [opts]
  * @param {number} [opts.timeoutMs] - per-request timeout (default 10s)
- * @returns {Promise<{ status: 'ok'|'redirect'|'broken'|'skipped', code: number|null, method: string|null, error: string|null }>}
+ * @returns {Promise<{ status: 'ok'|'redirect'|'suspicious'|'broken'|'skipped', code: number|null, method: string|null, error: string|null }>}
  */
+// Minimal two-part public-suffix list for registrable-host comparison. An
+// unlisted two-part suffix mis-groups CONSERVATIVELY (two different <x>.co.uk
+// sites compare equal → 'ok'), so growing this list only ever ADDS precision.
+const TWO_PART_TLDS = new Set([
+  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk',
+  'com.au', 'org.au', 'gov.au', 'edu.au',
+  'com.br', 'org.br', 'com.mx', 'co.nz', 'org.nz',
+  'co.in', 'org.in', 'co.za', 'org.za', 'com.sg',
+])
+
+function registrableHost(hostname) {
+  const labels = String(hostname || '').toLowerCase().replace(/\.$/, '').split('.')
+  if (labels.length <= 2) return labels.join('.')
+  const lastTwo = labels.slice(-2).join('.')
+  const take = TWO_PART_TLDS.has(lastTwo) ? 3 : 2
+  return labels.slice(-take).join('.')
+}
+
+/**
+ * Given a 2xx probe outcome, decide whether the settled location structurally
+ * contradicts the requested one. Returns a reason string when suspicious,
+ * null when the success is trustworthy. Only the strong signature fires:
+ * the chain crossed to a DIFFERENT registrable host AND settled on that
+ * host's root/homepage (path depth ≤ 1 with no query). Everything else —
+ * same-site redirects, www/protocol changes, cross-host redirects to a deep
+ * program path — stays 'ok'. Exported for tests.
+ */
+export function classifySuccessfulProbe(requestedUrl, finalUrl) {
+  if (!finalUrl || typeof finalUrl !== 'string') return null
+  let from, to
+  try {
+    from = new URL(requestedUrl)
+    to = new URL(finalUrl)
+  } catch {
+    return null
+  }
+  const fromHost = registrableHost(from.hostname)
+  const toHost = registrableHost(to.hostname)
+  if (!fromHost || !toHost || fromHost === toHost) return null
+  const path = to.pathname.replace(/\/+$/, '')
+  const depth = path.split('/').filter(Boolean).length
+  const isHomepageish = depth <= 1 && !to.search
+  if (!isHomepageish) return null
+  return `redirected_off_host_to_homepage:${toHost}`
+}
+
 export async function checkUrl(url, opts = {}) {
   if (shouldSkipUrl(url)) {
     return { status: 'skipped', code: null, method: null, error: null }
@@ -229,6 +275,25 @@ export async function checkUrl(url, opts = {}) {
 
   if (outcome.code !== null && outcome.code !== undefined) {
     if (outcome.code >= 200 && outcome.code < 300) {
+      // A 200 is not unconditional proof the PROGRAM page is alive. The one
+      // structural signal we can read without a body is where the redirect
+      // chain SETTLED: landing on a different registrable host's homepage is
+      // the parked-domain / program-retired-to-homepage signature (epic slice
+      // 2: "never display a generic funder homepage as an open direct
+      // application"). Deliberately conservative — a same-site redirect or a
+      // cross-host redirect to a DEEP path stays 'ok'; suspicious rows are
+      // demoted from default library results but NEVER deactivated (that
+      // remains the broken path's two-strike job).
+      const suspicion = classifySuccessfulProbe(url, outcome.finalUrl)
+      if (suspicion) {
+        return {
+          status: 'suspicious',
+          code: outcome.code,
+          method,
+          error: suspicion,
+          finalUrl: outcome.finalUrl,
+        }
+      }
       return { status: 'ok', code: outcome.code, method, error: null, finalUrl: outcome.finalUrl }
     }
     if (outcome.code >= 300 && outcome.code < 400) {
