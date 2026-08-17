@@ -82,3 +82,11 @@
 - If DB issues are involved:
   - Postgres: do **not** attempt to roll back migrations in prod during an incident; roll forward with a fix or restore from backup.
   - SQLite rollback is only viable if you have a persistent volume + known-good DB file.
+  - **Backups are real scripts, not aspiration**: `npm run db:backup` produces a
+    verified artifact (SQLite `VACUUM INTO` + integrity_check, or `pg_dump -Fc`)
+    under `BACKUP_DIR` (defaults to the persistent volume when present) and
+    stamps `system_kv backup_last_run`; `npm run db:restore -- <file>` restores
+    it (SQLite: pre-restore safety copy + refuses while the backend holds the
+    file; Postgres: `pg_restore --clean --if-exists`). The Sam check
+    `ops.backupFreshness` goes red when no verified backup exists within
+    `BACKUP_MAX_AGE_HOURS` (48h default) — schedule `db:backup` accordingly.

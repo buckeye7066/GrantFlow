@@ -115,7 +115,9 @@
     "purge:regional": "node backend/scripts/regional-purge.mjs",
     "amy:train": "node ./scripts/amy-train.mjs",
     "acceptance:amy-parity": "node ./scripts/grantflow-acceptance-50.mjs",
-    "amy:cleanup": "node ./scripts/amy-cleanup.mjs"
+    "amy:cleanup": "node ./scripts/amy-cleanup.mjs",
+    "db:backup": "node scripts/backup-db.mjs",
+    "db:restore": "node scripts/restore-db.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
