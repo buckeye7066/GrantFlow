@@ -19,6 +19,7 @@ const EXPECTED_RUNTIME_DEFAULTS = [
   '# NOFO_PARSE_CHUNK_CHARS=14000',
   '# NOFO_PARSE_CHUNK_OVERLAP=600',
   '# NOFO_PARSE_MAX_TEXT_CHARS=2000000',
+  '# PROFILE_SCORING_MAX_CANDIDATES=25000',
 ]
 
 const SOURCE_CONTRACTS = [
@@ -39,6 +40,10 @@ const SOURCE_CONTRACTS = [
       'NOFO_PARSE_CHUNK_OVERLAP',
       'NOFO_PARSE_MAX_TEXT_CHARS',
     ],
+  },
+  {
+    path: '../../backend/routes/opportunities.js',
+    names: ['PROFILE_SCORING_MAX_CANDIDATES'],
   },
 ]
 
