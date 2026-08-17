@@ -107,6 +107,14 @@ export function toCanonicalResult(opp) {
     opp.profile_signal_audit?.matched_facts,
   )
   const ineligibility = pickArray(opp.ineligibility_reasons, opp.eligibility_concerns)
+  // Facts the engine could not confirm either way (slice 3: the "unknown" leg
+  // of confirmed / unknown / disqualifying). Carried so the card can render an
+  // honest "we couldn't confirm" section instead of implying full coverage.
+  const unknownFacts = pickArray(
+    opp.missing_eligibility_fields,
+    opp.missingEligibilityFields,
+    opp.unknown_eligibility_fields,
+  )
 
   const applicationUrl = pickString(opp.application_url, opp.apply_url, opp.applicationUrl, opp.applyUrl)
   const sourceUrl = pickString(opp.source_url, opp.sourceUrl, opp.url, applicationUrl)
@@ -115,7 +123,23 @@ export function toCanonicalResult(opp) {
   const confidence = pickNumber(opp.match_confidence, opp.confidence)
 
   const trust = pickString(opp.source_trust_tier, opp.trust_tier, opp.trustTier)
-  const linkStatus = pickString(opp.link_status, opp.linkStatus) ||
+  const rawLinkStatus = pickString(opp.link_status, opp.linkStatus)
+  // The backend verifier's stored vocabulary is ok|redirect|broken|skipped|
+  // unverified (linkVerificationService). The card renders the canonical
+  // verified|redirect|broken|unverified|unreachable set — map the two here so a
+  // proven-live link ('ok') is never rendered as an unverified amber chip and a
+  // deliberately-skipped probe reads honestly as "not yet verified".
+  const LINK_STATUS_CANONICAL = {
+    ok: 'verified',
+    skipped: 'unverified',
+    verified: 'verified',
+    redirect: 'redirect',
+    broken: 'broken',
+    unreachable: 'unreachable',
+    unverified: 'unverified',
+  }
+  const linkStatus = (rawLinkStatus && LINK_STATUS_CANONICAL[rawLinkStatus.toLowerCase()]) ||
+    rawLinkStatus ||
     (opp.last_verified_at && opp.url_status_code && opp.url_status_code < 400 ? 'verified' : 'unverified')
 
   return {
@@ -130,6 +154,7 @@ export function toCanonicalResult(opp) {
     opportunity_kind: kind,
     source_trust_tier: trust || (kind === 'directory' ? 'verified_directory' : 'open_web'),
     link_status: linkStatus,
+    last_verified_at: pickString(opp.last_verified_at, opp.lastVerifiedAt),
     deadline: pickString(opp.deadline, opp.deadlineAt, opp.deadline_date),
     deadline_type: pickString(opp.deadline_type, opp.deadlineType),
     // Loan / matching-funds caveats so the card can warn the user (RC-15).
@@ -152,6 +177,7 @@ export function toCanonicalResult(opp) {
     match_confidence: confidence ?? null,
     matched_profile_facts: matchedFacts,
     ineligibility_reasons: ineligibility,
+    missing_eligibility_fields: unknownFacts,
     next_action: pickString(opp.next_action, opp.nextAction),
     threshold_relaxed: Boolean(opp.threshold_relaxed || opp.threshold_relaxed_reason),
     relaxed_reason: pickString(opp.relaxed_reason, opp.threshold_relaxed_reason, opp.threshold_fallback_message),

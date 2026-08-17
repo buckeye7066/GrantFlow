@@ -31,6 +31,29 @@ export function isFiniteNumberLike(value) {
   return Number.isFinite(Number(value))
 }
 
+/**
+ * Resolve the engine's "could not confirm" field list for a displayed row.
+ * Prefers the live decision's measured list; falls back to the persisted
+ * match_explain_json artifact. Returns [] when neither side measured one —
+ * never invents an unknown and never throws on malformed stored JSON.
+ */
+export function resolveMissingEligibilityFields(opportunity, decision) {
+  const onlyStrings = (values) =>
+    Array.isArray(values) ? values.filter((v) => typeof v === 'string' && v.trim()) : []
+  const live = onlyStrings(decision?.missingEligibilityFields ?? decision?.missing_eligibility_fields)
+  if (live.length > 0) return live
+  const raw = opportunity?.match_explain_json
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      return onlyStrings(JSON.parse(raw)?.missing_eligibility_fields)
+    } catch {
+      return []
+    }
+  }
+  if (raw && typeof raw === 'object') return onlyStrings(raw.missing_eligibility_fields)
+  return []
+}
+
 const PERSISTED_CANONICAL_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
 
 /**
@@ -293,6 +316,11 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     ineligibility_reasons: Array.isArray(decision?.ineligibilityReasons)
       ? decision.ineligibilityReasons
       : [],
+    // The "unknown" leg of the confirmed / unknown / disqualifying triad
+    // (epic slice 3): profile facts the engine could not confirm either way.
+    // Live recomputes carry it on the decision; persisted rows carry it inside
+    // match_explain_json (crawler-os/matchEngine writes missing_eligibility_fields).
+    missing_eligibility_fields: resolveMissingEligibilityFields(opportunity, decision),
     matcher_version: decision?.matcherVersion ?? null,
     evaluated_at: decision?.evaluatedAt ?? null,
     trust_tier: opportunity.trust_tier ?? trustMeta.trust_tier,

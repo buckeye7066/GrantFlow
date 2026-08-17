@@ -53,7 +53,15 @@ const LINK_STATUS_LABEL = {
   broken: 'Link reported broken',
   redirect: 'Link redirected',
   unreachable: 'Link unreachable',
+  // Backend verifier vocabulary (linkVerificationService stores ok/skipped).
+  // toCanonicalResult normalizes these, but surfaces that hand a raw row to
+  // the card must still render an honest label instead of the raw token.
+  ok: 'Link verified',
+  skipped: 'Link not yet verified',
 }
+
+// Statuses that mean "the verifier proved this link live".
+const VERIFIED_LINK_STATUSES = new Set(['verified', 'ok'])
 
 const NEXT_ACTION_LABEL = {
   apply: 'Open application',
@@ -88,6 +96,16 @@ function formatDeadline(deadline, deadlineType) {
   }
 }
 
+// Turn an engine field id ('profile.applicant_type', 'education.highest_level')
+// into plain language a first-time applicant can act on. Never shows the raw
+// dotted internal path.
+function humanizeUnknownField(field) {
+  const leaf = String(field || '').split('.').pop() || ''
+  const words = leaf.replace(/_/g, ' ').trim()
+  if (!words) return 'A profile detail we could not read'
+  return `Your ${words} — add it to your profile to confirm eligibility`
+}
+
 function pickAction(result) {
   if (result?.next_action) return result.next_action
   const kind = result?.kind || result?.opportunity_kind || 'direct'
@@ -109,6 +127,9 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
   const facts = Array.isArray(result.matched_profile_facts) ? result.matched_profile_facts : []
   const ineligibility = Array.isArray(result.ineligibility_reasons)
     ? result.ineligibility_reasons
+    : []
+  const unknownFacts = Array.isArray(result.missing_eligibility_fields)
+    ? result.missing_eligibility_fields
     : []
   const hasApplicationUrl = Boolean(result.application_url || result.apply_url)
   const url = result.application_url || result.apply_url || result.source_url || result.url || null
@@ -164,11 +185,15 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
               className={
                 isBroken
                   ? 'text-red-600'
-                  : linkStatus === 'verified'
+                  : VERIFIED_LINK_STATUSES.has(linkStatus)
                     ? 'text-emerald-600'
                     : 'text-amber-600'
               }
-              title="Link status — whether GrantFlow has verified the application URL is live"
+              title={
+                result.last_verified_at
+                  ? `Link status — last checked ${new Date(result.last_verified_at).toLocaleDateString()}`
+                  : 'Link status — whether GrantFlow has verified the application URL is live'
+              }
             >
               <span className="normal-case text-slate-500">Link status: </span>
               {LINK_STATUS_LABEL[linkStatus] ?? linkStatus}
@@ -231,6 +256,19 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
           <ul className="mt-1 list-disc pl-5 text-sm text-slate-700 space-y-0.5">
             {facts.slice(0, 5).map((fact, i) => (
               <li key={i}>{humanizeMatchReason(fact)}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {unknownFacts.length > 0 && (
+        <section data-testid="funding-result-card-unknown">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            We couldn&apos;t confirm
+          </p>
+          <ul className="mt-1 list-disc pl-5 text-sm text-slate-600 space-y-0.5">
+            {unknownFacts.slice(0, 4).map((field, i) => (
+              <li key={i}>{humanizeUnknownField(field)}</li>
             ))}
           </ul>
         </section>

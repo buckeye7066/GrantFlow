@@ -46,6 +46,10 @@ export const FUNDING_SOURCE_ROUTE_PROJECTION = `
        fo.source_trust_tier,
        fo.categories,
        fo.keywords,
+       fo.link_status,
+       fo.link_status_code,
+       fo.last_verified_at,
+       fo.verification_method,
        pom.match_score,
        pom.match_confidence,
        pom.match_decision,
@@ -117,7 +121,11 @@ SELECT m.profile_id,
        o.application_url,
        o.application_url AS apply_url,
        o.source_url,
-       o.record_origin
+       o.record_origin,
+       o.link_status,
+       o.link_status_code,
+       o.last_verified_at,
+       o.verification_method
   FROM profile_opportunity_matches m
   JOIN funding_opportunities o ON o.id = m.opportunity_id
  WHERE m.profile_id = ?

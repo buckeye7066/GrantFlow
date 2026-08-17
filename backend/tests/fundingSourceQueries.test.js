@@ -74,6 +74,10 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
       type TEXT,
       opportunity_kind TEXT,
       source_trust_tier TEXT,
+      link_status TEXT,
+      link_status_code INTEGER,
+      last_verified_at TEXT,
+      verification_method TEXT,
       is_active INTEGER DEFAULT 1,
       is_hidden INTEGER DEFAULT 0
     );
@@ -106,6 +110,7 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
       record_origin, description, eligibility_bullets, amount_min, amount_max,
       deadline, deadline_type, application_url, is_national, state, categories,
       keywords, opportunity_type, type, opportunity_kind, source_trust_tier,
+      link_status, link_status_code, last_verified_at, verification_method,
       is_active, is_hidden
     ) VALUES
       ('opp-1', CURRENT_TIMESTAMP, 'Canonical Medical Grant', 'Example Agency',
@@ -113,18 +118,21 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
        'Live-table description', '["Adults in Tennessee"]', 1000, 5000,
        '2026-12-31', 'fixed', 'https://example.gov/apply', 0, 'TN',
        '["medical"]', '["treatment"]', 'grant', 'OPPORTUNITY',
-       'DIRECT_GRANT', 'official_portal', 1, 0),
+       'DIRECT_GRANT', 'official_portal',
+       'ok', 200, '2026-08-15T00:00:00.000Z', 'http_head', 1, 0),
       ('opp-2', CURRENT_TIMESTAMP, 'Assistance Directory', 'Example Directory',
        'official', 'D-1', 'https://example.gov/directory', 'curated_verified',
        'Directory description', '["Tennessee residents"]', NULL, NULL,
        NULL, 'rolling', 'https://example.gov/directory', 1, NULL,
        '["medical"]', '["directory"]', 'directory', 'DIRECTORY',
-       'DIRECTORY', 'verified_directory', 1, 0),
+       'DIRECTORY', 'verified_directory',
+       NULL, NULL, NULL, NULL, 1, 0),
       ('opp-dismissed', CURRENT_TIMESTAMP, 'Dismissed Grant', 'Example Agency',
        'official', 'A-2', 'https://example.gov/dismissed', 'curated_verified',
        'Should stay hidden', '[]', 100, 500, NULL, 'rolling',
        'https://example.gov/dismissed', 1, NULL, '[]', '[]', 'grant',
-       'OPPORTUNITY', 'DIRECT_GRANT', 'official_portal', 1, 0);
+       'OPPORTUNITY', 'DIRECT_GRANT', 'official_portal',
+       NULL, NULL, NULL, NULL, 1, 0);
 
     INSERT INTO profile_opportunity_matches (
       id, profile_id, opportunity_id, match_score, match_decision,
@@ -196,6 +204,18 @@ describe('canonical funding-source query projection', () => {
       matcher_version: 'crawler-os',
     })
 
+    // Verification truth reaches the primary user-facing surface: the
+    // projection must carry the link-verification columns so a proven-live or
+    // proven-broken link is never rendered as "not yet verified" (epic slice 2).
+    expect(direct).toMatchObject({
+      link_status: 'ok',
+      link_status_code: 200,
+      last_verified_at: '2026-08-15T00:00:00.000Z',
+      verification_method: 'http_head',
+    })
+    const directory = result.rows.find((row) => row.id === 'opp-2')
+    expect(directory).toMatchObject({ link_status: null, last_verified_at: null })
+
     expect(FUNDING_SOURCES_BY_PROFILE_SQL).not.toMatch(/\bfo\.summary\b/)
     expect(FUNDING_SOURCES_BY_PROFILE_SQL).not.toMatch(/\bfo\.eligibility\b/)
     expect(FUNDING_SOURCES_BY_PROFILE_SQL).not.toMatch(/\bfo\.eligibility_criteria\b/)
@@ -211,6 +231,8 @@ describe('canonical funding-source query projection', () => {
     expect(rows[0]).toHaveProperty('summary')
     expect(rows[0]).toHaveProperty('eligibility')
     expect(rows[0]).toHaveProperty('match_confidence')
+    expect(rows[0]).toHaveProperty('link_status')
+    expect(rows[0]).toHaveProperty('last_verified_at')
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.summary\b/)
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.eligibility\b/)
     expect(NEED_FIRST_RECONCILIATION_ROWS_SQL).not.toMatch(/\bo\.eligibility_criteria\b/)
