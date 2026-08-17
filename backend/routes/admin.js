@@ -39,6 +39,7 @@ import { restoreProfileSectionsFromLinkedOrganizations } from '../services/profi
 import { runAutonomousCodeCrawl } from '../services/anyaAutonomousCrawler.js'
 import { auditPipelinesAgainstGoals } from '../services/pipelineGoalCleanupService.js'
 import { fetchPublicResource, publicFetchFailureStatus } from '../utils/safeRemoteFetch.js'
+import { redactProfileMemoryForProfile } from '../services/profileMemoryRepository.js'
 import {
   UploadValidationError,
   validateUploadBufferSecure,
@@ -4492,6 +4493,23 @@ async function hardDeleteProfileById({ db, profileId, actorUserId, reason, tombs
   }
 
   await db.withTransaction(async (tx) => {
+    // Keep memory erasure and the profile hard-delete in one database
+    // transaction. Hiding withTransaction from this scoped view is
+    // intentional: SQLite passes its root adapter into the callback, and the
+    // memory repository would otherwise try to open a nested async transaction.
+    // Postgres already supplies a transaction-scoped adapter, so the same view
+    // preserves parity on both dialects.
+    const memoryTx = {
+      dialect: tx?.dialect,
+      prepare: (...args) => tx.prepare(...args),
+    }
+    await redactProfileMemoryForProfile(memoryTx, {
+      profileId: pid,
+      actorUserId,
+      actorIsAdmin: true,
+      reason: 'profile_deleted',
+    })
+
     if (tombstone) {
       await tx.prepare(
         `
@@ -4593,13 +4611,25 @@ router.post('/profiles/:id/hard-delete', async (req, res) => {
     }
   }
 
-  await hardDeleteProfileById({
-    db: req.db,
-    profileId,
-    actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
-    reason,
-    tombstone,
-  })
+  try {
+    await hardDeleteProfileById({
+      db: req.db,
+      profileId,
+      actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
+      reason,
+      tombstone,
+    })
+  } catch (error) {
+    if (error?.code === 'MEMORY_RETENTION_HOLD') {
+      return res.status(409).json({
+        ok: false,
+        error: 'Profile deletion is blocked by a memory retention policy',
+        code: error.code,
+        details: error.details ?? undefined,
+      })
+    }
+    throw error
+  }
 
   try {
     logAuditEvent(req.db, {

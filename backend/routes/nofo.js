@@ -746,8 +746,10 @@ router.post('/solicitations/ingest', standardRateLimiter, async (req, res, next)
     if (req.body?.document_id) {
       document = await req.db.prepare(
         `SELECT id, profile_id, name, mime_type, file_bytes, extracted_text
-           FROM documents WHERE id = ? LIMIT 1`,
-      ).get(String(req.body.document_id))
+           FROM documents
+          WHERE id = ? AND profile_id = ?
+          LIMIT 1`,
+      ).get(String(req.body.document_id), profileId)
       if (!document) return res.status(404).json({ error: 'Document not found' })
       if (!document.profile_id || String(document.profile_id) !== profileId) {
         return res.status(403).json({ error: 'Document is not owned by this profile' })

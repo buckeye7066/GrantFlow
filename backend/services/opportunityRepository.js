@@ -282,23 +282,55 @@ export async function getOpportunityById(db, id, options = {}) {
 export async function listOpportunityRecords(db, options = {}) {
   const limit = Math.max(1, Math.min(Number(options.limit) || 50, 200))
   const offset = Math.max(0, Number(options.offset) || 0)
-  const conditions = []
-  const params = []
-  if (options.source) {
-    conditions.push('source = ?')
-    params.push(String(options.source))
+  const source = options.source ? String(options.source) : null
+  const status = options.status
+    ? (normalizeOpportunitySourceStatus(options.status) ?? String(options.status))
+    : null
+
+  // The filter shape has only four possibilities. Select an entirely static,
+  // parameterized statement for each instead of interpolating a constructed
+  // WHERE fragment. Values remain bind parameters and no caller-controlled
+  // identifier or SQL text can enter prepare().
+  let rows
+  let count
+  if (source && status) {
+    rows = await db.prepare(
+      `SELECT * FROM funding_opportunities
+       WHERE source = ? AND current_status = ?
+       ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC, created_at DESC
+       LIMIT ? OFFSET ?`,
+    ).all(source, status, limit, offset)
+    count = await db.prepare(
+      'SELECT COUNT(*) AS total FROM funding_opportunities WHERE source = ? AND current_status = ?',
+    ).get(source, status)
+  } else if (source) {
+    rows = await db.prepare(
+      `SELECT * FROM funding_opportunities
+       WHERE source = ?
+       ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC, created_at DESC
+       LIMIT ? OFFSET ?`,
+    ).all(source, limit, offset)
+    count = await db.prepare(
+      'SELECT COUNT(*) AS total FROM funding_opportunities WHERE source = ?',
+    ).get(source)
+  } else if (status) {
+    rows = await db.prepare(
+      `SELECT * FROM funding_opportunities
+       WHERE current_status = ?
+       ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC, created_at DESC
+       LIMIT ? OFFSET ?`,
+    ).all(status, limit, offset)
+    count = await db.prepare(
+      'SELECT COUNT(*) AS total FROM funding_opportunities WHERE current_status = ?',
+    ).get(status)
+  } else {
+    rows = await db.prepare(
+      `SELECT * FROM funding_opportunities
+       ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC, created_at DESC
+       LIMIT ? OFFSET ?`,
+    ).all(limit, offset)
+    count = await db.prepare('SELECT COUNT(*) AS total FROM funding_opportunities').get()
   }
-  if (options.status) {
-    conditions.push('current_status = ?')
-    params.push(normalizeOpportunitySourceStatus(options.status) ?? String(options.status))
-  }
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
-  const rows = await db.prepare(
-    `SELECT * FROM funding_opportunities ${where}
-     ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC, created_at DESC
-     LIMIT ? OFFSET ?`,
-  ).all(...params, limit, offset)
-  const count = await db.prepare(`SELECT COUNT(*) AS total FROM funding_opportunities ${where}`).get(...params)
   return {
     data: (rows || []).map((row) => buildOpportunityReadModel(row, options)),
     total: Number(count?.total ?? 0),

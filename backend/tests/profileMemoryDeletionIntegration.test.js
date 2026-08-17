@@ -11,6 +11,7 @@ const migrationSql = fs.readFileSync(
   new URL('../db/migrations/170_profile_memory_and_funder_intelligence.sql', import.meta.url),
   'utf8',
 )
+const baseSchemaSql = fs.readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8')
 const databases = []
 
 function makeMemoryDb() {
@@ -51,6 +52,43 @@ describe('canonical profile-delete memory choke point', () => {
     expect(hardDelete).toBeGreaterThan(guard)
     expect(source).toContain("memoryError?.code === 'MEMORY_RETENTION_HOLD'")
     expect(source).toContain('return res.status(409)')
+  })
+
+  it('wires admin hard-delete through the same atomic memory-erasure contract', () => {
+    const source = fs.readFileSync(new URL('../routes/admin.js', import.meta.url), 'utf8')
+    const transaction = source.indexOf('await db.withTransaction(async (tx) =>')
+    const memoryErase = source.indexOf('await redactProfileMemoryForProfile(memoryTx', transaction)
+    const profileDelete = source.indexOf("tx.prepare('DELETE FROM profiles WHERE id = ?')", memoryErase)
+    expect(transaction).toBeGreaterThan(0)
+    expect(memoryErase).toBeGreaterThan(transaction)
+    expect(profileDelete).toBeGreaterThan(memoryErase)
+    expect(source).toContain("error?.code === 'MEMORY_RETENTION_HOLD'")
+  })
+
+  it('keeps fresh-schema lifecycle foreign keys valid during profile cascades', () => {
+    const raw = new Database(':memory:')
+    databases.push(raw)
+    raw.pragma('foreign_keys = ON')
+    raw.exec(baseSchemaSql)
+
+    expect(raw.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'grant_applications'",
+    ).get()?.name).toBe('grant_applications')
+
+    raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)')
+      .run('profile-fresh', 'Fresh Schema Applicant')
+    raw.prepare(
+      `INSERT INTO grant_applications (id, profile_id, user_id, grant_name)
+       VALUES (?, ?, ?, ?)`,
+    ).run('application-fresh', 'profile-fresh', 'user-fresh', 'Fresh Schema Grant')
+    raw.prepare(
+      `INSERT INTO application_lifecycle_subjects (application_id, profile_id)
+       VALUES (?, ?)`,
+    ).run('application-fresh', 'profile-fresh')
+
+    expect(() => raw.prepare('DELETE FROM profiles WHERE id = ?').run('profile-fresh')).not.toThrow()
+    expect(raw.prepare('SELECT COUNT(*) AS count FROM grant_applications').get().count).toBe(0)
+    expect(raw.prepare('SELECT COUNT(*) AS count FROM application_lifecycle_subjects').get().count).toBe(0)
   })
 
   it('redacts eligible payloads before the profile row is removed', async () => {

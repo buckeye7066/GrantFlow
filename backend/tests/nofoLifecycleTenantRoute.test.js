@@ -43,6 +43,7 @@ function makeDb() {
       id TEXT PRIMARY KEY, profile_id TEXT, organization_id TEXT,
       funding_opportunity_id TEXT, title TEXT, status TEXT
     );
+    CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY);
     CREATE TABLE application_lifecycle_subjects (
       application_id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,
       pipeline_grant_id TEXT, canonical_task_id TEXT, solicitation_id TEXT
@@ -50,7 +51,7 @@ function makeDb() {
     CREATE TABLE documents (
       id TEXT PRIMARY KEY, profile_id TEXT, grant_id TEXT, name TEXT,
       type TEXT, file_size INTEGER, mime_type TEXT, content_hash TEXT,
-      status TEXT, version INTEGER, file_bytes BLOB,
+      status TEXT, version INTEGER, file_bytes BLOB, extracted_text TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -70,6 +71,7 @@ function makeDb() {
     INSERT INTO grants (id, profile_id, title, status) VALUES
       ('grant-2', 'profile-2', 'Private grant', 'drafting'),
       ('grant-3', 'profile-3', 'Wrong-profile grant', 'drafting');
+    INSERT INTO funding_opportunities (id) VALUES ('opportunity-1');
     INSERT INTO grant_applications
       (id, profile_id, pipeline_grant_id, user_id, status, grant_name)
       VALUES ('app-poisoned', 'profile-1', 'grant-2', 'user-1', 'draft', 'Poisoned application');
@@ -86,6 +88,10 @@ function makeDb() {
       (id, profile_id, grant_id, name, type, file_size, mime_type, content_hash, status, version, file_bytes)
       VALUES ('secret-doc', 'profile-2', 'grant-2', 'other-tenant-budget.pdf', 'budget', 6,
               'application/pdf', 'secret-hash', 'ready', 1, X'736563726574');
+    INSERT INTO documents
+      (id, profile_id, name, type, file_size, mime_type, content_hash, status, version, file_bytes)
+      VALUES ('other-accessible-profile-doc', 'profile-3', 'same-user-private-nofo.pdf', 'solicitation', 6,
+              'application/pdf', 'other-profile-hash', 'ready', 1, X'736563726574');
     INSERT INTO application_drafts
       (id, grant_id, section_name, section_order, content, status)
       VALUES ('secret-draft', 'grant-2', 'Narrative', 1, 'OTHER TENANT SECRET', 'draft');
@@ -136,5 +142,25 @@ describe('GET /api/applications/:applicationId/lifecycle tenant scope', () => {
 
     expect(response.status).toBe(403)
     expect(JSON.stringify(response.body)).not.toContain('OTHER TENANT SECRET')
+  })
+})
+
+describe('POST /api/solicitations/ingest document tenant scope', () => {
+  it.each([
+    ['secret-doc', 'other-tenant-budget.pdf'],
+    ['other-accessible-profile-doc', 'same-user-private-nofo.pdf'],
+  ])('scopes document %s to the exact submitted profile in SQL', async (documentId, privateName) => {
+    db = makeDb()
+    const response = await request(appWith(db))
+      .post('/api/solicitations/ingest')
+      .send({
+        profile_id: 'profile-1',
+        opportunity_id: 'opportunity-1',
+        document_id: documentId,
+      })
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'Document not found' })
+    expect(JSON.stringify(response.body)).not.toContain(privateName)
   })
 })

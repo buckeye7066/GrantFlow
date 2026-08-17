@@ -1340,6 +1340,40 @@ CREATE TABLE IF NOT EXISTS profiles (
   avatar_content_type TEXT
 );
 
+-- Grant application tracking workflow. This table originated in SQLite
+-- migration 047 (and Postgres migration 0064), but fresh DB_AUTO_MIGRATE
+-- installs apply schema.sql before the numbered migration ledger. Keep the
+-- canonical parent in the base schema so lifecycle FKs below never point at a
+-- missing table and profile cascades remain valid on a fresh database.
+CREATE TABLE IF NOT EXISTS grant_applications (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  opportunity_id TEXT,
+  pipeline_grant_id TEXT,
+  user_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  title TEXT,
+  grant_name TEXT NOT NULL,
+  funder_name TEXT,
+  amount_requested REAL,
+  amount_awarded REAL,
+  deadline_date TEXT,
+  submitted_at TIMESTAMP,
+  response_expected_date TEXT,
+  response_received_at TIMESTAMP,
+  notes TEXT,
+  contact_name TEXT,
+  contact_email TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_user_id
+  ON grant_applications(user_id);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_profile_id
+  ON grant_applications(profile_id);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_status
+  ON grant_applications(status);
+
 -- Tombstones for hard-deleted profiles.
 -- Prevents startup seeding/ensure logic from resurrecting removed profiles.
 CREATE TABLE IF NOT EXISTS profile_tombstones (

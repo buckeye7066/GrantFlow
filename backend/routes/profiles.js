@@ -2429,8 +2429,13 @@ router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const authUserId = req.ctx?.userId ?? null
 
-  // Check authorization - user must be admin or the profile must belong to them
-  const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  // Destructive authorization depends only on the persisted ownership fields.
+  // Do not use the presentation join here: a drifted/minimal database may not
+  // have the optional organizations table, and ownership must still fail
+  // closed with 403 rather than crashing before the persisted-owner check.
+  const existing = await req.db
+    .prepare('SELECT id, user_id, created_by, status FROM profiles WHERE id = ?')
+    .get(id)
   if (!existing) {
     return res.status(404).json({ error: 'Profile not found' })
   }
