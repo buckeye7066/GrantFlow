@@ -27,10 +27,15 @@ const MAX_ENTRIES = Number(process.env.VERIFICATION_CACHE_MAX_ENTRIES || 5000)
  * can never turn this helper into an open proxy toward internal addresses
  * (SSRF). Growing this set is a conscious review decision.
  */
-export const VERIFICATION_ALLOWED_HOSTS = Object.freeze(new Set([
-  'projects.propublica.org', // IRS nonprofit registry (nonprofitRegistry.js)
-  'geocoding.geo.census.gov', // Census geocoder (censusGeo.js)
-]))
+export const VERIFICATION_ALLOWED_ORIGINS = Object.freeze({
+  // hostname -> constant https origin. The fetch target is REBUILT from the
+  // matched constant (never from the caller's string), so the request host is
+  // provably one of these two values.
+  'projects.propublica.org': 'https://projects.propublica.org', // IRS nonprofit registry
+  'geocoding.geo.census.gov': 'https://geocoding.geo.census.gov', // Census geocoder
+})
+
+export const VERIFICATION_ALLOWED_HOSTS = Object.freeze(new Set(Object.keys(VERIFICATION_ALLOWED_ORIGINS)))
 
 /**
  * Create a bounded TTL cache. Keys are strings, values are arbitrary.
@@ -86,17 +91,22 @@ export function createTtlCache({ max = MAX_ENTRIES } = {}) {
  */
 export async function timedFetch(url, { timeoutMs = 4000, headers = {} } = {}) {
   // SSRF guard: pin the request to the fixed public-API hosts. The URL's
-  // query string carries profile-derived values by design; the HOST never
-  // may. Parse-then-compare (never substring — the
-  // js/incomplete-url-substring-sanitization class), https only.
+  // path/query carry profile-derived values by design; the HOST never may.
+  // Parse-then-compare (never substring — the
+  // js/incomplete-url-substring-sanitization class), https only — and the
+  // actual fetch target is REBUILT from the matched CONSTANT origin plus the
+  // parsed path/query, so untrusted input structurally cannot select the
+  // authority even if this guard were bypassed upstream.
   const parsed = new URL(String(url))
-  if (parsed.protocol !== 'https:' || !VERIFICATION_ALLOWED_HOSTS.has(parsed.hostname)) {
+  const allowedOrigin = VERIFICATION_ALLOWED_ORIGINS[parsed.hostname]
+  if (parsed.protocol !== 'https:' || !allowedOrigin) {
     throw new Error(`verification fetch refused: host not allowlisted (${parsed.hostname})`)
   }
+  const target = allowedOrigin + parsed.pathname + parsed.search
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs))
   try {
-    return await fetch(parsed.href, {
+    return await fetch(target, {
       signal: controller.signal,
       headers: {
         // Identify ourselves politely; both APIs are public + keyless.
