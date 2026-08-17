@@ -19,21 +19,26 @@
 
 import { randomUUID } from 'crypto'
 import { OPPORTUNITY_KINDS } from './opportunityRealityGate.js'
-import {
-  PIPELINE_STAGES,
-  PIPELINE_STAGE_ALL,
-  isAcceptedStage,
-} from '../../shared/pipelineStages.js'
+import { PIPELINE_STAGES } from '../../shared/pipelineStages.js'
+import { linkApplicationLifecycle } from './applicationLifecycleReadModel.js'
+import { loadLatestRequirementsForApplication } from './groundedDrafting.js'
 
-// Canonical lifecycle for a grant application. RC-13: one canonical enum
-// shared with the pipeline UI, the API status validator, and the DB CHECK
-// constraint. We accept legacy values too (PIPELINE_STAGE_ALL = canonical ∪
-// legacy aliases) so historical data isn't rejected by the workflow API.
-//
-// Pre-RC-13 this list had 9 ad-hoc values (`in_progress`, `denied`,
-// `withdrawn`) that didn't match either the UI columns or the grants.status
-// CHECK. Those legacy strings are now mapped via PIPELINE_STAGE_ALIASES.
-const APPLICATION_STATES = Object.freeze([...PIPELINE_STAGE_ALL])
+// `grant_applications` is an application record, not the `grants` pipeline.
+// Its DB/UI contract deliberately includes application-specific states such as
+// in_progress, under_review, denied, and withdrawn. Reusing the grants pipeline
+// enum here made valid UI actions fail while also advertising values rejected
+// by the grant_applications CHECK constraint.
+const APPLICATION_STATES = Object.freeze([
+  'draft',
+  'in_progress',
+  'submitted',
+  'under_review',
+  'awarded',
+  'denied',
+  'withdrawn',
+  'closed',
+])
+const APPLICATION_STATE_SET = new Set(APPLICATION_STATES)
 
 const DEFAULT_DOCUMENTS_BY_TYPE = Object.freeze({
   nonprofit: ['IRS 501(c)(3) determination letter', 'Most recent Form 990', 'Annual budget', 'Board roster'],
@@ -152,6 +157,63 @@ export function generateActionPlan(opportunity, profileContext = {}) {
   }
 }
 
+async function runWorkflowCreationTransaction(db, work) {
+  if (typeof db?.withTransaction === 'function') return db.withTransaction(work)
+
+  // Focused migration/tests sometimes pass a raw better-sqlite3 connection
+  // rather than the production SqliteDb adapter. Preserve atomicity for that
+  // narrow compatibility shape; both production adapters take the
+  // withTransaction branch above.
+  if (db?.dialect === 'sqlite' && typeof db?.exec === 'function') {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = await work(db)
+      db.exec('COMMIT')
+      return result
+    } catch (error) {
+      try { db.exec('ROLLBACK') } catch { /* preserve the original failure */ }
+      throw error
+    }
+  }
+
+  const error = new Error('Application workflow creation requires an atomic database transaction')
+  error.code = 'APPLICATION_WORKFLOW_TRANSACTION_UNAVAILABLE'
+  error.status = 503
+  throw error
+}
+
+async function materializeDefaultPlan(db, applicationId, plan) {
+  for (const step of plan.next_steps) {
+    const existing = await db.prepare(
+      `SELECT id FROM application_steps
+        WHERE application_id = ? AND step_order = ? AND title = ? LIMIT 1`,
+    ).get(applicationId, step.step_order, step.title)
+    if (!existing) {
+      await db
+        .prepare(
+          `INSERT INTO application_steps (id, application_id, step_order, title, status)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(randomUUID(), applicationId, step.step_order, step.title, step.status)
+    }
+  }
+
+  for (const event of plan.deadlines) {
+    const existing = await db.prepare(
+      `SELECT id FROM deadline_events
+        WHERE application_id = ? AND event_type = ? AND due_at = ? LIMIT 1`,
+    ).get(applicationId, event.event_type, event.due_at)
+    if (!existing) {
+      await db
+        .prepare(
+          `INSERT INTO deadline_events (id, application_id, event_type, due_at, notes)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(randomUUID(), applicationId, event.event_type, event.due_at, event.notes ?? null)
+    }
+  }
+}
+
 /**
  * Persist an action plan as a new application + steps + deadline rows.
  * Idempotent on (profile_id, opportunity_id) — calling twice for the same
@@ -161,58 +223,204 @@ export async function createApplicationFromOpportunity(db, {
   profileId,
   userId,
   opportunity,
+  pipelineGrantId = null,
   profileContext = {},
 } = {}) {
   if (!db || typeof db.prepare !== 'function') throw new Error('db is required')
   if (!profileId) throw new Error('profileId is required')
   if (!opportunity) throw new Error('opportunity is required')
 
-  // Idempotency check
-  try {
-    const existing = await db
-      .prepare(
-        'SELECT id FROM grant_applications WHERE profile_id = ? AND opportunity_id = ? LIMIT 1',
-      )
-      .get(profileId, String(opportunity.id ?? ''))
-    if (existing?.id) {
-      return { id: existing.id, created: false, plan: generateActionPlan(opportunity, profileContext) }
+  const opportunityId = String(opportunity.id ?? '').trim()
+  if (!opportunityId) {
+    const error = new Error('A canonical opportunity id is required')
+    error.code = 'OPPORTUNITY_ID_REQUIRED'
+    error.status = 400
+    throw error
+  }
+
+  return runWorkflowCreationTransaction(db, async (tx) => {
+    const canonicalOpportunity = await tx.prepare(
+      'SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1',
+    ).get(opportunityId)
+    if (
+      !canonicalOpportunity
+      || canonicalOpportunity.is_active === false
+      || canonicalOpportunity.is_active === 0
+      || canonicalOpportunity.is_hidden === true
+      || canonicalOpportunity.is_hidden === 1
+    ) {
+      const error = new Error('Visible catalog opportunity not found')
+      error.code = 'OPPORTUNITY_NOT_FOUND'
+      error.status = 404
+      throw error
     }
-  } catch { /* table may not exist in test/in-memory DBs — fall through */ }
 
-  const plan = generateActionPlan(opportunity, profileContext)
-  const id = randomUUID()
-  const grantName = String(opportunity.title ?? 'Untitled opportunity').slice(0, 240)
-  const funderName = opportunity.sponsor ?? null
-  const deadline = opportunity.deadline ?? null
-  const userIdSafe = userId ?? 'system'
+    let pipelineGrant = null
+    if (pipelineGrantId) {
+      pipelineGrant = await tx.prepare(
+        'SELECT id, profile_id, funding_opportunity_id FROM grants WHERE id = ? LIMIT 1',
+      ).get(String(pipelineGrantId))
+      if (!pipelineGrant) {
+        const error = new Error('Pipeline grant not found')
+        error.code = 'PIPELINE_GRANT_NOT_FOUND'
+        error.status = 404
+        throw error
+      }
+      if (!pipelineGrant.profile_id || String(pipelineGrant.profile_id) !== String(profileId)) {
+        const error = new Error('Pipeline grant does not belong to this application profile')
+        error.code = 'PIPELINE_GRANT_PROFILE_MISMATCH'
+        error.status = 403
+        throw error
+      }
+      if (
+        pipelineGrant.funding_opportunity_id
+        && String(pipelineGrant.funding_opportunity_id) !== opportunityId
+      ) {
+        const error = new Error('Pipeline grant does not belong to this opportunity')
+        error.code = 'PIPELINE_GRANT_OPPORTUNITY_MISMATCH'
+        error.status = 409
+        throw error
+      }
+    }
 
-  await db
-    .prepare(
-      `INSERT INTO grant_applications
-        (id, profile_id, opportunity_id, user_id, status, grant_name, funder_name, deadline_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(id, profileId, String(opportunity.id ?? ''), userIdSafe, 'discovered', grantName, funderName, deadline)
-
-  for (const step of plan.next_steps) {
-    await db
+    const plan = generateActionPlan(canonicalOpportunity, profileContext)
+    let application = await tx
       .prepare(
-        `INSERT INTO application_steps (id, application_id, step_order, title, status)
-         VALUES (?, ?, ?, ?, ?)`,
+        'SELECT id, pipeline_grant_id FROM grant_applications WHERE profile_id = ? AND opportunity_id = ? LIMIT 1',
       )
-      .run(randomUUID(), id, step.step_order, step.title, step.status)
+      .get(profileId, opportunityId)
+    let created = false
+
+    if (application?.id) {
+      if (
+        pipelineGrant
+        && application.pipeline_grant_id
+        && String(application.pipeline_grant_id) !== String(pipelineGrant.id)
+      ) {
+        const error = new Error('Application is already linked to a different pipeline grant')
+        error.code = 'APPLICATION_PIPELINE_GRANT_CONFLICT'
+        error.status = 409
+        throw error
+      }
+      if (pipelineGrant && !application.pipeline_grant_id) {
+        await tx.prepare(
+          `UPDATE grant_applications
+              SET pipeline_grant_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND profile_id = ? AND pipeline_grant_id IS NULL`,
+        ).run(String(pipelineGrant.id), application.id, profileId)
+        application = { ...application, pipeline_grant_id: String(pipelineGrant.id) }
+      }
+    } else {
+      application = { id: randomUUID(), pipeline_grant_id: pipelineGrant ? String(pipelineGrant.id) : null }
+      await tx
+        .prepare(
+          `INSERT INTO grant_applications
+            (id, profile_id, opportunity_id, pipeline_grant_id, user_id, status, grant_name, funder_name, deadline_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          application.id,
+          profileId,
+          opportunityId,
+          application.pipeline_grant_id,
+          userId ?? 'system',
+          'draft',
+          String(canonicalOpportunity.title ?? 'Untitled opportunity').slice(0, 240),
+          canonicalOpportunity.sponsor ?? null,
+          canonicalOpportunity.deadline ?? null,
+        )
+      created = true
+    }
+
+    // Always reconcile the deterministic rows. This repairs applications left
+    // incomplete by older non-atomic releases without duplicating successful
+    // work, so the idempotent path cannot bless a partial workflow.
+    await materializeDefaultPlan(tx, application.id, plan)
+    const integration = await wireApplicationLifecycleRequirements(tx, application.id, { strict: true })
+    return { id: application.id, created, plan, integration }
+  })
+}
+
+function parseJson(value, fallback = {}) {
+  if (value && typeof value === 'object') return value
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
+function requirementStepTitle(requirement) {
+  const label = String(requirement.title || requirement.requirement_text || 'Requirement')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180)
+  return `${requirement.mandatory === true || requirement.mandatory === 1 ? 'Required' : 'Optional'}: ${label}`
+}
+
+/**
+ * Wire an application into the lifecycle aggregate and materialize the latest
+ * structured requirements as deterministic workflow steps/deadlines. This is
+ * idempotent and reports rolling-migration failures instead of hiding them.
+ * Creation calls use strict mode inside their outer transaction so any
+ * integration failure rolls the complete workflow back.
+ */
+export async function wireApplicationLifecycleRequirements(db, applicationId, { strict = false } = {}) {
+  const result = { linked: false, requirement_steps_created: 0, deadlines_created: 0, warnings: [] }
+  try {
+    await linkApplicationLifecycle(db, { applicationId })
+    result.linked = true
+  } catch (error) {
+    if (strict) throw error
+    result.warnings.push({ code: 'lifecycle_link_failed', message: error?.message || String(error) })
+    return result
   }
 
-  for (const ev of plan.deadlines) {
-    await db
-      .prepare(
-        `INSERT INTO deadline_events (id, application_id, event_type, due_at, notes)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(randomUUID(), id, ev.event_type, ev.due_at, ev.notes ?? null)
-  }
+  try {
+    const stored = await loadLatestRequirementsForApplication(db, applicationId)
+    for (const requirement of stored.requirements || []) {
+      const marker = `[solicitation-requirement:${requirement.id}]`
+      const existing = await db.prepare(
+        `SELECT id FROM application_steps
+          WHERE application_id = ? AND description LIKE ? LIMIT 1`,
+      ).get(applicationId, `%${marker}%`)
+      if (!existing) {
+        await db.prepare(
+          `INSERT INTO application_steps
+            (id, application_id, step_order, title, description, status, due_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+        ).run(
+          randomUUID(),
+          applicationId,
+          1000 + result.requirement_steps_created,
+          requirementStepTitle(requirement),
+          `${requirement.requirement_text}\n\n${marker}`,
+          null,
+        )
+        result.requirement_steps_created += 1
+      }
 
-  return { id, created: true, plan }
+      if (requirement.requirement_type === 'deadline') {
+        const normalized = parseJson(requirement.normalized_value_json, {})
+        const dueAt = normalized.due_at || normalized.deadline || null
+        if (dueAt) {
+          const deadlineExists = await db.prepare(
+            `SELECT id FROM deadline_events
+              WHERE application_id = ? AND event_type = 'solicitation_deadline'
+                AND due_at = ? LIMIT 1`,
+          ).get(applicationId, dueAt)
+          if (!deadlineExists) {
+            await db.prepare(
+              `INSERT INTO deadline_events
+                (id, application_id, event_type, due_at, notes)
+               VALUES (?, ?, 'solicitation_deadline', ?, ?)`,
+            ).run(randomUUID(), applicationId, dueAt, `${requirement.requirement_text}\n${marker}`)
+            result.deadlines_created += 1
+          }
+        }
+      }
+    }
+  } catch (error) {
+    if (strict) throw error
+    result.warnings.push({ code: 'requirement_materialization_failed', message: error?.message || String(error) })
+  }
+  return result
 }
 
 export async function addApplicationStep(db, applicationId, { title, description = null, dueAt = null } = {}) {
@@ -244,6 +452,17 @@ export async function completeApplicationStep(db, stepId) {
 
 export async function addApplicationDocument(db, applicationId, { filename, documentType = null, storageUrl = null, sizeBytes = null, stepId = null, uploadedBy = null } = {}) {
   if (!applicationId || !filename) throw new Error('applicationId and filename required')
+  if (stepId) {
+    const step = await db.prepare(
+      'SELECT id FROM application_steps WHERE id = ? AND application_id = ? LIMIT 1',
+    ).get(String(stepId), String(applicationId))
+    if (!step) {
+      const error = new Error('Document step does not belong to this application')
+      error.code = 'APPLICATION_DOCUMENT_STEP_SCOPE_MISMATCH'
+      error.status = 409
+      throw error
+    }
+  }
   const id = randomUUID()
   await db
     .prepare(
@@ -269,9 +488,7 @@ export async function recordSubmissionEvent(db, applicationId, { eventType, note
 
 export async function setApplicationStatus(db, applicationId, status) {
   if (!applicationId || !status) throw new Error('applicationId and status required')
-  // Accept canonical OR legacy-alias names. The DB CHECK accepts both, so
-  // rejecting them at the service boundary would create a fake mismatch.
-  if (!isAcceptedStage(status)) {
+  if (!APPLICATION_STATE_SET.has(status)) {
     throw new Error(`Invalid application status: ${status}. Allowed: ${APPLICATION_STATES.join(', ')}`)
   }
   await db
@@ -308,6 +525,7 @@ export default {
   APPLICATION_STATES,
   generateActionPlan,
   createApplicationFromOpportunity,
+  wireApplicationLifecycleRequirements,
   addApplicationStep,
   completeApplicationStep,
   addApplicationDocument,

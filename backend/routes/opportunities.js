@@ -1,5 +1,4 @@
 import express from 'express';
-import crypto from 'crypto';
 import { requireAuthenticatedUser, ensureProfileAccess } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isExpiredOpportunity, isDirectoryLike } from './opportunityHelpers.js'
@@ -9,6 +8,10 @@ import {
 } from '../services/opportunityTrust.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 import { computeMatchDecision } from '../services/matchEngine.js'
+import {
+  assertCanonicalMatchDecision,
+  canonicalMatchReceipt,
+} from '../services/canonicalMatchAuthority.js'
 import {
   GOOD_MATCH_SCORE,
   MODERATE_MATCH_SCORE,
@@ -20,14 +23,58 @@ import {
   opportunityLifecycleVisibility,
   opportunityLifecycleVisibilitySql,
 } from '../config/matchSurfacing.js'
+import { buildOpportunityReadModel } from '../services/opportunityContract.js'
+import {
+  createOpportunity as createOpportunityRecord,
+  listOpportunityChanges,
+  syncOpportunityContractProjection,
+} from '../services/opportunityRepository.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:opportunities')
 
 const router = express.Router();
 
+function profileScoringCandidateLimit() {
+  const configured = Number.parseInt(process.env.PROFILE_SCORING_MAX_CANDIDATES || '25000', 10)
+  return Math.max(500, Math.min(Number.isFinite(configured) ? configured : 25_000, 100_000))
+}
+
+function assertProfileScoringCandidateBudget(total) {
+  const limit = profileScoringCandidateLimit()
+  if (Number(total) <= limit) return
+  const error = new Error(`Profile-scored opportunity request exceeds ${limit} candidates; narrow the search or geography filters`)
+  error.code = 'PROFILE_SCORING_CANDIDATE_LIMIT'
+  error.status = 422
+  throw error
+}
+
 const LOAN_TYPES = ['loan', 'loan_program', 'microloan'];
-const JSON_ARRAY_FIELDS = ['eligibility_bullets', 'categories', 'keywords', 'regions'];
+const JSON_ARRAY_FIELDS = [
+  'eligibility_bullets',
+  'categories',
+  'keywords',
+  'regions',
+  'entity_types_allowed',
+  'need_types_supported',
+  'required_documents',
+  'data_quality_flags',
+  'missing_fields',
+];
+const CONTRACT_PROJECTION_FIELDS = new Set([
+  'purpose',
+  'eligibility_requirements',
+  'estimated_award',
+  'open_date',
+  'recurrence',
+  'required_documents',
+  'application_method',
+  'first_published_at',
+  'current_status',
+  'data_quality_score',
+  'data_quality_flags',
+  'missing_fields',
+]);
 
 function stripOrdinalSuffixes(value) {
   const text = typeof value === 'string' ? value : String(value ?? '');
@@ -184,6 +231,13 @@ function decorateOpportunity(row) {
   const compliance = deriveCompliance(parsed);
   parsed.compliance_status = compliance.status;
   parsed.compliance_reasons = compliance.reasons;
+
+  // One deterministic lifecycle/read contract for list + detail consumers.
+  // This preserves legacy columns while adding canonical aliases, explicit
+  // missing-fields data, verification state, and the plain-language status.
+  Object.assign(parsed, buildOpportunityReadModel(parsed, {
+    changeHistory: Array.isArray(parsed.change_history) ? parsed.change_history : [],
+  }));
 
   // Canonical consumer-side trust assessment. Every user-facing surface
   // (discovery, matching, opportunities, savedGrants, realCrawlers) surfaces
@@ -378,6 +432,67 @@ function dedupeKeySql(prefix, { useGeoIndex }) {
   return `COALESCE(${urlExpr}, ${sourceIdExpr}, ${tsdExpr}, ${tdExpr}, ${prefix}id)`;
 }
 
+function matchDecisionRank(value) {
+  const normalized = String(value || '').toUpperCase()
+  if (normalized === 'ACCEPT') return 3
+  if (normalized === 'REVIEW') return 2
+  if (normalized === 'REJECT') return 1
+  return 0
+}
+
+/**
+ * Attach the one canonical matcher decision and order the complete candidate
+ * set before pagination. Keeping this pure/exported makes the ordering
+ * contract directly testable without standing up the full server.
+ */
+export function rankCanonicalProfileOpportunities(profileContext, opportunities = []) {
+  if (!profileContext?.profile) throw new Error('profileContext.profile is required')
+
+  return (opportunities || [])
+    .map((opportunity) => {
+      const decision = assertCanonicalMatchDecision(computeMatchDecision(
+        profileContext,
+        opportunity,
+        {
+          profileSections: profileContext.sections ?? {},
+          signals: profileContext.signals ?? null,
+        },
+      ))
+      return {
+        ...opportunity,
+        match_score: Number(decision.score),
+        match_reasons: Array.isArray(decision.reasons) ? decision.reasons : [],
+        match_explain: decision.match_explain ?? null,
+        match_decision: String(decision.decision || '').toUpperCase() || null,
+        match_confidence: Number.isFinite(Number(decision.confidence))
+          ? Number(decision.confidence)
+          : null,
+        match_confidence_band: decision.confidence_band ?? null,
+        match_authority: canonicalMatchReceipt(decision),
+      }
+    })
+    .sort((left, right) => {
+      const scoreDelta = Number(right.match_score) - Number(left.match_score)
+      if (scoreDelta !== 0) return scoreDelta
+      const decisionDelta = matchDecisionRank(right.match_decision) - matchDecisionRank(left.match_decision)
+      if (decisionDelta !== 0) return decisionDelta
+      const confidenceDelta = Number(right.match_confidence ?? -1) - Number(left.match_confidence ?? -1)
+      if (confidenceDelta !== 0) return confidenceDelta
+      const leftDeadline = parseLooseDate(left.deadline)?.getTime() ?? Number.POSITIVE_INFINITY
+      const rightDeadline = parseLooseDate(right.deadline)?.getTime() ?? Number.POSITIVE_INFINITY
+      if (leftDeadline !== rightDeadline) return leftDeadline - rightDeadline
+      return String(left.id || '').localeCompare(String(right.id || ''))
+    })
+}
+
+function paginateProfileMatches(profileContext, opportunities, { limit, offset }) {
+  const ranked = rankCanonicalProfileOpportunities(profileContext, opportunities)
+  return {
+    ranked,
+    page: ranked.slice(offset, offset + limit),
+  }
+}
+
 function coerceBooleanToSqlite(value) {
   const normalized = normalizeBoolean(value);
   if (normalized === null) return null;
@@ -417,6 +532,7 @@ router.get('/', async (req, res) => {
       deadline_after: deadlineAfter,
       deadline_before: deadlineBefore,
       is_national: isNational,
+      profile_id: profileIdParam,
       limit = 50,
       offset = 0,
       compliance,
@@ -430,6 +546,22 @@ router.get('/', async (req, res) => {
       ? Math.min(rawLimit, MAX_LIMIT)
       : DEFAULT_LIMIT;
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
+
+    const requestedProfileId = String(profileIdParam || '').trim()
+    const profileId = requestedProfileId && !['all', 'admin'].includes(requestedProfileId.toLowerCase())
+      ? requestedProfileId
+      : null
+    let profileContext = null
+    if (profileId) {
+      const user = requireAuthenticatedUser(req, res)
+      if (!user) return
+      if (!(await ensureProfileAccess(req, res, profileId))) return
+      const { loadProfileContext } = await import('../services/profileHelpers.js')
+      profileContext = await loadProfileContext(req.db, profileId)
+    }
+    const pageProfileRows = (rows) => profileContext
+      ? paginateProfileMatches(profileContext, rows, { limit: parsedLimit, offset: parsedOffset })
+      : { ranked: rows, page: rows }
 
     const dialect = req.db?.dialect;
     const sqliteBool = (value) => (value ? 1 : 0)
@@ -628,6 +760,13 @@ router.get('/', async (req, res) => {
       async function runListQuery(whereSql, params, { limit: qLimit, offset: qOffset } = {}) {
         const effectiveLimit = Number.isFinite(Number(qLimit)) ? Number(qLimit) : parsedLimit;
         const effectiveOffset = Number.isFinite(Number(qOffset)) ? Number(qOffset) : parsedOffset;
+        // A profile-scored response must rank the complete filtered candidate
+        // set before slicing. SQL pagination here would make page 1 merely the
+        // best matches among the deadline-first page, not the true best
+        // matches. Profile requests are authenticated and rate-limited at the
+        // app boundary; unscored/public requests retain the bounded SQL path.
+        const paginationSql = profileContext ? '' : 'LIMIT ? OFFSET ?'
+        const paginationParams = profileContext ? [] : [effectiveLimit, effectiveOffset]
         // Prefer deterministic de-dupe at the SQL layer (window functions), so pagination stays stable.
         // If a deployment uses an older SQLite build without window functions, we fall back to raw rows
         // and de-dupe in JS later.
@@ -645,11 +784,10 @@ router.get('/', async (req, res) => {
                 ) t
                 WHERE t.__rn = 1
                 ${orderClause}
-                LIMIT ?
-                OFFSET ?
+                ${paginationSql}
               `,
             )
-            .all(...params, effectiveLimit, effectiveOffset);
+            .all(...params, ...paginationParams);
         } catch (err) {
           const msg = String(err?.message || err);
           const isWindowMissing =
@@ -666,15 +804,14 @@ router.get('/', async (req, res) => {
                 ${fromClause}
                 ${whereSql}
                 ${orderClause}
-                LIMIT ?
-                OFFSET ?
+                ${paginationSql}
               `,
             )
-            .all(...params, effectiveLimit, effectiveOffset);
+            .all(...params, ...paginationParams);
         }
       }
 
-      if (normalizedState && parsedOffset === 0 && isNational !== 'true' && parsedLimit > 0 && minNationalVisible > 0) {
+      if (!profileContext && normalizedState && parsedOffset === 0 && isNational !== 'true' && parsedLimit > 0 && minNationalVisible > 0) {
         const commonWhere = baseConditionsSql.length ? `WHERE ${baseConditionsSql.join(' AND ')}` : 'WHERE 1=1';
 
         const nationals = await runListQuery(
@@ -723,15 +860,6 @@ router.get('/', async (req, res) => {
       baseParamsSql,
       useGeoIndex,
     }) {
-      const rows = await runQuery({
-        fromClause,
-        whereClauseSql,
-        queryParams,
-        baseConditionsSql,
-        baseParamsSql,
-        useGeoIndex,
-      });
-
       const keyExpr = dedupeKeySql(hasGeoRun ? 'fo.' : '', { useGeoIndex: Boolean(useGeoIndex && hasGeoRun) });
       const countRow = await req.db
         .prepare(
@@ -746,6 +874,17 @@ router.get('/', async (req, res) => {
           `,
         )
         .get(...queryParams);
+
+      const total = Number(countRow?.total ?? 0)
+      if (profileContext) assertProfileScoringCandidateBudget(total)
+      const rows = await runQuery({
+        fromClause,
+        whereClauseSql,
+        queryParams,
+        baseConditionsSql,
+        baseParamsSql,
+        useGeoIndex,
+      });
 
       return { rows, total: countRow?.total ?? rows.length };
     }
@@ -880,11 +1019,15 @@ router.get('/', async (req, res) => {
           const fbFinal = fbOut.filter((r) => !isExpiredOpportunity(r, { now }));
           if (fbFinal.length > 0) {
             const fbTrust = filterByTrust(fbFinal);
+            const profilePage = pageProfileRows(fbTrust.kept)
+            const responseTotal = profileContext
+              ? profilePage.ranked.length
+              : Math.max(0, Number(fbResult.total ?? fbTrust.kept.length))
             return res.json({
-              data: fbTrust.kept,
-              total: Math.max(0, Number(fbResult.total ?? fbTrust.kept.length)),
-              total_found: Math.max(0, Number(fbResult.total ?? fbTrust.kept.length)),
-              included: fbTrust.kept.length,
+              data: profilePage.page,
+              total: responseTotal,
+              total_found: responseTotal,
+              included: profilePage.page.length,
               trust_dropped: fbTrust.dropped,
               trust_dropped_reasons: fbTrust.droppedReasons,
               limit: parsedLimit,
@@ -894,6 +1037,7 @@ router.get('/', async (req, res) => {
               fallback_applied: true,
               fallback_reason: 'phrase_search_returned_0_retried_with_token_and',
               removed_expired: 0,
+              profile_id: profileId,
             });
           }
         } catch (fbErr) { console.warn('[opportunities] search fallback failed:', fbErr?.message || String(fbErr)); }
@@ -918,6 +1062,7 @@ router.get('/', async (req, res) => {
         const totalFound = Number(baseCountRow?.total ?? 0);
 
         if (totalFound > 0) {
+          if (profileContext) assertProfileScoringCandidateBudget(totalFound)
           routeLogger.info('[opportunities] compliance fallback applied', {
             request_id: req.requestId || null,
             compliance_requested: normalizedCompliance,
@@ -971,11 +1116,13 @@ router.get('/', async (req, res) => {
           }
 
           const fallbackTrust = filterByTrust(fallbackParsed);
+          const profilePage = pageProfileRows(fallbackTrust.kept)
+          const responseTotal = profileContext ? profilePage.ranked.length : distinctTotalFound
           return res.json({
-            data: fallbackTrust.kept,
-            total: distinctTotalFound,
-            total_found: distinctTotalFound,
-            included: fallbackTrust.kept.length,
+            data: profilePage.page,
+            total: responseTotal,
+            total_found: responseTotal,
+            included: profilePage.page.length,
             trust_dropped: fallbackTrust.dropped,
             trust_dropped_reasons: fallbackTrust.droppedReasons,
             limit: parsedLimit,
@@ -985,6 +1132,7 @@ router.get('/', async (req, res) => {
             fallback_applied: true,
             fallback_reason: 'compliance_filter_eliminated_all_results',
             removed_by_compliance: Math.max(0, distinctTotalFound),
+            profile_id: profileId,
           });
         }
       } catch (err) {
@@ -1027,11 +1175,13 @@ router.get('/', async (req, res) => {
         })
       }
     }
+    const profilePage = pageProfileRows(finalKept)
+    const responseTotal = profileContext ? profilePage.ranked.length : Math.max(0, filteredTotal)
     res.json({
-      data: finalKept,
-      total: Math.max(0, filteredTotal),
-      total_found: Math.max(0, filteredTotal),
-      included: finalKept.length,
+      data: profilePage.page,
+      total: responseTotal,
+      total_found: responseTotal,
+      included: profilePage.page.length,
       trust_dropped: finalDropped,
       trust_dropped_reasons: finalDroppedReasons,
       trust_relaxed: trustRelaxed,
@@ -1041,10 +1191,14 @@ router.get('/', async (req, res) => {
       compliance_effective: normalizedCompliance,
       fallback_applied: false,
       removed_expired: removedExpired,
+      profile_id: profileId,
     });
   } catch (error) {
     console.error('Error listing opportunities:', error);
-    res.status(500).json({ error: error.message });
+    res.status(Number(error?.status) || 500).json({
+      error: error.message,
+      code: error?.code || undefined,
+    });
   }
 });
 
@@ -1301,6 +1455,19 @@ router.get('/geo/scored', async (req, res) => {
     const parsedLimit = Math.min(Math.max(1, parseInt(rawLimit, 10) || 200), 500);
     const parsedOffset = Math.max(0, parseInt(rawOffset, 10) || 0);
     const normalizedState = String(state).toUpperCase().trim();
+    const normalizedProfileId = String(profileId || '').trim()
+    const isRealProfile = Boolean(normalizedProfileId)
+      && !['all', 'admin'].includes(normalizedProfileId.toLowerCase())
+    let profileContext = null
+    if (isRealProfile) {
+      const user = requireAuthenticatedUser(req, res)
+      if (!user) return
+      if (!(await ensureProfileAccess(req, res, normalizedProfileId))) return
+      const { loadProfileContext } = await import('../services/profileHelpers.js')
+      profileContext = await loadProfileContext(db, normalizedProfileId)
+    }
+    const paginationSql = profileContext ? '' : 'LIMIT ? OFFSET ?'
+    const paginationParams = profileContext ? [] : [parsedLimit, parsedOffset]
 
     const conditions = [
       opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect }),
@@ -1315,17 +1482,37 @@ router.get('/geo/scored', async (req, res) => {
       params.push(String(geoZip).trim());
     }
 
+    const isMissingGeoIndexError = (error) => {
+      const message = String(error?.message || error).toLowerCase()
+      return message.includes('funding_opportunity_geo_index')
+        && (message.includes('no such table')
+          || message.includes('does not exist')
+          || message.includes('undefined table'))
+    }
+
     let rows;
+    let total;
     try {
+      const countRow = await db.prepare(`
+        SELECT COUNT(DISTINCT fo.id) AS cnt
+        FROM funding_opportunities fo
+        JOIN funding_opportunity_geo_index gi ON gi.opportunity_id = fo.id
+        WHERE ${conditions.join(' AND ')}
+      `).get(...params);
+      total = Number(countRow?.cnt ?? 0)
+      if (profileContext) assertProfileScoringCandidateBudget(total)
+
       rows = await db.prepare(`
         SELECT DISTINCT fo.*, gi.zip AS geo_zip, gi.county AS geo_county, gi.source AS geo_source
         FROM funding_opportunities fo
         JOIN funding_opportunity_geo_index gi ON gi.opportunity_id = fo.id
         WHERE ${conditions.join(' AND ')}
         ORDER BY fo.title ASC
-        LIMIT ? OFFSET ?
-      `).all(...params, parsedLimit, parsedOffset);
-    } catch {
+        ${paginationSql}
+      `).all(...params, ...paginationParams);
+    } catch (error) {
+      if (!isMissingGeoIndexError(error)) throw error
+
       const fallbackConditions = [
         opportunityLifecycleVisibilitySql({ dialect }),
         'state = ?',
@@ -1337,27 +1524,21 @@ router.get('/geo/scored', async (req, res) => {
         fallbackConditions.push('geo_zip = ?');
         fallbackParams.push(String(geoZip).trim());
       }
+      const countRow = await db.prepare(`
+        SELECT COUNT(*) AS cnt
+        FROM funding_opportunities
+        WHERE ${fallbackConditions.join(' AND ')}
+      `).get(...fallbackParams);
+      total = Number(countRow?.cnt ?? 0)
+      if (profileContext) assertProfileScoringCandidateBudget(total)
+
       rows = await db.prepare(`
         SELECT *
         FROM funding_opportunities
         WHERE ${fallbackConditions.join(' AND ')}
         ORDER BY title ASC
-        LIMIT ? OFFSET ?
-      `).all(...fallbackParams, parsedLimit, parsedOffset);
-    }
-
-    // Count total for pagination
-    let total = rows.length;
-    try {
-      const countRow = await db.prepare(`
-        SELECT COUNT(DISTINCT fo.id) AS cnt
-        FROM funding_opportunities fo
-        JOIN funding_opportunity_geo_index gi ON gi.opportunity_id = fo.id
-        WHERE ${conditions.join(' AND ')}
-      `).get(...params);
-      total = countRow?.cnt ?? rows.length;
-    } catch {
-      // ignore - use rows.length
+        ${paginationSql}
+      `).all(...fallbackParams, ...paginationParams);
     }
 
     // Decorate rows
@@ -1366,56 +1547,38 @@ router.get('/geo/scored', async (req, res) => {
       .map(decorateOpportunity)
       .filter(Boolean);
 
-    // If profile_id provided, compute match scores using the canonical matchingEngine.
-    const isRealProfile = profileId && profileId !== 'all' && profileId !== 'admin';
+    // If profile_id is provided, tenant authorization happened before any
+    // profile row was loaded. Filter the complete candidate set, compute the
+    // canonical decisions, rank globally, and only then apply offset/limit.
     if (isRealProfile) {
-      try {
-        const { loadProfileContext } = await import('../services/profileHelpers.js');
-        const { scoreOpportunity } = await import('../services/matchEngine.js');
-
-        const profileContext = await loadProfileContext(db, profileId);
-        for (const opp of decorated) {
-          const result = scoreOpportunity(profileContext, opp);
-          opp.match_score = result.score;
-          opp.match_reasons = result.reasons || [];
-        }
-
-        // Sort by score descending so best matches appear first
-        decorated.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
-      } catch (scoringError) {
-        console.warn('[opportunities/geo/scored] Profile scoring failed, returning unscored:', scoringError?.message);
-        // Continue without scores rather than failing the request
-      }
-
       // Profile-scoped match list → never re-surface a pipeline member or
       // dismissed grant, and collapse duplicate rows. Canonical helper; admin
-      // can opt out with include_pipeline=1. Tolerant: failure leaves results.
+      // can opt out with include_pipeline=1. Integrity failures stay loud: a
+      // partially scoped/unscored response would be materially misleading.
       if (req.query?.include_pipeline !== '1') {
-        try {
-          const filtered = await filterOutPipelineMembers(db, String(profileId), decorated);
-          decorated = filtered.results;
-        } catch (exclErr) {
-          routeLogger.warn(`[opportunities/geo/scored] pipeline exclusion skipped: ${exclErr?.message || exclErr}`);
-        }
+        const filtered = await filterOutPipelineMembers(db, normalizedProfileId, decorated);
+        decorated = filtered.results;
       }
-      try {
-        decorated = dedupeOpportunityList(decorated).results;
-      } catch (dedupeErr) {
-        routeLogger.warn(`[opportunities/geo/scored] dedup skipped: ${dedupeErr?.message || dedupeErr}`);
-      }
+      decorated = dedupeOpportunityList(decorated).results;
+      const ranked = rankCanonicalProfileOpportunities(profileContext, decorated)
+      total = ranked.length
+      decorated = ranked.slice(parsedOffset, parsedOffset + parsedLimit)
     }
 
     res.json({
       ok: true,
       state: normalizedState,
       geo_zip: geoZip || null,
-      profile_id: profileId || null,
+      profile_id: isRealProfile ? normalizedProfileId : null,
       total,
       data: decorated,
     });
   } catch (error) {
     console.error('[opportunities/geo/scored] Error:', error);
-    res.status(500).json({ error: error?.message || String(error) });
+    res.status(Number(error?.status) || 500).json({
+      error: error?.message || String(error),
+      code: error?.code || undefined,
+    });
   }
 });
 
@@ -1453,7 +1616,8 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Opportunity not found' });
     }
 
-    res.json(decorateOpportunity(opp));
+    const changeHistory = await listOpportunityChanges(req.db, opp.id)
+    res.json(decorateOpportunity({ ...opp, change_history: changeHistory }));
   } catch (error) {
     console.error('Error getting opportunity:', error);
     res.status(500).json({ error: error.message });
@@ -1469,35 +1633,23 @@ router.post('/', async (req, res) => {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
 
-    const id = crypto.randomUUID();
-    let data = normalizePayloadForDb(validateFundingTerms(req.body || {}), req.db);
-    const normalizedData = Object.fromEntries(
-      Object.entries(data).filter(([, value]) => value !== undefined),
-    );
-
-    JSON_ARRAY_FIELDS.forEach((field) => {
-      if (Array.isArray(normalizedData[field])) {
-        normalizedData[field] = JSON.stringify(normalizedData[field]);
-      }
-    });
-    if (Array.isArray(normalizedData.match_reasons)) {
-      normalizedData.match_reasons = JSON.stringify(normalizedData.match_reasons);
+    const data = validateFundingTerms(req.body || {});
+    const result = await createOpportunityRecord(req.db, data, {
+      changedBy: user.id ? `admin:${user.id}` : 'admin_api',
+    })
+    if (result?.skipped) {
+      return res.status(422).json({
+        error: 'Opportunity did not pass the canonical ingest checks',
+        reason: result.reason ?? 'rejected',
+      })
     }
 
-    const columns = ['id', ...Object.keys(normalizedData)];
-    const placeholders = columns.map(() => '?').join(', ');
-    const values = [id, ...Object.values(normalizedData)];
-
-    await req.db.prepare(`
-      INSERT INTO funding_opportunities (${columns.join(', ')})
-      VALUES (${placeholders})
-    `).run(...values);
-
-    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(id);
+    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(result.id);
     if (!opp) {
       return res.status(500).json({ error: 'Opportunity created but could not be retrieved' });
     }
-    res.status(201).json(decorateOpportunity(opp));
+    const changeHistory = await listOpportunityChanges(req.db, result.id)
+    res.status(result.inserted ? 201 : 200).json(decorateOpportunity({ ...opp, change_history: changeHistory }));
   } catch (error) {
     console.error('Error creating opportunity:', error);
     const status = error.message?.toLowerCase().includes('match percentage') ? 400 : 500;
@@ -1520,38 +1672,8 @@ router.post('/bulk', async (req, res) => {
       return res.status(400).json({ error: 'opportunities must be an array' });
     }
 
-    const upsertSql = `
-      INSERT INTO funding_opportunities (
-        id, title, sponsor, source, source_id, description,
-        eligibility_bullets, amount_min, amount_max, deadline,
-        deadline_type, application_url, is_national, state,
-        categories, keywords, is_active, requires_match, match_percentage
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (id) DO UPDATE SET
-        title = EXCLUDED.title,
-        sponsor = EXCLUDED.sponsor,
-        source = EXCLUDED.source,
-        source_id = EXCLUDED.source_id,
-        description = EXCLUDED.description,
-        eligibility_bullets = EXCLUDED.eligibility_bullets,
-        amount_min = EXCLUDED.amount_min,
-        amount_max = EXCLUDED.amount_max,
-        deadline = EXCLUDED.deadline,
-        deadline_type = EXCLUDED.deadline_type,
-        application_url = EXCLUDED.application_url,
-        is_national = EXCLUDED.is_national,
-        state = EXCLUDED.state,
-        categories = EXCLUDED.categories,
-        keywords = EXCLUDED.keywords,
-        is_active = EXCLUDED.is_active,
-        requires_match = EXCLUDED.requires_match,
-        match_percentage = EXCLUDED.match_percentage,
-        updated_at = CURRENT_TIMESTAMP
-    `;
-
     const skipped = [];
     const imported = await req.db.withTransaction(async (tx) => {
-      const insertStmt = tx.prepare(upsertSql);
       let count = 0;
       for (const opp of opportunities) {
         const newOpp = { ...opp };
@@ -1567,29 +1689,17 @@ router.post('/bulk', async (req, res) => {
             continue;
           }
         }
-        const id = newOpp.id || crypto.randomUUID();
-        await insertStmt.run(
-          id,
-          newOpp.title,
-          newOpp.sponsor || null,
-          newOpp.source || null,
-          newOpp.source_id || null,
-          newOpp.description || null,
-          JSON.stringify(newOpp.eligibility_bullets || []),
-          newOpp.amount_min || null,
-          newOpp.amount_max || null,
-          newOpp.deadline || null,
-          newOpp.deadline_type || 'unknown',
-          newOpp.application_url || null,
-          Boolean(newOpp.is_national),
-          newOpp.state || null,
-          JSON.stringify(newOpp.categories || []),
-          JSON.stringify(newOpp.keywords || []),
-          true,
-          newOpp.requires_match === undefined ? false : Boolean(newOpp.requires_match),
-          newOpp.match_percentage ?? null,
-        );
-        count += 1;
+        const result = await createOpportunityRecord(tx, {
+          ...newOpp,
+          record_origin: newOpp.record_origin ?? 'imported',
+        }, {
+          changedBy: user.id ? `admin:${user.id}` : 'admin_bulk_api',
+        })
+        if (result?.skipped) {
+          skipped.push({ title: newOpp.title ?? 'untitled', reason: result.reason ?? 'rejected' })
+          continue
+        }
+        count += 1
       }
       return count;
     });
@@ -1620,9 +1730,12 @@ router.put('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
 
+    const beforeRow = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(req.params.id)
+    if (!beforeRow) return res.status(404).json({ error: 'Opportunity not found' })
+
     let data = normalizePayloadForDb(validateFundingTerms(req.body || {}), req.db);
     const normalizedData = Object.fromEntries(
-      Object.entries(data).filter(([, value]) => value !== undefined),
+      Object.entries(data).filter(([key, value]) => value !== undefined && !CONTRACT_PROJECTION_FIELDS.has(key)),
     );
 
     JSON_ARRAY_FIELDS.forEach((field) => {
@@ -1634,17 +1747,25 @@ router.put('/:id', async (req, res) => {
       normalizedData.match_reasons = JSON.stringify(normalizedData.match_reasons);
     }
 
-    const setClause = Object.keys(normalizedData).map((key) => `${key} = ?`).join(', ');
-    const values = [...Object.values(normalizedData), req.params.id];
+    if (Object.keys(normalizedData).length > 0) {
+      const setClause = Object.keys(normalizedData).map((key) => `${key} = ?`).join(', ');
+      const values = [...Object.values(normalizedData), req.params.id];
 
-    await req.db.prepare(`
-      UPDATE funding_opportunities 
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ?
-    `).run(...values);
+      await req.db.prepare(`
+        UPDATE funding_opportunities
+        SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(...values);
+    }
+
+    await syncOpportunityContractProjection(req.db, req.params.id, data, {
+      beforeRow,
+      changedBy: user.id ? `admin:${user.id}` : 'admin_api',
+    })
 
     const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(req.params.id);
-    res.json(decorateOpportunity(opp));
+    const changeHistory = await listOpportunityChanges(req.db, req.params.id)
+    res.json(decorateOpportunity({ ...opp, change_history: changeHistory }));
   } catch (error) {
     console.error('Error updating opportunity:', error);
     const status = error.message?.toLowerCase().includes('match percentage') ? 400 : 500;

@@ -30,6 +30,7 @@ import {
 } from '../config/profileInstitutions.js';
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js';
 import { stampMatchConfidenceProvenance } from './matching/matchConfidenceProvenance.js';
+import { syncOpportunityContractProjection } from './opportunityRepository.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -509,6 +510,20 @@ function osOppToLiveRow(o, supportedColumns = new Set()) {
   if (supportedColumns.has('deadline_status')) {
     row.deadline_status = isRolling ? 'rolling' : (o.deadline ? null : 'unknown');
   }
+  if (supportedColumns.has('purpose') && o.purpose) row.purpose = o.purpose;
+  if (supportedColumns.has('open_date') && o.open_date) row.open_date = o.open_date;
+  if (supportedColumns.has('recurrence') && o.recurrence) row.recurrence = o.recurrence;
+  if (supportedColumns.has('current_status') && o.source_status) row.current_status = o.source_status;
+  if (supportedColumns.has('first_published_at') && o.first_published_at) {
+    row.first_published_at = o.first_published_at;
+  }
+  if (supportedColumns.has('required_documents')) {
+    const requiredDocuments = structuredList(o.required_documents_json);
+    if (requiredDocuments.length > 0) row.required_documents = JSON.stringify(requiredDocuments);
+  }
+  if (supportedColumns.has('application_method') && o.application_method) {
+    row.application_method = o.application_method;
+  }
 
   if (geo) {
     const liveRegions = [...new Set([...geo.states, ...geo.regions])];
@@ -809,17 +824,27 @@ export async function persistRun(db, memStore, run, opts = {}) {
   for (const o of catalog) {
     const row = osOppToLiveRow(o, supportedOpportunityColumns);
     let targetId = o.id;
+    let beforeRow = null;
     if (row.canonical_opportunity_key) {
       const existing = await db
-        .prepare('SELECT id FROM funding_opportunities WHERE canonical_opportunity_key = ? LIMIT 1')
+        .prepare('SELECT * FROM funding_opportunities WHERE canonical_opportunity_key = ? LIMIT 1')
         .get(row.canonical_opportunity_key);
-      if (existing && existing.id) targetId = existing.id;
+      if (existing && existing.id) {
+        targetId = existing.id;
+        beforeRow = existing;
+      }
     }
     if (targetId === o.id && row.fingerprint) {
       const existing = await db
-        .prepare('SELECT id FROM funding_opportunities WHERE fingerprint = ? LIMIT 1')
+        .prepare('SELECT * FROM funding_opportunities WHERE fingerprint = ? LIMIT 1')
         .get(row.fingerprint);
-      if (existing && existing.id) targetId = existing.id;
+      if (existing && existing.id) {
+        targetId = existing.id;
+        beforeRow = existing;
+      }
+    }
+    if (!beforeRow) {
+      beforeRow = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(targetId);
     }
     idRemap.set(o.id, targetId);
     // LIVE-DB per-key provenance merge, done ATOMICALLY inside the single UPSERT
@@ -833,6 +858,10 @@ export async function persistRun(db, memStore, run, opts = {}) {
     // could error into a null-clobber.
     await upsertRow(db, 'funding_opportunities', ['id'], { ...row, id: targetId }, {
       conflictExpr: fundingOpportunityConflictExpr(db, supportedOpportunityColumns, row),
+    });
+    await syncOpportunityContractProjection(db, targetId, row, {
+      beforeRow: beforeRow ?? null,
+      changedBy: 'crawler_os',
     });
     opportunities += 1;
   }

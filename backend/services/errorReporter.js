@@ -11,8 +11,13 @@
  *  - Throttled + globally capped so a crash loop can't spam the inbox.
  */
 
+import crypto from 'node:crypto'
 import { sendEmail } from './email.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
+import {
+  redactTelemetryString,
+  sanitizeTelemetryValue,
+} from '../../shared/privacyRedaction.js'
 
 // Per-signature throttle: don't re-send the same error within this window.
 const THROTTLE_MS = 600000 // 10 minutes
@@ -38,8 +43,9 @@ function pruneOldEntries(now) {
 
 function buildSignature({ source, route, error }) {
   const name = error?.name || 'Error'
-  const message = String(error?.message || '').slice(0, 120)
-  return `${source}|${route || ''}|${name}|${message}`
+  const message = redactTelemetryString(error?.message || '', { maxLength: 120 })
+  const safeRoute = redactTelemetryString(route || '', { maxLength: 240 })
+  return `${source}|${safeRoute}|${name}|${message}`
 }
 
 function truncate(value, max) {
@@ -54,6 +60,40 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
+}
+
+function userReference(email) {
+  const normalized = String(email || '').trim().toLowerCase()
+  if (!normalized) return 'anonymous'
+  const pseudonymKey = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
+  if (!pseudonymKey) return 'authenticated-user'
+  return `user:${crypto.createHmac('sha256', pseudonymKey).update(normalized).digest('hex').slice(0, 12)}`
+}
+
+export function buildSafeErrorContext(error, ctx = {}) {
+  const sanitized = sanitizeTelemetryValue({
+    name: error?.name || 'Error',
+    message: error?.message || '',
+    stack: error?.stack || '',
+    source: ctx?.source || 'backend',
+    route: ctx?.route || null,
+    method: ctx?.method || null,
+    statusCode: ctx?.statusCode ?? null,
+  }, {
+    maxDepth: 4,
+    maxEntries: 20,
+    maxStringLength: 8_000,
+  })
+
+  return {
+    name: String(sanitized.name || 'Error'),
+    message: String(sanitized.message || ''),
+    stack: String(sanitized.stack || ''),
+    source: String(sanitized.source || 'backend'),
+    route: sanitized.route ? String(sanitized.route) : null,
+    method: sanitized.method ? String(sanitized.method) : null,
+    statusCode: sanitized.statusCode ?? null,
+  }
 }
 
 /**
@@ -177,21 +217,30 @@ function parseAnalysisJson(text) {
  */
 async function analyzeError(error, ctx) {
   try {
+    // Error excerpts may contain applicant PII, tokens, or document content.
+    // External analysis is opt-in and receives only the same redacted context
+    // used by the owner report. Heuristic triage remains the default.
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ERROR_REPORT_LLM_ANALYSIS_ENABLED || '').trim())) {
+      return heuristicAnalyze(error, ctx)
+    }
+
     const anthropic = await getAnthropic()
     if (!anthropic) return heuristicAnalyze(error, ctx)
+
+    const safe = buildSafeErrorContext(error, ctx)
 
     const system =
       'You are a senior software engineer triaging a production error for the GrantFlow app (React + Express + PostgreSQL, ESM JavaScript). Respond with STRICT minified JSON only — no prose, no code fences.'
     const userPrompt = [
       'Triage this error and return JSON: {"cause": string, "fix": string, "severity": "low"|"medium"|"high"}.',
       `app: GrantFlow`,
-      `source: ${ctx?.source || 'backend'}`,
-      `route: ${ctx?.route || 'unknown'}`,
-      `method: ${ctx?.method || 'unknown'}`,
-      `httpStatus: ${ctx?.statusCode ?? 'n/a'}`,
-      `errorName: ${error?.name || 'Error'}`,
-      `errorMessage: ${truncate(error?.message, 500)}`,
-      `stack:\n${truncate(error?.stack, 2000)}`,
+      `source: ${safe.source}`,
+      `route: ${safe.route || 'unknown'}`,
+      `method: ${safe.method || 'unknown'}`,
+      `httpStatus: ${safe.statusCode ?? 'n/a'}`,
+      `errorName: ${safe.name}`,
+      `errorMessage: ${truncate(safe.message, 500)}`,
+      `stack:\n${truncate(safe.stack, 2000)}`,
     ].join('\n')
 
     const call = anthropic.messages.create({
@@ -221,28 +270,30 @@ async function analyzeError(error, ctx) {
   }
 }
 
-function buildEmail({ error, source, userEmail, route, method, requestId, statusCode, analysis }) {
-  const shortMessage = truncate(error?.message, 140) || '(no message)'
-  const subject = `[GrantFlow] Error for ${userEmail || 'anonymous'}: ${error?.name || 'Error'}: ${shortMessage}`
+function buildEmail({ error, source, userRef, route, method, requestId, statusCode, analysis }) {
+  const safe = buildSafeErrorContext(error, { source, route, method, statusCode })
+  const safeRequestId = redactTelemetryString(requestId || '', { maxLength: 160 })
+  const shortMessage = truncate(safe.message, 140) || '(no message)'
+  const subject = `[GrantFlow] Error for ${userRef}: ${safe.name}: ${shortMessage}`
   const timestamp = new Date().toISOString()
 
   const text = [
     `GrantFlow error report`,
     ``,
     `Time:        ${timestamp}`,
-    `User:        ${userEmail || 'anonymous'}`,
-    `Source:      ${source}`,
-    `Route:       ${method || ''} ${route || '(unknown)'}`,
-    `Request ID:  ${requestId || '(none)'}`,
+    `User ref:    ${userRef}`,
+    `Source:      ${safe.source}`,
+    `Route:       ${safe.method || ''} ${safe.route || '(unknown)'}`,
+    `Request ID:  ${safeRequestId || '(none)'}`,
     `Status:      ${statusCode ?? '(n/a)'}`,
-    `Error:       ${error?.name || 'Error'}: ${error?.message || '(no message)'}`,
+    `Error:       ${safe.name}: ${safe.message || '(no message)'}`,
     ``,
     `Severity:    ${analysis.severity}`,
     `Cause:       ${analysis.cause}`,
     `Suggested fix: ${analysis.fix}`,
     ``,
     `Stack:`,
-    String(error?.stack || '(no stack)'),
+    safe.stack || '(no stack)',
   ].join('\n')
 
   const html = `
@@ -251,12 +302,12 @@ function buildEmail({ error, source, userEmail, route, method, requestId, status
       <table style="border-collapse:collapse;font-size:14px;width:100%">
         <tbody>
           <tr><td style="padding:4px 8px;color:#64748b">Time</td><td style="padding:4px 8px">${escapeHtml(timestamp)}</td></tr>
-          <tr><td style="padding:4px 8px;color:#64748b">User</td><td style="padding:4px 8px">${escapeHtml(userEmail || 'anonymous')}</td></tr>
-          <tr><td style="padding:4px 8px;color:#64748b">Source</td><td style="padding:4px 8px">${escapeHtml(source)}</td></tr>
-          <tr><td style="padding:4px 8px;color:#64748b">Route</td><td style="padding:4px 8px">${escapeHtml(`${method || ''} ${route || '(unknown)'}`)}</td></tr>
-          <tr><td style="padding:4px 8px;color:#64748b">Request ID</td><td style="padding:4px 8px"><code>${escapeHtml(requestId || '(none)')}</code></td></tr>
+          <tr><td style="padding:4px 8px;color:#64748b">User reference</td><td style="padding:4px 8px">${escapeHtml(userRef)}</td></tr>
+          <tr><td style="padding:4px 8px;color:#64748b">Source</td><td style="padding:4px 8px">${escapeHtml(safe.source)}</td></tr>
+          <tr><td style="padding:4px 8px;color:#64748b">Route</td><td style="padding:4px 8px">${escapeHtml(`${safe.method || ''} ${safe.route || '(unknown)'}`)}</td></tr>
+          <tr><td style="padding:4px 8px;color:#64748b">Request ID</td><td style="padding:4px 8px"><code>${escapeHtml(safeRequestId || '(none)')}</code></td></tr>
           <tr><td style="padding:4px 8px;color:#64748b">Status</td><td style="padding:4px 8px">${escapeHtml(String(statusCode ?? '(n/a)'))}</td></tr>
-          <tr><td style="padding:4px 8px;color:#64748b">Error</td><td style="padding:4px 8px">${escapeHtml(`${error?.name || 'Error'}: ${error?.message || '(no message)'}`)}</td></tr>
+          <tr><td style="padding:4px 8px;color:#64748b">Error</td><td style="padding:4px 8px">${escapeHtml(`${safe.name}: ${safe.message || '(no message)'}`)}</td></tr>
           <tr><td style="padding:4px 8px;color:#64748b">Severity</td><td style="padding:4px 8px"><strong>${escapeHtml(analysis.severity)}</strong></td></tr>
         </tbody>
       </table>
@@ -265,7 +316,7 @@ function buildEmail({ error, source, userEmail, route, method, requestId, status
       <h3 style="margin:16px 0 4px">Suggested fix</h3>
       <p style="margin:0;font-size:14px">${escapeHtml(analysis.fix)}</p>
       <h3 style="margin:16px 0 4px">Stack</h3>
-      <pre style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;overflow:auto;font-size:12px;white-space:pre-wrap">${escapeHtml(error?.stack || '(no stack)')}</pre>
+      <pre style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;overflow:auto;font-size:12px;white-space:pre-wrap">${escapeHtml(safe.stack || '(no stack)')}</pre>
     </div>
   `
 
@@ -316,10 +367,11 @@ export function reportErrorToOwner({ error, source = 'backend', user, route, met
       }
 
       const analysis = await analyzeError(error, { source, route, method, statusCode, ...(extra || {}) })
+      const userRef = userReference(userEmail)
       const { subject, html, text } = buildEmail({
         error,
         source,
-        userEmail,
+        userRef,
         route,
         method,
         requestId,

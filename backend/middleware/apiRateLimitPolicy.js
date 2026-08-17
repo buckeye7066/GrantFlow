@@ -64,7 +64,8 @@ export function classifyApiRatePolicy(req, env = process.env) {
       name: 'standard',
       windowMs: positiveInt(env.API_STANDARD_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
       max: positiveInt(env.API_STANDARD_RATE_LIMIT_MAX, 600),
-      shared: false,
+      shared: true,
+      requiredShared: false,
     }
   }
 
@@ -76,6 +77,7 @@ export function classifyApiRatePolicy(req, env = process.env) {
       windowMs: positiveInt(env.API_COST_RATE_LIMIT_WINDOW_MS, 10 * 60 * 1000),
       max: positiveInt(env.API_COST_RATE_LIMIT_MAX, 40),
       shared: true,
+      requiredShared: true,
     }
   }
 
@@ -108,6 +110,7 @@ export function classifyApiRatePolicy(req, env = process.env) {
       windowMs: positiveInt(env.API_AUTOMATION_RATE_LIMIT_WINDOW_MS, 10 * 60 * 1000),
       max: positiveInt(env.API_AUTOMATION_RATE_LIMIT_MAX, 25),
       shared: true,
+      requiredShared: true,
     }
   }
 
@@ -116,7 +119,8 @@ export function classifyApiRatePolicy(req, env = process.env) {
       name: 'auth',
       windowMs: positiveInt(env.API_AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
       max: positiveInt(env.API_AUTH_RATE_LIMIT_MAX, 30),
-      shared: false,
+      shared: true,
+      requiredShared: true,
     }
   }
 
@@ -125,7 +129,8 @@ export function classifyApiRatePolicy(req, env = process.env) {
       name: 'mutation',
       windowMs: positiveInt(env.API_MUTATION_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
       max: positiveInt(env.API_MUTATION_RATE_LIMIT_MAX, 120),
-      shared: false,
+      shared: true,
+      requiredShared: true,
     }
   }
 
@@ -133,7 +138,8 @@ export function classifyApiRatePolicy(req, env = process.env) {
     name: 'standard',
     windowMs: positiveInt(env.API_STANDARD_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
     max: positiveInt(env.API_STANDARD_RATE_LIMIT_MAX, 600),
-    shared: false,
+    shared: true,
+    requiredShared: false,
   }
 }
 
@@ -171,14 +177,11 @@ function hitMemory(key, policy, now) {
 
 async function ensureSharedTable(db) {
   if (!db || initializedDbs.has(db)) return
-  await db.prepare(`
-    CREATE TABLE IF NOT EXISTS api_rate_limit_buckets (
-      bucket_key TEXT PRIMARY KEY,
-      window_started_ms BIGINT NOT NULL,
-      expires_ms BIGINT NOT NULL,
-      hit_count INTEGER NOT NULL
-    )
-  `).run()
+  // Schema belongs to paired migrations (SQLite 172 / PostgreSQL 0177), not
+  // request-time self-healing DDL. A missing table is a deploy-integrity fault
+  // and security-sensitive lanes fail closed below instead of silently creating
+  // a divergent schema on one instance.
+  await db.prepare('SELECT bucket_key FROM api_rate_limit_buckets LIMIT 1').get()
   initializedDbs.add(db)
 }
 
@@ -241,10 +244,30 @@ export function apiRateLimitMiddleware({
       } catch (error) {
         if (!warnedSharedFallback) {
           warnedSharedFallback = true
-          console.warn('[rate-limit] shared store unavailable; using process-local fallback:', error?.message || error)
+          console.warn(
+            policy.requiredShared
+              ? '[rate-limit] required shared store unavailable; failing closed:'
+              : '[rate-limit] shared store unavailable; using process-local fallback:',
+            error?.message || error,
+          )
+        }
+        if (policy.requiredShared) {
+          return res.status(503).json({
+            ok: false,
+            error: 'rate_limit_store_unavailable',
+            rate_limit_policy: policy.name,
+            retryable: true,
+          })
         }
         hit = hitMemory(key, policy, now)
       }
+    } else if (policy.shared && policy.requiredShared) {
+      return res.status(503).json({
+        ok: false,
+        error: 'rate_limit_store_unavailable',
+        rate_limit_policy: policy.name,
+        retryable: true,
+      })
     } else {
       hit = hitMemory(key, policy, now)
     }

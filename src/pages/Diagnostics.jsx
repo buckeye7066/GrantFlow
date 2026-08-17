@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { CheckCircle, XCircle, Loader2, PlayCircle, Clock, FileText } from 'lucide-react';
+import { ingestDocument } from '@/api/documents';
+import { isRealProfileId } from '@/api/profileIdGuards';
 
 const Diagnostics = () => {
   const [isTesting, setIsTesting] = useState(false);
@@ -129,12 +131,28 @@ const Diagnostics = () => {
     setParseResult(null);
     
     try {
-      // Upload file
-      const { file_url } = await client.integrations.Core.UploadFile({ file: testFile });
+      const profileId = grants?.find((grant) => isRealProfileId(grant?.profile_id))?.profile_id
+        || client.getActiveProfileId?.()
+      if (!isRealProfileId(profileId)) {
+        throw new Error('Select a real active profile before running the document parser diagnostic.');
+      }
+
+      const uploadPayload = new FormData();
+      uploadPayload.append('document', testFile);
+      uploadPayload.append('profile_id', profileId);
+      uploadPayload.append('name', testFile.name);
+      uploadPayload.append('type', 'solicitation');
+      uploadPayload.append('source', 'diagnostics');
+      uploadPayload.append('skip_parsing', 'true');
+      const uploaded = await ingestDocument(uploadPayload);
+      if (!uploaded?.id) {
+        throw new Error('The diagnostic upload did not return a durable document id.');
+      }
       
       // Try to parse it
       const response = await client.functions.invoke('parseNOFO', {
-        file_url,
+        document_id: uploaded.id,
+        profile_id: profileId,
         json_schema: {
           type: "object",
           properties: {

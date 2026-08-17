@@ -38,6 +38,7 @@ import anyaMatchSuggestionsRouter from './routes/anyaMatchSuggestions.js';
 import itemsRouter from './routes/items.js';
 import itemNeedsRouter from './routes/itemNeeds.js';
 import profilesRouter from './routes/profiles.js';
+import profileMemoryRouter from './routes/profileMemory.js';
 import remindersRouter from './routes/reminders.js';
 import crawlersRouter from './routes/crawlers.js';
 import vehiclesRouter from './routes/vehicles.js';
@@ -93,6 +94,9 @@ import { attachRequestContext, isSyntheticServiceAdmin } from './middleware/requ
 import { enforceResolvedIdentity } from './middleware/enforceResolvedIdentity.js';
 import { ensureAuth, ensureAdmin } from './middleware/auth.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
+import { apiRateLimitMiddleware } from './middleware/apiRateLimitPolicy.js';
+import { operationalMetricsMiddleware } from './services/operationalMetrics.js';
+import operationalMetricsRouter from './routes/operationalMetrics.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
 import { responseCache } from './middleware/responseCache.js';
 import { MAX_JSON_BODY_SIZE, GRANT_STATUSES } from './config/constants.js';
@@ -127,6 +131,7 @@ import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
 import notificationsRouter from './routes/notifications.js'
 import savedGrantsRouter from './routes/savedGrants.js'
 import foundationsRouter from './routes/foundations.js'
+import funderIntelligenceRouter from './routes/funderIntelligence.js'
 import { expirePassedDeadlines } from './services/deadlineExpiryService.js'
 import { generateDeadlineNotifications } from './services/deadlineNotificationService.js'
 import {
@@ -520,6 +525,11 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-Id', requestId);
   next();
 });
+
+// PII-safe bounded SLO metrics. The collector stores only a coarse route group,
+// method, status class, duration, and timestamp—never raw URLs, ids, query
+// strings, request bodies, or user identity.
+app.use(operationalMetricsMiddleware());
 
 // Standardized JSON response envelope + double-send guard.
 // See backend/utils/responseEnvelope.js. Single choke point: error objects
@@ -1951,6 +1961,15 @@ app.use(enforceResolvedIdentity());
 // request context are known, so SQL tenant guards see the real user/profile.
 app.use(profileContextMiddleware());
 
+// Cross-instance policy limiter. Unlike the generous process-local emergency
+// floor mounted before raw-body webhooks, this runs after identity + DB context
+// are available and uses the migrated shared bucket table. Cost, auth,
+// automation, and mutation lanes fail closed if that shared authority is down.
+app.use(apiRateLimitMiddleware());
+
+// Admin-only JSON and Prometheus-compatible SLO views.
+app.use('/api/admin/operational-metrics', operationalMetricsRouter);
+
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
 
@@ -2418,6 +2437,9 @@ app.get('/api/profiles/vocabulary', async (_req, res) => {
     res.status(500).json({ ok: false, error: 'vocabulary_unavailable', message: err?.message || String(err) })
   }
 })
+// Specific profile-memory routes must precede profilesRouter's generic /:id
+// surface so the canonical, revisioned memory contract cannot be shadowed.
+app.use('/api/profiles', profileMemoryRouter);
 app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/matching', requestTimeout(PIPELINE_TIMEOUT), matchingRouter);
@@ -2475,6 +2497,9 @@ app.use('/api/hamilton/tailored', lazyRouter('./routes/hamiltonTailoredApplicati
 // the rollout. Both paths resolve to the same router.
 app.use('/api/yana/automation', lazyRouter('./routes/hamiltonAutomation.js'));
 app.use('/api/saved-grants', savedGrantsRouter);
+// Canonical persisted 990 intelligence reads precede the legacy foundation
+// router; both share the same authenticated foundation namespace.
+app.use('/api/foundations', funderIntelligenceRouter);
 app.use('/api/foundations', foundationsRouter);
 // John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.
 app.use('/api/john', lazyRouter('./routes/john.js'));

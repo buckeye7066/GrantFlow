@@ -20,7 +20,8 @@ import { parseApiAmount } from '../sources/grantsGovAmountAdapter.js';
 const log = createLogger('grantsGovApiClient');
 const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || '';
 
-export async function fetchGrantsGov(params = {}) {
+/** Build the one Search2 request shape used by every Grants.gov caller. */
+export function buildGrantsGovSearchPayload(params = {}) {
   const {
     keyword = '',
     oppStatus = 'forecasted|posted',
@@ -29,18 +30,54 @@ export async function fetchGrantsGov(params = {}) {
     fundingCategories = null,
     eligibilities = null,
   } = params;
+  const joinFilter = (value) => Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean).join('|')
+    : String(value ?? '').trim();
 
-  const payload = {
-    rows: Number(rows) || 25,
+  return {
+    rows: Math.max(1, Number(rows) || 25),
     oppStatuses: String(oppStatus || 'forecasted|posted'),
     keyword: String(keyword || ''),
-    startRecordNum: Number(startRow) || 0,
+    startRecordNum: Math.max(0, Number(startRow) || 0),
     agencies: '',
-    fundingCategories: Array.isArray(fundingCategories) ? fundingCategories.join('|') : '',
-    eligibilities: Array.isArray(eligibilities) ? eligibilities.join('|') : '',
+    fundingCategories: joinFilter(fundingCategories),
+    eligibilities: joinFilter(eligibilities),
     aln: '',
     oppNum: '',
   };
+}
+
+/** Grants.gov dates are commonly MM/DD/YYYY; store stable ISO calendar dates. */
+export function normalizeGrantsGovDate(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value).trim();
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
+  if (!match) return text;
+  const [, month, day, year] = match;
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+/** Preserve the official lifecycle fact in the canonical GrantFlow vocabulary. */
+export function normalizeGrantsGovStatus(value) {
+  const status = String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['posted', 'open', 'active'].includes(status)) return 'open';
+  if (['forecasted', 'forecast', 'planned'].includes(status)) return 'forecasted';
+  if (['closed', 'archived', 'cancelled', 'canceled'].includes(status)) return 'closed';
+  return status || null;
+}
+
+export function grantsGovDetailUrl(opportunityId, opportunityNumber = null) {
+  if (opportunityId !== null && opportunityId !== undefined && String(opportunityId).trim()) {
+    return `${GRANTS_GOV_VIEW}${encodeURIComponent(String(opportunityId))}`;
+  }
+  if (opportunityNumber) {
+    return `${GRANTS_GOV_VIEW}${encodeURIComponent(String(opportunityNumber))}`;
+  }
+  return null;
+}
+
+export async function fetchGrantsGov(params = {}) {
+  const payload = buildGrantsGovSearchPayload(params);
 
   const MAX_RETRIES = 3;
   const BASE_DELAY_MS = 1000;
@@ -82,16 +119,34 @@ export async function fetchGrantsGov(params = {}) {
 export function transformGrantsGovOpportunity(opp) {
   const oppId = opp?.id ?? opp?.oppId ?? null;
   const oppNumber = opp?.number || opp?.oppNum || opp?.oppNumber || opp?.opportunityNumber || '';
+  const sourceId = oppNumber || (oppId !== null && oppId !== undefined ? String(oppId) : null);
   const id = `grants-gov-${oppNumber || oppId || cryptoSafeId(opp)}`;
   const agencyName = opp?.agencyName || opp?.agency || null;
   const agencyCode = opp?.agencyCode || null;
-  const openDate = opp?.openDate || null;
-  const closeDate = opp?.closeDate || null;
+  const openDate = normalizeGrantsGovDate(opp?.openDate || null);
+  const closeDate = normalizeGrantsGovDate(opp?.closeDate || null);
   const oppStatus = opp?.oppStatus || null;
+  const sourceStatus = normalizeGrantsGovStatus(oppStatus);
   const alnlist = opp?.alnlist ?? null;
-  const detailUrl = (oppId !== null && oppId !== undefined)
-    ? `${GRANTS_GOV_VIEW}${oppId}`
-    : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null;
+  const detailUrl = grantsGovDetailUrl(oppId, oppNumber);
+  const applicantTypes = [
+    ...(Array.isArray(opp?.applicantTypes) ? opp.applicantTypes : []),
+    ...(Array.isArray(opp?.eligibilities) ? opp.eligibilities : []),
+  ].map((value) => String(value).trim()).filter(Boolean);
+  const eligibilityBullets = buildEligibility({
+    oppNumber,
+    agencyName,
+    agencyCode,
+    openDate,
+    closeDate,
+    oppStatus,
+    alnlist,
+  });
+  const amountMin = parseAmount(opp?.awardFloor);
+  const amountMax = parseAmount(opp?.awardCeiling);
+  const firstPublishedAt = normalizeGrantsGovDate(
+    opp?.firstPublishedAt ?? opp?.postedDate ?? opp?.postDate ?? null,
+  );
   return {
     id,
     title: opp?.title || opp?.opportunityTitle || opp?.oppTitle || 'Federal Grant Opportunity',
@@ -104,14 +159,22 @@ export function transformGrantsGovOpportunity(opp) {
     // lacks, so the boot net could never catch it either.
     sponsor: agencyName || agencyCode || null,
     source: 'grants.gov',
-    source_id: oppNumber || null,
+    source_id: sourceId,
     source_url: detailUrl,
     application_url: detailUrl,
+    authoritative_application_url: detailUrl,
     description: opp?.synopsis || opp?.description || `Grants.gov opportunity ${oppNumber}${oppStatus ? ` (${oppStatus})` : ''}`.trim(),
-    amount_min: parseAmount(opp?.awardFloor) || null,
-    amount_max: parseAmount(opp?.awardCeiling) || null,
+    purpose: opp?.purpose || null,
+    amount_min: amountMin,
+    amount_max: amountMax,
+    estimated_award: amountMin !== null && amountMin === amountMax ? amountMin : null,
+    open_date: openDate,
     deadline: closeDate || null,
     deadline_type: closeDate ? 'fixed' : 'rolling',
+    recurrence: closeDate ? null : 'rolling',
+    source_status: sourceStatus,
+    current_status: sourceStatus,
+    first_published_at: firstPublishedAt,
     is_national: true,
     state: 'nationwide',
     categories: [
@@ -124,7 +187,15 @@ export function transformGrantsGovOpportunity(opp) {
     type: 'OPPORTUNITY',
     requires_501c3: false,
     requires_match: false,
-    eligibility_bullets: buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDate, oppStatus, alnlist }),
+    applicant_types: applicantTypes,
+    eligibility_bullets: eligibilityBullets,
+    eligibility_requirements: { text: null, bullets: eligibilityBullets },
+    required_documents: Array.isArray(opp?.requiredDocuments) ? opp.requiredDocuments : [],
+    application_method: 'grants.gov',
+    data_quality_flags: [
+      ...(!agencyName && !agencyCode ? ['missing_funder'] : []),
+      ...(!oppStatus ? ['missing_source_status'] : []),
+    ],
   };
 }
 
@@ -181,4 +252,11 @@ function buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDa
   return bullets;
 }
 
-export default { fetchGrantsGov, transformGrantsGovOpportunity };
+export default {
+  buildGrantsGovSearchPayload,
+  fetchGrantsGov,
+  grantsGovDetailUrl,
+  normalizeGrantsGovDate,
+  normalizeGrantsGovStatus,
+  transformGrantsGovOpportunity,
+};

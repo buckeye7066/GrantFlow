@@ -1,20 +1,10 @@
+import {
+  sanitizeTelemetryEvent,
+  sanitizeTelemetryValue,
+} from '../../shared/privacyRedaction.js'
+
 let sentry = null
 let initPromise = null
-
-function cleanExtra(value) {
-  if (value === null || value === undefined) return value
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
-  if (Array.isArray(value)) return value.slice(0, 20).map(cleanExtra)
-  if (typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([key]) => !/password|token|secret|authorization|cookie/i.test(key))
-        .slice(0, 30)
-        .map(([key, item]) => [key, cleanExtra(item)]),
-    )
-  }
-  return String(value)
-}
 
 export function initObservability() {
   const dsn = String(process.env.SENTRY_DSN || '').trim()
@@ -32,6 +22,14 @@ export function initObservability() {
           process.env.VERCEL_GIT_COMMIT_SHA ||
           undefined,
         tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE || 0),
+        // A last-hop privacy choke point. Context passed through captureException
+        // is already scrubbed below, but SDK integrations can add request data,
+        // breadcrumbs, and exception values independently. Sanitize the complete
+        // event immediately before transport so credentials and applicant PII do
+        // not leave GrantFlow through an integration we forgot to wrap.
+        beforeSend(event) {
+          return sanitizeTelemetryEvent(event)
+        },
       })
       sentry = mod
       console.info('[observability] Sentry backend capture enabled')
@@ -52,7 +50,7 @@ export function captureException(error, context = {}) {
       if (context.requestId) scope.setTag('request_id', String(context.requestId))
       if (context.statusCode) scope.setTag('http_status', String(context.statusCode))
       if (context.retryable !== undefined) scope.setTag('retryable', String(Boolean(context.retryable)))
-      scope.setExtras(cleanExtra(context))
+      scope.setExtras(sanitizeTelemetryValue(context))
       sentry.captureException(error)
     })
     return true

@@ -17,6 +17,7 @@ import * as nsf from '../src/integrations/nsfAwards.js'
 import * as samAL from '../src/integrations/samAssistanceListings.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
+import { assertCanonicalMatchDecision, canonicalMatchReceipt } from '../services/canonicalMatchAuthority.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 
@@ -318,7 +319,7 @@ router.post('/score', requireAuthenticatedUserMiddleware, async (req, res) => {
 
       let decision = null
       try {
-        decision = computeMatchDecision(profileNorm, opportunity)
+        decision = assertCanonicalMatchDecision(computeMatchDecision(profileNorm, opportunity))
       } catch (scoreErr) {
         routeLogger.warn('[foundations/score] scoring failed for one item', scoreErr?.message)
       }
@@ -331,6 +332,7 @@ router.post('/score', requireAuthenticatedUserMiddleware, async (req, res) => {
         match_score: decision ? decision.score : null,
         decision: decision ? decision.decision : null,
         match_reasons: Array.isArray(reasons) ? reasons.slice(0, 6) : [],
+        match_authority: decision ? canonicalMatchReceipt(decision) : null,
         opportunity,
       }
     })

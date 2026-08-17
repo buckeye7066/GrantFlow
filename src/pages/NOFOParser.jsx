@@ -15,6 +15,9 @@ import { createPageUrl } from '@/utils';
 import { useToast } from "@/components/ui/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { parseGrantsGovDigest } from '../../shared/grantsGovDigestParser.js';
+import { listProfiles } from '@/api/profiles';
+import { ingestDocument } from '@/api/documents';
+import { ingestSolicitation } from '@/api/grantLifecycle';
 
 const grantSchemaForExtraction = {
   type: "object",
@@ -62,7 +65,7 @@ function isValidHttpUrl(value) {
   }
 }
 
-function buildGrantPayload(extractedData, { organizationId, inputMode, url }) {
+function buildGrantPayload(extractedData, { profileId, inputMode, url }) {
   const rawAppUrl = extractedData.application_url || '';
   const validatedAppUrl =
     rawAppUrl.startsWith('http://') || rawAppUrl.startsWith('https://')
@@ -72,7 +75,7 @@ function buildGrantPayload(extractedData, { organizationId, inputMode, url }) {
   return {
     ...extractedData,
     application_url: validatedAppUrl,
-    organization_id: organizationId,
+    profile_id: profileId,
     status: 'discovered',
     opportunity_type: 'grant',
     ai_status: 'queued',
@@ -96,7 +99,7 @@ export default function NOFOParser() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedProfileId, setSelectedProfileId] = useState('');
   const [inputMode, setInputMode] = useState('file'); // 'file' | 'url' | 'digest'
   const [file, setFile] = useState(null);
   const [url, setUrl] = useState('');
@@ -106,17 +109,19 @@ export default function NOFOParser() {
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState(null);
   const [extractedData, setExtractedData] = useState(null);
+  const [extractionMeta, setExtractionMeta] = useState(null);
+  const [solicitationDraft, setSolicitationDraft] = useState(null);
   const [isSavingGrant, setIsSavingGrant] = useState(false);
   const [rowActionId, setRowActionId] = useState(null);
 
-  const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
-    queryKey: ['organizations'],
-    queryFn: () => client.entities.Organization.list('-created_date'),
+  const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: listProfiles,
   });
 
-  const validOrganizations = useMemo(
-    () => (Array.isArray(organizations) ? organizations.filter((org) => org && org.id) : []),
-    [organizations],
+  const validProfiles = useMemo(
+    () => (Array.isArray(profiles) ? profiles.filter((profile) => profile && profile.id) : []),
+    [profiles],
   );
 
   const handleInputModeChange = (value) => {
@@ -130,8 +135,8 @@ export default function NOFOParser() {
     if (selectedFile) {
       const fileName = selectedFile.name.toLowerCase();
 
-      if (!fileName.endsWith('.pdf')) {
-        setError('Only PDF files are supported at this time. Please convert your Word document to PDF first.');
+      if (!fileName.endsWith('.pdf') && !fileName.endsWith('.docx')) {
+        setError('Upload a PDF or Word (.docx) solicitation.');
         setFile(null);
         return;
       }
@@ -141,13 +146,14 @@ export default function NOFOParser() {
     }
   };
 
-  const saveGrantToPipeline = async (grantPayload) => {
+  const saveGrantToPipeline = async (grantPayload, { canonicalizeOpportunity = false } = {}) => {
     try {
       const pipelineResult = unwrapApiPayload(
         await client.functions.invoke('saveToProfilePipeline', {
           opportunity: grantPayload,
-          organizationId: selectedOrgId,
+          profileId: selectedProfileId,
           source: 'nofo_parser',
+          canonicalizeOpportunity,
         }),
       );
 
@@ -160,7 +166,12 @@ export default function NOFOParser() {
         throw new Error(reason);
       }
 
-      return pipelineResult.grant;
+      return {
+        ...pipelineResult.grant,
+        canonical_profile_id: pipelineResult.profile_id || selectedProfileId,
+        canonical_opportunity_id:
+          pipelineResult.opportunity_id || pipelineResult.grant?.funding_opportunity_id || null,
+      };
     } catch (err) {
       if (!isRouteNotFoundError(err)) throw err;
 
@@ -170,7 +181,7 @@ export default function NOFOParser() {
 
       const fallbackResponse = unwrapApiPayload(
         await client.post('/api/grants/from-opportunity', {
-          organization_id: selectedOrgId,
+          profile_id: selectedProfileId,
           opportunity_data: {
             title: grantPayload.title,
             sponsor: grantPayload.funder || grantPayload.sponsor,
@@ -184,12 +195,21 @@ export default function NOFOParser() {
 
       // Normalize so callers always get a grant object with an `id`,
       // consistent with the primary pipeline path.
-      return fallbackResponse?.grant ?? fallbackResponse;
+      const fallbackGrant = fallbackResponse?.grant ?? fallbackResponse;
+      return {
+        ...fallbackGrant,
+        canonical_profile_id: selectedProfileId,
+        canonical_opportunity_id:
+          fallbackResponse?.opportunity_id
+          || fallbackResponse?.catalog_opportunity_id
+          || fallbackGrant?.funding_opportunity_id
+          || null,
+      };
     }
   };
 
-  const saveAndAnalyzeGrant = async (grantPayload) => {
-    const newGrant = await saveGrantToPipeline(grantPayload);
+  const saveAndAnalyzeGrant = async (grantPayload, options = {}) => {
+    const newGrant = await saveGrantToPipeline(grantPayload, options);
 
     if (!newGrant?.id) {
       throw new Error('Grant was saved but no valid grant id was returned.');
@@ -243,6 +263,12 @@ export default function NOFOParser() {
       return;
     }
 
+    if (inputMode === 'file' && !selectedProfileId) {
+      setError('Select the profile that owns this solicitation before uploading it.');
+      setStatus('error');
+      return;
+    }
+
     if (inputMode === 'url' && !url) {
       setError("Please enter a URL to process.");
       setStatus('error');
@@ -252,15 +278,28 @@ export default function NOFOParser() {
     setError(null);
     setStatus('uploading');
     setExtractedData(null);
+    setExtractionMeta(null);
+    setSolicitationDraft(null);
 
     try {
       let fileUrl;
+      let uploadedDocumentId = null;
 
       if (inputMode === 'file') {
         log.debug('Uploading file', file?.name);
-        const { file_url } = await client.integrations.Core.UploadFile({ file });
-        fileUrl = file_url;
-        log.debug('File uploaded', fileUrl);
+        const uploadPayload = new FormData();
+        uploadPayload.append('document', file);
+        uploadPayload.append('profile_id', selectedProfileId);
+        uploadPayload.append('name', file.name);
+        uploadPayload.append('type', 'solicitation');
+        uploadPayload.append('source', 'nofo_parser');
+        uploadPayload.append('skip_parsing', 'true');
+        const upload = await ingestDocument(uploadPayload);
+        uploadedDocumentId = upload?.id || null;
+        if (!uploadedDocumentId) {
+          throw new Error('The solicitation upload completed without a durable document id.');
+        }
+        log.debug('File uploaded as durable document', uploadedDocumentId);
       } else {
         const trimmedUrl = url.trim();
         if (!isValidHttpUrl(trimmedUrl)) {
@@ -276,7 +315,12 @@ export default function NOFOParser() {
       const response = await client.functions.invoke('parseNOFO', {
         file_url: fileUrl,
         json_schema: grantSchemaForExtraction,
-        is_url: inputMode === 'url'
+        is_url: inputMode === 'url',
+        source_kind: 'nofo',
+        source_filename: inputMode === 'file' ? file?.name : null,
+        mime_type: inputMode === 'file' ? file?.type : null,
+        document_id: uploadedDocumentId,
+        profile_id: inputMode === 'file' ? selectedProfileId : null,
       });
 
       log.debug('parseNOFO response received', { success: response?.success });
@@ -291,6 +335,8 @@ export default function NOFOParser() {
 
       if (parsed.success && parsed.output) {
         setExtractedData(parsed.output);
+        setExtractionMeta(parsed.extraction_meta || null);
+        setSolicitationDraft(parsed.solicitation_draft || null);
         setStatus('success');
         toast({
           title: "Document Processed! ✨",
@@ -306,17 +352,20 @@ export default function NOFOParser() {
 
       let errorMsg = 'An unexpected error occurred while processing the document.';
 
-      if (err.response?.data) {
-        if (typeof err.response.data === 'string') {
-          errorMsg = err.response.data;
-        } else if (err.response.data.message) {
-          errorMsg = err.response.data.message;
-        } else if (err.response.data.warning) {
+      const errorBody = err.response?.data || err.data || null;
+      if (errorBody) {
+        if (typeof errorBody === 'string') {
+          errorMsg = errorBody;
+        } else if (errorBody.reason === 'provider_unavailable') {
+          errorMsg = 'AI requirement extraction is temporarily unavailable. Nothing partial was saved; retry when a provider is available.';
+        } else if (errorBody.message) {
+          errorMsg = errorBody.message;
+        } else if (errorBody.warning) {
           // The backend surfaces a provider-unavailable 503 in `warning`; show it
           // so the user sees "AI provider unavailable" instead of a vague error.
-          errorMsg = err.response.data.warning;
-        } else if (err.response.data.details) {
-          errorMsg = err.response.data.details;
+          errorMsg = errorBody.warning;
+        } else if (errorBody.details) {
+          errorMsg = errorBody.details;
         }
       } else if (err.message) {
         errorMsg = err.message;
@@ -378,7 +427,7 @@ export default function NOFOParser() {
       toast({ variant: 'destructive', title: 'Nothing to import', description: 'Parse listing text first.' });
       return;
     }
-    if (!selectedOrgId) {
+    if (!selectedProfileId) {
       toast({
         variant: 'destructive',
         title: 'Select a profile to import',
@@ -396,7 +445,7 @@ export default function NOFOParser() {
     try {
       for (const opp of opportunities) {
         const grantPayload = buildGrantPayload(opp, {
-          organizationId: selectedOrgId,
+          profileId: selectedProfileId,
           inputMode: 'digest',
           url: opp.application_url,
         });
@@ -442,7 +491,7 @@ export default function NOFOParser() {
   };
 
   const handleQuickAddDigestRow = async (opp) => {
-    if (!selectedOrgId) {
+    if (!selectedProfileId) {
       toast({
         variant: 'destructive',
         title: 'Select a profile to save',
@@ -456,7 +505,7 @@ export default function NOFOParser() {
 
     try {
       const grantPayload = buildGrantPayload(opp, {
-        organizationId: selectedOrgId,
+        profileId: selectedProfileId,
         inputMode: 'digest',
         url: opp.application_url,
       });
@@ -484,6 +533,7 @@ export default function NOFOParser() {
     setInputMode('url');
     setUrl(opp.application_url);
     setExtractedData(null);
+    setSolicitationDraft(null);
     setError(null);
     setStatus('idle');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -495,7 +545,15 @@ export default function NOFOParser() {
 
   const handleSaveToPipeline = async () => {
     if (!extractedData) return;
-    if (!selectedOrgId) {
+    if (!solicitationDraft?.text || !Array.isArray(solicitationDraft?.requirements)) {
+      toast({
+        variant: 'destructive',
+        title: 'Validated requirements required',
+        description: 'Process the complete solicitation successfully before saving it to the lifecycle workspace.',
+      });
+      return;
+    }
+    if (!selectedProfileId) {
       toast({
         variant: 'destructive',
         title: 'Select a profile to save',
@@ -507,7 +565,7 @@ export default function NOFOParser() {
     setError(null);
 
     const grantPayload = buildGrantPayload(extractedData, {
-      organizationId: selectedOrgId,
+      profileId: selectedProfileId,
       inputMode,
       url,
     });
@@ -519,11 +577,31 @@ export default function NOFOParser() {
       });
     }
 
+    let savedGrant = null;
     try {
-      const newGrant = await saveAndAnalyzeGrant(grantPayload);
+      const newGrant = await saveAndAnalyzeGrant(grantPayload, { canonicalizeOpportunity: true });
+      savedGrant = newGrant;
+      const canonicalProfileId = newGrant.canonical_profile_id || selectedProfileId;
+      const canonicalOpportunityId =
+        newGrant.canonical_opportunity_id || newGrant.funding_opportunity_id || null;
+      if (!canonicalOpportunityId) {
+        throw new Error('The grant was saved, but no canonical opportunity id was returned for requirement ingestion.');
+      }
+      const ingestion = await ingestSolicitation({
+        ...solicitationDraft,
+        profile_id: canonicalProfileId,
+        opportunity_id: canonicalOpportunityId,
+        title: solicitationDraft.title || extractedData.title || null,
+      });
+      toast({
+        title: 'Requirements linked',
+        description: `${ingestion.requirement_count ?? solicitationDraft.requirements.length} validated requirement${(ingestion.requirement_count ?? solicitationDraft.requirements.length) === 1 ? '' : 's'} saved with source citations.`,
+      });
       navigate(createPageUrl("GrantDetail", { id: newGrant.id }));
     } catch (err) {
-      const errorMessage = `Failed to save grant or start analysis: ${err.message}`;
+      const errorMessage = savedGrant
+        ? `The grant was saved, but its validated requirements were not linked: ${err.message}. Retry this action to finish the lifecycle workspace.`
+        : `The grant could not be saved: ${err.message}`;
       setError(errorMessage);
       setStatus('error');
       toast({
@@ -538,7 +616,7 @@ export default function NOFOParser() {
 
   const isProcessing = status === 'uploading' || status === 'processing';
   const canProcess =
-    ((inputMode === 'file' && file) || (inputMode === 'url' && url.trim()) || (inputMode === 'digest' && digestText.trim())) &&
+    ((inputMode === 'file' && file && selectedProfileId) || (inputMode === 'url' && url.trim()) || (inputMode === 'digest' && digestText.trim())) &&
     !isProcessing;
 
   return (
@@ -558,17 +636,25 @@ export default function NOFOParser() {
           </CardHeader>
           <CardContent className="space-y-6">
             <div>
-              <Label className="text-base font-semibold mb-2 block">Link to Profile (optional)</Label>
-              <Select value={selectedOrgId} onValueChange={setSelectedOrgId} disabled={isProcessing || isSavingGrant}>
+              <Label className="text-base font-semibold mb-2 block">
+                Link to Profile {inputMode === 'file' ? '(required for uploads)' : '(optional)'}
+              </Label>
+              <Select value={selectedProfileId} onValueChange={setSelectedProfileId} disabled={isProcessing || isSavingGrant}>
                 <SelectTrigger className="text-base h-12 mt-2">
-                  <SelectValue placeholder="Optional: select a profile to save into its pipeline..." />
+                  <SelectValue
+                    placeholder={inputMode === 'file'
+                      ? 'Select the profile that owns this solicitation...'
+                      : 'Optional: select a profile to save into its pipeline...'}
+                  />
                 </SelectTrigger>
                 <SelectContent>
-                  {isLoadingOrgs ? (
+                  {isLoadingProfiles ? (
                     <div className="flex items-center justify-center p-4"><Loader2 className="w-5 h-5 animate-spin" /></div>
                   ) : (
-                    validOrganizations.map(org => (
-                      <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
+                    validProfiles.map(profile => (
+                      <SelectItem key={profile.id} value={profile.id}>
+                        {profile.display_name || profile.name || profile.id}
+                      </SelectItem>
                     ))
                   )}
                 </SelectContent>
@@ -581,7 +667,7 @@ export default function NOFOParser() {
                 <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="file" disabled={isProcessing}>
                     <Upload className="w-4 h-4 mr-2" />
-                    Upload PDF
+                    Upload PDF/DOCX
                   </TabsTrigger>
                   <TabsTrigger value="url" disabled={isProcessing}>
                     <LinkIcon className="w-4 h-4 mr-2" />
@@ -596,9 +682,9 @@ export default function NOFOParser() {
                 <TabsContent value="file" className="mt-4">
                   <Alert className="mb-4 border-blue-200 bg-blue-50">
                     <Info className="h-4 w-4 text-blue-600" />
-                    <AlertTitle className="text-blue-900">PDF Files Only</AlertTitle>
+                    <AlertTitle className="text-blue-900">PDF and Word solicitations</AlertTitle>
                     <AlertDescription className="text-blue-800">
-                      Currently, only PDF documents are supported. If you have a Word document (.docx), please convert it to PDF first.
+                      Upload the authoritative PDF or Word (.docx) file. The full document is processed in traceable chunks; it is not silently clipped.
                     </AlertDescription>
                   </Alert>
 
@@ -607,7 +693,7 @@ export default function NOFOParser() {
                       type="file"
                       id="file-upload"
                       className="hidden"
-                      accept=".pdf,application/pdf"
+                      accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                       onChange={handleFileChange}
                       disabled={isProcessing}
                     />
@@ -624,8 +710,8 @@ export default function NOFOParser() {
                       ) : (
                         <>
                           <Upload className="w-8 h-8 text-slate-400 mb-2"/>
-                          <p className="text-slate-500">Click to select a PDF file</p>
-                          <p className="text-xs text-slate-400 mt-1">Only PDF format supported</p>
+                          <p className="text-slate-500">Click to select a PDF or DOCX file</p>
+                          <p className="text-xs text-slate-400 mt-1">Complete-document extraction with explicit limits</p>
                         </>
                       )}
                     </label>
@@ -686,7 +772,7 @@ export default function NOFOParser() {
               {inputMode === 'digest' && parsedDigest.length > 0 && (
                 <Button
                   onClick={handleImportAllDigest}
-                  disabled={isSavingGrant || !selectedOrgId}
+                  disabled={isSavingGrant || !selectedProfileId}
                   variant="outline"
                   size="lg"
                 >
@@ -825,6 +911,24 @@ export default function NOFOParser() {
                 {extractedData && status === 'success' && inputMode !== 'digest' && (
                     <CardContent className="space-y-4">
                         <h3 className="text-lg font-semibold text-slate-800 border-b pb-2">Extracted Information</h3>
+                        {extractionMeta?.complete && (
+                          <Alert className="border-emerald-200 bg-emerald-50">
+                            <CheckCircle className="h-4 w-4 text-emerald-600" />
+                            <AlertTitle className="text-emerald-900">Complete source processed</AlertTitle>
+                            <AlertDescription className="text-emerald-800">
+                              {Number(extractionMeta.source_chars || 0).toLocaleString()} characters across {extractionMeta.chunk_count} traceable chunk{extractionMeta.chunk_count === 1 ? '' : 's'}; no silent clipping.
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                        {solicitationDraft && (
+                          <Alert className="border-blue-200 bg-blue-50">
+                            <ClipboardList className="h-4 w-4 text-blue-600" />
+                            <AlertTitle className="text-blue-900">Requirements ready to link</AlertTitle>
+                            <AlertDescription className="text-blue-800">
+                              {solicitationDraft.requirement_count ?? solicitationDraft.requirements?.length ?? 0} mechanically validated requirement{(solicitationDraft.requirement_count ?? solicitationDraft.requirements?.length ?? 0) === 1 ? '' : 's'} include exact source citations. Saving will catalog the opportunity and persist this complete solicitation version for the selected profile.
+                            </AlertDescription>
+                          </Alert>
+                        )}
                         <div className="space-y-3">
                             <p><strong>Title:</strong> {extractedData.title || 'N/A'}</p>
                             <p><strong>Funder:</strong> {extractedData.funder || 'N/A'}</p>
@@ -871,7 +975,7 @@ export default function NOFOParser() {
                                 className="bg-emerald-600 hover:bg-emerald-700"
                             >
                                 {isSavingGrant ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
-                                Save to Pipeline
+                                Save opportunity + requirements
                             </Button>
                         </div>
                     </CardContent>

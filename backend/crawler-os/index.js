@@ -72,5 +72,17 @@ export function applySchema(db) {
     // audit:allow dynamic-sql — col comes from the hardcoded registry defs
     try { db.exec(`ALTER TABLE funding_opportunities ADD COLUMN ${col}`); } catch { /* exists */ }
   }
+  for (const col of [
+    'purpose TEXT',
+    'open_date TEXT',
+    'recurrence TEXT',
+    'source_status TEXT',
+    'first_published_at TEXT',
+    'required_documents_json TEXT',
+    'application_method TEXT',
+  ]) {
+    // audit:allow dynamic-sql — values are fixed schema definitions above
+    try { db.exec(`ALTER TABLE funding_opportunities ADD COLUMN ${col}`); } catch { /* exists */ }
+  }
   return db;
 }
