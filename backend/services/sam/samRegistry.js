@@ -2654,6 +2654,43 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    id: 'ops.backupFreshness',
+    label: 'Database backup freshness',
+    category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Asserts a verified database backup ran within BACKUP_MAX_AGE_HOURS (default 48h). scripts/backup-db.mjs stamps system_kv backup_last_run only AFTER the artifact passed integrity verification (mark-after-write), so this check measures real recoverability, not documentation. A never-run state is a FILLABLE finding — one `npm run db:backup` (or scheduling it) closes it; the runbooks promised restore-from-backup for months while no backup mechanism existed.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'backup freshness: db unavailable' }
+      const maxAgeHours = Math.max(1, Number(process.env.BACKUP_MAX_AGE_HOURS || 48))
+      let record = null
+      try {
+        const row = await db.prepare(`SELECT value FROM system_kv WHERE key = 'backup_last_run'`).get()
+        record = row?.value ? JSON.parse(row.value) : null
+      } catch {
+        return { ok: true, skipped: true, summary: 'backup freshness: system_kv unavailable' }
+      }
+      if (!record?.at) {
+        return {
+          ok: false,
+          summary: `no database backup has ever been recorded — run \`npm run db:backup\` (and schedule it); the runbook's "restore from backup" step has nothing to restore until then`,
+        }
+      }
+      const ageMs = Date.now() - Date.parse(record.at)
+      const ageHours = Number.isFinite(ageMs) ? ageMs / 3_600_000 : Infinity
+      if (ageHours > maxAgeHours) {
+        return {
+          ok: false,
+          summary: `last verified backup is ${Math.round(ageHours)}h old (bar: ${maxAgeHours}h) — ${record.path ?? 'unknown path'}; run or re-schedule \`npm run db:backup\``,
+        }
+      }
+      return {
+        ok: true,
+        summary: `backup ${Math.round(ageHours)}h old (${record.dialect ?? '?'}, ${(Number(record.bytes || 0) / 1024 / 1024).toFixed(1)} MB) at ${record.path ?? '?'}`,
+      }
+    },
+  },
+  {
     id: 'queue.staleJobs',
     label: 'Stale crawler queue jobs',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,

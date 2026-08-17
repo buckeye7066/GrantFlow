@@ -72,6 +72,11 @@ class APIClient {
       ContactMethod: 'contact-methods',
       ApplicationDraft: 'application-drafts',
       BillingSettings: 'billing-settings',
+      // Grant-scoped UI records — previously unmapped, so these fell through
+      // to createStubEntityClient and every write vanished on reload.
+      ChecklistItem: 'checklist-items',
+      GrantAward: 'grant-awards',
+      ComplianceReport: 'compliance-reports',
     };
     this.stubStores = new Map();
     this.stubWarnings = new Set();

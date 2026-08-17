@@ -2388,6 +2388,12 @@ app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/award-compliance', lazyRouter('./routes/awardCompliance.js'));
+// Grant-scoped UI records (checklist/award/compliance-report) — these back
+// the frontend entity clients that previously fell through to the in-memory
+// stub store and silently discarded user data.
+app.use('/api/checklist-items', lazyRouter('./routes/grantScopedRecords.js', (m) => m.createGrantScopedRecordsRouter('checklist-items')));
+app.use('/api/grant-awards', lazyRouter('./routes/grantScopedRecords.js', (m) => m.createGrantScopedRecordsRouter('grant-awards')));
+app.use('/api/compliance-reports', lazyRouter('./routes/grantScopedRecords.js', (m) => m.createGrantScopedRecordsRouter('compliance-reports')));
 app.use('/api/expenses', expensesRouter);
 app.use('/api/budgets', budgetsRouter);
 app.use('/api/contacts', contactsRouter);
