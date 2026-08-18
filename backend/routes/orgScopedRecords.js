@@ -27,6 +27,7 @@ import {
   ensureGrantAccess,
   ensureOrganizationAccess,
   getAccessibleOrganizationIds,
+  getAuthUserId,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 import { createLogger } from '../utils/logger.js'
@@ -206,6 +207,44 @@ async function ensureRowAccess(req, res, spec, id) {
   return row
 }
 
+async function readBillingSeed(db, userId) {
+  try {
+    const row = await db.prepare(
+      'SELECT custom_preferences FROM user_preferences WHERE user_id = ? LIMIT 1',
+    ).get(String(userId))
+    if (!row?.custom_preferences) return 0
+    const custom = typeof row.custom_preferences === 'string'
+      ? JSON.parse(row.custom_preferences)
+      : row.custom_preferences
+    const n = Number(custom?.billing_settings?.last_invoice_number)
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+  } catch {
+    return 0
+  }
+}
+
+function formatInvoiceNumber(seq, issueDate) {
+  const match = String(issueDate || '').match(/^(\d{4})-(\d{2})/)
+  const now = new Date()
+  const y = match ? match[1] : String(now.getUTCFullYear())
+  const m = match ? match[2] : String(now.getUTCMonth() + 1).padStart(2, '0')
+  return `INV-${y}${m}-${String(seq).padStart(4, '0')}`
+}
+
+async function allocateInvoiceNumber(db, userId, issueDate) {
+  const seed = await readBillingSeed(db, userId)
+  const sql = db.dialect === 'postgres'
+    ? `INSERT INTO consultant_invoice_counters (user_id, last_number) VALUES (?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET last_number = consultant_invoice_counters.last_number + 1
+       RETURNING last_number`
+    : `INSERT INTO consultant_invoice_counters (user_id, last_number) VALUES (?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET last_number = last_number + 1
+       RETURNING last_number`
+  const row = await db.prepare(sql).get(String(userId), seed + 1)
+  const seq = Number(row?.last_number) || seed + 1
+  return formatInvoiceNumber(seq, issueDate)
+}
+
 export function createOrgScopedRecordsRouter(resourceKey) {
   const spec = ORG_SCOPED_RESOURCES[resourceKey]
   if (!spec) throw new Error(`unknown org-scoped resource: ${resourceKey}`)
@@ -304,6 +343,12 @@ export function createOrgScopedRecordsRouter(resourceKey) {
 
       const data = encodeFields(spec, pickAllowed(body, spec.columns))
       data.organization_id = String(parent.organization_id)
+
+      if (resourceKey === 'invoices') {
+        const userId = getAuthUserId(req.user)
+        if (!userId) return res.status(401).json({ error: 'Authentication required' })
+        data.invoice_number = await allocateInvoiceNumber(req.db, userId, data.issue_date)
+      }
 
       const id = crypto.randomUUID()
       const cols = ['id', ...Object.keys(data)]

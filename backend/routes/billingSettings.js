@@ -2,6 +2,8 @@ import express from 'express'
 import crypto from 'crypto'
 import { requireAuthenticatedUser, getAuthUserId } from '../utils/accessControl.js'
 import { createOrgScopedRecordsRouter } from './orgScopedRecords.js'
+import { createGrantScopedRecordsRouter } from './grantScopedRecords.js'
+import { createCatalogRecordsRouter } from './catalogRecords.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:billingSettings')
@@ -45,6 +47,10 @@ router.use('/invoice-lines', createOrgScopedRecordsRouter('invoice-lines'))
 router.use('/projects', createOrgScopedRecordsRouter('projects'))
 router.use('/time-entries', createOrgScopedRecordsRouter('time-entries'))
 router.use('/time-logs', createOrgScopedRecordsRouter('time-logs'))
+router.use('/ai-artifacts', createGrantScopedRecordsRouter('ai-artifacts'))
+router.use('/partner-sources', createCatalogRecordsRouter('partner-sources'))
+router.use('/search-jobs', createCatalogRecordsRouter('search-jobs'))
+router.use('/taxonomy', createCatalogRecordsRouter('taxonomy'))
 
 router.get('/', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
