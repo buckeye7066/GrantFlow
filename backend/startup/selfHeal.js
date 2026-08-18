@@ -51,6 +51,7 @@ import { reconcileDismissedGrants } from '../services/pipelineDismissals.js';
 import { runEnforceInvariants, enforceNoDuplicateGrants } from './enforceInvariants.js';
 import { resolveUploadsDir } from '../utils/uploadsDir.js';
 import { recordSelfHealRun } from './selfHealStatus.js';
+import { isDurableSqlite, runDatabaseBackup } from '../services/ops/databaseBackup.js';
 
 export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir, onDemand = false }) {
   // Structured, truthful run summary. Each step records what it actually did so
@@ -516,6 +517,34 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir, onDe
   } catch (error) {
     console.warn('[startup] Failed to dedupe grants:', error?.message || error);
     record('dedupe_grants', { ok: false, error: error?.message || String(error) });
+  }
+
+  // ── 11. Verified database backup (the schedule ops.backupFreshness needs) ──
+  // Anya 2026-08-18: "no database backup has ever been recorded". The CLI
+  // existed as a manual step nobody ran. Nightly on-demand self-heal (Sam /
+  // Anya owner.run_self_heal) is the schedule. Boot skips this so a deploy
+  // never waits on pg_dump. Smoke tests skip it. A dump failure is recorded,
+  // never thrown — the Sam check stays red until a verified artifact exists.
+  if (IS_SMOKE_MODE) {
+    record('db_backup', { ok: true, skipped: 'smoke' });
+  } else if (!onDemand) {
+    record('db_backup', { ok: true, skipped: 'boot_not_on_demand' });
+  } else if (db?.dialect !== 'postgres' && !(await isDurableSqlite(db))) {
+    record('db_backup', { ok: true, skipped: 'in_memory_sqlite' });
+  } else {
+    try {
+      const backup = await runDatabaseBackup({ db });
+      record('db_backup', {
+        ok: true,
+        dialect: backup.dialect,
+        path: backup.path,
+        bytes: backup.bytes,
+        pruned: backup.pruned?.length || 0,
+      });
+    } catch (error) {
+      console.warn('[startup] database backup failed (non-fatal):', error?.message || error);
+      record('db_backup', { ok: false, error: error?.message || String(error) });
+    }
   }
 
   summary.finished_at = new Date().toISOString();

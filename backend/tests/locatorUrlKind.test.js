@@ -196,6 +196,28 @@ describe('classifyLocatorKindFromUrl — fix-cycle-6 HUD/FCC/NeedyMeds/TN-DHS sh
   })
 })
 
+describe('classifyLocatorKindFromUrl — East Tennessee Foundation grants INDEX (Anya 2026-08-18)', () => {
+  // Prod named easttennesseefoundation.org as the remaining AWARD-BEARING
+  // unanswered_unreadable host. The `/grants/` listing is a catalog of funds
+  // ("Search for a grant"), not an award; an adapter there cannot yield a
+  // per-award figure. Exact-page only so a future `/grants/<fund>` program
+  // page keeps its ordinary read.
+  it('classifies the grants index and apply-portal landing as DIRECTORY', () => {
+    expect(classifyLocatorKindFromUrl('https://www.easttennesseefoundation.org/grants/'))
+      .toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://easttennesseefoundation.org/grants'))
+      .toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://www.easttennesseefoundation.org/nonprofits/apply-for-grants/'))
+      .toMatchObject({ kind: 'directory' })
+  })
+
+  it('does not host-claim the rest of the domain (a fund/news page may state a real figure)', () => {
+    expect(classifyLocatorKindFromUrl('https://www.easttennesseefoundation.org/grants/arts-fund')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.easttennesseefoundation.org/scholarships/')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.easttennesseefoundation.org/')).toBeNull()
+  })
+})
+
 describe('classifyLocatorKindFromRow — the AUTHORITATIVE source_url rule', () => {
   it('a real award source_url is never demoted by a secondary locator URL', () => {
     expect(classifyLocatorKindFromRow({

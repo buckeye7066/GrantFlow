@@ -745,6 +745,9 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     locator_only: locatorOnly,
     sources_total: sources.length,
     sources_failed: failedSources.length,
+    // Named so buildApprovalQueue can key the ledger on the source, not a
+    // forever-open `source_health` blob. Same shape as the finding evidence.
+    failed_sources: failedSources.map((s) => ({ id: s.source_id, outcome: s.outcome, reason: s.reason })),
     candidates,
     false_positives: falsePositives.length,
     // The offending TITLES, not just the count: proposeGenericTitleAdditions()

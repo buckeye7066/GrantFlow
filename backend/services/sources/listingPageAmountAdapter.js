@@ -84,6 +84,20 @@ export const LISTING_PAGES = Object.freeze([
     ]),
     fetchUrl: 'https://clevelandstatecc.scholarships.ngwebsolutions.com/Scholarships/Search',
   }),
+  Object.freeze({
+    // MTSU Computer Science awards page (Anya 2026-08-18 amount_recall_miss
+    // for graduate_student: Dr. Nancy Wahl / Mack Thweatt / Outstanding
+    // Student Award). Verified live 2026-08-18: the department page names
+    // those three and states NO per-award figure for them; the S-STEM
+    // section further down does ("up to $6000.00 per year") and title
+    // anchoring is what keeps that sibling figure off the other awards.
+    // Path-prefixed so a HOPE / collegepays row on mtsu.edu is never
+    // stolen from the generic page fetch (attempted:true short-circuits).
+    id: 'mtsu_cs_scholarships',
+    matchHosts: Object.freeze(['www.mtsu.edu', 'mtsu.edu']),
+    matchPathPrefixes: Object.freeze(['/csc/scholarships']),
+    fetchUrl: 'https://www.mtsu.edu/csc/scholarships/',
+  }),
 ])
 
 /** Title tokens too generic to anchor a section on their own. */
@@ -101,14 +115,36 @@ function hostOf(url) {
   }
 }
 
+function pathOf(url) {
+  try {
+    return new URL(String(url)).pathname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+function pathMatchesPrefix(pathname, prefix) {
+  const raw = String(prefix || '').toLowerCase().trim()
+  if (!raw || !pathname) return false
+  const normalized = raw.endsWith('/') ? raw.slice(0, -1) : raw
+  return pathname === normalized || pathname === `${normalized}/` || pathname.startsWith(`${normalized}/`)
+}
+
 /** The registry entry that owns this row, or null. Pure; exported for tests. */
 export function findListingPageEntry(row) {
-  const hosts = [row?.source_url, row?.application_url, row?.evidence_url, row?.url]
-    .map(hostOf)
-    .filter(Boolean)
-  if (hosts.length === 0) return null
+  const urls = [row?.source_url, row?.application_url, row?.evidence_url, row?.url].filter(Boolean)
+  if (urls.length === 0) return null
   for (const entry of LISTING_PAGES) {
-    if (entry.matchHosts.some((h) => hosts.includes(h))) return entry
+    const prefixes = Array.isArray(entry.matchPathPrefixes) ? entry.matchPathPrefixes : null
+    for (const url of urls) {
+      const host = hostOf(url)
+      if (!host || !entry.matchHosts.includes(host)) continue
+      if (prefixes && prefixes.length > 0) {
+        const pathname = pathOf(url)
+        if (!pathname || !prefixes.some((p) => pathMatchesPrefix(pathname, p))) continue
+      }
+      return entry
+    }
   }
   return null
 }

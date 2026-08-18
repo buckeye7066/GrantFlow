@@ -78,7 +78,18 @@ describe('registry routing', () => {
   it('does not own unrelated rows (caller falls through unchanged)', () => {
     expect(findListingPageEntry({ source_url: 'https://www.grants.gov/search-results-detail/1' })).toBeNull()
     expect(isListingPageRow({ source: 'web_search' })).toBe(false)
+    // Path-prefixed MTSU entry must not steal a random mtsu.edu award page.
+    expect(findListingPageEntry({ source_url: 'https://www.mtsu.edu/financial-aid/hope' })).toBeNull()
     expect(findListingPageEntry(null)).toBeNull()
+  })
+
+  it('owns the MTSU CS awards page by host+path, never by host alone', () => {
+    expect(
+      findListingPageEntry({ source_url: 'https://www.mtsu.edu/csc/scholarships/' })?.id,
+    ).toBe('mtsu_cs_scholarships')
+    expect(
+      findListingPageEntry({ source_url: 'https://mtsu.edu/csc/scholarships' })?.id,
+    ).toBe('mtsu_cs_scholarships')
   })
 
   it('is reachable through the shared AMOUNT_ADAPTERS registry', () => {
@@ -208,5 +219,76 @@ describe('enrichAmountViaListingPage', () => {
       fetcher: { fetch: async () => { throw new Error('boom') } },
     })
     expect(res).toMatchObject({ attempted: true, transient: true, found: false })
+  })
+})
+
+// Verbatim geometry of https://www.mtsu.edu/csc/scholarships/ (fetched 2026-08-18):
+// Wahl / Thweatt / Outstanding Student Award state NO figure; S-STEM later on
+// the same page states "up to $6000.00 per year". Whole-page extraction would
+// hand that sibling figure to any of the three — the Coca-Cola class.
+const MTSU_CS_TEXT = [
+  'Awards and Scholarships. Computer Science Department Award. The Computer Science',
+  'Department Award is given to a senior Computer Science major for high academic',
+  'achievement. This involves a monetary award as well as a certificate.',
+  'Outstanding Student Award. Each year Computer Science faculty members nominate',
+  'and select students they feel are outstanding in their class: Outstanding Freshman,',
+  'Sophomore, Junior and Senior. The winners are recognized at the awards ceremony.',
+  'The Dr. Nancy Wahl Scholarship has been created through the generosity of Drs.',
+  'Nancy and Robert Wahl. Scholarships will be awarded to computer science students',
+  'based on academic achievement and need. Please refer to the Scholarships Website',
+  'for details and to apply. Female students are especially encouraged to apply.',
+  'The Mack Thweatt Scholarship has been created in honor of Professor Emeritus Dr.',
+  'Mack Thweatt. To be eligible for consideration for this scholarship, a student must',
+  'be a Tennessee resident, enrolled as a full-time student, be a Computer Science',
+  'major, and have at least a 3.0 GPA. Please refer to the Scholarships Website for',
+  'details and to apply.',
+  'A scholarship has been created in honor of Mr. Homer Brown, Professor Emeritus.',
+  'Dr. Richard Detmer, Professor Emeritus, has endowed a scholarship to be awarded',
+  'annually on the basis of academic excellence, to a Computer Science major who is',
+  'a sophomore or junior and who has completed at least 10 hours of computer science',
+  'courses at MTSU.',
+  'S-STEM Scholarship Program in Computer Science. With funding from the National',
+  'Science Foundation Scholarships in Science, Technology, Engineering and Mathematics',
+  'program, the NSF S-STEM Scholarship Program is providing support to low-income',
+  'students with demonstrated financial need. Be a U.S. citizen or national. Be a full',
+  'time student. Be Pell-eligible. Be a Computer Science major. Have a GPA of 2.50 or',
+  'higher. Each scholarship recipient will receive up to $6000.00 per year for the first',
+  '2 years and up to $3000 for the 3rd year as long as he/she meets the scholarship',
+  'criteria each year.',
+].join(' ')
+
+const MTSU_CS_ROW = Object.freeze({
+  title: 'Dr. Nancy Wahl Scholarship',
+  source_url: 'https://www.mtsu.edu/csc/scholarships/',
+})
+
+describe('MTSU CS listing — amount_recall_miss titles never inherit S-STEM dollars', () => {
+  it('A/B: whole-page extraction DOES return the sibling S-STEM $6,000 (the defect)', () => {
+    const wholePage = extractAwardAmountsFromText(MTSU_CS_TEXT)
+    expect(wholePage.amount_max).toBe(6000)
+  })
+
+  it('Wahl / Thweatt / Outstanding Student Award get no number from the S-STEM section', () => {
+    for (const title of [
+      'Dr. Nancy Wahl Scholarship',
+      'Mack Thweatt Scholarship',
+      'Outstanding Student Award',
+    ]) {
+      const res = extractAnchoredAmounts(MTSU_CS_TEXT, title)
+      expect(res.anchored, title).toBe(true)
+      expect(res.amounts, title).toBeUndefined()
+    }
+  })
+
+  it('the S-STEM row still gets its OWN nearby figure', () => {
+    const res = extractAnchoredAmounts(MTSU_CS_TEXT, 'S-STEM Scholarship Program in Computer Science')
+    expect(res.anchored).toBe(true)
+    expect(res.amounts?.amount_max).toBe(6000)
+  })
+
+  it('enrichment records a page_read with no figure for Wahl (honest none-published path)', async () => {
+    const res = await enrichAmountViaListingPage(MTSU_CS_ROW, { fetcher: okFetcher(asHtml(MTSU_CS_TEXT)) })
+    expect(res).toMatchObject({ attempted: true, page_read: true, found: false })
+    expect(res.amounts).toBeUndefined()
   })
 })

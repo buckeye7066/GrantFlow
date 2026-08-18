@@ -54,7 +54,7 @@ import { countAmyProfiles, verifyAmyDeletion } from './amyDeletionProof.js'
 import { createAmyProfile, cleanupAmyProfiles, cleanupExpiredAmyProfiles, markProfileCrawled } from './amyProfileStore.js'
 import { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations } from './amyReport.js'
 import { cohortMetricsAtFloor, sweepFloors, summarizeCohort } from './crawlerMetrics.js'
-import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue } from './crawlerTuner.js'
+import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue, WEIGHT_TRIAL_KV_KEY } from './crawlerTuner.js'
 import { getEffectiveMinScore, getEffectiveWeights, setScoringTuning, persistScoringTuning } from '../../config/scoringTuning.js'
 import { readLiveOverrides, applyCoverageOverrides, revertCoverageOverrides } from './crawlerCoverageEditor.js'
 import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearning, appendArchetypeMetrics, evaluationArchetype } from './archetypeLearning.js'
@@ -684,7 +684,13 @@ export async function runAmyTraining(options = {}) {
   if (improve && applyWeights && crawledProfileIds.length >= (tuningOpts.weights?.minCohort ?? 12)) {
     try {
       const currentWeights = await weightEditor.read()
-      const wd = decideWeightChange({ currentWeights, cohort: summarizeCohort(evaluations, operatingFloor), opts: tuningOpts.weights })
+      const trialAt = isoFromClock(clock)
+      const lastTrial = await readWeightTrialLast(db)
+      const wd = decideWeightChange({
+        currentWeights,
+        cohort: summarizeCohort(evaluations, operatingFloor),
+        opts: { ...tuningOpts.weights, lastTrial, now: Date.parse(trialAt) },
+      })
       weightTuning = { ...wd, applied: null, validation: null }
       if (wd.change) {
         const applied = await weightEditor.apply(wd.to, { now: clock() })
@@ -742,6 +748,17 @@ export async function runAmyTraining(options = {}) {
             backup_path: weightAppliedRef?.backup_path ?? null,
           })
         }
+      }
+      // Stamp AFTER a real trial (kept or reverted). The next night's
+      // decideWeightChange cools down on this key so a falsified weight nudge
+      // is not re-applied forever against the same weak_match symptom.
+      if (weightTuning?.validation) {
+        await stampWeightTrialLast(db, {
+          at: isoFromClock(clock),
+          kept: Boolean(weightTuning.validation.kept),
+          reverted: Boolean(weightTuning.validation.reverted),
+          reason: weightTuning.reason || weightTuning.validation.reason || null,
+        })
       }
     }
   }
@@ -1267,3 +1284,35 @@ export async function runAmyTraining(options = {}) {
 
 export { cleanupAmyProfiles, cleanupExpiredAmyProfiles }
 export default { runAmyTraining, cleanupAmyProfiles, cleanupExpiredAmyProfiles }
+
+function isoFromClock(clock) {
+  const v = typeof clock === 'function' ? clock() : clock
+  if (v instanceof Date) return v.toISOString()
+  const parsed = Date.parse(v)
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date().toISOString()
+}
+
+async function readWeightTrialLast(db) {
+  if (!db?.prepare) return null
+  try {
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(WEIGHT_TRIAL_KV_KEY)
+    return row?.value ? JSON.parse(row.value) : null
+  } catch {
+    return null
+  }
+}
+
+async function stampWeightTrialLast(db, stamp) {
+  if (!db?.prepare || !stamp?.at) return false
+  try {
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    const value = JSON.stringify(stamp)
+    const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, stamp.at, WEIGHT_TRIAL_KV_KEY)
+    if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
+      await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(WEIGHT_TRIAL_KV_KEY, value, stamp.at)
+    }
+    return true
+  } catch {
+    return false
+  }
+}

@@ -102,6 +102,11 @@ describe('runSelfHealOnDemand — structured truthful summary + observability', 
     expect(Array.isArray(summary.steps)).toBe(true)
     // The invariant-enforcement step always runs as part of the full heal.
     expect(summary.steps.some((s) => s.step === 'enforce_invariants')).toBe(true)
+    // Nightly backup is scheduled here; in-memory test DBs skip (not durable).
+    const backupStep = summary.steps.find((s) => s.step === 'db_backup')
+    expect(backupStep).toBeTruthy()
+    expect(backupStep.ok).toBe(true)
+    expect(backupStep.skipped).toBe('in_memory_sqlite')
     expect(typeof summary.totalRepaired).toBe('number')
     // It was persisted for observability.
     const last = await getLastSelfHealRun(db)
