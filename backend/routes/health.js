@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { getSafeHealthSummary } from '../services/diagnosticsService.js'
+import { ensureAdmin } from '../middleware/auth.js'
 import { getImportValidationResult } from '../startup/validateImports.js'
 import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
 import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessService.js'
@@ -19,6 +20,24 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:health')
 
 const router = express.Router()
+
+// Operational-detail endpoints (mission gate, alerts, data readiness,
+// deployment identity, storage paths, import validation) leak catalog counts,
+// funnel numbers, commit SHAs and filesystem detail — they are mounted BEHIND
+// the identity middleware + admin gate in server.js (epic slice 9: the early
+// public mount exposed them unauthenticated). /healthz, /readyz and the basic
+// /api/health probe stay public for load balancers and uptime checks.
+export const sensitiveHealthRouter = express.Router()
+const sensitiveRouter = sensitiveHealthRouter
+// The server mounts this router behind ensureAuth. Everything except
+// /mission additionally requires ADMIN — /mission stays authenticated-only
+// because the production-audit account is non-admin BY CONTRACT
+// (scripts/production-audit/app-audit.mjs asserts audit_account_must_be_non_admin)
+// and reads it as its status probe.
+sensitiveRouter.use((req, res, next) => {
+  if (req.path === '/mission') return next()
+  return ensureAdmin(req, res, next)
+})
 
 const MISSION_READINESS_CACHE_MS = Math.max(5_000, Number(process.env.MISSION_READINESS_CACHE_MS) || 30_000)
 let missionReadinessCache = { at: 0, db: null, payload: null }
@@ -393,7 +412,7 @@ router.get('/healthz', (req, res) => {
 })
 
 // Storage health (safe, read-only)
-router.get('/api/health/storage', async (req, res) => {
+sensitiveRouter.get('/storage', async (req, res) => {
   const uploadsDir = req.uploadsDir || null
   const configured = Boolean(uploadsDir)
   const likelyPersistent = uploadsDir ? isLikelyPersistentPath(uploadsDir) : false
@@ -550,7 +569,7 @@ router.get('/readyz', async (req, res) => {
 })
 
 // Data readiness: is the funding_opportunities catalog populated and fresh?
-router.get('/api/health/data-readiness', async (req, res) => {
+sensitiveRouter.get('/data-readiness', async (req, res) => {
   try {
     const readiness = await getDataReadiness(req.db)
     const statusCode = readiness.status === 'ready' ? 200 : 503
@@ -569,7 +588,7 @@ router.get('/api/health/data-readiness', async (req, res) => {
 })
 
 // Alerts: surface operational issues (stuck jobs, empty catalog, crawler errors, etc.)
-router.get('/api/health/alerts', async (req, res) => {
+sensitiveRouter.get('/alerts', async (req, res) => {
   try {
     const { alerts, healthy } = await getSystemAlerts(req.db)
     return res.status(healthy ? 200 : 503).json({
@@ -587,7 +606,7 @@ router.get('/api/health/alerts', async (req, res) => {
 })
 
 // Deployment verification: shows what code version is actually running
-router.get('/api/health/deployment', (_req, res) => {
+sensitiveRouter.get('/deployment', (_req, res) => {
   res.json({
     version: process.env.npm_package_version || _cachedPkgVersion || 'unknown',
     commit: process.env.GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT_SHA || process.env.COMMIT_SHA || 'unknown',
@@ -613,7 +632,7 @@ router.get('/api/health/deployment', (_req, res) => {
 // rows, verification events in the last 24h, coverage by source, and the
 // application funnel by status. Returns 503 when ok=false (mission rule:
 // CI fails if placeholders inserted, etc.).
-router.get('/api/health/mission', async (req, res) => {
+sensitiveRouter.get('/mission', async (req, res) => {
   try {
     const payload = await getMissionReadiness(req.db)
     const code = payload?.ok === false || payload?.production_gate === false ? 503 : 200
@@ -625,7 +644,7 @@ router.get('/api/health/mission', async (req, res) => {
 })
 
 // Import validation: surfaces modules that failed to load at startup
-router.get('/api/health/imports', (_req, res) => {
+sensitiveRouter.get('/imports', (_req, res) => {
   const result = getImportValidationResult()
   if (!result) {
     return res.status(503).json({
