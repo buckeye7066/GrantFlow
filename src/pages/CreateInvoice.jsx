@@ -55,7 +55,7 @@ COMPENSATION TERMS:
 PAYMENT TERMS:
 • {{milestone_description}}
 • Payment is due {{payment_terms}}
-• Late payments subject to 1.5% monthly offense
+• Late payments subject to 1.5% monthly interest
 
 FUNDER COMPLIANCE:
 • Client understands some funders prohibit consultant payment from grant funds
@@ -76,3 +76,791 @@ CANCELLATION & REFUNDS:
 • Consultant misses mutually agreed deadline due to error → full refund of that milestone
 
 By accepting this invoice, Client agrees to these terms.`;
+
+export default function CreateInvoice() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  // Get organization_id from URL if provided
+  const urlParams = new URLSearchParams(window.location.search);
+  const preselectedOrgId = urlParams.get('organization_id');
+
+  const [formData, setFormData] = useState({
+    organization_id: preselectedOrgId || "",
+    project_id: "",
+    payment_terms: "net_15",
+    payment_option: "organization_pays",
+    milestone_type: "kickoff",
+    notes: "",
+    issue_date: new Date().toISOString().split('T')[0],
+    service_description: "",
+    service_type: "",
+    // Override fields
+    rate_override: "",
+    fee_override: "",
+    discount_override: "",
+  });
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Update formData when preselectedOrgId changes
+  React.useEffect(() => {
+    if (preselectedOrgId) {
+      setFormData(prev => ({ ...prev, organization_id: preselectedOrgId }));
+    }
+    // setFormData is stable and intentionally omitted from deps
+  }, [preselectedOrgId]);
+
+  const { data: organizations = [] } = useQuery({
+    queryKey: ['organizations'],
+    queryFn: () => client.entities.Organization.list('name'),
+  });
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => client.entities.Project.list('-created_date'),
+  });
+
+  const { data: settings } = useQuery({
+    queryKey: ['billingSettings'],
+    queryFn: async () => {
+      const results = await client.entities.BillingSettings.list();
+      return results[0] || {};
+    },
+  });
+
+  const { data: timeEntries = [] } = useQuery({
+    queryKey: ['unbilledTime', formData.organization_id],
+    queryFn: () => client.entities.TimeEntry.filter({
+      organization_id: formData.organization_id,
+      invoiced: false,
+    }),
+    enabled: !!formData.organization_id,
+  });
+
+  const createInvoiceMutation = useMutation({
+    mutationFn: (data) => client.entities.Invoice.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to Create Invoice",
+        description: error.message,
+      });
+    }
+  });
+
+  const selectedOrg = organizations.find(o => o.id === formData.organization_id);
+
+  // Calculate client category and pricing
+  const pricingInfo = useMemo(() => {
+    if (!selectedOrg || !settings) return null;
+
+    const result = {
+      category: 'large_org',
+      qualifiesForHardship: false,
+      qualifiesForMinistryDiscount: false,
+      qualifiesForProBono: selectedOrg.pro_bono || false,
+      baseRate: settings.hourly_rates?.large_org || 150,
+      // originalFee tracks the full pre-discount calculated fee for accurate subtotal/write-off
+      originalFee: 0,
+      calculatedFee: 0,
+      discountAmount: 0,
+      discountDescription: '',
+      finalFee: 0,
+    };
+
+    // Determine category. Boundary: < 250000 => small, >= 250000 && <= 2000000 => midsize,
+    // > 2000000 => large. Missing annual_budget for non-individual orgs defaults to large_org
+    // (cannot infer size). This is consistent with the ministry-discount check below.
+    if (['individual_need', 'medical_assistance', 'family', 'high_school_student', 'college_student', 'graduate_student'].includes(selectedOrg.applicant_type)) {
+      result.category = 'individual_household';
+      result.baseRate = settings.hourly_rates?.individual_household || 85;
+    } else if (selectedOrg.annual_budget !== null && selectedOrg.annual_budget !== undefined && selectedOrg.annual_budget < 250000) {
+      result.category = 'small_ministry_nonprofit';
+      result.baseRate = settings.hourly_rates?.small_ministry_nonprofit || 85;
+    } else if (selectedOrg.annual_budget !== null && selectedOrg.annual_budget !== undefined && selectedOrg.annual_budget <= 2000000) {
+      result.category = 'midsize_org';
+      result.baseRate = settings.hourly_rates?.midsize_org || 115;
+    }
+
+    // Check hardship qualifications
+    const hardshipQualifiers = [
+      selectedOrg.ssi_recipient,
+      selectedOrg.ssdi_recipient,
+      selectedOrg.medicaid_enrolled && selectedOrg.medicaid_waiver_program === 'ecf_choices',
+      selectedOrg.cancer_survivor && selectedOrg.cancer_diagnosis_year && (new Date().getFullYear() - selectedOrg.cancer_diagnosis_year <= 5),
+      selectedOrg.medicaid_enrolled,
+      selectedOrg.household_income && selectedOrg.household_size && (selectedOrg.household_income / selectedOrg.household_size < 25000),
+      selectedOrg.domestic_violence_survivor,
+      selectedOrg.trafficking_survivor,
+      selectedOrg.disaster_survivor,
+      selectedOrg.clergy && selectedOrg.household_income && selectedOrg.household_income < 40000,
+    ];
+
+    // Treat any truthy value (1, 'yes', true, etc.) as qualifying
+    result.qualifiesForHardship = hardshipQualifiers.some(Boolean);
+
+    // Check ministry discount (consistent < 250000 boundary)
+    result.qualifiesForMinistryDiscount =
+      (selectedOrg.faith_based || selectedOrg.clergy || selectedOrg.missionary) &&
+      (selectedOrg.annual_budget === null || selectedOrg.annual_budget === undefined || selectedOrg.annual_budget < 250000);
+
+    // Calculate fee based on service type
+    const serviceType = formData.service_type;
+    if (serviceType && settings.flat_fees) {
+      const fees = settings.flat_fees;
+      
+      switch (serviceType) {
+        case 'quick_scan':
+          if (result.category === 'individual_household') {
+            result.calculatedFee = fees.quick_eligibility_scan_individual || 149;
+          } else if (result.category === 'small_ministry_nonprofit') {
+            result.calculatedFee = fees.quick_eligibility_scan_small || 349;
+          } else {
+            result.calculatedFee = fees.quick_eligibility_scan_large || 750;
+          }
+          break;
+        
+        case 'comprehensive_dossier':
+          if (result.category === 'individual_household') {
+            result.calculatedFee = fees.comprehensive_dossier_individual || 399;
+          } else if (result.category === 'small_ministry_nonprofit') {
+            result.calculatedFee = fees.comprehensive_dossier_small || 1250;
+          } else if (result.category === 'midsize_org') {
+            result.calculatedFee = fees.comprehensive_dossier_mid || 2400;
+          } else {
+            result.calculatedFee = fees.comprehensive_dossier_large || 3800;
+          }
+          break;
+        
+        case 'micro_grant':
+          result.calculatedFee = fees.micro_grant_min || 600;
+          break;
+        
+        case 'standard_foundation':
+          result.calculatedFee = fees.standard_foundation_min || 2000;
+          break;
+        
+        case 'complex_federal':
+          result.calculatedFee = fees.complex_federal_min || 5000;
+          break;
+        
+        case 'scholarship_pack':
+          result.calculatedFee = fees.transfer_scholarship_pack || 450;
+          break;
+        
+        case 'hourly_time': {
+          const totalMinutes = timeEntries.reduce((sum, entry) => sum + (entry.rounded_minutes || 0), 0);
+          const totalHours = totalMinutes / 60;
+          result.calculatedFee = roundCurrency(totalHours * result.baseRate);
+          break;
+        }
+        
+        default:
+          result.calculatedFee = 0;
+      }
+    }
+
+    result.originalFee = roundCurrency(result.calculatedFee);
+
+    const DEFAULT_CAPS = {
+      quick_scan_max: 149,
+      dossier_max: 399,
+      micro_grant_max: 300,
+      scholarship_pack_max: 200,
+    };
+
+    if (result.qualifiesForHardship) {
+      const caps = { ...DEFAULT_CAPS, ...(settings.hardship_caps || {}) };
+      
+      switch (serviceType) {
+        case 'quick_scan':
+          if (caps.quick_scan_max !== null && caps.quick_scan_max !== undefined && result.calculatedFee > caps.quick_scan_max) {
+            result.discountAmount = roundCurrency(result.calculatedFee - caps.quick_scan_max);
+            result.calculatedFee = caps.quick_scan_max;
+            result.discountDescription = 'Hardship Cap Applied';
+          }
+          break;
+        
+        case 'comprehensive_dossier':
+          if (caps.dossier_max !== null && caps.dossier_max !== undefined && result.calculatedFee > caps.dossier_max) {
+            result.discountAmount = roundCurrency(result.calculatedFee - caps.dossier_max);
+            result.calculatedFee = caps.dossier_max;
+            result.discountDescription = 'Hardship Cap Applied';
+          }
+          break;
+        
+        case 'micro_grant':
+          if (caps.micro_grant_max !== null && caps.micro_grant_max !== undefined && result.calculatedFee > caps.micro_grant_max) {
+            result.discountAmount = roundCurrency(result.calculatedFee - caps.micro_grant_max);
+            result.calculatedFee = caps.micro_grant_max;
+            result.discountDescription = 'Hardship Cap Applied';
+          }
+          break;
+        
+        case 'scholarship_pack':
+          if (caps.scholarship_pack_max !== null && caps.scholarship_pack_max !== undefined && result.calculatedFee > caps.scholarship_pack_max) {
+            result.discountAmount = roundCurrency(result.calculatedFee - caps.scholarship_pack_max);
+            result.calculatedFee = caps.scholarship_pack_max;
+            result.discountDescription = 'Hardship Cap Applied';
+          }
+          break;
+      }
+    }
+
+    if (result.qualifiesForMinistryDiscount && result.discountAmount === 0) {
+      const ministryDiscount = roundCurrency(result.calculatedFee * ((settings.ministry_discount_percent || 25) / 100));
+      result.discountAmount = ministryDiscount;
+      result.calculatedFee = roundCurrency(result.calculatedFee - ministryDiscount);
+      result.discountDescription = `Ministry Discount ${settings.ministry_discount_percent || 25}%`;
+    }
+
+    if (result.qualifiesForProBono && result.originalFee > 0) {
+      result.discountAmount = result.originalFee;
+      result.calculatedFee = 0;
+      result.discountDescription = 'Pro Bono Service (100% Discount for Tax Write-Off)';
+    }
+
+    result.finalFee = roundCurrency(result.calculatedFee);
+
+    return result;
+  }, [selectedOrg, settings, formData.service_type, timeEntries]);
+
+  const finalPricing = useMemo(() => {
+    if (!pricingInfo) return null;
+
+    const result = { ...pricingInfo };
+
+    if (formData.fee_override !== '' && !isNaN(parseFloat(formData.fee_override))) {
+      const overrideFee = parseFloat(formData.fee_override);
+      if (overrideFee >= 0) {
+        result.finalFee = roundCurrency(overrideFee);
+      }
+    }
+
+    if (formData.discount_override !== '' && !isNaN(parseFloat(formData.discount_override))) {
+      const overrideDiscount = parseFloat(formData.discount_override);
+      if (overrideDiscount >= 0) {
+        result.discountAmount = roundCurrency(overrideDiscount);
+        result.discountDescription = 'Manual Discount Override';
+      }
+    }
+
+    return result;
+  }, [pricingInfo, formData.fee_override, formData.discount_override]);
+
+  const computeSubtotal = (pricing) => {
+    if (pricing.originalFee && pricing.originalFee > 0) {
+      return roundCurrency(pricing.originalFee);
+    }
+    return roundCurrency(pricing.finalFee + pricing.discountAmount);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!finalPricing) {
+      toast({
+        variant: "destructive",
+        title: "Cannot Create Invoice",
+        description: "Please select an organization and service type.",
+      });
+      return;
+    }
+
+    if (formData.fee_override !== '') {
+      const f = parseFloat(formData.fee_override);
+      if (isNaN(f) || f < 0) {
+        toast({
+          variant: "destructive",
+          title: "Invalid Fee Override",
+          description: "Fee override must be a non-negative number.",
+        });
+        return;
+      }
+    }
+    if (formData.discount_override !== '') {
+      const d = parseFloat(formData.discount_override);
+      if (isNaN(d) || d < 0) {
+        toast({
+          variant: "destructive",
+          title: "Invalid Discount Override",
+          description: "Discount override must be a non-negative number.",
+        });
+        return;
+      }
+    }
+
+    if (!MILESTONE_DESCRIPTIONS[formData.milestone_type]) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Milestone",
+        description: "Please select a valid milestone.",
+      });
+      return;
+    }
+
+    if (PAYMENT_TERMS_DAYS[formData.payment_terms] === null || PAYMENT_TERMS_DAYS[formData.payment_terms] === undefined) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Payment Terms",
+        description: "Please select valid payment terms.",
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const nextNumber = (settings?.last_invoice_number || 0) + 1;
+
+      const [iy, im, idd] = formData.issue_date.split('-').map(Number);
+      const issueDateLocal = new Date(iy, im - 1, idd);
+      const invoiceNumber = `INV-${issueDateLocal.getFullYear()}${String(issueDateLocal.getMonth() + 1).padStart(2, '0')}-${String(nextNumber).padStart(4, '0')}`;
+
+      const termsDays = PAYMENT_TERMS_DAYS[formData.payment_terms];
+      const dueDate = new Date(iy, im - 1, idd);
+      dueDate.setDate(dueDate.getDate() + termsDays);
+      const dueDateStr = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, '0')}-${String(dueDate.getDate()).padStart(2, '0')}`;
+
+      const milestoneDescription = MILESTONE_DESCRIPTIONS[formData.milestone_type] || '';
+      const paymentTermsLabel = PAYMENT_TERMS_LABELS[formData.payment_terms] || formData.payment_terms;
+
+      const contractTerms = CONTRACT_TERMS
+        .replace('{{milestone_description}}', milestoneDescription)
+        .replace('{{payment_terms}}', paymentTermsLabel);
+
+      const subtotal = computeSubtotal(finalPricing);
+
+      const invoiceData = {
+        organization_id: formData.organization_id,
+        project_id: formData.project_id || null,
+        invoice_number: invoiceNumber,
+        issue_date: formData.issue_date,
+        due_date: dueDateStr,
+        payment_terms: formData.payment_terms,
+        payment_option: formData.payment_option,
+        subtotal: subtotal,
+        discount_amount: roundCurrency(finalPricing.discountAmount),
+        discount_description: finalPricing.discountDescription,
+        tax_amount: 0,
+        total: roundCurrency(finalPricing.finalFee),
+        balance_due: roundCurrency(finalPricing.finalFee),
+        amount_paid: 0,
+        status: finalPricing.qualifiesForProBono ? 'Paid' : 'Draft',
+        notes: formData.notes,
+        contract_terms: contractTerms,
+        client_category: finalPricing.category,
+        qualifies_for_hardship: finalPricing.qualifiesForHardship,
+        qualifies_for_ministry_discount: finalPricing.qualifiesForMinistryDiscount,
+        rate_override: formData.rate_override ? parseFloat(formData.rate_override) : null,
+        fee_override: formData.fee_override ? parseFloat(formData.fee_override) : null,
+        milestone_type: formData.milestone_type,
+        service_type: formData.service_type,
+        service_description: formData.service_description,
+      };
+
+      const invoice = await createInvoiceMutation.mutateAsync(invoiceData);
+
+      try {
+        await client.entities.InvoiceLine.create({
+          invoice_id: invoice.id,
+          description: formData.service_description
+            || formData.service_type.replace(/_/g, ' '),
+          quantity: 1,
+          unit_price: subtotal,
+          amount: subtotal,
+          line_order: 0,
+          is_grant_chargeable: formData.payment_option === 'bill_to_grant',
+        });
+      } catch (err) {
+        toast({
+          variant: "destructive",
+          title: "Warning: Invoice line not saved",
+          description: "The invoice was created but its line item failed to save. Open the invoice and add the line manually.",
+        });
+      }
+
+      if (settings?.id) {
+        try {
+          await client.entities.BillingSettings.update(settings.id, {
+            last_invoice_number: nextNumber,
+          });
+        } catch (err) {
+          toast({
+            variant: "destructive",
+            title: "Warning: Invoice number counter not updated",
+            description: "The invoice was created but the invoice number counter failed to update. Please verify the next invoice number manually.",
+          });
+        }
+      }
+
+      if (formData.service_type === 'hourly_time' && timeEntries.length > 0) {
+        try {
+          await Promise.all(
+            timeEntries.map(entry =>
+              client.entities.TimeEntry.update(entry.id, { invoiced: true })
+            )
+          );
+        } catch (err) {
+          toast({
+            variant: "destructive",
+            title: "Warning: Some time entries not marked invoiced",
+            description: "The invoice was created but one or more time entries may not have been marked as invoiced. Please review the time log.",
+          });
+        }
+      }
+
+      toast({
+        title: "Invoice Created",
+        description: `Invoice ${invoice.invoice_number} has been created successfully.`,
+      });
+
+      navigate(createPageUrl("InvoiceView", { id: invoice.id }));
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Failed to Create Invoice",
+        description: err?.message || "An unexpected error occurred.",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const unbilledHours = timeEntries.reduce((sum, entry) => sum + (entry.rounded_minutes || 0), 0) / 60;
+  const unbilledAmount = roundCurrency(unbilledHours * (pricingInfo?.baseRate || 0));
+  const showUnbilledForInvoice = formData.service_type === 'hourly_time';
+
+  const submitting = isSubmitting || createInvoiceMutation.isPending;
+
+  return (
+    <div className="p-6 md:p-8">
+      <div className="max-w-4xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-slate-900">Create Invoice</h1>
+          <p className="text-slate-600 mt-2">Generate an ethical, contract-based invoice for services rendered</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <Card className="border-l-4 border-l-blue-600">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Building2 className="w-5 h-5" />
+                Client Information
+              </CardTitle>
+              <CardDescription>Select the organization or individual being invoiced</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label>Client / Organization *</Label>
+                <Select
+                  value={formData.organization_id}
+                  onValueChange={(value) => setFormData({ ...formData, organization_id: value })}
+                  required
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select client..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {organizations.map(org => (
+                      <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {selectedOrg && pricingInfo && (
+                <Alert className={pricingInfo.qualifiesForProBono ? "border-emerald-600 bg-emerald-50" : "border-emerald-200 bg-emerald-50"}>
+                  <CheckCircle2 className={`h-4 w-4 ${pricingInfo.qualifiesForProBono ? 'text-emerald-700' : 'text-emerald-600'}`} />
+                  <AlertDescription className="text-emerald-900">
+                    <div className="space-y-2">
+                      {pricingInfo.qualifiesForProBono && (
+                        <div className="font-bold text-emerald-800 mb-2 pb-2 border-b border-emerald-300">
+                          ✓ PRO BONO CLIENT - Invoice will be generated for tax write-off with 100% discount
+                        </div>
+                      )}
+                      <p><strong>Client Category:</strong> {pricingInfo.category.replace(/_/g, ' ').toUpperCase()}</p>
+                      <p><strong>Base Rate:</strong> ${pricingInfo.baseRate}/hour</p>
+                      {pricingInfo.qualifiesForHardship && !pricingInfo.qualifiesForProBono && (
+                        <Badge className="bg-amber-100 text-amber-900 border-amber-300">
+                          Qualifies for Hardship Pricing
+                        </Badge>
+                      )}
+                      {pricingInfo.qualifiesForMinistryDiscount && !pricingInfo.qualifiesForProBono && (
+                        <Badge className="bg-purple-100 text-purple-900 border-purple-300">
+                          Qualifies for Ministry Discount
+                        </Badge>
+                      )}
+                    </div>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {formData.organization_id && unbilledHours > 0 && (
+                <Alert className="border-blue-200 bg-blue-50">
+                  <AlertCircle className="h-4 w-4 text-blue-600" />
+                  <AlertDescription className="text-blue-900">
+                    <strong>Unbilled Time Available:</strong> {unbilledHours.toFixed(2)} hours (${unbilledAmount.toFixed(2)})
+                    {!showUnbilledForInvoice && (
+                      <span className="block text-xs text-blue-700 mt-1">
+                        Informational only — select "Hourly Time" service type to bill this time on this invoice.
+                      </span>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="w-5 h-5" />
+                Service Details
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label>Service Type *</Label>
+                <Select
+                  value={formData.service_type}
+                  onValueChange={(value) => setFormData({ ...formData, service_type: value })}
+                  required
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select service..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="quick_scan">Quick Eligibility Scan</SelectItem>
+                    <SelectItem value="comprehensive_dossier">Comprehensive Funding Dossier</SelectItem>
+                    <SelectItem value="micro_grant">Micro/Assistance Grant Application</SelectItem>
+                    <SelectItem value="standard_foundation">Standard Foundation Application</SelectItem>
+                    <SelectItem value="complex_federal">Complex/Federal Application</SelectItem>
+                    <SelectItem value="scholarship_pack">Transfer Scholarship Pack</SelectItem>
+                    <SelectItem value="hourly_time">Hourly Time (from time log)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Service Description</Label>
+                <Textarea
+                  value={formData.service_description}
+                  onChange={(e) => setFormData({ ...formData, service_description: e.target.value })}
+                  placeholder="Detailed description of services provided..."
+                  rows={3}
+                />
+              </div>
+
+              <div>
+                <Label>Project (Optional)</Label>
+                <Select
+                  value={formData.project_id || '__none__'}
+                  onValueChange={(value) => setFormData({ ...formData, project_id: value === '__none__' ? '' : value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Link to project..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No Project</SelectItem>
+                    {projects.filter(p => p.organization_id === formData.organization_id).map(project => (
+                      <SelectItem key={project.id} value={project.id}>{project.project_name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Milestone *</Label>
+                <Select
+                  value={formData.milestone_type}
+                  onValueChange={(value) => setFormData({ ...formData, milestone_type: value })}
+                  required
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="kickoff">Kickoff - 40% (Scope Locked)</SelectItem>
+                    <SelectItem value="draft_delivery">Draft Delivery - 40%</SelectItem>
+                    <SelectItem value="final_submission">Final Submission - 20%</SelectItem>
+                    <SelectItem value="full_payment">Full Payment</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+
+          {finalPricing && (
+            <Card className={`border-l-4 ${finalPricing.qualifiesForProBono ? 'border-l-emerald-600' : 'border-l-emerald-600'}`}>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <DollarSign className="w-5 h-5" />
+                  Pricing & Overrides
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className={`p-4 rounded-lg space-y-2 ${finalPricing.qualifiesForProBono ? 'bg-emerald-50 border-2 border-emerald-300' : 'bg-slate-50'}`}>
+                  <div className="flex justify-between">
+                    <span>Calculated Fee:</span>
+                    <span className="font-bold">${computeSubtotal(finalPricing).toFixed(2)}</span>
+                  </div>
+                  {finalPricing.discountAmount > 0 && (
+                    <div className={`flex justify-between ${finalPricing.qualifiesForProBono ? 'text-emerald-700 font-semibold' : 'text-emerald-600'}`}>
+                      <span>{finalPricing.discountDescription}:</span>
+                      <span className="font-bold">-${finalPricing.discountAmount.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className={`flex justify-between text-lg font-bold border-t pt-2 ${finalPricing.qualifiesForProBono ? 'border-emerald-400 text-emerald-800' : ''}`}>
+                    <span>Total Due:</span>
+                    <span>${finalPricing.finalFee.toFixed(2)}</span>
+                  </div>
+                  {finalPricing.qualifiesForProBono && (
+                    <div className="text-xs text-emerald-700 mt-2 pt-2 border-t border-emerald-300">
+                      <strong>Tax Write-Off Documentation:</strong> Full service value (${(finalPricing.discountAmount).toFixed(2)}) will be documented on invoice with 100% discount applied.
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 pt-4 border-t">
+                  <div>
+                    <Label>Fee Override ($)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.fee_override}
+                      onChange={(e) => setFormData({ ...formData, fee_override: e.target.value })}
+                      placeholder={`Default: ${finalPricing.finalFee.toFixed(2)}`}
+                      disabled={finalPricing.qualifiesForProBono}
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Leave blank to use calculated fee (non-negative)</p>
+                  </div>
+
+                  <div>
+                    <Label>Discount Override ($)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.discount_override}
+                      onChange={(e) => setFormData({ ...formData, discount_override: e.target.value })}
+                      placeholder={finalPricing.discountAmount > 0 ? `Default: ${finalPricing.discountAmount.toFixed(2)}` : 'No discount'}
+                      disabled={finalPricing.qualifiesForProBono}
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Manual discount amount (non-negative)</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Payment Terms</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Payment Terms *</Label>
+                  <Select
+                    value={formData.payment_terms}
+                    onValueChange={(value) => setFormData({ ...formData, payment_terms: value })}
+                    required
+                    disabled={finalPricing?.qualifiesForProBono}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="due_on_receipt">Due on Receipt</SelectItem>
+                      <SelectItem value="net_15">Net 15</SelectItem>
+                      <SelectItem value="net_30">Net 30</SelectItem>
+                      <SelectItem value="net_45">Net 45</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label>Issue Date *</Label>
+                  <Input
+                    type="date"
+                    value={formData.issue_date}
+                    onChange={(e) => setFormData({ ...formData, issue_date: e.target.value })}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label>Payment Option *</Label>
+                <Select
+                  value={formData.payment_option}
+                  onValueChange={(value) => setFormData({ ...formData, payment_option: value })}
+                  required
+                  disabled={finalPricing?.qualifiesForProBono}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="organization_pays">Organization Pays Directly</SelectItem>
+                    <SelectItem value="bill_to_grant">Bill to Grant (if allowable)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Notes (Optional)</Label>
+                <Textarea
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  placeholder="Additional notes or special instructions..."
+                  rows={3}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Alert className="border-emerald-600 bg-emerald-50">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            <AlertDescription className="text-emerald-900">
+              <strong>Ethical Billing Standards:</strong> This invoice will include contract terms stating that compensation is for professional services rendered, not contingent on award outcomes. No percentage-based fees. All terms comply with grant writing ethics.
+            </AlertDescription>
+          </Alert>
+
+          <div className="flex justify-end gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate(createPageUrl('Billing'))}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={submitting || !formData.organization_id || !formData.service_type}
+              aria-busy={submitting}
+              aria-live="polite"
+              className="bg-emerald-600 hover:bg-emerald-700 focus-visible:ring-2 focus-visible:ring-emerald-700 focus-visible:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
+                  <span>Creating...</span>
+                </>
+              ) : (
+                'Create Invoice'
+              )}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
