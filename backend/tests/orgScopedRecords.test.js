@@ -98,7 +98,7 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
       .send({ organization_id: 'org1', invoice_number: 'INV-202608-0001', total: 399, service_type: 'quick_scan' })
     expect(created.status).toBe(201)
     expect(created.body.id).toBeTruthy()
-    expect(created.body.invoice_number).toMatch(/^INV-\d{6}-\d{4}$/)
+    expect(created.body.invoice_number).toMatch(/^INV-\\d{6}-\\d{4}$/)
 
     const fresh = createApp(db, ADMIN)
     const listed = await request(fresh).get('/api/invoices').query({ organization_id: 'org1' })
@@ -201,7 +201,7 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
     }
   })
 
-  it('tenancy: a non-admin cannot read or write another org\'s record', async () => {
+  it('tenancy: a non-admin cannot read or write another org\\'s record', async () => {
     const db = createDb()
     const admin = createApp(db, ADMIN)
     const foreign = await request(admin)
@@ -250,6 +250,28 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
     expect(first.body.invoice_number).toBe('INV-202608-0001')
     expect(second.body.invoice_number).toBe('INV-202608-0002')
     expect(first.body.invoice_number).not.toBe('CLIENT-FORGED')
+  })
+
+  it('invoice numbers cannot be rewritten after allocation', async () => {
+    const db = createDb()
+    const app = createApp(db, ADMIN)
+    const created = await request(app)
+      .post('/api/invoices')
+      .send({ organization_id: 'org1', issue_date: '2026-08-18', notes: 'orig' })
+    expect(created.status).toBe(201)
+    const allocated = created.body.invoice_number
+    const rewritten = await request(app)
+      .put(`/api/invoices/${created.body.id}`)
+      .send({ invoice_number: 'CLIENT-FORGED', notes: 'updated' })
+    expect(rewritten.status).toBe(200)
+    expect(rewritten.body.invoice_number).toBe(allocated)
+    expect(rewritten.body.invoice_number).not.toBe('CLIENT-FORGED')
+    expect(rewritten.body.notes).toBe('updated')
+    const onlyNumber = await request(app)
+      .put(`/api/invoices/${created.body.id}`)
+      .send({ invoice_number: 'CLIENT-FORGED' })
+    expect(onlyNumber.status).toBe(400)
+    expect(onlyNumber.body.error).toMatch(/updatable/i)
   })
 
   it('registry totality: every resource declares required/sortable subsets of its columns', () => {
