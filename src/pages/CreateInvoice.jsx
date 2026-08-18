@@ -472,10 +472,31 @@ export default function CreateInvoice() {
         rate_override: formData.rate_override ? parseFloat(formData.rate_override) : null,
         fee_override: formData.fee_override ? parseFloat(formData.fee_override) : null,
         milestone_type: formData.milestone_type,
+        service_type: formData.service_type,
+        service_description: formData.service_description,
       };
 
       // Create invoice
       const invoice = await createInvoiceMutation.mutateAsync(invoiceData);
+
+      try {
+        await client.entities.InvoiceLine.create({
+          invoice_id: invoice.id,
+          description: formData.service_description
+            || formData.service_type.replace(/_/g, ' '),
+          quantity: 1,
+          unit_price: subtotal,
+          amount: subtotal,
+          line_order: 0,
+          is_grant_chargeable: formData.payment_option === 'bill_to_grant',
+        });
+      } catch (err) {
+        toast({
+          variant: "destructive",
+          title: "Warning: Invoice line not saved",
+          description: "The invoice was created but its line item failed to save. Open the invoice and add the line manually.",
+        });
+      }
 
       // Mark time entries as invoiced if applicable (guarded)
       if (formData.service_type === 'hourly_time' && timeEntries.length > 0) {
