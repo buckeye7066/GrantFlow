@@ -23,15 +23,9 @@ import client from './client.js'
 // never grow it without a deliberate decision recorded in the PR.
 const KNOWN_STUB_ENTITIES = Object.freeze([
   'AiArtifact',
-  'BillingAccount',
-  'Invoice',
-  'InvoiceLine',
   'PartnerSource',
-  'Project',
   'SearchJob',
   'Taxonomy',
-  'TimeEntry',
-  'TimeLog',
 ])
 
 function walk(dir, out) {
@@ -75,8 +69,14 @@ describe('entityResourceMap totality', () => {
     expect(stale, `remove from KNOWN_STUB_ENTITIES — now real: ${stale.join(', ')}`).toEqual([])
   })
 
-  it('the three previously-lost entities are REAL now and stay real', () => {
+  it('the previously-lost grant-scoped entities are REAL now and stay real', () => {
     for (const name of ['ChecklistItem', 'GrantAward', 'ComplianceReport']) {
+      expect(mapped.has(name), `${name} must map to a real backend resource`).toBe(true)
+    }
+  })
+
+  it('consultant workspace entities persist (no more vanishing invoices)', () => {
+    for (const name of ['Invoice', 'InvoiceLine', 'Project', 'TimeEntry', 'TimeLog', 'BillingAccount']) {
       expect(mapped.has(name), `${name} must map to a real backend resource`).toBe(true)
     }
   })

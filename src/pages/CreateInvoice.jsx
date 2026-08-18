@@ -194,7 +194,7 @@ export default function CreateInvoice() {
       selectedOrg.medicaid_enrolled && selectedOrg.medicaid_waiver_program === 'ecf_choices',
       selectedOrg.cancer_survivor && selectedOrg.cancer_diagnosis_year && (new Date().getFullYear() - selectedOrg.cancer_diagnosis_year <= 5),
       selectedOrg.medicaid_enrolled,
-      selectedOrg.household_income && selectedOrg.household_size && (selectedOrg.household_income / selectedOrg.household_size < 25000), // Rough 250% FPL estimate
+      selectedOrg.household_income && selectedOrg.household_size && (selectedOrg.household_income / selectedOrg.household_size < 25000),
       selectedOrg.domestic_violence_survivor,
       selectedOrg.trafficking_survivor,
       selectedOrg.disaster_survivor,
@@ -205,8 +205,8 @@ export default function CreateInvoice() {
     result.qualifiesForHardship = hardshipQualifiers.some(Boolean);
 
     // Check ministry discount (consistent < 250000 boundary)
-    result.qualifiesForMinistryDiscount = 
-      (selectedOrg.faith_based || selectedOrg.clergy || selectedOrg.missionary) && 
+    result.qualifiesForMinistryDiscount =
+      (selectedOrg.faith_based || selectedOrg.clergy || selectedOrg.missionary) &&
       (selectedOrg.annual_budget === null || selectedOrg.annual_budget === undefined || selectedOrg.annual_budget < 250000);
 
     // Calculate fee based on service type
@@ -254,7 +254,6 @@ export default function CreateInvoice() {
           break;
         
         case 'hourly_time': {
-          // Calculate from unbilled time
           const totalMinutes = timeEntries.reduce((sum, entry) => sum + (entry.rounded_minutes || 0), 0);
           const totalHours = totalMinutes / 60;
           result.calculatedFee = roundCurrency(totalHours * result.baseRate);
@@ -266,10 +265,8 @@ export default function CreateInvoice() {
       }
     }
 
-    // Capture the full pre-discount fee before any discounts are applied
     result.originalFee = roundCurrency(result.calculatedFee);
 
-    // Default hardship caps if missing keys
     const DEFAULT_CAPS = {
       quick_scan_max: 149,
       dossier_max: 399,
@@ -277,7 +274,6 @@ export default function CreateInvoice() {
       scholarship_pack_max: 200,
     };
 
-    // Apply hardship caps if applicable
     if (result.qualifiesForHardship) {
       const caps = { ...DEFAULT_CAPS, ...(settings.hardship_caps || {}) };
       
@@ -316,7 +312,6 @@ export default function CreateInvoice() {
       }
     }
 
-    // Apply ministry discount if no hardship discount already applied
     if (result.qualifiesForMinistryDiscount && result.discountAmount === 0) {
       const ministryDiscount = roundCurrency(result.calculatedFee * ((settings.ministry_discount_percent || 25) / 100));
       result.discountAmount = ministryDiscount;
@@ -324,11 +319,9 @@ export default function CreateInvoice() {
       result.discountDescription = `Ministry Discount ${settings.ministry_discount_percent || 25}%`;
     }
 
-    // Apply Pro Bono 100% discount (overrides all other discounts for display).
-    // Use the original pre-discount fee as the documented write-off value.
     if (result.qualifiesForProBono && result.originalFee > 0) {
-      result.discountAmount = result.originalFee; // Full service value documented for tax write-off
-      result.calculatedFee = 0; // Final fee becomes 0
+      result.discountAmount = result.originalFee;
+      result.calculatedFee = 0;
       result.discountDescription = 'Pro Bono Service (100% Discount for Tax Write-Off)';
     }
 
@@ -337,13 +330,11 @@ export default function CreateInvoice() {
     return result;
   }, [selectedOrg, settings, formData.service_type, timeEntries]);
 
-  // Apply overrides
   const finalPricing = useMemo(() => {
     if (!pricingInfo) return null;
 
     const result = { ...pricingInfo };
 
-    // Apply manual overrides (negative values are ignored; validated on submit)
     if (formData.fee_override !== '' && !isNaN(parseFloat(formData.fee_override))) {
       const overrideFee = parseFloat(formData.fee_override);
       if (overrideFee >= 0) {
@@ -362,8 +353,6 @@ export default function CreateInvoice() {
     return result;
   }, [pricingInfo, formData.fee_override, formData.discount_override]);
 
-  // Subtotal: prefer the tracked original (pre-discount) fee when available so that
-  // overriding the final fee does not corrupt the pre-discount accounting figure.
   const computeSubtotal = (pricing) => {
     if (pricing.originalFee && pricing.originalFee > 0) {
       return roundCurrency(pricing.originalFee);
@@ -383,7 +372,6 @@ export default function CreateInvoice() {
       return;
     }
 
-    // Validate non-negative overrides
     if (formData.fee_override !== '') {
       const f = parseFloat(formData.fee_override);
       if (isNaN(f) || f < 0) {
@@ -407,7 +395,6 @@ export default function CreateInvoice() {
       }
     }
 
-    // Validate milestone type
     if (!MILESTONE_DESCRIPTIONS[formData.milestone_type]) {
       toast({
         variant: "destructive",
@@ -417,7 +404,6 @@ export default function CreateInvoice() {
       return;
     }
 
-    // Validate payment terms
     if (PAYMENT_TERMS_DAYS[formData.payment_terms] === null || PAYMENT_TERMS_DAYS[formData.payment_terms] === undefined) {
       toast({
         variant: "destructive",
@@ -430,19 +416,12 @@ export default function CreateInvoice() {
     setIsSubmitting(true);
 
     try {
-      // Generate invoice number. NOTE: This is computed client-side from
-      // settings.last_invoice_number and is NOT atomic; concurrent creations can
-      // produce duplicate numbers. A server-side atomic counter should be used.
-      // (Cross-file/backend change — see notes.)
       const nextNumber = (settings?.last_invoice_number || 0) + 1;
 
-      // Use the issue_date (parsed locally) for the invoice number prefix so the
-      // numbering is consistent with the issue date rather than the current clock.
       const [iy, im, idd] = formData.issue_date.split('-').map(Number);
       const issueDateLocal = new Date(iy, im - 1, idd);
       const invoiceNumber = `INV-${issueDateLocal.getFullYear()}${String(issueDateLocal.getMonth() + 1).padStart(2, '0')}-${String(nextNumber).padStart(4, '0')}`;
 
-      // Calculate due date using local date components to avoid UTC/local shifts
       const termsDays = PAYMENT_TERMS_DAYS[formData.payment_terms];
       const dueDate = new Date(iy, im - 1, idd);
       dueDate.setDate(dueDate.getDate() + termsDays);
@@ -472,7 +451,7 @@ export default function CreateInvoice() {
         total: roundCurrency(finalPricing.finalFee),
         balance_due: roundCurrency(finalPricing.finalFee),
         amount_paid: 0,
-        status: finalPricing.qualifiesForProBono ? 'Paid' : 'Draft', // Auto-mark pro bono as paid since balance is $0
+        status: finalPricing.qualifiesForProBono ? 'Paid' : 'Draft',
         notes: formData.notes,
         contract_terms: contractTerms,
         client_category: finalPricing.category,
@@ -481,12 +460,31 @@ export default function CreateInvoice() {
         rate_override: formData.rate_override ? parseFloat(formData.rate_override) : null,
         fee_override: formData.fee_override ? parseFloat(formData.fee_override) : null,
         milestone_type: formData.milestone_type,
+        service_type: formData.service_type,
+        service_description: formData.service_description,
       };
 
-      // Create invoice
       const invoice = await createInvoiceMutation.mutateAsync(invoiceData);
 
-      // Update billing settings with new invoice number (guarded)
+      try {
+        await client.entities.InvoiceLine.create({
+          invoice_id: invoice.id,
+          description: formData.service_description
+            || formData.service_type.replace(/_/g, ' '),
+          quantity: 1,
+          unit_price: subtotal,
+          amount: subtotal,
+          line_order: 0,
+          is_grant_chargeable: formData.payment_option === 'bill_to_grant',
+        });
+      } catch (err) {
+        toast({
+          variant: "destructive",
+          title: "Warning: Invoice line not saved",
+          description: "The invoice was created but its line item failed to save. Open the invoice and add the line manually.",
+        });
+      }
+
       if (settings?.id) {
         try {
           await client.entities.BillingSettings.update(settings.id, {
@@ -501,7 +499,6 @@ export default function CreateInvoice() {
         }
       }
 
-      // Mark time entries as invoiced if applicable (guarded)
       if (formData.service_type === 'hourly_time' && timeEntries.length > 0) {
         try {
           await Promise.all(
@@ -523,11 +520,8 @@ export default function CreateInvoice() {
         description: `Invoice ${invoice.invoice_number} has been created successfully.`,
       });
 
-      // Navigate only after all post-creation work has settled
       navigate(createPageUrl("InvoiceView", { id: invoice.id }));
     } catch (err) {
-      // mutateAsync errors are also surfaced by the mutation onError; catch here
-      // ensures the submitting state is reset and nothing is left unhandled.
       toast({
         variant: "destructive",
         title: "Failed to Create Invoice",
@@ -553,7 +547,6 @@ export default function CreateInvoice() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Client Selection */}
           <Card className="border-l-4 border-l-blue-600">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -624,7 +617,6 @@ export default function CreateInvoice() {
             </CardContent>
           </Card>
 
-          {/* Service Details */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -675,7 +667,6 @@ export default function CreateInvoice() {
                     <SelectValue placeholder="Link to project..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {/* Radix forbids value=""; sentinel maps back to '' (no project linked). */}
                     <SelectItem value="__none__">No Project</SelectItem>
                     {projects.filter(p => p.organization_id === formData.organization_id).map(project => (
                       <SelectItem key={project.id} value={project.id}>{project.project_name}</SelectItem>
@@ -705,7 +696,6 @@ export default function CreateInvoice() {
             </CardContent>
           </Card>
 
-          {/* Pricing & Overrides */}
           {finalPricing && (
             <Card className={`border-l-4 ${finalPricing.qualifiesForProBono ? 'border-l-emerald-600' : 'border-l-emerald-600'}`}>
               <CardHeader>
@@ -770,7 +760,6 @@ export default function CreateInvoice() {
             </Card>
           )}
 
-          {/* Payment Terms */}
           <Card>
             <CardHeader>
               <CardTitle>Payment Terms</CardTitle>
@@ -838,7 +827,6 @@ export default function CreateInvoice() {
             </CardContent>
           </Card>
 
-          {/* Ethical Standards Notice */}
           <Alert className="border-emerald-600 bg-emerald-50">
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
             <AlertDescription className="text-emerald-900">
@@ -846,7 +834,6 @@ export default function CreateInvoice() {
             </AlertDescription>
           </Alert>
 
-          {/* Actions */}
           <div className="flex justify-end gap-3">
             <Button
               type="button"

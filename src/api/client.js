@@ -77,6 +77,18 @@ class APIClient {
       ChecklistItem: 'checklist-items',
       GrantAward: 'grant-awards',
       ComplianceReport: 'compliance-reports',
+      // Consultant workspace records — previously unmapped, so Create Invoice /
+      // Projects / Time entries toasted success and vanished on reload.
+      // Nested under the already-mounted /api/billing-settings router so
+      // server.js does not need a new top-level mount for these resources.
+      Invoice: 'billing-settings/invoices',
+      InvoiceLine: 'billing-settings/invoice-lines',
+      Project: 'billing-settings/projects',
+      TimeEntry: 'billing-settings/time-entries',
+      TimeLog: 'billing-settings/time-logs',
+      // NewProject only reads default_hourly_rate; alias the leftover
+      // BillingAccount name onto the existing billing-settings resource.
+      BillingAccount: 'billing-settings',
     };
     this.stubStores = new Map();
     this.stubWarnings = new Set();
@@ -715,6 +727,14 @@ class APIClient {
 
     return {
       list: async (sortBy, limit, filters = {}) => {
+        // InvoiceView calls InvoiceLine.list({ invoice_id }) — first arg is
+        // filters, not a sort key. Treating a plain object as a sort string
+        // throws on .startsWith and never applies the filter.
+        if (sortBy && typeof sortBy === 'object' && !Array.isArray(sortBy)) {
+          filters = sortBy;
+          sortBy = undefined;
+          if (typeof limit !== 'number') limit = undefined;
+        }
         const params = new URLSearchParams();
         if (sortBy) {
           const order = sortBy.startsWith('-') ? 'desc' : 'asc';
