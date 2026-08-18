@@ -21,6 +21,7 @@ import {
   verifyMigrationLedgerBeforeReadApplied,
   verifyOrBaselineMigrationLedger,
 } from './migrationIntegrity.js';
+import { applyWorkspacePersistenceTables } from './applyWorkspacePersistenceTables.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,7 +49,10 @@ async function ensureSqliteBaseSchema() {
       )
       .get()
 
-    if (row?.name === 'profiles') return
+    if (row?.name === 'profiles') {
+      await applyWorkspacePersistenceTables(db)
+      return
+    }
   } catch {
     // If probing fails, we still try to apply schema to self-heal.
   }
@@ -63,6 +67,7 @@ async function ensureSqliteBaseSchema() {
   const sql = fs.readFileSync(schemaPath, 'utf8')
   try {
     await db.exec(sql)
+    await applyWorkspacePersistenceTables(db)
     console.log('[migrate] ✓ Base schema applied')
   } catch (error) {
     console.error('[migrate] ✗ Failed to apply base schema:', error?.message || String(error))
@@ -76,10 +81,6 @@ function ensureDirExists(dir) {
 }
 
 function listSqlMigrations(dir) {
-  // Includes both .sql files (SQL-only migrations) and .mjs files (migrations
-  // that need procedural escape hatches not expressible in SQL — e.g. SQLite
-  // CHECK-constraint rewrites that require the better-sqlite3 unsafeMode +
-  // writable_schema + schema_version trick).
   return fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.sql') || f.endsWith('.mjs'))
@@ -101,14 +102,7 @@ async function applyMigration(filename) {
 
   console.log(`Applying: ${filename}`);
 
-  // .mjs migrations export a default async function(db). They get the live
-  // connection (so they can use better-sqlite3 escape hatches like
-  // unsafeMode), and they're responsible for inserting their own row into
-  // _migrations only on success — but for symmetry we record afterwards.
   if (filename.endsWith('.mjs')) {
-    // Import via file: URL so Windows paths work. pathToFileURL emits a valid
-    // file:///C:/... URL (a bare `file://C:/...` parses the drive letter as a
-    // hostname, which Node/Vite reject) and percent-encodes spaces/specials.
     const mod = await import(pathToFileURL(fullPath).href)
     const fn = typeof mod?.default === 'function' ? mod.default : mod?.up
     if (typeof fn !== 'function') {
@@ -149,16 +143,12 @@ async function applyMigration(filename) {
           tx.exec(`${statement};`)
         } catch (err) {
           if (!isIdempotentAlreadyAppliedError(err)) throw err
-          console.log(`  ↪ Skipped already-applied statement (${err?.message || err})`)
+          console.log(`  Skipped already-applied statement (${err?.message || err})`)
         }
       }
       await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE);
     });
   } else {
-    // IMPORTANT: must await — the sqlite withTransaction is async (manual
-    // BEGIN/COMMIT) and without awaiting we'd return before COMMIT, which
-    // previously caused the caller to log "Success" while the INSERT into
-    // _migrations never landed, looping the same migration every boot.
     await db.withTransaction(async (tx) => {
       tx.exec(sql);
       await recordMigrationApplied(tx, filename, checksumSha256, APPLIED_BYTES_PROVENANCE);
@@ -169,35 +159,15 @@ async function applyMigration(filename) {
 export function isIdempotentAlreadyAppliedError(err) {
   const msg = String(err?.message || err || '').toLowerCase();
 
-  // SQLite common "already applied" signatures
   if (msg.includes('duplicate column name')) return true;
-  if (msg.includes('already exists')) return true; // table/index already exists
+  if (msg.includes('already exists')) return true;
   if (msg.includes('duplicate index')) return true;
-
-  // ALTER TABLE ... RENAME TO <name> when <name> already exists. This is a
-  // harmless idempotent state on fresh DBs where schema.sql already created
-  // the target table — the rename is a no-op and we can move on.
   if (msg.includes('there is already another table or index with this name')) return true;
-
-  // sqlite < 3.35 does not support `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`;
-  // the legacy schema-apply path already materialized the column in practice,
-  // so treat this specific parser error as an "already applied" signal.
   if (msg.includes('near "exists"') && msg.includes('syntax error')) return true;
 
   return false;
 }
 
-// Round 30 — boot health for the HIGH-RISK phone-dedup repair (137/138 · 0141/0142).
-// The boot runner CATCHES a failed migration, leaves it unstamped, and CONTINUES (so an
-// unrelated idempotent hiccup can't take prod down). The cost is that a failed DATA repair
-// could otherwise start prod with duplicates still present while the schema check reports
-// OK (it only inspects selected missing columns/tables). These helpers give the boot signal
-// two teeth: (1) the failed filenames are surfaced, and (2) the repair's POST-CONDITIONS are
-// asserted, so a failed/unstamped 138/0142 flips the health line off OK instead of hiding.
-
-// Tables whose (user_id, profile_id/stripe_customer_id) pair legitimately records the ACTOR
-// at event time and must never be rewritten by the merge — mirrors the migration's EXEMPT set
-// (audit/actor rows; yana_* were renamed to hamilton_* so are vestigial phantoms only).
 const PHONE_DEDUPE_EXEMPT_TABLES = new Set(['audit_logs', 'agent_activity_events'])
 const isPhoneDedupeExempt = (t) => PHONE_DEDUPE_EXEMPT_TABLES.has(t) || t.startsWith('yana_')
 
@@ -210,9 +180,6 @@ async function indexExists(dbh, name) {
   return Boolean(row?.name)
 }
 
-// Enumerate two-owner tables (user_id + profile_id, or user_id + stripe_customer_id) from the
-// LIVE migrated schema — the same by-construction discovery the migration test uses, so a
-// table added by a future migration is covered without editing a hardcoded list.
 async function twoOwnerTables(dbh) {
   let tables
   let colsOf
@@ -249,12 +216,6 @@ async function countTwoOwnerSplits(dbh) {
   return splits
 }
 
-/**
- * Assert the phone-dedup repair's post-conditions actually hold. Returns
- * { ok, problems: string[] }. A failed/unstamped 138/0142 leaves at least one of these
- * broken, so `ok` is false and the boot health line cannot report OK. Never throws — a
- * probe error is itself recorded as a problem (visible, not swallowed).
- */
 export async function checkPhoneDedupeHealth(dbh = db) {
   const problems = []
   try {
@@ -270,12 +231,6 @@ export async function checkPhoneDedupeHealth(dbh = db) {
   return { ok: problems.length === 0, problems }
 }
 
-/**
- * Pure decision: fold the schema-drift facts, the boot runner's failed migrations, and the
- * phone-dedup post-condition health into ONE operator line. `schema check: OK` is reachable
- * ONLY when nothing is missing, nothing failed, and the repair's post-conditions hold — so a
- * failed high-risk repair can never hide behind a green schema check.
- */
 export function summarizeBootHealthLine({ missingCols = [], missingTables = [], failed = [], dedupe = { ok: true, problems: [] } } = {}) {
   const parts = []
   if (missingCols.length) parts.push(`cols=${missingCols.join(',')}`)
@@ -295,12 +250,11 @@ async function recordAsApplied(filename, note) {
       checksumSha256,
       IDEMPOTENT_RECORD_PROVENANCE,
     );
-    console.log(`  ↪ Recorded as applied (${note})`);
+    console.log(`  Recorded as applied (${note})`);
   } catch (e) {
-    // If it was recorded concurrently, treat as success.
     const msg = String(e?.message || e || '').toLowerCase();
     if (msg.includes('unique') || msg.includes('duplicate')) {
-      console.log(`  ↪ Already recorded (${note})`);
+      console.log(`  Already recorded (${note})`);
       return;
     }
     throw e;
@@ -336,7 +290,7 @@ async function main() {
   console.log(`Pending migrations: ${pending.length}`);
 
   if (pending.length === 0) {
-    console.log('✓ Database is up to date. No migrations to apply.');
+    console.log('\u2713 Database is up to date. No migrations to apply.');
     await db.close?.();
     await db.close?.();
     process.exit(0);
@@ -345,19 +299,15 @@ async function main() {
   for (const filename of pending) {
     try {
       await applyMigration(filename);
-      console.log('  ✓ Success\n');
+      console.log('  \u2713 Success\n');
     } catch (error) {
-      // Bootstrap safety:
-      // Existing SQLite environments may have had schema changes applied via `schema.sql` startup auto-migration,
-      // but `_migrations` is empty. In that case, treat "already applied" DDL failures as success and record them.
-      // IMPORTANT: Postgres migrations must be strict/deterministic. Never swallow/record on error for Postgres.
       if (db.dialect !== 'postgres' && isIdempotentAlreadyAppliedError(error)) {
         await recordAsApplied(filename, 'idempotent DDL');
         console.log('');
         continue;
       }
 
-      console.error(`  ✗ Failed: ${error?.message || error}\n`);
+      console.error(`  \u2717 Failed: ${error?.message || error}\n`);
       await db.close?.();
     await db.close?.();
     await db.close?.();
@@ -365,24 +315,12 @@ async function main() {
     }
   }
 
-  console.log('✓ All migrations applied successfully');
+  console.log('\u2713 All migrations applied successfully');
   await db.close?.();
     await db.close?.();
     process.exit(0);
 }
 
-/**
- * Idempotent boot-time migrate + schema-check entry point.
- *
- * Called from backend/server.js by default (opt out with
- * MIGRATE_ON_BOOT=0|false|no|off). Applies pending migrations using the same
- * logic as `npm run migrate`, then emits exactly one line of the form
- * `schema check: OK` or `schema check: DRIFT: <cols>` so operators can grep
- * the startup log for drift without reading the full admin.diagnostics
- * output.
- *
- * Safe to call multiple times; _migrations is the idempotency table.
- */
 export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
   if (!ensureDirExists(migrationsDir)) return { ran: 0, drift: null }
   await ensureSqliteBaseSchema()
@@ -397,40 +335,22 @@ export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
   })
   const pending = files.filter((f) => !applied.has(f))
   let ran = 0
-  // Round 30: TRACK the files that failed to apply so they can be SURFACED (a queryable
-  // signal + a prominent log), not just logged-and-forgotten. High-risk data repairs
-  // (phone-dedup) especially must not fail silently while the schema check reports OK.
   const failed = []
   for (const filename of pending) {
     try {
       await applyMigration(filename)
       ran += 1
     } catch (error) {
-      // SQLite: a recognised "already applied" DDL error means the legacy
-      // schema-apply path already materialised it — stamp it and move on.
       if (db.dialect !== 'postgres' && isIdempotentAlreadyAppliedError(error)) {
         await recordAsApplied(filename, 'idempotent DDL')
         ran += 1
         continue
       }
-      // Resilient boot (Postgres + SQLite): a single failing migration must
-      // NOT abort the whole chain. Historically the strict `throw` here meant
-      // the first migration that errored against an already-populated prod DB
-      // (e.g. a CHECK constraint or a non-IF-NOT-EXISTS object) blocked every
-      // later additive migration — that is exactly how funding_opportunities
-      // ended up missing `reality_status`, breaking all crawler/connector
-      // writes. We log and continue so subsequent idempotent migrations still
-      // apply; the failed file is left UNSTAMPED (no false "applied" record)
-      // and retried next boot, and the `schema check: DRIFT` line below makes
-      // any remaining gap visible. The CLI runner (`npm run migrate`, main())
-      // stays strict so CI still fails loudly on a bad migration.
       failed.push(filename)
       logger.error?.(`[migrate:boot] FAILED on ${filename} (left UNSTAMPED, continuing): ${error?.message || error}`)
     }
   }
 
-  // Post-repair health: schema drift (existing) + failed migrations + phone-dedup
-  // post-conditions. `schema check: OK` is now reachable ONLY when all three are clean.
   let missingCols = []
   let missingTables = []
   let driftLine
@@ -441,15 +361,11 @@ export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
     missingCols = sc?.details?.missing_columns || []
     missingTables = sc?.details?.missing_tables || []
   } catch (err) {
-    // Diagnostics unavailable — do NOT report OK; fold the reason in and keep going so
-    // the phone-dedup post-condition check still runs.
     missingTables = [`diagnostics_unavailable(${err?.message || err})`]
   }
   const dedupe = await checkPhoneDedupeHealth(db)
   driftLine = summarizeBootHealthLine({ missingCols, missingTables, failed, dedupe })
 
-  // Queryable signal (durable): persist the failed set + health line so operators/monitors
-  // can read it without grepping logs. Best-effort — never let it break boot.
   try {
     await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
     const now = new Date().toISOString()
@@ -468,10 +384,7 @@ export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
   return { ran, failed, drift: driftLine, health: dedupe }
 }
 
-// Only run the CLI entry point when invoked directly, so importers
-// (e.g. backend/server.js boot hook) don't trigger process.exit.
 const isDirectInvocation = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('backend/db/migrate.js')
 if (isDirectInvocation) {
   main();
 }
-
