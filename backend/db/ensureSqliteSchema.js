@@ -27,6 +27,8 @@
  * better-sqlite3 API.
  */
 
+import { applyWorkspacePersistenceTablesSync } from './applyWorkspacePersistenceTables.js'
+
 const SQLITE_BASE_TYPES = new Set([
   'TEXT',
   'INTEGER',
@@ -56,7 +58,7 @@ const CONSTRAINT_KEYWORDS = new Set([
  */
 function extractCreateTableBody(schemaSql, tableName) {
   const re = new RegExp(
-    `CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?["'\`]?${tableName}["'\`]?\\s*\\(`,
+    `CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?["'\u0060]?${tableName}["'\u0060]?\\s*\\(`,
     'i',
   )
   const match = re.exec(schemaSql)
@@ -210,6 +212,10 @@ export function applySqliteSchema(db, schemaSql, opts = {}) {
     if (added.length > 0) addedColumns[table] = added
   }
   db.exec(schemaSql)
+  // Consultant + catalog tables live outside schema.sql. Apply them here so a
+  // fresh local SQLite file has Invoice / AiArtifact / PartnerSource / SearchJob
+  // / Taxonomy without a separate `npm run migrate`.
+  applyWorkspacePersistenceTablesSync(db)
   return { addedColumns }
 }
 
