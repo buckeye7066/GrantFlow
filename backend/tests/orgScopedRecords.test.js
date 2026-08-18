@@ -19,7 +19,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createOrgScopedRecordsRouter, ORG_SCOPED_RESOURCES } from '../routes/orgScopedRecords.js'
 
-// Located by SUFFIX, not number, so a renumbering session cannot orphan this.
 function migrationBySuffix(suffix) {
   const dir = path.join(process.cwd(), 'backend/db/migrations')
   const matches = fs.readdirSync(dir).filter((f) => f.endsWith(suffix))
@@ -92,20 +91,17 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
   it('a created invoice survives a fresh read (no in-memory store)', async () => {
     const db = createDb()
     const app = createApp(db, ADMIN)
-
     const created = await request(app)
       .post('/api/invoices')
       .send({ organization_id: 'org1', invoice_number: 'INV-202608-0001', total: 399, service_type: 'quick_scan' })
     expect(created.status).toBe(201)
     expect(created.body.id).toBeTruthy()
-    expect(created.body.invoice_number).toMatch(/^INV-\\d{6}-\\d{4}$/)
-
+    expect(created.body.invoice_number).toMatch(/^INV-[0-9]{6}-[0-9]{4}$/)
     const fresh = createApp(db, ADMIN)
     const listed = await request(fresh).get('/api/invoices').query({ organization_id: 'org1' })
     expect(listed.status).toBe(200)
     expect(listed.body).toHaveLength(1)
     expect(listed.body[0].invoice_number).toBe(created.body.invoice_number)
-
     const row = db.prepare('SELECT * FROM consultant_invoices WHERE id = ?').get(created.body.id)
     expect(row).toBeTruthy()
     expect(row.organization_id).toBe('org1')
@@ -120,7 +116,6 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
       .send({ organization_id: 'org1', project_name: 'Dossier', evil_column: 'x' })
     expect(created.status).toBe(201)
     expect(created.body.evil_column).toBeUndefined()
-
     const updated = await request(app)
       .put(`/api/projects/${created.body.id}`)
       .send({ status: 'active', another_unknown: 'y' })
@@ -138,7 +133,6 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
     await request(app).post('/api/time-entries').send({
       organization_id: 'org1', rounded_minutes: 30, invoiced: true, note: 'billed',
     })
-
     const unbilled = await request(app)
       .get('/api/time-entries')
       .query({ organization_id: 'org1', invoiced: 'false' })
@@ -154,17 +148,14 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
       .post('/api/invoices')
       .send({ organization_id: 'org1', invoice_number: 'INV-1', total: 149 })
     expect(invoice.status).toBe(201)
-
     const line = await request(app)
       .post('/api/invoice-lines')
       .send({ invoice_id: invoice.body.id, description: 'Quick scan', quantity: 1, amount: 149 })
     expect(line.status).toBe(201)
     expect(line.body.organization_id).toBe('org1')
-
     const listed = await request(app).get('/api/invoice-lines').query({ invoice_id: invoice.body.id })
     expect(listed.status).toBe(200)
     expect(listed.body).toHaveLength(1)
-
     const del = await request(app).delete(`/api/invoices/${invoice.body.id}`)
     expect(del.status).toBe(200)
     const leftover = db.prepare('SELECT COUNT(*) AS n FROM consultant_invoice_lines').get()
@@ -178,7 +169,6 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
       .post('/api/projects')
       .send({ organization_id: 'org1', project_name: 'Hourly work' })
     expect(project.status).toBe(201)
-
     const log = await request(app)
       .post('/api/time-logs')
       .send({ project_id: project.body.id, hours: 2, description: 'Research', billable: true })
@@ -201,14 +191,13 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
     }
   })
 
-  it('tenancy: a non-admin cannot read or write another org\\'s record', async () => {
+  it('tenancy: a non-admin cannot read or write another organizations record', async () => {
     const db = createDb()
     const admin = createApp(db, ADMIN)
     const foreign = await request(admin)
       .post('/api/invoices')
       .send({ organization_id: 'org2', invoice_number: 'INV-OTHER' })
     expect(foreign.status).toBe(201)
-
     const org1App = createApp(db, ORG1_USER)
     const read = await request(org1App).get(`/api/invoices/${foreign.body.id}`)
     expect([403, 404]).toContain(read.status)
