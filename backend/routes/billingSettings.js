@@ -1,6 +1,7 @@
 import express from 'express'
 import crypto from 'crypto'
 import { requireAuthenticatedUser, getAuthUserId } from '../utils/accessControl.js'
+import { createOrgScopedRecordsRouter } from './orgScopedRecords.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:billingSettings')
@@ -35,6 +36,15 @@ async function loadUserPreferencesRow(db, userId) {
   if (!db) throw new Error('Database not available')
   return await db.prepare('SELECT * FROM user_preferences WHERE user_id = ? LIMIT 1').get(String(userId))
 }
+
+// Consultant workspace entities share this already-mounted /api/billing-settings
+// router so server.js does not need a new top-level mount. Register these BEFORE
+// /:id so "invoices" is never treated as a settings id.
+router.use('/invoices', createOrgScopedRecordsRouter('invoices'))
+router.use('/invoice-lines', createOrgScopedRecordsRouter('invoice-lines'))
+router.use('/projects', createOrgScopedRecordsRouter('projects'))
+router.use('/time-entries', createOrgScopedRecordsRouter('time-entries'))
+router.use('/time-logs', createOrgScopedRecordsRouter('time-logs'))
 
 router.get('/', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
