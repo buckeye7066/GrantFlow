@@ -59,6 +59,7 @@ function createDb() {
       ('g2', 'p2', 'org2', 'Other Org Grant', 'Other Fund', 'awarded');
   `)
   db.exec(migrationBySuffix('_org_scoped_workspace_entities.sql'))
+  db.exec(migrationBySuffix('_workspace_catalog_and_invoice_counters.sql'))
   return db
 }
 
@@ -97,13 +98,13 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
       .send({ organization_id: 'org1', invoice_number: 'INV-202608-0001', total: 399, service_type: 'quick_scan' })
     expect(created.status).toBe(201)
     expect(created.body.id).toBeTruthy()
-    expect(created.body.invoice_number).toBe('INV-202608-0001')
+    expect(created.body.invoice_number).toMatch(/^INV-\d{6}-\d{4}$/)
 
     const fresh = createApp(db, ADMIN)
     const listed = await request(fresh).get('/api/invoices').query({ organization_id: 'org1' })
     expect(listed.status).toBe(200)
     expect(listed.body).toHaveLength(1)
-    expect(listed.body[0].invoice_number).toBe('INV-202608-0001')
+    expect(listed.body[0].invoice_number).toBe(created.body.invoice_number)
 
     const row = db.prepare('SELECT * FROM consultant_invoices WHERE id = ?').get(created.body.id)
     expect(row).toBeTruthy()
@@ -233,6 +234,22 @@ describe('org-scoped records — persistence is REAL (the stub-store regression)
     expect(res.status).toBe(200)
     expect(res.body).toHaveLength(1)
     expect(db.prepare('SELECT COUNT(*) AS n FROM consultant_invoices').get().n).toBe(1)
+  })
+
+  it('invoice numbers are allocated server-side and never collide', async () => {
+    const db = createDb()
+    const app = createApp(db, ADMIN)
+    const first = await request(app)
+      .post('/api/invoices')
+      .send({ organization_id: 'org1', issue_date: '2026-08-18', invoice_number: 'CLIENT-FORGED' })
+    const second = await request(app)
+      .post('/api/invoices')
+      .send({ organization_id: 'org1', issue_date: '2026-08-18', invoice_number: 'CLIENT-FORGED' })
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(201)
+    expect(first.body.invoice_number).toBe('INV-202608-0001')
+    expect(second.body.invoice_number).toBe('INV-202608-0002')
+    expect(first.body.invoice_number).not.toBe('CLIENT-FORGED')
   })
 
   it('registry totality: every resource declares required/sortable subsets of its columns', () => {
