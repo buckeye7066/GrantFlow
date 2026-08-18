@@ -48,7 +48,7 @@ export const ORG_SCOPED_RESOURCES = Object.freeze({
       'service_description',
     ]),
     updatable: Object.freeze([
-      'project_id', 'invoice_number', 'issue_date', 'due_date', 'payment_terms',
+      'project_id', 'issue_date', 'due_date', 'payment_terms',
       'payment_option', 'subtotal', 'discount_amount', 'discount_description',
       'tax_amount', 'total', 'balance_due', 'amount_paid', 'status', 'notes',
       'contract_terms', 'client_category', 'qualifies_for_hardship',
@@ -234,12 +234,8 @@ function formatInvoiceNumber(seq, issueDate) {
 async function allocateInvoiceNumber(db, userId, issueDate) {
   const seed = await readBillingSeed(db, userId)
   const sql = db.dialect === 'postgres'
-    ? `INSERT INTO consultant_invoice_counters (user_id, last_number) VALUES (?, ?)
-       ON CONFLICT (user_id) DO UPDATE SET last_number = consultant_invoice_counters.last_number + 1
-       RETURNING last_number`
-    : `INSERT INTO consultant_invoice_counters (user_id, last_number) VALUES (?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET last_number = last_number + 1
-       RETURNING last_number`
+    ? `INSERT INTO consultant_invoice_counters (user_id, last_number) VALUES (?, ?)\n       ON CONFLICT (user_id) DO UPDATE SET last_number = consultant_invoice_counters.last_number + 1\n       RETURNING last_number`
+    : `INSERT INTO consultant_invoice_counters (user_id, last_number) VALUES (?, ?)\n       ON CONFLICT(user_id) DO UPDATE SET last_number = last_number + 1\n       RETURNING last_number`
   const row = await db.prepare(sql).get(String(userId), seed + 1)
   const seq = Number(row?.last_number) || seed + 1
   return formatInvoiceNumber(seq, issueDate)
@@ -297,10 +293,7 @@ export function createOrgScopedRecordsRouter(resourceKey) {
 
       const rows = await req.db.prepare(
         // audit:allow unscoped-profile-query -- org-scoped via accessible-organization WHERE or ensureOrganizationAccess above
-        `SELECT r.* FROM ${spec.table} r
-          ${where}
-          ORDER BY r.${sortCol} ${sortOrder}
-          LIMIT ?`,
+        `SELECT r.* FROM ${spec.table} r\n          ${where}\n          ORDER BY r.${sortCol} ${sortOrder}\n          LIMIT ?`,
       ).all(...params)
       res.json((Array.isArray(rows) ? rows : []).map((row) => decodeRow(spec, row)))
     } catch (error) {
@@ -353,8 +346,7 @@ export function createOrgScopedRecordsRouter(resourceKey) {
       const id = crypto.randomUUID()
       const cols = ['id', ...Object.keys(data)]
       await req.db.prepare(
-        `INSERT INTO ${spec.table} (${cols.join(', ')})
-         VALUES (${cols.map(() => '?').join(', ')})`,
+        `INSERT INTO ${spec.table} (${cols.join(', ')})\n         VALUES (${cols.map(() => '?').join(', ')})`,
       ).run(id, ...Object.values(data).map((v) => (v === undefined ? null : v)))
 
       const created = await req.db.prepare(`SELECT * FROM ${spec.table} WHERE id = ?`).get(id)
