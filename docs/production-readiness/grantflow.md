@@ -2,16 +2,38 @@
 
 **Executor:** ChatGPT  
 **Sole ACTIVE_APP:** GrantFlow  
-**Updated:** 2026-08-10  
+**Updated:** 2026-08-18  
 **Status:** REVIEWING  
 **Repository:** `buckeye7066/GrantFlow`  
 **Verified default branch:** `main`  
-**Release-candidate branch:** `chatgpt/production-ready/grantflow`  
-**Pull request:** `#1194`  
-**PR base SHA:** `09c72b027049c61a2b050ba0940b3442d92bcdf3`  
-**Implementation checkpoint before this evidence update:** `fd90da21530f7b8725cad47e9cb701e9e7a62677`
+**Current main SHA:** `735bc331d9e73619a14d8f8db5b560c72ee0471c`
 
 This document records evidence. It is not, by itself, proof that GrantFlow is production ready.
+
+## Current checkpoint (2026-08-18)
+
+The 2026-08-10 record below still describes implemented product behavior. These
+release-tracking facts in that record are **stale and must not be chased**:
+
+- PR **#1194** merged 2026-08-12. It is not an open merge blocker.
+- Persistence repair (atomic invoice counters, extras bootstrap, last stubs)
+  landed as PR **#1266** / `3060385`.
+- Allocated invoice numbers cannot be rewritten by PUT: PR **#1270** /
+  `735bc331`.
+
+GrantFlow remains a live **controlled beta**, not Production Ready.
+
+Remaining owner-ops before a `PRODUCTION READY` decision:
+
+1. Exact-SHA Vercel frontend and Railway backend deploy proof for current `main`.
+2. Production mission health: 100% visible direct opportunities freshly link
+   verified, and at least 95% of the complete visible catalog freshly link
+   verified.
+3. Amy recovery and the required 50-profile cohort evidence.
+4. Authenticated end-to-end production journeys.
+5. Hamilton / external-portal handoff evidence. Hamilton stays fixture-only in
+   controlled beta (`controlledBetaBrowserPolicy.js`); do not widen it for a
+   marketing screenshot.
 
 ## Purpose and Acceptance Contract
 
@@ -55,13 +77,13 @@ GrantFlow requires all of the following before a `PRODUCTION READY` decision:
 
 | Item | Current evidence |
 |---|---|
-| Default branch | `main` |
-| Current PR base | `09c72b027049c61a2b050ba0940b3442d92bcdf3` |
-| Release-candidate branch | `chatgpt/production-ready/grantflow` |
-| Active PR | `#1194`, open and mergeable at this checkpoint |
+| Default branch | `main` @ `735bc331` |
+| Production-hardening PR | `#1194` merged 2026-08-12 |
+| Persistence PR | `#1266` / `3060385` |
+| Invoice immutability PR | `#1270` / `735bc331` |
 | Frontend production target | Vercel target behind `app.axiombiolabs.org` |
 | Backend production target | Railway target behind `grantflow-production.up.railway.app` |
-| Local Windows launcher | Not available through the connected execution environment; not claimed as verified |
+| Local Windows launcher | Not claimed as verified in this record |
 
 ## Implemented in the current release candidate
 
@@ -111,62 +133,22 @@ Vite emits `/deployment-version.json` and `/release-identity.json`. The backend 
 
 The deployment-proof script now requires agreement among the certified Git branch, Vercel receipt, Railway receipt, database migration identity, and evidence-artifact hash.
 
-## Verification completed on the implementation candidate
+## Remaining gates
 
-Disposable validation workflow run `31360502616`, job `93368572487`, completed successfully before producing implementation commit `fd90da21530f7b8725cad47e9cb701e9e7a62677`.
-
-The workflow passed:
-
-- asserted source transformations;
-- generated-source syntax and JSON validation;
-- focused release-identity tests;
-- focused database-migration identity tests;
-- complete-catalog mission-health tests;
-- full repository lint through `npm run lint:ci`;
-- full TypeScript check through `npm run typecheck`;
-- production Vite build through `npm run build`;
-- removal of all temporary patch scripts and one-shot workflows before commit.
-
-Earlier exact-head checks for this PR also exercised the production Docker image, PostgreSQL migrations, browser smoke journey, CodeQL, SSRF regressions, authorization, green-home policy, privacy minimization, route visibility, and failure-state rendering. Those earlier results must still be repeated or reconciled on the final reviewed candidate and exact merged SHA.
-
-## Fresh human inspection of `fd90da2…`
-
-Reviewed surfaces:
-
-- `backend/services/missionHealthService.js`
-- `shared/releaseIdentity.js`
-- `scripts/deployment-version-plugin.mjs`
-- `backend/routes/version.js`
-- `scripts/production-deployment-proof.mjs`
-- `vercel.json`
-- `Dockerfile`
-- route registry and navigation tests
-- release-identity and mission-health regression tests
-
-The implementation is internally consistent at this checkpoint. The next gate is the repository’s normal exact-head CI and substantive external review on the evidence-checkpoint commit created from this document update.
-
-## Remaining gates before merge
-
-1. Normal GitHub CI, CodeQL, production-image, browser-smoke, and PostgreSQL migration jobs must pass on one exact final PR head.
-2. Vercel preview must build that same exact head.
-3. A fresh substantive CodeRabbit review must cover the complete final diff.
-4. Every valid review finding and material review thread must be resolved with regression evidence.
-5. PR `#1194` must be reconciled with the latest `main` and deliberately merged.
-6. CI and security checks must pass on the exact merge SHA.
-7. The exact merge SHA must be deployed to both Vercel and Railway.
-8. `/deployment-version.json`, `/release-identity.json`, and `/api/version` must agree on code, manifest, evidence artifact, and database migration identity.
-9. Production mission health must prove the 100% visible-direct and 95% complete-catalog link gates.
-10. Representative cohort/manual-search comparison, Amy recovery/cohort, and Hamilton/portal handoffs must be completed.
-11. A fresh post-merge review must find no unresolved release-blocking issue.
+1. Exact merged-SHA CI on current `main`.
+2. The exact `main` SHA deployed to both Vercel and Railway.
+3. `/deployment-version.json`, `/release-identity.json`, and `/api/version` agree on that SHA.
+4. Production mission health proves the 100% visible-direct and 95% complete-catalog link gates.
+5. Representative cohort/manual-search comparison, Amy recovery/cohort, and Hamilton/portal handoffs.
+6. A fresh review finds no unresolved release-blocking issue.
 
 ## Current truthful decision
 
 **REVIEWING.**
 
-GrantFlow is not being called Production Ready. The current candidate has substantial implementation and validation evidence, but normal exact-head CI, complete fresh review, merge, post-merge CI/review, exact dual deployment, production database identity, live catalog metrics, Amy cohort evidence, Hamilton/portal evidence, and manual-search comparison are not yet all complete.
+GrantFlow is not Production Ready. Persistence and invoice-number defects that blocked a truthful workspace are repaired on `main`. Owner-ops (exact-SHA dual deploy, live catalog metrics, Amy cohort, authenticated journeys) are not complete.
 
 ## Rollback
 
-- Before merge: close PR `#1194` or reset the release-candidate branch to the last reviewed good commit.
-- After merge: revert the merge commit through a reviewed PR, redeploy the resulting exact SHA, and rerun database, mission-health, release-identity, and authenticated-journey verification.
+- After merge: revert through a reviewed PR, redeploy the resulting exact SHA, and rerun database, mission-health, release-identity, and authenticated-journey verification.
 - Database migrations remain additive. Rollback must not rewrite `_migrations`; use an explicit compensating migration when schema or data reversal is required.
