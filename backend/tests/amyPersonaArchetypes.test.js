@@ -23,9 +23,10 @@
  */
 import { describe, it, expect } from 'vitest'
 import { CATEGORY_CATALOG, CATEGORY_IDS, generateScenarios } from '../services/amy/syntheticProfileCatalog.js'
-import { buildApprovalQueue } from '../services/amy/crawlerTuner.js'
+import { buildApprovalQueue, CATEGORY_COVERAGE } from '../services/amy/crawlerTuner.js'
 import { LANE_CATEGORY_AFFINITY } from '../services/coverageGapScoreboard.js'
 import { FINDING_TYPES } from '../services/amy/amyConstants.js'
+import { getSource } from '../crawler-os/sourceRegistry.js'
 
 const NEW_CATEGORIES = ['veteran_entrepreneur', 'struggling_congregation', 'homeowner_foreclosure', 'renter_eviction']
 
@@ -126,5 +127,26 @@ describe('a recall miss now has a lever, so it can be closed instead of re-repor
 
   it('an evaluation with no findings array does not throw (real evals predate the field)', () => {
     expect(() => buildApprovalQueue([{ category: 'x', status: 'ok', false_positives: 0, ineligible_accepts: 0, sources_failed: 0 }])).not.toThrow()
+  })
+})
+
+describe('every catalog category has a coverage lane that names a REAL source', () => {
+  // 2026-08-18: remaining catalog archetypes had no CATEGORY_COVERAGE entry, so
+  // locator-only / persistent weak_match for them dead-ended at scoring_weights
+  // — the lever Amy already trialled and auto-REVERTED. A missing lane is the
+  // housing_authority class again.
+  it('CATEGORY_COVERAGE covers every CATEGORY_IDS member with a live registry source', () => {
+    for (const id of CATEGORY_IDS) {
+      const cov = CATEGORY_COVERAGE[id]
+      expect(cov, `${id} has no CATEGORY_COVERAGE lane — a locator-only weak_match cannot widen a source`).toBeTruthy()
+      expect(cov.source, `${id} coverage lane names no source`).toBeTruthy()
+      expect(getSource(cov.source), `${id} maps to unknown source ${cov.source}`).toBeTruthy()
+    }
+  })
+
+  it('does not invent coverage keys that are not catalog categories', () => {
+    for (const id of Object.keys(CATEGORY_COVERAGE)) {
+      expect(CATEGORY_IDS, `CATEGORY_COVERAGE names unknown category ${id}`).toContain(id)
+    }
   })
 })

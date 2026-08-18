@@ -30,6 +30,7 @@ import { buildApprovalQueue, proposeCoverageOverrides } from '../services/amy/cr
 import { POINTER_KINDS } from '../config/opportunityKindClasses.js'
 import { evaluateDiscovery } from '../services/amy/amyReport.js'
 import { isGenericOnly } from '../config/genericTitleVocabulary.js'
+import { FINDING_TYPES } from '../services/amy/amyConstants.js'
 
 const D1 = '2026-07-25T04:00:00.000Z' // ET 2026-07-25
 const D2 = '2026-07-26T04:00:00.000Z'
@@ -336,6 +337,12 @@ describe('locator-only weak matches are a COVERAGE gap, not a scoring-weights ga
     expect(queue[0].rationale).toMatch(/NO entry in CATEGORY_COVERAGE/)
   })
 
+  it('a catalog category that used to dead-end at scoring_weights now has a coverage lane', () => {
+    const queue = buildApprovalQueue([{ status: 'weak', category: 'graduate_student', locator_only: true }])
+    expect(queue[0].lever).toBe('source_keyword_coverage')
+    expect(queue[0].evidence.has_coverage_lane).toBe(true)
+  })
+
   it('the coverage editor can now ACT on a locator-only gap (both prod categories map to a real source)', () => {
     const proposal = proposeCoverageOverrides([
       { status: 'weak', category: 'housing_authority', locator_only: true },
@@ -463,5 +470,74 @@ describe('false_positive — the detector evaluates the SAME text as the generic
     const capText = `${elPaso.title || ''} ${elPaso.description || ''}`.toLowerCase()
     expect(isGenericOnly(capText)).toBe(false) // the cap rescues it…
     expect(isGenericOnly(elPaso.title)).toBe(true) // …while a TITLE-ONLY reading (the old detector) flags it
+  })
+})
+
+describe('source_fetch_failed names the source so the ledger can close', () => {
+  // Prod 2026-08-18: Anya reported adapter_source_health / source_fetch_failed ×1
+  // with no source named. The queue minted one immortal id `source_health` from
+  // a count, so a different transient each night kept the same item open and
+  // the code brief pointed at sourceRegistry.js:1. Guessing a URL is how wrong
+  // adapters ship — name the source, or leave it to crawler.sourcePersistentFailure.
+
+  const namedFail = (sourceId, category = 'graduate_student', reason = 'timeout 504') => ({
+    category,
+    status: 'ok',
+    sources_failed: 1,
+    false_positives: 0,
+    ineligible_accepts: 0,
+    failed_sources: [{ id: sourceId, outcome: 'ERROR', reason }],
+    findings: [{
+      type: FINDING_TYPES.SOURCE_FETCH_FAILED,
+      evidence: { failed_sources: [{ id: sourceId, outcome: 'ERROR', reason }] },
+    }],
+  })
+
+  it('keys the item on the failing source_id and never emits the source_health blob', () => {
+    const items = buildApprovalQueue([namedFail('nih_guide')])
+    expect(items.some((i) => i.id === 'source_health')).toBe(false)
+    const item = items.find((i) => i.id === 'source_fetch_failed:nih_guide')
+    expect(item, 'named source produced no approval item').toBeTruthy()
+    expect(item.lever).toBe('adapter_source_health')
+    expect(item.evidence.subjects).toContain('nih_guide')
+    expect(item.rationale).toMatch(/nih_guide/)
+    expect(item.rationale).toMatch(/timeout 504/)
+    expect(item.code_brief?.subjects).toContain('nih_guide')
+  })
+
+  it('evaluateDiscovery publishes failed_sources on the evaluation, not only inside the finding', () => {
+    const ev = evaluateDiscovery(
+      { scenario_id: 's1', category: 'research_lab', label: 'Research Lab' },
+      'p1',
+      {
+        run: {
+          run_id: 'r',
+          stored: 1,
+          sources: [{ source_id: 'nih_guide', outcome: 'ERROR', reason: 'timeout 504', fetched: 0 }],
+          recommendations: [{ title: 'R01', kind: 'PROGRAM', decision: 'ACCEPT', match_score: 20, opportunity_id: 'opp-1' }],
+        },
+        thesis: { applicant_types: ['nonprofit'], needs: ['research'] },
+      },
+    )
+    expect(ev.failed_sources.map((s) => s.id)).toEqual(['nih_guide'])
+    const items = buildApprovalQueue([ev])
+    expect(items.find((i) => i.id === 'source_fetch_failed:nih_guide')).toBeTruthy()
+    expect(items.some((i) => i.id === 'source_health')).toBe(false)
+  })
+
+  it('a different source the next night CLOSES the previous item (the blob never could)', () => {
+    const night1 = buildApprovalQueue([namedFail('nih_guide')])
+    const first = foldApprovalLedger(null, { items: night1.filter((i) => i.id === 'source_fetch_failed:nih_guide'), runId: 'r1', at: D1 })
+    expect(first.ledger.entries['source_fetch_failed:nih_guide'].resolved_at).toBeNull()
+
+    const night2 = buildApprovalQueue([namedFail('grants_gov')])
+    const second = foldApprovalLedger(first.ledger, {
+      items: night2.filter((i) => String(i.id).startsWith('source_fetch_failed:')),
+      runId: 'r2',
+      at: D2,
+    })
+    expect(second.closed.map((c) => c.id)).toContain('source_fetch_failed:nih_guide')
+    expect(second.ledger.entries['source_fetch_failed:nih_guide'].resolution).toBe(RESOLUTION.STOPPED_REPRODUCING)
+    expect(second.ledger.entries['source_fetch_failed:grants_gov'].resolved_at).toBeNull()
   })
 })

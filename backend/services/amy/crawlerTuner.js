@@ -94,6 +94,10 @@ export function decideWeightChange({ currentWeights, cohort, opts = {} }) {
     return { change: false, from, to: from, reason: `cohort_too_small(<${minCohort})` }
   }
 
+  if (weightTrialIsCoolingDown(opts.lastTrial, opts.now)) {
+    return { change: false, from, to: from, reason: 'recently_tried' }
+  }
+
   const weakRate = (cohort.weak || 0) / Math.max(1, cohort.profiles)
   const fpRate = Number(cohort.false_positive_rate || 0)
   const to = { ...from }
@@ -113,8 +117,29 @@ export function decideWeightChange({ currentWeights, cohort, opts = {} }) {
   return { change: true, from, to, reason }
 }
 
+/**
+ * Scoring-weight trials are empirical and AUTO-REVERT when they do not raise
+ * topical quality. Prod 2026-08-17: Amy trialled weights against weak_match ×29,
+ * they did not help, auto-REVERTED — and the next night `decideWeightChange`
+ * saw the same weak-rate and trialled the SAME nudge again. A lever that has
+ * already been falsified for this symptom must cool down, or the morning
+ * report forever reads "Scoring weights trial did not improve — auto-REVERTED"
+ * while the finding never closes.
+ *
+ * Persistence lives in amyAgent (system_kv); this module stays pure.
+ */
+export const WEIGHT_TRIAL_KV_KEY = 'amy_weight_trial_last'
+export const WEIGHT_TRIAL_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000
+
+export function weightTrialIsCoolingDown(lastTrial, now = Date.now()) {
+  if (!lastTrial || typeof lastTrial !== 'object') return false
+  const at = Date.parse(lastTrial.at)
+  if (!Number.isFinite(at)) return false
+  return (now - at) < WEIGHT_TRIAL_COOLDOWN_MS
+}
+
 /** Static map: Amy category → the registry coverage it implies. */
-const CATEGORY_COVERAGE = Object.freeze({
+export const CATEGORY_COVERAGE = Object.freeze({
   veteran: { applicant_types: ['veteran'], need_categories: ['veterans'], source: 'benefits_gov' },
   military_family: { applicant_types: ['military_spouse'], need_categories: ['military_spouse_support'], source: 'military_onesource' },
   disaster_survivor: { applicant_types: ['individual', 'family'], need_categories: ['emergency'], source: 'united_way_211' },
@@ -153,6 +178,24 @@ const CATEGORY_COVERAGE = Object.freeze({
   homeschool_family: { applicant_types: ['individual', 'family'], need_categories: ['education', 'curriculum'], source: 'hslda_compassion_grants' },
   renter_eviction: { applicant_types: ['individual', 'family'], need_categories: ['housing', 'emergency'], source: 'cfpb_rent_and_housing_help' },
   individual_assistance: { applicant_types: ['individual', 'family'], need_categories: ['emergency', 'cash_assistance'], source: 'community_action' },
+  // 2026-08-18: remaining catalog archetypes had NO coverage lane, so a
+  // locator-only / persistent weak_match for them dead-ended at scoring_weights
+  // (the lever Amy already trialled and auto-REVERTED). Direct-award anchors
+  // only — a locator source here would recreate the housing_authority class.
+  business: { applicant_types: ['business'], need_categories: ['capital', 'economic_development'], source: 'sba_grants' },
+  nonprofit: { applicant_types: ['nonprofit'], need_categories: ['programs', 'operations'], source: 'community_action' },
+  school_district: { applicant_types: ['government'], need_categories: ['education'], source: 'us_dept_of_ed' },
+  college_university: { applicant_types: ['nonprofit'], need_categories: ['programs', 'research'], source: 'nih_guide' },
+  high_school_student: { applicant_types: ['student'], need_categories: ['education', 'student_aid'], source: 'pell_grant' },
+  college_student: { applicant_types: ['student'], need_categories: ['education', 'student_aid'], source: 'pell_grant' },
+  graduate_student: { applicant_types: ['student'], need_categories: ['education', 'student_aid'], source: 'studentaid_gov' },
+  cancer_patient: { applicant_types: ['individual'], need_categories: ['medical'], source: 'cancer_care' },
+  chronic_illness_patient: { applicant_types: ['individual'], need_categories: ['medical'], source: 'copay_assistance_foundations' },
+  disabled_person: { applicant_types: ['individual', 'disabled'], need_categories: ['disability', 'medical'], source: 'ssa_disability' },
+  veteran_entrepreneur: { applicant_types: ['veteran', 'business'], need_categories: ['veterans', 'capital'], source: 'sba_veteran_business' },
+  struggling_congregation: { applicant_types: ['church', 'nonprofit'], need_categories: ['capital', 'operations'], source: 'national_fund_sacred_places' },
+  homeowner_foreclosure: { applicant_types: ['individual', 'family'], need_categories: ['housing', 'emergency'], source: 'hud_avoiding_foreclosure' },
+  faith_based_org: { applicant_types: ['church', 'nonprofit'], need_categories: ['programs', 'operations'], source: 'national_fund_sacred_places' },
 })
 
 /**
@@ -307,6 +350,28 @@ export function buildCodeBrief(item) {
     // never infer that a PR is pending somewhere.
     patch_authored_by_amy: false,
   }
+}
+
+function failedSourceRecords(evaluation) {
+  const out = []
+  const push = (s) => {
+    const id = s?.id || s?.source_id || (typeof s === 'string' ? s : null)
+    if (!id) return
+    out.push({
+      id: String(id),
+      outcome: s?.outcome ?? null,
+      reason: s?.reason ?? null,
+    })
+  }
+  for (const f of Array.isArray(evaluation?.findings) ? evaluation.findings : []) {
+    if (f?.type !== FINDING_TYPES.SOURCE_FETCH_FAILED) continue
+    const list = f?.evidence?.failed_sources
+    if (Array.isArray(list)) for (const s of list) push(s)
+  }
+  if (out.length === 0 && Array.isArray(evaluation?.failed_sources)) {
+    for (const s of evaluation.failed_sources) push(s)
+  }
+  return out
 }
 
 /**
@@ -475,18 +540,63 @@ export function buildApprovalQueue(evaluations = []) {
     }
   }
 
-  // 4. Source failures → adapter/source health (sourceRegistry/adapters).
-  const failedSourceProfiles = evals.filter((e) => Number(e.sources_failed) > 0)
-  if (failedSourceProfiles.length > 0) {
+  // 4. Source failures — NAME THE SOURCE. The previous blob id `source_health`
+  // aggregated every fetch fail in the cohort into ONE item with no source_id,
+  // so (a) the ledger could never close (a different transient each night kept
+  // the same id open) and (b) the code brief named no adapter. Group by the
+  // finding's `failed_sources` evidence (the registry evidence_key). The
+  // totality pass below still covers findings that carry no id.
+  const failedBySource = {}
+  for (const e of evals) {
+    for (const rec of failedSourceRecords(e)) {
+      const bucket = (failedBySource[rec.id] ||= { profiles: 0, reasons: new Set() })
+      bucket.profiles += 1
+      const why = rec.reason || rec.outcome
+      if (why) bucket.reasons.add(String(why).slice(0, 80))
+    }
+  }
+  for (const [sourceId, bucket] of Object.entries(failedBySource)) {
+    const lastError = [...bucket.reasons][0] || null
+    const target = CODE_TARGETS[FINDING_TYPES.SOURCE_FETCH_FAILED]
     items.push({
-      id: 'source_health',
+      id: `source_fetch_failed:${sourceId}`,
       finding_type: FINDING_TYPES.SOURCE_FETCH_FAILED,
       lever: 'adapter_source_health',
-      target_file: CODE_TARGETS[FINDING_TYPES.SOURCE_FETCH_FAILED].file,
+      target_file: target.file,
+      target_line: target.line,
       severity: SEVERITY.MEDIUM,
-      rationale: `${failedSourceProfiles.length} profile(s) hit source fetch/parse failures. Audit adapter health, retries, and missing API keys.`,
-      evidence: { profiles_with_source_failures: failedSourceProfiles.length },
+      rationale: `${bucket.profiles} profile(s) failed fetching "${sourceId}"${lastError ? ` (${lastError})` : ''}. Name the source — do not guess a registry URL. Persistent same-host failures already have an actor (crawler.sourcePersistentFailure + URL self-repair). This item closes when THIS source stops failing, not when a different transient appears.`,
+      evidence: {
+        subjects: [sourceId],
+        failed_sources: [sourceId],
+        profiles: bucket.profiles,
+        last_error: lastError,
+      },
     })
+  }
+  // Count-only residue (older evals that set sources_failed but named no id
+  // and minted no SOURCE_FETCH_FAILED finding). Per-category so the ledger
+  // can still close; never the immortal `source_health` blob.
+  if (Object.keys(failedBySource).length === 0) {
+    const unnamedByCat = tally(
+      evals.filter((e) => Number(e.sources_failed) > 0 && failedSourceRecords(e).length === 0
+        && !(Array.isArray(e.findings) && e.findings.some((f) => f?.type === FINDING_TYPES.SOURCE_FETCH_FAILED))),
+      (e) => e.category,
+    )
+    for (const [category, count] of Object.entries(unnamedByCat)) {
+      const target = CODE_TARGETS[FINDING_TYPES.SOURCE_FETCH_FAILED]
+      items.push({
+        id: `source_fetch_failed:${category}`,
+        finding_type: FINDING_TYPES.SOURCE_FETCH_FAILED,
+        lever: 'adapter_source_health',
+        target_file: target.file,
+        target_line: target.line,
+        category,
+        severity: SEVERITY.MEDIUM,
+        rationale: `${count} "${category}" profile(s) hit source fetch failures but named no source_id. Do not guess a sourceRegistry.js URL — wait for a named failed_sources finding or crawler.sourcePersistentFailure.`,
+        evidence: { profiles: count, subjects: [category] },
+      })
+    }
   }
 
   // ── TOTALITY PASS (2026-08-02): every finding class the run EMITTED gets an
@@ -581,4 +691,7 @@ export default {
   decideWeightChange,
   proposeCoverageOverrides,
   buildApprovalQueue,
+  CATEGORY_COVERAGE,
+  WEIGHT_TRIAL_KV_KEY,
+  weightTrialIsCoolingDown,
 }

@@ -1053,6 +1053,28 @@ describe('scoring-weight editor + tuner', () => {
     const small = decideWeightChange({ currentWeights: base, cohort: { profiles: 3, weak: 3, false_positive_rate: 0 } })
     expect(small.change).toBe(false)
   })
+
+  it('does not re-trial weights while a recent KEEP/REVERT is cooling down', () => {
+    const base = { W_NEED: 0.35, W_ELIGIBILITY: 0.25, W_GEO: 0.2, W_CATEGORY: 0.2 }
+    const now = Date.parse('2026-08-18T12:00:00.000Z')
+    const lastWeek = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const cooled = decideWeightChange({
+      currentWeights: base,
+      cohort: { profiles: 50, weak: 29, false_positive_rate: 0 },
+      opts: { lastTrial: { at: lastWeek, reverted: true }, now },
+    })
+    expect(cooled.change).toBe(false)
+    expect(cooled.reason).toBe('recently_tried')
+
+    const lastMonth = new Date(now - 15 * 24 * 60 * 60 * 1000).toISOString()
+    const ready = decideWeightChange({
+      currentWeights: base,
+      cohort: { profiles: 50, weak: 29, false_positive_rate: 0 },
+      opts: { lastTrial: { at: lastMonth, reverted: true }, now },
+    })
+    expect(ready.change).toBe(true)
+    expect(ready.reason).not.toBe('recently_tried')
+  })
 })
 
 describe('source-coverage overrides (additive, live)', () => {
@@ -1154,6 +1176,39 @@ describe('Amy weight tuning with empirical validation', () => {
       expect(out.combined.weight_tuning.validation.kept).toBe(false)
       expect(out.combined.weight_tuning.validation.reverted).toBe(true)
       expect(state.applied).toBe(false) // reverted
+    } finally { db.close() }
+  })
+
+  it('does not apply a second weight trial the night after a revert', async () => {
+    const db = makeDb()
+    const state = { applied: false }
+    let applyCount = 0
+    const weightEditor = {
+      read: async () => baseWeights,
+      apply: async (to) => {
+        applyCount += 1
+        state.applied = true
+        return { applied: true, from: baseWeights, to, backup_path: 'b' }
+      },
+      restore: async () => { state.applied = false; return true },
+    }
+    const runOpts = {
+      db, targetCount: 16, dryRunDiscovery: true,
+      improve: true, applyTuning: false, applyWeights: true,
+      runDiscovery: discoveryFactory(state, false),
+      runPipeline: async () => ({ anya: {}, sam: {} }),
+      thresholdEditor: { read: async () => DISCOVERY_MIN_SCORE_FLOOR, apply: async () => ({ applied: false }) },
+      weightEditor,
+      clock: () => new Date('2026-08-18T12:00:00Z'),
+    }
+    try {
+      const first = await runAmyTraining(runOpts)
+      expect(first.combined.weight_tuning.validation.reverted).toBe(true)
+      expect(applyCount).toBe(1)
+      const second = await runAmyTraining(runOpts)
+      expect(second.combined.weight_tuning.change).toBe(false)
+      expect(second.combined.weight_tuning.reason).toBe('recently_tried')
+      expect(applyCount).toBe(1)
     } finally { db.close() }
   })
 })

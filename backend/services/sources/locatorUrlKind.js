@@ -211,6 +211,20 @@ export const ORG_PATH_RULES = Object.freeze([
     host: 'fcc.gov',
     benefitPrefixes: Object.freeze(['broadbandbenefits']),
   },
+  {
+    // East Tennessee Foundation (Anya 2026-08-18): the pipeline-$ census
+    // named easttennesseefoundation.org as the one remaining AWARD-BEARING
+    // unanswered_unreadable host. `/grants/` is the foundation's fund INDEX
+    // ("Search for a grant" + a catalog of county/field funds) and
+    // `/nonprofits/apply-for-grants/` is the apply-portal landing — both
+    // pointers, never a single award. The private-foundation crawler mints
+    // the umbrella row at `/grants/` with a curated grantRange that the
+    // funder's own listing does not state. Do NOT host-claim the domain:
+    // a future `/grants/<fund>` program page (or a news cycle that names
+    // "grants of up to $6,500") must keep its ordinary read.
+    host: 'easttennesseefoundation.org',
+    directoryPages: Object.freeze(['grants', 'nonprofits/apply-for-grants']),
+  },
 ])
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
