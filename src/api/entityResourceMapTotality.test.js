@@ -3,11 +3,11 @@
  *
  * Every `client.entities.<Name>` referenced anywhere in src/ must be either
  * (a) mapped to a real backend resource in entityResourceMap, or (b) listed
- * in KNOWN_STUB_ENTITIES below — the documented, consciously-accepted set
+ * in KNOWN_STUB_ENTITIES below -- the documented, consciously-accepted set
  * whose writes land in the in-memory stub store and vanish on reload.
  *
  * Why: ChecklistItem / GrantAward / ComplianceReport silently fell through to
- * createStubEntityClient for months — the UI toasted success while the data
+ * createStubEntityClient for months -- the UI toasted success while the data
  * evaporated. A stub is only acceptable when it is a DECLARED decision; this
  * test makes an undeclared one a red build, in both directions:
  *   - a NEW unmapped entity reference fails ("stub by accident")
@@ -18,15 +18,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import client from './client.js'
 
-// Entities that today still intentionally resolve to the in-memory stub.
-// Shrink this list by giving an entry a real backend resource + map entry;
-// never grow it without a deliberate decision recorded in the PR.
-const KNOWN_STUB_ENTITIES = Object.freeze([
-  'AiArtifact',
-  'PartnerSource',
-  'SearchJob',
-  'Taxonomy',
-])
+// Empty on purpose: every previously-declared stub now has a real resource.
+// Grow this list only with a deliberate PR decision.
+const KNOWN_STUB_ENTITIES = Object.freeze([])
 
 function walk(dir, out) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -60,13 +54,13 @@ describe('entityResourceMap totality', () => {
     )
     expect(
       undeclared,
-      `entities falling through to the in-memory stub store WITHOUT a declaration (writes vanish on reload): ${undeclared.join(', ')} — map them to a real backend resource or consciously add them to KNOWN_STUB_ENTITIES`,
+      `entities falling through to the in-memory stub store WITHOUT a declaration (writes vanish on reload): ${undeclared.join(', ')} -- map them to a real backend resource or consciously add them to KNOWN_STUB_ENTITIES`,
     ).toEqual([])
   })
 
   it('no DECLARED stub is secretly mapped (stale list)', () => {
     const stale = KNOWN_STUB_ENTITIES.filter((name) => mapped.has(name))
-    expect(stale, `remove from KNOWN_STUB_ENTITIES — now real: ${stale.join(', ')}`).toEqual([])
+    expect(stale, `remove from KNOWN_STUB_ENTITIES -- now real: ${stale.join(', ')}`).toEqual([])
   })
 
   it('the previously-lost grant-scoped entities are REAL now and stay real', () => {
@@ -77,6 +71,12 @@ describe('entityResourceMap totality', () => {
 
   it('consultant workspace entities persist (no more vanishing invoices)', () => {
     for (const name of ['Invoice', 'InvoiceLine', 'Project', 'TimeEntry', 'TimeLog', 'BillingAccount']) {
+      expect(mapped.has(name), `${name} must map to a real backend resource`).toBe(true)
+    }
+  })
+
+  it('the last declared stubs are REAL now and stay real', () => {
+    for (const name of ['AiArtifact', 'PartnerSource', 'SearchJob', 'Taxonomy']) {
       expect(mapped.has(name), `${name} must map to a real backend resource`).toBe(true)
     }
   })
