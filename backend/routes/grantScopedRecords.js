@@ -1,13 +1,14 @@
 /**
- * Grant-scoped UI record routes: checklist items, award records, and
- * compliance reports.
+ * Grant-scoped UI record routes: checklist items, award records,
+ * compliance reports, and AI artifacts.
  *
- * These three entities were referenced by the frontend generic entity client
- * (client.entities.ChecklistItem / GrantAward / ComplianceReport) but had no
- * backend resource, so the client silently fell through to its in-memory stub
- * store — the UI showed success toasts and every record vanished on reload
- * (epic slice 8/9 residual). This module gives each a real, tenant-scoped
- * REST resource with the exact HTTP contract createEntityClient speaks:
+ * These entities were referenced by the frontend generic entity client
+ * (client.entities.ChecklistItem / GrantAward / ComplianceReport / AiArtifact)
+ * but had no backend resource, so the client silently fell through to its
+ * in-memory stub store — the UI showed success toasts and every record
+ * vanished on reload (epic slice 8/9 residual). This module gives each a real,
+ * tenant-scoped REST resource with the exact HTTP contract createEntityClient
+ * speaks:
  *   GET    /            ?sort=&order=&limit=&<column filters>
  *   GET    /:id
  *   POST   /
@@ -76,6 +77,14 @@ export const GRANT_SCOPED_RESOURCES = Object.freeze({
     required: Object.freeze(['grant_id']),
     uniquePerGrant: false,
   }),
+  'ai-artifacts': Object.freeze({
+    table: 'grant_ai_artifacts',
+    columns: Object.freeze(['grant_id', 'organization_id', 'kind', 'content']),
+    updatable: Object.freeze(['kind', 'content']),
+    sortable: Object.freeze(['created_at', 'updated_at', 'kind']),
+    required: Object.freeze(['grant_id']),
+    uniquePerGrant: false,
+  }),
 })
 
 function pickAllowed(body, allowed) {
@@ -84,6 +93,14 @@ function pickAllowed(body, allowed) {
     if (body[key] !== undefined) out[key] = body[key]
   }
   return out
+}
+
+function resolveSortCol(spec, sort) {
+  const requested = String(sort || '')
+  const aliased = requested === 'created_date' ? 'created_at'
+    : requested === 'updated_date' ? 'updated_at'
+      : requested
+  return spec.sortable.find((c) => c === aliased) ?? 'created_at'
 }
 
 async function rowWithGrantOrg(db, table, id) {
@@ -164,7 +181,7 @@ export function createGrantScopedRecordsRouter(resourceKey) {
       // the sort column is the matched element of the frozen sortable list,
       // and the limit is a bound parameter — nothing request-derived is ever
       // interpolated into the SQL text.
-      const sortCol = spec.sortable.find((c) => c === String(sort)) ?? 'created_at'
+      const sortCol = resolveSortCol(spec, sort)
       const sortOrder = String(order).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
       const cappedLimit = Math.max(1, Math.min(500, Number(limit) || 500))
       params.push(cappedLimit)
