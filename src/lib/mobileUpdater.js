@@ -16,8 +16,20 @@
 // device: semver comparison, manifest validation, the update decision, the
 // native-floor decision, and the fail-closed integrity gate.
 
-/** Production origin that hosts /mobile/latest.json + bundle zips. */
-export const UPDATE_BASE_URL = 'https://axiombiolabs.org'
+/**
+ * Production origin that hosts /mobile/latest.json + bundle zips.
+ *
+ * THIS IS GrantFlow's OWN origin, `app.axiombiolabs.org` — NOT the apex.
+ * The apex `axiombiolabs.org` is a DIFFERENT Vercel project (the static
+ * publish site); it answers 200 with its SPA fallback HTML for every path,
+ * so pointing the feed there does not 404, it silently returns a web page.
+ * Measured live 2026-08-19: GET https://axiombiolabs.org/mobile/latest.json
+ * returned `<!DOCTYPE html>… Bundled Page`, while the real manifest and the
+ * 2.1 MB zip both sat on https://app.axiombiolabs.org/mobile/. With the apex
+ * pinned here the parser saw HTML, threw "no manifest published", and the
+ * whole update path was inert in production while every test passed.
+ */
+export const UPDATE_BASE_URL = 'https://app.axiombiolabs.org'
 
 /**
  * DEV-BUILD-ONLY override: set localStorage['grantflow.mobileUpdateFeedUrl'] to
@@ -88,7 +100,7 @@ const SHA256_HEX = /^[0-9a-f]{64}$/
  * @param {unknown} raw
  * @returns {{ version: string, url: string, sha256: string, minNativeVersion: string, notes: string, builtAt: string }}
  */
-export function parseUpdateManifest(raw) {
+export function parseUpdateManifest(raw, feedUrl) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('Update feed is not available yet (no manifest published).')
   }
@@ -101,9 +113,30 @@ export function parseUpdateManifest(raw) {
   }
   let bundleUrl
   try {
-    bundleUrl = new URL(url)
+    bundleUrl = feedUrl ? new URL(url, feedUrl) : new URL(url)
   } catch {
     throw new Error('Update feed has an invalid bundle URL (must be absolute https).')
+  }
+  // THE BUNDLE IS ALWAYS BESIDE ITS OWN MANIFEST. build-mobile-bundle.mjs
+  // writes the zip into dist/mobile/ next to latest.json, so same-origin is an
+  // invariant of how the feed is produced — and pinning it here HEALS a
+  // manifest that named the wrong origin, which `new URL(absolute, base)`
+  // alone would not (an absolute url ignores the base entirely).
+  // Measured live 2026-08-19: the published url named the apex
+  // `axiombiolabs.org`, a DIFFERENT Vercel project whose SPA fallback answered
+  // 200 with `text/html`, while the real 2.1 MB zip sat next to the manifest on
+  // `app.axiombiolabs.org`. Without this, every install would fetch that HTML
+  // page; the checksum gate would then refuse it, so the update died silently
+  // for every user. A relative url is accepted for the same reason.
+  if (feedUrl) {
+    try {
+      const feed = new URL(feedUrl)
+      if (bundleUrl.origin !== feed.origin) {
+        bundleUrl = new URL(bundleUrl.pathname + bundleUrl.search, feed.origin)
+      }
+    } catch {
+      // An unparseable feed url leaves the declared bundle url untouched.
+    }
   }
   if (bundleUrl.protocol !== 'https:' || !bundleUrl.hostname) {
     throw new Error('Update feed has an invalid bundle URL (must be absolute https).')
@@ -129,7 +162,9 @@ export function parseUpdateManifest(raw) {
 
   return {
     version: String(version),
-    url,
+    // The RESOLVED url — never the raw declared string, or the same-origin
+    // pin above would compute a correction nothing ever used.
+    url: bundleUrl.href,
     sha256: typeof rawSha === 'string' ? rawSha.trim().toLowerCase() : '',
     minNativeVersion: typeof rawMinNative === 'string' ? rawMinNative.trim() : '',
     notes: typeof raw.notes === 'string' ? raw.notes : '',
@@ -276,5 +311,5 @@ export async function fetchUpdateManifest({ fetchImpl, feedUrl, timeoutMs = UPDA
   } catch {
     throw new Error('Update feed is not available yet (no manifest published).')
   }
-  return parseUpdateManifest(parsed)
+  return parseUpdateManifest(parsed, url)
 }
