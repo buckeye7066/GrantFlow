@@ -7,6 +7,7 @@ import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import HamiltonToastBridge from '@/components/hamilton/HamiltonToastBridge'
 import HamiltonAuthPrimingToast from '@/components/hamilton/HamiltonAuthPrimingToast'
 import LoginGapInterviewLauncher from '@/components/profiles/LoginGapInterviewLauncher'
+import MobileUpdateWatcher from '@/components/mobile/MobileUpdateWatcher'
 import client from '@/api/client';
 import RouteErrorBoundary from '@/components/shared/RouteErrorBoundary.jsx'
 import FlashHighlighter from '@/components/shared/FlashHighlighter.jsx'
@@ -94,6 +95,10 @@ function App() {
       <SessionExpiredDialog />
       <HamiltonToastBridge />
       <HamiltonAuthPrimingToast />
+      {/* Native-only: checks the OTA feed on launch and on every resume, raises
+          a local notification, and puts the install button one tap away.
+          Renders null on the web and until an update is actually found. */}
+      <MobileUpdateWatcher />
       {/* ResetOnboardingFlow (mounted via OnboardingSequencer in Layout.jsx)
           renders its OWN LoginGapInterviewLauncher instance, sequenced
           explicitly after the video and before the guided tour, while

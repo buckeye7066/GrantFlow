@@ -27,17 +27,28 @@ vi.mock('@capgo/capacitor-updater', () => ({
   },
 }))
 
-vi.mock('@/lib/mobileUpdater', () => ({
-  fetchUpdateManifest: mocks.fetchUpdateManifest,
-  isNewerVersion: mocks.isNewerVersion,
-  parseVersion: mocks.parseVersion,
-}))
+// Only the transport + version helpers are stubbed. downloadAndApplyUpdate and
+// requiresNativeUpdate are the REAL implementations, so this file exercises the
+// card against the actual verified apply path rather than a stand-in.
+vi.mock('@/lib/mobileUpdater', async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    fetchUpdateManifest: mocks.fetchUpdateManifest,
+    isNewerVersion: mocks.isNewerVersion,
+    parseVersion: mocks.parseVersion,
+  }
+})
 
 import MobileUpdateCard from './MobileUpdateCard.jsx'
+
+const SHA = 'a'.repeat(64)
 
 const update = {
   version: '1.0.2',
   url: 'https://axiombiolabs.org/mobile/bundle-1.0.2.zip',
+  sha256: SHA,
+  minNativeVersion: '',
   notes: 'Improved matching.',
 }
 
@@ -102,9 +113,44 @@ describe('MobileUpdateCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /check for updates/i }))
     fireEvent.click(await screen.findByRole('button', { name: /install v1\.0\.2/i }))
 
-    await waitFor(() => expect(mocks.download).toHaveBeenCalledWith({ url: update.url, version: update.version }))
+    // INTEGRITY: the published sha256 must reach the plugin as `checksum`,
+    // which is the only thing that makes it verify the downloaded zip.
+    await waitFor(() =>
+      expect(mocks.download).toHaveBeenCalledWith({
+        url: update.url,
+        version: update.version,
+        checksum: SHA,
+      }),
+    )
     await waitFor(() => expect(mocks.set).toHaveBeenCalledWith({ id: 'bundle-1.0.2' }))
     expect(remove).toHaveBeenCalledTimes(1)
+  })
+
+  // FAIL CLOSED: an unverifiable bundle is refused before any download.
+  it('refuses to install a bundle whose manifest has no checksum', async () => {
+    mocks.fetchUpdateManifest.mockResolvedValue({ ...update, sha256: '' })
+    render(<MobileUpdateCard />)
+
+    fireEvent.click(screen.getByRole('button', { name: /check for updates/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /install v1\.0\.2/i }))
+
+    expect(await screen.findByText(/no published checksum/i)).toBeTruthy()
+    expect(mocks.download).not.toHaveBeenCalled()
+    expect(mocks.set).not.toHaveBeenCalled()
+  })
+
+  // OTA replaces the WEB bundle only — never offer a web install that cannot
+  // deliver a change requiring new native code.
+  it('demands a new app version instead of offering a web install when the native floor is higher', async () => {
+    mocks.fetchUpdateManifest.mockResolvedValue({ ...update, minNativeVersion: '2.0' })
+    render(<MobileUpdateCard />)
+
+    // The native version is loaded asynchronously; the floor cannot be compared
+    // until it lands, so wait for it before asking for a check.
+    await screen.findByText(/App v1\.1 — web bundle v1\.0\.1/)
+    fireEvent.click(screen.getByRole('button', { name: /check for updates/i }))
+    expect(await screen.findByText(/A new app version is required/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /install v1\.0\.2/i })).toBeNull()
   })
 
   it('cleans up the listener and surfaces a download failure', async () => {

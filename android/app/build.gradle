@@ -11,6 +11,12 @@ android {
         // `versionCode (System.getenv(...) ?: "1").toInteger()` parses in
         // Groovy as `versionCode(env).toInteger()` and crashes every local
         // build with "Value is null".
+        // These defaults are the LOCAL-BUILD fallback only. Every shipped APK
+        // comes from .github/workflows/android-build.yml, which sets
+        // ANDROID_VERSION_CODE=${github.run_number} and
+        // ANDROID_VERSION_NAME=1.0.${github.run_number} — so the real native
+        // version line is 1.0.<run>. Any `mobile.minNativeVersion` floor in
+        // package.json MUST be written on that line; see the notes there.
         def resolvedVersionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "2") as Integer
         def resolvedVersionName = System.getenv("ANDROID_VERSION_NAME") ?: "1.1"
         versionCode resolvedVersionCode
