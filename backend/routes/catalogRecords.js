@@ -124,15 +124,21 @@ function decodeRow(spec, row) {
   return dbToApi(spec, row)
 }
 
-function resolveSortCol(spec, sort) {
+export function resolveSortCol(spec, sort) {
   const requested = String(sort || '')
   const aliased = requested === 'created_date' ? 'created_at'
     : requested === 'updated_date' ? 'updated_at'
       : requested
   const asDb = dbColumn(spec, aliased)
-  return spec.sortable.includes(aliased) || spec.sortable.includes(asDb)
-    ? (spec.sortable.includes(asDb) ? asDb : aliased)
-    : (spec.sortable[0] || 'created_at')
+  // Return the MATCHED ELEMENT of the frozen sortable list, never the request
+  // string — the same posture as grantScopedRecords/orgScopedRecords. Testing
+  // membership with .includes() and then returning the caller's own string is
+  // behaviourally equivalent but leaves a request-derived value flowing into
+  // the ORDER BY identifier (js/sql-injection). Preference order is unchanged:
+  // renamed db column first, then the api-side alias, then the spec default.
+  const matched = spec.sortable.find((c) => c === asDb)
+    ?? spec.sortable.find((c) => c === aliased)
+  return matched ?? spec.sortable[0] ?? 'created_at'
 }
 
 export function createCatalogRecordsRouter(resourceKey) {
@@ -167,6 +173,10 @@ export function createCatalogRecordsRouter(resourceKey) {
         params.push(spec.booleanCols?.includes(key) ? coerceBool(value) : String(value))
       }
 
+      // Identifiers resolve to ALLOWLIST MEMBERS (never the request string):
+      // the sort column is the matched element of the frozen sortable list,
+      // and the limit is a bound parameter — nothing request-derived is ever
+      // interpolated into the SQL text.
       const sortCol = resolveSortCol(spec, sort)
       const sortOrder = String(order).toLowerCase() === 'desc' ? 'DESC' : 'ASC'
       const cappedLimit = Math.max(1, Math.min(500, Number(limit) || 500))

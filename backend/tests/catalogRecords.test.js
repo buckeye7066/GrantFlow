@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createCatalogRecordsRouter, CATALOG_RESOURCES } from '../routes/catalogRecords.js'
+import { createCatalogRecordsRouter, CATALOG_RESOURCES, resolveSortCol } from '../routes/catalogRecords.js'
 import { createGrantScopedRecordsRouter } from '../routes/grantScopedRecords.js'
 import { applyWorkspacePersistenceTablesSync } from '../db/applyWorkspacePersistenceTables.js'
 
@@ -166,6 +166,41 @@ describe('catalog records — last declared stubs persist', () => {
       expect(spec.table, key).toMatch(/^[a-z_]+$/)
       for (const col of spec.required) expect(spec.columns, `${key}.required`).toContain(col)
       for (const col of spec.updatable) expect(spec.columns, `${key}.updatable`).toContain(col)
+      for (const col of spec.sortable) expect(col, `${key}.sortable`).toMatch(/^[a-z_]+$/)
+    }
+  })
+
+  it('?sort= is allowlisted: an injection attempt falls back instead of erroring', async () => {
+    const db = createDb()
+    const app = createApp(db, ADMIN)
+    const created = await request(app)
+      .post('/api/partner-sources')
+      .send({ name: 'Acme' })
+    expect(created.status).toBe(201)
+
+    const res = await request(app)
+      .get('/api/partner-sources')
+      .query({ sort: 'name; DROP TABLE workspace_partner_sources;--', order: 'desc' })
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveLength(1)
+    // The table the injected statement targeted is still there.
+    expect(
+      db.prepare(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='workspace_partner_sources'",
+      ).get().n,
+    ).toBe(1)
+  })
+
+  it('the resolved sort column is an ELEMENT of the frozen sortable list, never the request string', () => {
+    // The ORDER BY identifier is interpolated, so it must never be a value the
+    // caller supplied — it must be identity-equal to a frozen allowlist member.
+    for (const [key, spec] of Object.entries(CATALOG_RESOURCES)) {
+      for (const attempt of ['name; DROP TABLE x;--', 'created_at', 'created_date', 'group', '', 'nope']) {
+        const resolved = resolveSortCol(spec, attempt)
+        const fromList = spec.sortable.some((c) => c === resolved)
+        expect(fromList || resolved === 'created_at', `${key} <- ${attempt}`).toBe(true)
+        expect(resolved, `${key} <- ${attempt}`).toMatch(/^[a-z_]+$/)
+      }
     }
   })
 })
