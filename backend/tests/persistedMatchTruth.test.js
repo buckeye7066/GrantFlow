@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { restorePersistedMatchTruth } from '../services/matching/persistedMatchTruth.js'
+import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
@@ -129,5 +130,43 @@ describe('owner-facing persisted match truth', () => {
     expect(querySource).toContain('fo.description AS summary')
     expect(querySource).not.toContain('fo.summary,')
     expect(routeSource).toContain('isFundingResource(row)')
+  })
+
+  it('canonicalizeOpportunityList with useStoredDecision:true preserves match_score and match_decision exactly — the divergence sentinel', () => {
+    // This test fails if the canonical funnel is ever modified to silently
+    // recompute or adjust a stored score/decision while that flag is set.
+    const profileContext = {
+      profile: { id: 'p-sentinel', primary_type: 'individual', state: 'TN' },
+      sections: {},
+      signals: null,
+    }
+    const storedScore = 67
+    const storedDecision = 'ACCEPT'
+
+    const row = {
+      id: 'opp-sentinel',
+      title: 'Tennessee Promise — Free Community College',
+      sponsor: 'Tennessee Student Assistance Corporation',
+      description: 'Free community college for Tennessee graduates.',
+      application_url: 'https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-scholarship-program/tennessee-promise.html',
+      source_url: 'https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-scholarship-program/tennessee-promise.html',
+      opportunity_kind: 'SCHOLARSHIP',
+      is_national: 0,
+      state: 'TN',
+      match_score: storedScore,
+      match_decision: storedDecision,
+      matcher_version: 'crawler-os',
+      match_reasons: ['education', 'geography'],
+    }
+
+    const { kept } = canonicalizeOpportunityList(profileContext, [row], {
+      preserveDirectories: true,
+      rejectHardIneligible: true,
+      useStoredDecision: true,
+    })
+
+    expect(kept).toHaveLength(1)
+    expect(kept[0].match_score).toBe(storedScore)
+    expect(kept[0].match_decision).toBe(storedDecision)
   })
 })
