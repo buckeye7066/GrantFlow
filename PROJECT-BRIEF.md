@@ -27,7 +27,7 @@ scope and trust level:
 | **Anya** | Continuous quality agent: nightly synthetic cohort testing, gap detection, and autonomous micro-repairs |
 | **Amy** | Synthetic profile training: generates adversarial profiles to surface coverage gaps |
 
-### 2. Source catalog (`backend/config/sourceRegistry.js`)
+### 2. Source catalog (`backend/crawler-os/sourceRegistry.js`)
 
 A curated registry maps source identifiers to base URLs, need categories,
 applicant types, geographic scope, and keyword vocabularies.  Every discovery
@@ -35,7 +35,7 @@ run consults this registry to select which lanes to run for a given profile.
 
 ### 3. Lane selection and ranking
 
-The crawler planner (`crawler-os/planner.js`) selects sources by:
+The crawler planner (`backend/crawler-os/planner.js`) selects sources by:
 1. **Applicant-type match** — does the source serve the profile's entity type
    (individual, family, nonprofit, small business, etc.)?
 2. **Need intersection** — does the source address at least one of the profile's
@@ -52,7 +52,7 @@ HTML is parsed for funding-opportunity facts using a combination of:
 
 - **Deterministic signals** — structured fields (deadline, award ceiling, entity
   types, application URL).
-- **LLM extraction** — a prompt-based extractor (`webGrantExtractor.js`) asks the
+- **LLM extraction** — a prompt-based extractor (`backend/services/webGrantExtractor.js`) asks the
   model to enumerate opportunities from unstructured page text.
 - **Profile-blind shadow extractor** (flag `WEB_LANE_PROFILE_BLIND`) — a
   second, profile-unaware extraction pass runs in parallel to surface facts the
@@ -60,7 +60,7 @@ HTML is parsed for funding-opportunity facts using a combination of:
 
 ### 5. Reality gate
 
-Every extracted row passes `opportunityRealityGate.js` before entering the
+Every extracted row passes `backend/services/opportunityRealityGate.js` before entering the
 catalog.  The gate rejects:
 - Procedural and regulatory notices (Federal Register rule changes, OMB
   collections, antitrust filings).
@@ -73,7 +73,7 @@ catalog.  The gate rejects:
 ### 6. Deduplication
 
 Catalog rows are collapsed to a canonical identity by
-`canonicalOpportunityKey()` (`crawler-os/contract.js`):
+`canonicalOpportunityKey()` (`backend/crawler-os/contract.js`):
 
 ```
 external_id → token-sorted (title + sponsor) → source URL
@@ -165,26 +165,26 @@ lane uses a rolling-delete/re-insert pattern; specialised recall lanes
 
 | Source | Integration |
 |--------|-------------|
-| **Grants.gov** | REST API via `grantsGovApiClient.js`; `awardCeiling`/`awardFloor` from `synopsis` and `forecast` nodes; adapter in `services/sources/grantsGovAmountAdapter.js` |
-| **SAM.gov / FAL** | Structured JSON fetcher in `services/sources/samFalAmountAdapter.js`; `federalRegisterAmountAdapter.js` for FR-published award ceilings |
-| **USASpending.gov** | `services/sources/usaSpending.js`; used for awarded-amount reference data |
-| **Federal Register** | `federalRegisterAmountAdapter.js`; used for award ceiling extraction from rule-making notices |
+| **Grants.gov** | REST API via `backend/services/shared/grantsGovApiClient.js`; `awardCeiling`/`awardFloor` from `synopsis` and `forecast` nodes; adapter in `backend/services/sources/grantsGovAmountAdapter.js` |
+| **SAM.gov / FAL** | Structured JSON fetcher in `backend/services/sources/samFalAmountAdapter.js`; `backend/services/sources/federalRegisterAmountAdapter.js` for FR-published award ceilings |
+| **USASpending.gov** | `backend/services/sources/usaSpending.js`; used for awarded-amount reference data |
+| **Federal Register** | `backend/services/sources/federalRegisterAmountAdapter.js`; used for award ceiling extraction from rule-making notices |
 
 ### State and local sources
 
 | Source | Integration |
 |--------|-------------|
-| **State housing finance agencies** | `stateHousingAgencyAdapter.js` resolves the profile's own state agency from `STATE_REGISTRY`; yields one national catalog row with per-state resolution at match time |
-| **State benefits portals** | `STATE_BENEFITS_PORTALS` registry (`backend/config/coverageEvidenceService.js`); four household portals (TN, WV, PA, OR) curated with awardable program URLs |
-| **County/city crisis resources** | `crisisNeedRecall.js`; county-phrase + state + declared-need matching against the local-crisis catalog |
+| **State housing finance agencies** | `backend/crawler-os/adapters/stateHousingAgencyAdapter.js` resolves the profile's own state agency from `STATE_REGISTRY`; yields one national catalog row with per-state resolution at match time |
+| **State benefits portals** | `STATE_BENEFITS_PORTALS` registry (`backend/services/coverageEvidenceService.js`); four household portals (TN, WV, PA, OR) curated with awardable program URLs |
+| **County/city crisis resources** | `backend/config/crisisNeedRecall.js`; county-phrase + state + declared-need matching against the local-crisis catalog |
 
 ### School portal integrations
 
 | Provider | Mode |
 |----------|------|
 | **TSAC** (Tennessee Student Assistance Corporation) | Manual-import pilot; JSON paste from portal |
-| **NGWeb Scholarship Manager** | Automated sync (`ngwebScholarshipManager.js`) for `*.scholarships.ngwebsolutions.com` tenants (MTSU, Cleveland State CC) |
-| **AcademicWorks** | Hamilton portal automation (`hamiltonAutopilotEngine.js`) for `*.academicworks.com` tenant slug matching |
+| **NGWeb Scholarship Manager** | Automated sync (`backend/services/hamilton/portalSync/connectors/ngwebScholarshipManager.js`) for `*.scholarships.ngwebsolutions.com` tenants (MTSU, Cleveland State CC) |
+| **AcademicWorks** | Hamilton portal automation (`backend/services/hamilton/hamiltonAutopilotEngine.js`) for `*.academicworks.com` tenant slug matching |
 
 ### Third-party discovery APIs
 
