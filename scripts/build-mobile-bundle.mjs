@@ -35,7 +35,22 @@ const distDir = path.join(root, 'dist')
 const mobileDir = path.join(distDir, 'mobile')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 const version = pkg.version
-const baseUrl = process.env.MOBILE_UPDATE_BASE_URL || 'https://axiombiolabs.org'
+// The bundle is written INTO dist/mobile/ beside latest.json, so it is always
+// served from the same origin as the manifest. Hardcoding an origin here broke
+// exactly that invariant: the default said `axiombiolabs.org`, but that apex is
+// a DIFFERENT Vercel project (the static publish site) while GrantFlow serves at
+// `app.axiombiolabs.org`. Measured live 2026-08-19: the manifest published a
+// bundle URL that returned 200 with `text/html` — the other project's SPA
+// fallback — instead of the 2.1 MB zip sitting next to it. The checksum gate
+// would have refused to install that page, so the update simply died for every
+// user. Prefer Vercel's own production domain (self-correcting if the domain
+// moves again), then an explicit override, and only then the constant.
+const baseUrl =
+  process.env.MOBILE_UPDATE_BASE_URL
+  || (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : null)
+  || 'https://app.axiombiolabs.org'
 
 if (!fs.existsSync(path.join(distDir, 'index.html'))) {
   console.error('[mobile-bundle] dist/index.html not found — run the web build first (npm run build).')

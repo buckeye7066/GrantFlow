@@ -325,3 +325,45 @@ describe('fetchUpdateManifest', () => {
     await expect(fetchUpdateManifest({ fetchImpl, feedUrl: 'https://example.test/latest.json' })).rejects.toThrow(/not available yet/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// The feed and the bundle must live on GrantFlow's OWN origin (2026-08-19).
+// The apex axiombiolabs.org is a DIFFERENT Vercel project whose SPA fallback
+// answers 200 with HTML for every path, so a wrong origin here does not 404 —
+// it silently returns a web page and the whole update path goes inert.
+// ---------------------------------------------------------------------------
+describe('update origin', () => {
+  it('pins the feed to app.axiombiolabs.org, never the apex', () => {
+    expect(UPDATE_BASE_URL).toBe('https://app.axiombiolabs.org')
+    expect(resolveFeedUrl()).toBe('https://app.axiombiolabs.org/mobile/latest.json')
+  })
+
+  it('HEALS a manifest that names the wrong origin', () => {
+    const feed = 'https://app.axiombiolabs.org/mobile/latest.json'
+    const parsed = parseUpdateManifest(
+      { version: '1.0.1', url: 'https://axiombiolabs.org/mobile/bundle-1.0.1.zip' },
+      feed,
+    )
+    // The zip is written beside its own manifest, so same-origin is an
+    // invariant of the build; `new URL(absolute, base)` alone would NOT fix
+    // this, because an absolute url ignores the base entirely.
+    expect(parsed.url).toBe('https://app.axiombiolabs.org/mobile/bundle-1.0.1.zip')
+  })
+
+  it('accepts a relative bundle url and resolves it against the feed', () => {
+    const parsed = parseUpdateManifest(
+      { version: '1.0.1', url: 'bundle-1.0.1.zip' },
+      'https://app.axiombiolabs.org/mobile/latest.json',
+    )
+    expect(parsed.url).toBe('https://app.axiombiolabs.org/mobile/bundle-1.0.1.zip')
+  })
+
+  it('leaves a correct absolute url untouched', () => {
+    const good = 'https://app.axiombiolabs.org/mobile/bundle-1.0.1.zip'
+    const parsed = parseUpdateManifest(
+      { version: '1.0.1', url: good },
+      'https://app.axiombiolabs.org/mobile/latest.json',
+    )
+    expect(parsed.url).toBe(good)
+  })
+})
