@@ -6,7 +6,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Progress } from '@/components/ui/progress'
 import { Loader2, RefreshCw, Download, CheckCircle2 } from 'lucide-react'
 import { version as APP_VERSION } from '../../../package.json'
-import { fetchUpdateManifest, isNewerVersion, parseVersion } from '@/lib/mobileUpdater'
+import {
+  downloadAndApplyUpdate,
+  fetchUpdateManifest,
+  isNewerVersion,
+  parseVersion,
+  requiresNativeUpdate,
+} from '@/lib/mobileUpdater'
 
 /**
  * "App Updates" card for the Settings page. Only rendered inside the native
@@ -21,11 +27,11 @@ export default function MobileUpdateCard() {
   const isNative = Capacitor.isNativePlatform()
   const [nativeVersion, setNativeVersion] = useState('')
   const [bundleVersion, setBundleVersion] = useState(APP_VERSION)
-  const [phase, setPhase] = useState('idle') // idle | checking | available | downloading | applying | uptodate | error
+  // idle | checking | available | native-required | downloading | applying | uptodate | error
+  const [phase, setPhase] = useState('idle')
   const [manifest, setManifest] = useState(null)
   const [error, setError] = useState('')
   const [progress, setProgress] = useState(0)
-  const listenerRef = useRef(null)
   const checkingRef = useRef(false)
   const downloadingRef = useRef(false)
 
@@ -49,7 +55,6 @@ export default function MobileUpdateCard() {
     })()
     return () => {
       cancelled = true
-      listenerRef.current?.remove?.()
     }
   }, [isNative])
 
@@ -83,18 +88,20 @@ export default function MobileUpdateCard() {
     setProgress(0)
     try {
       const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
-      listenerRef.current = await CapacitorUpdater.addListener('download', (event) => {
-        if (typeof event?.percent === 'number') setProgress(event.percent)
+      // Single shared apply path (also used by MobileUpdateWatcher): it refuses
+      // a manifest with no published sha256 and hands the digest to the plugin,
+      // which verifies the downloaded zip and throws on mismatch. There is no
+      // code path here that applies an unverified bundle.
+      await downloadAndApplyUpdate({
+        manifest,
+        updater: CapacitorUpdater,
+        onProgress: (percent) => {
+          setProgress(percent)
+          setPhase('downloading')
+        },
       })
-      const bundle = await CapacitorUpdater.download({ url: manifest.url, version: manifest.version })
-      listenerRef.current?.remove?.()
-      listenerRef.current = null
       setPhase('applying')
-      // set() swaps to the new bundle and reloads the webview.
-      await CapacitorUpdater.set(bundle)
     } catch (err) {
-      listenerRef.current?.remove?.()
-      listenerRef.current = null
       setError(err?.message || 'Update download failed.')
       setPhase('error')
     } finally {
@@ -105,6 +112,13 @@ export default function MobileUpdateCard() {
   if (!isNative) return null
 
   const busy = phase === 'checking' || phase === 'downloading' || phase === 'applying'
+  // OTA replaces the web bundle only — a bundle declaring a native floor above
+  // the installed app must be reported as "install a new app version", never
+  // offered as a web update that cannot deliver it. Derived at RENDER, not
+  // frozen when the check ran: the native version loads asynchronously, so a
+  // fast tap could otherwise be adjudicated against an empty version and slip
+  // past this gate.
+  const nativeRequired = Boolean(manifest) && requiresNativeUpdate(manifest, nativeVersion)
 
   return (
     <Card>
@@ -121,11 +135,20 @@ export default function MobileUpdateCard() {
             <AlertDescription>Up to date (v{bundleVersion}).</AlertDescription>
           </Alert>
         )}
-        {phase === 'available' && manifest && (
+        {phase === 'available' && manifest && !nativeRequired && (
           <Alert>
             <AlertDescription>
               Update available: v{manifest.version}
               {manifest.notes ? ` — ${manifest.notes}` : ''}
+            </AlertDescription>
+          </Alert>
+        )}
+        {phase === 'available' && nativeRequired && manifest && (
+          <Alert>
+            <AlertDescription>
+              A new app version is required. GrantFlow v{manifest.version} needs app version{' '}
+              {manifest.minNativeVersion} or newer — install the latest GrantFlow app to get it. An
+              in-app update replaces the web bundle only and cannot deliver this change.
             </AlertDescription>
           </Alert>
         )}
@@ -152,7 +175,7 @@ export default function MobileUpdateCard() {
             )}
             Check for Updates
           </Button>
-          {phase === 'available' && manifest && (
+          {phase === 'available' && manifest && !nativeRequired && (
             <Button onClick={downloadAndApply} disabled={busy}>
               <Download className="h-4 w-4 mr-2" />
               Install v{manifest.version}

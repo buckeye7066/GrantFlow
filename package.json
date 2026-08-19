@@ -3,6 +3,12 @@
   "private": true,
   "version": "1.0.1",
   "type": "module",
+  "mobile": {
+    "//": "Lowest NATIVE app version this web bundle is safe to run on, published into dist/mobile/latest.json by scripts/build-mobile-bundle.mjs. OTA replaces the web bundle only, so raise this when a web bundle starts REQUIRING native code an older app does not carry — the app then says 'a new app version is required' instead of applying a bundle that cannot work.",
+    "//versionLine": "MUST be expressed on the version line the SHIPPED app actually carries. .github/workflows/android-build.yml sets ANDROID_VERSION_NAME=1.0.${github.run_number}, so real APKs are 1.0.<run>, NOT 1.1 — a floor of '1.1' compares GREATER than '1.0.47' and would tell every real device a new app is required, killing OTA outright. Any floor must therefore look like '1.0.<run>' of the first build that carries the required native code.",
+    "//why-empty": "Empty = no floor, which is correct today: @capacitor/local-notifications and @capacitor/app are new NATIVE plugins, but the JS degrades silently where they are absent (the OS notification simply does not appear) and the in-app update prompt still works, so this bundle is safe on every existing build.",
+    "minNativeVersion": ""
+  },
   "engines": {
     "node": ">=20.19.0 <21"
   },
@@ -124,8 +130,10 @@
     "@aws-sdk/client-textract": "^3.1111.0",
     "@babel/parser": "7.29.8",
     "@capacitor/android": "8.5.0",
+    "@capacitor/app": "^8.1.1",
     "@capacitor/core": "8.5.0",
     "@capacitor/ios": "8.5.0",
+    "@capacitor/local-notifications": "^8.3.0",
     "@capgo/capacitor-updater": "^8.51.9",
     "@sentry/node": "10.70.0",
     "acorn": "^8.18.0",
