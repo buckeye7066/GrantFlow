@@ -1299,7 +1299,12 @@ export async function adminCrawlerCancel({ jobId, reason }, context) {
 
   const cancelReason = reason || 'Cancelled by admin'
 
-  db.prepare(
+  // MUST be awaited. Without it the UPDATE's rejection became an unhandled
+  // rejection while this function had already returned
+  // `new_status: 'cancelled'` / "Job cancelled successfully" — a success claim
+  // structurally independent of the write. Every neighbouring call in this
+  // file awaits (the SELECT above included); this one did not.
+  await db.prepare(
     `
     UPDATE crawler_jobs
     SET status = 'cancelled',

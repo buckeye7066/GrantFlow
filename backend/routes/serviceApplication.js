@@ -149,16 +149,30 @@ router.post('/', sensitiveRateLimiter, async (req, res) => {
         submittedAt: new Date().toISOString(),
       }
 
-      // Send to admin email (determined server-side, not from client)
+      // Send to admin email (determined server-side, not from client).
+      // The row is saved either way, so `success` stays true — but the
+      // RESPONSE MUST NOT CLAIM A SEND THAT DID NOT HAPPEN. With
+      // SERVICE_APPLICATION_EMAIL unset (the default — it is commented out in
+      // .env.example and no boot check requires it) this branch warns to a log
+      // nobody reads and used to answer "Message sent successfully", while
+      // module load had already warned "…emails will not be sent." The caller
+      // was told the opposite of what the process knew. Mirrors the
+      // `email_sent` + reason shape auth.js already uses for OTP delivery.
+      let notificationSent = false
       if (SERVICE_APPLICATION_EMAIL) {
         await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, emailContent)
+        notificationSent = true
       } else {
         console.warn('[serviceApplication] Skipping contact email — SERVICE_APPLICATION_EMAIL not configured.')
       }
 
       return res.json({
         success: true,
-        message: 'Message sent successfully',
+        message: notificationSent
+          ? 'Message sent successfully'
+          : 'Message recorded. Admin email notification is not configured, so nothing was emailed.',
+        notification_sent: notificationSent,
+        notification_error: notificationSent ? null : 'admin_email_not_configured',
         applicationId,
       })
     }
@@ -238,16 +252,24 @@ router.post('/submit', sensitiveRateLimiter, async (req, res) => {
       submittedAt: submittedAt || new Date().toISOString(),
     }
 
-    // Send the email
+    // Send the email. Same rule as the contact branch above: the application
+    // row is persisted regardless, but an unconfigured recipient must not be
+    // reported as a delivered notification.
+    let notificationSent = false
     if (SERVICE_APPLICATION_EMAIL) {
       await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, applicationData)
+      notificationSent = true
     } else {
       console.warn('[serviceApplication] Skipping application email — SERVICE_APPLICATION_EMAIL not configured.')
     }
 
     res.json({
       success: true,
-      message: 'Application submitted successfully',
+      message: notificationSent
+        ? 'Application submitted successfully'
+        : 'Application recorded. Admin email notification is not configured, so nothing was emailed.',
+      notification_sent: notificationSent,
+      notification_error: notificationSent ? null : 'admin_email_not_configured',
       applicationId,
     })
   } catch (error) {

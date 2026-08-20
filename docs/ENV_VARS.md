@@ -693,7 +693,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `PROFILE_GATE_TRUST_ENGINE` | Yes | Yes | Backend/Node |
 | `PROFILE_ID` | Yes | Yes | Backend/Node |
 | `PROFILE_RESULT_TARGET` | Yes | Yes | Backend/Node |
-| `PROFILE_SCOPE_CI_STRICT` | Yes | Yes | Backend/Node |
 | `PROFILE_SCOPE_FUNDING_READS` | Yes | Yes | Backend/Node |
 | `PROFILE_SCOPE_MODE` | Yes | Yes | Backend/Node |
 | `PROFILE_SCOPE_STRICT` | Yes | Yes | Backend/Node |
@@ -895,6 +894,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `VERCEL` | Yes | Yes | Backend/Node |
 | `VERCEL_ENV` | Yes | Yes | Backend/Node |
 | `VERCEL_GIT_COMMIT_SHA` | Yes | Yes | Used in both backend + frontend |
+| `VERCEL_PROJECT_PRODUCTION_URL` | Yes | Yes | Backend/Node |
 | `VERIFICATION_CACHE_MAX_ENTRIES` | Yes | Yes | Backend/Node |
 | `VERIFICATION_CACHE_TTL_MS` | Yes | Yes | Backend/Node |
 | `VERIFIED_AT_HONESTY_BOOT_LIMIT` | Yes | Yes | Backend/Node |
@@ -1065,7 +1065,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `.env.example:47` = `http://127.0.0.1:8080`
   - `backend/.env.example:18` = `http://127.0.0.1:8080`
 - **Code references**:
-  - `backend/services/anyaAdminTools.js:L1330` (process.env)
+  - `backend/services/anyaAdminTools.js:L1335` (process.env)
 
 ### `ADMIN_TOKEN`
 
@@ -1083,7 +1083,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/routes/vehicles.js:L37` (process.env)
   - `backend/scripts/check-crawler-results.mjs:L25` (process.env)
   - `backend/server.js:L192–L1985` (process.env)
-  - `backend/services/anyaAdminTools.js:L1367` (process.env)
+  - `backend/services/anyaAdminTools.js:L1372` (process.env)
   - `backend/services/anyaAutonomousFunctionTesting.js:L220` (process.env)
   - `backend/services/anyaStartupAudit.js:L42` (process.env)
   - `backend/services/anyaToolRegistry.js:L4240–L4419` (process.env)
@@ -1685,7 +1685,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/routes/sam.js:L180` (process.env)
   - `backend/routes/vehicles.js:L38` (process.env)
   - `backend/server.js:L192–L1985` (process.env)
-  - `backend/services/anyaAdminTools.js:L1367` (process.env)
+  - `backend/services/anyaAdminTools.js:L1372` (process.env)
   - `backend/services/anyaAutonomousFunctionTesting.js:L220` (process.env)
   - `backend/services/anyaStartupAudit.js:L42` (process.env)
   - `backend/services/anyaToolRegistry.js:L4240–L4419` (process.env)
@@ -2332,7 +2332,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/services/errorReporter.js:L68` (process.env)
   - `backend/tests/adminReinterviewGate.test.js:L23–L23` (process.env)
   - `backend/tests/refreshLoginRecording.test.js:L24–L24` (process.env)
-  - `scripts/verify-stability.mjs:L17` (process.env)
+  - `scripts/verify-stability.mjs:L38` (process.env)
   - `tests/unit/hamilton-auth-backup-plan.test.mjs:L27–L28` (process.env)
   - `tests/unit/hamilton-credential-csv-import.test.mjs:L38–L39` (process.env)
   - `tests/unit/hamilton-credential-vault-management.test.mjs:L32–L33` (process.env)
@@ -2542,7 +2542,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `.env.example:207` = `8080`
   - `backend/.env.example:178` = `8080`
 - **Code references**:
-  - `backend/services/anyaAdminTools.js:L1332` (process.env)
+  - `backend/services/anyaAdminTools.js:L1337` (process.env)
   - `scripts/runtime-crawl-local.mjs:L78` (process.env)
 
 ### `BACKUP_DIR`
@@ -3435,8 +3435,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `src/components/shared/ErrorBoundary.jsx:L21` (import.meta.env)
   - `src/components/shared/clickTracer.jsx:L4` (import.meta.env)
   - `src/config/env.js:L31` (import.meta.env)
-  - `src/lib/mobileUpdater.js:L27` (import.meta.env)
-  - `src/lib/mobileUpdater.test.js:L134–L138` (import.meta.env)
+  - `src/lib/mobileUpdater.js:L39` (import.meta.env)
+  - `src/lib/mobileUpdater.test.js:L143–L147` (import.meta.env)
   - `src/utils/logger.js:L11` (import.meta.env)
 
 ### `DIRECT_LAND_TOKEN_TTL_MS`
@@ -5356,7 +5356,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `.env.example:522` = `http://127.0.0.1:8080`
   - `backend/.env.example:493` = `http://127.0.0.1:8080`
 - **Code references**:
-  - `backend/services/anyaAdminTools.js:L1330` (process.env)
+  - `backend/services/anyaAdminTools.js:L1335` (process.env)
 
 ### `INTERNAL_BASE_URL`
 
@@ -5728,7 +5728,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/routes/health.js:L103` (process.env)
   - `backend/server.js:L1657–L1982` (process.env)
   - `backend/services/errorReporter.js:L68` (process.env)
-  - `scripts/verify-stability.mjs:L17` (process.env)
+  - `scripts/verify-stability.mjs:L38` (process.env)
   - `tests/unit/hamilton-auth-backup-plan.test.mjs:L27` (process.env)
   - `tests/unit/hamilton-credential-csv-import.test.mjs:L38` (process.env)
   - `tests/unit/hamilton-credential-vault-management.test.mjs:L32` (process.env)
@@ -6117,7 +6117,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `.env.example:613` = ``
   - `backend/.env.example:584` = ``
 - **Code references**:
-  - `scripts/build-mobile-bundle.mjs:L76` (process.env)
+  - `scripts/build-mobile-bundle.mjs:L91` (process.env)
 
 ### `MOBILE_UPDATE_BASE_URL`
 
@@ -6125,7 +6125,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `.env.example:614` = `http://127.0.0.1:8080`
   - `backend/.env.example:585` = `http://127.0.0.1:8080`
 - **Code references**:
-  - `scripts/build-mobile-bundle.mjs:L38` (process.env)
+  - `scripts/build-mobile-bundle.mjs:L49` (process.env)
 
 ### `MODE`
 
@@ -6747,7 +6747,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
 - **Code references**:
   - `backend/routes/sam.js:L164` (process.env)
   - `backend/server.js:L230–L3663` (process.env)
-  - `backend/services/anyaAdminTools.js:L1332` (process.env)
+  - `backend/services/anyaAdminTools.js:L1337` (process.env)
   - `backend/services/anyaAutonomousFunctionTesting.js:L210` (process.env)
   - `backend/services/anyaStartupAudit.js:L40` (process.env)
   - `backend/services/anyaToolRegistry.js:L4230–L4415` (process.env)
@@ -7041,19 +7041,11 @@ requirements remain in `docs/ENVIRONMENT.md`.
 - **Code references**:
   - `backend/config/profileResultFloor.js:L161–L165` (process.env)
 
-### `PROFILE_SCOPE_CI_STRICT`
+### `PROFILE_SCOPE_FUNDING_READS`
 
 - **Templates**:
   - `.env.example:712` = ``
   - `backend/.env.example:683` = ``
-- **Code references**:
-  - `scripts/codemod/no-unscoped-profile-query.mjs:L106` (process.env)
-
-### `PROFILE_SCOPE_FUNDING_READS`
-
-- **Templates**:
-  - `.env.example:713` = ``
-  - `backend/.env.example:684` = ``
 - **Code references**:
   - `backend/db/scopedQuery.js:L276` (process.env)
   - `tests/unit/scoped-query.test.mjs:L135–L143` (process.env)
@@ -7061,8 +7053,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `PROFILE_SCOPE_MODE`
 
 - **Templates**:
-  - `.env.example:714` = ``
-  - `backend/.env.example:685` = ``
+  - `.env.example:713` = ``
+  - `backend/.env.example:684` = ``
 - **Code references**:
   - `backend/db/scopedQuery.js:L293` (process.env)
   - `tests/unit/scoped-query.test.mjs:L55–L64` (process.env)
@@ -7070,8 +7062,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `PROFILE_SCOPE_STRICT`
 
 - **Templates**:
-  - `.env.example:715` = ``
-  - `backend/.env.example:686` = ``
+  - `.env.example:714` = ``
+  - `backend/.env.example:685` = ``
 - **Code references**:
   - `backend/db/scopedQuery.js:L294` (process.env)
   - `tests/unit/scoped-query.test.mjs:L69–L75` (process.env)
@@ -7079,72 +7071,72 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `PROFILE_SCORING_MAX_CANDIDATES`
 
 - **Templates**:
-  - `.env.example:716` = `25000`
-  - `backend/.env.example:687` = `25000`
+  - `.env.example:715` = `25000`
+  - `backend/.env.example:686` = `25000`
 - **Code references**:
   - `backend/routes/opportunities.js:L40` (process.env)
 
 ### `PROFILE_TAXONOMY_DEBUG`
 
 - **Templates**:
-  - `.env.example:717` = ``
-  - `backend/.env.example:688` = ``
+  - `.env.example:716` = ``
+  - `backend/.env.example:687` = ``
 - **Code references**:
   - `backend/services/profile/profileTaxonomy.js:L977` (process.env)
 
 ### `PROMOPILOT_ATTRIBUTION_SECRET`
 
 - **Templates**:
-  - `.env.example:718` = `<REPLACE_ME>`
-  - `backend/.env.example:689` = `<REPLACE_ME>`
+  - `.env.example:717` = `<REPLACE_ME>`
+  - `backend/.env.example:688` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/services/promoAttribution.js:L58` (process.env)
 
 ### `PROMOPILOT_ATTRIBUTION_URL`
 
 - **Templates**:
-  - `.env.example:719` = `http://127.0.0.1:8080`
-  - `backend/.env.example:690` = `http://127.0.0.1:8080`
+  - `.env.example:718` = `http://127.0.0.1:8080`
+  - `backend/.env.example:689` = `http://127.0.0.1:8080`
 - **Code references**:
   - `backend/services/promoAttribution.js:L57` (process.env)
 
 ### `PROMOTION_AMOUNT_BUDGET`
 
 - **Templates**:
-  - `.env.example:720` = ``
-  - `backend/.env.example:691` = ``
+  - `.env.example:719` = ``
+  - `backend/.env.example:690` = ``
 - **Code references**:
   - `backend/services/pipelinePromotion.js:L268` (process.env)
 
 ### `PROMOTION_AMOUNT_GRACE_DAYS`
 
 - **Templates**:
-  - `.env.example:721` = ``
-  - `backend/.env.example:692` = ``
+  - `.env.example:720` = ``
+  - `backend/.env.example:691` = ``
 - **Code references**:
   - `backend/services/sam/samRegistry.js:L89` (process.env)
 
 ### `PROMOTION_BATCH`
 
 - **Templates**:
-  - `.env.example:722` = ``
-  - `backend/.env.example:693` = ``
+  - `.env.example:721` = ``
+  - `backend/.env.example:692` = ``
 - **Code references**:
   - `backend/services/pipelinePromotion.js:L266` (process.env)
 
 ### `PROMOTION_TIME_BUDGET_MS`
 
 - **Templates**:
-  - `.env.example:723` = ``
-  - `backend/.env.example:694` = ``
+  - `.env.example:722` = ``
+  - `backend/.env.example:693` = ``
 - **Code references**:
   - `backend/services/pipelinePromotion.js:L267` (process.env)
 
 ### `PROPOSAL_CRITIC`
 
 - **Templates**:
-  - `.env.example:724` = ``
-  - `backend/.env.example:695` = ``
+  - `.env.example:723` = ``
+  - `backend/.env.example:694` = ``
 - **Code references**:
   - `backend/services/proposalCritic.js:L40` (process.env)
   - `backend/tests/proposalCritic.test.js:L16–L136` (process.env)
@@ -7152,16 +7144,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `PUBLIC_APP_URL`
 
 - **Templates**:
-  - `.env.example:725` = `http://127.0.0.1:8080`
-  - `backend/.env.example:696` = `http://127.0.0.1:8080`
+  - `.env.example:724` = `http://127.0.0.1:8080`
+  - `backend/.env.example:695` = `http://127.0.0.1:8080`
 - **Code references**:
   - `backend/services/stripeService.js:L100` (process.env)
 
 ### `PUBLIC_URL`
 
 - **Templates**:
-  - `.env.example:726` = `http://127.0.0.1:8080`
-  - `backend/.env.example:697` = `http://127.0.0.1:8080`
+  - `.env.example:725` = `http://127.0.0.1:8080`
+  - `backend/.env.example:696` = `http://127.0.0.1:8080`
 - **Code references**:
   - `backend/routes/auth.js:L201` (process.env)
   - `backend/routes/stripe.js:L24` (process.env)
@@ -7170,16 +7162,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `QUEUE_DRAIN_INTERVAL_MS`
 
 - **Templates**:
-  - `.env.example:727` = ``
-  - `backend/.env.example:698` = ``
+  - `.env.example:726` = ``
+  - `backend/.env.example:697` = ``
 - **Code references**:
   - `backend/services/crawlerDispatcher.js:L811` (process.env)
 
 ### `QUEUE_POLL_ENABLED`
 
 - **Templates**:
-  - `.env.example:728` = ``
-  - `backend/.env.example:699` = ``
+  - `.env.example:727` = ``
+  - `backend/.env.example:698` = ``
 - **Code references**:
   - `backend/server.js:L3537` (process.env)
   - `backend/startup/queueRecovery.js:L157` (process.env)
@@ -7187,8 +7179,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `QUEUE_POLL_INTERVAL_MS`
 
 - **Templates**:
-  - `.env.example:729` = ``
-  - `backend/.env.example:700` = ``
+  - `.env.example:728` = ``
+  - `backend/.env.example:699` = ``
 - **Code references**:
   - `backend/server.js:L3536` (process.env)
   - `backend/startup/queueRecovery.js:L153` (process.env)
@@ -7196,8 +7188,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `QUEUE_STAGGER_DELAY_MS`
 
 - **Templates**:
-  - `.env.example:730` = ``
-  - `backend/.env.example:701` = ``
+  - `.env.example:729` = ``
+  - `backend/.env.example:700` = ``
 - **Code references**:
   - `backend/server.js:L3542` (process.env)
   - `backend/startup/queueRecovery.js:L252` (process.env)
@@ -7205,8 +7197,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `QUEUE_STARTUP_DELAY_MS`
 
 - **Templates**:
-  - `.env.example:731` = ``
-  - `backend/.env.example:702` = ``
+  - `.env.example:730` = ``
+  - `backend/.env.example:701` = ``
 - **Code references**:
   - `backend/server.js:L3541` (process.env)
   - `backend/startup/queueRecovery.js:L248` (process.env)
@@ -7214,8 +7206,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `RAILWAY_DEPLOYMENT_ID`
 
 - **Templates**:
-  - `.env.example:732` = ``
-  - `backend/.env.example:703` = ``
+  - `.env.example:731` = ``
+  - `backend/.env.example:702` = ``
 - **Code references**:
   - `backend/config/constants.js:L13` (process.env)
   - `backend/db/index.js:L105` (process.env)
@@ -7226,16 +7218,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `RAILWAY_DEPLOYMENT_START_TIME`
 
 - **Templates**:
-  - `.env.example:733` = ``
-  - `backend/.env.example:704` = ``
+  - `.env.example:732` = ``
+  - `backend/.env.example:703` = ``
 - **Code references**:
   - `backend/server.js:L2899` (process.env)
 
 ### `RAILWAY_ENVIRONMENT`
 
 - **Templates**:
-  - `.env.example:734` = ``
-  - `backend/.env.example:705` = ``
+  - `.env.example:733` = ``
+  - `backend/.env.example:704` = ``
 - **Code references**:
   - `backend/db/index.js:L65–L102` (process.env)
   - `backend/routes/auth.js:L490–L3375` (process.env)
@@ -7249,8 +7241,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `RAILWAY_ENVIRONMENT_ID`
 
 - **Templates**:
-  - `.env.example:735` = ``
-  - `backend/.env.example:706` = ``
+  - `.env.example:734` = ``
+  - `backend/.env.example:705` = ``
 - **Code references**:
   - `backend/config/constants.js:L12` (process.env)
   - `backend/server.js:L207` (process.env)
@@ -7259,8 +7251,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `RAILWAY_GIT_BRANCH`
 
 - **Templates**:
-  - `.env.example:736` = ``
-  - `backend/.env.example:707` = ``
+  - `.env.example:735` = ``
+  - `backend/.env.example:706` = ``
 - **Code references**:
   - `backend/routes/health.js:L594` (process.env)
   - `backend/routes/version.js:L40` (process.env)
@@ -7268,8 +7260,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `RAILWAY_GIT_COMMIT_SHA`
 
 - **Templates**:
-  - `.env.example:737` = ``
-  - `backend/.env.example:708` = ``
+  - `.env.example:736` = ``
+  - `backend/.env.example:707` = ``
 - **Code references**:
   - `backend/db/index.js:L104` (process.env)
   - `backend/routes/health.js:L72–L593` (process.env)
@@ -7281,48 +7273,48 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `RAILWAY_PROJECT_ID`
 
 - **Templates**:
-  - `.env.example:738` = ``
-  - `backend/.env.example:709` = ``
+  - `.env.example:737` = ``
+  - `backend/.env.example:708` = ``
 - **Code references**:
   - `backend/db/index.js:L12–L100` (process.env)
 
 ### `RAILWAY_SERVICE_ID`
 
 - **Templates**:
-  - `.env.example:739` = ``
-  - `backend/.env.example:710` = ``
+  - `.env.example:738` = ``
+  - `backend/.env.example:709` = ``
 - **Code references**:
   - `backend/db/index.js:L12–L101` (process.env)
 
 ### `RAILWAY_STATIC_URL`
 
 - **Templates**:
-  - `.env.example:740` = `http://127.0.0.1:8080`
-  - `backend/.env.example:711` = `http://127.0.0.1:8080`
+  - `.env.example:739` = `http://127.0.0.1:8080`
+  - `backend/.env.example:710` = `http://127.0.0.1:8080`
 - **Code references**:
   - `backend/db/index.js:L103` (process.env)
 
 ### `RAILWAY_VOLUME_MOUNT_PATH`
 
 - **Templates**:
-  - `.env.example:741` = ``
-  - `backend/.env.example:712` = ``
+  - `.env.example:740` = ``
+  - `backend/.env.example:711` = ``
 - **Code references**:
   - `backend/services/maintenance/diskUsage.js:L28` (process.env)
 
 ### `REATTACH_ADMIN_USER_ID`
 
 - **Templates**:
-  - `.env.example:742` = ``
-  - `backend/.env.example:713` = ``
+  - `.env.example:741` = ``
+  - `backend/.env.example:712` = ``
 - **Code references**:
   - `scripts/reattach-users-simple.mjs:L55` (env helper)
 
 ### `REATTACH_CONFIRM`
 
 - **Templates**:
-  - `.env.example:743` = ``
-  - `backend/.env.example:714` = ``
+  - `.env.example:742` = ``
+  - `backend/.env.example:713` = ``
 - **Code references**:
   - `scripts/reattach-users-simple.mjs:L63` (env helper)
   - `tests/unit/operational-script-authority-safety.test.mjs:L131` (env helper)
@@ -7330,40 +7322,40 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `REATTACH_CONFIRM_DB_PATH`
 
 - **Templates**:
-  - `.env.example:744` = ``
-  - `backend/.env.example:715` = ``
+  - `.env.example:743` = ``
+  - `backend/.env.example:714` = ``
 - **Code references**:
   - `scripts/reattach-users-simple.mjs:L54` (env helper)
 
 ### `REATTACH_DB_PATH`
 
 - **Templates**:
-  - `.env.example:745` = ``
-  - `backend/.env.example:716` = ``
+  - `.env.example:744` = ``
+  - `backend/.env.example:715` = ``
 - **Code references**:
   - `scripts/reattach-users-simple.mjs:L53` (env helper)
 
 ### `REATTACH_SUMMARY_PATH`
 
 - **Templates**:
-  - `.env.example:746` = ``
-  - `backend/.env.example:717` = ``
+  - `.env.example:745` = ``
+  - `backend/.env.example:716` = ``
 - **Code references**:
   - `scripts/reattach-users-simple.mjs:L56` (env helper)
 
 ### `REGISTRY_VERIFICATION_TIMEOUT_MS`
 
 - **Templates**:
-  - `.env.example:747` = ``
-  - `backend/.env.example:718` = ``
+  - `.env.example:746` = ``
+  - `backend/.env.example:717` = ``
 - **Code references**:
   - `backend/services/verification/verificationConfig.js:L51` (env helper)
 
 ### `REPO_REWARDS_URL`
 
 - **Templates**:
-  - `.env.example:748` = `http://127.0.0.1:8080`
-  - `backend/.env.example:719` = `http://127.0.0.1:8080`
+  - `.env.example:747` = `http://127.0.0.1:8080`
+  - `backend/.env.example:718` = `http://127.0.0.1:8080`
 - **Code references**:
   - `backend/services/amy/repoRewardsScout.js:L62` (process.env)
   - `backend/tests/repoRewardsScout.test.js:L134–L142` (process.env)
@@ -7371,24 +7363,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `REQUEST_ID_ERROR_STORE_MAX`
 
 - **Templates**:
-  - `.env.example:749` = ``
-  - `backend/.env.example:720` = ``
+  - `.env.example:748` = ``
+  - `backend/.env.example:719` = ``
 - **Code references**:
   - `backend/services/requestIdErrorStore.js:L1` (process.env)
 
 ### `REQUEST_TIMEOUT_MS`
 
 - **Templates**:
-  - `.env.example:750` = ``
-  - `backend/.env.example:721` = ``
+  - `.env.example:749` = ``
+  - `backend/.env.example:720` = ``
 - **Code references**:
   - `backend/server.js:L542` (process.env)
 
 ### `RESEND_API_KEY`
 
 - **Templates**:
-  - `.env.example:751` = `<REPLACE_ME>`
-  - `backend/.env.example:722` = `<REPLACE_ME>`
+  - `.env.example:750` = `<REPLACE_ME>`
+  - `backend/.env.example:721` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/routes/auth.js:L3268–L3372` (process.env)
   - `backend/services/deadlineEmailSmsService.js:L22` (process.env)
@@ -7399,24 +7391,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `RESULT_FLOOR_PROFILE_LIMIT`
 
 - **Templates**:
-  - `.env.example:752` = ``
-  - `backend/.env.example:723` = ``
+  - `.env.example:751` = ``
+  - `backend/.env.example:722` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L8157–L8160` (process.env)
 
 ### `ROBERT_ADMIN_TOKEN`
 
 - **Templates**:
-  - `.env.example:753` = `<REPLACE_ME>`
-  - `backend/.env.example:724` = `<REPLACE_ME>`
+  - `.env.example:752` = `<REPLACE_ME>`
+  - `backend/.env.example:723` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/routes/robert.js:L63` (process.env)
 
 ### `ROBERT_ALLOW_LIVE_WEB`
 
 - **Templates**:
-  - `.env.example:754` = ``
-  - `backend/.env.example:725` = ``
+  - `.env.example:753` = ``
+  - `backend/.env.example:724` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L79` (env helper)
   - `tests/unit/robert-agent-silent-failure.test.mjs:L24–L39` (process.env)
@@ -7425,24 +7417,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_ALLOW_REVIEW_MATCH_TOASTS`
 
 - **Templates**:
-  - `.env.example:755` = ``
-  - `backend/.env.example:726` = ``
+  - `.env.example:754` = ``
+  - `backend/.env.example:725` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L101` (env helper)
 
 ### `ROBERT_ALLOW_SEARCH_ENGINE`
 
 - **Templates**:
-  - `.env.example:756` = ``
-  - `backend/.env.example:727` = ``
+  - `.env.example:755` = ``
+  - `backend/.env.example:726` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L80` (env helper)
 
 ### `ROBERT_ALLOW_SOURCE_DISCOVERY`
 
 - **Templates**:
-  - `.env.example:757` = ``
-  - `backend/.env.example:728` = ``
+  - `.env.example:756` = ``
+  - `backend/.env.example:727` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L81` (env helper)
   - `tests/unit/robert-agent-silent-failure.test.mjs:L25` (process.env)
@@ -7451,48 +7443,48 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_AUTOSEED_MAX_ENTITIES`
 
 - **Templates**:
-  - `.env.example:758` = ``
-  - `backend/.env.example:729` = ``
+  - `.env.example:757` = ``
+  - `backend/.env.example:728` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L71` (env helper)
 
 ### `ROBERT_AUTOSEED_MAX_PROFILES`
 
 - **Templates**:
-  - `.env.example:759` = ``
-  - `backend/.env.example:730` = ``
+  - `.env.example:758` = ``
+  - `backend/.env.example:729` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L70` (env helper)
 
 ### `ROBERT_AUTOSEED_MIN_RISK`
 
 - **Templates**:
-  - `.env.example:760` = ``
-  - `backend/.env.example:731` = ``
+  - `.env.example:759` = ``
+  - `backend/.env.example:730` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L72` (env helper)
 
 ### `ROBERT_AUTOSEED_ON_SCHEDULE`
 
 - **Templates**:
-  - `.env.example:761` = ``
-  - `backend/.env.example:732` = ``
+  - `.env.example:760` = ``
+  - `backend/.env.example:731` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L68` (env helper)
 
 ### `ROBERT_AUTOSEED_SCHEDULE`
 
 - **Templates**:
-  - `.env.example:762` = ``
-  - `backend/.env.example:733` = ``
+  - `.env.example:761` = ``
+  - `backend/.env.example:732` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L69` (env helper)
 
 ### `ROBERT_AUTO_INGEST_VERIFIED`
 
 - **Templates**:
-  - `.env.example:763` = ``
-  - `backend/.env.example:734` = ``
+  - `.env.example:762` = ``
+  - `backend/.env.example:733` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L83` (env helper)
   - `tests/unit/robert-agent-silent-failure.test.mjs:L26–L40` (process.env)
@@ -7501,24 +7493,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_BATCH_LOW_PRIORITY_RECOMMENDATIONS`
 
 - **Templates**:
-  - `.env.example:764` = ``
-  - `backend/.env.example:735` = ``
+  - `.env.example:763` = ``
+  - `backend/.env.example:734` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L102` (env helper)
 
 ### `ROBERT_CONTACTS_MAILBOX`
 
 - **Templates**:
-  - `.env.example:765` = ``
-  - `backend/.env.example:736` = ``
+  - `.env.example:764` = ``
+  - `backend/.env.example:735` = ``
 - **Code references**:
   - `backend/services/robert/robertContactDiscovery.js:L81` (process.env)
 
 ### `ROBERT_CONTACT_HARVEST`
 
 - **Templates**:
-  - `.env.example:766` = ``
-  - `backend/.env.example:737` = ``
+  - `.env.example:765` = ``
+  - `backend/.env.example:736` = ``
 - **Code references**:
   - `backend/services/robert/robertContactHarvest.js:L33` (process.env)
   - `backend/tests/robertContactHarvest.test.js:L110–L314` (process.env)
@@ -7526,8 +7518,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_ENABLED`
 
 - **Templates**:
-  - `.env.example:767` = ``
-  - `backend/.env.example:738` = ``
+  - `.env.example:766` = ``
+  - `backend/.env.example:737` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L58` (env helper)
   - `backend/tests/samDiscoveryAwareness.test.js:L240` (process.env)
@@ -7538,16 +7530,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_FAIL_OPEN`
 
 - **Templates**:
-  - `.env.example:768` = ``
-  - `backend/.env.example:739` = ``
+  - `.env.example:767` = ``
+  - `backend/.env.example:738` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L89` (env helper)
 
 ### `ROBERT_GMAIL_ACCOUNT`
 
 - **Templates**:
-  - `.env.example:769` = ``
-  - `backend/.env.example:740` = ``
+  - `.env.example:768` = ``
+  - `backend/.env.example:739` = ``
 - **Code references**:
   - `backend/services/robert/robertContactHarvest.js:L37` (process.env)
   - `backend/services/robert/robertMailboxReaders.js:L35` (process.env)
@@ -7555,16 +7547,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_GMAIL_APP_PASSWORD`
 
 - **Templates**:
-  - `.env.example:770` = `<REPLACE_ME>`
-  - `backend/.env.example:741` = `<REPLACE_ME>`
+  - `.env.example:769` = `<REPLACE_ME>`
+  - `backend/.env.example:740` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/services/robert/robertMailboxReaders.js:L36` (process.env)
 
 ### `ROBERT_GRAPH_ACCOUNT`
 
 - **Templates**:
-  - `.env.example:771` = ``
-  - `backend/.env.example:742` = ``
+  - `.env.example:770` = ``
+  - `backend/.env.example:741` = ``
 - **Code references**:
   - `backend/services/robert/robertContactHarvest.js:L40` (process.env)
   - `backend/services/robert/robertMailboxReaders.js:L41` (process.env)
@@ -7572,40 +7564,40 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_HARVEST_DAYS`
 
 - **Templates**:
-  - `.env.example:772` = ``
-  - `backend/.env.example:743` = ``
+  - `.env.example:771` = ``
+  - `backend/.env.example:742` = ``
 - **Code references**:
   - `backend/services/robert/robertContactHarvest.js:L34` (process.env)
 
 ### `ROBERT_HARVEST_MAX_CONTACTS`
 
 - **Templates**:
-  - `.env.example:773` = ``
-  - `backend/.env.example:744` = ``
+  - `.env.example:772` = ``
+  - `backend/.env.example:743` = ``
 - **Code references**:
   - `backend/services/robert/robertContactHarvest.js:L36` (process.env)
 
 ### `ROBERT_HARVEST_MAX_MESSAGES`
 
 - **Templates**:
-  - `.env.example:774` = ``
-  - `backend/.env.example:745` = ``
+  - `.env.example:773` = ``
+  - `backend/.env.example:744` = ``
 - **Code references**:
   - `backend/services/robert/robertContactHarvest.js:L35` (process.env)
 
 ### `ROBERT_JOHN_DEFAULT_LEAD_SCORE`
 
 - **Templates**:
-  - `.env.example:775` = ``
-  - `backend/.env.example:746` = ``
+  - `.env.example:774` = ``
+  - `backend/.env.example:745` = ``
 - **Code references**:
   - `backend/services/robert/robertJohnBridge.js:L63` (process.env)
 
 ### `ROBERT_JOHN_MAX_LEADS_PER_24H`
 
 - **Templates**:
-  - `.env.example:776` = ``
-  - `backend/.env.example:747` = ``
+  - `.env.example:775` = ``
+  - `backend/.env.example:746` = ``
 - **Code references**:
   - `backend/services/robert/robertJohnBridge.js:L58` (process.env)
   - `tests/unit/robert-john-bridge.test.mjs:L209–L227` (process.env)
@@ -7613,64 +7605,64 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_MAX_OPPORTUNITIES_PER_RUN`
 
 - **Templates**:
-  - `.env.example:777` = ``
-  - `backend/.env.example:748` = ``
+  - `.env.example:776` = ``
+  - `backend/.env.example:747` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L76` (env helper)
 
 ### `ROBERT_MAX_PROFILES_PER_RUN`
 
 - **Templates**:
-  - `.env.example:778` = ``
-  - `backend/.env.example:749` = ``
+  - `.env.example:777` = ``
+  - `backend/.env.example:748` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L77` (env helper)
 
 ### `ROBERT_MAX_SOURCES_PER_RUN`
 
 - **Templates**:
-  - `.env.example:779` = ``
-  - `backend/.env.example:750` = ``
+  - `.env.example:778` = ``
+  - `backend/.env.example:749` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L74` (env helper)
 
 ### `ROBERT_MAX_TOASTS_PER_PROFILE_PER_DAY`
 
 - **Templates**:
-  - `.env.example:780` = ``
-  - `backend/.env.example:751` = ``
+  - `.env.example:779` = ``
+  - `backend/.env.example:750` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L92` (env helper)
 
 ### `ROBERT_MAX_URLS_PER_SOURCE`
 
 - **Templates**:
-  - `.env.example:781` = ``
-  - `backend/.env.example:752` = ``
+  - `.env.example:780` = ``
+  - `backend/.env.example:751` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L75` (env helper)
 
 ### `ROBERT_MESSAGE_SCAN_MAX`
 
 - **Templates**:
-  - `.env.example:782` = ``
-  - `backend/.env.example:753` = ``
+  - `.env.example:781` = ``
+  - `backend/.env.example:752` = ``
 - **Code references**:
   - `backend/services/robert/robertContactDiscovery.js:L64` (process.env)
 
 ### `ROBERT_MIN_SOURCE_TRUST`
 
 - **Templates**:
-  - `.env.example:783` = ``
-  - `backend/.env.example:754` = ``
+  - `.env.example:782` = ``
+  - `backend/.env.example:753` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L84` (env helper)
 
 ### `ROBERT_MIN_TOAST_MATCH_SCORE`
 
 - **Templates**:
-  - `.env.example:784` = ``
-  - `backend/.env.example:755` = ``
+  - `.env.example:783` = ``
+  - `backend/.env.example:754` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L51` (env helper)
   - `tests/unit/robert-safety.test.mjs:L41–L57` (process.env)
@@ -7678,8 +7670,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_MODE`
 
 - **Templates**:
-  - `.env.example:785` = ``
-  - `backend/.env.example:756` = ``
+  - `.env.example:784` = ``
+  - `backend/.env.example:755` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L73` (env helper)
   - `tests/unit/robert-agent-silent-failure.test.mjs:L27` (process.env)
@@ -7689,136 +7681,136 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_PERSIST_CANDIDATES`
 
 - **Templates**:
-  - `.env.example:786` = ``
-  - `backend/.env.example:757` = ``
+  - `.env.example:785` = ``
+  - `backend/.env.example:756` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L82` (env helper)
 
 ### `ROBERT_RATE_LIMIT_PER_DOMAIN_PER_HOUR`
 
 - **Templates**:
-  - `.env.example:787` = ``
-  - `backend/.env.example:758` = ``
+  - `.env.example:786` = ``
+  - `backend/.env.example:757` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L88` (env helper)
 
 ### `ROBERT_RECOMMENDATION_LIVE_STREAM_ENABLED`
 
 - **Templates**:
-  - `.env.example:788` = ``
-  - `backend/.env.example:759` = ``
+  - `.env.example:787` = ``
+  - `backend/.env.example:758` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L104` (env helper)
 
 ### `ROBERT_RECOMMENDATION_POLL_INTERVAL_MS`
 
 - **Templates**:
-  - `.env.example:789` = ``
-  - `backend/.env.example:760` = ``
+  - `.env.example:788` = ``
+  - `backend/.env.example:759` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L103` (env helper)
 
 ### `ROBERT_RECOMMENDATION_QUEUE_ON_LOGIN`
 
 - **Templates**:
-  - `.env.example:790` = ``
-  - `backend/.env.example:761` = ``
+  - `.env.example:789` = ``
+  - `backend/.env.example:760` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L105` (env helper)
 
 ### `ROBERT_RECOMMENDATION_TOASTS_ENABLED`
 
 - **Templates**:
-  - `.env.example:791` = ``
-  - `backend/.env.example:762` = ``
+  - `.env.example:790` = ``
+  - `backend/.env.example:761` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L91` (env helper)
 
 ### `ROBERT_REQUIRE_REAL_APPLICATION_URL`
 
 - **Templates**:
-  - `.env.example:792` = `http://127.0.0.1:8080`
-  - `backend/.env.example:763` = `http://127.0.0.1:8080`
+  - `.env.example:791` = `http://127.0.0.1:8080`
+  - `backend/.env.example:762` = `http://127.0.0.1:8080`
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L85` (env helper)
 
 ### `ROBERT_RESPECT_ROBOTS`
 
 - **Templates**:
-  - `.env.example:793` = ``
-  - `backend/.env.example:764` = ``
+  - `.env.example:792` = ``
+  - `backend/.env.example:763` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L86` (env helper)
 
 ### `ROBERT_RUN_ON_SCHEDULE`
 
 - **Templates**:
-  - `.env.example:794` = ``
-  - `backend/.env.example:765` = ``
+  - `.env.example:793` = ``
+  - `backend/.env.example:764` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L60` (env helper)
 
 ### `ROBERT_RUN_ON_STARTUP`
 
 - **Templates**:
-  - `.env.example:795` = ``
-  - `backend/.env.example:766` = ``
+  - `.env.example:794` = ``
+  - `backend/.env.example:765` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L59` (env helper)
 
 ### `ROBERT_SCAN_EMAIL_CONTACTS`
 
 - **Templates**:
-  - `.env.example:796` = ``
-  - `backend/.env.example:767` = ``
+  - `.env.example:795` = ``
+  - `backend/.env.example:766` = ``
 - **Code references**:
   - `backend/services/robert/robertContactDiscovery.js:L56` (process.env)
 
 ### `ROBERT_SCAN_EMAIL_MESSAGES`
 
 - **Templates**:
-  - `.env.example:797` = ``
-  - `backend/.env.example:768` = ``
+  - `.env.example:796` = ``
+  - `backend/.env.example:767` = ``
 - **Code references**:
   - `backend/services/robert/robertContactDiscovery.js:L60` (process.env)
 
 ### `ROBERT_SCHEDULE`
 
 - **Templates**:
-  - `.env.example:798` = ``
-  - `backend/.env.example:769` = ``
+  - `.env.example:797` = ``
+  - `backend/.env.example:768` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L61` (env helper)
 
 ### `ROBERT_SCHEDULED_MODE`
 
 - **Templates**:
-  - `.env.example:799` = ``
-  - `backend/.env.example:770` = ``
+  - `.env.example:798` = ``
+  - `backend/.env.example:769` = ``
 - **Code references**:
   - `backend/services/robert/robertScheduler.js:L103` (process.env)
 
 ### `ROBERT_TIMEOUT_MS`
 
 - **Templates**:
-  - `.env.example:800` = ``
-  - `backend/.env.example:771` = ``
+  - `.env.example:799` = ``
+  - `backend/.env.example:770` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L78` (env helper)
 
 ### `ROBERT_USER_AGENT`
 
 - **Templates**:
-  - `.env.example:801` = ``
-  - `backend/.env.example:772` = ``
+  - `.env.example:800` = ``
+  - `backend/.env.example:771` = ``
 - **Code references**:
   - `backend/services/robert/robertSafety.js:L87` (env helper)
 
 ### `ROBERT_YAHOO_PRIMARY_ACCOUNT`
 
 - **Templates**:
-  - `.env.example:802` = ``
-  - `backend/.env.example:773` = ``
+  - `.env.example:801` = ``
+  - `backend/.env.example:772` = ``
 - **Code references**:
   - `backend/services/robert/robertContactHarvest.js:L38` (process.env)
   - `backend/services/robert/robertMailboxReaders.js:L37` (process.env)
@@ -7826,16 +7818,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_YAHOO_PRIMARY_APP_PASSWORD`
 
 - **Templates**:
-  - `.env.example:803` = `<REPLACE_ME>`
-  - `backend/.env.example:774` = `<REPLACE_ME>`
+  - `.env.example:802` = `<REPLACE_ME>`
+  - `backend/.env.example:773` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/services/robert/robertMailboxReaders.js:L38` (process.env)
 
 ### `ROBERT_YAHOO_SECONDARY_ACCOUNT`
 
 - **Templates**:
-  - `.env.example:804` = ``
-  - `backend/.env.example:775` = ``
+  - `.env.example:803` = ``
+  - `backend/.env.example:774` = ``
 - **Code references**:
   - `backend/services/robert/robertContactHarvest.js:L39` (process.env)
   - `backend/services/robert/robertMailboxReaders.js:L39` (process.env)
@@ -7843,16 +7835,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `ROBERT_YAHOO_SECONDARY_APP_PASSWORD`
 
 - **Templates**:
-  - `.env.example:805` = `<REPLACE_ME>`
-  - `backend/.env.example:776` = `<REPLACE_ME>`
+  - `.env.example:804` = `<REPLACE_ME>`
+  - `backend/.env.example:775` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/services/robert/robertMailboxReaders.js:L40` (process.env)
 
 ### `RUNTIME_SECRETS_KEY`
 
 - **Templates**:
-  - `.env.example:806` = `<REPLACE_ME>`
-  - `backend/.env.example:777` = `<REPLACE_ME>`
+  - `.env.example:805` = `<REPLACE_ME>`
+  - `backend/.env.example:776` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/tests/aidTypePreferences.test.js:L16–L16` (process.env)
   - `backend/tests/generalApplicationCoverage.test.js:L15` (process.env)
@@ -7910,40 +7902,40 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `RUN_GEO_CRAWL`
 
 - **Templates**:
-  - `.env.example:807` = ``
-  - `backend/.env.example:778` = ``
+  - `.env.example:806` = ``
+  - `backend/.env.example:777` = ``
 - **Code references**:
   - `backend/scripts/run-full-system-test.mjs:L155` (process.env)
 
 ### `RUN_ITEM_CRAWLERS`
 
 - **Templates**:
-  - `.env.example:808` = ``
-  - `backend/.env.example:779` = ``
+  - `.env.example:807` = ``
+  - `backend/.env.example:778` = ``
 - **Code references**:
   - `backend/scripts/run-full-system-test.mjs:L154` (process.env)
 
 ### `RUN_SQLITE_MIGRATION`
 
 - **Templates**:
-  - `.env.example:809` = ``
-  - `backend/.env.example:780` = ``
+  - `.env.example:808` = ``
+  - `backend/.env.example:779` = ``
 - **Code references**:
   - `backend/start.js:L103` (process.env)
 
 ### `SAM_ADVERSARIAL_MAX_REPAIRS`
 
 - **Templates**:
-  - `.env.example:810` = ``
-  - `backend/.env.example:781` = ``
+  - `.env.example:809` = ``
+  - `backend/.env.example:780` = ``
 - **Code references**:
   - `backend/services/sam/samAdversarialRepair.js:L65` (process.env)
 
 ### `SAM_ALLOW_SAFE_REPAIR`
 
 - **Templates**:
-  - `.env.example:811` = ``
-  - `backend/.env.example:782` = ``
+  - `.env.example:810` = ``
+  - `backend/.env.example:781` = ``
 - **Code references**:
   - `backend/routes/sam.js:L209–L271` (env helper)
   - `backend/services/sam/samAgent.js:L592` (env helper)
@@ -7951,24 +7943,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_AUTO_FIX_SAFE`
 
 - **Templates**:
-  - `.env.example:812` = ``
-  - `backend/.env.example:783` = ``
+  - `.env.example:811` = ``
+  - `backend/.env.example:782` = ``
 - **Code references**:
   - `backend/tests/samPolicy.test.js:L93–L104` (process.env)
 
 ### `SAM_CHECK_TIMEOUT_MS`
 
 - **Templates**:
-  - `.env.example:813` = ``
-  - `backend/.env.example:784` = ``
+  - `.env.example:812` = ``
+  - `backend/.env.example:783` = ``
 - **Code references**:
   - `backend/services/sam/samDiagnostics.js:L53` (process.env)
 
 ### `SAM_DAILY_CODE_SWEEP_ENABLED`
 
 - **Templates**:
-  - `.env.example:814` = ``
-  - `backend/.env.example:785` = ``
+  - `.env.example:813` = ``
+  - `backend/.env.example:784` = ``
 - **Code references**:
   - `backend/services/sam/samDailyCodeSweep.js:L27` (process.env)
   - `backend/tests/samDailyCodeSweep.test.js:L16–L63` (process.env)
@@ -7976,24 +7968,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_DAILY_CODE_SWEEP_HOUR_ET`
 
 - **Templates**:
-  - `.env.example:815` = ``
-  - `backend/.env.example:786` = ``
+  - `.env.example:814` = ``
+  - `backend/.env.example:785` = ``
 - **Code references**:
   - `backend/server.js:L4195` (process.env)
 
 ### `SAM_EMAIL_REPORTS`
 
 - **Templates**:
-  - `.env.example:816` = ``
-  - `backend/.env.example:787` = ``
+  - `.env.example:815` = ``
+  - `backend/.env.example:786` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L601` (process.env)
 
 ### `SAM_ENABLED`
 
 - **Templates**:
-  - `.env.example:817` = ``
-  - `backend/.env.example:788` = ``
+  - `.env.example:816` = ``
+  - `backend/.env.example:787` = ``
 - **Code references**:
   - `backend/routes/sam.js:L66` (env helper)
   - `backend/services/sam/samAgent.js:L591` (env helper)
@@ -8002,24 +7994,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_FAIL_ON_CRITICAL`
 
 - **Templates**:
-  - `.env.example:818` = ``
-  - `backend/.env.example:789` = ``
+  - `.env.example:817` = ``
+  - `backend/.env.example:788` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L227–L599` (env helper)
 
 ### `SAM_GOV_API_BASE_URL`
 
 - **Templates**:
-  - `.env.example:819` = `http://127.0.0.1:8080`
-  - `backend/.env.example:790` = `http://127.0.0.1:8080`
+  - `.env.example:818` = `http://127.0.0.1:8080`
+  - `backend/.env.example:789` = `http://127.0.0.1:8080`
 - **Code references**:
   - `backend/services/connectors/samGovConnector.js:L22` (process.env)
 
 ### `SAM_GOV_API_KEY`
 
 - **Templates**:
-  - `.env.example:820` = `<REPLACE_ME>`
-  - `backend/.env.example:791` = `<REPLACE_ME>`
+  - `.env.example:819` = `<REPLACE_ME>`
+  - `backend/.env.example:790` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/config/grantsGovEndpoints.js:L49` (process.env)
   - `backend/services/diagnosticsService.js:L402` (process.env)
@@ -8030,8 +8022,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_GOV_KEY`
 
 - **Templates**:
-  - `.env.example:821` = `<REPLACE_ME>`
-  - `backend/.env.example:792` = `<REPLACE_ME>`
+  - `.env.example:820` = `<REPLACE_ME>`
+  - `backend/.env.example:791` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/config/grantsGovEndpoints.js:L51` (process.env)
   - `backend/src/config/apiKeys.js:L43` (env helper)
@@ -8039,8 +8031,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_GOV_PUBLIC_API_KEY`
 
 - **Templates**:
-  - `.env.example:822` = `<REPLACE_ME>`
-  - `backend/.env.example:793` = `<REPLACE_ME>`
+  - `.env.example:821` = `<REPLACE_ME>`
+  - `backend/.env.example:792` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/config/grantsGovEndpoints.js:L48` (process.env)
   - `backend/services/connectorIngestService.js:L453` (process.env)
@@ -8053,24 +8045,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_HTTP_PROBE_TIMEOUT_MS`
 
 - **Templates**:
-  - `.env.example:823` = ``
-  - `backend/.env.example:794` = ``
+  - `.env.example:822` = ``
+  - `backend/.env.example:793` = ``
 - **Code references**:
   - `backend/services/sam/samHttpProbe.js:L23` (process.env)
 
 ### `SAM_MAX_FIXES_PER_RUN`
 
 - **Templates**:
-  - `.env.example:824` = ``
-  - `backend/.env.example:795` = ``
+  - `.env.example:823` = ``
+  - `backend/.env.example:794` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L742` (process.env)
 
 ### `SAM_MODE`
 
 - **Templates**:
-  - `.env.example:825` = ``
-  - `backend/.env.example:796` = ``
+  - `.env.example:824` = ``
+  - `backend/.env.example:795` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L596` (process.env)
   - `backend/services/sam/samScheduler.js:L64` (process.env)
@@ -8078,16 +8070,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_REPORT_EMAIL`
 
 - **Templates**:
-  - `.env.example:826` = ``
-  - `backend/.env.example:797` = ``
+  - `.env.example:825` = ``
+  - `backend/.env.example:796` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L603` (process.env)
 
 ### `SAM_RUN_ON_SCHEDULE`
 
 - **Templates**:
-  - `.env.example:827` = ``
-  - `backend/.env.example:798` = ``
+  - `.env.example:826` = ``
+  - `backend/.env.example:797` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L593` (env helper)
   - `backend/services/sam/samScheduler.js:L51` (process.env)
@@ -8095,8 +8087,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_RUN_ON_STARTUP`
 
 - **Templates**:
-  - `.env.example:828` = ``
-  - `backend/.env.example:799` = ``
+  - `.env.example:827` = ``
+  - `backend/.env.example:798` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L594` (env helper)
   - `backend/services/sam/samScheduler.js:L47` (process.env)
@@ -8104,8 +8096,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_SCHEDULE`
 
 - **Templates**:
-  - `.env.example:829` = ``
-  - `backend/.env.example:800` = ``
+  - `.env.example:828` = ``
+  - `backend/.env.example:799` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L597` (process.env)
   - `backend/services/sam/samScheduler.js:L150–L169` (process.env)
@@ -8113,8 +8105,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SAM_SCHEDULE_AUTOFIX`
 
 - **Templates**:
-  - `.env.example:830` = ``
-  - `backend/.env.example:801` = ``
+  - `.env.example:829` = ``
+  - `backend/.env.example:800` = ``
 - **Code references**:
   - `backend/services/sam/samAgent.js:L595` (env helper)
   - `backend/services/sam/samScheduler.js:L55` (process.env)
@@ -8122,32 +8114,32 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SCHOOL_PORTAL_VERIFY_BASE`
 
 - **Templates**:
-  - `.env.example:831` = ``
-  - `backend/.env.example:802` = ``
+  - `.env.example:830` = ``
+  - `backend/.env.example:801` = ``
 - **Code references**:
   - `scripts/verify-school-portal-live.mjs:L25` (process.env)
 
 ### `SCORE_BACKFILL_BATCH`
 
 - **Templates**:
-  - `.env.example:832` = ``
-  - `backend/.env.example:803` = ``
+  - `.env.example:831` = ``
+  - `backend/.env.example:802` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L5254` (process.env)
 
 ### `SEARXNG_ENGINES`
 
 - **Templates**:
-  - `.env.example:833` = ``
-  - `backend/.env.example:804` = ``
+  - `.env.example:832` = ``
+  - `backend/.env.example:803` = ``
 - **Code references**:
   - `backend/services/shared/searxngProvider.js:L93` (process.env)
 
 ### `SEARXNG_FALLBACK_ENGINES`
 
 - **Templates**:
-  - `.env.example:834` = ``
-  - `backend/.env.example:805` = ``
+  - `.env.example:833` = ``
+  - `backend/.env.example:804` = ``
 - **Code references**:
   - `backend/services/searchProviderHealth.js:L148` (process.env)
   - `backend/services/shared/webSearchEngine.js:L496` (process.env)
@@ -8157,16 +8149,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SEARXNG_MIN_INTERVAL_MS`
 
 - **Templates**:
-  - `.env.example:835` = ``
-  - `backend/.env.example:806` = ``
+  - `.env.example:834` = ``
+  - `backend/.env.example:805` = ``
 - **Code references**:
   - `backend/services/shared/searxngProvider.js:L49` (process.env)
 
 ### `SEARXNG_URL`
 
 - **Templates**:
-  - `.env.example:836` = `http://127.0.0.1:8080`
-  - `backend/.env.example:807` = `http://127.0.0.1:8080`
+  - `.env.example:835` = `http://127.0.0.1:8080`
+  - `backend/.env.example:806` = `http://127.0.0.1:8080`
 - **Code references**:
   - `backend/services/searchProviderHealth.js:L108` (process.env)
   - `backend/services/shared/searxngProvider.js:L81–L90` (process.env)
@@ -8178,104 +8170,104 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SEED_KEY`
 
 - **Templates**:
-  - `.env.example:837` = `<REPLACE_ME>`
-  - `backend/.env.example:808` = `<REPLACE_ME>`
+  - `.env.example:836` = `<REPLACE_ME>`
+  - `backend/.env.example:807` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/routes/admin.js:L3722` (process.env)
 
 ### `SEED_PATH`
 
 - **Templates**:
-  - `.env.example:838` = ``
-  - `backend/.env.example:809` = ``
+  - `.env.example:837` = ``
+  - `backend/.env.example:808` = ``
 - **Code references**:
   - `scripts/seed-profiles.mjs:L51–L52` (process.env)
 
 ### `SEMANTIC_RECALL`
 
 - **Templates**:
-  - `.env.example:839` = ``
-  - `backend/.env.example:810` = ``
+  - `.env.example:838` = ``
+  - `backend/.env.example:809` = ``
 - **Code references**:
   - `backend/services/embeddings/embeddingService.js:L41` (process.env)
 
 ### `SEMANTIC_RECALL_SCAN_LIMIT`
 
 - **Templates**:
-  - `.env.example:840` = ``
-  - `backend/.env.example:811` = ``
+  - `.env.example:839` = ``
+  - `backend/.env.example:810` = ``
 - **Code references**:
   - `backend/services/embeddings/embeddingService.js:L55` (process.env)
 
 ### `SEMANTIC_RECALL_TOP_K`
 
 - **Templates**:
-  - `.env.example:841` = ``
-  - `backend/.env.example:812` = ``
+  - `.env.example:840` = ``
+  - `backend/.env.example:811` = ``
 - **Code references**:
   - `backend/services/embeddings/embeddingService.js:L47` (process.env)
 
 ### `SENDGRID_API_KEY`
 
 - **Templates**:
-  - `.env.example:842` = `<REPLACE_ME>`
-  - `backend/.env.example:813` = `<REPLACE_ME>`
+  - `.env.example:841` = `<REPLACE_ME>`
+  - `backend/.env.example:812` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/tests/onboardingRoute.test.js:L187` (process.env)
 
 ### `SENTRY_DSN`
 
 - **Templates**:
-  - `.env.example:843` = ``
-  - `backend/.env.example:814` = ``
+  - `.env.example:842` = ``
+  - `backend/.env.example:813` = ``
 - **Code references**:
   - `backend/utils/observability.js:L10` (process.env)
 
 ### `SENTRY_ENVIRONMENT`
 
 - **Templates**:
-  - `.env.example:844` = ``
-  - `backend/.env.example:815` = ``
+  - `.env.example:843` = ``
+  - `backend/.env.example:814` = ``
 - **Code references**:
   - `backend/utils/observability.js:L18` (process.env)
 
 ### `SENTRY_RELEASE`
 
 - **Templates**:
-  - `.env.example:845` = ``
-  - `backend/.env.example:816` = ``
+  - `.env.example:844` = ``
+  - `backend/.env.example:815` = ``
 - **Code references**:
   - `backend/utils/observability.js:L20` (process.env)
 
 ### `SENTRY_TRACES_SAMPLE_RATE`
 
 - **Templates**:
-  - `.env.example:846` = ``
-  - `backend/.env.example:817` = ``
+  - `.env.example:845` = ``
+  - `backend/.env.example:816` = ``
 - **Code references**:
   - `backend/utils/observability.js:L24` (process.env)
 
 ### `SERVICE_APPLICATION_EMAIL`
 
 - **Templates**:
-  - `.env.example:847` = ``
-  - `backend/.env.example:818` = ``
+  - `.env.example:846` = ``
+  - `backend/.env.example:817` = ``
 - **Code references**:
   - `backend/routes/serviceApplication.js:L15` (process.env)
 
 ### `SERVICE_CATALOG_SEED_TTL_MS`
 
 - **Templates**:
-  - `.env.example:848` = ``
-  - `backend/.env.example:819` = ``
+  - `.env.example:847` = ``
+  - `backend/.env.example:818` = ``
 - **Code references**:
   - `backend/services/serviceCatalogStore.js:L28` (process.env)
 
 ### `SHOULDERS_VNEXT`
 
 - **Templates**:
-  - `.env.example:849` = ``
-  - `backend/.env.example:820` = ``
+  - `.env.example:848` = ``
+  - `backend/.env.example:819` = ``
 - **Code references**:
   - `backend/routes/vnextApplications.js:L24` (process.env)
   - `backend/tests/vnext-shoulders.test.js:L12` (process.env)
@@ -8283,16 +8275,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SHUTDOWN_GRACE_MS`
 
 - **Templates**:
-  - `.env.example:850` = ``
-  - `backend/.env.example:821` = ``
+  - `.env.example:849` = ``
+  - `backend/.env.example:820` = ``
 - **Code references**:
   - `backend/server.js:L3107` (process.env)
 
 ### `SIMPLER_GRANTS_API_KEY`
 
 - **Templates**:
-  - `.env.example:851` = `<REPLACE_ME>`
-  - `backend/.env.example:822` = `<REPLACE_ME>`
+  - `.env.example:850` = `<REPLACE_ME>`
+  - `backend/.env.example:821` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/services/connectorIngestService.js:L452` (process.env)
   - `backend/services/connectors/grantsGovConnector.js:L174` (process.env)
@@ -8305,24 +8297,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SKIP_NETWORK_TESTS`
 
 - **Templates**:
-  - `.env.example:852` = ``
-  - `backend/.env.example:823` = ``
+  - `.env.example:851` = ``
+  - `backend/.env.example:822` = ``
 - **Code references**:
   - `tests/unit/known-schools-liveness.test.mjs:L37` (process.env)
 
 ### `SMART_MATCHER_INTENT_MODEL`
 
 - **Templates**:
-  - `.env.example:853` = ``
-  - `backend/.env.example:824` = ``
+  - `.env.example:852` = ``
+  - `backend/.env.example:823` = ``
 - **Code references**:
   - `backend/services/smartMatcherIntent.js:L806` (process.env)
 
 ### `SMOKE_ADMIN_TOKEN`
 
 - **Templates**:
-  - `.env.example:854` = `<REPLACE_ME>`
-  - `backend/.env.example:825` = `<REPLACE_ME>`
+  - `.env.example:853` = `<REPLACE_ME>`
+  - `backend/.env.example:824` = `<REPLACE_ME>`
 - **Code references**:
   - `scripts/doctor.mjs:L182` (process.env)
   - `tests/smoke/admin-tools-button-live.spec.mjs:L23` (process.env)
@@ -8330,16 +8322,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SMOKE_API_BASE`
 
 - **Templates**:
-  - `.env.example:855` = ``
-  - `backend/.env.example:826` = ``
+  - `.env.example:854` = ``
+  - `backend/.env.example:825` = ``
 - **Code references**:
   - `scripts/smoke-docs-local.mjs:L17` (process.env)
 
 ### `SMOKE_BASE_PATH`
 
 - **Templates**:
-  - `.env.example:856` = ``
-  - `backend/.env.example:827` = ``
+  - `.env.example:855` = ``
+  - `backend/.env.example:826` = ``
 - **Code references**:
   - `scripts/doctor.mjs:L180` (process.env)
   - `scripts/smoke-auth-callback.mjs:L49` (process.env)
@@ -8353,8 +8345,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SMOKE_BASE_URL`
 
 - **Templates**:
-  - `.env.example:857` = `http://127.0.0.1:8080`
-  - `backend/.env.example:828` = `http://127.0.0.1:8080`
+  - `.env.example:856` = `http://127.0.0.1:8080`
+  - `backend/.env.example:827` = `http://127.0.0.1:8080`
 - **Code references**:
   - `scripts/dedupe-profiles.mjs:L28` (process.env)
   - `scripts/runtime-crawl-local.mjs:L79–L143` (process.env)
@@ -8370,48 +8362,48 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SMOKE_CHECK_PROFILE_SCHEMA`
 
 - **Templates**:
-  - `.env.example:858` = ``
-  - `backend/.env.example:829` = ``
+  - `.env.example:857` = ``
+  - `backend/.env.example:828` = ``
 - **Code references**:
   - `scripts/smoke-prod-readonly.mjs:L16` (process.env)
 
 ### `SMOKE_DEBUG`
 
 - **Templates**:
-  - `.env.example:859` = ``
-  - `backend/.env.example:830` = ``
+  - `.env.example:858` = ``
+  - `backend/.env.example:829` = ``
 - **Code references**:
   - `scripts/smoke-login.mjs:L58–L72` (process.env)
 
 ### `SMOKE_MAX_CLICKS`
 
 - **Templates**:
-  - `.env.example:860` = ``
-  - `backend/.env.example:831` = ``
+  - `.env.example:859` = ``
+  - `backend/.env.example:830` = ``
 - **Code references**:
   - `scripts/doctor.mjs:L186` (process.env)
 
 ### `SMOKE_MAX_PER_SELECTOR`
 
 - **Templates**:
-  - `.env.example:861` = ``
-  - `backend/.env.example:832` = ``
+  - `.env.example:860` = ``
+  - `backend/.env.example:831` = ``
 - **Code references**:
   - `scripts/doctor.mjs:L187` (process.env)
 
 ### `SMOKE_MAX_ROUTES`
 
 - **Templates**:
-  - `.env.example:862` = ``
-  - `backend/.env.example:833` = ``
+  - `.env.example:861` = ``
+  - `backend/.env.example:832` = ``
 - **Code references**:
   - `scripts/doctor.mjs:L185` (process.env)
 
 ### `SMOKE_MODE`
 
 - **Templates**:
-  - `.env.example:863` = ``
-  - `backend/.env.example:834` = ``
+  - `.env.example:862` = ``
+  - `backend/.env.example:833` = ``
 - **Code references**:
   - `backend/services/comprehensiveCrawlerOptimized.js:L582–L602` (process.env)
   - `backend/start.js:L40–L49` (process.env)
@@ -8422,88 +8414,88 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SMOKE_TARGET_PATH`
 
 - **Templates**:
-  - `.env.example:864` = ``
-  - `backend/.env.example:835` = ``
+  - `.env.example:863` = ``
+  - `backend/.env.example:834` = ``
 - **Code references**:
   - `scripts/smoke-login.mjs:L30` (process.env)
 
 ### `SMS_CONSENT_MESSAGE`
 
 - **Templates**:
-  - `.env.example:865` = ``
-  - `backend/.env.example:836` = ``
+  - `.env.example:864` = ``
+  - `backend/.env.example:835` = ``
 - **Code references**:
   - `backend/services/comms/smsConsentService.js:L60` (process.env)
 
 ### `SMS_CONSENT_PENDING_EXPIRE_DAYS`
 
 - **Templates**:
-  - `.env.example:866` = ``
-  - `backend/.env.example:837` = ``
+  - `.env.example:865` = ``
+  - `backend/.env.example:836` = ``
 - **Code references**:
   - `backend/services/comms/smsConsentService.js:L372` (process.env)
 
 ### `SMTP_HOST`
 
 - **Templates**:
-  - `.env.example:867` = ``
-  - `backend/.env.example:838` = ``
+  - `.env.example:866` = ``
+  - `backend/.env.example:837` = ``
 - **Code references**:
   - `backend/tests/onboardingRoute.test.js:L189` (process.env)
 
 ### `SOURCE`
 
 - **Templates**:
-  - `.env.example:868` = ``
-  - `backend/.env.example:839` = ``
+  - `.env.example:867` = ``
+  - `backend/.env.example:838` = ``
 - **Code references**:
   - `scripts/db-top-tags.cjs:L4` (process.env)
 
 ### `SOURCE_FAILURE_WINDOW_HOURS`
 
 - **Templates**:
-  - `.env.example:869` = ``
-  - `backend/.env.example:840` = ``
+  - `.env.example:868` = ``
+  - `backend/.env.example:839` = ``
 - **Code references**:
   - `backend/services/sources/sourceFailureDetector.js:L24` (process.env)
 
 ### `SOURCE_URL_REPAIR_BOOT_LIMIT`
 
 - **Templates**:
-  - `.env.example:870` = ``
-  - `backend/.env.example:841` = ``
+  - `.env.example:869` = ``
+  - `backend/.env.example:840` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L4563` (process.env)
 
 ### `SOURCE_URL_REPAIR_COOLDOWN_MS`
 
 - **Templates**:
-  - `.env.example:871` = ``
-  - `backend/.env.example:842` = ``
+  - `.env.example:870` = ``
+  - `backend/.env.example:841` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L4566` (process.env)
 
 ### `SOURCE_URL_REPAIR_MAX_ATTEMPTS`
 
 - **Templates**:
-  - `.env.example:872` = ``
-  - `backend/.env.example:843` = ``
+  - `.env.example:871` = ``
+  - `backend/.env.example:842` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L4565` (process.env)
 
 ### `SOURCE_URL_REPAIR_TIME_BUDGET_MS`
 
 - **Templates**:
-  - `.env.example:873` = ``
-  - `backend/.env.example:844` = ``
+  - `.env.example:872` = ``
+  - `backend/.env.example:843` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L4564` (process.env)
 
 ### `SQLITE_BUSY_TIMEOUT_MS`
 
 - **Templates**:
-  - `.env.example:874` = ``
-  - `backend/.env.example:845` = ``
+  - `.env.example:873` = ``
+  - `backend/.env.example:844` = ``
 - **Code references**:
   - `backend/db/index.js:L422` (process.env)
   - `backend/tests/opportunityIdentityStore.test.js:L489–L496` (process.env)
@@ -8511,16 +8503,16 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SQLITE_CACHE_SIZE_KB`
 
 - **Templates**:
-  - `.env.example:875` = ``
-  - `backend/.env.example:846` = ``
+  - `.env.example:874` = ``
+  - `backend/.env.example:845` = ``
 - **Code references**:
   - `backend/db/index.js:L425` (process.env)
 
 ### `SQLITE_DB_PATH`
 
 - **Templates**:
-  - `.env.example:876` = `backend/data/grantflow.dev.db`
-  - `backend/.env.example:847` = `backend/data/grantflow.dev.db`
+  - `.env.example:875` = `backend/data/grantflow.dev.db`
+  - `backend/.env.example:846` = `backend/data/grantflow.dev.db`
 - **Code references**:
   - `backend/db/index.js:L115` (process.env)
   - `backend/scripts/migrate-sqlite-to-postgres.mjs:L323` (process.env)
@@ -8538,48 +8530,48 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `SQLITE_PATH`
 
 - **Templates**:
-  - `.env.example:877` = ``
-  - `backend/.env.example:848` = ``
+  - `.env.example:876` = ``
+  - `backend/.env.example:847` = ``
 - **Code references**:
   - `scripts/probe-deferred-rcs.mjs:L22` (process.env)
 
 ### `STALE_MATCH_EXPLAIN_PAIR_BUDGET`
 
 - **Templates**:
-  - `.env.example:878` = ``
-  - `backend/.env.example:849` = ``
+  - `.env.example:877` = ``
+  - `backend/.env.example:848` = ``
 - **Code references**:
   - `backend/services/matching/staleMatchExplainRefresh.js:L64` (process.env)
 
 ### `STALE_MATCH_EXPLAIN_TIME_BUDGET_MS`
 
 - **Templates**:
-  - `.env.example:879` = ``
-  - `backend/.env.example:850` = ``
+  - `.env.example:878` = ``
+  - `backend/.env.example:849` = ``
 - **Code references**:
   - `backend/services/matching/staleMatchExplainRefresh.js:L66` (process.env)
 
 ### `STALE_MISSING_FIELD_PROFILE_LIMIT`
 
 - **Templates**:
-  - `.env.example:880` = ``
-  - `backend/.env.example:851` = ``
+  - `.env.example:879` = ``
+  - `backend/.env.example:850` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L1840` (process.env)
 
 ### `STARTUP_PROFILE_JOB_REPAIR_LIMIT`
 
 - **Templates**:
-  - `.env.example:881` = ``
-  - `backend/.env.example:852` = ``
+  - `.env.example:880` = ``
+  - `backend/.env.example:851` = ``
 - **Code references**:
   - `backend/startup/selfHeal.js:L168` (process.env)
 
 ### `STARTUP_PROFILE_ORG_LINK_LIMIT`
 
 - **Templates**:
-  - `.env.example:882` = ``
-  - `backend/.env.example:853` = ``
+  - `.env.example:881` = ``
+  - `backend/.env.example:852` = ``
 - **Code references**:
   - `backend/server.js:L1444` (process.env)
   - `backend/startup/selfHeal.js:L144` (process.env)
@@ -8587,8 +8579,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `STARTUP_SMOKE_CRAWL_ENABLED`
 
 - **Templates**:
-  - `.env.example:883` = ``
-  - `backend/.env.example:854` = ``
+  - `.env.example:882` = ``
+  - `backend/.env.example:853` = ``
 - **Code references**:
   - `backend/server.js:L3688` (process.env)
   - `backend/startup/backgroundServices.js:L191` (process.env)
@@ -8596,8 +8588,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `STRIPE_MOCK`
 
 - **Templates**:
-  - `.env.example:884` = ``
-  - `backend/.env.example:855` = ``
+  - `.env.example:883` = ``
+  - `backend/.env.example:854` = ``
 - **Code references**:
   - `backend/services/pricing/stripePriceVerifier.js:L37` (process.env)
   - `backend/services/stripeService.js:L53–L142` (process.env)
@@ -8608,8 +8600,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `STRIPE_SECRET_KEY`
 
 - **Templates**:
-  - `.env.example:885` = `<REPLACE_ME>`
-  - `backend/.env.example:856` = `<REPLACE_ME>`
+  - `.env.example:884` = `<REPLACE_ME>`
+  - `backend/.env.example:855` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/services/billing/invoiceService.js:L178–L264` (process.env)
   - `backend/services/pricing/stripePriceVerifier.js:L41` (process.env)
@@ -8618,24 +8610,24 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `STRIPE_WEBHOOK_SECRET`
 
 - **Templates**:
-  - `.env.example:886` = `<REPLACE_ME>`
-  - `backend/.env.example:857` = `<REPLACE_ME>`
+  - `.env.example:885` = `<REPLACE_ME>`
+  - `backend/.env.example:856` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/services/stripeService.js:L16–L173` (process.env)
 
 ### `SWEEP_DEBUG`
 
 - **Templates**:
-  - `.env.example:887` = ``
-  - `backend/.env.example:858` = ``
+  - `.env.example:886` = ``
+  - `backend/.env.example:857` = ``
 - **Code references**:
   - `backend/tests/endpointSweep.test.js:L95` (process.env)
 
 ### `Sam_gov_key`
 
 - **Templates**:
-  - `.env.example:888` = `<REPLACE_ME>`
-  - `backend/.env.example:859` = `<REPLACE_ME>`
+  - `.env.example:887` = `<REPLACE_ME>`
+  - `backend/.env.example:858` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/config/grantsGovEndpoints.js:L50` (process.env)
   - `backend/src/config/apiKeys.js:L42` (env helper)
@@ -8645,8 +8637,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `TEST_API_URL`
 
 - **Templates**:
-  - `.env.example:889` = `http://127.0.0.1:8080`
-  - `backend/.env.example:860` = `http://127.0.0.1:8080`
+  - `.env.example:888` = `http://127.0.0.1:8080`
+  - `backend/.env.example:859` = `http://127.0.0.1:8080`
 - **Code references**:
   - `tests/integration/grants-from-opportunity.test.mjs:L22–L115` (process.env)
   - `tests/manual/test-from-opportunity-comprehensive.mjs:L9` (process.env)
@@ -8654,32 +8646,32 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `TEST_CONCURRENCY`
 
 - **Templates**:
-  - `.env.example:890` = ``
-  - `backend/.env.example:861` = ``
+  - `.env.example:889` = ``
+  - `backend/.env.example:860` = ``
 - **Code references**:
   - `scripts/run-unit-tests.mjs:L40` (process.env)
 
 ### `TEST_STATE`
 
 - **Templates**:
-  - `.env.example:891` = ``
-  - `backend/.env.example:862` = ``
+  - `.env.example:890` = ``
+  - `backend/.env.example:861` = ``
 - **Code references**:
   - `scripts/opportunities-national-minimum.mjs:L140` (process.env)
 
 ### `TEST_ZIP`
 
 - **Templates**:
-  - `.env.example:892` = ``
-  - `backend/.env.example:863` = ``
+  - `.env.example:891` = ``
+  - `backend/.env.example:862` = ``
 - **Code references**:
   - `backend/tests/testServer.js:L94` (process.env)
 
 ### `TWILIO_ACCOUNT_SID`
 
 - **Templates**:
-  - `.env.example:893` = `<REPLACE_ME>`
-  - `backend/.env.example:864` = `<REPLACE_ME>`
+  - `.env.example:892` = `<REPLACE_ME>`
+  - `backend/.env.example:863` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/routes/auth.js:L196` (process.env)
   - `backend/services/deadlineEmailSmsService.js:L34` (process.env)
@@ -8690,8 +8682,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `TWILIO_AUTH_TOKEN`
 
 - **Templates**:
-  - `.env.example:894` = `<REPLACE_ME>`
-  - `backend/.env.example:865` = `<REPLACE_ME>`
+  - `.env.example:893` = `<REPLACE_ME>`
+  - `backend/.env.example:864` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/routes/auth.js:L197` (process.env)
   - `backend/services/deadlineEmailSmsService.js:L35` (process.env)
@@ -8702,8 +8694,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `TWILIO_FROM_NUMBER`
 
 - **Templates**:
-  - `.env.example:895` = ``
-  - `backend/.env.example:866` = ``
+  - `.env.example:894` = ``
+  - `backend/.env.example:865` = ``
 - **Code references**:
   - `backend/routes/auth.js:L199` (process.env)
   - `backend/services/deadlineEmailSmsService.js:L42` (process.env)
@@ -8713,8 +8705,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `TWILIO_MESSAGING_SERVICE_SID`
 
 - **Templates**:
-  - `.env.example:896` = ``
-  - `backend/.env.example:867` = ``
+  - `.env.example:895` = ``
+  - `backend/.env.example:866` = ``
 - **Code references**:
   - `backend/routes/auth.js:L198` (process.env)
   - `backend/services/deadlineEmailSmsService.js:L42–L118` (process.env)
@@ -8723,32 +8715,32 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `UNCONFIGURED_PROFILE_PURGE_LIMIT`
 
 - **Templates**:
-  - `.env.example:897` = ``
-  - `backend/.env.example:868` = ``
+  - `.env.example:896` = ``
+  - `backend/.env.example:867` = ``
 - **Code references**:
   - `backend/tests/unconfiguredProfileHonesty.test.js:L370–L506` (process.env)
 
 ### `UNIT_TEST_CONCURRENCY`
 
 - **Templates**:
-  - `.env.example:898` = ``
-  - `backend/.env.example:869` = ``
+  - `.env.example:897` = ``
+  - `backend/.env.example:868` = ``
 - **Code references**:
   - `scripts/run-unit-tests.mjs:L40` (process.env)
 
 ### `UNIT_TEST_HARD_TIMEOUT_MS`
 
 - **Templates**:
-  - `.env.example:899` = ``
-  - `backend/.env.example:870` = ``
+  - `.env.example:898` = ``
+  - `backend/.env.example:869` = ``
 - **Code references**:
   - `scripts/run-unit-tests.mjs:L84` (process.env)
 
 ### `UPLOADS_DIR`
 
 - **Templates**:
-  - `.env.example:900` = ``
-  - `backend/.env.example:871` = ``
+  - `.env.example:899` = ``
+  - `backend/.env.example:870` = ``
 - **Code references**:
   - `backend/routes/health.js:L416` (process.env)
   - `backend/server.js:L372` (process.env)
@@ -8765,40 +8757,40 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `UPLOADS_ORPHAN_GRACE_HOURS`
 
 - **Templates**:
-  - `.env.example:901` = ``
-  - `backend/.env.example:872` = ``
+  - `.env.example:900` = ``
+  - `backend/.env.example:871` = ``
 - **Code references**:
   - `backend/services/maintenance/pruneDiskArtifacts.js:L186` (process.env)
 
 ### `UPLOADS_ORPHAN_PRUNE_ENABLED`
 
 - **Templates**:
-  - `.env.example:902` = ``
-  - `backend/.env.example:873` = ``
+  - `.env.example:901` = ``
+  - `backend/.env.example:872` = ``
 - **Code references**:
   - `backend/services/maintenance/pruneDiskArtifacts.js:L181` (process.env)
 
 ### `UPLOADS_PERSIST_PREFIXES`
 
 - **Templates**:
-  - `.env.example:903` = ``
-  - `backend/.env.example:874` = ``
+  - `.env.example:902` = ``
+  - `backend/.env.example:873` = ``
 - **Code references**:
   - `backend/utils/uploadsPath.js:L38` (process.env)
 
 ### `UPLOAD_DIR`
 
 - **Templates**:
-  - `.env.example:904` = ``
-  - `backend/.env.example:875` = ``
+  - `.env.example:903` = ``
+  - `backend/.env.example:874` = ``
 - **Code references**:
   - `scripts/dev-start-geo-crawl.mjs:L40–L41` (process.env)
 
 ### `URL_RESCUE_BOOT_LIMIT`
 
 - **Templates**:
-  - `.env.example:905` = ``
-  - `backend/.env.example:876` = ``
+  - `.env.example:904` = ``
+  - `backend/.env.example:875` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L2629` (process.env)
   - `backend/tests/enforceInvariants.test.js:L3283–L3401` (process.env)
@@ -8806,8 +8798,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `URL_RESCUE_TIME_BUDGET_MS`
 
 - **Templates**:
-  - `.env.example:906` = ``
-  - `backend/.env.example:877` = ``
+  - `.env.example:905` = ``
+  - `backend/.env.example:876` = ``
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L2630` (process.env)
   - `backend/tests/enforceInvariants.test.js:L3284` (process.env)
@@ -8815,8 +8807,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `URL_VERIFICATION_ENABLED`
 
 - **Templates**:
-  - `.env.example:907` = ``
-  - `backend/.env.example:878` = ``
+  - `.env.example:906` = ``
+  - `backend/.env.example:877` = ``
 - **Code references**:
   - `backend/server.js:L314–L344` (process.env)
   - `backend/services/opportunityInserter.js:L163` (process.env)
@@ -8825,44 +8817,44 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `USER_PROFILE_MAPPINGS_FILE`
 
 - **Templates**:
-  - `.env.example:908` = ``
-  - `backend/.env.example:879` = ``
+  - `.env.example:907` = ``
+  - `backend/.env.example:878` = ``
 - **Code references**:
   - `backend/config/userProfileMappings.js:L63` (process.env)
 
 ### `USER_PROFILE_MAPPINGS_JSON`
 
 - **Templates**:
-  - `.env.example:909` = ``
-  - `backend/.env.example:880` = ``
+  - `.env.example:908` = ``
+  - `backend/.env.example:879` = ``
 - **Code references**:
   - `backend/config/userProfileMappings.js:L64` (process.env)
 
 ### `VEHICLES_INGEST_TOKEN`
 
 - **Templates**:
-  - `.env.example:910` = `<REPLACE_ME>`
-  - `backend/.env.example:881` = `<REPLACE_ME>`
+  - `.env.example:909` = `<REPLACE_ME>`
+  - `backend/.env.example:880` = `<REPLACE_ME>`
 - **Code references**:
   - `backend/routes/vehicles.js:L36` (process.env)
 
 ### `VERCEL`
 
 - **Templates**:
-  - `.env.example:911` = ``
-  - `backend/.env.example:882` = ``
+  - `.env.example:910` = ``
+  - `backend/.env.example:881` = ``
 - **Code references**:
   - `backend/routes/health.js:L82` (process.env)
   - `backend/services/productionAuditSnapshot.js:L443` (process.env)
   - `scripts/ensure-build-natives.mjs:L90` (process.env)
-  - `scripts/release-gates.mjs:L118` (process.env)
+  - `scripts/release-gates.mjs:L130` (process.env)
   - `scripts/run-vitest-isolated.mjs:L15` (process.env)
 
 ### `VERCEL_ENV`
 
 - **Templates**:
-  - `.env.example:912` = ``
-  - `backend/.env.example:883` = ``
+  - `.env.example:911` = ``
+  - `backend/.env.example:882` = ``
 - **Code references**:
   - `backend/routes/auth.js:L491` (process.env)
   - `backend/tests/otpLoginRetired.test.js:L67` (process.env)
@@ -8871,8 +8863,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 ### `VERCEL_GIT_COMMIT_SHA`
 
 - **Templates**:
-  - `.env.example:913` = ``
-  - `backend/.env.example:884` = ``
+  - `.env.example:912` = ``
+  - `backend/.env.example:883` = ``
 - **Code references**:
   - `backend/routes/health.js:L75` (process.env)
   - `backend/server.js:L2551` (process.env)
@@ -8880,6 +8872,14 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/startup/backgroundServices.js:L419` (process.env)
   - `backend/utils/observability.js:L22` (process.env)
   - `src/utils/observability.js:L18` (import.meta.env)
+
+### `VERCEL_PROJECT_PRODUCTION_URL`
+
+- **Templates**:
+  - `.env.example:913` = `http://127.0.0.1:8080`
+  - `backend/.env.example:884` = `http://127.0.0.1:8080`
+- **Code references**:
+  - `scripts/build-mobile-bundle.mjs:L50–L51` (process.env)
 
 ### `VERIFICATION_CACHE_MAX_ENTRIES`
 

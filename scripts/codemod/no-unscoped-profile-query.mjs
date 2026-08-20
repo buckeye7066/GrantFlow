@@ -101,9 +101,22 @@ console.error('  Remediation:')
 console.error("    1. Add `AND profile_id = ?` (or $N) to the SQL")
 console.error("    2. Or annotate with `// audit:allow unscoped-profile-query` after verification")
 console.error('    3. Runtime guard (backend/db/scopedQuery.js) will also catch this at request time')
-// Non-blocking in CI during rollout: produce warnings but do not fail.
-// Flip PROFILE_SCOPE_CI_STRICT=1 to enforce.
-if (String(process.env.PROFILE_SCOPE_CI_STRICT || '').toLowerCase() === '1') {
-  process.exit(1)
-}
-process.exit(0)
+// This gate IS reached by CI — `scripts/release-gates.mjs` runs
+// `profile-scope:check`, and `.github/workflows/ci.yml` runs `npm run
+// release:gates` on every PR and every push to main. But it printed
+// "[profile-scope] FAIL (N unscoped queries)" and then exited 0 unless
+// PROFILE_SCOPE_CI_STRICT=1, and that variable is set in NO workflow, NO
+// script and NO Dockerfile — it appears only commented out in .env.example and
+// in docs. So the cross-tenant scoping gate emitted a log line that reads like
+// enforcement while returning green, which is strictly worse than having no
+// gate: a reviewer scanning for red sees none.
+//
+// Verified before removing the hatch: `node
+// scripts/codemod/no-unscoped-profile-query.mjs` on origin/main f670ef24 prints
+// "OK (0 unscoped queries...)" and exits 0. The rollout the hatch was written
+// for is over, so the report-only mode is removed outright rather than being
+// re-hidden behind a different flag.
+//
+// The escape valve for a genuine false positive is unchanged and per-site:
+// annotate the line with `// audit:allow unscoped-profile-query`.
+process.exit(1)
