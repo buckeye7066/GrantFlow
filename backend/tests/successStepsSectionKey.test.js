@@ -44,11 +44,18 @@ describe('success step section_key wiring', () => {
     expect(body).toMatch(/planning\s*:\s*'narrative'/)
   })
 
-  it('section_key for documentation category is null (external docs, no profile section)', () => {
+  it('section_key for equipment category is organization_details', () => {
     const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
     expect(match).not.toBeNull()
     const body = match[1]
-    expect(body).toMatch(/documentation\s*:\s*null/)
+    expect(body).toMatch(/equipment\s*:\s*'organization_details'/)
+  })
+
+  it('section_key for benefits category is financial_information', () => {
+    const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
+    expect(match).not.toBeNull()
+    const body = match[1]
+    expect(body).toMatch(/benefits\s*:\s*'financial_information'/)
   })
 })
 
@@ -57,6 +64,13 @@ describe('success step UI wiring (SmartMatcher.jsx)', () => {
     new URL('../../src/pages/SmartMatcher.jsx', import.meta.url),
     'utf8',
   )
+
+  it('section_key for documentation category is null (external docs, no profile section)', () => {
+    const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
+    expect(match).not.toBeNull()
+    const body = match[1]
+    expect(body).toMatch(/documentation\s*:\s*null/)
+  })
 
   it('renders a Link when step.section_key is present', () => {
     expect(UI).toContain('step.section_key ?')

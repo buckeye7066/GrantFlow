@@ -1601,8 +1601,8 @@ const CATEGORY_TO_SECTION = {
   financial:    'financial_information',
   financial_aid:'financial_information',
   planning:     'narrative',
-  equipment:    'narrative',
-  benefits:     'narrative',
+  equipment:    'organization_details',
+  benefits:     'financial_information',
   education:    'basic_information',
   // documentation steps involve external docs/uploads — no profile section
   documentation: null,
