@@ -267,7 +267,7 @@ export const BASELINE_PATH = path.resolve(process.cwd(), 'scripts/codemod/safeSq
  * character, and a control-character separator makes the source itself
  * unsearchable by grep/ripgrep.
  */
-function laneKey(file, expr) {
+function baselineSiteKey(file, expr) {
   return JSON.stringify([file, expr])
 }
 
@@ -291,7 +291,7 @@ export function evaluateAgainstBaseline(violations, baselineSites) {
       failures.push({ ...v, why: 'dynamic-SQL interpolation (single-line rule)' })
       continue
     }
-    const key = laneKey(v.file, v.expr)
+    const key = baselineSiteKey(v.file, v.expr)
     const allowed = baselineSites?.[v.file]?.[v.expr] ?? 0
     const seen = (counters.get(key) ?? 0) + 1
     counters.set(key, seen)
@@ -302,7 +302,7 @@ export function evaluateAgainstBaseline(violations, baselineSites) {
   const stale = []
   for (const [file, exprs] of Object.entries(baselineSites || {})) {
     for (const [expr, allowed] of Object.entries(exprs)) {
-      const seen = counters.get(laneKey(file, expr)) ?? 0
+      const seen = counters.get(baselineSiteKey(file, expr)) ?? 0
       if (seen < allowed) stale.push({ file, expr, allowed, seen })
     }
   }
