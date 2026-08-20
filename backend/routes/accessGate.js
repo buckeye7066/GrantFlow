@@ -13,7 +13,7 @@
  */
 
 import express from 'express'
-import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
+import { getAuthUserId, requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
 import { createLogger } from '../utils/logger.js'
 import {
   getAccessStatus,
@@ -74,23 +74,30 @@ router.post('/agreement/accept', requireAuthenticatedUserMiddleware, async (req,
     const user = req.user
     const { profile_id: profileId, agreement_text: agreementText } = req.body || {}
     if (!profileId) return res.status(400).json({ ok: false, error: 'profile_id_required' })
+    if (
+      req.ctx?.isAdmin !== true &&
+      (!(req.ctx?.accessibleProfileIds instanceof Set) || !req.ctx.accessibleProfileIds.has(String(profileId)))
+    ) {
+      return res.status(403).json({ ok: false, error: 'profile_access_denied' })
+    }
     const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress
     const ua = req.headers['user-agent'] || ''
     const r = await acceptAgreement(req.db, {
       profileId,
-      userId: user?.id || null,
+      userId: req.ctx?.userId || getAuthUserId(user),
       ip: typeof ip === 'string' ? ip : Array.isArray(ip) ? ip[0] : null,
       userAgent: ua,
       agreementText,
     })
+    if (!r?.ok) return res.status(400).json(r)
     await recordPaymentAccessEvent(req.db, {
-      userId: user?.id || null,
+      userId: req.ctx?.userId || getAuthUserId(user),
       profileId,
       quoteId: null,
       eventType: PAYMENT_ACCESS_EVENT.AGREEMENT_ACCEPTED,
       details: { agreement_version: SERVICE_AGREEMENT_VERSION },
     })
-    return res.status(r?.ok ? 200 : 400).json(r)
+    return res.status(200).json(r)
   } catch (err) {
     routeLogger.error('agreement_accept_failed', { err: err?.message })
     return res.status(500).json({ ok: false, error: err?.message || String(err) })

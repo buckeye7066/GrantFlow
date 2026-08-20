@@ -15,6 +15,7 @@ const FRONTEND_CLIENT_SOURCE = readFileSync(
 
 function createApp({ user, ctx, db = null }) {
   const app = express()
+  app.use(express.json())
   app.use((req, _res, next) => {
     req.user = user
     req.ctx = ctx
@@ -103,6 +104,28 @@ describe('GET /api/access-gate/status canonical authority', () => {
     })
 
     const response = await request(app).get('/api/access-gate/status?profile_id=profile-2')
+
+    expect(response.status).toBe(403)
+    expect(response.body).toEqual({ ok: false, error: 'profile_access_denied' })
+  })
+})
+
+describe('POST /api/access-gate/agreement/accept canonical authority', () => {
+  it('rejects a non-admin agreement write outside the DB-resolved profile set', async () => {
+    const app = createApp({
+      user: { userId: 'user-1' },
+      ctx: {
+        userId: 'user-1',
+        identityResolved: true,
+        isAdmin: false,
+        activeProfileId: 'profile-1',
+        accessibleProfileIds: new Set(['profile-1']),
+      },
+    })
+
+    const response = await request(app)
+      .post('/api/access-gate/agreement/accept')
+      .send({ profile_id: 'profile-2', agreement_text: 'I agree' })
 
     expect(response.status).toBe(403)
     expect(response.body).toEqual({ ok: false, error: 'profile_access_denied' })
