@@ -20,7 +20,22 @@ import client from './client.js'
 
 // Empty on purpose: every previously-declared stub now has a real resource.
 // Grow this list only with a deliberate PR decision.
+//
+// NOTE: while this list is empty, the "no DECLARED stub is secretly mapped"
+// assertion below iterates nothing and therefore proves nothing. That is
+// correct — an empty inventory has no stale entries — but it means the ONLY
+// load-bearing check here is the `undeclared` one, which is powered entirely by
+// `referencedEntityNames()`. A totality test whose own discovery silently
+// returns nothing is a check that cannot fail (measured on origin/main
+// 2fcb599f: stubbing the walk to return zero files left all five tests GREEN),
+// so the discovery is given its own floor below.
 const KNOWN_STUB_ENTITIES = Object.freeze([])
+
+// Entities whose `client.entities.<Name>` references are load-bearing product
+// code today. They are the floor that proves the scan below actually reached
+// src/ — NAMES, not a count, so relocating one file cannot quietly lower the
+// bar the way `expect(count).toBeGreaterThan(n)` would.
+const DISCOVERY_SENTINELS = Object.freeze(['Grant', 'Organization', 'Profile', 'Document'])
 
 function walk(dir, out) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -36,17 +51,32 @@ function referencedEntityNames() {
   const srcRoot = path.join(process.cwd(), 'src')
   const names = new Set()
   const re = /\bentities\.([A-Z][A-Za-z0-9]*)\b/g
-  for (const file of walk(srcRoot, [])) {
+  const scanned = walk(srcRoot, [])
+  for (const file of scanned) {
     const text = fs.readFileSync(file, 'utf8')
     let m
     while ((m = re.exec(text)) !== null) names.add(m[1])
   }
-  return names
+  return { names, scanned }
 }
 
 describe('entityResourceMap totality', () => {
   const mapped = new Set(Object.keys(client.entityResourceMap ?? {}))
-  const referenced = referencedEntityNames()
+  const { names: referenced, scanned } = referencedEntityNames()
+
+  it('the scan that powers this totality test actually READ src/ (no vacuous pass)', () => {
+    expect(
+      scanned.length,
+      'walk(src/) returned no files — this totality scan is not reading the codebase, so every assertion below is vacuous',
+    ).toBeGreaterThan(0)
+    const missing = DISCOVERY_SENTINELS.filter((name) => !referenced.has(name))
+    expect(
+      missing,
+      `the entity scan no longer finds load-bearing references (${missing.join(', ')}). ` +
+        'Either the `entities.<Name>` accessor pattern changed and the regex above must follow, ' +
+        'or these entities really are gone and the sentinel list must be updated deliberately.',
+    ).toEqual([])
+  })
 
   it('every entity referenced in src/ is mapped or a DECLARED stub', () => {
     const undeclared = Array.from(referenced).filter(

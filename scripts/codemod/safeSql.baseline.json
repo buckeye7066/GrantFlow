@@ -1,0 +1,118 @@
+{
+  "_comment": [
+    "Frozen inventory of dynamic-SQL interpolations on CONTINUATION lines that predate",
+    "the multi-line pass in scripts/codemod/safe-sql.mjs. This list may only SHRINK:",
+    "a new site, an extra occurrence, or a stale entry all fail the gate."
+  ],
+  "sites": {
+    "backend/routes/ai.js": {
+      "trustedOriginClause()": 5,
+      "trustedSourceClause()": 5,
+      "isolationClause": 4,
+      "stateClause": 1,
+      "nowSql": 1
+    },
+    "backend/routes/colleges.js": {
+      "trustedOriginClause()": 2,
+      "trustedSourceClause()": 2
+    },
+    "backend/routes/grantApplications.js": {
+      "where": 1
+    },
+    "backend/routes/hamiltonAutomation.js": {
+      "where": 1
+    },
+    "backend/routes/opportunities.js": {
+      "whereClause": 2,
+      "opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect })": 1,
+      "trustedOriginClause('fo')": 1,
+      "trustedSourceClause('fo')": 1,
+      "opportunityLifecycleVisibilitySql({ dialect })": 1,
+      "trustedOriginClause()": 2,
+      "trustedSourceClause()": 2,
+      "paginationSql": 2,
+      "opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })": 2,
+      "setClause": 1,
+      "lifecycleSql": 1
+    },
+    "backend/routes/organizations.js": {
+      "setClause": 1
+    },
+    "backend/routes/realCrawlers.js": {
+      "SURFACED_MATCHER_VERSIONS_SQL": 1
+    },
+    "backend/server.js": {
+      "scope.sql": 1,
+      "trustedOriginClause()": 1,
+      "trustedSourceClause()": 1
+    },
+    "backend/services/anyaToolRegistry.js": {
+      "expiresClause": 1
+    },
+    "backend/services/coverageAudit/surfacedEligibility.js": {
+      "scopeClause": 2,
+      "SURFACED_MATCHER_VERSIONS_SQL": 1,
+      "activeClause": 1
+    },
+    "backend/services/crawlerOsCompatibility.js": {
+      "SURFACED_MATCHER_VERSIONS_SQL": 1,
+      "lifecycleClause": 1
+    },
+    "backend/services/hamilton/hamiltonFundingSourcePolicy.js": {
+      "SURFACED_MATCHER_VERSIONS_SQL": 1,
+      "where.sql": 2,
+      "authClauses.join(' OR ')": 1
+    },
+    "backend/services/hamilton/hamiltonPortalCredentialService.js": {
+      "where": 1
+    },
+    "backend/services/hamilton/manualSubmissionReceiptStore.js": {
+      "lockClause": 1
+    },
+    "backend/services/hamilton/pointerTaskRepair.js": {
+      "pointerKindSql('fo.opportunity_kind')": 1,
+      "nowSqlLiteral(db)": 1
+    },
+    "backend/services/itemNeedSearch.js": {
+      "SURFACED_MATCHER_VERSIONS_SQL": 1
+    },
+    "backend/services/linkBacklogRepairService.js": {
+      "linkLifecycleKindSql('opportunity_kind')": 2,
+      "mutableLinkLifecycleSql()": 8,
+      "linkLifecycleOpportunitySql()": 3,
+      "linkLifecycleOpportunitySql('fo')": 1,
+      "mutableLinkLifecycleSql('fo')": 1
+    },
+    "backend/services/linkVerificationService.js": {
+      "mutableLinkLifecycleSql()": 6
+    },
+    "backend/services/matching/catalogRescoreSweep.js": {
+      "whereExplainMark": 1,
+      "whereMark": 1
+    },
+    "backend/services/portalCheckService.js": {
+      "mutableLinkLifecycleSql()": 1
+    },
+    "backend/services/productionAuditSnapshot.js": {
+      "idsSql": 5,
+      "SURFACED_MATCHER_VERSIONS_SQL": 1
+    },
+    "backend/services/sam/samRegistry.js": {
+      "statusesSql": 1
+    },
+    "backend/services/serviceCatalogStore.js": {
+      "nowSqlLiteral(db)": 18
+    },
+    "backend/startup/enforceInvariants.js": {
+      "where": 2
+    },
+    "backend/tests/linkLifecycleKinds.test.js": {
+      "linkLifecycleKindSql('opportunity_kind')": 1,
+      "linkLifecycleOpportunitySql()": 2,
+      "legacyDefaultedLinkLifecycleKindSql('opportunity_kind')": 1
+    },
+    "backend/utils/ensureProfileOrgLinks.js": {
+      "nowSql": 1
+    }
+  }
+}
