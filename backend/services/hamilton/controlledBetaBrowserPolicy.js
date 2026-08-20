@@ -1,11 +1,12 @@
 /**
- * Controlled-beta browser boundary.
+ * Hamilton browser target policy.
  *
- * GrantFlow does not yet have a reviewed real-portal Playwright adapter. Until
- * one is reviewed and released, every Hamilton browser flow is limited to the
- * single reserved `.invalid` fixture origin used by the irreversible-boundary
- * tests. Environment allowlists, saved credentials, profile URLs, redirects,
- * and loopback/private addresses cannot widen this boundary.
+ * When browser automation is enabled, Hamilton may drive public HTTPS portal
+ * origins (plus the reserved synthetic fixture used by irreversible-boundary
+ * tests). Private / loopback / link-local / metadata addresses stay blocked
+ * forever (SSRF). Environment allowlists and saved credentials do not widen
+ * past that SSRF floor — they only narrow which public hosts are eligible when
+ * an allowlist is configured (see browserAutomationPermittedForUrl).
  */
 
 export const CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN =
@@ -13,6 +14,25 @@ export const CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN =
 
 export const CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST =
   new URL(CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN).hostname
+
+function asHostname(value) {
+  return String(value || '').trim().toLowerCase().replace(/\.$/, '')
+}
+
+/** True for loopback, RFC1918, link-local, and cloud-metadata addresses. */
+export function isPrivateOrLocalHostname(hostname) {
+  const h = asHostname(hostname)
+  if (!h) return true
+  if (h === 'localhost' || h.endsWith('.localhost') || h === '0.0.0.0') return true
+  if (h === '::1' || h === '[::1]') return true
+  if (h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd')) return true
+  if (/^127\./.test(h)) return true
+  if (/^10\./.test(h)) return true
+  if (/^192\.168\./.test(h)) return true
+  if (/^169\.254\./.test(h)) return true
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true
+  return false
+}
 
 export function isControlledBetaSyntheticBrowserUrl(value) {
   try {
@@ -26,28 +46,63 @@ export function isControlledBetaSyntheticBrowserUrl(value) {
   }
 }
 
-/** Non-network document URLs are harmless; every HTTP(S) request stays on the fixture origin. */
-export function isControlledBetaBrowserRequestAllowed(value) {
+/** Public HTTPS portal URL Hamilton may open when browser automation is on. */
+export function isPublicHttpsPortalUrl(value) {
+  try {
+    const url = new URL(String(value || ''))
+    if (url.protocol !== 'https:') return false
+    if (url.username || url.password) return false
+    if (isPrivateOrLocalHostname(url.hostname)) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Navigation targets: reserved fixture OR public HTTPS (SSRF-safe). */
+export function isHamiltonBrowserTargetAllowed(value) {
+  return isControlledBetaSyntheticBrowserUrl(value) || isPublicHttpsPortalUrl(value)
+}
+
+/**
+ * Request/subresource/redirect egress: fixture, blank/data, or any
+ * http(s) host that is not private/loopback/metadata.
+ */
+export function isHamiltonBrowserRequestAllowed(value) {
   const raw = String(value || '')
   if (isControlledBetaSyntheticBrowserUrl(raw)) return true
   if (raw === 'about:blank' || raw.startsWith('data:')) return true
   if (raw.startsWith('blob:')) {
-    return isControlledBetaSyntheticBrowserUrl(raw.slice('blob:'.length))
+    return isHamiltonBrowserTargetAllowed(raw.slice('blob:'.length))
   }
-  return false
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
+    return !isPrivateOrLocalHostname(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+/** @deprecated Prefer isHamiltonBrowserRequestAllowed — kept for import stability. */
+export function isControlledBetaBrowserRequestAllowed(value) {
+  return isHamiltonBrowserRequestAllowed(value)
 }
 
 export function controlledBetaBrowserRefusal() {
   return {
     code: 'controlled_beta_manual_handoff',
-    message: 'Controlled beta does not open real portal sites in a server browser. Hamilton prepared the available packet or draft; open the official portal yourself for login, review, and final submission.',
+    message: 'Hamilton cannot open this address in a server browser (private, loopback, or unsafe target). Use a public HTTPS portal URL, or open the official portal yourself.',
   }
 }
 
+export function unsafeBrowserTargetRefusal() {
+  return controlledBetaBrowserRefusal()
+}
+
 /**
- * Install before the first page/request. Playwright routing covers redirects,
- * popup/new-tab requests, subresources, and fetch/XHR. Blocking service workers
- * on context creation keeps them from bypassing the route handler.
+ * Install before the first page/request. Aborts SSRF-class destinations while
+ * allowing public portal hosts and the reserved synthetic fixture.
  */
 export async function installControlledBetaBrowserEgressGuard(context) {
   if (!context || typeof context.route !== 'function') {
@@ -56,7 +111,7 @@ export async function installControlledBetaBrowserEgressGuard(context) {
   await context.route('**/*', async (route) => {
     let requestUrl = ''
     try { requestUrl = route.request().url() } catch { /* fail closed below */ }
-    if (isControlledBetaBrowserRequestAllowed(requestUrl)) {
+    if (isHamiltonBrowserRequestAllowed(requestUrl)) {
       await route.continue()
       return
     }

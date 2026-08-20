@@ -104,6 +104,8 @@ import { isSearchEngineUrl } from '../../config/urlRules.js'
 import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
 import {
   isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserTargetAllowed,
+  isPublicHttpsPortalUrl,
 } from './controlledBetaBrowserPolicy.js'
 import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
 
@@ -111,17 +113,22 @@ const PERSONA_VERSION = 'hamilton-mba-2026'
 
 const ENV = (typeof process !== 'undefined' && process?.env) ? process.env : {}
 
-// Browser-automation gate for the active (Control Center) autopilot path.
-// `HAMILTON_ENABLE_BROWSER_AUTOMATION` must be 'true' before Hamilton launches a
-// real browser; until then she degrades to the lawful pdf_docx packet. This is
-// the flag the legacy hamiltonApplicationAgent path already honored — wiring it
-// here makes it authoritative on the path the Control Center actually drives.
-export function isBrowserAutomationEnabled() {
-  return String(ENV.HAMILTON_ENABLE_BROWSER_AUTOMATION || 'false').toLowerCase() === 'true'
+function envFlagEnabled(raw, defaultOn = true) {
+  const v = String(raw ?? (defaultOn ? 'true' : 'false')).trim().toLowerCase()
+  if (v === '' || v === 'undefined' || v === 'null') return defaultOn
+  return v !== 'false' && v !== '0' && v !== 'off' && v !== 'no'
 }
 
-// Retained as configuration telemetry only. During controlled beta this
-// allowlist cannot authorize a real-domain browser launch.
+// Browser-automation gate for the active (Control Center) autopilot path.
+// Defaults ON so authorized Autopilot can reach real portals. Set
+// HAMILTON_ENABLE_BROWSER_AUTOMATION=false to force packet-only handoff.
+export function isBrowserAutomationEnabled() {
+  return envFlagEnabled(ENV.HAMILTON_ENABLE_BROWSER_AUTOMATION, true)
+}
+
+// Optional operational narrow: when set, only these public hosts (plus
+// profile-declared / credentialed hosts passed as extraAllowedHosts) may be
+// driven. Empty allowlist = any public HTTPS portal (SSRF floor still holds).
 export function browserAutomationHostAllowlist() {
   return String(ENV.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST || '')
     .split(',')
@@ -129,28 +136,45 @@ export function browserAutomationHostAllowlist() {
     .filter(Boolean)
 }
 
+function hostMatchesAllowed(hostname, allowedHosts) {
+  const host = String(hostname || '').toLowerCase()
+  if (!host) return false
+  for (const raw of allowedHosts) {
+    const h = String(raw || '').toLowerCase().replace(/^www\./, '')
+    if (!h) continue
+    if (host === h || host === `www.${h}` || host.endsWith(`.${h}`)) return true
+  }
+  return false
+}
+
 /**
  * May Hamilton drive a real browser at this URL?
  *
- * Browser automation must be globally enabled and the target must be the exact
- * reserved synthetic fixture origin. Profile URLs, saved credentials, and env
- * allowlists are data/configuration — none is review evidence for a real-domain
- * adapter and none can widen this controlled-beta boundary.
+ * Requires browser automation enabled and an SSRF-safe target (reserved
+ * fixture or public HTTPS). When HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST
+ * is set, the host must also appear on that list OR in extraAllowedHosts
+ * (profile-declared portals + saved credential domains).
  */
 export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] } = {}) {
-  void extraAllowedHosts
   if (!isBrowserAutomationEnabled()) return false
-  return isControlledBetaSyntheticBrowserUrl(url)
+  if (isControlledBetaSyntheticBrowserUrl(url)) return true
+  if (!isPublicHttpsPortalUrl(url) && !isHamiltonBrowserTargetAllowed(url)) return false
+  if (!isPublicHttpsPortalUrl(url)) return false
+
+  let hostname
+  try { hostname = new URL(String(url)).hostname.toLowerCase() } catch { return false }
+
+  const allowlist = browserAutomationHostAllowlist()
+  if (allowlist.length === 0) return true
+  const extras = (Array.isArray(extraAllowedHosts) ? extraAllowedHosts : [])
+    .map((h) => String(h || '').toLowerCase())
+    .filter(Boolean)
+  return hostMatchesAllowed(hostname, [...allowlist, ...extras])
 }
 
-// This bounded release has no independently reviewed, executable real-portal
-// submission adapter. Keep the positive irreversible-boundary path testable on
-// one reserved synthetic host, but fail closed for every real host. A future
-// release must replace this synthetic-only predicate with a persisted,
-// versioned adapter/fixture contract and an exact executor; an env flag or a
-// permissive host policy is not review evidence.
+/** Submit click is executable wherever browser automation is permitted. */
 export function reviewedPortalSubmissionExecutionAvailable(url) {
-  return isControlledBetaSyntheticBrowserUrl(url)
+  return browserAutomationPermittedForUrl(url)
 }
 
 /**
@@ -1282,18 +1306,14 @@ async function runAutopilotPathway(db, {
     const reason = policyForbidsAutomation
       ? `portal terms forbid agent automation (${portalHostForPolicy || 'this host'}); Hamilton respects the site's ToS and uses the lawful ${portalPolicy.fallback_path || 'pdf_docx'} packet instead`
       : !isBrowserAutomationEnabled()
-        ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
-        // AN INSTRUCTION THAT CANNOT BE SATISFIED IS WORSE THAN NO INSTRUCTION.
-        // This branch used to read "portal host is not on the allowlist and the
-        // profile has no declared portal or saved credential for it", which told
-        // the owner to add the host to HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST
-        // or save a credential. Neither can EVER satisfy
-        // `browserAutomationPermittedForUrl`: it `void`s `extraAllowedHosts`
-        // entirely and returns true only for the ONE reserved synthetic fixture
-        // origin (isControlledBetaSyntheticBrowserUrl). So for every real portal
-        // the owner was chasing a fix that does not exist. State the real reason
-        // and the real next step.
-        : `this bounded release has no reviewed real-portal submission adapter, so Hamilton does not drive a browser on ${portalHostForPolicy || 'this host'} — a lawful packet was prepared instead; use side-by-side co-browse or apply manually. (No allowlist entry or saved credential can change this: the controlled-beta boundary permits only the reserved synthetic fixture origin.)`
+        ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is false'
+        : (() => {
+          const allowlist = browserAutomationHostAllowlist()
+          if (allowlist.length > 0 && !hostMatchesAllowed(portalHostForPolicy, [...allowlist, ...extraAllowedHosts])) {
+            return `portal host ${portalHostForPolicy || '(unknown)'} is not on HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST and this profile has no declared portal or saved credential for it`
+          }
+          return `portal URL is not a safe public HTTPS target Hamilton can drive (${portalHostForPolicy || 'unknown host'})`
+        })()
     const packet = await generateAndSavePacket(db, {
       profile, opportunity, grant, automationType: 'pdf_docx', taskId: task.id, userId,
     }).catch((err) => ({ error: err?.message || String(err) }))
@@ -1386,7 +1406,7 @@ async function runAutopilotPathway(db, {
     submissionDecision = {
       ...submissionDecision,
       allow_auto_submit: false,
-      reason: 'reviewed_submission_adapter_required',
+      reason: 'portal_url_not_browser_executable',
       execution_channel: 'human_handoff',
     }
   }
@@ -1394,13 +1414,13 @@ async function runAutopilotPathway(db, {
     authorizationId: submissionDecision.authorization_id,
     result: { submission_decision: submissionDecision },
   })
-  if (submissionDecision.reason === 'reviewed_submission_adapter_required') {
+  if (submissionDecision.reason === 'portal_url_not_browser_executable') {
     await appendTaskEvent(db, {
       taskId: task.id,
       eventType: 'note',
       status: 'filling_portal',
-      step: 'unreviewed_portal_submit_adapter',
-      message: 'Hamilton may prepare and save this application, but final Submit remains a human handoff because no independently reviewed executable adapter exists for this real portal.',
+      step: 'portal_url_not_browser_executable',
+      message: 'Hamilton may prepare and save this application, but the portal URL is not a safe public HTTPS target she can submit through automatically.',
       actorUserId: userId,
       actorRole: 'agent',
       details: { auto_submit_allowed: false, execution_channel: 'human_handoff' },
@@ -1495,10 +1515,8 @@ async function runAutopilotPathway(db, {
       return { allow: false, reason: 'profile_auto_submit_disabled', decision: fresh }
     }
     // Re-check executable coverage at the click boundary as well as launch.
-    // Real portals remain draft/human-handoff-only until a reviewed adapter
-    // contract and exact executor are installed.
     if (!reviewedPortalSubmissionExecutionAvailable(url)) {
-      return { allow: false, reason: 'reviewed_submission_adapter_required', decision: fresh }
+      return { allow: false, reason: 'portal_url_not_browser_executable', decision: fresh }
     }
     if (grant?.id) {
       let freshGate

@@ -37,7 +37,7 @@ export function ProfilePricingGate({ profileId, children, onUnlocked }) {
       if (r?.access_granted && typeof onUnlocked === 'function') onUnlocked(r)
     } catch (err) {
       if (!isMounted.current || activeProfileId.current !== pid) return
-      setStatus({ ok: false, access_granted: false, blocking_reason: err?.message })
+      setStatus({ ok: false, access_granted: false, blocking_reason: 'unknown_error' })
     } finally {
       if (isMounted.current && activeProfileId.current === pid) setLoading(false)
     }

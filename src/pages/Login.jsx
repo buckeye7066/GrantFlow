@@ -78,7 +78,7 @@ export default function Login() {
 
 function AuthMethodExpiryNotice() {
     return (
-          <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50/70 p-3 text-sm text-slate-700">
+          <div className="mb-6 rounded-lg border border-blue-100 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/40 p-3 text-sm text-slate-700 dark:text-slate-100">
                 First-time sign-in uses a one-time email link to set your password.
                 Returning users can sign in with email + password.
           </div>

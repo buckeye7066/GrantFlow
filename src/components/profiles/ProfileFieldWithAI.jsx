@@ -169,7 +169,7 @@ function TagPickerField({ field, value, onChange, disabled }) {
               type="button"
               disabled={disabled}
               onClick={() => toggle(opt)}
-              className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:opacity-50"
+              className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:border-blue-800 dark:hover:bg-blue-950/50 disabled:opacity-50"
             >
               + {opt}
             </button>

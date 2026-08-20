@@ -28,7 +28,7 @@ const distDir = path.join(root, 'dist')
 const mobileDir = path.join(distDir, 'mobile')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 const version = pkg.version
-const baseUrl = process.env.MOBILE_UPDATE_BASE_URL || 'https://axiombiolabs.org'
+const baseUrl = (process.env.MOBILE_UPDATE_BASE_URL || 'https://axiombiolabs.org').replace(/\/+$/, '')
 
 if (!fs.existsSync(path.join(distDir, 'index.html'))) {
   console.error('[mobile-bundle] dist/index.html not found — run the web build first (npm run build).')

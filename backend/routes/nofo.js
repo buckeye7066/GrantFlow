@@ -88,7 +88,14 @@ function jsonSchemaNodeToZod(node, { partial = false, depth = 0 } = {}) {
       if (partial || !required.has(key)) childSchema = childSchema.optional()
       shape[key] = childSchema
     }
-    result = z.object(shape).passthrough()
+    // STRIP, never passthrough: the model reads UNTRUSTED document text, so a
+    // steered response can emit arbitrary extra keys — the schema's declared
+    // properties are the output ALLOWLIST (the config.keys posture in
+    // buildProfileSectionPrompt/documentIngestion), and anything undeclared is
+    // hard-dropped here before it can reach merge/persistence. strip (not
+    // strict) so one injected stray key cannot veto an otherwise-valid
+    // extraction — the honest fields survive, the smuggled ones die.
+    result = z.object(shape).strip()
   } else if (node.type === 'array') {
     result = z.array(jsonSchemaNodeToZod(node.items || {}, { partial, depth: depth + 1 }))
     if (Number.isInteger(node.minItems)) result = result.min(node.minItems)
@@ -113,8 +120,26 @@ function jsonSchemaNodeToZod(node, { partial = false, depth = 0 } = {}) {
   return result
 }
 
-function validateOpportunityAgainstSchema(value, jsonSchema, { partial = false } = {}) {
-  if (!jsonSchema) return z.record(z.string(), z.unknown()).safeParse(value)
+/**
+ * Server-side default output allowlist, mirroring the frontend's
+ * grantSchemaForExtraction (src/pages/NOFOParser.jsx). A schema-less API call
+ * used to validate the model's opportunity object as z.record(unknown) —
+ * i.e. NO key allowlist at all, so a document-steered response could smuggle
+ * arbitrary fields into the pipeline. Exported for the guard test.
+ */
+export const DEFAULT_OPPORTUNITY_OUTPUT_KEYS = Object.freeze([
+  'title', 'funder', 'opportunity_number', 'deadline',
+  'amount_min', 'amount_max', 'application_url', 'eligibility_summary',
+  'applicant_types', 'program_description', 'selection_criteria',
+  'funder_email', 'funder_phone', 'funder_fax', 'funder_address',
+])
+
+const defaultOpportunityOutputSchema = z.object(
+  Object.fromEntries(DEFAULT_OPPORTUNITY_OUTPUT_KEYS.map((key) => [key, z.unknown().optional()])),
+).strip()
+
+export function validateOpportunityAgainstSchema(value, jsonSchema, { partial = false } = {}) {
+  if (!jsonSchema) return defaultOpportunityOutputSchema.safeParse(value)
   if (JSON.stringify(jsonSchema).length > 50_000) {
     return { success: false, error: new Error('json_schema exceeds 50,000 characters') }
   }

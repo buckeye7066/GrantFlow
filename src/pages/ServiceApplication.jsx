@@ -524,7 +524,7 @@ export default function ServiceApplication() {
         )}
 
         {/* Contact Information */}
-        <div className="bg-blue-50 rounded-lg p-4 text-sm text-slate-700 space-y-1">
+        <div className="bg-blue-50 dark:bg-blue-950/40 rounded-lg p-4 text-sm text-slate-700 dark:text-slate-200 space-y-1">
           <p className="font-semibold text-slate-900">Contact Information</p>
           <p>John White, PhD, MBA, Grant Writing Consultant</p>
           <p>Cell: 423.504.7778</p>

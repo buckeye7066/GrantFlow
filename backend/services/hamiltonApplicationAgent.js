@@ -59,12 +59,18 @@ export const HAMILTON_AGENT_NAME = 'hamilton'
 
 const ENV = (typeof process !== 'undefined' && process?.env) ? process.env : {}
 
+function envFlagEnabled(raw, defaultOn = true) {
+  const v = String(raw ?? (defaultOn ? 'true' : 'false')).trim().toLowerCase()
+  if (v === '' || v === 'undefined' || v === 'null') return defaultOn
+  return v !== 'false' && v !== '0' && v !== 'off' && v !== 'no'
+}
+
 export function isBrowserAutomationEnabled() {
-  return String(ENV.HAMILTON_ENABLE_BROWSER_AUTOMATION || 'false').toLowerCase() === 'true'
+  return envFlagEnabled(ENV.HAMILTON_ENABLE_BROWSER_AUTOMATION, true)
 }
 
 export function isAutoSubmitGloballyEnabled() {
-  return String(ENV.HAMILTON_ALLOW_AUTOSUBMIT || 'false').toLowerCase() === 'true'
+  return envFlagEnabled(ENV.HAMILTON_ALLOW_AUTOSUBMIT, true)
 }
 
 /**

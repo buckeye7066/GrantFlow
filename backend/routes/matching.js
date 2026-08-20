@@ -25,6 +25,13 @@ import { canonicalizeOpportunityList, isFiniteNumberLike } from '../services/mat
 import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
+import {
+  enrichSuccessStep,
+  loadSuccessStepCompletion,
+  setSuccessStepCompletion,
+  applySuccessStepCompletion,
+  successStepId,
+} from '../config/successStepActions.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -962,6 +969,8 @@ router.get('/profile/:profileId/matching-gaps', async (req, res) => {
 
     // ── Success steps: real-world items needed based on goals/narrative ──
     const successSteps = buildSuccessSteps(profileRow, sections, applicantType)
+    const completionStore = await loadSuccessStepCompletion(req.db, profileId)
+    const successPayload = applySuccessStepCompletion(successSteps, completionStore)
 
     res.json({
       profile_id: profileId,
@@ -969,10 +978,52 @@ router.get('/profile/:profileId/matching-gaps', async (req, res) => {
       total_gaps: gaps.length,
       completed: 8 - gaps.length,
       total_items: 8,
-      success_steps: successSteps,
+      success_steps: successPayload.success_steps,
+      success_steps_completed: successPayload.success_steps_completed,
+      success_steps_total: successPayload.success_steps_total,
     })
   } catch (error) {
     console.error('[matching/matching-gaps]', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * PATCH /api/matching/profile/:profileId/success-steps/:stepId
+ * Persist per-profile completion for a "What You Need for Success" card.
+ * Body: { completed?: boolean, label?: string }
+ */
+router.patch('/profile/:profileId/success-steps/:stepId', async (req, res) => {
+  const profileId = req.params.profileId
+  const auth = await requireProfileAccess(req, res, profileId)
+  if (!auth) return
+
+  const stepId = successStepId(req.params.stepId)
+  if (!stepId) {
+    return res.status(400).json({ error: 'step_id is required' })
+  }
+
+  try {
+    const profileRow = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profileRow) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    const completed = req.body?.completed !== false
+    const result = await setSuccessStepCompletion(req.db, profileId, stepId, {
+      completed,
+      label: req.body?.label,
+    })
+
+    res.json({
+      profile_id: profileId,
+      step_id: result.step_id,
+      completed: result.is_completed,
+      completed_at: result.is_completed ? result.completed[result.step_id]?.completed_at || null : null,
+      success_steps_completed: Object.keys(result.completed).length,
+    })
+  } catch (error) {
+    console.error('[matching/success-steps]', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1622,15 +1673,15 @@ function buildSuccessSteps(profile, sections, applicantType) {
           if (step.skip(allText, sections)) continue
         } catch { /* guard threw — include the step */ }
       }
-      steps.push({ label: step.label, category: step.category, why: step.why })
+      steps.push(enrichSuccessStep({ label: step.label, category: step.category, why: step.why }))
     }
   }
 
-  // Deduplicate by label (multiple archetypes may suggest the same step)
+  // Deduplicate by id (multiple archetypes may suggest the same step)
   const seen = new Set()
-  const unique = steps.filter(s => {
-    if (seen.has(s.label)) return false
-    seen.add(s.label)
+  const unique = steps.filter((s) => {
+    if (seen.has(s.id)) return false
+    seen.add(s.id)
     return true
   })
 

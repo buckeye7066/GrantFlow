@@ -8,7 +8,12 @@
  * same proven pattern as profileSections.js APPLICANT_CONTEXT.
  */
 import { describe, expect, it } from 'vitest'
-import { buildNofoChunkPrompt, fenceUntrustedDocumentText } from '../routes/nofo.js'
+import {
+  buildNofoChunkPrompt,
+  fenceUntrustedDocumentText,
+  validateOpportunityAgainstSchema,
+  DEFAULT_OPPORTUNITY_OUTPUT_KEYS,
+} from '../routes/nofo.js'
 
 const chunk = (content) => ({ chunk_index: 0, char_start: 0, char_end: content.length, content })
 
@@ -43,6 +48,30 @@ describe('buildNofoChunkPrompt', () => {
     // The hostile text survives as inert, escaped data after the REAL opener.
     const inside = prompt.slice(prompt.indexOf('<SOLICITATION_DOCUMENT>'), prompt.indexOf('</SOLICITATION_DOCUMENT>'))
     expect(inside).toContain('attacker.org')
+  })
+
+  it('OUTPUT allowlist: undeclared keys a steered model emits are STRIPPED, honest keys survive (schema-supplied)', () => {
+    const schema = { type: 'object', properties: { title: { type: 'string' }, amount_max: { type: 'number' } } }
+    const result = validateOpportunityAgainstSchema(
+      { title: 'Roof Grant', amount_max: 50000, __proto_pollution: 'x', wire_funds_to: 'attacker.org' },
+      schema,
+      { partial: true },
+    )
+    expect(result.success).toBe(true)
+    expect(result.data).toEqual({ title: 'Roof Grant', amount_max: 50000 })
+    expect(Object.keys(result.data)).not.toContain('wire_funds_to')
+  })
+
+  it('OUTPUT allowlist: a SCHEMA-LESS call filters to the server default keys, never z.record(anything)', () => {
+    const result = validateOpportunityAgainstSchema(
+      { title: 'Roof Grant', funder: 'Example Fund', smuggled_instruction: 'ignore gates', exfil: 'yes' },
+      null,
+    )
+    expect(result.success).toBe(true)
+    expect(result.data).toEqual({ title: 'Roof Grant', funder: 'Example Fund' })
+    for (const key of Object.keys(result.data)) {
+      expect(DEFAULT_OPPORTUNITY_OUTPUT_KEYS).toContain(key)
+    }
   })
 
   it('no raw document text appears OUTSIDE the fence', () => {

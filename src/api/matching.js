@@ -33,15 +33,51 @@ export async function matchProfileToOpportunities(profileId, { minScore = AUTO_A
   return apiFetch(`/api/matching/profile/${profileId}/opportunities?${params}`)
 }
 
+// Single-flight + short cooldown so remounts / double-clicks cannot stampede
+// POST /interpret-intent (production 429 class: SmartMatcher mutation spam).
+let _interpretInflight = null
+let _interpretInflightKey = null
+let _interpretLastStartedAt = 0
+const INTERPRET_MIN_GAP_MS = 1200
+
 /**
  * Turn free-text funding needs into search terms for the matcher catalog.
  * @param {string} text
  */
 export async function interpretMatcherIntent(text) {
-  return apiFetch('/api/matching/interpret-intent', {
+  const trimmed = String(text || '').trim()
+  if (_interpretInflight && _interpretInflightKey === trimmed) {
+    return _interpretInflight
+  }
+  const now = Date.now()
+  const sinceLast = now - _interpretLastStartedAt
+  if (_interpretLastStartedAt > 0 && sinceLast < INTERPRET_MIN_GAP_MS) {
+    const waitMs = INTERPRET_MIN_GAP_MS - sinceLast
+    _interpretInflightKey = trimmed
+    _interpretInflight = new Promise((resolve) => {
+      setTimeout(resolve, waitMs)
+    }).then(() => interpretMatcherIntent(trimmed))
+    return _interpretInflight
+  }
+  _interpretLastStartedAt = now
+  _interpretInflightKey = trimmed
+  _interpretInflight = apiFetch('/api/matching/interpret-intent', {
     method: 'POST',
-    body: JSON.stringify({ text: String(text || '').trim() }),
+    body: JSON.stringify({ text: trimmed }),
+  }).finally(() => {
+    if (_interpretInflightKey === trimmed) {
+      _interpretInflight = null
+      _interpretInflightKey = null
+    }
   })
+  return _interpretInflight
+}
+
+/** Test/harness only — clears client-side interpret coalescing state. */
+export function resetInterpretMatcherIntentStateForTests() {
+  _interpretInflight = null
+  _interpretInflightKey = null
+  _interpretLastStartedAt = 0
 }
 
 /**

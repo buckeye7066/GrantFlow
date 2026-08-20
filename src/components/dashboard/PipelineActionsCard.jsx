@@ -39,7 +39,7 @@ function WorkflowButton({ icon: Icon, title, detail, to, tooltip, primary = fals
           className={`h-auto w-full justify-start gap-3 whitespace-normal rounded-lg px-4 py-3 text-left ${
             primary
               ? "shadow-md shadow-blue-200"
-              : "border-slate-200 bg-white text-slate-900 hover:border-blue-200 hover:bg-blue-50 hover:text-slate-950"
+              : "border-slate-200 bg-white text-slate-900 hover:border-blue-200 hover:bg-blue-50 hover:text-slate-950 dark:hover:border-blue-800 dark:hover:bg-blue-950/50"
           }`}
         >
           <Link to={to}>
