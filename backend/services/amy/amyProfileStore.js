@@ -177,6 +177,61 @@ export async function markProfileCrawled(db, profileId, { now = new Date(), floo
   }
 }
 
+/**
+ * Mark one or more synthetic profiles as TAUGHT. This is the durable receipt for
+ * the owner rule create → crawl → teach → delete: cleanup may only reap a
+ * crawled profile once Amy has published its blind-spot lessons through the
+ * existing mesh / finding-actor chain.
+ */
+export async function markProfilesTaught(
+  db,
+  profileIds,
+  { now = new Date(), runId = null, agents = REQUIRED_TEACHING_AGENTS, receipt = null } = {},
+) {
+  if (!db) throw new Error('markProfilesTaught: db is required')
+  const ids = [...new Set((Array.isArray(profileIds) ? profileIds : [profileIds]).filter(Boolean).map(String))]
+  if (ids.length === 0) return { updated: 0, ids: [] }
+
+  const upsertSection = db.prepare(
+    `INSERT INTO profile_sections (profile_id, section_key, data, updated_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(profile_id, section_key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+  )
+  const selectSection = db.prepare(
+    `SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?`,
+  )
+  const taughtAgents = normalizeAgentIds(agents)
+  const nowIso = (now instanceof Date ? now : new Date(now)).toISOString()
+  const result = { updated: 0, ids: [] }
+
+  for (const profileId of ids) {
+    const sec = await selectSection.get(profileId, METADATA_SECTION_KEY)
+    const meta = sec?.data ? safeParse(sec.data, {}) : {}
+    const learningAgents = normalizeAgentIds([
+      ...normalizeAgentIds(meta.learning_agents),
+      ...normalizeAgentIds(meta?.teaching?.agents),
+      ...taughtAgents,
+    ])
+    const taughtAt = meta.taught_at || meta?.teaching?.taught_at || nowIso
+    meta.taught_at = taughtAt
+    meta.last_taught_at = nowIso
+    meta.learning_agents = learningAgents
+    if (runId) meta.last_taught_run_id = runId
+    meta.teaching = {
+      ...(meta.teaching && typeof meta.teaching === 'object' ? meta.teaching : {}),
+      taught_at: taughtAt,
+      last_taught_at: nowIso,
+      run_id: runId || meta?.teaching?.run_id || meta.amy_run_id || null,
+      agents: learningAgents,
+      receipt: receipt && typeof receipt === 'object' ? receipt : (meta?.teaching?.receipt || null),
+    }
+    await upsertSection.run(profileId, METADATA_SECTION_KEY, JSON.stringify(meta), SECTION_WRITER, nowIso, nowIso)
+    result.updated += 1
+    result.ids.push(profileId)
+  }
+
+  return result
+}
 const DEPENDENT_TABLES = [
   ['profile_documents', 'profile_id'],
   ['documents', 'profile_id'],
