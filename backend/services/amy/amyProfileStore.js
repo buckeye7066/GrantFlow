@@ -32,6 +32,7 @@ import {
 import { buildAmyMetadata, buildAmyTags, isMetadataExpired } from './amyMetadata.js'
 
 const log = createLogger('services:amy:profileStore')
+export const REQUIRED_TEACHING_AGENTS = Object.freeze(['amy', 'anya', 'sam', 'robert'])
 
 function safeParse(json, fallback) {
   try {
@@ -39,6 +40,17 @@ function safeParse(json, fallback) {
   } catch {
     return fallback
   }
+}
+
+function normalizeAgentIds(ids) {
+  return [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim().toLowerCase()).filter(Boolean))]
+}
+
+export function hasRequiredTeachingReceipt(meta) {
+  const taughtAt = meta?.last_taught_at || meta?.taught_at || meta?.teaching?.last_taught_at || meta?.teaching?.taught_at || null
+  if (!taughtAt) return false
+  const learned = normalizeAgentIds(meta?.learning_agents || meta?.teaching?.agents)
+  return REQUIRED_TEACHING_AGENTS.every((agentId) => learned.includes(agentId))
 }
 
 /**
@@ -177,6 +189,61 @@ export async function markProfileCrawled(db, profileId, { now = new Date(), floo
   }
 }
 
+/**
+ * Mark one or more synthetic profiles as TAUGHT. This is the durable receipt for
+ * the owner rule create → crawl → teach → delete: cleanup may only reap a
+ * crawled profile once Amy has published its blind-spot lessons through the
+ * existing mesh / finding-actor chain.
+ */
+export async function markProfilesTaught(
+  db,
+  profileIds,
+  { now = new Date(), runId = null, agents = REQUIRED_TEACHING_AGENTS, receipt = null } = {},
+) {
+  if (!db) throw new Error('markProfilesTaught: db is required')
+  const ids = [...new Set((Array.isArray(profileIds) ? profileIds : [profileIds]).filter(Boolean).map(String))]
+  if (ids.length === 0) return { updated: 0, ids: [] }
+
+  const upsertSection = db.prepare(
+    `INSERT INTO profile_sections (profile_id, section_key, data, updated_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(profile_id, section_key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+  )
+  const taughtAgents = normalizeAgentIds(agents)
+  const nowIso = (now instanceof Date ? now : new Date(now)).toISOString()
+  const result = { updated: 0, ids: [] }
+
+  for (const profileId of ids) {
+    const sec = await db
+      .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?`)
+      .get(profileId, METADATA_SECTION_KEY)
+    const meta = sec?.data ? safeParse(sec.data, {}) : {}
+    const learningAgents = normalizeAgentIds([
+      ...normalizeAgentIds(meta.learning_agents),
+      ...normalizeAgentIds(meta?.teaching?.agents),
+      ...taughtAgents,
+    ])
+    const taughtAt = meta.taught_at || meta?.teaching?.taught_at || nowIso
+    meta.taught_at = taughtAt
+    meta.last_taught_at = nowIso
+    meta.learning_agents = learningAgents
+    if (runId) meta.last_taught_run_id = runId
+    meta.teaching = {
+      ...(meta.teaching && typeof meta.teaching === 'object' ? meta.teaching : {}),
+      taught_at: taughtAt,
+      last_taught_at: nowIso,
+      run_id: runId || meta?.teaching?.run_id || meta.amy_run_id || null,
+      agents: learningAgents,
+      receipt: receipt && typeof receipt === 'object' ? receipt : (meta?.teaching?.receipt || null),
+    }
+    await upsertSection.run(profileId, METADATA_SECTION_KEY, JSON.stringify(meta), SECTION_WRITER, nowIso, nowIso)
+    result.updated += 1
+    result.ids.push(profileId)
+  }
+
+  return result
+}
+
 const DEPENDENT_TABLES = [
   ['profile_documents', 'profile_id'],
   ['documents', 'profile_id'],
@@ -211,6 +278,9 @@ async function hardDeleteAmyProfile(db, profileId) {
  * @param {string[]} [opts.onlyIds]    - restrict deletion to these profile ids.
  * @param {boolean} [opts.requireCrawled=false] - HARD invariant: never delete a
  *        profile that has not been crawled at least once (crawled_at present).
+ * @param {boolean} [opts.requireTaught=false] - HARD invariant: never delete a
+ *        crawled profile until the Amy → mesh / finding-actor teaching receipt
+ *        exists for all required agents.
  * @param {number} [opts.minCrawledAgeMs=0] - safety grace: never delete a profile
  *        crawled more recently than this many ms ago (its training run could
  *        still be mid-flight, before its learning step). Expiry-independent, so a
@@ -228,7 +298,7 @@ async function hardDeleteAmyProfile(db, profileId) {
  * @param {Date} [opts.now]
  * @returns {Promise<{ scanned, deleted, skipped, dry_run, ids, skipped_ids }>}
  */
-export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false, force = false, dryRun = false, onlyIds = null, requireCrawled = false, minCrawledAgeMs = 0, neverCrawledMaxAgeMs = 0, now = new Date() } = {}) {
+export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false, force = false, dryRun = false, onlyIds = null, requireCrawled = false, requireTaught = false, minCrawledAgeMs = 0, neverCrawledMaxAgeMs = 0, now = new Date() } = {}) {
   if (!db) throw new Error('cleanupAmyProfiles: db is required')
   const candidates = await listAmyProfiles(db)
   const onlyIdSet = Array.isArray(onlyIds) ? new Set(onlyIds.map(String)) : null
@@ -270,6 +340,9 @@ export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false
         }
       }
       if (!reapNeverCrawled) reasonsToSkip.push('not_crawled')
+    }
+    if (requireTaught && crawledSignalIso && !hasRequiredTeachingReceipt(meta)) {
+      reasonsToSkip.push('not_taught')
     }
     // Guard 4b (race safety): don't reap a profile crawled so recently its run
     // could still be mid-flight / pre-learning. Expiry-independent — EXCEPT for
@@ -382,6 +455,7 @@ export function amyNeverCrawledMaxAgeMs(env = process.env) {
  *     never even scanned;
  *   - designated-profile / allow_sam_cleanup / synthetic guards;
  *   - requireCrawled with the bounded never-crawled TTL escape hatch;
+ *   - requireTaught for any row that HAS been crawled (create → crawl → teach → delete);
  *   - 6h crawled grace so a mid-flight run is never reaped.
  */
 export async function cleanupExpiredAmyProfiles(
@@ -396,6 +470,7 @@ export async function cleanupExpiredAmyProfiles(
   return cleanupAmyProfiles(db, {
     expiredOnly: true,
     requireCrawled: true,
+    requireTaught: true,
     minCrawledAgeMs,
     neverCrawledMaxAgeMs,
     dryRun,
@@ -407,7 +482,9 @@ export default {
   createAmyProfile,
   listAmyProfiles,
   markProfileCrawled,
+  markProfilesTaught,
   cleanupAmyProfiles,
   cleanupExpiredAmyProfiles,
+  hasRequiredTeachingReceipt,
   amyNeverCrawledMaxAgeMs,
 }
