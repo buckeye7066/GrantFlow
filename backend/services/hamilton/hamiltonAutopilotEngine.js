@@ -46,7 +46,7 @@ import {
   controlledBetaBrowserContextOptions,
   controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
-  isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserTargetAllowed,
 } from './controlledBetaBrowserPolicy.js'
 import path from 'node:path'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
@@ -1012,7 +1012,7 @@ export async function runAutopilot({
     return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before browser launch.', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  if (!isControlledBetaSyntheticBrowserUrl(url)) {
+  if (!isHamiltonBrowserTargetAllowed(url)) {
     const refusal = controlledBetaBrowserRefusal()
     return {
       status: 'blocked',

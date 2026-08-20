@@ -6,12 +6,13 @@
 > scholarships, institutional aid, foundation funding, government
 > funding, school aid, and private assistance."
 >
-> In the current controlled beta, Hamilton automates preparation and the
-> reserved synthetic browser fixture only. A real portal is always a human
-> handoff: the owner opens the official site, completes login/2FA/signatures/
-> attestations, performs the final submission, and may then retain the genuine
-> portal receipt in GrantFlow. No authorization flag or host allow-list enables
-> server-side browsing or final submission on a real domain.
+> When authorized, Hamilton may open public HTTPS portals (plus a reserved
+> synthetic fixture used by irreversible-boundary tests), fill forms, and
+> click Submit. She always pauses for human-only gates: login, CAPTCHA, 2FA,
+> payment, and signatures. Private / loopback / metadata addresses stay
+> blocked forever (SSRF). Set `HAMILTON_ENABLE_BROWSER_AUTOMATION=false` or
+> `HAMILTON_ALLOW_AUTOSUBMIT=false` to disable browser automation or
+> auto-submit globally.
 
 ## Autopilot in one paragraph
 
@@ -21,10 +22,9 @@ When the user clicks **Automate with Hamilton**, the
 selected sources (`POST /api/hamilton/automation/preflight`) so any
 missing field/document/URL is fixed before launch, and then starts
 the unattended run (`POST /api/hamilton/automation/start-autopilot`).
-The Playwright path is executable only against the reserved synthetic fixture
-used by controlled-beta tests. For a real portal, Hamilton prepares the packet
-and instructions and stops at a visible manual handoff. The owner completes
-all interactive and irreversible steps in their own browser.
+For a public HTTPS portal URL, Playwright may fill and submit when
+auto-submit is authorized. Hamilton still stops at login, CAPTCHA, 2FA,
+payment, and signatures.
 
 ## What changed
 
@@ -36,11 +36,10 @@ Archived — and click a single bulk action:
 > **Automate selected with Hamilton**
 
 For every selected source Hamilton decides the correct **completion
-pathway** and automates the safe preparation steps. It pauses and persists its
-state at missing information or any human/security boundary (login, 2FA,
-CAPTCHA, payment, signature, attestation, terms, or ambiguous mapping). Real
-portal completion does not resume server-side in controlled beta; the owner
-uses the official portal.
+pathway** and automates the safe preparation and authorized submit steps.
+It pauses and persists its state at missing information or any human/security
+boundary (login, 2FA, CAPTCHA, payment, signature, attestation, terms, or
+ambiguous mapping).
 
 ## Eight completion pathways
 
@@ -49,7 +48,7 @@ deterministic function that maps a funding source to one of:
 
 | `automation_type` | Hamilton's behaviour                                                                                                                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `portal`          | Prepare the scoped packet and official portal handoff. Controlled beta never launches Playwright on a real domain; only the reserved synthetic fixture exercises browser automation. |
+| `portal`          | Open the public HTTPS portal (when browser automation is enabled), fill forms, and submit when authorized. Pauses for login, CAPTCHA, 2FA, payment, and signatures. |
 | `pdf_docx`        | Generate a complete DOCX + PDF packet from the profile, save it under the profile's Documents, hand it to the user for review and signing.       |
 | `mail`            | Same as `pdf_docx` plus structured **mailing instructions** (funder address, postmark deadline, certified-mail recommendation, envelope subject). |
 | `fax`             | Generate the packet plus structured fax instructions (number, cover-sheet content, deadline).                                                     |

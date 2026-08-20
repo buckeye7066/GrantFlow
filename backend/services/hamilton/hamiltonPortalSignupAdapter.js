@@ -53,7 +53,7 @@ import {
   controlledBetaBrowserContextOptions,
   controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
-  isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserTargetAllowed,
 } from './controlledBetaBrowserPolicy.js'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { browserAutomationPermittedForUrl, isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
@@ -558,7 +558,7 @@ export async function completeEmailVerification({
  * in one place.
  */
 async function openBrowserContext(launchBrowser, targetUrl) {
-  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
+  if (!isHamiltonBrowserTargetAllowed(targetUrl)) {
     const refusal = controlledBetaBrowserRefusal()
     return { error: ok('failed', {
       blocker_kind: refusal.code,

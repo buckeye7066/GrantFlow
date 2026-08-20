@@ -5,24 +5,25 @@ import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
 import { useToast } from '@/components/ui/use-toast'
 
-// Mirrors HamiltonAutopilotAuthorization.jsx's fail-closed preparation
-// defaults. This onboarding surface never writes profile-wide submit authority.
+// Mirrors HamiltonAutopilotAuthorization.jsx defaults (fill + submit when
+// authorized; still pauses for login/CAPTCHA/2FA/payment/signatures).
 const AUTOMATION_TYPES = [
   'complete_forms', 'upload_documents', 'generate_narratives', 'save_drafts',
+  'submit_applications',
   'use_saved_session', 'use_saved_credentials_reference',
 ]
 
-const PREPARATION_OPTIONS = {
+const FULL_AUTOMATION_OPTIONS = {
   complete_forms: true,
   upload_documents: true,
   generate_narratives: true,
   save_drafts: true,
-  submit_applications: false,
-  allow_auto_submit: false,
+  submit_applications: true,
+  allow_auto_submit: true,
   use_saved_session: true,
   use_saved_credentials_reference: true,
   use_standing_attestation: false,
-  require_human_review: true,
+  require_human_review: false,
 }
 
 /**
@@ -41,7 +42,7 @@ export default function AutomationChoiceBody({ onDone }) {
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
 
-  const choosePreparation = async () => {
+  const chooseFullAutomation = async () => {
     if (!profileId) {
       onDone?.()
       return
@@ -54,12 +55,13 @@ export default function AutomationChoiceBody({ onDone }) {
           profile_id: profileId,
           scope: 'profile',
           authorization_types: AUTOMATION_TYPES,
-          options: PREPARATION_OPTIONS,
+          replace_omitted_types: true,
+          options: FULL_AUTOMATION_OPTIONS,
         }),
       })
       toast({
-        title: 'Hamilton can prepare your drafts',
-        description: "I'll fill what I can, save drafts, and stop for your review and every final portal handoff.",
+        title: 'Hamilton can fill and submit',
+        description: "I'll fill what I can and submit when authorized. I'll pause for login, CAPTCHA, 2FA, payment, and signatures.",
       })
     } catch (err) {
       toast({
@@ -76,14 +78,14 @@ export default function AutomationChoiceBody({ onDone }) {
   return (
     <div>
       <p className="text-sm leading-relaxed text-slate-700">
-        Hamilton can prepare applications and save drafts for you. Final portal Submit, account
-        creation, signatures, 2FA, and confirmation remain visible human handoffs.
+        Hamilton can prepare applications and submit them when you authorize it.
+        She always pauses for login, CAPTCHA, 2FA, payment, and signatures.
       </p>
 
       <div className="mt-3 space-y-2">
         <button
           type="button"
-          onClick={choosePreparation}
+          onClick={chooseFullAutomation}
           disabled={busy}
           className="flex w-full items-start gap-2 rounded-xl border border-blue-200 bg-blue-50/60 p-3 text-left transition-colors hover:bg-blue-50 disabled:opacity-60"
         >
@@ -93,8 +95,8 @@ export default function AutomationChoiceBody({ onDone }) {
             <Zap className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
           )}
           <span>
-            <span className="block text-sm font-semibold text-slate-900">Let Hamilton prepare drafts</span>
-            <span className="block text-xs text-slate-500">Forms are prepared and saved; you complete the final portal handoff.</span>
+            <span className="block text-sm font-semibold text-slate-900">Let Hamilton fill and submit</span>
+            <span className="block text-xs text-slate-500">Forms are filled and submitted when authorized; Hamilton pauses for login, CAPTCHA, 2FA, payment, and signatures.</span>
           </span>
         </button>
       </div>

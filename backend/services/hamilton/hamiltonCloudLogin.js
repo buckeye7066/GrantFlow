@@ -1,9 +1,10 @@
 /**
  * Hamilton cloud interactive login (Option B).
  *
- * The live-login machinery remains testable against GrantFlow's reserved
- * synthetic fixture. Controlled beta never launches it against a real portal;
- * users sign in and submit in their own browser.
+ * Starts a server browser against a public HTTPS portal login URL (or the
+ * reserved synthetic fixture). Private / loopback / metadata targets are
+ * refused (SSRF). Login, CAPTCHA, 2FA, payment, and signatures remain
+ * human-driven in the live view — Hamilton never bypasses those gates.
  *
  * PROVIDERS (HAMILTON_CLOUD_LOGIN_PROVIDER):
  *
@@ -42,11 +43,11 @@
 import http from 'node:http'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import {
-  CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
   controlledBetaBrowserContextOptions,
   controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
-  isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserRequestAllowed,
+  isHamiltonBrowserTargetAllowed,
 } from './controlledBetaBrowserPolicy.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
@@ -272,9 +273,7 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
   sweepExpired()
   const target = loginUrl || (portalHost ? `https://${portalHost}/` : null)
   if (!profileId || !portalHost || !target) return { ok: false, reason: 'missing_params' }
-  const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
-  if (!isControlledBetaSyntheticBrowserUrl(target)
-      || normalizedPortalHost !== CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST) {
+  if (!isHamiltonBrowserTargetAllowed(target)) {
     const refusal = controlledBetaBrowserRefusal()
     return {
       ok: false,
@@ -387,8 +386,8 @@ async function navigateOrFail(page, target) {
     navError = err
   }
   const landedUrl = (() => { try { return page.url() } catch { return null } })()
-  if (landedUrl && landedUrl !== 'about:blank' && !isControlledBetaSyntheticBrowserUrl(landedUrl)) {
-    return { ok: false, reason: 'controlled_beta_redirect_blocked', detail: `Blocked off-fixture redirect (${landedUrl})` }
+  if (landedUrl && landedUrl !== 'about:blank' && !isHamiltonBrowserRequestAllowed(landedUrl)) {
+    return { ok: false, reason: 'controlled_beta_redirect_blocked', detail: `Blocked private/unsafe redirect (${landedUrl})` }
   }
   if (navError || !landedUrl || landedUrl === 'about:blank') {
     return { ok: false, reason: 'navigation_failed', detail: navError?.message || `stayed_on_blank_page (target: ${target})` }
@@ -620,9 +619,9 @@ export async function retargetLivePage(s, page) {
   if (!s || !page || s.page === page) return false
   const candidateUrl = (() => { try { return page.url() } catch { return null } })()
   if (candidateUrl && candidateUrl !== 'about:blank'
-      && !isControlledBetaSyntheticBrowserUrl(candidateUrl)) {
+      && !isHamiltonBrowserRequestAllowed(candidateUrl)) {
     try { await page.close?.() } catch { /* best-effort quarantine */ }
-    log.warn('cloud login blocked off-fixture popup', { candidateUrl })
+    log.warn('cloud login blocked private/unsafe popup', { candidateUrl })
     return false
   }
   s.page = page
@@ -965,20 +964,18 @@ export async function cancelCloudLogin(liveSessionId) {
 }
 
 export function cloudLoginStatus() {
-  const infrastructureConfigured = isCloudLoginConfigured()
+  const configured = isCloudLoginConfigured()
+  const provider = cloudLoginProvider()
   return {
-    // Product-facing truth: real-portal cloud login is intentionally disabled
-    // in controlled beta even if the synthetic test infrastructure is present.
-    configured: false,
-    provider: 'controlled_beta_manual_handoff',
-    infrastructure_configured: infrastructureConfigured,
-    synthetic_fixture_only: true,
-    real_portal_navigation: false,
+    configured,
+    provider,
     active_sessions: sessions.size,
     // self_hosted now serves the interactive view from GrantFlow itself (a
     // same-origin SSE screencast + POST input), so it needs NO public devtools
     // base and works on a single-port PaaS out of the box.
     requires_public_base: false,
-    reason: 'Controlled beta does not launch a server browser on real portal domains. Open the official portal in your own browser for login, review, and final submission.',
+    reason: configured
+      ? null
+      : 'Cloud login is disabled (HAMILTON_CLOUD_LOGIN_PROVIDER=disabled). Use Saved Login, or set HAMILTON_CLOUD_LOGIN_PROVIDER=self_hosted (default) / =cdp with HAMILTON_CLOUD_LOGIN_CDP_ENDPOINT.',
   }
 }

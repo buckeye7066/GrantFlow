@@ -22,15 +22,14 @@ const { runPortalSync, listRuns, ensurePortalSyncSchema, resolveConnector } =
 
 function makeDb() { return new Database(':memory:') }
 
-describe('runPortalSync — controlled-beta real-portal boundary', () => {
+describe('runPortalSync — requiresSession honesty (real portals)', () => {
   let db
   beforeEach(() => {
     db = makeDb()
     _resetCredentialSchemaCache()
   })
 
-  it('MTSU fails closed to manual handoff before a browser or run can start', async () => {
-    // A saved login exists, but NO captured session.
+  it('MTSU with password and no session → needs_session (not controlled_beta_manual_handoff)', async () => {
     await saveCredential(db, {
       userId: 'u1', profileId: 'pA', portalHost: 'mtsu.edu',
       username: 'student@mtmail.mtsu.edu', password: 'pw-not-enough-for-sso',
@@ -39,24 +38,17 @@ describe('runPortalSync — controlled-beta real-portal boundary', () => {
     const r = await runPortalSync(db, { profileId: 'pA', portalHost: 'mtsu.edu', direction: 'read', actorUserId: 'u1' })
 
     expect(r.ok).toBe(false)
-    expect(r.requires_human_handoff).toBe(true)
-    expect(r.connectorId).toBeNull()
-    expect(r.error).toBe('controlled_beta_manual_handoff')
+    expect(r.needs_session).toBe(true)
+    expect(r.error).toMatch(/captured login session/i)
+    expect(r.error).not.toBe('controlled_beta_manual_handoff')
     expect(r.read).toBeUndefined()
 
-    // No automation run is created for a browser operation we refused.
     await ensurePortalSyncSchema(db).catch(() => {})
     const runs = await listRuns(db, { profileId: 'pA', portalHost: 'mtsu.edu' }).catch(() => [])
-    expect(runs).toHaveLength(0)
+    expect(runs.some((row) => row.status === 'failed')).toBe(true)
   })
 
   it('EVERY connector without a real login workflow requires a captured session', () => {
-    // Deterministic (no browser/network). The generic connector never fills a
-    // login form, so a saved password cannot authenticate anything through it —
-    // it used to declare requiresSession falsy, letting a password-only sync
-    // land on a login wall, extract nothing, and record a misleading clean
-    // "completed" (2026-07-28 audit). Both connectors now demand the captured
-    // session the sync actually needs.
     const mtsuC = resolveConnector({ host: 'mtsu.edu' })
     const genericC = resolveConnector({ host: 'example.com' })
     expect(mtsuC.id).toBe('mtsu')
@@ -65,7 +57,7 @@ describe('runPortalSync — controlled-beta real-portal boundary', () => {
     expect(genericC.requiresSession).toBe(true)
   })
 
-  it('a generic real portal also fails closed before connector/browser work', async () => {
+  it('a generic real portal with password and no session → needs_session', async () => {
     await saveCredential(db, {
       userId: 'u1', profileId: 'pB', portalHost: 'someportal.example.org',
       username: 'student@example.org', password: 'pw-cannot-log-in-by-itself',
@@ -74,9 +66,9 @@ describe('runPortalSync — controlled-beta real-portal boundary', () => {
     const r = await runPortalSync(db, { profileId: 'pB', portalHost: 'someportal.example.org', direction: 'read', actorUserId: 'u1' })
 
     expect(r.ok).toBe(false)
-    expect(r.requires_human_handoff).toBe(true)
-    expect(r.error).toBe('controlled_beta_manual_handoff')
-    expect(r.connectorId).toBeNull()
+    expect(r.needs_session).toBe(true)
+    expect(r.error).toMatch(/captured login session/i)
+    expect(r.error).not.toBe('controlled_beta_manual_handoff')
     expect(r.read).toBeUndefined()
   })
 })

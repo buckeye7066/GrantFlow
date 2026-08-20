@@ -36,7 +36,7 @@ import {
   controlledBetaBrowserContextOptions,
   controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
-  isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserTargetAllowed,
 } from '../controlledBetaBrowserPolicy.js'
 import { getDecryptedCredentialWithFallback, listCredentialedDomains, registrableDomain } from '../hamiltonPortalCredentialService.js'
 import {
@@ -567,33 +567,37 @@ export async function runPortalSync(db, {
   const host = normalizeHost(portalHost)
   if (!host) return { ok: false, direction, connectorId: null, runId: null, error: 'portalHost required' }
   const dir = VALID_DIRECTIONS.has(direction) ? direction : 'read'
-  const controlledBetaUrl = `https://${host}/`
+  const portalUrl = `https://${host}/`
 
-  // Defense in depth for direct service callers and stale clients. A final
-  // external submit may be reintroduced only through a reviewed adapter joined
-  // to the canonical durable task authorization, final-review veto, submission
-  // lease, and confirmation-proof protocol.
+  // Defense in depth: portal sync is not a final-submit authority.
   if (allowSubmit === true) {
     return {
       ok: false,
       direction: dir,
       connectorId: null,
       runId: null,
-      error: 'reviewed_submission_adapter_required',
+      error: 'portal_sync_submit_not_supported',
       requires_human_submission: true,
     }
   }
 
-  if (!isControlledBetaSyntheticBrowserUrl(controlledBetaUrl)) {
+  if (!isHamiltonBrowserTargetAllowed(portalUrl)
+      || !browserAutomationPermittedForUrl(portalUrl, { extraAllowedHosts: [host] })) {
     const refusal = controlledBetaBrowserRefusal()
+    const unsafe = !isHamiltonBrowserTargetAllowed(portalUrl)
+    const reason = !isBrowserAutomationEnabled()
+      ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
+      : unsafe
+        ? refusal.message
+        : 'portal host is not permitted for browser automation'
     return {
       ok: false,
       direction: dir,
       connectorId: null,
       runId: null,
-      error: refusal.code,
-      detail: refusal.message,
-      requires_human_handoff: true,
+      error: unsafe ? refusal.code : 'browser_automation_not_permitted',
+      detail: reason,
+      requires_human_handoff: unsafe,
     }
   }
 
@@ -657,7 +661,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
   if (!browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
     const reason = !isBrowserAutomationEnabled()
       ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
-      : 'controlled beta permits only the reserved synthetic fixture origin'
+      : 'portal host is not on the allowlist and no saved credential covers it'
     return fail(`browser automation not permitted: ${reason}`)
   }
 

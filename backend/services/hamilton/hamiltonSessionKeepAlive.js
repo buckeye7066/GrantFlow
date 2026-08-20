@@ -45,7 +45,8 @@ import {
   CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN,
   controlledBetaBrowserContextOptions,
   installControlledBetaBrowserEgressGuard,
-  isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserRequestAllowed,
+  isHamiltonBrowserTargetAllowed,
 } from './controlledBetaBrowserPolicy.js'
 import { classifyBlocker } from './hamiltonBlockerClassifier.js'
 import {
@@ -161,8 +162,8 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
     : null
   const authProbeUrl = syntheticProbeUrl || authProbeUrlForHost(row.portal_host)
   const target = authProbeUrl || meta.landing_url || `https://${row.portal_host}/`
-  if (!isControlledBetaSyntheticBrowserUrl(target)) {
-    return { outcome: 'skipped', detail: 'controlled beta keeps real-portal session checks in the user browser' }
+  if (!isHamiltonBrowserTargetAllowed(target)) {
+    return { outcome: 'skipped', detail: 'session probe refused private/unsafe browser target' }
   }
 
   const storageState = await getSessionStorageState(db, row.id)
@@ -195,8 +196,8 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
     let pageText = ''
     try { pageText = await page.evaluate(() => document.body?.innerText || '') } catch { pageText = '' }
     const finalUrl = page.url()
-    if (!isControlledBetaSyntheticBrowserUrl(finalUrl)) {
-      return { outcome: 'inconclusive', detail: 'controlled beta blocked an off-fixture redirect' }
+    if (!isHamiltonBrowserRequestAllowed(finalUrl)) {
+      return { outcome: 'inconclusive', detail: 'probe landed on a private/unsafe URL' }
     }
 
     // A blank/thin page tells us nothing (JS shell that didn't render for the

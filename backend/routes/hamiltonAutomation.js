@@ -167,13 +167,14 @@ import {
 import { createLogger } from '../utils/logger.js'
 
 export const HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT = (
-  'Hamilton will prepare the selected application(s) using the profile information '
-  + 'and authorized documents on file. Hamilton may open portals, fill forms, upload '
-  + 'documents, generate narratives, and save drafts. Final portal Submit and portal '
-  + 'account creation remain visible human handoffs. Hamilton never bypasses login, '
-  + 'CAPTCHA, 2FA, payment, signatures, attestations, or owner approval.'
+  'Hamilton will prepare and may submit the selected application(s) using the '
+  + 'profile information and authorized documents on file. Hamilton may open '
+  + 'portals, fill forms, upload documents, generate narratives, save drafts, '
+  + 'and click Submit when auto-submit is authorized. Hamilton pauses for login, '
+  + 'CAPTCHA, 2FA, payment, and signatures. Hamilton never bypasses those '
+  + 'human-only gates or owner approval when review is required.'
 )
-export const HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION = 'hamilton-autopilot-v1'
+export const HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION = 'hamilton-autopilot-v2'
 
 const log = createLogger('route:hamilton-automation')
 

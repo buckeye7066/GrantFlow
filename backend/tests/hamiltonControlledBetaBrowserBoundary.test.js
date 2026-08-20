@@ -6,12 +6,13 @@ import {
   installControlledBetaBrowserEgressGuard,
   isControlledBetaBrowserRequestAllowed,
   isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserTargetAllowed,
+  isPublicHttpsPortalUrl,
 } from '../services/hamilton/controlledBetaBrowserPolicy.js'
 import { launchPortalBrowser } from '../services/hamilton/browserLaunch.js'
 import { browserAutomationPermittedForUrl } from '../services/hamilton/hamiltonAutomationOrchestrator.js'
 import { runAutopilot } from '../services/hamilton/hamiltonAutopilotEngine.js'
 import { cancelCloudLogin, startCloudLogin } from '../services/hamilton/hamiltonCloudLogin.js'
-import { runPortalSync } from '../services/hamilton/portalSync/index.js'
 
 const saved = {}
 
@@ -20,7 +21,7 @@ beforeEach(() => {
   saved.allowlist = process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST
   saved.cloud = process.env.HAMILTON_CLOUD_LOGIN_PROVIDER
   process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'true'
-  process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = 'example.org,127.0.0.1,10.0.0.1'
+  process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = ''
   process.env.HAMILTON_CLOUD_LOGIN_PROVIDER = 'self_hosted'
 })
 
@@ -31,37 +32,55 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('controlled-beta target predicate', () => {
-  it('allows only the exact reserved HTTPS fixture origin', () => {
+describe('public HTTPS + fixture target policy', () => {
+  it('allows the reserved fixture and public HTTPS; refuses private/loopback', () => {
     expect(isControlledBetaSyntheticBrowserUrl(`${CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN}/apply?case=1`)).toBe(true)
+    expect(isHamiltonBrowserTargetAllowed(`${CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN}/apply`)).toBe(true)
+    expect(isPublicHttpsPortalUrl('https://example.org/apply')).toBe(true)
+    expect(isHamiltonBrowserTargetAllowed('https://example.org/apply')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://example.org/apply')).toBe(true)
+    expect(browserAutomationPermittedForUrl(`${CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN}/apply`)).toBe(true)
+
     for (const target of [
-      'https://example.org/apply',
       'http://127.0.0.1:3000/',
       'http://localhost:3000/',
       'http://10.0.0.1/',
       'http://169.254.169.254/latest/meta-data/',
       'http://192.168.1.10/',
-      `http://${CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST}/`,
-      `https://sub.${CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST}/`,
-      `https://${CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST}:8443/`,
+      'https://127.0.0.1/',
+      'https://10.0.0.1/',
     ]) {
-      expect(isControlledBetaSyntheticBrowserUrl(target), target).toBe(false)
+      expect(isHamiltonBrowserTargetAllowed(target), target).toBe(false)
       expect(browserAutomationPermittedForUrl(target, {
-        extraAllowedHosts: [new URL(target).hostname],
+        extraAllowedHosts: [(() => { try { return new URL(target).hostname } catch { return '' } })()],
       }), target).toBe(false)
     }
   })
 
-  it('rejects a real target before Chromium launch, regardless of env allowlist', async () => {
-    const chromium = { launch: vi.fn() }
-    await expect(launchPortalBrowser(chromium, { targetUrl: 'https://example.org/apply' }))
-      .rejects.toMatchObject({ code: 'controlled_beta_manual_handoff' })
-    expect(chromium.launch).not.toHaveBeenCalled()
+  it('launches for public HTTPS and refuses private before Chromium launch', async () => {
+    const chromiumOk = { launch: vi.fn(async () => ({ close: vi.fn() })) }
+    await expect(launchPortalBrowser(chromiumOk, { targetUrl: 'https://example.org/apply' }))
+      .resolves.toMatchObject({ engine: expect.any(String) })
+    expect(chromiumOk.launch).toHaveBeenCalled()
+
+    const chromiumBad = { launch: vi.fn() }
+    await expect(launchPortalBrowser(chromiumBad, { targetUrl: 'http://127.0.0.1:3000/' }))
+      .rejects.toMatchObject({ code: 'unsafe_browser_target' })
+    expect(chromiumBad.launch).not.toHaveBeenCalled()
+  })
+
+  it('honors allowlist when set (host or extraAllowedHosts)', () => {
+    process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = 'tn.gov'
+    expect(browserAutomationPermittedForUrl('https://www.tn.gov/apply')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://example.org/apply')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/', {
+      extraAllowedHosts: ['mtsu.edu'],
+    })).toBe(true)
   })
 })
 
 describe('redirect and subresource egress guard', () => {
-  it('continues fixture requests and aborts real, loopback, private, and redirect targets', async () => {
+  it('continues fixture and public HTTPS; aborts private/loopback/metadata', async () => {
     let handler = null
     const context = {
       route: vi.fn(async (_pattern, callback) => { handler = callback }),
@@ -79,31 +98,36 @@ describe('redirect and subresource egress guard', () => {
       return route
     }
 
-    const fixture = await dispatch(`${CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN}/asset.js`)
-    expect(fixture.continue).toHaveBeenCalledOnce()
-    expect(fixture.abort).not.toHaveBeenCalled()
-
-    for (const redirectTarget of [
+    for (const allowed of [
+      `${CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN}/asset.js`,
       'https://example.org/redirected',
+      'https://cdn.example.org/x.js',
+    ]) {
+      expect(isControlledBetaBrowserRequestAllowed(allowed), allowed).toBe(true)
+      const route = await dispatch(allowed)
+      expect(route.continue).toHaveBeenCalledOnce()
+      expect(route.abort).not.toHaveBeenCalled()
+    }
+
+    for (const blocked of [
       'http://127.0.0.1/admin',
       'http://10.0.0.1/private',
       'http://169.254.169.254/latest/meta-data/',
     ]) {
-      expect(isControlledBetaBrowserRequestAllowed(redirectTarget)).toBe(false)
-      const route = await dispatch(redirectTarget)
+      expect(isControlledBetaBrowserRequestAllowed(blocked)).toBe(false)
+      const route = await dispatch(blocked)
       expect(route.continue).not.toHaveBeenCalled()
       expect(route.abort).toHaveBeenCalledWith('blockedbyclient')
     }
   })
 })
 
-describe('browser entry points fail closed before launch', () => {
+describe('browser entry points refuse private only', () => {
   it.each([
-    ['example.org', 'https://example.org/login'],
     ['127.0.0.1', 'http://127.0.0.1:3000/login'],
     ['10.0.0.1', 'http://10.0.0.1/login'],
     ['169.254.169.254', 'http://169.254.169.254/latest/meta-data/'],
-  ])('cloud login refuses %s before the injected launcher runs', async (portalHost, loginUrl) => {
+  ])('cloud login refuses private %s before the injected launcher runs', async (portalHost, loginUrl) => {
     const launchBrowser = vi.fn()
     const result = await startCloudLogin({
       userId: 'u1', profileId: 'p1', portalHost, loginUrl, launchBrowser,
@@ -116,9 +140,9 @@ describe('browser entry points fail closed before launch', () => {
     expect(launchBrowser).not.toHaveBeenCalled()
   })
 
-  it('direct generic draft fill refuses a real target before Playwright import/launch', async () => {
+  it('autopilot refuses a private target before Playwright import/launch', async () => {
     const result = await runAutopilot({
-      url: 'https://example.org/apply',
+      url: 'http://127.0.0.1:3000/apply',
       profile: { id: 'p1', basic_information: { first_name: 'Demo' } },
       authorizations: { complete_forms: true, save_drafts: true, submit_applications: false },
     })
@@ -129,22 +153,10 @@ describe('browser entry points fail closed before launch', () => {
       pages_visited: 0,
     })
   })
-
-  it('portal sync refuses a real target before connector or browser work', async () => {
-    const result = await runPortalSync({}, {
-      profileId: 'p1', portalHost: 'example.org', direction: 'read',
-    })
-    expect(result).toMatchObject({
-      ok: false,
-      error: 'controlled_beta_manual_handoff',
-      requires_human_handoff: true,
-      runId: null,
-    })
-  })
 })
 
 describe('synthetic fixture remains testable', () => {
-  it('cloud login can launch only the reserved fixture with a guarded context', async () => {
+  it('cloud login can launch the reserved fixture with a guarded context', async () => {
     const route = vi.fn(async () => {})
     const page = {
       goto: vi.fn(async () => {}),
