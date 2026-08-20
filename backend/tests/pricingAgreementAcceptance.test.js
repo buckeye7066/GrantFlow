@@ -29,6 +29,9 @@ function makePgDb({
 
   const db = {
     dialect: 'postgres',
+    async withTransaction(fn) {
+      return fn(db)
+    },
     prepare(sql) {
       state.statements.push(sql)
 

@@ -349,14 +349,18 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
   if (!(await tableExists(db, SERVICE_AGREEMENTS_TABLE))) {
     return { ok: false, error: 'pricing_tables_not_installed' }
   }
-  return withProfileScope({ bypass: true }, async () => {
+  const runInTx =
+    db && typeof db.withTransaction === 'function'
+      ? (work) => db.withTransaction(work)
+      : async (work) => work(db)
+  return runInTx((tx) => withProfileScope({ bypass: true }, async () => {
     const now = new Date().toISOString()
-    const pricing = await getProfilePricing(db, profileId)
+    const pricing = await getProfilePricing(tx, profileId)
     if (!pricing) return { ok: false, error: 'no_pricing' }
-    let agreement = await getLatestServiceAgreement(db, profileId)
+    let agreement = await getLatestServiceAgreement(tx, profileId)
     if (!agreement) {
       const agreementId = makeAgreementId()
-      await db.prepare(
+      await tx.prepare(
         `INSERT INTO ${SERVICE_AGREEMENTS_TABLE}
           (id, user_id, profile_id, quote_id, agreement_version)
          VALUES (?, ?, ?, ?, ?)`,
@@ -369,7 +373,7 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
       )
       agreement = { id: agreementId, user_id: userId || pricing.user_id || null, quote_id: pricing.quote_id || null }
     }
-    const updateResult = await db.prepare(
+    const updateResult = await tx.prepare(
       `UPDATE ${SERVICE_AGREEMENTS_TABLE}
           SET user_id = COALESCE(user_id, ?),
               quote_id = COALESCE(quote_id, ?),
@@ -393,12 +397,12 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
     if (Number(pricing.total_cents) === 0) nextStatus = ACCESS_STATUS.ACTIVE_PAID
     else if (pricing.access_status === ACCESS_STATUS.PENDING_AGREEMENT) nextStatus = ACCESS_STATUS.PENDING_PAYMENT
     if (nextStatus !== pricing.access_status) {
-      await db.prepare(
+      await tx.prepare(
         `UPDATE ${PROFILE_PRICING_TABLE} SET access_status = ?, updated_at = ? WHERE profile_id = ?`,
       ).run(nextStatus, now, profileId)
     }
     return { ok: true, access_status: nextStatus }
-  })
+  }))
 }
 
 /**
