@@ -57,6 +57,42 @@ export {
 };
 
 /**
+ * Resolve a crawl target's host to IPs for the DNS-rebinding guard.
+ *
+ * WHY THE FALLBACK. The production fetcher had hard-bound itself to
+ * `dns.promises.resolve()`, bypassing the OS resolver that the actual HTTPS
+ * request uses. That made the SSRF guard strictly MORE fragile than the fetch:
+ * a public host could be reachable through the platform resolver and still be
+ * rejected up front as `source_fetch_failed` when recursive DNS had a bad
+ * minute. Amy's adapter_source_health queue on `sbir_gov` / `federal_register`
+ * is exactly the wrong place to park that — the host is public, our guard was
+ * the brittle part. `lookup()` shares the caller's resolver path; `resolve()`
+ * stays as the narrow fallback when lookup returns no addresses.
+ */
+export async function resolveCrawlerHost(
+  host,
+  {
+    lookup = dns.promises.lookup.bind(dns.promises),
+    resolve = dns.promises.resolve.bind(dns.promises),
+  } = {},
+) {
+  const name = String(host || '').trim()
+  if (!name) return []
+  try {
+    const rows = await lookup(name, { all: true, verbatim: true })
+    const ips = (Array.isArray(rows) ? rows : [rows])
+      .map((row) => String(row?.address || '').trim())
+      .filter(Boolean)
+    if (ips.length > 0) return ips
+  } catch {
+    // Best-effort fallback below. The guard must not be *more* fragile than the
+    // fetch path when the public DNS resolver has a transient failure.
+  }
+  const rows = await resolve(name)
+  return (Array.isArray(rows) ? rows : [rows]).map((row) => String(row || '').trim()).filter(Boolean)
+}
+
+/**
  * getCrawlerOsStore — bind the Crawler OS storage layer to the live database.
  *
  * SQLite: returns a SqlStore over the live connection (synchronous, works).
@@ -92,7 +128,7 @@ export function getCrawlerOsStore(opts = {}) {
 export function makeProductionFetcher(overrides = {}) {
   return createFetcher({
     doFetch: (url, init) => fetchWithTimeout(url, init),
-    resolve: (host) => dns.promises.resolve(host),
+    resolve: (host) => resolveCrawlerHost(host),
     // One retry keeps the wall-clock cost bounded while recovering common
     // transient GET/HEAD failures. The existing flag remains the rollout kill
     // switch; MAX_CRAWLER_RETRIES and CRAWLER_RETRY_BASE_DELAY belong to the

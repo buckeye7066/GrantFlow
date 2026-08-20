@@ -11,9 +11,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { gzipSync, gunzipSync } from 'node:zlib'
+import * as childProcess from 'node:child_process'
 
 export const BACKUP_LAST_RUN_KEY = 'backup_last_run'
+export const POSTGRES_JSON_BACKUP_FORMAT = 'grantflow-postgres-json-v1'
 
 /**
  * In-memory SQLite (`:memory:`) cannot produce a durable backup artifact.
@@ -98,16 +100,87 @@ async function backupSqlite(db, dir) {
   return dest
 }
 
-function backupPostgres(dir) {
+function quotePgIdentifier(id) {
+  return `"${String(id || '').replace(/"/g, '""')}"`
+}
+
+function encodeBackupValue(value) {
+  if (Buffer.isBuffer(value)) {
+    return { __bytea_base64: value.toString('base64') }
+  }
+  if (Array.isArray(value)) return value.map((item) => encodeBackupValue(item))
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, val]) => [key, encodeBackupValue(val)]),
+    )
+  }
+  return value
+}
+
+function verifyJsonBackup(dest) {
+  const raw = fs.readFileSync(dest)
+  const parsed = JSON.parse(gunzipSync(raw).toString('utf8'))
+  if (parsed?.format !== POSTGRES_JSON_BACKUP_FORMAT) {
+    throw new Error('postgres JSON backup verification failed — unexpected format marker')
+  }
+  if (!Array.isArray(parsed?.tables)) {
+    throw new Error('postgres JSON backup verification failed — tables payload missing')
+  }
+}
+
+async function backupPostgresViaSql(db, dir) {
+  if (!db?._pool?.query) {
+    throw new Error('pg_dump not found and the live db handle does not expose a postgres pool for JSON fallback backup')
+  }
+  const dest = path.join(dir, `grantflow-backup-${stamp()}.json.gz`)
+  const tablesRes = await db._pool.query(`
+    SELECT table_name
+      FROM information_schema.tables
+     WHERE table_schema = 'public'
+       AND table_type = 'BASE TABLE'
+     ORDER BY table_name
+  `)
+  const tables = []
+  for (const row of tablesRes.rows || []) {
+    const tableName = String(row?.table_name || '').trim()
+    if (!tableName) continue
+    const columnsRes = await db._pool.query(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = $1
+        ORDER BY ordinal_position`,
+      [tableName],
+    )
+    const dataRes = await db._pool.query(`SELECT * FROM public.${quotePgIdentifier(tableName)}`)
+    tables.push({
+      name: tableName,
+      columns: (columnsRes.rows || []).map((col) => String(col?.column_name || '')).filter(Boolean),
+      rows: (dataRes.rows || []).map((record) => encodeBackupValue(record)),
+    })
+  }
+  fs.writeFileSync(
+    dest,
+    gzipSync(Buffer.from(JSON.stringify({
+      format: POSTGRES_JSON_BACKUP_FORMAT,
+      created_at: new Date().toISOString(),
+      tables,
+    }))),
+  )
+  verifyJsonBackup(dest)
+  return dest
+}
+
+async function backupPostgres(db, dir) {
   const url = String(process.env.DATABASE_URL || '').trim()
   if (!url) throw new Error('postgres dialect but DATABASE_URL is not set')
   const dest = path.join(dir, `grantflow-backup-${stamp()}.dump`)
-  const result = spawnSync('pg_dump', ['--format=custom', `--file=${dest}`, url], {
+  const result = childProcess.spawnSync('pg_dump', ['--format=custom', `--file=${dest}`, url], {
     stdio: ['ignore', 'inherit', 'pipe'],
     timeout: 15 * 60 * 1000,
   })
   if (result.error?.code === 'ENOENT') {
-    throw new Error('pg_dump not found on PATH — install postgresql-client (apt) / postgresql (winget/brew) and re-run')
+    return backupPostgresViaSql(db, dir)
   }
   if (result.status !== 0) {
     const stderr = String(result.stderr || '').slice(0, 500)
@@ -131,7 +204,7 @@ export async function runDatabaseBackup({ db } = {}) {
   const dir = resolveBackupDir()
   fs.mkdirSync(dir, { recursive: true })
 
-  const dest = dialect === 'postgres' ? backupPostgres(dir) : await backupSqlite(db, dir)
+  const dest = dialect === 'postgres' ? await backupPostgres(db, dir) : await backupSqlite(db, dir)
   const bytes = fs.statSync(dest).size
 
   await kvSet(db, BACKUP_LAST_RUN_KEY, { at: new Date().toISOString(), path: dest, bytes, dialect })

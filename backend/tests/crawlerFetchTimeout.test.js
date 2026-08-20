@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { BROWSER_FETCH_HEADERS, fetchWithTimeout, makeProductionFetcher } from '../services/crawlerOsService.js'
+import {
+  BROWSER_FETCH_HEADERS,
+  fetchWithTimeout,
+  makeProductionFetcher,
+  resolveCrawlerHost,
+} from '../services/crawlerOsService.js'
 
 /**
  * makeProductionFetcher is "the ONE network entry for live discovery". Native
@@ -132,5 +137,21 @@ describe('crawler fetchWithTimeout', () => {
     expect(result.retries).toBe(0)
     expect(result.retrySuppressed).toBe('retry_limit_reached')
     expect(calls).toBe(1)
+  })
+
+  it('resolver falls back to the OS lookup path before marking a public host failed', async () => {
+    const ips = await resolveCrawlerHost('api.www.sbir.gov', {
+      lookup: async () => [{ address: '203.0.113.7' }],
+      resolve: async () => { throw new Error('should not reach public-DNS fallback when lookup already worked') },
+    })
+    expect(ips).toEqual(['203.0.113.7'])
+  })
+
+  it('if lookup has a bad minute, resolver still falls back to resolve()', async () => {
+    const ips = await resolveCrawlerHost('www.federalregister.gov', {
+      lookup: async () => { throw Object.assign(new Error('EAI_AGAIN'), { code: 'EAI_AGAIN' }) },
+      resolve: async () => ['198.51.100.23'],
+    })
+    expect(ips).toEqual(['198.51.100.23'])
   })
 })

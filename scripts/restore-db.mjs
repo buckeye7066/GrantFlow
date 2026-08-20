@@ -22,6 +22,11 @@ if (!file || !fs.existsSync(file)) {
   process.exit(1)
 }
 
+if (file.endsWith('.json.gz')) {
+  console.error('[db:restore] FAILED: JSON fallback backups are freshness artifacts only; restore support still requires a pg_dump/pg_restore backup (.dump) or a SQLite .db snapshot')
+  process.exit(1)
+}
+
 async function restoreSqlite(backupPath) {
   const { default: Database } = await import('better-sqlite3')
   const check = new Database(backupPath, { readonly: true })

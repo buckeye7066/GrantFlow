@@ -12,8 +12,13 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import * as zlib from 'node:zlib'
 import { spawnSync } from 'node:child_process'
 import { getCheckById } from '../services/sam/samRegistry.js'
+import {
+  POSTGRES_JSON_BACKUP_FORMAT,
+  runDatabaseBackup,
+} from '../services/ops/databaseBackup.js'
 
 function fakeDb(record) {
   return {
@@ -116,6 +121,79 @@ describe('backup + restore scripts (SQLite end-to-end)', () => {
     expect(after.prepare('SELECT title FROM grants WHERE id = ?').get('g1').title).toBe('Roof Repair Grant')
     after.close()
 
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe('postgres backup fallback (no pg_dump on PATH)', () => {
+  it('still records a real backup artifact + metadata via the live SQL connection', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gf-pg-backup-'))
+    const priorEnv = {
+      PATH: process.env.PATH,
+      BACKUP_DIR: process.env.BACKUP_DIR,
+      DATABASE_URL: process.env.DATABASE_URL,
+    }
+    const kv = new Map()
+    const db = {
+      dialect: 'postgres',
+      _pool: {
+        async query(sql, params = []) {
+          if (/information_schema\.tables/.test(sql)) {
+            return { rows: [{ table_name: 'grants' }, { table_name: 'system_kv' }] }
+          }
+          if (/information_schema\.columns/.test(sql)) {
+            const t = params[0]
+            if (t === 'grants') return { rows: [{ column_name: 'id' }, { column_name: 'title' }, { column_name: 'file_bytes' }] }
+            if (t === 'system_kv') return { rows: [{ column_name: 'key' }, { column_name: 'value' }] }
+          }
+          if (/SELECT \* FROM public\."grants"/.test(sql)) {
+            return { rows: [{ id: 'g1', title: 'Roof Repair Grant', file_bytes: Buffer.from('grant-bytes') }] }
+          }
+          if (/SELECT \* FROM public\."system_kv"/.test(sql)) {
+            return { rows: [] }
+          }
+          throw new Error(`unexpected query: ${sql}`)
+        },
+      },
+      prepare(sql) {
+        return {
+          async run(...args) {
+            if (/UPDATE system_kv/.test(sql)) return { changes: 0 }
+            if (/INSERT INTO system_kv/.test(sql)) {
+              kv.set(args[0], args[1])
+              return { changes: 1 }
+            }
+            throw new Error(`unexpected prepare().run sql: ${sql}`)
+          },
+        }
+      },
+    }
+
+    process.env.BACKUP_DIR = dir
+    process.env.DATABASE_URL = '******localhost:5432/grantflow'
+    process.env.PATH = ''
+    const res = await runDatabaseBackup({ db })
+
+    expect(res.ok).toBe(true)
+    expect(res.path).toMatch(/\.json\.gz$/)
+    expect(res.bytes).toBeGreaterThan(0)
+
+    const payload = JSON.parse(zlib.gunzipSync(fs.readFileSync(res.path)).toString('utf8'))
+    expect(payload.format).toBe(POSTGRES_JSON_BACKUP_FORMAT)
+    expect(payload.tables.find((t) => t.name === 'grants')?.rows?.[0]?.file_bytes?.__bytea_base64).toBe(
+      Buffer.from('grant-bytes').toString('base64'),
+    )
+
+    const stamp = JSON.parse(kv.get('backup_last_run'))
+    expect(stamp.dialect).toBe('postgres')
+    expect(stamp.path).toBe(res.path)
+
+    if (priorEnv.PATH === undefined) delete process.env.PATH
+    else process.env.PATH = priorEnv.PATH
+    if (priorEnv.BACKUP_DIR === undefined) delete process.env.BACKUP_DIR
+    else process.env.BACKUP_DIR = priorEnv.BACKUP_DIR
+    if (priorEnv.DATABASE_URL === undefined) delete process.env.DATABASE_URL
+    else process.env.DATABASE_URL = priorEnv.DATABASE_URL
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })

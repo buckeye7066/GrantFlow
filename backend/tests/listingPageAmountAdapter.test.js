@@ -62,6 +62,23 @@ const UMBRELLA_ROW = Object.freeze({
   application_url: 'https://ww5.clevelandstatecc.edu/foundation/home/',
 })
 
+const ETF_ROW = Object.freeze({
+  title: 'East Tennessee Foundation',
+  source_url: 'https://www.easttennesseefoundation.org/nonprofits/apply-for-grants/',
+  application_url: 'https://www.easttennesseefoundation.org/nonprofits/apply-for-grants/',
+})
+
+const ETF_TEXT = [
+  'APPLY FOR GRANTS',
+  'East Tennessee Foundation strengthens communities through grantmaking.',
+  'Review the eligibility rules, then continue into the grants portal to see the programs we offer.',
+  'GRANTS WE OFFER',
+  'Organizations can explore open cycles, deadlines, and application guidance here.',
+  'Questions? Contact the foundation for assistance with the portal.',
+  'Additional applicant instructions and FAQ are available before you begin the application.',
+  'This page lists process guidance only and does not publish one umbrella award amount.',
+].join(' ')
+
 const okFetcher = (body) => ({ fetch: vi.fn(async () => ({ ok: true, status: 200, body })) })
 const asHtml = (text) => `<html><body><main>${text}</main></body></html>`
 
@@ -90,6 +107,16 @@ describe('registry routing', () => {
     expect(
       findListingPageEntry({ source_url: 'https://mtsu.edu/csc/scholarships' })?.id,
     ).toBe('mtsu_cs_scholarships')
+  })
+
+  it('owns the exact East Tennessee Foundation landing pages, never a deeper grant subpage', () => {
+    expect(findListingPageEntry(ETF_ROW)?.id).toBe('east_tennessee_foundation_grants_index')
+    expect(
+      findListingPageEntry({ source_url: 'https://www.easttennesseefoundation.org/grants/' })?.id,
+    ).toBe('east_tennessee_foundation_grants_index')
+    expect(
+      findListingPageEntry({ source_url: 'https://www.easttennesseefoundation.org/grants/special-fund/' }),
+    ).toBeNull()
   })
 
   it('is reachable through the shared AMOUNT_ADAPTERS registry', () => {
@@ -219,6 +246,16 @@ describe('enrichAmountViaListingPage', () => {
       fetcher: { fetch: async () => { throw new Error('boom') } },
     })
     expect(res).toMatchObject({ attempted: true, transient: true, found: false })
+  })
+
+  it('known ETF landing page with no per-award figure yields a page_read answer, not unreadable forever', async () => {
+    const res = await enrichAmountViaListingPage(ETF_ROW, { fetcher: okFetcher(asHtml(ETF_TEXT)) })
+    expect(res).toMatchObject({
+      attempted: true,
+      page_read: true,
+      transient: false,
+      found: false,
+    })
   })
 })
 
