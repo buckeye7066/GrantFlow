@@ -131,41 +131,45 @@ describe('profileWebsitePurpose — Axiom Hamilton queue audit', () => {
 
 describe('matchEngine — website purpose REJECT', () => {
   it('REJECTs Title X for an Axiom-shaped profile with website URL', async () => {
-    const decision = await computeMatchDecision({
-      profile: {
+    const decision = await computeMatchDecision(
+      {
         id: 'axiom-1',
         primary_type: 'small_business',
         display_name: 'Axiom BioLabs',
       },
-      sections: AXIOM_SECTIONS,
-      opportunity: {
+      {
         id: 'opp-title-x',
         title: 'Title X Family Planning Services Grants',
         sponsor: 'HHS',
+        source_url: 'https://example.org/title-x',
+        application_url: 'https://example.org/title-x/apply',
         opportunity_kind: 'PROGRAM',
         is_national: true,
       },
-    })
+      { profileSections: AXIOM_SECTIONS },
+    )
     expect(decision.decision).toBe('REJECT')
     expect(String(decision.explanation || decision.reasons?.join(' ') || '')).toMatch(/website purpose mismatch/i)
   })
 
   it('does NOT refuse an STTR for the same profile', async () => {
-    const decision = await computeMatchDecision({
-      profile: {
+    const decision = await computeMatchDecision(
+      {
         id: 'axiom-1',
         primary_type: 'small_business',
         display_name: 'Axiom BioLabs',
       },
-      sections: AXIOM_SECTIONS,
-      opportunity: {
+      {
         id: 'opp-sttr',
         title: 'NIH Small Business Technology Transfer Grant (Parent STTR [R41/R42] Clinical Trial Optional)',
         sponsor: 'NIH',
+        source_url: 'https://example.org/sttr',
+        application_url: 'https://example.org/sttr/apply',
         opportunity_kind: 'PROGRAM',
         is_national: true,
       },
-    })
+      { profileSections: AXIOM_SECTIONS },
+    )
     expect(decision.decision).not.toBe('REJECT')
   })
 })

@@ -53,6 +53,11 @@ describe('crawler telemetry reads do not spend the crawl-start budget', () => {
     }
   })
 
+  it('keeps SmartMatcher interpret-intent on a separate non-cost budget', () => {
+    expect(classify('POST', '/api/matching/interpret-intent')?.name).toBe('standard')
+    expect(classify('POST', '/api/matching/profile/p1/opportunities')?.name).toBe('cost')
+  })
+
   it('separates the two budgets so a dashboard poll cannot starve a crawl start', () => {
     // Same principal, same path — ONLY the method differs. Because the bucket
     // key is derived from the policy NAME, different names are what guarantees
