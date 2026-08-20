@@ -149,7 +149,14 @@ async function runEslintCheck() {
     // Windows: `npx`/`.cmd` resolution requires shell:true so PATHEXT and
     // .cmd shims are honored. POSIX runners are unaffected.
     const useShell = process.platform === 'win32'
-    const child = spawn('npx', ['eslint', '--ext', '.js,.jsx,.mjs,.cjs', 'src', 'backend'], {
+    // `--no-install` is LOAD-BEARING. A bare `npx eslint` falls back to
+    // DOWNLOADING whatever version npm considers latest when local resolution
+    // misses -- measured here fetching eslint@10.8.1 against this repo's
+    // pinned ^9.39.1. A gate that silently runs a different MAJOR version of
+    // the linter is not checking this repo's rules, and a network hiccup then
+    // reads as a code failure. With --no-install a missing eslint fails loudly
+    // as a setup error instead of quietly becoming a different check.
+    const child = spawn('npx', ['--no-install', 'eslint', '--ext', '.js,.jsx,.mjs,.cjs', 'src', 'backend'], {
       cwd: REPO_ROOT,
       shell: useShell,
       stdio: ['pipe', 'pipe', 'pipe']

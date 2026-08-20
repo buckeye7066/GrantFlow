@@ -47,7 +47,7 @@
     "lint": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\" \"shared/**/*.js\" \"tests/unit/**/*.mjs\"",
     "lint:strict": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\" \"shared/**/*.js\"",
     "auth-middleware:check": "node scripts/check-auth-middleware.mjs",
-    "typecheck": "tsc -p tsconfig.node.json --noEmit",
+    "typecheck": "tsc -b --force",
     "profile-guards:check": "node scripts/check-profile-guard-reexports.mjs",
     "runtime-imports:check": "node scripts/check-runtime-imports.mjs",
     "check:env-examples": "node scripts/check-env-examples.mjs",
