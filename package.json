@@ -247,7 +247,7 @@
     "uuid": "^14.0.1",
     "vaul": "^1.1.2",
     "vite": "^8.2.0",
-    "vitest": "^4.0.18",
+    "vitest": "^4.1.11",
     "zustand": "^4.5.7"
   },
   "optionalDependencies": {

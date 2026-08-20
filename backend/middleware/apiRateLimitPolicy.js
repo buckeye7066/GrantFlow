@@ -69,6 +69,29 @@ export function classifyApiRatePolicy(req, env = process.env) {
     }
   }
 
+  // SmartMatcher intent-interpretation is a lightweight JSON parse + optional
+  // short OpenAI call. It is NOT a crawl-start or expensive AI generation, but
+  // it shared the 'cost' bucket (40 req / 10 min) with every other /api/matching
+  // call — so browsing the matching catalog used up the budget that interpret-intent
+  // needs, and normal SmartMatcher use (type → submit → retry) hit 429
+  // (2026-08-20 incident). Give it its own bucket: policy name 'intent' keeps
+  // the bucket key separate from 'cost' (bucket key = hash(policy.name | principal)).
+  // Limit is 30 requests / minute per principal.
+  // NOTE: this middleware runs AFTER auth context is attached (see server.js), so
+  // req.ctx.userId is populated for authenticated callers — principalFor() uses it,
+  // giving each user their own isolated bucket. Unauthenticated callers get an
+  // IP-keyed bucket at the same 30/min limit; the route's requireAuth check returns
+  // 401 before any expensive work occurs, so the more generous limit is harmless.
+  if (path === '/api/matching/interpret-intent') {
+    return {
+      name: 'intent',
+      windowMs: positiveInt(env.API_INTENT_RATE_LIMIT_WINDOW_MS, 60 * 1000),
+      max: positiveInt(env.API_INTENT_RATE_LIMIT_MAX, 30),
+      shared: true,
+      requiredShared: false,
+    }
+  }
+
   if (
     /^\/api\/(?:ai|anya|matching|real-crawlers|crawlers|geo-crawl|laptop-connector)(?:\/|$)/.test(path)
   ) {
