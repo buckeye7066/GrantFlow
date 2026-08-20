@@ -670,12 +670,26 @@ function getServerBaseUrl(req) {
 }
 
 function inferFrontendBaseUrl(req) {
+  // Auth redirects (OAuth callback, password-setup email links) must NEVER
+  // invent a base URL from an untrusted Origin. An attacker page that POSTs
+  // /password/setup/start with Origin: evil.example would otherwise put the
+  // password-setup token in a link on the attacker's host.
   if (FRONTEND_BASE_URL) {
     return FRONTEND_BASE_URL.replace(/\/$/, '')
   }
+  // Origin is honored ONLY when it already sits on the configured allowlist
+  // (localhost Vite, app.axiombiolabs.org, CORS_ORIGIN, …). It must never
+  // grow that allowlist.
   const origin = req.get('origin')
   if (origin) {
-    return origin.replace(/\/$/, '')
+    try {
+      const normalized = new URL(origin).origin
+      if (configuredAuthOrigins(req).has(normalized)) {
+        return normalized
+      }
+    } catch {
+      // fall through
+    }
   }
   return getServerBaseUrl(req)
 }
@@ -686,6 +700,17 @@ function defaultFrontendRedirect(req) {
   return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`
 }
 
+/**
+ * Resolve a post-OAuth frontend redirect. Only origins from
+ * configuredAuthOrigins() are accepted — never the request Origin/Referer.
+ *
+ * Concrete trigger this closed: attacker hosts
+ *   <a href="https://api…/api/auth/google?redirect_to=https://evil.example/steal">
+ * Victim clicks (Referer: evil.example). The old allowlist ADDED the Referer
+ * origin, stored redirect_to=evil.example, and after Google login redirected
+ * to evil.example#handoff=<one-time-session-capability>. The attacker's page
+ * then POSTs /oauth/complete and receives the victim's access token.
+ */
 function sanitizeRedirectTarget(req, target) {
   if (!target || typeof target !== 'string') {
     return defaultFrontendRedirect(req)
@@ -698,43 +723,7 @@ function sanitizeRedirectTarget(req, target) {
     return defaultFrontendRedirect(req)
   }
 
-  const allowedOrigins = new Set()
-
-  if (FRONTEND_BASE_URL) {
-    try {
-      allowedOrigins.add(new URL(FRONTEND_BASE_URL).origin)
-    } catch {
-      // ignore malformed env
-    }
-  }
-
-  const originHeader = req.get('origin')
-  if (originHeader) {
-    try {
-      allowedOrigins.add(new URL(originHeader).origin)
-    } catch {
-      // ignore
-    }
-  }
-
-  const referer = req.get('referer')
-  if (referer) {
-    try {
-      allowedOrigins.add(new URL(referer).origin)
-    } catch {
-      // ignore
-    }
-  }
-
-  if (allowedOrigins.size === 0) {
-    try {
-      allowedOrigins.add(new URL(defaultFrontendRedirect(req)).origin)
-    } catch {
-      // ignore
-    }
-  }
-
-  if (allowedOrigins.has(redirectUrl.origin)) {
+  if (configuredAuthOrigins(req).has(redirectUrl.origin)) {
     return target
   }
 
@@ -4155,6 +4144,11 @@ export {
   compensateFailedOtpSend,
   ensurePhoneCredential,
   EMAIL_MAX_VERIFY_ATTEMPTS,
+  // Exported for the OAuth open-redirect regression suite: post-login
+  // redirect_to must resolve against configuredAuthOrigins only.
+  sanitizeRedirectTarget,
+  configuredAuthOrigins,
+  inferFrontendBaseUrl,
 }
 
 export default router
