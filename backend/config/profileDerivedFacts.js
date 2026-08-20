@@ -296,7 +296,7 @@ export function deriveProfileFacts(profile = {}, sections = {}) {
   const websitePurpose = deriveWebsitePurpose({ profile, sections: s })
   const websiteEvidence = websitePurpose.url
     ? (obj(s.basic_information).website ? 'basic_information.website' : 'organization_details.website')
-    : 'organization_details.website_excerpt'
+    : 'website_or_mission_text'
   const websiteTerms = (websitePurpose.terms || []).map((term) => Object.freeze({
     term: normalizeTerm(term),
     evidence: websiteEvidence,
