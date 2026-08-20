@@ -209,14 +209,15 @@ export async function markProfilesTaught(
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(profile_id, section_key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
   )
+  const selectSection = db.prepare(
+    `SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?`,
+  )
   const taughtAgents = normalizeAgentIds(agents)
   const nowIso = (now instanceof Date ? now : new Date(now)).toISOString()
   const result = { updated: 0, ids: [] }
 
   for (const profileId of ids) {
-    const sec = await db
-      .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?`)
-      .get(profileId, METADATA_SECTION_KEY)
+    const sec = await selectSection.get(profileId, METADATA_SECTION_KEY)
     const meta = sec?.data ? safeParse(sec.data, {}) : {}
     const learningAgents = normalizeAgentIds([
       ...normalizeAgentIds(meta.learning_agents),
