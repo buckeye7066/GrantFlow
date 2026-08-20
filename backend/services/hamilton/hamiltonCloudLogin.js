@@ -273,8 +273,6 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
   sweepExpired()
   const target = loginUrl || (portalHost ? `https://${portalHost}/` : null)
   if (!profileId || !portalHost || !target) return { ok: false, reason: 'missing_params' }
-  const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
-  void normalizedPortalHost // retained for telemetry; no longer restricts to fixture host
   const isSynthetic = isControlledBetaSyntheticBrowserUrl(target)
   if (!isSynthetic && !isPublicHttpsPortalUrl(target)) {
     return {

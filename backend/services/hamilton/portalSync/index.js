@@ -558,9 +558,11 @@ const inFlightSyncs = new Map()
 
 export async function runPortalSync(db, {
   profileId, portalHost, direction = 'read', actorUserId = null,
-  // Compatibility input only. Portal sync is intentionally outside Hamilton's
-  // canonical task authorization/lease/proof protocol, so it must never become
-  // a second final-submit authority.
+  // allowSubmit is accepted for API compatibility but is intentionally
+  // ignored here: portal sync is outside the canonical task
+  // authorization/lease/proof protocol. Submission authority lives in the
+  // Hamilton task orchestrator (hamiltonAutomationOrchestrator), not here.
+  // eslint-disable-next-line no-unused-vars
   allowSubmit = false,
 } = {}) {
   if (!db) return { ok: false, direction, connectorId: null, runId: null, error: 'db required' }
