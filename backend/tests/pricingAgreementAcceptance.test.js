@@ -114,7 +114,15 @@ describe('acceptAgreement', () => {
     expect(result).toEqual({ ok: true, access_status: 'pending_payment' })
     expect(state.updateSql).toContain('WHERE id = ?')
     expect(state.updateSql).not.toContain('user_id IS ?')
-    expect(state.updateArgs.at(-1)).toBe('sa-existing')
+    expect(state.updateArgs).toMatchObject([
+      'user-1',
+      'quote-1',
+      expect.any(String),
+      '127.0.0.1',
+      'vitest',
+      'I agree',
+      'sa-existing',
+    ])
     expect(state.agreement?.user_id).toBe('user-1')
     expect(state.agreement?.accepted).toBe(1)
     expect(state.pricing?.access_status).toBe('pending_payment')
@@ -134,6 +142,7 @@ describe('acceptAgreement', () => {
     expect(result).toEqual({ ok: true, access_status: 'pending_payment' })
     expect(state.agreement?.id).toMatch(/^sa_/)
     expect(state.agreement?.user_id).toBe('user-9')
+    expect(state.agreement?.agreement_version).toBe('2026-06-15')
     expect(state.agreement?.accepted).toBe(1)
   })
 })
