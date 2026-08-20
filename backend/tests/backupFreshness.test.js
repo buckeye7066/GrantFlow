@@ -134,25 +134,35 @@ describe('postgres backup fallback (no pg_dump on PATH)', () => {
       DATABASE_URL: process.env.DATABASE_URL,
     }
     const kv = new Map()
+    const queryImpl = async (sql, params = []) => {
+      if (/information_schema\.tables/.test(sql)) {
+        return { rows: [{ table_name: 'grants' }, { table_name: 'system_kv' }] }
+      }
+      if (/information_schema\.columns/.test(sql)) {
+        const t = params[0]
+        if (t === 'grants') return { rows: [{ column_name: 'id' }, { column_name: 'title' }, { column_name: 'file_bytes' }] }
+        if (t === 'system_kv') return { rows: [{ column_name: 'key' }, { column_name: 'value' }] }
+      }
+      if (/SELECT \* FROM public\."grants"/.test(sql)) {
+        return { rows: [{ id: 'g1', title: 'Roof Repair Grant', file_bytes: Buffer.from('grant-bytes') }] }
+      }
+      if (/SELECT \* FROM public\."system_kv"/.test(sql)) {
+        return { rows: [] }
+      }
+      if (/^(BEGIN|START TRANSACTION)\b/.test(sql) || /^COMMIT$/.test(sql) || /^ROLLBACK$/.test(sql)) {
+        return { rows: [] }
+      }
+      throw new Error(`unexpected query: ${sql}`)
+    }
     const db = {
       dialect: 'postgres',
       _pool: {
-        async query(sql, params = []) {
-          if (/information_schema\.tables/.test(sql)) {
-            return { rows: [{ table_name: 'grants' }, { table_name: 'system_kv' }] }
+        async query(sql, params = []) { return queryImpl(sql, params) },
+        async connect() {
+          return {
+            query: queryImpl,
+            release() {},
           }
-          if (/information_schema\.columns/.test(sql)) {
-            const t = params[0]
-            if (t === 'grants') return { rows: [{ column_name: 'id' }, { column_name: 'title' }, { column_name: 'file_bytes' }] }
-            if (t === 'system_kv') return { rows: [{ column_name: 'key' }, { column_name: 'value' }] }
-          }
-          if (/SELECT \* FROM public\."grants"/.test(sql)) {
-            return { rows: [{ id: 'g1', title: 'Roof Repair Grant', file_bytes: Buffer.from('grant-bytes') }] }
-          }
-          if (/SELECT \* FROM public\."system_kv"/.test(sql)) {
-            return { rows: [] }
-          }
-          throw new Error(`unexpected query: ${sql}`)
         },
       },
       prepare(sql) {
@@ -169,31 +179,34 @@ describe('postgres backup fallback (no pg_dump on PATH)', () => {
       },
     }
 
-    process.env.BACKUP_DIR = dir
-    process.env.DATABASE_URL = '******localhost:5432/grantflow'
-    process.env.PATH = ''
-    const res = await runDatabaseBackup({ db })
+    try {
+      process.env.BACKUP_DIR = dir
+      process.env.DATABASE_URL = 'postgresql://localhost:5432/grantflow'
+      process.env.PATH = ''
+      const res = await runDatabaseBackup({ db })
 
-    expect(res.ok).toBe(true)
-    expect(res.path).toMatch(/\.json\.gz$/)
-    expect(res.bytes).toBeGreaterThan(0)
+      expect(res.ok).toBe(true)
+      expect(res.path).toMatch(/\.json\.gz$/)
+      expect(res.bytes).toBeGreaterThan(0)
 
-    const payload = JSON.parse(zlib.gunzipSync(fs.readFileSync(res.path)).toString('utf8'))
-    expect(payload.format).toBe(POSTGRES_JSON_BACKUP_FORMAT)
-    expect(payload.tables.find((t) => t.name === 'grants')?.rows?.[0]?.file_bytes?.__bytea_base64).toBe(
-      Buffer.from('grant-bytes').toString('base64'),
-    )
+      const payload = JSON.parse(zlib.gunzipSync(fs.readFileSync(res.path)).toString('utf8'))
+      expect(payload.format).toBe(POSTGRES_JSON_BACKUP_FORMAT)
+      expect(payload.tables.find((t) => t.name === 'grants')?.rows?.[0]?.file_bytes?.__bytea_base64).toBe(
+        Buffer.from('grant-bytes').toString('base64'),
+      )
 
-    const stamp = JSON.parse(kv.get('backup_last_run'))
-    expect(stamp.dialect).toBe('postgres')
-    expect(stamp.path).toBe(res.path)
-
-    if (priorEnv.PATH === undefined) delete process.env.PATH
-    else process.env.PATH = priorEnv.PATH
-    if (priorEnv.BACKUP_DIR === undefined) delete process.env.BACKUP_DIR
-    else process.env.BACKUP_DIR = priorEnv.BACKUP_DIR
-    if (priorEnv.DATABASE_URL === undefined) delete process.env.DATABASE_URL
-    else process.env.DATABASE_URL = priorEnv.DATABASE_URL
-    fs.rmSync(dir, { recursive: true, force: true })
+      const stamp = JSON.parse(kv.get('backup_last_run'))
+      expect(stamp.dialect).toBe('postgres')
+      expect(stamp.path).toBe(res.path)
+      expect(fs.statSync(res.path).mode & 0o777).toBe(0o600)
+    } finally {
+      if (priorEnv.PATH === undefined) delete process.env.PATH
+      else process.env.PATH = priorEnv.PATH
+      if (priorEnv.BACKUP_DIR === undefined) delete process.env.BACKUP_DIR
+      else process.env.BACKUP_DIR = priorEnv.BACKUP_DIR
+      if (priorEnv.DATABASE_URL === undefined) delete process.env.DATABASE_URL
+      else process.env.DATABASE_URL = priorEnv.DATABASE_URL
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

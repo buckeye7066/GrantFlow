@@ -5,17 +5,26 @@
  * passes integrity_check (mark-after-write). Consumed by Sam
  * `ops.backupFreshness` and by nightly self-heal (`runSelfHealOnDemand`).
  *
+ * SECURITY: backup artifacts are full database snapshots and therefore carry
+ * the same sensitivity as the live database, including secrets/tokens stored
+ * in DB tables. Every artifact this module writes is chmod'd to owner-only
+ * read/write (`0600`) immediately after creation.
+ * Full-fidelity parity with `pg_dump` is INTENTIONAL: the fallback JSON export
+ * does not exclude "sensitive" tables, because a partial backup is not a
+ * disaster-recovery backup. Protect BACKUP_DIR the same way you protect the DB.
+ *
  * CLI: `npm run db:backup` → scripts/backup-db.mjs
  * Restore: `npm run db:restore -- <file>` → scripts/restore-db.mjs
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { gzipSync, gunzipSync } from 'node:zlib'
+import { createGzip, gunzipSync } from 'node:zlib'
 import * as childProcess from 'node:child_process'
 
 export const BACKUP_LAST_RUN_KEY = 'backup_last_run'
 export const POSTGRES_JSON_BACKUP_FORMAT = 'grantflow-postgres-json-v1'
+const POSTGRES_JSON_BACKUP_BATCH_ROWS = Math.max(100, Number(process.env.POSTGRES_JSON_BACKUP_BATCH_ROWS || 1000) || 1000)
 
 /**
  * In-memory SQLite (`:memory:`) cannot produce a durable backup artifact.
@@ -84,10 +93,27 @@ function pruneOld(dir) {
   return pruned
 }
 
+function withOwnerOnlyUmask(fn) {
+  const prior = process.umask(0o077)
+  try {
+    return fn()
+  } finally {
+    process.umask(prior)
+  }
+}
+
+function createOwnerOnlyWriteStream(dest) {
+  let stream = null
+  withOwnerOnlyUmask(() => {
+    stream = fs.createWriteStream(dest, { mode: 0o600 })
+  })
+  return stream
+}
+
 async function backupSqlite(db, dir) {
   const dest = path.join(dir, `grantflow-backup-${stamp()}.db`)
   const literal = dest.replace(/'/g, "''")
-  await db.exec(`VACUUM INTO '${literal}'`)
+  await withOwnerOnlyUmask(() => db.exec(`VACUUM INTO '${literal}'`))
 
   const { default: Database } = await import('better-sqlite3')
   const check = new Database(dest, { readonly: true })
@@ -129,45 +155,83 @@ function verifyJsonBackup(dest) {
 }
 
 async function backupPostgresViaSql(db, dir) {
-  if (!db?._pool?.query) {
+  if (!db?._pool?.query || typeof db._pool.connect !== 'function') {
     throw new Error('pg_dump not found and the live db handle does not expose a postgres pool for JSON fallback backup')
   }
   const dest = path.join(dir, `grantflow-backup-${stamp()}.json.gz`)
-  const tablesRes = await db._pool.query(`
-    SELECT table_name
-      FROM information_schema.tables
-     WHERE table_schema = 'public'
-       AND table_type = 'BASE TABLE'
-     ORDER BY table_name
-  `)
-  const tables = []
-  for (const row of tablesRes.rows || []) {
-    const tableName = String(row?.table_name || '').trim()
-    if (!tableName) continue
-    const columnsRes = await db._pool.query(
-      `SELECT column_name
-         FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = $1
-        ORDER BY ordinal_position`,
-      [tableName],
-    )
-    const dataRes = await db._pool.query(`SELECT * FROM public.${quotePgIdentifier(tableName)}`)
-    tables.push({
-      name: tableName,
-      columns: (columnsRes.rows || []).map((col) => String(col?.column_name || '')).filter(Boolean),
-      rows: (dataRes.rows || []).map((record) => encodeBackupValue(record)),
+  const client = await db._pool.connect()
+  let out = null
+  let gzip = null
+  let finished = null
+  try {
+    out = createOwnerOnlyWriteStream(dest)
+    gzip = createGzip()
+    gzip.pipe(out)
+    finished = new Promise((resolve, reject) => {
+      out.once('finish', resolve)
+      out.once('error', reject)
+      gzip.once('error', reject)
     })
+    await client.query('START TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    const tablesRes = await client.query(`
+      SELECT table_name
+        FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_type = 'BASE TABLE'
+       ORDER BY table_name
+    `)
+    gzip.write(`{"format":"${POSTGRES_JSON_BACKUP_FORMAT}","created_at":${JSON.stringify(new Date().toISOString())},"tables":[`)
+    let firstTable = true
+    for (const row of tablesRes.rows || []) {
+      const tableName = String(row?.table_name || '').trim()
+      if (!tableName) continue
+      const columnsRes = await client.query(
+        `SELECT column_name
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = $1
+          ORDER BY ordinal_position`,
+        [tableName],
+      )
+      const columns = (columnsRes.rows || []).map((col) => String(col?.column_name || '')).filter(Boolean)
+      gzip.write(
+        `${firstTable ? '' : ','}{"name":${JSON.stringify(tableName)},"columns":${JSON.stringify(columns)},"rows":[`,
+      )
+      firstTable = false
+      let firstRow = true
+      let offset = 0
+      for (;;) {
+        // Full backups cannot assume every table has a portable logical key.
+        // `ctid` gives a deterministic page order within this repeatable-read
+        // snapshot without inventing per-table ordering rules.
+        const dataRes = await client.query(
+          `SELECT * FROM public.${quotePgIdentifier(tableName)} ORDER BY ctid OFFSET $1 LIMIT $2`,
+          [offset, POSTGRES_JSON_BACKUP_BATCH_ROWS],
+        )
+        const rows = dataRes.rows || []
+        if (!rows.length) break
+        for (const record of rows) {
+          gzip.write(`${firstRow ? '' : ','}${JSON.stringify(encodeBackupValue(record))}`)
+          firstRow = false
+        }
+        offset += rows.length
+        if (rows.length < POSTGRES_JSON_BACKUP_BATCH_ROWS) break
+      }
+      gzip.write(']}')
+    }
+    gzip.end(']}')
+    await finished
+    verifyJsonBackup(dest)
+    await client.query('COMMIT')
+  } catch (error) {
+    try { await client.query('ROLLBACK') } catch { /* ignore rollback failure */ }
+    gzip?.destroy()
+    out?.destroy()
+    try { fs.unlinkSync(dest) } catch { /* ignore cleanup failure */ }
+    throw error
+  } finally {
+    client.release()
   }
-  fs.writeFileSync(
-    dest,
-    gzipSync(Buffer.from(JSON.stringify({
-      format: POSTGRES_JSON_BACKUP_FORMAT,
-      created_at: new Date().toISOString(),
-      tables,
-    }))),
-  )
-  verifyJsonBackup(dest)
   return dest
 }
 
@@ -175,10 +239,10 @@ async function backupPostgres(db, dir) {
   const url = String(process.env.DATABASE_URL || '').trim()
   if (!url) throw new Error('postgres dialect but DATABASE_URL is not set')
   const dest = path.join(dir, `grantflow-backup-${stamp()}.dump`)
-  const result = childProcess.spawnSync('pg_dump', ['--format=custom', `--file=${dest}`, url], {
+  const result = withOwnerOnlyUmask(() => childProcess.spawnSync('pg_dump', ['--format=custom', `--file=${dest}`, url], {
     stdio: ['ignore', 'inherit', 'pipe'],
     timeout: 15 * 60 * 1000,
-  })
+  }))
   if (result.error?.code === 'ENOENT') {
     return backupPostgresViaSql(db, dir)
   }
