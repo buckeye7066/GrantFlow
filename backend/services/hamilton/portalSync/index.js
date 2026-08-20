@@ -34,9 +34,10 @@ import { normalizeHost, findValidSession, getSessionStorageState } from '../hami
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from '../browserLaunch.js'
 import {
   controlledBetaBrowserContextOptions,
-  controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
+  installPortalBrowserEgressGuard,
   isControlledBetaSyntheticBrowserUrl,
+  isPublicHttpsPortalUrl,
 } from '../controlledBetaBrowserPolicy.js'
 import { getDecryptedCredentialWithFallback, listCredentialedDomains, registrableDomain } from '../hamiltonPortalCredentialService.js'
 import {
@@ -567,32 +568,19 @@ export async function runPortalSync(db, {
   const host = normalizeHost(portalHost)
   if (!host) return { ok: false, direction, connectorId: null, runId: null, error: 'portalHost required' }
   const dir = VALID_DIRECTIONS.has(direction) ? direction : 'read'
-  const controlledBetaUrl = `https://${host}/`
+  const portalUrl = `https://${host}/`
+  const isSyntheticFixture = isControlledBetaSyntheticBrowserUrl(portalUrl)
 
-  // Defense in depth for direct service callers and stale clients. A final
-  // external submit may be reintroduced only through a reviewed adapter joined
-  // to the canonical durable task authorization, final-review veto, submission
-  // lease, and confirmation-proof protocol.
-  if (allowSubmit === true) {
+  // Block unsafe portal targets (private/loopback/metadata IPs) before
+  // launching any browser work.
+  if (!isSyntheticFixture && !isPublicHttpsPortalUrl(portalUrl)) {
     return {
       ok: false,
       direction: dir,
       connectorId: null,
       runId: null,
-      error: 'reviewed_submission_adapter_required',
-      requires_human_submission: true,
-    }
-  }
-
-  if (!isControlledBetaSyntheticBrowserUrl(controlledBetaUrl)) {
-    const refusal = controlledBetaBrowserRefusal()
-    return {
-      ok: false,
-      direction: dir,
-      connectorId: null,
-      runId: null,
-      error: refusal.code,
-      detail: refusal.message,
+      error: 'unsafe_portal_url',
+      detail: 'Portal sync requires a public HTTPS portal URL.',
       requires_human_handoff: true,
     }
   }
@@ -657,7 +645,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
   if (!browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
     const reason = !isBrowserAutomationEnabled()
       ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
-      : 'controlled beta permits only the reserved synthetic fixture origin'
+      : 'target is not a public HTTPS portal URL'
     return fail(`browser automation not permitted: ${reason}`)
   }
 
@@ -711,7 +699,9 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       userAgent: REALISTIC_PORTAL_UA,
       ...(storageState && typeof storageState === 'object' ? { storageState } : {}),
     }))
-    await installControlledBetaBrowserEgressGuard(context)
+    await (isControlledBetaSyntheticBrowserUrl(url)
+      ? installControlledBetaBrowserEgressGuard(context)
+      : installPortalBrowserEgressGuard(context))
     const page = await context.newPage()
 
     const ctx = {

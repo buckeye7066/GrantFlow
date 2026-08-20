@@ -1,9 +1,9 @@
 /**
- * Hamilton controlled-beta browser guard — synthetic fixture only.
+ * Hamilton browser automation guard — real portals now permitted.
  *
  * Covers browserAutomationPermittedForUrl + deriveProfilePortalHosts: the logic
- * Environment allowlists and profile/credential-derived hosts must never widen
- * the release boundary to a real domain.
+ * now permits ANY public HTTPS portal URL (not just the synthetic fixture), while
+ * still refusing when automation is disabled and refusing private/unsafe targets.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
@@ -24,35 +24,39 @@ afterEach(() => {
 })
 
 describe('browserAutomationPermittedForUrl', () => {
-  it('refuses when browser automation is disabled', () => {
+  it('refuses when browser automation is globally disabled', () => {
     process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'false'
     expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid/x')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://www.tn.gov/apply')).toBe(false)
   })
 
-  it('permits only the exact reserved synthetic fixture origin', () => {
+  it('permits the exact reserved synthetic fixture origin', () => {
     expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid/apply')).toBe(true)
+    // Wrong protocol, wrong port, wrong subdomain — all refused
     expect(browserAutomationPermittedForUrl('http://hamilton-submit-fixture.invalid/apply')).toBe(false)
     expect(browserAutomationPermittedForUrl('https://sub.hamilton-submit-fixture.invalid/apply')).toBe(false)
     expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid:8443/apply')).toBe(false)
   })
 
-  it('refuses a real host even when the static allowlist names it', () => {
-    expect(browserAutomationPermittedForUrl('https://www.tn.gov/apply')).toBe(false)
-    expect(browserAutomationPermittedForUrl('https://benefits.tn.gov/apply')).toBe(false)
+  it('now permits real public HTTPS portals (not gated by an allowlist)', () => {
+    expect(browserAutomationPermittedForUrl('https://www.tn.gov/apply')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://benefits.tn.gov/apply')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/financial-aid/')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://scholarships.com/')).toBe(true)
+    // The extraAllowedHosts option is no longer a gate — public HTTPS just works
+    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/financial-aid/', { extraAllowedHosts: ['mtsu.edu'] })).toBe(true)
   })
 
-  it('refuses a real host even when profile data or a saved credential names it', () => {
-    const extra = ['mtsu.edu']
-    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/financial-aid/', { extraAllowedHosts: extra })).toBe(false)
-    expect(browserAutomationPermittedForUrl('https://login.mtsu.edu/', { extraAllowedHosts: extra })).toBe(false)
-    expect(browserAutomationPermittedForUrl('https://evil.example.com/', { extraAllowedHosts: extra })).toBe(false)
-  })
-
-  it('an empty static allowlist cannot enable fleet-wide behavior', () => {
-    process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = ''
-    expect(browserAutomationPermittedForUrl('https://anything.example.org/')).toBe(false)
+  it('refuses private/loopback/metadata IPs regardless of allowlist', () => {
     expect(browserAutomationPermittedForUrl('http://127.0.0.1:3000/')).toBe(false)
     expect(browserAutomationPermittedForUrl('http://10.0.0.1/')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://169.254.169.254/')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://127.0.0.1/')).toBe(false)
+  })
+
+  it('refuses non-HTTPS real portals', () => {
+    // HTTP real portals are not permitted — portals must use TLS
+    expect(browserAutomationPermittedForUrl('http://www.tn.gov/apply')).toBe(false)
   })
 })
 

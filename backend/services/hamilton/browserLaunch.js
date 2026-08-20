@@ -1,4 +1,10 @@
-import { isControlledBetaSyntheticBrowserUrl } from './controlledBetaBrowserPolicy.js'
+import {
+  isControlledBetaSyntheticBrowserUrl,
+  isPublicHttpsPortalUrl,
+  controlledBetaBrowserContextOptions,
+  installControlledBetaBrowserEgressGuard,
+  installPortalBrowserEgressGuard,
+} from './controlledBetaBrowserPolicy.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:browserLaunch')
@@ -52,15 +58,17 @@ export const REALISTIC_PORTAL_UA =
  * can log which engine actually served the session.
  */
 export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null } = {}) {
-  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
-    const err = new Error('controlled_beta_manual_handoff')
-    err.code = 'controlled_beta_manual_handoff'
+  const isSynthetic = isControlledBetaSyntheticBrowserUrl(targetUrl)
+  const isRealPortal = !isSynthetic && isPublicHttpsPortalUrl(targetUrl)
+  if (!isSynthetic && !isRealPortal) {
+    const err = new Error('unsafe_portal_url')
+    err.code = 'unsafe_portal_url'
     throw err
   }
   const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...extraArgs]
   try {
     const browser = await chromium.launch({ headless, channel: 'chromium', args })
-    return { browser, engine: 'chromium-new-headless' }
+    return { browser, engine: 'chromium-new-headless', synthetic: isSynthetic }
   } catch (err) {
     // NAME THE DOWNGRADE. This file's own header records that `headless-shell`
     // is killed at the CONNECTION level by Akamai-class walls
@@ -72,6 +80,28 @@ export async function launchPortalBrowser(chromium, { headless = true, extraArgs
     const downgradeReason = String(err?.message || err)
     log.warn(`[browserLaunch] full-Chromium launch FAILED, downgrading to headless-shell (this engine is blocked by Akamai-class walls): ${downgradeReason}`)
     const browser = await chromium.launch({ headless, args })
-    return { browser, engine: 'headless-shell', downgraded_from: 'chromium-new-headless', downgrade_reason: downgradeReason }
+    return { browser, engine: 'headless-shell', downgraded_from: 'chromium-new-headless', downgrade_reason: downgradeReason, synthetic: isSynthetic }
   }
 }
+
+/**
+ * Install the appropriate egress guard for a Playwright BrowserContext.
+ * Synthetic-fixture contexts get the strict fixture-only guard; real-portal
+ * contexts get the public-HTTPS guard that blocks only private/loopback/metadata
+ * destinations.
+ *
+ * @param {import('playwright').BrowserContext} context
+ * @param {{ synthetic?: boolean }} opts
+ */
+export async function installEgressGuard(context, { synthetic = false } = {}) {
+  if (synthetic) {
+    return installControlledBetaBrowserEgressGuard(context)
+  }
+  return installPortalBrowserEgressGuard(context)
+}
+
+/**
+ * Context options shared by both synthetic-fixture and real-portal contexts.
+ * (Blocks service workers in both cases.)
+ */
+export { controlledBetaBrowserContextOptions as browserContextOptions }

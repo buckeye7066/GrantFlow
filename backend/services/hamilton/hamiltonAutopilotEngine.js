@@ -44,9 +44,10 @@ import crypto from 'node:crypto'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import {
   controlledBetaBrowserContextOptions,
-  controlledBetaBrowserRefusal,
-  installControlledBetaBrowserEgressGuard,
   isControlledBetaSyntheticBrowserUrl,
+  isPublicHttpsPortalUrl,
+  installControlledBetaBrowserEgressGuard,
+  installPortalBrowserEgressGuard,
 } from './controlledBetaBrowserPolicy.js'
 import path from 'node:path'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
@@ -1012,12 +1013,15 @@ export async function runAutopilot({
     return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before browser launch.', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  if (!isControlledBetaSyntheticBrowserUrl(url)) {
-    const refusal = controlledBetaBrowserRefusal()
+  // Reject unsafe targets (non-HTTPS, private/loopback/metadata IPs) before
+  // launching any browser process. The synthetic fixture is also accepted so
+  // the test suite keeps working against the reserved `.invalid` origin.
+  const isSyntheticFixture = isControlledBetaSyntheticBrowserUrl(url)
+  if (!isSyntheticFixture && !isPublicHttpsPortalUrl(url)) {
     return {
       status: 'blocked',
-      blocker_kind: refusal.code,
-      blocker_detail: refusal.message,
+      blocker_kind: 'unsafe_portal_url',
+      blocker_detail: `Hamilton cannot open an unsafe or private URL: ${url}. Only public HTTPS portals and the reserved test fixture are permitted.`,
       requires_human_handoff: true,
       filled_fields: filled,
       pages_visited: 0,
@@ -1053,7 +1057,9 @@ export async function runAutopilot({
   let page
   try {
     context = await browser.newContext(contextOptions)
-    await installControlledBetaBrowserEgressGuard(context)
+    await (isSyntheticFixture
+      ? installControlledBetaBrowserEgressGuard(context)
+      : installPortalBrowserEgressGuard(context))
     page = await context.newPage()
   } catch (setupErr) {
     await browser.close().catch(() => {})

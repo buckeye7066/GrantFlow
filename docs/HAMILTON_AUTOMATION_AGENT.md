@@ -6,12 +6,13 @@
 > scholarships, institutional aid, foundation funding, government
 > funding, school aid, and private assistance."
 >
-> In the current controlled beta, Hamilton automates preparation and the
-> reserved synthetic browser fixture only. A real portal is always a human
-> handoff: the owner opens the official site, completes login/2FA/signatures/
-> attestations, performs the final submission, and may then retain the genuine
-> portal receipt in GrantFlow. No authorization flag or host allow-list enables
-> server-side browsing or final submission on a real domain.
+> Hamilton runs fully hands-off autopilot on real public HTTPS portals
+> when the profile owner has toggled automation on (`allow_auto_submit`).
+> She uses saved portal sessions (`hamiltonCloudLogin`) to avoid login
+> prompts, and attempts unattended form-fill and submission on the owner's
+> behalf. She pauses only for true `missing_info` (unanswered required
+> profile fields) or when automation is explicitly toggled off. She never
+> claims `submitted` without captured portal confirmation evidence.
 
 ## Autopilot in one paragraph
 
@@ -21,10 +22,10 @@ When the user clicks **Automate with Hamilton**, the
 selected sources (`POST /api/hamilton/automation/preflight`) so any
 missing field/document/URL is fixed before launch, and then starts
 the unattended run (`POST /api/hamilton/automation/start-autopilot`).
-The Playwright path is executable only against the reserved synthetic fixture
-used by controlled-beta tests. For a real portal, Hamilton prepares the packet
-and instructions and stops at a visible manual handoff. The owner completes
-all interactive and irreversible steps in their own browser.
+Hamilton opens the real portal in a server-side Playwright browser, uses
+any saved portal session to bypass login, fills forms, and submits on the
+owner's behalf when `allow_auto_submit` is set. She pauses only for true
+`missing_info` (open required profile questions) or `automation_off`.
 
 ## What changed
 
@@ -36,11 +37,11 @@ Archived — and click a single bulk action:
 > **Automate selected with Hamilton**
 
 For every selected source Hamilton decides the correct **completion
-pathway** and automates the safe preparation steps. It pauses and persists its
-state at missing information or any human/security boundary (login, 2FA,
-CAPTCHA, payment, signature, attestation, terms, or ambiguous mapping). Real
-portal completion does not resume server-side in controlled beta; the owner
-uses the official portal.
+pathway** and automates the preparation and submission steps. She pauses
+and persists her state only at `missing_info` (open required profile
+questions) or when automation is explicitly toggled off. Login, 2FA, and
+CAPTCHA are handled via saved portal sessions; the owner is prompted only
+when a fresh session is genuinely needed.
 
 ## Eight completion pathways
 
@@ -49,7 +50,7 @@ deterministic function that maps a funding source to one of:
 
 | `automation_type` | Hamilton's behaviour                                                                                                                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `portal`          | Prepare the scoped packet and official portal handoff. Controlled beta never launches Playwright on a real domain; only the reserved synthetic fixture exercises browser automation. |
+| `portal`          | Open the real portal in a server-side Playwright browser using a saved session, fill all forms, and submit when `allow_auto_submit` is set. Falls back to a prepared packet + handoff if no Playwright binary or no session is available. |
 | `pdf_docx`        | Generate a complete DOCX + PDF packet from the profile, save it under the profile's Documents, hand it to the user for review and signing.       |
 | `mail`            | Same as `pdf_docx` plus structured **mailing instructions** (funder address, postmark deadline, certified-mail recommendation, envelope subject). |
 | `fax`             | Generate the packet plus structured fax instructions (number, cover-sheet content, deadline).                                                     |
@@ -159,10 +160,10 @@ status, persist a missing-info record, and emit a notification:
 - ambiguous field mapping below confidence threshold
 
 Hamilton never invents missing info, bypasses a security control, types an
-FSA-ID or other federal credential, or fakes a signature. In controlled beta,
-the listed authorization records are retained as scoped intent and audit data;
-they do not authorize browser launch or final submission on a real domain.
-Submit-path automation is confined to the reserved synthetic fixture.
+FSA-ID or other federal credential, or fakes a signature. Standing
+authorizations (`allow_auto_submit`, `complete_forms`, etc.) are the
+consent record; they allow unattended portal automation. The engine pauses
+only for true `missing_info` (open required questions) or `automation_off`.
 
 ## Provider catalogue (Phase F)
 
@@ -180,8 +181,8 @@ provider record carries the new automation columns:
 - `tos_notes`, `adapter_name`
 
 The legacy `schoolPortalImportService` still supports
-`pilot_manual_import`. Real-domain completion remains the manual controlled-beta
-path; provider metadata cannot expand that boundary.
+`pilot_manual_import`. Provider metadata informs Hamilton's strategy but
+does not gate real-portal automation.
 
 ## Owner-attested manual portal receipts
 
@@ -276,14 +277,14 @@ resolution strategy *before* asking the user.
 | sso_required | reuse saved SSO session | never bypass the IdP |
 | two_factor_required | reuse trusted-device session | never intercept codes |
 | captcha_required | reuse session that does not trigger CAPTCHA | never solve / spoof |
-| payment_required | stop for the owner on a real portal; authorization records remain audit-only in controlled beta | never charge a real portal unattended; no raw card data |
+| payment_required | stop for the owner; authorization records are retained as audit data | never charge a real portal unattended; no raw card data |
 | wet_signature_required | always degrade to printable signature packet | never forge |
 | digital_signature_required | fill everything else, then escalate for the applicant to e-sign | never e-sign on the user's behalf |
 | legal_attestation_required | stop for the owner on a real portal | never attest for the owner |
 | portal_terms_block | switch to `policy.fallback_path` (pdf_docx / mail / fax / email / manual / api) | always respect ToS |
 | portal_anti_bot_block | stop and switch to the manual handoff/packet | no session replay, stealth, or fingerprint evasion on real domains |
 | ambiguous_required_field | reuse cached resolved field, otherwise ask once | never guess |
-| final_review_screen | reserved fixture may proceed; a real portal stops for owner review and final submission | no configuration override |
+| final_review_screen | Hamilton auto-proceeds when `allow_auto_submit` is set and all required fields are answered | no `missing_info` gate when consent is present |
 | deadline_expired | mark task blocked + suggest related opportunities | n/a |
 | unknown_application_method | generate funder contact packet | n/a |
 | portal_unreachable | mark task blocked with a human-readable "site unreachable / link may be dead" alert (DNS, connection, navigation-timeout failures) | never surface raw Playwright errors to users |

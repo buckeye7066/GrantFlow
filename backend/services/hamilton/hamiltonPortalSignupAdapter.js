@@ -51,9 +51,10 @@ import fs from 'node:fs'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import {
   controlledBetaBrowserContextOptions,
-  controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
+  installPortalBrowserEgressGuard,
   isControlledBetaSyntheticBrowserUrl,
+  isPublicHttpsPortalUrl,
 } from './controlledBetaBrowserPolicy.js'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { browserAutomationPermittedForUrl, isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
@@ -558,11 +559,11 @@ export async function completeEmailVerification({
  * in one place.
  */
 async function openBrowserContext(launchBrowser, targetUrl) {
-  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
-    const refusal = controlledBetaBrowserRefusal()
+  const isSynthetic = isControlledBetaSyntheticBrowserUrl(targetUrl)
+  if (!isSynthetic && !isPublicHttpsPortalUrl(targetUrl)) {
     return { error: ok('failed', {
-      blocker_kind: refusal.code,
-      blocker_detail: refusal.message,
+      blocker_kind: 'unsafe_portal_url',
+      blocker_detail: 'Hamilton can only open public HTTPS portals or the reserved test fixture.',
       automation_disabled: true,
       requires_human_handoff: true,
     }) }
@@ -591,7 +592,9 @@ async function openBrowserContext(launchBrowser, targetUrl) {
   if (!context) {
     return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'No browser context available' }) }
   }
-  await installControlledBetaBrowserEgressGuard(context)
+  await (isSynthetic
+    ? installControlledBetaBrowserEgressGuard(context)
+    : installPortalBrowserEgressGuard(context))
   return { browser, context }
 }
 

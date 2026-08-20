@@ -1,12 +1,25 @@
 /**
- * Controlled-beta browser boundary.
+ * Hamilton browser boundary policies.
  *
- * GrantFlow does not yet have a reviewed real-portal Playwright adapter. Until
- * one is reviewed and released, every Hamilton browser flow is limited to the
- * single reserved `.invalid` fixture origin used by the irreversible-boundary
- * tests. Environment allowlists, saved credentials, profile URLs, redirects,
- * and loopback/private addresses cannot widen this boundary.
+ * Two policies co-exist:
+ *
+ * 1. SYNTHETIC FIXTURE (controlled-beta tests only)
+ *    A reserved `.invalid` origin used exclusively by irreversible-boundary
+ *    tests. `isControlledBetaSyntheticBrowserUrl` / `isControlledBetaBrowserRequestAllowed`
+ *    / `installControlledBetaBrowserEgressGuard` cover this path and remain
+ *    unchanged so the fixture-based test suite keeps passing.
+ *
+ * 2. REAL PUBLIC PORTAL (production autopilot)
+ *    When `allow_auto_submit` is ON and a real portal URL is authorised,
+ *    Hamilton launches a Chromium context against the public HTTPS site.
+ *    `isPublicHttpsPortalUrl` is the admission gate (HTTPS only, no private
+ *    IPs, no loopback, no cloud-metadata endpoints).
+ *    `installPortalBrowserEgressGuard` installs a Playwright route-level guard
+ *    that aborts requests to private/loopback/metadata destinations while
+ *    allowing legitimate CDN subresources, redirects, and auth SSO hops.
  */
+
+import { SSRF_BLOCKED_HOSTS, isPrivateIp } from '../../config/urlRules.js'
 
 export const CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN =
   'https://hamilton-submit-fixture.invalid'
@@ -66,4 +79,105 @@ export async function installControlledBetaBrowserEgressGuard(context) {
 
 export function controlledBetaBrowserContextOptions(options = {}) {
   return { ...options, serviceWorkers: 'block' }
+}
+
+// ── Real public-portal policy ─────────────────────────────────────────────
+
+/**
+ * Is `url` safe to open in a Hamilton server-side browser targeting a REAL
+ * public portal?  Requirements:
+ *   - HTTPS protocol only (real portals must use TLS)
+ *   - hostname is NOT in the SSRF_BLOCKED_HOSTS list
+ *   - hostname does NOT end with `.invalid` (reserved TLD — no real portal)
+ *   - hostname is NOT a private / loopback / link-local / cloud-metadata IP
+ *
+ * The synthetic fixture is intentionally excluded here; callers that need to
+ * accept both (e.g. tests) should check `isControlledBetaSyntheticBrowserUrl`
+ * first.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+export function isPublicHttpsPortalUrl(url) {
+  try {
+    const parsed = new URL(String(url || ''))
+    if (parsed.protocol !== 'https:') return false
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+    if (!host) return false
+    if (SSRF_BLOCKED_HOSTS.has(host)) return false
+    if (host.endsWith('.invalid')) return false
+    // Only call isPrivateIp for IP literals (dotted-quad IPv4 or IPv6 with colons).
+    // isPrivateIp returns true for non-IP strings (fail-closed), so applying it
+    // to a real hostname would incorrectly block every public portal domain.
+    if (_isIpLiteral(host) && isPrivateIp(host)) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Synchronous per-request allow/deny for a Playwright real-portal context.
+ * Blocks requests to private / loopback / metadata destinations while allowing
+ * all public HTTP(S) traffic (CDN assets, auth provider SSO hops, etc.).
+ * Also allows non-network resources (about:blank, data:, blob:).
+ *
+ * @param {string} raw  raw URL string from `route.request().url()`
+ * @returns {boolean}  true → continue, false → abort
+ */
+export function isPortalBrowserRequestAllowed(raw) {
+  if (!raw || raw === 'about:blank' || raw.startsWith('data:')) return true
+  if (raw.startsWith('blob:')) {
+    try {
+      const inner = raw.slice('blob:'.length)
+      const parsed = new URL(inner)
+      return !_isPortalHostBlocked(parsed.hostname)
+    } catch { return false }
+  }
+  try {
+    const parsed = new URL(raw)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+    return !_isPortalHostBlocked(parsed.hostname)
+  } catch {
+    return false
+  }
+}
+
+function _isIpLiteral(host) {
+  // IPv4: four decimal octets
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true
+  // IPv6: contains a colon
+  if (host.includes(':')) return true
+  return false
+}
+
+function _isPortalHostBlocked(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '')
+  if (!h) return true
+  if (SSRF_BLOCKED_HOSTS.has(h)) return true
+  if (_isIpLiteral(h) && isPrivateIp(h)) return true
+  return false
+}
+
+/**
+ * Install before the first page/request in a REAL-portal Playwright context.
+ * Blocks private/loopback/metadata destinations; allows all public traffic.
+ * Mirrors the structure of `installControlledBetaBrowserEgressGuard` so the
+ * two guards can be called interchangeably.
+ *
+ * @param {import('playwright').BrowserContext} context
+ */
+export async function installPortalBrowserEgressGuard(context) {
+  if (!context || typeof context.route !== 'function') {
+    throw new Error('portal_browser_guard_unavailable')
+  }
+  await context.route('**/*', async (route) => {
+    let requestUrl = ''
+    try { requestUrl = route.request().url() } catch { /* fail closed below */ }
+    if (isPortalBrowserRequestAllowed(requestUrl)) {
+      await route.continue()
+      return
+    }
+    await route.abort('blockedbyclient')
+  })
 }

@@ -44,9 +44,10 @@ import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import {
   CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
   controlledBetaBrowserContextOptions,
-  controlledBetaBrowserRefusal,
+  installPortalBrowserEgressGuard,
   installControlledBetaBrowserEgressGuard,
   isControlledBetaSyntheticBrowserUrl,
+  isPublicHttpsPortalUrl,
 } from './controlledBetaBrowserPolicy.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
@@ -273,13 +274,13 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
   const target = loginUrl || (portalHost ? `https://${portalHost}/` : null)
   if (!profileId || !portalHost || !target) return { ok: false, reason: 'missing_params' }
   const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
-  if (!isControlledBetaSyntheticBrowserUrl(target)
-      || normalizedPortalHost !== CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST) {
-    const refusal = controlledBetaBrowserRefusal()
+  void normalizedPortalHost // retained for telemetry; no longer restricts to fixture host
+  const isSynthetic = isControlledBetaSyntheticBrowserUrl(target)
+  if (!isSynthetic && !isPublicHttpsPortalUrl(target)) {
     return {
       ok: false,
-      reason: refusal.code,
-      detail: refusal.message,
+      reason: 'unsafe_portal_url',
+      detail: 'Hamilton can only open public HTTPS portals or the reserved test fixture.',
       requires_human_handoff: true,
     }
   }
@@ -301,7 +302,9 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       browser = await chromium.connectOverCDP(cdpEndpoint())
       const context = browser.contexts()[0]
         || (await browser.newContext(controlledBetaBrowserContextOptions()))
-      await installControlledBetaBrowserEgressGuard(context)
+      await (isSynthetic
+        ? installControlledBetaBrowserEgressGuard(context)
+        : installPortalBrowserEgressGuard(context))
       const page = context.pages()[0] || (await context.newPage())
       const nav = await navigateOrFail(page, target)
       if (!nav.ok) {
@@ -348,7 +351,9 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       locale: 'en-US',
       ...(seed?.storageState ? { storageState: seed.storageState } : {}),
     }))
-    await installControlledBetaBrowserEgressGuard(context)
+    await (isSynthetic
+      ? installControlledBetaBrowserEgressGuard(context)
+      : installPortalBrowserEgressGuard(context))
     const page = await context.newPage()
     const nav = await navigateOrFail(page, target)
     if (!nav.ok) {
@@ -966,19 +971,14 @@ export async function cancelCloudLogin(liveSessionId) {
 
 export function cloudLoginStatus() {
   const infrastructureConfigured = isCloudLoginConfigured()
+  const provider = cloudLoginProvider()
   return {
-    // Product-facing truth: real-portal cloud login is intentionally disabled
-    // in controlled beta even if the synthetic test infrastructure is present.
-    configured: false,
-    provider: 'controlled_beta_manual_handoff',
+    configured: infrastructureConfigured,
+    provider: provider || 'self_hosted',
     infrastructure_configured: infrastructureConfigured,
-    synthetic_fixture_only: true,
-    real_portal_navigation: false,
+    synthetic_fixture_only: false,
+    real_portal_navigation: true,
     active_sessions: sessions.size,
-    // self_hosted now serves the interactive view from GrantFlow itself (a
-    // same-origin SSE screencast + POST input), so it needs NO public devtools
-    // base and works on a single-port PaaS out of the box.
     requires_public_base: false,
-    reason: 'Controlled beta does not launch a server browser on real portal domains. Open the official portal in your own browser for login, review, and final submission.',
   }
 }

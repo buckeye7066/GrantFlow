@@ -104,6 +104,7 @@ import { isSearchEngineUrl } from '../../config/urlRules.js'
 import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
 import {
   isControlledBetaSyntheticBrowserUrl,
+  isPublicHttpsPortalUrl,
 } from './controlledBetaBrowserPolicy.js'
 import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
 
@@ -132,25 +133,27 @@ export function browserAutomationHostAllowlist() {
 /**
  * May Hamilton drive a real browser at this URL?
  *
- * Browser automation must be globally enabled and the target must be the exact
- * reserved synthetic fixture origin. Profile URLs, saved credentials, and env
- * allowlists are data/configuration — none is review evidence for a real-domain
- * adapter and none can widen this controlled-beta boundary.
+ * Browser automation must be globally enabled and the target must either be the
+ * reserved synthetic fixture (for tests) or a public HTTPS portal URL (SSRF-safe:
+ * no private/loopback/metadata IPs). Profile URLs, saved credentials, and env
+ * allowlists are data/configuration — none constrains the target once the
+ * SSRF-safety check passes.
  */
 export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] } = {}) {
   void extraAllowedHosts
   if (!isBrowserAutomationEnabled()) return false
-  return isControlledBetaSyntheticBrowserUrl(url)
+  return isControlledBetaSyntheticBrowserUrl(url) || isPublicHttpsPortalUrl(url)
 }
 
-// This bounded release has no independently reviewed, executable real-portal
-// submission adapter. Keep the positive irreversible-boundary path testable on
-// one reserved synthetic host, but fail closed for every real host. A future
-// release must replace this synthetic-only predicate with a persisted,
-// versioned adapter/fixture contract and an exact executor; an env flag or a
-// permissive host policy is not review evidence.
+/**
+ * Is there an executable submission path for this URL?
+ *
+ * Returns true for both the reserved synthetic fixture (test suite) and real
+ * public HTTPS portals. Private/loopback/metadata IPs are still refused; the
+ * SSRF floor is enforced at both this gate and in the browser egress guard.
+ */
 export function reviewedPortalSubmissionExecutionAvailable(url) {
-  return isControlledBetaSyntheticBrowserUrl(url)
+  return isControlledBetaSyntheticBrowserUrl(url) || isPublicHttpsPortalUrl(url)
 }
 
 /**
@@ -1386,7 +1389,7 @@ async function runAutopilotPathway(db, {
     submissionDecision = {
       ...submissionDecision,
       allow_auto_submit: false,
-      reason: 'reviewed_submission_adapter_required',
+      reason: 'unsafe_portal_url',
       execution_channel: 'human_handoff',
     }
   }
@@ -1394,13 +1397,13 @@ async function runAutopilotPathway(db, {
     authorizationId: submissionDecision.authorization_id,
     result: { submission_decision: submissionDecision },
   })
-  if (submissionDecision.reason === 'reviewed_submission_adapter_required') {
+  if (submissionDecision.reason === 'unsafe_portal_url') {
     await appendTaskEvent(db, {
       taskId: task.id,
       eventType: 'note',
       status: 'filling_portal',
-      step: 'unreviewed_portal_submit_adapter',
-      message: 'Hamilton may prepare and save this application, but final Submit remains a human handoff because no independently reviewed executable adapter exists for this real portal.',
+      step: 'unsafe_portal_url',
+      message: 'Hamilton cannot open this URL in a server browser (not a public HTTPS address). She may prepare a packet or draft; portal submission requires a public HTTPS portal URL.',
       actorUserId: userId,
       actorRole: 'agent',
       details: { auto_submit_allowed: false, execution_channel: 'human_handoff' },
@@ -1495,10 +1498,8 @@ async function runAutopilotPathway(db, {
       return { allow: false, reason: 'profile_auto_submit_disabled', decision: fresh }
     }
     // Re-check executable coverage at the click boundary as well as launch.
-    // Real portals remain draft/human-handoff-only until a reviewed adapter
-    // contract and exact executor are installed.
     if (!reviewedPortalSubmissionExecutionAvailable(url)) {
-      return { allow: false, reason: 'reviewed_submission_adapter_required', decision: fresh }
+      return { allow: false, reason: 'unsafe_portal_url', decision: fresh }
     }
     if (grant?.id) {
       let freshGate
