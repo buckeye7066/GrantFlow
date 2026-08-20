@@ -353,63 +353,72 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
     db && typeof db.withTransaction === 'function'
       ? (work) => db.withTransaction(work)
       : async (work) => work(db)
-  return runInTx((tx) => withProfileScope({ bypass: true }, async () => {
-    const now = new Date().toISOString()
-    const pricing = await getProfilePricing(tx, profileId)
-    if (!pricing) return { ok: false, error: 'no_pricing' }
-    let agreement = await getLatestServiceAgreement(tx, profileId)
-    if (!agreement) {
-      const agreementId = makeAgreementId()
-      await tx.prepare(
-        `INSERT INTO ${SERVICE_AGREEMENTS_TABLE}
-          (id, user_id, profile_id, quote_id, agreement_version)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(
-        agreementId,
-        userId || pricing.user_id || null,
-        profileId,
-        pricing.quote_id || null,
-        SERVICE_AGREEMENT_VERSION,
-      )
-      agreement = {
-        id: agreementId,
-        user_id: userId || pricing.user_id || null,
-        profile_id: profileId,
-        quote_id: pricing.quote_id || null,
-        agreement_version: SERVICE_AGREEMENT_VERSION,
-        accepted: 0,
+  try {
+    return await runInTx((tx) => withProfileScope({ bypass: true }, async () => {
+      const now = new Date().toISOString()
+      const pricing = await getProfilePricing(tx, profileId)
+      if (!pricing) return { ok: false, error: 'no_pricing' }
+      let agreement = await getLatestServiceAgreement(tx, profileId)
+      if (!agreement) {
+        const agreementId = makeAgreementId()
+        await tx.prepare(
+          `INSERT INTO ${SERVICE_AGREEMENTS_TABLE}
+            (id, user_id, profile_id, quote_id, agreement_version)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).run(
+          agreementId,
+          userId || pricing.user_id || null,
+          profileId,
+          pricing.quote_id || null,
+          SERVICE_AGREEMENT_VERSION,
+        )
+        agreement = {
+          id: agreementId,
+          user_id: userId || pricing.user_id || null,
+          profile_id: profileId,
+          quote_id: pricing.quote_id || null,
+          agreement_version: SERVICE_AGREEMENT_VERSION,
+          accepted: 0,
+        }
       }
-    }
-    const updateResult = await tx.prepare(
-      `UPDATE ${SERVICE_AGREEMENTS_TABLE}
-          SET user_id = COALESCE(user_id, ?),
-              quote_id = COALESCE(quote_id, ?),
-              accepted = 1,
-              accepted_at = ?,
-              accepted_ip = ?,
-              accepted_user_agent = ?,
-              agreement_text_snapshot = COALESCE(agreement_text_snapshot, ?)
-        WHERE id = ?`,
-    ).run(
-      userId || null,
-      pricing.quote_id || null,
-      now,
-      ip || null,
-      userAgent || null,
-      agreementText || null,
-      agreement.id,
-    )
-    if (!Number(updateResult?.changes || 0)) return { ok: false, error: 'agreement_not_found' }
-    let nextStatus = pricing.access_status
-    if (Number(pricing.total_cents) === 0) nextStatus = ACCESS_STATUS.ACTIVE_PAID
-    else if (pricing.access_status === ACCESS_STATUS.PENDING_AGREEMENT) nextStatus = ACCESS_STATUS.PENDING_PAYMENT
-    if (nextStatus !== pricing.access_status) {
-      await tx.prepare(
-        `UPDATE ${PROFILE_PRICING_TABLE} SET access_status = ?, updated_at = ? WHERE profile_id = ?`,
-      ).run(nextStatus, now, profileId)
-    }
-    return { ok: true, access_status: nextStatus }
-  }))
+      const updateResult = await tx.prepare(
+        `UPDATE ${SERVICE_AGREEMENTS_TABLE}
+            SET user_id = COALESCE(user_id, ?),
+                quote_id = COALESCE(quote_id, ?),
+                accepted = 1,
+                accepted_at = ?,
+                accepted_ip = ?,
+                accepted_user_agent = ?,
+                agreement_text_snapshot = COALESCE(agreement_text_snapshot, ?)
+          WHERE id = ?`,
+      ).run(
+        userId || null,
+        pricing.quote_id || null,
+        now,
+        ip || null,
+        userAgent || null,
+        agreementText || null,
+        agreement.id,
+      )
+      if (!Number(updateResult?.changes || 0)) {
+        const err = new Error('agreement_not_found')
+        err.code = 'agreement_not_found'
+        throw err
+      }
+      let nextStatus = pricing.access_status
+      if (Number(pricing.total_cents) === 0) nextStatus = ACCESS_STATUS.ACTIVE_PAID
+      else if (pricing.access_status === ACCESS_STATUS.PENDING_AGREEMENT) nextStatus = ACCESS_STATUS.PENDING_PAYMENT
+      if (nextStatus !== pricing.access_status) {
+        await tx.prepare(
+          `UPDATE ${PROFILE_PRICING_TABLE} SET access_status = ?, updated_at = ? WHERE profile_id = ?`,
+        ).run(nextStatus, now, profileId)
+      }
+      return { ok: true, access_status: nextStatus }
+    }))
+  } catch (error) {
+    if (error?.code === 'agreement_not_found') return { ok: false, error: 'agreement_not_found' }
+    throw error
+  }
 }
 
 /**

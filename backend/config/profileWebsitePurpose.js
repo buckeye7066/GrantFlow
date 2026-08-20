@@ -139,15 +139,6 @@ export const KNOWN_WEBSITE_PURPOSE_BY_HOST = Object.freeze({
     'biomedical research',
     'biotechnology research',
   ]),
-  'www.axiombiolabs.org': Object.freeze([
-    'car-t transplant',
-    'immune tolerance',
-    'cell therapy',
-    'solid organ transplant',
-    'genomic diagnostics',
-    'biomedical research',
-    'biotechnology research',
-  ]),
 })
 
 const RESEARCH_PURPOSE_RX = /\b(car-t transplant|immune tolerance|cell therapy|solid organ transplant|cancer immunotherapy|autoimmune research|genomic diagnostics|biomedical research|biotechnology research|environmental dna testing)\b/i
