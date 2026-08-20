@@ -86,7 +86,8 @@ function makePgDb({
 
       if (sql.includes('UPDATE profile_pricing')) {
         return {
-          run: async (accessStatus) => {
+          run: async (accessStatus, _updatedAt, profileId) => {
+            expect(profileId).toBe(state.pricing?.profile_id)
             state.pricing = { ...state.pricing, access_status: accessStatus }
             return { changes: 1 }
           },
