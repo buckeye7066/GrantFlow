@@ -26,3 +26,6 @@ institutional NOFOs.
 Only actionable owner item from the paste: **Set Hamilton’s master passphrase**
 (Open Portals). The 87 Working-on-now items are mostly junk matches — not
 missing profile fields.
+
+## CI retrigger
+2026-08-20T20:05Z — owner billing restored; nudging required Actions checks for merge.
