@@ -1,4 +1,4 @@
-import { isControlledBetaSyntheticBrowserUrl } from './controlledBetaBrowserPolicy.js'
+import { isPublicHttpsUrl, isControlledBetaSyntheticBrowserUrl } from './controlledBetaBrowserPolicy.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:browserLaunch')
@@ -52,9 +52,9 @@ export const REALISTIC_PORTAL_UA =
  * can log which engine actually served the session.
  */
 export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null } = {}) {
-  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
-    const err = new Error('controlled_beta_manual_handoff')
-    err.code = 'controlled_beta_manual_handoff'
+  if (targetUrl !== null && !isPublicHttpsUrl(targetUrl) && !isControlledBetaSyntheticBrowserUrl(targetUrl)) {
+    const err = new Error('ssrf_blocked')
+    err.code = 'ssrf_blocked'
     throw err
   }
   const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...extraArgs]

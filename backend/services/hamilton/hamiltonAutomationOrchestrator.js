@@ -104,6 +104,7 @@ import { isSearchEngineUrl } from '../../config/urlRules.js'
 import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
 import {
   isControlledBetaSyntheticBrowserUrl,
+  isPublicHttpsUrl,
 } from './controlledBetaBrowserPolicy.js'
 import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
 
@@ -132,25 +133,22 @@ export function browserAutomationHostAllowlist() {
 /**
  * May Hamilton drive a real browser at this URL?
  *
- * Browser automation must be globally enabled and the target must be the exact
- * reserved synthetic fixture origin. Profile URLs, saved credentials, and env
- * allowlists are data/configuration — none is review evidence for a real-domain
- * adapter and none can widen this controlled-beta boundary.
+ * Browser automation must be globally enabled and the target must be a public
+ * HTTPS URL (not private/loopback/metadata — SSRF floor). The reserved
+ * synthetic fixture origin is always permitted for test suites.
  */
 export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] } = {}) {
   void extraAllowedHosts
   if (!isBrowserAutomationEnabled()) return false
-  return isControlledBetaSyntheticBrowserUrl(url)
+  return isPublicHttpsUrl(url) || isControlledBetaSyntheticBrowserUrl(url)
 }
 
-// This bounded release has no independently reviewed, executable real-portal
-// submission adapter. Keep the positive irreversible-boundary path testable on
-// one reserved synthetic host, but fail closed for every real host. A future
-// release must replace this synthetic-only predicate with a persisted,
-// versioned adapter/fixture contract and an exact executor; an env flag or a
-// permissive host policy is not review evidence.
+/**
+ * Hamilton may attempt portal submission on any public HTTPS URL.
+ * Private/loopback/metadata addresses remain blocked (SSRF floor).
+ */
 export function reviewedPortalSubmissionExecutionAvailable(url) {
-  return isControlledBetaSyntheticBrowserUrl(url)
+  return isPublicHttpsUrl(url) || isControlledBetaSyntheticBrowserUrl(url)
 }
 
 /**
@@ -1283,17 +1281,7 @@ async function runAutopilotPathway(db, {
       ? `portal terms forbid agent automation (${portalHostForPolicy || 'this host'}); Hamilton respects the site's ToS and uses the lawful ${portalPolicy.fallback_path || 'pdf_docx'} packet instead`
       : !isBrowserAutomationEnabled()
         ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
-        // AN INSTRUCTION THAT CANNOT BE SATISFIED IS WORSE THAN NO INSTRUCTION.
-        // This branch used to read "portal host is not on the allowlist and the
-        // profile has no declared portal or saved credential for it", which told
-        // the owner to add the host to HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST
-        // or save a credential. Neither can EVER satisfy
-        // `browserAutomationPermittedForUrl`: it `void`s `extraAllowedHosts`
-        // entirely and returns true only for the ONE reserved synthetic fixture
-        // origin (isControlledBetaSyntheticBrowserUrl). So for every real portal
-        // the owner was chasing a fix that does not exist. State the real reason
-        // and the real next step.
-        : `this bounded release has no reviewed real-portal submission adapter, so Hamilton does not drive a browser on ${portalHostForPolicy || 'this host'} — a lawful packet was prepared instead; use side-by-side co-browse or apply manually. (No allowlist entry or saved credential can change this: the controlled-beta boundary permits only the reserved synthetic fixture origin.)`
+        : `browser automation not available for ${portalHostForPolicy || 'this host'} (SSRF or policy block)`
     const packet = await generateAndSavePacket(db, {
       profile, opportunity, grant, automationType: 'pdf_docx', taskId: task.id, userId,
     }).catch((err) => ({ error: err?.message || String(err) }))
@@ -1386,26 +1374,14 @@ async function runAutopilotPathway(db, {
     submissionDecision = {
       ...submissionDecision,
       allow_auto_submit: false,
-      reason: 'reviewed_submission_adapter_required',
-      execution_channel: 'human_handoff',
+      reason: 'ssrf_blocked',
+      execution_channel: 'blocked',
     }
   }
   await updateAutopilotRun(db, run.id, {
     authorizationId: submissionDecision.authorization_id,
     result: { submission_decision: submissionDecision },
   })
-  if (submissionDecision.reason === 'reviewed_submission_adapter_required') {
-    await appendTaskEvent(db, {
-      taskId: task.id,
-      eventType: 'note',
-      status: 'filling_portal',
-      step: 'unreviewed_portal_submit_adapter',
-      message: 'Hamilton may prepare and save this application, but final Submit remains a human handoff because no independently reviewed executable adapter exists for this real portal.',
-      actorUserId: userId,
-      actorRole: 'agent',
-      details: { auto_submit_allowed: false, execution_channel: 'human_handoff' },
-    }).catch(() => {})
-  }
   // Per-profile automation toggle: turning OFF "Hamilton auto-submit" forces a
   // hand-back before submission regardless of the per-application authorization.
   // Absent preference defaults ON (current behaviour).
@@ -1494,11 +1470,9 @@ async function runAutopilotPathway(db, {
     if (!isAutomationEnabled(preferences, 'hamilton_auto_submit')) {
       return { allow: false, reason: 'profile_auto_submit_disabled', decision: fresh }
     }
-    // Re-check executable coverage at the click boundary as well as launch.
-    // Real portals remain draft/human-handoff-only until a reviewed adapter
-    // contract and exact executor are installed.
+    // Re-check SSRF safety at the click boundary as well as launch.
     if (!reviewedPortalSubmissionExecutionAvailable(url)) {
-      return { allow: false, reason: 'reviewed_submission_adapter_required', decision: fresh }
+      return { allow: false, reason: 'ssrf_blocked', decision: fresh }
     }
     if (grant?.id) {
       let freshGate

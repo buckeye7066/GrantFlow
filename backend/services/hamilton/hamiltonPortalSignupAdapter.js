@@ -51,8 +51,8 @@ import fs from 'node:fs'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import {
   controlledBetaBrowserContextOptions,
-  controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
+  isPublicHttpsUrl,
   isControlledBetaSyntheticBrowserUrl,
 } from './controlledBetaBrowserPolicy.js'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
@@ -558,13 +558,12 @@ export async function completeEmailVerification({
  * in one place.
  */
 async function openBrowserContext(launchBrowser, targetUrl) {
-  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
-    const refusal = controlledBetaBrowserRefusal()
+  if (!isPublicHttpsUrl(targetUrl) && !isControlledBetaSyntheticBrowserUrl(targetUrl)) {
     return { error: ok('failed', {
-      blocker_kind: refusal.code,
-      blocker_detail: refusal.message,
+      blocker_kind: 'ssrf_blocked',
+      blocker_detail: 'Hamilton does not open private, loopback, or non-HTTPS addresses.',
       automation_disabled: true,
-      requires_human_handoff: true,
+      requires_human_handoff: false,
     }) }
   }
   let browser = null

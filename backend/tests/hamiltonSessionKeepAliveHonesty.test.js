@@ -95,22 +95,27 @@ describe('keep-alive liveness verdict', () => {
     _resetCredentialSchemaCache()
   })
 
-  it('a real-domain session is skipped without launching a browser', async () => {
+  it('a real-domain session is PROBED (not skipped) — Hamilton is now hands-off on real portals', async () => {
     const est = new Date(Date.now() - 3 * 86_400_000).toISOString()
     await seedSession(db, { host: 'leic.tennessee.edu', establishedAt: est })
 
-    const launchBrowser = vi.fn(async () => { throw new Error('real-domain browser must not launch') })
+    // With the controlled-beta boundary removed, Hamilton now attempts to probe
+    // real domains.  A launcher that throws causes an `inconclusive` result, NOT
+    // `skipped` — the key difference from the old controlled-beta behavior.
+    const launchBrowser = vi.fn(async () => { throw new Error('simulated browser-launch failure') })
 
     const out = await runSessionKeepAliveSweep(db, { launchBrowser })
 
-    expect(out.refreshed).toBe(0)
-    expect(out.unverified).toBe(0)
-    expect(out.skipped).toBe(1)
-    expect(out.expired).toBe(0)
-    expect(out.results[0].outcome).toBe('skipped')
-    expect(launchBrowser).not.toHaveBeenCalled()
+    // launchBrowser IS called now (real domains are no longer skipped).
+    expect(launchBrowser).toHaveBeenCalledOnce()
 
-    // And nothing enters the lifetime ledger from a probe that could not tell.
+    // A failed launch is inconclusive, not a permanent skip.
+    expect(out.results[0].outcome).toBe('inconclusive')
+    // An inconclusive probe contributes neither a refreshed nor an expired count.
+    expect(out.refreshed).toBe(0)
+    expect(out.expired).toBe(0)
+
+    // Nothing enters the lifetime ledger from an inconclusive probe.
     const s = summarizeHostLifetime(await loadLifetimeLedger(db), 'leic.tennessee.edu')
     expect(s.samples).toBe(0)
     expect(out.observed).toBe(0)

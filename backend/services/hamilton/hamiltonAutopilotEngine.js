@@ -44,8 +44,8 @@ import crypto from 'node:crypto'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import {
   controlledBetaBrowserContextOptions,
-  controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
+  isPublicHttpsUrl,
   isControlledBetaSyntheticBrowserUrl,
 } from './controlledBetaBrowserPolicy.js'
 import path from 'node:path'
@@ -1012,13 +1012,12 @@ export async function runAutopilot({
     return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before browser launch.', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  if (!isControlledBetaSyntheticBrowserUrl(url)) {
-    const refusal = controlledBetaBrowserRefusal()
+  if (!isPublicHttpsUrl(url) && !isControlledBetaSyntheticBrowserUrl(url)) {
     return {
       status: 'blocked',
-      blocker_kind: refusal.code,
-      blocker_detail: refusal.message,
-      requires_human_handoff: true,
+      blocker_kind: 'ssrf_blocked',
+      blocker_detail: 'Hamilton does not open private, loopback, or non-HTTPS addresses.',
+      requires_human_handoff: false,
       filled_fields: filled,
       pages_visited: 0,
       trace,

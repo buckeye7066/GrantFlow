@@ -1,18 +1,33 @@
 /**
- * Controlled-beta browser boundary.
+ * Hamilton browser policy.
  *
- * GrantFlow does not yet have a reviewed real-portal Playwright adapter. Until
- * one is reviewed and released, every Hamilton browser flow is limited to the
- * single reserved `.invalid` fixture origin used by the irreversible-boundary
- * tests. Environment allowlists, saved credentials, profile URLs, redirects,
- * and loopback/private addresses cannot widen this boundary.
+ * Hamilton drives real public HTTPS portals when automation is enabled.
+ * The SSRF floor remains: private/loopback/link-local IP ranges and known
+ * metadata service hostnames are always blocked — these are infrastructure
+ * concerns, not user-facing blockers.
+ *
+ * The reserved synthetic fixture origin is retained for unit tests that need
+ * a controllable in-process HTTP target.
  */
+
+import { isPrivateIp } from '../../config/urlRules.js'
 
 export const CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN =
   'https://hamilton-submit-fixture.invalid'
 
 export const CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST =
   new URL(CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN).hostname
+
+// Known metadata / loopback hostnames that must never be reached by a
+// portal browser even if they appear in a redirect chain.
+const SSRF_BLOCKED_HOSTNAMES = new Set([
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  '169.254.169.254',
+  '100.100.100.200',
+  'metadata.google.internal',
+])
 
 export function isControlledBetaSyntheticBrowserUrl(value) {
   try {
@@ -26,21 +41,43 @@ export function isControlledBetaSyntheticBrowserUrl(value) {
   }
 }
 
-/** Non-network document URLs are harmless; every HTTP(S) request stays on the fixture origin. */
-export function isControlledBetaBrowserRequestAllowed(value) {
-  const raw = String(value || '')
-  if (isControlledBetaSyntheticBrowserUrl(raw)) return true
-  if (raw === 'about:blank' || raw.startsWith('data:')) return true
-  if (raw.startsWith('blob:')) {
-    return isControlledBetaSyntheticBrowserUrl(raw.slice('blob:'.length))
+/**
+ * Is this URL safe for a Hamilton browser context to request?
+ * Allows any HTTPS URL whose hostname is not a private/loopback/metadata address.
+ * Blocks HTTP (non-TLS), private IPs, and known metadata service hostnames.
+ */
+export function isPublicHttpsUrl(value) {
+  try {
+    const url = new URL(String(value || ''))
+    if (url.protocol !== 'https:') return false
+    if (url.username || url.password) return false
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+    if (!host) return false
+    if (SSRF_BLOCKED_HOSTNAMES.has(host)) return false
+    const isIpLiteral = /^[0-9.]+$/.test(host) || host.includes(':')
+    if (isIpLiteral) return !isPrivateIp(host)
+    return true
+  } catch {
+    return false
   }
-  return false
 }
 
+/** Non-network document URLs and any public HTTPS URL are allowed. */
+export function isControlledBetaBrowserRequestAllowed(value) {
+  const raw = String(value || '')
+  if (raw === 'about:blank' || raw.startsWith('data:')) return true
+  if (raw.startsWith('blob:')) {
+    const inner = raw.slice('blob:'.length)
+    return isControlledBetaSyntheticBrowserUrl(inner) || isPublicHttpsUrl(inner)
+  }
+  return isControlledBetaSyntheticBrowserUrl(raw) || isPublicHttpsUrl(raw)
+}
+
+/** SSRF refusal — returned when a private/loopback/metadata target is blocked. */
 export function controlledBetaBrowserRefusal() {
   return {
-    code: 'controlled_beta_manual_handoff',
-    message: 'Controlled beta does not open real portal sites in a server browser. Hamilton prepared the available packet or draft; open the official portal yourself for login, review, and final submission.',
+    code: 'ssrf_blocked',
+    message: 'Hamilton does not open private, loopback, or metadata-service addresses in a browser.',
   }
 }
 
@@ -48,6 +85,8 @@ export function controlledBetaBrowserRefusal() {
  * Install before the first page/request. Playwright routing covers redirects,
  * popup/new-tab requests, subresources, and fetch/XHR. Blocking service workers
  * on context creation keeps them from bypassing the route handler.
+ * Blocks only SSRF-dangerous targets (private IPs, HTTP, metadata services);
+ * all public HTTPS requests continue normally.
  */
 export async function installControlledBetaBrowserEgressGuard(context) {
   if (!context || typeof context.route !== 'function') {

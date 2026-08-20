@@ -1,9 +1,12 @@
 /**
- * Hamilton controlled-beta browser guard — synthetic fixture only.
+ * Hamilton browser automation guard — hands-off mode.
  *
- * Covers browserAutomationPermittedForUrl + deriveProfilePortalHosts: the logic
- * Environment allowlists and profile/credential-derived hosts must never widen
- * the release boundary to a real domain.
+ * Covers browserAutomationPermittedForUrl + deriveProfilePortalHosts.
+ *
+ * The controlled-beta synthetic-only boundary has been replaced with an SSRF
+ * floor.  Real public HTTPS portals are now permitted when browser automation
+ * is enabled.  Private IPs, loopback, and cloud-metadata addresses are still
+ * hard-blocked.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
@@ -27,30 +30,38 @@ describe('browserAutomationPermittedForUrl', () => {
   it('refuses when browser automation is disabled', () => {
     process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'false'
     expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid/x')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://example.org/apply')).toBe(false)
   })
 
-  it('permits only the exact reserved synthetic fixture origin', () => {
+  it('permits the exact reserved synthetic fixture origin', () => {
     expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid/apply')).toBe(true)
+  })
+
+  it('permits real public HTTPS portals when browser automation is enabled', () => {
+    // These are no longer blocked — the hands-off requirement means real portals
+    // must be reachable when the owner has authorized automation.
+    expect(browserAutomationPermittedForUrl('https://www.tn.gov/apply')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://benefits.tn.gov/apply')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/financial-aid/')).toBe(true)
+    expect(browserAutomationPermittedForUrl('https://example.org/')).toBe(true)
+  })
+
+  it('still blocks private IP ranges and loopback (SSRF floor)', () => {
+    expect(browserAutomationPermittedForUrl('http://127.0.0.1:3000/')).toBe(false)
+    expect(browserAutomationPermittedForUrl('http://10.0.0.1/')).toBe(false)
+    expect(browserAutomationPermittedForUrl('http://169.254.169.254/latest/meta-data/')).toBe(false)
+    expect(browserAutomationPermittedForUrl('http://192.168.1.10/')).toBe(false)
+  })
+
+  it('blocks non-HTTPS (http://) real-host URLs', () => {
     expect(browserAutomationPermittedForUrl('http://hamilton-submit-fixture.invalid/apply')).toBe(false)
-    expect(browserAutomationPermittedForUrl('https://sub.hamilton-submit-fixture.invalid/apply')).toBe(false)
-    expect(browserAutomationPermittedForUrl('https://hamilton-submit-fixture.invalid:8443/apply')).toBe(false)
+    expect(browserAutomationPermittedForUrl('http://example.org/')).toBe(false)
   })
 
-  it('refuses a real host even when the static allowlist names it', () => {
-    expect(browserAutomationPermittedForUrl('https://www.tn.gov/apply')).toBe(false)
-    expect(browserAutomationPermittedForUrl('https://benefits.tn.gov/apply')).toBe(false)
-  })
-
-  it('refuses a real host even when profile data or a saved credential names it', () => {
-    const extra = ['mtsu.edu']
-    expect(browserAutomationPermittedForUrl('https://www.mtsu.edu/financial-aid/', { extraAllowedHosts: extra })).toBe(false)
-    expect(browserAutomationPermittedForUrl('https://login.mtsu.edu/', { extraAllowedHosts: extra })).toBe(false)
-    expect(browserAutomationPermittedForUrl('https://evil.example.com/', { extraAllowedHosts: extra })).toBe(false)
-  })
-
-  it('an empty static allowlist cannot enable fleet-wide behavior', () => {
+  it('an empty static allowlist does not prevent real-portal access (allowlist is no longer the gate)', () => {
     process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = ''
-    expect(browserAutomationPermittedForUrl('https://anything.example.org/')).toBe(false)
+    expect(browserAutomationPermittedForUrl('https://anything.example.org/')).toBe(true)
+    // SSRF floor still applies.
     expect(browserAutomationPermittedForUrl('http://127.0.0.1:3000/')).toBe(false)
     expect(browserAutomationPermittedForUrl('http://10.0.0.1/')).toBe(false)
   })
@@ -82,3 +93,4 @@ describe('deriveProfilePortalHosts', () => {
     expect(hosts.size).toBe(0)
   })
 })
+

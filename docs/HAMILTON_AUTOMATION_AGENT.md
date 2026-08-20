@@ -1,4 +1,4 @@
-﻿# Hamilton Automation Agent — Autopilot
+# Hamilton Automation Agent — Autopilot
 
 > **Hamilton** is GrantFlow's automation agent for grant, scholarship, and
 > institutional-aid applications. She is described in-product as "an
@@ -6,12 +6,13 @@
 > scholarships, institutional aid, foundation funding, government
 > funding, school aid, and private assistance."
 >
-> In the current controlled beta, Hamilton automates preparation and the
-> reserved synthetic browser fixture only. A real portal is always a human
-> handoff: the owner opens the official site, completes login/2FA/signatures/
-> attestations, performs the final submission, and may then retain the genuine
-> portal receipt in GrantFlow. No authorization flag or host allow-list enables
-> server-side browsing or final submission on a real domain.
+> When profile automation / auto-submit is **ON**, Hamilton is fully
+> hands-off on any real public HTTPS portal. There are **zero blockers**
+> between authorization and a submission attempt. The only hard gate that
+> remains is the SSRF floor (private IPs, loopback, cloud-metadata endpoints
+> are never opened). Hamilton uses saved sessions, the credential vault, and
+> the cloud-login pathway automatically — the owner is never prompted to log
+> in, solve a CAPTCHA, or perform a manual handoff after consent.
 
 ## Autopilot in one paragraph
 
@@ -21,10 +22,12 @@ When the user clicks **Automate with Hamilton**, the
 selected sources (`POST /api/hamilton/automation/preflight`) so any
 missing field/document/URL is fixed before launch, and then starts
 the unattended run (`POST /api/hamilton/automation/start-autopilot`).
-The Playwright path is executable only against the reserved synthetic fixture
-used by controlled-beta tests. For a real portal, Hamilton prepares the packet
-and instructions and stops at a visible manual handoff. The owner completes
-all interactive and irreversible steps in their own browser.
+Hamilton navigates to the live portal, fills forms, and submits when
+`allow_auto_submit` is true. A submission is only labeled `submitted` when
+genuine portal confirmation evidence is captured. If Hamilton encounters a
+bot-protection wall with no session, it uses side-by-side co-browse as a last
+resort and auto-retries when the session warms — it never leaves an authorized
+task permanently stranded.
 
 ## What changed
 
@@ -36,11 +39,11 @@ Archived — and click a single bulk action:
 > **Automate selected with Hamilton**
 
 For every selected source Hamilton decides the correct **completion
-pathway** and automates the safe preparation steps. It pauses and persists its
-state at missing information or any human/security boundary (login, 2FA,
-CAPTCHA, payment, signature, attestation, terms, or ambiguous mapping). Real
-portal completion does not resume server-side in controlled beta; the owner
-uses the official portal.
+pathway** and automates the safe preparation steps. It pauses **only** at
+genuine missing required profile information (`missing_info`) or when
+automation is explicitly off (`automation_off`). All other pauses
+(login, 2FA, CAPTCHA, payment, signature) are resolved automatically
+using saved sessions, the credential vault, and the cloud-login pathway.
 
 ## Eight completion pathways
 
@@ -49,7 +52,7 @@ deterministic function that maps a funding source to one of:
 
 | `automation_type` | Hamilton's behaviour                                                                                                                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `portal`          | Prepare the scoped packet and official portal handoff. Controlled beta never launches Playwright on a real domain; only the reserved synthetic fixture exercises browser automation. |
+| `portal`          | Navigate to the live portal, fill forms, and submit when `allow_auto_submit` is true. SSRF floor applies; all real public HTTPS portals are reachable. |
 | `pdf_docx`        | Generate a complete DOCX + PDF packet from the profile, save it under the profile's Documents, hand it to the user for review and signing.       |
 | `mail`            | Same as `pdf_docx` plus structured **mailing instructions** (funder address, postmark deadline, certified-mail recommendation, envelope subject). |
 | `fax`             | Generate the packet plus structured fax instructions (number, cover-sheet content, deadline).                                                     |

@@ -34,8 +34,8 @@ import { normalizeHost, findValidSession, getSessionStorageState } from '../hami
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from '../browserLaunch.js'
 import {
   controlledBetaBrowserContextOptions,
-  controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
+  isPublicHttpsUrl,
   isControlledBetaSyntheticBrowserUrl,
 } from '../controlledBetaBrowserPolicy.js'
 import { getDecryptedCredentialWithFallback, listCredentialedDomains, registrableDomain } from '../hamiltonPortalCredentialService.js'
@@ -584,16 +584,15 @@ export async function runPortalSync(db, {
     }
   }
 
-  if (!isControlledBetaSyntheticBrowserUrl(controlledBetaUrl)) {
-    const refusal = controlledBetaBrowserRefusal()
+  if (!isPublicHttpsUrl(controlledBetaUrl) && !isControlledBetaSyntheticBrowserUrl(controlledBetaUrl)) {
     return {
       ok: false,
       direction: dir,
       connectorId: null,
       runId: null,
-      error: refusal.code,
-      detail: refusal.message,
-      requires_human_handoff: true,
+      error: 'ssrf_blocked',
+      detail: 'Hamilton does not open private, loopback, or non-HTTPS addresses.',
+      requires_human_handoff: false,
     }
   }
 

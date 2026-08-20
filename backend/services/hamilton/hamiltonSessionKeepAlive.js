@@ -41,11 +41,12 @@
 import { createLogger } from '../../utils/logger.js'
 import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import {
-  CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
-  CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN,
   controlledBetaBrowserContextOptions,
   installControlledBetaBrowserEgressGuard,
+  isPublicHttpsUrl,
   isControlledBetaSyntheticBrowserUrl,
+  CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
+  CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN,
 } from './controlledBetaBrowserPolicy.js'
 import { classifyBlocker } from './hamiltonBlockerClassifier.js'
 import {
@@ -161,8 +162,8 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
     : null
   const authProbeUrl = syntheticProbeUrl || authProbeUrlForHost(row.portal_host)
   const target = authProbeUrl || meta.landing_url || `https://${row.portal_host}/`
-  if (!isControlledBetaSyntheticBrowserUrl(target)) {
-    return { outcome: 'skipped', detail: 'controlled beta keeps real-portal session checks in the user browser' }
+  if (!isPublicHttpsUrl(target) && !isControlledBetaSyntheticBrowserUrl(target)) {
+    return { outcome: 'skipped', detail: 'target is not a reachable public HTTPS URL' }
   }
 
   const storageState = await getSessionStorageState(db, row.id)
@@ -195,10 +196,6 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
     let pageText = ''
     try { pageText = await page.evaluate(() => document.body?.innerText || '') } catch { pageText = '' }
     const finalUrl = page.url()
-    if (!isControlledBetaSyntheticBrowserUrl(finalUrl)) {
-      return { outcome: 'inconclusive', detail: 'controlled beta blocked an off-fixture redirect' }
-    }
-
     // A blank/thin page tells us nothing (JS shell that didn't render for the
     // probe) — never expire on silence.
     if (!pageText || pageText.trim().length < 40) {
