@@ -392,7 +392,7 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
         WHERE id = ?`,
     ).run(
       userId || null,
-      pricing.quote_id || agreement?.quote_id || null,
+      pricing.quote_id || null,
       now,
       ip || null,
       userAgent || null,
