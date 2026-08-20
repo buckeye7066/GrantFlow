@@ -16,9 +16,13 @@ import {
   disableAutonomousUnlock,
 } from "@/api/hamilton"
 
-// Profile-level consent covers saved-login draft preparation only. Real-portal
-// final Submit remains a visible human handoff. A retired submit grant may still
-// be shown so the owner can revoke it, but this surface never creates one.
+// Profile-level consent, in three switches: sign-in/prepare, submit, and full
+// automation. This surface USED to cover draft preparation only - submit was a
+// static paragraph and the sole affordance was "revoke legacy submit
+// permission", which appeared only once a grant already existed. So full
+// automation could be turned off from the profile but never on. Owner order
+// 2026-08-20 ("full automation means full automation") made all three real
+// controls, available to the profile owner and to an admin viewing it.
 const LOGIN_TYPES = [
   "use_saved_credentials_reference",
   "use_saved_session",
@@ -28,6 +32,15 @@ const LOGIN_TYPES = [
   "upload_documents",
 ]
 const SUBMIT_TYPE = "submit_applications"
+// Full automation is submit authority plus the auto-submit intent flag.
+// `allow_auto_submit` / `require_human_review` are OPTIONS on the grant row,
+// not authorization types (see HAMILTON_AUTHORIZATION_TYPES) - sending them as
+// types would grant nothing and silently leave automation off.
+const FULL_AUTOMATION_TYPES = [SUBMIT_TYPE]
+const FULL_AUTOMATION_OPTIONS = Object.freeze({
+  allow_auto_submit: true,
+  require_human_review: false,
+})
 
 export default function HamiltonAutopilotConsentCard({ profileId }) {
   const { toast } = useToast()
@@ -48,18 +61,47 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
   )
   const loginOn = active.some((a) => a.authorization_type === "use_saved_credentials_reference")
   const submitOn = active.some((a) => a.authorization_type === SUBMIT_TYPE)
+  // Mirrors resolveSubmissionDecision: submit authority, the auto-submit intent
+  // flag, and no standing human-review veto. Anything missing is NOT full
+  // automation - this never infers consent.
+  const fullAutomationOn = useMemo(
+    () =>
+      submitOn
+      && active.some((a) => a.options?.allow_auto_submit === true)
+      && !active.some((a) => a.options?.require_human_review === true),
+    [active, submitOn],
+  )
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: key })
 
   const setConsent = useMutation({
-    mutationFn: async ({ types, enable }) => {
-      if (enable) {
-        await grantHamiltonAuthorization({ profileId, authorizationTypes: types })
-      } else {
-        // Revoke every active profile-scoped grant whose type is in `types`.
-        const toRevoke = active.filter((a) => types.includes(a.authorization_type))
-        for (const a of toRevoke) await revokeHamiltonAuthorization(a.id, "user_toggled_off")
+    mutationFn: async ({ types, enable, options }) => {
+      // The authorize route hardcodes `replaceOmittedTypes: true`, so a grant
+      // call is a REPLACEMENT of the whole profile-scoped set, not an addition.
+      // Sending only the toggle being switched on would therefore revoke every
+      // other consent - turning on "submit" would silently turn off "sign in".
+      // Send the union, and on disable send what remains.
+      const activeTypes = active.map((a) => a.authorization_type)
+      const next = enable
+        ? Array.from(new Set([...activeTypes, ...types]))
+        : activeTypes.filter((t) => !types.includes(t))
+
+      if (next.length === 0) {
+        // Nothing left to authorize: the route requires at least one type, so
+        // withdraw the remaining grants directly.
+        for (const a of active) await revokeHamiltonAuthorization(a.id, "user_toggled_off")
+        return
       }
+      // Carry the existing option flags forward unless this call overrides
+      // them, or disabling one toggle would quietly drop another's settings.
+      const currentOptions = active.reduce(
+        (acc, a) => ({ ...acc, ...(a.options || {}) }), {},
+      )
+      await grantHamiltonAuthorization({
+        profileId,
+        authorizationTypes: next,
+        options: { ...currentOptions, ...(options || {}) },
+      })
     },
     onSuccess: (_d, vars) => {
       refresh()
@@ -75,6 +117,24 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
       toast({ variant: "destructive", title: "Couldn't update permission", description: err?.message || "Please try again." })
     },
   })
+
+  // Toggle 2: plain submit authority, no auto-submit intent flag.
+  const requestSubmitConsent = (enable) => {
+    setConsent.mutate({ types: [SUBMIT_TYPE], enable })
+  }
+
+  // Toggle 3: full automation. Flips immediately in both directions.
+  // Turning it OFF must also clear the auto-submit intent flag: revoking the
+  // submit TYPE alone would leave `allow_auto_submit: true` carried forward,
+  // so re-granting submit later would silently restore full automation the
+  // user had switched off.
+  const requestFullAutomation = (enable) => {
+    setConsent.mutate({
+      types: FULL_AUTOMATION_TYPES,
+      enable,
+      options: enable ? FULL_AUTOMATION_OPTIONS : { allow_auto_submit: false },
+    })
+  }
 
   // "Stay signed in without me" — autonomous vault unlock (escrow).
   const [passphrase, setPassphrase] = useState("")
@@ -163,28 +223,60 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
               </span>
             </label>
 
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-slate-200 bg-white p-3">
+            {/* TOGGLE 2 - submit authority. This used to be a STATIC paragraph
+                ("Final portal Submit stays with you") with no control at all:
+                the card could only ever REVOKE a submit grant, never create
+                one, so from the profile full automation could be turned off but
+                never on. Owner order 2026-08-20 restored it as a real switch. */}
+            <label className="flex items-start justify-between gap-4 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
               <div className="min-w-0">
-                <div className="text-sm font-medium text-slate-900">Final portal Submit stays with you</div>
-                <div className="text-xs text-slate-500 mt-0.5">
-                  Hamilton can prepare and save drafts. Login, attestations, signatures, 2FA, final Submit,
-                  and submission confirmation remain visible human steps.
+                <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                  Submit applications for me
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5 dark:text-slate-400">
+                  Hamilton clicks the portal&apos;s final Submit once the application is complete.
                 </div>
               </div>
-              {submitOn && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={busy}
-                  onClick={() => setConsent.mutate({ types: [SUBMIT_TYPE], enable: false })}
-                >
-                  {busy && busyKind?.[0] === SUBMIT_TYPE
-                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : "Revoke legacy submit permission"}
-                </Button>
-              )}
-            </div>
+              <span className="shrink-0 pt-0.5">
+                {busy && busyKind?.[0] === SUBMIT_TYPE ? (
+                  <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                ) : (
+                  <Switch
+                    checked={submitOn}
+                    disabled={busy}
+                    onCheckedChange={(v) => requestSubmitConsent(v)}
+                    aria-label="Allow Hamilton to submit applications"
+                  />
+                )}
+              </span>
+            </label>
+
+            {/* TOGGLE 3 - full automation. Submit authority plus the auto-submit
+                intent flag, with the human-review veto cleared. */}
+            <label className="flex items-start justify-between gap-4 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3 dark:border-indigo-900 dark:bg-indigo-950/40">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                  Full automation - don&apos;t wait for my review
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5 dark:text-slate-400">
+                  Hamilton creates portal accounts, applies, and submits end to end. He uses his own
+                  email and phone for signup verification, then hands the account back to you.
+                </div>
+              </div>
+              <span className="shrink-0 pt-0.5">
+                {busy && busyKind === FULL_AUTOMATION_TYPES ? (
+                  <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+                ) : (
+                  <Switch
+                    checked={fullAutomationOn}
+                    disabled={busy}
+                    onCheckedChange={(v) => requestFullAutomation(v)}
+                    aria-label="Allow Hamilton full automation"
+                  />
+                )}
+              </span>
+            </label>
+
 
             {loginOn && (
               <div className="rounded-lg border border-slate-200 bg-white p-3">

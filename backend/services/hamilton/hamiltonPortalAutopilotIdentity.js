@@ -44,6 +44,8 @@
  *     saveAutoProvisionedCredential). The passphrase is never logged or returned.
  */
 
+import { HAMILTON_IDENTITY, hasFullAutomation } from '../../config/hamiltonIdentity.js'
+import { listActiveAuthorizations } from './hamiltonAuthorizationStore.js'
 import {
   getDecryptedCredentialWithFallback,
   saveAutoProvisionedCredential,
@@ -164,6 +166,21 @@ const HANDOFF_BLOCKER_CATEGORIES = new Set([
  * when nothing usable is on file (the caller then marks needs_user).
  */
 async function resolveIdentityEmail(db, profileId, portalHost) {
+  // FULL AUTOMATION registers under HAMILTON'S OWN contact channel.
+  // Signup verification (an emailed link, an SMS code) is the wall every
+  // unattended registration hit: Hamilton cannot read the applicant's mailbox,
+  // so the run became a human handoff and "full automation" never created the
+  // account it existed to create. Registering with his own address puts the
+  // code somewhere he can act on; the applicant's real details are written
+  // back by the handover phase after the application is submitted, with
+  // Hamilton retained as secondary so he keeps submission access.
+  //
+  // Gated on standing profile consent - with full automation off this whole
+  // branch is skipped and the original vault/suggester behaviour applies.
+  try {
+    const active = await listActiveAuthorizations(db, { profileId })
+    if (hasFullAutomation(active)) return HAMILTON_IDENTITY.email
+  } catch { /* fall through - never fail closed into a wrong identity */ }
   try {
     const status = await getMasterVaultStatus(db, profileId)
     if (status?.identity_email) return String(status.identity_email).trim()
