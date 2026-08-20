@@ -1589,6 +1589,25 @@ const SUCCESS_ARCHETYPES = [
  * Data-driven: iterates the SUCCESS_ARCHETYPES array, tests keyword/type triggers,
  * and collects matching steps with optional skip guards.
  */
+// Maps a success-step category to the profile section it relates to (for deep-linking).
+// null means no direct profile-section target (external task or documents area).
+const CATEGORY_TO_SECTION = {
+  legal:        'organization_details',
+  compliance:   'organization_details',
+  governance:   'organization_details',
+  insurance:    'organization_details',
+  operations:   'organization_details',
+  safety:       'organization_details',
+  financial:    'financial_information',
+  financial_aid:'financial_information',
+  planning:     'narrative',
+  equipment:    'narrative',
+  benefits:     'narrative',
+  education:    'basic_information',
+  // documentation steps involve external docs/uploads — no profile section
+  documentation: null,
+}
+
 function buildSuccessSteps(profile, sections, applicantType) {
   const narrative = sections.narrative ?? {}
   const orgDetails = sections.organization_details ?? {}
@@ -1622,7 +1641,7 @@ function buildSuccessSteps(profile, sections, applicantType) {
           if (step.skip(allText, sections)) continue
         } catch { /* guard threw — include the step */ }
       }
-      steps.push({ label: step.label, category: step.category, why: step.why })
+      steps.push({ label: step.label, category: step.category, why: step.why, section_key: CATEGORY_TO_SECTION[step.category] ?? null })
     }
   }
 

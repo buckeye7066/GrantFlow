@@ -1115,24 +1115,42 @@ export default function SmartMatcher() {
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-2">
-                        {matchingGaps.success_steps.map((step, idx) => (
-                          <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-amber-50/30">
-                            <div className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-xs font-bold shrink-0">
-                              {idx + 1}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-slate-900">{step.label}</span>
-                                <Badge variant="outline" className="text-xs capitalize">
-                                  {step.category?.replace(/_/g, ' ')}
-                                </Badge>
+                        {matchingGaps.success_steps.map((step, idx) => {
+                          const inner = (
+                            <>
+                              <div className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-xs font-bold shrink-0">
+                                {idx + 1}
                               </div>
-                              {step.why && (
-                                <p className="text-xs text-slate-500 mt-0.5 leading-snug">{step.why}</p>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-slate-900">{step.label}</span>
+                                  <Badge variant="outline" className="text-xs capitalize">
+                                    {step.category?.replace(/_/g, ' ')}
+                                  </Badge>
+                                </div>
+                                {step.why && (
+                                  <p className="text-xs text-slate-500 mt-0.5 leading-snug">{step.why}</p>
+                                )}
+                              </div>
+                              {step.section_key && (
+                                <ArrowRight className="w-4 h-4 mt-0.5 text-slate-400 group-hover:text-amber-500 shrink-0" />
                               )}
+                            </>
+                          )
+                          return step.section_key ? (
+                            <Link
+                              key={idx}
+                              to={createPageUrl("ProfileDetail", { id: selectedProfileId, section: step.section_key })}
+                              className="group flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-amber-50/30 hover:border-amber-300 hover:bg-amber-50 transition-colors"
+                            >
+                              {inner}
+                            </Link>
+                          ) : (
+                            <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-amber-50/30">
+                              {inner}
                             </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </CardContent>
                   </Card>
