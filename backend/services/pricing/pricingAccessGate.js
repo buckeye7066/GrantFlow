@@ -371,7 +371,14 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
         pricing.quote_id || null,
         SERVICE_AGREEMENT_VERSION,
       )
-      agreement = { id: agreementId, user_id: userId || pricing.user_id || null, quote_id: pricing.quote_id || null }
+      agreement = {
+        id: agreementId,
+        user_id: userId || pricing.user_id || null,
+        profile_id: profileId,
+        quote_id: pricing.quote_id || null,
+        agreement_version: SERVICE_AGREEMENT_VERSION,
+        accepted: 0,
+      }
     }
     const updateResult = await tx.prepare(
       `UPDATE ${SERVICE_AGREEMENTS_TABLE}
