@@ -508,9 +508,22 @@ export default function SmartMatcher() {
       })
     },
     onError: (err) => {
+      const limited =
+        err?.status === 429 ||
+        err?.errorCode === "rate_limit_exceeded" ||
+        /rate_limit|too many requests/i.test(String(err?.message || ""))
+      const retrySec = Number(err?.details?.retry_after_seconds)
+      const waitHint =
+        Number.isFinite(retrySec) && retrySec > 0
+          ? retrySec < 90
+            ? `Wait about ${retrySec} seconds, then try again.`
+            : `Wait about ${Math.ceil(retrySec / 60)} minutes, then try again.`
+          : "Wait about a minute, then try again."
       toast({
-        title: "Could not interpret request",
-        description: err?.message ?? "Try again or use keywords below.",
+        title: limited ? "Temporarily rate-limited" : "Could not interpret request",
+        description: limited
+          ? `${waitHint} Your description was not lost — you can retry the same text.`
+          : err?.message ?? "Try again or use keywords below.",
         variant: "destructive",
       })
     },

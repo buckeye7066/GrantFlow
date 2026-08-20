@@ -296,42 +296,58 @@ const PIPELINE_HERO_CARD =
   "border-transparent bg-current-ink text-[#eaf1ec] shadow-[0_24px_48px_-30px_rgba(20,36,31,0.7)]"
 const PIPELINE_HERO_LABEL = "text-[#9fb4a8]"
 
+// CONTRAST (WCAG AA): every accent surface below pairs a LIGHT tint with a
+// `dark:` counterpart. Without the dark variant the tint stays light in dark
+// mode while index.css's `.dark` ink remap flips the text to slate-100 — the
+// banner heading measured 1.79:1 and the metric tiles 1.13:1 (near-invisible).
+// The dark tints resolve over `--card` (#0a0a0a): heading #e2e8f0 >= 14.7:1,
+// the *-200 inks >= 12.7:1, and the slate-400 subtext >= 7.0:1.
 const THEME_PRESETS = {
   blue: {
-    metric: "bg-blue-50 text-blue-700 border-blue-200",
-    subtleMetric: "bg-blue-50 text-blue-700 border-blue-100",
-    banner: "border-blue-100 bg-blue-50/70",
+    metric: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-200 dark:border-blue-900",
+    subtleMetric: "bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-950/40 dark:text-blue-200 dark:border-blue-900",
+    banner: "border-blue-100 bg-blue-50/70 dark:border-blue-900 dark:bg-blue-950/40",
+    bannerBody: "text-blue-800 dark:text-blue-200",
     pipelineCard: PIPELINE_HERO_CARD,
     pipelineLabel: PIPELINE_HERO_LABEL,
     gradient: "bg-gradient-to-br from-blue-500 to-blue-600",
-    iconTone: "text-blue-600",
+    iconTone: "text-blue-600 dark:text-blue-300",
   },
   emerald: {
-    metric: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    subtleMetric: "bg-emerald-50 text-emerald-700 border-emerald-100",
-    banner: "border-emerald-100 bg-emerald-50/70",
+    metric:
+      "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:border-emerald-900",
+    subtleMetric:
+      "bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-200 dark:border-emerald-900",
+    banner: "border-emerald-100 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/40",
+    bannerBody: "text-emerald-800 dark:text-emerald-200",
     pipelineCard: PIPELINE_HERO_CARD,
     pipelineLabel: PIPELINE_HERO_LABEL,
     gradient: "bg-gradient-to-br from-emerald-500 to-emerald-600",
-    iconTone: "text-emerald-600",
+    iconTone: "text-emerald-600 dark:text-emerald-300",
   },
   violet: {
-    metric: "bg-violet-50 text-violet-700 border-violet-200",
-    subtleMetric: "bg-violet-50 text-violet-700 border-violet-100",
-    banner: "border-violet-100 bg-violet-50/70",
+    metric:
+      "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/40 dark:text-violet-200 dark:border-violet-900",
+    subtleMetric:
+      "bg-violet-50 text-violet-700 border-violet-100 dark:bg-violet-950/40 dark:text-violet-200 dark:border-violet-900",
+    banner: "border-violet-100 bg-violet-50/70 dark:border-violet-900 dark:bg-violet-950/40",
+    bannerBody: "text-violet-800 dark:text-violet-200",
     pipelineCard: PIPELINE_HERO_CARD,
     pipelineLabel: PIPELINE_HERO_LABEL,
     gradient: "bg-gradient-to-br from-violet-500 to-violet-600",
-    iconTone: "text-violet-600",
+    iconTone: "text-violet-600 dark:text-violet-300",
   },
   amber: {
-    metric: "bg-amber-50 text-amber-700 border-amber-200",
-    subtleMetric: "bg-amber-50 text-amber-700 border-amber-100",
-    banner: "border-amber-100 bg-amber-50/70",
+    metric:
+      "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900",
+    subtleMetric:
+      "bg-amber-50 text-amber-700 border-amber-100 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900",
+    banner: "border-amber-100 bg-amber-50/70 dark:border-amber-900 dark:bg-amber-950/40",
+    bannerBody: "text-amber-800 dark:text-amber-200",
     pipelineCard: PIPELINE_HERO_CARD,
     pipelineLabel: PIPELINE_HERO_LABEL,
     gradient: "bg-gradient-to-br from-amber-500 to-amber-600",
-    iconTone: "text-amber-600",
+    iconTone: "text-amber-600 dark:text-amber-300",
   },
 }
 
@@ -1172,7 +1188,7 @@ export default function ProfileOverview({
       label: "Last Updated",
       value: relativeUpdated ?? lastUpdated,
       icon: Timer,
-      tone: "bg-amber-50 text-amber-700 border-amber-200",
+      tone: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900",
     },
     {
       label: "Tags",
@@ -1373,25 +1389,27 @@ export default function ProfileOverview({
             {headerMetrics.map(({ label, value, icon: Icon, tone, subtext }) => (
               <div key={label} className={`rounded-2xl border ${tone} px-4 py-3`}>
                 <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide">{label}</div>
-                <div className="flex items-center gap-2 mt-2 text-sm font-semibold text-slate-900">
+                <div className="flex items-center gap-2 mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
                   <Icon className="w-4 h-4" />
                   <span>{value}</span>
                 </div>
-                {subtext ? <p className="mt-1 text-[11px] text-slate-500">{subtext}</p> : null}
+                {subtext ? <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{subtext}</p> : null}
               </div>
             ))}
           </div>
         </div>
         <div
-          className={`flex flex-col gap-4 rounded-2xl border ${theme.banner} p-4 text-sm text-slate-900 md:flex-row md:items-center md:justify-between`}
+          className={`flex flex-col gap-4 rounded-2xl border ${theme.banner} p-4 text-sm text-slate-900 dark:text-slate-100 md:flex-row md:items-center md:justify-between`}
         >
           <div className="flex items-start gap-3">
+            {/* bg-white/70 is remapped to hsl(var(--card)) in dark by index.css's
+                surface shim, so the icon ink needs its own dark variant (iconTone). */}
             <span className={`p-2 rounded-xl bg-white/70 shadow-sm ${theme.iconTone}`}>
               <Sparkles className="w-4 h-4" />
             </span>
             <div>
               <p className="font-semibold">Keep your profile complete and current</p>
-              <p className="text-sm mt-1 text-blue-800">
+              <p className={`text-sm mt-1 ${theme.bannerBody}`}>
                 Each section below maps to what funders ask for. Edit manually or use AI assistance to fill gaps — a more
                 complete profile means stronger, more accurate grant matches.
               </p>

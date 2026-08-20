@@ -71,10 +71,6 @@
  */
 
 import { deriveStageOfLife } from './profileDerivedFacts.js'
-import {
-  deriveWebsitePurpose,
-  websitePurposeConflict,
-} from './profileWebsitePurpose.js'
 
 /**
  * Every stage `deriveStageOfLife` can return. Totality-tested against that
@@ -379,28 +375,10 @@ export function stageOfLifeConflict(stage, opportunity = {}) {
 /**
  * Convenience for callers that hold SECTIONS rather than a resolved stage.
  * Derives through the canonical `deriveStageOfLife` — never a second taxonomy.
- *
- * Also applies website-purpose conflicts (owner 2026-08-20): the profile URL
- * states what the org IS (Axiom BioLabs → CAR-T / transplant), so opportunities
- * locked to unrelated purposes (Title X, CACFP, …) REJECT here — the same
- * hard-stop shape matchEngine already consumes via this function. Missing
- * website / missing purpose remains neutral.
  */
 export function stageOfLifeConflictForSections(sections, opportunity = {}) {
   const derived = deriveStageOfLife(sections ?? {})
-  const stage = stageOfLifeConflict(derived?.value ?? null, opportunity)
-  if (stage) return stage
-  const purpose = deriveWebsitePurpose({ sections: sections ?? {} })
-  const site = websitePurposeConflict({ purpose, opportunity })
-  if (!site) return null
-  return {
-    classId: 'website_purpose',
-    label: 'website purpose',
-    phrase: site.lock,
-    field: 'profile.website',
-    reason: site.reason,
-    lock: site.lock,
-  }
+  return stageOfLifeConflict(derived?.value ?? null, opportunity)
 }
 
 export default {

@@ -46,8 +46,8 @@ export default function ComparableAwardsPanel({ grantId, grantTitle, onClose }) 
         )}
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex items-start gap-2 text-xs text-slate-500 bg-amber-50 border border-amber-100 rounded-md p-2">
-          <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+        <div className="flex items-start gap-2 text-xs text-slate-500 dark:text-slate-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-900 rounded-md p-2">
+          <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-300" />
           <span>
             These are real awards previously made to <strong>other applicants</strong> (NIH RePORTER).
             Use them to gauge scope, framing, and award size — never as facts about your own application.

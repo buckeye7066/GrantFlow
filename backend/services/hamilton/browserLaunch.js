@@ -1,4 +1,4 @@
-import { isControlledBetaSyntheticBrowserUrl } from './controlledBetaBrowserPolicy.js'
+import { isHamiltonBrowserTargetAllowed } from './controlledBetaBrowserPolicy.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:browserLaunch')
@@ -33,8 +33,9 @@ export const REALISTIC_PORTAL_UA =
 
 /**
  * launchPortalBrowser — the one launcher for Hamilton portal-facing flows.
- * Controlled beta permits only the reserved synthetic fixture origin. Real
- * portals use packet preparation plus a visible manual browser handoff.
+ * Accepts the reserved synthetic fixture OR a public HTTPS portal URL.
+ * Private / loopback / metadata targets are refused (SSRF). Callers still
+ * gate enablement via HAMILTON_ENABLE_BROWSER_AUTOMATION + host allowlist.
  * PDF/print flows that only render local HTML should keep using plain
  * `chromium.launch` + args.
  *
@@ -52,9 +53,9 @@ export const REALISTIC_PORTAL_UA =
  * can log which engine actually served the session.
  */
 export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null } = {}) {
-  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
-    const err = new Error('controlled_beta_manual_handoff')
-    err.code = 'controlled_beta_manual_handoff'
+  if (targetUrl !== null && !isHamiltonBrowserTargetAllowed(targetUrl)) {
+    const err = new Error('unsafe_browser_target')
+    err.code = 'unsafe_browser_target'
     throw err
   }
   const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...extraArgs]
