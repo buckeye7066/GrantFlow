@@ -59,6 +59,7 @@ import {
 } from './profileInstitutions.js'
 import { resolveAcceptedAidTypes, AID_TYPE_KEYS } from './aidTypePreferences.js'
 import { STATE_REGISTRY } from '../services/shared/data/stateRegistry.js'
+import { deriveWebsitePurpose } from './profileWebsitePurpose.js'
 
 /** Coerce a section value to a plain object (may be an object or a JSON string). */
 function obj(v) {
@@ -75,11 +76,6 @@ function list(v) {
   return []
 }
 
-/**
- * Normalize a candidate topical term. Lowercase, punctuation to space, collapsed
- * whitespace. Deliberately KEEPS internal digits (an "act 28" term is filtered by
- * the stoplist, not by mangling) so the rejection is explainable.
- */
 export function normalizeTerm(v) {
   return String(v ?? '')
     .toLowerCase()
@@ -88,20 +84,6 @@ export function normalizeTerm(v) {
     .trim()
 }
 
-/**
- * Terms that name no discipline and no program class. Every entry here was
- * OBSERVED producing a junk pair when the recall key was measured against real
- * prod profiles (2026-08-02) — this is a measured list, not a guessed one:
- *
- *   'funding opportunities' → "EDA funding opportunities" for a nonprofit
- *   'research and development' → "Cooperative Research and Development
- *      Agreement: Modified Low Sulfur…" for a biolab
- *   'community support' / 'community empowerment' / 'social impact' → generic
- *      grant-prose titles that say nothing about the profile
- *
- * A term here is still a fine SEARCH term; it is only refused the power to
- * authorize a catalog LOOK.
- */
 export const NON_TOPICAL_TERMS = Object.freeze(new Set([
   'financial aid', 'financial assistance', 'financial support', 'financial need',
   'funding opportunities', 'funding opportunity', 'grant funding', 'grant program',
@@ -116,45 +98,15 @@ export const NON_TOPICAL_TERMS = Object.freeze(new Set([
   'cost of attendance', 'room and board', 'student housing', 'student aid',
 ]))
 
-/**
- * A PLACE IS NOT A FIELD OF STUDY. Measured 2026-08-02: `programs_services`
- * keywords legitimately carry the profile's own state ("south dakota"), and
- * admitting it as a topic linked 15 rows to a South Dakota ministry whose only
- * connection was the state name — a claim the GEOGRAPHY gate already owns and
- * makes correctly. The canonical state names come from `STATE_REGISTRY` (50
- * states + DC) so this list cannot drift from the one the rest of the product
- * uses; territories are appended because that registry stops at DC.
- */
 export const PLACE_TERMS = Object.freeze(new Set([
   ...Object.values(STATE_REGISTRY).map((s) => normalizeTerm(s?.name)).filter(Boolean),
   'puerto rico', 'guam', 'virgin islands', 'american samoa', 'northern mariana islands',
 ]))
 
-/** Shortest / longest topical term honored. */
 export const MIN_TERM_LENGTH = 5
 export const MAX_TERM_LENGTH = 40
-
-/**
- * Max topical terms carried per profile. Bounded so a verbose profile cannot
- * explode the query set or the recall scan — and ORDERED (see
- * `DERIVED_FACT_FIELDS`) so the bound truncates the WEAKEST evidence, never the
- * declared major. That ordering is the entire fix: the old `.slice(0, 12)`
- * truncated an unranked bag and kept a person's first name.
- */
 export const MAX_TOPICAL_TERMS = 12
 
-/**
- * THE REGISTRY. Every profile field that can state a topical, life-stage,
- * academic or aid-preference fact, in DESCENDING evidence strength.
- *
- * `fact` — which derived fact the field feeds.
- * `read` — receives the SECTIONS map, returns raw values (any shape).
- *
- * `recallSafe: true` marks a field whose values are strong enough to authorize
- * the engine to LOOK at a catalog row. A DECLARED major is a fact the applicant
- * typed about themselves; a mined `programs_services.keywords` entry is a
- * machine's paraphrase of prose and is search-only.
- */
 export const DERIVED_FACT_FIELDS = Object.freeze([
   Object.freeze({
     id: 'education.intended_major',
@@ -232,37 +184,39 @@ export const DERIVED_FACT_FIELDS = Object.freeze([
     id: 'education.aid_types_accepted',
     fact: 'accepted_aid_types',
     recallSafe: false,
-    // DELEGATED: `aidTypePreferences.resolveAcceptedAidTypes` owns the rule
-    // (including the "unset ⇒ everything except debt" default). Read here only
-    // so the registry's totality test can see the field.
     read: (s) => list(obj(s.education).aid_types_accepted),
+  }),
+  Object.freeze({
+    id: 'basic_information.website',
+    fact: 'topic',
+    recallSafe: false,
+    read: (s) => [obj(s.basic_information).website],
+  }),
+  Object.freeze({
+    id: 'organization_details.website',
+    fact: 'topic',
+    recallSafe: false,
+    read: (s) => [obj(s.organization_details).website, obj(s.organization_details).website_url],
+  }),
+  Object.freeze({
+    id: 'organization_details.website_excerpt',
+    fact: 'topic',
+    recallSafe: false,
+    read: (s) => [obj(s.organization_details).website_excerpt, obj(s.organization_details).website_about],
   }),
 ])
 
-/** Registry entries that feed topical terms, in evidence order. */
 const TOPICAL_FIELDS = DERIVED_FACT_FIELDS.filter((f) => f.fact === 'field_of_study' || f.fact === 'topic')
 
-/**
- * Is this a usable topical term?
- *
- * MULTI-WORD ONLY, and that is the load-bearing precision rule. A single word is
- * a coincidence magnet: "science" reaches 258 STEM rows, "research" reaches
- * federal solicitations a high-school senior cannot receive, and "white" is a
- * surname. A two-word phrase ("forensic science", "assistive technology",
- * "vocational rehabilitation", "home repair") names a real program class.
- * Measured 2026-08-02: relaxing this to single words ≥7 chars is what dragged
- * generic academic vocabulary back into the key.
- */
 export function isTopicalTerm(term) {
   const t = normalizeTerm(term)
   if (t.length < MIN_TERM_LENGTH || t.length > MAX_TERM_LENGTH) return false
-  if (!t.includes(" ")) return false
+  if (!t.includes(' ')) return false
   if (NON_TOPICAL_TERMS.has(t)) return false
   if (PLACE_TERMS.has(t)) return false
   return true
 }
 
-/** Ordered, deduped topical terms with provenance. */
 function readTopicalTerms(sections) {
   const byTerm = new Map()
   for (const field of TOPICAL_FIELDS) {
@@ -311,33 +265,9 @@ function firstNumber(sections, fieldId) {
 
 const DUAL_ENROLLED_RX = /^\s*(y|yes|true|1)\s*$/i
 const HS_RX = /high school|secondary|senior|junior|sophomore|freshman \(hs\)/i
-// "graduate" must not match inside "high school graduate" / "HS graduate" —
-// a COMPLETED high school education is the opposite claim from graduate
-// school. Live incident 2026-08-03: education_level "College Freshman
-// (incoming) — high school graduate, May 2026" derived `graduate_student`,
-// which disarmed the stage gate and re-admitted graduate/professional
-// fellowships (UAB Blazer class) for an incoming freshman. "graduated from
-// X" alone is also NOT graduate school ("graduated high school in May").
-// SECOND LIVE INSTANCE, same day: the phrase-lookbehind alone still let
-// "graduate" match INSIDE the word "UNDERgraduate" — Demo College Student Persona's
-// `education.highest_level` is verbatim "College Student - Currently in
-// undergraduate program", and he derived `graduate_student`. A letter
-// lookbehind makes the token a WORD; `post-?graduate` is re-admitted
-// explicitly because the letter rule would otherwise drop bare
-// "postgraduate", which IS graduate school.
 const GRAD_RX = /master|doctor|phd|post-?graduate|(?<!high school |hs |college )(?<![a-z])graduate(?!d)|grad school|professional degree/i
 const UNDERGRAD_RX = /associate|bachelor|undergraduate|some college|college/i
 
-/**
- * STAGE OF LIFE — an academic-standing bucket, derived, never guessed.
- *
- * Why it matters: "High School Senior" + `college_courses = Yes` is a
- * DUAL-ENROLLED INCOMING FRESHMAN, which is a different applicant from a
- * returning adult ("Associates Degree" + no HS signal) and from a graduate
- * student. The three are eligible for disjoint award classes, and the profile
- * states enough to tell them apart. Returns `null` when the profile does not
- * say — silence is never resolved into a stage.
- */
 export function deriveStageOfLife(sections = {}) {
   const level = firstString(sections, [
     'basic_information.academic_status.education_level',
@@ -356,18 +286,6 @@ export function deriveStageOfLife(sections = {}) {
   return levelText ? { value: 'unclassified', evidence } : null
 }
 
-/**
- * deriveProfileFacts — the canonical read of a profile's own statements.
- *
- * Every returned fact carries the registry field id it came from. A fact the
- * profile does not state is ABSENT, never defaulted into existence (the sole
- * exception is `acceptedAidTypes`, whose "unset ⇒ everything except debt"
- * default is `aidTypePreferences`'s documented rule and is reported with an
- * explicit `evidence: null`).
- *
- * @param {object} profile the profiles row (used for location fallbacks only)
- * @param {object} sections the profile's sections map
- */
 export function deriveProfileFacts(profile = {}, sections = {}) {
   const s = sections ?? {}
   const terms = readTopicalTerms(s)
@@ -375,13 +293,27 @@ export function deriveProfileFacts(profile = {}, sections = {}) {
   const loc = obj(basic.location)
   const education = obj(s.education)
   const declaredAid = list(education.aid_types_accepted)
+  const websitePurpose = deriveWebsitePurpose({ profile, sections: s })
+  const websiteEvidence = websitePurpose.url
+    ? (obj(s.basic_information).website ? 'basic_information.website' : 'organization_details.website')
+    : 'organization_details.website_excerpt'
+  const websiteTerms = (websitePurpose.terms || []).map((term) => Object.freeze({
+    term: normalizeTerm(term),
+    evidence: websiteEvidence,
+    fact: 'topic',
+    recallSafe: false,
+  })).filter((t) => t.term && isTopicalTerm(t.term))
+  const mergedTerms = []
+  const seen = new Set()
+  for (const t of [...websiteTerms, ...terms]) {
+    if (seen.has(t.term)) continue
+    seen.add(t.term)
+    mergedTerms.push(t)
+  }
 
   return Object.freeze({
-    /** Ordered topical terms — declared major first, mined keywords last. */
-    topicalTerms: Object.freeze(terms),
-    /** The strict subset allowed to authorize a catalog LOOK. */
-    recallTerms: Object.freeze(terms.filter((t) => t.recallSafe)),
-    /** Schools, DELEGATED to profileInstitutions (#1089/#1090). */
+    topicalTerms: Object.freeze(mergedTerms),
+    recallTerms: Object.freeze(mergedTerms.filter((t) => t.recallSafe)),
     institutions: Object.freeze({
       attended: Object.freeze(resolveAttendedInstitutions(s)),
       aspirational: Object.freeze(resolveAspirationalInstitutions(s)),
@@ -393,7 +325,6 @@ export function deriveProfileFacts(profile = {}, sections = {}) {
       act: firstNumber(s, 'education.act_score'),
       sat: firstNumber(s, 'education.sat_score'),
     }),
-    /** DELEGATED to aidTypePreferences; `evidence` is null when defaulted. */
     acceptedAidTypes: Object.freeze({
       value: Object.freeze(resolveAcceptedAidTypes(education)),
       declared: declaredAid.length > 0,
@@ -406,23 +337,14 @@ export function deriveProfileFacts(profile = {}, sections = {}) {
       zip: loc.zip_code || basic.zip_code || profile?.postal_code || null,
       evidence: 'basic_information.location',
     }),
+    websitePurpose,
   })
 }
 
-/**
- * The topical seeds the open-web QUERY builder should search for, strongest
- * first. This replaces `.slice(0, 12)` of an unranked keyword bag.
- */
 export function searchTermsFromFacts(facts) {
   return (facts?.topicalTerms ?? []).map((t) => t.term)
 }
 
-/**
- * Token-boundary phrase containment. `"forensic science"` must match "AFTE
- * Forensic Science Scholarship" and must NOT match inside a longer word.
- * Direction is deliberate: TERM ⊂ TITLE only. A title is a name; a term is a
- * subject the name may mention.
- */
 export function titleStatesTerm(term, title) {
   const t = normalizeTerm(term)
   if (!t) return false
@@ -430,12 +352,6 @@ export function titleStatesTerm(term, title) {
   return hay.includes(` ${t} `)
 }
 
-/**
- * SQL LIKE pattern for PREDICATE-based candidate discovery. Candidate discovery
- * must be a SQL predicate, never a post-`LIMIT` JS filter (the #944 "green while
- * doing nothing" signature is `scanned === bound` forever), so this returns a
- * deliberate SUPERSET that `titleStatesTerm` then adjudicates row by row.
- */
 export function termLikePattern(term) {
   const t = normalizeTerm(term)
   return t ? `%${t}%` : null
