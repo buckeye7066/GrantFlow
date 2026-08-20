@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { acceptAgreement } from '../services/pricing/pricingAccessGate.js'
+import { SERVICE_AGREEMENT_VERSION } from '../services/pricing/pricingTypes.js'
 
 function makePgDb({
   pricing = {
@@ -142,7 +143,7 @@ describe('acceptAgreement', () => {
     expect(result).toEqual({ ok: true, access_status: 'pending_payment' })
     expect(state.agreement?.id).toMatch(/^sa_/)
     expect(state.agreement?.user_id).toBe('user-9')
-    expect(state.agreement?.agreement_version).toBe('2026-06-15')
+    expect(state.agreement?.agreement_version).toBe(SERVICE_AGREEMENT_VERSION)
     expect(state.agreement?.accepted).toBe(1)
   })
 })
