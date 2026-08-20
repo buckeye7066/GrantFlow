@@ -22,6 +22,7 @@
  * the caller to own (or be an admin for) the target profile.
  */
 
+import { randomUUID } from 'node:crypto'
 import express from 'express'
 import rateLimit from 'express-rate-limit'
 import multer from 'multer'
@@ -2447,6 +2448,65 @@ router.get('/profile-summary', async (req, res) => {
     next_run_at: summary.next_run_at,
     counts: { working: summary.working_on.length, needs: summary.needs_you.length },
   })
+})
+
+/**
+ * Inbound SMS from the owner's phone (Tasker) so Hamilton can read the one-time
+ * codes portal signup sends to his number. Owner order 2026-08-20.
+ *
+ * Deliberately NOT behind the normal session auth: Tasker posts from a phone
+ * with no cookie jar. It is behind a shared secret instead
+ * (HAMILTON_SMS_INGEST_TOKEN), and when that secret is UNSET the route is
+ * DISABLED rather than open - an unauthenticated write endpoint that silently
+ * accepts anything is worse than one that does not exist.
+ *
+ * This route only STORES what the phone forwarded. Nothing in the product can
+ * send a text or reach the handset.
+ */
+router.post('/sms-inbox', async (req, res) => {
+  const expected = String(process.env.HAMILTON_SMS_INGEST_TOKEN || '').trim()
+  if (!expected) {
+    return res.status(503).json({
+      error: 'sms_ingest_disabled',
+      message: 'Set HAMILTON_SMS_INGEST_TOKEN to enable phone code forwarding.',
+    })
+  }
+  const supplied = String(
+    req.get('x-hamilton-sms-token') || req.body?.token || '',
+  ).trim()
+  // Length-independent compare is unnecessary here (the secret is not derived
+  // from user input), but a mismatch must never say WHICH part was wrong.
+  if (!supplied || supplied !== expected) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
+
+  const body = String(req.body?.body || req.body?.text || '').trim()
+  if (!body) {
+    return res.status(400).json({ error: 'body_required', message: 'No message text was posted.' })
+  }
+  const sender = String(req.body?.from || req.body?.sender || '').trim() || null
+  const receivedRaw = String(req.body?.received_at || '').trim()
+  const parsed = Date.parse(receivedRaw)
+  // An unparseable timestamp becomes NOW rather than being rejected: Tasker's
+  // format varies by device, and a code that arrives with a bad stamp is still
+  // a real code. It can only ever look NEWER, never older, so a stale code can
+  // not be smuggled in as fresh.
+  const receivedAt = Number.isFinite(parsed)
+    ? new Date(parsed).toISOString()
+    : new Date().toISOString()
+
+  try {
+    await req.db.run(
+      `INSERT INTO hamilton_inbound_sms (id, sender, body, received_at)
+       VALUES (?, ?, ?, ?)`,
+      [randomUUID(), sender, body, receivedAt],
+    )
+  } catch (err) {
+    log.error('sms_inbox_store_failed', { err: err?.message || String(err) })
+    return res.status(500).json({ error: 'store_failed' })
+  }
+  // Never echo the message back - the response is a receipt, not a mirror.
+  return res.status(202).json({ ok: true, received_at: receivedAt })
 })
 
 export default router
