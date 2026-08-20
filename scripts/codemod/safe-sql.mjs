@@ -261,6 +261,16 @@ export function auditTree(root, cwd = process.cwd()) {
 
 export const BASELINE_PATH = path.resolve(process.cwd(), 'scripts/codemod/safeSql.baseline.json')
 
+/**
+ * Composite key for (file, interpolation expression). JSON-encoded rather than
+ * joined on a separator: a path or an expression can contain any printable
+ * character, and a control-character separator makes the source itself
+ * unsearchable by grep/ripgrep.
+ */
+function laneKey(file, expr) {
+  return JSON.stringify([file, expr])
+}
+
 export function tallyStatementViolations(violations) {
   const tally = {}
   for (const v of violations) {
@@ -281,7 +291,7 @@ export function evaluateAgainstBaseline(violations, baselineSites) {
       failures.push({ ...v, why: 'dynamic-SQL interpolation (single-line rule)' })
       continue
     }
-    const key = `${v.file} ${v.expr}`
+    const key = laneKey(v.file, v.expr)
     const allowed = baselineSites?.[v.file]?.[v.expr] ?? 0
     const seen = (counters.get(key) ?? 0) + 1
     counters.set(key, seen)
@@ -292,7 +302,7 @@ export function evaluateAgainstBaseline(violations, baselineSites) {
   const stale = []
   for (const [file, exprs] of Object.entries(baselineSites || {})) {
     for (const [expr, allowed] of Object.entries(exprs)) {
-      const seen = counters.get(`${file} ${expr}`) ?? 0
+      const seen = counters.get(laneKey(file, expr)) ?? 0
       if (seen < allowed) stale.push({ file, expr, allowed, seen })
     }
   }

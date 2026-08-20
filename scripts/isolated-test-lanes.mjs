@@ -41,10 +41,36 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** Roots vitest.config.js `include` collects from. Keep in sync with that file. */
-export const DEFAULT_SEARCH_ROOTS = Object.freeze(['src', 'backend/tests', 'tests/unit'])
+/**
+ * The EXACT `include`/`exclude` patterns from vitest.config.js.
+ *
+ * These must mirror that file, not merely approximate it, and
+ * backend/tests/isolatedTestLanes.test.js imports the real config and asserts
+ * they are equal. A looser pattern here re-opens the very hole this guard
+ * closes: `tests/unit/**\/*.test.mjs` are node:test suites run by
+ * scripts/run-unit-tests.mjs and Vitest deliberately does NOT collect them, so
+ * a discovery that matched `.mjs` under tests/unit would report "this filter
+ * matches files" for a lane Vitest resolves to zero and exits 0 on.
+ */
+export const VITEST_INCLUDE_GLOBS = Object.freeze([
+  'src/**/*.test.{js,jsx}',
+  'backend/tests/**/*.test.{js,mjs}',
+  'tests/unit/**/*.test.js',
+])
 
-const TEST_FILE_RE = /\.test\.(js|jsx|mjs|ts|tsx)$/
+export const VITEST_EXCLUDE_GLOBS = Object.freeze(['backend/tests/endpointSweep.test.js'])
+
+/** The literal directory prefix of a glob, i.e. everything before the first wildcard. */
+export function globRoot(glob) {
+  const wildcard = glob.search(/[*?{[]/)
+  const head = wildcard === -1 ? glob : glob.slice(0, wildcard)
+  const cut = head.lastIndexOf('/')
+  return cut === -1 ? '.' : head.slice(0, cut)
+}
+
+export const DEFAULT_SEARCH_ROOTS = Object.freeze([
+  ...new Set(VITEST_INCLUDE_GLOBS.map(globRoot)),
+])
 
 export const ISOLATED_LANES = Object.freeze([
   Object.freeze({
@@ -76,8 +102,18 @@ export function toPosix(p) {
   return String(p).split(path.sep).join('/')
 }
 
-export function listTestFiles(cwd = process.cwd(), roots = DEFAULT_SEARCH_ROOTS) {
-  const found = []
+/**
+ * Every file Vitest would collect under this repo's config: the union of
+ * VITEST_INCLUDE_GLOBS minus VITEST_EXCLUDE_GLOBS.
+ */
+export function listTestFiles(
+  cwd = process.cwd(),
+  includeGlobs = VITEST_INCLUDE_GLOBS,
+  excludeGlobs = VITEST_EXCLUDE_GLOBS,
+) {
+  const includes = includeGlobs.map(globToRegExp)
+  const excludes = excludeGlobs.map(globToRegExp)
+  const found = new Set()
   const walk = (dir) => {
     let entries
     try {
@@ -88,19 +124,26 @@ export function listTestFiles(cwd = process.cwd(), roots = DEFAULT_SEARCH_ROOTS)
     for (const entry of entries) {
       if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
       const full = path.join(dir, entry.name)
-      if (entry.isDirectory()) walk(full)
-      else if (entry.isFile() && TEST_FILE_RE.test(entry.name)) found.push(toPosix(path.relative(cwd, full)))
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!entry.isFile()) continue
+      const rel = toPosix(path.relative(cwd, full))
+      if (!includes.some((re) => re.test(rel))) continue
+      if (excludes.some((re) => re.test(rel))) continue
+      found.add(rel)
     }
   }
-  for (const root of roots) walk(path.resolve(cwd, root))
-  return found.sort()
+  for (const root of new Set(includeGlobs.map(globRoot))) walk(path.resolve(cwd, root))
+  return [...found].sort()
 }
 
 /**
- * Minimal glob -> RegExp for the shapes `--exclude` is given here:
- * `**` crosses directories, `*` and `?` do not. Deliberately small and
- * self-contained: this runs in CI before any dependency graph is loaded, and
- * picomatch is only a transitive dependency here.
+ * Minimal glob -> RegExp for the shapes used here: `**` crosses directories,
+ * `*` and `?` do not, and `{a,b}` is a brace alternation. Deliberately small
+ * and self-contained: this runs in CI before any dependency graph is loaded,
+ * and picomatch is only a transitive dependency of this repo.
  */
 export function globToRegExp(glob) {
   let out = '^'
@@ -119,6 +162,18 @@ export function globToRegExp(glob) {
     if (ch === '?') {
       out += '[^/]'
       continue
+    }
+    if (ch === '{') {
+      const close = glob.indexOf('}', i)
+      if (close !== -1) {
+        const alternatives = glob
+          .slice(i + 1, close)
+          .split(',')
+          .map((alt) => alt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        out += `(?:${alternatives.join('|')})`
+        i = close
+        continue
+      }
     }
     out += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&')
   }

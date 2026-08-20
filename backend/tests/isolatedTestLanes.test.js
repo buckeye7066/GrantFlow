@@ -19,16 +19,20 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   ISOLATED_LANES,
+  VITEST_EXCLUDE_GLOBS,
+  VITEST_INCLUDE_GLOBS,
   assertLaneIntegrity,
   checkLane,
   findLaneByExcludeGlobs,
   findLaneByFilters,
+  globRoot,
   globToRegExp,
   listTestFiles,
   parseVitestArgs,
   resolveByExcludeGlobs,
   resolveByFilters,
 } from '../../scripts/isolated-test-lanes.mjs'
+import vitestConfig from '../../vitest.config.js'
 
 const repoRoot = process.cwd()
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
@@ -127,7 +131,46 @@ describe('isolated test lanes', () => {
     expect(findLaneByFilters(['backend/tests/otp'])).toBe(null)
   })
 
-  it('globToRegExp: * does not cross directories, ** does', () => {
+  it('discovery mirrors vitest.config.js EXACTLY (drift tripwire)', () => {
+    // An approximation here re-opens the hole this guard closes: a filter that
+    // resolves to files WE collect but Vitest does not would pass the guard and
+    // then exit 0 under passWithNoTests, running nothing.
+    expect([...VITEST_INCLUDE_GLOBS]).toEqual(vitestConfig.test.include)
+    for (const glob of VITEST_EXCLUDE_GLOBS) {
+      expect(vitestConfig.test.exclude, `${glob} is no longer excluded by vitest.config.js`).toContain(glob)
+    }
+  })
+
+  it('node:test suites under tests/unit are NOT treated as Vitest files', () => {
+    // tests/unit/**/*.test.mjs belong to scripts/run-unit-tests.mjs; Vitest's
+    // include is `tests/unit/**/*.test.js` only.
+    const files = listTestFiles(repoRoot)
+    expect(files.some((f) => f.startsWith('tests/unit/') && f.endsWith('.mjs'))).toBe(false)
+    expect(files.some((f) => f.startsWith('tests/unit/') && f.endsWith('.test.js'))).toBe(true)
+
+    const nodeTestSuite = fs
+      .readdirSync(path.join(repoRoot, 'tests/unit'))
+      .find((name) => name.endsWith('.test.mjs'))
+    expect(nodeTestSuite, 'expected at least one node:test suite under tests/unit').toBeTruthy()
+    const problems = assertLaneIntegrity(['run', `tests/unit/${nodeTestSuite.replace(/\.test\.mjs$/, '')}`])
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toMatch(/matches NO test file/)
+  })
+
+  it('the vitest `exclude` entry is honored, so a filter resolving only to it is refused', () => {
+    expect(listTestFiles(repoRoot)).not.toContain('backend/tests/endpointSweep.test.js')
+    const problems = assertLaneIntegrity(['run', 'backend/tests/endpointSweep'])
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toMatch(/matches NO test file/)
+  })
+
+  it('globRoot finds the literal prefix of each include glob', () => {
+    expect(globRoot('src/**/*.test.{js,jsx}')).toBe('src')
+    expect(globRoot('backend/tests/**/*.test.{js,mjs}')).toBe('backend/tests')
+    expect(globRoot('tests/unit/**/*.test.js')).toBe('tests/unit')
+  })
+
+  it('globToRegExp: * does not cross directories, ** does, {a,b} alternates', () => {
     const star = globToRegExp('backend/tests/otp*.test.js')
     expect(star.test('backend/tests/otpLockoutBypass.test.js')).toBe(true)
     expect(star.test('backend/tests/otp/nested.test.js')).toBe(false)
@@ -135,5 +178,11 @@ describe('isolated test lanes', () => {
     const globstar = globToRegExp('backend/**/*.test.js')
     expect(globstar.test('backend/tests/otpLockoutBypass.test.js')).toBe(true)
     expect(globstar.test('backend/tests/deep/nested.test.js')).toBe(true)
+
+    const braces = globToRegExp('backend/tests/**/*.test.{js,mjs}')
+    expect(braces.test('backend/tests/a.test.js')).toBe(true)
+    expect(braces.test('backend/tests/a.test.mjs')).toBe(true)
+    expect(braces.test('backend/tests/a.test.jsx')).toBe(false)
+    expect(globToRegExp('tests/unit/**/*.test.js').test('tests/unit/a.test.mjs')).toBe(false)
   })
 })
