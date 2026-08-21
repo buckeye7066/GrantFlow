@@ -933,22 +933,9 @@ router.post('/preflight', async (req, res) => {
   // selected_sources_required guarantee - an empty selection must never
   // silently become "all of them".
   if (selectedSources.length === 0 && req.body?.all_ready_sources === true) {
-    const rows = await req.db.prepare(
-      `SELECT id, funding_opportunity_id, title, status
-         FROM grants
-        WHERE profile_id = ?
-          AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')
-        ORDER BY updated_at DESC
-        LIMIT 100`,
-    ).all(profileId)
-    for (const r of Array.isArray(rows) ? rows : []) {
-      selectedSources.push({
-        grant_id: r.id,
-        opportunity_id: r.funding_opportunity_id || null,
-        title: r.title,
-        current_stage: r.status,
-      })
-    }
+    // Same helper the "Select all sources" button reads, so the count the
+    // owner is shown is exactly the set that runs.
+    for (const src of await listReadySources(req.db, profileId)) selectedSources.push(src)
     // An empty pipeline is a REASON, not a silent no-op run that reports queued.
     if (selectedSources.length === 0) {
       return res.status(409).json({
@@ -970,6 +957,46 @@ router.post('/preflight', async (req, res) => {
 })
 
 // ── Phase C — Start Autopilot (preflight → unattended run) ─────────
+
+/**
+ * Every funding source in a profile's pipeline that Hamilton can still work.
+ *
+ * ONE definition, used by BOTH `GET /ready-sources` (what "Select all sources"
+ * shows) and `POST /start-autopilot` (what an empty selection expands to). If
+ * these drifted, the button would promise a set the run does not honour -
+ * exactly the kind of quiet disagreement that makes a UI lie.
+ */
+async function listReadySources(db, profileId) {
+  const rows = await db.prepare(
+    `SELECT id, funding_opportunity_id, title, status
+       FROM grants
+      WHERE profile_id = ?
+        AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')
+      ORDER BY updated_at DESC
+      LIMIT 100`,
+  ).all(profileId)
+  return (Array.isArray(rows) ? rows : []).map((r) => ({
+    grant_id: r.id,
+    opportunity_id: r.funding_opportunity_id || null,
+    title: r.title,
+    current_stage: r.status,
+  }))
+}
+
+/** What "Select all sources" will pick, so the count shown is the count run. */
+router.get('/ready-sources', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const profileId = String(req.query?.profileId || req.query?.profile_id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
+  try {
+    const sources = await listReadySources(req.db, profileId)
+    return res.json({ ok: true, count: sources.length, sources })
+  } catch (err) {
+    return res.status(500).json({ error: 'ready_sources_failed', message: err?.message || String(err) })
+  }
+})
 
 router.post('/start-autopilot', startLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)

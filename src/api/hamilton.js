@@ -773,3 +773,11 @@ export function beginHamiltonAutomation(profileId) {
     }),
   })
 }
+
+/** Every funding source Hamilton can still work for this profile. */
+export function listReadyHamiltonSources(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(
+    `/api/hamilton/automation/ready-sources?profileId=${encodeURIComponent(profileId)}`,
+  )
+}

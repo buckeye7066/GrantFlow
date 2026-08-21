@@ -10,6 +10,7 @@ const {
   revokeAuthorizationMock,
   getVaultStatusMock,
   beginAutomationMock,
+  listReadySourcesMock,
   toastMock,
 } = vi.hoisted(() => ({
   getAuthorizationsMock: vi.fn(),
@@ -17,6 +18,7 @@ const {
   revokeAuthorizationMock: vi.fn(),
   getVaultStatusMock: vi.fn(),
   beginAutomationMock: vi.fn(),
+  listReadySourcesMock: vi.fn(),
   toastMock: vi.fn(),
 }))
 
@@ -28,6 +30,7 @@ vi.mock('@/api/hamilton', () => ({
   enableAutonomousUnlock: vi.fn(),
   disableAutonomousUnlock: vi.fn(),
   beginHamiltonAutomation: (...args) => beginAutomationMock(...args),
+  listReadyHamiltonSources: (...args) => listReadySourcesMock(...args),
 }))
 
 vi.mock('@/components/ui/use-toast', () => ({
@@ -52,6 +55,7 @@ describe('HamiltonAutopilotConsentCard final-submit boundary', () => {
     vi.clearAllMocks()
     getAuthorizationsMock.mockResolvedValue({ active: [] })
     beginAutomationMock.mockResolvedValue({ ok: true, queued: true, queued_count: 3 })
+    listReadySourcesMock.mockResolvedValue({ ok: true, count: 4, sources: [] })
     getVaultStatusMock.mockResolvedValue({
       vault: { has_passphrase: false, autonomous_unlock: false },
     })
@@ -168,4 +172,40 @@ describe('HamiltonAutopilotConsentCard final-submit boundary', () => {
 
     await waitFor(() => expect(beginAutomationMock).toHaveBeenCalledWith('profile-1'))
   })
-})
+
+  it('offers "Select all sources" beside Begin, and shows the REAL count', async () => {
+    getAuthorizationsMock.mockResolvedValue({
+      active: [{
+        id: 'submit-auth', profile_id: 'profile-1', scope: 'profile',
+        authorization_type: 'submit_applications', revoked_at: null,
+        options: { allow_auto_submit: true },
+      }],
+    })
+    renderCard()
+
+    fireEvent.click(await screen.findByRole('button', { name: /select all sources/i }))
+
+    await waitFor(() => expect(listReadySourcesMock).toHaveBeenCalledWith('profile-1'))
+    // The count shown must be the server's count - the same set the run
+    // expands to - never a guess.
+    await screen.findByRole('button', { name: /all 4 selected/i })
+  })
+
+  it('says so plainly when there is nothing to select', async () => {
+    getAuthorizationsMock.mockResolvedValue({
+      active: [{
+        id: 'submit-auth', profile_id: 'profile-1', scope: 'profile',
+        authorization_type: 'submit_applications', revoked_at: null,
+        options: { allow_auto_submit: true },
+      }],
+    })
+    listReadySourcesMock.mockResolvedValue({ ok: true, count: 0, sources: [] })
+    renderCard()
+
+    fireEvent.click(await screen.findByRole('button', { name: /select all sources/i }))
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({
+        title: expect.stringMatching(/no sources to select/i),
+      }))
+    })
+  })})

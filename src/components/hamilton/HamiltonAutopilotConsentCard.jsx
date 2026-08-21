@@ -15,6 +15,7 @@ import {
   enableAutonomousUnlock,
   disableAutonomousUnlock,
   beginHamiltonAutomation,
+  listReadyHamiltonSources,
 } from "@/api/hamilton"
 
 // Profile-level consent, in three switches: sign-in/prepare, submit, and full
@@ -162,6 +163,35 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
         description: /no_ready_sources|ready to work/i.test(msg)
           ? "This profile has no funding sources in the pipeline yet. Add one, then start."
           : (msg || "Please try again."),
+      })
+    },
+  })
+
+  // "Select all sources" — makes the set VISIBLE before it runs. Begin
+  // automation already works on an empty selection (the server expands it),
+  // but "it will just do everything" is a promise the owner cannot check.
+  // This reads the SAME server-side list the run expands to, so the number
+  // shown is the number worked.
+  const [selectedAll, setSelectedAll] = useState(null)
+  const selectAllSources = useMutation({
+    mutationFn: async () => listReadyHamiltonSources(profileId),
+    onSuccess: (res) => {
+      const n = Number(res?.count ?? (res?.sources || []).length) || 0
+      setSelectedAll(n)
+      toast({
+        title: n ? `All ${n} source(s) selected` : "No sources to select",
+        description: n
+          ? "Begin automation will work exactly these."
+          : "This profile has nothing in its pipeline yet. Add a funding source first.",
+        variant: n ? undefined : "destructive",
+      })
+    },
+    onError: (err) => {
+      setSelectedAll(null)
+      toast({
+        variant: "destructive",
+        title: "Could not read this profile's sources",
+        description: err?.message || "Please try again.",
       })
     },
   })
@@ -321,16 +351,27 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
                     Hamilton will work every funding source in this profile&apos;s pipeline.
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  className="shrink-0"
-                  disabled={beginAutomation.isPending}
-                  onClick={() => beginAutomation.mutate()}
-                >
-                  {beginAutomation.isPending ? (
-                    <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Starting…</>
-                  ) : "Begin automation"}
-                </Button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={selectAllSources.isPending || beginAutomation.isPending}
+                    onClick={() => selectAllSources.mutate()}
+                  >
+                    {selectAllSources.isPending ? (
+                      <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Selecting…</>
+                    ) : selectedAll !== null ? `All ${selectedAll} selected` : "Select all sources"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={beginAutomation.isPending}
+                    onClick={() => beginAutomation.mutate()}
+                  >
+                    {beginAutomation.isPending ? (
+                      <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Starting…</>
+                    ) : "Begin automation"}
+                  </Button>
+                </div>
               </div>
             )}
 
