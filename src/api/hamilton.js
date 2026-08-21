@@ -753,3 +753,23 @@ export function listPortalSyncRuns(profileId, portalHost = null) {
   if (portalHost) params.set('portalHost', portalHost)
   return apiFetch(`/api/hamilton/portal-sync/runs?${params.toString()}`)
 }
+
+/**
+ * Start a full-automation run for a whole profile.
+ *
+ * `all_ready_sources` asks the SERVER to resolve the pipeline, because the
+ * profile card has no source picker - the point of full automation is that the
+ * owner does not hand-pick. Existing callers that pass their own
+ * `selected_sources` are unaffected.
+ */
+export function beginHamiltonAutomation(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch('/api/hamilton/automation/start-autopilot', {
+    method: 'POST',
+    body: JSON.stringify({
+      profile_id: profileId,
+      all_ready_sources: true,
+      options: { allow_auto_submit: true, headless: true },
+    }),
+  })
+}

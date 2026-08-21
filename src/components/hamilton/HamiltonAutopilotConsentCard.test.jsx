@@ -9,12 +9,14 @@ const {
   grantAuthorizationMock,
   revokeAuthorizationMock,
   getVaultStatusMock,
+  beginAutomationMock,
   toastMock,
 } = vi.hoisted(() => ({
   getAuthorizationsMock: vi.fn(),
   grantAuthorizationMock: vi.fn(),
   revokeAuthorizationMock: vi.fn(),
   getVaultStatusMock: vi.fn(),
+  beginAutomationMock: vi.fn(),
   toastMock: vi.fn(),
 }))
 
@@ -25,6 +27,7 @@ vi.mock('@/api/hamilton', () => ({
   getPortalVaultStatus: (...args) => getVaultStatusMock(...args),
   enableAutonomousUnlock: vi.fn(),
   disableAutonomousUnlock: vi.fn(),
+  beginHamiltonAutomation: (...args) => beginAutomationMock(...args),
 }))
 
 vi.mock('@/components/ui/use-toast', () => ({
@@ -48,6 +51,7 @@ describe('HamiltonAutopilotConsentCard final-submit boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getAuthorizationsMock.mockResolvedValue({ active: [] })
+    beginAutomationMock.mockResolvedValue({ ok: true, queued: true, queued_count: 3 })
     getVaultStatusMock.mockResolvedValue({
       vault: { has_passphrase: false, autonomous_unlock: false },
     })
@@ -136,5 +140,32 @@ describe('HamiltonAutopilotConsentCard final-submit boundary', () => {
     await waitFor(() => {
       expect(revokeAuthorizationMock).toHaveBeenCalledWith('submit-auth', 'user_toggled_off')
     })
+  })
+
+  it('shows NO start button until full automation is actually on', async () => {
+    // A button that cannot lawfully run reads as a capability the profile
+    // does not have.
+    renderCard()
+    await screen.findByRole('switch', { name: /allow hamilton full automation/i })
+    expect(screen.queryByRole('button', { name: /begin automation/i })).toBeNull()
+  })
+
+  it('offers "Begin automation" once full automation is on, and starts a run', async () => {
+    getAuthorizationsMock.mockResolvedValue({
+      active: [{
+        id: 'submit-auth',
+        profile_id: 'profile-1',
+        scope: 'profile',
+        authorization_type: 'submit_applications',
+        revoked_at: null,
+        options: { allow_auto_submit: true },
+      }],
+    })
+    renderCard()
+
+    const start = await screen.findByRole('button', { name: /begin automation/i })
+    fireEvent.click(start)
+
+    await waitFor(() => expect(beginAutomationMock).toHaveBeenCalledWith('profile-1'))
   })
 })

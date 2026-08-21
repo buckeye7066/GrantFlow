@@ -14,6 +14,7 @@ import {
   getPortalVaultStatus,
   enableAutonomousUnlock,
   disableAutonomousUnlock,
+  beginHamiltonAutomation,
 } from "@/api/hamilton"
 
 // Profile-level consent, in three switches: sign-in/prepare, submit, and full
@@ -135,6 +136,35 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
       options: enable ? FULL_AUTOMATION_OPTIONS : { allow_auto_submit: false },
     })
   }
+
+  // "Begin automation" — the START control that sits beside the full-automation
+  // switch. Consent and ACTION are different things: leaving the toggle as the
+  // only affordance meant a profile could be fully authorized and simply never
+  // run, with nothing on screen to start it.
+  const beginAutomation = useMutation({
+    mutationFn: async () => beginHamiltonAutomation(profileId),
+    onSuccess: (res) => {
+      toast({
+        title: "Hamilton is working",
+        description: res?.queued_count
+          ? `Started on ${res.queued_count} funding source(s). Watch the Automation tab for progress.`
+          : "Hamilton autopilot is running in the background.",
+      })
+    },
+    onError: (err) => {
+      // An empty pipeline is a REASON, not a silent no-op that looks started.
+      const msg = err?.message || ""
+      toast({
+        variant: "destructive",
+        title: /no_ready_sources|ready to work/i.test(msg)
+          ? "Nothing to work on yet"
+          : "Could not start Hamilton",
+        description: /no_ready_sources|ready to work/i.test(msg)
+          ? "This profile has no funding sources in the pipeline yet. Add one, then start."
+          : (msg || "Please try again."),
+      })
+    },
+  })
 
   // "Stay signed in without me" — autonomous vault unlock (escrow).
   const [passphrase, setPassphrase] = useState("")
@@ -276,6 +306,33 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
                 )}
               </span>
             </label>
+
+            {/* The START control. Only rendered once full automation is
+                actually ON - a button that cannot lawfully run is worse than
+                no button, because it reads as a capability the profile does
+                not have. */}
+            {fullAutomationOn && (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-indigo-300 bg-indigo-50 p-3 dark:border-indigo-800 dark:bg-indigo-950/50">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                    Ready when you are
+                  </div>
+                  <div className="text-xs text-slate-600 mt-0.5 dark:text-slate-400">
+                    Hamilton will work every funding source in this profile&apos;s pipeline.
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  className="shrink-0"
+                  disabled={beginAutomation.isPending}
+                  onClick={() => beginAutomation.mutate()}
+                >
+                  {beginAutomation.isPending ? (
+                    <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Starting…</>
+                  ) : "Begin automation"}
+                </Button>
+              </div>
+            )}
 
 
             {loginOn && (

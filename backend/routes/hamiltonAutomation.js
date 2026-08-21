@@ -922,8 +922,42 @@ router.post('/preflight', async (req, res) => {
   const profileId = String(req.body?.profile_id || req.body?.profileId || '').trim()
   const selectedSources = Array.isArray(req.body?.selected_sources) ? req.body.selected_sources : []
   if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
-  if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
   if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
+
+  // "Begin automation" from the profile card has no source PICKER - the whole
+  // point of full automation is that the owner does not hand-pick. Resolving
+  // the set SERVER-SIDE keeps one source of truth; a client that posted its own
+  // idea of "everything" could silently drift from what the pipeline holds.
+  //
+  // Opt-in via an explicit flag so every existing caller keeps its
+  // selected_sources_required guarantee - an empty selection must never
+  // silently become "all of them".
+  if (selectedSources.length === 0 && req.body?.all_ready_sources === true) {
+    const rows = await req.db.prepare(
+      `SELECT id, funding_opportunity_id, title, status
+         FROM grants
+        WHERE profile_id = ?
+          AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')
+        ORDER BY updated_at DESC
+        LIMIT 100`,
+    ).all(profileId)
+    for (const r of Array.isArray(rows) ? rows : []) {
+      selectedSources.push({
+        grant_id: r.id,
+        opportunity_id: r.funding_opportunity_id || null,
+        title: r.title,
+        current_stage: r.status,
+      })
+    }
+    // An empty pipeline is a REASON, not a silent no-op run that reports queued.
+    if (selectedSources.length === 0) {
+      return res.status(409).json({
+        error: 'no_ready_sources',
+        message: 'Nothing in this profile pipeline is ready to work. Add a funding source first.',
+      })
+    }
+  }
+  if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
   try {
     const profile = await loadProfile(req.db, profileId)
     if (!profile) return res.status(404).json({ error: 'profile_not_found' })
