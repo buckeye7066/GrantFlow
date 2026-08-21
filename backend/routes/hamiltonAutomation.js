@@ -46,6 +46,15 @@ import {
   listMissingInfo,
 } from '../services/hamilton/applicationTaskStore.js'
 import { listScopedHamiltonTasks } from '../services/hamilton/hamiltonTaskListing.js'
+import {
+  isFullAutomationGrant,
+  isFullAutomationEnabled,
+  applyFullAutomationSweep,
+  readAutomationPreferenceState,
+  FULL_AUTOMATION_AUTHORIZATION_TYPES,
+  FULL_AUTOMATION_OPTIONS,
+} from '../services/hamilton/hamiltonFullAutomationMode.js'
+import { isAutoSubmitGloballyEnabled } from '../services/hamiltonApplicationAgent.js'
 import { attachTaskPresentation } from '../services/hamilton/hamiltonTaskPresentation.js'
 import { cancelActiveHamiltonTaskRun } from '../services/hamilton/hamiltonRunCancellation.js'
 import {
@@ -889,7 +898,33 @@ router.post('/authorize', async (req, res) => {
         accepted_at: new Date().toISOString(),
       },
     })
-    return res.json({ ok: true, authorization_ids: ids, authorization_text: authorizationText, authorization_version: authorizationVersion })
+    // FULL AUTOMATION IS A DECISION, NOT A ROW. Recording the grant is only
+    // one of the stores that decide whether Hamilton may finish a portal
+    // unattended; a legacy `require_human_review` row at ANY scope vetoes
+    // forever, the live tasks carry their own `allow_auto_submit` intent flag,
+    // and the profile's automation_preferences toggles are re-read at the
+    // irreversible boundary. Sweeping them here is what makes the toggle mean
+    // what the screen says it means. The counts are RETURNED so a sweep that
+    // changed nothing is visible rather than reported as a bare success.
+    let fullAutomation = null
+    if (isFullAutomationGrant(types, options)) {
+      try {
+        fullAutomation = await applyFullAutomationSweep(req.db, { profileId, userId, enable: true })
+      } catch (sweepErr) {
+        // The grant itself is recorded and valid; report the sweep failure
+        // instead of swallowing it, because a silent partial enable is exactly
+        // the "authorized but never submits" state this fixes.
+        log.error('full_automation_sweep_failed', { err: sweepErr?.message, profileId })
+        fullAutomation = { error: 'full_automation_sweep_failed', detail: sweepErr?.message || String(sweepErr) }
+      }
+    }
+    return res.json({
+      ok: true,
+      authorization_ids: ids,
+      authorization_text: authorizationText,
+      authorization_version: authorizationVersion,
+      ...(fullAutomation ? { full_automation: fullAutomation } : {}),
+    })
   } catch (err) {
     const detail = err?.message || String(err)
     log.error('authorize_failed', { err: detail, profileId, scope })
@@ -921,6 +956,87 @@ router.get('/authorizations', async (req, res) => {
   } catch (err) {
     log.error('list_auth_failed', { err: err?.message })
     return res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// ── Full automation — one switch, one honest status ─────────────────
+//
+// Owner report 2026-08-21: a profile could hold every authorization and still
+// never submit, because the decision is spread across THREE stores (the
+// authorization rows, each task's `allow_auto_submit`, and the profile's
+// automation_preferences toggles) and nothing reported which one said no.
+// These two routes are the one place that reads all three and the one place
+// that sets all three.
+
+router.get('/full-automation', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const profileId = String(req.query?.profile_id || req.query?.profileId || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
+  try {
+    const authorization = await isFullAutomationEnabled(req.db, profileId)
+    const preferences = await readAutomationPreferenceState(req.db, profileId)
+    const globalRail = isAutoSubmitGloballyEnabled()
+    // Every reason Hamilton would stop short, named. An empty list is the only
+    // honest way to say "nothing is blocking an unattended submit".
+    const blockers = []
+    if (!authorization.enabled) blockers.push({ kind: 'authorization', reason: authorization.reason, vetoes: authorization.vetoes })
+    if (!preferences.hamilton_autopilot) blockers.push({ kind: 'profile_preference', reason: 'hamilton_autopilot_off' })
+    if (!preferences.hamilton_auto_submit) blockers.push({ kind: 'profile_preference', reason: 'hamilton_auto_submit_off' })
+    if (!globalRail) blockers.push({ kind: 'deployment', reason: 'HAMILTON_ALLOW_AUTOSUBMIT_disabled' })
+    return res.json({
+      ok: true,
+      profile_id: profileId,
+      enabled: blockers.length === 0,
+      authorization,
+      preferences,
+      global_auto_submit_enabled: globalRail,
+      blockers,
+    })
+  } catch (err) {
+    log.error('full_automation_status_failed', { err: err?.message, profileId })
+    return res.status(500).json({ error: 'full_automation_status_failed', detail: err?.message })
+  }
+})
+
+router.post('/full-automation', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const userId = getAuthUserId(user)
+  const profileId = String(req.body?.profile_id || req.body?.profileId || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
+  if (!userId) return res.status(401).json({ error: 'session_invalid' })
+  if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
+  // Absent `enable` means ON: this route exists to switch full automation on.
+  const enable = req.body?.enable !== false
+  try {
+    if (enable) {
+      // The standing grant itself, written through the SAME store and with the
+      // same audit fields as the authorization screen — this route is a
+      // shortcut for the owner, never a second consent model.
+      await recordAuthorizations(req.db, {
+        userId,
+        profileId,
+        scope: 'profile',
+        authorizationTypes: [...FULL_AUTOMATION_AUTHORIZATION_TYPES],
+        authorizationText: String(req.body?.authorization_text || HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT),
+        authorizationVersion: String(req.body?.authorization_version || 'hamilton-autopilot-v1'),
+        options: { ...FULL_AUTOMATION_OPTIONS },
+        replaceOmittedTypes: true,
+        metadata: {
+          ip: req.ip || req.headers['x-forwarded-for'] || null,
+          user_agent: req.headers['user-agent'] || null,
+          accepted_at: new Date().toISOString(),
+          granted_via: 'full_automation_toggle',
+        },
+      })
+    }
+    const sweep = await applyFullAutomationSweep(req.db, { profileId, userId, enable })
+    return res.json({ ok: true, ...sweep })
+  } catch (err) {
+    log.error('full_automation_toggle_failed', { err: err?.message, profileId, enable })
+    return res.status(500).json({ error: 'full_automation_toggle_failed', detail: err?.message })
   }
 })
 
@@ -1056,6 +1172,16 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
       message: 'Use saved profile documents and sessions; raw server file paths are not accepted.',
     })
   }
+  // Standing profile-wide consent (see the allow_auto_submit note below). Read
+  // before the background hand-off so a DB error surfaces as a launch failure
+  // rather than silently degrading the run to "filled but never submitted".
+  let launchFullAutomation = false
+  try {
+    launchFullAutomation = (await isFullAutomationEnabled(req.db, profileId)).enabled === true
+  } catch (err) {
+    log.error('full_automation_read_failed', { err: err?.message, profileId })
+    launchFullAutomation = false
+  }
   // Background: autopilot drives real portals and can run for minutes.
   runAutomationInBackground('start_autopilot', () => automateSelected(req.db, {
     profileId,
@@ -1066,7 +1192,17 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
       // Per-application authorization is an OPT-IN: an absent flag means the
       // caller never chose auto-submit, so it must not read as consent
       // (2026-08-03; was `!== false`, which defaulted every launch to true).
-      allow_auto_submit: req.body?.options?.allow_auto_submit === true,
+      //
+      // A profile that has switched FULL AUTOMATION on has already made that
+      // choice, standing, for every source in its queue — that is the whole
+      // meaning of the toggle, and requiring it to be re-made per launch is why
+      // a fully-authorized profile still never submitted (owner report
+      // 2026-08-21). The standing consent is READ from the persisted grant, not
+      // inferred from the request, and `resolveSubmissionDecision` still
+      // re-checks authority at the irreversible boundary; an explicit `false`
+      // in the request is still honored as a per-launch veto.
+      allow_auto_submit: req.body?.options?.allow_auto_submit === true
+        || (req.body?.options?.allow_auto_submit !== false && launchFullAutomation),
       headless: req.body?.options?.headless !== false,
     },
   }))

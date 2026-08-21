@@ -16,6 +16,7 @@ import {
   disableAutonomousUnlock,
   beginHamiltonAutomation,
   listReadyHamiltonSources,
+  getHamiltonFullAutomationStatus,
 } from "@/api/hamilton"
 import {
   openAutomationWatchWindow,
@@ -48,6 +49,21 @@ const FULL_AUTOMATION_OPTIONS = Object.freeze({
   require_human_review: false,
 })
 
+// Plain-language reason for each blocker the status endpoint can return.
+// Unknown reasons fall through VERBATIM rather than being hidden - a reason the
+// UI cannot phrase is still a reason.
+function describeBlocker(b) {
+  switch (b?.reason) {
+    case "missing_submit_authorization": return "Submit authority has not been granted."
+    case "auto_submit_not_authorized": return "Auto-submit was not included in the grant."
+    case "human_review_required": return "An older permission still asks for final human review. Switch full automation off and on again to clear it."
+    case "hamilton_autopilot_off": return "The profile's Hamilton auto-apply automation preference is off."
+    case "hamilton_auto_submit_off": return "The profile's Hamilton auto-submit automation preference is off."
+    case "HAMILTON_ALLOW_AUTOSUBMIT_disabled": return "Auto-submit is disabled for this deployment (HAMILTON_ALLOW_AUTOSUBMIT)."
+    default: return String(b?.reason || b?.kind || "unknown blocker")
+  }
+}
+
 export default function HamiltonAutopilotConsentCard({ profileId }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -78,7 +94,29 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
     [active, submitOn],
   )
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: key })
+  // The HONEST readiness read. The authorization list above can say "full
+  // automation on" while a legacy per-task human-review row, the profile's own
+  // automation_preferences toggles, or the deployment rail still refuse the
+  // submit - and that was exactly the state the owner reported on 2026-08-21.
+  // This endpoint names every store that says no, so the card can show a
+  // reason instead of a green switch over a run that never submits.
+  const statusKey = ["hamilton-full-automation", profileId]
+  const statusQuery = useQuery({
+    queryKey: statusKey,
+    // Tests mock the API module with an explicit factory; tolerate the helper
+    // being absent so an older mock never crashes the card.
+    queryFn: () => (typeof getHamiltonFullAutomationStatus === "function"
+      ? getHamiltonFullAutomationStatus(profileId)
+      : Promise.resolve(null)),
+    enabled: Boolean(profileId),
+    staleTime: 30_000,
+  })
+  const blockers = Array.isArray(statusQuery.data?.blockers) ? statusQuery.data.blockers : null
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: key })
+    queryClient.invalidateQueries({ queryKey: statusKey })
+  }
 
   const setConsent = useMutation({
     mutationFn: async ({ types, enable, options }) => {
@@ -380,6 +418,24 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
                 )}
               </span>
             </label>
+
+            {/* What is STILL in the way, named. Rendered only while the switch
+                is on and something would stop an unattended submit - a green
+                toggle above a list of reasons is the truth; a green toggle
+                alone was the lie. */}
+            {fullAutomationOn && blockers && blockers.length > 0 && (
+              <div
+                data-testid="full-automation-blockers"
+                className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+              >
+                <div className="font-medium">Full automation is on, but Hamilton still cannot submit unattended:</div>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {blockers.map((b, i) => (
+                    <li key={`${b.kind}-${b.reason}-${i}`}>{describeBlocker(b)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {/* The START control. Only rendered once full automation is
                 actually ON - a button that cannot lawfully run is worse than
