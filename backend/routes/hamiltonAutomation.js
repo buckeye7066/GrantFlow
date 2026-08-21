@@ -1004,8 +1004,27 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
   const profileId = String(req.body?.profile_id || req.body?.profileId || '').trim()
   const selectedSources = Array.isArray(req.body?.selected_sources) ? req.body.selected_sources : []
   if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
-  if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
   if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
+
+  // "Begin automation" from the profile card has no source PICKER - the whole
+  // point of full automation is that the owner does not hand-pick. Resolving
+  // the set SERVER-SIDE via the SAME helper the "Select all sources" button
+  // reads keeps one source of truth, so the count shown is the set that runs.
+  //
+  // Opt-in via an explicit flag, so every existing caller keeps its
+  // selected_sources_required guarantee: an empty selection must never
+  // silently become "all of them".
+  if (selectedSources.length === 0 && req.body?.all_ready_sources === true) {
+    for (const src of await listReadySources(req.db, profileId)) selectedSources.push(src)
+    // An empty pipeline is a REASON, not a silent no-op that reports queued.
+    if (selectedSources.length === 0) {
+      return res.status(409).json({
+        error: 'no_ready_sources',
+        message: 'Nothing in this profile pipeline is ready to work. Add a funding source first.',
+      })
+    }
+  }
+  if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
   // Web callers may reference saved sessions/documents only by opaque,
   // profile-owned identifiers. Raw server paths would let an authenticated
   // caller make Playwright read or upload arbitrary files from the host.
