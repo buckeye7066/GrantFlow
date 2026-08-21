@@ -125,6 +125,52 @@ const HARD_ATTESTATION_PATTERNS = [
   /digital\s*signature/i,
 ]
 
+// Typed e-signature fields: a text input whose label/name/placeholder asks the
+// applicant to type their name AS a signature. Distinct from a plain "Full
+// name" identity field (FIELD_RULES.full_name) — that one is always filled;
+// this one is a legal act and is filled ONLY under full-automation consent.
+const SIGNATURE_FIELD_PATTERNS = [
+  /\bsignature\b/i,
+  /\bsign(?:ed)?\s*(?:(?:your|full|legal)\s*)*name\b/i,
+  /type\s*(?:(?:your|full|legal)\s*)*name\s*(?:to|as|for)\s*(?:e-?)?sign/i,
+  /electronic(?:ally)?\s*sign/i,
+  /e-?sign(?:ature)?\b/i,
+]
+
+/**
+ * Is this visible field a typed-signature input? Text-like inputs only — a
+ * checkbox signature is the HARD_ATTESTATION path, a file input is an upload.
+ */
+function isTypedSignatureField(field) {
+  if (!field) return false
+  if (field.tag === 'select') return false
+  if (field.tag === 'input' && !['', 'text', 'search'].includes(String(field.type || '').toLowerCase())) return false
+  const text = [field.name, field.id, field.placeholder, field.ariaLabel, field.label].filter(Boolean).join(' ')
+  return SIGNATURE_FIELD_PATTERNS.some((rx) => rx.test(text))
+}
+
+/**
+ * The consent that lets Hamilton perform the applicant's electronic signature.
+ *
+ * Owner goal 2026-08-21 (reaffirmed): under FULL AUTOMATION Hamilton finishes
+ * every portal end to end. An e-signature on the applicant's own application,
+ * executed under the applicant's standing consent, is the applicant's act —
+ * but ONLY when all three hold, and each is read from the one authority that
+ * owns it rather than re-derived here:
+ *   - `fullAutomation`  — resolveSubmissionDecision's verdict, passed in by the
+ *                         orchestrator (the same flag that gates 2FA clearing);
+ *   - `use_standing_attestation` + `submit_applications` — granted types;
+ *   - a real applicant name on the profile to sign WITH (never invented).
+ * With any of them absent the signature stays a hard blocker, exactly as before.
+ */
+function signatureConsentFor({ fullAutomation, authorizations, signerName }) {
+  if (!fullAutomation) return null
+  if (!authorizations?.use_standing_attestation || !authorizations?.submit_applications) return null
+  const name = String(signerName || '').trim()
+  if (!name) return null
+  return { name }
+}
+
 const SUBMIT_BUTTON_PATTERNS = [/^submit/i, /finalize/i, /apply\s*now/i, /complete\s*application/i, /send\s*application/i]
 const NEXT_BUTTON_PATTERNS   = [/^next/i, /continue/i, /proceed/i, /save\s*&\s*continue/i]
 const DRAFT_BUTTON_PATTERNS  = [/save\s*draft/i, /save\s*&\s*exit/i, /save\s*for\s*later/i]
@@ -564,7 +610,7 @@ async function detectGate(page) {
   return null
 }
 
-async function detectAttestationGate(page, { authorizations }) {
+async function detectAttestationGate(page, { authorizations, signatureConsent = null }) {
   // Find checkbox labels that look like legal attestations or signatures.
   const items = await page.$$eval('input[type="checkbox"]', (els) => {
     const out = []
@@ -587,6 +633,9 @@ async function detectAttestationGate(page, { authorizations }) {
   for (const it of items) {
     const text = `${it.name} ${it.label}`
     if (HARD_ATTESTATION_PATTERNS.some((rx) => rx.test(text))) {
+      // Under full-automation consent an e-signature checkbox is ticked in
+      // the fill loop (traced as `signature_attested`), not reported as a gate.
+      if (signatureConsent) continue
       return { kind: 'signature', detail: `Wet/digital signature attestation present: "${(it.label || it.name).slice(0, 120)}"` }
     }
     if (STANDING_ATTESTATION_PATTERNS.some((rx) => rx.test(text))) {
@@ -1034,6 +1083,11 @@ export async function runAutopilot({
   // verdict. Absent (the default) = the previous behaviour exactly: a 2FA gate
   // is a hard blocker.
   attemptVerification = null,
+  // Full-automation consent (resolveSubmissionDecision's verdict, forwarded by
+  // the orchestrator). Unlocks the applicant's electronic signature — typed
+  // name fields and e-sign checkboxes — see signatureConsentFor. Absent (the
+  // default) = a signature is a hard blocker, exactly as before.
+  fullAutomation = false,
 } = {}) {
   if (!url) throw new Error('url required')
   if (!profile) throw new Error('profile required')
@@ -1098,6 +1152,9 @@ export async function runAutopilot({
     throw setupErr
   }
   const valuesByKey = applyNarrativeAnswers(readProfileValues(profile), narrativeAnswers)
+  const signatureConsent = signatureConsentFor({
+    fullAutomation, authorizations, signerName: valuesByKey.full_name,
+  })
   // Durable capture dir (UPLOADS_DIR-based in prod, NEVER ephemeral tmp) so a
   // confirmation screenshot/page survives Railway restarts; the orchestrator
   // also passes an explicit durable dir. Direct callers/tests fall back to tmp.
@@ -1208,7 +1265,7 @@ export async function runAutopilot({
         trace.push({ step: 'gate', detail: gate })
         return { status: 'blocked', blocker_kind: gate.kind, blocker_detail: gate.detail, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
-      const sigGate = await detectAttestationGate(page, { authorizations })
+      const sigGate = await detectAttestationGate(page, { authorizations, signatureConsent })
       if (sigGate) {
         trace.push({ step: 'attestation_gate', detail: sigGate })
         return { status: 'blocked', blocker_kind: sigGate.kind, blocker_detail: sigGate.detail, filled_fields: filled, pages_visited: pagesVisited, trace }
@@ -1243,6 +1300,22 @@ export async function runAutopilot({
       }
       trace.push({ step: 'fill', detail: { filledThisPage } })
 
+      // The applicant's typed electronic signature, under full-automation
+      // consent only. The value is the applicant's own name from the profile
+      // (never Hamilton's, never invented) and every signature is traced so
+      // the run record shows exactly what was signed where.
+      if (signatureConsent) {
+        for (const f of fields) {
+          if (!isTypedSignatureField(f)) continue
+          if (f.value && String(f.value).trim()) continue
+          const ok = await fillFieldByFid(page, f.fid, signatureConsent.name)
+          if (ok) {
+            filled.push({ key: 'signature', fid: f.fid, value: signatureConsent.name.slice(0, 60) })
+            trace.push({ step: 'signature_typed', detail: { fid: f.fid, label: (f.label || f.name || f.placeholder || '').slice(0, 120), name: signatureConsent.name } })
+          }
+        }
+      }
+
       // Authorized standing attestations.
       if (authorizations.use_standing_attestation) {
         const checkboxes = await page.$$eval('input[type="checkbox"]', (els, opts) => {
@@ -1265,15 +1338,24 @@ export async function runAutopilot({
             if (tickable && !blocked && !el.checked) {
               el.checked = true
               el.dispatchEvent(new Event('change', { bubbles: true }))
-              list.push(text.slice(0, 120))
+              list.push({ kind: 'standing', text: text.slice(0, 120) })
+            } else if (blocked && opts.signature && !el.checked) {
+              // An e-signature checkbox, under full-automation consent.
+              el.checked = true
+              el.dispatchEvent(new Event('change', { bubbles: true }))
+              list.push({ kind: 'signature', text: text.slice(0, 120) })
             }
           }
           return list
         }, {
           standing: STANDING_ATTESTATION_PATTERNS.map((r) => ({ s: r.source, f: r.flags })),
           hard:     HARD_ATTESTATION_PATTERNS.map((r) => ({ s: r.source, f: r.flags })),
+          signature: Boolean(signatureConsent),
         }).catch(() => [])
-        if (checkboxes.length > 0) trace.push({ step: 'attestation_checked', detail: { items: checkboxes } })
+        const standingTicked = checkboxes.filter((c) => c.kind === 'standing').map((c) => c.text)
+        const signatureTicked = checkboxes.filter((c) => c.kind === 'signature').map((c) => c.text)
+        if (standingTicked.length > 0) trace.push({ step: 'attestation_checked', detail: { items: standingTicked } })
+        if (signatureTicked.length > 0) trace.push({ step: 'signature_attested', detail: { items: signatureTicked, name: signatureConsent.name } })
       }
 
       // Authorized document uploads.
@@ -1554,6 +1636,7 @@ export async function runAutopilot({
 
 export const _internal = {
   FIELD_RULES, STANDING_ATTESTATION_PATTERNS, HARD_ATTESTATION_PATTERNS,
+  SIGNATURE_FIELD_PATTERNS, isTypedSignatureField, signatureConsentFor, detectAttestationGate,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
   detectGate, detectBotWall, attemptLogin,
