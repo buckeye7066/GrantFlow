@@ -22,8 +22,14 @@
 #   unauthenticated recreates the exact defect it was written to fix.
 set -euo pipefail
 
-fail() { echo "FATAL(codex-setup): $*" >&2; exit 1; }
+fail() { echo "FATAL(codex-setup): $*" >&2; echo "FAILED: $*" >>"$HOME/.codex-setup-marker" 2>/dev/null || true; exit 1; }
 note() { echo "codex-setup: $*"; }
+
+# Breadcrumb the agent phase can read, so "the script failed" is distinguishable
+# from "the script never ran at all". Written before anything can fail.
+: >"$HOME/.codex-setup-marker" 2>/dev/null || true
+echo "started $(date -u +%FT%TZ) rev=2" >>"$HOME/.codex-setup-marker" 2>/dev/null || true
+note "STARTING (rev 2)"
 
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
@@ -31,6 +37,14 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+# Report presence by LENGTH ONLY -- never echo the value into the setup log.
+if [ -n "$TOKEN" ]; then
+  note "GITHUB_TOKEN/GH_TOKEN secret visible to setup: yes (${#TOKEN} chars)"
+  echo "token_visible=yes len=${#TOKEN}" >>"$HOME/.codex-setup-marker" 2>/dev/null || true
+else
+  note "GITHUB_TOKEN/GH_TOKEN secret visible to setup: NO"
+  echo "token_visible=no" >>"$HOME/.codex-setup-marker" 2>/dev/null || true
+fi
 [ -n "$TOKEN" ] || fail "no GITHUB_TOKEN/GH_TOKEN secret is set for this environment.
   Add it at https://chatgpt.com/codex/settings/environments -> this environment -> Secrets."
 
@@ -69,8 +83,15 @@ note "authenticated to github.com as: $LOGIN"
 
 # --- 3. Hand the credential to git ------------------------------------------
 $GH_CLEAN gh auth setup-git --hostname github.com || fail "gh auth setup-git failed"
-git config --global user.name  "buckeye7066"
-git config --global user.email "buckeye7066@gmail.com"
+
+# Commit identity is DERIVED from whichever account the token belongs to, never
+# hardcoded: no personal address ends up in this repo (a privacy guard test
+# enforces that) or in the commit metadata, and the script stays portable to any
+# account. GitHub's noreply form is <id>+<login>@users.noreply.github.com and
+# still links commits to the right profile.
+GH_ID="$($GH_CLEAN gh api user --jq .id)" || fail "could not read the account id from gh api user"
+git config --global user.name  "$LOGIN"
+git config --global user.email "${GIT_AUTHOR_EMAIL:-${GH_ID}+${LOGIN}@users.noreply.github.com}"
 git config --global --replace-all safe.directory '*'
 note "git identity: $(git config --global user.name) <$(git config --global user.email)>"
 
@@ -82,7 +103,7 @@ for d in "${CODEX_WORKSPACE:-/workspace}"/*/ ; do
   (
     cd "$d"
     if ! git remote get-url origin >/dev/null 2>&1; then
-      git remote add origin "https://github.com/buckeye7066/$(basename "$d").git"
+      git remote add origin "https://github.com/${GITHUB_REPOSITORY_OWNER:-$LOGIN}/$(basename "$d").git"
       note "added missing origin for $(basename "$d")"
     fi
     note "$(basename "$d") origin = $(git remote get-url origin)"
@@ -90,4 +111,5 @@ for d in "${CODEX_WORKSPACE:-/workspace}"/*/ ; do
 done
 [ "$found_repo" = "1" ] || note "WARNING: no git checkout found under ${CODEX_WORKSPACE:-/workspace}"
 
+echo "ok gh_login=$LOGIN $(date -u +%FT%TZ)" >>"$HOME/.codex-setup-marker" 2>/dev/null || true
 note "OK — gh authenticated as $LOGIN, git credential helper and identity configured."
