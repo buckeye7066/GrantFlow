@@ -4,11 +4,6 @@ on:
   # Allow manual trigger only
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: 'Dry run mode (no actual merges)'
-        required: false
-        default: true
-        type: boolean
       exclude_branches:
         description: 'Comma-separated list of branch names to exclude (in addition to main)'
         required: false
@@ -116,10 +111,8 @@ jobs:
         if: fromJSON(steps.get-branches.outputs.branch_count) > 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           echo "Processing branches..."
-          echo "Dry run: $DRY_RUN"
           echo ""
 
           CREATED_COUNT=0
@@ -141,63 +134,56 @@ jobs:
               echo "ℹ️  PR already exists: #$EXISTING_PR"
               EXISTING_COUNT=$((EXISTING_COUNT + 1))
 
-              # Try to merge existing PR
-              if [ "$DRY_RUN" = "true" ]; then
-                echo "🔍 [DRY RUN] Would merge existing PR #$EXISTING_PR"
+              # Try to merge existing PR.
+              # Require clean checks + at least one approval before auto-merge.
+              MERGEABLE_STATE=$(gh pr view "$EXISTING_PR" --json mergeable --jq '.mergeable')
+              if [ "$MERGEABLE_STATE" != "MERGEABLE" ]; then
+                echo "⏸️  PR #$EXISTING_PR not mergeable (state: $MERGEABLE_STATE). Skipping."
+                echo ""
+                continue
+              fi
+
+              # Check status via mergeStateStatus, NOT statusCheckRollup:
+              # the rollup GraphQL query traverses checkSuite.workflowRun
+              # nodes owned by foreign GitHub Apps (e.g. Vercel), which the
+              # default GITHUB_TOKEN cannot read ("GraphQL: Resource not
+              # accessible by integration"). mergeStateStatus is a plain
+              # computed field: CLEAN means nothing reported is failing,
+              # cancelled, or pending.
+              #
+              # STALENESS WARNING (2026-08-20): branch protection on main was
+              # REMOVED by owner order and this repo's plan cannot re-enable it,
+              # so NO check is "required" any more. CLEAN therefore no longer
+              # implies that "test" and "postgres-migrations" actually ran. A
+              # failing or pending check still yields UNSTABLE rather than CLEAN,
+              # so red work is still not merged -- but a suite that never
+              # reported at all is no longer caught here.
+              MERGE_STATE=$(gh pr view "$EXISTING_PR" --json mergeStateStatus --jq '.mergeStateStatus')
+              if [ "$MERGE_STATE" != "CLEAN" ] && [ "$MERGE_STATE" != "HAS_HOOKS" ]; then
+                echo "⏸️  PR #$EXISTING_PR checks not all green/reported (mergeStateStatus: $MERGE_STATE). Skipping."
+                echo ""
+                continue
+              fi
+
+              APPROVALS=$(gh pr view "$EXISTING_PR" --json reviews --jq '[.reviews[] | select(.state == "APPROVED")] | length')
+              if [ "$APPROVALS" -eq 0 ]; then
+                echo "⏸️  PR #$EXISTING_PR has no approvals. Skipping."
+                echo ""
+                continue
+              fi
+
+              echo "🔀 Attempting to merge existing PR #$EXISTING_PR..."
+              if gh pr merge "$EXISTING_PR" --squash --delete-branch --auto 2>/dev/null; then
+                echo "✅ PR #$EXISTING_PR queued for auto-merge"
+                MERGED_COUNT=$((MERGED_COUNT + 1))
               else
-                # Require clean checks + at least one approval before auto-merge.
-                MERGEABLE_STATE=$(gh pr view "$EXISTING_PR" --json mergeable --jq '.mergeable')
-                if [ "$MERGEABLE_STATE" != "MERGEABLE" ]; then
-                  echo "⏸️  PR #$EXISTING_PR not mergeable (state: $MERGEABLE_STATE). Skipping."
-                  echo ""
-                  continue
-                fi
-
-                # Check status via mergeStateStatus, NOT statusCheckRollup:
-                # the rollup GraphQL query traverses checkSuite.workflowRun
-                # nodes owned by foreign GitHub Apps (e.g. Vercel), which the
-                # default GITHUB_TOKEN cannot read ("GraphQL: Resource not
-                # accessible by integration"). mergeStateStatus is a plain
-                # computed field and is stricter-or-equal: CLEAN means every
-                # branch-protection requirement is satisfied — the required
-                # "test" and "postgres-migrations" checks are PRESENT and
-                # SUCCESSFUL, and nothing is failing, cancelled, or pending.
-                # An empty/never-reported check rollup yields BLOCKED, not
-                # CLEAN, so it still counts as a failure, not a pass.
-                MERGE_STATE=$(gh pr view "$EXISTING_PR" --json mergeStateStatus --jq '.mergeStateStatus')
-                if [ "$MERGE_STATE" != "CLEAN" ] && [ "$MERGE_STATE" != "HAS_HOOKS" ]; then
-                  echo "⏸️  PR #$EXISTING_PR checks not all green/reported (mergeStateStatus: $MERGE_STATE). Skipping."
-                  echo ""
-                  continue
-                fi
-
-                APPROVALS=$(gh pr view "$EXISTING_PR" --json reviews --jq '[.reviews[] | select(.state == "APPROVED")] | length')
-                if [ "$APPROVALS" -eq 0 ]; then
-                  echo "⏸️  PR #$EXISTING_PR has no approvals. Skipping."
-                  echo ""
-                  continue
-                fi
-
-                echo "🔀 Attempting to merge existing PR #$EXISTING_PR..."
-                if gh pr merge "$EXISTING_PR" --squash --delete-branch --auto 2>/dev/null; then
-                  echo "✅ PR #$EXISTING_PR queued for auto-merge"
-                  MERGED_COUNT=$((MERGED_COUNT + 1))
-                else
-                  echo "⚠️  Could not auto-merge PR #$EXISTING_PR (may need approval or have conflicts)"
-                fi
+                echo "⚠️  Could not auto-merge PR #$EXISTING_PR (may need approval or have conflicts)"
               fi
               echo ""
               continue
             fi
 
             # Create PR
-            if [ "$DRY_RUN" = "true" ]; then
-              echo "🔍 [DRY RUN] Would create PR: $branch -> main"
-              CREATED_COUNT=$((CREATED_COUNT + 1))
-              echo ""
-              continue
-            fi
-
             echo "📝 Creating PR for $branch..."
 
             PR_TITLE="Merge $branch to main"
@@ -262,16 +248,10 @@ jobs:
           echo "   ❌ Failed: $FAILED_COUNT"
           echo "=========================================="
 
-          if [ "$DRY_RUN" = "true" ]; then
-            echo ""
-            echo "🔍 This was a DRY RUN. No actual changes were made."
-            echo "ℹ️  To actually merge branches, run this workflow with dry_run=false"
-          else
-            echo ""
-            echo "🎉 Workflow completed!"
-            echo "ℹ️  PRs that were queued for auto-merge will be merged automatically once they pass CI and get approval."
-            echo "ℹ️  Some PRs may need manual review and approval before they can be merged."
-          fi
+          echo ""
+          echo "🎉 Workflow completed!"
+          echo "ℹ️  PRs that were queued for auto-merge will be merged automatically once they pass CI and get approval."
+          echo "ℹ️  Some PRs may need manual review and approval before they can be merged."
 
       - name: No branches to merge
         if: fromJSON(steps.get-branches.outputs.branch_count) == 0
