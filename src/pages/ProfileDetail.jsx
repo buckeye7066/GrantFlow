@@ -1578,12 +1578,14 @@ export default function ProfileDetail() {
                   benefits for its type + state) is auto-listed. Green = ready,
                   red = click to log in once. No explainer clutter - the card
                   speaks for itself. Power-user manual entry lives under Advanced. */}
-              <ProfileFundingSourcesCard profileId={profileId} />
-              {/* One-time, profile-level consent: grant Hamilton standing
-                  permission to use this profile's saved logins across every
-                  portal (scope:'profile' authorization) instead of authorizing
-                  each funding source. */}
+              {/* The Hamilton switches and the Begin-automation button come
+                  FIRST (owner order 2026-08-21: "put the toggle switches and
+                  hamilton buttons at the top of the page instead of under the
+                  portals"). They are the controls that decide what everything
+                  below them is allowed to do, and sitting under a long portal
+                  list they were the part of the page nobody reached. */}
               <HamiltonAutopilotConsentCard profileId={profileId} />
+              <ProfileFundingSourcesCard profileId={profileId} />
               <ProfilePortalsCard profileId={profileId} profileName={profile?.display_name || ""} />
               {/* The manual portal-host/URL entry forms are de-emphasized: kept
                   for power users under a disclosure, since the dashboard above is

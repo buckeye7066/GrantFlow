@@ -298,6 +298,19 @@ export function grantHamiltonAuthorization({
   })
 }
 
+/**
+ * Every reason Hamilton would stop short of an unattended submit for this
+ * profile, in one read: the standing authorization, the profile's
+ * automation_preferences toggles, and the deployment rail. `blockers: []` is the
+ * only honest "ready". (Owner report 2026-08-21: a profile could hold every
+ * grant and still never submit, with nothing on screen saying which store said
+ * no.)
+ */
+export function getHamiltonFullAutomationStatus(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/full-automation?profile_id=${encodeURIComponent(profileId)}`)
+}
+
 export function revokeHamiltonAuthorization(id, reason = null) {
   if (!id) return Promise.reject(new Error('authorization id required'))
   return apiFetch(`/api/hamilton/automation/authorizations/${encodeURIComponent(id)}/revoke`, {
