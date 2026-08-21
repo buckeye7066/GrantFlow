@@ -1128,24 +1128,59 @@ export default function SmartMatcher() {
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-2">
-                        {matchingGaps.success_steps.map((step, idx) => (
-                          <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-amber-50/30">
-                            <div className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-xs font-bold shrink-0">
-                              {idx + 1}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-slate-900">{step.label}</span>
-                                <Badge variant="outline" className="text-xs capitalize">
-                                  {step.category?.replace(/_/g, ' ')}
-                                </Badge>
+                        {matchingGaps.success_steps.map((step, idx) => {
+                          // Deep-link to the profile section this step actually
+                          // fills. `profile_section` comes from
+                          // successStepActions.enrichSuccessStep, which resolves
+                          // it PER STEP (ACTION_PATTERNS) with a per-category
+                          // fallback — deliberately finer than a category->section
+                          // map, which would send every legal/compliance/
+                          // governance/insurance/operations/safety step to the
+                          // same place.
+                          //
+                          // Why this is worth wiring at all: match_score here is
+                          // matched profile data points over total, so a card
+                          // that lands the user on the exact unfilled section is
+                          // on the product's own chain — better profile, better
+                          // need determination, better sources. A step with no
+                          // section (an external filing, a document upload) stays
+                          // a plain row rather than a link that goes nowhere.
+                          const target = step.profile_section
+                          const body = (
+                            <>
+                              <div className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-xs font-bold shrink-0">
+                                {idx + 1}
                               </div>
-                              {step.why && (
-                                <p className="text-xs text-slate-500 mt-0.5 leading-snug">{step.why}</p>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-slate-900">{step.label}</span>
+                                  <Badge variant="outline" className="text-xs capitalize">
+                                    {step.category?.replace(/_/g, ' ')}
+                                  </Badge>
+                                </div>
+                                {step.why && (
+                                  <p className="text-xs text-slate-500 mt-0.5 leading-snug">{step.why}</p>
+                                )}
+                              </div>
+                              {target && (
+                                <ArrowRight className="w-4 h-4 mt-0.5 text-slate-400 group-hover:text-amber-600 shrink-0" />
                               )}
-                            </div>
-                          </div>
-                        ))}
+                            </>
+                          )
+                          const shell = "flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-amber-50/30"
+                          return target ? (
+                            <Link
+                              key={idx}
+                              to={createPageUrl("ProfileDetail", { id: selectedProfileId, section: target })}
+                              className={`${shell} group transition-colors hover:bg-amber-50 hover:border-amber-300`}
+                              aria-label={`${step.label} — open the ${String(target).replace(/_/g, ' ')} section of your profile`}
+                            >
+                              {body}
+                            </Link>
+                          ) : (
+                            <div key={idx} className={shell}>{body}</div>
+                          )
+                        })}
                       </div>
                     </CardContent>
                   </Card>
