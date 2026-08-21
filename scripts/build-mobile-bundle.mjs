@@ -51,6 +51,8 @@ const baseUrl =
     ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
     : null)
   || 'https://app.axiombiolabs.org'
+// Trailing slashes would produce `https://host//mobile/...` in the manifest.
+const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')
 
 if (!fs.existsSync(path.join(distDir, 'index.html'))) {
   console.error('[mobile-bundle] dist/index.html not found — run the web build first (npm run build).')
@@ -92,7 +94,7 @@ const minNativeVersion = process.env.MOBILE_MIN_NATIVE_VERSION || pkg.mobile?.mi
 
 const manifest = {
   version,
-  url: `${baseUrl}/mobile/${zipName}`,
+  url: `${normalizedBaseUrl}/mobile/${zipName}`,
   sha256,
   ...(minNativeVersion ? { minNativeVersion } : {}),
   notes: `GrantFlow web bundle v${version}`,

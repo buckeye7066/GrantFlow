@@ -22,6 +22,8 @@
  * the caller to own (or be an admin for) the target profile.
  */
 
+import { randomUUID } from 'node:crypto'
+import { FORWARDED_CHANNELS } from '../services/hamilton/hamiltonVerificationCodes.js'
 import express from 'express'
 import rateLimit from 'express-rate-limit'
 import multer from 'multer'
@@ -167,13 +169,13 @@ import {
 import { createLogger } from '../utils/logger.js'
 
 export const HAMILTON_AUTOPILOT_AUTHORIZATION_TEXT = (
-  'Hamilton will prepare the selected application(s) using the profile information '
+  'Hamilton will complete the selected application(s) using the profile information '
   + 'and authorized documents on file. Hamilton may open portals, fill forms, upload '
-  + 'documents, generate narratives, and save drafts. Final portal Submit and portal '
-  + 'account creation remain visible human handoffs. Hamilton never bypasses login, '
-  + 'CAPTCHA, 2FA, payment, signatures, attestations, or owner approval.'
+  + 'documents, generate narratives, save drafts, and click Submit when you authorize '
+  + 'auto-submit. Hamilton never bypasses login, CAPTCHA, 2FA, payment, or signatures '
+  + 'that only a human can complete — she pauses and asks you for those.'
 )
-export const HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION = 'hamilton-autopilot-v1'
+export const HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION = 'hamilton-autopilot-v2'
 
 const log = createLogger('route:hamilton-automation')
 
@@ -2448,5 +2450,132 @@ router.get('/profile-summary', async (req, res) => {
     counts: { working: summary.working_on.length, needs: summary.needs_you.length },
   })
 })
+
+/**
+ * How long after a forwarded message a REPOST of the same message counts as the
+ * same message. The email ladder deliberately posts twice (a notification
+ * preview, then the opened mail's full text), and those land seconds apart.
+ */
+const INBOUND_DEDUP_WINDOW_MS = Number(process.env.HAMILTON_INBOX_DEDUP_WINDOW_MS) || 5 * 60 * 1000
+
+/**
+ * Inbound messages the owner's phone forwarded (Tasker) so Hamilton can read the
+ * one-time codes portal signup sends to HIS OWN number and mailbox. Owner order
+ * 2026-08-20; generalized from SMS-only to sms+email the same day, because the
+ * owner's phone also runs Outlook signed in to Hamilton@axiombiolabs.org.
+ *
+ * Deliberately NOT behind the normal session auth: Tasker posts from a phone
+ * with no cookie jar. It is behind a shared secret instead
+ * (HAMILTON_SMS_INGEST_TOKEN), and when that secret is UNSET the route is
+ * DISABLED rather than open - an unauthenticated write endpoint that silently
+ * accepts anything is worse than one that does not exist.
+ *
+ * This route only STORES what the phone forwarded. Nothing in the product can
+ * send a text or reach the handset.
+ */
+async function handleForwardedInbox(req, res) {
+  const expected = String(process.env.HAMILTON_SMS_INGEST_TOKEN || '').trim()
+  if (!expected) {
+    return res.status(503).json({
+      error: 'sms_ingest_disabled',
+      message: 'Set HAMILTON_SMS_INGEST_TOKEN to enable phone code forwarding.',
+    })
+  }
+  const supplied = String(
+    req.get('x-hamilton-sms-token') || req.body?.token || '',
+  ).trim()
+  // Length-independent compare is unnecessary here (the secret is not derived
+  // from user input), but a mismatch must never say WHICH part was wrong.
+  if (!supplied || supplied !== expected) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
+
+  const body = String(req.body?.body || req.body?.text || '').trim()
+  if (!body) {
+    return res.status(400).json({ error: 'body_required', message: 'No message text was posted.' })
+  }
+  const sender = String(req.body?.from || req.body?.sender || '').trim() || null
+  // CHANNEL defaults to 'sms' so a Tasker profile keyed in before email
+  // forwarding existed keeps working byte-for-byte. An unknown channel is
+  // REFUSED rather than coerced - silently filing an 'whatsapp' post as an SMS
+  // would make the reader's channel filter lie.
+  const channel = String(req.body?.channel || 'sms').trim().toLowerCase() || 'sms'
+  if (!FORWARDED_CHANNELS.includes(channel)) {
+    return res.status(400).json({
+      error: 'invalid_channel',
+      message: `channel must be one of: ${FORWARDED_CHANNELS.join(', ')}`,
+    })
+  }
+  // SUBJECT matters because portals very often put the code in the subject line
+  // and an Outlook notification surfaces the subject as its title.
+  const subject = String(req.body?.subject || '').trim() || null
+  const receivedRaw = String(req.body?.received_at || '').trim()
+  const parsed = Date.parse(receivedRaw)
+  // An unparseable timestamp becomes NOW rather than being rejected: Tasker's
+  // format varies by device, and a code that arrives with a bad stamp is still
+  // a real code. It can only ever look NEWER, never older, so a stale code can
+  // not be smuggled in as fresh.
+  const receivedAt = Number.isFinite(parsed)
+    ? new Date(parsed).toISOString()
+    : new Date().toISOString()
+
+  let deduped = false
+  try {
+    // PREFER-LONGER DEDUPLICATION.
+    //
+    // The email ladder can post the SAME message twice: the Tier-1 profile
+    // forwards Outlook's notification PREVIEW, and the Tier-2 profile opens the
+    // mail and forwards the FULL scraped text moments later. Storing both would
+    // leave a truncated copy sitting beside the complete one, and a code read
+    // twice must never look like two different codes.
+    //
+    // So a repost of the same (channel, subject/sender) inside a short window
+    // REPLACES the stored text when the new copy is strictly LONGER, and is
+    // otherwise dropped. `received_at` is deliberately NOT advanced: the message
+    // arrived when it arrived, and refreshing the stamp on a repost is how a
+    // stale code would get smuggled in as fresh.
+    const windowStart = new Date(Date.parse(receivedAt) - INBOUND_DEDUP_WINDOW_MS).toISOString()
+    const existing = await req.db.prepare(
+      `SELECT id, body FROM hamilton_inbound_sms
+        WHERE channel = ?
+          AND COALESCE(subject, '') = COALESCE(?, '')
+          AND COALESCE(sender, '') = COALESCE(?, '')
+          AND received_at >= ?
+        ORDER BY received_at DESC
+        LIMIT 1`,
+    ).get(channel, subject, sender, windowStart)
+
+    if (existing) {
+      deduped = true
+      if (String(body).length > String(existing.body || '').length) {
+        await req.db.prepare(
+          `UPDATE hamilton_inbound_sms SET body = ?, subject = ? WHERE id = ?`,
+        ).run(body, subject, existing.id)
+      }
+    } else {
+      // The db handle exposes prepare(sql).run(...params) - there is NO
+      // db.run(sql, paramsArray). The original spelling threw
+      // "req.db.run is not a function" on EVERY valid post, so the route
+      // answered 500 and no code the phone forwarded was ever stored:
+      // readSmsCode could only ever report "no fresh verification code from the
+      // phone". Verified live 2026-08-20 before and after this line.
+      await req.db.prepare(
+        `INSERT INTO hamilton_inbound_sms (id, channel, sender, subject, body, received_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(randomUUID(), channel, sender, subject, body, receivedAt)
+    }
+  } catch (err) {
+    log.error('sms_inbox_store_failed', { err: err?.message || String(err) })
+    return res.status(500).json({ error: 'store_failed' })
+  }
+  // Never echo the message back - the response is a receipt, not a mirror.
+  return res.status(202).json({ ok: true, received_at: receivedAt, channel, deduped })
+}
+
+// `/sms-inbox` is the path already documented and possibly already keyed into a
+// Tasker profile, so it keeps working forever. `/inbox` is the honest name now
+// that the channel is not always SMS. ONE handler, so the two can never drift.
+router.post('/sms-inbox', handleForwardedInbox)
+router.post('/inbox', handleForwardedInbox)
 
 export default router

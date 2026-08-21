@@ -22,15 +22,16 @@ const { runPortalSync, listRuns, ensurePortalSyncSchema, resolveConnector } =
 
 function makeDb() { return new Database(':memory:') }
 
-describe('runPortalSync — controlled-beta real-portal boundary', () => {
+describe('runPortalSync — session honesty gate', () => {
   let db
   beforeEach(() => {
     db = makeDb()
     _resetCredentialSchemaCache()
   })
 
-  it('MTSU fails closed to manual handoff before a browser or run can start', async () => {
-    // A saved login exists, but NO captured session.
+  it('MTSU with password but no captured session fails needs_session (not a browser ban)', async () => {
+    // A saved login exists, but NO captured session. Public HTTPS is allowed;
+    // the honesty gate still refuses SSO/2FA portals without storageState.
     await saveCredential(db, {
       userId: 'u1', profileId: 'pA', portalHost: 'mtsu.edu',
       username: 'student@mtmail.mtsu.edu', password: 'pw-not-enough-for-sso',
@@ -39,15 +40,15 @@ describe('runPortalSync — controlled-beta real-portal boundary', () => {
     const r = await runPortalSync(db, { profileId: 'pA', portalHost: 'mtsu.edu', direction: 'read', actorUserId: 'u1' })
 
     expect(r.ok).toBe(false)
-    expect(r.requires_human_handoff).toBe(true)
-    expect(r.connectorId).toBeNull()
-    expect(r.error).toBe('controlled_beta_manual_handoff')
+    expect(r.needs_session).toBe(true)
+    expect(r.connectorId).toBe('mtsu')
+    expect(String(r.error || '')).toMatch(/captured login session/i)
     expect(r.read).toBeUndefined()
 
-    // No automation run is created for a browser operation we refused.
     await ensurePortalSyncSchema(db).catch(() => {})
     const runs = await listRuns(db, { profileId: 'pA', portalHost: 'mtsu.edu' }).catch(() => [])
-    expect(runs).toHaveLength(0)
+    expect(runs.length).toBeGreaterThanOrEqual(1)
+    expect(runs[0].status).toBe('failed')
   })
 
   it('EVERY connector without a real login workflow requires a captured session', () => {
@@ -65,7 +66,7 @@ describe('runPortalSync — controlled-beta real-portal boundary', () => {
     expect(genericC.requiresSession).toBe(true)
   })
 
-  it('a generic real portal also fails closed before connector/browser work', async () => {
+  it('a generic real portal also needs a captured session before browser work', async () => {
     await saveCredential(db, {
       userId: 'u1', profileId: 'pB', portalHost: 'someportal.example.org',
       username: 'student@example.org', password: 'pw-cannot-log-in-by-itself',
@@ -74,9 +75,9 @@ describe('runPortalSync — controlled-beta real-portal boundary', () => {
     const r = await runPortalSync(db, { profileId: 'pB', portalHost: 'someportal.example.org', direction: 'read', actorUserId: 'u1' })
 
     expect(r.ok).toBe(false)
-    expect(r.requires_human_handoff).toBe(true)
-    expect(r.error).toBe('controlled_beta_manual_handoff')
-    expect(r.connectorId).toBeNull()
+    expect(r.needs_session).toBe(true)
+    expect(r.connectorId).toBe('generic')
+    expect(String(r.error || '')).toMatch(/captured login session/i)
     expect(r.read).toBeUndefined()
   })
 })

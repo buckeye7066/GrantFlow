@@ -152,7 +152,15 @@ test('documents download: 401 without auth, 200 with admin bearer', async () => 
     })
     assert.equal(adminPipelineHealth.status, 200)
 
-    const storageHealth = await fetch(`${base}/api/health/storage`)
+    // /api/health/storage is admin-gated as of the epic slice-9 hardening
+    // (it discusses filesystem/storage state): anonymous is refused outright,
+    // and even the authorized admin payload stays redacted.
+    const publicStorageHealth = await fetch(`${base}/api/health/storage`)
+    assert.equal(publicStorageHealth.status, 401)
+
+    const storageHealth = await fetch(`${base}/api/health/storage`, {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    })
     assert.equal(storageHealth.status, 200)
     const storageJson = await storageHealth.json()
     assert.equal(storageJson.details_redacted, true)

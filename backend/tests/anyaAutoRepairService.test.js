@@ -61,7 +61,11 @@ describe('AUTO_REPAIR_TYPES surface', () => {
     expect(report.writePolicy).toBe('code_error_repair')
     expect(report.permissionRequired).toBe(false)
     expect(report.auditRequired).toBe(true)
-  }, 20_000)
+    // No per-test override: this walks the live source tree (~13s measured
+    // standalone, 2026-08-20), so the old local 20s cap was TIGHTER than the
+    // suite default and it timed out under full-suite contention. Inherit the
+    // 45s global, whose reasoning is documented in vitest.config.js.
+  })
 })
 
 describe('missing_db_await pattern (reproduces /api/profiles/:id/sections/:key/ai 500)', () => {

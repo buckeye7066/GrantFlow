@@ -147,6 +147,22 @@ describe('enforceFunderBehaviorRecall — links on demonstrated behavior + engin
     expect(explain.evidence[0].purpose).toContain('RENT ASSISTANCE')
   })
 
+  it('a 990 funder row REVIEW carries the direct-approach explanation, never the defect-shaped "missing URL" text', async () => {
+    const db = makeDb()
+    seedProfile(db)
+    seedFunderRow(db)
+    seedTransactions(db)
+    await enforceFunderBehaviorRecall(wrap(db))
+    const links = linkRows(db)
+    expect(links).toHaveLength(1)
+    if (String(links[0].match_decision).toLowerCase() === 'review') {
+      // The funder-behavior ceiling (structurally-absent apply URL) must read
+      // as a DIRECT-APPROACH funder, not a broken listing (epic slice 5).
+      expect(links[0].match_explanation).toMatch(/approach this funder directly/i)
+      expect(links[0].match_explanation).not.toMatch(/missing application URL/i)
+    }
+  })
+
   it('is idempotent: a second boot links nothing new and deletes nothing', async () => {
     const db = makeDb()
     seedProfile(db)

@@ -319,12 +319,44 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     expect(events.find((e) => e.step === 'auto_submit_gate')).toBeFalsy()
   })
 
-  it('withholds final Submit on every real host until a reviewed executable adapter exists', async () => {
+  // SUPERSEDED CONTRACT. This case used to assert the opposite — "withholds
+  // final Submit on every real host until a reviewed executable adapter
+  // exists" — which pinned the 2026-08-06 controlled-beta boundary where the
+  // reserved `hamilton-submit-fixture.invalid` origin was the only thing
+  // Hamilton could open. The owner retired that on 2026-08-20 ("full
+  // automation means full automation";
+  // docs/agent-sync/2026-08-20-hamilton-real-portal-submit.md: "Do not
+  // re-impose fixture-only controlled-beta refuse for real public HTTPS"), so
+  // an authorized card on a real public HTTPS portal must now actually reach
+  // the engine WITH the submit grant forwarded.
+  it('reaches a real public HTTPS portal and carries the authorized submit grant', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     const db = makeDb()
     await seedFixture(db)
     await db.prepare('UPDATE funding_opportunities SET application_url = ? WHERE id = ?')
       .run('https://portal.example.org/apply', 'opp-1')
+    await seedStoredAuthorization(db, { submit: true })
+    await seedTaskWith(db, { allowAutoSubmit: true })
+
+    const result = await runSource(db)
+
+    expect(runAutopilot).toHaveBeenCalledTimes(1)
+    expect(runAutopilot.mock.calls[0][0].url).toBe('https://portal.example.org/apply')
+    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
+    expect(result.skipped_browser).toBeFalsy()
+    const events = await listTaskEvents(db, result.task.id)
+    expect(events.find((event) => /Browser automation skipped/i.test(event.message || ''))).toBeFalsy()
+  })
+
+  // The SSRF floor is what the fixture-only boundary is NOT. A target Hamilton
+  // must never open in a server browser still degrades to the lawful packet,
+  // with the skip recorded — so "full automation" never became "any address".
+  it('still withholds the browser (and packets instead) for an unsafe non-public target', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await db.prepare('UPDATE funding_opportunities SET application_url = ? WHERE id = ?')
+      .run('http://127.0.0.1:8080/apply', 'opp-1')
     await seedStoredAuthorization(db, { submit: true })
     await seedTaskWith(db, { allowAutoSubmit: true })
 

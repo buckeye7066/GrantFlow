@@ -59,6 +59,7 @@ import {
 } from './profileInstitutions.js'
 import { resolveAcceptedAidTypes, AID_TYPE_KEYS } from './aidTypePreferences.js'
 import { STATE_REGISTRY } from '../services/shared/data/stateRegistry.js'
+import { deriveWebsitePurpose } from './profileWebsitePurpose.js'
 
 /** Coerce a section value to a plain object (may be an object or a JSON string). */
 function obj(v) {
@@ -237,6 +238,28 @@ export const DERIVED_FACT_FIELDS = Object.freeze([
     // so the registry's totality test can see the field.
     read: (s) => list(obj(s.education).aid_types_accepted),
   }),
+  // Website purpose (owner 2026-08-20): the profile's own URL is evidence of
+  // what the applicant/org IS. Terms are produced by deriveWebsitePurpose —
+  // these registry rows exist so totality tests see the fields, and so stored
+  // website_excerpt / mission prose can contribute topical seeds.
+  Object.freeze({
+    id: 'basic_information.website',
+    fact: 'topic',
+    recallSafe: false,
+    read: (s) => [obj(s.basic_information).website],
+  }),
+  Object.freeze({
+    id: 'organization_details.website',
+    fact: 'topic',
+    recallSafe: false,
+    read: (s) => [obj(s.organization_details).website, obj(s.organization_details).website_url],
+  }),
+  Object.freeze({
+    id: 'organization_details.website_excerpt',
+    fact: 'topic',
+    recallSafe: false,
+    read: (s) => [obj(s.organization_details).website_excerpt, obj(s.organization_details).website_about],
+  }),
 ])
 
 /** Registry entries that feed topical terms, in evidence order. */
@@ -375,12 +398,36 @@ export function deriveProfileFacts(profile = {}, sections = {}) {
   const loc = obj(basic.location)
   const education = obj(s.education)
   const declaredAid = list(education.aid_types_accepted)
+  // Website purpose sits BESIDE the registry topical read: URL/host/excerpt
+  // phrases are already multi-word program classes (e.g. "immune tolerance").
+  // Bare URLs fail isTopicalTerm (no space) so they must be expanded here.
+  const websitePurpose = deriveWebsitePurpose({ profile, sections: s })
+  // Website purpose seeds SEARCH (topical) but is NOT recall-safe: a host map
+  // phrase like "biomedical research" must not authorize a catalog LOOK the
+  // way a declared major does (#1091 flood class). Precision for junk refusal
+  // lives in matchEngine.websitePurposeConflict, not in recall linkage.
+  const websiteEvidence = websitePurpose.url
+    ? (obj(s.basic_information).website ? 'basic_information.website' : 'organization_details.website')
+    : 'organization_details.website_excerpt'
+  const websiteTerms = (websitePurpose.terms || []).map((term) => Object.freeze({
+    term: normalizeTerm(term),
+    evidence: websiteEvidence,
+    fact: 'topic',
+    recallSafe: false,
+  })).filter((t) => t.term && isTopicalTerm(t.term))
+  const mergedTerms = []
+  const seen = new Set()
+  for (const t of [...websiteTerms, ...terms]) {
+    if (seen.has(t.term)) continue
+    seen.add(t.term)
+    mergedTerms.push(t)
+  }
 
   return Object.freeze({
-    /** Ordered topical terms — declared major first, mined keywords last. */
-    topicalTerms: Object.freeze(terms),
+    /** Ordered topical terms — website purpose + declared major first. */
+    topicalTerms: Object.freeze(mergedTerms),
     /** The strict subset allowed to authorize a catalog LOOK. */
-    recallTerms: Object.freeze(terms.filter((t) => t.recallSafe)),
+    recallTerms: Object.freeze(mergedTerms.filter((t) => t.recallSafe)),
     /** Schools, DELEGATED to profileInstitutions (#1089/#1090). */
     institutions: Object.freeze({
       attended: Object.freeze(resolveAttendedInstitutions(s)),
@@ -406,6 +453,8 @@ export function deriveProfileFacts(profile = {}, sections = {}) {
       zip: loc.zip_code || basic.zip_code || profile?.postal_code || null,
       evidence: 'basic_information.location',
     }),
+    /** What the profile's own website says it is (URL + stored excerpt/mission). */
+    websitePurpose,
   })
 }
 

@@ -6,12 +6,12 @@
 > scholarships, institutional aid, foundation funding, government
 > funding, school aid, and private assistance."
 >
-> In the current controlled beta, Hamilton automates preparation and the
-> reserved synthetic browser fixture only. A real portal is always a human
-> handoff: the owner opens the official site, completes login/2FA/signatures/
-> attestations, performs the final submission, and may then retain the genuine
-> portal receipt in GrantFlow. No authorization flag or host allow-list enables
-> server-side browsing or final submission on a real domain.
+> When the user authorizes automation (including submit), Hamilton may open
+> public HTTPS portal sites in a server browser, fill forms, save drafts, and
+> click Submit. She still pauses for login, CAPTCHA, 2FA, payment, and
+> signatures that only a human can complete. Private / loopback / metadata
+> addresses remain blocked (SSRF). Set `HAMILTON_ENABLE_BROWSER_AUTOMATION=false`
+> or `HAMILTON_ALLOW_AUTOSUBMIT=false` to force packet-only / draft-only mode.
 
 ## Autopilot in one paragraph
 
@@ -21,10 +21,10 @@ When the user clicks **Automate with Hamilton**, the
 selected sources (`POST /api/hamilton/automation/preflight`) so any
 missing field/document/URL is fixed before launch, and then starts
 the unattended run (`POST /api/hamilton/automation/start-autopilot`).
-The Playwright path is executable only against the reserved synthetic fixture
-used by controlled-beta tests. For a real portal, Hamilton prepares the packet
-and instructions and stops at a visible manual handoff. The owner completes
-all interactive and irreversible steps in their own browser.
+With submit authorized, Autopilot drives the public HTTPS portal and
+submits when the form is complete; otherwise she prepares a packet and
+stops for a visible handoff. Login / CAPTCHA / 2FA / payment / signature
+remain hard stops.
 
 ## What changed
 

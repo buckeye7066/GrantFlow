@@ -278,11 +278,23 @@ export function getHamiltonAuthorizations(profileId) {
   return apiFetch(`/api/hamilton/automation/authorizations?profile_id=${encodeURIComponent(profileId)}`)
 }
 
-export function grantHamiltonAuthorization({ profileId, authorizationTypes, scope = 'profile' }) {
+export function grantHamiltonAuthorization({
+  profileId, authorizationTypes, scope = 'profile', options = undefined,
+}) {
   if (!profileId) return Promise.reject(new Error('profileId required'))
+  // `options` carries the flags that are NOT authorization types -
+  // `allow_auto_submit` and `require_human_review`. Dropping them here made
+  // the full-automation switch a silent no-op: the submit grant landed, the
+  // intent flag never did, and resolveSubmissionDecision then refused to
+  // submit while the UI showed automation as on.
   return apiFetch('/api/hamilton/automation/authorize', {
     method: 'POST',
-    body: JSON.stringify({ profile_id: profileId, scope, authorization_types: authorizationTypes }),
+    body: JSON.stringify({
+      profile_id: profileId,
+      scope,
+      authorization_types: authorizationTypes,
+      ...(options ? { options } : {}),
+    }),
   })
 }
 

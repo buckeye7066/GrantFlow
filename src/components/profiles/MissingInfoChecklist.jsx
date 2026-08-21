@@ -68,7 +68,7 @@ export default function MissingInfoChecklist({
             <li key={key}>
               <Link
                 to={href}
-                className="group flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50"
+                className="group flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 dark:hover:border-blue-800 dark:hover:bg-blue-950/50"
               >
                 <Circle className="w-4 h-4 shrink-0 text-amber-500" />
                 <span className="font-medium text-slate-800">{label}</span>

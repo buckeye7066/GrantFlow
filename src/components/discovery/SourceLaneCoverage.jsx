@@ -54,7 +54,7 @@ export default function SourceLaneCoverage({ profileId, refreshKey, onCoverage }
           return (
             <span
               key={s.source_id}
-              className={`rounded-full px-2 py-0.5 text-xs ${hit ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}
+              className={`rounded-full px-2 py-0.5 text-xs ${hit ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200' : 'bg-slate-200 text-slate-600 dark:bg-slate-800'}`}
               title={hit ? 'Has current matches' : 'Checked — no current match'}
             >
               {s.name}

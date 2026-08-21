@@ -18,7 +18,7 @@ vi.mock('@/components/ui/use-toast', () => ({
 
 import HamiltonAutopilotAuthorization from './HamiltonAutopilotAuthorization.jsx'
 
-describe('HamiltonAutopilotAuthorization fail-closed submit UX', () => {
+describe('HamiltonAutopilotAuthorization full-automation UX', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     clientPostMock
@@ -27,7 +27,7 @@ describe('HamiltonAutopilotAuthorization fail-closed submit UX', () => {
       .mockResolvedValueOnce({ ok: true, queued: true })
   })
 
-  it('does not offer real auto-submit and launches draft preparation with a human-review veto', async () => {
+  it('authorizes submit by default and launches with allow_auto_submit', async () => {
     render(
       <HamiltonAutopilotAuthorization
         open
@@ -37,20 +37,20 @@ describe('HamiltonAutopilotAuthorization fail-closed submit UX', () => {
       />,
     )
 
-    expect(screen.getByText(/final portal submit and new-account creation are not automated/i)).toBeTruthy()
-    expect(screen.queryByText(/allow auto-submit/i)).toBeNull()
-    expect(screen.queryByText(/submit applications when complete/i)).toBeNull()
+    expect(screen.getByText(/submit applications when complete/i)).toBeTruthy()
+    expect(screen.getByText(/allow auto-submit/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /run hamilton \(fill \+ submit\)/i })).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: /run hamilton to prepare drafts/i }))
+    fireEvent.click(screen.getByRole('button', { name: /run hamilton \(fill \+ submit\)/i }))
     await waitFor(() => expect(clientPostMock).toHaveBeenCalledTimes(3))
 
     const authorizeBody = clientPostMock.mock.calls[0][1]
-    expect(authorizeBody.authorization_types).not.toContain('submit_applications')
+    expect(authorizeBody.authorization_types).toContain('submit_applications')
     expect(authorizeBody.options).toMatchObject({
-      allow_auto_submit: false,
-      submit_applications: false,
-      require_human_review: true,
+      allow_auto_submit: true,
+      submit_applications: true,
+      require_human_review: false,
     })
-    expect(clientPostMock.mock.calls[2][1].options.allow_auto_submit).toBe(false)
+    expect(clientPostMock.mock.calls[2][1].options.allow_auto_submit).toBe(true)
   })
 })

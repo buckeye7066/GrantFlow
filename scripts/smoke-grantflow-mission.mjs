@@ -198,8 +198,10 @@ async function askAnyaNextBest(token, profileId) {
   )
 }
 
-async function fetchMissionHealth() {
-  return fetchJSON(`${BASE_URL}/api/health/mission`, {}, 'health.mission')
+async function fetchMissionHealth(token) {
+  // /api/health/mission is authenticated as of the epic slice-9 hardening
+  // (it publishes catalog counts + the application funnel).
+  return fetchJSON(`${BASE_URL}/api/health/mission`, { headers: authHeaders(token) }, 'health.mission')
 }
 
 function findPiiTokensInBlob(blob, tokens) {
@@ -458,7 +460,7 @@ async function main() {
   }
 
   // Mission health — strict gate
-  const mh = await fetchMissionHealth()
+  const mh = await fetchMissionHealth(token)
   report.mission_health = mh.body ?? { ok: false, status: mh.status, error: mh.error }
   if (mh.body?.ok === false) {
     const critical = Array.isArray(mh.body.alerts)

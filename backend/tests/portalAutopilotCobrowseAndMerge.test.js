@@ -76,12 +76,27 @@ describe('(A) escalation ordering — co-browse is the LAST resort', () => {
     expect(r.cobrowse?.loginUrl).toBe('https://studentaid.gov/login')
   })
 
-  it('an unknown portal without an existing account remains a human handoff', async () => {
-    // A saved-login reference never authorizes creating a new portal account
-    // or accepting registration terms on the owner's behalf.
+  it('an unknown portal with an UNLOCKED vault is pending-automation, NOT a co-browse terminal', async () => {
+    // Superseded 2026-08-20: signup execution is an env flag defaulting ON
+    // (HAMILTON_PORTAL_SIGNUP_EXECUTION), so an ordinary portal with an
+    // unlocked vault is now ready for Hamilton to auto-provision. That is
+    // pending-automation, and the ladder's whole point is that co-browse is
+    // offered only AFTER automation is exhausted — so resolution stays null.
     await setMasterPassphrase(db, { profileId: 'pA', passphrase: 'master-pass-1' })
     const st = await describeAutopilotStateForPortal(db, {
       profileId: 'pA', portalHost: 'communityforce.com',
+    })
+    expect(st.canAutoMerge).toBe(true)
+    expect(st.resolution).toBe(RESOLUTION.NONE)
+    expect(st.detail).toMatch(/auto-provision/i)
+  })
+
+  it('a portal with NO passphrase is still a human handoff', async () => {
+    // Opening the signup gate does not invent a vault: with no master
+    // passphrase there is nothing to wrap a generated password with, so this
+    // remains a genuine co-browse terminal.
+    const st = await describeAutopilotStateForPortal(db, {
+      profileId: 'pNoPass', portalHost: 'communityforce.com',
     })
     expect(st.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
     expect(st.resolution).toBe(RESOLUTION.SIDE_BY_SIDE_COBROWSE)

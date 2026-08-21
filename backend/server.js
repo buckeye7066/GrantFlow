@@ -55,7 +55,7 @@ import adminRouter from './routes/admin.js';
 import discoveryRouter from './routes/discovery.js';
 import statsRouter from './routes/stats.js';
 import jwt from 'jsonwebtoken';
-import healthRouter from './routes/health.js';
+import healthRouter, { sensitiveHealthRouter } from './routes/health.js';
 import crawlLogsRouter from './routes/crawlLogs.js'
 import sourceDirectoryRouter from './routes/sourceDirectory.js'
 import activityRouter from './routes/activity.js'
@@ -2365,6 +2365,15 @@ app.use('/api/stripe', stripeRouter);
 // as defense-in-depth. Public signup reads /api/services (not /api/admin/*),
 // and the public health probes live under /api/sam + /api/anya — unaffected.
 app.use('/api/admin', ensureAuth, ensureAdmin)
+// Operational-detail health endpoints (mission/alerts/data-readiness/
+// deployment/storage/imports) — they used to ride the early public health
+// mount and exposed catalog counts, the application funnel, commit SHAs and
+// filesystem paths unauthenticated (epic slice 9). Gated here behind the
+// identity middleware: every route requires authentication, and the router
+// internally requires ADMIN for everything except /mission (which the
+// deliberately-non-admin production audit account reads by contract).
+// /healthz + /readyz + basic /api/health remain public for probes.
+app.use('/api/health', ensureAuth, sensitiveHealthRouter)
 app.use('/api/admin/service-catalog', adminServiceCatalogRouter)
 app.use('/api/admin/queue', adminQueueOpsRouter)
 app.use('/api/admin/link-repair', lazyRouter('./routes/linkBacklogRepair.js'))

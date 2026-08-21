@@ -97,7 +97,7 @@ function DeeperSearchChip({ completionPct, nextEmptySectionTitle, onRunDeeperSea
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800 dark:hover:border-blue-800 dark:hover:bg-blue-950/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
         aria-haspopup="dialog"
       >
         <Search className="h-3.5 w-3.5 text-blue-600" />
@@ -192,7 +192,7 @@ function WorkspaceTabTrigger({
     ? "bg-emerald-900 text-white"
     : active
       ? "bg-blue-600 text-white"
-      : "bg-slate-100 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-700"
+      : "bg-slate-100 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-700 dark:group-hover:bg-blue-900/60"
 
   const detailClass = complete
     ? compact
@@ -416,7 +416,7 @@ function ProfileWorkspaceNav({
             <button
               type="button"
               onClick={onOpenCoverageEvidence}
-              className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-800 dark:hover:border-indigo-800 dark:hover:bg-indigo-950/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
               title="What we searched, what we missed, why each match survived, and what to answer next"
             >
               <Radar className="h-3.5 w-3.5 text-indigo-600" />

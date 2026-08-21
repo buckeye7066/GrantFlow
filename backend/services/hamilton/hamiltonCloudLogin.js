@@ -47,6 +47,9 @@ import {
   controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
   isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserRequestAllowed,
+  isHamiltonBrowserTargetAllowed,
+  isPublicHttpsPortalUrl,
 } from './controlledBetaBrowserPolicy.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
@@ -273,8 +276,10 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
   const target = loginUrl || (portalHost ? `https://${portalHost}/` : null)
   if (!profileId || !portalHost || !target) return { ok: false, reason: 'missing_params' }
   const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
-  if (!isControlledBetaSyntheticBrowserUrl(target)
-      || normalizedPortalHost !== CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST) {
+  const targetAllowed = isControlledBetaSyntheticBrowserUrl(target)
+    ? (normalizedPortalHost === CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST)
+    : isPublicHttpsPortalUrl(target)
+  if (!targetAllowed) {
     const refusal = controlledBetaBrowserRefusal()
     return {
       ok: false,
@@ -387,8 +392,8 @@ async function navigateOrFail(page, target) {
     navError = err
   }
   const landedUrl = (() => { try { return page.url() } catch { return null } })()
-  if (landedUrl && landedUrl !== 'about:blank' && !isControlledBetaSyntheticBrowserUrl(landedUrl)) {
-    return { ok: false, reason: 'controlled_beta_redirect_blocked', detail: `Blocked off-fixture redirect (${landedUrl})` }
+  if (landedUrl && landedUrl !== 'about:blank' && !isHamiltonBrowserRequestAllowed(landedUrl)) {
+    return { ok: false, reason: 'unsafe_browser_redirect', detail: `Blocked unsafe redirect (${landedUrl})` }
   }
   if (navError || !landedUrl || landedUrl === 'about:blank') {
     return { ok: false, reason: 'navigation_failed', detail: navError?.message || `stayed_on_blank_page (target: ${target})` }
@@ -620,9 +625,9 @@ export async function retargetLivePage(s, page) {
   if (!s || !page || s.page === page) return false
   const candidateUrl = (() => { try { return page.url() } catch { return null } })()
   if (candidateUrl && candidateUrl !== 'about:blank'
-      && !isControlledBetaSyntheticBrowserUrl(candidateUrl)) {
+      && !isHamiltonBrowserRequestAllowed(candidateUrl)) {
     try { await page.close?.() } catch { /* best-effort quarantine */ }
-    log.warn('cloud login blocked off-fixture popup', { candidateUrl })
+    log.warn('cloud login blocked unsafe popup', { candidateUrl })
     return false
   }
   s.page = page
@@ -967,18 +972,18 @@ export async function cancelCloudLogin(liveSessionId) {
 export function cloudLoginStatus() {
   const infrastructureConfigured = isCloudLoginConfigured()
   return {
-    // Product-facing truth: real-portal cloud login is intentionally disabled
-    // in controlled beta even if the synthetic test infrastructure is present.
-    configured: false,
-    provider: 'controlled_beta_manual_handoff',
+    configured: infrastructureConfigured,
+    provider: cloudLoginProvider(),
     infrastructure_configured: infrastructureConfigured,
-    synthetic_fixture_only: true,
-    real_portal_navigation: false,
+    synthetic_fixture_only: false,
+    real_portal_navigation: infrastructureConfigured,
     active_sessions: sessions.size,
     // self_hosted now serves the interactive view from GrantFlow itself (a
     // same-origin SSE screencast + POST input), so it needs NO public devtools
     // base and works on a single-port PaaS out of the box.
     requires_public_base: false,
-    reason: 'Controlled beta does not launch a server browser on real portal domains. Open the official portal in your own browser for login, review, and final submission.',
+    reason: infrastructureConfigured
+      ? null
+      : 'Cloud login is not configured. Set HAMILTON_CLOUD_LOGIN_PROVIDER=self_hosted (default) or a CDP endpoint.',
   }
 }

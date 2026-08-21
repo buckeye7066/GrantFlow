@@ -101,6 +101,24 @@ async function ensureSchema(db) {
       verification_status TEXT,
       verification_attempts INTEGER NOT NULL DEFAULT 0,
       verification_next_retry_at ${tsType},
+      -- PHASE 2 of the two-phase portal identity policy (config/hamiltonIdentity.js).
+      -- Under full automation Hamilton REGISTERS with his own email + phone so the
+      -- verification code reaches him; once the account exists AND an application
+      -- has actually been submitted, the portal profile is edited over to the
+      -- APPLICANT'S real email/phone with Hamilton kept as the SECONDARY contact so
+      -- he retains submission access. That edit is per-ACCOUNT, not per-task - one
+      -- portal login serves many applications - which is why the state lives here
+      -- beside the verification lifecycle it mirrors.
+      -- handover_status: 'pending' (owed, not yet performed) | 'blocked' (a stated
+      -- reason it cannot be performed) | 'completed'. NULL means nothing is owed.
+      -- handover_plan_json holds the exact handoverIdentity() plan so the pending
+      -- state is inspectable rather than a bare flag.
+      handover_status TEXT,
+      handover_plan_json TEXT,
+      handover_blocker TEXT,
+      handover_attempts INTEGER NOT NULL DEFAULT 0,
+      handover_next_retry_at ${tsType},
+      handover_completed_at ${tsType},
       status TEXT NOT NULL DEFAULT 'active',
       last_used_at ${tsType},
       generated_by TEXT,
@@ -145,6 +163,12 @@ async function ensureSchema(db) {
       ['verification_status', 'TEXT'],
       ['verification_attempts', 'INTEGER'],
       ['verification_next_retry_at', tsType],
+      ['handover_status', 'TEXT'],
+      ['handover_plan_json', 'TEXT'],
+      ['handover_blocker', 'TEXT'],
+      ['handover_attempts', 'INTEGER'],
+      ['handover_next_retry_at', tsType],
+      ['handover_completed_at', tsType],
     ]
     for (const [name, type] of wanted) {
       if (have.has(name)) continue
@@ -170,6 +194,12 @@ async function ensureSchema(db) {
       'verification_status TEXT',
       'verification_attempts INTEGER NOT NULL DEFAULT 0',
       `verification_next_retry_at ${tsType}`,
+      'handover_status TEXT',
+      'handover_plan_json TEXT',
+      'handover_blocker TEXT',
+      'handover_attempts INTEGER NOT NULL DEFAULT 0',
+      `handover_next_retry_at ${tsType}`,
+      `handover_completed_at ${tsType}`,
     ]) {
       try { await db.exec(`ALTER TABLE hamilton_portal_credentials ADD COLUMN IF NOT EXISTS ${col};`) }
       catch { /* benign */ }
@@ -805,6 +835,120 @@ export async function listCredentialsAwaitingVerification(db, { nowIso = new Dat
     ).all(nowIso)
     return Array.isArray(rows) ? rows : []
   } catch { return [] }
+}
+
+/**
+ * PHASE 2 - record that a CONTACT HANDOVER is owed on this portal account.
+ *
+ * Called once an application has been CONFIRMED submitted through the account:
+ * from that moment the portal profile should carry the applicant's real email and
+ * phone as primary, with Hamilton retained as the secondary contact.
+ *
+ * `status` is 'pending' when the edit is owed and performable, or 'blocked' with
+ * a stated `blocker` when it is owed but cannot be performed (today: no reviewed
+ * portal profile-EDIT adapter exists for any host). Either way the state is
+ * DURABLE and VISIBLE - it is never silently dropped. Idempotent: a row already
+ * marked 'completed' is left alone.
+ */
+export async function recordContactHandoverPending(db, id, {
+  plan = null, status = 'pending', blocker = null, nextRetryAt = null,
+} = {}) {
+  if (!db || !id) return false
+  await ensureSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  try {
+    const res = await db.prepare(
+      `UPDATE hamilton_portal_credentials
+         SET handover_status = ?, handover_plan_json = ?, handover_blocker = ?,
+             handover_next_retry_at = ?, updated_at = ${nowFn}
+       WHERE id = ? AND COALESCE(handover_status, '') <> 'completed'`,
+    ).run(
+      String(status), plan ? JSON.stringify(plan) : null, blocker ?? null,
+      nextRetryAt ?? null, String(id),
+    )
+    return (res?.changes ?? res?.rowCount ?? 0) > 0
+  } catch { return false }
+}
+
+/**
+ * PHASE 2 - the handover was actually applied on the portal. Terminal: the
+ * account now carries the applicant's contact details with Hamilton secondary.
+ */
+export async function markContactHandoverComplete(db, id) {
+  if (!db || !id) return false
+  await ensureSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  try {
+    const res = await db.prepare(
+      `UPDATE hamilton_portal_credentials
+         SET handover_status = 'completed', handover_blocker = NULL,
+             handover_next_retry_at = NULL, handover_completed_at = ${nowFn},
+             updated_at = ${nowFn}
+       WHERE id = ?`,
+    ).run(String(id))
+    return (res?.changes ?? res?.rowCount ?? 0) > 0
+  } catch { return false }
+}
+
+/** PHASE 2 - one attempt that did not complete. Bumps the counter; never hides. */
+export async function recordContactHandoverAttempt(db, id, { nextRetryAt = null, blocker = null } = {}) {
+  if (!db || !id) return 0
+  await ensureSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  try {
+    await db.prepare(
+      `UPDATE hamilton_portal_credentials
+         SET handover_attempts = COALESCE(handover_attempts, 0) + 1,
+             handover_next_retry_at = ?, handover_blocker = ?, updated_at = ${nowFn}
+       WHERE id = ?`,
+    ).run(nextRetryAt ?? null, blocker ?? null, String(id))
+    const row = await db.prepare('SELECT handover_attempts FROM hamilton_portal_credentials WHERE id = ?').get(String(id))
+    return Number(row?.handover_attempts) || 0
+  } catch { return 0 }
+}
+
+/**
+ * PHASE 2 - accounts that OWE a contact handover. This is the read that makes
+ * the pending state visible: a dashboard, a report or a future profile-edit
+ * driver enumerates the debt instead of it living only in a log line.
+ * Best-effort - returns [] on any error.
+ */
+export async function listCredentialsAwaitingHandover(db, { profileId = null, limit = 100 } = {}) {
+  if (!db) return []
+  await ensureSchema(db)
+  const cap = Math.max(1, Math.min(500, Number(limit) || 100))
+  // Fully static SQL: the optional profile filter rides an `? IS NULL OR`
+  // predicate and the cap is a bound parameter, so scripts/codemod/safe-sql.mjs
+  // sees no interpolation at all. (The assembled `WHERE ${where.join(…)}` /
+  // `LIMIT ${cap}` this replaced tripped the frozen dynamic-SQL baseline —
+  // that inventory is allowed to shrink and never to grow, so the fix is
+  // static SQL, not a new baseline entry.) Both shapes already have precedent
+  // in this repo (routes/grants.js, agentControlStore.js) and work on the
+  // SQLite and Postgres sides of the shim. The predicate still runs BEFORE
+  // LIMIT, per the repo's SQL-predicate-before-LIMIT invariant.
+  const pid = profileId ? String(profileId) : null
+  try {
+    const rows = await db.prepare(
+      `SELECT id, user_id, profile_id, portal_host, login_url, username,
+              handover_status, handover_blocker, handover_plan_json,
+              handover_attempts, handover_next_retry_at
+         FROM hamilton_portal_credentials
+        WHERE handover_status IN ('pending','blocked')
+          AND (? IS NULL OR profile_id = ?)
+        ORDER BY updated_at DESC
+        LIMIT ?`,
+    ).all(pid, pid, cap)
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      ...r,
+      handover_plan: safeJson(r?.handover_plan_json),
+    }))
+  } catch { return [] }
+}
+
+function safeJson(value) {
+  if (!value) return null
+  if (typeof value === 'object') return value
+  try { return JSON.parse(String(value)) } catch { return null }
 }
 
 /**

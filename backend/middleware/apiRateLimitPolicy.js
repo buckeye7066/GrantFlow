@@ -57,8 +57,8 @@ export function classifyApiRatePolicy(req, env = process.env) {
   // therefore 429'd real "Run now" clicks with nobody touching anything
   // (observed in production 2026-08-06). Charge these reads to the ordinary
   // read budget instead. The expensive lane below is unchanged: every POST that
-  // starts a crawl, and every /api/ai, /api/anya, /api/matching and
-  // /api/real-crawlers call, still gets the full 'cost' treatment.
+  // starts a crawl, and every /api/ai, /api/anya, and /api/real-crawlers call,
+  // still gets the full 'cost' treatment.
   if (method === 'GET' && /^\/api\/crawlers\/jobs(?:\/|$)/.test(path)) {
     return {
       name: 'standard',
@@ -69,6 +69,45 @@ export function classifyApiRatePolicy(req, env = process.env) {
     }
   }
 
+  // SmartMatcher / Discover matching reads are product UI (DB score + catalog),
+  // not crawl/LLM spend. Keeping them on the shared 'cost' bucket (40 / 10 min)
+  // meant a normal SmartMatcher session — load opportunities, tweak filters,
+  // refetch after interpret — burned the same budget as Anya chat + crawl
+  // starts, so POST /interpret-intent 429'd under legitimate use (Axiom
+  // production 2026-08-20). Mirror the crawler-jobs carve-out: charge GETs to
+  // the ordinary read budget; keep expensive AI/crawl lanes on 'cost'.
+  if (method === 'GET' && /^\/api\/matching(?:\/|$)/.test(path)) {
+    return {
+      name: 'standard',
+      windowMs: positiveInt(env.API_STANDARD_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
+      max: positiveInt(env.API_STANDARD_RATE_LIMIT_MAX, 600),
+      shared: true,
+      requiredShared: false,
+    }
+  }
+
+  // User-initiated intent parse (SmartMatcher "Understand & search"). Optional
+  // OpenAI, auth-gated, one click. Must NOT share the crawl/AI 'cost' bucket —
+  // that is what made a single button hit 429 after ordinary page reads. Use
+  // the mutation lane (still per-user, still capped) so abuse is not free.
+  if (method === 'POST' && /^\/api\/matching\/interpret-intent\/?$/.test(path)) {
+    return {
+      name: 'mutation',
+      windowMs: positiveInt(env.API_MUTATION_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
+      max: positiveInt(env.API_MUTATION_RATE_LIMIT_MAX, 120),
+      shared: true,
+      requiredShared: false,
+    }
+  }
+
+  // `matching` stays on the paid/security 'cost' lane. The two carve-outs
+  // ABOVE (GET /api/matching, POST /interpret-intent) run first and take the
+  // product-UI traffic off this budget, which is what fixed the 2026-08-20
+  // 429s. Dropping `matching` from the lane ENTIRELY, as an earlier pass did,
+  // also dropped `requiredShared: true` from every other matching POST - and
+  // api-rate-limit-shared-authority asserts that a paid-work lane must carry
+  // the cross-instance authority, because a per-instance bucket is not a limit
+  // at all once the service runs more than one process.
   if (
     /^\/api\/(?:ai|anya|matching|real-crawlers|crawlers|geo-crawl|laptop-connector)(?:\/|$)/.test(path)
   ) {

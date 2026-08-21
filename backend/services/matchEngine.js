@@ -53,6 +53,10 @@ import { isPointerOpportunityRow } from '../config/linkLifecycleKinds.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
+import {
+  deriveWebsitePurpose,
+  websitePurposeConflict,
+} from '../config/profileWebsitePurpose.js'
 import { resolveProfileType, getParentChain } from './profileTypeRegistry.js'
 import { createLogger } from '../utils/logger.js'
 import {
@@ -3835,6 +3839,28 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     }
   }
 
+  // WEBSITE PURPOSE. The profile's own URL states what it is (Axiom BioLabs
+  // axiombiolabs.org = CAR-T / transplant / genomics — not Title X, CACFP,
+  // law-enforcement wellness, Alzheimer's state respite, specialty crops…).
+  // When the site (or stored website excerpt/mission) yields a research
+  // purpose AND the opportunity is locked to an unrelated exclusive class,
+  // refuse. No website / no readable purpose → neutral. Research-aligned
+  // identity (SBIR/STTR/Catalyze biologics/DoW Peer Reviewed Medical/…) is
+  // never refused by this gate.
+  const websitePurpose = deriveWebsitePurpose({
+    profile: prof,
+    sections: fullSections(sections, prof),
+  })
+  const siteConflict = websitePurposeConflict({ purpose: websitePurpose, opportunity: opp })
+  if (siteConflict) {
+    reasons.push(siteConflict.reason)
+    return {
+      decision: 'REJECT',
+      explanation: `${siteConflict.reason}.`,
+      reasons,
+    }
+  }
+
   // ── Categorical restriction gates — all driven by `on` (normalizeOpportunity
   //    flags), the single source of truth. Order and reason strings preserved.
 
@@ -4590,8 +4616,23 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
 
   if (decision === 'ACCEPT' && !hasUrl) {
     decision = 'REVIEW'
-    explanation = 'Downgraded from ACCEPT — missing application URL.'
-    decisionReasons = [...decisionReasons, 'Missing application URL']
+    // A 990-lane funder row STRUCTURALLY has no application URL — the funder
+    // is approached directly, and its filings are the evidence (the
+    // funder-behavior-link ceiling: an otherwise-ACCEPT was labeled with a
+    // defect-shaped "missing URL" message users read as a broken listing).
+    // Same band, honest words: this is a direct-approach funder, not a bug.
+    const isFunderIntelRow =
+      String(rawOpportunity?.source ?? '') === 'propublica_990' ||
+      String(rawOpportunity?.record_origin ?? '') === 'propublica_990'
+    if (isFunderIntelRow) {
+      explanation =
+        'Approach this funder directly — no application page is published. ' +
+        'Their IRS filings show real giving that matches your profile; use the funder contact information instead of an application link.'
+      decisionReasons = [...decisionReasons, 'Direct-approach funder (no published application URL by design)']
+    } else {
+      explanation = 'Downgraded from ACCEPT — missing application URL.'
+      decisionReasons = [...decisionReasons, 'Missing application URL']
+    }
   }
   // With soft inference, needCategories is never truly empty (normalizeProfile guarantees at
   // least one inferred need). Only downgrade when needAlignment is 0 AND the profile has no

@@ -54,32 +54,87 @@ describe('HamiltonAutopilotConsentCard final-submit boundary', () => {
     revokeAuthorizationMock.mockResolvedValue({ ok: true })
   })
 
-  it('offers draft preparation but no control that grants submit authority', async () => {
+  it('exposes a real switch that GRANTS submit authority', async () => {
+    // This card used to render a static "Final portal Submit stays with you"
+    // paragraph and a revoke-only button, so full automation could be turned
+    // OFF from the profile but never ON. Owner order 2026-08-20.
     renderCard()
 
-    expect(await screen.findByText(/final portal submit stays with you/i)).toBeTruthy()
-    expect(screen.queryByRole('switch', { name: /submit/i })).toBeNull()
-    expect(screen.queryByText(/also submit finished applications/i)).toBeNull()
-    expect(grantAuthorizationMock).not.toHaveBeenCalled()
+    const submitSwitch = await screen.findByRole('switch', {
+      name: /allow hamilton to submit applications/i,
+    })
+    fireEvent.click(submitSwitch)
+
+    await waitFor(() => expect(grantAuthorizationMock).toHaveBeenCalled())
+    const call = grantAuthorizationMock.mock.calls[0][0]
+    expect(call.authorizationTypes).toContain('submit_applications')
   })
 
-  it('can only revoke a retired profile-wide submit grant', async () => {
+  it('full automation sends the auto-submit OPTION, not a bogus type', async () => {
+    // `allow_auto_submit` is an OPTION on the grant row, never one of
+    // HAMILTON_AUTHORIZATION_TYPES. Sending it as a type grants nothing and
+    // silently leaves automation off.
+    renderCard()
+
+    fireEvent.click(await screen.findByRole('switch', {
+      name: /allow hamilton full automation/i,
+    }))
+
+    await waitFor(() => expect(grantAuthorizationMock).toHaveBeenCalled())
+    const call = grantAuthorizationMock.mock.calls[0][0]
+    expect(call.authorizationTypes).toContain('submit_applications')
+    expect(call.authorizationTypes).not.toContain('allow_auto_submit')
+    expect(call.options.allow_auto_submit).toBe(true)
+    expect(call.options.require_human_review).toBe(false)
+  })
+
+  it('turning ON submit does not silently revoke the sign-in consent', async () => {
+    // The authorize route hardcodes replaceOmittedTypes:true, so a grant is a
+    // REPLACEMENT of the whole set - sending one type drops the others.
     getAuthorizationsMock.mockResolvedValue({
       active: [{
-        id: 'legacy-submit-auth',
+        id: 'login-auth',
         profile_id: 'profile-1',
         scope: 'profile',
-        authorization_type: 'submit_applications',
+        authorization_type: 'use_saved_credentials_reference',
         revoked_at: null,
+        options: {},
       }],
     })
     renderCard()
 
-    fireEvent.click(await screen.findByRole('button', { name: /revoke legacy submit permission/i }))
+    fireEvent.click(await screen.findByRole('switch', {
+      name: /allow hamilton to submit applications/i,
+    }))
 
-    await waitFor(() => {
-      expect(revokeAuthorizationMock).toHaveBeenCalledWith('legacy-submit-auth', 'user_toggled_off')
+    await waitFor(() => expect(grantAuthorizationMock).toHaveBeenCalled())
+    const call = grantAuthorizationMock.mock.calls[0][0]
+    expect(call.authorizationTypes).toContain('use_saved_credentials_reference')
+    expect(call.authorizationTypes).toContain('submit_applications')
+  })
+
+  it('turning full automation OFF clears the auto-submit flag', async () => {
+    getAuthorizationsMock.mockResolvedValue({
+      active: [{
+        id: 'submit-auth',
+        profile_id: 'profile-1',
+        scope: 'profile',
+        authorization_type: 'submit_applications',
+        revoked_at: null,
+        options: { allow_auto_submit: true },
+      }],
     })
-    expect(grantAuthorizationMock).not.toHaveBeenCalled()
+    renderCard()
+
+    const fullSwitch = await screen.findByRole('switch', {
+      name: /allow hamilton full automation/i,
+    })
+    fireEvent.click(fullSwitch)
+
+    // Only submit_applications was active, so nothing remains to authorize and
+    // the card withdraws the grant outright.
+    await waitFor(() => {
+      expect(revokeAuthorizationMock).toHaveBeenCalledWith('submit-auth', 'user_toggled_off')
+    })
   })
 })

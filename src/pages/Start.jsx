@@ -46,9 +46,9 @@ function AnyaBubble({ children }) {
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-500 text-white shadow-sm">
         <Sparkles className="h-4 w-4" />
       </div>
-      <div className="flex-1 rounded-2xl rounded-tl-sm border border-blue-200 bg-blue-50/70 px-4 py-3 text-sm leading-relaxed text-slate-800 shadow-sm">
+      <div className="flex-1 rounded-2xl rounded-tl-sm border border-blue-200 bg-blue-50/70 dark:border-blue-900 dark:bg-blue-950/40 px-4 py-3 text-sm leading-relaxed text-slate-800 dark:text-slate-100 shadow-sm">
         <div className="mb-1 flex items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-blue-700">Anya</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Anya</span>
         </div>
         <div className="whitespace-pre-wrap">{children}</div>
       </div>

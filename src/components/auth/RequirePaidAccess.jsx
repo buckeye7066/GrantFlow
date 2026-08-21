@@ -62,7 +62,7 @@ export function RequirePaidAccess({ children, fallback = null }) {
   if (state.status === 'anonymous') return null // upstream LayoutRoutes handles unauth redirect
   if (state.status === 'error') {
     return (
-      <div className="mx-auto max-w-lg rounded-lg border border-amber-300 bg-amber-50 p-6 text-slate-900" role="alert">
+      <div className="mx-auto max-w-lg rounded-lg border border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 p-6 text-slate-900 dark:text-slate-100" role="alert">
         <h2 className="text-lg font-semibold">We couldn’t verify your access</h2>
         <p className="mt-2 text-sm">
           GrantFlow is keeping this workspace locked until the server confirms your access. Check your connection and try again.

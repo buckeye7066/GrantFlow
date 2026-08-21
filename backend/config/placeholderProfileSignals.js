@@ -355,7 +355,15 @@ export const SUBSTANCE_PROBES = Object.freeze([
   {
     id: 'facts.topicalTerms',
     prerequisite: 'a field of study or subject interest',
-    read: ({ facts }) => size(obj(facts).topicalTerms) > 0,
+    // recallTerms, NOT topicalTerms. `topicalTerms` now also carries seeds
+    // derived from website prose (deriveWebsitePurpose), which its own author
+    // marks "NOT recall-safe" - and a placeholder profile carrying a stock
+    // address and a mission sentence would then read as having SUBSTANCE and
+    // stop being classified unconfigured, re-opening the invented-geography
+    // class this detector exists to close. `recallTerms` is the declared
+    // subset: strong enough to authorize a catalog look, so strong enough to
+    // count as a real answer here. Prose seeds SEARCH; it does not DECLARE.
+    read: ({ facts }) => size(obj(facts).recallTerms) > 0,
   },
   {
     id: 'facts.stageOfLife',
