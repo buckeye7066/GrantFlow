@@ -14,6 +14,7 @@ import {
   readSmsCode,
   findVerificationCode,
   CODE_MAX_AGE_MS,
+  FORWARDED_CHANNELS,
 } from '../services/hamilton/hamiltonVerificationCodes.js'
 
 describe('extractVerificationCode', () => {
@@ -105,8 +106,22 @@ describe('readSmsCode', () => {
     expect(out.code).toBe('481920')
     expect(sawSql).toMatch(/hamilton_inbound_sms/)
     // Params are passed positionally to .all(), not as a single array argument.
-    expect(sawParams).toHaveLength(2)
+    // The statement is FIXED-ARITY because the SQL is static (safe-sql gate):
+    // cutoff, the any-channel sentinel, two channel slots, then the limit.
+    expect(sawParams).toHaveLength(5)
     expect(Array.isArray(sawParams[0])).toBe(false)
+    expect(sawParams).toContain('sms')
+    // The clauses must NOT be assembled by interpolation - that is what
+    // `npm run safe-sql:check` rejects, and the frozen baseline may only shrink.
+    expect(sawSql).not.toMatch(/\$\{/)
+  })
+
+  it('the static query covers the WHOLE channel vocabulary', () => {
+    // readForwardedCode's WHERE has exactly two channel slots
+    // (`channel = ? OR channel = ?`). If FORWARDED_CHANNELS ever grows, that
+    // fixed arity would silently DROP the extra channel - a forwarded code
+    // that exists but can never be read. Widen the statement, then this test.
+    expect(FORWARDED_CHANNELS).toHaveLength(2)
   })
 
   it('never throws without a db handle', async () => {
@@ -177,8 +192,9 @@ describe('findVerificationCode', () => {
       { getToken: async () => 'tok', fetchImpl: async () => ({ ok: false, status: 500 }), now },
     )
     expect(out.code).toBeNull()
-    expect(out.reason).toMatch(/sms:/)
-    expect(out.reason).toMatch(/email:/)
+    // The phone lane (sms AND email together) is consulted first, then Graph.
+    expect(out.reason).toMatch(/phone \(sms\+email\):/)
+    expect(out.reason).toMatch(/graph email:/)
   })
 
   it('prefers whichever channel actually has the code', async () => {

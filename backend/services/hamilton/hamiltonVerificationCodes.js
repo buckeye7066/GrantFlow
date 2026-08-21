@@ -157,13 +157,32 @@ export async function readEmailCode({
   return { code: null, reason: 'no fresh verification code in the mailbox' }
 }
 
+/** The channels the owner's phone can forward. */
+export const FORWARDED_CHANNELS = Object.freeze(['sms', 'email'])
+
 /**
- * Newest code forwarded by the owner's phone (Tasker -> /api/hamilton/sms-inbox).
+ * Newest code the owner's PHONE forwarded, across either channel.
+ *
+ * Tasker forwards two things to `POST /api/hamilton/automation/sms-inbox`:
+ * inbound TEXTS (a `Received Text` event) and Outlook NOTIFICATIONS for
+ * Hamilton's own mailbox (a `Notification` event). Both land in
+ * `hamilton_inbound_sms`, distinguished by `channel`.
+ *
+ * SUBJECT IS SEARCHED, NOT JUST BODY. Portals very often put the code in the
+ * subject line ("481920 is your AwardSpring code"), and an Outlook notification
+ * surfaces the subject as its title, so a reader that only looked at the body
+ * would miss the most common shape of the thing it exists to find. The subject
+ * is searched FIRST for the same reason.
  *
  * Reads only rows the phone actually posted; there is no path here that can
- * reach the handset.
+ * reach the handset, and none that can send anything.
+ *
+ * @param {object} db
+ * @param {object} [opts]
+ * @param {string[]} [opts.channels] restrict to these channels (default: both)
  */
-export async function readSmsCode(db, {
+export async function readForwardedCode(db, {
+  channels = null,
   maxAgeMs = CODE_MAX_AGE_MS,
   now = null,
   max = 25,
@@ -171,54 +190,112 @@ export async function readSmsCode(db, {
   if (!db) return { code: null, reason: 'no database handle' }
   const stamp = Number.isFinite(now) ? now : Date.now()
   const cutoff = new Date(stamp - maxAgeMs).toISOString()
+  const wanted = Array.isArray(channels) && channels.length
+    ? channels.map((c) => String(c).toLowerCase()).filter((c) => FORWARDED_CHANNELS.includes(c))
+    : null
+  const limit = Math.max(1, Math.min(50, max))
+  const label = wanted && wanted.length ? wanted.join('+') : FORWARDED_CHANNELS.join('+')
+
+  // STATIC SQL. The clause list used to be assembled with
+  // `WHERE ${where.join(' AND ')}` and `channel IN (${...})`, which tripped
+  // `npm run safe-sql:check` as a NEW dynamic-SQL interpolation. The frozen
+  // baseline in scripts/codemod/safe-sql.mjs may only ever SHRINK, so the fix
+  // is a fixed statement, not a widened inventory and not an
+  // `// audit:allow dynamic-sql` annotation.
+  //
+  // The channel vocabulary is FORWARDED_CHANNELS, exactly two entries, so the
+  // filter fits two bound parameters plus an "any channel" sentinel. Filtering
+  // in JS after the query was rejected deliberately: that is the post-LIMIT
+  // filter anti-pattern this repo documents — asking for 'email' when the
+  // newest 50 rows are all 'sms' would return nothing while the real row sat
+  // just outside the bound.
+  const anyChannel = wanted && wanted.length ? 0 : 1
+  // Duplicating a single requested channel is harmless and keeps the statement
+  // fixed-arity. An unused slot never matches, because '' is not a channel.
+  const ch1 = anyChannel ? '' : wanted[0]
+  const ch2 = anyChannel ? '' : (wanted[1] ?? wanted[0])
+
   let rows
   try {
-    // The db handle exposes prepare(sql).all(...params); there is NO
-    // db.all(sql, paramsArray). The original spelling threw
-    // "db.all is not a function" on EVERY call and the catch below turned it
-    // into the innocuous-looking "inbound sms unavailable" - so the SMS lane
-    // read as "the phone has not forwarded anything yet" while in fact no code
-    // could ever be read, no matter how many the phone forwarded. Verified live
-    // 2026-08-20 against a row the Tasker route had just stored.
     rows = await db.prepare(
-      `SELECT id, sender, body, received_at
+      `SELECT id, channel, sender, subject, body, received_at
          FROM hamilton_inbound_sms
         WHERE received_at >= ?
+          AND (? = 1 OR channel = ? OR channel = ?)
         ORDER BY received_at DESC
         LIMIT ?`,
-    ).all(cutoff, Math.max(1, Math.min(50, max)))
+    ).all(cutoff, anyChannel, ch1, ch2, limit)
   } catch (err) {
     // A missing table means the phone has never forwarded anything yet.
-    return { code: null, reason: `inbound sms unavailable: ${err?.message || err}` }
+    return { code: null, reason: `forwarded inbox unavailable: ${err?.message || err}` }
   }
 
   for (const row of Array.isArray(rows) ? rows : []) {
     if (!isFresh(row?.received_at, stamp, maxAgeMs)) continue
-    const code = extractVerificationCode(String(row?.body || ''))
+    const channel = String(row?.channel || 'sms').toLowerCase()
+    // Subject first, then body — see the note above.
+    const code = extractVerificationCode(`${row?.subject || ''}\n${row?.body || ''}`)
     if (code) {
-      log.info('sms_code_found', { sender: row?.sender, receivedAt: row?.received_at })
-      return { code, source: 'sms', receivedAt: row?.received_at || null, sender: row?.sender || null }
+      log.info('forwarded_code_found', { channel, receivedAt: row?.received_at })
+      return {
+        code,
+        // 'email_forwarded' is deliberately DISTINCT from the Graph reader's
+        // 'email': one came off the phone's notification shade, the other out of
+        // the mailbox itself, and an audit trail should not conflate them.
+        source: channel === 'email' ? 'email_forwarded' : 'sms',
+        channel,
+        receivedAt: row?.received_at || null,
+        sender: row?.sender || null,
+        subject: row?.subject || null,
+      }
     }
   }
-  return { code: null, reason: 'no fresh verification code from the phone' }
+  return { code: null, reason: `no fresh verification code forwarded by the phone (${label})` }
 }
 
 /**
- * Try BOTH channels and return whichever has a fresh code.
+ * SMS-only view of the forwarded inbox. Kept as its own export because it is the
+ * existing published contract; `readForwardedCode` is the general one.
+ */
+export async function readSmsCode(db, opts = {}) {
+  return readForwardedCode(db, { ...opts, channels: ['sms'] })
+}
+
+/** Email-only view of the forwarded inbox (Outlook notifications via Tasker). */
+export async function readForwardedEmailCode(db, opts = {}) {
+  return readForwardedCode(db, { ...opts, channels: ['email'] })
+}
+
+/**
+ * Try every channel and return whichever has a fresh code.
  *
- * A portal does not tell you which channel it used, so both are consulted and
+ * ORDER: rows the PHONE forwarded first (sms AND email together, newest first),
+ * then Microsoft Graph. The phone is first because it needs no app
+ * registration, no `Mail.Read` grant and no token - it is the path that works
+ * today. Graph is the FALLBACK for the one case the phone cannot cover: an
+ * Outlook notification carries a truncated PREVIEW, so a code buried below the
+ * fold never reaches the forwarded row, while Graph reads the message itself.
+ *
+ * Because the forwarded rows are walked newest-first and each is only accepted
+ * when it actually YIELDS a code, a truncated copy of a message is simply
+ * skipped in favour of a fuller copy (or of Graph) rather than shadowing it.
+ *
+ * A portal does not tell you which channel it used, so all are consulted and
  * every failure REASON is carried back - a caller that finds no code must be
  * able to say why, rather than reporting a bare "no code".
  */
 export async function findVerificationCode(db, opts = {}) {
   const reasons = []
-  const sms = await readSmsCode(db, opts)
-  if (sms.code) return sms
-  reasons.push(`sms: ${sms.reason}`)
+  const forwarded = await readForwardedCode(db, opts)
+  if (forwarded.code) return forwarded
+  reasons.push(`phone (sms+email): ${forwarded.reason}`)
 
+  // Optional fallback. With no token provider configured this returns its
+  // honest reason string and never throws, so an absent Graph registration
+  // degrades the ladder instead of breaking it.
   const email = await readEmailCode(opts)
   if (email.code) return email
-  reasons.push(`email: ${email.reason}`)
+  reasons.push(`graph email: ${email.reason}`)
 
   return { code: null, reason: reasons.join(' | ') }
 }
