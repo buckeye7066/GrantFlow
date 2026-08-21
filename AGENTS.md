@@ -68,3 +68,23 @@ Two traps it encodes, both verified against gh 2.98.0:
 Agent-phase network access is off by default in a Codex environment; the GrantFlow
 environment is set to `custom` with a GitHub-only domain allowlist. If a task needs
 to reach anything else at runtime, that allowlist is where to add it.
+
+### Opening and merging PRs from a Codex task
+
+Open the PR through Codex's own connector (that is the path that works from the
+cloud sandbox). To merge it, run `scripts/codex-merge-pr.sh <pr-number>`.
+
+That script is the merge path for agent-authored PRs, and it carries the evidence
+gate: `main` auto-deploys to Vercel production and this repo has **no branch
+protection** (removed by owner order 2026-08-20), so GitHub will not stop a red
+merge — the gate has to live in the merge step. The script refuses unless the PR
+is open, non-draft, conflict-free, has no failing or cancelled checks, and has
+`test` and `test-suite` both **present and passing**. Green means it merges by
+itself, with no approval step; red means it refuses and names the failing checks.
+There is no dry-run mode.
+
+Do not use `.github/workflows/auto-merge-recent-prs.yml` for this. It is the
+scheduled sweeper, it additionally requires a human approval, and no agent-authored
+PR has ever satisfied that — which is why a separate explicit merge path exists.
+Do not add a second scheduled sweeper; two competing auto-mergers on one repo is a
+defect.
