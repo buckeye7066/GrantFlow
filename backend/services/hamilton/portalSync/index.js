@@ -578,8 +578,16 @@ export async function runPortalSync(db, {
       direction: dir,
       connectorId: null,
       runId: null,
-      error: 'portal_sync_submit_not_supported',
-      requires_human_submission: false,
+      // A final external submit may be reintroduced only through a REVIEWED
+      // adapter joined to the durable task authorization, final-review veto,
+      // submission lease and confirmation-proof protocol - that is the
+      // hardening boundary, and hamilton-legacy-submit-boundary asserts it.
+      // An earlier uncommitted pass renamed this and set
+      // requires_human_submission to FALSE, so a caller asked to submit was
+      // refused without being told that a human (or Autopilot, which holds the
+      // authorization) still has to do it.
+      error: 'reviewed_submission_adapter_required',
+      requires_human_submission: true,
       detail: 'Portal sync does not click Submit. Use Hamilton Autopilot with submit authorization for final submission.',
     }
   }

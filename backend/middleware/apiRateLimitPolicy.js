@@ -100,8 +100,16 @@ export function classifyApiRatePolicy(req, env = process.env) {
     }
   }
 
+  // `matching` stays on the paid/security 'cost' lane. The two carve-outs
+  // ABOVE (GET /api/matching, POST /interpret-intent) run first and take the
+  // product-UI traffic off this budget, which is what fixed the 2026-08-20
+  // 429s. Dropping `matching` from the lane ENTIRELY, as an earlier pass did,
+  // also dropped `requiredShared: true` from every other matching POST - and
+  // api-rate-limit-shared-authority asserts that a paid-work lane must carry
+  // the cross-instance authority, because a per-instance bucket is not a limit
+  // at all once the service runs more than one process.
   if (
-    /^\/api\/(?:ai|anya|real-crawlers|crawlers|geo-crawl|laptop-connector)(?:\/|$)/.test(path)
+    /^\/api\/(?:ai|anya|matching|real-crawlers|crawlers|geo-crawl|laptop-connector)(?:\/|$)/.test(path)
   ) {
     return {
       name: 'cost',

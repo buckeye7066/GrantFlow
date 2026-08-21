@@ -16,16 +16,16 @@ import {
 } from '../config/hamiltonIdentity.js'
 
 const profile = {
-  name: 'Anastasia Nicole White',
-  full_name: 'Anastasia Nicole White',
-  email: 'anastasia@example.org',
+  name: 'Test Applicant Persona',
+  full_name: 'Test Applicant Persona',
+  email: 'applicant@example.org',
   phone: '555-0100',
 }
 const vaultLogin = {
-  full_name: 'Anastasia Nicole White',
-  username: 'anastasia@example.org',
+  full_name: 'Test Applicant Persona',
+  username: 'applicant@example.org',
   password: 'vault-secret',
-  identity_email: 'anastasia@example.org',
+  identity_email: 'applicant@example.org',
 }
 
 // `submit_applications` is an authorization TYPE; `allow_auto_submit` and
@@ -70,8 +70,8 @@ describe('hasFullAutomation', () => {
 describe('registration identity (phase 1)', () => {
   it('registers under the APPLICANT name/login but HAMILTON contact', () => {
     const id = registrationIdentity({ profile, vaultLogin, fullAutomation: true })
-    expect(id.fullName).toBe('Anastasia Nicole White')
-    expect(id.username).toBe('anastasia@example.org')
+    expect(id.fullName).toBe('Test Applicant Persona')
+    expect(id.username).toBe('applicant@example.org')
     expect(id.password).toBe('vault-secret')
     // The whole point: verification must reach Hamilton.
     expect(id.email).toBe(HAMILTON_IDENTITY.email)
@@ -110,7 +110,7 @@ describe('handover identity (phase 2)', () => {
   it('hands the primary contact to the applicant', () => {
     const h = handoverIdentity({ ...base, accountCreated: true, applicationSubmitted: true })
     expect(h.ready).toBe(true)
-    expect(h.primary.email).toBe('anastasia@example.org')
+    expect(h.primary.email).toBe('applicant@example.org')
     expect(h.primary.phone).toBe('555-0100')
   })
 
