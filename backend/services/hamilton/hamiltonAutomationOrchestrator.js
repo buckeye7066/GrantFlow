@@ -1902,6 +1902,12 @@ async function runAutopilotPathway(db, {
               }),
             }
             : {}),
+          // E-signature (owner goal 2026-08-21, reaffirmed): under the same
+          // full-automation verdict, the engine may perform the applicant's
+          // electronic signature — typed name + e-sign checkbox — with the
+          // applicant's own name. Consent is the ONE flag, read from the one
+          // authority; the engine re-checks the granted types itself.
+          fullAutomation: allowAutoSubmit,
         })
       }
     } finally {
@@ -1909,6 +1915,23 @@ async function runAutopilotPathway(db, {
     }
     if (loginCredential && engineResult?.logged_in) {
       await markCredentialUsed(db, loginCredential.id).catch(() => {})
+    }
+    // Every electronic signature Hamilton performed is a durable, owner-visible
+    // event on the task — what was signed, where, and under which consent —
+    // never only a line in the run trace.
+    const signatureSteps = (engineResult?.trace || []).filter((t) => t?.step === 'signature_typed' || t?.step === 'signature_attested')
+    if (signatureSteps.length > 0) {
+      const signer = signatureSteps[0]?.detail?.name || null
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'progress',
+        status: 'filling_portal',
+        step: 'esignature',
+        message: `Hamilton applied the applicant's electronic signature${signer ? ` as "${signer}"` : ''} under full-automation consent (${signatureSteps.length} signature field(s)).`,
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: { autopilot_run_id: run.id, signatures: signatureSteps.map((t) => t.detail), consent: 'full_automation+use_standing_attestation' },
+      }).catch(() => {})
     }
     // Persist the freshly-authenticated session (AES-256-GCM, profile+host
     // scoped) so future runs — and post-restart runs — reuse it instead of
@@ -1982,6 +2005,7 @@ async function runAutopilotPathway(db, {
       taskId: task.id, profileId: task.profile_id, userId,
       portalUrl: url, opportunity, profile, classification,
       documentCandidates: documents,
+      fullAutomation: allowAutoSubmit,
     }, {
       kind: engineResult.blocker_kind,
       text: engineResult.blocker_detail,

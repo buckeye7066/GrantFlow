@@ -549,9 +549,27 @@ async function resolveWetSignature(db, ctx, input) {
 }
 
 async function resolveDigitalSignature(db, ctx, input) {
-  // Hamilton NEVER applies a digital/electronic signature on the applicant's
-  // behalf — it is the user's own legal signature. Hamilton fills everything
-  // else, then escalates so the user e-signs; the task resumes afterward.
+  // Under FULL AUTOMATION with standing-attestation authority (owner goal
+  // 2026-08-21), the applicant's electronic signature is the applicant's own
+  // consented act: the engine types the applicant's name into the signature
+  // field / ticks the e-sign box on the retry, and the orchestrator records a
+  // durable `esignature` task event. Both consents are read from their own
+  // authorities (resolveSubmissionDecision's verdict via ctx.fullAutomation;
+  // the persisted grant via isAuthorizationActive) — nothing is inferred.
+  if (ctx?.fullAutomation === true) {
+    const attestationAuthorized = await isAuthorizationActive(db, {
+      profileId: ctx.profileId, authorizationType: 'use_standing_attestation',
+      fundingSourceId: ctx?.opportunity?.id || null, taskId: ctx.taskId,
+    })
+    if (attestationAuthorized) {
+      return ok('apply_applicant_esignature',
+        { consent: 'full_automation+use_standing_attestation', label: String(input?.text || input?.detail || input?.context?.label || '').slice(0, 200) },
+        'Full automation is on and standing attestation is authorized: Hamilton applies the applicant\'s electronic signature with the applicant\'s own name and retries.')
+    }
+  }
+  // Otherwise Hamilton never applies a digital/electronic signature on the
+  // applicant's behalf — it is the user's own legal signature. Hamilton fills
+  // everything else, then escalates so the user e-signs; the task resumes afterward.
   return escalate('ask_user_to_esign',
     'This application requires the applicant\'s electronic signature. Hamilton completed everything else and will resume after you e-sign.',
     { detail: String(input?.text || input?.detail || input?.context?.label || '').slice(0, 200) })
