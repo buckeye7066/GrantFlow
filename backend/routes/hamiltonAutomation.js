@@ -23,7 +23,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { FORWARDED_CHANNELS, extractVerificationCode } from '../services/hamilton/hamiltonVerificationCodes.js'
+import { FORWARDED_CHANNELS, extractVerificationCode, readEmailCode } from '../services/hamilton/hamiltonVerificationCodes.js'
+import { hamiltonGraphStatus, hamiltonGraphBlockerReason, makeHamiltonGraphTokenProvider } from '../services/hamilton/hamiltonGraphToken.js'
 import express from 'express'
 import rateLimit from 'express-rate-limit'
 import multer from 'multer'
@@ -2632,9 +2633,41 @@ async function handleForwardedInboxStatus(req, res) {
 ${r?.body || ''}`)) extractable += 1
   }
 
+  // GRAPH REACHABILITY, measured rather than assumed. The email lane was
+  // reported "unverified" for a long time because the credentials live in
+  // PRODUCTION and nothing here could ask. This probes the same app-only
+  // registration John already uses and reports whether Hamilton's own mailbox
+  // is actually readable. It returns NO message content - only whether the
+  // door opens - so it can never become a second way to read a code.
+  let graph = { configured: false, reason: null, mailbox_readable: null }
+  try {
+    const status = hamiltonGraphStatus()
+    graph.configured = Boolean(status.ready)
+    graph.mailbox = status.mailbox || null
+    if (!status.ready) {
+      graph.reason = hamiltonGraphBlockerReason(status)
+    } else if (String(req.query?.probe_graph || '') === '1') {
+      // Only on explicit request: a live token + mailbox read costs an AAD
+      // round trip, and this endpoint is also the cheap polling surface.
+      const probe = await readEmailCode({
+        getToken: makeHamiltonGraphTokenProvider(),
+        maxAgeMs: 60_000,
+        max: 1,
+      })
+      // A code found or not found BOTH prove the mailbox was readable; only a
+      // transport/permission failure does not.
+      const reason = String(probe?.reason || '')
+      graph.mailbox_readable = !reason || /no fresh verification code/i.test(reason)
+      graph.reason = reason || null
+    }
+  } catch (err) {
+    graph.reason = `graph probe failed: ${err?.message || err}`
+  }
+
   return res.json({
     ok: true,
     window_ms: windowMs,
+    graph,
     forwarded: rows.length,
     newest: rows[0]?.received_at || null,
     channels,
