@@ -23,9 +23,11 @@ export const IDENTITY_REQUEST_NOTIFICATION_TYPE = 'hamilton_identity_needed'
 export function buildAddIdentityLink({ profileId, kind } = {}) {
   const p = new URLSearchParams()
   if (profileId) p.set('id', String(profileId))
-  p.set('tab', 'identity')
+  // The identity vault card lives at #identity-vault in the pipeline tab, beside
+  // the other Hamilton controls; addIdentity pre-selects the requested kind.
+  p.set('tab', 'pipeline')
   if (kind) p.set('addIdentity', String(kind))
-  return `/ProfileDetail?${p.toString()}`
+  return `/ProfileDetail?${p.toString()}#identity-vault`
 }
 
 /**
