@@ -14,11 +14,23 @@ function publicHttpUrl(raw) {
   }
 }
 
+// Extract readable text from an HTML document for KEYWORD matching only — the
+// result is tokenised for purpose terms, never rendered, so this is not an HTML
+// sanitiser. It is still written defeat-resistant so it cannot be tricked into
+// leaking raw markup into the token stream (and so CodeQL's js/bad-tag-filter
+// is satisfied): comments are stripped FIRST (a `>` inside `<!-- a > b -->`
+// would otherwise end a tag early), and the script/style block matchers
+// terminate on their closing tag OR end-of-input, so an unterminated `<script>`
+// cannot pass its contents through.
 function visibleText(html) {
   return String(html || '')
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+    // HTML comments first — they may contain `>` that would break tag matching.
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
+    // Script / style blocks, terminated by their close tag or the end of input.
+    .replace(/<script\b[\s\S]*?(?:<\/script\s*>|$)/gi, ' ')
+    .replace(/<style\b[\s\S]*?(?:<\/style\s*>|$)/gi, ' ')
+    // Any remaining tag, including an unterminated trailing `<tag` at EOF.
+    .replace(/<[^>]*(?:>|$)/g, ' ')
     .replace(/&(?:nbsp|amp|quot|#39);/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim()
