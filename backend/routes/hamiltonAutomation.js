@@ -46,6 +46,7 @@ import {
   listMissingInfo,
 } from '../services/hamilton/applicationTaskStore.js'
 import { listScopedHamiltonTasks } from '../services/hamilton/hamiltonTaskListing.js'
+import { attachTaskPresentation } from '../services/hamilton/hamiltonTaskPresentation.js'
 import { cancelActiveHamiltonTaskRun } from '../services/hamilton/hamiltonRunCancellation.js'
 import {
   automateSelected,
@@ -501,6 +502,18 @@ router.get('/tasks', async (req, res) => {
     if (automationType) {
       tasks = (tasks || []).filter((t) => t.automation_type === automationType)
     }
+    // `application_tasks` carries no title — the funder's name lives on the
+    // grant/opportunity row it points at. Resolving it HERE is what stops
+    // every card on the run dashboard reading "Untitled funding source"; the
+    // same call also attaches the recorded outcome reason and the terminal
+    // actor, so a finished card can say what happened and who did it.
+    // Best-effort by construction: a failure leaves the raw rows intact rather
+    // than 500-ing a list the caller can still partly use.
+    try {
+      tasks = await attachTaskPresentation(req.db, tasks)
+    } catch (err) {
+      log.warn('task_presentation_failed', { err: err?.message })
+    }
     return res.json({ ok: true, tasks })
   } catch (err) {
     log.error('list_tasks_failed', { err: err?.message })
@@ -514,7 +527,16 @@ router.get('/tasks/:taskId', async (req, res) => {
   try {
     const events = await listTaskEvents(req.db, ctx.task.id, { limit: 500 })
     const missing = await listMissingInfo(req.db, ctx.task.id, { includeResolved: true })
-    return res.json({ ok: true, task: ctx.task, events, missing })
+    // Same presentation contract as the list endpoint, so a task detail view
+    // and the card that links to it can never disagree about the name.
+    let task = ctx.task
+    try {
+      const [presented] = await attachTaskPresentation(req.db, [ctx.task])
+      if (presented) task = presented
+    } catch (err) {
+      log.warn('task_presentation_failed', { taskId: ctx.task.id, err: err?.message })
+    }
+    return res.json({ ok: true, task, events, missing })
   } catch (err) {
     log.error('get_task_failed', { taskId: ctx.task.id, err: err?.message })
     return res.status(500).json({ error: 'get_failed' })

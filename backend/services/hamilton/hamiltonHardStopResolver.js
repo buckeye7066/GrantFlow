@@ -50,6 +50,7 @@ import {
 import { isAuthorizationActive } from './hamiltonAuthorizationStore.js'
 import { findOfficialUrlForOpportunity } from '../urlEnrichment.js'
 import { isSearchEngineUrl, portalUrlFunderPlausibility } from '../../config/urlRules.js'
+import { classifyNonApplicationSurface } from '../../config/applicationSurfaceHosts.js'
 
 function ok(strategy, payload = {}, detail = null, retry = true) {
   return { outcome: 'resolved', strategy, retry, fallback: null, detail, payload }
@@ -651,6 +652,18 @@ export async function attemptRuntimeUrlRescue(ctx, input, deps = {}) {
   if (current && candidate === current) return { url: null, reason: 'same_dead_end_page' }
   if (sponsor && portalUrlFunderPlausibility(found.url, sponsor) === 'implausible') {
     return { url: null, reason: 'funder_mismatch', rejected_url: found.url }
+  }
+  // A page can be live, on-topic, and still structurally incapable of being an
+  // application surface. Token overlap actively FAVOURS an encyclopedia
+  // article — it is named after the funder — and the previous bar had no other
+  // content test, so production accepted
+  // `en.wikipedia.org/wiki/NeighborWorks_America`, a realtor's blog post about
+  // Section 8, and a tax-content site's article on senior exemptions as
+  // "the funder's own application page". See backend/config/applicationSurfaceHosts.js
+  // for the verbatim list. This can only refuse; it never admits anything new.
+  const nonApplication = classifyNonApplicationSurface(found.url)
+  if (nonApplication) {
+    return { url: null, reason: nonApplication.reason, rejected_url: found.url }
   }
   return { url: found.url, probe: found.probe || null, hits: found.hits ?? null }
 }
