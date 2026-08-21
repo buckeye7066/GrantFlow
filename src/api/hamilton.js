@@ -311,6 +311,32 @@ export function getHamiltonFullAutomationStatus(profileId) {
   return apiFetch(`/api/hamilton/automation/full-automation?profile_id=${encodeURIComponent(profileId)}`)
 }
 
+/**
+ * Identity vault (owner directive 2026-08-21). The SENSITIVE identity values a
+ * portal may demand for identity proofing / SSO. GET returns the offerable
+ * kinds + which are on file with a MASKED hint — never a plaintext value.
+ */
+export function getHamiltonIdentityVault(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/identity-vault?profileId=${encodeURIComponent(profileId)}`)
+}
+
+export function setHamiltonIdentitySecret({ profileId, kind, value }) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch('/api/hamilton/automation/identity-vault', {
+    method: 'POST',
+    body: JSON.stringify({ profileId, kind, value }),
+  })
+}
+
+export function revokeHamiltonIdentitySecret({ profileId, kind }) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch('/api/hamilton/automation/identity-vault/revoke', {
+    method: 'POST',
+    body: JSON.stringify({ profileId, kind }),
+  })
+}
+
 export function revokeHamiltonAuthorization(id, reason = null) {
   if (!id) return Promise.reject(new Error('authorization id required'))
   return apiFetch(`/api/hamilton/automation/authorizations/${encodeURIComponent(id)}/revoke`, {

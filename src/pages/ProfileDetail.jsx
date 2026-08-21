@@ -64,6 +64,7 @@ import PortalSessionsCard from "@/components/hamilton/PortalSessionsCard.jsx"
 import PortalSyncCard from "@/components/hamilton/PortalSyncCard.jsx"
 import ProfilePortalsCard from "@/components/hamilton/ProfilePortalsCard.jsx"
 import HamiltonAutopilotConsentCard from "@/components/hamilton/HamiltonAutopilotConsentCard.jsx"
+import HamiltonIdentityVaultCard from "@/components/hamilton/HamiltonIdentityVaultCard.jsx"
 import HamiltonWorkPanel from "@/components/hamilton/HamiltonWorkPanel.jsx"
 import ProfileFundingSourcesCard from "@/components/funding/ProfileFundingSourcesCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
@@ -1585,6 +1586,12 @@ export default function ProfileDetail() {
                   below them is allowed to do, and sitting under a long portal
                   list they were the part of the page nobody reached. */}
               <HamiltonAutopilotConsentCard profileId={profileId} />
+              {/* Secure store for the identity values a portal may demand (SSN,
+                  DOB, government ID, FSA ID, SSO). Hamilton's "I need X"
+                  notification deep-links here (#identity-vault). */}
+              <div id="identity-vault" className="scroll-mt-24">
+                <HamiltonIdentityVaultCard profileId={profileId} />
+              </div>
               <ProfileFundingSourcesCard profileId={profileId} />
               <ProfilePortalsCard profileId={profileId} profileName={profile?.display_name || ""} />
               {/* The manual portal-host/URL entry forms are de-emphasized: kept
