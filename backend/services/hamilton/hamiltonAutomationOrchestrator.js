@@ -264,6 +264,41 @@ async function loadPortalLink(db, profileId, { opportunityId, grantId }) {
   } catch { return null }
 }
 
+/**
+ * Turn a classification into a sentence a person can act on.
+ *
+ * The old line was `Hamilton classified this source as "portal" (confidence
+ * 0.55).` — the same shape for a declared application mode and for the
+ * last-resort "there is a link here" heuristic. Measured on production
+ * 2026-08-21, 38,207 of roughly 48,700 classification events ever written are
+ * that heuristic, so four cards in five carried an identical number that
+ * looked like a measurement and was not. There is also no threshold anywhere
+ * that reads `confidence` — routing is by `automation_type` alone — so the
+ * number was pure display, and misleading display at that.
+ *
+ * Nothing about the routing changes here. What changes is that the record says
+ * whether Hamilton KNEW or GUESSED.
+ */
+function describeClassification(classification = {}) {
+  const type = classification.automation_type || 'unknown'
+  const strength = classification.evidence_strength || 'guessed'
+  const rule = classification.deciding_rule || 'unknown_rule'
+  const confidence = Number.isFinite(Number(classification.confidence))
+    ? Number(classification.confidence).toFixed(2)
+    : 'n/a'
+
+  if (strength === 'declared') {
+    return `Hamilton read this source's own metadata: it applies through "${type}" (rule ${rule}, confidence ${confidence}).`
+  }
+  if (strength === 'inferred') {
+    return `Hamilton inferred this source applies through "${type}" from ${rule} (confidence ${confidence}). Not stated by the funder.`
+  }
+  if (strength === 'none') {
+    return `Hamilton could NOT determine how to apply to this source — no application channel was found (rule ${rule}).`
+  }
+  return `Hamilton GUESSED "${type}" for this source: nothing declared an application method, so it fell back to ${rule} (confidence ${confidence}). The page has not been checked for an application form.`
+}
+
 function mapClassificationToInitialStatus(automationType) {
   switch (automationType) {
     case 'portal':         return 'analyzing'
@@ -487,7 +522,12 @@ export async function automateSingleSource(db, {
     eventType: 'progress',
     status: initialStatus,
     step: classification.automation_type,
-    message: `Hamilton classified this source as "${classification.automation_type}" (confidence ${classification.confidence.toFixed(2)}).`,
+    // Say what the classification RESTS ON, not just a number. A bare
+    // "confidence 0.55" reads as a measurement; it is in fact the last-resort
+    // `url.http` rule, which fires when nothing declared an application method
+    // and the row merely carries a link. Presenting a guess in the same words
+    // as a declared fact is the silent-failure-as-success pattern.
+    message: describeClassification(classification),
     actorUserId: userId,
     actorRole: 'agent',
     details: { classification },

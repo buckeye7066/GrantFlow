@@ -12,49 +12,257 @@
  * HONESTY RULES THIS PAGE KEEPS:
  *  - It never claims work is happening. Every line comes from a task row or a
  *    task event the orchestrator actually wrote. An empty run says it is empty.
- *  - "Needs you" is louder than "running". A blocked task is the thing the user
- *    can act on, so it sorts first and keeps its own colour.
+ *  - EVERY task is in exactly one visible bucket and the buckets sum to the
+ *    list. The first version counted only ten of the thirty-four real statuses
+ *    and swept the rest into a counter it never rendered — on production data
+ *    that hid 523 of 931 tasks, including two actively filling a portal while
+ *    the header read "Hamilton is not working right now · 0 working". The
+ *    bucket map now lives in `shared/hamiltonTaskLifecycle.js` and is
+ *    totality-tested against the canonical status list.
+ *  - A card says WHAT happened, not that something happened. "Finished" is not
+ *    a result — submitted and cancelled are opposite results wearing that word
+ *    — so a terminal card shows its outcome and the reason the system actually
+ *    recorded. It never invents one: a row with no recorded reason says so.
+ *  - Times carry a DATE unless they are from today. Without one, a sweep that
+ *    cancelled 295 tasks on 2026-08-03 read as if it had happened overnight.
+ *  - "Needs you" is louder than "running", sorts first, and names the actual
+ *    wall plus the page to open. "Open this task in GrantFlow to clear it" is
+ *    not an instruction if it neither says what is wrong nor links anywhere.
  *  - Polling backs off when nothing is live, and says when it last looked. A
  *    stale panel that looks live is the failure mode this page exists to avoid.
  *  - Closing the window does not stop the run, and the page says so.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { Loader2, RefreshCw, CheckCircle2, AlertTriangle, Clock } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Loader2, RefreshCw, CheckCircle2, AlertTriangle, Clock, ExternalLink, ChevronRight } from 'lucide-react'
 import client from '@/api/client'
-
-/** Statuses that mean Hamilton is actively working the row right now. */
-const LIVE_STATUSES = new Set(['queued', 'ready', 'in_progress', 'running'])
-/** Statuses that mean the run stopped and a human is the next actor. */
-const NEEDS_YOU_PREFIXES = ['blocked']
-const NEEDS_YOU_STATUSES = new Set(['waiting_for_user', 'waiting_for_admin', 'needs_info'])
-/** Statuses that are finished, for better or worse. */
-const DONE_STATUSES = new Set(['submitted', 'draft_completed', 'awarded', 'declined', 'cancelled', 'failed'])
-
-function classify(status) {
-  const s = String(status || '').toLowerCase()
-  if (NEEDS_YOU_STATUSES.has(s) || NEEDS_YOU_PREFIXES.some((p) => s.startsWith(p))) return 'needs'
-  if (LIVE_STATUSES.has(s)) return 'live'
-  if (DONE_STATUSES.has(s)) return 'done'
-  return 'idle'
-}
+import {
+  BUCKET_ORDER,
+  bucketForTaskStatus,
+  countTaskBuckets,
+  isRecognisedTaskStatus,
+  terminalOutcome,
+} from '../../shared/hamiltonTaskLifecycle.js'
 
 const TONE = {
-  needs: { dot: 'bg-rose-400', text: 'text-rose-300', label: 'Needs you' },
-  live: { dot: 'bg-emerald-400 animate-pulse', text: 'text-emerald-300', label: 'Working' },
-  done: { dot: 'bg-amber-300', text: 'text-amber-200', label: 'Finished' },
-  idle: { dot: 'bg-slate-500', text: 'text-slate-300', label: 'Waiting' },
+  needs_you: { dot: 'bg-rose-400', text: 'text-rose-300', label: 'Needs you' },
+  working: { dot: 'bg-emerald-400 animate-pulse', text: 'text-emerald-300', label: 'Working' },
+  waiting: { dot: 'bg-slate-500', text: 'text-slate-300', label: 'Waiting' },
+  finished: { dot: 'bg-amber-300', text: 'text-amber-200', label: 'Finished' },
 }
-const ORDER = { needs: 0, live: 1, idle: 2, done: 3 }
+
+/**
+ * What a terminal card leads with. The plain English differs per outcome
+ * because the outcomes differ — the previous single sentence, "Hamilton is
+ * finished with this one", was shown identically for a real submission and for
+ * a task a boot sweep killed.
+ */
+const OUTCOME_COPY = {
+  submitted: { label: 'Submitted', tone: 'text-emerald-300' },
+  completed: { label: 'Completed', tone: 'text-amber-200' },
+  drafted: { label: 'Draft prepared — not submitted', tone: 'text-amber-200' },
+  failed: { label: 'Failed', tone: 'text-rose-300' },
+  cancelled: { label: 'Cancelled before it was applied for', tone: 'text-slate-300' },
+}
+
+/** Who a submission is attributed to. "We do not know" is an honest answer. */
+const SUBMITTED_BY_COPY = {
+  hamilton: 'Submitted by Hamilton, with a captured portal confirmation.',
+  owner: 'Marked submitted by a person in the Application Tracker — GrantFlow did not transmit it.',
+  unrecorded: 'Nothing recorded who submitted this, so GrantFlow cannot say whether Hamilton or a person did.',
+}
 
 function humanStatus(status) {
   return String(status || 'unknown').replace(/_/g, ' ')
 }
 
-function timeOf(value) {
+function sameCalendarDay(a, b) {
+  return (
+    a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate()
+  )
+}
+
+/**
+ * A timestamp a reader can place. Today's rows stay short; anything older
+ * carries its date, because a list mixing several days with time-only stamps
+ * is unreadable and actively misleading.
+ */
+function whenOf(value) {
   if (!value) return ''
   const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString()
+  if (Number.isNaN(d.getTime())) return ''
+  if (sameCalendarDay(d, new Date())) return d.toLocaleTimeString()
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+function timeValue(value) {
+  const t = new Date(value || 0).getTime()
+  return Number.isNaN(t) ? 0 : t
+}
+
+function asList(value) {
+  if (Array.isArray(value)) return value.filter(Boolean)
+  if (typeof value === 'string' && value.trim()) return [value.trim()]
+  return []
+}
+
+function labelOfMissing(entry) {
+  if (typeof entry === 'string') return entry
+  return entry?.label || entry?.key || entry?.name || entry?.kind || null
+}
+
+/**
+ * The concrete thing standing in the way, in the owner's words rather than the
+ * state machine's. Everything here is already on the task row — the previous
+ * card simply showed none of it.
+ */
+function blockerSummary(task) {
+  const status = String(task?.status || '').toLowerCase()
+  const named = {
+    waiting_for_login: 'Hamilton needs you to sign in to this portal.',
+    blocked_login_required: 'Hamilton needs you to sign in to this portal.',
+    waiting_for_2fa: 'The portal asked for a two-factor code.',
+    blocked_2fa: 'The portal asked for a two-factor code.',
+    waiting_for_captcha: 'The portal put up a captcha Hamilton cannot answer.',
+    blocked_captcha: 'The portal put up a captcha Hamilton cannot answer.',
+    waiting_for_email_verification: 'A verification link was emailed and still needs clicking.',
+    waiting_for_missing_info: 'Hamilton needs information the profile does not have yet.',
+    blocked_missing_info: 'Hamilton needs information the profile does not have yet.',
+    blocked_terms_or_policy: "This portal's terms do not permit automated submission.",
+    waiting_for_review: 'This one is waiting for you to review it before it goes any further.',
+    submission_verification_required: 'A submission may have gone through and could not be confirmed. Check the portal before retrying.',
+    ready_to_submit: 'Everything is ready — it needs your go-ahead to submit.',
+    ready_to_print_mail: 'The packet is ready to print and mail.',
+    ready_to_email: 'The packet is ready to email.',
+    ready_to_fax: 'The packet is ready to fax.',
+  }[status]
+
+  if (named) return named
+  // `last_agent_message` is Hamilton's own explanation and it is persisted on
+  // every row. Preferring it over a generic sentence is most of this fix.
+  if (task?.outcome_reason) return task.outcome_reason
+  if (task?.last_agent_message) return task.last_agent_message
+  if (!isRecognisedTaskStatus(status)) {
+    return `This task is in an unrecognised state (${humanStatus(status)}). That is a GrantFlow defect, not something you did.`
+  }
+  return 'Hamilton stopped here and a person is the next step.'
+}
+
+/**
+ * The terminal story. Deliberately conservative: where the system recorded no
+ * reason, the card SAYS the reason was not recorded rather than inventing a
+ * plausible one.
+ */
+function outcomeSummary(task) {
+  const outcome = terminalOutcome(task?.status)
+  const reason = task?.outcome_reason || task?.last_agent_message || null
+  if (outcome === 'submitted') {
+    return SUBMITTED_BY_COPY[task?.submitted_by] || SUBMITTED_BY_COPY.unrecorded
+  }
+  if (reason) return reason
+  if (outcome === 'cancelled') {
+    return 'No reason was recorded for this cancellation, so GrantFlow cannot tell you why it stopped.'
+  }
+  if (outcome === 'failed') {
+    return 'No error detail was recorded for this failure.'
+  }
+  return 'Hamilton finished with this one and recorded no further detail.'
+}
+
+function TaskCard({ task }) {
+  const bucket = bucketForTaskStatus(task.status)
+  const tone = TONE[bucket]
+  const outcome = terminalOutcome(task.status)
+  const outcomeCopy = outcome ? OUTCOME_COPY[outcome] : null
+  const missing = [
+    ...asList(task.missing_fields).map(labelOfMissing),
+    ...asList(task.missing_documents).map(labelOfMissing),
+    ...asList(task.required_user_actions).map(labelOfMissing),
+  ].filter(Boolean)
+
+  return (
+    <li className="rounded-xl border border-slate-800 bg-slate-950/40 transition-colors hover:border-slate-700">
+      <Link
+        to={`/HamiltonTask/${encodeURIComponent(task.id)}`}
+        className="block rounded-xl p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} aria-hidden="true" />
+          <span className="text-sm font-medium">{task.display_title || 'Unnamed source'}</span>
+          {task.title_source === 'host' && (
+            <span className="rounded-full border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400">
+              no stored name — showing the site
+            </span>
+          )}
+          <span className={`ml-auto text-xs font-medium ${tone.text}`}>{tone.label}</span>
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-600" aria-hidden="true" />
+        </div>
+
+        <p className="mt-1 text-xs text-slate-400">
+          {humanStatus(task.status)}
+          {task.automation_type && task.automation_type !== 'unknown'
+            ? ` · ${humanStatus(task.automation_type)}`
+            : ''}
+          {task.funder_name && task.funder_name !== task.display_title ? ` · ${task.funder_name}` : ''}
+          {task.updated_at ? ` · updated ${whenOf(task.updated_at)}` : ''}
+        </p>
+
+        {bucket === 'needs_you' && (
+          <div className="mt-2 rounded-lg bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">
+            <p className="flex items-start gap-1.5">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>{blockerSummary(task)}</span>
+            </p>
+            {missing.length > 0 && (
+              <p className="mt-1.5 pl-5 text-rose-300/80">
+                Still needed: {missing.slice(0, 6).join(', ')}
+                {missing.length > 6 ? ` and ${missing.length - 6} more` : ''}
+              </p>
+            )}
+            {task.next_retry_at && (
+              <p className="mt-1.5 pl-5 text-rose-300/70">
+                Hamilton will try again on its own at {whenOf(task.next_retry_at)}.
+              </p>
+            )}
+          </div>
+        )}
+
+        {outcomeCopy && (
+          <div className="mt-2 text-xs">
+            <p className={`flex items-center gap-1.5 font-medium ${outcomeCopy.tone}`}>
+              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+              {outcomeCopy.label}
+              {task.submitted_at && outcome === 'submitted' ? ` · ${whenOf(task.submitted_at)}` : ''}
+            </p>
+            <p className="mt-1 text-slate-400">{outcomeSummary(task)}</p>
+          </div>
+        )}
+      </Link>
+
+      {task.apply_url && (
+        <p className="border-t border-slate-800/70 px-4 py-2 text-xs">
+          <a
+            href={task.apply_url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-center gap-1.5 text-slate-300 hover:text-emerald-300"
+          >
+            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+            Open the funder&rsquo;s page
+          </a>
+        </p>
+      )}
+    </li>
+  )
 }
 
 export default function HamiltonAutomationWatch() {
@@ -62,7 +270,6 @@ export default function HamiltonAutomationWatch() {
   const profileId = params.get('profile') || ''
 
   const [tasks, setTasks] = useState([])
-  const [events, setEvents] = useState({})
   const [loadedAt, setLoadedAt] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [firstLoadDone, setFirstLoadDone] = useState(false)
@@ -79,30 +286,8 @@ export default function HamiltonAutomationWatch() {
       const qs = new URLSearchParams({ profile_id: profileId })
       const res = await client.get(`/api/hamilton/automation/tasks?${qs.toString()}`)
       if (runId !== runIdRef.current) return
-      const rows = Array.isArray(res?.tasks) ? res.tasks : []
-      setTasks(rows)
+      setTasks(Array.isArray(res?.tasks) ? res.tasks : [])
       setLoadError(null)
-
-      // Pull the step-by-step ONLY for the rows that are actually moving or
-      // stuck. Fetching events for every finished task would turn a courtesy
-      // window into a request storm.
-      const watch = rows.filter((t) => classify(t.status) !== 'done').slice(0, 6)
-      const detail = await Promise.all(watch.map(async (t) => {
-        try {
-          const d = await client.get(`/api/hamilton/automation/tasks/${encodeURIComponent(t.id)}`)
-          return [t.id, Array.isArray(d?.events) ? d.events.slice(-8).reverse() : []]
-        } catch {
-          return [t.id, null]
-        }
-      }))
-      if (runId !== runIdRef.current) return
-      setEvents((prev) => {
-        const next = { ...prev }
-        // A failed detail fetch keeps the PREVIOUS steps rather than blanking
-        // the panel — a momentary network blip must not read as "no work".
-        for (const [id, list] of detail) if (list) next[id] = list
-        return next
-      })
     } catch (err) {
       if (runId !== runIdRef.current) return
       setLoadError(err?.message || 'Could not reach GrantFlow.')
@@ -114,10 +299,8 @@ export default function HamiltonAutomationWatch() {
     }
   }, [profileId])
 
-  const anyLive = useMemo(
-    () => tasks.some((t) => classify(t.status) === 'live'),
-    [tasks],
-  )
+  const counts = useMemo(() => countTaskBuckets(tasks), [tasks])
+  const anyLive = counts.working > 0
 
   useEffect(() => {
     if (!profileId) return undefined
@@ -129,14 +312,15 @@ export default function HamiltonAutomationWatch() {
     return () => clearInterval(t)
   }, [profileId, load, anyLive])
 
-  const sorted = useMemo(
-    () => [...tasks].sort((a, b) => ORDER[classify(a.status)] - ORDER[classify(b.status)]),
-    [tasks],
-  )
-  const counts = useMemo(() => {
-    const c = { needs: 0, live: 0, done: 0, idle: 0 }
-    for (const t of tasks) c[classify(t.status)] += 1
-    return c
+  const sorted = useMemo(() => {
+    // Bucket first, then genuinely most-recent-first INSIDE the bucket. The
+    // previous comparator had no secondary key and leaned on sort stability
+    // plus whatever order the backend happened to return.
+    return [...tasks].sort((a, b) => {
+      const bucketDelta = BUCKET_ORDER[bucketForTaskStatus(a.status)] - BUCKET_ORDER[bucketForTaskStatus(b.status)]
+      if (bucketDelta !== 0) return bucketDelta
+      return timeValue(b.updated_at) - timeValue(a.updated_at)
+    })
   }, [tasks])
 
   if (!profileId) {
@@ -155,7 +339,7 @@ export default function HamiltonAutomationWatch() {
     <div className="min-h-screen bg-slate-900 text-slate-100">
       <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-900/95 px-6 py-4 backdrop-blur">
         <div className="flex flex-wrap items-center gap-3">
-          <span className={`h-2.5 w-2.5 rounded-full ${anyLive ? TONE.live.dot : TONE.idle.dot}`} aria-hidden="true" />
+          <span className={`h-2.5 w-2.5 rounded-full ${anyLive ? TONE.working.dot : TONE.waiting.dot}`} aria-hidden="true" />
           <h1 className="text-base font-semibold">
             {anyLive ? 'Hamilton is working' : 'Hamilton is not working right now'}
           </h1>
@@ -167,10 +351,23 @@ export default function HamiltonAutomationWatch() {
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /> Refresh
           </button>
         </div>
+        {/*
+          Every task is counted exactly once and the four numbers sum to the
+          list below. If they ever do not, the totals line says so rather than
+          quietly dropping the difference.
+        */}
         <p className="mt-1.5 text-xs text-slate-400">
-          {counts.live} working · {counts.needs} need you · {counts.done} finished
+          {counts.working} working · {counts.needs_you} need you · {counts.waiting} waiting ·{' '}
+          {counts.finished} finished · {counts.total} in total
           {loadedAt ? ` · checked ${loadedAt.toLocaleTimeString()}` : ''}
         </p>
+        {counts.unrecognised > 0 && (
+          <p className="mt-1 text-xs text-amber-300">
+            {counts.unrecognised} task{counts.unrecognised === 1 ? ' is' : 's are'} in a state this
+            page does not recognise. They are counted under &ldquo;need you&rdquo; so they are not
+            lost, but this is a GrantFlow defect worth reporting.
+          </p>
+        )}
         <p className="mt-1 text-xs text-slate-500">
           You can close this window at any time — the run keeps going without it.
         </p>
@@ -201,58 +398,15 @@ export default function HamiltonAutomationWatch() {
         )}
 
         <ul className="space-y-3">
-          {sorted.map((t) => {
-            const kind = classify(t.status)
-            const tone = TONE[kind]
-            const steps = events[t.id] || []
-            return (
-              <li key={t.id} className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} aria-hidden="true" />
-                  <span className="text-sm font-medium">{t.title || t.opportunity_title || 'Untitled funding source'}</span>
-                  <span className={`ml-auto text-xs font-medium ${tone.text}`}>{tone.label}</span>
-                </div>
-                <p className="mt-1 text-xs text-slate-400">
-                  {humanStatus(t.status)}
-                  {t.automation_type ? ` · ${humanStatus(t.automation_type)}` : ''}
-                  {t.updated_at ? ` · updated ${timeOf(t.updated_at)}` : ''}
-                </p>
-
-                {kind === 'needs' && (
-                  <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    Hamilton stopped here and needs you. Open this task in GrantFlow to clear it.
-                  </p>
-                )}
-
-                {steps.length > 0 && (
-                  <ol className="mt-3 space-y-1.5 border-l border-slate-800 pl-3">
-                    {steps.map((e) => (
-                      <li key={e.id || `${e.created_at}-${e.event_type}`} className="text-xs">
-                        <span className="text-slate-200">
-                          {humanStatus(e.step || e.event_type)}
-                          {e.status ? ` — ${humanStatus(e.status)}` : ''}
-                        </span>
-                        {e.message && <span className="block text-slate-400">{e.message}</span>}
-                        <span className="block text-[10px] text-slate-500">
-                          <Clock className="mr-1 inline h-2.5 w-2.5" aria-hidden="true" />
-                          {timeOf(e.created_at)}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-
-                {kind === 'done' && (
-                  <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-200">
-                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    Hamilton is finished with this one.
-                  </p>
-                )}
-              </li>
-            )
-          })}
+          {sorted.map((task) => <TaskCard key={task.id} task={task} />)}
         </ul>
+
+        {sorted.length > 0 && (
+          <p className="mt-4 flex items-center gap-1.5 text-xs text-slate-500">
+            <Clock className="h-3 w-3" aria-hidden="true" />
+            Open any card for its full step-by-step timeline.
+          </p>
+        )}
       </main>
     </div>
   )

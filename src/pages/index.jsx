@@ -87,6 +87,7 @@ const ServiceAgreement = lazy(() => import('./ServiceAgreement'), 'ServiceAgreem
 const CheckoutRequired = lazy(() => import('./CheckoutRequired'), 'CheckoutRequired')
 const HamiltonLiveLogin = lazy(() => import('./HamiltonLiveLogin'), 'HamiltonLiveLogin')
 const HamiltonAutomationWatch = lazy(() => import('./HamiltonAutomationWatch'), 'HamiltonAutomationWatch')
+const HamiltonTaskDetail = lazy(() => import('./HamiltonTaskDetail'), 'HamiltonTaskDetail')
 const Landing = lazy(() => import('./Landing'), 'Landing')
 const PrivacyPolicy = lazy(() => import('./PrivacyPolicy'), 'PrivacyPolicy')
 
@@ -243,6 +244,14 @@ export default function Pages() {
           own window instead of being homework on the Automation tab.
         */}
         <Route path="/HamiltonAutomationWatch" element={withBoundary(<HamiltonAutomationWatch />, 'HamiltonAutomationWatch')} />
+        {/*
+          Top-level for the same reason as the watch window above: the watch
+          popup has no app chrome, so the card it links to must resolve inside
+          that window rather than bouncing the user back into the main layout.
+          Before this route existed there was NO url that opened a Hamilton
+          task, which is why a finished card had nowhere to go.
+        */}
+        <Route path="/HamiltonTask/:taskId" element={withBoundary(<HamiltonTaskDetail />, 'HamiltonTaskDetail')} />
         <Route path="/set-password" element={withBoundary(<SetPassword />, 'SetPassword')} />
         <Route path="/ServiceApplication" element={withBoundary(<ServiceApplication />, 'ServiceApplication')} />
         <Route path="/auth/callback" element={withBoundary(<AuthCallback />, 'AuthCallback')} />
