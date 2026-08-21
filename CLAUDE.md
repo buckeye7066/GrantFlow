@@ -71,30 +71,47 @@ npm run opps:ensure-national-minimum  # Ensure national opportunity floor
 
 ## Portal automation chain (2026-08-03) — REQUIRED READING before touching Hamilton portal work
 
-**SUPERSEDED IN PART by the 2026-08-06 `bfeae548` "harden GrantFlow controlled
-beta release" commit (added, gf-phase2-batch-02 purpose-alignment pass,
-2026-08-14):** the narrative below (and the entries after it) describes live
-Hamilton Playwright automation reaching real funder/portal domains
-(scholarships.com, `<school>.scholarships.ngwebsolutions.com`,
-`*.academicworks.com`, etc.) as of 2026-08-01→2026-08-03. As of the 2026-08-06
-hardening commit, `backend/services/hamilton/controlledBetaBrowserPolicy.js`
-enforces a hard technical boundary: every Hamilton browser context is confined
-to a single reserved `https://hamilton-submit-fixture.invalid` origin (a
-Playwright route-level egress guard aborts any other request), and
-`backend/services/hamilton/browserLaunch.js` consults it before launch. No
-environment allowlist, saved credential, or profile URL can widen this. That
-means Hamilton currently CANNOT open a real portal site in a server browser at
-all — the real-domain bot-wall/session/portal-fill mechanics documented below
-are current explanations of the ENGINE's decision logic (still real, still
-tested), but the "reaches a real domain" premise is stale until a reviewed
-real-portal adapter ships. **`docs/HAMILTON_AUTOMATION_AGENT.md` reflects the
-current (post-hardening) boundary and is the authority for what Hamilton can
-reach today** — read it, not just this section, before assuming any of the
-scenarios below still execute against a live funder site. This repo's own
-`git log` shows CLAUDE.md was NOT updated with this fact when the hardening
-commit landed (it only got a cosmetic real-name→placeholder rename that same
-commit), so treat the "live" framing below as historical unless corroborated
-against `controlledBetaBrowserPolicy.js`.
+**THE FIXTURE-ONLY CONFINEMENT DESCRIBED HERE IS GONE. Corrected 2026-08-21
+(purpose audit), verified against the code on `main`.** For roughly two weeks
+this section told every agent that Hamilton "currently CANNOT open a real portal
+site in a server browser at all" because the 2026-08-06 `bfeae548` hardening
+confined every browser context to `https://hamilton-submit-fixture.invalid`.
+That is no longer true, and reading it as true produces wrong conclusions about
+the whole apply→submit chain — it did exactly that during this audit.
+
+What the code says today, `backend/services/hamilton/controlledBetaBrowserPolicy.js`:
+
+```js
+/** Navigation targets: reserved fixture OR public HTTPS (SSRF-safe). */
+export function isHamiltonBrowserTargetAllowed(value) {
+  return isControlledBetaSyntheticBrowserUrl(value) || isPublicHttpsPortalUrl(value)
+}
+```
+
+Any public HTTPS host is allowed; only the SSRF floor (`isPrivateOrLocalHostname`)
+still refuses. So the real-domain bot-wall / session / portal-fill mechanics
+documented below are LIVE mechanics again, not historical narrative.
+
+Two chokepoints did NOT get lifted with it, and they are load-bearing:
+
+- `POST /sessions/cloud-login/start` (`backend/routes/hamiltonAutomation.js`)
+  still hard-refuses any host that is not the fixture. Server-side cloud login to
+  a real portal is dead **via that route**; `POST /sessions/import` is the
+  surviving session-capture door.
+- `hamiltonSessionKeepAlive.js` returns `skipped` for real hosts, so a captured
+  session is never kept warm (and NGWeb idles out in ~45 min — see below).
+
+**Do not "restore" the fixture confinement.** `docs/agent-sync/2026-08-20-hamilton-real-portal-submit.md`
+records the owner instruction: *"Do not re-impose fixture-only controlled-beta
+refuse for real public HTTPS."* Note that `docs/HAMILTON_AUTOMATION_AGENT.md`
+still self-contradicts on this point (its header allows public HTTPS; its pathway
+table and hard-blockers section still say controlled beta never launches on a
+real domain) — when the two disagree, `controlledBetaBrowserPolicy.js` wins.
+
+Standing lesson, since this section has now been stale twice: a claim in this
+file about what the code enforces must be re-read against the code before it is
+relied on. Grep finding the string is not the check — `all_ready_sources` was
+present in the file and absent from the request path for days (`c826a5cc`).
 
 Five merged + deploy-verified PRs (#1103-#1108) changed how portals sync, how
 proposals are drafted, and what auto-submit means. Every agent working in this

@@ -284,6 +284,22 @@ export default function AdminAmyConsole() {
                 quality {before?.quality_score ?? '—'} → {after?.quality_score ?? '—'} (best floor {report?.metrics?.best?.floor ?? '—'})
               </span>
             </div>
+            {/*
+              SCOPE, next to the number. `quality_score` counts coverage minus
+              GENERIC-TITLED accepts the cap let through; it does not measure
+              whether an accepted grant is about the right subject. It read 1.0
+              on a run whose top result was a commercial-fishing safety grant
+              matched to a university. Derived from the finding registry, so this
+              line disappears the day a bad_match detector ships.
+            */}
+            {after?.relevance_measured === false && (
+              <div className="text-xs text-amber-800">
+                Coverage vs. the generic-title cap only — topical relevance is not measured
+                {Array.isArray(after?.unmeasured_finding_types) && after.unmeasured_finding_types.length > 0
+                  ? ` (no detector for: ${after.unmeasured_finding_types.join(', ')})`
+                  : ''}
+              </div>
+            )}
             {tuning?.applied?.backup_path && (
               <div className="text-xs text-muted-foreground">Reversible — backup: {tuning.applied.backup_path}</div>
             )}

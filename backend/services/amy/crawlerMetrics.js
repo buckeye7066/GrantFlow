@@ -16,6 +16,7 @@ import {
   DISCOVERY_MIN_SCORE_FLOOR,
   STRONG_MATCH_SCORE,
 } from '../../config/matchThresholds.js'
+import { PRECISION_SCOPE, unmeasuredFindingTypes } from './findingActorRegistry.js'
 
 function num(v) {
   const n = Number(v)
@@ -116,6 +117,25 @@ export function cohortMetricsAtFloor(evaluations, floor, { scoreKey = 'score' } 
     total_qualified: totalQualified,
     total_false_positives: totalFalsePositives,
     quality_score: qualityScore,
+    // SCOPE, published with the number (purpose audit 2026-08-21). `quality_score`
+    // reached 1.0 on a run whose top ACCEPT was a commercial-fishing safety grant
+    // matched to a university, because `candidateIsFalsePositive` only ever sees a
+    // GENERIC-TITLED accept. A specifically-titled irrelevant accept is not merely
+    // uncounted — it lands in `real` and RAISES this number. Derived from the
+    // finding registry so it retires itself the day a bad_match detector ships.
+    ...precisionScope(),
+  }
+}
+
+/**
+ * The honesty envelope around every precision number this module returns.
+ * @returns {{false_positive_scope: string, relevance_measured: boolean, unmeasured_finding_types: string[]}}
+ */
+function precisionScope() {
+  return {
+    false_positive_scope: PRECISION_SCOPE.false_positive_detects,
+    relevance_measured: PRECISION_SCOPE.relevance_measured,
+    unmeasured_finding_types: unmeasuredFindingTypes(),
   }
 }
 
@@ -163,6 +183,9 @@ export function summarizeCohort(evaluations, currentFloor = ACCEPT_SCORE) {
     zero_rate: at.zero_rate,
     false_positive_rate: at.false_positive_rate,
     quality_score: at.quality_score,
+    false_positive_scope: at.false_positive_scope,
+    relevance_measured: at.relevance_measured,
+    unmeasured_finding_types: at.unmeasured_finding_types,
     skipped: evals.filter((e) => e.status === 'skipped').length,
     errored: evals.filter((e) => e.status === 'error').length,
     source_failure_profiles: evals.filter((e) => num(e.sources_failed) > 0).length,

@@ -31,6 +31,7 @@
 
 import { containsTermWholeWord } from './shared/textMatch.js'
 import { DATA_POINT_MIN_TERM_LENGTH } from '../config/matchThresholds.js'
+import { isEvidentiaryKeyword } from '../config/nonEvidentiaryKeywords.js'
 
 /** Fixed kind order — determines inventory ordering and dashboard grouping. */
 export const DATA_POINT_KINDS = Object.freeze([
@@ -368,7 +369,14 @@ export function buildProfileDataPointInventory({ profile, signals, profileNorm =
   const keywords = keywordList && (keywordList.size ?? keywordList.length)
     ? toValueList(keywordList)
     : rowList(profile?.keywords)
+  //    A stopword is not evidence. Keyword credit is NUMERATOR-ONLY, so a term
+  //    that proves nothing ("and", "grant", "funding", "eligible", "none", the
+  //    sponsor-name fragment "era") is free score with no offsetting cost in the
+  //    denominator — which is how a college profile's top ACCEPT came to be a
+  //    commercial-fishing occupational-safety grant at 59. The vocabulary is the
+  //    one document mining already used; see config/nonEvidentiaryKeywords.js.
   for (const k of cleanTerms(keywords)) {
+    if (!isEvidentiaryKeyword(k)) continue
     push('keyword', k)
   }
 

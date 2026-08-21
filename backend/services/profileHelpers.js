@@ -4,6 +4,7 @@ import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
 import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
 import { isFabricatedGeoSource } from '../config/placeholderProfileSignals.js'
+import { NON_EVIDENTIARY_KEYWORDS } from '../config/nonEvidentiaryKeywords.js'
 import { normalizeState, normalizeStateFromText } from '../utils/stateNormalization.js'
 import { createLogger } from '../utils/logger.js'
 import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
@@ -1003,30 +1004,14 @@ function collectNarrativeKeywords(section = {}, register) {
 
 // Stopwords for document-text mining: ordinary English + grant/admin boilerplate
 // that would otherwise dominate frequency counts and add nothing discriminating.
-const DOC_STOPWORDS = new Set([
-  'the', 'and', 'for', 'that', 'this', 'with', 'will', 'are', 'was', 'were',
-  'have', 'has', 'had', 'not', 'but', 'you', 'your', 'our', 'their', 'they',
-  'them', 'his', 'her', 'she', 'him', 'who', 'whom', 'which', 'what', 'when',
-  'where', 'how', 'why', 'all', 'any', 'can', 'may', 'must', 'shall', 'should',
-  'would', 'could', 'from', 'into', 'over', 'under', 'about', 'above', 'below',
-  'than', 'then', 'them', 'these', 'those', 'such', 'each', 'every', 'some',
-  'more', 'most', 'other', 'also', 'been', 'being', 'because', 'while', 'during',
-  'between', 'within', 'through', 'after', 'before', 'once', 'only', 'very',
-  'here', 'there', 'both', 'few', 'many', 'much', 'own', 'same', 'does', 'did',
-  'doing', 'done', 'one', 'two', 'three', 'first', 'second', 'page', 'date',
-  'name', 'please', 'thank', 'thanks', 'sincerely', 'dear', 'regards',
-  'application', 'applicant', 'apply', 'program', 'programs', 'grant', 'grants',
-  'funding', 'fund', 'project', 'organization', 'org', 'services', 'service',
-  'information', 'provide', 'provided', 'include', 'including', 'support',
-  'request', 'requirements', 'eligible', 'eligibility', 'available', 'number',
-  'address', 'email', 'phone', 'street', 'city', 'state', 'county', 'zip',
-  'across', 'around', 'toward', 'towards', 'upon', 'among', 'amongst', 'per',
-  'via', 'onto', 'out', 'down', 'again', 'further', 'against', 'throughout',
-  'regarding', 'concerning', 'serve', 'serves', 'serving', 'served', 'focus',
-  'focuses', 'focused', 'help', 'helps', 'helping', 'need', 'needs', 'make',
-  'makes', 'made', 'get', 'gets', 'got', 'use', 'uses', 'used', 'using',
-  'work', 'works', 'working', 'includes', 'provides', 'providing', 'across',
-])
+//
+// The list MOVED to config/nonEvidentiaryKeywords.js (purpose audit 2026-08-21)
+// because the KEYWORD DATA-POINT inventory — which scores every match — never had
+// a stopword filter at all, and a college profile's top ACCEPT turned out to be a
+// commercial-fishing occupational-safety grant credited for matching "and",
+// "grant", "funding" and "eligible". One list, two consumers, so a term the miner
+// discards can never come back as scoring evidence.
+const DOC_STOPWORDS = NON_EVIDENTIARY_KEYWORDS
 
 /**
  * Mine salient keyword/bigram terms out of uploaded document text so a user's

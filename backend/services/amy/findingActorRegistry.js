@@ -310,13 +310,56 @@ export function actorlessFindingTypes() {
   return Object.values(FINDING_TYPES).filter((t) => !FINDING_ACTORS[t])
 }
 
+/**
+ * The finding types this registry DECLARES but no detector emits.
+ *
+ * Purpose audit 2026-08-21: `bad_match` has sat here with `emitted: false` and
+ * the note "No detector emits this" while Amy reported `false_positives: 0,
+ * quality_score: 1.0` for a run whose top result was a commercial-fishing
+ * occupational-safety grant matched to a university. The admission existed; it
+ * just never left the source file. Publishing it beside the metric is what
+ * stops a scope-limited number from being read as a relevance measurement.
+ *
+ * DERIVED, never hand-listed. Build the detector, flip `emitted: true`, and the
+ * disclosure retires itself — and a second undetected class can never be added
+ * without appearing here.
+ */
+export function unmeasuredFindingTypes() {
+  return Object.entries(FINDING_ACTORS)
+    .filter(([, actor]) => actor?.emitted === false)
+    .map(([type]) => type)
+    .sort()
+}
+
+/**
+ * What Amy's precision numbers actually measure — stated, so they cannot be
+ * over-read.
+ *
+ * `candidateIsFalsePositive` (crawlerMetrics.js) fires only on `genericOnly`
+ * candidates: rows whose TITLE matches the directory phrases in
+ * `config/genericTitleVocabulary.js`. That is a self-consistency check on the
+ * generic-title cap, NOT a relevance judgement. A specifically-titled but
+ * topically-irrelevant ACCEPT matches none of those phrases, so it is never
+ * counted as a false positive — and it lands in `real`, where it counts as
+ * COVERAGE and pushes `quality_score` UP.
+ */
+export const PRECISION_SCOPE = Object.freeze({
+  false_positive_detects: 'generic_title_cap_leak',
+  relevance_measured: false,
+  note: 'false_positives counts generic/directory titles the ACCEPT cap let through. '
+    + 'Topical relevance of a specifically-titled ACCEPT is not measured by any detector '
+    + '(see unmeasuredFindingTypes()).',
+})
+
 export default {
   SURFACE_CLASSES,
   AUTONOMY_FORBIDDEN,
   LEVER_SURFACE,
   FINDING_ACTORS,
+  PRECISION_SCOPE,
   actorFor,
   actorlessFindingTypes,
+  unmeasuredFindingTypes,
   unregisteredLevers,
   assertAutonomyBoundary,
 }
