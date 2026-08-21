@@ -39,6 +39,19 @@ const log = createLogger('service:hamilton-captcha-solver')
 
 const ENV = (typeof process !== 'undefined' && process?.env) ? process.env : {}
 
+// The env keys this solver reads, as a static registry. Two jobs: it is the
+// single naming source the code below indexes env by, AND it is the shape
+// scripts/generate-env-examples.mjs statically detects (a *ENV_KEYS* object of
+// string values) so these keys appear in .env.example without a live
+// `process.env.X` literal — the module reads them through a defaulted `env`
+// parameter for testability, which the generator's `process.env.` scan cannot see.
+export const CAPTCHA_SOLVER_ENV_KEYS = Object.freeze({
+  apiKey: 'CAPTCHA_SOLVER_API_KEY',
+  url: 'CAPTCHA_SOLVER_URL',
+  attempts: 'CAPTCHA_SOLVER_ATTEMPTS',
+  intervalMs: 'CAPTCHA_SOLVER_INTERVAL_MS',
+})
+
 // Bounds. A portal that never returns a token must cost a bounded minute and
 // then hand off, never spin — the same discipline as the verification gate.
 export const DEFAULT_SOLVE_ATTEMPTS = 12
@@ -62,7 +75,8 @@ async function sleep(ms) {
  * unchanged.
  */
 export function isCaptchaSolverConfigured(env = ENV) {
-  return Boolean(env.CAPTCHA_SOLVER_API_KEY && String(env.CAPTCHA_SOLVER_API_KEY).trim())
+  const k = env[CAPTCHA_SOLVER_ENV_KEYS.apiKey]
+  return Boolean(k && String(k).trim())
 }
 
 /**
@@ -112,10 +126,10 @@ export async function requestSolverToken(challenge, {
   if (!challenge?.sitekey) return { solved: false, reason: 'no_sitekey_on_page' }
   if (typeof fetchImpl !== 'function') return { solved: false, reason: 'no_fetch' }
 
-  const base = String(env.CAPTCHA_SOLVER_URL || 'https://api.capsolver.com').replace(/\/+$/, '')
-  const key = String(env.CAPTCHA_SOLVER_API_KEY).trim()
-  const attempts = boundedInt(env.CAPTCHA_SOLVER_ATTEMPTS, DEFAULT_SOLVE_ATTEMPTS, MAX_SOLVE_ATTEMPTS)
-  const interval = boundedInt(env.CAPTCHA_SOLVER_INTERVAL_MS, DEFAULT_SOLVE_INTERVAL_MS, MAX_SOLVE_INTERVAL_MS)
+  const base = String(env[CAPTCHA_SOLVER_ENV_KEYS.url] || 'https://api.capsolver.com').replace(/\/+$/, '')
+  const key = String(env[CAPTCHA_SOLVER_ENV_KEYS.apiKey]).trim()
+  const attempts = boundedInt(env[CAPTCHA_SOLVER_ENV_KEYS.attempts], DEFAULT_SOLVE_ATTEMPTS, MAX_SOLVE_ATTEMPTS)
+  const interval = boundedInt(env[CAPTCHA_SOLVER_ENV_KEYS.intervalMs], DEFAULT_SOLVE_INTERVAL_MS, MAX_SOLVE_INTERVAL_MS)
 
   const taskTypeByVendor = {
     recaptcha: 'ReCaptchaV2TaskProxyLess',
@@ -231,6 +245,7 @@ export async function attemptCaptchaSolve(page, {
 }
 
 export default {
+  CAPTCHA_SOLVER_ENV_KEYS,
   isCaptchaSolverConfigured,
   readCaptchaChallenge,
   requestSolverToken,
