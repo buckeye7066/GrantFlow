@@ -111,5 +111,28 @@ for d in "${CODEX_WORKSPACE:-/workspace}"/*/ ; do
 done
 [ "$found_repo" = "1" ] || note "WARNING: no git checkout found under ${CODEX_WORKSPACE:-/workspace}"
 
+# --- 5. Project dependencies -----------------------------------------------
+# Setting a custom setup script REPLACES Codex's automatic setup (the env's
+# use_auto_setup must be false or this script never runs at all -- that is why
+# revision 1 appeared to do nothing). Auto-setup was what installed project
+# dependencies, so this restores that behaviour rather than silently removing it.
+#
+# Best-effort by design: a failed dependency install is reported loudly but does
+# NOT abort setup, because this script's contract is GitHub access. A hard failure
+# here would take away the very credential the agent needs to report the problem.
+for d in "${CODEX_WORKSPACE:-/workspace}"/*/ ; do
+  [ -d "$d" ] || continue
+  ( cd "$d"
+    if   [ -f pnpm-lock.yaml ]  && command -v pnpm >/dev/null 2>&1; then pnpm install --frozen-lockfile
+    elif [ -f yarn.lock ]       && command -v yarn >/dev/null 2>&1; then yarn install --frozen-lockfile
+    elif [ -f package-lock.json ]; then npm ci
+    elif [ -f package.json ];     then npm install
+    fi
+    if   [ -f poetry.lock ]     && command -v poetry >/dev/null 2>&1; then poetry install
+    elif [ -f requirements.txt ]; then pip install -r requirements.txt
+    fi
+  ) || note "WARNING: dependency install failed in $(basename "$d") — continuing; the agent will see the failure when it builds."
+done
+
 echo "ok gh_login=$LOGIN $(date -u +%FT%TZ)" >>"$HOME/.codex-setup-marker" 2>/dev/null || true
 note "OK — gh authenticated as $LOGIN, git credential helper and identity configured."
