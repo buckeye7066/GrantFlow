@@ -13,6 +13,7 @@
 // SQL contract for createSqlStore(db).
 
 import { ACCEPTABLE_REALITY_STATUSES, canonicalOpportunityKey } from './contract.js';
+import { cleanExtractedText } from '../utils/htmlTextHygiene.js';
 import { PIPELINE_STAGE, isValidStage, assertTransition } from './stages.js';
 import {
   buildOsStorePageFactColumns, hasAnyPageFact, PAGE_FACT_OS_STORE_COLUMN_DEFS,
@@ -83,10 +84,26 @@ export function upsertOpportunity(store, opp) {
   const existingById = store.get('funding_opportunities', { id: opp.id });
   const pageFacts = buildOsStorePageFactColumns(existingById, opp);
 
+  // HTML-ENTITY HYGIENE (2026-08-21). This is the SECOND writer into the shared
+  // `funding_opportunities` table — `opportunityInserter.upsertFundingOpportunity`
+  // has run `cleanExtractedText` over title/sponsor/description since the
+  // 2026-08-03 owner QA pass, and this path never did, so aggregator entities
+  // reached the owner verbatim ("Law &amp; Science" from grants_gov,
+  // "…Unaccompanied Alien Children&#8203;&#8203;", a usda_rd "&amp;" title —
+  // 3 catalog rows / 7 match rows measured on a real 480-row local crawl).
+  // The util is the one choke point; it is never re-implemented here.
+  //
+  // Applied to the STORED text only — `canonicalKey` above is deliberately still
+  // derived from the RAW opportunity, so this can never re-key or un-dedupe a
+  // row that is already in the catalog.
+  const cleanTitle = cleanExtractedText(opp.title);
+  const cleanSponsor = cleanExtractedText(opp.sponsor);
+  const cleanSummary = cleanExtractedText(opp.summary);
+
   store.upsert('funding_opportunities', ['id'], {
     id: opp.id, source_id: opp.source_id, external_id: opp.external_id, kind: opp.kind,
     canonical_opportunity_key: canonicalKey,
-    title: opp.title, sponsor: opp.sponsor, summary: opp.summary,
+    title: cleanTitle, sponsor: cleanSponsor, summary: cleanSummary,
     apply_url: opp.apply_url, info_url: opp.info_url, deadline: opp.deadline,
     purpose: opp.purpose ?? null, open_date: opp.open_date ?? null,
     recurrence: opp.recurrence ?? null, source_status: opp.source_status ?? null,

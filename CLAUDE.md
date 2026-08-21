@@ -417,6 +417,21 @@ DDL; data-repair invariants go in `enforceInvariants.js`).
 When you add or change behavior that touches an invariant below, change the
 enforcer + its test — do not rely on a new per-call check alone.
 
+**THE STEP COUNT IN THIS DOCUMENT IS NOT AUTHORITATIVE — THE TEST IS.** The
+running totals sprinkled through the table below ("totality 45 → 46", "totality
+52 → 53") were each correct on the day they were written and then went stale the
+next time a step landed without someone re-reading the whole table. The single
+authority is `backend/tests/enforceInvariants.test.js`, which asserts
+`expect(summary.ran).toBe(59)` against a FULL ORDERED LIST of step names — so a
+new step cannot be added without that list being extended, and the list cannot
+drift from what the orchestrator actually runs. As of 2026-08-21 the ladder runs
+**59 steps** (measured, not inferred: `system_kv enforce_invariants_last_run`
+from a real local boot at 2026-08-21T03:21:57Z carries `"ran": 59` with 59 named
+step entries; the last table entry below still says 53). When you add a step,
+extend the test's ordered list and bump its number; do NOT try to keep the
+prose totals below in sync — read them as "this row's step was #N when it
+landed", never as the current size of the ladder.
+
 | Invariant | Single enforcer | Guard test |
 | --- | --- | --- |
 | Sticky deletes (deleted pipeline grants AND deleted funding-source matches stay gone) | `reconcileDismissedGrants()` + `reconcileDismissedMatches()` in `backend/services/pipelineDismissals.js`, both re-run by `enforceStickyDeletes()`. Owner-facing delete: `DELETE /api/profiles/:id/funding-sources/:opportunityId` (`backend/routes/fundingSources.js`) records the tombstone + purges via the same sweeps; the GET excludes tombstoned rows per-read | `backend/tests/enforceInvariants.test.js` + `backend/tests/fundingSourcesDismissRoute.test.js` |

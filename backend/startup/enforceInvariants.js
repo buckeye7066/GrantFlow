@@ -70,7 +70,10 @@ import { findOfficialUrlForOpportunity, significantTitleTokens } from '../servic
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS } from '../services/sources/locatorUrlKind.js'
 import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from '../config/amountEnrichEnv.js'
-import { normalizePersistedMatchDecisionIntegrity } from '../services/matching/matchDecisionIntegrity.js'
+import {
+  normalizePersistedMatchDecisionIntegrity,
+  isBelowReviewResourceMatch,
+} from '../services/matching/matchDecisionIntegrity.js'
 import { buildPersistedMatchExplain } from '../services/matching/matchExplainPersistence.js'
 import { hasFarmIdentity } from '../services/eligibility/farmIdentity.js'
 
@@ -1853,8 +1856,14 @@ export async function enforceStaleMissingFieldResolution(db) {
        LIMIT ${limit}
     `).all()
     const profiles = (rows || []).map((r) => r.pid).filter(Boolean)
-    if (profiles.length === 0) return { repaired: 0, scannedProfiles: 0 }
-    if (!enforce) return { repaired: 0, scannedProfiles: profiles.length, enforced: false }
+    // `scanned` (not just the private `scannedProfiles`) is REQUIRED: it is the
+    // only field `runEnforceInvariants` persists into
+    // `system_kv enforce_invariants_last_run`, and `scanned === limit` is this
+    // repo's one signature for a bound-truncated sweep (#944 / #1080). Reporting
+    // nothing here persisted `scanned: 0` on every boot, so "hit the 50-profile
+    // bound" and "found nothing" were byte-identical in the artifact.
+    if (profiles.length === 0) return { repaired: 0, scanned: 0, scannedProfiles: 0, boundedBy: limit }
+    if (!enforce) return { repaired: 0, scanned: profiles.length, scannedProfiles: profiles.length, boundedBy: limit, enforced: false }
 
     let reconcileProfileFieldsToTasks
     try {
@@ -1877,7 +1886,14 @@ export async function enforceStaleMissingFieldResolution(db) {
         scannedProfiles: profiles.length, fieldsResolved, tasksResumed,
       })
     }
-    return { repaired: fieldsResolved, tasksResumed, scannedProfiles: profiles.length, enforced: true }
+    return {
+      repaired: fieldsResolved,
+      tasksResumed,
+      scanned: profiles.length,
+      scannedProfiles: profiles.length,
+      boundedBy: limit,
+      enforced: true,
+    }
   })
 }
 
@@ -1925,7 +1941,13 @@ export async function enforceHamiltonStopRecheck(db, deps = {}) {
       tasksCancelled: r.tasksCancelled,
       leftHonest: r.leftHonest,
       linksReverified: r.linksReverified,
+      // Same contract as stale_missing_field_resolution above: `scanned` is the
+      // only count the boot artifact keeps, and this sweep is bounded by
+      // HAMILTON_STOP_RECHECK_LIMIT — without it, `scanned === bound` (the
+      // #944/#1080 blindness signature) can never be observed for this step.
+      scanned: Number(r.scannedTasks) || 0,
       scannedTasks: r.scannedTasks,
+      boundedBy: limit,
       enforced: enforce,
     }
   })
@@ -9179,6 +9201,10 @@ export async function enforceFunderBehaviorRecall(db) {
     let rejectedByEngine = 0
     let adjudicatedOut = 0
     let unscorable = 0
+    // Pairs the ENGINE endorsed but the persisted-decision CONTRACT forbids
+    // (a resource-kind row below REVIEW_SCORE). Counted, never written — see
+    // the convergence note at the write site below.
+    let contractRejected = 0
     let profilesEligible = 0
     let truncated = false
     const wouldLink = []
@@ -9271,6 +9297,25 @@ export async function enforceFunderBehaviorRecall(db) {
         if (verdict !== 'ACCEPT' && verdict !== 'REVIEW') { rejectedByEngine += 1; continue }
         const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
         if (score === null) { unscorable += 1; continue }
+
+        // LADDER CONVERGENCE (2026-08-21). `enforcePersistedMatchDecisionIntegrity`
+        // (step 39, rule 3) DELETES any resource-kind match carrying an explicit
+        // score below REVIEW_SCORE. This sweep is step 33 and writes on the
+        // engine's REVIEW verdict alone — and the engine can return REVIEW under
+        // that bar. Measured on a real local catalog: profile 80953e8d… ↔
+        // "Michael & Susan Dell Foundation — Foundation/Grantmaker"
+        // (opportunity_kind `directory`, score 2, decision `review`) was inserted
+        // here and deleted there on EVERY boot, holding the ladder's
+        // totalRepaired at a permanent floor (15 → 7 → 7 → 7 over four passes)
+        // so convergence could never be observed.
+        //
+        // Skipping it surfaces NOTHING less than before — the row never survived
+        // the same boot — it only stops the two sweeps from fighting. The bar
+        // comes from the contract's own module; it is never re-encoded here.
+        if (isBelowReviewResourceMatch({ opportunityKind: opp.opportunity_kind, matchScore: score })) {
+          contractRejected += 1
+          continue
+        }
 
         if (countOnly) {
           wouldLink.push({ profileId, opportunityId: opp.id })
@@ -9373,17 +9418,17 @@ export async function enforceFunderBehaviorRecall(db) {
       }
       return {
         scanned, repaired: 0, wouldRepair: wouldLink.length, profilesEligible,
-        rejectedByEngine, adjudicatedOut, truncated, enforced: false,
+        rejectedByEngine, adjudicatedOut, contractRejected, truncated, enforced: false,
       }
     }
     if (linked > 0 || stale > 0) {
       log.info('linked profiles to funders with demonstrated matching giving', {
-        linked, stale, scanned, profilesEligible, rejectedByEngine, adjudicatedOut, unscorable, examples,
+        linked, stale, scanned, profilesEligible, rejectedByEngine, adjudicatedOut, unscorable, contractRejected, examples,
       })
     }
     return {
       scanned, repaired: linked, stale, profilesEligible,
-      rejectedByEngine, adjudicatedOut, unscorable, truncated, enforced: true,
+      rejectedByEngine, adjudicatedOut, unscorable, contractRejected, truncated, enforced: true,
     }
   })
 }

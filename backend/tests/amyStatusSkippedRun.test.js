@@ -22,7 +22,7 @@ vi.mock('../services/amy/amyRunner.js', () => ({
 }))
 
 import amyRouter from '../routes/amy.js'
-import { getAmyRunState } from '../services/amy/amyRunner.js'
+import { getAmyRunState, launchAmyRun } from '../services/amy/amyRunner.js'
 
 function makeApp() {
   const app = express()
@@ -88,5 +88,62 @@ describe('GET /api/amy/status skipped-run honesty', () => {
     expect(res.status).toBe(200)
     expect(res.body.status.last_run_summary).toBe(null)
     expect(res.body.status.last_run_skipped).toBe(false)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AN OWNER-TRIGGERED RUN IS A REAL RUN (2026-08-21)
+//
+// `runAmyTraining` gates THREE durable learning writes on `!dryRunDiscovery`:
+// `recordFlywheelCohort` (system_kv amy_flywheel_cohort),
+// `recordProbeCoverage` (amy_probe_coverage) and `recordApprovalQueue`
+// (amy_approval_ledger — the ONLY thing that ages a finding and can ever CLOSE
+// one). This route computed `dryRunDiscovery: body.persist !== true`, and the
+// admin console's Run-now button sends `{ count, improve, applyTuning,
+// applyWeights, applyCoverage }` and NO `persist`
+// (src/components/admin/AdminAmyConsole.jsx). So every owner-triggered run paid
+// the full cost — creating profiles, crawling them live, running the
+// improvement loop (`improve` already defaults to TRUE right here) — and then
+// threw the learning away: no cohort row, no probe fold, no ledger entry, so
+// nothing could age and nothing could close. Only the nightly scheduler, which
+// passes `dryRunDiscovery: !cfg.persist` with AMY_PERSIST defaulting to true,
+// ever learned anything.
+//
+// It is also a dry-run default sitting in owner tooling, which this repo's
+// standing rule forbids outright. `persist` stays an EXPLICIT opt-out
+// (`persist: false`) for anyone who genuinely wants a measurement-only pass.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('POST /api/amy/run — owner runs are real runs, not dry runs', () => {
+  const optsOf = () => launchAmyRun.mock.calls.at(-1)[0].opts
+
+  beforeEach(() => {
+    launchAmyRun.mockReturnValue({ run_id: 'run-x', already_running: false, promise: Promise.resolve(null) })
+  })
+
+  it('a body with no `persist` still records the learning artifacts', async () => {
+    const res = await request(makeApp()).post('/api/amy/run').send({ count: 12, improve: true })
+    expect(res.status).toBe(202)
+    expect(optsOf().dryRunDiscovery).toBe(false)
+  })
+
+  it('the admin console payload (no `persist` key at all) is a real run', async () => {
+    // Verbatim shape from AdminAmyConsole.jsx runNow().
+    const res = await request(makeApp()).post('/api/amy/run').send({
+      count: 12, improve: true, applyTuning: false, applyWeights: false, applyCoverage: false,
+    })
+    expect(res.status).toBe(202)
+    expect(optsOf().dryRunDiscovery).toBe(false)
+  })
+
+  it('persist:false is still honoured as an EXPLICIT measurement-only opt-out', async () => {
+    const res = await request(makeApp()).post('/api/amy/run').send({ count: 4, persist: false })
+    expect(res.status).toBe(202)
+    expect(optsOf().dryRunDiscovery).toBe(true)
+  })
+
+  it('persist:true is unchanged', async () => {
+    const res = await request(makeApp()).post('/api/amy/run').send({ count: 4, persist: true })
+    expect(res.status).toBe(202)
+    expect(optsOf().dryRunDiscovery).toBe(false)
   })
 })

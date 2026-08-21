@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import Database from 'better-sqlite3'
 import { planGapSeekingProbes, resolveCohortSplit } from '../services/amy/gapSeekingPlanner.js'
 import { buildIntersectionScenarios, buildIntersectionScenario } from '../services/amy/intersectionScenario.js'
 import {
@@ -24,8 +25,15 @@ import {
 } from '../services/amy/probeCoverageLedger.js'
 import { cellPairs, isPlausibleCell, reachablePairCount, enumerateReachablePairs, STATE_IDS } from '../services/amy/probeSpace.js'
 import { assessConvergence, TREND } from '../services/amy/gapConvergence.js'
-import { buildDeletionProof, classifySurvivorHold, DELETION_VERDICT, SURVIVOR_HOLD } from '../services/amy/amyDeletionProof.js'
+import {
+  buildDeletionProof,
+  classifySurvivorHold,
+  findExpiredSurvivors,
+  DELETION_VERDICT,
+  SURVIVOR_HOLD,
+} from '../services/amy/amyDeletionProof.js'
 import { CATEGORY_IDS } from '../services/amy/syntheticProfileCatalog.js'
+import { ORIGIN_CREATED_BY } from '../services/amy/amyConstants.js'
 
 const AT = '2026-08-03T04:00:00.000Z'
 
@@ -431,5 +439,138 @@ describe('deletion is PROVEN from row counts, or it is unknown', () => {
         { now: NOW },
       )).toBeNull()
     })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A TRUNCATED SURVIVOR SCAN CANNOT SAY "PROVEN" (2026-08-21)
+//
+// `cleanupExpiredAmyProfiles` (the DELETER) loads Amy's profiles with NO limit
+// at all — `listAmyProfiles` is a bare `SELECT ... WHERE created_by = ?`. Its
+// PROOF, `findExpiredSurvivors`, reads the same rows under `LIMIT 200` and then
+// decides expiry in JavaScript, on the rows that came back.
+//
+// That asymmetry is the #944/#1080 shape pointed at the honesty layer instead
+// of at a repair: with more than 200 Amy rows alive (the design target is ~50 a
+// night and prod has held 55 from one run plus leftovers, so three skipped
+// nights reach it), rows past the bound are never examined — and
+// `buildDeletionProof` treats the truncated array as the COMPLETE leak set. It
+// computes `live_within_ttl = after - survivors.length` from it and can return
+// `proven` while unscanned rows sit past their TTL.
+//
+// The rule this repo already applies to counts applies here: an unreadable —
+// or partially-read — world proves nothing. A truncated scan is `unknown`,
+// unless leaks were ALREADY found in the part that was read, in which case the
+// alarm wins.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('a truncated survivor scan is UNKNOWN, never PROVEN', () => {
+  const CLEAN = { before: 260, after: 250, created: 250, runCleanup: { deleted: 10 }, expiredSweep: { deleted: 0 } }
+
+  it('refuses `proven` when the survivor scan hit its bound', () => {
+    const survivors = []
+    survivors.truncated = true
+    const p = buildDeletionProof({ ...CLEAN, survivors })
+    expect(p.verdict).toBe(DELETION_VERDICT.UNKNOWN)
+    expect(p.reasons.join(' ')).toMatch(/bound|truncat/i)
+    expect(p.survivor_scan_truncated).toBe(true)
+  })
+
+  it('accepts an explicit scanTruncated flag from the caller', () => {
+    const p = buildDeletionProof({ ...CLEAN, survivors: [], scanTruncated: true })
+    expect(p.verdict).toBe(DELETION_VERDICT.UNKNOWN)
+    expect(p.survivor_scan_truncated).toBe(true)
+  })
+
+  it('a leak found in the part that WAS read still wins over unknown', () => {
+    const survivors = [{ id: 'p-leak', expires_at: '2026-07-30T00:00:00Z', hold: null }]
+    survivors.truncated = true
+    const p = buildDeletionProof({ ...CLEAN, survivors })
+    expect(p.verdict).toBe(DELETION_VERDICT.LEAKED)
+    expect(p.survivor_scan_truncated).toBe(true)
+  })
+
+  it('an untruncated scan is unaffected — still PROVEN', () => {
+    const p = buildDeletionProof({ ...CLEAN, survivors: [] })
+    expect(p.verdict).toBe(DELETION_VERDICT.PROVEN)
+    expect(p.survivor_scan_truncated).toBe(false)
+  })
+})
+
+describe('findExpiredSurvivors reads PAST the old 200-row bound', () => {
+  function amyDb() {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE profiles (
+        id TEXT PRIMARY KEY, display_name TEXT, created_by TEXT,
+        created_at TEXT, last_discovery_at TEXT
+      );
+      CREATE TABLE profile_sections (
+        profile_id TEXT NOT NULL, section_key TEXT NOT NULL, data TEXT NOT NULL,
+        UNIQUE(profile_id, section_key)
+      );
+    `)
+    return db
+  }
+
+  /** `n` Amy rows; the LAST one is the only expired row, so a single-page scan misses it. */
+  function seedAmyRows(db, n, { expiredIndex = n - 1 } = {}) {
+    for (let i = 0; i < n; i += 1) {
+      // Zero-padded ids so `ORDER BY p.id` matches insertion order.
+      const id = `amy-${String(i).padStart(5, '0')}`
+      db.prepare('INSERT INTO profiles (id, display_name, created_by, created_at) VALUES (?, ?, ?, ?)')
+        .run(id, `Synthetic ${i}`, ORIGIN_CREATED_BY, '2026-08-20T00:00:00.000Z')
+      db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)').run(
+        id,
+        'amy_metadata',
+        JSON.stringify({
+          synthetic: true,
+          allow_sam_cleanup: true,
+          // Everything but the marked row is still well inside its TTL.
+          expires_at: i === expiredIndex ? '2026-08-20T01:00:00.000Z' : '2026-08-30T00:00:00.000Z',
+        }),
+      )
+    }
+  }
+
+  const NOW = new Date('2026-08-21T00:00:00.000Z')
+
+  it('finds an expired row sitting at position 250 (the old bound hid it)', async () => {
+    const db = amyDb()
+    seedAmyRows(db, 260)
+    const survivors = await findExpiredSurvivors(db, { now: NOW })
+    expect(survivors).toHaveLength(1)
+    expect(survivors[0].id).toBe('amy-00259')
+    expect(survivors.truncated).toBe(false)
+  })
+
+  it('marks the scan truncated when it stops at maxScan, and the proof refuses `proven`', async () => {
+    const db = amyDb()
+    seedAmyRows(db, 260)
+    const survivors = await findExpiredSurvivors(db, { now: NOW, limit: 50, maxScan: 100 })
+    expect(survivors.truncated).toBe(true)
+    expect(survivors).toHaveLength(0) // the expired row is past the cap
+    const proof = buildDeletionProof({
+      before: 270, after: 260, created: 260,
+      runCleanup: { deleted: 10 }, expiredSweep: { deleted: 0 },
+      survivors,
+    })
+    expect(proof.verdict).toBe(DELETION_VERDICT.UNKNOWN)
+    expect(proof.survivor_scan_truncated).toBe(true)
+  })
+
+  it('degrades to the no-last_discovery_at schema without losing paging', async () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, display_name TEXT, created_by TEXT, created_at TEXT);
+      CREATE TABLE profile_sections (
+        profile_id TEXT NOT NULL, section_key TEXT NOT NULL, data TEXT NOT NULL,
+        UNIQUE(profile_id, section_key)
+      );
+    `)
+    seedAmyRows(db, 260)
+    const survivors = await findExpiredSurvivors(db, { now: NOW })
+    expect(survivors).toHaveLength(1)
+    expect(survivors[0].id).toBe('amy-00259')
+    expect(survivors[0].crawled_signal_at).toBeNull()
   })
 })

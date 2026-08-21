@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMemoryStore } from '../store.js';
 import { storage } from '../index.js';
-import { makeOpportunity, OPPORTUNITY_KIND, REALITY_STATUS, TRUST_TIER } from '../contract.js';
+import { makeOpportunity, canonicalOpportunityKey, OPPORTUNITY_KIND, REALITY_STATUS, TRUST_TIER } from '../contract.js';
 import { PIPELINE_STAGE } from '../stages.js';
 
 function opp(id, over = {}) {
@@ -159,4 +159,65 @@ test('suppression list is honored case-insensitively', () => {
   storage.addSuppression(store, 'No@Example.ORG', 'email');
   assert.equal(storage.isSuppressed(store, 'no@example.org', 'email'), true);
   assert.equal(storage.isSuppressed(store, 'other@example.org', 'email'), false);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HTML-ENTITY HYGIENE AT THE *SECOND* CATALOG WRITER (2026-08-21)
+//
+// `backend/utils/htmlTextHygiene.js` exists because "titles surfaced to the
+// owner still carried raw entities from aggregator feeds", and its docblock
+// says the fix "lives in ONE util consumed by BOTH the ingest choke point
+// (opportunityInserter.upsertFundingOpportunity) and the owner-facing read
+// paths". `upsertOpportunity` here is a SECOND writer into the very same
+// `funding_opportunities` table, and it wrote `title`/`sponsor`/`summary`
+// verbatim.
+//
+// Measured on a real local crawl (Amy, 2026-08-21, 480 catalog rows): 3 rows
+// carried undecoded entities and 7 match rows pointed at them — "Law &amp;
+// Science" (grants_gov, record_origin live_crawl, canonical key ext:pd-21-128y),
+// "Coordinating Agricultural Development &amp; Innovation (CADI)…" (usda_rd),
+// and "…Unaccompanied Alien Children&#8203;&#8203;" (grants_gov). Feeding those
+// exact strings to `cleanExtractedText` decodes all three, so the util was fine
+// — this write site simply never called it.
+//
+// The canonical dedup key is deliberately still computed from the RAW row, so
+// this change cannot re-key any existing catalog row.
+// ─────────────────────────────────────────────────────────────────────────────
+test('the catalog decodes HTML entities in the text it surfaces (the second writer honours the hygiene choke point)', () => {
+  const store = createMemoryStore();
+  const res = storage.upsertOpportunity(store, opp('ent1', {
+    title: 'Law &amp; Science',
+    sponsor: 'Department of Energy &amp; Science',
+    summary: 'Research &amp; Development for 2026 &ndash; 2027',
+  }));
+  assert.equal(res.stored, true);
+  const got = storage.getOpportunity(store, 'ent1');
+  assert.equal(got.title, 'Law & Science');
+  assert.equal(got.sponsor, 'Department of Energy & Science');
+  assert.equal(got.summary, 'Research & Development for 2026 – 2027');
+});
+
+test('numeric entities (the zero-width spaces grants.gov emits) are decoded too', () => {
+  const store = createMemoryStore();
+  storage.upsertOpportunity(store, opp('ent2', {
+    title: 'Home Study and Post-Release Services for Unaccompanied Alien Children&#8203;&#8203;',
+  }));
+  const got = storage.getOpportunity(store, 'ent2');
+  assert.equal(got.title.includes('&#8203;'), false);
+  assert.ok(got.title.startsWith('Home Study and Post-Release Services'));
+});
+
+test('entity decoding never re-keys a row: the canonical dedup key still comes from the RAW opportunity', () => {
+  const store = createMemoryStore();
+  const raw = opp('ent3', { title: 'Law &amp; Science', external_id: null });
+  const expected = canonicalOpportunityKey(raw);
+  storage.upsertOpportunity(store, raw);
+  const got = storage.getOpportunity(store, 'ent3');
+  assert.equal(got.canonical_opportunity_key, expected);
+});
+
+test('a clean title is passed through untouched', () => {
+  const store = createMemoryStore();
+  storage.upsertOpportunity(store, opp('ent4', { title: 'Rural Business Development Grant' }));
+  assert.equal(storage.getOpportunity(store, 'ent4').title, 'Rural Business Development Grant');
 });

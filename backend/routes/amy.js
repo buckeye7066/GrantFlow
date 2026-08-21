@@ -232,6 +232,10 @@ router.post('/relevance-vocabulary', async (req, res) => {
  * panel polls GET /status (running → false) and GET /report/latest for results.
  *   body: { count?, improve?, applyTuning?, applyWeights?, applyCoverage?,
  *           anyaApply?, samApply?, keepProfiles?, persist? }
+ *
+ * `persist` defaults to TRUE: an owner-triggered run stores what it discovers
+ * AND records the flywheel cohort / probe coverage / approval ledger. Send
+ * `persist: false` for an explicit measurement-only pass.
  */
 router.post('/run', (req, res) => {
   try {
@@ -243,7 +247,16 @@ router.post('/run', (req, res) => {
       source: 'admin',
       opts: {
         targetCount: count,
-        dryRunDiscovery: body.persist !== true,
+        // A run the owner ASKED for is a real run (2026-08-21). This used to be
+        // `body.persist !== true`, and the admin console's Run-now button sends
+        // no `persist` at all — so every owner-triggered run created profiles,
+        // crawled them live and ran the improvement loop (`improve` defaults to
+        // true two lines down) and then discarded the three durable learning
+        // writes `runAmyTraining` gates on `!dryRunDiscovery`: the flywheel
+        // cohort, the probe-coverage fold, and the APPROVAL LEDGER — the only
+        // thing that ages a finding or can ever CLOSE one. Measurement-only is
+        // now an EXPLICIT `persist: false`, never the default.
+        dryRunDiscovery: body.persist === false,
         improve: body.improve !== false, // admin runs default to the full improvement loop
         applyTuning: body.applyTuning === true, // writing the floor change is opt-in from the UI
         applyWeights: body.applyWeights === true,

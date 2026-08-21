@@ -4505,8 +4505,39 @@ registerTool({
         // the Anya→Sam improvement pipeline — minutes of work), so we launch and
         // return the run id immediately; the panel/owner polls status via
         // getAmyRunState. This closes the create→crawl→learn→delete loop on demand.
+        //
+        // OPTS ARE REQUIRED (2026-08-21). This used to call launchAmyRun with no
+        // `opts` at all, so runAmyTraining fell back to its own defaults —
+        // `dryRunDiscovery: true` and `improve: false` — and the run silently
+        // dropped the LEARN half: nothing stored in the catalog, and none of
+        // recordFlywheelCohort / recordProbeCoverage / recordApprovalQueue (the
+        // ledger that ages and CLOSES findings), all three of which are gated on
+        // `!dryRunDiscovery`. Same class as the Yana branch above. The scheduler's
+        // own `getAmyConfig()` is the single definition of a real run, so the
+        // AMY_* switches govern the on-demand path and the nightly path alike.
         const { launchAmyRun } = await import('./amy/amyRunner.js')
-        const launched = launchAmyRun({ db, source: 'anya_owner', logger: console })
+        const { getAmyConfig } = await import('./amy/amyScheduler.js')
+        const cfg = getAmyConfig()
+        const launched = launchAmyRun({
+          db,
+          source: 'anya_owner',
+          logger: console,
+          opts: {
+            targetCount: cfg.dailyTarget,
+            dryRunDiscovery: !cfg.persist,
+            keepProfiles: cfg.keepProfiles,
+            floor: cfg.floor,
+            improve: cfg.improve,
+            applyTuning: cfg.applyTuning,
+            applyWeights: cfg.applyWeights,
+            applyCoverage: cfg.applyCoverage,
+            applyLearning: cfg.applyLearning,
+            gapLearning: cfg.gapLearning,
+            gapScanLimit: cfg.gapScanLimit,
+            anyaApply: cfg.anyaApply,
+            samApply: cfg.samApply,
+          },
+        })
         return { agent, result: { started: !launched.already_running, already_running: launched.already_running, run_id: launched.run_id } }
       }
       throw new Error(`Unknown agent "${agent}"`)

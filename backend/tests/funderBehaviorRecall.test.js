@@ -17,7 +17,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
 import { SURFACED_MATCHER_VERSIONS } from '../config/matchSurfacing.js'
+import { REVIEW_SCORE } from '../config/matchThresholds.js'
 import { enforceFunderBehaviorRecall } from '../startup/enforceInvariants.js'
+import { normalizePersistedMatchDecisionIntegrity } from '../services/matching/matchDecisionIntegrity.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -83,11 +85,22 @@ function seedProfile(db, { id = 'p-shelter', needs = ['housing'], state = 'TN' }
 }
 
 /** The row shape the 990 lane + ingest actually produce for this funder. */
-function seedFunderRow(db, { id = 'fo-smith', ein = EIN, state = 'TN' } = {}) {
+function seedFunderRow(db, {
+  id = 'fo-smith',
+  ein = EIN,
+  state = 'TN',
+  // The live 990 lane stamps `opportunity_kind` on some funder rows (measured
+  // 2026-08-21 in the local catalog: "Michael & Susan Dell Foundation —
+  // Foundation/Grantmaker", kind `directory`), and a thin row carries no
+  // categories at all. Both are parameters so the resource-kind convergence
+  // case below can reproduce the real shape.
+  kind = null,
+  categories = ['housing', 'programs'],
+} = {}) {
   db.prepare(
     `INSERT INTO funding_opportunities
-       (id, title, sponsor, description, source, source_id, state, is_national, categories, source_url)
-     VALUES (?, ?, ?, ?, 'propublica_990', ?, ?, 0, ?, ?)`,
+       (id, title, sponsor, description, source, source_id, state, is_national, categories, source_url, opportunity_kind)
+     VALUES (?, ?, ?, ?, 'propublica_990', ?, ?, 0, ?, ?, ?)`,
   ).run(
     id,
     'Smith Family Foundation — Foundation/Grantmaker',
@@ -96,8 +109,9 @@ function seedFunderRow(db, { id = 'fo-smith', ein = EIN, state = 'TN' } = {}) {
       'IRS 990 grants filed (tax year 2024): 12 grants totaling $340,000, individual awards $5,000–$60,000. Top recipient states: TN (11), GA (1).',
     ein,
     state,
-    JSON.stringify(['housing', 'programs']),
+    categories ? JSON.stringify(categories) : null,
     `https://projects.propublica.org/nonprofits/organizations/${ein}`,
+    kind,
   )
   return id
 }
@@ -304,5 +318,95 @@ describe('count-only, convergence, and survival', () => {
     `)
     const res = await enforceFunderBehaviorRecall(wrap(db))
     expect(res.skipped).toBe('schema')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LADDER CONVERGENCE: a sweep must never write a row a LATER sweep in the same
+// boot deletes (2026-08-21, measured).
+//
+// `enforceFunderBehaviorRecall` is step 33 of the boot ladder;
+// `enforcePersistedMatchDecisionIntegrity` is step 39. Rule 3 of the decision
+// contract deletes any RESOURCE-kind match (DIRECTORY / REFERRAL /
+// SCHOOL_PORTAL / PAST_AWARD_INTEL) whose explicit score is below REVIEW_SCORE.
+// The recall net writes on the engine's REVIEW verdict alone — and the engine
+// can return REVIEW at a score under that bar.
+//
+// Measured on a real local catalog (480 crawled opportunities, 8 crawled Amy
+// profiles) on 2026-08-21: `enforceFunderBehaviorRecall` inserted
+// profile 80953e8d… ↔ "Michael & Susan Dell Foundation — Foundation/Grantmaker"
+// (opportunity_kind `directory`, match_score **2**, decision `review`) and
+// `enforcePersistedMatchDecisionIntegrity` deleted that exact same pair, on
+// EVERY boot. Four consecutive full ladder runs reported
+// totalRepaired 15 → 7 → 7 → 7, with `funder_behavior_recall repaired:1` and
+// `persisted_match_decision_integrity repaired:1` in every single pass. That is
+// the documented tug-of-war signature: a repair count that never trends to zero.
+//
+// The fix narrows the WRITER (a row the contract forbids is simply never
+// minted). It cannot surface anything new — the row was being deleted the same
+// boot anyway — so no gate is weakened by making the ladder converge.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ladder convergence — never mint a row the decision contract deletes', () => {
+  it('does not link a resource-kind funder row scored below the resource bar', async () => {
+    const db = makeDb()
+    seedProfile(db)
+    // The real shape: a DIRECTORY-kind 990 funder row with no categories, which
+    // the engine scores at 4 — REVIEW by verdict, below REVIEW_SCORE (7).
+    seedFunderRow(db, { kind: 'DIRECTORY', categories: null })
+    seedTransactions(db)
+
+    const res = await enforceFunderBehaviorRecall(wrap(db))
+    expect(res.error).toBeUndefined()
+    expect(res.profilesEligible).toBe(1)
+    // Nothing is written, and the sweep SAYS so rather than reporting a repair
+    // that another sweep silently undoes.
+    expect(linkRows(db)).toHaveLength(0)
+    expect(res.repaired).toBe(0)
+    expect(res.contractRejected).toBe(1)
+  })
+
+  it('the decision-contract net finds nothing to delete after the recall net ran', async () => {
+    const db = makeDb()
+    seedProfile(db)
+    seedFunderRow(db, { kind: 'DIRECTORY', categories: null })
+    seedTransactions(db)
+
+    await enforceFunderBehaviorRecall(wrap(db))
+    const integrity = await normalizePersistedMatchDecisionIntegrity(wrap(db))
+    // The whole point: step 39 must have no work created by step 33.
+    expect(integrity.removed_below_review_resources).toBe(0)
+  })
+
+  it('a resource-kind row AT OR ABOVE the bar is still linked (the fix narrows nothing else)', async () => {
+    const db = makeDb()
+    seedProfile(db)
+    // Same DIRECTORY kind, but the categorised row scores 10 — above the bar.
+    seedFunderRow(db, { kind: 'directory' })
+    seedTransactions(db)
+
+    const res = await enforceFunderBehaviorRecall(wrap(db))
+    expect(res.repaired).toBe(1)
+    expect(res.contractRejected ?? 0).toBe(0)
+    const links = linkRows(db)
+    expect(links).toHaveLength(1)
+    expect(links[0].match_score).toBeGreaterThanOrEqual(REVIEW_SCORE)
+    // …and the contract net leaves it alone.
+    const integrity = await normalizePersistedMatchDecisionIntegrity(wrap(db))
+    expect(integrity.removed_below_review_resources).toBe(0)
+    expect(linkRows(db)).toHaveLength(1)
+  })
+
+  it('a NON-resource kind below the bar is untouched by this narrowing (rule 3 does not govern it)', async () => {
+    const db = makeDb()
+    seedProfile(db)
+    // No opportunity_kind at all — rule 3 never applies, so the engine's REVIEW
+    // stands even at a low score. Guards against over-narrowing the writer.
+    seedFunderRow(db, { kind: null, categories: null })
+    seedTransactions(db)
+
+    const res = await enforceFunderBehaviorRecall(wrap(db))
+    expect(res.repaired).toBe(1)
+    expect(res.contractRejected ?? 0).toBe(0)
+    expect(linkRows(db)).toHaveLength(1)
   })
 })

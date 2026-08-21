@@ -6124,3 +6124,127 @@ describe('enforce: foreign-jurisdiction purge is not starved by its own bound', 
     } finally { db.close() }
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE BLINDNESS DETECTOR MUST BE ABLE TO SEE (2026-08-21)
+//
+// The documented signature of a structurally-blind sweep (#944 / #1080) is
+// `scanned === the query's LIMIT`: a post-LIMIT JS filter makes every row past
+// the bound permanently unreachable while the step still returns ok:true. The
+// ONLY place anyone can check that is `system_kv enforce_invariants_last_run`,
+// which persists `{ name, ok, repaired, scanned }` per step.
+//
+// Measured on a real local boot (2026-08-21T03:21:57Z and again in-process
+// while writing this test): `stale_missing_field_resolution` and
+// `hamilton_stop_recheck` NEVER emit `scanned`. Both are BOUNDED
+// (STALE_MISSING_FIELD_PROFILE_LIMIT default 50; HAMILTON_STOP_RECHECK_LIMIT
+// default 200) and both already COUNT what they scanned — they just report it
+// under a private key (`scannedProfiles` / `scannedTasks`) that the summary
+// does not carry. So they persist `scanned: 0` forever, and the one tripwire
+// this repo has for the bug class it has "paid for four times" can never fire
+// for them: a boot that hit the bound and a boot that found nothing are
+// byte-identical in the artifact.
+//
+// This is the "a check that cannot fail proves nothing" rule applied to
+// telemetry. The fix is to surface the count that already exists — never to
+// widen a bound or weaken a guard.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('boot summary telemetry — a BOUNDED sweep must report a numeric `scanned`', () => {
+  let taskStore
+
+  async function makeTaskDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+      CREATE TABLE grants (
+        id TEXT PRIMARY KEY, profile_id TEXT, funding_opportunity_id TEXT,
+        title TEXT, application_url TEXT, url TEXT, record_origin TEXT
+      );
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT,
+        application_url TEXT, source_url TEXT, deadline TEXT, deadline_type TEXT,
+        record_origin TEXT, is_national INTEGER DEFAULT 1, profile_id TEXT,
+        link_status TEXT, last_verified_at TEXT
+      );
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        profile_id TEXT, opportunity_id TEXT, match_score REAL,
+        match_decision TEXT, match_explanation TEXT, matcher_version TEXT,
+        updated_at DATETIME, computed_at DATETIME
+      );
+    `)
+    taskStore = await import('../services/hamilton/applicationTaskStore.js')
+    taskStore._resetSchemaCache()
+    await taskStore.ensureApplicationTaskSchema(raw)
+    raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-tel', 'Telemetry Profile')
+    return raw
+  }
+
+  async function flaggedTask(db, missing) {
+    const task = await taskStore.ensureApplicationTask(db, {
+      profileId: 'p-tel', grantId: crypto.randomUUID(), automationType: 'portal', initialStatus: 'queued',
+    })
+    await taskStore.updateApplicationTask(db, task.id, { status: 'blocked' })
+    await taskStore.setMissingInfo(db, task.id, missing)
+    return task
+  }
+
+  beforeEach(() => {
+    delete process.env.ENFORCE_STALE_MISSING_FIELDS
+    delete process.env.ENFORCE_HAMILTON_STOP_RECHECK
+  })
+  afterEach(() => {
+    delete process.env.ENFORCE_STALE_MISSING_FIELDS
+    delete process.env.ENFORCE_HAMILTON_STOP_RECHECK
+  })
+
+  it('stale_missing_field_resolution surfaces the profiles it scanned as `scanned`', async () => {
+    const db = await makeTaskDb()
+    await flaggedTask(db, [{ kind: 'field', key: 'social_security_number', label: 'Profile is missing SSN' }])
+
+    const res = await __testables.enforceStaleMissingFieldResolution(db)
+    expect(res.ok).toBe(true)
+    // The count already exists under its private name…
+    expect(res.scannedProfiles).toBe(1)
+    // …and MUST also ride the summary key the boot artifact persists, or the
+    // `scanned === bound` tripwire is blind to this step forever.
+    expect(res.scanned).toBe(1)
+  })
+
+  it('stale_missing_field_resolution reports `scanned` in count-only mode too', async () => {
+    const db = await makeTaskDb()
+    process.env.ENFORCE_STALE_MISSING_FIELDS = '0'
+    await flaggedTask(db, [{ kind: 'field', key: 'first_name', label: 'Profile is missing first name' }])
+
+    const res = await __testables.enforceStaleMissingFieldResolution(db)
+    expect(res.enforced).toBe(false)
+    expect(res.repaired).toBe(0)
+    expect(res.scanned).toBe(1)
+  })
+
+  it('hamilton_stop_recheck surfaces the tasks it scanned as `scanned`', async () => {
+    const db = await makeTaskDb()
+    await flaggedTask(db, [{ kind: 'other', key: 'crawler_profile_rules', label: 'Funding source does not meet GrantFlow rules' }])
+
+    const res = await __testables.enforceHamiltonStopRecheck(db)
+    expect(res.ok).toBe(true)
+    expect(res.scannedTasks).toBe(1)
+    expect(res.scanned).toBe(1)
+  })
+
+  it('the boot summary carries a numeric `scanned` for every BOUNDED sweep', async () => {
+    const db = await makeTaskDb()
+    await flaggedTask(db, [{ kind: 'field', key: 'social_security_number', label: 'Profile is missing SSN' }])
+
+    const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {}, error() {} } })
+    const byName = new Map(summary.steps.map((s) => [s.name, s]))
+    // Every step named here selects candidates under a SQL LIMIT, so
+    // `scanned === that bound` is the only available blindness signal.
+    for (const name of ['stale_missing_field_resolution', 'hamilton_stop_recheck']) {
+      const step = byName.get(name)
+      expect(step, `${name} must be in the boot summary`).toBeTruthy()
+      expect(typeof step.scanned, `${name}.scanned must be a number, not ${typeof step.scanned}`).toBe('number')
+    }
+  })
+})

@@ -150,41 +150,65 @@ export async function countAmyProfiles(db) {
  * `expires_at` lives in Amy's metadata section, not on `profiles`, so the
  * survivor scan reads the section — the same place `cleanupExpiredAmyProfiles`
  * reads it from, so the two can never disagree about which rows are expired.
+ *
+ * PAGED, and it SAYS SO when it stops early (2026-08-21). The DELETER
+ * (`cleanupExpiredAmyProfiles` → `listAmyProfiles`) is completely unbounded;
+ * this proof used to read one `LIMIT 200` page and then decide expiry in JS on
+ * whatever came back — the #944/#1080 post-`LIMIT` shape, aimed at the honesty
+ * layer instead of at a repair. With more than 200 Amy rows alive (the nightly
+ * target is ~50 and prod has held 55 from a single run plus leftovers), rows
+ * past the bound were never examined, and `buildDeletionProof` treated the
+ * truncated array as the COMPLETE leak set.
+ *
+ * It now walks pages of `limit` up to `maxScan` and marks the returned array
+ * `truncated` if it stopped at the cap. The return type is unchanged (Array or
+ * null); `truncated` is an extra own-property, so every existing consumer keeps
+ * working and the ones that care can refuse to say `proven`.
+ *
+ * @returns {Promise<Array|null>} survivors, with a `truncated` boolean property
  */
-export async function findExpiredSurvivors(db, { now = new Date(), limit = 200 } = {}) {
+export async function findExpiredSurvivors(db, { now = new Date(), limit = 200, maxScan = 5000 } = {}) {
   if (!db) return null
   const nowIso = now instanceof Date ? now.toISOString() : String(now)
   try {
     // Tolerant of older/test schemas without profiles.last_discovery_at — the
     // same fallback `listAmyProfiles` (the sweep's own reader) uses; the crawl
     // signal then comes from amy_metadata alone.
-    let rows
     const bound = Math.max(1, Math.min(2000, limit))
-    try {
-      rows = await db
-        .prepare(
-          `SELECT p.id AS id, p.display_name AS display_name, p.created_at AS created_at,
-                  p.last_discovery_at AS last_discovery_at, s.data AS data
-             FROM profiles p
-             LEFT JOIN profile_sections s
-               ON s.profile_id = p.id AND s.section_key = 'amy_metadata'
-            WHERE p.created_by = ?
-            LIMIT ?`,
-        )
-        .all(ORIGIN_CREATED_BY, bound)
-    } catch {
-      rows = await db
-        .prepare(
-          `SELECT p.id AS id, p.display_name AS display_name, p.created_at AS created_at, s.data AS data
-             FROM profiles p
-             LEFT JOIN profile_sections s
-               ON s.profile_id = p.id AND s.section_key = 'amy_metadata'
-            WHERE p.created_by = ?
-            LIMIT ?`,
-        )
-        .all(ORIGIN_CREATED_BY, bound)
+    const cap = Math.max(bound, Math.min(100000, Number(maxScan) || 0))
+    // ORDER BY is required for stable paging; `id` is the only column
+    // guaranteed present and unique on every schema this reader supports.
+    const pageSql = (withDiscovery) => `
+      SELECT p.id AS id, p.display_name AS display_name, p.created_at AS created_at,
+             ${withDiscovery ? 'p.last_discovery_at AS last_discovery_at,' : ''} s.data AS data
+        FROM profiles p
+        LEFT JOIN profile_sections s
+          ON s.profile_id = p.id AND s.section_key = 'amy_metadata'
+       WHERE p.created_by = ?
+       ORDER BY p.id
+       LIMIT ? OFFSET ?`
+
+    let withDiscovery = true
+    const rows = []
+    let truncated = false
+    for (let offset = 0; ; offset += bound) {
+      if (offset >= cap) { truncated = true; break }
+      const pageSize = Math.min(bound, cap - offset)
+      let page
+      try {
+        page = await db.prepare(pageSql(withDiscovery)).all(ORIGIN_CREATED_BY, pageSize, offset)
+      } catch {
+        if (!withDiscovery) throw new Error('amy survivor scan failed')
+        withDiscovery = false
+        page = await db.prepare(pageSql(false)).all(ORIGIN_CREATED_BY, pageSize, offset)
+      }
+      const got = Array.isArray(page) ? page : []
+      rows.push(...got)
+      if (got.length < pageSize) break
     }
+
     const survivors = []
+    survivors.truncated = truncated
     for (const row of Array.isArray(rows) ? rows : []) {
       let meta = null
       try {
@@ -232,6 +256,10 @@ export async function findExpiredSurvivors(db, { now = new Date(), limit = 200 }
  * @param {object|null} args.expiredSweep  result of cleanupExpiredAmyProfiles
  * @param {Array|null} args.survivors      expired rows still present (null = unread)
  * @param {number} args.created            profiles this run created
+ * @param {boolean} [args.scanTruncated]   the survivor scan stopped at its cap;
+ *   defaults to the `truncated` property `findExpiredSurvivors` sets on the
+ *   array it returns. A PARTIALLY-read world proves nothing, exactly like an
+ *   unreadable count — see the docblock on `findExpiredSurvivors`.
  * @returns {object} the proof block persisted on the report
  */
 export function buildDeletionProof({
@@ -241,6 +269,7 @@ export function buildDeletionProof({
   expiredSweep = null,
   survivors = null,
   created = 0,
+  scanTruncated = null,
 } = {}) {
   const reportedDeleted = (Number(runCleanup?.deleted) || 0) + (Number(expiredSweep?.deleted) || 0)
   const observedDeleted = Number.isFinite(before) && Number.isFinite(after) ? before - after : null
@@ -260,6 +289,14 @@ export function buildDeletionProof({
   )
   const leaked = allSurvivors.filter((s) => !graceHeld.includes(s))
 
+  // A scan that stopped at its cap read PART of the world. Absence of a leak in
+  // the part it read is not evidence there is none — but a leak it DID find is
+  // still a leak, so the alarm is checked first and truncation only ever blocks
+  // the comfortable verdicts.
+  const truncatedScan = scanTruncated === null || scanTruncated === undefined
+    ? survivors?.truncated === true
+    : scanTruncated === true
+
   if (!readable) {
     reasons.push('counts or survivor scan unavailable — deletion NOT verified this run')
   } else if (leaked.length > 0) {
@@ -267,6 +304,18 @@ export function buildDeletionProof({
     reasons.push(
       `${leaked.length} profile(s) survived past their TTL with no documented guard holding them`
       + (graceHeld.length > 0 ? ` (${graceHeld.length} more are held by the sweep's grace windows)` : ''),
+    )
+    if (truncatedScan) {
+      reasons.push('the survivor scan also hit its bound — there may be MORE past-TTL rows it never examined')
+    }
+  } else if (truncatedScan) {
+    // No leak in the part that was read, but the scan stopped short. The
+    // deleter is unbounded; only the proof was truncated, so the honest answer
+    // is that this run did not verify deletion — never a comfortable `proven`.
+    verdict = DELETION_VERDICT.UNKNOWN
+    reasons.push(
+      'the survivor scan hit its bound — rows past it were never examined, so finding no '
+      + 'past-TTL row is NOT evidence there is none; deletion NOT verified this run',
     )
   } else if (graceHeld.length > 0) {
     verdict = DELETION_VERDICT.GRACE_HELD
@@ -313,6 +362,9 @@ export function buildDeletionProof({
     leaked_survivor_count: Array.isArray(survivors) ? leaked.length : null,
     grace_held_survivors: Array.isArray(survivors) ? graceHeld.slice(0, 20) : null,
     grace_held_count: Array.isArray(survivors) ? graceHeld.length : null,
+    // Persisted so the admin panel / morning report can tell "we looked at
+    // everything and found nothing" from "we ran out of scan budget".
+    survivor_scan_truncated: truncatedScan,
     reasons,
   }
 }

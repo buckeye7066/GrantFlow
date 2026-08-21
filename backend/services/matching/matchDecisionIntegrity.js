@@ -1,7 +1,43 @@
 import { REVIEW_SCORE } from '../../config/matchThresholds.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
 
-const RESOURCE_KINDS_SQL = "('DIRECTORY', 'PAST_AWARD_INTEL', 'SCHOOL_PORTAL', 'REFERRAL')"
+/**
+ * The opportunity kinds rules 3 and 4 below govern: navigational evidence, not
+ * direct funding. Exported so a WRITER can pre-apply the same bar instead of
+ * re-encoding the list at its own call site (CLAUDE.md: one choke point).
+ */
+export const RESOURCE_OPPORTUNITY_KINDS = Object.freeze([
+  'DIRECTORY',
+  'PAST_AWARD_INTEL',
+  'SCHOOL_PORTAL',
+  'REFERRAL',
+])
+
+const RESOURCE_KINDS_SQL = `(${RESOURCE_OPPORTUNITY_KINDS.map((k) => `'${k}'`).join(', ')})`
+
+/**
+ * Would rule 3 delete this row the instant it is written?
+ *
+ * PURE. A writer that persists a resource-kind match below REVIEW_SCORE creates
+ * work for `normalizePersistedMatchDecisionIntegrity` on the SAME boot, and the
+ * pair then cycles insert→delete forever — the tug-of-war signature (a repair
+ * count that never trends to zero). Measured 2026-08-21: `funder_behavior_recall`
+ * (ladder step 33) minted exactly one such row per boot and step 39 deleted it,
+ * holding the ladder's `totalRepaired` at a permanent floor of 7.
+ *
+ * A NULL/non-numeric score is NOT below the bar — rule 3 requires an explicit
+ * score, and rule 4 relabels those to REVIEW instead of deleting them.
+ *
+ * @param {{ opportunityKind?: string|null, matchScore?: number|string|null }} row
+ * @returns {boolean}
+ */
+export function isBelowReviewResourceMatch({ opportunityKind = null, matchScore = null } = {}) {
+  const kind = String(opportunityKind ?? '').trim().toUpperCase()
+  if (!RESOURCE_OPPORTUNITY_KINDS.includes(kind)) return false
+  const score = Number(matchScore)
+  if (!Number.isFinite(score)) return false
+  return score < REVIEW_SCORE
+}
 
 function changes(result) {
   return Number(result?.changes ?? result?.rowCount ?? 0)
@@ -165,4 +201,6 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
 
 export default {
   normalizePersistedMatchDecisionIntegrity,
+  RESOURCE_OPPORTUNITY_KINDS,
+  isBelowReviewResourceMatch,
 }

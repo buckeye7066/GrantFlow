@@ -22,7 +22,11 @@
  *                               them (default true). The synthetic profile + its
  *                               scoped matches are still cleaned up; the real,
  *                               reality-gated, deduped opportunities are retained.
- *                               Set AMY_PERSIST=false for measurement-only dry runs.
+ *                               It ALSO gates the durable learning writes
+ *                               (flywheel cohort, probe coverage, approval
+ *                               ledger), so AMY_PERSIST=false is a run that
+ *                               LEARNS NOTHING — an explicit measurement-only
+ *                               opt-out, never a default.
  *   AMY_KEEP_PROFILES           leave profiles for Sam instead of auto-clean (default false)
  *   AMY_FLOOR                   match score floor for the crawler event (default DEFAULT_MIN_SCORE slider)
  *   AMY_IMPROVE                 run the Anya→Sam chain + tuning measurement (default true)
@@ -43,8 +47,16 @@
  *   AMY_INTERVAL_MS             override the 24h cadence (testing/ops)
  *
  * Safety: at most one run at a time (in-memory flag + DB scheduler lock); never
- * crashes the server; never blocks startup; dry-run by default so it never
- * pollutes the live catalog.
+ * crashes the server; never blocks startup.
+ *
+ * NOT dry-run by default — the line here used to claim it was, and
+ * `getAmyConfig()` below has read `AMY_PERSIST` with a default of TRUE for as
+ * long as that comment has been wrong. A scheduled run DOES store the real,
+ * reality-gated, deduped opportunities it discovers (the synthetic profile and
+ * its scoped matches are still reaped), and `dryRunDiscovery` also gates the
+ * three durable learning writes — flywheel cohort, probe coverage, approval
+ * ledger — so a "dry" run is a run that learns nothing. `AMY_PERSIST=false` is
+ * an explicit measurement-only opt-out, never the default.
  */
 
 import { launchAmyRun } from './amyRunner.js'
@@ -63,8 +75,9 @@ function bool(v, dflt = false) {
 export function getAmyConfig() {
   // ON by default (owner directive 2026-06-29). Amy is a login-independent
   // background agent: the scheduler starts at server boot (not on any user
-  // login) and runs daily. Discovery stays dry-run (AMY_PERSIST=false) and all
-  // tuning is proven + reversible. Disable explicitly with AMY_ENABLED=false.
+  // login) and runs daily. Discovery PERSISTS by default (AMY_PERSIST=true, see
+  // `persist` below — this comment used to say the opposite) and all tuning is
+  // proven + reversible. Disable explicitly with AMY_ENABLED=false.
   const enabled = bool(process.env.AMY_ENABLED, true)
   return {
     enabled,
