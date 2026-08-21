@@ -23,7 +23,8 @@ const log = createLogger('privateFoundationCrawler')
  * @property {string} [ein]
  * @property {string[]} focusAreas
  * @property {string} geographicScope  - 'national' | state abbreviation(s) joined by comma
- * @property {{ min: number, max: number }} grantRange  - USD
+ * @property {{ min: number, max: number }} [grantRange]  - USD when the source
+ *   publishes a real per-award figure/range
  * @property {string} applicationUrl
  * @property {string} description
  * @property {string} [deadlineInfo]
@@ -275,8 +276,7 @@ const FOUNDATION_REGISTRY = [
     ein: '62-1301680',
     focusAreas: ['education', 'health', 'environment', 'arts'],
     geographicScope: 'tn',
-    grantRange: { min: 1000, max: 50000 },
-    applicationUrl: 'https://www.easttennesseefoundation.org/grants/',
+    applicationUrl: 'https://www.easttennesseefoundation.org/nonprofits/apply-for-grants/',
     description: 'Strengthens communities in East Tennessee through philanthropic grants and scholarships.',
     deadlineInfo: 'Annual; applications typically accepted March–May',
   },
@@ -606,8 +606,8 @@ function foundationToOpportunity(foundation) {
     ],
     state: stateScope,
     is_national: isNational,
-    grant_amount_min: foundation.grantRange.min,
-    grant_amount_max: foundation.grantRange.max,
+    grant_amount_min: foundation.grantRange?.min ?? null,
+    grant_amount_max: foundation.grantRange?.max ?? null,
     deadline_info: foundation.deadlineInfo || null,
     ein: foundation.ein || null,
     opportunity_type: 'grant',

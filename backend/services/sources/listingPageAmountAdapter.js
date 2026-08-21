@@ -98,6 +98,24 @@ export const LISTING_PAGES = Object.freeze([
     matchPathPrefixes: Object.freeze(['/csc/scholarships']),
     fetchUrl: 'https://www.mtsu.edu/csc/scholarships/',
   }),
+  Object.freeze({
+    // East Tennessee Foundation's grant landing pages are structure-only
+    // indexes: they route applicants into the portal / program list, but the
+    // foundation-wide row itself does not name one award figure. The old
+    // private-foundation seed pointed at `/grants/` and left the row sitting in
+    // Sam's unreadable bucket forever. Exact-path only: subpages under
+    // `/grants/...` can name a real fund and must stay eligible for ordinary
+    // extraction rather than being stolen by this umbrella adapter.
+    id: 'east_tennessee_foundation_grants_index',
+    matchHosts: Object.freeze(['www.easttennesseefoundation.org', 'easttennesseefoundation.org']),
+    matchPaths: Object.freeze([
+      '/grants',
+      '/nonprofits/apply-for-grants',
+      '/nonprofits/grants-we-offer',
+    ]),
+    fetchUrl: 'https://www.easttennesseefoundation.org/nonprofits/apply-for-grants/',
+    pageLevelPhrases: Object.freeze(['apply for grants', 'grants we offer']),
+  }),
 ])
 
 /** Title tokens too generic to anchor a section on their own. */
@@ -130,23 +148,41 @@ function pathMatchesPrefix(pathname, prefix) {
   return pathname === normalized || pathname === `${normalized}/` || pathname.startsWith(`${normalized}/`)
 }
 
+function pathMatchesExact(pathname, exact) {
+  const raw = String(exact || '').toLowerCase().trim()
+  if (!raw || !pathname) return false
+  const normalized = raw.endsWith('/') ? raw.slice(0, -1) : raw
+  return pathname === normalized || pathname === `${normalized}/`
+}
+
 /** The registry entry that owns this row, or null. Pure; exported for tests. */
 export function findListingPageEntry(row) {
   const urls = [row?.source_url, row?.application_url, row?.evidence_url, row?.url].filter(Boolean)
   if (urls.length === 0) return null
   for (const entry of LISTING_PAGES) {
+    const exactPaths = Array.isArray(entry.matchPaths) ? entry.matchPaths : null
     const prefixes = Array.isArray(entry.matchPathPrefixes) ? entry.matchPathPrefixes : null
     for (const url of urls) {
       const host = hostOf(url)
       if (!host || !entry.matchHosts.includes(host)) continue
+      const pathname = pathOf(url)
+      if (exactPaths && exactPaths.length > 0) {
+        if (!pathname || !exactPaths.some((p) => pathMatchesExact(pathname, p))) continue
+      }
       if (prefixes && prefixes.length > 0) {
-        const pathname = pathOf(url)
         if (!pathname || !prefixes.some((p) => pathMatchesPrefix(pathname, p))) continue
       }
       return entry
     }
   }
   return null
+}
+
+function pageLevelFallback(entry, collapsedText) {
+  const phrases = Array.isArray(entry?.pageLevelPhrases) ? entry.pageLevelPhrases : []
+  if (!phrases.length) return false
+  const text = String(collapsedText || '').toLowerCase()
+  return phrases.some((phrase) => text.includes(String(phrase).toLowerCase()))
 }
 
 /** Is this row served by a registered listing page? Pure; exported for tests. */
@@ -255,6 +291,20 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
 
     const result = extractAnchoredAmounts(text, row?.title)
     if (!result.anchored) {
+      if (pageLevelFallback(entry, text)) {
+        // The row points at a known umbrella/index page that we successfully
+        // read, but the page names no per-award figure for the umbrella itself.
+        // That is the honest none-published path the sweep can persist; it is
+        // NOT the "closed portal listing" case above, which still teaches us
+        // only that we cannot see the row.
+        return {
+          attempted: true,
+          page_read: true,
+          transient: false,
+          found: false,
+          reason: 'listing_page_no_program_figure',
+        }
+      }
       // The page is live but does not name this program (a portal only lists
       // OPEN awards). We learned we cannot SEE the row — not that its funder
       // publishes nothing — so this is a stable failure, never a denial.
