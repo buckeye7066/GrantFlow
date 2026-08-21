@@ -5173,11 +5173,12 @@ describe('enforceAmySyntheticExpiry', () => {
   }
 
   async function seedExpiredCrawledSynthetic(db, { hoursAgo = 30, ttlHours = 24, runId = 'amy-prior-run' } = {}) {
-    const { createAmyProfile, markProfileCrawled } = await import('../services/amy/amyProfileStore.js')
+    const { createAmyProfile, markProfileCrawled, markProfilesTaught, REQUIRED_TEACHING_AGENTS } = await import('../services/amy/amyProfileStore.js')
     const { generateScenarios } = await import('../services/amy/syntheticProfileCatalog.js')
     const past = new Date(Date.now() - hoursAgo * 60 * 60 * 1000)
     const { profileId } = await createAmyProfile(db, generateScenarios({ runId })[0], { runId, ttlHours, now: past })
     await markProfileCrawled(db, profileId, { now: past })
+    await markProfilesTaught(db, [profileId], { runId, agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: runId } })
     return profileId
   }
 
@@ -5233,6 +5234,27 @@ describe('enforceAmySyntheticExpiry', () => {
       expect(res.repaired).toBe(0)
       expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(fresh)).toBeTruthy()
       expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(young)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps an expired crawled synthetic until the teach receipt exists', async () => {
+    const db = makeAmyDb()
+    try {
+      const { createAmyProfile, markProfileCrawled } = await import('../services/amy/amyProfileStore.js')
+      const { generateScenarios } = await import('../services/amy/syntheticProfileCatalog.js')
+      const past = new Date(Date.now() - 30 * 60 * 60 * 1000)
+      const { profileId } = await createAmyProfile(db, generateScenarios({ runId: 'amy-untaught' })[0], {
+        runId: 'amy-untaught',
+        ttlHours: 24,
+        now: past,
+      })
+      await markProfileCrawled(db, profileId, { now: past })
+
+      const res = await enforceAmySyntheticExpiry(db)
+      expect(res.repaired).toBe(0)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)).toBeTruthy()
     } finally {
       db.close()
     }

@@ -51,7 +51,14 @@ import {
 } from './probeCoverageLedger.js'
 import { assessConvergence } from './gapConvergence.js'
 import { countAmyProfiles, verifyAmyDeletion } from './amyDeletionProof.js'
-import { createAmyProfile, cleanupAmyProfiles, cleanupExpiredAmyProfiles, markProfileCrawled } from './amyProfileStore.js'
+import {
+  createAmyProfile,
+  cleanupAmyProfiles,
+  cleanupExpiredAmyProfiles,
+  markProfileCrawled,
+  markProfilesTaught,
+  REQUIRED_TEACHING_AGENTS,
+} from './amyProfileStore.js'
 import { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations } from './amyReport.js'
 import { cohortMetricsAtFloor, sweepFloors, summarizeCohort } from './crawlerMetrics.js'
 import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue, WEIGHT_TRIAL_KV_KEY } from './crawlerTuner.js'
@@ -913,6 +920,9 @@ export async function runAmyTraining(options = {}) {
       lessons_heard: meshLessonsHeard.map((l) => ({ id: l.id, author: l.author, topic: l.topic, claim: l.claim })),
       search_degraded: searchDegraded,
       suppressed_low_results: suppressedLowResults,
+      notified: [],
+      taught_profiles: 0,
+      teaching_complete: false,
       taught: [], // filled below (teach step runs after the combined skeleton exists)
     },
     chain,
@@ -944,6 +954,8 @@ export async function runAmyTraining(options = {}) {
   // stored on the admin report.
   try {
     const taught = []
+    const notified = []
+    const recipients = REQUIRED_TEACHING_AGENTS.filter((agentId) => agentId !== 'amy')
     if (gapActions.structural.length > 0) {
       const top = gapActions.structural.slice(0, 3)
       const claim = `Structural coverage gaps persist: ${top.map((w) => w.detail || w.lane || w.gap_class).join('; ')}`
@@ -955,7 +967,17 @@ export async function runAmyTraining(options = {}) {
         now: clock(),
       })
       taught.push({ id: lesson.id, topic: lesson.topic, claim: lesson.claim })
-      await mesh.postMessage(db, { from: 'amy', to: 'sam', kind: 'lesson', body: claim, data: { lesson_id: lesson.id, run_id: runId }, now: clock() })
+      for (const to of recipients) {
+        const message = await mesh.postMessage(db, {
+          from: 'amy',
+          to,
+          kind: 'lesson',
+          body: claim,
+          data: { lesson_id: lesson.id, run_id: runId },
+          now: clock(),
+        })
+        notified.push({ id: message.id, to: message.to, kind: message.kind })
+      }
     }
     if (Object.keys(effectiveArchetypeUpdate).length > 0) {
       const pairs = Object.entries(effectiveArchetypeUpdate)
@@ -970,11 +992,78 @@ export async function runAmyTraining(options = {}) {
         now: clock(),
       })
       taught.push({ id: lesson.id, topic: lesson.topic, claim: lesson.claim })
-      await mesh.postMessage(db, { from: 'amy', to: 'sam', kind: 'lesson', body: claim, data: { lesson_id: lesson.id, run_id: runId }, now: clock() })
+      for (const to of recipients) {
+        const message = await mesh.postMessage(db, {
+          from: 'amy',
+          to,
+          kind: 'lesson',
+          body: claim,
+          data: { lesson_id: lesson.id, run_id: runId },
+          now: clock(),
+        })
+        notified.push({ id: message.id, to: message.to, kind: message.kind })
+      }
     }
+    const summaryMessage = await postTeachingSummary(mesh, db, {
+      runId,
+      handoff,
+      approvalQueue,
+      recipients,
+      now: clock(),
+    })
+    notified.push(...summaryMessage)
     combined.agent_mesh.taught = taught
+    combined.agent_mesh.notified = notified
+    combined.agent_mesh.teaching_complete = recipients.every((to) => notified.some((msg) => msg.to === to))
   } catch (err) {
+    combined.agent_mesh.teaching_error = err?.message || String(err)
     logger.warn('Amy agent-mesh teach failed (non-fatal)', { error: err?.message })
+  }
+
+  // The deletion gate is the mesh / finding-actor TEACHING receipt, not the
+  // crawl alone. A crawled synthetic profile may only be reaped after Amy has
+  // published what that crawl taught the rest of the fleet (Amy herself via the
+  // run-local learning stores; Anya/Sam/Robert via the existing mesh + actor
+  // summaries). If the teach step fails, cleanup must KEEP the profile so the
+  // missed lesson is visible instead of silently destroyed.
+  if (crawledProfileIds.length > 0) {
+    try {
+      if (combined.agent_mesh.teaching_complete) {
+        const findingTypes = [...new Set((handoff.findings || []).map((f) => f?.type).filter(Boolean))]
+        const actorLevers = [...new Set(approvalQueue.map((item) => item?.lever).filter(Boolean))]
+        const taught = await markProfilesTaught(db, crawledProfileIds, {
+          now: clock(),
+          runId,
+          agents: REQUIRED_TEACHING_AGENTS,
+          receipt: {
+            run_id: runId,
+            findings_total: handoff.findings_total || 0,
+            finding_types: findingTypes,
+            actor_levers: actorLevers,
+            approval_items: approvalQueue.length,
+            lesson_ids: combined.agent_mesh.taught.map((lesson) => lesson.id),
+            notified_agents: [...new Set(combined.agent_mesh.notified.map((msg) => msg.to))],
+            handoff_generated: true,
+          },
+        })
+        combined.agent_mesh.taught_profiles = taught.updated
+      } else {
+        combined.degraded = true
+        combined.agent_mesh.teaching_error ||= 'mesh_teach_incomplete'
+        logger.error('Amy could not prove mesh teaching for every required agent; crawled synthetics will be kept', {
+          run_id: runId,
+          crawled_profiles: crawledProfileIds.length,
+        })
+      }
+    } catch (err) {
+      combined.degraded = true
+      combined.agent_mesh.teaching_complete = false
+      combined.agent_mesh.teaching_error = err?.message || String(err)
+      logger.error('Amy could not persist the teaching receipt; crawled synthetics will be kept', {
+        run_id: runId,
+        error: err?.message || String(err),
+      })
+    }
   }
 
   // Daily flywheel scoreboard: fold this run's per-profile clean/issue verdicts
@@ -1070,6 +1159,7 @@ export async function runAmyTraining(options = {}) {
       runId,
       onlyIds: crawledProfileIds,
       requireCrawled: true,
+      requireTaught: true,
       force: true,
       now: clock(),
     })
@@ -1290,6 +1380,33 @@ function isoFromClock(clock) {
   if (v instanceof Date) return v.toISOString()
   const parsed = Date.parse(v)
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date().toISOString()
+}
+
+async function postTeachingSummary(mesh, db, { runId, handoff, approvalQueue, recipients, now }) {
+  const messages = []
+  const topRoutes = approvalQueue
+    .slice(0, 3)
+    .map((item) => `${item.finding_type}:${item.lever}${item.category ? `:${item.category}` : ''}`)
+    .join('; ')
+  const body = Number(handoff?.findings_total || 0) > 0
+    ? `Amy run ${runId} found ${handoff.findings_total} crawler blind spot(s). Actor routes: ${topRoutes || 'see handoff + approval queue for details'}.`
+    : `Amy run ${runId} found no persistent crawler blind spots in this cohort.`
+  for (const to of Array.isArray(recipients) ? recipients : []) {
+    const message = await mesh.postMessage(db, {
+      from: 'amy',
+      to,
+      kind: 'summary',
+      body,
+      data: {
+        run_id: runId,
+        findings_total: Number(handoff?.findings_total || 0),
+        approval_items: Array.isArray(approvalQueue) ? approvalQueue.length : 0,
+      },
+      now,
+    })
+    messages.push({ id: message.id, to: message.to, kind: message.kind })
+  }
+  return messages
 }
 
 async function readWeightTrialLast(db) {

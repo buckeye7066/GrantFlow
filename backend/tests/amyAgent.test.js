@@ -4,7 +4,16 @@ import { runAmyTraining } from '../services/amy/amyAgent.js'
 import os from 'node:os'
 import fsp from 'node:fs/promises'
 import nodePath from 'node:path'
-import { createAmyProfile, cleanupAmyProfiles, cleanupExpiredAmyProfiles, listAmyProfiles, markProfileCrawled } from '../services/amy/amyProfileStore.js'
+import {
+  createAmyProfile,
+  cleanupAmyProfiles,
+  cleanupExpiredAmyProfiles,
+  listAmyProfiles,
+  markProfileCrawled,
+  markProfilesTaught,
+  hasRequiredTeachingReceipt,
+  REQUIRED_TEACHING_AGENTS,
+} from '../services/amy/amyProfileStore.js'
 import { buildAmyMetadata } from '../services/amy/amyMetadata.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { cohortMetricsAtFloor, sweepFloors } from '../services/amy/crawlerMetrics.js'
@@ -356,6 +365,9 @@ describe('Amy training run (end-to-end, offline discovery)', () => {
       expect(out.report.handoff_from).toBe('amy')
       expect(out.artifacts.handoffPath).toBe(`audit-reports/amy-to-anya-handoff-${out.run_id}.json`)
       expect(Object.keys(artifacts).length).toBe(2)
+      expect(out.combined.agent_mesh.teaching_complete).toBe(true)
+      expect(out.combined.agent_mesh.notified.map((m) => m.to)).toEqual(expect.arrayContaining(['sam', 'anya', 'robert']))
+      expect(out.combined.agent_mesh.taught_profiles).toBe(out.crawled_profile_ids.length)
 
       // Default cleanup removed all synthetic profiles.
       expect(out.cleanup.deleted).toBe(out.created_profile_ids.length)
@@ -736,6 +748,33 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
     }
   })
 
+  it('never deletes a crawled profile before the teaching receipt exists for every required agent', async () => {
+    const db = createDb()
+    try {
+      const { profileId } = await createAmyProfile(db, generateScenarios({ runId: 'amy-teach' })[0], { runId: 'amy-teach', ttlHours: 48 })
+      await markProfileCrawled(db, profileId, {})
+
+      const skipped = await cleanupAmyProfiles(db, { force: true, requireCrawled: true, requireTaught: true })
+      expect(skipped.deleted).toBe(0)
+      expect(skipped.skipped_ids.some((s) => s.id === profileId && s.reasons.includes('not_taught'))).toBe(true)
+
+      await markProfilesTaught(db, [profileId], {
+        runId: 'amy-teach',
+        agents: REQUIRED_TEACHING_AGENTS,
+        receipt: { run_id: 'amy-teach', findings_total: 1, approval_items: 1, handoff_generated: true },
+      })
+      const metaRow = db.prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?').get(profileId, METADATA_SECTION_KEY)
+      const meta = JSON.parse(metaRow.data)
+      expect(hasRequiredTeachingReceipt(meta)).toBe(true)
+
+      const deleted = await cleanupAmyProfiles(db, { force: true, requireCrawled: true, requireTaught: true })
+      expect(deleted.deleted).toBe(1)
+      expect(db.prepare('SELECT id FROM profiles WHERE id=?').get(profileId)).toBeFalsy()
+    } finally {
+      db.close()
+    }
+  })
+
   it('reaps a never-crawled synthetic ONLY once it is far past its TTL (bounded escape hatch)', async () => {
     const db = createDb()
     try {
@@ -802,6 +841,7 @@ describe('Amy end-of-run expired sweep + crawled-signal rescue', () => {
     const db = createDb()
     try {
       const leftover = await seedExpiredLeftover(db)
+      await markProfilesTaught(db, [leftover], { runId: 'amy-prior', agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: 'amy-prior' } })
       const events = []
       // Discovery that skips for every synthetic — the prod failure mode that
       // left crawledProfileIds EMPTY so the scoped cleanup deleted nothing.
@@ -906,10 +946,12 @@ describe('Amy end-of-run expired sweep + crawled-signal rescue', () => {
     const db = createDb()
     try {
       const expired = await seedExpiredLeftover(db, { hoursAgo: 30, ttlHours: 24, runId: 'amy-a' })
+      await markProfilesTaught(db, [expired], { runId: 'amy-a', agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: 'amy-a' } })
 
       // Expired, but crawled 1h ago — inside the 6h mid-flight grace.
       const recent = await seedExpiredLeftover(db, { hoursAgo: 30, ttlHours: 24, runId: 'amy-b' })
       await markProfileCrawled(db, recent, { now: new Date(Date.now() - 1 * HOUR) })
+      await markProfilesTaught(db, [recent], { runId: 'amy-b', agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: 'amy-b' } })
 
       // A DESIGNATED profile id maliciously tagged as an expired Amy synthetic
       // must still be untouchable (guard 1 always wins).
@@ -923,6 +965,10 @@ describe('Amy end-of-run expired sweep + crawled-signal rescue', () => {
       const meta = buildAmyMetadata({ runId: 'amy-evil', scenarioId: 's', ttlHours: 24, now: past })
       meta.crawled_at = past.toISOString()
       meta.last_crawled_at = past.toISOString()
+      meta.taught_at = past.toISOString()
+      meta.last_taught_at = past.toISOString()
+      meta.learning_agents = [...REQUIRED_TEACHING_AGENTS]
+      meta.teaching = { taught_at: past.toISOString(), last_taught_at: past.toISOString(), agents: [...REQUIRED_TEACHING_AGENTS] }
       db.prepare(
         `INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)`,
       ).run(designatedId, METADATA_SECTION_KEY, JSON.stringify(meta))
@@ -952,11 +998,13 @@ describe('Amy end-of-run expired sweep + crawled-signal rescue', () => {
       // forever ("starved by perpetual re-discovery").
       const starved = await seedExpiredLeftover(db, { hoursAgo: 100, ttlHours: 48, runId: 'amy-starved' })
       await markProfileCrawled(db, starved, { now: new Date(Date.now() - 1 * HOUR) })
+      await markProfilesTaught(db, [starved], { runId: 'amy-starved', agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: 'amy-starved' } })
 
       // Control: expired and ALSO crawled 1h ago, but only 30h old — well
       // inside the starvation bound, so the mid-flight grace must still hold.
       const graceHeld = await seedExpiredLeftover(db, { hoursAgo: 30, ttlHours: 24, runId: 'amy-grace' })
       await markProfileCrawled(db, graceHeld, { now: new Date(Date.now() - 1 * HOUR) })
+      await markProfilesTaught(db, [graceHeld], { runId: 'amy-grace', agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: 'amy-grace' } })
 
       const res = await cleanupExpiredAmyProfiles(db)
       expect(res.ids).toContain(starved)
@@ -1009,6 +1057,68 @@ describe('Amy end-of-run expired sweep + crawled-signal rescue', () => {
       expect(res.deleted).toBe(1)
       expect(res.ids).toContain(ancient)
       expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(young)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('cleanupExpiredAmyProfiles: refuses an expired crawled profile until the teach receipt exists, then reaps it', async () => {
+    const db = createDb()
+    try {
+      const past = new Date(Date.now() - 30 * HOUR)
+      const { profileId } = await createAmyProfile(db, generateScenarios({ runId: 'amy-expired-teach' })[0], {
+        runId: 'amy-expired-teach',
+        ttlHours: 24,
+        now: past,
+      })
+      await markProfileCrawled(db, profileId, { now: past })
+
+      const skipped = await cleanupExpiredAmyProfiles(db)
+      expect(skipped.deleted).toBe(0)
+      expect(skipped.skipped_ids.some((s) => s.id === profileId && s.reasons.includes('not_taught'))).toBe(true)
+
+      await markProfilesTaught(db, [profileId], {
+        runId: 'amy-expired-teach',
+        agents: REQUIRED_TEACHING_AGENTS,
+        receipt: { run_id: 'amy-expired-teach', findings_total: 2, approval_items: 1, handoff_generated: true },
+      })
+      const reaped = await cleanupExpiredAmyProfiles(db)
+      expect(reaped.deleted).toBe(1)
+      expect(reaped.ids).toContain(profileId)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('runAmyTraining keeps crawled synthetics when the teach step cannot notify every required agent', async () => {
+    const db = createDb()
+    try {
+      const out = await runAmyTraining({
+        db,
+        categories: CATEGORY_IDS.slice(0, 2),
+        perCategory: 1,
+        dryRunDiscovery: true,
+        runDiscovery: makeFakeDiscovery(db),
+        mesh: {
+          consumeInbox: async () => [],
+          readLessons: async () => [],
+          recordLesson: async () => ({ id: 'lsn-failing', topic: 'coverage_gap', claim: 'lesson' }),
+          postMessage: async (_db, args) => {
+            if (args.to === 'robert') throw new Error('robert inbox unavailable')
+            return { id: `msg-${args.to}`, to: args.to, kind: args.kind }
+          },
+          markConsumed: async () => true,
+        },
+        clock: () => new Date('2026-08-20T12:00:00Z'),
+      })
+
+      expect(out.crawled_profile_ids.length).toBeGreaterThan(0)
+      expect(out.combined.agent_mesh.teaching_complete).toBe(false)
+      expect(out.combined.agent_mesh.teaching_error).toContain('robert inbox unavailable')
+      expect(out.cleanup.deleted).toBe(0)
+      const survivors = await listAmyProfiles(db)
+      expect(survivors.length).toBe(out.created_profile_ids.length)
+      expect(survivors.every((row) => !hasRequiredTeachingReceipt(row.metadata))).toBe(true)
     } finally {
       db.close()
     }
