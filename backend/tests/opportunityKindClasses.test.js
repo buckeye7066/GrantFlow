@@ -29,6 +29,7 @@ import {
   isNoPerAwardFigureKind,
   noPerAwardFigureKindSql,
 } from '../config/opportunityKindClasses.js'
+import { RESOURCE_OPPORTUNITY_KINDS } from '../services/matching/matchDecisionIntegrity.js'
 
 const check = getCheckById('pipeline.amountCoverage')
 
@@ -100,18 +101,34 @@ describe('the no-per-award-figure kind registry', () => {
     }
   })
 
-  it('static drift tripwire: matches matchDecisionIntegrity RESOURCE_KINDS_SQL', () => {
-    // The same set lives as a literal there. If either side gains a kind and the
-    // other does not, a pointer is a resource in one place and an award in the
-    // other — exactly the drift that produced this defect.
+  it('drift tripwire: matches the resource kinds matchDecisionIntegrity governs', () => {
+    // The same set lives there too. If either side gains a kind and the other
+    // does not, a pointer is a resource in one place and an award in the other —
+    // exactly the drift that produced this defect.
+    //
+    // This used to regex the `RESOURCE_KINDS_SQL = "(...)"` STRING LITERAL out of
+    // the source file. That made the tripwire fire on a refactor rather than on
+    // real drift: when the literal became a template built from the now-exported
+    // `RESOURCE_OPPORTUNITY_KINDS` array (2026-08-21, so a writer could pre-apply
+    // the same bar instead of re-encoding the list), the regex stopped matching
+    // and the test failed even though the two sets were still identical.
+    // Comparing the EXPORTED VALUE is strictly stronger: it survives any
+    // formatting of the literal and still catches an actual set change.
+    expect([...RESOURCE_OPPORTUNITY_KINDS].map((k) => k.toLowerCase()).sort())
+      .toEqual([...POINTER_KINDS].sort())
+  })
+
+  it('the SQL literal is DERIVED from that array — nobody hand-types a second list', () => {
     const src = fs.readFileSync(
       path.join(process.cwd(), 'backend/services/matching/matchDecisionIntegrity.js'),
       'utf8',
     )
-    const m = /RESOURCE_KINDS_SQL\s*=\s*"\(([^)]*)\)"/.exec(src)
-    expect(m, 'RESOURCE_KINDS_SQL literal not found — update this tripwire').toBeTruthy()
-    const theirs = m[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '').toLowerCase()).sort()
-    expect([...POINTER_KINDS].sort()).toEqual(theirs)
+    // A hand-typed `RESOURCE_KINDS_SQL = "('DIRECTORY', ...)"` would silently
+    // fork from the exported array the predicate above compares. Require the
+    // literal to be built from it.
+    expect(src).toMatch(/RESOURCE_KINDS_SQL\s*=\s*`\(\$\{RESOURCE_OPPORTUNITY_KINDS\.map/)
+    // …and the exported array is what the runtime predicate reads.
+    expect(src).toMatch(/RESOURCE_OPPORTUNITY_KINDS\.includes\(kind\)/)
   })
 
   it('renders a dialect-agnostic, lower-cased SQL predicate', () => {
