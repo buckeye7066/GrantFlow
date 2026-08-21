@@ -62,6 +62,7 @@ import {
   enforceStateAgencyGeoScope,
   enforceCrossProfileMatchPrecision,
   enforceConditionLaneMatchScope,
+  enforceStageOfLifeMatchScope,
   enforceDeclaredPlaceScopeMatches,
   enforceForeignJurisdictionMatches,
   enforceNonGrantNoticePipeline,
@@ -84,6 +85,63 @@ import {
 // the cap is pinned to the TRUSTED insert floor by design (data-point scale:
 // insert 7, trusted/purge 5) — see startup/enforceInvariants.js PURGE_FLOOR_CAP.
 const PURGE_FLOOR = Math.min(INSERT_RELEVANCE_FLOOR, TRUSTED_RELEVANCE_FLOOR)
+
+describe('enforceStageOfLifeMatchScope task reconciliation', () => {
+  async function makeWebsiteConflictDb() {
+    const db = makeDb()
+    db.exec(`
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT,
+        eligibility_text TEXT, eligibility_bullets TEXT
+      );
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT
+      );
+    `)
+    db.prepare("INSERT INTO profiles (id, status) VALUES ('p-lab', 'active')").run()
+    db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p-lab', 'website_purpose', JSON.stringify({ excerpt: 'Biomedical research and genomic diagnostics' }))
+    db.prepare('INSERT INTO funding_opportunities (id, title, description) VALUES (?, ?, ?)')
+      .run('opp-title-x', 'Title X Family Planning Services', 'Family planning and reproductive health services')
+    db.prepare("INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id) VALUES ('m-title-x', 'p-lab', 'opp-title-x')").run()
+    db.prepare("INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES ('g-title-x', 'p-lab', 'opp-title-x', 'Title X Family Planning Services')").run()
+    const taskStore = await import('../services/hamilton/applicationTaskStore.js')
+    taskStore._resetSchemaCache()
+    await taskStore.ensureApplicationTaskSchema(db)
+    return { db, taskStore }
+  }
+
+  it('cancels legacy grant-only tasks before deleting a website-purpose conflict', async () => {
+    const { db, taskStore } = await makeWebsiteConflictDb()
+    const task = await taskStore.ensureApplicationTask(db, {
+      profileId: 'p-lab', grantId: 'g-title-x', initialStatus: 'queued',
+    })
+    expect(task.opportunity_id).toBeNull()
+
+    const result = await enforceStageOfLifeMatchScope(db)
+
+    expect(result.repaired).toBe(1)
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('cancelled')
+    expect(db.prepare("SELECT id FROM profile_opportunity_matches WHERE id = 'm-title-x'").get()).toBeUndefined()
+  })
+
+  it('retains the match for retry when cancelling its task fails', async () => {
+    const { db, taskStore } = await makeWebsiteConflictDb()
+    const task = await taskStore.ensureApplicationTask(db, {
+      profileId: 'p-lab', grantId: 'g-title-x', initialStatus: 'queued',
+    })
+    // Cancellation writes an audit event in the same operation. Removing that
+    // dependency simulates a transient reconciliation failure.
+    db.exec('DROP TABLE application_task_events')
+
+    const result = await enforceStageOfLifeMatchScope(db)
+
+    expect(result.repaired).toBe(0)
+    expect(db.prepare("SELECT id FROM profile_opportunity_matches WHERE id = 'm-title-x'").get()).toBeTruthy()
+    expect(db.prepare('SELECT id FROM application_tasks WHERE id = ?').get(task.id)).toBeTruthy()
+  })
+})
 
 function makeDb() {
   const raw = new Database(':memory:')

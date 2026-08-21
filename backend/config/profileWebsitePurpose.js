@@ -33,6 +33,7 @@ const TEXT_FIELDS = Object.freeze([
   ['organization_details', 'mission'],
   ['programs_services', 'description'],
   ['narrative', 'organization_overview'],
+  ['website_purpose', 'excerpt'],
 ])
 
 function obj(v) {
@@ -139,15 +140,6 @@ export const KNOWN_WEBSITE_PURPOSE_BY_HOST = Object.freeze({
     'biomedical research',
     'biotechnology research',
   ]),
-  'www.axiombiolabs.org': Object.freeze([
-    'car-t transplant',
-    'immune tolerance',
-    'cell therapy',
-    'solid organ transplant',
-    'genomic diagnostics',
-    'biomedical research',
-    'biotechnology research',
-  ]),
 })
 
 const RESEARCH_PURPOSE_RX = /\b(car-t transplant|immune tolerance|cell therapy|solid organ transplant|cancer immunotherapy|autoimmune research|genomic diagnostics|biomedical research|biotechnology research|environmental dna testing)\b/i
@@ -204,9 +196,7 @@ export const UNRELATED_PURPOSE_LOCKS = Object.freeze([
   { key: 'nidcr_observational', rx: /\bnidcr prospective observational\b/i },
   { key: 'ncmrr_early_career', rx: /\bncmrr early career\b/i },
   { key: 'women_children_network', rx: /\bwomen, children, pregnant and lactating\b|\bleveraging network infrastructure to conduct innovative research for women\b/i },
-  { key: 'shared_instrumentation_sig', rx: /\bshared instrumentation grant\b|\b\(s10 clinical trial not allowed\)\b/i },
   { key: 'limited_comp_k_award', rx: /\blimited competition: small grant program for (?:mentored research|nhlbi)\b/i },
-  { key: 'modern_equipment_shared_facilities', rx: /\bmodern equipment for shared-use biomedical\b|\b\(s15 clinical trial not allowed\)\b/i },
   { key: 'brain_initiative_resource', rx: /\bbrain initiative: research resource grants\b/i },
   { key: 'biotech_exporter_farmers', rx: /\benhancing biotechnology market opportunities for u\.?s\.? exporters\b/i },
   { key: 'usda_nutrition_education', rx: /\bfdpir nutrition education\b/i },

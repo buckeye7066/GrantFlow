@@ -343,7 +343,19 @@ export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false
       if (!reapNeverCrawled) reasonsToSkip.push('not_crawled')
     }
     if (requireTaught && crawledSignalIso && !hasRequiredTeachingReceipt(meta)) {
-      reasonsToSkip.push('not_taught')
+      // A failed mesh handoff must not create an immortal synthetic. Preserve
+      // the receipt as deletion authority during its useful lifetime, then use
+      // the same far-past-TTL bound as never-crawled recovery as a terminal
+      // cleanup policy. A later run cannot reconstruct the original lesson.
+      const maxAge = Number(neverCrawledMaxAgeMs) || 0
+      const createdIso = meta?.created_at || meta?.expires_at || row.created_at
+      const createdMs = createdIso ? Date.parse(createdIso) : NaN
+      const terminallyExpired = maxAge > 0
+        && Number.isFinite(createdMs)
+        && Number.isFinite(nowMs)
+        && (nowMs - createdMs) >= maxAge
+        && isMetadataExpired(meta, now)
+      if (!terminallyExpired) reasonsToSkip.push('not_taught')
     }
     // Guard 4b (race safety): don't reap a profile crawled so recently its run
     // could still be mid-flight / pre-learning. Expiry-independent — EXCEPT for
