@@ -775,6 +775,27 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
     }
   })
 
+  it('terminally reaps an expired crawled profile after a teaching outage', async () => {
+    const db = createDb()
+    try {
+      const now = new Date()
+      const created = new Date(now.getTime() - 100 * 60 * 60 * 1000)
+      const { profileId } = await createAmyProfile(db, generateScenarios({ runId: 'amy-teach-outage' })[0], {
+        runId: 'amy-teach-outage', ttlHours: 48, now: created,
+      })
+      await markProfileCrawled(db, profileId, {})
+
+      const result = await cleanupAmyProfiles(db, {
+        expiredOnly: true, requireCrawled: true, requireTaught: true,
+        neverCrawledMaxAgeMs: 96 * 60 * 60 * 1000, now,
+      })
+      expect(result.deleted).toBe(1)
+      expect(db.prepare('SELECT id FROM profiles WHERE id=?').get(profileId)).toBeFalsy()
+    } finally {
+      db.close()
+    }
+  })
+
   it('reaps a never-crawled synthetic ONLY once it is far past its TTL (bounded escape hatch)', async () => {
     const db = createDb()
     try {

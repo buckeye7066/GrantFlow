@@ -17,6 +17,8 @@ import {
   websitePurposeConflict,
 } from '../config/profileWebsitePurpose.js'
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js'
+import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
+import { enrichProfileWebsitePurpose } from '../services/profileWebsitePurposeEnrichment.js'
 import { computeMatchDecision } from '../services/matchEngine.js'
 
 const AXIOM_SECTIONS = {
@@ -167,5 +169,26 @@ describe('matchEngine — website purpose REJECT', () => {
     // Pin the positive side too, so this case can actually fail: the engine
     // must not have short-circuited into its "insufficient data" stub.
     expect(decision.decision).toBe('ACCEPT')
+  })
+})
+
+describe('website purpose enrichment', () => {
+  it('reads and persists purpose for an ordinary, non-registry hostname', async () => {
+    const writes = []
+    const db = { prepare: () => ({ run: async (...args) => { writes.push(args); return { changes: 1 } } }) }
+    const sections = { basic_information: { website: 'https://ordinary-biotech.example' } }
+    const result = await enrichProfileWebsitePurpose(db, {
+      profile: { id: 'ordinary-1' }, sections,
+      fetchImpl: async () => ({ ok: true, headers: { get: (k) => k === 'content-type' ? 'text/html' : null }, text: async () => '<main>We conduct biomedical translational research and genomic diagnostics.</main>' }),
+    })
+    expect(result.status).toBe('fetched')
+    expect(result.data.terms).toEqual(expect.arrayContaining(['biomedical research', 'genomic diagnostics']))
+    expect(writes).toHaveLength(1)
+    expect(deriveWebsitePurpose({ sections }).terms).toContain('biomedical research')
+  })
+
+  it('keeps biomedical shared-use equipment on mission', () => {
+    const purpose = deriveWebsitePurpose({ sections: AXIOM_SECTIONS })
+    expect(websitePurposeConflict({ purpose, opportunity: { title: 'Modern Equipment for Shared-use Biomedical Research Facilities (S15)' } })).toBeNull()
   })
 })
