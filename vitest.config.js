@@ -17,8 +17,14 @@ export default defineConfig({
     // machines (Windows FS, cold module cache) that first import alone can take
     // 10s+, tripping Vitest's DEFAULT 10s hookTimeout in beforeAll — a known
     // intermittent flake class (see the comment in backend/tests/testServer.js).
-    // 30s keeps genuine hangs caught while giving the one-time boot headroom.
-    hookTimeout: 30000,
+    // 60s keeps genuine hangs caught while giving the one-time boot headroom.
+    // (Was 30s. Under a full 663-file run four integration files —
+    // authMeIdentityGate, profileSectionsArrayShape, profileWorkspaceStepCounts,
+    // and the adversarialRepair/anyaAutoRepair pair — blew the 30s beforeAll on
+    // server-boot import time alone, then passed standalone in seconds. The
+    // bound is a hang detector, not a performance budget; doubling it does not
+    // relax a single assertion.)
+    hookTimeout: 60000,
     // Same "known intermittent flake class" one line up, but for individual
     // tests rather than beforeAll hooks: a handful of files load their module
     // graph via top-level `await import(...)` OUTSIDE any hook (e.g.
@@ -29,7 +35,22 @@ export default defineConfig({
     // reliably standalone). 15s mirrors the hookTimeout bump's own reasoning:
     // headroom for legitimate slow imports under load, not a looser bar for
     // actual hangs.
-    testTimeout: 15000,
+    //
+    // RAISED 15s -> 45s on MEASURED evidence (2026-08-20), because 15s was not
+    // headroom, it was a coin flip. Timed on an otherwise-idle machine with
+    // --reporter=verbose:
+    //   adversarialRepairSettings "403 for a NON-owner admin; …"  16130ms
+    //   hamiltonPacketBilingual (4 cases, each boots the packet
+    //     generator + translation path)                     9539-11493ms
+    //   anyaAutoRepairService "reports Anya code-error repair
+    //     policy on every run" (walks the live source tree)   ~13000ms
+    // The first one is already OVER the old limit with nothing else running, so
+    // it could only ever pass by luck; the rest cleared it by 3.5s or less and
+    // failed the moment the full suite contended for CPU. None of them hangs —
+    // all are hermetic and all pass standalone. 45s is ~2.8x the measured worst
+    // case: still far short of "a hung test finishes the run", which is the only
+    // thing this bound exists to catch.
+    testTimeout: 45000,
     // The OTP full-app family (backend/tests/otp*.test.js +
     // emailOtpTokenNoVerifier.test.js) is the worst member of that same class:
     // its tests race their OWN parallel requests in-process (the security
