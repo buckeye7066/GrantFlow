@@ -44,7 +44,7 @@
  *     saveAutoProvisionedCredential). The passphrase is never logged or returned.
  */
 
-import { HAMILTON_IDENTITY, hasFullAutomation } from '../../config/hamiltonIdentity.js'
+import { HAMILTON_IDENTITY, hasFullAutomation, registrationIdentity } from '../../config/hamiltonIdentity.js'
 import { listActiveAuthorizations } from './hamiltonAuthorizationStore.js'
 import {
   getDecryptedCredentialWithFallback,
@@ -76,6 +76,7 @@ import {
   recheckEmailVerification,
   reviewedPortalSignupExecutionEnabled,
 } from './hamiltonPortalSignupAdapter.js'
+import { makeHamiltonGraphTokenProvider } from './hamiltonGraphToken.js'
 import { planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { emitEmailVerificationAlert } from './hamiltonNotifications.js'
 import { createLogger } from '../../utils/logger.js'
@@ -165,7 +166,24 @@ const HANDOFF_BLOCKER_CATEGORIES = new Set([
  * profile's designated email resolved by the existing login suggester. Returns ''
  * when nothing usable is on file (the caller then marks needs_user).
  */
-async function resolveIdentityEmail(db, profileId, portalHost) {
+/**
+ * Does this profile carry standing full-automation consent? Resolved ONCE per
+ * run and threaded through, so the identity email, the registration identity and
+ * the verification-code gate can never disagree about it mid-run.
+ *
+ * Fails CLOSED to `false`: an unreadable authorization list must never be read
+ * as consent to register under Hamilton's own contact details.
+ */
+async function profileHasFullAutomation(db, profileId) {
+  try {
+    const active = await listActiveAuthorizations(db, { profileId })
+    return hasFullAutomation(active)
+  } catch {
+    return false
+  }
+}
+
+async function resolveIdentityEmail(db, profileId, portalHost, { fullAutomation = undefined } = {}) {
   // FULL AUTOMATION registers under HAMILTON'S OWN contact channel.
   // Signup verification (an emailed link, an SMS code) is the wall every
   // unattended registration hit: Hamilton cannot read the applicant's mailbox,
@@ -177,10 +195,10 @@ async function resolveIdentityEmail(db, profileId, portalHost) {
   //
   // Gated on standing profile consent - with full automation off this whole
   // branch is skipped and the original vault/suggester behaviour applies.
-  try {
-    const active = await listActiveAuthorizations(db, { profileId })
-    if (hasFullAutomation(active)) return HAMILTON_IDENTITY.email
-  } catch { /* fall through - never fail closed into a wrong identity */ }
+  const full = fullAutomation === undefined
+    ? await profileHasFullAutomation(db, profileId)
+    : Boolean(fullAutomation)
+  if (full) return HAMILTON_IDENTITY.email
   try {
     const status = await getMasterVaultStatus(db, profileId)
     if (status?.identity_email) return String(status.identity_email).trim()
@@ -190,6 +208,44 @@ async function resolveIdentityEmail(db, profileId, portalHost) {
     if (sugg?.username) return String(sugg.username).trim()
   } catch { /* fall through */ }
   return ''
+}
+
+/**
+ * PHASE 1 of the two-phase portal identity policy: the exact identity object the
+ * signup adapter fills a registration form with.
+ *
+ * Under full automation the account is created with the APPLICANT'S name, login
+ * and generated password - it must belong to the applicant - but with HAMILTON'S
+ * email AND PHONE, because the verification code a portal sends is the wall that
+ * turned every unattended signup into a human handoff. `registrationIdentity`
+ * carries both channels plus a digits-only phone for portals that reject
+ * punctuation.
+ *
+ * With `fullAutomation` false, `registrationIdentity` returns null and
+ * `buildSignupIdentity` produces byte-for-byte what it produced before this
+ * policy existed: the profile's own email and phone.
+ *
+ * Exported so the wiring is directly testable rather than only observable
+ * through a browser run.
+ */
+export function buildPhaseOneSignupIdentity({
+  profile = {}, identityEmail, password, vaultStatus = null, fullAutomation = false,
+} = {}) {
+  const phase1 = registrationIdentity({
+    profile: profile || {},
+    vaultLogin: {
+      username: identityEmail,
+      password,
+      identity_email: vaultStatus?.identity_email || null,
+    },
+    fullAutomation,
+  })
+  return buildSignupIdentity({
+    profile: profile || {},
+    identityEmail,
+    password,
+    registration: phase1,
+  })
 }
 
 /**
@@ -467,8 +523,12 @@ async function _runAutopilotIdentityForPortal(db, {
       }
     }
 
-    // 7. Resolve the identity Hamilton registers with.
-    const identityEmail = await resolveIdentityEmail(db, profileId, host)
+    // 7. Resolve the identity Hamilton registers with. Full-automation consent is
+    // read ONCE here and threaded through steps 7-9 (identity email, PHASE-1
+    // registration identity, verification-code gate) so those three can never
+    // disagree about it inside a single run.
+    const fullAutomation = await profileHasFullAutomation(db, profileId)
+    const identityEmail = await resolveIdentityEmail(db, profileId, host, { fullAutomation })
     if (!identityEmail) {
       await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'no autopilot identity email on file' })
       return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: 'No autopilot identity email is set for this profile; set one (or sign in once).' }
@@ -494,10 +554,26 @@ async function _runAutopilotIdentityForPortal(db, {
     let registration = registrationResult
     if (!registration && !dryRun) {
       try {
-        const identity = buildSignupIdentity({ profile: profile || {}, identityEmail, password: result.password_one_time_view })
+        // PHASE 1 of the two-phase identity policy. Under full automation the
+        // account is created with the APPLICANT'S name/login/password (from the
+        // vault) but HAMILTON'S email AND PHONE, so the verification code the
+        // portal sends lands somewhere Hamilton can actually read and the signup
+        // completes unattended. `registrationIdentity` returns null when full
+        // automation is off, and `buildSignupIdentity` then behaves exactly as
+        // it does today.
+        const vaultStatus = await getMasterVaultStatus(db, profileId).catch(() => null)
+        const identity = buildPhaseOneSignupIdentity({
+          profile: profile || {},
+          identityEmail,
+          password: result.password_one_time_view,
+          vaultStatus,
+          fullAutomation,
+        })
         registration = await registerOnPortal(db, {
           portalHost: host, signupUrl: resolvedLoginUrl, identity, profile: profile || {},
           launchBrowser, outlookProvider,
+          fullAutomation,
+          ...(fullAutomation ? { getGraphToken: makeHamiltonGraphTokenProvider() } : {}),
           ...(verifyWaitMs !== undefined ? { verifyWaitMs } : {}),
           ...(verifyPollMs !== undefined ? { verifyPollMs } : {}),
         })

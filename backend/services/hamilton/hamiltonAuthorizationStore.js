@@ -210,25 +210,50 @@ export async function recordAuthorizations(db, {
 
   async function writeAuthorizations() {
    const ids = []
+   // Who actually performed this write. The row's `user_id` records who accepted
+   // the authorization text; when an ADMIN changes an owner's consent the row is
+   // updated in place (see the comment below), so the acting principal has to be
+   // recorded somewhere or the audit trail loses it entirely.
+   const writeMetadata = {
+     ...(metadata || {}),
+     last_modified_by: String(userId),
+     last_modified_at: new Date().toISOString(),
+   }
    for (const target of targets) {
     // The authorization screen represents the caller's complete selection for
     // this exact scope/target. When requested by that screen, revoke active
     // capabilities that were omitted instead of leaving a stale grant alive
     // behind an unchecked box. Revocation is fail-closed and preserves the
     // audit row; a later insert failure can remove authority, never widen it.
+    // THE WRITE KEY MUST MATCH THE READ KEY. Every reader of this table -
+    // listActiveAuthorizations, isAuthorizationActive, readAuthorizations,
+    // resolveSubmissionDecision and therefore hasFullAutomation - selects on
+    // (profile_id, scope, target) and NEVER on user_id: a profile-scoped consent
+    // is a property of the PROFILE, not of whoever happened to click. These two
+    // statements used to add `user_id = ?`, so a second principal - an ADMIN
+    // operating a profile they do not own, or the owner returning under a
+    // different user id - matched nothing: the omitted-type revoke silently
+    // updated ZERO rows while the profile-scoped read still returned the
+    // original grant, so the toggle snapped straight back on, and the insert
+    // below then added a DUPLICATE active row under the new user id. Keying the
+    // write the way the read is keyed is what makes "an admin can operate all
+    // three toggles" true rather than merely unblocked at the route.
+    //
+    // `user_id` stays on the row as the record of who ACCEPTED the authorization
+    // text; the principal who last changed it is recorded in metadata below.
     if (replaceOmittedTypes) {
       const omitted = HAMILTON_AUTHORIZATION_TYPES.filter((type) => !authorizationTypes.includes(type))
       for (const type of omitted) {
         await db.prepare(
           `UPDATE hamilton_authorizations SET
               revoked_at = ${nowFn}, revoked_reason = ?, updated_at = ${nowFn}
-            WHERE user_id = ? AND profile_id = ? AND scope = ? AND authorization_type = ?
+            WHERE profile_id = ? AND scope = ? AND authorization_type = ?
               AND COALESCE(funding_source_id,'') = COALESCE(?, '')
               AND COALESCE(task_id,'') = COALESCE(?, '')
               AND revoked_at IS NULL`,
         ).run(
           'replaced_by_authorization_selection',
-          String(userId), String(profileId), scope, type,
+          String(profileId), scope, type,
           target.funding_source_id, target.task_id,
         )
       }
@@ -236,13 +261,14 @@ export async function recordAuthorizations(db, {
     for (const type of authorizationTypes) {
       const existing = await db.prepare(
         `SELECT id FROM hamilton_authorizations
-          WHERE user_id = ? AND profile_id = ? AND scope = ? AND authorization_type = ?
+          WHERE profile_id = ? AND scope = ? AND authorization_type = ?
             AND COALESCE(funding_source_id,'') = COALESCE(?, '')
             AND COALESCE(task_id,'') = COALESCE(?, '')
             AND revoked_at IS NULL
+          ORDER BY accepted_at DESC
           LIMIT 1`,
       ).get(
-        String(userId), String(profileId), scope, type,
+        String(profileId), scope, type,
         target.funding_source_id, target.task_id,
       )
       if (existing) {
@@ -254,7 +280,7 @@ export async function recordAuthorizations(db, {
             WHERE id = ?`,
         ).run(
           authorizationText, authorizationVersion,
-          JSON.stringify(options || {}), JSON.stringify(metadata || {}),
+          JSON.stringify(options || {}), JSON.stringify(writeMetadata),
           existing.id,
         )
         ids.push(existing.id)

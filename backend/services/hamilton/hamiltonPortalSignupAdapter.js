@@ -59,6 +59,7 @@ import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { browserAutomationPermittedForUrl, isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
 import { isIdentityProofedHost, getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { classifyBlocker } from './hamiltonBlockerClassifier.js'
+import { attemptAutomatedVerification } from './hamiltonVerificationGate.js'
 import { hostOfUrl } from './hamiltonMissingCredential.js'
 import { createLogger } from '../../utils/logger.js'
 
@@ -252,18 +253,37 @@ function pick(obj, paths) {
  * The identity fields a signup form typically needs, resolved from the profile
  * bundle + the autopilot identity email. Password is the generated, master-wrapped
  * password the brain produced — passed in, never read from the profile.
+ *
+ * PHASE 1 (full automation): pass `registration`, the object
+ * `hamiltonIdentity.registrationIdentity()` returns. The account still belongs to
+ * the applicant — name, login and password are the vault's — but the CONTACT
+ * CHANNELS become Hamilton's, because a verification code sent to a mailbox
+ * nobody reads is the wall that stopped every unattended signup. `phone_digits`
+ * is carried alongside `phone` for portals that reject punctuation, and
+ * `contact_owner` records whose channels these are so downstream code (and the
+ * audit trail) can tell the two phases apart.
+ *
+ * With full automation OFF the brain passes `registration: null` and every field
+ * resolves exactly as it did before: profile email, profile phone, no
+ * `phone_digits`, `contact_owner: 'applicant'`.
  */
-export function buildSignupIdentity({ profile = {}, identityEmail, password } = {}) {
+export function buildSignupIdentity({ profile = {}, identityEmail, password, registration = null } = {}) {
   const first = pick(profile, ['basic_information.first_name', 'first_name'])
   const last = pick(profile, ['basic_information.last_name', 'last_name'])
   const full = [first, last].filter(Boolean).join(' ') || pick(profile, ['display_name', 'full_name'])
+  // Only a real PHASE-1 registration identity may redirect the contact channels.
+  const reg = registration && registration.phase === 'registration' ? registration : null
   return {
-    email: identityEmail || pick(profile, ['basic_information.email', 'email']) || null,
-    password: password || null,
+    email: reg?.email || identityEmail || pick(profile, ['basic_information.email', 'email']) || null,
+    password: password || reg?.password || null,
     first_name: first || null,
     last_name: last || null,
-    full_name: full || null,
-    phone: pick(profile, ['basic_information.phone', 'phone']) || null,
+    full_name: reg?.fullName || full || null,
+    phone: reg?.phone || pick(profile, ['basic_information.phone', 'phone']) || null,
+    // Digits-only fallback exists ONLY under full automation, so a profile-owned
+    // phone is filled byte-for-byte the way it always was.
+    phone_digits: reg?.phoneDigits || null,
+    contact_owner: reg?.contactOwner || 'applicant',
   }
 }
 
@@ -303,6 +323,10 @@ const FULL_NAME_SELECTORS = [
   'input[name="name" i]:not([disabled])', 'input[id="name" i]:not([disabled])',
   'input[name*="full" i]:not([disabled])',
 ]
+const PHONE_SELECTORS = [
+  'input[type="tel"]:not([disabled])',
+  'input[name*="phone" i]:not([disabled])',
+]
 const SUBMIT_SELECTORS = [
   'button[type="submit"]:not([disabled])',
   'input[type="submit"]:not([disabled])',
@@ -312,6 +336,40 @@ const SUBMIT_SELECTORS = [
   'button:has-text("Join")', 'button:has-text("Continue")',
   'a[role="button"]:has-text("Sign up")',
 ]
+
+/**
+ * Fill the phone field, with a digits-only retry that exists ONLY under full
+ * automation (i.e. when the number being filled is HAMILTON'S, carried as
+ * `phone_digits` by `registrationIdentity`).
+ *
+ * Some portals reject punctuation: the input either refuses the fill or silently
+ * keeps something other than what we typed. Reading the value back and retrying
+ * with the bare digits is the difference between a signup that completes and one
+ * that fails validation on a field we had the right answer for all along. A
+ * profile-owned phone carries no `phone_digits`, so its fill is byte-for-byte
+ * what it always was.
+ */
+async function fillPhoneField(page, identity) {
+  const formatted = identity?.phone
+  const digits = identity?.phone_digits
+  const filled = await fillIfPresent(page, PHONE_SELECTORS, formatted)
+  if (!digits || identity?.contact_owner !== 'hamilton') {
+    return { filled, used: filled ? 'formatted' : null }
+  }
+  if (!filled) {
+    const retried = await fillIfPresent(page, PHONE_SELECTORS, digits)
+    return { filled: retried, used: retried ? 'digits' : null }
+  }
+  const handle = await firstSelector(page, PHONE_SELECTORS)
+  let current = null
+  try { current = handle && handle.inputValue ? await handle.inputValue() : null }
+  catch { current = null }
+  if (current !== null && String(current) !== String(formatted)) {
+    const retried = await fillIfPresent(page, PHONE_SELECTORS, digits)
+    if (retried) return { filled: true, used: 'digits' }
+  }
+  return { filled: true, used: 'formatted' }
+}
 
 /**
  * Generic heuristic signup driver. Detects + fills the standard fields, submits,
@@ -348,7 +406,7 @@ export async function genericSignupAdapter(page, identity, { signupUrl } = {}) {
   if (!filledFirst && !filledLast) {
     await fillIfPresent(page, FULL_NAME_SELECTORS, identity.full_name)
   }
-  await fillIfPresent(page, ['input[type="tel"]:not([disabled])', 'input[name*="phone" i]:not([disabled])'], identity.phone)
+  await fillPhoneField(page, identity)
 
   // Submit.
   const beforeUrl = safeUrl(page)
@@ -663,6 +721,63 @@ export async function recheckEmailVerification(db, {
   }
 }
 
+/**
+ * ONE-TIME CODE WALL — the step that turns `findVerificationCode` from an unused
+ * module into the thing that finishes an unattended signup.
+ *
+ * The portal asked for a code, and under full automation it was sent to
+ * HAMILTON'S own mailbox/phone (PHASE 1 put those on the form), so he can read
+ * it. Poll BOTH channels a bounded number of times, type the code that actually
+ * arrived, and re-classify the resulting page.
+ *
+ * If no code arrives the ORIGINAL result is returned unchanged and the brain's
+ * existing `needs_user` handoff applies — with an honest `verification_code`
+ * record of the attempt attached so a failure is visible rather than silent. A
+ * code is never fabricated: only a string `findVerificationCode` returned is
+ * ever typed. Identity PROOFING is refused far above this line
+ * (`isIdentityProofedHost`) and is untouched by any of this.
+ *
+ * With `fullAutomation` false NOTHING is read and the result is returned exactly
+ * as it is today.
+ *
+ * Exported so the wiring is directly testable; `registerOnPortal` is the live
+ * caller.
+ */
+export async function answerVerificationCodeWall(db, page, result, {
+  fullAutomation = false, getGraphToken = null, verificationCodeOptions = null, host = null,
+} = {}) {
+  if (!result) return result
+  const codeWall = result.status === 'verification_pending'
+    || result.blockerType === 'two_factor_required'
+    || result.blocker_kind === 'two_factor_required'
+  if (!fullAutomation || !codeWall) return result
+
+  const gate = await attemptAutomatedVerification(db, page, {
+    fullAutomation: true,
+    ...(getGraphToken ? { getToken: getGraphToken } : {}),
+    ...(verificationCodeOptions || {}),
+  }).catch((err) => ({ verified: false, reason: `verification gate failed: ${err?.message || err}` }))
+
+  if (gate?.verified) {
+    const after = await classifyOutcome(page, { beforeUrl: safeUrl(page) })
+    after.adapter = result.adapter
+    after.verified_via = `hamilton_${gate.source || 'code'}`
+    after.verification_code = { entered: true, source: gate.source || null, attempts: gate.attempts ?? null }
+    log.info('signup_code_wall_cleared', { host, source: gate.source || null })
+    return after
+  }
+  return {
+    ...result,
+    verification_code: {
+      entered: false,
+      attempted: true,
+      code_found: Boolean(gate?.code_found),
+      attempts: gate?.attempts ?? null,
+      reason: gate?.reason || 'no verification code arrived',
+    },
+  }
+}
+
 // ── Top-level entry: register on a portal ──────────────────────────────────────
 
 /**
@@ -686,12 +801,19 @@ export async function recheckEmailVerification(db, {
  * @param {boolean} [args.dryRun]        plan only — never launch a browser
  * @param {Function} [args.launchBrowser]  injectable Playwright launcher (tests)
  * @param {object}  [args.outlookProvider] injectable Graph mailbox (tests)
+ * @param {boolean} [args.fullAutomation]  profile consent (hasFullAutomation). When
+ *        true, an email/SMS one-time-code wall is answered from Hamilton's OWN
+ *        channels (bounded poll) instead of taking the needs_user handoff. When
+ *        false NOTHING is read and the handoff is exactly what it is today.
+ * @param {Function}[args.getGraphToken]   Graph token provider for the email lane
+ * @param {object}  [args.verificationCodeOptions] test seams for the bounded poll
  * @returns {Promise<registrationResult>}
  */
 export async function registerOnPortal(db, {
   portalHost, signupUrl, identity, profile = {},
   dryRun = false, launchBrowser = null, outlookProvider = null,
   verifyWaitMs = VERIFY_WAIT_MS, verifyPollMs = VERIFY_POLL_MS,
+  fullAutomation = false, getGraphToken = null, verificationCodeOptions = null,
 } = {}) {
   const host = registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase()
   const url = signupUrl || (host ? `https://${host}` : null)
@@ -728,6 +850,7 @@ export async function registerOnPortal(db, {
   if (!reviewedPortalSignupExecutionEnabled()) {
     void profile; void dryRun; void launchBrowser; void outlookProvider
     void verifyWaitMs; void verifyPollMs; void identity
+    void fullAutomation; void getGraphToken; void verificationCodeOptions
     return blocked('create_portal_account', {
       blockerKind: 'create_portal_account',
       detail: 'No reviewed portal-account creation adapter is enabled for this host.',
@@ -798,6 +921,21 @@ export async function registerOnPortal(db, {
     }
     result.adapter = hostAdapter ? `host:${hostAdapter.host}` : 'generic'
 
+    // ── ONE-TIME CODE WALL (full automation only) ─────────────────────────────
+    // The portal asked for a code, and under full automation it was sent to
+    // HAMILTON'S own mailbox/phone (registrationIdentity put them on the form),
+    // so he can read it. Poll BOTH channels a bounded number of times, type the
+    // code that actually arrived, and re-classify the page.
+    //
+    // If no code arrives we fall straight through to the existing behaviour —
+    // the verification_pending / blocked result is returned unchanged and the
+    // brain's needs_user handoff applies. A code is never fabricated: only a
+    // string `findVerificationCode` returned is ever typed. Identity PROOFING is
+    // refused far above this line (isIdentityProofedHost) and is untouched.
+    result = await answerVerificationCodeWall(db, page, result, {
+      fullAutomation, getGraphToken, verificationCodeOptions, host,
+    })
+
     // Best-effort email verification when the portal asked for it.
     if (result.status === 'verification_pending') {
       const verify = await completeEmailVerification({
@@ -820,7 +958,8 @@ export async function registerOnPortal(db, {
 export const _internal = {
   ALREADY_EXISTS_RX, VERIFY_EMAIL_RX, SUCCESS_RX, SUCCESS_URL_RX, CONFIRM_LINK_RX,
   classifyOutcome, detectSignupBlocker, extractConfirmationLink, buildSignupIdentity,
-  EMAIL_SELECTORS, PASSWORD_SELECTORS, SUBMIT_SELECTORS,
+  EMAIL_SELECTORS, PASSWORD_SELECTORS, SUBMIT_SELECTORS, PHONE_SELECTORS,
+  fillPhoneField, answerVerificationCodeWall,
 }
 
 export default {
@@ -829,6 +968,7 @@ export default {
   resolveHostAdapter,
   HOST_ADAPTERS,
   buildSignupIdentity,
+  answerVerificationCodeWall,
   completeEmailVerification,
   recheckEmailVerification,
   extractConfirmationLink,

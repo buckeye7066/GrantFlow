@@ -2496,11 +2496,16 @@ router.post('/sms-inbox', async (req, res) => {
     : new Date().toISOString()
 
   try {
-    await req.db.run(
+    // The db handle exposes prepare(sql).run(...params) - there is NO
+    // db.run(sql, paramsArray). The original spelling threw
+    // "req.db.run is not a function" on EVERY valid post, so the route
+    // answered 500 and no code the phone forwarded was ever stored:
+    // readSmsCode could only ever report "no fresh verification code from the
+    // phone". Verified live 2026-08-20 before and after this line.
+    await req.db.prepare(
       `INSERT INTO hamilton_inbound_sms (id, sender, body, received_at)
        VALUES (?, ?, ?, ?)`,
-      [randomUUID(), sender, body, receivedAt],
-    )
+    ).run(randomUUID(), sender, body, receivedAt)
   } catch (err) {
     log.error('sms_inbox_store_failed', { err: err?.message || String(err) })
     return res.status(500).json({ error: 'store_failed' })

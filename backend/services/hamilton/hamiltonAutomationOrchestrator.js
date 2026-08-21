@@ -62,6 +62,7 @@ import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot, sanitizeListingSnapshotForPersistence } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
 import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './hamiltonConfirmationArtifacts.js'
+import { runContactHandoverAfterSubmission } from './hamiltonContactHandover.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
@@ -2322,6 +2323,35 @@ async function runAutopilotPathway(db, {
       severity: 'success',
       data: { run_id: run.id, confirmation: engineResult.confirmation_reference },
     })
+
+    // PHASE 2 OF THE PORTAL IDENTITY POLICY (config/hamiltonIdentity.js).
+    // This is the exact moment the owner's sequence names: the account exists
+    // AND the application has actually been submitted, with durable portal
+    // evidence and the task CAS already landed above. Under full automation the
+    // account was registered under HAMILTON'S email and phone so signup
+    // verification could complete; the portal profile must now be handed over to
+    // the applicant's real contact details with Hamilton kept as SECONDARY so he
+    // retains submission access.
+    //
+    // Best-effort by contract, like every other post-submission step here: a
+    // handover problem must never be able to un-confirm a real submission. The
+    // handover driver never throws and records its own durable, visible state
+    // (pending / blocked / completed) rather than skipping silently.
+    const handover = await runContactHandoverAfterSubmission(db, {
+      profileId: task.profile_id,
+      userId,
+      taskId: task.id,
+      portalUrl: url,
+      portalHost: portalHostForPolicy || hostOfUrl(url),
+      profile,
+      authorizations: null,
+    })
+    engineResult.contact_handover = {
+      ran: handover?.ran === true,
+      state: handover?.state || null,
+      applied: handover?.applied === true,
+      reason: handover?.reason || handover?.blocker || null,
+    }
   } else if (engineResult.status === 'completed_draft') {
     const draftTask = await updateApplicationTask(db, task.id, {
       unlessCancelled: true,

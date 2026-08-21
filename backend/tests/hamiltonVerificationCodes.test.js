@@ -54,7 +54,14 @@ describe('readSmsCode', () => {
   const now = Date.parse('2026-08-20T20:00:00.000Z')
   const at = (msAgo) => new Date(now - msAgo).toISOString()
 
-  const dbWith = (rows) => ({ all: async () => rows })
+  // The REAL db handle exposes prepare(sql).all(...params) — there is no
+  // db.all(sql, params). The original stub modelled an API production never
+  // had, so these tests passed green while `readSmsCode` threw
+  // "db.all is not a function" on every real call and reported it as the
+  // innocuous "inbound sms unavailable". Verified live 2026-08-20: with the
+  // real handle the pre-fix code cannot read a row the Tasker route just
+  // stored, and with this stub it cannot either.
+  const dbWith = (rows) => ({ prepare: () => ({ all: async () => rows }) })
 
   it('returns the newest fresh code the phone forwarded', async () => {
     const db = dbWith([
@@ -74,10 +81,32 @@ describe('readSmsCode', () => {
   })
 
   it('reports a missing table as a REASON, never as a code', async () => {
-    const db = { all: async () => { throw new Error('no such table: hamilton_inbound_sms') } }
+    const db = { prepare: () => ({ all: async () => { throw new Error('no such table: hamilton_inbound_sms') } }) }
     const out = await readSmsCode(db, { now })
     expect(out.code).toBeNull()
     expect(out.reason).toMatch(/no such table/)
+  })
+
+  it('reads through the REAL prepare(sql).all(...) handle shape', async () => {
+    // Regression pin for the live defect: `db.all(sql, params)` does not exist
+    // on this project's db handle. A stub that only offers `prepare` is what
+    // production actually looks like, and the reader must work against it.
+    let sawSql = null
+    let sawParams = null
+    const db = {
+      prepare: (sql) => {
+        sawSql = sql
+        return { all: async (...params) => { sawParams = params; return [
+          { id: '1', sender: '+18775550142', body: 'Your verification code is 481920', received_at: at(30_000) },
+        ] } }
+      },
+    }
+    const out = await readSmsCode(db, { now })
+    expect(out.code).toBe('481920')
+    expect(sawSql).toMatch(/hamilton_inbound_sms/)
+    // Params are passed positionally to .all(), not as a single array argument.
+    expect(sawParams).toHaveLength(2)
+    expect(Array.isArray(sawParams[0])).toBe(false)
   })
 
   it('never throws without a db handle', async () => {
@@ -144,7 +173,7 @@ describe('findVerificationCode', () => {
 
   it('carries BOTH channels\' reasons when neither has a code', async () => {
     const out = await findVerificationCode(
-      { all: async () => [] },
+      { prepare: () => ({ all: async () => [] }) },
       { getToken: async () => 'tok', fetchImpl: async () => ({ ok: false, status: 500 }), now },
     )
     expect(out.code).toBeNull()
@@ -154,7 +183,7 @@ describe('findVerificationCode', () => {
 
   it('prefers whichever channel actually has the code', async () => {
     const out = await findVerificationCode(
-      { all: async () => [{ id: '1', sender: 'x', body: 'code is 314159', received_at: new Date(now - 5000).toISOString() }] },
+      { prepare: () => ({ all: async () => [{ id: '1', sender: 'x', body: 'code is 314159', received_at: new Date(now - 5000).toISOString() }] }) },
       { getToken: async () => 'tok', fetchImpl: async () => ({ ok: false, status: 500 }), now },
     )
     expect(out.code).toBe('314159')

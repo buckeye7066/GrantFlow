@@ -173,14 +173,20 @@ export async function readSmsCode(db, {
   const cutoff = new Date(stamp - maxAgeMs).toISOString()
   let rows
   try {
-    rows = await db.all(
+    // The db handle exposes prepare(sql).all(...params); there is NO
+    // db.all(sql, paramsArray). The original spelling threw
+    // "db.all is not a function" on EVERY call and the catch below turned it
+    // into the innocuous-looking "inbound sms unavailable" - so the SMS lane
+    // read as "the phone has not forwarded anything yet" while in fact no code
+    // could ever be read, no matter how many the phone forwarded. Verified live
+    // 2026-08-20 against a row the Tasker route had just stored.
+    rows = await db.prepare(
       `SELECT id, sender, body, received_at
          FROM hamilton_inbound_sms
         WHERE received_at >= ?
         ORDER BY received_at DESC
         LIMIT ?`,
-      [cutoff, Math.max(1, Math.min(50, max))],
-    )
+    ).all(cutoff, Math.max(1, Math.min(50, max)))
   } catch (err) {
     // A missing table means the phone has never forwarded anything yet.
     return { code: null, reason: `inbound sms unavailable: ${err?.message || err}` }
