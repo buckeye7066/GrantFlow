@@ -7,6 +7,10 @@ import {
 import { ShieldCheck, Sparkles, Loader2, AlertTriangle } from 'lucide-react'
 import client from '@/api/client'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  openAutomationWatchWindow,
+  resolveAutomationWatchUrl,
+} from '@/components/hamilton/automationWatchWindow'
 
 /**
  * HamiltonAutopilotAuthorization
@@ -83,6 +87,17 @@ export default function HamiltonAutopilotAuthorization({
       setPhase('error')
       return
     }
+    // WATCH WINDOW (owner order 2026-08-21): the work Hamilton does once
+    // automation begins opens in its own window. This function is called
+    // straight from the button's onClick, so everything above the first `await`
+    // is still inside the user gesture — which is the only moment a browser
+    // will honour window.open. Claiming it later (after authorize + preflight +
+    // launch, i.e. three round trips) is guaranteed to be blocked.
+    //
+    // Watching is optional and the run is not: a blocked popup is recorded as
+    // null and the launch proceeds exactly as before.
+    const watchHandle = openAutomationWatchWindow()
+    const watch = watchHandle.blocked ? null : watchHandle
     // NO client-side hard stop on an empty selection. This dialog is reached
     // from surfaces that have no picker and no select-all, so refusing here
     // left the owner unable to start ANYTHING: "I cannot use the begin button
@@ -108,6 +123,7 @@ export default function HamiltonAutopilotAuthorization({
     if (types.length === 0) {
       setError('Authorize at least one capability so Hamilton has something to do.')
       setPhase('error')
+      watch?.fail('Nothing was authorized, so Hamilton has nothing to do yet.')
       return
     }
 
@@ -136,6 +152,9 @@ export default function HamiltonAutopilotAuthorization({
       setPreflight(preflightRes)
       if (preflightRes?.ok === false) {
         setPhase('preflight')
+        // Preflight refused, so no run started. Say that in the window rather
+        // than leaving it spinning on "Starting…" over work that never began.
+        watch?.fail('Preflight stopped the run before it started. GrantFlow has the details.')
         return
       }
 
@@ -154,6 +173,9 @@ export default function HamiltonAutopilotAuthorization({
       })
       setPhase('done')
       onLaunched?.(launch)
+      const watchUrl = resolveAutomationWatchUrl(profileId)
+      if (watchUrl) watch?.navigate(watchUrl)
+      else watch?.close()
       toast({
         title: opts.allow_auto_submit && opts.submit_applications
           ? 'Hamilton automation launched'
@@ -172,6 +194,8 @@ export default function HamiltonAutopilotAuthorization({
         || 'Failed to start Hamilton Autopilot.'
       setError(friendly)
       setPhase('error')
+      // Never a dead window: it says why instead of spinning forever.
+      watch?.fail(friendly)
     }
   }
 

@@ -34,7 +34,7 @@ const NOOP_HANDLE = {
   close() {},
 }
 
-function loadingHtml(title) {
+function loadingHtml(title, message, hint) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
@@ -54,8 +54,8 @@ function loadingHtml(title) {
 </style></head>
 <body>
   <div class="spinner" role="status" aria-label="Loading"></div>
-  <p>Preparing your secure login&hellip;</p>
-  <small>Keep this window open. It will load the portal sign-in page in a moment.</small>
+  <p>${message}</p>
+  <small>${hint}</small>
 </body></html>`
 }
 
@@ -96,7 +96,11 @@ function errorHtml(message) {
  *   - fail(message) replace the placeholder with a readable error
  *   - close()      close the popup
  */
-export function openPendingLoginWindow({ title = "Secure login" } = {}) {
+export function openPendingLoginWindow({
+  title = "Secure login",
+  message = "Preparing your secure login&hellip;",
+  hint = "Keep this window open. It will load the portal sign-in page in a moment.",
+} = {}) {
   if (typeof window === "undefined") return NOOP_HANDLE
 
   let win = null
@@ -111,7 +115,7 @@ export function openPendingLoginWindow({ title = "Secure login" } = {}) {
 
   try {
     win.document.open()
-    win.document.write(loadingHtml(title))
+    win.document.write(loadingHtml(title, message, hint))
     win.document.close()
   } catch {
     /* timing/cross-process write race — navigate() below still works */

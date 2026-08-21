@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react"
+import React, { useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
@@ -17,6 +17,10 @@ import {
   beginHamiltonAutomation,
   listReadyHamiltonSources,
 } from "@/api/hamilton"
+import {
+  openAutomationWatchWindow,
+  resolveAutomationWatchUrl,
+} from "@/components/hamilton/automationWatchWindow"
 
 // Profile-level consent, in three switches: sign-in/prepare, submit, and full
 // automation. This surface USED to cover draft preparation only - submit was a
@@ -142,19 +146,45 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
   // switch. Consent and ACTION are different things: leaving the toggle as the
   // only affordance meant a profile could be fully authorized and simply never
   // run, with nothing on screen to start it.
+  //
+  // WATCH WINDOW (owner order 2026-08-21: "let the work Hamilton is doing, once
+  // automation begins, pop open in its own window and the user can watch if
+  // they chose to"). The old success toast said "Watch the Automation tab for
+  // progress" - the run was real, but seeing it was homework on a surface the
+  // user had to go find. The window is opened for them now.
+  //
+  // The handle is passed THROUGH the mutation because the popup must be claimed
+  // synchronously in the click gesture: mutationFn awaits a POST that launches
+  // real browser work, and a window.open in onSuccess is no longer
+  // user-initiated (liveLoginWindow.js documents this exact blocked-popup bug).
+  //
+  const watchRef = useRef(null)
   const beginAutomation = useMutation({
     mutationFn: async () => beginHamiltonAutomation(profileId),
     onSuccess: (res) => {
+      const watch = watchRef.current
+      watchRef.current = null
+      const url = resolveAutomationWatchUrl(profileId)
+      if (url) watch?.navigate(url)
+      else watch?.close()
       toast({
         title: "Hamilton is working",
         description: res?.queued_count
-          ? `Started on ${res.queued_count} funding source(s). Watch the Automation tab for progress.`
+          ? `Started on ${res.queued_count} funding source(s). The work is open in its own window.`
           : "Hamilton autopilot is running in the background.",
       })
     },
     onError: (err) => {
-      // An empty pipeline is a REASON, not a silent no-op that looks started.
+      // Never a dead popup: the window that opened on the click says WHY.
+      const watch = watchRef.current
+      watchRef.current = null
       const msg = err?.message || ""
+      watch?.fail(
+        /no_ready_sources|ready to work/i.test(msg)
+          ? "This profile has no funding sources in the pipeline yet, so there is nothing to work on."
+          : (msg || "Hamilton could not start."),
+      )
+      // An empty pipeline is a REASON, not a silent no-op that looks started.
       toast({
         variant: "destructive",
         title: /no_ready_sources|ready to work/i.test(msg)
@@ -166,6 +196,20 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
       })
     },
   })
+
+  // The click handler. Watching is OPTIONAL and the run is NOT: a browser that
+  // blocks the popup gets a truthful note, and the automation starts anyway.
+  function handleBeginAutomation() {
+    const watch = openAutomationWatchWindow()
+    watchRef.current = watch.blocked ? null : watch
+    if (watch.blocked) {
+      toast({
+        title: "Starting without the watch window",
+        description: "Your browser blocked the pop-up. Hamilton is still running — allow pop-ups for GrantFlow to watch the work live.",
+      })
+    }
+    beginAutomation.mutate()
+  }
 
   // "Select all sources" — makes the set VISIBLE before it runs. Begin
   // automation already works on an empty selection (the server expands it),
@@ -365,7 +409,7 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
                   <Button
                     size="sm"
                     disabled={beginAutomation.isPending}
-                    onClick={() => beginAutomation.mutate()}
+                    onClick={handleBeginAutomation}
                   >
                     {beginAutomation.isPending ? (
                       <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Starting…</>

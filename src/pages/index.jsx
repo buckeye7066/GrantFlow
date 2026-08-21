@@ -86,6 +86,7 @@ const PricingRequired = lazy(() => import('./PricingRequired'), 'PricingRequired
 const ServiceAgreement = lazy(() => import('./ServiceAgreement'), 'ServiceAgreement')
 const CheckoutRequired = lazy(() => import('./CheckoutRequired'), 'CheckoutRequired')
 const HamiltonLiveLogin = lazy(() => import('./HamiltonLiveLogin'), 'HamiltonLiveLogin')
+const HamiltonAutomationWatch = lazy(() => import('./HamiltonAutomationWatch'), 'HamiltonAutomationWatch')
 const Landing = lazy(() => import('./Landing'), 'Landing')
 const PrivacyPolicy = lazy(() => import('./PrivacyPolicy'), 'PrivacyPolicy')
 
@@ -236,6 +237,12 @@ export default function Pages() {
         <Route path="/start" element={withBoundary(<Start />, 'Start')} />
         <Route path="/login" element={withBoundary(<Login />, 'Login')} />
         <Route path="/HamiltonLiveLogin" element={withBoundary(<HamiltonLiveLogin />, 'HamiltonLiveLogin')} />
+        {/*
+          Top-level (chrome-less) on purpose: this is a POPUP target. "Begin
+          automation" opens it so the work Hamilton is doing is visible in its
+          own window instead of being homework on the Automation tab.
+        */}
+        <Route path="/HamiltonAutomationWatch" element={withBoundary(<HamiltonAutomationWatch />, 'HamiltonAutomationWatch')} />
         <Route path="/set-password" element={withBoundary(<SetPassword />, 'SetPassword')} />
         <Route path="/ServiceApplication" element={withBoundary(<ServiceApplication />, 'ServiceApplication')} />
         <Route path="/auth/callback" element={withBoundary(<AuthCallback />, 'AuthCallback')} />
