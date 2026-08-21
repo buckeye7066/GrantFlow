@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { isHamiltonBrowserTargetAllowed } from '../services/hamilton/controlledBetaBrowserPolicy.js'
 
 process.env.RUNTIME_SECRETS_KEY = 'c'.repeat(64)
 process.env.HAMILTON_ADMIN_VAULT_PROFILE_ID = 'owner-vault'
@@ -105,6 +106,12 @@ function makeFakeBrowser(page, { extraPages = [] } = {}) {
   const pages = [page, ...extraPages]
   const context = {
     async newPage() { return pages[pageIndex++] || page },
+    // The SSRF egress guard is MANDATORY: installControlledBetaBrowserEgressGuard
+    // THROWS on a context it cannot route, so a fake browser without `route`
+    // cannot be driven at all. That is a feature — pin it by giving the fake a
+    // real route hook and recording what the guard registered.
+    routes: [],
+    async route(pattern, handler) { this.routes.push({ pattern, handler }) },
     closed: false,
     async close() { this.closed = true },
   }
@@ -241,9 +248,12 @@ describe('per-host adapter registry', () => {
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-pw-1234!' },
       launchBrowser,
     })
-    expect(res.status).toBe('blocked')
-    expect(res.blockerType).toBe('create_portal_account')
-    expect(res.evidence?.signal).toBe('reviewed_signup_adapter_required')
+    // Superseded 2026-08-20: signup execution defaults ON, so a registered host
+    // actually runs — through the GENERIC driver. The registry grants a host a
+    // known signup URL, never a privileged execution path.
+    expect(res.status).toBe('registered')
+    expect(res.adapter).toBe('host:communityforce.com')
+    expect(hostAdapter).not.toHaveBeenCalled()
     disableBrowser()
   })
 })
@@ -268,8 +278,13 @@ describe('registerOnPortal safety rails', () => {
     disableBrowser()
   })
 
-  it('fails closed at the reviewed-adapter gate before browser settings matter', async () => {
-    disableBrowser()
+  // The reviewed-adapter CONSTANT is gone (signup execution is now the env flag
+  // HAMILTON_PORTAL_SIGNUP_EXECUTION, defaulting ON). The rails below are the
+  // ones that still hold, and each still refuses BEFORE a browser is launched.
+  it('browser automation OFF still fails closed, and never launches', async () => {
+    // NOTE: disableBrowser() only UNSETS the var, and the flag defaults ON, so
+    // an explicit 0 is what actually turns automation off.
+    process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = '0'
     const db = makeDb()
     const launchBrowser = vi.fn()
     const res = await registerOnPortal(db, {
@@ -277,12 +292,14 @@ describe('registerOnPortal safety rails', () => {
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
       launchBrowser,
     })
-    expect(res.status).toBe('blocked')
-    expect(res.blockerType).toBe('create_portal_account')
+    expect(res.status).toBe('failed')
+    expect(res.blocker_kind).toBe('no_browser')
+    expect(res.automation_disabled).toBe(true)
     expect(launchBrowser).not.toHaveBeenCalled()
+    disableBrowser()
   })
 
-  it('fails closed before an allowlisted-browser decision can launch', async () => {
+  it('a host outside a configured allowlist still fails closed, and never launches', async () => {
     enableBrowser('tn.gov')
     const db = makeDb()
     const launchBrowser = vi.fn()
@@ -291,13 +308,13 @@ describe('registerOnPortal safety rails', () => {
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
       launchBrowser,
     })
-    expect(res.status).toBe('blocked')
-    expect(res.blockerType).toBe('create_portal_account')
+    expect(res.status).toBe('failed')
+    expect(res.blocker_kind).toBe('no_browser')
     expect(launchBrowser).not.toHaveBeenCalled()
     disableBrowser()
   })
 
-  it('does not let dry-run bypass the reviewed account-creation boundary', async () => {
+  it('a dry run PLANS without ever launching a browser', async () => {
     enableBrowser()
     const db = makeDb()
     const launchBrowser = vi.fn()
@@ -306,8 +323,48 @@ describe('registerOnPortal safety rails', () => {
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
       dryRun: true, launchBrowser,
     })
+    expect(res.status).toBe('planned')
+    expect(launchBrowser).not.toHaveBeenCalled()
+    disableBrowser()
+  })
+
+  it('SSRF: a private / loopback target is refused even with the gate open', async () => {
+    enableBrowser()
+    const db = makeDb()
+    const launchBrowser = vi.fn()
+    for (const url of [
+      'http://127.0.0.1:8080/register',
+      'https://localhost/register',
+      'https://10.0.0.5/register',
+      'https://169.254.169.254/latest/meta-data/',
+      'https://192.168.1.10/signup',
+    ]) {
+      const res = await registerOnPortal(db, {
+        portalHost: 'communityforce.com', signupUrl: url,
+        identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
+        launchBrowser,
+      })
+      expect(res.status).toBe('failed')
+      // And the POLICY — the single authority openBrowserContext consults —
+      // refuses the target outright, so no later change to the signup gate can
+      // make an SSRF destination reachable.
+      expect(isHamiltonBrowserTargetAllowed(url)).toBe(false)
+    }
+    expect(launchBrowser).not.toHaveBeenCalled()
+    disableBrowser()
+  })
+
+  it('identity PROOFING is still refused BEFORE the signup flag is consulted', async () => {
+    enableBrowser()
+    const db = makeDb()
+    const launchBrowser = vi.fn()
+    const res = await registerOnPortal(db, {
+      portalHost: 'studentaid.gov', signupUrl: 'https://studentaid.gov/register',
+      identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
+      launchBrowser,
+    })
     expect(res.status).toBe('blocked')
-    expect(res.blockerType).toBe('create_portal_account')
+    expect(res.blockerType).toBe('identity_proof_required')
     expect(launchBrowser).not.toHaveBeenCalled()
     disableBrowser()
   })
@@ -586,12 +643,21 @@ describe('recheckEmailVerification + recheckDuePortalVerifications', () => {
       }],
     })) }
     const summary = await recheckDuePortalVerifications(db, { limit: 25, launchBrowser, outlookProvider: mailbox })
-    expect(summary.checked).toBe(0)
+    // The due row IS now looked at (signup execution is on), but MAILBOX-LINK
+    // ACTIVATION stays OFF by its own flag (HAMILTON_MAILBOX_LINK_ACTIVATION),
+    // so no mail is read, no link is visited and nothing is verified.
     expect(summary.verified).toBe(0)
     expect(mailbox.listInboxMessages).not.toHaveBeenCalled()
-    // The account remains pending for the owner to verify.
-    const stillPending = await listCredentialsAwaitingVerification(db, {})
-    expect(stillPending.map((r) => r.portal_host)).toContain('communityforce.com')
+    // The account remains PENDING for the owner to verify. It is no longer
+    // listed as DUE only because the re-check advanced the backoff — assert the
+    // stored state, not the due-window, or this passes for the wrong reason.
+    const row = await db.prepare(
+      `SELECT verification_status, verification_attempts, verification_next_retry_at
+         FROM hamilton_portal_credentials WHERE id = ?`,
+    ).get(prov.credential.id)
+    expect(row.verification_status).toBe('pending')
+    expect(Number(row.verification_attempts)).toBeGreaterThan(0)
+    expect(Date.parse(row.verification_next_retry_at)).toBeGreaterThan(Date.now())
     disableBrowser()
   })
 })

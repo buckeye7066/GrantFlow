@@ -53,7 +53,7 @@ import {
   controlledBetaBrowserContextOptions,
   controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
-  isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserTargetAllowed,
 } from './controlledBetaBrowserPolicy.js'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { browserAutomationPermittedForUrl, isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
@@ -73,12 +73,50 @@ const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_SIGNUP_STEP_TIMEOUT_MS) || 8
 const VERIFY_WAIT_MS = Number(process.env.HAMILTON_SIGNUP_VERIFY_WAIT_MS) || 45_000
 const VERIFY_POLL_MS = Number(process.env.HAMILTON_SIGNUP_VERIFY_POLL_MS) || 7_000
 
-// No real host-specific account-creation executor has completed an independent
-// reviewed adapter contract in this release. Keep the legacy parser/driver
-// testable as isolated helpers, but never let a production entry point launch
-// it until that contract exists.
-export function reviewedPortalSignupExecutionEnabled() { return false }
-export function automaticMailboxVerificationEnabled() { return false }
+/**
+ * May a production entry point actually DRIVE account creation on a real host?
+ *
+ * This returned a hard `false`, which short-circuited `registerOnPortal` before
+ * any of the identity/verification wiring below could ever run - the
+ * wired-but-unreachable class this repo names explicitly. The owner's standing
+ * order is "full automation means full automation", and the browser boundary it
+ * was paired with has already been opened to public HTTPS
+ * (`controlledBetaBrowserPolicy`), so the gate is now an env flag that defaults
+ * ON rather than a constant that can never be reached.
+ *
+ * WHAT THIS DOES NOT WIDEN. Every other rail still stands, and each is enforced
+ * somewhere this flag cannot reach:
+ *   - SSRF: private / loopback / link-local / metadata targets are refused by
+ *     `isHamiltonBrowserTargetAllowed` and aborted again by the egress guard.
+ *   - Identity PROOFING (SSN, government ID, FSA ID, Login.gov, ID.me) is
+ *     refused by `isIdentityProofedHost` BEFORE this flag is consulted.
+ *   - Creating an account is a distinct authority from using an existing login:
+ *     the brain still requires `createPortalAccountAuthorized === true`.
+ *   - Registration creates an ACCOUNT only. It never submits an application and
+ *     never touches the auto-submit / authorization / lease / confirmation-proof
+ *     protocol.
+ * Set HAMILTON_PORTAL_SIGNUP_EXECUTION=0 to put the hard stop back.
+ */
+export function reviewedPortalSignupExecutionEnabled() {
+  return signupEnvFlag(process.env.HAMILTON_PORTAL_SIGNUP_EXECUTION, true)
+}
+
+/**
+ * Mailbox-link activation (opening a portal's confirmation LINK out of a Graph
+ * mailbox) stays OFF. It is deliberately NOT covered by the flag above: reading
+ * a one-time CODE and typing it is answering a challenge addressed to Hamilton,
+ * whereas visiting an activation link is acting on a message's embedded
+ * instruction, and no reviewed contract for that exists. The verification-code
+ * gate (hamiltonVerificationGate) is the supported path.
+ */
+export function automaticMailboxVerificationEnabled() {
+  return signupEnvFlag(process.env.HAMILTON_MAILBOX_LINK_ACTIVATION, false)
+}
+
+function signupEnvFlag(raw, defaultOn) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return defaultOn
+  return !/^(0|false|off|no)$/i.test(String(raw).trim())
+}
 
 // ── Result helpers ────────────────────────────────────────────────────────────
 
@@ -616,7 +654,16 @@ export async function completeEmailVerification({
  * in one place.
  */
 async function openBrowserContext(launchBrowser, targetUrl) {
-  if (!isControlledBetaSyntheticBrowserUrl(targetUrl)) {
+  // The SINGLE authority on what Hamilton may open is
+  // `isHamiltonBrowserTargetAllowed` in controlledBetaBrowserPolicy: the
+  // reserved synthetic fixture OR a public HTTPS portal, with private /
+  // loopback / link-local / metadata targets refused forever (SSRF). This used
+  // to call `isControlledBetaSyntheticBrowserUrl`, i.e. fixture-ONLY, which
+  // contradicted the policy module beside it and made every real portal
+  // unreachable no matter what the policy said. There is deliberately NO second
+  // host rule here - narrowing to specific hosts is
+  // `browserAutomationPermittedForUrl`'s allowlist, one layer up.
+  if (!isHamiltonBrowserTargetAllowed(targetUrl)) {
     const refusal = controlledBetaBrowserRefusal()
     return { error: ok('failed', {
       blocker_kind: refusal.code,
@@ -679,7 +726,12 @@ export async function recheckEmailVerification(db, {
   const host = registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase()
   const url = loginUrl || (host ? `https://${host}` : null)
   if (!identityEmail) return ok('verification_pending', { message: 'No autopilot identity email to verify.' })
-  if (!reviewedPortalSignupExecutionEnabled()) {
+  // Gated on the MAILBOX-LINK flag, not the signup-execution flag. Opening a
+  // portal's activation LINK out of a mailbox is a different act from creating
+  // an account or typing a one-time code, and it stays OFF by default; keying
+  // it to the signup flag would have opened it as a side effect of opening
+  // signup, which is not a decision this change is entitled to make.
+  if (!automaticMailboxVerificationEnabled()) {
     void db; void launchBrowser; void outlookProvider; void waitMs; void pollMs; void lookbackMs
     return ok('verification_pending', {
       blocker_kind: 'create_portal_account',
