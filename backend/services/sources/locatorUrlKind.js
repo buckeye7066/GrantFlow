@@ -102,6 +102,23 @@ const DIRECTORY_HOSTS = Object.freeze([
   // other funders' patient-assistance/co-pay programs — every page is a pointer
   // to someone else's program, never an award of its own.
   'needymeds.org',
+  // ── PURE SCHOLARSHIP SEARCH PRODUCTS (owner report 2026-08-21) ────────────
+  // Whole-host is correct ONLY where the host has no award of its own to
+  // offer — every page is a search over OTHER funders' programs.
+  //
+  // DELIBERATELY NOT HERE: scholarships.com, bold.org, fastweb.com,
+  // goingmerry.com, unigo.com, cappex.com, niche.com, scholarshipowl.com. Those
+  // hosts DO serve individual award pages that state a real fixed award, and
+  // `locatorUrlKind.test.js` already pins that distinction ("classifies
+  // scholarships.com BROWSE-TREE category pages but never individual award
+  // pages"). Blanket-classifying them would retire real awards — the
+  // starving-recall end of the locator defect. Their SEARCH surfaces are caught
+  // by title shape instead (`fundingResultFilters.SEARCH_SURFACE_TITLE_RX`),
+  // which is what the owner's rows actually carried: "— Free Scholarship
+  // Search", "Apply to Multiple Scholarships", "Scholarship Search".
+  'bigfuture.collegeboard.org', // College Board's scholarship SEARCH product
+  'wemakescholars.com', // aggregator; the owner's row recorded it as the FUNDER
+  'careeronestop.org', // DOL scholarship FINDER — a search over other funders
 ])
 
 // Escape EVERY regex metacharacter, not just `.` — the hostname lists above

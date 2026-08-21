@@ -167,3 +167,105 @@ describe('applicantTypeGate — no eligibility pattern may regrow the ReDoS shap
     expect(ADJACENT_UNBOUNDED_WHITESPACE.test(re.source)).toBe(false)
   })
 })
+
+/**
+ * 2026-08-21 — THE STRUCTURED COLUMN THIS GATE COULD NOT SEE.
+ *
+ * `gatherExplicitTypes` read `applicant_types` / `eligible_profile_types` /
+ * `eligibility_types` / `eligible_applicants`. NONE of those is a column on
+ * `funding_opportunities`; the stored column is `entity_types_allowed`. Both
+ * real call sites (`matchEngine.js`, `pipelineEligibilitySweep.js`) hand this
+ * gate a DB row, so the structured half never executed in production and every
+ * institutional federal NOFO returned `{decision:'pass', reason:null}` for an
+ * individual — the owner's 2026-08-21 report (an undergraduate holding queued
+ * applications to ONR/NSF/ACL/HUD/EDA/FTA awards she cannot apply to).
+ *
+ * Each `entity_types_allowed` value below is a VERBATIM value measured in the
+ * catalog, not a fixture invented for the test.
+ */
+describe('applicantTypeGate — entity_types_allowed is the column that is actually stored', () => {
+  const ctx = { profile: { primary_type: 'college_student' }, sections: {} }
+
+  const institutionalRows = [
+    { title: 'Astronomy and Astrophysics Research Grants', sponsor: 'U.S. National Science Foundation', entity_types_allowed: '["nonprofit","school","government","business","vfd","farm"]' },
+    { title: 'NRL Long Range Broad Agency Announcement (BAA) for Basic and Applied Research', sponsor: 'Office of Naval Research', entity_types_allowed: '["nonprofit","school","government","business","vfd","farm"]' },
+    { title: 'FY 2025 EDA Public Works and Economic Adjustment Assistance Programs', sponsor: 'Economic Development Administration', entity_types_allowed: '["nonprofit","school","government","business","vfd","farm"]' },
+    { title: 'Siemer Family Foundation — Foundation/Grantmaker', sponsor: 'Siemer Family Foundation', entity_types_allowed: '["nonprofit","school","church","ministry","government"]' },
+    { title: 'Rural Business Development Grant', sponsor: 'USDA Rural Development', entity_types_allowed: '["farm","government","business","vfd"]' },
+  ]
+
+  for (const row of institutionalRows) {
+    it(`hard-mismatches an individual: "${row.title.slice(0, 46)}…"`, () => {
+      expect(evaluateApplicantTypeEligibility(row, 'college_student', ctx).decision).toBe('mismatch')
+    })
+    it(`still PASSES an organization: "${row.title.slice(0, 40)}…"`, () => {
+      expect(evaluateApplicantTypeEligibility(row, 'nonprofit', { profile: { primary_type: 'nonprofit' }, sections: {} }).decision)
+        .not.toBe('mismatch')
+    })
+  }
+
+  // RECALL: the rows an individual genuinely can apply to must be untouched.
+  const individualRows = [
+    { title: 'Federal Pell Grant', sponsor: 'Federal Student Aid', entity_types_allowed: '["student","family"]' },
+    { title: 'Federal Work-Study', sponsor: 'Federal Student Aid', entity_types_allowed: '["student","family"]' },
+    { title: 'SNAP state directory', sponsor: 'USDA', entity_types_allowed: '["individual","family","student","veteran"]' },
+    { title: 'Avoid foreclosure — free HUD-approved housing counseling', sponsor: 'HUD', entity_types_allowed: '["individual","family","veteran","senior"]' },
+    // A narrow population token that the pre-2026-08-21 individual vocabulary
+    // did NOT contain — widening it is what stops this becoming a new flood.
+    { title: 'Survivor Benefits', sponsor: 'SSA', entity_types_allowed: '["veteran"]' },
+    { title: 'Caregiver Respite Fund', sponsor: 'A Foundation', entity_types_allowed: '["caregiver"]' },
+  ]
+
+  for (const row of individualRows) {
+    it(`keeps an individual-eligible row: "${row.title.slice(0, 40)}"`, () => {
+      expect(evaluateApplicantTypeEligibility(row, 'college_student', ctx).decision).toBe('pass')
+    })
+  }
+
+  it('treats the ["*"] wildcard as UNRESTRICTED, never as "excludes everyone"', () => {
+    // `crawlerVocabulary.withFallback()` writes ['*'] when a lane states
+    // nothing. Without this rail the gate would go from blind to hostile.
+    const row = { title: 'Community Foundation Locator (national directory)', entity_types_allowed: '["*"]' }
+    for (const t of ['college_student', 'nonprofit', 'small_business', 'individual']) {
+      expect(evaluateApplicantTypeEligibility(row, t, { profile: { primary_type: t }, sections: {} }).decision).toBe('pass')
+    }
+  })
+
+  it('an EMPTY structured list is silence, not a denial', () => {
+    const row = { title: 'Catholic Charities – Lorain County Emergency Housing Assistance', entity_types_allowed: '[]' }
+    expect(evaluateApplicantTypeEligibility(row, 'college_student', ctx).decision).toBe('pass')
+  })
+
+  it('SOFTENS to review — never hard-rejects — an assistance-shaped row typed from its own prose', () => {
+    // `crawlerVocabulary.APPLICANT_RULES` types this ["church"] from the word
+    // "Church" in the TITLE. A hard mismatch would delete a real emergency-aid
+    // program from a needy student's pipeline.
+    const row = {
+      title: 'Emmanuel Lutheran Church – Emergency Rent Assistance',
+      entity_types_allowed: '["church","ministry"]',
+    }
+    const res = evaluateApplicantTypeEligibility(row, 'college_student', ctx)
+    expect(res.decision).toBe('review')
+    expect(isHardApplicantTypeMismatch(row, 'college_student', ctx)).toBe(false)
+  })
+
+  it('the softener does NOT rescue an institutional NOFO (it is title-shaped and narrow)', () => {
+    const row = {
+      title: 'Research Experiences for Undergraduates (REU Sites)',
+      sponsor: 'U.S. National Science Foundation',
+      entity_types_allowed: '["nonprofit","school","government","business","vfd","farm"]',
+    }
+    expect(evaluateApplicantTypeEligibility(row, 'college_student', ctx).decision).toBe('mismatch')
+  })
+
+  it('an explicit institution-only PROSE bar still hard-rejects even on an assistance-shaped title', () => {
+    // The prose patterns are evidence the FUNDER wrote; the softener only ever
+    // covers types the CRAWLER inferred.
+    const row = {
+      title: 'Institutional Training Scholarship Program',
+      description: 'Open to institutions of higher education only.',
+      entity_types_allowed: '["school"]',
+    }
+    expect(evaluateApplicantTypeEligibility(row, 'college_student', ctx).decision).toBe('mismatch')
+  })
+})

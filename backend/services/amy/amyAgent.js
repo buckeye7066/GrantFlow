@@ -555,7 +555,30 @@ export async function runAmyTraining(options = {}) {
   const before = cohortMetricsAtFloor(evaluations, currentFloor)
   const { sweep, best } = sweepFloors(evaluations)
   const decision = decideFloorChange({ currentFloor, best, currentMetrics: before, opts: tuningOpts })
-  const approvalQueue = buildApprovalQueue(evaluations)
+  // ── ROBERT'S PIPELINE-AUDIT NOTATIONS (owner order 2026-08-21) ──────────
+  // Robert removes a funding source from a profile's pipeline and notates the
+  // gap it leaves; Amy is the actor who closes that gap with active crawler
+  // searches. Reading them HERE is what stops the notation being a write-only
+  // queue — the exact shape this repo has shipped three times. The notes are
+  // marked consumed only AFTER the queue is built from them, so a failure
+  // between the two leaves them open for the next run rather than losing them.
+  let robertGapNotes = []
+  let markRobertGapsConsumed = null
+  try {
+    const { loadGapNotesForAmy, markGapNotesConsumed } = await import('../robert/robertPipelineAudit.js')
+    const gaps = await loadGapNotesForAmy(db, { limit: 200 })
+    // Amy acts ONLY on the levers Robert already placed on her side of the
+    // autonomy boundary. Code briefs stay Robert's to report — routing them
+    // through Amy's queue as if she could act on them is the fake ask.
+    robertGapNotes = gaps.amy_levers || []
+    markRobertGapsConsumed = markGapNotesConsumed
+  } catch { robertGapNotes = [] }
+  const approvalQueue = buildApprovalQueue(evaluations, { robertGapNotes })
+  // Mark consumed only AFTER the items exist, so a failure in between leaves
+  // the notes open for the next run instead of losing them.
+  if (markRobertGapsConsumed && robertGapNotes.length > 0) {
+    await markRobertGapsConsumed(db, robertGapNotes.map((n) => n.id)).catch(() => {})
+  }
 
   // ── MEASURE + LEARN per ARCHETYPE (the Amy→crawler flywheel) ────────────
   // Metrics: per-archetype qualified / ineligible-accept counts for THIS run —

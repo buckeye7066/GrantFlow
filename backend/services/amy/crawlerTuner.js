@@ -381,9 +381,84 @@ function failedSourceRecords(evaluation) {
  * @param {Array<object>} evaluations
  * @returns {Array<object>} approval items
  */
-export function buildApprovalQueue(evaluations = []) {
+/**
+ * Turn Robert's pipeline-audit notations into approval-queue items.
+ *
+ * WHY THIS EXISTS (owner order 2026-08-21): Robert removes a funding source
+ * from a profile's pipeline and must "notate to agent Amy what he did so she
+ * can close that gap in the future with active crawler searches in that profile
+ * and globally". A notation nothing reads is the write-only queue this repo has
+ * shipped three times (`web_parity_gap_queue`, the adapter wishlist, the
+ * approval queue itself) — so the notes get a CONSUMER on the same day they get
+ * a producer.
+ *
+ * THE AUTONOMY BOUNDARY IS PRESERVED BY CONSTRUCTION, not by convention: each
+ * note already carries the lever Robert derived from `LEVER_SURFACE`, and
+ * `leverActionability` below decides AUTO / OWNER_API / CODE_CHANGE from the
+ * same `LEVER_REGISTRY` every other item uses. An eligibility / geo / matching
+ * removal therefore renders as a CODE BRIEF and can never become an Amy
+ * auto-apply, which is exactly the authority the owner withheld from her.
+ *
+ * `finding_type` is deliberately left null: these are not Amy's synthetic-cohort
+ * findings and must not be counted as one of the declared `FINDING_TYPES`
+ * classes (the registry totality test asserts that map, and inflating it with a
+ * class no detector emits is the defect it exists to catch).
+ *
+ * @param {Array<object>} notes  entries from `robertPipelineAudit.loadGapNotesForAmy`
+ */
+export function robertGapApprovalItems(notes = []) {
+  const list = Array.isArray(notes) ? notes : []
+  if (list.length === 0) return []
+  // Group by (lever, need) so one item names work, not one item per removed row.
+  const groups = new Map()
+  for (const note of list) {
+    if (!note?.lever) continue
+    const needs = Array.isArray(note.unmet_needs) && note.unmet_needs.length > 0 ? note.unmet_needs : ['unspecified']
+    const key = `${note.lever}|${note.failed_gate}|${needs.join('+')}`
+    const bucket = groups.get(key) || {
+      lever: note.lever, gate: note.failed_gate, needs,
+      profiles: new Set(), subjects: new Set(), surfaces: new Set(), note_ids: [],
+    }
+    bucket.profiles.add(note.profile_id)
+    if (note.removed_title) bucket.subjects.add(String(note.removed_title))
+    if (note.search_surface?.source) bucket.surfaces.add(String(note.search_surface.source))
+    bucket.note_ids.push(note.id)
+    groups.set(key, bucket)
+  }
+
+  const out = []
+  for (const [key, b] of groups.entries()) {
+    out.push({
+      id: `robert_gap:${key}`,
+      // NOT a FINDING_TYPES class — see the note above.
+      finding_type: null,
+      lever: b.lever,
+      target_file: CODE_TARGETS[FINDING_TYPES.ZERO_RESULT]?.file ?? null,
+      category: b.needs[0] ?? null,
+      severity: SEVERITY.HIGH,
+      rationale:
+        `Robert removed ${b.subjects.size} funding source(s) from ${b.profiles.size} profile(s) ` +
+        `because they failed the "${b.gate}" gate. Those profiles still need ${b.needs.join(', ')} covered — ` +
+        `run active crawler searches for that need in those profiles and globally, and stop the ` +
+        `${[...b.surfaces].join(', ') || 'originating'} lane producing sources that fail this gate.`,
+      evidence: {
+        gate: b.gate,
+        profiles: b.profiles.size,
+        profile_ids: [...b.profiles].slice(0, 20),
+        unmet_needs: b.needs,
+        search_surfaces: [...b.surfaces],
+        // CANONICAL evidence key — `buildCodeBrief` reads `evidence.subjects`.
+        subjects: [...b.subjects].slice(0, 12),
+        robert_note_ids: b.note_ids.slice(0, 50),
+      },
+    })
+  }
+  return out
+}
+
+export function buildApprovalQueue(evaluations = [], { robertGapNotes = [] } = {}) {
   const evals = Array.isArray(evaluations) ? evaluations : []
-  const items = []
+  const items = [...robertGapApprovalItems(robertGapNotes)]
 
   // 1. Zero-result CATEGORIES → source/keyword coverage gap (planner/registry).
   const zeroByCat = tally(evals.filter((e) => e.status === 'zero'), (e) => e.category)

@@ -129,3 +129,85 @@ describe('pointer rows become research leads, never application tasks', () => {
     expect(assessment.handoff?.instructions).toMatch(/referral/i)
   })
 })
+
+/**
+ * 3. THE SECOND DOOR (owner report 2026-08-21).
+ *
+ * `assessHamiltonFundingSource` reaches its match checks only when a stored
+ * `profile_opportunity_matches` row exists OR `requiresProfileMatch(subject)`
+ * is true — and that predicate is keyed on
+ * `PROFILE_MATCH_REQUIRED_ORIGINS = {live_crawl, geo_crawl, discovered}`.
+ * A row with any OTHER `record_origin` — `curated_verified`, `manual`, and
+ * `scholarship_crawler`, which is exactly what listing decomposition mints —
+ * fell through to `ok: true` with NO eligibility evaluation of any kind, and
+ * Hamilton opened an application for it.
+ *
+ * Fixing only the match engine would have left this door open for every
+ * curated and decomposition-minted row.
+ */
+describe('the applicant-type gate runs for EVERY record_origin, not just the crawled ones', () => {
+  // A real-looking host: `example-*.org` trips the trust gate's placeholder
+  // detector, which would refuse before the applicant-type gate is reached and
+  // make this test pass for the wrong reason.
+  function seedOpp(database, { id, title, entityTypes, origin, url }) {
+    return database.prepare(`
+      INSERT INTO funding_opportunities
+        (id, title, opportunity_kind, application_url, source_url, record_origin, source,
+         source_trust_tier, reality_status, is_active, entity_types_allowed)
+      VALUES (?, ?, 'direct', ?, ?, ?, 'curated', 'official', 'real', 1, ?)
+    `).run(id, title, url, url, origin, JSON.stringify(entityTypes))
+  }
+
+  let policyDb
+  beforeEach(async () => {
+    policyDb = makeDb()
+    // The gate needs the column the crawler actually writes.
+    await policyDb.prepare('ALTER TABLE funding_opportunities ADD COLUMN entity_types_allowed TEXT').run()
+    await policyDb.prepare('UPDATE profiles SET display_name = ? WHERE id = ?').run('MTSU Forensic Science Undergraduate', PROFILE)
+    await policyDb.prepare('ALTER TABLE profiles ADD COLUMN primary_type TEXT').run()
+    await policyDb.prepare("UPDATE profiles SET primary_type = 'college_student' WHERE id = ?").run(PROFILE)
+    await policyDb.prepare('CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT)').run()
+  })
+
+  // NOTE: the assessment is driven through a GRANT, not a bare `{id}` stub —
+  // `loadOpportunityForPolicy` short-circuits on `opportunity?.id` and would
+  // hand the trust gate a row with no URL, refusing for the wrong reason.
+  it('REFUSES an institutional NOFO for an individual even with a curated origin and no stored match', async () => {
+    await seedOpp(policyDb, {
+      id: 'opp-onr',
+      title: 'FY25 Long Range Broad Agency Announcement (BAA) for Navy and Marine Corps Science and Technology',
+      entityTypes: ['nonprofit', 'school', 'government', 'business'],
+      origin: 'curated_verified',
+      url: 'https://www.onr.navy.mil/work-with-us/funding-opportunities/baa',
+    })
+    const verdict = await assessHamiltonFundingSource(policyDb, { profileId: PROFILE, grant: { id: 'g-opp-onr', funding_opportunity_id: 'opp-onr' } })
+    expect(verdict.ok).toBe(false)
+    expect(verdict.code).toBe('funding_source_profile_rejected')
+    expect(verdict.reasons.join(' ')).toMatch(/applicant_type/)
+  })
+
+  it('ALLOWS a real student award through the same door (the gate is not a blanket refusal)', async () => {
+    await seedOpp(policyDb, {
+      id: 'opp-pell',
+      title: 'Federal Pell Grant',
+      entityTypes: ['student', 'family'],
+      origin: 'curated_verified',
+      url: 'https://studentaid.gov/understand-aid/types/grants/pell',
+    })
+    const verdict = await assessHamiltonFundingSource(policyDb, { profileId: PROFILE, grant: { id: 'g-opp-pell', funding_opportunity_id: 'opp-pell' } })
+    expect(verdict.ok).toBe(true)
+  })
+
+  it('an UNREADABLE applicant type never refuses — missing is neutral', async () => {
+    await policyDb.prepare("UPDATE profiles SET primary_type = NULL WHERE id = ?").run(PROFILE)
+    await seedOpp(policyDb, {
+      id: 'opp-unknown',
+      title: 'Developmental Sciences',
+      entityTypes: ['nonprofit', 'school'],
+      origin: 'curated_verified',
+      url: 'https://www.nsf.gov/funding/opportunities/developmental-sciences',
+    })
+    const verdict = await assessHamiltonFundingSource(policyDb, { profileId: PROFILE, grant: { id: 'g-opp-unknown', funding_opportunity_id: 'opp-unknown' } })
+    expect(verdict.ok).toBe(true)
+  })
+})

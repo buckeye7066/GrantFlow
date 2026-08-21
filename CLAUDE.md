@@ -547,3 +547,157 @@ comparisons are profile-scoped. See the "INVARIANTS" section of
 `docs/canonical_rules.md` for the full rationale and the list of invariants that
 are documented-but-not-yet-auto-enforced (source denylist, zero-result-but-no-junk,
 agent observability).
+
+## ELIGIBILITY — the gate must read the field the database actually stores (2026-08-21)
+
+Owner report: one individual undergraduate's Application Tracker held **150
+tasks / 105 "In Progress"**, including six consecutive ACL institutional NOFOs,
+an Office of Naval Research Broad Agency Announcement, NSF research programs,
+HUD/EDA/FTA agency grants, Community Action Agencies in **Maine, Alabama and
+Wyoming** for a Tennessee student, a program whose own title reads **"Ended May
+2024"**, and a dozen scholarship **search engines** filed as leaf applications.
+105 unapplyable queued applications is worse than 20 real ones — it buries the
+real matches.
+
+**ROOT CAUSE, measured, not inferred: `applicantTypeGate.gatherExplicitTypes()`
+read four field names that are not columns.** It asked for `applicant_types` /
+`eligible_profile_types` / `eligibility_types` / `eligible_applicants`; the
+stored column is **`entity_types_allowed`** (`db/schema.sql:150`, pg `0168`).
+Both real call sites (`matchEngine.js:4373`, `pipelineEligibilitySweep.js:127`)
+pass a **DB ROW**, so `explicitTypes` was ALWAYS `[]`, `explicitMatchesBucket`
+early-returned `null`, and only the free-text `INSTITUTION_ONLY_PATTERNS` could
+ever fire — and a federal NOFO does not write that prose. Measured on the
+catalog before the fix: every NSF grant, the ONR/NRL BAA, the FTA and EDA NOFOs
+and HUD homeless assistance returned `{decision:'pass', reason:null}` for a
+`college_student` profile while their own `entity_types_allowed` read
+`["nonprofit","school","government","business","vfd","farm"]`. After: those
+return `mismatch`; catalog-wide for an individual **pass 109 / mismatch 414 /
+review 2**, and Pell, Work-Study, SNAP, HUD counseling, Catholic Charities and
+Salvation Army all still pass.
+
+**Three rails came with it, and removing any one turns the gate from blind to
+hostile:**
+1. **`['*']` is a WILDCARD, not a type.** `crawlerVocabulary.withFallback()`
+   writes it whenever a lane states nothing. Without the rail those rows
+   hard-mismatch EVERY bucket.
+2. **The individual vocabulary must carry the POPULATION tokens the registries
+   actually emit** (`veteran`, `senior`, `caregiver`, `military_spouse`,
+   `active_duty`, `guard_reserve`, `transitioning_service_member`, …). A row
+   typed only `["veteran"]` would otherwise hard-mismatch an individual.
+3. **An individual-ASSISTANCE-shaped title is SOFTENED to `review`, never
+   hard-rejected on structured types alone.** `APPLICANT_RULES` infers
+   `["church"]` from the word "Church" in "Emmanuel Lutheran Church — Emergency
+   Rent Assistance" — the exact class `matchEngine.js:2940` already guards. The
+   funder's own `INSTITUTION_ONLY` PROSE still outranks the softener, so a real
+   "institutions of higher education only" bar is unaffected.
+
+**THE SECOND DOOR.** `hamiltonFundingSourcePolicy.assessHamiltonFundingSource`
+reaches its match checks only when a stored match row exists OR
+`requiresProfileMatch(subject)` is true — and that predicate is keyed on
+`PROFILE_MATCH_REQUIRED_ORIGINS = {live_crawl, geo_crawl, discovered}`. **Every
+other `record_origin`** — `curated_verified`, `manual`, and
+`scholarship_crawler` (what listing decomposition mints) — fell through to
+`ok:true` having had NO eligibility evaluation of any kind. A hard
+applicant-type check now runs for EVERY origin. **TRAP when testing it:**
+`loadOpportunityForPolicy` short-circuits on `opportunity?.id`, so passing
+`{id:'x'}` hands the trust gate a URL-less stub that refuses as `no_real_url`
+before your gate is reached — drive it through a GRANT. Also `example-*.org`
+trips the trust placeholder detector.
+
+**EXPIRY WAS 100% A FUNCTION OF THE `deadline` COLUMN.**
+`opportunityHelpers.isExpiredOpportunity` returns false for a NULL deadline and
+`deadlineExpiryService`'s first SQL predicate is `deadline IS NOT NULL`, so a
+curated row stating its sunset in PROSE was structurally unreachable by every
+expiry net. `fundingResultFilters.STALE_PROGRAM_PATTERNS` now reads the TITLE
+("Ended May 2024", "program has been discontinued", "no longer accepting"), and
+`staleCycleYear()` catches a bare cycle year at least two years old — but ONLY
+when the row states no FUTURE deadline (the funder's own statement that it is
+open outranks a year in a name) and the year is not a range end or a "Class of
+2019" style fund name. "Tennessee HOPE Scholarship (2026-27)" survives on the
+deadline condition alone.
+
+**AGGREGATORS ARE CLASSIFIED BY TITLE, NEVER BY HOST.** scholarships.com,
+bold.org, fastweb.com and goingmerry.com all serve INDIVIDUAL award pages that
+state a real fixed award — `locatorUrlKind.test.js` pins that on purpose
+("classifies scholarships.com BROWSE-TREE category pages but never individual
+award pages"). Blanket-classifying those hosts retires real awards, which is the
+starving-recall end of the locator defect. Only PURE search products go in
+`DIRECTORY_HOSTS` (`bigfuture.collegeboard.org`, `wemakescholars.com`,
+`careeronestop.org`). The rest are caught by
+`fundingResultFilters.SEARCH_SURFACE_TITLE_RX` (a title that names itself a
+search/finder/directory) and `aggregatorBrandSurface()` (the brand LEADS the
+title, or the aggregator is recorded as the FUNDER — the owner's
+"WeMakeScholars" row). Measured on the owner's 22 verbatim titles: 12/12 junk
+routed out, 10/10 real awards kept, zero misclassifications either way.
+
+**HTML ENTITIES: the registry is a closed character BLOCK, not a hand-typed
+list.** A stored title read `C&ocirc;te d'Ivoire` — raw markup in an
+owner-facing field. The row DID pass the ingest choke point; `ocirc` was simply
+absent from `NAMED_ENTITIES`, which held eight accented letters and none of the
+circumflex/ring/slash/ligature/acute-vowel/thorn forms. Per the module's own
+(correct) policy an unknown entity is left VERBATIM, so a registry gap renders
+as markup. The Latin-1 letter half is now GENERATED from one table, and the
+lookup tries an EXACT match before the lower-cased fallback (`&Ocirc;` is `Ô`,
+not `ô`).
+
+### Robert's fifth tool: the four-gate pipeline verifier (`audit-pipelines`)
+
+`backend/services/robert/robertPipelineAudit.js`, mode
+`ROBERT_MODES.AUDIT_PIPELINES`, route `POST /api/robert/audit-pipelines`,
+read-back `GET /api/robert/pipeline-gaps`. Every funding source in every
+profile's pipeline answers four questions — **REAL** (evidence, never an LLM
+assertion: title-stated sunset, past deadline, then a bounded live `checkUrl`),
+**RELATABLE** (`classifyFundingResult` + `isPointerKind` + a re-derived
+structural URL claim, because the stored `opportunity_kind` predates every
+registry entry), **COVERS A NEED** ("at least PART" is the owner's bar; the
+profile's DECLARED structured needs only, never mined prose), **QUALIFIES**
+(`applicantTypeGate` + `passesEligibility` + `isRelevantGeo`). It invents no
+verdicts; every gate delegates to the existing authority.
+
+Rules that must not be re-weakened:
+- **"Cannot answer yes" means DETERMINED NO, not "could not check."** A 503, a
+  timeout, a bot wall or an SSRF refusal lands in a distinct `unverifiable`
+  bucket, is reported separately, and **stays in the pipeline**. Only 404/410
+  are a statement about the page.
+- **Aggregators are HARVESTED before they are removed** (`harvest_first`) — the
+  decomposer is how the real awards behind them are reached.
+- **Removal is the canonical tombstone** (`recordDismissal` +
+  `reconcileDismissedGrants`), never a hard DELETE; user-progressed statuses and
+  the Sasquatch PromoPilot profile are never touched.
+- **Accounting is ASSERTED, not logged**: `candidates === kept + protected +
+  removed + deduped_away + unverifiable + failed` **throws** if it does not
+  hold, and a zero-removal run logs loudly.
+- **Dedup is a PAIRWISE predicate, not a hash key** — the owner's duplicate
+  pairs are SUBSETS ("Pell Grant" inside "Federal Pell Grant", "QuestBridge"
+  inside "QuestBridge National College Match"). A lone short shared token needs
+  either 6+ characters or every EXTRA word to be a QUALIFIER (a state, an
+  institution, a scope) — that is what keeps "Tennessee HOPE Scholarship" one
+  program with "HOPE Scholarship" while "Gates Millennium Scholars" stays
+  distinct from "Gates Scholarship".
+- **The Amy notation is SPLIT at the autonomy boundary, derived from
+  `LEVER_SURFACE`/`AUTONOMY_FORBIDDEN` rather than hand-typed.** A coverage or
+  URL-hygiene gap is Amy's to close; an ELIGIBILITY or GEO failure becomes a
+  `code_brief` and can never enter her autonomous lane. The notes are read back
+  by `crawlerTuner.buildApprovalQueue(evaluations, { robertGapNotes })` and
+  marked consumed AFTER the items exist — a producer without a consumer is the
+  write-only queue this repo has shipped three times.
+- **No dry run.** There is deliberately no `dryRun`/`apply:false` option.
+
+**A DECOMPOSITION ZERO IS NEVER REPORTED WITHOUT ITS REASON.** The dashboard
+read "0 award(s) found, 0 admitted to matching, 0 profile-accepted award task(s)
+created" and nothing else. `extractListingAwardItems` always returns a populated
+`notFound` (LLM disabled / no AI provider / call failed / unparseable JSON / no
+page text) and a `rejected[]` of fabrication-guard refusals, and the
+orchestrator discarded all of it at the render — so "no AI provider is
+configured" and "this page genuinely lists no awards" printed identically while
+demanding opposite actions. `describeDecomposition()` now puts the reason in the
+sentence.
+
+**STILL OPEN, deliberately not fixed here.** `listReadySources`
+(`routes/hamiltonAutomation.js:969`) selects up to 100 pipeline rows with NO
+predicate but `profile_id` and a non-terminal status — no score floor, no
+decision, no deadline, no applicant type, no geo — and `all_ready_sources:true`
+expands an empty selection to all of them. The per-source gate downstream is
+what refuses; that is now a real gate rather than a blind one, but the SELECTION
+is still unfiltered and a future change there should add the predicate rather
+than rely on the per-source refusal.

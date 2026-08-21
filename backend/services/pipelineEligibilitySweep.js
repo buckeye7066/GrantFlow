@@ -69,15 +69,31 @@ async function resolveProfileIdentity(db, profileId) {
 async function loadPipelineRows(db, profileId) {
   // Join the pipeline grant to its catalog opportunity so the gate sees the rich
   // eligibility text (the grants row alone usually only carries title/funder).
+  //
+  // COLUMN NAMES — READ THIS BEFORE EDITING. Until 2026-08-21 this SELECT asked
+  // for `fo.applicant_types`, `fo.eligible_applicants`, `fo.eligibility_types`,
+  // `fo.eligibility` and `fo.is_directory_resource`. NOT ONE of those is a
+  // column on `funding_opportunities`. Measured against a real database:
+  // `no such column: fo.applicant_types`. The `catch` below then fell back to
+  // the grants-only query, which carries NO eligibility evidence at all — so
+  // `gatherOppText` saw a bare title, `explicitTypes` was empty, every row
+  // returned `review`, and the sweep reported "scanned N, flagged 0" forever
+  // while doing nothing. The fallback made the failure invisible: a broken
+  // query that reads as a clean run is worse than a crash.
+  //
+  // The real columns are `entity_types_allowed` (the structured applicant
+  // types) and `eligibility_text`. `is_directory_resource` does not exist
+  // either — directory-ness is `opportunity_kind`, which `isDirectoryLikeOpportunity`
+  // already reads.
   try {
     return await db.prepare(`
       SELECT g.id AS grant_id, g.title AS title, g.funder AS funder, g.deadline AS deadline,
              g.application_url AS application_url, g.funding_opportunity_id AS funding_opportunity_id,
-             fo.description AS description, fo.eligibility AS eligibility,
-             fo.eligibility_bullets AS eligibility_bullets, fo.applicant_types AS applicant_types,
-             fo.eligible_applicants AS eligible_applicants, fo.eligibility_types AS eligibility_types,
-             fo.opportunity_kind AS opportunity_kind, fo.type AS type, fo.opportunity_type AS opportunity_type,
-             fo.source AS source, fo.source_url AS source_url, fo.is_directory_resource AS is_directory_resource
+             fo.description AS description, fo.eligibility_text AS eligibility_text,
+             fo.eligibility_bullets AS eligibility_bullets,
+             fo.entity_types_allowed AS entity_types_allowed,
+             fo.opportunity_kind AS opportunity_kind, fo.opportunity_type AS opportunity_type,
+             fo.source AS source, fo.source_url AS source_url
       FROM grants g
       LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
       WHERE g.profile_id = ?
@@ -111,17 +127,16 @@ export async function sweepProfilePipelineApplicantType(
     const oppLike = {
       title: r.title,
       description: r.description,
-      eligibility: r.eligibility,
+      eligibility_text: r.eligibility_text,
       eligibility_bullets: r.eligibility_bullets,
-      applicant_types: r.applicant_types,
-      eligible_applicants: r.eligible_applicants,
-      eligibility_types: r.eligibility_types,
+      // The STORED column. `applicantTypeGate.gatherExplicitTypes` reads it
+      // directly; passing it under a name that is not a column (as this did
+      // until 2026-08-21) makes the structured half of the gate unreachable.
+      entity_types_allowed: r.entity_types_allowed,
       opportunity_kind: r.opportunity_kind,
-      type: r.type,
       opportunity_type: r.opportunity_type,
       source: r.source,
       source_url: r.source_url,
-      is_directory_resource: r.is_directory_resource,
     }
     if (isDirectoryLikeOpportunity(oppLike)) continue
     const res = evaluateApplicantTypeEligibility(oppLike, applicantType, {
