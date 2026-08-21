@@ -66,8 +66,16 @@ describe('buildAutomationPosture', () => {
     }
   })
 
-  it('reports allow_auto_submit FALSE when the flag is unset', () => {
-    expect(buildAutomationPosture().allow_auto_submit).toBe(false)
+  // SUPERSEDED DEFAULT. This case used to assert `false` for an unset flag,
+  // matching isAutoSubmitGloballyEnabled()'s old `|| 'false'` default. The
+  // owner flipped that default ON on 2026-08-20 ("full automation means full
+  // automation"; docs/agent-sync/2026-08-20-hamilton-real-portal-submit.md),
+  // so an unset flag now means ARMED. The posture must say so — this record is
+  // a safety control, and reporting "disabled" for an armed process is exactly
+  // the drift the file exists to prevent. Note the direction of the risk: this
+  // makes the production-audit bridge REFUSE by default, never proceed.
+  it('reports allow_auto_submit TRUE when the flag is unset (default is now ARMED)', () => {
+    expect(buildAutomationPosture().allow_auto_submit).toBe(true)
   })
 
   it('reports allow_auto_submit FALSE when the flag is explicitly "false"', () => {
@@ -75,9 +83,10 @@ describe('buildAutomationPosture', () => {
     expect(buildAutomationPosture().allow_auto_submit).toBe(false)
   })
 
-  // The load-bearing case. A recorder that always said `false` would pass both
-  // tests above and would silently authorize an audit against an ARMED
-  // production. This is the one that catches that.
+  // The load-bearing case. A recorder hardcoded to `false` would silently
+  // authorize an audit against an ARMED production; this and the unset case
+  // above are what catch that, while the explicit-"false" case above catches a
+  // recorder hardcoded to `true`. Both directions must stay covered.
   it('reports allow_auto_submit TRUE when the flag is armed', () => {
     process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
     expect(buildAutomationPosture().allow_auto_submit).toBe(true)
