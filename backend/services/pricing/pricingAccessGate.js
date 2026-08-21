@@ -383,7 +383,7 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
       }
       const updateResult = await tx.prepare(
         `UPDATE ${SERVICE_AGREEMENTS_TABLE}
-            SET user_id = COALESCE(user_id, ?),
+            SET user_id = ?,
                 quote_id = COALESCE(quote_id, ?),
                 accepted = 1,
                 accepted_at = ?,

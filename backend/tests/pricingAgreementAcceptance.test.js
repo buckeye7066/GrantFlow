@@ -71,7 +71,7 @@ function makePgDb({
             state.updateArgs = args
             state.agreement = {
               ...state.agreement,
-              user_id: state.agreement?.user_id ?? args[0] ?? null,
+              user_id: args[0] ?? null,
               quote_id: state.agreement?.quote_id ?? args[1] ?? null,
               accepted: 1,
               accepted_at: args[2],
@@ -128,6 +128,17 @@ describe('acceptAgreement', () => {
     expect(state.agreement?.user_id).toBe('user-1')
     expect(state.agreement?.accepted).toBe(1)
     expect(state.pricing?.access_status).toBe('pending_payment')
+  })
+
+  it('records the authenticated collaborator rather than preserving the owner id', async () => {
+    const { db, state } = makePgDb()
+    state.agreement.user_id = 'profile-owner'
+
+    await acceptAgreement(db, {
+      profileId: 'profile-1', userId: 'collaborator-7', agreementText: 'I agree',
+    })
+
+    expect(state.agreement?.user_id).toBe('collaborator-7')
   })
 
   it('recreates a missing agreement row before recording acceptance', async () => {

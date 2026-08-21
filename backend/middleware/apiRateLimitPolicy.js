@@ -69,17 +69,16 @@ export function classifyApiRatePolicy(req, env = process.env) {
     }
   }
 
-  // SmartMatcher intent interpretation is a lightweight text-normalization path
-  // with a deterministic rules fallback. It was sharing the same 40/10m "cost"
-  // budget as expensive crawler/AI operations, so routine matching activity
-  // could 429 this critical user path under normal use.
+  // SmartMatcher intent interpretation may make one paid OpenAI call. Give it
+  // an isolated budget so crawlers cannot starve it, but retain the bounded,
+  // required-shared semantics of every cost-bearing AI surface.
   if (method === 'POST' && path === '/api/matching/interpret-intent') {
     return {
-      name: 'standard',
-      windowMs: positiveInt(env.API_STANDARD_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
-      max: positiveInt(env.API_STANDARD_RATE_LIMIT_MAX, 600),
+      name: 'intent_cost',
+      windowMs: positiveInt(env.API_INTENT_RATE_LIMIT_WINDOW_MS, 10 * 60 * 1000),
+      max: positiveInt(env.API_INTENT_RATE_LIMIT_MAX, 40),
       shared: true,
-      requiredShared: false,
+      requiredShared: true,
     }
   }
 

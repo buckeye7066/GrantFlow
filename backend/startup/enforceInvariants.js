@@ -8297,10 +8297,10 @@ export async function enforceStageOfLifeMatchScope(db) {
     if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
     }
-    let deriveStageOfLife, stageOfLifeConflict, STAGE_DECLARATION_LIKE_PATTERNS
+    let deriveStageOfLife, stageOfLifeConflictForSections
     try {
       ;({ deriveStageOfLife } = await import('../config/profileDerivedFacts.js'))
-      ;({ stageOfLifeConflict, STAGE_DECLARATION_LIKE_PATTERNS } = await import(
+      ;({ stageOfLifeConflictForSections } = await import(
         '../config/stageOfLifeEligibility.js'
       ))
     } catch (err) {
@@ -8334,12 +8334,6 @@ export async function enforceStageOfLifeMatchScope(db) {
     }
     // Only the TEXT columns are LIKE-able; eligibility_bullets is a JSON array
     // string, which LIKE still matches usefully as a superset.
-    const likeClause = STAGE_DECLARATION_LIKE_PATTERNS
-      .map(() => `(${EVIDENCE_COLS.map((c) => `LOWER(COALESCE(o.${c},'')) LIKE ?`).join(' OR ')})`)
-      .join(' OR ')
-    const likeParams = []
-    for (const p of STAGE_DECLARATION_LIKE_PATTERNS) for (const _c of EVIDENCE_COLS) likeParams.push(p)
-
     let scanned = 0
     const violating = []
     let profilesWithStage = 0
@@ -8347,21 +8341,20 @@ export async function enforceStageOfLifeMatchScope(db) {
       if (violating.length >= limit) break
       const ctx = await _loadProfileContextForInvariant(db, row.id)
       if (!ctx) continue
-      let stage
-      try { stage = deriveStageOfLife(ctx.sections ?? {})?.value ?? null } catch { continue }
-      if (!stage || stage === 'unclassified') continue
-      profilesWithStage += 1
+      let stage = null
+      try { stage = deriveStageOfLife(ctx.sections ?? {})?.value ?? null } catch { /* purpose still applies */ }
+      if (stage && stage !== 'unclassified') profilesWithStage += 1
       let candidates
       try {
         candidates = await db
           .prepare(
-            `SELECT m.id AS match_id, m.profile_id, ${EVIDENCE_COLS.map((c) => `o.${c}`).join(', ')}
+            `SELECT m.id AS match_id, m.profile_id, m.opportunity_id, ${EVIDENCE_COLS.map((c) => `o.${c}`).join(', ')}
                FROM profile_opportunity_matches m
                JOIN funding_opportunities o ON o.id = m.opportunity_id
-              WHERE m.profile_id = ? AND (${likeClause})
+              WHERE m.profile_id = ?
               LIMIT ?`,
           )
-          .all(row.id, ...likeParams, limit)
+          .all(row.id, limit)
       } catch (err) {
         log.warn('stage_of_life_match_scope: candidate query failed (non-fatal)', {
           profile: row.id, error: String(err?.message || err),
@@ -8370,7 +8363,7 @@ export async function enforceStageOfLifeMatchScope(db) {
       }
       for (const c of candidates || []) {
         scanned += 1
-        const conflict = stageOfLifeConflict(stage, c)
+        const conflict = stageOfLifeConflictForSections(ctx.sections ?? {}, c)
         if (conflict) violating.push({ ...c, stage, conflict })
       }
     }
@@ -8387,6 +8380,23 @@ export async function enforceStageOfLifeMatchScope(db) {
     if (violating.length === 0) return { scanned, repaired: 0, profilesWithStage, enforced: true }
 
     const ids = violating.map((v) => v.match_id)
+    // A persisted mismatch must also leave Hamilton's active queue. Completed,
+    // submitted and cancelled work is historical evidence and remains intact.
+    let tasksCancelled = 0
+    try {
+      const { cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')
+      const terminal = ['submitted', 'completed', 'cancelled']
+      for (const v of violating) {
+        const ph = terminal.map(() => '?').join(', ')
+        const tasks = await db.prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND opportunity_id = ? AND status NOT IN (${ph})`).all(v.profile_id, v.opportunity_id, ...terminal)
+        for (const task of tasks || []) {
+          await cancelApplicationTask(db, task.id, { actorRole: 'system', reason: v.conflict.reason })
+          tasksCancelled += 1
+        }
+      }
+    } catch (err) {
+      log.warn('stage_of_life_match_scope: task reconciliation unavailable (non-fatal)', { error: String(err?.message || err) })
+    }
     let repaired = 0
     for (let i = 0; i < ids.length; i += 200) {
       const slice = ids.slice(i, i + 200)
@@ -8396,6 +8406,7 @@ export async function enforceStageOfLifeMatchScope(db) {
     }
     log.info('removed matches to awards the profile\'s academic stage cannot receive', {
       repaired,
+      tasksCancelled,
       scanned,
       profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
       examples: violating.slice(0, 3).map(describe),

@@ -331,6 +331,18 @@ export async function loadProfileContext(db, profileId) {
       return acc
     }, {})
 
+  // Website-derived purpose is persisted and reused by the synchronous match
+  // engine. Tests stay hermetic; production/profile-crawl loads perform one
+  // bounded read per cache window when a public website is present.
+  if (String(process.env.NODE_ENV || '').toLowerCase() !== 'test') {
+    try {
+      const { enrichProfileWebsitePurpose } = await import('./profileWebsitePurposeEnrichment.js')
+      await enrichProfileWebsitePurpose(db, { profile, sections })
+    } catch (error) {
+      console.warn('[profileHelpers] website purpose enrichment unavailable', error?.message || error)
+    }
+  }
+
   // Use safeParseArrayField for array fields
   const tags = safeParseArrayField(profile.tags, [])
   const interests = safeParseArrayField(profile.interests, [])

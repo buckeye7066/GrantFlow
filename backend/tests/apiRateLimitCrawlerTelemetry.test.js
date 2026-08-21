@@ -53,8 +53,10 @@ describe('crawler telemetry reads do not spend the crawl-start budget', () => {
     }
   })
 
-  it('keeps SmartMatcher interpret-intent on a separate non-cost budget', () => {
-    expect(classify('POST', '/api/matching/interpret-intent')?.name).toBe('standard')
+  it('keeps SmartMatcher interpret-intent on an isolated cost-limited budget', () => {
+    expect(classify('POST', '/api/matching/interpret-intent')).toMatchObject({
+      name: 'intent_cost', max: 40, requiredShared: true,
+    })
     expect(classify('POST', '/api/matching/profile/p1/opportunities')?.name).toBe('cost')
   })
 
