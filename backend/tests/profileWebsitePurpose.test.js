@@ -123,43 +123,49 @@ describe('profileWebsitePurpose — Axiom Hamilton queue audit', () => {
   })
 })
 
+// computeMatchDecision is POSITIONAL — (profile, opportunity, { profileSections }).
+// Both cases below used to pass a single `{ profile, sections, opportunity }`
+// object, so `rawOpportunity` was undefined and the engine returned its
+// "missing profile or opportunity" REVIEW stub before reaching ANY gate. That
+// made the REJECT case fail for a reason unrelated to website purpose, and made
+// the STTR case a test that could not fail (the stub is REVIEW, which satisfies
+// `not.toBe('REJECT')` no matter how badly the gate over-fires).
+// The rows also need a real URL, or the data-quality "no actionable URL" gate
+// rejects both before the website-purpose gate is ever consulted.
+const AXIOM_PROFILE = {
+  id: 'axiom-1',
+  primary_type: 'small_business',
+  display_name: 'Axiom BioLabs',
+}
+
 describe('matchEngine — website purpose REJECT', () => {
   it('REJECTs Title X for an Axiom-shaped profile with website URL', async () => {
-    const decision = await computeMatchDecision({
-      profile: {
-        id: 'axiom-1',
-        primary_type: 'small_business',
-        display_name: 'Axiom BioLabs',
-      },
-      sections: AXIOM_SECTIONS,
-      opportunity: {
-        id: 'opp-title-x',
-        title: 'Title X Family Planning Services Grants',
-        sponsor: 'HHS',
-        opportunity_kind: 'PROGRAM',
-        is_national: true,
-      },
-    })
+    const decision = await computeMatchDecision(AXIOM_PROFILE, {
+      id: 'opp-title-x',
+      title: 'Title X Family Planning Services Grants',
+      sponsor: 'HHS',
+      opportunity_kind: 'PROGRAM',
+      is_national: true,
+      url: 'https://www.grants.gov/opp/title-x',
+      application_url: 'https://www.grants.gov/opp/title-x',
+    }, { profileSections: AXIOM_SECTIONS })
     expect(decision.decision).toBe('REJECT')
     expect(String(decision.explanation || decision.reasons?.join(' ') || '')).toMatch(/website purpose mismatch/i)
   })
 
   it('does NOT refuse an STTR for the same profile', async () => {
-    const decision = await computeMatchDecision({
-      profile: {
-        id: 'axiom-1',
-        primary_type: 'small_business',
-        display_name: 'Axiom BioLabs',
-      },
-      sections: AXIOM_SECTIONS,
-      opportunity: {
-        id: 'opp-sttr',
-        title: 'NIH Small Business Technology Transfer Grant (Parent STTR [R41/R42] Clinical Trial Optional)',
-        sponsor: 'NIH',
-        opportunity_kind: 'PROGRAM',
-        is_national: true,
-      },
-    })
+    const decision = await computeMatchDecision(AXIOM_PROFILE, {
+      id: 'opp-sttr',
+      title: 'NIH Small Business Technology Transfer Grant (Parent STTR [R41/R42] Clinical Trial Optional)',
+      sponsor: 'NIH',
+      opportunity_kind: 'PROGRAM',
+      is_national: true,
+      url: 'https://www.grants.gov/opp/sttr',
+      application_url: 'https://www.grants.gov/opp/sttr',
+    }, { profileSections: AXIOM_SECTIONS })
     expect(decision.decision).not.toBe('REJECT')
+    // Pin the positive side too, so this case can actually fail: the engine
+    // must not have short-circuited into its "insufficient data" stub.
+    expect(decision.decision).toBe('ACCEPT')
   })
 })
