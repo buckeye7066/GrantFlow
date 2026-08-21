@@ -331,13 +331,30 @@ export async function loadProfileContext(db, profileId) {
       return acc
     }, {})
 
+  // Organization website and mission are first-class profile evidence. Load
+  // them before enrichment so profiles that store their public URL only on the
+  // linked organization do not silently skip the website-purpose chain.
+  let organization = null
+  if (profile.organization_id) {
+    try {
+      organization = await loadLinkedOrganizationForProfile(db, profileId, profile.organization_id)
+    } catch (err) {
+      console.warn(
+        '[loadProfileContext] organization lookup failed for profile=%s org=%s:',
+        sanitizeLogValue(profileId),
+        profile.organization_id,
+        err?.message || err,
+      )
+    }
+  }
+
   // Website-derived purpose is persisted and reused by the synchronous match
   // engine. Tests stay hermetic; production/profile-crawl loads perform one
   // bounded read per cache window when a public website is present.
   if (String(process.env.NODE_ENV || '').toLowerCase() !== 'test') {
     try {
       const { enrichProfileWebsitePurpose } = await import('./profileWebsitePurposeEnrichment.js')
-      await enrichProfileWebsitePurpose(db, { profile, sections })
+      await enrichProfileWebsitePurpose(db, { profile, sections, organization })
     } catch (error) {
       console.warn('[profileHelpers] website purpose enrichment unavailable', error?.message || error)
     }
@@ -351,8 +368,7 @@ export async function loadProfileContext(db, profileId) {
 
   // Merge organization address fields into the profile context when available.
   // Many workflows store ZIP/state/city on `organizations`, but matching relies on profileContext.signals.location.
-  let organization = null
-  if (profile.organization_id) {
+  if (profile.organization_id && !organization) {
     try {
       organization = await loadLinkedOrganizationForProfile(db, profileId, profile.organization_id)
     } catch (err) {

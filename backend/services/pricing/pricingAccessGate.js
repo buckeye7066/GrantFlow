@@ -381,6 +381,9 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
           accepted: 0,
         }
       }
+      if (Number(agreement.accepted) === 1 || agreement.accepted === true) {
+        return { ok: false, error: 'agreement_already_accepted' }
+      }
       const updateResult = await tx.prepare(
         `UPDATE ${SERVICE_AGREEMENTS_TABLE}
             SET user_id = ?,
@@ -390,7 +393,7 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
                 accepted_ip = ?,
                 accepted_user_agent = ?,
                 agreement_text_snapshot = COALESCE(agreement_text_snapshot, ?)
-          WHERE id = ?`,
+          WHERE id = ? AND (accepted IS NULL OR accepted = 0)`,
       ).run(
         userId || null,
         pricing.quote_id || null,
@@ -401,8 +404,8 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
         agreement.id,
       )
       if (!Number(updateResult?.changes || 0)) {
-        const err = new Error('agreement_not_found')
-        err.code = 'agreement_not_found'
+        const err = new Error('agreement_already_accepted')
+        err.code = 'agreement_already_accepted'
         throw err
       }
       let nextStatus = pricing.access_status
@@ -416,7 +419,7 @@ export async function acceptAgreement(db, { profileId, userId, ip, userAgent, ag
       return { ok: true, access_status: nextStatus }
     }))
   } catch (error) {
-    if (error?.code === 'agreement_not_found') return { ok: false, error: 'agreement_not_found' }
+    if (error?.code === 'agreement_already_accepted') return { ok: false, error: 'agreement_already_accepted' }
     throw error
   }
 }

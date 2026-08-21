@@ -141,6 +141,27 @@ describe('acceptAgreement', () => {
     expect(state.agreement?.user_id).toBe('collaborator-7')
   })
 
+  it('does not overwrite the immutable audit identity on repeat acceptance', async () => {
+    const acceptedAt = '2026-08-20T12:00:00.000Z'
+    const { db, state } = makePgDb({
+      agreement: {
+        id: 'sa-accepted', profile_id: 'profile-1', user_id: 'original-accepter',
+        quote_id: 'quote-1', agreement_version: SERVICE_AGREEMENT_VERSION,
+        accepted: 1, accepted_at: acceptedAt, accepted_ip: '198.51.100.1',
+      },
+    })
+
+    const result = await acceptAgreement(db, {
+      profileId: 'profile-1', userId: 'later-collaborator', ip: '198.51.100.2', agreementText: 'I agree again',
+    })
+
+    expect(result).toEqual({ ok: false, error: 'agreement_already_accepted' })
+    expect(state.updateSql).toBeNull()
+    expect(state.agreement).toMatchObject({
+      user_id: 'original-accepter', accepted_at: acceptedAt, accepted_ip: '198.51.100.1',
+    })
+  })
+
   it('recreates a missing agreement row before recording acceptance', async () => {
     const { db, state } = makePgDb({ agreement: null })
 
