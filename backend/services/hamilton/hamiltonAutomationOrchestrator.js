@@ -101,6 +101,7 @@ import {
 } from './hamiltonRunCancellation.js'
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
 import { attemptAutomatedVerification } from './hamiltonVerificationGate.js'
+import { attemptCaptchaSolve, isCaptchaSolverConfigured } from './hamiltonCaptchaSolver.js'
 import { makeHamiltonGraphTokenProvider } from './hamiltonGraphToken.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isSearchEngineUrl } from '../../config/urlRules.js'
@@ -1908,6 +1909,14 @@ async function runAutopilotPathway(db, {
           // applicant's own name. Consent is the ONE flag, read from the one
           // authority; the engine re-checks the granted types itself.
           fullAutomation: allowAutoSubmit,
+          // CAPTCHA solver: only under full automation AND only when the owner
+          // configured a solver key. With no key isCaptchaSolverConfigured is
+          // false and this stays null, so a CAPTCHA is the same hard hand-off
+          // it has always been. The db never crosses the engine boundary — the
+          // solver closes over page + env only.
+          ...(allowAutoSubmit && isCaptchaSolverConfigured()
+            ? { solveCaptcha: (livePage) => attemptCaptchaSolve(livePage, { fullAutomation: true }) }
+            : {}),
         })
       }
     } finally {

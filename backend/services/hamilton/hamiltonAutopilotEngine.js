@@ -1083,6 +1083,11 @@ export async function runAutopilot({
   // verdict. Absent (the default) = the previous behaviour exactly: a 2FA gate
   // is a hard blocker.
   attemptVerification = null,
+  // One-time CAPTCHA solver, injected by the orchestrator only under full
+  // automation with an owner-configured solver key. Signature mirrors
+  // attemptVerification: (page) => Promise<{ solved: boolean, reason?: string }>.
+  // Absent (the default) = a CAPTCHA is a hard blocker, exactly as before.
+  solveCaptcha = null,
   // Full-automation consent (resolveSubmissionDecision's verdict, forwarded by
   // the orchestrator). Unlocks the applicant's electronic signature — typed
   // name fields and e-sign checkboxes — see signatureConsentFor. Absent (the
@@ -1160,6 +1165,7 @@ export async function runAutopilot({
   // also passes an explicit durable dir. Direct callers/tests fall back to tmp.
   const screenshotsRoot = screenshotsDir || resolveConfirmationCaptureDir()
   let pagesVisited = 0
+  let captchaAttempted = false
   let submissionAttemptStarted = false
   let submitClicked = false
   let beforeSubmitCapture = {}
@@ -1238,6 +1244,29 @@ export async function runAutopilot({
         // Once only is not caution for its own sake: repeated OTP submissions
         // are what portals treat as an attack, and the cost of being wrong is a
         // locked account on a real applicant's portal.
+        // CAPTCHA wall: forward the challenge to the owner-configured solver
+        // service and inject the token. Mirrors the 2FA path deliberately —
+        // once per gate, and any failure falls through to the SAME hard stop
+        // that has always been here (saved-session reuse, then human hand-off),
+        // so the default without a solver key is unchanged. Hamilton never
+        // hand-forges a challenge; the token comes from the paid service the
+        // owner opted into.
+        if (gate.kind === 'captcha' && solveCaptcha && !captchaAttempted) {
+          captchaAttempted = true
+          trace.push({ step: 'captcha_attempt' })
+          let verdict = { solved: false, reason: 'solver_unavailable' }
+          try {
+            verdict = (await solveCaptcha(page)) || verdict
+          } catch (err) {
+            verdict = { solved: false, reason: String(err?.message || err).slice(0, 80) }
+          }
+          trace.push({ step: 'captcha_result', detail: { solved: Boolean(verdict.solved), vendor: verdict.vendor || null, reason: verdict.reason || null } })
+          if (verdict.solved) {
+            // Token injected; re-inspect the page rather than treating the
+            // CAPTCHA as a live gate.
+            continue
+          }
+        }
         if (gate.kind === '2fa' && attemptVerification && !twoFactorAttempted) {
           twoFactorAttempted = true
           trace.push({ step: 'two_factor_attempt' })
