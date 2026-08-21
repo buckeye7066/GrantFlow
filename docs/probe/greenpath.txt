@@ -1,0 +1,2 @@
+Throwaway probe for the codex-merge-pr.sh green path, 2026-08-21T17:02:22Z.
+Base is a throwaway branch, never main. Safe to delete.
