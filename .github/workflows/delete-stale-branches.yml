@@ -4,11 +4,6 @@ on:
   # Manual trigger — run from the Actions tab in GitHub
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: 'Dry run (list branches but do not delete)'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -27,7 +22,6 @@ jobs:
       - name: Delete all non-main remote branches
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run || 'false' }}
           CURRENT_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -52,12 +46,6 @@ jobs:
           echo "$BRANCHES"
           echo "──────────────────────────────────────────"
           echo ""
-
-          if [[ "$DRY_RUN" == "true" ]]; then
-            echo "🔍 DRY RUN — no branches were deleted."
-            echo "   Run with dry_run=false to actually delete."
-            exit 0
-          fi
 
           DELETED=0
           FAILED=0
