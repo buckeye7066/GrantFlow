@@ -8413,12 +8413,27 @@ export async function enforceStageOfLifeMatchScope(db) {
           const ph = terminal.map(() => '?').join(', ')
           // Include grant-only legacy tasks whose grant links to this catalog
           // opportunity; ensureApplicationTask intentionally preserves these.
-          const tasks = await db.prepare(`SELECT DISTINCT t.id
-            FROM application_tasks t
-            LEFT JOIN grants g ON g.id = t.grant_id AND g.profile_id = t.profile_id
-            WHERE t.profile_id = ?
-              AND (t.opportunity_id = ? OR g.funding_opportunity_id = ?)
-              AND t.status NOT IN (${ph})`).all(v.profile_id, v.opportunity_id, v.opportunity_id, ...terminal)
+          let tasks = []
+          try {
+            tasks = await db.prepare(`SELECT DISTINCT t.id
+              FROM application_tasks t
+              LEFT JOIN grants g ON g.id = t.grant_id AND g.profile_id = t.profile_id
+              WHERE t.profile_id = ?
+                AND (t.opportunity_id = ? OR g.funding_opportunity_id = ?)
+                AND t.status NOT IN (${ph})`).all(v.profile_id, v.opportunity_id, v.opportunity_id, ...terminal)
+          } catch (selectErr) {
+            // A deployment with NO application_tasks relation (or a schema
+            // predating the joined columns) has no Hamilton queue to reconcile
+            // against. That is "zero tasks to cancel", not a failed
+            // reconciliation, and the match must still be repaired — retaining
+            // it made the sweep report `repaired: 0` on every such database
+            // (caught by stageOfLifeEligibility.test.js when this hardening was
+            // rebased onto main, 2026-08-21). A failure DURING cancellation,
+            // below, is a different fact and still retains the match.
+            const msg = String(selectErr?.message || selectErr).toLowerCase()
+            if (!(msg.includes('no such table') || msg.includes('no such column') || msg.includes('does not exist'))) throw selectErr
+            tasks = []
+          }
           for (const task of tasks || []) {
             await cancelApplicationTask(db, task.id, { actorRole: 'system', reason: v.conflict.reason })
             tasksCancelled += 1
