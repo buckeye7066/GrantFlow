@@ -110,7 +110,80 @@ export function isLeadGenScholarship(row) {
  */
 export const STALE_PROGRAM_PATTERNS = Object.freeze([
   { rx: /\bcovid[-\s]?19\b.{0,40}\brapid response\b|\brapid response\b.{0,40}\bcovid[-\s]?19\b/i, label: 'covid_rapid_response' },
+  // ── A PROGRAM WHOSE OWN NAME SAYS IT ENDED (owner report 2026-08-21) ──
+  // "Affordable Connectivity Program (ACP) — Ended May 2024" sat In Progress in
+  // a live application queue. Expiry in this product was 100% a function of the
+  // `deadline` COLUMN (`opportunityHelpers.isExpiredOpportunity` returns false
+  // for a NULL deadline, and `deadlineExpiryService`'s first SQL predicate is
+  // `deadline IS NOT NULL`), so a curated row that states its sunset in prose
+  // and carries no deadline was structurally unreachable by every expiry net.
+  // These patterns read the TITLE, which is the one place the fact was written.
+  // Deliberately narrow — each requires an explicit terminal verb, so an
+  // ordinary program name ("Ending Homelessness Initiative", "Sunset District
+  // Community Fund") never matches.
+  { rx: /(?:^|[\s([—–|:-])ended\s+(?:in\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|q[1-4]|\d{1,2}\/)?\s*\d{4}\b/i, label: 'title_states_ended' },
+  { rx: /\bprogram\s+(?:has\s+)?(?:been\s+)?(?:ended|closed|discontinued|terminated|sunset)\b/i, label: 'title_states_program_closed' },
+  { rx: /\bno\s+longer\s+(?:accepting|available|funded|active|offered)\b/i, label: 'title_states_no_longer_accepting' },
+  { rx: /\b(?:discontinued|permanently\s+closed)\b/i, label: 'title_states_discontinued' },
 ])
+
+/**
+ * A cycle year at least two years old, with NO future deadline to contradict it.
+ *
+ * Owner report 2026-08-21: "Community Foundation of Cleveland and Bradley
+ * County 2022 …" was queued as an active application. `PROGRAM_YEAR_RX` only
+ * matches the literal `PY 2022` allotment spelling, so a bare cycle year in a
+ * title was invisible.
+ *
+ * THREE conditions, all required, because a false positive here REMOVES a real
+ * grant from someone's pipeline:
+ *   1. the title names a year <= now - 2 (this year and last year are live);
+ *   2. that year is not the start of a range reaching into the present
+ *      ("2022-2027", "2022–27" — a multi-year program is not stale);
+ *   3. the row states NO deadline in the future. A future deadline is the
+ *      funder's own statement that the program is open, and it OUTRANKS a year
+ *      in a name — "Tennessee HOPE Scholarship (2026-27)" and any renamed-but-
+ *      open program survive on this condition alone.
+ */
+export const STALE_CYCLE_MIN_AGE_YEARS = 2
+
+export function staleCycleYear(row, now = new Date()) {
+  if (!row || typeof row !== 'object') return null
+  const title = String(row.title ?? '')
+  if (!title) return null
+  const currentYear = now.getFullYear()
+
+  // Condition 3 first — it is the cheapest and the most authoritative.
+  if (row.deadline) {
+    const t = Date.parse(row.deadline)
+    if (Number.isFinite(t) && t >= now.getTime()) return null
+  }
+  if (String(row.deadline_type ?? '').toLowerCase() === 'rolling') return null
+
+  // A year that NAMES the fund rather than dating a cycle — an endowment
+  // memorialising a graduating class, or a founding date — is not a stale
+  // cycle. Narrow, literal phrasings only.
+  if (/\b(?:class\s+of|founded(?:\s+in)?|established(?:\s+in)?|est\.?|since|in\s+memory\s+of)\s+(?:the\s+)?20\d{2}\b/i.test(title)) return null
+
+  let stale = null
+  const rx = /\b(20\d{2})\b(?:\s*[-–—/]\s*(\d{2,4}))?/g
+  let m = rx.exec(title)
+  while (m) {
+    const year = Number(m[1])
+    if (Number.isFinite(year) && year <= currentYear - STALE_CYCLE_MIN_AGE_YEARS) {
+      let rangeEnd = null
+      if (m[2]) {
+        const tail = Number(m[2])
+        rangeEnd = m[2].length === 2 ? Number(`${String(year).slice(0, 2)}${m[2]}`) : tail
+      }
+      if (!(Number.isFinite(rangeEnd) && rangeEnd >= currentYear - 1)) {
+        if (stale === null || year < stale) stale = year
+      }
+    }
+    m = rx.exec(title)
+  }
+  return stale === null ? null : `stale_cycle_year_${stale}`
+}
 
 export const PROGRAM_YEAR_RX = /\bpy\s?(20[0-9]{2})\b/i
 
@@ -127,6 +200,8 @@ export function isClearlyExpiredProgram(row, now = new Date()) {
     const year = Number(py[1])
     if (Number.isFinite(year) && year < now.getFullYear() - 1) return `program_year_${year}`
   }
+  const staleCycle = staleCycleYear(row, now)
+  if (staleCycle) return staleCycle
   const deadlineType = String(row.deadline_type ?? '').toLowerCase()
   if (row.deadline && deadlineType !== 'rolling') {
     const t = Date.parse(row.deadline)
@@ -204,6 +279,69 @@ export const PLACE_LOCATOR_TITLE_RX = /\bnear\s+[A-Za-z][A-Za-z .''-]{1,60},\s*[
  * Resource/data hubs measured leaking into direct matches 2026-08-03 (College
  * Scorecard linked at score 78): exact lower-cased title identity only.
  */
+/**
+ * A SEARCH SURFACE names itself (owner report 2026-08-21).
+ *
+ * These arrived in a student's Application Tracker as leaf APPLICATIONS:
+ * "Scholarships.com — Free Scholarship Search", "Fastweb — Room & Board /
+ * Housing Scholarships", "Bold.org — No-Essay & Traditional Scholarships",
+ * "Going Merry — Apply to Multiple Scholarships", "College Board BigFuture
+ * Scholarship Search", "Criminal Justice & Forensics Scholarship Directory",
+ * "STEM Scholarship Directory", "Music & Performing Arts Scholarship Finder",
+ * "Scholarships Search". You cannot submit an application to a search engine.
+ *
+ * WHY THE TITLE AND NOT THE HOST: scholarships.com, bold.org, fastweb.com and
+ * goingmerry.com all serve INDIVIDUAL award pages that state a real fixed
+ * award, and `locatorUrlKind.test.js` pins that distinction deliberately.
+ * Classifying those hosts wholesale would retire real awards — the
+ * starving-recall end of the locator defect this repo has already documented.
+ * The SHAPE of the title is the claim, and it is the claim the owner's rows
+ * actually made.
+ *
+ * The trailing noun must be the SEARCH ITSELF, so "National Merit Scholarship"
+ * and "Forensic Science Scholarship" are untouched — they name an award.
+ */
+export const SEARCH_SURFACE_TITLE_RX =
+  /\b(?:scholarships?|grants?|awards?|funding|aid)\b[^|]{0,40}\b(?:search|searches|finder|directory|database|listings?|browse|index)\b|\b(?:search|find|browse)\b[^|]{0,30}\b(?:scholarships?|grants?)\b|\bapply\s+to\s+multiple\b/i
+
+/**
+ * AGGREGATOR BRANDS — the scholarship search platforms `pipelineAllowedSources`
+ * already lists as vetted REFERRAL sources. Being a good source to INGEST from
+ * is not the same as being something you can APPLY to, and the two were being
+ * conflated: every one of these arrived as a leaf application.
+ *
+ * The claim is made only when the brand LEADS the title (`"Bold.org — No-Essay
+ * & Traditional Scholarships"`, `"Fastweb — Room & Board / Housing
+ * Scholarships"`) or is recorded as the FUNDER (the owner's row "Education
+ * Future International Scholarship" carried funder "WeMakeScholars"). That
+ * shape is a category page on an aggregator, never an award.
+ *
+ * An INDIVIDUAL award page hosted on one of these platforms is untouched,
+ * because its title is the award's own name — which is exactly the distinction
+ * `locatorUrlKind.test.js` protects for scholarships.com.
+ */
+export const AGGREGATOR_BRANDS = Object.freeze([
+  'scholarships.com', 'fastweb', 'bold.org', 'going merry', 'goingmerry',
+  'bigfuture', 'college board bigfuture', 'wemakescholars', 'we make scholars',
+  'unigo', 'cappex', 'niche.com', 'scholarshipowl', 'scholarship owl',
+  'chegg', 'sallie mae', 'salliemae', 'needymeds', 'grantwatch',
+])
+
+const AGGREGATOR_BRAND_LEAD_RX = new RegExp(
+  `^\\s*(?:${AGGREGATOR_BRANDS.map((b) => b.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('|')})\\s*(?:[—–\\-|:]|$)`,
+  'i',
+)
+
+/** Is this record an aggregator's own category/brand page rather than an award? */
+export function aggregatorBrandSurface(row) {
+  if (!row || typeof row !== 'object') return null
+  const title = String(row.title ?? '').trim()
+  if (title && AGGREGATOR_BRAND_LEAD_RX.test(title)) return 'brand_leads_title'
+  const funder = String(row.sponsor || row.funder || '').trim().toLowerCase()
+  if (funder && AGGREGATOR_BRANDS.includes(funder)) return 'aggregator_is_the_funder'
+  return null
+}
+
 export const RESOURCE_HUB_TITLES = Object.freeze(new Set([
   'college scorecard',
   'state higher ed agencies',
@@ -255,6 +393,15 @@ export function classifyFundingResult(row, { now = new Date() } = {}) {
   // scholarship whose title merely contains one of these phrases is untouched.
   if (RESOURCE_HUB_TITLES.has(title.trim().toLowerCase())) {
     return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['resource_hub_registry'], stale }
+  }
+  // A title that names itself a SEARCH / DIRECTORY / FINDER is a discovery
+  // surface, whatever kind the crawler stamped on it.
+  if (SEARCH_SURFACE_TITLE_RX.test(title)) {
+    return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['search_surface_title'], stale }
+  }
+  const brandSurface = aggregatorBrandSurface(row)
+  if (brandSurface) {
+    return { bucket: RESULT_BUCKETS.RESOURCE, reasons: [`aggregator_surface:${brandSurface}`], stale }
   }
   if (!hasFundableSignal(row)) {
     return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['no_fundable_signal'], stale }

@@ -26,6 +26,14 @@ export const ROBERT_MODES = Object.freeze({
   MATCH: 'match',
   RECOMMEND: 'recommend',
   FULL_CYCLE: 'full-cycle',
+  /**
+   * AUDIT_PIPELINES (owner order 2026-08-21) — verify every funding source in
+   * every profile's pipeline against four gates (REAL / RELATABLE / COVERS A
+   * NEED / QUALIFIES), collapse duplicates to one surviving record, remove what
+   * fails, and notate Amy so she can close the coverage gap the removal opens.
+   * Implementation: `robertPipelineAudit.js`. There is no preview mode.
+   */
+  AUDIT_PIPELINES: 'audit-pipelines',
 })
 export const ROBERT_MODE_LIST = Object.freeze(Object.values(ROBERT_MODES))
 export const DEFAULT_MODE = ROBERT_MODES.OBSERVE

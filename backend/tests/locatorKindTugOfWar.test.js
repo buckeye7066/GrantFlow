@@ -29,6 +29,7 @@ import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
 import { persistRun } from '../services/crawlerOsPersistence.js'
 import { classifyOpportunityKind } from '../services/opportunityRealityGate.js'
+import { classifyLocatorKindFromRow } from '../services/sources/locatorUrlKind.js'
 
 function makeDb() {
   const raw = new Database(':memory:')
@@ -285,5 +286,46 @@ describe('crawler-os bridge — a row that names its own state is never written 
       })],
     }), {})
     expect(geoOf(db, 'os-geo-src')).toMatchObject({ state: 'GA' })
+  })
+})
+
+/**
+ * 2026-08-21 — PURE SEARCH PRODUCTS classify as directories; platforms that
+ * also serve real award pages DO NOT.
+ *
+ * The owner's Application Tracker held "College Board BigFuture Scholarship
+ * Search" and a WeMakeScholars row as LEAF APPLICATIONS. Those hosts have no
+ * award of their own, so whole-host is the right claim.
+ *
+ * scholarships.com / bold.org / fastweb.com / goingmerry.com are DELIBERATELY
+ * absent: they serve individual award pages that state a real fixed award, and
+ * `locatorUrlKind.test.js` already pins that ("classifies scholarships.com
+ * BROWSE-TREE category pages but never individual award pages"). Blanket-
+ * classifying them would retire real awards — the starving-recall end of the
+ * locator defect. Their category pages are caught by TITLE shape instead
+ * (`fundingResultFilters.SEARCH_SURFACE_TITLE_RX` / `aggregatorBrandSurface`).
+ */
+describe('pure search products classify as directories; mixed platforms do not', () => {
+  const pureSearchProducts = [
+    'https://bigfuture.collegeboard.org/scholarship-search',
+    'https://www.wemakescholars.com/other-scholarships-in-gender-studies-to-study-abroad',
+    'https://www.careeronestop.org/toolkit/training/find-scholarships.aspx',
+  ]
+  it.each(pureSearchProducts)('classifies %s as a directory', (url) => {
+    expect(classifyLocatorKindFromRow({ source_url: url, application_url: url })?.kind).toBe('directory')
+  })
+
+  // RECALL GUARD — an individual award page must stay unclaimed, on an
+  // aggregator platform as much as on a funder's own site.
+  const mustStayUnclaimed = [
+    'https://www.scholarships.com/scholarship/the-example-memorial-scholarship/',
+    'https://bold.org/scholarships/the-example-memorial-scholarship/',
+    'https://www.mtsu.edu/financial-aid/scholarships.php',
+    'https://afte.org/awards-scholarships/scholarship-program',
+    'https://www.coca-colascholarsfoundation.org/apply/',
+  ]
+  it.each(mustStayUnclaimed)('leaves %s alone', (url) => {
+    const verdict = classifyLocatorKindFromRow({ source_url: url, application_url: url })
+    expect(verdict?.kind === 'directory').toBe(false)
   })
 })

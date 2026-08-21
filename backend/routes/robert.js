@@ -146,6 +146,22 @@ router.post('/verify-candidates', adminOnly, (req, res) => runWithMode(req, res,
 router.post('/ingest-verified', adminOnly, (req, res) => runWithMode(req, res, ROBERT_MODES.INGEST))
 router.post('/match-new', adminOnly, (req, res) => runWithMode(req, res, ROBERT_MODES.MATCH))
 router.post('/recommend', adminOnly, (req, res) => runWithMode(req, res, ROBERT_MODES.RECOMMEND))
+/**
+ * Robert's pipeline verifier (owner order 2026-08-21). Checks every funding
+ * source in every profile's pipeline against REAL / RELATABLE / COVERS-A-NEED
+ * / QUALIFIES, keeps one of each duplicated program, removes what fails, and
+ * notates Amy. Body may carry `profileIds` to scope it. There is deliberately
+ * no preview flag — this endpoint does real work every time it is called.
+ */
+router.post('/audit-pipelines', adminOnly, (req, res) => runWithMode(req, res, ROBERT_MODES.AUDIT_PIPELINES))
+/** What Robert removed, and what Amy still has to close. Read-only. */
+router.get('/pipeline-gaps', adminOnly, async (req, res) => {
+  try {
+    const { loadGapNotesForAmy } = await import('../services/robert/robertPipelineAudit.js')
+    const notes = await loadGapNotesForAmy(req.db, { limit: Number(req.query?.limit) || 100 })
+    return res.json({ ok: true, ...notes })
+  } catch (err) { return handleError(res, err) }
+})
 
 // ---------------------------------------------------------------------------
 // Run history

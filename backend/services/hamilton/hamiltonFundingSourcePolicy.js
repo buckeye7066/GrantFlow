@@ -305,6 +305,38 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     }
   }
 
+  // ── HARD APPLICANT-TYPE GATE, RUN FOR EVERY ORIGIN ──────────────────────
+  // The match checks above are reachable only when a stored row exists OR
+  // `requiresProfileMatch(subject)` is true, and that predicate is keyed on
+  // `PROFILE_MATCH_REQUIRED_ORIGINS = {live_crawl, geo_crawl, discovered}`.
+  // Every OTHER record_origin — `curated_verified`, `manual`,
+  // `scholarship_crawler` (what listing decomposition mints), the seeded
+  // registries — fell straight through to this `ok: true` having had NO
+  // eligibility evaluation of any kind, and Hamilton then opened an
+  // application for it.
+  //
+  // That is the second door on the 2026-08-21 owner report: an individual
+  // undergraduate holding queued applications to ONR / NSF / ACL / HUD / EDA
+  // institutional awards. Closing only the match-engine door would have left
+  // this one open for every curated and decomposition-minted row.
+  //
+  // The check is PURE, cheap, and it is the SAME authority the engine uses —
+  // it does not re-implement eligibility, and it only ever refuses on an
+  // EXPLICIT hard mismatch (`review`/`pass` both continue).
+  const applicantVerdict = await assessApplicantTypeForPolicy(db, profileId, subject)
+  if (applicantVerdict?.decision === 'mismatch') {
+    const reasons = ['profile_match_rejected', `applicant_type:${applicantVerdict.reason}`]
+    return {
+      ok: false,
+      code: 'funding_source_profile_rejected',
+      reasons,
+      trust,
+      match,
+      applicant_type: applicantVerdict,
+      message: buildPolicyMessage(reasons),
+    }
+  }
+
   return {
     ok: true,
     reasons: [],
@@ -313,6 +345,31 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     match,
     opportunityId,
     grantId: grant?.id || null,
+  }
+}
+
+/**
+ * The applicant-type verdict for a (profile, subject) pair, using the canonical
+ * gate. Returns null when the profile cannot be read — an unreadable profile is
+ * never a reason to refuse (missing = neutral).
+ */
+async function assessApplicantTypeForPolicy(db, profileId, subject) {
+  if (!db || !profileId || !subject) return null
+  try {
+    const [{ loadProfileContext }, { evaluateApplicantTypeEligibility }] = await Promise.all([
+      import('../profileHelpers.js'),
+      import('../applicantTypeGate.js'),
+    ])
+    const ctx = await loadProfileContext(db, profileId)
+    const profileRow = ctx?.profile ?? ctx
+    const sections = ctx?.sections ?? {}
+    const basic = sections.basic_information ?? sections.basic_info ?? {}
+    const applicantType = profileRow?.applicant_type || profileRow?.primary_type ||
+      basic?.profile_category || basic?.applicant_type || null
+    if (!applicantType) return null
+    return evaluateApplicantTypeEligibility(subject, applicantType, { profile: profileRow, sections })
+  } catch {
+    return null
   }
 }
 

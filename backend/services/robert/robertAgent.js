@@ -288,6 +288,41 @@ export async function runRobert({
       summary.sources.updated += seeded.updated
     }
 
+    // ---- AUDIT-PIPELINES (owner order 2026-08-21) ----------------------
+    // Robert's fifth tool: verify every funding source already IN a profile's
+    // pipeline against REAL / RELATABLE / COVERS-A-NEED / QUALIFIES, collapse
+    // duplicates to one surviving record, remove what fails (auditably and
+    // reversibly, via the canonical dismissal tombstone), and notate Amy.
+    //
+    // It returns BEFORE the coverage/discovery phases: this mode is a cleanup
+    // of what exists, not a discovery run, and mixing the two would make the
+    // run's counters unreadable. There is NO preview mode — owner order
+    // 2026-08-13, "I don't want dry runs, I want work" — so `dryRun` is
+    // deliberately not consulted here.
+    if (chosenMode === ROBERT_MODES.AUDIT_PIPELINES) {
+      const { auditAllPipelines } = await import('./robertPipelineAudit.js')
+      const audit = await auditAllPipelines(db, {
+        db,
+        profileIds: profilesToConsider.length > 0 ? profilesToConsider : null,
+        userId: req?.ctx?.userId ? `user:${req.ctx.userId}` : 'agent:robert',
+        runId,
+        realGate: options?.realGate !== false,
+      })
+      summary.pipeline_audit = audit
+      summary.notes.push({
+        stage: 'pipeline_audit',
+        candidates: audit.totals.candidates,
+        kept: audit.totals.kept,
+        removed: audit.totals.removed,
+        deduped_away: audit.totals.deduped_away,
+        unverifiable: audit.totals.unverifiable,
+        balanced: audit.totals.balanced,
+      })
+      counters.profiles_considered = audit.totals.profiles
+      counters.candidates_verified = audit.totals.candidates
+      return finishRun({ db, runId, status: RUN_STATUS.COMPLETED, counters, summary })
+    }
+
     // ---- Phase 1: coverage analysis (always runs) ----
     const coverageResults = await runCoveragePhase({
       db,

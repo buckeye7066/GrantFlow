@@ -177,3 +177,61 @@ describe('buildOpportunityRecord survives the REAL inserter gate stack', () => {
     db.close()
   })
 })
+
+/**
+ * 2026-08-21 — "0 award(s) found, 0 admitted to matching, 0 profile-accepted
+ * award task(s) created" was the ENTIRE message the owner saw on the run
+ * dashboard. The decomposer always knows why it enumerated nothing; the
+ * orchestrator discarded the reason at the render, so "no AI provider is
+ * configured" and "this page genuinely lists no awards" printed identically.
+ */
+describe('describeDecomposition — a zero is never reported without its reason', () => {
+  it('names the enumerator failure instead of printing three zeros', async () => {
+    const { describeDecomposition } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
+    const msg = describeDecomposition({
+      enumerated: 0,
+      admitted: 0,
+      items: [],
+      rejected: [],
+      notFound: ['no AI provider configured (ANTHROPIC_API_KEY / OPENAI_API_KEY)'],
+    }, 0)
+    expect(msg).toContain('no AI provider configured')
+    expect(msg).toContain('not evidence the page is empty')
+  })
+
+  it('says so LOUDLY when even the reason is missing', async () => {
+    const { describeDecomposition } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
+    const msg = describeDecomposition({ enumerated: 0, admitted: 0, items: [], rejected: [], notFound: [] }, 0)
+    expect(msg).toContain('unexplained')
+  })
+
+  it('reports the fabrication guard when it refused candidates', async () => {
+    const { describeDecomposition } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
+    const msg = describeDecomposition({
+      enumerated: 0, admitted: 0, items: [], notFound: ['no individual award opportunities enumerated from the listing text'],
+      rejected: [{ title: 'Made Up Award', reason: 'title_not_on_page' }],
+    }, 0)
+    expect(msg).toContain('fabrication guard')
+    expect(msg).toContain('title_not_on_page')
+  })
+
+  it('explains why nothing was ADMITTED even when awards were enumerated', async () => {
+    const { describeDecomposition } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
+    const msg = describeDecomposition({
+      enumerated: 4, admitted: 0, notFound: [], rejected: [],
+      items: [{ outcome: 'not_admitted', detail: 'inserter rejected or deduped without id' }],
+    }, 0)
+    expect(msg).toContain('4 award(s) found')
+    expect(msg).toContain('None was admitted')
+  })
+
+  it('still renders the ordinary success sentence unchanged in shape', async () => {
+    const { describeDecomposition } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
+    const msg = describeDecomposition({
+      enumerated: 6, admitted: 5, notFound: [], rejected: [],
+      items: [{ outcome: 'accepted_apply_deferred' }],
+    }, 3)
+    expect(msg).toContain('6 award(s) found, 5 admitted to matching, 3 profile-accepted')
+    expect(msg).toContain('No child application was submitted')
+  })
+})

@@ -16,7 +16,60 @@
  * showing an entity.
  */
 
+/**
+ * LATIN-1 SUPPLEMENT LETTERS — the accented-letter half of the registry,
+ * generated from one table so a gap cannot open one letter at a time.
+ *
+ * WHY (owner report 2026-08-21): a stored title read
+ * `Improving global health security in C&ocirc;te d'Ivoire through
+ * collaboration with local partners`. The row DID pass through the ingest
+ * choke point; `ocirc` was simply absent from the hand-typed registry, which
+ * held `eacute/egrave/agrave/ccedil/ntilde/uuml/ouml/auml` and none of the
+ * circumflex, ring, slash, ligature, acute-vowel or thorn forms. Per the
+ * module's own policy an unknown entity is left VERBATIM, so the defect is a
+ * REGISTRY GAP that renders as raw markup to the owner — a hand-typed list of
+ * a closed, finite character block is the wrong shape for the job.
+ *
+ * Case is significant here (`&Ocirc;` is `Ô`, not `ô`), so the decoder tries an
+ * EXACT match before falling back to the lower-cased lookup the punctuation
+ * entities rely on.
+ */
+const LATIN1_LETTER_ENTITIES = (() => {
+  const out = {}
+  const vowelBases = { a: 'a', e: 'e', i: 'i', o: 'o', u: 'u', y: 'y' }
+  const accents = { grave: '̀', acute: '́', circ: '̂', tilde: '̃', uml: '̈', ring: '̊' }
+  const supported = {
+    grave: ['a', 'e', 'i', 'o', 'u'],
+    acute: ['a', 'e', 'i', 'o', 'u', 'y'],
+    circ: ['a', 'e', 'i', 'o', 'u'],
+    tilde: ['a', 'n', 'o'],
+    uml: ['a', 'e', 'i', 'o', 'u', 'y'],
+    ring: ['a'],
+  }
+  for (const [accent, mark] of Object.entries(accents)) {
+    for (const letter of supported[accent]) {
+      const base = vowelBases[letter] ?? letter
+      out[`${base}${accent}`] = `${base}${mark}`.normalize('NFC')
+      out[`${base.toUpperCase()}${accent}`] = `${base.toUpperCase()}${mark}`.normalize('NFC')
+    }
+  }
+  Object.assign(out, {
+    ccedil: 'ç', Ccedil: 'Ç',
+    ntilde: 'ñ', Ntilde: 'Ñ',
+    oslash: 'ø', Oslash: 'Ø',
+    aelig: 'æ', AElig: 'Æ',
+    oelig: 'œ', OElig: 'Œ',
+    szlig: 'ß',
+    thorn: 'þ', THORN: 'Þ',
+    eth: 'ð', ETH: 'Ð',
+    scaron: 'š', Scaron: 'Š',
+    yuml: 'ÿ', Yuml: 'Ÿ',
+  })
+  return out
+})()
+
 const NAMED_ENTITIES = Object.freeze({
+  ...LATIN1_LETTER_ENTITIES,
   amp: '&',
   lt: '<',
   gt: '>',
@@ -76,6 +129,10 @@ export function decodeHtmlEntities(value) {
           return whole
         }
       }
+      // EXACT first (case carries meaning for letters: `&Ocirc;` is `Ô`), then
+      // the lower-cased fallback the punctuation entities have always used.
+      const exact = Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, body) ? NAMED_ENTITIES[body] : undefined
+      if (exact !== undefined) return exact
       const named = NAMED_ENTITIES[body.toLowerCase()]
       return named !== undefined ? named : whole
     })

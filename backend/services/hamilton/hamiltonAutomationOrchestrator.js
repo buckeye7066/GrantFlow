@@ -114,6 +114,62 @@ import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
+/**
+ * Describe a listing decomposition HONESTLY — including when it found nothing.
+ *
+ * OWNER REPORT 2026-08-21: the run dashboard read
+ *   "Hamilton decomposed this listing: 0 award(s) found, 0 admitted to
+ *    matching, 0 profile-accepted award task(s) created"
+ * and that was the ENTIRE message. Three zeros and no reason. The decomposer
+ * always knows WHY it enumerated nothing — `extractListingAwardItems` returns a
+ * populated `notFound` for every failure mode (`LLM extraction disabled
+ * (PORTAL_SYNC_LLM_EXTRACT=false)`, `no AI provider configured
+ * (ANTHROPIC_API_KEY / OPENAI_API_KEY)`, `LLM enumeration call failed: …`,
+ * `LLM returned no parseable JSON …`, `no page text to enumerate`) and a
+ * `rejected[]` carrying each fabrication-guard refusal — and the orchestrator
+ * threw all of it away at the render.
+ *
+ * That is the silent-no-op-reported-as-a-number shape: "0 found" reads as "this
+ * page has no awards on it" when the truth may be "no AI provider is
+ * configured, so nothing was ever read". Those two facts demand opposite
+ * actions from the owner, and the message could not tell them apart. The
+ * detail was already persisted in the event's `details` — this puts it in the
+ * SENTENCE, which is what anyone actually reads.
+ */
+export function describeDecomposition(decomposition, childTaskCount = 0) {
+  const enumerated = Number(decomposition?.enumerated || 0)
+  const admitted = Number(decomposition?.admitted || 0)
+  const notFound = Array.isArray(decomposition?.notFound) ? decomposition.notFound.filter(Boolean) : []
+  const rejected = Array.isArray(decomposition?.rejected) ? decomposition.rejected : []
+  const notAdmitted = (decomposition?.items || []).filter((i) => i?.outcome === 'not_admitted')
+
+  if (enumerated === 0) {
+    const why = notFound.length > 0
+      ? notFound.join('; ')
+      : 'the enumerator returned no reason — treat this as unexplained, not as "this page has no awards"'
+    const guard = rejected.length > 0
+      ? ` ${rejected.length} candidate(s) were refused by the fabrication guard (${[...new Set(rejected.map((r) => r?.reason).filter(Boolean))].join('; ')}).`
+      : ''
+    return `Hamilton found a page listing multiple awards but enumerated NONE of them. Why: ${why}.${guard} No award was admitted to matching and no child task was created — this is not evidence the page is empty.`
+  }
+
+  const parts = [
+    `Hamilton decomposed this listing: ${enumerated} award(s) found, ${admitted} admitted to matching, ${childTaskCount} profile-accepted award task(s) created for separate review.`,
+  ]
+  if (admitted === 0 && notAdmitted.length > 0) {
+    const reasons = [...new Set(notAdmitted.map((i) => i?.detail).filter(Boolean))].slice(0, 3)
+    parts.push(`None was admitted: ${reasons.join('; ') || 'the canonical inserter rejected or deduped every one'}.`)
+  } else if (admitted > 0 && childTaskCount === 0) {
+    const outcomes = [...new Set((decomposition?.items || []).map((i) => i?.outcome).filter(Boolean))]
+    parts.push(`No child task was created — every admitted award ended as: ${outcomes.join(', ') || 'unrecorded'}.`)
+  }
+  if (rejected.length > 0) {
+    parts.push(`${rejected.length} candidate(s) were refused by the fabrication guard.`)
+  }
+  parts.push('No child application was submitted from the parent run.')
+  return parts.join(' ')
+}
+
 const ENV = (typeof process !== 'undefined' && process?.env) ? process.env : {}
 
 function envFlagEnabled(raw, defaultOn = true) {
@@ -2050,7 +2106,7 @@ async function runAutopilotPathway(db, {
       ? `Hamilton found a page listing multiple awards but could not decompose it: ${decomposition.error}`
       : decomposition?.catalog_only
         ? `Hamilton catalogued ${decomposition.admitted} award(s) from this listing for matching. These are covered by the school's General Application — no per-item application is possible here.`
-        : `Hamilton decomposed this listing: ${decomposition?.enumerated || 0} award(s) found, ${decomposition?.admitted || 0} admitted to matching, ${childTaskIds.length} profile-accepted award task(s) created for separate review. No child application was submitted from the parent run.`
+        : describeDecomposition(decomposition, childTaskIds.length)
     await appendTaskEvent(db, {
       taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'listing_decomposition',
       message: summary, actorUserId: userId, actorRole: 'agent', details: decomposition,

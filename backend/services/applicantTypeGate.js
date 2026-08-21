@@ -199,6 +199,39 @@ export function resolveProfileBuckets(profileApplicantType, context = {}) {
   return buckets
 }
 
+/**
+ * INDIVIDUAL-ASSISTANCE SHAPE — TITLE + SPONSOR ONLY (the precise-detector
+ * doctrine: full-text patterns over-match eligibility prose). Used solely to
+ * SOFTEN a structured-type mismatch from hard-reject to review; it never
+ * admits anything and never raises a score.
+ *
+ * Deliberately narrow. "Research Experiences for Undergraduates",
+ * "Developmental Sciences", "FY25 Long Range Broad Agency Announcement" and the
+ * six ACL institutional NOFOs from the 2026-08-21 owner report match NOTHING
+ * here, so they keep their hard mismatch.
+ */
+const INDIVIDUAL_ASSISTANCE_TITLE_PATTERNS = Object.freeze([
+  /\bscholarships?\b/i,
+  /\bfellowships?\b/i,
+  /\bbursary\b/i,
+  /\btuition\b/i,
+  /\bemergency\s+(?:aid|assistance|fund|grant|relief)\b/i,
+  /\b(?:rent|rental|utility|energy|heating|water)\s+assistance\b/i,
+  /\bfood\s+(?:assistance|pantry|bank)\b/i,
+  /\bhardship\s+(?:fund|grant|assistance)\b/i,
+  /\bcopay\s+assistance\b/i,
+  /\bpatient\s+assistance\b/i,
+  /\bstudent\s+aid\b/i,
+  /\bbenefits?\s+program\b/i,
+])
+
+export function looksLikeIndividualAssistance(opportunity) {
+  if (!opportunity || typeof opportunity !== 'object') return false
+  const identity = `${opportunity.title ?? ''} ${opportunity.sponsor || opportunity.funder || ''}`
+  if (!identity.trim()) return false
+  return INDIVIDUAL_ASSISTANCE_TITLE_PATTERNS.some((rx) => rx.test(identity))
+}
+
 function gatherOppText(opportunity) {
   const bullets = safeParseArrayField(opportunity?.eligibility_bullets, [])
   const parts = [
@@ -211,9 +244,60 @@ function gatherOppText(opportunity) {
   return parts.filter(Boolean).map((s) => String(s).toLowerCase()).join(' ')
 }
 
+/**
+ * STRUCTURED APPLICANT TYPES — the field this gate reads must be the field the
+ * database actually stores (2026-08-21, measured).
+ *
+ * Until now this list held only `applicant_types` / `eligible_profile_types` /
+ * `eligibility_types` / `eligible_applicants`. **None of those is a column on
+ * `funding_opportunities`.** The stored column is `entity_types_allowed`
+ * (`db/schema.sql:150`, pg `0168_funding_opportunity_match_semantics.sql`), and
+ * `opportunityContract.js` already reads it as `row.applicant_types ??
+ * row.entity_types_allowed` — this gate did not. Both real call sites
+ * (`matchEngine.js:4373`, `pipelineEligibilitySweep.js:127`) pass a DB row, so
+ * `gatherExplicitTypes` returned `[]` for every persisted opportunity and the
+ * structured half of the gate never executed once in production.
+ *
+ * Measured on the local catalog replica (525 active rows) BEFORE this change:
+ * every NSF research grant, the ONR/NRL Long Range BAA, the FTA and EDA NOFOs
+ * and the HUD homeless-assistance rows returned `{decision:'pass', reason:null}`
+ * for a `college_student` profile — while their own `entity_types_allowed` read
+ * `["nonprofit","school","government","business","vfd","farm"]`, i.e. a list
+ * that explicitly excludes an individual. That is the exact class the owner
+ * reported on 2026-08-21: an individual undergraduate holding 105 queued
+ * applications to institutional federal NOFOs she cannot apply to at all.
+ *
+ * Adding the column is a HARDENING, so three rails come with it:
+ *  1. `*` (and `any`/`all`) is a WILDCARD, not a type. `withFallback()` in
+ *     `crawler-os/crawlerVocabulary.js` emits `['*']` when a lane states
+ *     nothing; without this rail those 12 rows would hard-mismatch EVERY
+ *     bucket — the gate would have gone from blind to hostile.
+ *  2. The individual vocabulary is widened to the population tokens the
+ *     registries actually emit (`veteran`, `senior`, `caregiver`,
+ *     `military_spouse`, …). A row typed `["individual","family","veteran"]`
+ *     already passed on `individual`; one typed only `["veteran"]` would not
+ *     have.
+ *  3. An INDIVIDUAL-ASSISTANCE-shaped row is never HARD-rejected on structured
+ *     types alone — see `looksLikeIndividualAssistance`. The crawler infers
+ *     these types from prose, so a church-run rent-assistance program tagged
+ *     `["church"]` must be softened to `review`, not deleted. Same posture the
+ *     module header describes: hard mismatch only where we are confident.
+ */
+const STRUCTURED_APPLICANT_TYPE_FIELDS = Object.freeze([
+  'applicant_types',
+  'eligible_profile_types',
+  'eligibility_types',
+  'eligible_applicants',
+  // The COLUMN. Do not remove: without it this gate reads nothing off a DB row.
+  'entity_types_allowed',
+])
+
+/** Tokens that mean "unrestricted / not stated", never a concrete applicant. */
+const WILDCARD_APPLICANT_TOKENS = new Set(['*', 'any', 'all', 'anyone', 'unrestricted'])
+
 function gatherExplicitTypes(opportunity) {
   const out = []
-  for (const field of ['applicant_types', 'eligible_profile_types', 'eligibility_types', 'eligible_applicants']) {
+  for (const field of STRUCTURED_APPLICANT_TYPE_FIELDS) {
     const parsed = safeParseArrayField(opportunity?.[field], [])
     if (Array.isArray(parsed) && parsed.length > 0) {
       for (const v of parsed) {
@@ -234,16 +318,36 @@ function gatherExplicitTypes(opportunity) {
   return out
 }
 
+/**
+ * Population tokens that name a PERSON. Sourced from what the live registries
+ * actually emit into `entity_types_allowed` (measured on the catalog replica:
+ * `["individual","family","veteran","student"]`, `["individual","family",
+ * "veteran","senior"]`, `["student","family"]`, `["individual","family",
+ * "veteran","active_duty","guard_reserve","transitioning_service_member",
+ * "military_spouse","student"]`, `["individual","student"]`). A row typed with
+ * ONLY one of the narrower tokens must pass an individual profile, not
+ * hard-mismatch it.
+ */
+const INDIVIDUAL_APPLICANT_TOKENS = Object.freeze([
+  'individual', 'individuals', 'family', 'families', 'household', 'households',
+  'student', 'students', 'consumer', 'consumers', 'patient', 'patients',
+  'person', 'people', 'resident', 'residents',
+  'veteran', 'veterans', 'senior', 'seniors', 'elder', 'elders',
+  'caregiver', 'caregivers', 'parent', 'parents', 'youth', 'child', 'children',
+  'homeowner', 'homeowners', 'renter', 'renters', 'tenant', 'tenants',
+  'active_duty', 'guard_reserve', 'transitioning_service_member',
+  'military_spouse', 'survivor', 'survivors', 'disabled', 'low_income',
+])
+
 function explicitMatchesBucket(types, profileBucket) {
   if (!types.length) return null
   const set = new Set(types)
+  // A wildcard is an ABSENCE of a restriction, not a restriction that excludes
+  // everyone. `withFallback()` writes `['*']` whenever a lane stated nothing.
+  if ([...set].some((t) => WILDCARD_APPLICANT_TOKENS.has(t))) return 'pass'
   switch (profileBucket) {
     case 'individual':
-      if ([
-        'individual', 'individuals', 'family', 'families', 'household', 'households',
-        'student', 'students', 'consumer', 'consumers', 'patient', 'patients',
-        'person', 'people', 'resident', 'residents',
-      ].some((k) => set.has(k))) return 'pass'
+      if (INDIVIDUAL_APPLICANT_TOKENS.some((k) => set.has(k))) return 'pass'
       break
     case 'org':
       if ([
@@ -286,12 +390,29 @@ function explicitMatchesBucket(types, profileBucket) {
  *   || basic.profile_category).
  * @returns {{ decision: 'pass'|'review'|'mismatch', reason: string|null }}
  */
-function evaluateOneBucket(profileBucket, explicitTypes, oppText) {
+function evaluateOneBucket(profileBucket, explicitTypes, oppText, softenStructured = false) {
   // 1. Explicit applicant_types lists win — they are usually crawler-set
   //    and reliable. Mismatch here is hard.
   const explicitDecision = explicitMatchesBucket(explicitTypes, profileBucket)
   if (explicitDecision === 'pass') return { decision: 'pass', reason: 'explicit_applicant_types_match' }
   if (explicitDecision === 'mismatch') {
+    // SAFETY VALVE (2026-08-21). The structured types the crawler writes are
+    // INFERRED from the row's own prose (`crawlerVocabulary.APPLICANT_RULES`),
+    // so a church-run emergency-rent program is typed `["church"]` from the
+    // word "Church" in its title — the exact shape `matchEngine.js` already
+    // guards ("Emmanuel Lutheran Church – Emergency Rent Assistance"). A HARD
+    // mismatch DELETES a pipeline row, so an assistance-shaped record is only
+    // ever softened to `review` (a score penalty), never hard-rejected on
+    // structured types alone. Prose-based INSTITUTION_ONLY_PATTERNS below are
+    // unaffected — an explicit "institutions of higher education" still bars.
+    // ORDER MATTERS: the softener only ever covers types the CRAWLER inferred,
+    // so the FUNDER's own prose is consulted first and still bars hard.
+    if (softenStructured && (profileBucket === 'individual' || profileBucket === 'farm')) {
+      for (const pat of INSTITUTION_ONLY_PATTERNS) {
+        if (pat.test(oppText)) return { decision: 'mismatch', reason: `institution_only_excludes_${profileBucket}` }
+      }
+      return { decision: 'review', reason: 'explicit_applicant_types_mismatch_softened_individual_assistance' }
+    }
     return { decision: 'mismatch', reason: 'explicit_applicant_types_mismatch' }
   }
 
@@ -349,6 +470,7 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
 
   const oppText = gatherOppText(opportunity)
   const explicitTypes = gatherExplicitTypes(opportunity)
+  const softenStructured = looksLikeIndividualAssistance(opportunity)
 
   // A profile may hold MORE THAN ONE identity (the owner's farm case: a person
   // who also runs a farm business). A hard mismatch is a claim that the
@@ -358,7 +480,7 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
   let firstMismatch = null
   let firstReview = null
   for (const b of buckets) {
-    const result = evaluateOneBucket(b, explicitTypes, oppText)
+    const result = evaluateOneBucket(b, explicitTypes, oppText, softenStructured)
     if (result.decision === 'pass') {
       return { decision: 'pass', reason: result.reason, matched_bucket: b }
     }

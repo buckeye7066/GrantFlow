@@ -31,6 +31,8 @@ import {
   nonGrantTitleLikePatterns,
   federalRegisterSourceLikePatterns,
   nonGrantCandidateSqlPredicate,
+  staleCycleYear,
+  aggregatorBrandSurface,
   RESULT_BUCKETS,
 } from '../config/fundingResultFilters.js'
 import {
@@ -556,5 +558,131 @@ describe('rescore-pass leak classes: place-locator titles and resource hubs', ()
     ]) {
       expect(classifyFundingResult(row).bucket, row.title).toBe('fundable')
     }
+  })
+})
+
+/**
+ * 2026-08-21 — A PROGRAM WHOSE OWN NAME SAYS IT IS OVER.
+ *
+ * "Affordable Connectivity Program (ACP) — Ended May 2024" and "Community
+ * Foundation of Cleveland and Bradley County 2022 …" were both sitting In
+ * Progress in a live Application Tracker. Expiry in this product was 100% a
+ * function of the `deadline` COLUMN — `opportunityHelpers.isExpiredOpportunity`
+ * returns false for a NULL deadline and `deadlineExpiryService`'s first SQL
+ * predicate is `deadline IS NOT NULL` — so a curated row that states its sunset
+ * in PROSE and carries no deadline was structurally unreachable by every
+ * expiry net in the system. `PROGRAM_YEAR_RX` only matched the literal `PY
+ * 2022` allotment spelling, so a bare cycle year was invisible too.
+ */
+describe('expired-by-its-own-title (owner report 2026-08-21)', () => {
+  const NOW = new Date('2026-08-21T12:00:00Z')
+
+  const mustExpire = [
+    'Affordable Connectivity Program (ACP) — Ended May 2024',
+    'Affordable Connectivity Program (ACP) - ENDED June 2024',
+    'Some Relief Fund (ended 2023)',
+    'Rural Broadband Program has been discontinued',
+    'Emergency Rental Assistance — no longer accepting applications',
+    'Community Foundation of Cleveland and Bradley County 2022 Community Grant Cycle',
+  ]
+  it.each(mustExpire)('flags "%s" as clearly expired', (title) => {
+    expect(isClearlyExpiredProgram({ title }, NOW)).toBeTruthy()
+    expect(classifyFundingResult({ title }, { now: NOW }).bucket).toBe('not_a_grant')
+  })
+
+  // RECALL GUARD. Each of these would be a real grant deleted from a real
+  // person's pipeline if the patterns were one notch broader.
+  const mustSurvive = [
+    'Tennessee HOPE Scholarship (2026-27)',
+    'Federal Work-Study at Middle Tennessee State University (2026-27)',
+    'Federal Pell Grant',
+    'Ending Homelessness Initiative',
+    'Sunset District Community Fund',
+    '2022-2027 Strategic Housing Program',
+    'Coca-Cola Scholars Program',
+    'Class of 2019 Legacy Scholarship',
+    'Founded in 1998 Community Trust Award',
+  ]
+  it.each(mustSurvive)('does NOT flag "%s"', (title) => {
+    expect(isClearlyExpiredProgram({ title }, NOW)).toBeNull()
+  })
+
+  it('a FUTURE deadline outranks a stale year in the name', () => {
+    // The funder's own statement that the program is open beats a cycle year.
+    expect(isClearlyExpiredProgram({ title: '2021 Community Grant Cycle', deadline: '2027-01-01' }, NOW)).toBeNull()
+  })
+
+  it('a ROLLING deadline outranks a stale year in the name', () => {
+    expect(isClearlyExpiredProgram({ title: '2021 Community Grant Cycle', deadline_type: 'rolling' }, NOW)).toBeNull()
+  })
+
+  it('staleCycleYear reports WHICH year it acted on, not a bare boolean', () => {
+    expect(staleCycleYear({ title: '2019 Neighborhood Award' }, NOW)).toBe('stale_cycle_year_2019')
+  })
+})
+
+/**
+ * 2026-08-21 — A SEARCH SURFACE NAMES ITSELF, and an aggregator's category page
+ * is its brand plus a topic.
+ *
+ * You cannot submit an application to a search engine, yet a student's
+ * Application Tracker held twelve of them as leaf applications. Classifying by
+ * HOST would have retired real awards — scholarships.com and bold.org both
+ * serve individual award pages that state a fixed award, a distinction
+ * `locatorUrlKind.test.js` protects on purpose. The TITLE is the claim.
+ */
+describe('discovery surfaces vs awards (owner report 2026-08-21)', () => {
+  const NOW = new Date('2026-08-21T12:00:00Z')
+  const withUrl = (title, sponsor = null) => ({ title, sponsor, application_url: 'https://example-funder.org/apply', deadline: '2027-01-01' })
+
+  const mustNotBeFundable = [
+    ['Scholarships.com — Free Scholarship Search', null],
+    ['Scholarships.com — Housing & Living Expense Scholarships', null],
+    ['Fastweb — Room & Board / Housing Scholarships', null],
+    ['Bold.org — No-Essay & Traditional Scholarships', null],
+    ['Bold.org — Housing & Living Expense Scholarships', null],
+    ['Going Merry — Apply to Multiple Scholarships', null],
+    ['College Board BigFuture Scholarship Search', null],
+    ['Criminal Justice & Forensics Scholarship Directory', null],
+    ['Music & Performing Arts Scholarship Finder', null],
+    ['STEM Scholarship Directory', null],
+    ['Scholarships Search', null],
+    // The aggregator recorded as the FUNDER — the owner's verbatim row.
+    ['Education Future International Scholarship - USA & Non-USA 2026', 'WeMakeScholars'],
+  ]
+  it.each(mustNotBeFundable)('routes "%s" out of direct results', (title, sponsor) => {
+    expect(classifyFundingResult(withUrl(title, sponsor), { now: NOW }).bucket).not.toBe(RESULT_BUCKETS.FUNDABLE)
+  })
+
+  // RECALL GUARD. These are real awards. Removing any of them is the defect,
+  // not the fix — and "Scholarships for Women in STEM" is the sharp case: it
+  // reads like a directory and is a real award program.
+  const mustStayFundable = [
+    ['Federal Pell Grant', 'Federal Student Aid'],
+    ['Tennessee HOPE Scholarship (2026-27)', 'Tennessee Student Assistance Corporation'],
+    ['MTSU Guaranteed Scholarship', 'Middle Tennessee State University'],
+    ['AFTE Forensic Science Scholarship', 'AFTE'],
+    ['National Merit Scholarship', 'NMSC'],
+    ['Coca-Cola Scholars Program', 'Coca-Cola Scholars Foundation'],
+    ['Gates Scholarship', 'Gates Foundation'],
+    ['Scholarships for Women in STEM', 'Society of Women Engineers'],
+    ['Federal Work-Study', 'Federal Student Aid'],
+    // An individual award page hosted ON an aggregator platform: its title is
+    // the award's own name, so the brand rule never sees it.
+    ['The Example Memorial Scholarship', 'Example Family Foundation'],
+  ]
+  it.each(mustStayFundable)('keeps "%s" in direct results', (title, sponsor) => {
+    expect(classifyFundingResult(withUrl(title, sponsor), { now: NOW }).bucket).toBe(RESULT_BUCKETS.FUNDABLE)
+  })
+
+  it('aggregatorBrandSurface fires on the brand LEADING the title, not merely appearing in it', () => {
+    expect(aggregatorBrandSurface({ title: 'Bold.org — Housing Scholarships' })).toBe('brand_leads_title')
+    // A real award that merely mentions a platform is untouched.
+    expect(aggregatorBrandSurface({ title: 'Memorial Scholarship (also listed on Fastweb)' })).toBeNull()
+  })
+
+  it('aggregatorBrandSurface fires when the aggregator is recorded as the FUNDER', () => {
+    expect(aggregatorBrandSurface({ title: 'Some Scholarship', sponsor: 'WeMakeScholars' })).toBe('aggregator_is_the_funder')
+    expect(aggregatorBrandSurface({ title: 'Some Scholarship', sponsor: 'Middle Tennessee State University' })).toBeNull()
   })
 })

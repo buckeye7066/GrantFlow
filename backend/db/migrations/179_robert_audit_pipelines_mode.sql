@@ -1,0 +1,24 @@
+-- Migration 179: Robert gains the `audit-pipelines` mode (SQLite side).
+--
+-- Owner order 2026-08-21: Robert verifies every funding source in every
+-- profile's pipeline against four gates (REAL / RELATABLE / COVERS A NEED /
+-- QUALIFIES), dedupes to one surviving record, removes what fails, and notates
+-- Amy. The run is recorded in `robert_runs.mode`.
+--
+-- NO-OP FOR SQLITE, DELIBERATELY — and this was VERIFIED, not assumed. The
+-- CHECK constraint in `081_robert_tables.sql` lists the eight original modes,
+-- but the table as it actually exists in a live SQLite database carries NO
+-- CHECK on `mode` at all (read back from `sqlite_master` on the local dev DB
+-- 2026-08-21: `mode TEXT NOT NULL DEFAULT 'observe'`, no CHECK), because
+-- `startup/bootstrap.js` creates/repairs the table from its own column list.
+-- Its column set also differs from the migration file's (`error`, not
+-- `error_message`), so a table REBUILD here would either drop a column or fail
+-- outright depending on which path created the database.
+--
+-- Rebuilding a table to widen a constraint that is not present is exactly the
+-- kind of "fix" that breaks one deployment shape to satisfy another. The real
+-- constraint lives in Postgres and is widened there (0184).
+--
+-- Precedent: `030_expand_record_origin_check.sql` took the same position.
+
+SELECT 1;
