@@ -45,12 +45,33 @@ describe('crawler telemetry reads do not spend the crawl-start budget', () => {
       '/api/real-crawlers/run',
       '/api/ai/draft',
       '/api/anya/chat',
-      '/api/matching/profile/p1/opportunities',
       '/api/geo-crawl/start',
     ]) {
       expect(classify('GET', path)?.name, `GET ${path}`).toBe('cost')
       expect(classify('POST', path)?.name, `POST ${path}`).toBe('cost')
     }
+  })
+
+  // SUPERSEDED IN PART. `/api/matching/...` used to be in the loop above, on
+  // 'cost' for BOTH methods. The 2026-08-20 Axiom production incident showed
+  // why that was wrong: SmartMatcher/Discover reads are DB score + catalog
+  // lookups, so a normal session (load opportunities, tweak filters, refetch)
+  // burned the same 40-per-10-min budget as Anya chat and crawl starts and
+  // 429'd the user's own "Understand & search" click. The carve-out mirrors the
+  // crawler-jobs one exactly: reads get the ordinary read budget, the paid AI
+  // lane is untouched. Pinned here rather than deleted, because the half that
+  // matters is still "the expensive lane did not get wider".
+  it('matching READS are cheap, but every other matching call stays expensive', () => {
+    expect(classify('GET', '/api/matching/profile/p1/opportunities')?.name).toBe('standard')
+    // The one-click intent parse gets the ordinary mutation lane — bounded and
+    // per-user, just not sharing the crawl/AI budget.
+    expect(classify('POST', '/api/matching/interpret-intent')?.name).toBe('mutation')
+    // Everything else under /api/matching — including any POST that can drive
+    // paid work — is still on 'cost'. api-rate-limit-shared-authority.test.mjs
+    // additionally requires that lane to carry requiredShared: true.
+    expect(classify('POST', '/api/matching/profile/p1/opportunities')?.name).toBe('cost')
+    expect(classify('POST', '/api/matching/profile-1')?.name).toBe('cost')
+    expect(classify('POST', '/api/matching/profile-1')?.requiredShared).toBe(true)
   })
 
   it('separates the two budgets so a dashboard poll cannot starve a crawl start', () => {
