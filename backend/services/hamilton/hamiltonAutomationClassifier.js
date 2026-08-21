@@ -55,6 +55,45 @@ import { isPointerKind } from '../../config/opportunityKindClasses.js'
 // behaviour can be toggled without a redeploy if it ever misbehaves in prod.
 const DECOMPOSE_POINTER_LISTINGS = String(process.env.HAMILTON_DECOMPOSE_POINTER_LISTINGS ?? 'true').toLowerCase() !== 'false'
 
+/**
+ * How good the evidence behind each rule actually is.
+ *
+ * A confidence number alone is unreadable to a person and, worse, was being
+ * PRESENTED as a finding: the run dashboard printed
+ * `Hamilton classified this source as "portal" (confidence 0.55)` on card after
+ * card, and 0.55 is not a measurement — it is the one rule that fires when
+ * every declared signal has missed and all we know is that the row carries a
+ * link. Measured on production 2026-08-21: 38,207 classification events at
+ * 0.55/portal against 6,468 at 0.95/portal and 3,953 at 0.30/unknown, i.e.
+ * roughly four out of five classifications in the system's whole history are
+ * that guess.
+ *
+ *  - `declared`  the source (or its metadata) SAID so.
+ *  - `inferred`  read off structure we trust — a .pdf link, a fax number.
+ *  - `guessed`   a last-resort heuristic. Nothing has been verified.
+ *  - `none`      no signal at all.
+ *
+ * TOTALITY: `backend/tests/hamiltonClassificationEvidence.test.js` asserts
+ * every rule string the classifier can emit has an entry here, so a new rule
+ * cannot ship without someone deciding how much it is worth.
+ */
+export const EVIDENCE_STRENGTH = Object.freeze({
+  'metadata.application_mode': 'declared',
+  'metadata.result_kind': 'declared',
+  'metadata.opportunity_kind': 'declared',
+  'portal_link.portal_type': 'declared',
+  'contact.fax': 'inferred',
+  'contact.email': 'inferred',
+  'url.pdf_docx': 'inferred',
+  'text.fafsa': 'inferred',
+  'text.nomination': 'inferred',
+  'text.institutional_aid': 'inferred',
+  'pointer_kind.decompose': 'inferred',
+  'url.http': 'guessed',
+  'contact.mailing_address': 'guessed',
+  no_signal: 'none',
+})
+
 const PORTAL_RESULT_KINDS = new Set(['application', 'portal', 'apply'])
 const AUTO_PROFILE_RESULT_KINDS = new Set(['auto_match', 'institutional_match', 'nomination'])
 const NO_APPLICATION_RESULT_KINDS = new Set(['directory', 'awareness', 'reference', 'no_application'])
@@ -246,6 +285,14 @@ export function classifyFundingSource({ opportunity = null, grant = null, profil
     return {
       automation_type: type,
       confidence: conf,
+      // The RULE that decided, carried out of the function so every surface
+      // can say WHY rather than printing a bare number. A confidence with no
+      // basis beside it is unreadable: on production, 38,207 of the ~48,700
+      // classification events ever logged are the single last-resort
+      // `url.http` rule at 0.55 — 78% of the fleet — and the log line rendered
+      // that identically to a 0.95 declared-application-mode match.
+      deciding_rule: rule,
+      evidence_strength: EVIDENCE_STRENGTH[rule] || (conf >= 0.8 ? 'declared' : 'guessed'),
       reasons,
       resolved_url: url || null,
       mailing_address: mailingAddress || null,
@@ -319,6 +366,13 @@ export function classifyFundingSource({ opportunity = null, grant = null, profil
   if (portalLink?.portal_type) {
     return setAndReturn('portal', 0.85, 'portal_link.portal_type', portalLink.portal_type)
   }
+  // LAST-RESORT URL HEURISTIC. Reached only after every declared-metadata,
+  // auto-profile, pointer, no-application, channel, PDF, result-kind and
+  // portal-link rule has missed. It says nothing more than "this row has an
+  // http(s) link, so treat it as a portal and go look" — it has NOT been
+  // established that the page exists, that it is the funder's, or that it
+  // carries an application form. `evidence_strength: 'guessed'` is what stops
+  // downstream surfaces from reporting that guess as a finding.
   if (nonEmpty(url) && /^https?:/i.test(url)) {
     return setAndReturn('portal', 0.55, 'url.http', url)
   }

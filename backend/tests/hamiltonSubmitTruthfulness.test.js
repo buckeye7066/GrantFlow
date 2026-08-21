@@ -31,6 +31,16 @@ describe('submit-hunt truthfulness gate (actionableSubmitButtons)', () => {
     expect(actionableSubmitButtons([chrome, navLink], { anyFieldFilled: true })).toEqual([chrome, navLink])
   })
 
+  it('never treats a page-feedback survey as the application submit', () => {
+    const helpfulSurvey = {
+      bid: 'feedback', text: 'Submit', inForm: true, formFieldCount: 2, isPageFeedback: true,
+    }
+    expect(actionableSubmitButtons([helpfulSurvey, formButton], {
+      anyFieldFilled: true,
+      recognizedFieldCount: 6,
+    })).toEqual([formButton])
+  })
+
   it('tolerates malformed input', () => {
     expect(actionableSubmitButtons(null, {})).toEqual([])
     expect(actionableSubmitButtons([null, {}], { anyFieldFilled: false })).toEqual([])

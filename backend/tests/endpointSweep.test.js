@@ -23,7 +23,26 @@ import request from 'supertest'
 // schema) every GET endpoint is mounted and returns non-5xx. The mechanism is
 // retained so a future genuinely-can't-fix-here case can be documented rather
 // than silently tolerated — but the bar is "empty until proven necessary".
-const KNOWN_ALLOWLIST = new Map([])
+// Documented, deliberate 5xx. NOT defects — do not "fix the handler".
+//
+// The SMS forwarding routes (ingest + its status probe) are gated on the shared
+// secret HAMILTON_SMS_INGEST_TOKEN, and when that secret is UNSET the route
+// DISABLES itself with 503 rather than serving unauthenticated. That posture is
+// the point: an unauthenticated read of who-texted-whom is not something to
+// leave open, and an unauthenticated write endpoint that silently accepts
+// anything is worse than one that does not exist.
+//
+// CI does not set that secret (it is a phone-forwarding credential, not a test
+// fixture), so 503 here is the handler behaving CORRECTLY. Allowlisting it is
+// the documented escape hatch this gate offers; the alternative — setting a
+// real ingest secret in CI — would weaken the very posture being asserted.
+//
+// The router is mounted twice, under /api/hamilton and /api/yana, so both
+// mount points appear.
+const KNOWN_ALLOWLIST = new Map([
+  ['GET /api/hamilton/automation/inbox-status', 'sms_ingest_disabled: HAMILTON_SMS_INGEST_TOKEN unset in CI; 503 is the secure-by-default posture, not a throwing handler'],
+  ['GET /api/yana/automation/inbox-status', 'sms_ingest_disabled: same router mounted under /api/yana; see above'],
+])
 
 describe('endpoint sweep — every GET endpoint is mounted and not 5xx (allowlist for pre-existing smoke gaps)', () => {
   let app

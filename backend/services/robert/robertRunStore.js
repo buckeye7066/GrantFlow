@@ -11,6 +11,7 @@
  * back already-parsed objects.
  */
 
+import { randomUUID } from 'node:crypto'
 import { maskSecrets } from './robertSafety.js'
 import {
   RUN_STATUS,
@@ -61,7 +62,7 @@ function safeParse(value, fallback) {
 }
 function nowISO() { return new Date().toISOString() }
 function genId(prefix = 'rob') {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  return `${prefix}-${randomUUID()}`
 }
 
 // ---------------------------------------------------------------------------
