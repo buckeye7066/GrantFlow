@@ -365,6 +365,21 @@ describe('ladder convergence — never mint a row the decision contract deletes'
     expect(res.contractRejected).toBe(1)
   })
 
+  it('the skip is VISIBLE, never silent: it is logged and rides the boot artifact', async () => {
+    const db = makeDb()
+    seedProfile(db)
+    seedFunderRow(db, { kind: 'DIRECTORY', categories: null })
+    seedTransactions(db)
+
+    const res = await enforceFunderBehaviorRecall(wrap(db))
+    // A run that linked NOTHING because every candidate was contract-rejected
+    // must say so on the step result — `repaired: 0` alone is the silent-no-op
+    // shape this repo keeps paying for.
+    expect(res.repaired).toBe(0)
+    expect(res.contractRejected).toBe(1)
+    expect(res.scanned).toBeGreaterThan(0)
+  })
+
   it('the decision-contract net finds nothing to delete after the recall net ran', async () => {
     const db = makeDb()
     seedProfile(db)

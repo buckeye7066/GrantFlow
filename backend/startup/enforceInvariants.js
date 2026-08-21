@@ -9421,7 +9421,11 @@ export async function enforceFunderBehaviorRecall(db) {
         rejectedByEngine, adjudicatedOut, contractRejected, truncated, enforced: false,
       }
     }
-    if (linked > 0 || stale > 0) {
+    // `contractRejected > 0` is in the condition on purpose: a run that linked
+    // nothing BECAUSE the decision contract forbade every candidate must say so.
+    // A skip nobody can see is the silent-no-op shape, and this sweep would
+    // otherwise log only when it succeeded.
+    if (linked > 0 || stale > 0 || contractRejected > 0) {
       log.info('linked profiles to funders with demonstrated matching giving', {
         linked, stale, scanned, profilesEligible, rejectedByEngine, adjudicatedOut, unscorable, contractRejected, examples,
       })
@@ -9743,6 +9747,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.skippedCooldown !== undefined ? { skippedCooldown: s.skippedCooldown } : {}),
       ...(s.proposed !== undefined ? { proposed: s.proposed } : {}),
       ...(s.aliveNoRepair !== undefined ? { aliveNoRepair: s.aliveNoRepair } : {}),
+      // Candidates the ENGINE endorsed that the persisted-decision CONTRACT
+      // forbids (funder_behavior_recall). Carried so "linked 0" can be read as
+      // "the contract rejected N" rather than as an unexplained empty run.
+      ...(s.contractRejected !== undefined ? { contractRejected: s.contractRejected } : {}),
       // Result-floor census: the owner-facing number ("how many profiles hold
       // fewer real funding sources than they asked for") plus how many of those
       // have a recorded, evidenced "exhausted" verdict rather than a pending
@@ -9771,7 +9779,22 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ran: steps.length,
       failed,
       totalRepaired,
-      steps: steps.map((s) => ({ name: s.name, ok: s.ok, repaired: s.repaired ?? 0, scanned: s.scanned ?? 0, ...(s.error ? { error: s.error } : {}) })),
+      steps: steps.map((s) => ({
+        name: s.name,
+        ok: s.ok,
+        repaired: s.repaired ?? 0,
+        // NOTE: `?? 0` means a step that never emits `scanned` is indistinguishable
+        // here from one that scanned nothing — which is exactly why every BOUNDED
+        // sweep must emit it (see stale_missing_field_resolution /
+        // hamilton_stop_recheck): `scanned === bound` is the only blindness signal
+        // this artifact can carry.
+        scanned: s.scanned ?? 0,
+        // Work the sweep deliberately did NOT do, and why — so "repaired 0" can be
+        // read as "the decision contract forbade N candidates" instead of as an
+        // unexplained empty run.
+        ...(s.contractRejected ? { contractRejected: s.contractRejected } : {}),
+        ...(s.error ? { error: s.error } : {}),
+      })),
     })
     const iso = new Date().toISOString()
     await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
