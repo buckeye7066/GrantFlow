@@ -336,8 +336,12 @@ async function detectButtons(page, patterns) {
               formFieldCount += 1
             }
           }
+          const formContext = form
+            ? `${form.getAttribute('id') || ''} ${form.getAttribute('name') || ''} ${form.getAttribute('aria-label') || ''} ${form.innerText || form.textContent || ''}`
+            : ''
+          const isPageFeedback = /\b(?:was this page helpful|rate this page|feedback (?:about|on) this page|did you find what you needed|how (?:helpful|useful) was this page)\b/i.test(formContext)
           el.setAttribute('data-hamilton-btn', `b${out.length}`)
-          out.push({ bid: `b${out.length}`, text, inForm: !!form, formFieldCount })
+          out.push({ bid: `b${out.length}`, text, inForm: !!form, formFieldCount, isPageFeedback })
           break
         }
       }
@@ -360,7 +364,13 @@ async function detectButtons(page, patterns) {
  * form" as an engine failure. Pure function — unit-tested directly.
  */
 function actionableSubmitButtons(submitButtons, { anyFieldFilled = false, recognizedFieldCount = 0 } = {}) {
-  const list = Array.isArray(submitButtons) ? submitButtons : []
+  // A separate "Was this page helpful?" footer form is never an application
+  // boundary. Previously the any-field-filled fast path admitted every Submit
+  // control, so a feedback survey could win over the real application form and
+  // surface its required Yes/No radio as an application validation blocker.
+  const list = Array.isArray(submitButtons)
+    ? submitButtons.filter((button) => button && button.isPageFeedback !== true)
+    : []
   if (anyFieldFilled) return list
   // Nothing was filled this run. The only legitimate submit here is a
   // PREFILLED application form (a resumed draft) — and a real application
