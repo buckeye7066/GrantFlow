@@ -917,19 +917,27 @@ export async function listCredentialsAwaitingHandover(db, { profileId = null, li
   if (!db) return []
   await ensureSchema(db)
   const cap = Math.max(1, Math.min(500, Number(limit) || 100))
+  // Fully static SQL: the optional profile filter rides an `? IS NULL OR`
+  // predicate and the cap is a bound parameter, so scripts/codemod/safe-sql.mjs
+  // sees no interpolation at all. (The assembled `WHERE ${where.join(…)}` /
+  // `LIMIT ${cap}` this replaced tripped the frozen dynamic-SQL baseline —
+  // that inventory is allowed to shrink and never to grow, so the fix is
+  // static SQL, not a new baseline entry.) Both shapes already have precedent
+  // in this repo (routes/grants.js, agentControlStore.js) and work on the
+  // SQLite and Postgres sides of the shim. The predicate still runs BEFORE
+  // LIMIT, per the repo's SQL-predicate-before-LIMIT invariant.
+  const pid = profileId ? String(profileId) : null
   try {
-    const where = [`handover_status IN ('pending','blocked')`]
-    const params = []
-    if (profileId) { where.push('profile_id = ?'); params.push(String(profileId)) }
     const rows = await db.prepare(
       `SELECT id, user_id, profile_id, portal_host, login_url, username,
               handover_status, handover_blocker, handover_plan_json,
               handover_attempts, handover_next_retry_at
          FROM hamilton_portal_credentials
-        WHERE ${where.join(' AND ')}
+        WHERE handover_status IN ('pending','blocked')
+          AND (? IS NULL OR profile_id = ?)
         ORDER BY updated_at DESC
-        LIMIT ${cap}`,
-    ).all(...params)
+        LIMIT ?`,
+    ).all(pid, pid, cap)
     return (Array.isArray(rows) ? rows : []).map((r) => ({
       ...r,
       handover_plan: safeJson(r?.handover_plan_json),
