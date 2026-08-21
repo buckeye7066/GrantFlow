@@ -23,7 +23,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { FORWARDED_CHANNELS } from '../services/hamilton/hamiltonVerificationCodes.js'
+import { FORWARDED_CHANNELS, extractVerificationCode } from '../services/hamilton/hamiltonVerificationCodes.js'
 import express from 'express'
 import rateLimit from 'express-rate-limit'
 import multer from 'multer'
@@ -2575,6 +2575,77 @@ async function handleForwardedInbox(req, res) {
 // `/sms-inbox` is the path already documented and possibly already keyed into a
 // Tasker profile, so it keeps working forever. `/inbox` is the honest name now
 // that the channel is not always SMS. ONE handler, so the two can never drift.
+/**
+ * Read-only proof that a forwarded code actually LANDED.
+ *
+ * Why this exists: the ingest route answers 202 and then the row is invisible
+ * from outside the box. With no read path, "the phone's code reached
+ * production" was unprovable - the exact shape of claim this project refuses to
+ * make. A verification you cannot run is not a verification.
+ *
+ * It NEVER returns the code, the sender, or the message body. It returns
+ * whether a code was EXTRACTABLE, which is the only bit needed to prove the
+ * chain works end to end. Returning the code here would turn an observability
+ * endpoint into a second way to read someone's one-time password.
+ *
+ * Same shared secret as ingest, and the same disabled-when-unset posture: an
+ * unauthenticated read of who-texted-when is not something to leave open.
+ */
+async function handleForwardedInboxStatus(req, res) {
+  const expected = String(process.env.HAMILTON_SMS_INGEST_TOKEN || '').trim()
+  if (!expected) {
+    return res.status(503).json({ error: 'sms_ingest_disabled' })
+  }
+  const supplied = String(req.get('x-hamilton-sms-token') || '').trim()
+  if (!supplied || supplied !== expected) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
+
+  const windowMs = Math.max(60_000, Math.min(24 * 60 * 60 * 1000,
+    Number(req.query?.window_ms) || 60 * 60 * 1000))
+  const cutoff = new Date(Date.now() - windowMs).toISOString()
+
+  let rows = []
+  try {
+    rows = await req.db.prepare(
+      `SELECT channel, subject, body, received_at
+         FROM hamilton_inbound_sms
+        WHERE received_at >= ?
+        ORDER BY received_at DESC
+        LIMIT 50`,
+    ).all(cutoff)
+  } catch (err) {
+    // A missing table means nothing has ever been forwarded. Say that, rather
+    // than 500-ing on a fresh deploy.
+    return res.json({
+      ok: true, forwarded: 0, newest: null, channels: {}, code_extractable: 0,
+      note: `inbox unavailable: ${err?.message || err}`,
+    })
+  }
+
+  const channels = {}
+  let extractable = 0
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const ch = String(r?.channel || 'sms')
+    channels[ch] = (channels[ch] || 0) + 1
+    if (extractVerificationCode(`${r?.subject || ''}
+${r?.body || ''}`)) extractable += 1
+  }
+
+  return res.json({
+    ok: true,
+    window_ms: windowMs,
+    forwarded: rows.length,
+    newest: rows[0]?.received_at || null,
+    channels,
+    // The bit that proves the chain: a real code arrived AND the extractor
+    // recognised it. Deliberately a COUNT, never the code itself.
+    code_extractable: extractable,
+  })
+}
+
+router.get('/inbox-status', handleForwardedInboxStatus)
+
 router.post('/sms-inbox', handleForwardedInbox)
 router.post('/inbox', handleForwardedInbox)
 
