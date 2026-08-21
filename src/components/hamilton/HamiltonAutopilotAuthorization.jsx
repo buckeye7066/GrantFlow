@@ -83,11 +83,15 @@ export default function HamiltonAutopilotAuthorization({
       setPhase('error')
       return
     }
-    if (selectedSources.length === 0) {
-      setError('Select at least one funding source first.')
-      setPhase('error')
-      return
-    }
+    // NO client-side hard stop on an empty selection. This dialog is reached
+    // from surfaces that have no picker and no select-all, so refusing here
+    // left the owner unable to start ANYTHING: "I cannot use the begin button
+    // because selected sources are required, yet I cannot select sources nor
+    // do I have a select all option." An empty selection now means EVERY ready
+    // source in the profile's pipeline, resolved SERVER-SIDE by
+    // `all_ready_sources` so the client never has to guess the set. The server
+    // still answers 409 `no_ready_sources` when the pipeline is genuinely
+    // empty, so "nothing to do" stays a stated reason and never a silent run.
     setError(null)
     setPhase('preflight')
 
@@ -110,8 +114,13 @@ export default function HamiltonAutopilotAuthorization({
     try {
       await client.post('/api/hamilton/automation/authorize', {
         profile_id: profileId,
-        scope: 'funding_source',
-        funding_source_ids: fundingSourceIds,
+        // An empty selection means "everything in this pipeline", so the
+        // consent belongs at PROFILE scope. Sending scope 'funding_source'
+        // with an empty id list would record a grant that governs nothing -
+        // authorization that reads as granted and gates nothing is worse than
+        // no authorization at all.
+        scope: fundingSourceIds.length ? 'funding_source' : 'profile',
+        ...(fundingSourceIds.length ? { funding_source_ids: fundingSourceIds } : {}),
         authorization_types: types,
         authorization_text: AUTOPILOT_TEXT,
         authorization_version: AUTOPILOT_VERSION,
@@ -135,6 +144,9 @@ export default function HamiltonAutopilotAuthorization({
       const launch = await client.post('/api/hamilton/automation/start-autopilot', {
         profile_id: profileId,
         selected_sources: selectedSources,
+        // Only when the caller picked nothing — an explicit selection is
+        // always honoured verbatim.
+        ...(selectedSources.length === 0 ? { all_ready_sources: true } : {}),
         options: {
           allow_auto_submit: Boolean(opts.allow_auto_submit && opts.submit_applications && !opts.require_human_review),
           headless: true,
