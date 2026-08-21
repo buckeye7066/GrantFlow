@@ -108,10 +108,10 @@ const FIELD_RULES = Object.freeze([
   // SSO / Login.gov / ID.me credential fields a proofing wall asks for.
   { key: 'id_ssn',              patterns: [/\bssn\b/i, new RegExp(`social${_S_}security`, 'i'), new RegExp(`social${_S_}security${_S_}number`, 'i')] },
   { key: 'id_itin',             patterns: [/\bitin\b/i, new RegExp(`individual${_S_}taxpayer`, 'i')] },
-  { key: 'id_date_of_birth',    patterns: [new RegExp(`date${_S_}of${_S_}birth`, 'i'), /\bdob\b/i, /birth${_S_}date/i, /^birthdate$/i] },
+  { key: 'id_date_of_birth',    patterns: [new RegExp(`date${_S_}of${_S_}birth`, 'i'), /\bdob\b/i, new RegExp(`birth${_S_}date`, 'i'), /^birthdate$/i] },
   { key: 'id_government_id_number', patterns: [new RegExp(`driver'?s?${_S_}licen[sc]e`, 'i'), new RegExp(`government${_S_}id`, 'i'), new RegExp(`state${_S_}id${_S_}number`, 'i')] },
   { key: 'id_passport_number',  patterns: [/passport/i] },
-  { key: 'id_fsa_id_username',  patterns: [new RegExp(`fsa${_S_}id${_S_}(username|user${_S_}name)`, 'i'), new RegExp(`fsa${_S_}id\b`, 'i')] },
+  { key: 'id_fsa_id_username',  patterns: [new RegExp(`fsa${_S_}id${_S_}(username|user${_S_}name)`, 'i'), new RegExp(`fsa${_S_}id\\b`, 'i')] },
   { key: 'id_fsa_id_password',  patterns: [new RegExp(`fsa${_S_}id${_S_}password`, 'i')] },
   { key: 'id_sso_username',     patterns: [new RegExp(`sso${_S_}(username|user${_S_}name|id)`, 'i')] },
   { key: 'id_sso_password',     patterns: [new RegExp(`sso${_S_}password`, 'i')] },
