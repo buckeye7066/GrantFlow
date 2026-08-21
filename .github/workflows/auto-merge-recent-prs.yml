@@ -12,11 +12,6 @@ on:
         required: false
         default: '48'
         type: string
-      dry_run:
-        description: 'Dry run mode (no actual merges)'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -79,7 +74,6 @@ jobs:
         if: fromJSON(steps.get-prs.outputs.pr_count) > 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
           echo "Processing pull requests..."
 
@@ -111,7 +105,7 @@ jobs:
               continue
             fi
 
-            # Check CI / branch-protection status per PR via mergeStateStatus.
+            # Check CI status per PR via mergeStateStatus.
             #
             # Do NOT use statusCheckRollup for this: reading it via GraphQL
             # traverses checkSuite.workflowRun nodes owned by foreign GitHub
@@ -120,18 +114,22 @@ jobs:
             # mergeStateStatus is a plain computed field on the PR — always
             # readable — and it is STRICTER-or-equal to the old rollup logic:
             #
-            #   CLEAN     = every branch-protection requirement on main is
-            #               satisfied, including the required "test" and
-            #               "postgres-migrations" checks being PRESENT and
-            #               SUCCESSFUL, and no reported check is failing,
+            #   CLEAN     = mergeable and no reported check is failing,
             #               cancelled, timed out, or still pending.
-            #   BLOCKED   = required checks failing/pending/never reported.
-            #   UNSTABLE  = some non-required check failing or pending.
+            #   BLOCKED   = blocked by a branch-protection requirement.
+            #   UNSTABLE  = some check failing or pending.
             #   BEHIND/DIRTY/DRAFT/UNKNOWN = not ready.
             #
-            # So a cancelled CodeQL run, a check that never reported on the
-            # head SHA, or an in-progress check still cannot qualify a PR for
-            # auto-merge. (HAS_HOOKS is the GHES equivalent of CLEAN.)
+            # STALENESS WARNING (2026-08-20): branch protection on main was
+            # REMOVED by owner order, and this repo's plan cannot re-enable it
+            # (`gh api .../branches/main/protection` returns 403). So NO check is
+            # "required" any more, and CLEAN no longer implies that `test` and
+            # `postgres-migrations` ran. What still holds is that a PR with a
+            # failing or pending check reports UNSTABLE, not CLEAN, so red work
+            # is still not merged here. What NO LONGER holds is the guarantee
+            # that a suite which never reported at all would be caught --
+            # scripts/codex-merge-pr.sh checks for that explicitly instead.
+            # (HAS_HOOKS is the GHES equivalent of CLEAN.)
             MERGE_STATE=$(gh pr view "$PR_NUMBER" --json mergeStateStatus --jq '.mergeStateStatus')
 
             if [ "$MERGE_STATE" != "CLEAN" ] && [ "$MERGE_STATE" != "HAS_HOOKS" ]; then
@@ -159,23 +157,19 @@ jobs:
               fi
             fi
 
-            # All checks passed - merge the PR
-            if [ "$DRY_RUN" = "true" ]; then
-              echo "🔍 [DRY RUN] Would merge PR #$PR_NUMBER: $PR_TITLE"
+            # All checks passed - merge the PR. There is no dry-run branch here
+            # on purpose: every run of this workflow does real work.
+            echo "✅ Merging PR #$PR_NUMBER: $PR_TITLE"
+
+            if gh pr merge "$PR_NUMBER" --auto --squash --delete-branch; then
+              echo "✅ Successfully queued PR #$PR_NUMBER for auto-merge"
               MERGE_COUNT=$((MERGE_COUNT + 1))
+
+              # Add a comment to the PR
+              gh pr comment "$PR_NUMBER" --body "🤖 This PR has been queued for auto-merge by the automated workflow. It was updated within the last 48 hours and meets all merge criteria (passing CI, approved, no conflicts)."
             else
-              echo "✅ Merging PR #$PR_NUMBER: $PR_TITLE"
-
-              if gh pr merge "$PR_NUMBER" --auto --squash --delete-branch; then
-                echo "✅ Successfully queued PR #$PR_NUMBER for auto-merge"
-                MERGE_COUNT=$((MERGE_COUNT + 1))
-
-                # Add a comment to the PR
-                gh pr comment "$PR_NUMBER" --body "🤖 This PR has been queued for auto-merge by the automated workflow. It was updated within the last 48 hours and meets all merge criteria (passing CI, approved, no conflicts). The PR will be automatically merged once all branch protection requirements are satisfied."
-              else
-                echo "❌ Failed to merge PR #$PR_NUMBER"
-                FAIL_COUNT=$((FAIL_COUNT + 1))
-              fi
+              echo "❌ Failed to merge PR #$PR_NUMBER"
+              FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
 
           done < <(jq -c '.[]' recent_prs.json)
