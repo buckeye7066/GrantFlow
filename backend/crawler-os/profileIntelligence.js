@@ -1073,7 +1073,24 @@ function deriveNeeds(profile, blob) {
   for (const [canon, kws] of Object.entries(NEED_KEYWORDS)) {
     if (kws.some((k) => containsTermWholeWord(blob, k))) found.add(canon);
   }
-  if (found.size === 0) addProfileTypeDefaultNeeds(found, profile);
+  // THE FALLBACK IS A GUESS, AND IT MUST SAY SO.
+  //
+  // When a profile declares nothing this stamps a plausible, fully-formed need
+  // set derived purely from its TYPE — a blank nonprofit receives
+  // ['capacity_building','capital','programs','operations'], which is
+  // indistinguishable downstream from four needs an owner actually typed.
+  // Measured 2026-08-21: a described food-bank nonprofit derives
+  // ['food','emergency'] and a blank one derives the four above, and the thesis
+  // presented BOTH with identical confidence.
+  //
+  // `buildProfileSignals` already draws exactly this distinction with
+  // `needsDefaulted`, for exactly this reason — CLAUDE.md states it plainly:
+  // "we could not read it" is not "there is nothing". That provenance was
+  // computed and then dropped before the thesis, so no consumer could act on
+  // it. Keeping the fallback (removing it would zero-result every sparse
+  // profile) but LABELLING it is the honest half.
+  const defaulted = found.size === 0;
+  if (defaulted) addProfileTypeDefaultNeeds(found, profile);
   applyNeedImplications(found);
   if ((found.has('veterans') || /\b(veteran|former service member|prior service|ex[-\s]?military|service-disabled)\b/i.test(blob)) &&
       (found.has('startup') || found.has('capital') || found.has('operations') || found.has('equipment'))) {
@@ -1085,7 +1102,14 @@ function deriveNeeds(profile, blob) {
     found.add('military_startup');
   }
   applyNeedImplications(found);
-  return [...found];
+  // Array-like on purpose: `needs` is consumed by ~14 call sites as an array
+  // (`thesis.needs.length`, `.includes`, spread), and returning a plain object
+  // here would break every one of them silently — `({}).length` is undefined,
+  // and planner.servesNeed's guard is a LENGTH test, so the need gate would
+  // fail open for every profile in the fleet. The flag rides as a property.
+  const out = [...found];
+  Object.defineProperty(out, 'defaulted', { value: defaulted, enumerable: false });
+  return out;
 }
 
 function normalizeState(state) {
@@ -1199,6 +1223,13 @@ export function buildThesis(profile = {}) {
     profile_id: profile?.id ?? profile?.profile_id ?? null,
     applicant_types,
     needs,
+    // TRUE when `needs` above was invented from the profile's TYPE because the
+    // profile declared nothing readable. A consumer that treats a defaulted set
+    // as a declaration is reading a guess as a statement of fact — which is how
+    // a profile that typed nothing gets scored as confidently as one that
+    // filled itself in. An explicit boolean (never undefined) so a consumer can
+    // tell "not defaulted" from "this thesis predates the field".
+    needs_defaulted: needs?.defaulted === true,
     location,
     loan_allowed,
     cost_share_allowed,

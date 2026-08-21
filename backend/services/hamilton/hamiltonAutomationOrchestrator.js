@@ -100,6 +100,8 @@ import {
   finishHamiltonTaskRun,
 } from './hamiltonRunCancellation.js'
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
+import { attemptAutomatedVerification } from './hamiltonVerificationGate.js'
+import { makeHamiltonGraphTokenProvider } from './hamiltonGraphToken.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isSearchEngineUrl } from '../../config/urlRules.js'
 import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
@@ -1780,6 +1782,30 @@ async function runAutopilotPathway(db, {
           narrativeAnswers,
           signal: controller.signal,
           beforeSubmit,
+          // 2FA (owner order 2026-08-21): under full automation, let the engine
+          // clear a one-time-code wall by reading the code from HAMILTON'S OWN
+          // mailbox/SMS inbox. That is what HAMILTON_IDENTITY exists for — the
+          // signup path has done this since 2026-08-20; the RUN path, which is
+          // where a real portal login actually hits 2FA, never had a caller.
+          //
+          // `allowAutoSubmit` is the consent gate on purpose. It is
+          // resolveSubmissionDecision's own verdict (submit_applications granted
+          // + allow_auto_submit + no require_human_review veto), i.e. exactly
+          // what hasFullAutomation() describes — so consent is READ from the one
+          // authority rather than re-derived here into a second one that can
+          // drift from it.
+          //
+          // The db handle stays on THIS side of the boundary: the engine's
+          // contract is that nothing reads the database mid-run, so it receives
+          // a solver, not a connection.
+          ...(allowAutoSubmit
+            ? {
+              attemptVerification: (livePage) => attemptAutomatedVerification(db, livePage, {
+                fullAutomation: true,
+                getToken: makeHamiltonGraphTokenProvider(),
+              }),
+            }
+            : {}),
         })
       }
     } finally {

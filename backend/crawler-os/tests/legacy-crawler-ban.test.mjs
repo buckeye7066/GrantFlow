@@ -75,6 +75,19 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // Amy's amount_recall_miss measure pre-extraction values. Zero imports, zero
   // I/O — verified dependency-free.
   'backend/services/awardAmountExtractor.js',
+  // The ONE text-hygiene choke point (HTML entity decoding + tag stripping),
+  // imported by crawler-os/storage.js so text is cleaned AT INGEST rather than
+  // at each read surface. A private copy inside the OS is the drift this
+  // boundary exists to prevent in the other direction: two decoders disagreeing
+  // means a title is stored one way and displayed another, which is how
+  // "&amp;amp;" reaches an owner-facing card. Zero imports, zero I/O — verified
+  // dependency-free 2026-08-21 (three pure string functions).
+  //
+  // This import landed WITHOUT the allowlist entry and left the crawler-os
+  // suite red on main; allowlisted here so the boundary test states the real,
+  // intended architecture instead of standing red — the same disposition as
+  // needFirstScoringAdapter below.
+  'backend/utils/htmlTextHygiene.js',
   // The need-first scoring policy adapter, imported by crawler-os/matchEngine.js
   // so the OS decision and the canonical engine apply the SAME need-first rules
   // (matchEngine.js itself is already an approved contract above; this is the

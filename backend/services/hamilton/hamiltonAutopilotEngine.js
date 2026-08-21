@@ -26,11 +26,28 @@
  *           HARD BLOCKER (`blocker_kind=validation`).
  *   7. After submission, capture confirmation reference + screenshot.
  *
+ * 2FA (owner order 2026-08-21: "The goal with the mailbox and phone number is
+ * so hamilton can do 2fa's"):
+ *   Hamilton completes a one-time-code challenge on an account registered to
+ *   HIS OWN identity, by reading the code from HIS OWN mailbox/SMS inbox
+ *   (`HAMILTON_IDENTITY` — Hamilton@axiombiolabs.org / 423-504-7778) and typing
+ *   it into the portal. This is the whole reason that mailbox and number exist.
+ *
+ *   The bar is deliberately narrow and it is NOT "2FA is now automated":
+ *     - Only under FULL automation consent. Without it, the old `needs_user`
+ *       handoff is unchanged.
+ *     - The code must come from Hamilton's own inbox. Hamilton never derives,
+ *       guesses, or brute-forces a code, and never reads a HUMAN's mailbox — if
+ *       the portal account was registered under the applicant's own email or
+ *       phone, the code lands somewhere Hamilton cannot read and the run takes
+ *       the SAME handoff it always did. That is a correct refusal, not a bug.
+ *     - Tried at most ONCE per run, mirroring the saved-login path below: a
+ *       retry loop against an OTP wall is indistinguishable from an attack and
+ *       is how an account gets locked.
+ *
  * Hamilton NEVER:
  *   - solves CAPTCHA or signs anything.
- *   - completes a 2FA challenge. The user may clear 2FA themselves and save
- *     the resulting trusted browser session, but Hamilton never derives, types,
- *     intercepts, or replays a live MFA code.
+ *   - reads any mailbox but his own, or replays a code he did not receive.
  *   - clicks a legal-attestation checkbox unless `use_standing_attestation`
  *     is authorized AND the checkbox is in the recognised attestation
  *     allow-list (financial-aid eligibility self-certification, etc.).
@@ -997,6 +1014,16 @@ export async function runAutopilot({
   // overridden — short factual fields (name, address, …) always come from
   // the profile verbatim. Falls back to the profile's raw essays when absent.
   narrativeAnswers = null,
+  // One-time-code solver, injected by the orchestrator. Signature:
+  //   (page) => Promise<{ verified: boolean, reason?: string }>
+  //
+  // A CALLBACK rather than a `db` handle on purpose: this engine's contract
+  // (see the header) is that the profile arrives pre-loaded and nothing reads
+  // the database mid-run. The orchestrator owns the db and the Graph token
+  // provider and closes over both, so the engine only ever sees a page and a
+  // verdict. Absent (the default) = the previous behaviour exactly: a 2FA gate
+  // is a hard blocker.
+  attemptVerification = null,
 } = {}) {
   if (!url) throw new Error('url required')
   if (!profile) throw new Error('profile required')
@@ -1008,6 +1035,7 @@ export async function runAutopilot({
   const filled = []
   let loggedIn = false
   let loginAttempted = false
+  let twoFactorAttempted = false
   if (signal?.aborted) {
     return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before browser launch.', filled_fields: filled, pages_visited: 0, trace }
   }
@@ -1134,6 +1162,38 @@ export async function runAutopilot({
           // Login fill failed (couldn't find/submit form) — fall through to the
           // normal hard-stop so the user is told login is required.
           return { status: 'blocked', blocker_kind: 'login', blocker_detail: 'Saved login could not be completed automatically', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
+        // One-time-code wall: read the code from HAMILTON'S OWN inbox and type
+        // it. Mirrors the saved-login path above deliberately — attempted at
+        // most ONCE, and a failure falls through to the SAME hard stop that has
+        // always been here, so the handoff is preserved rather than replaced.
+        //
+        // Once only is not caution for its own sake: repeated OTP submissions
+        // are what portals treat as an attack, and the cost of being wrong is a
+        // locked account on a real applicant's portal.
+        if (gate.kind === '2fa' && attemptVerification && !twoFactorAttempted) {
+          twoFactorAttempted = true
+          trace.push({ step: 'two_factor_attempt' })
+          let verdict = { verified: false, reason: 'verification_unavailable' }
+          try {
+            verdict = (await attemptVerification(page)) || verdict
+          } catch (err) {
+            // Never let the solver take the run down: an unreadable mailbox is
+            // a reason to hand off, not to crash a run that has already filled
+            // fields worth preserving.
+            verdict = { verified: false, reason: `verification_error:${err?.message || err}` }
+          }
+          // The code itself is NEVER traced. `trace` is persisted on the run row
+          // and rendered in the task drawer, and a live MFA code written into
+          // durable storage outlives its usefulness by months.
+          trace.push({
+            step: 'two_factor_result',
+            detail: { verified: Boolean(verdict.verified), reason: verdict.reason || null },
+          })
+          if (verdict.verified) {
+            loggedIn = true
+            continue
+          }
         }
         trace.push({ step: 'gate', detail: gate })
         return { status: 'blocked', blocker_kind: gate.kind, blocker_detail: gate.detail, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
