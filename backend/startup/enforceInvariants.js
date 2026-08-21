@@ -8401,24 +8401,41 @@ export async function enforceStageOfLifeMatchScope(db) {
     }
     if (violating.length === 0) return { scanned, repaired: 0, profilesWithStage, enforced: true }
 
-    const ids = violating.map((v) => v.match_id)
     // A persisted mismatch must also leave Hamilton's active queue. Completed,
     // submitted and cancelled work is historical evidence and remains intact.
     let tasksCancelled = 0
+    const reconciled = []
     try {
       const { cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')
       const terminal = ['submitted', 'completed', 'cancelled']
       for (const v of violating) {
-        const ph = terminal.map(() => '?').join(', ')
-        const tasks = await db.prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND opportunity_id = ? AND status NOT IN (${ph})`).all(v.profile_id, v.opportunity_id, ...terminal)
-        for (const task of tasks || []) {
-          await cancelApplicationTask(db, task.id, { actorRole: 'system', reason: v.conflict.reason })
-          tasksCancelled += 1
+        try {
+          const ph = terminal.map(() => '?').join(', ')
+          // Include grant-only legacy tasks whose grant links to this catalog
+          // opportunity; ensureApplicationTask intentionally preserves these.
+          const tasks = await db.prepare(`SELECT DISTINCT t.id
+            FROM application_tasks t
+            LEFT JOIN grants g ON g.id = t.grant_id AND g.profile_id = t.profile_id
+            WHERE t.profile_id = ?
+              AND (t.opportunity_id = ? OR g.funding_opportunity_id = ?)
+              AND t.status NOT IN (${ph})`).all(v.profile_id, v.opportunity_id, v.opportunity_id, ...terminal)
+          for (const task of tasks || []) {
+            await cancelApplicationTask(db, task.id, { actorRole: 'system', reason: v.conflict.reason })
+            tasksCancelled += 1
+          }
+          reconciled.push(v)
+        } catch (err) {
+          // Retain this match as the durable retry handle. Other violations are
+          // isolated and can still reconcile during the same boot.
+          log.warn('stage_of_life_match_scope: task reconciliation failed; retaining match', {
+            matchId: v.match_id, error: String(err?.message || err),
+          })
         }
       }
     } catch (err) {
       log.warn('stage_of_life_match_scope: task reconciliation unavailable (non-fatal)', { error: String(err?.message || err) })
     }
+    const ids = reconciled.map((v) => v.match_id)
     let repaired = 0
     for (let i = 0; i < ids.length; i += 200) {
       const slice = ids.slice(i, i + 200)

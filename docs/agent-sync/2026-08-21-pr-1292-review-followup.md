@@ -12,8 +12,16 @@
   across persisted matches and cancels nonterminal Hamilton tasks for conflicts.
 - Expired Amy synthetics with a failed teaching handoff receive a 96-hour
   terminal cleanup escape hatch instead of surviving forever.
-- Agreement acceptance overwrites `user_id` with the authenticated accepter.
+- First-time agreement acceptance records the authenticated accepter; repeat
+  acceptance is rejected so the original identity, timestamp, IP, and user
+  agent remain immutable.
 - `interpret-intent` uses its own 40-per-10-minute, required-shared cost bucket.
+- The website-purpose reader now uses the socket-pinned shared `safeFetch`
+  choke point, including DNS/private-address checks and redirect revalidation.
+  Linked organization website/mission data is loaded before enrichment.
+- Stage/purpose reconciliation includes legacy grant-only Hamilton tasks and
+  retains each match when its task lookup or cancellation fails, allowing the
+  next boot sweep to retry safely.
 
 ## VERIFIED
 
@@ -21,6 +29,9 @@
   enrichment, persisted match reconciliation, agreement acceptance, Amy
   lifecycle cleanup, and API rate-policy classification.
 - Focused ESLint passed for all changed JavaScript files.
+- Follow-up Vitest coverage passed for private/loopback website refusal,
+  organization-backed websites, immutable repeat agreement acceptance,
+  grant-only task cancellation, and failed-reconciliation match retention.
 
 ## UNKNOWN
 

@@ -6,7 +6,7 @@
  * GrantFlow must read the profile website URL to know what the profile is.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   classifyOpportunitiesAgainstWebsitePurpose,
@@ -179,12 +179,49 @@ describe('website purpose enrichment', () => {
     const sections = { basic_information: { website: 'https://ordinary-biotech.example' } }
     const result = await enrichProfileWebsitePurpose(db, {
       profile: { id: 'ordinary-1' }, sections,
+      resolve: async () => [{ address: '93.184.216.34', family: 4 }],
       fetchImpl: async () => ({ ok: true, headers: { get: (k) => k === 'content-type' ? 'text/html' : null }, text: async () => '<main>We conduct biomedical translational research and genomic diagnostics.</main>' }),
     })
     expect(result.status).toBe('fetched')
     expect(result.data.terms).toEqual(expect.arrayContaining(['biomedical research', 'genomic diagnostics']))
     expect(writes).toHaveLength(1)
     expect(deriveWebsitePurpose({ sections }).terms).toContain('biomedical research')
+  })
+
+  it.each([
+    ['an IPv6 loopback literal', 'http://[::1]:8080/private', async () => [{ address: '::1', family: 6 }]],
+    ['a public-looking name resolving privately', 'https://profile.example/private', async () => [{ address: '10.0.0.8', family: 4 }]],
+  ])('rejects %s before the transport connects', async (_label, website, resolve) => {
+    const fetchImpl = vi.fn()
+    const result = await enrichProfileWebsitePurpose(
+      { prepare: vi.fn() },
+      { profile: { id: 'unsafe', website }, sections: {}, resolve, fetchImpl },
+    )
+
+    expect(result.status).toBe('unreadable')
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('uses a linked organization website when the profile row has none', async () => {
+    const writes = []
+    const result = await enrichProfileWebsitePurpose(
+      { prepare: () => ({ run: async (...args) => { writes.push(args); return { changes: 1 } } }) },
+      {
+        profile: { id: 'org-backed' },
+        sections: {},
+        organization: { website: 'https://org-purpose.example', mission: 'Biomedical research' },
+        resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+        fetchImpl: async () => ({
+          ok: true,
+          headers: { get: (key) => key === 'content-type' ? 'text/html' : null },
+          text: async () => '<main>We conduct biomedical research.</main>',
+        }),
+      },
+    )
+
+    expect(result.status).toBe('fetched')
+    expect(result.data.url).toBe('https://org-purpose.example/')
+    expect(writes).toHaveLength(1)
   })
 
   it('keeps biomedical shared-use equipment on mission', () => {
