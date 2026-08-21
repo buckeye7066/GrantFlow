@@ -71,6 +71,41 @@ describe('HamiltonAutomationWatch', () => {
     expect(screen.getByText(/hamilton is working/i)).toBeTruthy()
   })
 
+  it.each([
+    'waiting_for_login',
+    'waiting_for_2fa',
+    'waiting_for_captcha',
+    'waiting_for_email_verification',
+    'waiting_for_missing_info',
+    'waiting_for_review',
+  ])('surfaces the actionable %s state instead of hiding it as neutral waiting', async (status) => {
+    getMock.mockImplementation(async (url) => {
+      if (url.includes('/tasks?')) {
+        return { ok: true, tasks: [{ id: 't-handoff', title: 'Portal handoff', status }] }
+      }
+      return { ok: true, events: [] }
+    })
+    renderAt()
+
+    expect(await screen.findByText('Needs you')).toBeTruthy()
+    expect(screen.getByText(/hamilton stopped here and needs you/i)).toBeTruthy()
+    expect(screen.getByText(/1 need you/i)).toBeTruthy()
+  })
+
+  it('keeps a scheduled window neutral because the user is not blocking Hamilton', async () => {
+    getMock.mockImplementation(async (url) => {
+      if (url.includes('/tasks?')) {
+        return { ok: true, tasks: [{ id: 't-window', title: 'Scheduled portal', status: 'waiting_for_window' }] }
+      }
+      return { ok: true, events: [] }
+    })
+    renderAt()
+
+    expect(await screen.findByText('Waiting')).toBeTruthy()
+    expect(screen.queryByText('Needs you')).toBeNull()
+    expect(screen.getByText(/0 need you/i)).toBeTruthy()
+  })
+
   it('tells the user that closing the window does not stop the run', async () => {
     getMock.mockResolvedValue({ ok: true, tasks: [] })
     renderAt()

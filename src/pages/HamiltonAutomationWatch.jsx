@@ -27,7 +27,26 @@ import client from '@/api/client'
 const LIVE_STATUSES = new Set(['queued', 'ready', 'in_progress', 'running'])
 /** Statuses that mean the run stopped and a human is the next actor. */
 const NEEDS_YOU_PREFIXES = ['blocked']
-const NEEDS_YOU_STATUSES = new Set(['waiting_for_user', 'waiting_for_admin', 'needs_info'])
+// Keep this explicit rather than treating every `waiting_for_*` state as a
+// handoff: `waiting_for_window` is scheduled automation and must not accuse the
+// user of blocking Hamilton. These are the actionable states emitted by
+// applicationTaskStore / hamiltonAuthBackupPlan. In particular, authentication
+// deferrals used to render as the neutral "Waiting" state, hiding the exact
+// login/2FA/CAPTCHA/email-verification work this window exists to surface.
+const NEEDS_YOU_STATUSES = new Set([
+  'waiting_for_user',
+  'waiting_for_admin',
+  'waiting_for_login',
+  'waiting_for_2fa',
+  'waiting_for_captcha',
+  'waiting_for_email_verification',
+  'waiting_for_missing_info',
+  'waiting_for_review',
+  'needs_user',
+  'needs_info',
+  'needs_authorization',
+  'submission_verification_required',
+])
 /** Statuses that are finished, for better or worse. */
 const DONE_STATUSES = new Set(['submitted', 'draft_completed', 'awarded', 'declined', 'cancelled', 'failed'])
 
