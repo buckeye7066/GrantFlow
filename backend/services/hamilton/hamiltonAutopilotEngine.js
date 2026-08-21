@@ -102,6 +102,19 @@ const FIELD_RULES = Object.freeze([
   { key: 'expected_graduation', patterns: [new RegExp(`expected${_S_}graduation`, 'i'), new RegExp(`graduation${_S_}(date|year)`, 'i')] },
   { key: 'household_income',patterns: [new RegExp(`household${_S_}income`, 'i'), new RegExp(`family${_S_}income`, 'i'), new RegExp(`annual${_S_}income`, 'i')] },
   { key: 'household_size',  patterns: [new RegExp(`household${_S_}size`, 'i')] },
+  // Identity-proofing fields. These map to the ENCRYPTED identity vault, not the
+  // profile, and are filled ONLY under full automation when a value is on file
+  // (see identityValues below). SSN/ITIN, DOB, government-ID, and the FSA-ID /
+  // SSO / Login.gov / ID.me credential fields a proofing wall asks for.
+  { key: 'id_ssn',              patterns: [/\bssn\b/i, new RegExp(`social${_S_}security`, 'i'), new RegExp(`social${_S_}security${_S_}number`, 'i')] },
+  { key: 'id_itin',             patterns: [/\bitin\b/i, new RegExp(`individual${_S_}taxpayer`, 'i')] },
+  { key: 'id_date_of_birth',    patterns: [new RegExp(`date${_S_}of${_S_}birth`, 'i'), /\bdob\b/i, /birth${_S_}date/i, /^birthdate$/i] },
+  { key: 'id_government_id_number', patterns: [new RegExp(`driver'?s?${_S_}licen[sc]e`, 'i'), new RegExp(`government${_S_}id`, 'i'), new RegExp(`state${_S_}id${_S_}number`, 'i')] },
+  { key: 'id_passport_number',  patterns: [/passport/i] },
+  { key: 'id_fsa_id_username',  patterns: [new RegExp(`fsa${_S_}id${_S_}(username|user${_S_}name)`, 'i'), new RegExp(`fsa${_S_}id\b`, 'i')] },
+  { key: 'id_fsa_id_password',  patterns: [new RegExp(`fsa${_S_}id${_S_}password`, 'i')] },
+  { key: 'id_sso_username',     patterns: [new RegExp(`sso${_S_}(username|user${_S_}name|id)`, 'i')] },
+  { key: 'id_sso_password',     patterns: [new RegExp(`sso${_S_}password`, 'i')] },
   { key: 'fafsa_efc',       patterns: [new RegExp(`efc|expected${_S_}family${_S_}contribution|sai\\b`, 'i')] },
   { key: 'essay',           patterns: [new RegExp(`essay|personal${_S_}statement|tell${_S_}us${_S_}about|why${_S_}do${_S_}you|describe`, 'i')], multiline: true },
   { key: 'goals',           patterns: [new RegExp(`career${_S_}goals|future${_S_}plans|after${_S_}graduation`, 'i')], multiline: true },
@@ -1055,6 +1068,13 @@ function submitCaptureHistoryResult(captures, before = {}) {
  *   trace: Array<{step:string, detail?:any}>,
  * }>}
  */
+const IDENTITY_FIELD_TO_KIND = Object.freeze({
+  id_ssn: 'ssn', id_itin: 'itin', id_date_of_birth: 'date_of_birth',
+  id_government_id_number: 'government_id_number', id_passport_number: 'passport_number',
+  id_fsa_id_username: 'fsa_id_username', id_fsa_id_password: 'fsa_id_password',
+  id_sso_username: 'sso_username', id_sso_password: 'sso_password',
+})
+
 export async function runAutopilot({
   url,
   profile,
@@ -1088,6 +1108,12 @@ export async function runAutopilot({
   // attemptVerification: (page) => Promise<{ solved: boolean, reason?: string }>.
   // Absent (the default) = a CAPTCHA is a hard blocker, exactly as before.
   solveCaptcha = null,
+  // Decrypted identity-vault values for this profile, keyed by vault kind
+  // (ssn, date_of_birth, government_id_number, fsa_id_*, sso_*). Loaded by the
+  // ORCHESTRATOR under full automation and passed in (the engine never reads the
+  // db mid-run — same contract as narrativeAnswers). Absent/empty = an identity
+  // field is a blocker, exactly as before. NEVER logged or traced.
+  identityValues = null,
   // Full-automation consent (resolveSubmissionDecision's verdict, forwarded by
   // the orchestrator). Unlocks the applicant's electronic signature — typed
   // name fields and e-sign checkboxes — see signatureConsentFor. Absent (the
@@ -1160,12 +1186,31 @@ export async function runAutopilot({
   const signatureConsent = signatureConsentFor({
     fullAutomation, authorizations, signerName: valuesByKey.full_name,
   })
+  // Merge decrypted identity values in under their id_* field keys, ONLY under
+  // full automation. Kept OUT of valuesByKey's log/trace surface: filled fields
+  // record the KEY and a 60-char value slice, so an SSN would leak into the
+  // trace — identity fills are therefore recorded WITHOUT their value below.
+  const identityByFieldKey = {}
+  if (fullAutomation && identityValues && typeof identityValues === 'object') {
+    const KIND_TO_FIELD = {
+      ssn: 'id_ssn', itin: 'id_itin', date_of_birth: 'id_date_of_birth',
+      government_id_number: 'id_government_id_number', passport_number: 'id_passport_number',
+      fsa_id_username: 'id_fsa_id_username', fsa_id_password: 'id_fsa_id_password',
+      sso_username: 'id_sso_username', sso_password: 'id_sso_password',
+    }
+    for (const [kind, fieldKey] of Object.entries(KIND_TO_FIELD)) {
+      const v = identityValues[kind]
+      if (v !== undefined && v !== null && String(v) !== '') identityByFieldKey[fieldKey] = String(v)
+    }
+  }
+  const isIdentityFieldKey = (k) => typeof k === 'string' && k.startsWith('id_')
   // Durable capture dir (UPLOADS_DIR-based in prod, NEVER ephemeral tmp) so a
   // confirmation screenshot/page survives Railway restarts; the orchestrator
   // also passes an explicit durable dir. Direct callers/tests fall back to tmp.
   const screenshotsRoot = screenshotsDir || resolveConfirmationCaptureDir()
   let pagesVisited = 0
   let captchaAttempted = false
+  const missingIdentityKinds = new Set()
   let submissionAttemptStarted = false
   let submitClicked = false
   let beforeSubmitCapture = {}
@@ -1311,8 +1356,19 @@ export async function runAutopilot({
       for (const f of fields) {
         const rule = matchFieldKey(f)
         if (!rule) continue
-        const v = valuesByKey[rule.key]
-        if (v === undefined || v === null || String(v).trim() === '') continue
+        // An identity-proofing field is filled from the ENCRYPTED vault, only
+        // when a value is on file — never from the profile, never invented.
+        const identityField = isIdentityFieldKey(rule.key)
+        const v = identityField ? identityByFieldKey[rule.key] : valuesByKey[rule.key]
+        if (v === undefined || v === null || String(v).trim() === '') {
+          // A REQUIRED identity field we cannot fill (nothing on file) is what
+          // the owner wants Hamilton to ASK for by name — record the vault kind
+          // so the run surfaces a specific request instead of silently stalling.
+          if (identityField && fullAutomation && f.required && IDENTITY_FIELD_TO_KIND[rule.key]) {
+            missingIdentityKinds.add(IDENTITY_FIELD_TO_KIND[rule.key])
+          }
+          continue
+        }
         if (!authorizations.complete_forms && rule.key !== 'email' && rule.key !== 'first_name' && rule.key !== 'last_name') {
           // Without complete_forms authorization Hamilton only fills basic
           // identity fields needed to land on the right page.
@@ -1323,11 +1379,35 @@ export async function runAutopilot({
         }
         const ok = await fillFieldByFid(page, f.fid, v)
         if (ok) {
-          filled.push({ key: rule.key, fid: f.fid, value: String(v).slice(0, 60) })
+          // NEVER record an identity value in the trace/filled list — it is
+          // persisted on the run row. Record the key and that it came from the
+          // vault; the value is deliberately omitted.
+          filled.push(identityField
+            ? { key: rule.key, fid: f.fid, source: 'identity_vault' }
+            : { key: rule.key, fid: f.fid, value: String(v).slice(0, 60) })
           filledThisPage += 1
         }
       }
       trace.push({ step: 'fill', detail: { filledThisPage } })
+
+      // A required identity value is missing from the vault: stop and hand back a
+      // NAMED request (owner directive 2026-08-21 — Hamilton asks the profile's
+      // user for what he needs rather than fabricating or dead-ending). The kinds
+      // are surfaced; no value is ever in the trace.
+      if (missingIdentityKinds.size > 0) {
+        const kinds = [...missingIdentityKinds]
+        trace.push({ step: 'identity_needed', detail: { kinds } })
+        return {
+          status: 'blocked',
+          blocker_kind: 'identity_proof',
+          blocker_detail: `Hamilton needs identity detail(s) not on file: ${kinds.join(', ')}.`,
+          missing_identity_kinds: kinds,
+          filled_fields: filled,
+          pages_visited: pagesVisited,
+          trace,
+          logged_in: loggedIn,
+        }
+      }
 
       // The applicant's typed electronic signature, under full-automation
       // consent only. The value is the applicant's own name from the profile

@@ -47,6 +47,13 @@ import {
 } from '../services/hamilton/applicationTaskStore.js'
 import { listScopedHamiltonTasks } from '../services/hamilton/hamiltonTaskListing.js'
 import {
+  setIdentitySecret,
+  listIdentitySecrets,
+  revokeIdentitySecret,
+  isKnownIdentityKind,
+  IDENTITY_SECRET_KINDS,
+} from '../services/hamilton/hamiltonProfileIdentityVault.js'
+import {
   isFullAutomationGrant,
   isFullAutomationEnabled,
   applyFullAutomationSweep,
@@ -1320,6 +1327,70 @@ router.post('/preflight-resolve', async (req, res) => {
 // Payment authorizations. Token/reference-only — these stores never hold raw
 // card data — but they are still profile-scoped secrets, so every read and
 // write verifies the caller may access the target profile.
+// ── Identity vault (owner directive 2026-08-21) ─────────────────────
+//
+// The SENSITIVE identity values a portal may demand for identity proofing / SSO
+// (SSN, DOB, government ID, FSA ID, university SSO). Stored ENCRYPTED, per
+// profile. Hamilton fills them under full automation when on file, and asks the
+// profile's user for anything missing. These routes are how the owner/admin
+// puts a value on file or takes it off — GET never returns a plaintext value,
+// only which kinds are stored and a masked display hint.
+
+router.get('/identity-vault', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.query.profileId || req.query.profile_id)
+  if (!user) return
+  try {
+    const profileId = req.query.profileId || req.query.profile_id
+    const onFile = await listIdentitySecrets(req.db, profileId)
+    return res.json({
+      ok: true,
+      // The full catalogue of kinds (so the UI can offer them), plus which are on file.
+      kinds: Object.entries(IDENTITY_SECRET_KINDS).map(([kind, spec]) => ({ kind, label: spec.label })),
+      on_file: onFile,
+    })
+  } catch (err) {
+    return res.status(500).json({ error: 'identity_list_failed', detail: err?.message })
+  }
+})
+
+router.post('/identity-vault', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId || req.body?.profile_id)
+  if (!user) return
+  const kind = String(req.body?.kind || '')
+  if (!isKnownIdentityKind(kind)) {
+    return res.status(400).json({ error: 'unknown_identity_kind', message: 'That identity field is not one Hamilton stores.' })
+  }
+  if (!req.body?.value || String(req.body.value).trim() === '') {
+    return res.status(400).json({ error: 'value_required', message: 'Provide the value to store.' })
+  }
+  try {
+    const stored = await setIdentitySecret(req.db, {
+      profileId: req.body.profileId || req.body.profile_id,
+      kind,
+      value: req.body.value,
+      userId: getAuthUserId(user),
+    })
+    // Never echo the value back — only the masked hint.
+    return res.json({ ok: true, stored: { kind: stored.kind, display_hint: stored.display_hint } })
+  } catch (err) {
+    return res.status(400).json({ error: 'identity_store_failed', detail: err?.message })
+  }
+})
+
+router.post('/identity-vault/revoke', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId || req.body?.profile_id)
+  if (!user) return
+  try {
+    const removed = await revokeIdentitySecret(req.db, {
+      profileId: req.body.profileId || req.body.profile_id,
+      kind: String(req.body?.kind || ''),
+    })
+    return res.json({ ok: true, removed })
+  } catch (err) {
+    return res.status(400).json({ error: 'identity_revoke_failed', detail: err?.message })
+  }
+})
+
 router.get('/payment-authorizations', async (req, res) => {
   const user = await requireProfileScope(req, res, req.query.profileId)
   if (!user) return

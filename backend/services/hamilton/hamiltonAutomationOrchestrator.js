@@ -102,6 +102,8 @@ import {
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
 import { attemptAutomatedVerification } from './hamiltonVerificationGate.js'
 import { attemptCaptchaSolve, isCaptchaSolverConfigured } from './hamiltonCaptchaSolver.js'
+import { loadIdentityValuesForFill } from './hamiltonProfileIdentityVault.js'
+import { emitIdentityRequest } from './hamiltonIdentityRequest.js'
 import { makeHamiltonGraphTokenProvider } from './hamiltonGraphToken.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isSearchEngineUrl } from '../../config/urlRules.js'
@@ -1909,6 +1911,11 @@ async function runAutopilotPathway(db, {
           // applicant's own name. Consent is the ONE flag, read from the one
           // authority; the engine re-checks the granted types itself.
           fullAutomation: allowAutoSubmit,
+          // Identity-proofing values (SSN / DOB / gov-ID / FSA-ID / SSO) from the
+          // ENCRYPTED per-profile vault, decrypted here (the orchestrator owns
+          // the db) and passed in so the engine's no-db-mid-run contract holds.
+          // Only under full automation; absent = the field stays a hand-off.
+          ...(allowAutoSubmit ? { identityValues: await loadIdentityValuesForFill(db, task.profile_id).catch(() => null) } : {}),
           // CAPTCHA solver: only under full automation AND only when the owner
           // configured a solver key. With no key isCaptchaSolverConfigured is
           // false and this stays null, so a CAPTCHA is the same hard hand-off
@@ -2007,6 +2014,38 @@ async function runAutopilotPathway(db, {
         loginCredential = recovered.credential
         continue // retry the run, now able to log in
       }
+    }
+
+    // Identity proofing (owner directive 2026-08-21): Hamilton fills SSN / DOB /
+    // gov-ID / FSA-ID / SSO from the encrypted vault when they are on file (the
+    // engine did that above). When a REQUIRED one is NOT on file, he asks the
+    // profile's user for exactly that value — by name, with a secure link — and
+    // stops, rather than fabricating it or dead-ending on a generic block.
+    if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'identity_proof'
+        && Array.isArray(engineResult.missing_identity_kinds) && engineResult.missing_identity_kinds.length > 0) {
+      await emitIdentityRequest(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        kinds: engineResult.missing_identity_kinds,
+        host: hostOfUrl(url),
+        fundingTitle: opportunity?.title || grant?.title || null,
+      }).catch(() => {})
+      await updateApplicationTask(db, task.id, {
+        unlessCancelled: true,
+        status: 'waiting_for_missing_info',
+        lastAgentMessage: `Hamilton needs a detail only you can provide (${engineResult.missing_identity_kinds.join(', ')}). Add it securely and Hamilton resumes.`,
+      }).catch(() => {})
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'blocked',
+        status: 'waiting_for_missing_info',
+        step: 'identity_needed',
+        message: `Hamilton asked you for: ${engineResult.missing_identity_kinds.join(', ')}. No value was fabricated.`,
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: { autopilot_run_id: run.id, missing_identity_kinds: engineResult.missing_identity_kinds },
+      }).catch(() => {})
+      break
     }
 
     // Hand the blocker to the resolver.
