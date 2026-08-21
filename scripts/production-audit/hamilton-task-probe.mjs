@@ -65,14 +65,31 @@ const QUERIES = [
            LIMIT 15`,
   },
   {
-    id: 'completed_at_by_second',
-    why: 'D5 — same check for completions landing in a single second.',
-    sql: `SELECT date_trunc('second', completed_at) AS at_second, COUNT(*)::int AS n
+    id: 'cancel_reason_messages',
+    why: 'D5/D11 — what REASON, if any, the mass-cancelled rows actually recorded.',
+    sql: `SELECT left(COALESCE(last_agent_message, '(null)'), 160) AS message,
+                 COUNT(*)::int AS n,
+                 MIN(cancelled_at) AS first_at,
+                 MAX(cancelled_at) AS last_at
             FROM application_tasks
-           WHERE completed_at IS NOT NULL
+           WHERE status = 'cancelled'
            GROUP BY 1
-           ORDER BY n DESC, 1 DESC
-           LIMIT 15`,
+           ORDER BY n DESC
+           LIMIT 25`,
+  },
+  {
+    id: 'cancel_event_actors',
+    why: 'D5 — who performed the cancellations that DID leave an event.',
+    sql: `SELECT COALESCE(e.actor_role, '(null)') AS actor_role,
+                 left(COALESCE(e.message, '(null)'), 140) AS message,
+                 COUNT(*)::int AS n,
+                 MIN(e.created_at) AS first_at,
+                 MAX(e.created_at) AS last_at
+            FROM application_task_events e
+           WHERE e.event_type = 'cancelled' OR e.status = 'cancelled'
+           GROUP BY 1, 2
+           ORDER BY n DESC
+           LIMIT 25`,
   },
   {
     id: 'title_resolution',
@@ -82,187 +99,162 @@ const QUERIES = [
                  COUNT(t.grant_id)::int                                                AS with_grant_id,
                  COUNT(*) FILTER (WHERE NULLIF(TRIM(g.title), '') IS NOT NULL)::int     AS grant_title_present,
                  COUNT(*) FILTER (WHERE NULLIF(TRIM(fo.title), '') IS NOT NULL)::int    AS opportunity_title_present,
-                 COUNT(*) FILTER (WHERE NULLIF(TRIM(g.funder), '') IS NOT NULL)::int    AS grant_funder_present,
-                 COUNT(*) FILTER (WHERE NULLIF(TRIM(fo.sponsor), '') IS NOT NULL)::int  AS opportunity_sponsor_present,
-                 COUNT(*) FILTER (WHERE NULLIF(TRIM(t.application_url), '') IS NOT NULL)::int AS task_application_url_present,
-                 COUNT(*) FILTER (WHERE NULLIF(TRIM(t.portal_url), '') IS NOT NULL)::int      AS task_portal_url_present,
                  COUNT(*) FILTER (
                    WHERE NULLIF(TRIM(g.title), '') IS NULL
                      AND NULLIF(TRIM(fo.title), '') IS NULL
-                 )::int                                                                AS no_title_anywhere
+                 )::int                                                                AS no_title_anywhere,
+                 COUNT(*) FILTER (
+                   WHERE NULLIF(TRIM(g.title), '') IS NULL
+                     AND NULLIF(TRIM(fo.title), '') IS NULL
+                     AND COALESCE(NULLIF(TRIM(t.application_url), ''), NULLIF(TRIM(t.portal_url), '')) IS NOT NULL
+                 )::int                                                                AS no_title_but_has_url
             FROM application_tasks t
             LEFT JOIN grants g ON g.id = t.grant_id
             LEFT JOIN funding_opportunities fo ON fo.id = t.opportunity_id`,
   },
   {
-    id: 'submitted_tasks',
-    why: 'D10/D12/D14 — what the tasks that reached `submitted` actually recorded.',
-    sql: `SELECT t.id,
-                 t.status,
-                 t.automation_type,
-                 t.submitted_at,
-                 t.auto_submit_enabled,
-                 t.allow_auto_submit,
-                 t.application_url,
-                 t.portal_url,
-                 COALESCE(NULLIF(TRIM(g.title), ''), NULLIF(TRIM(fo.title), '')) AS resolved_title,
-                 COALESCE(NULLIF(TRIM(g.funder), ''), NULLIF(TRIM(fo.sponsor), '')) AS resolved_funder
+    id: 'submitted_proof_documents',
+    why: 'D10/D12 — do the submitted rows point at real CONFIRMATION proof, or at a draft packet?',
+    sql: `SELECT COALESCE(d.type, '(no document)') AS document_type, COUNT(*)::int AS n
             FROM application_tasks t
-            LEFT JOIN grants g ON g.id = t.grant_id
-            LEFT JOIN funding_opportunities fo ON fo.id = t.opportunity_id
-           WHERE t.status = 'submitted' OR t.submitted_at IS NOT NULL
-           ORDER BY t.submitted_at DESC NULLS LAST
-           LIMIT 50`,
-  },
-  {
-    id: 'auto_submit_settings',
-    why: 'D12 — is Hamilton even permitted to submit? Distribution of the two flags.',
-    sql: `SELECT COALESCE(auto_submit_enabled::text, '(null)') AS auto_submit_enabled,
-                 COALESCE(allow_auto_submit::text, '(null)')   AS allow_auto_submit,
-                 COUNT(*)::int AS n
-            FROM application_tasks
-           GROUP BY 1, 2
-           ORDER BY n DESC`,
-  },
-  {
-    id: 'task_event_types',
-    why: 'D5/D11 — what per-task events are persisted, and by which actor role.',
-    sql: `SELECT event_type,
-                 COALESCE(status, '(null)')     AS status,
-                 COALESCE(actor_role, '(null)') AS actor_role,
-                 COUNT(*)::int AS n
-            FROM application_task_events
-           GROUP BY 1, 2, 3
-           ORDER BY n DESC
-           LIMIT 60`,
-  },
-  {
-    id: 'cancellation_events_present',
-    why: 'D5 — was a REASON recorded for the mass cancellation, or none at all?',
-    sql: `SELECT COUNT(*)::int AS cancelled_tasks,
-                 COUNT(*) FILTER (WHERE e.task_id IS NOT NULL)::int AS with_any_cancel_event,
-                 COUNT(*) FILTER (
-                   WHERE NULLIF(TRIM(t.last_agent_message), '') IS NOT NULL
-                 )::int AS with_last_agent_message
-            FROM application_tasks t
-            LEFT JOIN LATERAL (
-              SELECT 1 AS task_id
-                FROM application_task_events e
-               WHERE e.task_id = t.id
-                 AND (e.event_type ILIKE '%cancel%' OR e.status = 'cancelled')
-               LIMIT 1
-            ) e ON TRUE
-           WHERE t.status = 'cancelled'`,
-  },
-  {
-    id: 'grants_status_counts',
-    why: 'D15 — the Application Tracker lanes (Draft / In Progress / Submitted / Withdrawn ...).',
-    sql: `SELECT COALESCE(status, '(null)') AS status, COUNT(*)::int AS n
-            FROM grants
+            LEFT JOIN documents d ON d.id = t.output_document_id
+           WHERE t.status = 'submitted'
            GROUP BY 1
            ORDER BY n DESC`,
   },
   {
-    id: 'grants_untitled',
-    why: 'D2/D15 — how many tracker rows carry no usable title.',
-    sql: `SELECT COUNT(*)::int AS grants,
-                 COUNT(*) FILTER (WHERE NULLIF(TRIM(title), '') IS NULL)::int  AS no_title,
-                 COUNT(*) FILTER (WHERE NULLIF(TRIM(funder), '') IS NULL)::int AS no_funder,
-                 COUNT(*) FILTER (WHERE funding_opportunity_id IS NULL)::int   AS no_opportunity_link
-            FROM grants`,
-  },
-  {
-    id: 'grants_withdrawn_by_second',
-    why: 'D15 — is "Withdrawn" the same one-second sweep as the run view "cancelled"?',
-    sql: `SELECT date_trunc('second', updated_at) AS at_second,
+    id: 'submitted_event_actors',
+    why: 'D12 — did HAMILTON record these submissions, or a human/bulk admin action?',
+    sql: `SELECT COALESCE(e.actor_role, '(null)') AS actor_role,
+                 left(COALESCE(e.message, '(null)'), 140) AS message,
                  COUNT(*)::int AS n,
-                 COUNT(*) FILTER (WHERE NULLIF(TRIM(title), '') IS NULL)::int AS untitled
-            FROM grants
-           WHERE status ILIKE 'withdraw%'
-           GROUP BY 1
-           ORDER BY n DESC, 1 DESC
-           LIMIT 15`,
-  },
-  {
-    id: 'duplicate_programs',
-    why: 'D14 — duplicate program records per profile, keyed loosely on title.',
-    sql: `SELECT profile_id,
-                 lower(regexp_replace(COALESCE(title, ''), '[^a-z0-9]+', ' ', 'gi')) AS norm_title,
-                 COUNT(*)::int AS n,
-                 COUNT(DISTINCT COALESCE(funder, ''))::int AS distinct_funders,
-                 COUNT(DISTINCT COALESCE(funding_opportunity_id::text, ''))::int AS distinct_opportunities
-            FROM grants
-           WHERE NULLIF(TRIM(title), '') IS NOT NULL
+                 MIN(e.created_at) AS first_at,
+                 MAX(e.created_at) AS last_at
+            FROM application_task_events e
+           WHERE e.event_type = 'submitted'
            GROUP BY 1, 2
-          HAVING COUNT(*) > 1
            ORDER BY n DESC
-           LIMIT 60`,
+           LIMIT 25`,
   },
   {
-    id: 'duplicate_task_opportunities',
-    why: 'D4c/D14 — the same opportunity or URL claimed by more than one task.',
+    id: 'duplicate_tasks_by_grant',
+    why: 'D14 — the same grant claimed by more than one task on one profile.',
     sql: `SELECT COUNT(*)::int AS duplicated_groups,
-                 COALESCE(SUM(n) - COUNT(*), 0)::int AS excess_rows
+                 COALESCE(SUM(n) - COUNT(*), 0)::int AS excess_rows,
+                 COALESCE(MAX(n), 0)::int AS worst_group
             FROM (
-              SELECT profile_id, opportunity_id, COUNT(*)::int AS n
+              SELECT profile_id, grant_id, COUNT(*)::int AS n
                 FROM application_tasks
-               WHERE opportunity_id IS NOT NULL
+               WHERE grant_id IS NOT NULL
                GROUP BY 1, 2
               HAVING COUNT(*) > 1
             ) d`,
   },
   {
-    id: 'duplicate_task_application_urls',
-    why: 'D4c — the same rescued URL attached to more than one task.',
-    sql: `SELECT application_url, COUNT(*)::int AS n
-            FROM application_tasks
-           WHERE NULLIF(TRIM(application_url), '') IS NOT NULL
-           GROUP BY 1
+    id: 'duplicate_tasks_by_title',
+    why: 'D14 — the same PROGRAM (by resolved title) claimed by several tasks on one profile.',
+    sql: `SELECT t.profile_id,
+                 lower(regexp_replace(COALESCE(g.title, fo.title, ''), '[^a-z0-9]+', ' ', 'gi')) AS norm_title,
+                 COUNT(*)::int AS n,
+                 COUNT(DISTINCT t.status)::int AS distinct_statuses,
+                 COUNT(DISTINCT COALESCE(g.funder, fo.sponsor, ''))::int AS distinct_funders
+            FROM application_tasks t
+            LEFT JOIN grants g ON g.id = t.grant_id
+            LEFT JOIN funding_opportunities fo ON fo.id = t.opportunity_id
+           WHERE COALESCE(NULLIF(TRIM(g.title), ''), NULLIF(TRIM(fo.title), '')) IS NOT NULL
+           GROUP BY 1, 2
           HAVING COUNT(*) > 1
            ORDER BY n DESC
            LIMIT 40`,
   },
   {
-    id: 'rescued_url_hosts',
-    why: 'D4a — which hosts URL rescue actually accepted as application pages.',
-    sql: `SELECT lower(substring(application_url from '^https?://([^/]+)')) AS host,
-                 COUNT(*)::int AS n
-            FROM application_tasks
-           WHERE NULLIF(TRIM(application_url), '') IS NOT NULL
-           GROUP BY 1
-           ORDER BY n DESC
-           LIMIT 60`,
+    id: 'duplicate_task_totals',
+    why: 'D14 — the honest headline: how many task rows are excess duplicates of a program.',
+    sql: `SELECT COUNT(*)::int AS duplicated_programs,
+                 COALESCE(SUM(n) - COUNT(*), 0)::int AS excess_rows
+            FROM (
+              SELECT t.profile_id,
+                     lower(regexp_replace(COALESCE(g.title, fo.title, ''), '[^a-z0-9]+', ' ', 'gi')) AS norm_title,
+                     COUNT(*)::int AS n
+                FROM application_tasks t
+                LEFT JOIN grants g ON g.id = t.grant_id
+                LEFT JOIN funding_opportunities fo ON fo.id = t.opportunity_id
+               WHERE COALESCE(NULLIF(TRIM(g.title), ''), NULLIF(TRIM(fo.title), '')) IS NOT NULL
+               GROUP BY 1, 2
+              HAVING COUNT(*) > 1
+            ) d`,
   },
   {
-    id: 'submission_events_table',
-    why: 'D12/D13 — does anything write submission_events, and with what recorded_by?',
-    sql: `SELECT event_type,
-                 COALESCE(outcome, '(null)')     AS outcome,
-                 COALESCE(recorded_by, '(null)') AS recorded_by,
-                 COUNT(*)::int AS n
-            FROM submission_events
-           GROUP BY 1, 2, 3
+    id: 'url_rescue_events',
+    why: 'D4 — what URL rescue actually said, and which pages it accepted.',
+    sql: `SELECT left(COALESCE(e.message, '(null)'), 200) AS message,
+                 COUNT(*)::int AS n,
+                 MAX(e.created_at) AS last_at
+            FROM application_task_events e
+           WHERE e.message ILIKE '%rescue%'
+              OR e.step ILIKE '%rescue%'
+              OR e.event_type ILIKE '%rescue%'
+           GROUP BY 1
            ORDER BY n DESC
            LIMIT 40`,
   },
   {
-    id: 'deadline_events_table',
-    why: 'D13 — does a per-profile forward-looking calendar mechanism already carry rows?',
-    sql: `SELECT event_type, COUNT(*)::int AS n,
-                 COUNT(*) FILTER (WHERE due_at IS NOT NULL)::int AS with_due_at
-            FROM deadline_events
-           GROUP BY 1
-           ORDER BY n DESC
-           LIMIT 40`,
-  },
-  {
-    id: 'manual_receipts',
-    why: 'D12 — how many submissions were attested manually by the owner.',
-    sql: `SELECT COALESCE(status, '(null)') AS status,
-                 COALESCE(channel, '(null)') AS channel,
+    id: 'classification_confidence_events',
+    why: 'D3 — is the reported classification confidence a constant?',
+    sql: `SELECT substring(e.message from 'confidence ([0-9.]+)') AS confidence,
+                 substring(e.message from 'as "([a-z_]+)"')        AS classified_as,
                  COUNT(*)::int AS n
-            FROM hamilton_manual_submission_receipts
+            FROM application_task_events e
+           WHERE e.message ILIKE '%confidence%'
            GROUP BY 1, 2
+           ORDER BY n DESC
+           LIMIT 40`,
+  },
+  {
+    id: 'degraded_resolver_events',
+    why: 'D9 — how often a resolver degraded, and whether the run continued anyway.',
+    sql: `SELECT left(COALESCE(e.message, '(null)'), 160) AS message,
+                 COUNT(*)::int AS n
+            FROM application_task_events e
+           WHERE e.message ILIKE '%degraded%'
+              OR e.message ILIKE '%funder_contact_packet%'
+           GROUP BY 1
+           ORDER BY n DESC
+           LIMIT 25`,
+  },
+  {
+    id: 'listing_decomposition_events',
+    why: 'D10 — did listing decomposition find nothing, or fail silently?',
+    sql: `SELECT left(COALESCE(e.message, '(null)'), 200) AS message,
+                 COUNT(*)::int AS n
+            FROM application_task_events e
+           WHERE e.message ILIKE '%decompos%'
+           GROUP BY 1
+           ORDER BY n DESC
+           LIMIT 25`,
+  },
+  {
+    id: 'junk_host_opportunities',
+    why: 'D4a — are the SEO-content-farm pages the owner saw stored as application URLs?',
+    sql: `SELECT lower(substring(COALESCE(application_url, source_url) from '^https?://([^/]+)')) AS host,
+                 COUNT(*)::int AS n
+            FROM funding_opportunities
+           WHERE COALESCE(application_url, source_url) ILIKE ANY (ARRAY[
+                   '%mjnewellhomes.com%',
+                   '%nationaltaxreports.com%',
+                   '%wemakescholars.com%',
+                   '%tbr.edu%'
+                 ])
+           GROUP BY 1
+           ORDER BY n DESC
+           LIMIT 20`,
+  },
+  {
+    id: 'grants_status_counts',
+    why: 'D15 — the Application Tracker lanes as they exist on the grants table.',
+    sql: `SELECT COALESCE(status, '(null)') AS status, COUNT(*)::int AS n
+            FROM grants
+           GROUP BY 1
            ORDER BY n DESC`,
   },
 ];
