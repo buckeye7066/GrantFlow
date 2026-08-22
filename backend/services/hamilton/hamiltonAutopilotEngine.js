@@ -1700,7 +1700,9 @@ export async function runAutopilot({
       // automation only. (U.S. Bank form: tick "I am 18 or older", leave "I am
       // 17…" — the difference between filling the form and blocking on submit.)
       if (authorizations.use_standing_attestation) {
-        const dobForAge = identityByFieldKey.date_of_birth || valuesByKey.date_of_birth || valuesByKey.dob || null
+        const dobForAge = identityByFieldKey.id_date_of_birth
+          || (identityValues && identityValues.date_of_birth)
+          || valuesByKey.date_of_birth || valuesByKey.dob || null
         const ageYears = computeAgeYears(dobForAge)
         if (ageYears !== null) {
           const boxes = await page.$$eval('input[type="checkbox"]', (els) => els.map((el) => {
