@@ -101,10 +101,29 @@ export async function readCaptchaChallenge(page) {
       if (recaptcha) type = 'recaptcha'
       else if (hcaptcha) type = 'hcaptcha'
       else if (turnstile) type = 'turnstile'
+      // Fallback: many sites (reCAPTCHA invisible / enterprise / JS-injected)
+      // never render a data-sitekey div — the key lives ONLY in the challenge
+      // iframe's src (reCAPTCHA anchor `...api2/anchor?k=KEY`, hCaptcha
+      // `...#...sitekey=KEY`). Without this the detector returns type but no
+      // sitekey and the solve dead-ends at `no_sitekey_on_page`.
+      function sitekeyFromIframe() {
+        const frames = document.querySelectorAll(
+          'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"]',
+        )
+        for (const f of frames) {
+          const src = f.getAttribute('src') || ''
+          // reCAPTCHA uses `k=`, hCaptcha/others use `sitekey=`. The key charset
+          // is URL-safe base64-ish; stop at the next param delimiter.
+          const m = src.match(/[?&#](?:k|sitekey|render)=([\w-]{20,})/)
+          if (m) return m[1]
+        }
+        return ''
+      }
       const sitekey = dataSite
         || attr('div.g-recaptcha', 'data-sitekey')
         || attr('div.h-captcha', 'data-sitekey')
         || attr('div.cf-turnstile', 'data-sitekey')
+        || sitekeyFromIframe()
       if (!type && !sitekey) return null
       return { type: type || 'unknown', sitekey: sitekey || null, pageUrl: window.location.href }
     })
