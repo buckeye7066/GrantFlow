@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { assessOpportunityTrust } from '../opportunityTrust.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
-import { isClearlyExpiredProgram } from '../../config/fundingResultFilters.js'
+import { isClearlyExpiredProgram, SEARCH_SURFACE_TITLE_RX, aggregatorBrandSurface } from '../../config/fundingResultFilters.js'
 
 const ALLOWED_MATCH_DECISIONS = new Set(['accept', 'review'])
 const PROFILE_MATCH_REQUIRED_ORIGINS = new Set(['live_crawl', 'geo_crawl', 'discovered'])
@@ -132,7 +132,19 @@ function usableWebUrl(subject) {
 
 export function assessPointerResearchLead(subject, { profileNeeds = [] } = {}) {
   const kind = subject?.opportunity_kind
-  if (!isPointerKind(kind)) return null
+  // A SEARCH / FINDER / DIRECTORY surface is a pointer even when its stored
+  // `opportunity_kind` predates the classifier (the rolling-snapshot / stale-kind
+  // problem): "Scholarships.com — Free Scholarship Search", "Music & Performing
+  // Arts Scholarship Finder", the "…Scholarship Directory" rows, and an aggregator
+  // brand leading the title ("Bold.org — …", "Fastweb — …"). These were filled as
+  // leaf applications and sat at "waiting for review". Title-classified so a stale
+  // kind can't hide them — but a real award HOSTED on bold.org (the funder is the
+  // actual sponsor, the title is the award) does NOT match either predicate, so it
+  // still applies normally.
+  const titleIsSearchSurface = SEARCH_SURFACE_TITLE_RX.test(String(subject?.title ?? ''))
+    || Boolean(aggregatorBrandSurface(subject))
+  if (!isPointerKind(kind) && !titleIsSearchSurface) return null
+  const effectiveKind = isPointerKind(kind) ? kind : 'directory'
   const url = usableWebUrl(subject)
   if (url && decomposePointerListingsEnabled()) return null
   const needsLine = (Array.isArray(profileNeeds) ? profileNeeds : [])
@@ -140,11 +152,11 @@ export function assessPointerResearchLead(subject, { profileNeeds = [] } = {}) {
     .slice(0, 6)
     .join(', ')
   return {
-    kind: String(kind).toLowerCase(),
+    kind: String(effectiveKind).toLowerCase(),
     url,
     title: subject?.title ?? null,
     instructions: [
-      `"${subject?.title ?? 'This source'}" is a ${String(kind).toLowerCase().replace('_', ' ')} — a page that lists or points at funding programs, not a program you can apply to directly.`,
+      `"${subject?.title ?? 'This source'}" is a ${String(effectiveKind).toLowerCase().replace('_', ' ')} — a page that lists or points at funding programs, not a program you can apply to directly.`,
       url
         ? `Open ${url} and identify specific programs${needsLine ? ` matching: ${needsLine}` : ''}, then add each one from Discovery so it can be applied to individually.`
         : `No working link is stored for it. Search for the source by name, identify specific programs${needsLine ? ` matching: ${needsLine}` : ''}, and add each one from Discovery.`,

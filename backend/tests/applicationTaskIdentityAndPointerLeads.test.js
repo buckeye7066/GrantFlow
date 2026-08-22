@@ -116,6 +116,33 @@ describe('pointer rows become research leads, never application tasks', () => {
     expect(assessPointerResearchLead({ opportunity_kind: null, title: 'Kindless' })).toBeNull()
   })
 
+  it('a SEARCH/FINDER/DIRECTORY title is a research lead even with a stale non-pointer kind', () => {
+    delete process.env.HAMILTON_DECOMPOSE_POINTER_LISTINGS
+    // Real rows that sat at "waiting for review" (2026-08-22) with a non-pointer
+    // stored kind — title-classified so the stale kind can't hide them. URL-less
+    // here so they resolve to a research-lead handoff rather than decomposition.
+    for (const title of [
+      'Scholarships.com — Free Scholarship Search',
+      'Music & Performing Arts Scholarship Finder',
+      'Criminal Justice & Forensics Scholarship Directory',
+      'Bold.org — No-Essay & Traditional Scholarships',
+      'Fastweb — Room & Board / Housing Scholarships',
+    ]) {
+      const lead = assessPointerResearchLead({ opportunity_kind: 'direct_grant', title })
+      expect(lead, title).toBeTruthy()
+    }
+  })
+
+  it('a REAL award hosted on an aggregator is NOT a research lead (funder is the sponsor, title is the award)', () => {
+    for (const opp of [
+      { opportunity_kind: 'direct_grant', title: 'Coca-Cola Scholars Program', sponsor: 'National Program' },
+      { opportunity_kind: 'direct_grant', title: 'Bound Tree Medical Legacy Scholarship', sponsor: 'Bound Tree Medical' },
+      { opportunity_kind: 'direct_grant', title: 'Dr. Richard Detmer Scholarship', sponsor: 'Middle Tennessee State University' },
+    ]) {
+      expect(assessPointerResearchLead(opp), opp.title).toBeNull()
+    }
+  })
+
   it('assessHamiltonFundingSource refuses a URL-less pointer catalog row as pointer_research_lead WITH handoff', async () => {
     await db.prepare(
       `INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?, ?, ?, 1)`,
