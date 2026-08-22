@@ -181,6 +181,7 @@ import {
 } from '../services/hamilton/hamiltonCustomFieldRegistry.js'
 import { resolveMissingInfoItem } from '../services/hamilton/applicationTaskStore.js'
 import { categorizeHamiltonTask } from '../../shared/hamiltonTaskCategory.js'
+import { classifyNeedYouBlock } from '../services/hamilton/hamiltonNeedYouRelease.js'
 import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
 import {
@@ -2742,31 +2743,64 @@ router.post('/admin/release-need-you', async (req, res) => {
     const scope = profileId ? 'AND profile_id = ?' : ''
     const params = [...RELEASABLE_NEED_YOU_STATUSES, ...(profileId ? [profileId] : [])]
 
-    // What will be released (for the response), then clear the backoff in one write.
-    const before = await req.db.prepare(
-      `SELECT id, profile_id, status FROM application_tasks
+    const tasks = await req.db.prepare(
+      `SELECT id, profile_id, status, last_agent_message FROM application_tasks
         WHERE status IN (${placeholders}) ${scope}`,
     ).all(...params)
 
-    const nowFn = req.db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
-    const upd = await req.db.prepare(
-      `UPDATE application_tasks
-          SET next_retry_at = NULL, updated_at = ${nowFn}
-        WHERE status IN (${placeholders}) ${scope}`,
-    ).run(...params)
+    // Category 2 needs the truth about whether an ask is still OPEN. Batch it.
+    const withOpenInfo = new Set()
+    if (tasks.length > 0) {
+      const ids = tasks.map((t) => t.id)
+      const ph = ids.map(() => '?').join(', ')
+      const rows = await req.db.prepare(
+        `SELECT DISTINCT task_id FROM application_missing_info
+          WHERE task_id IN (${ph}) AND resolved IS NOT TRUE`,
+      ).all(...ids).catch(() => [])
+      for (const r of rows || []) withOpenInfo.add(String(r.task_id))
+    }
 
-    const byStatus = {}
-    for (const t of before) byStatus[t.status] = (byStatus[t.status] || 0) + 1
-    const profiles = new Set(before.map((t) => t.profile_id)).size
+    // Classify each card against the owner's 4 categories (+ correctness keeps).
+    const releaseIds = []
+    const releasedByStatus = {}
+    const keptByCategory = {}
+    for (const t of tasks) {
+      const verdict = classifyNeedYouBlock(t, { hasUnresolvedInfo: withOpenInfo.has(String(t.id)) })
+      if (verdict.keep) {
+        keptByCategory[verdict.category] = (keptByCategory[verdict.category] || 0) + 1
+      } else {
+        releaseIds.push(t.id)
+        releasedByStatus[t.status] = (releasedByStatus[t.status] || 0) + 1
+      }
+    }
 
-    log.info('release_need_you', { released: before.length, profiles, byStatus, scope: profileId || 'all' })
+    // Clear the backoff ONLY on the non-legitimate blocks.
+    let changed = 0
+    if (releaseIds.length > 0) {
+      const nowFn = req.db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+      const ph = releaseIds.map(() => '?').join(', ')
+      const upd = await req.db.prepare(
+        `UPDATE application_tasks SET next_retry_at = NULL, updated_at = ${nowFn} WHERE id IN (${ph})`,
+      ).run(...releaseIds)
+      changed = upd?.changes ?? releaseIds.length
+    }
+
+    const profiles = new Set(tasks.map((t) => t.profile_id)).size
+    const kept = tasks.length - releaseIds.length
+    log.info('release_need_you', {
+      considered: tasks.length, released: releaseIds.length, kept, profiles,
+      kept_by_category: keptByCategory, scope: profileId || 'all',
+    })
     return res.json({
       ok: true,
-      released: before.length,
-      changed: upd?.changes ?? before.length,
+      considered: tasks.length,
+      released: releaseIds.length,
+      changed,
+      kept,
       profiles_affected: profiles,
-      by_status: byStatus,
-      note: 'Retry backoff cleared. Start a full-automation run to revisit these — the run re-picks non-terminal sources and will now create accounts / solve challenges / arm submit. Genuinely unresolvable ones (a real missing-info ask, a ToS wall) will re-block honestly.',
+      released_by_status: releasedByStatus,
+      kept_by_category: keptByCategory,
+      note: 'Cleared the backoff on every "needs you" card whose block is NOT one of the four legitimate hand-offs (physical-copy packet, genuinely-missing info, an unbeatable bot wall, or an existing external login). A full-automation run now re-picks those and, with the allowlist bypassed + CAPTCHA solver + e-signature, submits where it can. Kept blocked: the four legitimate categories, plus ineligible sources (the eligibility gate is correct) and any maybe-already-submitted card (never auto-retried).',
     })
   } catch (err) {
     log.error('release_need_you_failed', { err: err?.message })

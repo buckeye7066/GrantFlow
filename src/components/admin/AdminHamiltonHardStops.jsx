@@ -134,15 +134,19 @@ export default function AdminHamiltonHardStops() {
   // block-removal fixes deployed. Uses the app's authenticated client (Bearer
   // token), so it works where a raw console fetch 401s. Never submits.
   async function releaseNeedYou() {
-    if (!window.confirm('Release all stuck "need you" portals across every profile so the next full-automation run revisits them? This clears the retry backoff only — it never submits, and the double-submit quarantine / ToS / mail-fax tasks are left untouched.')) return
+    if (!window.confirm('Revisit every "needs you" card across all profiles and clear the block on any that is NOT one of the four legitimate hand-offs (physical-copy packet, genuinely-missing info, an unbeatable bot wall, or an existing external login). Cleared cards are revisited by the next full-automation run; ineligible sources and any maybe-already-submitted card are left blocked. This never submits by itself.')) return
     setBusy('__release__')
     try {
       const res = await client.post('/api/hamilton/automation/admin/release-need-you', { allProfiles: true })
-      const parts = Object.entries(res?.by_status || {}).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`).join(', ')
-      showInfoToast(toast, 'Portals released', `${res?.released ?? 0} task${(res?.released ?? 0) === 1 ? '' : 's'} released across ${res?.profiles_affected ?? 0} profile(s)${parts ? ` — ${parts}` : ''}. Start a full-automation run to revisit them.`)
+      const kept = Object.entries(res?.kept_by_category || {}).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`).join(', ')
+      showInfoToast(
+        toast,
+        'Cards revisited',
+        `${res?.released ?? 0} block${(res?.released ?? 0) === 1 ? '' : 's'} cleared across ${res?.profiles_affected ?? 0} profile(s); ${res?.kept ?? 0} kept legitimate${kept ? ` (${kept})` : ''}. Start a full-automation run to submit the cleared ones.`,
+      )
       await load()
     } catch (err) {
-      showErrorToast(toast, 'Could not release portals', err?.message || 'See logs.')
+      showErrorToast(toast, 'Could not revisit cards', err?.message || 'See logs.')
     } finally {
       setBusy(null)
     }

@@ -1,0 +1,77 @@
+/**
+ * Owner order 2026-08-22: a "Needs You" card whose block is NOT one of the four
+ * legitimate hand-offs gets cleared; the legitimate four (+ ineligible /
+ * maybe-submitted, kept for correctness) stay blocked.
+ */
+import { describe, it, expect, beforeEach } from 'vitest'
+import express from 'express'
+import request from 'supertest'
+import Database from 'better-sqlite3'
+import { classifyNeedYouBlock } from '../services/hamilton/hamiltonNeedYouRelease.js'
+
+process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'a'.repeat(64)
+const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
+
+describe('classifyNeedYouBlock', () => {
+  const keep = (t, ctx) => classifyNeedYouBlock(t, ctx).keep
+  it('KEEPS the four legitimate hand-offs', () => {
+    expect(keep({ status: 'waiting_for_review', last_agent_message: 'produced a printable packet instead of browser automation' })).toBe(true) // 1 physical
+    expect(keep({ status: 'waiting_for_missing_info', last_agent_message: 'needs your date of birth' }, { hasUnresolvedInfo: true })).toBe(true) // 2 missing
+    expect(keep({ status: 'blocked', last_agent_message: 'This site blocks automated submission (bot protection). Use side-by-side co-browse.' })).toBe(true) // 3 bot wall
+    expect(keep({ status: 'waiting_for_login', last_agent_message: 'You already have an account here — please provide the login.' })).toBe(true) // 4 existing login
+  })
+  it('KEEPS ineligible + maybe-submitted for correctness (not cleared to resubmit)', () => {
+    expect(classifyNeedYouBlock({ status: 'blocked', last_agent_message: 'Hamilton Autopilot stopped at preflight: Funding source does not meet GrantFlow rules' })).toMatchObject({ keep: true, category: 'ineligible', legitimate: false })
+    expect(classifyNeedYouBlock({ status: 'submission_verification_required', last_agent_message: 'A submission may have gone through' })).toMatchObject({ keep: true, category: 'submit_unverified' })
+  })
+  it('RELEASES everything else', () => {
+    expect(keep({ status: 'waiting_for_review', last_agent_message: 'saved a draft, could not auto-submit on this portal' })).toBe(false)
+    expect(keep({ status: 'waiting_for_captcha', last_agent_message: 'The portal triggered CAPTCHA' })).toBe(false) // solver tries now
+    expect(keep({ status: 'waiting_for_login', last_agent_message: 'Hamilton needs you to sign in to this portal once' })).toBe(false) // creates account
+    expect(keep({ status: 'blocked', last_agent_message: 'could not reach www.tn.gov' })).toBe(false)
+    expect(keep({ status: 'waiting_for_missing_info', last_agent_message: 'stale' }, { hasUnresolvedInfo: false })).toBe(false) // no open ask
+  })
+})
+
+let db, router
+const app = () => {
+  const a = express()
+  a.use(express.json())
+  a.use((req, _res, next) => { req.db = db; req.user = { userId: 'u1', role: 'admin' }; req.ctx = { userId: 'u1', isAdmin: true }; next() })
+  a.use('/api/hamilton/automation', router)
+  return a
+}
+beforeEach(async () => {
+  const sqlite = new Database(':memory:')
+  sqlite.exec(`
+    CREATE TABLE users (id TEXT PRIMARY KEY, is_admin INTEGER DEFAULT 1);
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT);
+    CREATE TABLE application_tasks (id TEXT PRIMARY KEY, profile_id TEXT, status TEXT, last_agent_message TEXT, next_retry_at DATETIME, updated_at DATETIME);
+    CREATE TABLE application_missing_info (id TEXT PRIMARY KEY, task_id TEXT, kind TEXT, key TEXT, resolved INTEGER DEFAULT 0);
+  `)
+  db = wrapSqlite(sqlite)
+  await db.prepare('INSERT INTO users (id) VALUES (?)').run('u1')
+  await db.prepare('INSERT INTO profiles (id, user_id) VALUES (?, ?)').run('p1', 'u1')
+  const seed = (id, status, msg) => db.prepare('INSERT INTO application_tasks (id, profile_id, status, last_agent_message, next_retry_at) VALUES (?, ?, ?, ?, ?)').run(id, 'p1', status, msg, '2099-01-01')
+  await seed('draft', 'waiting_for_review', 'saved a draft, could not auto-submit on this portal') // release
+  await seed('inelig', 'blocked', 'Hamilton Autopilot stopped at preflight: Funding source does not meet GrantFlow rules') // keep
+  await seed('packet', 'waiting_for_review', 'produced a printable packet instead of browser automation') // keep
+  await seed('info', 'waiting_for_missing_info', 'needs your income') // keep (open ask below)
+  await db.prepare('INSERT INTO application_missing_info (id, task_id, kind, key, resolved) VALUES (?, ?, ?, ?, 0)').run('mi', 'info', 'field', 'financial.income')
+  router = (await import('../routes/hamiltonAutomation.js')).default
+})
+
+describe('POST /admin/release-need-you (classified)', () => {
+  const retryOf = async (id) => (await db.prepare('SELECT next_retry_at FROM application_tasks WHERE id = ?').get(id))?.next_retry_at
+  it('clears only the non-legitimate block; keeps the four categories + ineligible', async () => {
+    const res = await request(app()).post('/api/hamilton/automation/admin/release-need-you').send({ profileId: 'p1' })
+    expect(res.status).toBe(200)
+    expect(res.body.released).toBe(1) // only the draft
+    expect(res.body.kept).toBe(3)
+    expect(res.body.kept_by_category).toMatchObject({ ineligible: 1, physical_copy: 1, missing_info: 1 })
+    expect(await retryOf('draft')).toBeNull()       // released
+    expect(await retryOf('inelig')).toBe('2099-01-01') // kept
+    expect(await retryOf('packet')).toBe('2099-01-01') // kept
+    expect(await retryOf('info')).toBe('2099-01-01')   // kept
+  })
+})
