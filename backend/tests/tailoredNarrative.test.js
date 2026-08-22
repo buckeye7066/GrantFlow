@@ -266,6 +266,24 @@ describe('auto-submit gate', () => {
     expect(gate.reason).toBe('automation_off')
   })
 
+  it('SUBMITS when the preference is OFF but full automation is authorized (the toggle IS the consent)', async () => {
+    const db = makeDb()
+    await seedApproved(db)
+    // Preference defaults/says OFF, but the caller resolved an active
+    // full-automation authorization — that authorization IS the auto-submit
+    // selection, so the gate must not withhold as automation_off.
+    const profileToggledOff = baseProfile({
+      automation_preferences: { automations: { hamilton_auto_submit: false } },
+    })
+    const gate = await evaluateAutoSubmitGate(db, {
+      profileId: 'prof-1', grantId: 'grant-1', profile: profileToggledOff,
+      opportunity: CLEAN_OPP, grant: CLEAN_GRANT,
+      fullAutomationEnabled: true,
+    })
+    expect(gate.reason).not.toBe('automation_off')
+    expect(gate.submit).toBe(true)
+  })
+
   it('true ONLY when approved + no missing questions + toggle on', async () => {
     const db = makeDb()
     await seedApproved(db)

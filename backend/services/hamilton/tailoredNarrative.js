@@ -364,14 +364,19 @@ export async function reconcileTailoredApplication(db, { profileId, grantId, pro
  */
 export async function evaluateAutoSubmitGate(db, {
   profileId, grantId, profile = null, opportunity = null, grant = null,
+  fullAutomationEnabled = false,
 }) {
   if (!gateEnabled()) return { submit: true, reason: null, enforced: false }
 
   // The toggle is the auto-submit SELECTION itself — check it first so a
   // profile that never selected auto-submit is withheld regardless of card
-  // state, exactly as before.
+  // state. EXCEPT: an active full-automation authorization IS that selection
+  // (the caller resolves it from the authorization store), so it satisfies the
+  // check even though the `hamilton_auto_submit` preference defaults OFF — that
+  // mismatch is what drafted the whole backlog to waiting_for_review while full
+  // automation was toggled on (2026-08-22).
   const prefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
-  if (!isAutomationEnabled(prefs, 'hamilton_auto_submit')) {
+  if (!fullAutomationEnabled && !isAutomationEnabled(prefs, 'hamilton_auto_submit')) {
     return { submit: false, reason: 'automation_off', enforced: true }
   }
 

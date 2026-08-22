@@ -64,6 +64,7 @@ import { decomposeListing } from './listingDecomposition.js'
 import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './hamiltonConfirmationArtifacts.js'
 import { runContactHandoverAfterSubmission } from './hamiltonContactHandover.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
+import { isFullAutomationEnabled } from './hamiltonFullAutomationMode.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
   loadDraftPacketForTask,
@@ -1558,6 +1559,22 @@ async function runAutopilotPathway(db, {
   if (submissionDecision.allow_auto_submit && !isAutoSubmitGloballyEnabled()) {
     submissionDecision = { ...submissionDecision, allow_auto_submit: false, reason: 'global_auto_submit_disabled' }
   }
+  // Is full automation authorized for this profile RIGHT NOW? The auto-submit
+  // consent lives in TWO stores: the authorization (submit_applications +
+  // allow_auto_submit + no require_human_review veto) and a SEPARATE profile
+  // preference `automation_preferences.automations.hamilton_auto_submit`, which
+  // DEFAULTS OFF (shared/automationPreferences.js). When the owner toggles full
+  // automation on, the authorization is what carries that intent; the preference
+  // mirror can be unset, and then every submit drafts to waiting_for_review even
+  // though the toggle is on (the whole backlog did exactly this, 2026-08-22).
+  // The authorization is the single source of truth for submit consent — the
+  // same rule resolveSubmissionDecision now follows — so an active full-automation
+  // grant satisfies the preference checks below. Fail closed (false) on any read
+  // error so a broken read never widens submit.
+  let fullAutomationActive = false
+  try {
+    fullAutomationActive = Boolean((await isFullAutomationEnabled(db, task.profile_id))?.enabled)
+  } catch { fullAutomationActive = false }
   if (allowAutoSubmit && !reviewedPortalSubmissionExecutionAvailable(url)) {
     allowAutoSubmit = false
     submissionDecision = {
@@ -1584,11 +1601,15 @@ async function runAutopilotPathway(db, {
     }).catch(() => {})
   }
   // Per-profile automation toggle: turning OFF "Hamilton auto-submit" forces a
-  // hand-back before submission regardless of the per-application authorization.
-  // Absent preference defaults ON (current behaviour).
+  // hand-back before submission — UNLESS full automation is authorized, which is
+  // itself the auto-submit consent (the `hamilton_auto_submit` preference
+  // DEFAULTS OFF, so requiring it in addition to the full-automation grant is
+  // what parked the whole backlog at waiting_for_review). The preference still
+  // governs a profile that authorized credential/form use but not full
+  // automation.
   {
     const autoSubmitPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
-    if (allowAutoSubmit && !isAutomationEnabled(autoSubmitPrefs, 'hamilton_auto_submit')) {
+    if (allowAutoSubmit && !fullAutomationActive && !isAutomationEnabled(autoSubmitPrefs, 'hamilton_auto_submit')) {
       allowAutoSubmit = false
     }
   }
@@ -1612,6 +1633,7 @@ async function runAutopilotPathway(db, {
         profile,
         opportunity,
         grant,
+        fullAutomationEnabled: fullAutomationActive,
       })
     } catch (err) {
       // Fail CLOSED: if the gate can't be evaluated we do NOT auto-submit.
@@ -1668,7 +1690,15 @@ async function runAutopilotPathway(db, {
     const preferences = liveProfile.automation_preferences
       || liveProfile.sections?.automation_preferences
       || {}
-    if (!isAutomationEnabled(preferences, 'hamilton_auto_submit')) {
+    // Full automation (re-read LIVE at the irreversible boundary, so turning it
+    // off mid-run still vetoes) is itself the auto-submit consent; the
+    // default-OFF `hamilton_auto_submit` preference only governs a profile that
+    // did NOT authorize full automation.
+    let fullAutomationLive = false
+    try {
+      fullAutomationLive = Boolean((await isFullAutomationEnabled(db, task.profile_id))?.enabled)
+    } catch { fullAutomationLive = false }
+    if (!fullAutomationLive && !isAutomationEnabled(preferences, 'hamilton_auto_submit')) {
       return { allow: false, reason: 'profile_auto_submit_disabled', decision: fresh }
     }
     // Re-check executable coverage at the click boundary as well as launch.
@@ -1684,6 +1714,7 @@ async function runAutopilotPathway(db, {
           profile: liveProfile,
           opportunity,
           grant,
+          fullAutomationEnabled: fullAutomationLive,
         })
       } catch {
         return { allow: false, reason: 'gate_error', decision: fresh }
