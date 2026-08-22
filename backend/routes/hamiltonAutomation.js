@@ -176,6 +176,7 @@ import { buildHamiltonProfileSummary } from '../services/hamilton/hamiltonProfil
 import { resolveBlocker } from '../services/hamilton/hamiltonHardStopResolver.js'
 import { resolveProfileFieldTarget, inlineFieldForBlocker } from '../services/hamilton/profileFieldTargets.js'
 import { setProfileSectionField } from '../services/profileFieldWriter.js'
+import { reconcileProfileFieldsToTasks } from '../services/hamilton/applicationTaskStore.js'
 import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
 import {
@@ -2573,6 +2574,14 @@ router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
       confidence: 1.0,
     }).catch(() => {})
 
+    // 2b. PLACE IT IN THE PROFILE FOR EVERY CONSUMER (owner order 2026-08-21:
+    // "make sure missing information is asked for and placed appropriately in the
+    // profile so it can be used by the agents and crawlers"). The value is now in
+    // profile_sections (step 1) — which crawlers/agents read directly — so
+    // reconcile it across EVERY non-terminal task, resolving the same missing-field
+    // flag wherever it was raised instead of only the one task being re-run.
+    await reconcileProfileFieldsToTasks(req.db, { profileId }).catch(() => {})
+
     // 3. Mark this blocker resolved + clear the notifications it raised.
     const resolved = await resolveBlockerById(req.db, {
       blockerId,
@@ -2648,6 +2657,75 @@ router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
   } catch (err) {
     log.error('admin_hard_stop_resolve_field_failed', { err: err?.message, blockerId })
     return res.status(500).json({ error: 'resolve_field_failed', detail: err?.message })
+  }
+})
+
+// RELEASE stuck "need you" portals so the next full-automation run revisits them
+// (owner order 2026-08-21). Backlog tasks that stopped BEFORE the block-removal
+// fixes deployed (login walls, CAPTCHA, bot-walls, waiting-for-review) carry a
+// retry backoff (next_retry_at) that parks them; clearing it lets the next run
+// re-pick and re-attempt them, now that the run can create the account / solve
+// the challenge / arm the submit. This ONLY clears the backoff — it never
+// submits, never changes an irreversible state, and the run's own gates still
+// re-block anything genuinely unresolvable (a real missing-info ask, a ToS wall).
+//
+// EXCLUDED from release (deliberately): `submission_verification_required` (a
+// task that may already have submitted without captured evidence — re-running
+// could double-submit, the SWEEP_EXCLUDED_STATUSES rule), `blocked_terms_or_policy`
+// (a ToS wall is not ours to force), and the mail/email/fax "ready_to_*" states
+// (those need a human to physically send — a browser re-run cannot).
+const RELEASABLE_NEED_YOU_STATUSES = Object.freeze([
+  'blocked', 'blocked_login_required', 'blocked_missing_info', 'blocked_2fa', 'blocked_captcha',
+  'waiting_for_login', 'waiting_for_2fa', 'waiting_for_captcha', 'waiting_for_email_verification',
+  'waiting_for_missing_info', 'waiting_for_review', 'waiting_for_user', 'waiting_for_admin',
+  'ready_to_submit',
+])
+
+router.post('/admin/release-need-you', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
+
+  const profileId = req.body?.profileId ? String(req.body.profileId).trim() : null
+  const allProfiles = req.body?.allProfiles === true
+  if (!profileId && !allProfiles) {
+    return res.status(400).json({ error: 'profile_or_all_required', message: 'Pass a profileId, or allProfiles:true.' })
+  }
+
+  try {
+    const placeholders = RELEASABLE_NEED_YOU_STATUSES.map(() => '?').join(', ')
+    const scope = profileId ? 'AND profile_id = ?' : ''
+    const params = [...RELEASABLE_NEED_YOU_STATUSES, ...(profileId ? [profileId] : [])]
+
+    // What will be released (for the response), then clear the backoff in one write.
+    const before = await req.db.prepare(
+      `SELECT id, profile_id, status FROM application_tasks
+        WHERE status IN (${placeholders}) ${scope}`,
+    ).all(...params)
+
+    const nowFn = req.db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+    const upd = await req.db.prepare(
+      `UPDATE application_tasks
+          SET next_retry_at = NULL, updated_at = ${nowFn}
+        WHERE status IN (${placeholders}) ${scope}`,
+    ).run(...params)
+
+    const byStatus = {}
+    for (const t of before) byStatus[t.status] = (byStatus[t.status] || 0) + 1
+    const profiles = new Set(before.map((t) => t.profile_id)).size
+
+    log.info('release_need_you', { released: before.length, profiles, byStatus, scope: profileId || 'all' })
+    return res.json({
+      ok: true,
+      released: before.length,
+      changed: upd?.changes ?? before.length,
+      profiles_affected: profiles,
+      by_status: byStatus,
+      note: 'Retry backoff cleared. Start a full-automation run to revisit these — the run re-picks non-terminal sources and will now create accounts / solve challenges / arm submit. Genuinely unresolvable ones (a real missing-info ask, a ToS wall) will re-block honestly.',
+    })
+  } catch (err) {
+    log.error('release_need_you_failed', { err: err?.message })
+    return res.status(500).json({ error: 'release_failed', detail: err?.message })
   }
 })
 
