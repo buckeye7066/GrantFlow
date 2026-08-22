@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { assessOpportunityTrust } from '../opportunityTrust.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
+import { isClearlyExpiredProgram } from '../../config/fundingResultFilters.js'
 
 const ALLOWED_MATCH_DECISIONS = new Set(['accept', 'review'])
 const PROFILE_MATCH_REQUIRED_ORIGINS = new Set(['live_crawl', 'geo_crawl', 'discovered'])
@@ -229,6 +230,26 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
       reasons: trustReasons.length ? trustReasons : ['trust_policy'],
       trust,
       message: buildPolicyMessage(trustReasons),
+    }
+  }
+
+  // A program whose own title says it ENDED ("Affordable Connectivity Program
+  // (ACP) — Ended May 2024"), a long-past firm deadline, or a stale cycle year
+  // must not be filled or submitted (owner report 2026-08-21/22). Expiry used to
+  // be 100% a function of the `deadline` COLUMN, so a curated row stating its
+  // sunset in PROSE with a NULL deadline was structurally unreachable by every
+  // expiry net and sat "In Progress" in the live queue. isClearlyExpiredProgram
+  // reads the title/deadline; a future/rolling deadline outranks a year in a
+  // name, so an open program is never mislabelled.
+  const expiredLabel = isClearlyExpiredProgram(subject)
+  if (expiredLabel) {
+    const reasons = ['funding_source_expired', String(expiredLabel)]
+    return {
+      ok: false,
+      code: 'funding_source_expired',
+      reasons,
+      trust,
+      message: buildPolicyMessage(reasons),
     }
   }
 

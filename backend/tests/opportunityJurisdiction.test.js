@@ -123,6 +123,20 @@ describe('opportunityJurisdiction — a row that names its own state is not nati
     expect(declaredStateFromTitle({ title: 'La Grange County, IN — County & city government assistance programs' })).toBe('IN')
   })
 
+  it('reads the declared state from the "near <City>, XX" locator shape (real out-of-state junk 2026-08-22)', () => {
+    // A TN profile carried these at "waiting for review" — the trailing
+    // "near <City>, XX" shape (no separator) was invisible to TITLE_STATE_RX.
+    expect(declaredStateFromTitle('Community Action Agency near Big Piney, WY')).toBe('WY')
+    expect(declaredStateFromTitle('Community Action Agency near Auburn, ME')).toBe('ME')
+    expect(declaredStateFromTitle('Community Action Agency near Russellville, AL')).toBe('AL')
+    expect(declaredStateFromTitle('United Way near Austin, TX')).toBe('TX')
+    // Must NOT fire on a title that merely ends in a two-letter coincidence with
+    // no "near <City>," anchor.
+    expect(declaredStateFromTitle('Scholarships for students in STEM')).toBe(null)
+    expect(declaredStateFromTitle('Rotary Peace Fellowship')).toBe(null)
+    expect(declaredStateFromTitle('Society of Women Engineers (SWE) Scholarships')).toBe(null)
+  })
+
   it('does NOT invent a state from a two-letter coincidence (the one-shared-token class)', () => {
     // No `, XX —` declaration: a bare token anywhere in a title is a coincidence.
     expect(declaredStateFromTitle('Local assistance programs near you (findhelp)')).toBe(null)

@@ -22,11 +22,21 @@
  * surfaces drifted apart in the first place.
  */
 import { isSearchEngineUrl } from '../../config/urlRules.js'
+import { decodeHtmlEntities } from '../../utils/htmlTextHygiene.js'
 
-/** Nothing here should ever be presented as a funding source's NAME. */
+/**
+ * Nothing here should ever be presented as a funding source's NAME. Also decode
+ * HTML entities: a title stored raw (ingested before the ingest-time decode, or
+ * by a path that skipped it) rendered as markup in the owner-facing card —
+ * "Improving global health security in C&ocirc;te d'Ivoire", "FY 2024 &ndash;
+ * 2026 …", "Reception &amp; Placement". The decode is idempotent, so an
+ * already-clean title is unchanged.
+ */
 function cleanText(value) {
   const s = typeof value === 'string' ? value.trim() : ''
-  return s.length > 0 ? s : null
+  if (s.length === 0) return null
+  const decoded = decodeHtmlEntities(s).trim()
+  return decoded.length > 0 ? decoded : null
 }
 
 function uniqueStrings(values) {
