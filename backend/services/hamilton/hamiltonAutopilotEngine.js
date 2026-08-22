@@ -923,8 +923,26 @@ const RECEIPT_ACK_RX = new RegExp(
   'i',
 )
 
+// Additional post-submit acknowledgement phrasings real portals use, as a regex
+// LITERAL (avoids the string-array backslash doubling). OR'd with the primary
+// set; kept to clearly-post-submission phrasings so it never matches a pre-submit
+// form page.
+const RECEIPT_ACK_EXTRA_RX = /\byou(?:'ve| have)? (?:successfully )?(?:applied|submitted your application)\b|\b(?:confirmation|submission|application|reference)\s*(?:number|code|id)\s*[:#]|\ba confirmation (?:email|message)?\s*(?:has been|was)?\s*(?:sent|emailed)\b|\byour application is (?:now )?(?:complete|submitted|in review|under review)\b|\bapplication (?:complete|completed)\b/i
+
 function detectReceiptAcknowledgement(text) {
-  return RECEIPT_ACK_RX.test(String(text || ''))
+  const t = String(text || '')
+  return RECEIPT_ACK_RX.test(t) || RECEIPT_ACK_EXTRA_RX.test(t)
+}
+
+// A distinct post-submit URL landing on a confirmation/receipt/thank-you page is
+// independent corroboration a submit landed — used ONLY to strengthen a genuine
+// acknowledgement, never to manufacture one.
+const CONFIRMATION_LANDING_RX = /(confirmation|submitted|receipt|thank[-_]?you|success|complete|received)/i
+function urlLandedOnConfirmation(url) {
+  try {
+    const u = new URL(String(url))
+    return CONFIRMATION_LANDING_RX.test(u.pathname) || CONFIRMATION_LANDING_RX.test(u.search)
+  } catch { return false }
 }
 
 function normalizedReference(value) {
@@ -947,9 +965,16 @@ function assessSubmissionEvidence(conf, before = {}) {
   if (referenceChanged) {
     return { ok: true, confirmation_evidence: 'portal_reference' }
   }
-  const acknowledgementChanged = conf?.received_acknowledgement === true
-    && before?.received_acknowledgement !== true
-  if (acknowledgementChanged) {
+  // Acknowledgement is proof when a genuine receipt phrase is on the post-submit
+  // page AND that is either NEW since before the click, OR the portal redirected
+  // to a distinct confirmation/receipt page. The ack TEXT is load-bearing — a
+  // bare URL change or a screenshot alone still never counts (honesty floor).
+  const ackPresent = conf?.received_acknowledgement === true
+  const ackNew = ackPresent && before?.received_acknowledgement !== true
+  const movedToConfirmation = Boolean(
+    before?.url && conf?.url && before.url !== conf.url && urlLandedOnConfirmation(conf.url),
+  )
+  if (ackPresent && (ackNew || movedToConfirmation)) {
     return { ok: true, confirmation_evidence: 'portal_acknowledgement' }
   }
   const attemptCaptured = Boolean(

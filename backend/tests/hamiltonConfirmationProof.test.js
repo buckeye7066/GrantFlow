@@ -167,6 +167,7 @@ describe('resolveConfirmationCaptureDir', () => {
 describe('assessSubmissionEvidence requires a genuinely new receipt signal', () => {
   const {
     assessSubmissionEvidence,
+    detectReceiptAcknowledgement,
     mergeSubmitCapture,
     submitCaptureResult,
     submitCaptureHistoryResult,
@@ -205,6 +206,27 @@ describe('assessSubmissionEvidence requires a genuinely new receipt signal', () 
       .toEqual({ ok: true, confirmation_evidence: 'portal_acknowledgement' })
     expect(assessSubmissionEvidence({ reference: null, screenshot_path: null }))
       .toEqual({ ok: false, confirmation_evidence: 'none' })
+  })
+
+  it('a real acknowledgement that lands on a distinct confirmation URL counts even if similar text existed before (brittleness fix)', () => {
+    expect(assessSubmissionEvidence(
+      { received_acknowledgement: true, url: 'https://portal.example.org/confirmation/123', screenshot_path: '/tmp/s.png' },
+      { received_acknowledgement: true, url: 'https://portal.example.org/apply' },
+    )).toEqual({ ok: true, confirmation_evidence: 'portal_acknowledgement' })
+  })
+
+  it('a stale acknowledgement with NO url move still does NOT count (honesty floor held)', () => {
+    expect(assessSubmissionEvidence(
+      { received_acknowledgement: true, url: 'https://portal.example.org/apply', screenshot_path: '/tmp/s.png' },
+      { received_acknowledgement: true, url: 'https://portal.example.org/apply' },
+    )).toEqual({ ok: false, confirmation_evidence: 'attempt_evidence' })
+  })
+
+  it('detectReceiptAcknowledgement matches the broadened post-submit phrasings, not pre-submit text', () => {
+    expect(detectReceiptAcknowledgement('Confirmation number: 84213')).toBe(true)
+    expect(detectReceiptAcknowledgement('You have successfully applied.')).toBe(true)
+    expect(detectReceiptAcknowledgement('Your application is now under review.')).toBe(true)
+    expect(detectReceiptAcknowledgement('Please review your application before you submit.')).toBe(false)
   })
 
   it('retains earlier and later post-click captures while classifying the bundle honestly', () => {
