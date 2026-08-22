@@ -141,6 +141,28 @@ export function classifyApiRatePolicy(req, env = process.env) {
     }
   }
 
+  // The automation WATCH window polls GET /api/hamilton/automation/tasks (and
+  // readiness / authorizations / status) on a live cadence to show the run in
+  // progress. Those are plain read-only DB lookups, NOT run starts — but the
+  // block below charged every /api/hamilton request to the 25-per-10-min
+  // 'automation' budget (which exists to throttle the EXPENSIVE POST that
+  // launches a run), so the live view 429'd with rate_limit_exceeded after ~25
+  // polls (the owner hit this on a real run, 2026-08-21). Mirror the
+  // /api/matching + crawler-jobs carve-outs already in this file: GET reads of
+  // Hamilton/application-task status go on the ordinary 'standard' read budget;
+  // every POST that actually drives a run stays on 'automation' below.
+  if (
+    method === 'GET'
+    && /^\/api\/(?:hamilton|application-tasks)(?:\/|$)/.test(path)
+  ) {
+    return {
+      name: 'standard',
+      windowMs: positiveInt(env.API_STANDARD_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
+      max: positiveInt(env.API_STANDARD_RATE_LIMIT_MAX, 600),
+      shared: true,
+      requiredShared: false,
+    }
+  }
   if (
     /^\/api\/(?:hamilton|application-tasks|admin\/agent-control|admin\/queue)(?:\/|$)/.test(path)
   ) {
