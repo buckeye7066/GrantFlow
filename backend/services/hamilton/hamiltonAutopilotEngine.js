@@ -1303,6 +1303,10 @@ export async function runAutopilot({
   let applyNavClicks = 0
   const clickedApplyNav = new Set()
   const missingIdentityKinds = new Set()
+  // Required portal-specific questions Hamilton could not answer from the
+  // profile (owner doctrine 2026-08-22, condition 2). Collected here; the
+  // orchestrator routes each to its profile home or has a global field made.
+  const unansweredRequiredFields = []
   let submissionAttemptStarted = false
   let submitClicked = false
   let beforeSubmitCapture = {}
@@ -1477,6 +1481,7 @@ export async function runAutopilot({
           // never fabricated; a null answer leaves the field blank so it becomes
           // a genuine user ask instead of a made-up value. Only text-like fields,
           // only when narrative generation is authorized, only if not pre-filled.
+          let unknownFilled = false
           if (answerUnknownField && authorizations.generate_narratives
               && isAnswerableUnknownField(f) && !f.value) {
             let answered = null
@@ -1486,8 +1491,20 @@ export async function runAutopilot({
               if (okA) {
                 filled.push({ key: `q:${fieldLabelOf(f).slice(0, 40)}`, fid: f.fid, source: 'llm_field_answer', value: String(answered.value).slice(0, 60) })
                 filledThisPage += 1
+                unknownFilled = true
                 trace.push({ step: 'llm_field_answer', detail: { label: fieldLabelOf(f).slice(0, 60), free_text: Boolean(answered.free_text), grounded_in: answered.grounded_in || [] } })
               }
+            }
+          }
+          // A REQUIRED portal-specific question Hamilton could not answer from
+          // the profile — and has no fixed rule for — is exactly what the owner
+          // wants ASKED (never fabricated). Collect it so the orchestrator can
+          // route it to the right profile section, or have Anya create a global
+          // field for it, and surface a specific request. Deduped by label.
+          if (f.required && !unknownFilled && !f.value) {
+            const label = fieldLabelOf(f).slice(0, 120)
+            if (label && !unansweredRequiredFields.some((u) => u.label === label)) {
+              unansweredRequiredFields.push({ label, fid: f.fid, type: String(f.type || f.tag || 'text') })
             }
           }
           continue
@@ -1689,7 +1706,7 @@ export async function runAutopilot({
         const nativeErrors = await detectNativeValidationErrors(page, submitCandidates[0].bid)
         if (nativeErrors.length > 0) {
           trace.push({ step: 'submit_native_validation_failed', detail: { errors: nativeErrors.slice(0, 5) } })
-          return { status: 'blocked', blocker_kind: 'validation', blocker_detail: nativeErrors.slice(0, 5).join(' | '), filled_fields: filled, pages_visited: pagesVisited, trace }
+          return { status: 'blocked', blocker_kind: 'validation', blocker_detail: nativeErrors.slice(0, 5).join(' | '), filled_fields: filled, unanswered_required_fields: unansweredRequiredFields, pages_visited: pagesVisited, trace }
         }
         const boundary = typeof beforeSubmit === 'function'
           ? await beforeSubmit()
@@ -1699,7 +1716,7 @@ export async function runAutopilot({
         }
         if (boundary?.allow !== true) {
           trace.push({ step: 'completed_draft', detail: { reason: boundary?.reason || 'submit_authority_revoked' } })
-          return { status: 'completed_draft', submit_withheld_reason: boundary?.reason || 'submit_authority_revoked', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+          return { status: 'completed_draft', submit_withheld_reason: boundary?.reason || 'submit_authority_revoked', filled_fields: filled, unanswered_required_fields: unansweredRequiredFields, pages_visited: pagesVisited, trace, logged_in: loggedIn }
         }
         submissionAttemptStarted = true
         // Submit the application.
@@ -1762,7 +1779,7 @@ export async function runAutopilot({
         if (errors.length > 0) {
           trace.push({ step: 'submit_validation_failed', detail: { errors: errors.slice(0, 5) } })
           return {
-            status: 'blocked', blocker_kind: 'validation',
+            status: 'blocked', blocker_kind: 'validation', unanswered_required_fields: unansweredRequiredFields,
             blocker_detail: errors.slice(0, 5).join(' | '),
             ...retainedSubmitFields(),
             filled_fields: filled, pages_visited: pagesVisited, trace,
@@ -1799,7 +1816,7 @@ export async function runAutopilot({
           await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
         }
         trace.push({ step: 'completed_draft', detail: { reason: 'submit_not_authorized' } })
-        return { status: 'completed_draft', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        return { status: 'completed_draft', filled_fields: filled, unanswered_required_fields: unansweredRequiredFields, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
 
       if (canNext) {
@@ -1814,7 +1831,7 @@ export async function runAutopilot({
         const errors = await detectValidationErrors(page)
         if (errors.length > 0) {
           trace.push({ step: 'validation_after_next', detail: { errors: errors.slice(0, 5) } })
-          return { status: 'blocked', blocker_kind: 'validation', blocker_detail: errors.slice(0, 5).join(' | '), filled_fields: filled, pages_visited: pagesVisited, trace }
+          return { status: 'blocked', blocker_kind: 'validation', blocker_detail: errors.slice(0, 5).join(' | '), filled_fields: filled, unanswered_required_fields: unansweredRequiredFields, pages_visited: pagesVisited, trace }
         }
         continue
       }
@@ -1824,7 +1841,7 @@ export async function runAutopilot({
       if (canDraft && authorizations.save_drafts) {
         await clickButtonByBid(page, draftButtons[0].bid)
         trace.push({ step: 'completed_draft', detail: { reason: 'no_next_button' } })
-        return { status: 'completed_draft', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        return { status: 'completed_draft', filled_fields: filled, unanswered_required_fields: unansweredRequiredFields, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
 
       // Nothing to advance. Before reporting a hard no_progress, triage: the

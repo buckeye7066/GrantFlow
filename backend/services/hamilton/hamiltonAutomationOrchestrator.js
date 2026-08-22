@@ -65,6 +65,7 @@ import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './h
 import { runContactHandoverAfterSubmission } from './hamiltonContactHandover.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
 import { isFullAutomationEnabled } from './hamiltonFullAutomationMode.js'
+import { resolveOrCreateFieldHome } from './hamiltonCustomFieldRegistry.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
   loadDraftPacketForTask,
@@ -1596,6 +1597,9 @@ async function runAutopilotPathway(db, {
   try {
     fullAutomationActive = Boolean((await isFullAutomationEnabled(db, task.profile_id))?.enabled)
   } catch { fullAutomationActive = false }
+  // Condition-2 asks (labels of required fields Hamilton could not answer),
+  // populated after the engine returns and read by the completed_draft branch.
+  let unansweredAskLabels = []
   // Owner rule (2026-08-22): turning full automation ON *is* the profile user's
   // consent for the applicant's electronic signature and attestation. So an
   // active full-automation grant satisfies the engine's standing-attestation
@@ -2061,6 +2065,33 @@ async function runAutopilotPathway(db, {
     if (loginCredential && engineResult?.logged_in) {
       await markCredentialUsed(db, loginCredential.id).catch(() => {})
     }
+
+    // CONDITION 2 (owner doctrine 2026-08-22): every REQUIRED portal question
+    // Hamilton could not answer from the profile is routed to its profile HOME
+    // (deep-link the owner there) or, if nothing fits, a NEW GLOBAL field is
+    // created (for every current + future profile) and the owner is asked. Runs
+    // for ANY terminal status that carried them (a saved draft OR a validation
+    // block), so a genuinely-missing fact always becomes a specific, resolvable
+    // ask rather than a silent blank. Never fabricated.
+    try {
+      const uf = Array.isArray(engineResult?.unanswered_required_fields) ? engineResult.unanswered_required_fields : []
+      const askItems = []
+      for (const f of uf.slice(0, 25)) {
+        if (!f?.label) continue
+        const home = await resolveOrCreateFieldHome(db, {
+          taskId: task.id, label: f.label, fieldType: f.type, originSource: 'portal_required_field',
+        }).catch(() => null)
+        if (!home) continue
+        unansweredAskLabels.push(f.label)
+        askItems.push({
+          kind: 'field', key: home.field_key, label: f.label,
+          description: home.custom
+            ? `The portal requires "${f.label}". There was no place for it in the profile, so Hamilton added it under "${home.section_title}". Fill it in and Hamilton finishes this application.`
+            : `The portal requires "${f.label}". Add it to your profile under ${home.section_title} and Hamilton finishes this application.`,
+        })
+      }
+      if (askItems.length > 0) await setMissingInfo(db, task.id, askItems).catch(() => {})
+    } catch { /* best-effort: routing must never break the run outcome */ }
     // Every electronic signature Hamilton performed is a durable, owner-visible
     // event on the task — what was signed, where, and under which consent —
     // never only a line in the run trace.
@@ -2749,12 +2780,18 @@ async function runAutopilotPathway(db, {
     // (e.g. the portal is not browser-executable, or the submit control could
     // not be driven). Say that honestly instead of asking for a review that
     // consent has already granted.
-    const draftMessage = fullAutomationActive
-      ? `Hamilton filled the application and saved a draft, but could not auto-submit it on this portal${reasonSuffix}. No review is needed from you — you can submit it in the portal, or leave it for Hamilton to retry.`
-      : `Hamilton finished filling the application and saved a draft${reasonSuffix}. Review it in the portal, complete required human steps, and submit it yourself.`
+    // Condition 2: the required-field asks were already routed + recorded right
+    // after the engine returned (unansweredAskLabels). A draft that is only
+    // waiting on genuinely-missing info is a SPECIFIC ask, not a generic review.
+    const needsInfo = unansweredAskLabels.length > 0
+    const draftMessage = needsInfo
+      ? `Hamilton filled everything he could, but the portal requires ${unansweredAskLabels.length === 1 ? 'a detail' : `${unansweredAskLabels.length} details`} not in the profile: ${unansweredAskLabels.slice(0, 4).join(', ')}${unansweredAskLabels.length > 4 ? ', …' : ''}. Add ${unansweredAskLabels.length === 1 ? 'it' : 'them'} on the profile (see "needs you") and Hamilton finishes this application automatically.`
+      : fullAutomationActive
+        ? `Hamilton filled the application and saved a draft, but could not auto-submit it on this portal${reasonSuffix}. No review is needed from you — you can submit it in the portal, or leave it for Hamilton to retry.`
+        : `Hamilton finished filling the application and saved a draft${reasonSuffix}. Review it in the portal, complete required human steps, and submit it yourself.`
     const draftTask = await updateApplicationTask(db, task.id, {
       unlessCancelled: true,
-      status: 'waiting_for_review',
+      status: needsInfo ? 'waiting_for_missing_info' : 'waiting_for_review',
       lastAgentMessage: draftMessage,
     })
     if (draftTask?.status === 'cancelled') {

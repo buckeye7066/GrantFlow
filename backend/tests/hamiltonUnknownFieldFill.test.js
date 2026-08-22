@@ -54,6 +54,29 @@ async function formPage() {
   return { context, page }
 }
 
+async function formPageWith(html) {
+  const context = await browser.newContext()
+  const page = await context.newPage()
+  await page.route('**/*', (route) => route.fulfill({
+    status: 200, contentType: 'text/html',
+    body: route.request().url().includes('/confirmation') ? CONFIRM_HTML : html,
+  }))
+  return { context, page }
+}
+
+// A form with a REQUIRED portal-specific question Hamilton cannot answer from
+// the profile — the owner's "are you the oldest sibling?" class.
+const SIBLING_FORM = `<!DOCTYPE html><html><head><title>Scholarship Application</title></head>
+<body>
+  <form action="/confirmation" method="get">
+    <label for="first_name">First name</label><input id="first_name" name="first_name" />
+    <label for="email">Email</label><input id="email" name="email" type="email" />
+    <label for="sib">Are you the oldest sibling?</label>
+    <input id="sib" name="oldest_sibling" type="text" required />
+    <button type="submit">Submit application</button>
+  </form>
+</body></html>`
+
 // A fake answerer: grounded, deterministic — mimics the real service's contract.
 const fakeAnswerer = (field) => {
   const label = String(field?.label || '').toLowerCase()
@@ -61,6 +84,29 @@ const fakeAnswerer = (field) => {
   if (label.includes('research area')) return Promise.resolve({ value: 'Forensic Science', free_text: false, grounded_in: ['education.major'] })
   return Promise.resolve(null)
 }
+
+run('Hamilton reports a REQUIRED question he cannot answer (condition 2)', () => {
+  it('collects the unanswerable required field instead of leaving it silently blank', async () => {
+    const { context, page } = await formPageWith(SIBLING_FORM)
+    try {
+      const result = await runAutopilot({
+        url: 'https://fixture.invalid/apply',
+        profile: { basic_information: { first_name: 'Jordan', last_name: 'Rivera', email: 'jordan@example.org' } },
+        authorizations: { submit_applications: true, complete_forms: true, generate_narratives: true },
+        allowAutoSubmit: true,
+        fullAutomation: true,
+        answerUnknownField: () => Promise.resolve(null), // Hamilton genuinely cannot answer it
+        beforeSubmit: async () => ({ allow: true, reason: 'authorized', decision: {} }),
+        headless: true,
+        _testPage: page,
+      })
+      const labels = (result.unanswered_required_fields || []).map((u) => u.label.toLowerCase())
+      expect(labels.some((l) => l.includes('oldest sibling'))).toBe(true)
+    } finally {
+      await context.close()
+    }
+  }, 60_000)
+})
 
 run('Hamilton answers unrecognized portal questions (real browser)', () => {
   it('fills the custom community + research questions via the answerer and submits', async () => {
