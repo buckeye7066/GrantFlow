@@ -696,7 +696,7 @@ async function detectValidationErrors(page) {
 // government portals these live in the SAME <form> as the real submit control,
 // so a required Yes/No feedback radio fails checkValidity() and — before this —
 // hard-blocked the actual application ("Was this page helpful? field is
-// required" killed a real TANF submission, Anastasia's run 2026-08-21). Mirrors
+// required" killed a real TANF submission, a real applicant's run 2026-08-21). Mirrors
 // the isPageFeedback filter that already keeps such widgets from being treated
 // as the application's SUBMIT button.
 const FEEDBACK_VALIDATION_IGNORE_RX = /was this (page |content )?helpful|page helpful|how helpful|rate (this )?(page|content)|site feedback|leave feedback|feedback about this|report (suspected )?(fraud|abuse)|newsletter|subscribe|cookie/i

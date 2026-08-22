@@ -1,7 +1,7 @@
 /**
  * A page-feedback / fraud-report widget must not block a real application.
  *
- * Live evidence 2026-08-21 (Anastasia's run): a real TANF submission was hard-
+ * Live evidence 2026-08-21 (a real applicant's run): a real TANF submission was hard-
  * blocked with "Was this page helpful? field is required" — a government-site
  * feedback survey that sits in the same <form> as the real submit control, so
  * its required Yes/No radio failed checkValidity() and sank the application.

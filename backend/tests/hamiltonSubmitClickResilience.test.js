@@ -2,7 +2,7 @@
  * "Submit button could not be clicked" must not kill a real submission over a
  * cosmetic overlay.
  *
- * Live evidence 2026-08-21 (Anastasia's run): HOPE, Aspire, GAMS and TSAA — the
+ * Live evidence 2026-08-21 (a real applicant's run): HOPE, Aspire, GAMS and TSAA — the
  * exact Tennessee awards she most wants — all FAILED with "Submit button could
  * not be clicked". On real portals the submit control is routinely below the
  * fold and covered by a sticky footer / cookie banner / consent overlay, so
