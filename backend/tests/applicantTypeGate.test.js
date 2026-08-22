@@ -19,6 +19,12 @@ describe('applicantTypeGate — institution-only federal mechanisms vs an indivi
     'Ruth L. Kirschstein National Research Service Award Institutional Research Training Grant (NRSA)',
     'Office of Elementary and Secondary Education (OESE): Comprehensive Centers Program: National Comprehensive Center, ALN 84.283D',
     'National Space Grant College and Fellowship Program - Opportunities in NASA STEM',
+    // Real federal-NOFO junk from an individual profile's "waiting for review"
+    // backlog (2026-08-22) — auto-submit would otherwise have sent a student's
+    // application to these. Terms of art no individual award uses.
+    'FY25 Long Range Broad Agency Announcement (BAA) for Navy and Marine Corps Science and Technology',
+    'Research Experiences for Undergraduates',
+    'Notice of Intent to Publish a Request for Concept Notes Announcement on Capacity Development for the Reception & Placement Program',
   ]
 
   for (const title of institutionOnlyTitles) {
@@ -44,6 +50,22 @@ describe('applicantTypeGate — institution-only federal mechanisms vs an indivi
     }
     expect(evaluateApplicantTypeEligibility(opp, STUDENT).decision).toBe('mismatch')
   })
+
+  it('blocks a CDC global-health cooperative agreement (mechanism in the description)', () => {
+    const opp = {
+      title: 'Improving global health security in Côte d’Ivoire through collaboration with local partners',
+      description: 'This cooperative agreement supports the ministry of health and local partner institutions.',
+    }
+    expect(evaluateApplicantTypeEligibility(opp, STUDENT).decision).toBe('mismatch')
+  })
+
+  it('blocks an SBIR/STTR small-business R&D solicitation', () => {
+    const opp = {
+      title: 'Component Technology Development',
+      description: 'Small Business Innovation Research (SBIR) Phase I solicitation for eligible small business concerns.',
+    }
+    expect(evaluateApplicantTypeEligibility(opp, STUDENT).decision).toBe('mismatch')
+  })
 })
 
 describe('applicantTypeGate — legitimate individual funding still passes', () => {
@@ -55,6 +77,14 @@ describe('applicantTypeGate — legitimate individual funding still passes', () 
     // Demographic mismatch must NOT hard-block (rule: reduce score, not discard).
     { title: 'Hispanic Scholarship Fund (HSF)', description: 'Scholarships for students of Hispanic heritage.' },
     { title: 'Society of Women Engineers (SWE) Scholarships', description: 'Scholarships for women in engineering.' },
+    // Real individual military/federal awards from the SAME backlog — a student
+    // CAN receive these, so the new federal-mechanism patterns must not touch
+    // them (they name "Army"/"Armed Forces"/"fellowship", never a BAA / SBIR /
+    // cooperative agreement / NOFO).
+    { title: 'Army ROTC Scholarships', description: 'Merit scholarships for college students pursuing an Army commission.' },
+    { title: 'Armed Forces Health Professions Scholarship Program (Army)', description: 'Full-tuition scholarship for individual medical/health students.' },
+    { title: 'AAUW International Fellowships', description: 'Fellowships for women pursuing graduate study.' },
+    { title: 'Federal Work-Study', description: 'Part-time federal work-study aid for undergraduate and graduate students.' },
   ]
 
   for (const opp of passingScholarships) {

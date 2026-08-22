@@ -124,6 +124,31 @@ const INSTITUTION_ONLY_PATTERNS = [
   /\bresearch\s+training\s+grant\s*\((?:t32|nrsa)\)/,
   /\bcomprehensive\s+centers?\s+program\b/,
   /\bspace\s+grant\s+(?:college|consorti)/,
+  // FEDERAL / INSTITUTIONAL GRANT MECHANISMS — terms of art whose applicant is
+  // always an institution, company, state, tribe, or a principal investigator
+  // AT an institution, never a private individual. A student cannot apply to a
+  // Broad Agency Announcement, a cooperative agreement, an SBIR/STTR, or a
+  // request for concept notes. These caught the federal-NOFO flood a real
+  // individual profile carried at "waiting for review" (2026-08-22): the
+  // Navy/ONR/DARPA/NOAA Broad Agency Announcements, the CDC global-health
+  // cooperative agreements, and the EDA/FTA/NRCS/ACL agency programs — every one
+  // of which auto-submit would otherwise have sent a forensic-science student's
+  // application to. Deliberately terms of art NO individual scholarship /
+  // fellowship / benefit uses, so an individual award (Army ROTC, AAUW
+  // Fellowship, HOPE, Pell) is never touched. Matched against title + description
+  // + eligibility text via gatherOppText.
+  /\bbroad\s+agency\s+announcement\b/,
+  /\bcooperative\s+agreement\b/,
+  /\bsmall\s+business\s+(?:innovation\s+research|technology\s+transfer)\b/,
+  /\b(?:sbir|sttr)\b/,
+  /\brequest\s+for\s+concept\s+notes?\b/,
+  /\bnotice\s+of\s+intent\s+to\s+publish\b/,
+  /\bresearch\s+experiences?\s+for\s+undergraduates\b/,
+  // A grants.gov "Notice of Funding Opportunity" for a discretionary federal
+  // grant is an institutional mechanism (states / locals / tribes / nonprofits /
+  // IHEs / businesses apply — individuals receive BENEFITS and SCHOLARSHIPS
+  // through other channels, which never carry this phrase).
+  /\bnotice\s+of\s+funding\s+opportunity\b/,
 ]
 
 // Opportunity-side phrases that EXCLUDE organisations (rare but real —
