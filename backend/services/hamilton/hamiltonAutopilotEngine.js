@@ -188,6 +188,22 @@ function signatureConsentFor({ fullAutomation, authorizations, signerName }) {
 const SUBMIT_BUTTON_PATTERNS = [/^submit/i, /finalize/i, /apply\s*now/i, /complete\s*application/i, /send\s*application/i]
 const NEXT_BUTTON_PATTERNS   = [/^next/i, /continue/i, /proceed/i, /save\s*&\s*continue/i]
 const DRAFT_BUTTON_PATTERNS  = [/save\s*draft/i, /save\s*&\s*exit/i, /save\s*for\s*later/i]
+// LANDING PAGE → APPLICATION FORM. A "portal" URL often points at a program
+// description / landing page whose only control is an "Apply" / "Start
+// Application" link that NAVIGATES to the real form. That control is filtered
+// out of the submit candidates (no fields to fill on a landing page), so without
+// following it Hamilton dead-ends as no_application_form one click from the
+// application — the single biggest "waiting for review" bucket on a real profile
+// (86 of 200, 2026-08-22). These patterns are for NAVIGATION only, followed just
+// when no fillable form and no next-control were found, so they never intercept
+// a real submit.
+const APPLY_NAV_PATTERNS = [
+  /^apply(?:\s|$)/i, /apply\s*now/i, /apply\s*online/i, /apply\s*here/i, /apply\s*today/i,
+  /start\s*(?:your\s*|an?\s*)?application/i, /begin\s*(?:your\s*|an?\s*)?application/i,
+  /start\s*(?:your\s*)?app\b/i, /go\s*to\s*(?:the\s*)?application/i, /open\s*application/i,
+  /application\s*form/i,
+]
+const MAX_APPLY_NAV_CLICKS = 3
 
 // ── Profile reader (mirrors mapping in packet generator) ─────────────
 
@@ -1271,6 +1287,10 @@ export async function runAutopilot({
   const screenshotsRoot = screenshotsDir || resolveConfirmationCaptureDir()
   let pagesVisited = 0
   let captchaAttempted = false
+  // Landing-page → application-form navigation state (bounded, never re-clicks
+  // the same control) — see APPLY_NAV_PATTERNS.
+  let applyNavClicks = 0
+  const clickedApplyNav = new Set()
   const missingIdentityKinds = new Set()
   let submissionAttemptStarted = false
   let submitClicked = false
@@ -1599,6 +1619,27 @@ export async function runAutopilot({
               listing_snapshot: listing.listing_snapshot, triage: listing.triage,
               filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
             }
+          }
+        }
+        // Before giving up: this may be a LANDING page whose "Apply" / "Start
+        // Application" control NAVIGATES to the real form. Follow it (bounded,
+        // never the same control twice) and re-inspect — the form it leads to
+        // carries the fields Hamilton fills. Only reached when nothing was
+        // fillable here, so it can never intercept a real submit.
+        const applyNav = await detectButtons(page, APPLY_NAV_PATTERNS)
+        const nextApply = applyNav.find(
+          (b) => !clickedApplyNav.has(String(b.text || '').trim().toLowerCase()),
+        )
+        if (nextApply && applyNavClicks < MAX_APPLY_NAV_CLICKS) {
+          applyNavClicks += 1
+          clickedApplyNav.add(String(nextApply.text || '').trim().toLowerCase())
+          trace.push({ step: 'follow_apply_link', detail: { text: String(nextApply.text || '').slice(0, 40) } })
+          reportLiveStep(runId, 'Opening the application form')
+          const followed = await clickButtonByBid(page, nextApply.bid)
+          if (followed) {
+            await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+            await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => null)
+            continue // re-inspect the page the apply link led to
           }
         }
         trace.push({
