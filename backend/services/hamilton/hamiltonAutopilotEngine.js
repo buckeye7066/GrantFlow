@@ -1710,22 +1710,54 @@ export async function runAutopilot({
             let lab = ''
             if (id) { const l = document.querySelector(`label[for="${CSS.escape(id)}"]`); if (l) lab = l.textContent || '' }
             if (!lab) { const par = el.closest('label'); if (par) lab = par.textContent || '' }
-            return { id, name: el.getAttribute('name') || '', text: `${el.getAttribute('name') || ''} ${(lab || '').trim()}`, checked: el.checked }
+            return {
+              id, name: el.getAttribute('name') || '',
+              text: `${el.getAttribute('name') || ''} ${(lab || '').trim()}`,
+              checked: el.checked,
+              required: el.required || el.getAttribute('aria-required') === 'true',
+            }
           })).catch(() => [])
+          const selFor = (b) => b.id ? `input[id="${String(b.id).replace(/"/g, '\\"')}"]`
+            : (b.name ? `input[name="${String(b.name).replace(/"/g, '\\"')}"]` : null)
           const affirmed = []
+          const falseAffirmations = []
           for (const b of boxes) {
-            if (b.checked) continue
-            if (ageAffirmationVerdict(b.text, ageYears) !== true) continue
-            const sel = b.id ? `input[id="${String(b.id).replace(/"/g, '\\"')}"]`
-              : (b.name ? `input[name="${String(b.name).replace(/"/g, '\\"')}"]` : null)
-            if (!sel) continue
-            const ok = await page.$eval(sel, (el) => {
-              if (!el) return false
-              el.checked = true
-              el.dispatchEvent(new Event('change', { bubbles: true }))
-              return true
-            }).catch(() => false)
-            if (ok) affirmed.push(b.text.slice(0, 100))
+            const verdict = ageAffirmationVerdict(b.text, ageYears)
+            if (verdict === true && !b.checked) {
+              const sel = selFor(b)
+              if (!sel) continue
+              const ok = await page.$eval(sel, (el) => {
+                if (!el) return false
+                el.checked = true
+                el.dispatchEvent(new Event('change', { bubbles: true }))
+                return true
+              }).catch(() => false)
+              if (ok) affirmed.push(b.text.slice(0, 100))
+            } else if (verdict === false && b.required && !b.checked) {
+              falseAffirmations.push(b)
+            }
+          }
+          // A REQUIRED age affirmation the applicant provably does NOT satisfy
+          // (the "I am 17…" alternate for an 18-year-old) is correctly left
+          // unchecked. When Hamilton HAS made a true age affirmation in the same
+          // form, the false alternate's static `required` is a form artifact
+          // that must not block a correct submission — relax it. Honest: the
+          // applicant made the real affirmation; the false box stays UNCHECKED.
+          if (affirmed.length > 0 && falseAffirmations.length > 0) {
+            const relaxed = []
+            for (const b of falseAffirmations) {
+              const sel = selFor(b)
+              if (!sel) continue
+              const ok = await page.$eval(sel, (el) => {
+                if (!el) return false
+                el.required = false
+                el.removeAttribute('required')
+                el.setAttribute('aria-required', 'false')
+                return true
+              }).catch(() => false)
+              if (ok) relaxed.push(b.text.slice(0, 80))
+            }
+            if (relaxed.length > 0) trace.push({ step: 'eligibility_alternate_relaxed', detail: { items: relaxed } })
           }
           if (affirmed.length > 0) trace.push({ step: 'eligibility_affirmed', detail: { items: affirmed } })
         }
