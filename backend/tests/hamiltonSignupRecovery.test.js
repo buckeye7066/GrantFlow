@@ -43,19 +43,51 @@ describe('attemptPortalSignupRecovery', () => {
     expect(credentialFetcher).not.toHaveBeenCalled()
   })
 
-  it('requires both separate authority and a reviewed adapter before execution', async () => {
-    const withoutAdapter = await attemptPortalSignupRecovery(db, {
-      profileId: PID, url: URL, createPortalAccountAuthorized: true,
-    })
-    expect(withoutAdapter.reason).toBe('reviewed_signup_adapter_required')
-    expect(withoutAdapter.credential).toBeNull()
+  // NEW CONTRACT (owner condition 2026-08-21): full automation authorizes
+  // autonomous portal ACCOUNT CREATION. With that authority, the recovery helper
+  // drives the real Portal Autopilot Identity brain and, on a genuine
+  // registration, returns the provisioned credential so the run retries and logs
+  // in — instead of the old hard "create the account yourself" handoff.
+  it('with account-creation authority, drives the brain and returns the provisioned credential', async () => {
+    const identityRunner = vi.fn(async () => ({ state: 'registered', host: 'scholarsapply.org' }))
+    const usableCredential = { id: 'cred-1', username: 'Hamilton@axiombiolabs.org', vault_locked: false, pending_registration: false }
+    const credentialFetcher = vi.fn(async () => usableCredential)
 
-    const disabledReviewed = await attemptPortalSignupRecovery(db, {
+    const { credential, reason } = await attemptPortalSignupRecovery(db, {
       profileId: PID, url: URL, createPortalAccountAuthorized: true,
-      reviewedSignupAdapter: { reviewed: true, id: 'fixture-only' },
+      _identityRunner: identityRunner,
+      _credentialFetcher: credentialFetcher,
     })
-    expect(disabledReviewed.reason).toBe('reviewed_signup_execution_not_enabled')
-    expect(disabledReviewed.credential).toBeNull()
+    expect(identityRunner).toHaveBeenCalledTimes(1)
+    // the brain is asked to CREATE the account (authority threaded through)
+    expect(identityRunner.mock.calls[0][1]).toMatchObject({ createPortalAccountAuthorized: true, profileId: PID })
+    expect(credential).toEqual(usableCredential)
+    expect(reason).toBe('registered')
+  })
+
+  it('does NOT return a vault-locked or pending-registration credential as recovered', async () => {
+    for (const cred of [
+      { id: 'c', vault_locked: true, pending_registration: false },
+      { id: 'c', vault_locked: false, pending_registration: true },
+    ]) {
+      const { credential } = await attemptPortalSignupRecovery(db, {
+        profileId: PID, url: URL, createPortalAccountAuthorized: true,
+        _identityRunner: async () => ({ state: 'needs_user' }),
+        _credentialFetcher: async () => cred,
+      })
+      expect(credential).toBeNull()
+    }
+  })
+
+  it('when the brain hands off (needs_user) and no usable credential exists, stays blocked honestly', async () => {
+    const { credential, outcome, reason } = await attemptPortalSignupRecovery(db, {
+      profileId: PID, url: URL, createPortalAccountAuthorized: true,
+      _identityRunner: async () => ({ state: 'identity_proof_required', blocker: 'identity_proof' }),
+      _credentialFetcher: async () => null,
+    })
+    expect(credential).toBeNull()
+    expect(reason).toBe('identity_proof_required')
+    expect(outcome.state).toBe('identity_proof_required')
   })
 
   it('ignores throwing legacy seams and returns the safe handoff deterministically', async () => {

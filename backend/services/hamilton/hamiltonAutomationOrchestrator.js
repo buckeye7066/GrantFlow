@@ -80,6 +80,7 @@ import { findValidSession, getSessionStorageState, importSession, markSessionExp
 import { createCaptureRequest } from './hamiltonSessionCaptureRequests.js'
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
+import { runAutopilotIdentityForPortal } from './hamiltonPortalAutopilotIdentity.js'
 import { botProtectedNotice } from './hamiltonBotProtectedNotice.js'
 import { normalizeSchedule, isWithinWindow, nextWindowStart } from './portalAccessSchedule.js'
 import { isAutomationEnabled } from '../../../shared/automationPreferences.js'
@@ -666,35 +667,89 @@ async function reload(db, taskId) {
 export async function attemptPortalSignupRecovery(db, {
   profileId, userId = 'system_admin_token', taskId = null, url, profile = null,
   createPortalAccountAuthorized = false,
-  reviewedSignupAdapter = null,
   _identityRunner = null, _credentialFetcher = null,
 } = {}) {
-  // Using a saved credential is not authority to create a third-party account.
-  // No reviewed real-host signup executor exists in this release, so even a
-  // future explicit grant must hand off until that executable review exists.
-  const reason = createPortalAccountAuthorized !== true
-    ? 'account_creation_not_authorized'
-    : !reviewedSignupAdapter
-      ? 'reviewed_signup_adapter_required'
-      : 'reviewed_signup_execution_not_enabled'
+  const host = hostOfUrl(url)
+
+  // Not authorized to CREATE a third-party account (this run is not under full
+  // automation): using a saved login is a different authority. Hand off, exactly
+  // as before — the owner has to set the account up, then Hamilton uses it.
+  if (createPortalAccountAuthorized !== true) {
+    const outcome = {
+      state: 'needs_user', host, blocker: 'create_portal_account',
+      detail: 'Using saved logins does not authorize Hamilton to create a new portal account.',
+    }
+    if (taskId) {
+      await appendTaskEvent(db, {
+        taskId, eventType: 'blocked', status: 'filling_portal', step: 'portal_account_creation',
+        message: outcome.detail, actorUserId: userId, actorRole: 'agent',
+        details: { state: outcome.state, host, blocker: outcome.blocker, reason: 'account_creation_not_authorized' },
+      }).catch(() => {})
+    }
+    return { outcome, credential: null, reason: 'account_creation_not_authorized' }
+  }
+
+  // AUTHORIZED (full automation): drive the Portal Autopilot Identity brain,
+  // which provisions a unique master-wrapped password and runs the real
+  // browser-driven signup adapter with the applicant's identity + HAMILTON'S own
+  // email/phone (so the portal's verification lands where Hamilton can read it).
+  // Every compliance rail lives INSIDE the brain and still hands off: an
+  // identity-proofed host, a ToS-forbidden portal, a CAPTCHA/2FA wall during
+  // signup, a locked vault, or a disabled/allowlist-blocked browser all return a
+  // needs-user/waiting state, never a fabricated account. Never throws.
+  const runIdentity = _identityRunner || runAutopilotIdentityForPortal
+  const fetchCredential = _credentialFetcher
+    || ((args) => getDecryptedCredentialWithFallback(db, args))
+
+  let brain = { state: 'needs_user' }
+  try {
+    brain = await runIdentity(db, {
+      profileId,
+      userId,
+      portalHost: url,
+      loginUrl: url,
+      profile,
+      createPortalAccountAuthorized: true,
+      // launchBrowser omitted → the signup adapter self-launches the portal
+      // browser (openBrowserContext), the same launcher the run engine uses.
+    }) || { state: 'needs_user' }
+  } catch (err) {
+    brain = { state: 'needs_user', detail: err?.message || String(err) }
+  }
+
+  // A genuinely registered account has written a usable credential to the vault.
+  // Re-read it; a vault-locked or still-pending-registration credential is NOT
+  // usable to log in with, so it does not count as recovered (the run stays
+  // blocked and the brain's waiting/handoff state is reported honestly).
+  let credential = null
+  try {
+    const cred = await fetchCredential({ profileId, portalHost: host })
+    if (cred && !cred.vault_locked && !cred.pending_registration) credential = cred
+  } catch { credential = null }
+
   const outcome = {
-    state: 'needs_user',
-    host: hostOfUrl(url),
-    blocker: 'create_portal_account',
-    detail: reason === 'account_creation_not_authorized'
-      ? 'Using saved logins does not authorize Hamilton to create a new portal account.'
-      : 'This portal has no enabled, reviewed account-creation adapter. Create the account yourself, then Hamilton can use the saved login.',
+    state: brain?.state || 'needs_user',
+    host,
+    blocker: brain?.blocker || (credential ? null : 'create_portal_account'),
+    detail: brain?.detail
+      || (credential
+        ? `Hamilton set up a portal account on ${host} and will log in to continue.`
+        : 'Hamilton could not complete portal account setup autonomously; handed off.'),
   }
   if (taskId) {
     await appendTaskEvent(db, {
-      taskId, eventType: 'blocked', status: 'filling_portal', step: 'portal_account_creation',
-      message: outcome.detail, actorUserId: userId, actorRole: 'agent',
-      details: { state: outcome.state, host: outcome.host, blocker: outcome.blocker, reason },
+      taskId,
+      eventType: credential ? 'progress' : 'blocked',
+      status: 'filling_portal',
+      step: 'portal_account_creation',
+      message: outcome.detail,
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { state: outcome.state, host, blocker: outcome.blocker, reason: brain?.state || 'needs_user' },
     }).catch(() => {})
   }
-  void profileId; void profile; void reviewedSignupAdapter
-  void _identityRunner; void _credentialFetcher
-  return { outcome, credential: null, reason }
+  void profile
+  return { outcome, credential, reason: brain?.state || 'needs_user' }
 }
 
 /**
@@ -2006,12 +2061,22 @@ async function runAutopilotPathway(db, {
         && !loginCredential && !vaultLockedForHost && !signupAttempted
         && authorizations.use_saved_credentials_reference) {
       signupAttempted = true
+      // Full automation authorizes autonomous portal ACCOUNT CREATION (owner
+      // condition 2026-08-21: "Hamilton will use his own email, phone, vault info
+      // for setting up these portals"). That is the full-automation grant shape:
+      // submit_applications granted + credential-use granted + no human-review
+      // veto. A fill-only or human-review profile still hands account creation to
+      // the owner. The brain's own compliance rails are unchanged either way.
+      const createAccountAuthorized = authorizations.submit_applications === true
+        && authorizations.use_saved_credentials_reference === true
+        && authorizations.require_human_review !== true
       const recovered = await attemptPortalSignupRecovery(db, {
         profileId: task.profile_id,
         userId: userId || task.user_id || 'system_admin_token',
         taskId: task.id,
         url,
         profile,
+        createPortalAccountAuthorized: createAccountAuthorized,
         _identityRunner: options?._identityRunner || null,
       })
       if (recovered.credential) {
