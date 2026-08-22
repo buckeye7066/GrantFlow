@@ -32,6 +32,7 @@ const ITEM_COLORS = Object.freeze({
   completed: '#bbf7d0',
   needed: '#fef08a',
   submission: '#fecaca',
+  submitted: '#86efac',
 })
 
 const TERMINAL_HIDDEN_STATUSES = new Set([
@@ -77,14 +78,22 @@ function segmentedBackground(items) {
 
 function statusLabel(kind) {
   if (kind === 'completed') return 'Completed'
+  if (kind === 'submitted') return 'Application submitted'
   if (kind === 'submission') return 'Submission deadline'
   return 'Needed by this date'
 }
 
 function statusIcon(kind) {
   if (kind === 'completed') return CheckCircle2
+  if (kind === 'submitted') return CheckCircle2
   if (kind === 'submission') return CircleAlert
   return Clock3
+}
+
+function pendingAmountLabel(grant) {
+  const amt = Number(grant?.amount_requested || grant?.amount_max || grant?.amount_min || 0)
+  if (!Number.isFinite(amt) || amt <= 0) return ''
+  try { return ` — award pending: ${amt.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}` } catch { return ` — award pending: $${amt}` }
 }
 
 function describeCalendarDay(day, items = []) {
@@ -162,6 +171,28 @@ export default function EndUserCalendar() {
     }
 
     for (const grant of pipelineGrants) {
+      // WHEN THE SUBMISSION OCCURRED (owner 2026-08-22): a grant Hamilton (or the
+      // user) has submitted shows a "submitted ✓" marker on its submission date,
+      // with the award amount noted as pending. Distinct from the DEADLINE below.
+      const status = String(grant.status || '').toLowerCase()
+      const submittedRaw = grant.submitted_date || grant.submitted_at || null
+      if (submittedRaw || status === 'submitted') {
+        const subDate = toLocalDate(submittedRaw) || (status === 'submitted' ? toLocalDate(grant.updated_at) : null)
+        if (subDate) {
+          items.push({
+            id: `submitted:${grant.id}`,
+            kind: 'submitted',
+            date: subDate,
+            dateKey: dayKey(subDate),
+            title: 'Application submitted',
+            description: `Submitted to ${grantSponsor(grant) || grantTitle(grant)}${pendingAmountLabel(grant)}. Awaiting the funder's decision.`,
+            grantId: grant.id,
+            grantTitle: grantTitle(grant),
+            sponsor: grantSponsor(grant),
+          })
+        }
+      }
+
       if (!grant.deadline || String(grant.deadline).toLowerCase() === 'rolling') continue
       const date = toLocalDate(grant.deadline)
       if (!date) continue

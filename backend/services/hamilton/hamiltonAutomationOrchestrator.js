@@ -2583,6 +2583,21 @@ async function runAutopilotPathway(db, {
         submission_verification_required: true,
       }
     }
+    // Promote the linked GRANT to submitted + stamp the submission DATE, so the
+    // profile pipeline shows the award amount as PENDING and the profile CALENDAR
+    // shows WHEN the submission occurred (owner 2026-08-22). Only reached on a
+    // CONFIRMED external submission (evidence-gated above) — never on a draft, so
+    // "submitted" on the grant stays an honest claim.
+    if (grant?.id) {
+      await maybeUpdateGrantStage(db, grant.id, 'submitted')
+      try {
+        const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+        const dateExpr = db?.dialect === 'postgres' ? 'CURRENT_DATE' : "date('now')"
+        await db.prepare(
+          `UPDATE grants SET submitted_date = COALESCE(submitted_date, ${dateExpr}), updated_at = ${nowFn} WHERE id = ?`,
+        ).run(String(grant.id))
+      } catch { /* grants table may be absent in test fixtures */ }
+    }
     await appendTaskEvent(db, {
       taskId: task.id,
       eventType: 'submitted',
