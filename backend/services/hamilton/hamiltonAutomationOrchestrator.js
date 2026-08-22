@@ -229,7 +229,7 @@ function hostMatchesAllowed(hostname, allowedHosts) {
  * is set, the host must also appear on that list OR in extraAllowedHosts
  * (profile-declared portals + saved credential domains).
  */
-export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] } = {}) {
+export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [], ignoreHostAllowlist = false } = {}) {
   if (!isBrowserAutomationEnabled()) return false
   if (isControlledBetaSyntheticBrowserUrl(url)) return true
   if (!isPublicHttpsPortalUrl(url) && !isHamiltonBrowserTargetAllowed(url)) return false
@@ -237,6 +237,13 @@ export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] }
 
   let hostname
   try { hostname = new URL(String(url)).hostname.toLowerCase() } catch { return false }
+
+  // Owner doctrine 2026-08-22: under FULL AUTOMATION the profile user has
+  // consented, so Hamilton submits on ANY public HTTPS portal — the host
+  // allowlist (a controlled-beta throttle) no longer gates it. The SSRF floor
+  // (public-HTTPS-only, no private/local hosts) and the global
+  // HAMILTON_ENABLE_BROWSER_AUTOMATION switch above STILL apply.
+  if (ignoreHostAllowlist) return true
 
   const allowlist = browserAutomationHostAllowlist()
   if (allowlist.length === 0) return true
@@ -246,9 +253,13 @@ export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] }
   return hostMatchesAllowed(hostname, [...allowlist, ...extras])
 }
 
-/** Submit click is executable wherever browser automation is permitted. */
-export function reviewedPortalSubmissionExecutionAvailable(url) {
-  return browserAutomationPermittedForUrl(url)
+/**
+ * Submit click is executable wherever browser automation is permitted. Under
+ * full automation the host allowlist is bypassed (owner doctrine 2026-08-22):
+ * any public HTTPS portal is a valid submit target.
+ */
+export function reviewedPortalSubmissionExecutionAvailable(url, { fullAutomation = false } = {}) {
+  return browserAutomationPermittedForUrl(url, { ignoreHostAllowlist: fullAutomation === true })
 }
 
 /**
@@ -1595,7 +1606,7 @@ async function runAutopilotPathway(db, {
     authorizations.use_standing_attestation = true
     authorizations.submit_applications = true
   }
-  if (allowAutoSubmit && !reviewedPortalSubmissionExecutionAvailable(url)) {
+  if (allowAutoSubmit && !reviewedPortalSubmissionExecutionAvailable(url, { fullAutomation: fullAutomationActive })) {
     allowAutoSubmit = false
     submissionDecision = {
       ...submissionDecision,
@@ -1722,7 +1733,7 @@ async function runAutopilotPathway(db, {
       return { allow: false, reason: 'profile_auto_submit_disabled', decision: fresh }
     }
     // Re-check executable coverage at the click boundary as well as launch.
-    if (!reviewedPortalSubmissionExecutionAvailable(url)) {
+    if (!reviewedPortalSubmissionExecutionAvailable(url, { fullAutomation: fullAutomationActive })) {
       return { allow: false, reason: 'portal_url_not_browser_executable', decision: fresh }
     }
     if (grant?.id) {
