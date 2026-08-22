@@ -407,7 +407,20 @@ export async function resolveSubmissionDecision(db, {
   const active = await listActiveAuthorizations(db, { profileId, fundingSourceId, taskId })
   const submitAuthorization = active.find((row) => row.authorization_type === 'submit_applications') || null
   const requireHumanReview = active.some((row) => row.options?.require_human_review === true)
-  const requested = Boolean(taskAllowAutoSubmit)
+  // Auto-submit INTENT has two sources, and the toggle is the authoritative one.
+  // The per-task `allow_auto_submit` column is a mirror the #1312 full-automation
+  // sweep maintains; a task the sweep never reached — a stale backlog row, or one
+  // created after the profile toggle flipped on — would otherwise draft forever
+  // while the readiness card (`isFullAutomationEnabled`, which reads the
+  // authorization's own `allow_auto_submit` option) reports "full automation is
+  // on". That contradiction is exactly what stranded 100+ tasks at
+  // `waiting_for_review` under an enabled toggle (2026-08-21). Reading intent from
+  // the active authorization here makes the gate and the readiness card agree by
+  // construction. Every veto still holds below: a `require_human_review` option at
+  // any scope, the missing-submit-grant check, the global env kill switch
+  // (applied by the caller), and the browser-executable check all still refuse.
+  const authorizationAutoSubmit = active.some((row) => row.options?.allow_auto_submit === true)
+  const requested = Boolean(taskAllowAutoSubmit) || authorizationAutoSubmit
 
   let reason = 'authorized'
   if (!requested) reason = 'not_requested'
