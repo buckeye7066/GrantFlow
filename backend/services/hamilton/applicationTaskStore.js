@@ -1432,7 +1432,7 @@ export async function cancelApplicationTask(db, taskId, { actorUserId = null, ac
                ELSE ${nowSqlLiteral(db)}
              END,
              next_retry_at = NULL,
-             auto_submit_enabled = 0, allow_auto_submit = 0,
+             auto_submit_enabled = false, allow_auto_submit = false,
              updated_at = ${nowSqlLiteral(db)}
        WHERE id = ?`
   const cancelParams = [verificationMessage, cancelledMessage, String(taskId)]
