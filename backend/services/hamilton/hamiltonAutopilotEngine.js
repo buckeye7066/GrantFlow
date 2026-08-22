@@ -691,13 +691,34 @@ async function detectValidationErrors(page) {
   }).catch(() => [])
 }
 
+// Page chrome that is NOT part of the application: a "Was this page helpful?"
+// survey, a "Report suspected fraud" widget, a newsletter/cookie box. On many
+// government portals these live in the SAME <form> as the real submit control,
+// so a required Yes/No feedback radio fails checkValidity() and — before this —
+// hard-blocked the actual application ("Was this page helpful? field is
+// required" killed a real TANF submission, Anastasia's run 2026-08-21). Mirrors
+// the isPageFeedback filter that already keeps such widgets from being treated
+// as the application's SUBMIT button.
+const FEEDBACK_VALIDATION_IGNORE_RX = /was this (page |content )?helpful|page helpful|how helpful|rate (this )?(page|content)|site feedback|leave feedback|feedback about this|report (suspected )?(fraud|abuse)|newsletter|subscribe|cookie/i
+
 async function detectNativeValidationErrors(page, buttonId) {
   if (!buttonId) return []
-  return await page.$eval(`[data-hamilton-btn="${buttonId}"]`, (button) => {
+  return await page.$eval(`[data-hamilton-btn="${buttonId}"]`, (button, feedbackSrc) => {
     const form = button.form || button.closest('form')
     if (!form) return []
+    const feedbackRx = new RegExp(feedbackSrc, 'i')
+    const isFeedbackField = (field) => {
+      const label = field.labels?.[0]?.textContent || field.getAttribute?.('aria-label') || ''
+      const name = field.getAttribute?.('name') || ''
+      const id = field.getAttribute?.('id') || ''
+      const legend = field.closest?.('fieldset')?.querySelector?.('legend')?.textContent || ''
+      return feedbackRx.test(label) || feedbackRx.test(name) || feedbackRx.test(id) || feedbackRx.test(legend)
+    }
     return Array.from(form.elements || [])
       .filter((field) => typeof field.checkValidity === 'function' && !field.checkValidity())
+      // A page-feedback / fraud-report / newsletter widget is not the
+      // application and must never block its submission.
+      .filter((field) => !isFeedbackField(field))
       .slice(0, 10)
       .map((field) => {
         const label = field.labels?.[0]?.textContent || field.getAttribute('aria-label')
@@ -705,7 +726,7 @@ async function detectNativeValidationErrors(page, buttonId) {
         const message = field.validationMessage || 'invalid value'
         return `${String(label).trim()}: ${String(message).trim()}`.slice(0, 300)
       })
-  }).catch(() => [])
+  }, FEEDBACK_VALIDATION_IGNORE_RX.source).catch(() => [])
 }
 
 function summarisePageState(page, fields, buttons) {
@@ -1781,7 +1802,7 @@ export const _internal = {
   SIGNATURE_FIELD_PATTERNS, isTypedSignatureField, signatureConsentFor, detectAttestationGate,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
-  clickButtonByBid,
+  clickButtonByBid, FEEDBACK_VALIDATION_IGNORE_RX,
   detectGate, detectBotWall, attemptLogin,
   extractConfirmationReference,
   extractConfirmationReferenceFromUrl,
