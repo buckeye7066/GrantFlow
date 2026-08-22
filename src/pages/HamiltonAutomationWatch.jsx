@@ -178,6 +178,91 @@ function outcomeSummary(task) {
   return 'Hamilton finished with this one and recorded no further detail.'
 }
 
+// LiveView — the owner's "watch the portal" panel (2026-08-21). While a card is
+// WORKING, it polls this task's latest run for a screencast FRAME (the portal
+// picture, present only while a page is rendering) and a STEP (the play-by-play
+// text, available even between frames), at a few frames/sec. Honest by design:
+// no frame yet says so rather than showing a frozen picture; a request failure
+// says it is retrying rather than looking live.
+function LiveView({ taskId, active }) {
+  const [live, setLive] = useState(null)
+  const [runStatus, setRunStatus] = useState(null)
+  const [error, setError] = useState(false)
+  const busy = useRef(false)
+
+  useEffect(() => {
+    if (!active) { setLive(null); return undefined }
+    let cancelled = false
+    const tick = async () => {
+      if (busy.current) return
+      busy.current = true
+      try {
+        const res = await client.get(
+          `/api/hamilton/automation/tasks/${encodeURIComponent(taskId)}/live-frame`,
+        )
+        if (!cancelled) {
+          setLive(res?.data?.live || null)
+          setRunStatus(res?.data?.run_status || null)
+          setError(false)
+        }
+      } catch {
+        if (!cancelled) setError(true)
+      } finally {
+        busy.current = false
+      }
+    }
+    tick()
+    const id = setInterval(tick, 800)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [taskId, active])
+
+  if (!active) return null
+
+  const frame = live?.frame
+  const step = live?.step
+  const detail = live?.step_detail
+  const detailText = detail && typeof detail === 'object'
+    ? Object.entries(detail)
+      .filter(([, v]) => v !== null && v !== undefined && v !== '')
+      .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+      .join(' · ')
+    : ''
+
+  return (
+    <div className="border-t border-slate-800/70 p-3">
+      <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-emerald-300">
+        <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+        Live — what Hamilton is doing now
+      </p>
+      {frame ? (
+        <img
+          src={`data:image/jpeg;base64,${frame}`}
+          alt="Live view of Hamilton's portal browser"
+          className="w-full rounded-lg border border-slate-800"
+        />
+      ) : (
+        <div className="rounded-lg border border-dashed border-slate-800 bg-slate-900/60 px-3 py-4 text-center text-xs text-slate-400">
+          {step
+            ? 'The portal picture appears while a page is on screen — Hamilton is between screens right now.'
+            : 'Waiting for the next step to render…'}
+        </div>
+      )}
+      {step && (
+        <p className="mt-2 text-xs text-slate-300">
+          <span className="font-medium text-slate-100">{step}</span>
+          {detailText ? ` · ${detailText}` : ''}
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 text-[11px] text-slate-500">Couldn&rsquo;t reach the live view just now — retrying.</p>
+      )}
+      {!step && !frame && runStatus && (
+        <p className="mt-1 text-[11px] text-slate-500">Run status: {String(runStatus).replace(/_/g, ' ')}.</p>
+      )}
+    </div>
+  )
+}
+
 function TaskCard({ task }) {
   const bucket = bucketForTaskStatus(task.status)
   const tone = TONE[bucket]
@@ -261,6 +346,8 @@ function TaskCard({ task }) {
           </a>
         </p>
       )}
+
+      <LiveView taskId={task.id} active={bucket === 'working'} />
     </li>
   )
 }

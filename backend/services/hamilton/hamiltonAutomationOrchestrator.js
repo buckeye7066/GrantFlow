@@ -1870,6 +1870,10 @@ async function runAutopilotPathway(db, {
       } else {
         engineResult = await runAutopilot({
           url, profile, authorizations,
+          // Live view: this run's browser is screencast to the in-memory live
+          // store under run.id and the engine reports its step there, so the
+          // watch window can show a live video + play-by-play for THIS run.
+          runId: run.id,
           documents, storageState, allowAutoSubmit, loginCredential,
           headless: options?.headless ?? true,
           // DURABLE proof: capture the confirmation screenshot + saved page under

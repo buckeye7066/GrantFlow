@@ -70,6 +70,7 @@ import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { triagePage, PAGE_SURFACES } from './listingPageTriage.js'
 import { resolveConfirmationCaptureDir } from './hamiltonConfirmationArtifacts.js'
 import { resolveUploadsDir } from '../../utils/uploadsDir.js'
+import { startLiveScreencast, reportLiveStep, isLiveViewEnabled } from './hamiltonLiveView.js'
 
 const NAV_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS) || 25_000
 const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS) || 8_000
@@ -1154,6 +1155,12 @@ export async function runAutopilot({
   // db mid-run — same contract as narrativeAnswers). Absent/empty = an identity
   // field is a blocker, exactly as before. NEVER logged or traced.
   identityValues = null,
+  // The autopilot run id. When set (and live view is enabled), this run's
+  // browser is screencast to the in-memory live store under this id and the
+  // engine reports its current step there, so the watch window can show a live
+  // video + play-by-play. Absent (direct callers / tests) = no live view, and
+  // every reportLiveStep/screencast call is a guarded no-op.
+  runId = null,
   // TEST-ONLY page injection. Engine-internal (underscore); the orchestrator's
   // runAutopilot call never sets it and no request can reach it. When provided,
   // the real engine logic runs against this page instead of launching Chromium,
@@ -1309,7 +1316,20 @@ export async function runAutopilot({
   }
   signal?.addEventListener('abort', abortBrowser, { once: true })
 
+  // Live view: stream a low-fps screencast of this run's browser and report its
+  // steps to the in-memory live store. Pure side channel — startLiveScreencast
+  // never throws, and a failure leaves the run untouched. Only the real headless
+  // Chromium path (the injected test page has no CDP session). Declared here so
+  // the finally below can always stop it.
+  let liveViewHandle = { stop: async () => {} }
+  if (runId && !_testPage && isLiveViewEnabled()) {
+    liveViewHandle = await startLiveScreencast(page, runId).catch(() => ({ stop: async () => {} }))
+  }
+
   try {
+    reportLiveStep(runId, 'Opening the portal', {
+      detail: { host: (() => { try { return new URL(url).host } catch { return null } })() },
+    })
     trace.push({ step: 'navigate', detail: { url } })
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
 
@@ -1318,6 +1338,7 @@ export async function runAutopilot({
         return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
       pagesVisited += 1
+      reportLiveStep(runId, 'Reading the application page', { detail: { page: pagesVisited } })
       trace.push({ step: 'page', detail: { index: pagesVisited, url: (() => { try { return page.url() } catch { return null } })() } })
 
       const gate = await detectGate(page)
@@ -1353,6 +1374,7 @@ export async function runAutopilot({
         if (gate.kind === 'captcha' && solveCaptcha && !captchaAttempted) {
           captchaAttempted = true
           trace.push({ step: 'captcha_attempt' })
+          reportLiveStep(runId, 'Solving the CAPTCHA')
           let verdict = { solved: false, reason: 'solver_unavailable' }
           try {
             verdict = (await solveCaptcha(page)) || verdict
@@ -1443,6 +1465,7 @@ export async function runAutopilot({
         }
       }
       trace.push({ step: 'fill', detail: { filledThisPage } })
+      reportLiveStep(runId, 'Filling the application', { detail: { fields_filled: filledThisPage } })
 
       // A required identity value is missing from the vault: stop and hand back a
       // NAMED request (owner directive 2026-08-21 — Hamilton asks the profile's
@@ -1612,6 +1635,7 @@ export async function runAutopilot({
             || detectReceiptAcknowledgement(beforeHtml),
         }
         beforeSubmitCapture = beforeConfirmation
+        reportLiveStep(runId, 'Submitting the application')
         const clicked = await clickButtonByBid(page, submitCandidates[0].bid)
         if (!clicked) {
           return {
@@ -1792,6 +1816,7 @@ export async function runAutopilot({
         sessionSink.storageState = await context.storageState()
       }
     } catch { /* capture is best-effort; ignore */ }
+    try { await liveViewHandle.stop() } catch { /* ignore */ }
     try { await context.close() } catch { /* ignore */ }
     try { await browser.close() } catch { /* ignore */ }
   }

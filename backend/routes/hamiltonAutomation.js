@@ -68,6 +68,7 @@ import {
   automateSelected,
   automateSingleSource,
 } from '../services/hamilton/hamiltonAutomationOrchestrator.js'
+import { getLiveFrame } from '../services/hamilton/hamiltonLiveView.js'
 import { generateAndSavePacket } from '../services/hamilton/hamiltonApplicationPacketGenerator.js'
 import { emitHamiltonNotificationToProfileAndAdmins } from '../services/hamilton/hamiltonNotifications.js'
 import {
@@ -556,6 +557,36 @@ router.get('/tasks/:taskId', async (req, res) => {
   } catch (err) {
     log.error('get_task_failed', { taskId: ctx.task.id, err: err?.message })
     return res.status(500).json({ error: 'get_failed' })
+  }
+})
+
+// GET /tasks/:taskId/live-frame — the live view (owner request 2026-08-21:
+// "show the open portal and Hamilton entering information"). Returns the latest
+// screencast FRAME (a picture of the portal, present only while the run is
+// actively rendering) and STEP (a plain-text play-by-play, available even when
+// no frame is) for this task's most recent run. Ephemeral: frames live only in
+// memory (never persisted — a frame can carry a half-filled form) and are served
+// only to a caller who may access the profile. The UI polls this fast, so it
+// classifies onto the live_interaction rate budget (see apiRateLimitPolicy).
+router.get('/tasks/:taskId/live-frame', async (req, res) => {
+  const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
+  if (!ctx) return
+  try {
+    const run = await req.db.prepare(
+      `SELECT id, status FROM hamilton_autopilot_runs
+        WHERE task_id = ? ORDER BY started_at DESC LIMIT 1`,
+    ).get(String(ctx.task.id))
+    if (!run) return res.json({ ok: true, run_id: null, task_status: ctx.task.status || null, live: null })
+    return res.json({
+      ok: true,
+      run_id: run.id,
+      run_status: run.status || null,
+      task_status: ctx.task.status || null,
+      live: getLiveFrame(run.id) || null,
+    })
+  } catch (err) {
+    log.error('live_frame_failed', { taskId: ctx.task?.id, err: err?.message })
+    return res.status(500).json({ error: 'live_frame_failed' })
   }
 })
 

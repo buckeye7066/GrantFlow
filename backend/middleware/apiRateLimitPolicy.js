@@ -132,7 +132,12 @@ export function classifyApiRatePolicy(req, env = process.env) {
   // + live-session existence), and human-bounded, so they get a real-time
   // per-user budget instead. Deliberately shared:false — a DB write per mouse
   // event would be its own outage.
-  if (/^\/api\/hamilton\/automation\/sessions\/cloud-login\/[^/]+\/(?:input|stream)$/.test(path)) {
+  // Also the live-view frame poll (GET /tasks/:taskId/live-frame): the watch
+  // window fetches it at a few frames/sec to show Hamilton filling the portal,
+  // which would exhaust the 600/15min standard read budget in ~seconds. Same
+  // class as cloud-login stream — cheap (one in-memory read), triple-gated
+  // (auth + profile access + task ownership), human-bounded.
+  if (/^\/api\/hamilton\/automation\/(?:sessions\/cloud-login\/[^/]+\/(?:input|stream)|tasks\/[^/]+\/live-frame)$/.test(path)) {
     return {
       name: 'live_interaction',
       windowMs: positiveInt(env.API_LIVE_INTERACTION_RATE_LIMIT_WINDOW_MS, 60 * 1000),

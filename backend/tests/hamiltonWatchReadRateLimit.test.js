@@ -37,4 +37,10 @@ describe('Hamilton watch reads do not spend the run-start budget', () => {
       expect(p?.max).toBe(25)
     }
   })
+
+  it('the live-view frame poll is on the live_interaction budget (fast polling, not the 600 read cap)', () => {
+    const p = classify('GET', '/api/hamilton/automation/tasks/abc-123/live-frame')
+    expect(p?.name).toBe('live_interaction')
+    expect(p?.max).toBe(1800)
+  })
 })
