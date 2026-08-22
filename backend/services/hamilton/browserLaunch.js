@@ -52,13 +52,28 @@ export const REALISTIC_PORTAL_UA =
  * previously-working deployment worse. Returns { browser, engine } so callers
  * can log which engine actually served the session.
  */
-export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null } = {}) {
+// Translate a VALIDATED bypass strategy (from hamiltonBotBypassRegistry) into
+// Chromium launch args. Input is already allowlist-validated; this only maps
+// the known knobs to flags — it can never introduce an arbitrary arg.
+function bypassStrategyLaunchArgs(strategy) {
+  if (!strategy || typeof strategy !== 'object') return []
+  const out = []
+  if (typeof strategy.user_agent === 'string' && strategy.user_agent) out.push(`--user-agent=${strategy.user_agent}`)
+  if (Array.isArray(strategy.extra_args)) for (const a of strategy.extra_args) if (typeof a === 'string') out.push(a)
+  return out
+}
+
+export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null, bypassStrategy = null } = {}) {
   if (targetUrl !== null && !isHamiltonBrowserTargetAllowed(targetUrl)) {
     const err = new Error('unsafe_browser_target')
     err.code = 'unsafe_browser_target'
     throw err
   }
-  const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...extraArgs]
+  // Condition 3 (owner 2026-08-22): apply a PERSISTED, VALIDATED per-host bypass
+  // strategy (hamiltonBotBypassRegistry) — data-only launch knobs (a user agent,
+  // a few allowlisted args) the registry has already validated. Never code.
+  const strategyArgs = bypassStrategyLaunchArgs(bypassStrategy)
+  const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...strategyArgs, ...extraArgs]
   try {
     const browser = await chromium.launch({ headless, channel: 'chromium', args })
     return { browser, engine: 'chromium-new-headless' }

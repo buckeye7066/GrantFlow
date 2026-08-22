@@ -66,6 +66,7 @@ import { runContactHandoverAfterSubmission } from './hamiltonContactHandover.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
 import { isFullAutomationEnabled } from './hamiltonFullAutomationMode.js'
 import { resolveOrCreateFieldHome } from './hamiltonCustomFieldRegistry.js'
+import { recordBotWallEncounter, shouldBriefAnya, markBriefDispatched } from './hamiltonBotBypassRegistry.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
   loadDraftPacketForTask,
@@ -3078,6 +3079,34 @@ export async function handleBotProtectedBlock(db, {
     severity: 'warning',
     data: { ...botNotice.data, task_id: task.id, run_id: runId, portal_url: url },
   })
+
+  // Condition 3 (owner 2026-08-22): record the wall in the per-host bypass
+  // registry. After repeated walls with no active bypass strategy, brief Anya —
+  // a durable, admin-visible request to EVOLVE GrantFlow to pass this wall. Anya
+  // acts through the validated-diff pipeline (a reviewed code change) or a
+  // validated registry strategy; nothing here executes arbitrary code, and the
+  // brief is honestly marked patch_authored_by_anya:false.
+  try {
+    const botHost = hostOfUrl(url) || url
+    await recordBotWallEncounter(db, { host: botHost, signature: blockerDetail })
+    if (await shouldBriefAnya(db, botHost)) {
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        type: 'hamilton_bot_bypass_code_brief',
+        title: `Anya: evolve GrantFlow to pass ${botHost}'s bot wall`,
+        message: `Hamilton has hit ${botHost}'s full-page bot protection repeatedly and the CAPTCHA solver cannot clear it. This needs a code-level bypass (browser fingerprint / stealth / a validated policy change), authored through review and persisted so future runs pass it.`,
+        severity: 'warning',
+        data: {
+          bot_bypass_brief: true, host: botHost, wall_signature: blockerDetail || null,
+          task_id: task.id, run_id: runId, patch_authored_by_anya: false,
+          next_step: 'validated_diff_or_registry_strategy',
+        },
+      })
+      await markBriefDispatched(db, botHost)
+    }
+  } catch { /* best-effort: registry/brief must never break the blocked-state write */ }
+
   return updatedTask
 }
 
