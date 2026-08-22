@@ -11,7 +11,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import client from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, RefreshCw, AlertTriangle, CheckCircle2, X, Trash2 } from 'lucide-react'
+import { Loader2, RefreshCw, AlertTriangle, CheckCircle2, X, Trash2, Unlock } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { showInfoToast, showErrorToast } from '@/components/shared/toastHelpers'
 import HamiltonInlineHardStopFix from '@/components/hamilton/HamiltonInlineHardStopFix'
@@ -129,6 +129,25 @@ export default function AdminHamiltonHardStops() {
     }
   }
 
+  // Release stuck "need you" portals so the next full-automation run revisits
+  // them — clears the retry backoff on the backlog that stopped before the
+  // block-removal fixes deployed. Uses the app's authenticated client (Bearer
+  // token), so it works where a raw console fetch 401s. Never submits.
+  async function releaseNeedYou() {
+    if (!window.confirm('Release all stuck "need you" portals across every profile so the next full-automation run revisits them? This clears the retry backoff only — it never submits, and the double-submit quarantine / ToS / mail-fax tasks are left untouched.')) return
+    setBusy('__release__')
+    try {
+      const res = await client.post('/api/hamilton/automation/admin/release-need-you', { allProfiles: true })
+      const parts = Object.entries(res?.by_status || {}).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`).join(', ')
+      showInfoToast(toast, 'Portals released', `${res?.released ?? 0} task${(res?.released ?? 0) === 1 ? '' : 's'} released across ${res?.profiles_affected ?? 0} profile(s)${parts ? ` — ${parts}` : ''}. Start a full-automation run to revisit them.`)
+      await load()
+    } catch (err) {
+      showErrorToast(toast, 'Could not release portals', err?.message || 'See logs.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -141,6 +160,17 @@ export default function AdminHamiltonHardStops() {
           )}
         </h2>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={releaseNeedYou}
+            disabled={busy === '__release__' || loading}
+            className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+            title="Clear the retry backoff on stuck 'need you' portals so the next run revisits them"
+          >
+            {busy === '__release__' ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Unlock className="w-3 h-3 mr-1" />}
+            Release stuck portals
+          </Button>
           {blockers.length > 0 && (
             <Button
               variant="outline"
