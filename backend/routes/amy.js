@@ -285,4 +285,52 @@ router.post('/run', (req, res) => {
   }
 })
 
+/**
+ * POST /api/amy/cleanup — reap Amy's synthetic training profiles on demand.
+ *
+ * Owner directive 2026-08-22 ("Amy needs to clean up her profiles she created").
+ * The nightly reaper is NOT broken — it holds a crawled synthetic under the
+ * `requireTaught` guard until it is 96h past creation, and the mesh teaching
+ * handoff has been failing (0-of-79 taught in prod 2026-08-22), so synthetics
+ * pile up for the full 96h instead of the intended create->crawl->teach->delete.
+ * This route is the reachable actor that clears the backlog now, honoring EVERY
+ * hard safety guard (designated-profile / allow_sam_cleanup / synthetic marker)
+ * plus the 6h mid-flight crawl grace so a live Amy run is never interrupted.
+ * It does REAL work — there is deliberately no dry-run/report-only mode.
+ *
+ * Body (all optional):
+ *   mode: 'backlog' (default) reaps every guarded synthetic crawled >6h ago,
+ *         relaxing requireTaught since teaching is failing; 'expired' runs the
+ *         standard guarded expired-only sweep (requireCrawled + requireTaught).
+ */
+router.post('/cleanup', async (req, res) => {
+  try {
+    const { cleanupAmyProfiles, cleanupExpiredAmyProfiles, amyNeverCrawledMaxAgeMs } =
+      await import('../services/amy/amyProfileStore.js')
+    const { countAmyProfiles } = await import('../services/amy/amyDeletionProof.js')
+    const mode = String(req.body?.mode || 'backlog').toLowerCase()
+    const before = await countAmyProfiles(req.db)
+
+    let result
+    if (mode === 'expired') {
+      result = await cleanupExpiredAmyProfiles(req.db)
+    } else {
+      // Backlog reap: force past the TTL, relax requireTaught/requireCrawled
+      // (teaching is systematically failing), but KEEP the three hard safety
+      // guards and the 6h mid-flight grace so an in-progress run is never hit.
+      result = await cleanupAmyProfiles(req.db, {
+        force: true,
+        minCrawledAgeMs: 6 * 60 * 60 * 1000,
+        neverCrawledMaxAgeMs: amyNeverCrawledMaxAgeMs(),
+      })
+    }
+    const after = await countAmyProfiles(req.db)
+    log.info('amy cleanup route', { mode, deleted: result?.deleted, skipped: result?.skipped })
+    return res.json({ ok: true, mode, before, after, ...result })
+  } catch (err) {
+    log.error(`cleanup failed: ${err?.message}`)
+    return res.status(500).json({ ok: false, error: 'amy_cleanup_failed', message: err?.message })
+  }
+})
+
 export default router
