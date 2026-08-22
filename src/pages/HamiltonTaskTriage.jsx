@@ -13,10 +13,13 @@ import client from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { showInfoToast, showErrorToast } from '@/components/shared/toastHelpers'
-import { Loader2, RefreshCw, CheckCircle2, Trash2, Sparkles, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, RefreshCw, CheckCircle2, Trash2, Sparkles, ChevronDown, ChevronRight, Archive } from 'lucide-react'
 import { categorizeHamiltonTask, HAMILTON_TASK_CATEGORIES } from '../../shared/hamiltonTaskCategory.js'
 
 const ORDER = HAMILTON_TASK_CATEGORIES.map((c) => c.key)
+// Finished/terminal statuses live on the ARCHIVE tab; everything else is ACTIVE.
+const ARCHIVED_STATUSES = new Set(['submitted', 'completed', 'completed_draft', 'failed', 'cancelled'])
+const isArchived = (t) => ARCHIVED_STATUSES.has(String(t?.status || '').toLowerCase())
 
 export default function HamiltonTaskTriage() {
   const [params] = useSearchParams()
@@ -28,6 +31,7 @@ export default function HamiltonTaskTriage() {
   const [busy, setBusy] = useState(null)
   const [selected, setSelected] = useState(() => new Set())
   const [collapsed, setCollapsed] = useState(() => new Set())
+  const [view, setView] = useState('active') // 'active' | 'archived'
 
   const load = useCallback(async () => {
     if (!profileId) return
@@ -46,15 +50,22 @@ export default function HamiltonTaskTriage() {
 
   useEffect(() => { load() }, [load])
 
+  const counts = useMemo(() => {
+    let active = 0; let archived = 0
+    for (const t of tasks) (isArchived(t) ? archived++ : active++, 0)
+    return { active, archived }
+  }, [tasks])
+
   const groups = useMemo(() => {
     const byKey = new Map()
     for (const t of tasks) {
+      if (view === 'archived' ? !isArchived(t) : isArchived(t)) continue
       const cat = categorizeHamiltonTask(t)
       if (!byKey.has(cat.key)) byKey.set(cat.key, { ...cat, tasks: [] })
       byKey.get(cat.key).tasks.push(t)
     }
     return [...byKey.values()].sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key))
-  }, [tasks])
+  }, [tasks, view])
 
   const toggle = (id) => setSelected((prev) => {
     const next = new Set(prev)
@@ -73,10 +84,14 @@ export default function HamiltonTaskTriage() {
   })
 
   const runAction = useCallback(async (action, { taskIds = null, category = null } = {}) => {
-    const verb = action === 'acknowledge' ? 'Acknowledge' : action === 'delete' ? 'Delete' : 'Finish with AI'
+    const verb = action === 'acknowledge' ? 'Acknowledge'
+      : action === 'delete' ? 'Delete'
+      : action === 'purge' ? 'Delete permanently'
+      : 'Finish with AI'
     const n = taskIds ? taskIds.length : (groups.find((g) => g.key === category)?.tasks.length || 0)
     if (!n) return
     if (action === 'delete' && !window.confirm(`Delete (cancel) ${n} task${n === 1 ? '' : 's'}? This tombstones them.`)) return
+    if (action === 'purge' && !window.confirm(`Permanently delete ${n} finished task${n === 1 ? '' : 's'} from the archive? This cannot be undone.`)) return
     setBusy(`${action}:${category || 'selected'}`)
     try {
       const body = { action, ...(taskIds ? { taskIds } : { profileId, category }) }

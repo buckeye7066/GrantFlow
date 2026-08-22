@@ -2717,6 +2717,8 @@ router.post('/admin/release-need-you', async (req, res) => {
 // field-answerer). Targets are an explicit taskIds[] (checkbox selection) OR a
 // whole CATEGORY for a profile (en masse) via the shared categorizer.
 const BULK_TASK_TERMINAL = new Set(['submitted', 'failed', 'cancelled'])
+// Finished/archivable statuses — the only rows the archive's hard PURGE may remove.
+const HAMILTON_ARCHIVED_STATUSES = new Set(['submitted', 'completed', 'completed_draft', 'failed', 'cancelled'])
 const BULK_RETRY_CAP = 25
 
 router.post('/admin/tasks/bulk', async (req, res) => {
@@ -2725,8 +2727,8 @@ router.post('/admin/tasks/bulk', async (req, res) => {
   if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
 
   const action = String(req.body?.action || '')
-  if (!['acknowledge', 'delete', 'retry'].includes(action)) {
-    return res.status(400).json({ error: 'invalid_action', message: 'action must be acknowledge, delete, or retry.' })
+  if (!['acknowledge', 'delete', 'retry', 'purge'].includes(action)) {
+    return res.status(400).json({ error: 'invalid_action', message: 'action must be acknowledge, delete, retry, or purge.' })
   }
   const taskIds = Array.isArray(req.body?.taskIds) ? req.body.taskIds.map(String).slice(0, 500) : []
   const profileId = req.body?.profileId ? String(req.body.profileId).trim() : null
@@ -2769,6 +2771,14 @@ router.post('/admin/tasks/bulk', async (req, res) => {
         } else if (action === 'delete') {
           cancelActiveHamiltonTaskRun(t.id, 'bulk_deleted')
           await cancelApplicationTask(req.db, t.id, { actorUserId, actorRole, reason: 'bulk_deleted_by_user' })
+          done += 1
+        } else if (action === 'purge') {
+          // Hard-remove a FINISHED task from the archive (owner 2026-08-22:
+          // "ability to delete them there"). Only terminal/finished rows may be
+          // purged — an active or in-flight task can never be silently dropped.
+          if (!HAMILTON_ARCHIVED_STATUSES.has(String(t.status))) { skipped += 1; continue }
+          await req.db.prepare('DELETE FROM application_task_events WHERE task_id = ?').run(t.id).catch(() => {})
+          await req.db.prepare('DELETE FROM application_tasks WHERE id = ?').run(t.id)
           done += 1
         } else if (action === 'retry') {
           if (BULK_TASK_TERMINAL.has(String(t.status)) && t.status !== 'failed') { skipped += 1; continue }

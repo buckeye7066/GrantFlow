@@ -127,6 +127,15 @@ function labelOfMissing(entry) {
  */
 function blockerSummary(task) {
   const status = String(task?.status || '').toLowerCase()
+  // A saved DRAFT is not "waiting for your review" — under full automation the
+  // profile user already authorized submission (owner 2026-08-22). Prefer
+  // Hamilton's own last_agent_message (which now says, honestly, that it filled
+  // the draft and could not auto-submit on this portal). Only fall back to a
+  // non-"review" default when no message is stored.
+  if (status === 'waiting_for_review') {
+    return task?.last_agent_message || task?.outcome_reason
+      || 'Hamilton filled this and saved a draft; it could not auto-submit on this portal. No review is needed — submit it in the portal, or leave it for Hamilton to retry.'
+  }
   const named = {
     waiting_for_login: 'Hamilton needs you to sign in to this portal.',
     blocked_login_required: 'Hamilton needs you to sign in to this portal.',
@@ -138,7 +147,6 @@ function blockerSummary(task) {
     waiting_for_missing_info: 'Hamilton needs information the profile does not have yet.',
     blocked_missing_info: 'Hamilton needs information the profile does not have yet.',
     blocked_terms_or_policy: "This portal's terms do not permit automated submission.",
-    waiting_for_review: 'This one is waiting for you to review it before it goes any further.',
     submission_verification_required: 'A submission may have gone through and could not be confirmed. Check the portal before retrying.',
     ready_to_submit: 'Everything is ready — it needs your go-ahead to submit.',
     ready_to_print_mail: 'The packet is ready to print and mail.',

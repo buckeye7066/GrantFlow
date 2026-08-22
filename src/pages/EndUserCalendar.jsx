@@ -33,7 +33,11 @@ const ITEM_COLORS = Object.freeze({
   needed: '#fef08a',
   submission: '#fecaca',
   submitted: '#86efac',
+  hamilton_done: '#bae6fd',
 })
+
+// Finished Hamilton tasks that belong on the calendar for the profile.
+const HAMILTON_FINISHED_STATUSES = new Set(['submitted', 'completed', 'completed_draft'])
 
 const TERMINAL_HIDDEN_STATUSES = new Set([
   'rejected',
@@ -80,12 +84,14 @@ function statusLabel(kind) {
   if (kind === 'completed') return 'Completed'
   if (kind === 'submitted') return 'Application submitted'
   if (kind === 'submission') return 'Submission deadline'
+  if (kind === 'hamilton_done') return 'Hamilton finished'
   return 'Needed by this date'
 }
 
 function statusIcon(kind) {
   if (kind === 'completed') return CheckCircle2
   if (kind === 'submitted') return CheckCircle2
+  if (kind === 'hamilton_done') return CheckCircle2
   if (kind === 'submission') return CircleAlert
   return Clock3
 }
@@ -136,8 +142,19 @@ export default function EndUserCalendar() {
     staleTime: 30_000,
   })
 
+  const hamiltonTasksQuery = useQuery({
+    queryKey: ['hamilton-tasks', 'end-user-calendar', profileId],
+    queryFn: () => client.get(`/api/hamilton/automation/tasks?profile_id=${encodeURIComponent(profileId)}`),
+    enabled: Boolean(profileId),
+    staleTime: 30_000,
+  })
+
   const grants = grantsQuery.data ?? []
   const milestones = milestonesQuery.data ?? []
+  const hamiltonTasks = useMemo(() => {
+    const d = hamiltonTasksQuery.data?.data ?? hamiltonTasksQuery.data
+    return Array.isArray(d?.tasks) ? d.tasks : (Array.isArray(d) ? d : [])
+  }, [hamiltonTasksQuery.data])
 
   const pipelineGrants = useMemo(
     () => (Array.isArray(grants) ? grants : []).filter((grant) => {
@@ -209,8 +226,35 @@ export default function EndUserCalendar() {
       })
     }
 
+    // FINISHED HAMILTON TASKS on the calendar (owner 2026-08-22). A completed /
+    // submitted Hamilton task is an event on the day it finished — even when it
+    // did not flip a grant to 'submitted' (a directory logged, a draft filled,
+    // a FAFSA-based award confirmed on file). Dated by submitted_at / completed_at
+    // and de-duplicated against the grant 'submitted' events already added above.
+    const seenGrantSubmit = new Set(items.filter((i) => i.kind === 'submitted').map((i) => String(i.grantId)))
+    for (const task of Array.isArray(hamiltonTasks) ? hamiltonTasks : []) {
+      const status = String(task?.status || '').toLowerCase()
+      if (!HAMILTON_FINISHED_STATUSES.has(status)) continue
+      if (task.grant_id && seenGrantSubmit.has(String(task.grant_id))) continue
+      const raw = task.submitted_at || task.completed_at || task.updated_at || null
+      const date = toLocalDate(raw)
+      if (!date) continue
+      const title = task.display_title || task.funder_name || task.title || 'Funding application'
+      items.push({
+        id: `hamilton:${task.id}`,
+        kind: 'hamilton_done',
+        date,
+        dateKey: dayKey(date),
+        title: status === 'submitted' ? 'Application submitted' : 'Hamilton finished',
+        description: task.last_agent_message || `Hamilton finished working "${title}".`,
+        grantId: task.grant_id || null,
+        grantTitle: title,
+        sponsor: task.funder_name || null,
+      })
+    }
+
     return items.sort((a, b) => a.date - b.date || a.title.localeCompare(b.title))
-  }, [milestones, pipelineGrants])
+  }, [milestones, pipelineGrants, hamiltonTasks])
 
   const itemsByDay = useMemo(() => {
     const map = new Map()
@@ -280,6 +324,7 @@ export default function EndUserCalendar() {
           <Legend kind="completed" color={ITEM_COLORS.completed} label="Completed" />
           <Legend kind="needed" color={ITEM_COLORS.needed} label="Needed by this date" />
           <Legend kind="submission" color={ITEM_COLORS.submission} label="Submission deadline" />
+          <Legend kind="hamilton_done" color={ITEM_COLORS.hamilton_done} label="Hamilton finished" />
           <span className="self-center text-muted-foreground">Split squares mean more than one item shares that date.</span>
         </div>
 

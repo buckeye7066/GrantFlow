@@ -2732,11 +2732,19 @@ async function runAutopilotPathway(db, {
       || (autoSubmitGate && autoSubmitGate.enforced && !autoSubmitGate.submit ? autoSubmitGate.reason : null)
       || null
     const reasonSuffix = withheldReason ? ` (auto-submit withheld: ${withheldReason})` : ''
+    // Owner 2026-08-22: under full automation the profile user has ALREADY
+    // authorized submission, so a filled draft is NOT "waiting for your review"
+    // — it is waiting because Hamilton could not auto-submit on THIS portal
+    // (e.g. the portal is not browser-executable, or the submit control could
+    // not be driven). Say that honestly instead of asking for a review that
+    // consent has already granted.
+    const draftMessage = fullAutomationActive
+      ? `Hamilton filled the application and saved a draft, but could not auto-submit it on this portal${reasonSuffix}. No review is needed from you — you can submit it in the portal, or leave it for Hamilton to retry.`
+      : `Hamilton finished filling the application and saved a draft${reasonSuffix}. Review it in the portal, complete required human steps, and submit it yourself.`
     const draftTask = await updateApplicationTask(db, task.id, {
       unlessCancelled: true,
       status: 'waiting_for_review',
-      lastAgentMessage:
-        `Hamilton finished filling the application and saved a draft${reasonSuffix}. Review it in the portal, complete required human steps, and submit it yourself.`,
+      lastAgentMessage: draftMessage,
     })
     if (draftTask?.status === 'cancelled') {
       return { task: draftTask, classification, autopilot_run: run.id, autopilot_result: engineResult, cancelled: true }

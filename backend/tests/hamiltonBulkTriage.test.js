@@ -105,6 +105,23 @@ describe('POST /admin/tasks/bulk', () => {
     expect(await statusOf('t-dir')).toBe('cancelled')
   })
 
+  it('purge hard-deletes a FINISHED task from the archive', async () => {
+    const res = await request(app()).post('/api/hamilton/automation/admin/tasks/bulk')
+      .send({ action: 'purge', taskIds: ['t-submitted'] })
+    expect(res.status).toBe(200)
+    expect(res.body.done).toBe(1)
+    expect(await db.prepare('SELECT id FROM application_tasks WHERE id = ?').get('t-submitted')).toBeFalsy()
+  })
+
+  it('purge REFUSES to remove an active (non-terminal) task', async () => {
+    const res = await request(app()).post('/api/hamilton/automation/admin/tasks/bulk')
+      .send({ action: 'purge', taskIds: ['t-noapp1'] })
+    expect(res.status).toBe(200)
+    expect(res.body.done).toBe(0)
+    expect(res.body.skipped).toBe(1)
+    expect(await statusOf('t-noapp1')).toBe('waiting_for_review') // still there, untouched
+  })
+
   it('is admin-only, needs a valid action and a target', async () => {
     expect((await request(app({ isAdmin: false })).post('/api/hamilton/automation/admin/tasks/bulk').send({ action: 'acknowledge', taskIds: ['t-dir'] })).status).toBe(403)
     expect((await request(app()).post('/api/hamilton/automation/admin/tasks/bulk').send({ action: 'nope', taskIds: ['t-dir'] })).status).toBe(400)
