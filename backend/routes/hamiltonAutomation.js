@@ -2760,13 +2760,22 @@ router.post('/admin/release-need-you', async (req, res) => {
       for (const r of rows || []) withOpenInfo.add(String(r.task_id))
     }
 
-    // Classify each card against the owner's 4 categories (+ correctness keeps).
+    // Classify each card against the owner's 4 categories.
+    //   - keep  → a legitimate hand-off (or a maybe-submitted safety hold)
+    //   - remove→ INELIGIBLE: the eligibility gate correctly refuses it, so it
+    //             does not belong as a "needs you" card. Owner 2026-08-22:
+    //             "remove them to an archived page" — cancel it (tombstone) so
+    //             it leaves needs-you and shows in the Archived tab.
+    //   - release→ everything else: clear the backoff for the next run.
     const releaseIds = []
+    const removeTasks = []
     const releasedByStatus = {}
     const keptByCategory = {}
     for (const t of tasks) {
       const verdict = classifyNeedYouBlock(t, { hasUnresolvedInfo: withOpenInfo.has(String(t.id)) })
-      if (verdict.keep) {
+      if (verdict.category === 'ineligible') {
+        removeTasks.push(t)
+      } else if (verdict.keep) {
         keptByCategory[verdict.category] = (keptByCategory[verdict.category] || 0) + 1
       } else {
         releaseIds.push(t.id)
@@ -2785,22 +2794,40 @@ router.post('/admin/release-need-you', async (req, res) => {
       changed = upd?.changes ?? releaseIds.length
     }
 
+    // Remove ineligible cards to the archive (cancel = tombstone, reversible by
+    // re-discovery; NEVER a hard delete here — the owner can purge from the
+    // Archived tab). Stops any active run first, like the bulk delete.
+    let removed = 0
+    for (const t of removeTasks) {
+      try {
+        cancelActiveHamiltonTaskRun(t.id, 'ineligible_removed_to_archive')
+        await cancelApplicationTask(req.db, t.id, {
+          actorUserId: getAuthUserId(user), actorRole: 'admin',
+          reason: 'Removed to archive: the eligibility gate refuses this source for this profile.',
+        })
+        removed += 1
+      } catch (e) {
+        log.warn('release_need_you_remove_failed', { taskId: t.id, err: e?.message })
+      }
+    }
+
     const profiles = new Set(tasks.map((t) => t.profile_id)).size
-    const kept = tasks.length - releaseIds.length
+    const kept = tasks.length - releaseIds.length - removeTasks.length
     log.info('release_need_you', {
-      considered: tasks.length, released: releaseIds.length, kept, profiles,
+      considered: tasks.length, released: releaseIds.length, removed, kept, profiles,
       kept_by_category: keptByCategory, scope: profileId || 'all',
     })
     return res.json({
       ok: true,
       considered: tasks.length,
       released: releaseIds.length,
+      removed,
       changed,
       kept,
       profiles_affected: profiles,
       released_by_status: releasedByStatus,
       kept_by_category: keptByCategory,
-      note: 'Cleared the backoff on every "needs you" card whose block is NOT one of the four legitimate hand-offs (physical-copy packet, genuinely-missing info, an unbeatable bot wall, or an existing external login). A full-automation run now re-picks those and, with the allowlist bypassed + CAPTCHA solver + e-signature, submits where it can. Kept blocked: the four legitimate categories, plus ineligible sources (the eligibility gate is correct) and any maybe-already-submitted card (never auto-retried).',
+      note: 'Cleared the backoff on every "needs you" card whose block is NOT one of the four legitimate hand-offs. Ineligible sources were REMOVED to the Archived tab (cancelled, not submitted). A full-automation run now re-picks the cleared ones and, with the allowlist bypassed + CAPTCHA solver + e-signature, submits where it can. Kept blocked: the four legitimate categories, plus any maybe-already-submitted card (never auto-retried).',
     })
   } catch (err) {
     log.error('release_need_you_failed', { err: err?.message })

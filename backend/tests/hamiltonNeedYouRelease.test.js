@@ -46,13 +46,21 @@ beforeEach(async () => {
   sqlite.exec(`
     CREATE TABLE users (id TEXT PRIMARY KEY, is_admin INTEGER DEFAULT 1);
     CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT);
-    CREATE TABLE application_tasks (id TEXT PRIMARY KEY, profile_id TEXT, status TEXT, last_agent_message TEXT, next_retry_at DATETIME, updated_at DATETIME);
+    CREATE TABLE application_tasks (
+      id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, user_id TEXT, status TEXT, last_agent_message TEXT,
+      opportunity_id TEXT, grant_id TEXT, current_pipeline_stage TEXT, selected_from_stage TEXT,
+      allow_auto_submit INTEGER DEFAULT 0, auto_submit_enabled INTEGER DEFAULT 0, retry_count INTEGER DEFAULT 0,
+      current_step TEXT, outcome_reason TEXT,
+      next_retry_at DATETIME, started_at DATETIME, submitted_at DATETIME, completed_at DATETIME,
+      cancelled_at DATETIME, updated_at DATETIME
+    );
     CREATE TABLE application_missing_info (id TEXT PRIMARY KEY, task_id TEXT, kind TEXT, key TEXT, resolved INTEGER DEFAULT 0);
+    CREATE TABLE application_task_events (id TEXT PRIMARY KEY, task_id TEXT, event_type TEXT, status TEXT, step TEXT, message TEXT, actor_user_id TEXT, actor_role TEXT, details_json TEXT, created_at DATETIME);
   `)
   db = wrapSqlite(sqlite)
   await db.prepare('INSERT INTO users (id) VALUES (?)').run('u1')
   await db.prepare('INSERT INTO profiles (id, user_id) VALUES (?, ?)').run('p1', 'u1')
-  const seed = (id, status, msg) => db.prepare('INSERT INTO application_tasks (id, profile_id, status, last_agent_message, next_retry_at) VALUES (?, ?, ?, ?, ?)').run(id, 'p1', status, msg, '2099-01-01')
+  const seed = (id, status, msg) => db.prepare('INSERT INTO application_tasks (id, profile_id, status, last_agent_message, opportunity_id, next_retry_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, 'p1', status, msg, `opp-${id}`, '2099-01-01')
   await seed('draft', 'waiting_for_review', 'saved a draft, could not auto-submit on this portal') // release
   await seed('inelig', 'blocked', 'Hamilton Autopilot stopped at preflight: Funding source does not meet GrantFlow rules') // keep
   await seed('packet', 'waiting_for_review', 'produced a printable packet instead of browser automation') // keep
@@ -63,14 +71,17 @@ beforeEach(async () => {
 
 describe('POST /admin/release-need-you (classified)', () => {
   const retryOf = async (id) => (await db.prepare('SELECT next_retry_at FROM application_tasks WHERE id = ?').get(id))?.next_retry_at
-  it('clears only the non-legitimate block; keeps the four categories + ineligible', async () => {
+  const statusOf = async (id) => (await db.prepare('SELECT status FROM application_tasks WHERE id = ?').get(id))?.status
+  it('clears the non-legitimate block, keeps the four categories, REMOVES ineligible to archive', async () => {
     const res = await request(app()).post('/api/hamilton/automation/admin/release-need-you').send({ profileId: 'p1' })
     expect(res.status).toBe(200)
-    expect(res.body.released).toBe(1) // only the draft
-    expect(res.body.kept).toBe(3)
-    expect(res.body.kept_by_category).toMatchObject({ ineligible: 1, physical_copy: 1, missing_info: 1 })
-    expect(await retryOf('draft')).toBeNull()       // released
-    expect(await retryOf('inelig')).toBe('2099-01-01') // kept
+    expect(res.body.released).toBe(1)  // the draft
+    expect(res.body.removed).toBe(1)   // the ineligible card
+    expect(res.body.kept).toBe(2)      // packet + open-info
+    expect(res.body.kept_by_category).toMatchObject({ physical_copy: 1, missing_info: 1 })
+    expect(res.body.kept_by_category.ineligible).toBeUndefined()
+    expect(await retryOf('draft')).toBeNull()          // released
+    expect(await statusOf('inelig')).toBe('cancelled') // removed to archive
     expect(await retryOf('packet')).toBe('2099-01-01') // kept
     expect(await retryOf('info')).toBe('2099-01-01')   // kept
   })

@@ -134,7 +134,7 @@ export default function AdminHamiltonHardStops() {
   // block-removal fixes deployed. Uses the app's authenticated client (Bearer
   // token), so it works where a raw console fetch 401s. Never submits.
   async function releaseNeedYou() {
-    if (!window.confirm('Revisit every "needs you" card across all profiles and clear the block on any that is NOT one of the four legitimate hand-offs (physical-copy packet, genuinely-missing info, an unbeatable bot wall, or an existing external login). Cleared cards are revisited by the next full-automation run; ineligible sources and any maybe-already-submitted card are left blocked. This never submits by itself.')) return
+    if (!window.confirm('Revisit every "needs you" card across all profiles and clear the block on any that is NOT one of the four legitimate hand-offs (physical-copy packet, genuinely-missing info, an unbeatable bot wall, or an existing external login). Cleared cards are revisited by the next full-automation run; ineligible sources are REMOVED to the Archived tab; any maybe-already-submitted card is left blocked. This never submits by itself.')) return
     setBusy('__release__')
     try {
       const res = await client.post('/api/hamilton/automation/admin/release-need-you', { allProfiles: true })
@@ -142,7 +142,7 @@ export default function AdminHamiltonHardStops() {
       showInfoToast(
         toast,
         'Cards revisited',
-        `${res?.released ?? 0} block${(res?.released ?? 0) === 1 ? '' : 's'} cleared across ${res?.profiles_affected ?? 0} profile(s); ${res?.kept ?? 0} kept legitimate${kept ? ` (${kept})` : ''}. Start a full-automation run to submit the cleared ones.`,
+        `${res?.released ?? 0} block${(res?.released ?? 0) === 1 ? '' : 's'} cleared, ${res?.removed ?? 0} ineligible removed to the archive, across ${res?.profiles_affected ?? 0} profile(s); ${res?.kept ?? 0} kept legitimate${kept ? ` (${kept})` : ''}. Start a full-automation run to submit the cleared ones.`,
       )
       await load()
     } catch (err) {
