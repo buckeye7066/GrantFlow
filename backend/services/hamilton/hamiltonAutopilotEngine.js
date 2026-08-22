@@ -1371,10 +1371,19 @@ export async function runAutopilot({
         // so the default without a solver key is unchanged. Hamilton never
         // hand-forges a challenge; the token comes from the paid service the
         // owner opted into.
-        if (gate.kind === 'captcha' && solveCaptcha && !captchaAttempted) {
+        // A CAPTCHA wall — OR a full-page bot-protection interstitial that is
+        // actually a SOLVABLE challenge (Cloudflare Turnstile / managed
+        // challenge carrying a sitekey). CapSolver solves Turnstile proxyless,
+        // so a bot_protected page should get a solver attempt BEFORE dead-ending
+        // at the co-browse hand-off — the solver's own detector looks for a
+        // Turnstile/reCAPTCHA/hCaptcha sitekey and returns no_sitekey_on_page for
+        // a pure managed challenge with no widget, which then falls through to
+        // the unchanged bot_protected hard stop below. This removes the block for
+        // the solvable subset without ever claiming to pass an unsolvable wall.
+        if ((gate.kind === 'captcha' || gate.kind === 'bot_protected') && solveCaptcha && !captchaAttempted) {
           captchaAttempted = true
-          trace.push({ step: 'captcha_attempt' })
-          reportLiveStep(runId, 'Solving the CAPTCHA')
+          trace.push({ step: 'captcha_attempt', detail: gate.kind === 'bot_protected' ? { source: 'bot_wall' } : undefined })
+          reportLiveStep(runId, gate.kind === 'bot_protected' ? 'Clearing the site security check' : 'Solving the CAPTCHA')
           let verdict = { solved: false, reason: 'solver_unavailable' }
           try {
             verdict = (await solveCaptcha(page)) || verdict
@@ -1384,7 +1393,7 @@ export async function runAutopilot({
           trace.push({ step: 'captcha_result', detail: { solved: Boolean(verdict.solved), vendor: verdict.vendor || null, reason: verdict.reason || null } })
           if (verdict.solved) {
             // Token injected; re-inspect the page rather than treating the
-            // CAPTCHA as a live gate.
+            // challenge as a live gate.
             continue
           }
         }
