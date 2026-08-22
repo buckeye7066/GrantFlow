@@ -132,6 +132,12 @@ export async function decomposeListing(args = {}, deps = {}) {
     surface: 'LISTING', catalog_only: catalogOnly, host,
     enumerated: 0, admitted: 0, applies_attempted: 0,
     items: [], notFound: [], rejected: [],
+    // Set when the enumerator could not READ the page at all (LLM provider
+    // momentarily unavailable — exhausted credits, rate limit, 5xx — or no
+    // provider configured / disabled). A zero enumeration under this flag is
+    // NOT evidence the page is empty, and the orchestrator must leave the task
+    // RETRYABLE rather than parking it as a manual "needs you" card.
+    enumeration_unavailable: false, enumeration_transient: false,
   }
 
   const enumResult = await enumerate(
@@ -140,6 +146,12 @@ export async function decomposeListing(args = {}, deps = {}) {
   )
   out.rejected.push(...(enumResult?.rejected || []))
   out.notFound.push(...(enumResult?.notFound || []))
+  const enumRaw = enumResult?.raw || {}
+  // `transient` = provider outage/credits/rate limit; `attempted === false` =
+  // no provider configured or LLM extraction disabled. Both mean "we did not
+  // actually read the page", so a 0 here is unexplained, never "empty".
+  out.enumeration_transient = Boolean(enumRaw.transient)
+  out.enumeration_unavailable = Boolean(enumRaw.transient) || enumRaw.attempted === false
   const enumerated = Array.isArray(enumResult?.items) ? enumResult.items.slice(0, maxItems) : []
   out.enumerated = enumerated.length
 

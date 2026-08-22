@@ -120,6 +120,15 @@ import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
+// How long to wait before the scheduler re-attempts a listing decomposition
+// that failed because the AI provider was momentarily unavailable (credits /
+// rate limit / 5xx). Short enough to resume promptly once credits are funded,
+// long enough not to hammer an exhausted provider. Overridable for ops/tests.
+const DECOMPOSITION_RETRY_DELAY_MS = Math.max(
+  60_000,
+  Number(process.env.HAMILTON_DECOMPOSITION_RETRY_DELAY_MS) || 15 * 60 * 1000,
+)
+
 /**
  * Describe a listing decomposition HONESTLY — including when it found nothing.
  *
@@ -2282,6 +2291,36 @@ async function runAutopilotPathway(db, {
         actorRole: 'agent',
         details: { parent_task_id: task.id, parent_run_id: run.id },
       })
+    }
+    // A zero-enumeration caused by the LLM being momentarily UNAVAILABLE
+    // (exhausted credits, rate limit, 5xx, or no provider configured) is NOT a
+    // result about the page — parking it as a manual "needs you" card means it
+    // never resumes once credits are funded. Defer it to the retryable
+    // waiting_for_window state so the scheduler re-attempts it, exactly like an
+    // out-of-window run. Only genuine outcomes (real awards, a truly empty
+    // page, an insert/match error) become a waiting_for_review card below.
+    if (decomposition?.enumeration_unavailable && Number(decomposition?.enumerated || 0) === 0 && childTaskIds.length === 0) {
+      const retryAt = new Date(Date.now() + DECOMPOSITION_RETRY_DELAY_MS).toISOString()
+      const why = (Array.isArray(decomposition?.notFound) ? decomposition.notFound.filter(Boolean) : []).join('; ')
+        || (decomposition.enumeration_transient ? 'the AI provider was momentarily unavailable' : 'no AI provider is configured')
+      const deferMessage = `Hamilton found a page listing multiple awards but could not read them yet: ${why}. This is not evidence the page is empty — Hamilton will retry automatically (next attempt ${retryAt}).`
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'waiting_for_window', step: 'listing_decomposition_deferred',
+        message: deferMessage, actorUserId: userId, actorRole: 'agent', details: decomposition,
+      }).catch(() => {})
+      await updateAutopilotRun(db, run.id, {
+        status: 'deferred',
+        result: { ...engineResult, deferred: true, reason: decomposition.enumeration_transient ? 'llm_unavailable_transient' : 'llm_provider_unconfigured' },
+        blockerKind: null, blockerDetail: null,
+        finishedAt: new Date().toISOString(),
+      }).catch(() => {})
+      await updateApplicationTask(db, task.id, {
+        unlessCancelled: true,
+        status: 'waiting_for_window',
+        nextRetryAt: retryAt,
+        lastAgentMessage: deferMessage,
+      }).catch(() => {})
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: engineResult, listing_decomposition: decomposition, deferred: true }
     }
     const summary = decomposition?.error
       ? `Hamilton found a page listing multiple awards but could not decompose it: ${decomposition.error}`

@@ -280,6 +280,42 @@ function describeLlmFailure(result) {
 }
 
 /**
+ * Is an LLM failure TRANSIENT (the provider was momentarily unable — exhausted
+ * credits, rate limit, overload, a 5xx or a network/timeout) rather than a real
+ * answer about the page?
+ *
+ * WHY THIS MATTERS (owner north star — Hamilton finishes portals autonomously):
+ * a credit-exhausted enumeration used to return `items:[]` INDISTINGUISHABLY
+ * from a genuine "this page lists no awards". Downstream that read as "0 awards
+ * found, 0 admitted" and parked the task as a manual "needs you" card — so once
+ * credits were funded it never auto-retried. A transient failure must instead
+ * leave the task RETRYABLE (waiting_for_window), so the scheduler resumes it.
+ * This mirrors the amount-enrichment transient/stable split (see CLAUDE.md):
+ * only a real read is a fact about the row; an outage is a fact about us.
+ *
+ * Conservative by design: it inspects the thrown error AND the wrapper's
+ * per-provider error fields, and matches on the vocabulary providers actually
+ * use. A 4xx that is NOT a credit/rate signal (e.g. a 400 bad request) is NOT
+ * transient. Unknown → NOT transient (we never manufacture a retry excuse).
+ */
+export function isTransientLlmFailure(errOrResult) {
+  if (!errOrResult) return false
+  const texts = []
+  const push = (v) => { const t = errToText(v); if (t) texts.push(String(t)) }
+  // A thrown error, or the wrapper's collected provider errors.
+  push(errOrResult)
+  push(errOrResult?.anthropicError)
+  push(errOrResult?.openaiError)
+  push(errOrResult?.error)
+  const statuses = [errOrResult?.status, errOrResult?.anthropicError?.status, errOrResult?.openaiError?.status, errOrResult?.error?.status]
+    .map((s) => Number(s)).filter((n) => Number.isFinite(n))
+  if (statuses.some((s) => s === 429 || s === 408 || s === 425 || (s >= 500 && s <= 599))) return true
+  const hay = texts.join(' | ').toLowerCase()
+  if (!hay) return false
+  return /credit balance|insufficient[_ ]?(quota|funds|credit)|billing|payment required|quota (exceeded|reached)|rate[_ ]?limit|too many requests|overloaded|temporarily unavailable|service unavailable|\b(429|408|500|502|503|504)\b|econn|etimedout|timeout|timed out|socket hang up|network|fetch failed/.test(hay)
+}
+
+/**
  * Defensively coerce the model's JSON into our shape. Anything malformed is
  * dropped rather than trusted.
  */
@@ -402,13 +438,13 @@ export async function extractPortalDataWithLLM(page, opts = {}) {
   } catch (err) {
     const reason = `LLM extraction call failed: ${err?.message || err}`
     log(`llmPageExtract: ${reason}`)
-    return { awards: [], fields: [], notFound: [reason], rejected: [], raw }
+    return { awards: [], fields: [], notFound: [reason], rejected: [], raw: { ...raw, transient: isTransientLlmFailure(err) } }
   }
 
   if (!result?.ok || !result?.json) {
     const reason = `LLM returned no parseable JSON (${describeLlmFailure(result)})`
     log(`llmPageExtract: ${reason}`)
-    return { awards: [], fields: [], notFound: [reason], rejected: [], raw }
+    return { awards: [], fields: [], notFound: [reason], rejected: [], raw: { ...raw, transient: isTransientLlmFailure(result) } }
   }
   raw.provider = result.provider
 
@@ -545,10 +581,10 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
   try {
     result = await invoke({ openai: getOpenAIOptional(), system: LISTING_SYSTEM, prompt, temperature: 0, maxTokens: 2000 })
   } catch (err) {
-    return { items: [], notFound: [`LLM enumeration call failed: ${err?.message || err}`], rejected: [], raw }
+    return { items: [], notFound: [`LLM enumeration call failed: ${err?.message || err}`], rejected: [], raw: { ...raw, transient: isTransientLlmFailure(err) } }
   }
   if (!result?.ok || !result?.json) {
-    return { items: [], notFound: [`LLM returned no parseable JSON (${describeLlmFailure(result)})`], rejected: [], raw }
+    return { items: [], notFound: [`LLM returned no parseable JSON (${describeLlmFailure(result)})`], rejected: [], raw: { ...raw, transient: isTransientLlmFailure(result) } }
   }
   raw.provider = result.provider || null
 
@@ -592,6 +628,6 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
   return { items, notFound, rejected, raw }
 }
 
-export const _internal = { partitionAwards, awardHasUserEvidence, describeLlmFailure, errToText, titlePresentInText, normForPresence }
+export const _internal = { partitionAwards, awardHasUserEvidence, describeLlmFailure, errToText, titlePresentInText, normForPresence, isTransientLlmFailure }
 
 export default { extractPortalDataWithLLM, isListingSurface, extractListingAwardItems }
