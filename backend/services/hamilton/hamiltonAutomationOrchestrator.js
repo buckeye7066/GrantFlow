@@ -64,7 +64,7 @@ import { decomposeListing } from './listingDecomposition.js'
 import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './hamiltonConfirmationArtifacts.js'
 import { runContactHandoverAfterSubmission } from './hamiltonContactHandover.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
-import { isFullAutomationEnabled } from './hamiltonFullAutomationMode.js'
+import { isFullAutomationEnabled, isPortalAccountCreationAuthorized } from './hamiltonFullAutomationMode.js'
 import { resolveOrCreateFieldHome } from './hamiltonCustomFieldRegistry.js'
 import { recordBotWallEncounter, shouldBriefAnya, markBriefDispatched } from './hamiltonBotBypassRegistry.js'
 import { getTailoredApplication } from './tailoredApplicationStore.js'
@@ -2265,13 +2265,16 @@ async function runAutopilotPathway(db, {
       signupAttempted = true
       // Full automation authorizes autonomous portal ACCOUNT CREATION (owner
       // condition 2026-08-21: "Hamilton will use his own email, phone, vault info
-      // for setting up these portals"). That is the full-automation grant shape:
-      // submit_applications granted + credential-use granted + no human-review
-      // veto. A fill-only or human-review profile still hands account creation to
-      // the owner. The brain's own compliance rails are unchanged either way.
-      const createAccountAuthorized = authorizations.submit_applications === true
-        && authorizations.use_saved_credentials_reference === true
-        && authorizations.require_human_review !== true
+      // for setting up these portals"). Consent is the SAME full-automation
+      // verdict used for submit/2FA/e-sign/captcha (submit_applications +
+      // allow_auto_submit + no human-review veto) PLUS credential-use. Do NOT
+      // rebuild this from readAuthorizations flags alone — that helper never
+      // surfaces allow_auto_submit, so submit+credentials would falsely authorize
+      // irreversible third-party registration without auto-submit consent.
+      const createAccountAuthorized = isPortalAccountCreationAuthorized({
+        fullAutomationActive,
+        useSavedCredentialsReference: authorizations.use_saved_credentials_reference === true,
+      })
       const recovered = await attemptPortalSignupRecovery(db, {
         profileId: task.profile_id,
         userId: userId || task.user_id || 'system_admin_token',
