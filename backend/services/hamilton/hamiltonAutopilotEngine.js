@@ -1114,6 +1114,12 @@ export async function runAutopilot({
   // db mid-run — same contract as narrativeAnswers). Absent/empty = an identity
   // field is a blocker, exactly as before. NEVER logged or traced.
   identityValues = null,
+  // TEST-ONLY page injection. Engine-internal (underscore); the orchestrator's
+  // runAutopilot call never sets it and no request can reach it. When provided,
+  // the real engine logic runs against this page instead of launching Chromium,
+  // so an in-process e2e can drive the whole autonomous gauntlet against a real
+  // (jsdom-backed) DOM. Absent (production) = a browser is launched, unchanged.
+  _testPage = null,
   // Full-automation consent (resolveSubmissionDecision's verdict, forwarded by
   // the orchestrator). Unlocks the applicant's electronic signature — typed
   // name fields and e-sign checkboxes — see signatureConsentFor. Absent (the
@@ -1148,39 +1154,47 @@ export async function runAutopilot({
     }
   }
 
-  let chromium
-  try {
-    ({ chromium } = await import('playwright'))
-  } catch (err) {
-    return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: `Playwright unavailable: ${err?.message || err}`, filled_fields: filled, pages_visited: 0, trace }
-  }
-  const exe = chromium.executablePath?.()
-  if (!exe || !fs.existsSync(exe)) {
-    return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', filled_fields: filled, pages_visited: 0, trace }
-  }
-
-  const { browser } = await launchPortalBrowser(chromium, { headless, targetUrl: url })
-  // Only an in-memory storageState OBJECT from the profile-owned encrypted
-  // session store is accepted. Request-supplied filesystem paths are never
-  // passed to Playwright.
-  // UA matches the capture-time fingerprint (REALISTIC_PORTAL_UA) so a WAF that
-  // bound the session cookies to it accepts the replay.
-  const contextOptions = controlledBetaBrowserContextOptions({ userAgent: REALISTIC_PORTAL_UA })
-  if (storageState && typeof storageState === 'object') {
-    contextOptions.storageState = storageState
-  }
-  // Guard the setup path: if newContext/newPage throws (e.g. /dev/shm memory
-  // pressure), the already-launched Chromium must not leak — the main
-  // try/finally below only covers code after both exist.
+  let browser
   let context
   let page
-  try {
-    context = await browser.newContext(contextOptions)
-    await installControlledBetaBrowserEgressGuard(context)
-    page = await context.newPage()
-  } catch (setupErr) {
-    await browser.close().catch(() => {})
-    throw setupErr
+  if (_testPage) {
+    // In-process e2e: use the injected page directly, no browser launch.
+    page = _testPage
+    browser = _testPage._browser || { close: async () => {} }
+    context = _testPage._context || { close: async () => {}, storageState: async () => ({}) }
+  } else {
+    let chromium
+    try {
+      ({ chromium } = await import('playwright'))
+    } catch (err) {
+      return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: `Playwright unavailable: ${err?.message || err}`, filled_fields: filled, pages_visited: 0, trace }
+    }
+    const exe = chromium.executablePath?.()
+    if (!exe || !fs.existsSync(exe)) {
+      return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', filled_fields: filled, pages_visited: 0, trace }
+    }
+
+    ;({ browser } = await launchPortalBrowser(chromium, { headless, targetUrl: url }))
+    // Only an in-memory storageState OBJECT from the profile-owned encrypted
+    // session store is accepted. Request-supplied filesystem paths are never
+    // passed to Playwright.
+    // UA matches the capture-time fingerprint (REALISTIC_PORTAL_UA) so a WAF that
+    // bound the session cookies to it accepts the replay.
+    const contextOptions = controlledBetaBrowserContextOptions({ userAgent: REALISTIC_PORTAL_UA })
+    if (storageState && typeof storageState === 'object') {
+      contextOptions.storageState = storageState
+    }
+    // Guard the setup path: if newContext/newPage throws (e.g. /dev/shm memory
+    // pressure), the already-launched Chromium must not leak — the main
+    // try/finally below only covers code after both exist.
+    try {
+      context = await browser.newContext(contextOptions)
+      await installControlledBetaBrowserEgressGuard(context)
+      page = await context.newPage()
+    } catch (setupErr) {
+      await browser.close().catch(() => {})
+      throw setupErr
+    }
   }
   const valuesByKey = applyNarrativeAnswers(readProfileValues(profile), narrativeAnswers)
   const signatureConsent = signatureConsentFor({
