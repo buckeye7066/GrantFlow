@@ -177,6 +177,7 @@ import { resolveBlocker } from '../services/hamilton/hamiltonHardStopResolver.js
 import { resolveProfileFieldTarget, inlineFieldForBlocker } from '../services/hamilton/profileFieldTargets.js'
 import { setProfileSectionField } from '../services/profileFieldWriter.js'
 import { reconcileProfileFieldsToTasks } from '../services/hamilton/applicationTaskStore.js'
+import { categorizeHamiltonTask } from '../../shared/hamiltonTaskCategory.js'
 import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
 import {
@@ -2726,6 +2727,102 @@ router.post('/admin/release-need-you', async (req, res) => {
   } catch (err) {
     log.error('release_need_you_failed', { err: err?.message })
     return res.status(500).json({ error: 'release_failed', detail: err?.message })
+  }
+})
+
+// BULK TRIAGE (owner 2026-08-22): act on many "need you" tasks at once —
+// acknowledge (mark reviewed → completed, stop nagging), delete (cancel +
+// tombstone), or retry/finish-with-AI (clear backoff + re-run, now with the LLM
+// field-answerer). Targets are an explicit taskIds[] (checkbox selection) OR a
+// whole CATEGORY for a profile (en masse) via the shared categorizer.
+const BULK_TASK_TERMINAL = new Set(['submitted', 'failed', 'cancelled'])
+const BULK_RETRY_CAP = 25
+
+router.post('/admin/tasks/bulk', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
+
+  const action = String(req.body?.action || '')
+  if (!['acknowledge', 'delete', 'retry'].includes(action)) {
+    return res.status(400).json({ error: 'invalid_action', message: 'action must be acknowledge, delete, or retry.' })
+  }
+  const taskIds = Array.isArray(req.body?.taskIds) ? req.body.taskIds.map(String).slice(0, 500) : []
+  const profileId = req.body?.profileId ? String(req.body.profileId).trim() : null
+  const category = req.body?.category ? String(req.body.category).trim() : null
+
+  try {
+    // Resolve the target task set with a LIGHT query (bulk triage needs status +
+    // message + ids, not the heavy per-task presentation/proof joins).
+    const cols = 'id, profile_id, status, last_agent_message, opportunity_id, grant_id, current_pipeline_stage, selected_from_stage'
+    let tasks = []
+    if (taskIds.length) {
+      const ph = taskIds.map(() => '?').join(', ')
+      tasks = await req.db.prepare(`SELECT ${cols} FROM application_tasks WHERE id IN (${ph})`).all(...taskIds)
+    } else if (profileId && category) {
+      const all = await req.db.prepare(`SELECT ${cols} FROM application_tasks WHERE profile_id = ?`).all(profileId)
+      tasks = (all || []).filter((t) => categorizeHamiltonTask(t).key === category)
+    } else {
+      return res.status(400).json({ error: 'target_required', message: 'Pass taskIds, or profileId + category.' })
+    }
+
+    const actorRole = req.ctx?.isAdmin === true ? 'admin' : 'user'
+    const actorUserId = getAuthUserId(user)
+    let done = 0; let skipped = 0; let failed = 0; let queued = 0
+    for (const t of tasks) {
+      if (!(await userMayAccessProfile(req, user, t.profile_id))) { skipped += 1; continue }
+      try {
+        if (action === 'acknowledge') {
+          if (BULK_TASK_TERMINAL.has(String(t.status))) { skipped += 1; continue }
+          await updateApplicationTask(req.db, t.id, {
+            status: 'completed',
+            completedAt: new Date().toISOString(),
+            lastAgentMessage: `Acknowledged by the ${actorRole} — no further automated action needed on this one.`,
+          })
+          await appendTaskEvent(req.db, {
+            taskId: t.id, eventType: 'note', status: 'completed', step: 'acknowledged',
+            message: 'Acknowledged in bulk triage.', actorUserId, actorRole,
+          }).catch(() => {})
+          await resolveOpenBlockersForTask(req.db, { taskId: t.id, strategy: 'acknowledged', detail: 'Acknowledged in bulk triage.' }).catch(() => {})
+          done += 1
+        } else if (action === 'delete') {
+          cancelActiveHamiltonTaskRun(t.id, 'bulk_deleted')
+          await cancelApplicationTask(req.db, t.id, { actorUserId, actorRole, reason: 'bulk_deleted_by_user' })
+          done += 1
+        } else if (action === 'retry') {
+          if (BULK_TASK_TERMINAL.has(String(t.status)) && t.status !== 'failed') { skipped += 1; continue }
+          await updateApplicationTask(req.db, t.id, { nextRetryAt: null }).catch(() => {})
+          if (queued >= BULK_RETRY_CAP) { skipped += 1; continue } // bound simultaneous re-runs
+          const profile = await loadProfile(req.db, t.profile_id)
+          if (!profile) { skipped += 1; continue }
+          queued += 1; done += 1
+          runAutomationInBackground('bulk_retry', () => automateSingleSource(req.db, {
+            profile,
+            profileId: t.profile_id,
+            userId: actorUserId,
+            source: {
+              opportunity_id: t.opportunity_id,
+              grant_id: t.grant_id,
+              task_id: t.id,
+              current_stage: t.current_pipeline_stage || t.selected_from_stage,
+            },
+            options: { autopilot: true },
+          }))
+        }
+      } catch (e) {
+        log.warn('bulk_task_action_failed', { action, taskId: t.id, err: e?.message })
+        failed += 1
+      }
+    }
+
+    log.info('bulk_task_action', { action, done, skipped, failed, queued, total: tasks.length })
+    return res.json({
+      ok: true, action, total: tasks.length, done, skipped, failed,
+      ...(action === 'retry' ? { queued, retry_capped: tasks.length > BULK_RETRY_CAP } : {}),
+    })
+  } catch (err) {
+    log.error('bulk_task_action_error', { err: err?.message })
+    return res.status(500).json({ error: 'bulk_action_failed', detail: err?.message })
   }
 })
 

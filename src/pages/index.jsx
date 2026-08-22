@@ -87,6 +87,7 @@ const ServiceAgreement = lazy(() => import('./ServiceAgreement'), 'ServiceAgreem
 const CheckoutRequired = lazy(() => import('./CheckoutRequired'), 'CheckoutRequired')
 const HamiltonLiveLogin = lazy(() => import('./HamiltonLiveLogin'), 'HamiltonLiveLogin')
 const HamiltonAutomationWatch = lazy(() => import('./HamiltonAutomationWatch'), 'HamiltonAutomationWatch')
+const HamiltonTaskTriage = lazy(() => import('./HamiltonTaskTriage'), 'HamiltonTaskTriage')
 const HamiltonTaskDetail = lazy(() => import('./HamiltonTaskDetail'), 'HamiltonTaskDetail')
 const Landing = lazy(() => import('./Landing'), 'Landing')
 const PrivacyPolicy = lazy(() => import('./PrivacyPolicy'), 'PrivacyPolicy')
@@ -244,6 +245,7 @@ export default function Pages() {
           own window instead of being homework on the Automation tab.
         */}
         <Route path="/HamiltonAutomationWatch" element={withBoundary(<HamiltonAutomationWatch />, 'HamiltonAutomationWatch')} />
+        <Route path="/HamiltonTaskTriage" element={withBoundary(<HamiltonTaskTriage />, 'HamiltonTaskTriage')} />
         {/*
           Top-level for the same reason as the watch window above: the watch
           popup has no app chrome, so the card it links to must resolve inside
