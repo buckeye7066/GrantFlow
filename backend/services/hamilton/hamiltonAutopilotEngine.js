@@ -1323,6 +1323,13 @@ export async function runAutopilot({
   const screenshotsRoot = screenshotsDir || resolveConfirmationCaptureDir()
   let pagesVisited = 0
   let captchaAttempted = false
+  // Set once the solver actually SOLVES a challenge this run. A solved
+  // reCAPTCHA/Turnstile injects its token but leaves the widget DOM in place,
+  // so detectGate re-fires on the next inspection — without this the run
+  // dead-ended on a captcha it had already cleared (the fleet-wide 130-captcha
+  // zero: solver ran, solved:true, then blocked anyway). Live-diagnosed on the
+  // U.S. Bank form 2026-08-22.
+  let captchaSolved = false
   // Landing-page → application-form navigation state (bounded, never re-clicks
   // the same control) — see APPLY_NAV_PATTERNS.
   let applyNavClicks = 0
@@ -1401,7 +1408,15 @@ export async function runAutopilot({
       reportLiveStep(runId, 'Reading the application page', { detail: { page: pagesVisited } })
       trace.push({ step: 'page', detail: { index: pagesVisited, url: (() => { try { return page.url() } catch { return null } })() } })
 
-      const gate = await detectGate(page)
+      let gate = await detectGate(page)
+      // A captcha this run's solver already SOLVED is not a live gate — the
+      // token is injected; the lingering widget DOM must not re-block. Proceed
+      // to fill/submit (a genuinely unapplied token surfaces later as an honest
+      // validation/submit failure, never a fabricated success).
+      if (gate && (gate.kind === 'captcha' || gate.kind === 'bot_protected') && captchaSolved) {
+        trace.push({ step: 'captcha_cleared', detail: { note: 'solved token injected; ignoring lingering widget' } })
+        gate = null
+      }
       if (gate) {
         // Saved-login path: when Hamilton hits a login gate and the user saved a
         // login for this portal, type it into the portal's own login form and
@@ -1453,7 +1468,9 @@ export async function runAutopilot({
           trace.push({ step: 'captcha_result', detail: { solved: Boolean(verdict.solved), vendor: verdict.vendor || null, reason: verdict.reason || null } })
           if (verdict.solved) {
             // Token injected; re-inspect the page rather than treating the
-            // challenge as a live gate.
+            // challenge as a live gate. captchaSolved makes the re-inspection
+            // ignore the lingering widget instead of re-blocking.
+            captchaSolved = true
             continue
           }
         }

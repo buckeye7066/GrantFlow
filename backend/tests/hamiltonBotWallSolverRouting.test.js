@@ -80,6 +80,34 @@ describe('bot-wall → solver routing', () => {
     expect((result.trace || []).some((t) => t.step === 'captcha_attempt' && t.detail?.source === 'bot_wall')).toBe(true)
   })
 
+  it('a SOLVED captcha whose widget DOM lingers does NOT re-block the run (live-diagnosed on the U.S. Bank form)', async () => {
+    // Real reCAPTCHA/Turnstile: a successful solve injects the token but leaves
+    // the widget in the DOM, so detectGate re-fires. Before the fix the run
+    // dead-ended on a captcha it had already cleared (the fleet-wide 130-captcha
+    // zero). The solver here returns solved:true WITHOUT removing the widget.
+    const PERSISTS = `
+      <p>Please verify you are human — reCAPTCHA challenge</p>
+      <div class="g-recaptcha" data-sitekey="6Lc_recaptcha_key"></div>
+      <input name="g-recaptcha-response" type="hidden" />
+      <form><label for="fn">First name</label><input id="fn" name="first_name" /><button type="submit">Submit</button></form>`
+    const page = seamPage(PERSISTS)
+    let solverCalled = false
+    const solveCaptcha = async () => { solverCalled = true; return { solved: true, vendor: 'recaptcha' } } // token injected; widget stays
+    const result = await runAutopilot({
+      url: 'https://portal.example.org/apply',
+      profile: { basic_information: { first_name: 'Jane', last_name: 'Applicant', email: 'jane@example.org' } },
+      authorizations: { complete_forms: true },
+      solveCaptcha,
+      headless: true,
+      _testPage: page,
+    })
+    expect(solverCalled).toBe(true)
+    // The solved captcha must NOT be the terminal blocker.
+    expect(result.blocker_kind).not.toBe('captcha')
+    expect(result.blocker_kind).not.toBe('bot_protected')
+    expect((result.trace || []).some((t) => t.step === 'captcha_cleared')).toBe(true)
+  })
+
   it('still hands off a bot wall when no solver is configured (unchanged)', async () => {
     const page = seamPage(TURNSTILE_WALL)
     const result = await runAutopilot({
