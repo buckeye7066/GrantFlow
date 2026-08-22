@@ -88,10 +88,6 @@ import { getHamiltonReadiness, computeHamiltonCalendarEvents, emitSessionCapture
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { listPortalProviders } from '../services/hamilton/hamiltonPortalProviders.js'
 import {
-  authorizePayment,
-  canPayFor,
-  revokePaymentAuthorization,
-  getPaymentAuthorizationById,
   listPaymentAuthorizations,
   PAYMENT_CATEGORIES,
 } from '../services/hamilton/hamiltonPaymentAuthorizationService.js'
@@ -1435,30 +1431,15 @@ router.get('/payment-authorizations', async (req, res) => {
   }
 })
 router.post('/payment-authorizations', async (req, res) => {
-  const user = await requireProfileScope(req, res, req.body?.profileId)
-  if (!user) return
-  try {
-    const auth = await authorizePayment(req.db, { ...req.body, userId: getAuthUserId(user) })
-    return res.json({ ok: true, authorization: auth })
-  } catch (err) {
-    return res.status(400).json({ error: 'authorize_failed', detail: err?.message })
-  }
-})
-router.post('/payment-authorizations/:id/revoke', async (req, res) => {
-  const ctx = await requireRecordOwnership(req, res, req.params.id, getPaymentAuthorizationById)
-  if (!ctx) return
-  const auth = await revokePaymentAuthorization(req.db, req.params.id, req.body?.reason || null)
-  return res.json({ ok: true, authorization: auth })
-})
-router.get('/payment-authorizations/can-pay', async (req, res) => {
-  const { profileId, category, amountCents, portalHost } = req.query
-  const user = await requireProfileScope(req, res, profileId)
-  if (!user) return
-  if (!category) return res.status(400).json({ error: 'category required' })
-  const decision = await canPayFor(req.db, {
-    profileId, category, amountCents: Number(amountCents || 0), portalHost: portalHost || null,
+  // Owner rule (2026-08-22): grants and funding sources never require a payment
+  // to apply. There is no payment envelope — the create/authorize/charge path
+  // was removed so a fee-charging \"grant\" can never be paid or pre-authorized.
+  // The GET above stays mounted (it lists nothing) so the security probe still
+  // confirms Hamilton stores no card data.
+  return res.status(410).json({
+    error: 'payment_not_supported',
+    message: 'Payment authorization has been removed. Legitimate grants and funding sources never charge a fee to apply, so Hamilton never pays and there is no payment envelope.',
   })
-  return res.json(decision)
 })
 
 // Saved sessions. Storage stores only Playwright storage-state references /

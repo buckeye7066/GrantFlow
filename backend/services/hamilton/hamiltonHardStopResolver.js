@@ -36,11 +36,6 @@ import {
   markSessionUsed,
   normalizeHost,
 } from './hamiltonCredentialSessionService.js'
-import {
-  canPayFor,
-  recordCharge,
-  PaymentAuthorizationExceededError,
-} from './hamiltonPaymentAuthorizationService.js'
 import { isAttestationAllowed } from './hamiltonAttestationStore.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import {
@@ -124,9 +119,9 @@ export const BLOCKER_PROFILE = Object.freeze({
     user_required: true,
   },
   payment_required: {
-    title: 'Application payment approval required',
-    message: 'The portal requires a fee. Hamilton will only charge inside an explicit pre-authorized envelope. Review and approve the payment.',
-    required_action: 'approve_payment',
+    title: 'Funding source is asking for a payment',
+    message: 'This source requires a fee. Legitimate grants and funding sources never charge to apply, so Hamilton will NOT pay and did not submit — the source is flagged for your review.',
+    required_action: 'review_flagged_source',
     severity: 'warning',
     admin_required: true,
     user_required: true,
@@ -490,54 +485,17 @@ async function resolveCaptcha(db, ctx, input) {
 }
 
 async function resolvePayment(db, ctx, input) {
+  // Owner rule (2026-08-22): grants and funding sources never require a payment
+  // to apply — Hamilton pays for NOTHING and there is no payment envelope. A
+  // portal demanding a fee is either not a real grant or a step Hamilton must
+  // not take. So this never charges and never asks the owner to authorize an
+  // envelope; it flags the source for human review and leaves the task blocked
+  // WITHOUT any submission having happened.
   const host = ctx.portalUrl ? normalizeHost(ctx.portalUrl) : null
-  const category = String(input?.context?.category || 'application_fee')
-  const amountCents = Number(input?.context?.amount_cents || input?.context?.amountCents || 0)
-  if (!Number.isFinite(amountCents) || amountCents <= 0) {
-    return escalate('ask_user_payment_amount', 'Hamilton could not read the payment amount. Confirm and re-authorize.', { portal_host: host })
-  }
-  const decision = await canPayFor(db, { profileId: ctx.profileId, category, amountCents, portalHost: host })
-  if (!decision.allowed) {
-    return escalate('ask_user_to_authorize_payment',
-      `Hamilton needs payment authorization for ${category} at ${host || 'this portal'} (${(amountCents / 100).toFixed(2)} USD).`,
-      { portal_host: host, category, amount_cents: amountCents, reason: decision.reason })
-  }
-  // The actual charge call is the host's responsibility; Hamilton records
-  // the spend against the authorization for audit.
-  //
-  // recordCharge re-asserts the cap atomically, so it can refuse even though
-  // canPayFor just approved (a concurrent charge or a revocation landed in
-  // between). A refusal means NOTHING was recorded — never continue as if the
-  // spend succeeded.
-  try {
-    await recordCharge(db, {
-      authorizationId: decision.authorization.id,
-      amountCents,
-      taskId: ctx.taskId,
-      portalHost: host,
-      processorReceipt: input?.context?.receipt || null,
-    })
-  } catch (err) {
-    if (err instanceof PaymentAuthorizationExceededError) {
-      return escalate('ask_user_to_authorize_payment',
-        `Hamilton could not record a ${(amountCents / 100).toFixed(2)} USD ${category} charge — it would exceed the pre-authorized limit, or the authorization was revoked. Nothing was charged.`,
-        {
-          portal_host: host,
-          category,
-          amount_cents: amountCents,
-          reason: 'payment_authorization_exceeded',
-          payment_authorization_id: decision.authorization.id,
-        })
-    }
-    throw err
-  }
-
-  return ok('charge_within_pre_authorization', {
-    payment_authorization_id: decision.authorization.id,
-    payment_method_reference: decision.authorization.payment_method_reference,
-    amount_cents: amountCents,
-    category,
-  }, `Charged ${(amountCents / 100).toFixed(2)} USD to pre-authorized ${category}.`)
+  const label = String(input?.context?.label || input?.text || input?.detail || '').slice(0, 200)
+  return escalate('payment_not_supported',
+    'This source is asking for a payment. Legitimate grants and funding sources never charge an application fee, so Hamilton will not pay and did not submit — please review whether this source belongs in the pipeline.',
+    { portal_host: host, flagged_label: label, charged: false })
 }
 
 async function resolveWetSignature(db, ctx, input) {
@@ -549,23 +507,17 @@ async function resolveWetSignature(db, ctx, input) {
 }
 
 async function resolveDigitalSignature(db, ctx, input) {
-  // Under FULL AUTOMATION with standing-attestation authority (owner goal
-  // 2026-08-21), the applicant's electronic signature is the applicant's own
-  // consented act: the engine types the applicant's name into the signature
-  // field / ticks the e-sign box on the retry, and the orchestrator records a
-  // durable `esignature` task event. Both consents are read from their own
-  // authorities (resolveSubmissionDecision's verdict via ctx.fullAutomation;
-  // the persisted grant via isAuthorizationActive) — nothing is inferred.
+  // Owner rule (2026-08-22): turning full automation ON *is* the profile
+  // user's consent for the applicant's electronic signature — no separate
+  // standing-attestation grant is required. Under full automation the engine
+  // types the applicant's own name into the signature field / ticks the e-sign
+  // box on the retry, and the orchestrator records a durable `esignature` task
+  // event. Full automation is read from resolveSubmissionDecision's verdict
+  // (ctx.fullAutomation) — nothing is inferred.
   if (ctx?.fullAutomation === true) {
-    const attestationAuthorized = await isAuthorizationActive(db, {
-      profileId: ctx.profileId, authorizationType: 'use_standing_attestation',
-      fundingSourceId: ctx?.opportunity?.id || null, taskId: ctx.taskId,
-    })
-    if (attestationAuthorized) {
-      return ok('apply_applicant_esignature',
-        { consent: 'full_automation+use_standing_attestation', label: String(input?.text || input?.detail || input?.context?.label || '').slice(0, 200) },
-        'Full automation is on and standing attestation is authorized: Hamilton applies the applicant\'s electronic signature with the applicant\'s own name and retries.')
-    }
+    return ok('apply_applicant_esignature',
+      { consent: 'full_automation', label: String(input?.text || input?.detail || input?.context?.label || '').slice(0, 200) },
+      "Full automation is on (the profile user's consent): Hamilton applies the applicant's electronic signature with the applicant's own name and retries.")
   }
   // Otherwise Hamilton never applies a digital/electronic signature on the
   // applicant's behalf — it is the user's own legal signature. Hamilton fills

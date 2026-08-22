@@ -31,7 +31,7 @@
 import { preflightSingleSource } from './hamiltonPreflight.js'
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
 import { findValidSession, normalizeHost } from './hamiltonCredentialSessionService.js'
-import { canPayFor } from './hamiltonPaymentAuthorizationService.js'
+import { isFullAutomationEnabled } from './hamiltonFullAutomationMode.js'
 import { listActiveAttestations } from './hamiltonAttestationStore.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isAuthorizationActive } from './hamiltonAuthorizationStore.js'
@@ -138,46 +138,24 @@ export async function preflightAndResolveSource(db, {
     })
   }
 
-  // Predict payment if the opportunity carries application_fee_cents.
-  let paymentReadiness = { needed: false, allowed: false, reason: null }
-  const feeCents = Number(opportunity?.application_fee_cents || 0) || 0
-  if (feeCents > 0) {
-    const decision = await canPayFor(db, {
-      profileId, category: 'application_fee',
-      amountCents: feeCents, portalHost: host,
-    })
-    paymentReadiness = { needed: true, ...decision }
-    if (!decision.allowed) {
-      // The blocker object IS the `context` handed to `resolvePayment`
-      // (see the resolveBlocker call below: `context: b`), and that resolver
-      // reads `context.category` / `context.amount_cents`. Omitting them made
-      // `Number(undefined)` -> NaN -> the generic escalation "Hamilton could not
-      // read the payment amount. Confirm and re-authorize." — for a fee this
-      // same block computed from `opportunity.application_fee_cents` one line
-      // earlier. That message is what reached the owner's and admins'
-      // notifications, naming nothing they could act on. Carrying the facts
-      // authorizes nothing: `canPayFor` has ALREADY denied above (that is why
-      // this blocker exists), so the resolver still escalates — now with the
-      // actionable "needs payment authorization for application_fee at <host>
-      // (N USD)".
-      base.blockers.push({
-        kind: 'payment_required', key: 'application_fee',
-        category: 'application_fee',
-        amount_cents: feeCents,
-        portal_host: host || null,
-        label: `Application fee ${(feeCents / 100).toFixed(2)} USD not pre-authorized`,
-        detail: `Authorize Hamilton to charge ${(feeCents / 100).toFixed(2)} USD to ${host || 'this portal'} before launch.`,
-      })
-    }
-  }
+  // Owner rule (2026-08-22): grants and funding sources never require a payment
+  // to apply, and there is no payment envelope. Preflight therefore never
+  // predicts a payment blocker — a fee, if a portal shows one at runtime, is
+  // handled by the resolver as a flag-and-skip (Hamilton pays for nothing).
+  const paymentReadiness = { needed: false, allowed: true, reason: 'payment_never_required' }
 
-  // Resolve every predicted blocker we can.
+  // Resolve every predicted blocker we can. Full automation is the profile
+  // user's consent (owner rule 2026-08-22), so it flows into the resolver ctx —
+  // a signature/attestation blocker predicted here is auto-completed under full
+  // automation exactly as it is on the live run, instead of escalating.
+  const fullAutomation = Boolean((await isFullAutomationEnabled(db, profileId).catch(() => null))?.enabled)
   const resolutions = []
   const ctx = {
     taskId: taskId || `preflight_${profileId}_${(opportunity?.id || grant?.id || 'unknown')}`,
     profileId, userId,
     portalUrl,
     opportunity, profile, classification: base.classification,
+    fullAutomation,
   }
   for (const b of [...base.blockers]) {
     const directive = await resolveBlocker(db, ctx, {

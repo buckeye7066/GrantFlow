@@ -714,7 +714,7 @@ const ACTION_LABEL = {
   provide_info: 'Resolve blocker and continue Hamilton',
   upload_document: 'Upload document and continue Hamilton',
   renew_session: 'Renew login session and continue Hamilton',
-  approve_payment: 'Approve payment and continue Hamilton',
+  review_flagged_source: 'Review this source and continue Hamilton',
   review_attestation: 'Review attestation and continue Hamilton',
   admin_review: 'Admin review',
   resume: 'Resume Hamilton',

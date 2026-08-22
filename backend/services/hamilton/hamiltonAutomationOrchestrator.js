@@ -1585,6 +1585,16 @@ async function runAutopilotPathway(db, {
   try {
     fullAutomationActive = Boolean((await isFullAutomationEnabled(db, task.profile_id))?.enabled)
   } catch { fullAutomationActive = false }
+  // Owner rule (2026-08-22): turning full automation ON *is* the profile user's
+  // consent for the applicant's electronic signature and attestation. So an
+  // active full-automation grant satisfies the engine's standing-attestation
+  // capability (which drives auto-checking e-sign boxes / typing the applicant's
+  // own name) without a separate use_standing_attestation grant — the same
+  // "full automation is the single consent" rule the submit gate now follows.
+  if (fullAutomationActive && authorizations) {
+    authorizations.use_standing_attestation = true
+    authorizations.submit_applications = true
+  }
   if (allowAutoSubmit && !reviewedPortalSubmissionExecutionAvailable(url)) {
     allowAutoSubmit = false
     submissionDecision = {

@@ -104,18 +104,21 @@ describe('resolveDigitalSignature — the resolver path', () => {
     expect(d.outcome).toBe('escalated')
     expect(d.strategy).toBe('ask_user_to_esign')
   })
-  it('escalates under full automation when standing attestation was NOT granted', async () => {
+  it('resolves under full automation WITHOUT a separate standing-attestation grant (full automation IS the consent, owner 2026-08-22)', async () => {
     await recordAuthorizations(db, { userId: 'u1', profileId: PROFILE, scope: 'profile', authorizationTypes: ['submit_applications'], authorizationText: 'c' })
     const d = await resolveBlocker(db, { taskId: 't1', profileId: PROFILE, userId: 'u1', portalUrl: 'https://portal.example.org/apply', fullAutomation: true }, input)
-    expect(d.outcome).toBe('escalated')
+    expect(d.outcome).toBe('resolved')
+    expect(d.retry).toBe(true)
+    expect(d.strategy).toBe('apply_applicant_esignature')
+    expect(d.payload.consent).toBe('full_automation')
   })
-  it('resolves with a retry under full automation + standing attestation', async () => {
+  it('resolves with a retry under full automation (standing attestation optional)', async () => {
     await recordAuthorizations(db, { userId: 'u1', profileId: PROFILE, scope: 'profile', authorizationTypes: ['use_standing_attestation', 'submit_applications'], authorizationText: 'c' })
     const d = await resolveBlocker(db, { taskId: 't1', profileId: PROFILE, userId: 'u1', portalUrl: 'https://portal.example.org/apply', fullAutomation: true }, input)
     expect(d.outcome).toBe('resolved')
     expect(d.retry).toBe(true)
     expect(d.strategy).toBe('apply_applicant_esignature')
-    expect(d.payload.consent).toBe('full_automation+use_standing_attestation')
+    expect(d.payload.consent).toBe('full_automation')
   })
   it('a WET (ink) signature still degrades to the printable packet — no automation can sign on paper', async () => {
     await recordAuthorizations(db, { userId: 'u1', profileId: PROFILE, scope: 'profile', authorizationTypes: ['use_standing_attestation', 'submit_applications'], authorizationText: 'c' })

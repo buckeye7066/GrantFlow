@@ -20,7 +20,7 @@ const ACTION_LABEL = {
   provide_info: 'Provide info',
   upload_document: 'Upload doc',
   renew_session: 'Renew session',
-  approve_payment: 'Approve payment',
+  review_flagged_source: 'Review source',
   review_attestation: 'Review attestation',
   admin_review: 'Admin review',
   resume: 'Resume',
