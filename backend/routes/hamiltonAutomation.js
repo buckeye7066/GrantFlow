@@ -173,6 +173,13 @@ import { resolveBlocker } from '../services/hamilton/hamiltonHardStopResolver.js
 import { resolveProfileFieldTarget, inlineFieldForBlocker } from '../services/hamilton/profileFieldTargets.js'
 import { setProfileSectionField } from '../services/profileFieldWriter.js'
 import { reconcileProfileFieldsToTasks } from '../services/hamilton/applicationTaskStore.js'
+import {
+  listGlobalCustomFields,
+  getCustomFieldValues,
+  setCustomFieldValue,
+  normalizeFieldKey,
+} from '../services/hamilton/hamiltonCustomFieldRegistry.js'
+import { resolveMissingInfoItem } from '../services/hamilton/applicationTaskStore.js'
 import { categorizeHamiltonTask } from '../../shared/hamiltonTaskCategory.js'
 import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
@@ -2489,6 +2496,62 @@ function blockerFieldKey(blocker) {
 // Hamilton reuses it on this and every future portal, (3) mark the blocker
 // resolved + clear its notifications, and (4) re-run Hamilton so she continues
 // from where she stopped. This is the "bring the fix to the banner" path.
+// Global custom fields (owner doctrine 2026-08-22, condition 2): the fields
+// Anya created because a portal required something with no home in the profile
+// schema. Read the registry + this profile's answers; answering one resolves
+// the ask and lets the task resume.
+router.get('/custom-fields', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.query.profileId)
+  if (!user) return
+  try {
+    const [fields, values] = await Promise.all([
+      listGlobalCustomFields(req.db),
+      getCustomFieldValues(req.db, req.query.profileId),
+    ])
+    return res.json({ ok: true, fields, values })
+  } catch (err) {
+    return res.status(500).json({ error: 'custom_fields_list_failed', detail: err?.message })
+  }
+})
+
+router.put('/custom-fields', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
+  const profileId = String(req.body?.profileId || '')
+  const fieldKey = normalizeFieldKey(req.body?.fieldKey || '')
+  const rawValue = req.body?.value
+  const value = typeof rawValue === 'string' ? rawValue.trim() : rawValue
+  if (!fieldKey) return res.status(400).json({ error: 'field_key_required' })
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return res.status(400).json({ error: 'value_required', message: 'Enter a value to save.' })
+  }
+  if (String(value).length > 2000) return res.status(400).json({ error: 'value_too_long' })
+  try {
+    await setCustomFieldValue(req.db, profileId, fieldKey, value, { updatedBy: getAuthUserId(user) })
+    // Resolve the ask on every task that raised it, then let the tasks resume.
+    const askKey = `custom_fields.${fieldKey}`
+    const rows = await req.db.prepare(
+      `SELECT mi.task_id AS task_id
+         FROM application_missing_info mi
+         JOIN application_tasks t ON t.id = mi.task_id
+        WHERE t.profile_id = ? AND mi.kind = 'field' AND mi.key = ? AND mi.resolved IS NOT TRUE`,
+    ).all(profileId, askKey).catch(() => [])
+    const touched = new Set()
+    for (const r of rows || []) {
+      await resolveMissingInfoItem(req.db, r.task_id, { kind: 'field', key: askKey, value, resolvedBy: getAuthUserId(user) }).catch(() => {})
+      touched.add(r.task_id)
+    }
+    // Clear retry backoff so the next full-automation run re-picks these tasks.
+    for (const taskId of touched) {
+      await req.db.prepare('UPDATE application_tasks SET next_retry_at = NULL WHERE id = ?').run(taskId).catch(() => {})
+    }
+    await reconcileProfileFieldsToTasks(req.db, { profileId }).catch(() => {})
+    return res.json({ ok: true, field_key: fieldKey, tasks_resolved: touched.size })
+  } catch (err) {
+    return res.status(500).json({ error: 'custom_field_save_failed', detail: err?.message })
+  }
+})
+
 router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
