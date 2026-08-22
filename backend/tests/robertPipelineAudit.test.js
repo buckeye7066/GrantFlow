@@ -269,6 +269,20 @@ describe('every gate can actually reject, and can actually pass', () => {
     expect(gateQualifies(pell, facts).pass).toBe(true)
   })
 
+  it('QUALIFIES rejects an ACADEMIC-STAGE mismatch (a postdoctoral award for an undergraduate) via the stage-of-life gate', () => {
+    const undergradFacts = {
+      ...facts,
+      sections: { basic_information: { state: 'TN', profile_category: 'college_student', academic_status: { education_level: 'College Freshman (incoming), Associate degree earned May 2026' } } },
+    }
+    const postdoc = { title: 'Postdoctoral Research Fellowship', sponsor: 'Example Foundation', eligibility_text: 'Open to postdoctoral scholars only.', entity_types_allowed: '["individual"]' }
+    const verdict = gateQualifies(postdoc, undergradFacts)
+    expect(verdict.pass).toBe(false)
+    expect(verdict.evidence.gate).toBe('stage_of_life')
+    // A row with NO stage-declaring text is neutral (missing = neutral).
+    const plain = { title: 'General Community Scholarship', sponsor: 'Example', entity_types_allowed: '["individual"]' }
+    expect(gateQualifies(plain, undergradFacts).pass).toBe(true)
+  })
+
   it('QUALIFIES rejects an out-of-state place-declaring row and keeps an in-state one', () => {
     const outOfState = { title: 'Polk County, GA — Local assistance programs', sponsor: 'Findhelp', entity_types_allowed: '["individual"]' }
     expect(gateQualifies(outOfState, facts).pass).toBe(false)

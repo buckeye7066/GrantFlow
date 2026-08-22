@@ -399,6 +399,18 @@ async function assessApplicantTypeForPolicy(db, profileId, subject) {
     const basic = sections.basic_information ?? sections.basic_info ?? {}
     const applicantType = profileRow?.applicant_type || profileRow?.primary_type ||
       basic?.profile_category || basic?.applicant_type || null
+    // Academic STAGE-OF-LIFE hard mismatch (owner 2026-08-22): a pre-college
+    // award (current-HS / K-12) is provably impossible for an enrolled college
+    // student. The canonical gate reads ONLY the subject's own eligibility text
+    // (missing = neutral) and also catches website-purpose locks. Return the
+    // same `mismatch` shape the caller already refuses on.
+    try {
+      const { stageOfLifeConflictForSections } = await import('../../config/stageOfLifeEligibility.js')
+      const stageConflict = stageOfLifeConflictForSections(sections, subject)
+      if (stageConflict) {
+        return { decision: 'mismatch', reason: stageConflict.reason, matched_bucket: stageConflict.classId }
+      }
+    } catch { /* stage gate unavailable → fall through to applicant-type only */ }
     if (!applicantType) return null
     return evaluateApplicantTypeEligibility(subject, applicantType, { profile: profileRow, sections })
   } catch {

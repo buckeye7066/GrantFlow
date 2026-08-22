@@ -74,6 +74,7 @@ import {
   RESULT_BUCKETS,
 } from '../../config/fundingResultFilters.js'
 import { evaluateApplicantTypeEligibility } from '../applicantTypeGate.js'
+import { stageOfLifeConflictForSections } from '../../config/stageOfLifeEligibility.js'
 import { normalizeNeedCategory } from '../profileNormalizer.js'
 import { CANONICAL_NEED_CATEGORIES } from '../../constants/needCategories.js'
 import { recordDismissal, reconcileDismissedGrants } from '../pipelineDismissals.js'
@@ -393,6 +394,21 @@ export function gateQualifies(row, facts) {
       pass: false,
       reason: REJECTION_REASONS.PROFILE_MISMATCH,
       evidence: { gate: 'applicant_type', detail: applicantEval.reason, bucket: applicantEval.matched_bucket ?? null },
+    }
+  }
+
+  // Academic STAGE-OF-LIFE (owner 2026-08-22: Coolidge = current HS junior;
+  // Education Freedom = K-12 — neither is a college student's award). The stage
+  // gate refuses ONLY provable impossibility from the row's OWN eligibility text
+  // (missing = neutral), so it catches a pre-college award surfaced to an
+  // enrolled undergraduate. Also covers website-purpose locks. Consumes the
+  // canonical gate; never re-derives the stage.
+  const stageConflict = stageOfLifeConflictForSections(facts.sections, row)
+  if (stageConflict) {
+    return {
+      pass: false,
+      reason: REJECTION_REASONS.PROFILE_MISMATCH,
+      evidence: { gate: 'stage_of_life', detail: stageConflict.reason, bars: stageConflict.classId },
     }
   }
 
