@@ -104,6 +104,7 @@ import {
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
 import { attemptAutomatedVerification } from './hamiltonVerificationGate.js'
 import { attemptCaptchaSolve, isCaptchaSolverConfigured } from './hamiltonCaptchaSolver.js'
+import { answerUnknownField } from './hamiltonFieldAnswerer.js'
 import { loadIdentityValuesForFill } from './hamiltonProfileIdentityVault.js'
 import { emitIdentityRequest } from './hamiltonIdentityRequest.js'
 import { makeHamiltonGraphTokenProvider } from './hamiltonGraphToken.js'
@@ -2013,6 +2014,14 @@ async function runAutopilotPathway(db, {
           // solver closes over page + env only.
           ...(allowAutoSubmit && isCaptchaSolverConfigured()
             ? { solveCaptcha: (livePage) => attemptCaptchaSolve(livePage, { fullAutomation: true }) }
+            : {}),
+          // LLM field-understanding: answer portal-specific questions Hamilton's
+          // fixed field vocabulary does not recognize, grounded strictly in the
+          // profile (never fabricates; null → the field stays a user ask). Only
+          // when narrative generation is authorized; closes over the profile +
+          // funder so the engine's no-db-mid-run contract holds.
+          ...(authorizations.generate_narratives
+            ? { answerUnknownField: (field) => answerUnknownField(field, { profile, opportunity, grant }) }
             : {}),
         })
       }

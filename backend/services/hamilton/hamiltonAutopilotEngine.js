@@ -71,6 +71,7 @@ import { triagePage, PAGE_SURFACES } from './listingPageTriage.js'
 import { resolveConfirmationCaptureDir } from './hamiltonConfirmationArtifacts.js'
 import { resolveUploadsDir } from '../../utils/uploadsDir.js'
 import { startLiveScreencast, reportLiveStep, isLiveViewEnabled } from './hamiltonLiveView.js'
+import { isAnswerableUnknownField, fieldLabelOf } from './hamiltonFieldAnswerer.js'
 
 const NAV_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS) || 25_000
 const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS) || 8_000
@@ -88,7 +89,9 @@ const FIELD_RULES = Object.freeze([
   { key: 'email',           patterns: [/^e[-\s_]?mail$/i, new RegExp(`email${_S_}address`, 'i'), /\bemail\b/i] },
   { key: 'phone',           patterns: [/phone/i, /telephone/i, /^tel$/i, /mobile/i, /cell/i] },
   { key: 'address1',        patterns: [new RegExp(`address${_S_}(1|line${_S_}1)?$`, 'i'), /^street/i] },
-  { key: 'address2',        patterns: [new RegExp(`address${_S_}(2|line${_S_}2)`, 'i'), /apt|suite|unit/i] },
+  // Word-boundaried so "unit" no longer matches inside "community": a
+  // "community involvement" field was mis-recognized as an address line (2026-08-22).
+  { key: 'address2',        patterns: [new RegExp(`address${_S_}(2|line${_S_}2)`, 'i'), /\bapt\b|\bapartment\b|\bsuite\b|\bste\b|\bunit\b/i] },
   { key: 'city',            patterns: [/^city$/i, /town/i] },
   { key: 'state',           patterns: [/^state$/i, /province/i] },
   { key: 'zip',             patterns: [/zip/i, /postal/i] },
@@ -1171,6 +1174,14 @@ export async function runAutopilot({
   // db mid-run — same contract as narrativeAnswers). Absent/empty = an identity
   // field is a blocker, exactly as before. NEVER logged or traced.
   identityValues = null,
+  // LLM field-understanding layer: an injected (field) => Promise<{value,
+  // free_text, grounded_in} | null> that answers a portal field Hamilton's fixed
+  // vocabulary does NOT recognize, grounded strictly in the profile (never
+  // fabricates; returns null when the profile can't answer it → the field stays
+  // blank and becomes a user ask). Injected by the orchestrator only under
+  // generate_narratives consent, closing over the profile/funder + LLM (the
+  // engine's no-db-mid-run contract holds — same pattern as solveCaptcha).
+  answerUnknownField = null,
   // The autopilot run id. When set (and live view is enabled), this run's
   // browser is screencast to the in-memory live store under this id and the
   // engine reports its current step there, so the watch window can show a live
@@ -1460,7 +1471,27 @@ export async function runAutopilot({
       let filledThisPage = 0
       for (const f of fields) {
         const rule = matchFieldKey(f)
-        if (!rule) continue
+        if (!rule) {
+          // Field outside the fixed vocabulary (a portal-specific question).
+          // Answer it from the profile via the injected LLM layer — grounded,
+          // never fabricated; a null answer leaves the field blank so it becomes
+          // a genuine user ask instead of a made-up value. Only text-like fields,
+          // only when narrative generation is authorized, only if not pre-filled.
+          if (answerUnknownField && authorizations.generate_narratives
+              && isAnswerableUnknownField(f) && !f.value) {
+            let answered = null
+            try { answered = await answerUnknownField(f) } catch { answered = null }
+            if (answered?.value) {
+              const okA = await fillFieldByFid(page, f.fid, answered.value)
+              if (okA) {
+                filled.push({ key: `q:${fieldLabelOf(f).slice(0, 40)}`, fid: f.fid, source: 'llm_field_answer', value: String(answered.value).slice(0, 60) })
+                filledThisPage += 1
+                trace.push({ step: 'llm_field_answer', detail: { label: fieldLabelOf(f).slice(0, 60), free_text: Boolean(answered.free_text), grounded_in: answered.grounded_in || [] } })
+              }
+            }
+          }
+          continue
+        }
         // An identity-proofing field is filled from the ENCRYPTED vault, only
         // when a value is on file — never from the profile, never invented.
         const identityField = isIdentityFieldKey(rule.key)
