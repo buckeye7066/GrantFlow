@@ -455,7 +455,26 @@ async function clickButtonByBid(page, bid) {
   // tolerate either path.
   try {
     const navWait = page.waitForNavigation({ timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' }).catch(() => null)
-    await h.click({ timeout: STEP_TIMEOUT_MS })
+    // Real portals routinely put the submit button below the fold and cover it
+    // with a sticky footer / cookie banner / consent overlay, so a plain
+    // actionability-checked click throws "element intercepts pointer events" and
+    // the whole submission fails ("Submit button could not be clicked" killed
+    // HOPE / Aspire / GAMS / TSAA for a real applicant, 2026-08-21). Try, in
+    // order: scroll it into view, a normal click, a FORCED click (bypasses the
+    // pointer-intercept check), then a direct DOM click. A forced/DOM click
+    // still cannot fire a genuinely DISABLED button, so this never submits a
+    // form the portal itself considers invalid — it only defeats an overlay
+    // sitting on top of the right control.
+    await h.scrollIntoViewIfNeeded?.({ timeout: STEP_TIMEOUT_MS }).catch(() => {})
+    let clicked = false
+    try { await h.click({ timeout: STEP_TIMEOUT_MS }); clicked = true } catch { /* overlay/visibility — fall through */ }
+    if (!clicked) {
+      try { await h.click({ timeout: STEP_TIMEOUT_MS, force: true }); clicked = true } catch { /* fall through */ }
+    }
+    if (!clicked) {
+      try { await h.evaluate((el) => el.click()); clicked = true } catch { /* give up below */ }
+    }
+    if (!clicked) return false
     await Promise.race([
       navWait,
       new Promise((r) => setTimeout(r, 1500)),
@@ -1762,6 +1781,7 @@ export const _internal = {
   SIGNATURE_FIELD_PATTERNS, isTypedSignatureField, signatureConsentFor, detectAttestationGate,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
+  clickButtonByBid,
   detectGate, detectBotWall, attemptLogin,
   extractConfirmationReference,
   extractConfirmationReferenceFromUrl,
