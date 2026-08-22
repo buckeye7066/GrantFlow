@@ -212,11 +212,23 @@ export default function GrantMonitoring() {
                 Grant Monitoring
               </h1>
               <p className="text-slate-600 mt-2">
-                Automated tracking and alerts for your grant applications
+                Automated deadline and status <span className="font-medium">alerts</span> for your
+                grant applications. For a plain, per-grant timeline of what was submitted, what is
+                due, and pending awards, open the{' '}
+                <Link to={createPageUrl('Calendar')} className="text-blue-600 underline hover:text-blue-700">
+                  grant calendar
+                </Link>
+                .
               </p>
             </div>
 
             <div className="flex items-center gap-3">
+              <Button asChild variant="outline">
+                <Link to={createPageUrl('Calendar')}>
+                  <Calendar className="w-4 h-4 mr-2" />
+                  View calendar
+                </Link>
+              </Button>
               <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
                 <SelectTrigger className="w-64">
                   <SelectValue />

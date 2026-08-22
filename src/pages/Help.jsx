@@ -52,7 +52,7 @@ function buildCommonTasks() {
     'Dashboard', 'Calendar', 'Settings', 'MyProfiles', 'Organizations',
     'DiscoverGrants', 'SmartMatcher', 'ProfileMatcher', 'FundingOpportunities',
     'Funder', 'Pipeline', 'Proposals', 'Documents', 'PrintableApplication',
-    'GrantDeadline', 'GrantMonitoring', 'Reports', 'Outreach', 'Stewardship',
+    'GrantDeadline', 'GrantMonitoring', 'Reports', 'Outreach',
     'DataSources', 'SourceDirectory',
   ]
   return routeOrder.map((key) => {

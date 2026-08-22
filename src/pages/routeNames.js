@@ -40,7 +40,6 @@ export const ROUTE_NAMES = new Set([
   "DataSources",
   "SourceRegistry",
   "BackfillContacts",
-  "Stewardship",
   "Settings",
   "Help",
   "Incognito",

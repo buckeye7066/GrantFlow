@@ -34,7 +34,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Loader2, RefreshCw, CheckCircle2, AlertTriangle, Clock, ExternalLink, ChevronRight } from 'lucide-react'
+import { Loader2, RefreshCw, CheckCircle2, AlertTriangle, Clock, ExternalLink, ChevronRight, Layers } from 'lucide-react'
 import client from '@/api/client'
 import {
   BUCKET_ORDER,
@@ -430,10 +430,16 @@ export default function HamiltonAutomationWatch() {
           <h1 className="text-base font-semibold">
             {anyLive ? 'Hamilton is working' : 'Hamilton is not working right now'}
           </h1>
+          <Link
+            to={`/HamiltonTaskTriage?profile=${encodeURIComponent(profileId)}`}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
+          >
+            <Layers className="h-3.5 w-3.5" aria-hidden="true" /> Triage all tasks
+          </Link>
           <button
             type="button"
             onClick={load}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /> Refresh
           </button>

@@ -52,7 +52,6 @@ const OneTimeFix = lazy(() => import('./OneTimeFix'), 'OneTimeFix')
 const DataSources = lazy(() => import('./DataSources'), 'DataSources')
 const SourceRegistry = lazy(() => import('./SourceRegistry'), 'SourceRegistry')
 const BackfillContacts = lazy(() => import('./BackfillContacts'), 'BackfillContacts')
-const Stewardship = lazy(() => import('./Stewardship'), 'Stewardship')
 const ProfileDetail = lazy(() => import('./ProfileDetail'), 'ProfileDetail')
 const Diagnostics = lazy(() => import('./Diagnostics'), 'Diagnostics')
 const CrawlCoverage = lazy(() => import('./CrawlCoverage'), 'CrawlCoverage')
@@ -192,7 +191,6 @@ function LayoutRoutes() {
           <Route path="/DataSources" element={withBoundary(<DataSources />, 'DataSources')} />
           <Route path="/SourceRegistry" element={withBoundary(<SourceRegistry />, 'SourceRegistry')} />
           <Route path="/BackfillContacts" element={withBoundary(<BackfillContacts />, 'BackfillContacts')} />
-          <Route path="/Stewardship" element={withBoundary(<Stewardship />, 'Stewardship')} />
           <Route path="/Settings" element={withBoundary(<Settings />, 'Settings')} />
           <Route path="/Help" element={withBoundary(helpPage, 'Help')} />
           <Route path="/Incognito" element={withBoundary(<Incognito />, 'Incognito')} />

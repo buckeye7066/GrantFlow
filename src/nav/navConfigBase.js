@@ -117,7 +117,6 @@ export const NAV_GROUPS = [
       { title: "Reports & Analytics", i18nKey: "nav.reports", routeName: "Reports", url: createPageUrl("Reports"), icon: BarChart3 },
       { title: "Advanced Analytics", i18nKey: "nav.advancedAnalytics", routeName: "AdvancedAnalytics", url: createPageUrl("AdvancedAnalytics"), icon: LineChart },
       { title: "Outreach", i18nKey: "nav.outreach", routeName: "Outreach", url: createPageUrl("Outreach"), icon: Megaphone },
-      { title: "Stewardship", i18nKey: "nav.stewardship", routeName: "Stewardship", url: createPageUrl("Stewardship"), icon: ShieldCheck },
     ],
   },
   {
@@ -199,7 +198,6 @@ export const ROUTE_LABELS = {
   GrantDeadline: "Grant Deadline",
   GrantMonitoring: "Grant Monitoring",
   Proposals: "Proposals",
-  Stewardship: "Stewardship",
   Reports: "Reports",
   AdvancedAnalytics: "Advanced Analytics",
   Billing: "Billing & Invoicing",
@@ -254,7 +252,6 @@ export const ROUTE_LABEL_I18N = {
   GrantDeadline: "nav.grantDeadline",
   GrantMonitoring: "nav.grantMonitoring",
   Proposals: "nav.proposals",
-  Stewardship: "nav.stewardship",
   Reports: "nav.reports",
   AdvancedAnalytics: "nav.advancedAnalytics",
   Billing: "nav.billing",
