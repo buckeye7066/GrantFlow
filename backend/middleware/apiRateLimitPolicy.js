@@ -168,6 +168,26 @@ export function classifyApiRatePolicy(req, env = process.env) {
       requiredShared: false,
     }
   }
+  // Lightweight per-task / operator POST actions — resume a blocked task
+  // (resolve-blocker), retry, approve, mark-mailed/emailed/faxed, cancel,
+  // regenerate, resolve a missing field, dismiss hard stops, release the
+  // backlog — are NOT the expensive run-start fan-out. They must not share the
+  // tight 25/10min 'automation' budget, or resuming a backlog of stuck tasks
+  // 429s ("Could not resume Hamilton: rate_limit_exceeded", owner 2026-08-22).
+  // They go on the ordinary mutation lane (120/15min); the run-START endpoints
+  // (/start, /start-autopilot) fall through to 'automation' below.
+  if (
+    ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+    && /^\/api\/hamilton\/automation\/(?:tasks\/[^/]+\/|admin\/(?:hard-stops(?:\/|$)|release-need-you|tasks\/[^/]+\/))/.test(path)
+  ) {
+    return {
+      name: 'mutation',
+      windowMs: positiveInt(env.API_MUTATION_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
+      max: positiveInt(env.API_MUTATION_RATE_LIMIT_MAX, 120),
+      shared: true,
+      requiredShared: false,
+    }
+  }
   if (
     /^\/api\/(?:hamilton|application-tasks|admin\/agent-control|admin\/queue)(?:\/|$)/.test(path)
   ) {

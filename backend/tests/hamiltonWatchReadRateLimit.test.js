@@ -43,4 +43,27 @@ describe('Hamilton watch reads do not spend the run-start budget', () => {
     expect(p?.name).toBe('live_interaction')
     expect(p?.max).toBe(1800)
   })
+
+  it('lightweight resume/resolve/retry POSTs are on the mutation budget (120), NOT the tight automation 25', () => {
+    for (const path of [
+      '/api/hamilton/automation/tasks/abc/resolve-blocker',
+      '/api/hamilton/automation/tasks/abc/retry',
+      '/api/hamilton/automation/tasks/abc/approve',
+      '/api/hamilton/automation/admin/hard-stops/xyz/resolve-field',
+      '/api/hamilton/automation/admin/hard-stops/dismiss-all',
+      '/api/hamilton/automation/admin/release-need-you',
+    ]) {
+      const p = classify('POST', path)
+      expect(p?.name, path).toBe('mutation')
+      expect(p?.max, path).toBe(120)
+    }
+  })
+
+  it('the expensive run-START POSTs still stay on the tight automation budget (25)', () => {
+    for (const path of ['/api/hamilton/automation/start', '/api/hamilton/automation/start-autopilot']) {
+      const p = classify('POST', path)
+      expect(p?.name, path).toBe('automation')
+      expect(p?.max, path).toBe(25)
+    }
+  })
 })
