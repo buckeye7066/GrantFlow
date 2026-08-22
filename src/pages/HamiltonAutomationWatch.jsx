@@ -34,7 +34,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Loader2, RefreshCw, CheckCircle2, AlertTriangle, Clock, ExternalLink, ChevronRight, Layers } from 'lucide-react'
+import { Loader2, RefreshCw, CheckCircle2, AlertTriangle, Clock, ExternalLink, ChevronRight, Layers, Trash2 } from 'lucide-react'
 import client from '@/api/client'
 import {
   BUCKET_ORDER,
@@ -271,7 +271,7 @@ function LiveView({ taskId, active }) {
   )
 }
 
-function TaskCard({ task }) {
+function TaskCard({ task, onDelete }) {
   const bucket = bucketForTaskStatus(task.status)
   const tone = TONE[bucket]
   const outcome = terminalOutcome(task.status)
@@ -355,6 +355,27 @@ function TaskCard({ task }) {
         </p>
       )}
 
+      {onDelete && (
+        <div className="flex items-center gap-3 border-t border-slate-800/70 px-4 py-2 text-xs">
+          <button
+            type="button"
+            onClick={() => onDelete(task, { allProfiles: false })}
+            className="inline-flex items-center gap-1 text-slate-400 hover:text-rose-300"
+            title="Remove this card from this profile — Hamilton stops working it"
+          >
+            <Trash2 className="h-3 w-3" aria-hidden="true" /> Delete
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(task, { allProfiles: true })}
+            className="inline-flex items-center gap-1 text-slate-500 hover:text-rose-300"
+            title="Remove this funding source from EVERY profile that has it"
+          >
+            Delete everywhere
+          </button>
+        </div>
+      )}
+
       <LiveView taskId={task.id} active={bucket === 'working'} />
     </li>
   )
@@ -393,6 +414,24 @@ export default function HamiltonAutomationWatch() {
       }
     }
   }, [profileId])
+
+  const deleteTask = useCallback(async (task, { allProfiles = false } = {}) => {
+    const label = task.display_title || task.funder_name || 'this source'
+    const msg = allProfiles
+      ? `Delete "${label}" from EVERY profile that has it? Hamilton stops working it everywhere.`
+      : `Delete "${label}" from this profile? Hamilton stops working it.`
+    if (!window.confirm(msg)) return
+    try {
+      await client.post('/api/hamilton/automation/admin/tasks/bulk', {
+        action: 'delete',
+        taskIds: [task.id],
+        ...(allProfiles ? { allProfiles: true } : {}),
+      })
+      await load()
+    } catch (err) {
+      setLoadError(err?.response?.data?.message || err?.message || 'Delete failed.')
+    }
+  }, [load])
 
   const counts = useMemo(() => countTaskBuckets(tasks), [tasks])
   const anyLive = counts.working > 0
@@ -499,7 +538,7 @@ export default function HamiltonAutomationWatch() {
         )}
 
         <ul className="space-y-3">
-          {sorted.map((task) => <TaskCard key={task.id} task={task} />)}
+          {sorted.map((task) => <TaskCard key={task.id} task={task} onDelete={deleteTask} />)}
         </ul>
 
         {sorted.length > 0 && (

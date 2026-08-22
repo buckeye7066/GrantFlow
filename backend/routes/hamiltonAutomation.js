@@ -2749,6 +2749,28 @@ router.post('/admin/tasks/bulk', async (req, res) => {
       return res.status(400).json({ error: 'target_required', message: 'Pass taskIds, or profileId + category.' })
     }
 
+    // GLOBAL delete (owner 2026-08-22: "delete ... globally in every profile on
+    // their similar page"). When allProfiles is set on a delete/purge, expand
+    // the target set to EVERY profile's task that points at the SAME funding
+    // source (opportunity_id / grant_id) as a selected task — a source that is
+    // wrong for one profile's page is wrong on every profile's page. Admin-only
+    // (already enforced above).
+    if (req.body?.allProfiles === true && (action === 'delete' || action === 'purge')) {
+      const oppIds = [...new Set((tasks || []).map((t) => t.opportunity_id).filter(Boolean).map(String))]
+      const grantIds = [...new Set((tasks || []).map((t) => t.grant_id).filter(Boolean).map(String))]
+      const seen = new Set((tasks || []).map((t) => String(t.id)))
+      const merged = [...(tasks || [])]
+      const addSiblings = async (col, ids) => {
+        if (!ids.length) return
+        const ph = ids.map(() => '?').join(', ')
+        const rows = await req.db.prepare(`SELECT ${cols} FROM application_tasks WHERE ${col} IN (${ph})`).all(...ids)
+        for (const r of rows || []) { if (!seen.has(String(r.id))) { seen.add(String(r.id)); merged.push(r) } }
+      }
+      await addSiblings('opportunity_id', oppIds)
+      await addSiblings('grant_id', grantIds)
+      tasks = merged
+    }
+
     const actorRole = req.ctx?.isAdmin === true ? 'admin' : 'user'
     const actorUserId = getAuthUserId(user)
     let done = 0; let skipped = 0; let failed = 0; let queued = 0

@@ -105,6 +105,35 @@ describe('POST /admin/tasks/bulk', () => {
     expect(await statusOf('t-dir')).toBe('cancelled')
   })
 
+  it('allProfiles delete removes sibling tasks across EVERY profile sharing the funding source', async () => {
+    await db.prepare('INSERT INTO profiles (id, user_id) VALUES (?, ?)').run('p2', 'u1')
+    await db.prepare(
+      'INSERT INTO application_tasks (id, profile_id, status, last_agent_message, opportunity_id) VALUES (?, ?, ?, ?, ?)',
+    ).run('g-a', PID, 'waiting_for_review', 'junk source', 'shared-opp-1')
+    await db.prepare(
+      'INSERT INTO application_tasks (id, profile_id, status, last_agent_message, opportunity_id) VALUES (?, ?, ?, ?, ?)',
+    ).run('g-b', 'p2', 'waiting_for_review', 'junk source', 'shared-opp-1')
+    const res = await request(app()).post('/api/hamilton/automation/admin/tasks/bulk')
+      .send({ action: 'delete', taskIds: ['g-a'], allProfiles: true })
+    expect(res.status).toBe(200)
+    expect(await statusOf('g-a')).toBe('cancelled')
+    expect(await statusOf('g-b')).toBe('cancelled') // sibling on the OTHER profile removed too
+  })
+
+  it('WITHOUT allProfiles, a delete touches only the named task', async () => {
+    await db.prepare('INSERT INTO profiles (id, user_id) VALUES (?, ?)').run('p3', 'u1')
+    await db.prepare(
+      'INSERT INTO application_tasks (id, profile_id, status, last_agent_message, opportunity_id) VALUES (?, ?, ?, ?, ?)',
+    ).run('h-a', PID, 'waiting_for_review', 'x', 'shared-opp-2')
+    await db.prepare(
+      'INSERT INTO application_tasks (id, profile_id, status, last_agent_message, opportunity_id) VALUES (?, ?, ?, ?, ?)',
+    ).run('h-b', 'p3', 'waiting_for_review', 'x', 'shared-opp-2')
+    await request(app()).post('/api/hamilton/automation/admin/tasks/bulk')
+      .send({ action: 'delete', taskIds: ['h-a'] })
+    expect(await statusOf('h-a')).toBe('cancelled')
+    expect(await statusOf('h-b')).toBe('waiting_for_review') // other profile untouched
+  })
+
   it('purge hard-deletes a FINISHED task from the archive', async () => {
     const res = await request(app()).post('/api/hamilton/automation/admin/tasks/bulk')
       .send({ action: 'purge', taskIds: ['t-submitted'] })
