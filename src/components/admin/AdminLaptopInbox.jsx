@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Check, X, RefreshCw, Laptop, FileText, Building2, Coins, UserCog } from 'lucide-react'
+import { Check, X, RefreshCw, Laptop, FileText, Building2, Coins, UserCog, Trash2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -128,6 +128,50 @@ export default function AdminLaptopInbox() {
     toast({ title: 'Bulk accept complete', description: `${ok} added${fail ? `, ${fail} failed` : ''}` })
   }, [selected, allItems, toast])
 
+  const applyBulkDismiss = useCallback(
+    async (body, label, removeFilter) => {
+      try {
+        const res = await laptopConnectorApi.bulkDismiss(body)
+        const n = res?.dismissed ?? 0
+        setGrouped((prev) => {
+          const next = { lead: [], funding: [], profile_field: [] }
+          for (const key of Object.keys(next)) next[key] = (prev[key] || []).filter(removeFilter)
+          return next
+        })
+        setSelected(new Set())
+        toast({ title: 'Erased', description: `${n} ${label} rejected.` })
+      } catch (err) {
+        toast({ title: 'Bulk erase failed', description: err.message, variant: 'destructive' })
+      }
+    },
+    [toast],
+  )
+
+  const rejectSelected = useCallback(() => {
+    const ids = [...selected]
+    if (!ids.length) return
+    if (!window.confirm(`Reject ${ids.length} selected candidate(s)? They are removed from the inbox (nothing is added).`)) return
+    const idSet = new Set(ids)
+    applyBulkDismiss({ ids }, 'candidate(s)', (it) => !idSet.has(it.id))
+  }, [selected, applyBulkDismiss])
+
+  const rejectGroup = useCallback(
+    (type) => {
+      const n = (grouped[type] || []).length
+      if (!n) return
+      if (!window.confirm(`Reject all ${n} "${TYPE_META[type].label}" candidate(s)? They are removed from the inbox.`)) return
+      applyBulkDismiss({ type }, `${TYPE_META[type].label} candidate(s)`, (it) => it.candidate_type !== type)
+    },
+    [grouped, applyBulkDismiss],
+  )
+
+  const rejectAll = useCallback(() => {
+    const n = allItems.length
+    if (!n) return
+    if (!window.confirm(`Reject ALL ${n} pending candidate(s) across every queue? This erases the whole inbox (nothing is added).`)) return
+    applyBulkDismiss({ all: true }, 'candidate(s)', () => false)
+  }, [allItems, applyBulkDismiss])
+
   const renderItem = (item) => {
     const busy = busyIds.has(item.id)
     return (
@@ -180,6 +224,16 @@ export default function AdminLaptopInbox() {
             <Icon className="h-5 w-5 text-primary" />
             {meta.label}
             <span className="ml-1 rounded-full bg-muted px-2 py-0.5 text-xs">{items.length}</span>
+            {items.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="ml-auto text-destructive hover:text-destructive"
+                onClick={() => rejectGroup(type)}
+              >
+                <Trash2 className="mr-1 h-3.5 w-3.5" /> Reject all ({items.length})
+              </Button>
+            )}
           </CardTitle>
           <p className="text-sm text-muted-foreground">{meta.blurb}</p>
         </CardHeader>
@@ -211,6 +265,22 @@ export default function AdminLaptopInbox() {
         <div className="flex gap-2">
           <Button variant="outline" onClick={acceptSelected} disabled={selected.size === 0}>
             Accept selected ({selected.size})
+          </Button>
+          <Button
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            onClick={rejectSelected}
+            disabled={selected.size === 0}
+          >
+            <Trash2 className="mr-1 h-4 w-4" /> Reject selected ({selected.size})
+          </Button>
+          <Button
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            onClick={rejectAll}
+            disabled={total === 0}
+          >
+            Reject all ({total})
           </Button>
           <Button variant="outline" onClick={refresh} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />

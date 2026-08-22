@@ -38,6 +38,7 @@ import {
   mapReviewItem,
   listPendingReviewItems,
   markReviewItem,
+  bulkDismissReviewItems,
 } from '../services/laptopConnector/laptopConnectorStore.js'
 import { analyzeText, buildProfilesDigest, redactSecrets } from '../services/laptopConnector/laptopAnalyzer.js'
 import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
@@ -220,6 +221,30 @@ router.get('/review', async (req, res) => {
   } catch (err) {
     log.warn('[laptop-connector] review list failed', { err: err?.message })
     return res.json({ items: [], grouped: { lead: [], funding: [], profile_field: [] }, counts: {} })
+  }
+})
+
+router.post('/review/bulk-dismiss', async (req, res) => {
+  const rawIds = Array.isArray(req.body?.ids) ? req.body.ids.filter((x) => typeof x === 'string') : null
+  const type = ['lead', 'funding', 'profile_field'].includes(req.body?.type) ? req.body.type : null
+  const all = req.body?.all === true
+  if (!rawIds?.length && !type && !all) {
+    return res.status(400).json({ error: 'target_required', message: 'Provide ids[], a type, or all:true' })
+  }
+  const reason =
+    typeof req.body?.reason === 'string' && req.body.reason.trim()
+      ? req.body.reason.trim().slice(0, 200)
+      : 'user_bulk_dismissed'
+  try {
+    const { requested, dismissed } = await bulkDismissReviewItems(req.db, {
+      ids: rawIds?.length ? rawIds : null,
+      candidateType: rawIds?.length ? null : type,
+      reason,
+    })
+    return res.json({ ok: true, requested, dismissed, skipped: requested - dismissed })
+  } catch (err) {
+    log.error('[laptop-connector] bulk dismiss failed', { err: err?.message })
+    return res.status(500).json({ error: 'bulk_dismiss_failed', message: err?.message })
   }
 })
 

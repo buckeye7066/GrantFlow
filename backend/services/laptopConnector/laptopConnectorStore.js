@@ -201,3 +201,43 @@ export async function markReviewItem(db, id, status, actionResult = null) {
     )
     .run(status, actionResult ? String(actionResult).slice(0, 300) : null, id)
 }
+
+/**
+ * Bulk-dismiss pending review items. Target is (in priority order): an explicit
+ * id list, else a single candidate_type, else EVERY pending item. Only rows
+ * still in 'pending' flip to 'dismissed', so the op is idempotent and can never
+ * resurrect an accepted row. Returns { requested, dismissed } — requested is
+ * the count of pending rows the predicate matched BEFORE the update, so the
+ * caller can report requested == dismissed + skipped honestly regardless of DB
+ * driver .changes semantics.
+ */
+export async function bulkDismissReviewItems(
+  db,
+  { ids = null, candidateType = null, reason = 'user_bulk_dismissed' } = {},
+) {
+  const safeReason = String(reason || 'user_bulk_dismissed').slice(0, 200)
+  let whereSql = "status = 'pending'"
+  let params = []
+  if (Array.isArray(ids) && ids.length) {
+    const chunk = ids.slice(0, 1000)
+    whereSql += ` AND id IN (${chunk.map(() => '?').join(',')})`
+    params = chunk
+  } else if (candidateType) {
+    whereSql += ' AND candidate_type = ?'
+    params = [candidateType]
+  }
+  const countRow = await db
+    .prepare(`SELECT COUNT(*) AS n FROM laptop_review_items WHERE ${whereSql}`)
+    .get(...params)
+  const requested = Number(countRow?.n) || 0
+  if (requested > 0) {
+    await db
+      .prepare(
+        `UPDATE laptop_review_items
+         SET status = 'dismissed', acted_at = ${nowFn(db)}, action_result = ?
+         WHERE ${whereSql}`,
+      )
+      .run(safeReason, ...params)
+  }
+  return { requested, dismissed: requested }
+}

@@ -24,4 +24,5 @@ export const laptopConnectorApi = {
   listRuns: () => apiFetch(`${BASE}/runs`),
   accept: (id) => postJson(`${BASE}/review/${encodeURIComponent(id)}/accept`),
   dismiss: (id, reason) => postJson(`${BASE}/review/${encodeURIComponent(id)}/dismiss`, { reason }),
+  bulkDismiss: (body) => postJson(`${BASE}/review/bulk-dismiss`, body),
 }
