@@ -662,6 +662,37 @@ async function detectGate(page) {
   return null
 }
 
+export function computeAgeYears(dobStr, now = new Date()) {
+  if (!dobStr) return null
+  const dob = new Date(dobStr)
+  if (Number.isNaN(dob.getTime())) return null
+  let age = now.getFullYear() - dob.getFullYear()
+  const m = now.getMonth() - dob.getMonth()
+  if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age -= 1
+  return age >= 0 && age < 130 ? age : null
+}
+
+// Verdict for a REQUIRED eligibility checkbox that affirms an AGE fact about the
+// applicant (owner 2026-08-22, live-diagnosed on the U.S. Bank form: "I am 18
+// years old or older" vs "I am 17 years old…"). Returns true = tick (provably
+// satisfied by the applicant's real age), false = leave unticked (provably NOT),
+// null = not an age affirmation / ambiguous (leave to the attestation logic or
+// the human). Never fabricates — the age comes from the vault/profile DOB.
+export function ageAffirmationVerdict(text, ageYears) {
+  if (ageYears === null) return null
+  const t = String(text || '').toLowerCase()
+  let m = t.match(/\b(\d{1,2})\s*(?:\+|years?\s*(?:old|of age)?\s*(?:or\s*(?:older|above|more)|and\s*(?:older|above)))/)
+       || t.match(/\bat\s*least\s*(\d{1,2})\b/)
+       || t.match(/\b(\d{1,2})\s*(?:years?)?\s*or\s*older\b/)
+  if (m) return ageYears >= Number(m[1])
+  if (/\b(?:age of majority|legal age)\b/.test(t)) return ageYears >= 18
+  m = t.match(/\bunder\s*(?:the\s*age\s*of\s*)?(\d{1,2})\b/) || t.match(/\byounger\s*than\s*(\d{1,2})\b/)
+  if (m) return ageYears < Number(m[1])
+  m = t.match(/\bi\s*am\s*(\d{1,2})\s*years?\s*old\b/)
+  if (m) return ageYears === Number(m[1])
+  return null
+}
+
 async function detectAttestationGate(page, { authorizations, signatureConsent = null }) {
   // Find checkbox labels that look like legal attestations or signatures.
   const items = await page.$$eval('input[type="checkbox"]', (els) => {
@@ -1663,6 +1694,41 @@ export async function runAutopilot({
         if (signatureTicked.length > 0) trace.push({ step: 'signature_attested', detail: { items: signatureTicked, name: signatureConsent.name } })
       }
 
+      // Eligibility AGE-AFFIRMATION checkboxes: a required box affirming a fact
+      // Hamilton can VERIFY from the applicant's real age is ticked when
+      // provably true, and left alone when false or ambiguous. Under full
+      // automation only. (U.S. Bank form: tick "I am 18 or older", leave "I am
+      // 17…" — the difference between filling the form and blocking on submit.)
+      if (authorizations.use_standing_attestation) {
+        const dobForAge = identityByFieldKey.date_of_birth || valuesByKey.date_of_birth || valuesByKey.dob || null
+        const ageYears = computeAgeYears(dobForAge)
+        if (ageYears !== null) {
+          const boxes = await page.$$eval('input[type="checkbox"]', (els) => els.map((el) => {
+            const id = el.id || ''
+            let lab = ''
+            if (id) { const l = document.querySelector(`label[for="${CSS.escape(id)}"]`); if (l) lab = l.textContent || '' }
+            if (!lab) { const par = el.closest('label'); if (par) lab = par.textContent || '' }
+            return { id, name: el.getAttribute('name') || '', text: `${el.getAttribute('name') || ''} ${(lab || '').trim()}`, checked: el.checked }
+          })).catch(() => [])
+          const affirmed = []
+          for (const b of boxes) {
+            if (b.checked) continue
+            if (ageAffirmationVerdict(b.text, ageYears) !== true) continue
+            const sel = b.id ? `input[id="${String(b.id).replace(/"/g, '\\"')}"]`
+              : (b.name ? `input[name="${String(b.name).replace(/"/g, '\\"')}"]` : null)
+            if (!sel) continue
+            const ok = await page.$eval(sel, (el) => {
+              if (!el) return false
+              el.checked = true
+              el.dispatchEvent(new Event('change', { bubbles: true }))
+              return true
+            }).catch(() => false)
+            if (ok) affirmed.push(b.text.slice(0, 100))
+          }
+          if (affirmed.length > 0) trace.push({ step: 'eligibility_affirmed', detail: { items: affirmed } })
+        }
+      }
+
       // Authorized document uploads.
       if (authorizations.upload_documents && Array.isArray(documents) && documents.length > 0) {
         if (signal?.aborted) {
@@ -1963,6 +2029,8 @@ export async function runAutopilot({
 }
 
 export const _internal = {
+  computeAgeYears,
+  ageAffirmationVerdict,
   FIELD_RULES, STANDING_ATTESTATION_PATTERNS, HARD_ATTESTATION_PATTERNS,
   SIGNATURE_FIELD_PATTERNS, isTypedSignatureField, signatureConsentFor, detectAttestationGate,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
