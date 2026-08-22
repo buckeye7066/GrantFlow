@@ -51,6 +51,21 @@ function clean(value, { stripTags = false } = {}) {
   return s.length ? s : null;
 }
 
+// Normalize a feed item link to https. The NIH Guide RSS feed emits its item
+// <link>s as `http://grants.nih.gov/...` (verified live 2026-08-22), and the
+// reality gate hard-rejects any http URL as BAD_URL (an intentional no-downgrade
+// security floor added 2026-08-06). That silently zeroed the entire nih_guide
+// lane — every candidate rejected `all_candidates_rejected:bad_url` — for every
+// research-leaning profile (Axiom BioLabs and peers). grants.nih.gov serves the
+// exact same notice pages over https (the http link 301->https to a 200), so a
+// scheme upgrade is a faithful normalization, not a reachability guess. Only a
+// bare `http://` scheme is upgraded; https and any other scheme are untouched.
+function httpsUpgrade(url) {
+  const u = typeof url === 'string' ? url.trim() : '';
+  if (/^http:\/\//i.test(u)) return u.replace(/^http:\/\//i, 'https://');
+  return u || null;
+}
+
 export function createAgencyRssAdapter() {
   return createBaseAdapter({
     source_id: 'nih_guide',
@@ -64,10 +79,10 @@ export function createAgencyRssAdapter() {
     mapCandidate(raw, { source } = {}) {
       if (!raw) return null;
       const title = clean(raw.title);
-      const infoUrl = clean(raw.info_url);
+      const infoUrl = httpsUpgrade(clean(raw.info_url));
       if (!title || !infoUrl) return null;
-      // The feed only lists items over https agency pages; the reality gate
-      // re-validates the URL and rejects anything unsafe.
+      // info_url is scheme-normalized to https above (the feed emits http links);
+      // the reality gate re-validates the URL and rejects anything unsafe.
       return {
         external_id: infoUrl, // RSS items have no stable id; the link is canonical
         kind: OPPORTUNITY_KIND.PROGRAM,
