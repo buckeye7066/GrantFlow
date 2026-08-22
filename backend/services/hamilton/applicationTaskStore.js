@@ -1407,7 +1407,6 @@ export async function reconcileProfileAfterParse(db, { profileId } = {}) {
 
 export async function cancelApplicationTask(db, taskId, { actorUserId = null, actorRole = null, reason = null } = {}) {
   await ensureApplicationTaskSchema(db)
-  const ts = new Date().toISOString()
   const uncertainStatusSql = SUBMISSION_UNCERTAIN_STATUSES
     .map((status) => `'${String(status).replace(/'/g, "''")}'`)
     .join(', ')
@@ -1430,13 +1429,13 @@ export async function cancelApplicationTask(db, taskId, { actorUserId = null, ac
              END,
              cancelled_at = CASE
                WHEN status IN (${uncertainStatusSql}) THEN NULL
-               ELSE ?
+               ELSE ${nowSqlLiteral(db)}
              END,
              next_retry_at = NULL,
              auto_submit_enabled = 0, allow_auto_submit = 0,
              updated_at = ${nowSqlLiteral(db)}
        WHERE id = ?`
-  const cancelParams = [verificationMessage, cancelledMessage, ts, String(taskId)]
+  const cancelParams = [verificationMessage, cancelledMessage, String(taskId)]
   const executeCancel = async (targetDb) => {
     try {
       return await targetDb.prepare(cancelSql).run(...cancelParams)
