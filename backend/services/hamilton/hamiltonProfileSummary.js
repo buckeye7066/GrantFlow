@@ -217,7 +217,23 @@ export async function buildHamiltonProfileSummary(db, profileId) {
         fafsaLinkAsks.push({ task_id: t.id, title })
         continue
       }
-      const isDoc = String(m.kind || '').toLowerCase() === 'document'
+      const kindLc = String(m.kind || '').toLowerCase()
+      // Condition 4: an EXISTING external login the applicant already has
+      // (FAFSA etc.) — surfaced as its own item pointing at the Saved portal
+      // logins card, distinct from a profile-field ask.
+      if (kindLc === 'login') {
+        needsYou.push({
+          id: `missing:${m.id}`,
+          kind: 'missing_login',
+          title: m.label || 'Existing login needed',
+          detail: m.description || `${title}: Hamilton needs the existing login for this portal (he will not create a second account).`,
+          where: 'pipeline',
+          task_id: t.id,
+          required: Boolean(m.required),
+        })
+        continue
+      }
+      const isDoc = kindLc === 'document'
       needsYou.push({
         id: `missing:${m.id}`,
         kind: isDoc ? 'missing_document' : 'missing_field',
@@ -299,7 +315,7 @@ function todoItemFromNeed(need) {
     title: need.title,
     priority: kind === 'missing_field' || kind === 'missing_document'
       ? (need.required ? 'critical' : 'high')
-      : kind === 'portal_session' || kind === 'vault' ? 'high' : 'medium',
+      : kind === 'portal_session' || kind === 'vault' || kind === 'missing_login' ? 'high' : 'medium',
     deadline: null,
     instructions: need.detail || '',
     resources_needed: null,

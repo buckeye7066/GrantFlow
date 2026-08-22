@@ -43,6 +43,8 @@ import {
   saveResolvedField,
 } from './hamiltonResolvedFieldStore.js'
 import { isAuthorizationActive } from './hamiltonAuthorizationStore.js'
+import { requiresExistingExternalLogin, buildExistingLoginAsk } from './hamiltonExistingAccountPolicy.js'
+import { setMissingInfo } from './applicationTaskStore.js'
 import { findOfficialUrlForOpportunity } from '../urlEnrichment.js'
 import { isSearchEngineUrl, portalUrlFunderPlausibility } from '../../config/urlRules.js'
 import { classifyNonApplicationSurface } from '../../config/applicationSurfaceHosts.js'
@@ -434,6 +436,21 @@ async function resolveMissingDocument(db, ctx, input) {
 
 async function resolveLogin(db, ctx, input) {
   const host = ctx.portalUrl ? normalizeHost(ctx.portalUrl) : null
+  // Condition 4 (owner 2026-08-22): a login wall for an account the applicant
+  // ALREADY has but that is not in the vault (an identity-bound host like FAFSA/
+  // studentaid.gov, or an "account already exists" page signal) is an ASK for
+  // that existing login — Hamilton never creates a second account. Recorded as a
+  // 'login' missing-info ask so it surfaces on the profile with a deep link.
+  const askExistingLogin = async () => {
+    const existing = requiresExistingExternalLogin({
+      host, pageText: input?.text || input?.detail || input?.context?.label || null,
+    })
+    if (!existing.ask) return null
+    const ask = buildExistingLoginAsk({ host, reason: existing.reason })
+    if (ctx.taskId) await setMissingInfo(db, ctx.taskId, [ask]).catch(() => {})
+    return escalate('ask_user_for_existing_login', ask.description, { portal_host: host, reason: existing.reason })
+  }
+
   const sessionAuthorized = await isAuthorizationActive(db, {
     profileId: ctx.profileId, authorizationType: 'use_saved_session',
     fundingSourceId: ctx?.opportunity?.id || null, taskId: ctx.taskId,
@@ -443,7 +460,8 @@ async function resolveLogin(db, ctx, input) {
     fundingSourceId: ctx?.opportunity?.id || null, taskId: ctx.taskId,
   })
   if (!sessionAuthorized && !credAuthorized) {
-    return escalate('ask_user_for_session', 'Hamilton needs the user to log in once and save the session before she can run unattended.', { portal_host: host })
+    return (await askExistingLogin())
+      || escalate('ask_user_for_session', 'Hamilton needs the user to log in once and save the session before she can run unattended.', { portal_host: host })
   }
   if (host) {
     const session = await findValidSession(db, { profileId: ctx.profileId, portalHost: host })
@@ -452,7 +470,8 @@ async function resolveLogin(db, ctx, input) {
       return ok('reuse_saved_session', { session_id: session.id, storage_state_path: session.storage_state_path, storage_state_ref: session.storage_state_ref }, `Reused saved session for ${host}.`)
     }
   }
-  return escalate('ask_user_for_session', 'Saved session is missing or expired. Ask the user to re-establish the session.', { portal_host: host })
+  return (await askExistingLogin())
+    || escalate('ask_user_for_session', 'Saved session is missing or expired. Ask the user to re-establish the session.', { portal_host: host })
 }
 
 async function resolveSSO(db, ctx, input) {
