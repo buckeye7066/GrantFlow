@@ -2880,6 +2880,45 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       }
     },
   },
+  {
+    // Adapter URL-defect blind spot (2026-08-22): a source can run cleanly
+    // (`failed = false`), fetch its feed, PARSE candidates, and still store
+    // NOTHING because the reality gate rejects every candidate as `bad_url` — an
+    // adapter emitting a URL the gate refuses (an http:// link against the
+    // no-downgrade https floor; a malformed/search URL). Every existing crawler
+    // check keys on `failed` or `api_outage`, so this class was structurally
+    // invisible: `nih_guide` fed http:// links and silently returned zero for
+    // every research org for as long as the feed served them. Distinct from an
+    // outage (owner/env action) — this is a CODE fix in the source adapter.
+    id: 'crawler.sourceAdapterUrlDefect',
+    label: 'Crawler source rejects every candidate as bad_url (adapter defect)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Flags any registry source whose last N (default 3) QUERIED runs ALL fetched OK (failed=false) but stored nothing because the reality gate rejected every parsed candidate as bad_url — the signature of an adapter emitting a URL the gate refuses (an http:// link, a malformed/search URL). Reads only crawler_source_runs; matched on bad_url alone so intentional gate exclusions (no_sponsor/geo_stub) and external outages (api_outage/fetch failures) never trip it. This is a CODE fix in the source adapter, routed as such. Fails open when the table is missing or a source has too few recent runs.',
+    async run({ db }) {
+      if (!db?.prepare) return { ok: true, summary: 'source adapter url defect: db unavailable' }
+      const STREAK = Math.max(2, Number.parseInt(process.env.CRAWLER_SOURCE_BADURL_STREAK || '3', 10) || 3)
+      let offenders = []
+      try {
+        const { findSourcesRejectingAllUrls } = await import('../sources/sourceFailureDetector.js')
+        offenders = await findSourcesRejectingAllUrls(db, { streak: STREAK })
+      } catch (err) {
+        return { ok: true, summary: `source adapter url-defect detector unavailable (${err?.message || 'unknown'})` }
+      }
+      if (offenders.length === 0) {
+        return { ok: true, summary: `No source has rejected every candidate as bad_url for ${STREAK} consecutive queried runs.` }
+      }
+      const names = offenders.slice(0, 5).map((r) => `${r.source_id} (${r.last_error || 'bad_url'})`)
+      return {
+        ok: false,
+        summary: `${offenders.length} source adapter(s) storing NOTHING — every candidate rejected as bad_url over the last ${STREAK} queried runs: ${names.join('; ')}. The source fetched fine; its adapter is emitting a URL the reality gate refuses.`,
+        evidence: { offenders: offenders.slice(0, 10), streak: STREAK },
+        recommended_fix: 'This is an ADAPTER CODE fix, not an outage or a key. For each named source, open its adapter (backend/crawler-os/adapters/) and normalize the URL it emits: the reality gate hard-rejects http:// (no-downgrade https floor) and search/malformed URLs. The nih_guide case (2026-08-22) was a feed serving http:// links — fixed by scheme-normalizing the extracted info_url to https in the adapter. Confirm with a single-source re-crawl.',
+        confidence: 0.85,
+      }
+    },
+  },
 ])
 
 // ---------------------------------------------------------------------------

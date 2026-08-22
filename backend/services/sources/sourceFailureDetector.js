@@ -90,4 +90,65 @@ export async function findPersistentlyFailingSources(db, opts = {}) {
   }
 }
 
-export default { findPersistentlyFailingSources }
+/**
+ * Sibling detector for the ADAPTER-URL-DEFECT signature: a source whose recent
+ * queried runs did NOT fail to fetch (`failed = false`) yet stored NOTHING
+ * because the reality gate rejected every parsed candidate as `bad_url` — the
+ * exact signature of an adapter emitting a URL the gate refuses (an http:// link
+ * against the no-downgrade https floor; a malformed/search URL). This is a CODE
+ * defect in the source adapter, categorically different from:
+ *   - `failed = true`             (a fetch/connectivity failure — the sibling above),
+ *   - `api_outage:*` / 4xx/5xx    (an external OWNER/ENV action — the amount checks),
+ *   - `all_candidates_rejected:no_sponsor` / `:geo_stub` (intentional gate exclusions).
+ * So it is matched ONLY on `bad_url` and routed as a code fix, never an outage.
+ *
+ * Verbatim motivating case (2026-08-22): `nih_guide` fed `http://grants.nih.gov`
+ * item links and every run recorded `found:0, rejected>0, error:
+ * all_candidates_rejected:bad_url` while `failed` stayed false — invisible to
+ * every `failed`-keyed check. Fixed by scheme-normalizing the adapter's URL.
+ *
+ * @returns {Promise<Array<{source_id, source_label, last_error, last_failure_at, runs}>>}
+ *   Ordered oldest-last-occurrence-first, then source_id (same starvation-safe
+ *   order as the sibling), so an actor's bounded slice attends every source.
+ */
+export async function findSourcesRejectingAllUrls(db, opts = {}) {
+  const STREAK = Math.max(2, Number.parseInt(opts.streak ?? 3, 10) || 3)
+  const now = Number.isFinite(Number(opts.now)) ? Number(opts.now) : Date.now()
+  const hours = Number.isFinite(Number(opts.windowHours)) && Number(opts.windowHours) > 0
+    ? Number(opts.windowHours)
+    : windowHours()
+  // Same SQLite-vs-Postgres timestamp spelling rule as the sibling above.
+  const since = new Date(now - hours * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ')
+  try {
+    const rows = await db
+      .prepare(
+        `WITH recent AS (
+           SELECT source_id, source_label, failed, error, found, rejected, created_at,
+                  ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY created_at DESC) AS rn
+             FROM crawler_source_runs
+            WHERE queried
+              AND created_at >= ?
+         )
+         SELECT source_id, MAX(source_label) AS source_label,
+                MAX(CASE WHEN rn = 1 THEN error END) AS last_error,
+                MAX(created_at) AS last_failure_at,
+                COUNT(*) AS runs
+           FROM recent
+          WHERE rn <= ${STREAK}
+          GROUP BY source_id
+         HAVING COUNT(*) >= ${STREAK}
+            -- every recent run: fetched OK, parsed candidates, stored none,
+            -- all rejected as bad_url (an adapter URL defect, not an outage).
+            AND SUM(CASE WHEN (NOT failed) AND COALESCE(found,0) = 0
+                              AND COALESCE(rejected,0) > 0
+                              AND error LIKE '%bad_url%' THEN 1 ELSE 0 END) = COUNT(*)
+          ORDER BY MAX(created_at) ASC, source_id ASC`,
+      )
+      .all(since)
+    return Array.isArray(rows) ? rows : []
+  } catch {
+    return []
+  }
+}
+
+export default { findPersistentlyFailingSources, findSourcesRejectingAllUrls }
