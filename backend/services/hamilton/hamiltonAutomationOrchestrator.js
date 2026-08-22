@@ -2647,11 +2647,23 @@ async function runAutopilotPathway(db, {
       reason: handover?.reason || handover?.blocker || null,
     }
   } else if (engineResult.status === 'completed_draft') {
+    // WHY did Hamilton draft instead of submitting? Surface the exact withhold
+    // reason on the card so "waiting for review" is diagnosable instead of an
+    // opaque generic message. The reason comes from the engine's submit boundary
+    // (submit_withheld_reason: not_requested / global_auto_submit_disabled /
+    // human_review_required / profile_auto_submit_disabled /
+    // portal_url_not_browser_executable) or the orchestrator's auto-submit gate
+    // (automation_off / missing_info). This is what tells us which consent gate
+    // is still vetoing a full-automation profile.
+    const withheldReason = engineResult.submit_withheld_reason
+      || (autoSubmitGate && autoSubmitGate.enforced && !autoSubmitGate.submit ? autoSubmitGate.reason : null)
+      || null
+    const reasonSuffix = withheldReason ? ` (auto-submit withheld: ${withheldReason})` : ''
     const draftTask = await updateApplicationTask(db, task.id, {
       unlessCancelled: true,
       status: 'waiting_for_review',
       lastAgentMessage:
-        'Hamilton finished filling the application and saved a draft. Review it in the portal, complete required human steps, and submit it yourself.',
+        `Hamilton finished filling the application and saved a draft${reasonSuffix}. Review it in the portal, complete required human steps, and submit it yourself.`,
     })
     if (draftTask?.status === 'cancelled') {
       return { task: draftTask, classification, autopilot_run: run.id, autopilot_result: engineResult, cancelled: true }
@@ -2661,10 +2673,10 @@ async function runAutopilotPathway(db, {
       eventType: 'progress',
       status: 'waiting_for_review',
       step: 'autopilot',
-      message: 'Hamilton saved a draft for human portal review and final submission.',
+      message: `Hamilton saved a draft for human portal review and final submission${reasonSuffix}.`,
       actorUserId: userId,
       actorRole: 'agent',
-      details: { autopilot_run_id: run.id },
+      details: { autopilot_run_id: run.id, submit_withheld_reason: withheldReason },
     })
   } else if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'bot_protected') {
     // FULL-PAGE BOT-PROTECTION DEAD-END (owner 2026-08-03: "for the dead-ends,
