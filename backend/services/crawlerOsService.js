@@ -665,6 +665,31 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
       try {
         seedPages = await parity.loadGapSeedPagesForProfile(db, profileId);
       } catch { seedPages = []; }
+      if (!Array.isArray(seedPages)) seedPages = [];
+
+      // KNOWN-SOURCE SEEDS (2026-08-23, the "seed what the model already knows"
+      // fix). Blind crawling MISSES the canonical funders the models already
+      // name per profile TYPE/need — SBA / Hello Alice / Amber Grant / Comcast
+      // RISE for a small business, the scholarship hubs for a student,
+      // PAN/HealthWell for a patient. `knownSeedSourcesForProfile` resolves the
+      // profile's archetypes and returns those curated URLs. They are handed to
+      // the lane as SEED PAGES — fetched, LLM-extracted, reality-gated, deduped
+      // and scored by the canonical engine exactly like a search hit. A seed is
+      // a URL, NOT a verdict: this lowers NO bar; it only removes a search's
+      // failure to FIND the page. De-duped against the gap-queue seeds and
+      // bounded (KNOWN_SEED_LIMIT_PER_RUN). Best-effort: a resolver miss must
+      // never fail a crawl.
+      try {
+        const { knownSeedSourcesForProfile } = await import('../config/profileSourceArchetypes.js');
+        const known = knownSeedSourcesForProfile(ctx?.profile ?? null, ctx?.sections ?? {});
+        const already = new Set(seedPages.map((s) => String(s?.url || '').trim().toLowerCase()));
+        for (const s of Array.isArray(known) ? known : []) {
+          const key = String(s?.url || '').trim().toLowerCase();
+          if (!key || already.has(key)) continue;
+          already.add(key);
+          seedPages.push(s);
+        }
+      } catch { /* known-seed resolution is best-effort; never fail a crawl */ }
 
       // Phase 1b SHADOW (WEB_LANE_PROFILE_BLIND, default OFF): when ON, the lane
       // ALSO runs the profile-blind extractor on each already-fetched page and
