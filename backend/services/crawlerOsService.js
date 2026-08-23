@@ -533,7 +533,7 @@ export async function overlayLiveAmountKnowledge(db, recommendations, idRemap) {
   return { checked: recs.length, enriched };
 }
 
-export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null, deadlineMs = null, timeBudgetMs = null } = {}) {
+export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null, deadlineMs = null, timeBudgetMs = null, extraSeedPages = null, extraQueries = null } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
   const ctx = await loadProfileContext(db, profileId);
   // Lifecycle guard: never crawl a deleted/archived/merged profile (no-op, no writes).
@@ -691,6 +691,23 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
         }
       } catch { /* known-seed resolution is best-effort; never fail a crawl */ }
 
+      // ARCHETYPE DISCOVERY DIRECTIVE (initiative agent #3): a profile below its
+      // per-type APPLYABLE floor is handed its profile-type's known seed sources
+      // (as extra seed pages) and query patterns (as extra searches) by the
+      // coverage sweep. They enter EXACTLY where a benchmark seed / a search hit
+      // does — a seed is a URL, not a verdict — so this lowers no bar; it only
+      // makes the crawler look where the profile's type says it should. Deduped
+      // against the benchmark seeds by URL below.
+      if (Array.isArray(extraSeedPages) && extraSeedPages.length) {
+        const seen = new Set(seedPages.map((s) => String(s?.url || '').trim().toLowerCase()));
+        for (const s of extraSeedPages) {
+          const url = String(s?.url || '').trim();
+          if (!/^https?:\/\//i.test(url) || seen.has(url.toLowerCase())) continue;
+          seen.add(url.toLowerCase());
+          seedPages.push({ url, title: s.title ?? null, query: s.query ?? 'seed:archetype' });
+        }
+      }
+
       // Phase 1b SHADOW (WEB_LANE_PROFILE_BLIND, default OFF): when ON, the lane
       // ALSO runs the profile-blind extractor on each already-fetched page and
       // emits a read-only `web_lane_blind_shadow` delta. null (flag off / load
@@ -701,7 +718,11 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
 
       const web = await runWebDiscoveryLane(
         { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage, blindShadow },
-        { thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id, seedPages },
+        {
+          thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id, seedPages,
+          // Archetype query patterns run ALONGSIDE the profile's own web queries.
+          extraQueries: Array.isArray(extraQueries) ? extraQueries : [],
+        },
       );
       const { recommendations: webRecs, targetVerification, ...webTelemetry } = web;
       // The bounded target-verification promise is awaited AFTER persistRun (it
