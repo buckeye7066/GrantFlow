@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   htmlToText,
   extractOpportunitiesFromPage,
+  decomposeHubApplyTargets,
 } from '../services/webGrantExtractor.js'
 import { OPPORTUNITY_KIND } from '../crawler-os/contract.js'
 
@@ -266,5 +267,64 @@ describe('extractOpportunitiesFromPage', () => {
       { invoke, openai: null },
     )
     expect(out).toEqual([])
+  })
+})
+
+describe('decomposeHubApplyTargets — crawl-time hub decomposition (Coolidge/Live Más class, 2026-08-23)', () => {
+  const HUB = 'https://oregongoestocollege.example/pay/scholarships'
+  const inventory = [
+    { url: HUB, text: 'Scholarships' }, // the hub's own self-link
+    { url: 'https://coolidgescholars.example/apply', text: 'The Coolidge Scholarship — apply' },
+    { url: 'https://taco-bell-foundation.example/live-mas', text: 'Live Más Scholarship application' },
+  ]
+  const award = (title, apply_url) => ({ title, apply_url, is_directory: false, info_url: null, raw: {} })
+
+  it('a single-award page is untouched (applying ON the page is legitimate — the U.S. Bank form)', () => {
+    const one = [award('The Whole Application', HUB)]
+    expect(decomposeHubApplyTargets(one, { pageUrl: HUB, linkInventory: inventory })).toEqual(one)
+  })
+
+  it('on a multi-award hub, an award whose apply target is the HUB URL is DECOMPOSED to its own outbound link', () => {
+    const cands = [
+      award('The Coolidge Scholarship', HUB),
+      award('Live Más Scholarship', HUB),
+    ]
+    const out = decomposeHubApplyTargets(cands, { pageUrl: HUB, linkInventory: inventory })
+    expect(out[0].apply_url).toBe('https://coolidgescholars.example/apply')
+    expect(out[0].raw.hub_decomposed).toBe(true)
+    expect(out[1].apply_url).toBe('https://taco-bell-foundation.example/live-mas')
+    expect(out[1].raw.hub_decomposed).toBe(true)
+  })
+
+  it('an award with NO matching outbound link is stripped to info-only (never a false "apply here" to the hub)', () => {
+    const cands = [
+      award('The Coolidge Scholarship', HUB),
+      award('General Manager', HUB), // a job posting scraped off the listing — no award link
+    ]
+    const out = decomposeHubApplyTargets(cands, { pageUrl: HUB, linkInventory: inventory })
+    // Coolidge decomposes; the job posting has no own-link → apply nulled, info = hub.
+    expect(out[0].apply_url).toBe('https://coolidgescholars.example/apply')
+    expect(out[1].apply_url).toBeNull()
+    expect(out[1].info_url).toBe(HUB)
+    expect(out[1].raw.hub_apply_url_stripped).toBe(true)
+  })
+
+  it('a real per-award outbound link (not the hub) is kept as-is', () => {
+    const cands = [
+      award('The Coolidge Scholarship', 'https://coolidgescholars.example/apply'),
+      award('Live Más Scholarship', HUB),
+    ]
+    const out = decomposeHubApplyTargets(cands, { pageUrl: HUB, linkInventory: inventory })
+    expect(out[0].apply_url).toBe('https://coolidgescholars.example/apply')
+    expect(out[0].raw.hub_decomposed).toBeUndefined() // untouched — already a real link
+  })
+
+  it('directory rows are never touched', () => {
+    const cands = [
+      { ...award('A', HUB), is_directory: true },
+      { ...award('B', HUB), is_directory: true },
+    ]
+    const out = decomposeHubApplyTargets(cands, { pageUrl: HUB, linkInventory: inventory })
+    expect(out).toEqual(cands)
   })
 })

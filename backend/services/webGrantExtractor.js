@@ -16,6 +16,7 @@
 import * as cheerio from 'cheerio';
 import { getOpenAIOptional, invokeJsonWithFallback } from '../utils/aiProviders.js';
 import { buildLinkInventory } from '../crawler-os/blindLinkInventory.js';
+import { canonicalizeUrl } from '../crawler-os/urlCanonical.js';
 import { extractPageFactsBlind } from '../crawler-os/blindPageFactExtractor.js';
 import { mapBlindFactsToCandidate } from '../crawler-os/blindFactsMapper.js';
 import { classifyBlindOpportunityKind } from '../crawler-os/blindOpportunityKind.js';
@@ -83,6 +84,91 @@ function makeProfileBlindLlm(deps = {}) {
   };
 }
 
+// Generic scholarship/grant words carry no identity — an award's distinctive
+// tokens are what let us match it to its OWN link on a hub page.
+const GENERIC_AWARD_WORDS = new Set([
+  'scholarship', 'scholarships', 'grant', 'grants', 'award', 'awards', 'fund',
+  'foundation', 'program', 'programs', 'fellowship', 'bursary', 'prize',
+  'the', 'of', 'for', 'and', 'a', 'an', 'in', 'to', 'college', 'student',
+  'students', 'financial', 'aid', 'application', 'apply', 'now', 'more',
+  'learn', 'view', 'details', 'annual', 'memorial', 'endowed',
+]);
+
+function distinctiveTitleTokens(title) {
+  return String(title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 3 && !GENERIC_AWARD_WORDS.has(t));
+}
+
+function normUrl(u) {
+  const c = canonicalizeUrl(String(u || ''), null);
+  return c ? c.replace(/\/+$/, '').toLowerCase() : '';
+}
+
+/**
+ * CRAWL-TIME HUB DECOMPOSITION (owner design ruling 2026-08-23).
+ *
+ * When more than one distinct award is extracted from ONE page, that page is
+ * functioning as a HUB/listing (oregongoestocollege.org/pay/scholarships served
+ * both "The Coolidge Scholarship" and "Live Más Scholarship" AND a "General
+ * Manager" job posting, each stamped with the LISTING URL as its apply target —
+ * the measured Coolidge/Live Más class). A hub is a SOURCE, not an apply target:
+ * an award's apply_url must be a page-OWN OUTBOUND link (a real anchor on the
+ * page, distinct from the page's own URL), or nothing at all.
+ *
+ * So for a multi-award page, each award's apply_url is kept ONLY when it is a
+ * real outbound link in the page's inventory that is not the page itself.
+ * Otherwise Hamilton's fabrication discipline applies: try to DECOMPOSE — find
+ * the award's OWN link by matching its distinctive title tokens to an anchor,
+ * adopting it only on an UNAMBIGUOUS single match; failing that, null the
+ * apply_url (info-only research lead pointing at the hub via info_url), never a
+ * false "apply here" that sends every applicant to the listing.
+ *
+ * A SINGLE-award page is untouched: applying on the page itself (a real
+ * application form — the U.S. Bank scholarship form) is legitimate.
+ */
+export function decomposeHubApplyTargets(candidates, { pageUrl, linkInventory }) {
+  const reals = candidates.filter((c) => !c.is_directory && c.apply_url);
+  if (reals.length <= 1) return candidates; // single-award page or none — leave alone
+  const pageKey = normUrl(pageUrl);
+  const inventory = Array.isArray(linkInventory) ? linkInventory : [];
+  const outboundKeys = new Set(
+    inventory.map((l) => normUrl(l?.url)).filter((k) => k && k !== pageKey),
+  );
+  const findOwnLink = (title) => {
+    const tokens = distinctiveTitleTokens(title);
+    if (tokens.length === 0) return null;
+    const matches = inventory.filter((l) => {
+      const k = normUrl(l?.url);
+      if (!k || k === pageKey) return false;
+      const text = String(l?.text || '').toLowerCase();
+      return tokens.every((t) => text.includes(t));
+    });
+    const distinct = [...new Set(matches.map((l) => normUrl(l.url)))];
+    return distinct.length === 1 ? matches.find((l) => normUrl(l.url) === distinct[0]).url : null;
+  };
+  return candidates.map((c) => {
+    if (c.is_directory || !c.apply_url) return c;
+    const key = normUrl(c.apply_url);
+    // A real per-award outbound link on the page → keep it.
+    if (key && key !== pageKey && outboundKeys.has(key)) return c;
+    // Otherwise the apply_url is the hub itself (or off-page). Decompose to the
+    // award's own link, else demote to info-only.
+    const own = findOwnLink(c.title);
+    if (own) {
+      return { ...c, apply_url: own, raw: { ...(c.raw || {}), hub_decomposed: true, hub_page: pageUrl } };
+    }
+    return {
+      ...c,
+      apply_url: null,
+      info_url: c.info_url || c.raw?.page_url || pageUrl,
+      raw: { ...(c.raw || {}), hub_apply_url_stripped: true, hub_page: pageUrl },
+    };
+  });
+}
+
 /**
  * Extract profile-independent candidates from one fetched page.
  *
@@ -117,7 +203,7 @@ export async function extractOpportunitiesFromPage(
     return [];
   }
 
-  return (Array.isArray(facts) ? facts : [])
+  const classified = (Array.isArray(facts) ? facts : [])
     .map(mapBlindFactsToCandidate)
     .filter(Boolean)
     .map((candidate) => {
@@ -150,6 +236,12 @@ export async function extractOpportunitiesFromPage(
         },
       };
     });
+
+  // CRAWL-TIME HUB DECOMPOSITION: a multi-award page's per-award apply targets
+  // must be page-OWN outbound links, never the hub URL (owner ruling
+  // 2026-08-23). This is the ROOT fix for the Coolidge/Live Más class — the
+  // enforceSharedListingApplicationTargets boot sweep (#1324) is only the net.
+  return decomposeHubApplyTargets(classified, { pageUrl, linkInventory });
 }
 
-export default { extractOpportunitiesFromPage, htmlToText };
+export default { extractOpportunitiesFromPage, htmlToText, decomposeHubApplyTargets };
