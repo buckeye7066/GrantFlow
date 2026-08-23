@@ -1782,6 +1782,29 @@ export async function runAutopilot({
           if (identityField && fullAutomation && f.required && IDENTITY_FIELD_TO_KIND[rule.key]) {
             missingIdentityKinds.add(IDENTITY_FIELD_TO_KIND[rule.key])
           }
+          // A NON-identity rule claim with nothing to fill may be a MIS-CLAIM
+          // (the same class as the fill-refused branch below): give the
+          // grounded answerer its chance before leaving the field empty.
+          if (!identityField && answerUnknownField && authorizations.generate_narratives
+              && isAnswerableUnknownField(f) && !f.value) {
+            let answered = null
+            try { answered = await answerUnknownField(f) } catch { answered = null }
+            if (answered?.value) {
+              const okA = await fillFieldByFid(page, f.fid, answered.value)
+              if (okA) {
+                filled.push({ key: `q:${fieldLabelOf(f).slice(0, 40)}`, fid: f.fid, source: 'llm_field_answer', value: String(answered.value).slice(0, 60) })
+                filledThisPage += 1
+                trace.push({ step: 'llm_field_answer', detail: { label: fieldLabelOf(f).slice(0, 60), free_text: Boolean(answered.free_text), grounded_in: answered.grounded_in || [], misclaimed_rule: rule.key } })
+                continue
+              }
+            }
+            if (f.required) {
+              const label = fieldLabelOf(f).slice(0, 120)
+              if (label && !unansweredRequiredFields.some((u) => u.label === label)) {
+                unansweredRequiredFields.push({ label, fid: f.fid, type: String(f.type || f.tag || 'text') })
+              }
+            }
+          }
           continue
         }
         if (!authorizations.complete_forms && rule.key !== 'email' && rule.key !== 'first_name' && rule.key !== 'last_name') {
@@ -1808,6 +1831,32 @@ export async function runAutopilot({
             ? { key: rule.key, fid: f.fid, source: 'identity_vault' }
             : { key: rule.key, fid: f.fid, value: String(v).slice(0, 60) })
           filledThisPage += 1
+        } else if (!identityField && answerUnknownField && authorizations.generate_narratives
+            && isAnswerableUnknownField(f) && !f.value) {
+          // A RULE-claimed field whose mapped value the portal REFUSED (a
+          // <select> without that option) is a MIS-CLAIM, not a fill.
+          // Measured 2026-08-23 on the U.S. Bank form: "Where did you hear
+          // about our scholarship program?" matched the `major` rule on the
+          // word "program", so every run tried selectOption("Forensic
+          // Science") and failed silently. Give the grounded answerer the
+          // same chance the no-rule branch gets — it may only choose among
+          // the portal's own options, and null still means "ask the user".
+          let answered = null
+          try { answered = await answerUnknownField(f) } catch { answered = null }
+          if (answered?.value) {
+            const okA = await fillFieldByFid(page, f.fid, answered.value)
+            if (okA) {
+              filled.push({ key: `q:${fieldLabelOf(f).slice(0, 40)}`, fid: f.fid, source: 'llm_field_answer', value: String(answered.value).slice(0, 60) })
+              filledThisPage += 1
+              trace.push({ step: 'llm_field_answer', detail: { label: fieldLabelOf(f).slice(0, 60), free_text: Boolean(answered.free_text), grounded_in: answered.grounded_in || [], misclaimed_rule: rule.key } })
+            }
+          }
+          if (!answered?.value && f.required) {
+            const label = fieldLabelOf(f).slice(0, 120)
+            if (label && !unansweredRequiredFields.some((u) => u.label === label)) {
+              unansweredRequiredFields.push({ label, fid: f.fid, type: String(f.type || f.tag || 'text') })
+            }
+          }
         }
       }
       trace.push({ step: 'fill', detail: { filledThisPage } })

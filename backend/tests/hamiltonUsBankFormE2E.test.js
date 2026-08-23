@@ -135,6 +135,63 @@ describe('E2E: the U.S. Bank form shape that blocked in prod (2026-08-22)', () =
     expect(result.blocker_kind ?? null).toBe(null)
   })
 
+  it('a RULE-mis-claimed required <select> falls through to the grounded answerer instead of failing silently (the "hear about our scholarship PROGRAM → major rule" class, 2026-08-23)', async () => {
+    // The live form's survey select: its label contains "program", so
+    // matchFieldKey claims it for the `major` rule and every run tried
+    // selectOption("Forensic Science") — not an option — and failed silently.
+    const page = makeJsdomPortalPage(
+      `<!DOCTYPE html><html><head><title>U.S. Bank Student Scholarship</title></head><body>
+        <form id="application">
+          <label for="fn">First Name</label><input id="fn" name="first_name" type="text" required />
+          <label for="ln">Last Name</label><input id="ln" name="last_name" type="text" required />
+          <label for="em">Email</label><input id="em" name="email" type="email" required />
+          <label for="maj">Major</label><input id="maj" name="major" type="text" />
+          <label for="hear">Where did you hear about our scholarship program?</label>
+          <select id="hear" name="00N60000002Q0ho" required>
+            <option value="">Select</option>
+            <option value="High school">High school</option>
+            <option value="Scholarship finder website">Scholarship finder website</option>
+            <option value="Search engine">Search engine</option>
+          </select>
+          <button type="submit">Submit and continue</button>
+        </form>
+      </body></html>`,
+    )
+    const answerUnknownField = vi.fn(async (f) => (
+      /hear about our scholarship/i.test(String(f.label || ''))
+        ? { value: 'Scholarship finder website', free_text: false, grounded_in: ['portal_survey_answers.heard_about_scholarship_program_via'] }
+        : null
+    ))
+    const result = await runAutopilot({
+      url: 'https://hamilton-submit-fixture.invalid/apply',
+      profile: {
+        ...STUDENT_PROFILE_SHAPE,
+        education: { intended_major: 'Forensic Science' },
+      },
+      authorizations: { ...FULL_AUTH, generate_narratives: true },
+      allowAutoSubmit: true,
+      fullAutomation: true,
+      identityValues: { date_of_birth: '2006-05-14' },
+      beforeSubmit: async () => ({ allow: true, reason: 'authorized', decision: {} }),
+      headless: true,
+      _testPage: page,
+      answerUnknownField,
+    })
+    // The mis-claimed select was answered among the portal's OWN options (the
+    // live DOM is the confirmation page post-submit, so read the run's filled
+    // record, which survives)…
+    const answered = (result.filled_fields || []).find((f) => /^q:Where did you hear/.test(String(f.key)))
+    expect(answered?.value).toBe('Scholarship finder website')
+    expect(answered?.source).toBe('llm_field_answer')
+    // …recorded as an LLM answer that names the rule it was released from…
+    const llm = (result.trace || []).find((t) => t.step === 'llm_field_answer'
+      && /hear about our scholarship/i.test(String(t.detail?.label || '')))
+    expect(llm?.detail?.misclaimed_rule).toBe('major')
+    // …and the run submits instead of failing native validation forever.
+    expect((result.trace || []).map((t) => t.step)).not.toContain('submit_native_validation_failed')
+    expect(result.status).toBe('submitted')
+  })
+
   it('with a profile that declares NO enrollment, the eligibility boxes stay unticked and become named asks', async () => {
     const page = usBankPage()
     const result = await runAutopilot({
