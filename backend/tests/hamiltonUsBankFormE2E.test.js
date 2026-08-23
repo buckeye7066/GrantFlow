@@ -1,6 +1,6 @@
 /**
  * E2E (jsdom, real engine): the EXACT shape of the live run that blocked in
- * prod on 2026-08-22 — Anastasia's U.S. Bank Student Scholarship form.
+ * prod on 2026-08-22 — a real student profile's U.S. Bank Student Scholarship form.
  *
  * The live run solved the captcha and filled 8 fields, then failed the
  * portal's native validation on:
@@ -72,10 +72,10 @@ const FULL_AUTH = {
 }
 
 // The live profile: ONE address blob, no city/state/zip columns, enrolled at MTSU.
-const ANASTASIA_SHAPE = {
+const STUDENT_PROFILE_SHAPE = {
   applicant_type: 'student',
   basic_information: {
-    first_name: 'Anastasia', last_name: 'White',
+    first_name: 'Avery', last_name: 'Stonebrook',
     email: 'applicant@example.org', phone: '4235550100',
     address: '3940 Eveningside Dr. NE \nCleveland, TN 37312',
   },
@@ -88,7 +88,7 @@ describe('E2E: the U.S. Bank form shape that blocked in prod (2026-08-22)', () =
     const beforeSubmit = vi.fn(async () => ({ allow: true, reason: 'authorized', decision: {} }))
     const result = await runAutopilot({
       url: 'https://hamilton-submit-fixture.invalid/apply',
-      profile: ANASTASIA_SHAPE,
+      profile: STUDENT_PROFILE_SHAPE,
       authorizations: FULL_AUTH,
       allowAutoSubmit: true,
       fullAutomation: true,
