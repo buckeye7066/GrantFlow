@@ -79,6 +79,11 @@ export const FINDING_TYPES = Object.freeze({
   HYPERLOCAL_RECALL_MISS: 'hyperlocal_recall_miss',
   INELIGIBLE_MATCH: 'ineligible_match',
   AMOUNT_RECALL_MISS: 'amount_recall_miss',
+  // A source that FAILS the canonical four-gate criteria (REAL / RELATABLE /
+  // COVERS-A-NEED / QUALIFIES) but had nonetheless been admitted to a real
+  // profile's pipeline. Amy removes it via the canonical tombstone at her reap
+  // and DIAGNOSES how it escaped admission so the blind spot can be closed.
+  PIPELINE_GUARD_ESCAPE: 'pipeline_guard_escape',
 })
 
 export const SEVERITY = Object.freeze({
@@ -219,6 +224,17 @@ export const CODE_TARGETS = Object.freeze({
     line: 1,
     severity: SEVERITY.MEDIUM,
     hint: 'Stored candidates carry NO award amounts — the profile\'s pipeline value will read $0 even though recall is fine. If the sources are structured APIs, the adapter is dropping amount fields (map them into amount_min/amount_max). If the sources are web/text, extend extractAwardAmountsFromText with the phrasing seen on these pages (keep it per-award conservative — never program totals). The boot net (enforceGrantAmountBackfill) copies catalog amounts onto pipeline rows, but it cannot invent what ingest never captured.',
+  },
+  // A source that FAILS the canonical four-gate criteria was nonetheless admitted
+  // to a real pipeline — an ADMISSION-gate blind spot. The single choke point
+  // where all four gates should be enforced is admitToPipeline; the SPECIFIC gate
+  // that should have caught THIS row (and the assertion that proves the fix) is
+  // carried per-finding in `evidence.gate_file` / `evidence.assertion`.
+  [FINDING_TYPES.PIPELINE_GUARD_ESCAPE]: {
+    file: 'backend/services/opportunityMatcher.js',
+    line: 244,
+    severity: SEVERITY.HIGH,
+    hint: 'A pipeline source failed the canonical REAL/RELATABLE/COVERS-A-NEED/QUALIFIES criteria but had been admitted — the admission gate (admitToPipeline) let it through. Close the specific gate named in the finding evidence so the class can never be re-admitted; the boot net (enforcePipelinePrecision) and Amy\'s reap audit are the removal NETs, not the fix.',
   },
 })
 

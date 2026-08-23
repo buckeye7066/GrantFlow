@@ -248,6 +248,23 @@ export const FINDING_ACTORS = Object.freeze({
     evidence_key: 'reason',
     note: 'A synthetic profile discovery refused to run is a defect in Amy\'s OWN harness, not in the crawlers.',
   },
+  [FINDING_TYPES.PIPELINE_GUARD_ESCAPE]: {
+    // A source that FAILS the canonical four-gate criteria (REAL / RELATABLE /
+    // COVERS-A-NEED / QUALIFIES) but had been admitted to a real pipeline.
+    // Amy REMOVES it at her reap via the canonical tombstone (auditAllPipelines
+    // → recordDismissal), and this finding is the LEARNING record: it names the
+    // admission-gate blind spot that let it through. That is fundamentally a
+    // GATE fix, not a data knob — a wrong change here can re-admit an award an
+    // applicant cannot receive — so it is CODE_CHANGE on the ELIGIBILITY surface
+    // (`eligibility_gate`), which AUTONOMY_FORBIDDEN keeps out of Amy's
+    // auto-apply lane by construction. The SPECIFIC gate (relatable / qualifies
+    // / covers_need / real) + its file + the proving assertion are carried in
+    // the finding's `evidence` (gate_file / assertion / blind_spot).
+    lever: 'eligibility_gate',
+    emitted: true,
+    evidence_key: 'subjects',
+    note: 'Removal is canonical (recordDismissal tombstone); the residual reaches the owner as a code brief naming the admission gate to close, never an Amy auto-apply.',
+  },
   // ── Declared vocabulary with no detector. Said out loud, not discovered. ──
   [FINDING_TYPES.BAD_MATCH]: {
     lever: 'relevance_precision',

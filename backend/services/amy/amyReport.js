@@ -20,6 +20,7 @@ import { isGenericTitle, isGenericOnly } from '../../config/genericTitleVocabula
 import { AMOUNT_STATUS_NONE_PUBLISHED } from '../awardAmountExtractor.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
 import { titleStatesTerm } from '../../config/profileDerivedFacts.js'
+import { blindSpotForGate } from './pipelineGuardEscapeAudit.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
 const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
@@ -780,6 +781,86 @@ function tally(arr, keyFn) {
  * @param {object} [args.meta] - { startedAt, completedAt, dryRun, options }
  * @returns {object} Anya-compatible report with amy_summary.
  */
+/**
+ * Turn a pipeline guard-escape audit result (from
+ * `pipelineGuardEscapeAudit.runPipelineGuardEscapeAudit`) into evaluation-shaped
+ * records carrying `pipeline_guard_escape` findings — the LEARNING half of the
+ * owner directive.
+ *
+ * ONE evaluation per ESCAPED GATE, so each carries a homogeneous, gate-specific
+ * blind-spot diagnosis (file + assertion). These records slot straight into the
+ * evaluations list `buildApprovalQueue` consumes: its registry-driven totality
+ * pass then mints ONE approval item per gate, at the `pipeline_guard_escape`
+ * class's registered lever (`eligibility_gate` → CODE_CHANGE), and attaches a
+ * code brief. `FINDING_TYPES.PIPELINE_GUARD_ESCAPE` is emitted HERE (in
+ * amyReport.js) so the actor-registry totality test's `emitted:true` grep holds.
+ *
+ * @param {object} auditResult
+ * @returns {Array<object>} evaluation-shaped records (empty when no escapes)
+ */
+export function buildGuardEscapeEvaluations(auditResult) {
+  const audit = auditResult && typeof auditResult === 'object' ? auditResult : null
+  if (!audit || !Array.isArray(audit.escapes) || audit.escapes.length === 0) return []
+
+  const byGate = new Map()
+  for (const esc of audit.escapes) {
+    const gate = String(esc?.gate || 'unknown')
+    const bucket = byGate.get(gate) || { profiles: new Set(), reasons: {}, subjects: [], items: [] }
+    if (esc?.profile_id) bucket.profiles.add(esc.profile_id)
+    const reason = esc?.reason || 'failed'
+    bucket.reasons[reason] = (bucket.reasons[reason] || 0) + 1
+    if (esc?.title) bucket.subjects.push(String(esc.title))
+    bucket.items.push({ profile_id: esc?.profile_id ?? null, title: esc?.title ?? null, reason })
+    byGate.set(gate, bucket)
+  }
+
+  const out = []
+  for (const [gate, b] of byGate.entries()) {
+    const bs = blindSpotForGate(gate)
+    const subjects = [...new Set(b.subjects)].slice(0, 12)
+    const removed = b.items.length
+    const finding = {
+      ...makeFinding(FINDING_TYPES.PIPELINE_GUARD_ESCAPE, {
+        severity: SEVERITY.HIGH,
+        message:
+          `${removed} pipeline source(s) across ${b.profiles.size} real profile(s) FAILED the "${gate}" `
+          + `criterion but had been admitted — a guard-escape (removed via the canonical tombstone). `
+          + `Blind spot: ${bs.blind_spot}. Fix in ${bs.gate_file} (${bs.symbol}); ${bs.assertion}.`,
+        evidence: {
+          gate,
+          gate_file: bs.gate_file,
+          symbol: bs.symbol,
+          blind_spot: bs.blind_spot,
+          assertion: bs.assertion,
+          profiles: b.profiles.size,
+          escapes_removed: removed,
+          reasons: b.reasons,
+          subjects,
+          escapes: b.items.slice(0, 20),
+        },
+      }),
+      // Point the finding at the SPECIFIC gate's source (the totality pass reads
+      // finding.file into `bucket.files`); the code brief still names the
+      // admission choke point via CODE_TARGETS.
+      file: bs.gate_file,
+    }
+    out.push({
+      scenario_id: `guard_escape:${gate}`,
+      category: `guard_escape:${gate}`,
+      profile_id: null,
+      status: 'ok',
+      stored: removed,
+      accepted: 0,
+      review: 0,
+      sources_failed: 0,
+      false_positives: 0,
+      ineligible_accepts: 0,
+      findings: [finding],
+    })
+  }
+  return out
+}
+
 export function buildAnyaHandoff({ runId, evaluations = [], meta = {} }) {
   const allFindings = []
   for (const ev of evaluations) {

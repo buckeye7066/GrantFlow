@@ -301,36 +301,64 @@ function staleTopUp({ ledger, axisIndex, pressure, nowMs, runId, want, seenCells
 }
 
 /**
- * Split the nightly target between the CATALOG FLOOR and adversarial probes.
+ * The THIN catalog hard-floor kept for regression coverage — the number of
+ * catalog profiles reserved BEFORE the adversarial probes take the rest.
  *
- * The catalog floor is not optional: it is the regression suite that proves a
- * previously-fixed archetype stays fixed, and dropping below one-per-category
- * would let breadth collapse in the name of exploration. So the adversarial
- * share is whatever is left AFTER every catalog category keeps its slot.
+ * WHY IT IS THIN NOW (owner directive 2026-08-23): the ADVERSARIAL cohort — the
+ * profiles purposely built to break the system so weaknesses are revealed →
+ * learned → fixed — is the whole point of Amy's nightly run, so it must be the
+ * MAJORITY of the daily target (up to ~50), not a 40% minority. The catalog
+ * floor still exists (a fixed archetype must be proven to STAY fixed, and
+ * coverage must never drop to zero), but it is now a small, rotating hard floor
+ * rather than one reserved slot per category. Env override: `AMY_CATALOG_FLOOR`.
+ */
+export const CATALOG_FLOOR_DEFAULT = 6
+
+/**
+ * Split the nightly target into a THIN catalog floor and an ADVERSARIAL-MAJORITY
+ * probe cohort.
+ *
+ * WAS (until 2026-08-23): the catalog reserved ONE slot per category (~32 of a
+ * 50-cohort) and `AMY_ADVERSARIAL_SHARE` defaulted to 0.4, so a 50-profile night
+ * built only ~18 adversarial probes — the break-the-system cohort was a
+ * minority. NOW: `AMY_ADVERSARIAL_SHARE` defaults to 1.0 and the catalog keeps
+ * only a thin hard floor (`AMY_CATALOG_FLOOR`, default 6, never below 1 while any
+ * category exists — coverage must not hit zero), so the adversarial probes take
+ * the target down to that floor (~44 of 50). Breadth across all categories is
+ * preserved OVER NIGHTS by rotating which categories the thin floor covers, not
+ * by reserving every category every night.
  *
  * @param {object} args {targetCount, catalogCategories, share}
- * @returns {{ catalog:number, adversarial:number, share_effective:number }}
+ * @returns {{ catalog:number, adversarial:number, catalog_floor:number, share_effective:number }}
  */
 export function resolveCohortSplit({ targetCount = 0, catalogCategories = 0, share = null } = {}) {
   const total = Math.max(0, Math.trunc(Number(targetCount) || 0))
-  const floor = Math.max(0, Math.trunc(Number(catalogCategories) || 0))
+  const categories = Math.max(0, Math.trunc(Number(catalogCategories) || 0))
+  // The catalog floor is a THIN hard floor: enough to prove fixed archetypes
+  // stay fixed and to keep coverage above zero, never enough to make catalog the
+  // majority. ≥1 whenever any category exists, capped by AMY_CATALOG_FLOOR, and
+  // never larger than the categories that exist or the total itself.
+  const declaredFloor = Number(process.env.AMY_CATALOG_FLOOR ?? CATALOG_FLOOR_DEFAULT)
+  const floorCap = Number.isFinite(declaredFloor) ? Math.max(0, Math.trunc(declaredFloor)) : CATALOG_FLOOR_DEFAULT
+  const catalogFloor = categories > 0 ? Math.min(categories, total, Math.max(1, floorCap)) : 0
   // TRAP (the same one CLAUDE.md documents for the portal-lifetime seed):
   // `Number(null)` is 0 and IS finite, so a bare `Number.isFinite(Number(share))`
   // reads an ABSENT share as a declared 0 and the adversarial cohort silently
   // becomes empty — the whole feature off, reporting success. Reject
   // null/''/undefined BEFORE coercing.
   const declared = share === null || share === undefined || share === ''
-    ? Number(process.env.AMY_ADVERSARIAL_SHARE ?? 0.4)
+    ? Number(process.env.AMY_ADVERSARIAL_SHARE ?? 1.0)
     : Number(share)
-  const rawShare = Number.isFinite(declared) ? declared : 0.4
+  const rawShare = Number.isFinite(declared) ? declared : 1.0
   const wanted = Math.round(total * Math.max(0, Math.min(1, rawShare)))
-  const adversarial = Math.max(0, Math.min(wanted, total - Math.min(floor, total)))
+  const adversarial = Math.max(0, Math.min(wanted, total - catalogFloor))
   const catalog = total - adversarial
   return {
     catalog,
     adversarial,
+    catalog_floor: catalogFloor,
     share_effective: total > 0 ? Number((adversarial / total).toFixed(4)) : 0,
   }
 }
 
-export default { planGapSeekingProbes, resolveCohortSplit, W_NEW, W_GAP, W_STALE }
+export default { planGapSeekingProbes, resolveCohortSplit, CATALOG_FLOOR_DEFAULT, W_NEW, W_GAP, W_STALE }
