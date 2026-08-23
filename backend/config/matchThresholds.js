@@ -111,6 +111,40 @@ export const NO_NEEDS_TOPICAL_CAP = 13
  */
 export const FIT_EVIDENCE_HALF_CREDIT = 0.5
 
+/**
+ * FULL-SATISFACTION COVERAGE FLOOR (owner directive 2026-08-23, "scoring later").
+ *
+ * The data-point score is matched-credit ÷ the profile's ENTIRE inventory, so a
+ * broadly-eligible fund that states FEW criteria scores LOW even for someone who
+ * FULLY satisfies it: a national patient-assistance fund (PAN, HealthWell,
+ * Modest Needs) that gates on "a qualifying condition + financial need" touches
+ * 1-2 of a ~70-point inventory → 6-10% coverage → REVIEW, never ACCEPT — burying
+ * the funds a disabled/senior/low-income person genuinely qualifies for.
+ *
+ * The cure is a SATISFACTION ratio (Instrumentl's good-fit idea): when a match
+ * satisfies EVERY need the funder STATES (full satisfaction of the criteria that
+ * apply), passes the eligibility + geography gates cleanly, and the profile is
+ * rich enough to calibrate (≥ MIN_CALIBRATED_INVENTORY), its coverage is floored
+ * here so it reaches ACCEPT. This is a floor via Math.max — it NEVER lowers a
+ * higher measured coverage, and it is gated so it can never flood:
+ *   - the funder must STATE ≥1 need (MISSING = NEUTRAL — a stated-nothing fund
+ *     is NOT "fully satisfied by everyone" and is never lifted);
+ *   - the profile must satisfy ALL of them at FULL credit (a partial / fragment
+ *     match does not rise);
+ *   - eligibility/geo must not be a mismatch and no population mismatch may hold;
+ *   - directory/benefit pointers are excluded (the locator rule — a pointer
+ *     never claims ACCEPT).
+ *
+ * 15 lands a lifted match in the GOOD-match band (≥ GOOD_MATCH_SCORE 11, below
+ * STRONG 17) after the 0.8 unknown-eligibility haircut (15×0.8=12) — genuinely
+ * qualifying broad-fund matches surface at ACCEPT, ranked BELOW high-coverage
+ * strong matches, never above them. Reversible via GRANTFLOW_SATISFACTION_FLOOR.
+ */
+export const SATISFACTION_ACCEPT_COVERAGE = (() => {
+  const raw = Number(process.env.GRANTFLOW_SATISFACTION_FLOOR)
+  return Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : 15
+})()
+
 /** Eligibility gate factors (multiplicative). */
 export const ELIG_MATCH_FACTOR = 1.0     // opportunity confirms the profile's applicant type
 export const ELIG_UNKNOWN_FACTOR = 0.8   // opportunity silent / profile untyped — can't verify

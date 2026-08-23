@@ -42,6 +42,38 @@
 // and this gate cannot drift.
 import { safeParseArrayField } from './profileHelpers.js'
 import { FARM_APPLICANT_TOKENS, hasFarmIdentity, isFarmApplicantToken, normalizeApplicantToken } from './eligibility/farmIdentity.js'
+import { getParentChain, resolveProfileType } from './profileTypeRegistry.js'
+
+// Registry roots that mean a person applies (individual-root family) vs an
+// organization applies. Derived from the canonical profileTypeRegistry so a new
+// individual-root type (disabled_adult, senior, medical_need, …) the hand-typed
+// vocabularies below don't enumerate still buckets correctly instead of reading
+// as "profile applicant type missing" — which forces the eligibility-confirmation
+// cap and made EVERY match for a disabled_adult/senior profile REVIEW, never
+// ACCEPT (prod 2026-08-23: disabled_adult 0/42, senior 0/94 accepts fleet-wide).
+const ORG_ROOT_TYPES = new Set([
+  'nonprofit', 'church', 'school', 'institution', 'university', 'public_agency',
+  'government', 'local_government', 'educator', 'public_school', 'school_district',
+  'library', 'organization',
+])
+
+/**
+ * Bucket a profile type by its CANONICAL registry root family. Returns
+ * 'individual' | 'org' | 'business' | 'farm' | null. Consulted only as a
+ * fallback after the hand-typed sets, so it never changes an already-recognized
+ * token — it only rescues individual-root sub-types the sets omit.
+ */
+function bucketByRegistryRoot(token) {
+  const chain = new Set(
+    [resolveProfileType(token), ...getParentChain(token)].filter(Boolean),
+  )
+  if (chain.size === 0) return null
+  if (chain.has('farm')) return 'farm'
+  if (chain.has('business')) return 'business'
+  if ([...ORG_ROOT_TYPES].some((t) => chain.has(t))) return 'org'
+  if (chain.has('individual')) return 'individual'
+  return null
+}
 
 const INDIVIDUAL_LIKE = new Set([
   'individual',
@@ -181,7 +213,11 @@ function bucket(profileType) {
   if (t.startsWith('individual') || t.endsWith('_student') || t === 'family') return 'individual'
   if (t.includes('nonprofit') || t.includes('organization') || t.includes('church') || t.includes('school')) return 'org'
   if (t.includes('business') || t.includes('startup') || t.includes('entrepreneur')) return 'business'
-  return null
+  // Canonical registry root (anti-drift): the hand-typed sets above miss
+  // individual-root types like disabled_adult / senior / medical_need, which
+  // then resolved to NO bucket → 'profile_applicant_type_missing' → the
+  // eligibility-confirmation cap held every one of their matches below ACCEPT.
+  return bucketByRegistryRoot(t)
 }
 
 /**
