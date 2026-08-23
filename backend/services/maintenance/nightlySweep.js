@@ -80,28 +80,14 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     selfHeal = { ok: false, error: err?.message }
   }
 
-  // Per-profile RESULT-coverage self-audit + bounded self-heal. This is the
-  // check the pipeline was missing: it detects profiles that are returning too
-  // few / no funding, students with a named school but no institution-specific
-  // matches, county profiles with no hyperlocal matches, AND surfacing
-  // regressions (matches persisted in a matcher_version the reads don't surface).
-  // Remediable acquisition gaps are healed by re-running discovery (bounded +
-  // gated by COVERAGE_AUTOHEAL_ENABLED); surfacing regressions are logged for a
-  // human/Sam. Best-effort — never blocks the sweep.
-  let coverage = null
-  try {
-    const { runProfileCoverageSweep } = await import('../coverageAudit/profileResultCoverageAudit.js')
-    coverage = await runProfileCoverageSweep(db)
-    log.info('nightly coverage audit complete', {
-      scanned: coverage?.summary?.scanned ?? 0,
-      needs_rediscovery: coverage?.summary?.needs_rediscovery ?? 0,
-      surfacing_regressions: coverage?.summary?.surfacing_regressions ?? 0,
-      healed: coverage?.healed_count ?? 0,
-    })
-  } catch (err) {
-    log.warn('nightly coverage audit failed (non-fatal)', { error: err?.message })
-    coverage = { ok: false, error: err?.message }
-  }
+  // DECOUPLED (2026-08-23): the per-profile RESULT-coverage self-audit
+  // (`runProfileCoverageSweep`) now runs on its OWN freshness-gated,
+  // independently-locked cron (`scheduleProfileCoverageSweep` in server.js),
+  // NOT inside this monolith. Freshness (`coverage_audit_last_run`) is
+  // owner-critical — competitors always show CURRENT results — and it must not
+  // be starved by a slow/stuck step here (self-heal, web-parity, Sam observe).
+  // Its own cron stamps `coverage_audit_last_run` on every completion.
+  const coverage = null
 
   // Google-bar web-parity benchmark: for each golden profile, run a BOUNDED
   // web-search session (≤6 queries × ≤10 results) and score GrantFlow's stored
@@ -156,30 +142,14 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     crawlerResearch = { ran: false, error: err?.message }
   }
 
-  // Award-amount enrichment, at NIGHT-sized bounds. The boot invariant
-  // (enforceAmountEnrichment) reads the funder's own page for active-pipeline
-  // rows with no dollar figure, but its boot budget (10 fetches / 20s) exists
-  // to keep deploys fast — against a ~300-row amount-less active pipeline it
-  // never catches up (Sam's "Pipeline-$ coverage LOW 11%" finding, 2026-07-08).
-  // The nightly window has time: same conservative extractor, same attempted-id
-  // ring (no page is re-fetched), just a real budget. Tune with
-  // NIGHTLY_AMOUNT_ENRICH_LIMIT / NIGHTLY_AMOUNT_ENRICH_TIME_BUDGET_MS; the
-  // pass is skipped entirely when ENFORCE_AMOUNT_ENRICHMENT=0 (the invariant
-  // itself honors that flag). Best-effort — never blocks the sweep.
-  let amountEnrichment = null
-  try {
-    const { enforceAmountEnrichment } = await import('../../startup/enforceInvariants.js')
-    const limit = Math.max(1, Number.parseInt(process.env.NIGHTLY_AMOUNT_ENRICH_LIMIT || '120', 10) || 120)
-    const timeBudgetMs = Math.max(10_000, Number.parseInt(process.env.NIGHTLY_AMOUNT_ENRICH_TIME_BUDGET_MS || '300000', 10) || 300_000)
-    amountEnrichment = await enforceAmountEnrichment(db, { limit, timeBudgetMs })
-    log.info('nightly amount-enrichment pass complete', {
-      scanned: amountEnrichment?.scanned ?? 0,
-      repaired: amountEnrichment?.repaired ?? 0,
-    })
-  } catch (err) {
-    log.warn('nightly amount enrichment failed (non-fatal)', { error: err?.message })
-    amountEnrichment = { ok: false, error: err?.message }
-  }
+  // DECOUPLED (2026-08-23): award-amount enrichment on a real budget
+  // (`enforceAmountEnrichment`) now runs on its OWN freshness-gated,
+  // independently-locked cron (`scheduleAmountEnrichmentSweep` in server.js).
+  // The "how much" (dollar-amount coverage) is exactly the owner-critical
+  // freshness pillar, so it must not depend on this monolith completing — one
+  // slow step here previously starved it for days. Its cron stamps
+  // `amount_enrichment_last_run` on every completion.
+  const amountEnrichment = null
 
   // Gap-email review drafts: when a profile is incomplete, draft a warm "a few
   // quick questions" email (Annie voice) into the owner's mailbox for review.
