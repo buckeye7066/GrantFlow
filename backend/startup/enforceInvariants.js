@@ -4970,6 +4970,307 @@ export async function enforceDeadUrlRepair(db, deps = {}) {
   })
 }
 
+// Application-task statuses that are already terminal — shared by every
+// pipeline purge net below (pipeline_precision, profession_eligibility,
+// non_grant_notice_pipeline) so "cancel the open tasks" means one thing.
+const TERMINAL_TASK_STATUSES = Object.freeze([
+  'submitted', 'completed', 'complete', 'done',
+  'cancelled', 'canceled', 'archived', 'rejected', 'closed',
+])
+
+/**
+ * INVARIANT: every pipeline row MEETS A DECLARED NEED, comes from a REAL,
+ * RELATABLE source, and is one the profile QUALIFIES for (owner order
+ * 2026-08-21, verbatim: "no funding source that does not meet the needs of the
+ * profile, come from real relatable sources, that the profile qualifies for,
+ * will make it to that profile's pipeline. All such funding sources that are
+ * currently on a pipeline will be removed.").
+ *
+ * The per-call gate is `opportunityMatcher.admitToPipeline` (source allowlist,
+ * tombstones, junk chain, NEED_COVERAGE, decision engine — which carries the
+ * applicant-type, stage-of-life, geography, eligibility and aid-preference
+ * gates). This is the NET over rows every pre-gate writer left behind. It runs
+ * Robert's four-gate verifier (services/robert/robertPipelineAudit.js —
+ * RELATABLE / QUALIFIES / COVERS_NEED / REAL) over EVERY profile's pipeline on
+ * every boot, with ONE difference from Robert's manual tool: the REAL gate is
+ * its DETERMINISTIC half only (title-stated sunset, long-past deadline, no URL).
+ * A boot never spends minutes on HEAD requests, and a funder's bad afternoon
+ * must never read as "dead" (the `unverifiable` rule).
+ *
+ * REMOVAL / RE-LABEL (the owner's two halves):
+ *   - An early/discovery-status row that fails a gate is TOMBSTONED
+ *     (pipelineDismissals.recordDismissal — sticky, reversible by a manual
+ *     re-add) and DELETED; its open application tasks are CANCELLED.
+ *   - A PROTECTED row (user-progressed status, protected MTSU/portal name,
+ *     recorded award) is RE-LABELED, never deleted: `eligibility_status =
+ *     'ineligible'` and the failing gate+reason appended to
+ *     `ineligibility_reasons` (columns permitting).
+ *   - The Sasquatch PromoPilot profile is skipped (standing owner instruction).
+ *
+ * ACCOUNTING IS ASSERTED: `scanned === kept + removed + relabeled + failed`
+ * throws (→ ok:false) if it does not hold. Counts are reported PER GATE and
+ * PER REASON, plus the two neutral-silence classes of the need gate
+ * (`needNeutralProfile` — the profile declares no needs; `needNeutralRow` —
+ * the row states no need vocabulary), so a "kept" row can never hide an
+ * unreadable one.
+ *
+ * NO DRY RUN and no disable switch, by owner order (2026-08-13, permanent).
+ * Bound: PIPELINE_PRECISION_LIMIT (2000) limits WRITES per boot, never
+ * discovery — a truncated boot is reported (`truncated: true`).
+ */
+export async function enforcePipelinePrecision(db) {
+  return runInvariant('pipeline_precision', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('profile_id') || !grantCols.has('title') || !grantCols.has('status')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    const oppCols = await listOpportunityColumns(db)
+    // Robert's row loader joins the catalog for the eligibility evidence the
+    // gates need. Without these columns the gates would see bare titles and
+    // report "kept" for everything — the exact blind-sweep class
+    // (pipelineEligibilitySweep, 2026-08-21). Say so instead.
+    const REQUIRED_OPP_COLS = ['entity_types_allowed', 'need_types_supported', 'categories', 'opportunity_kind', 'source_url']
+    const missingOpp = REQUIRED_OPP_COLS.filter((c) => !oppCols.has(c))
+    if (missingOpp.length > 0) {
+      log.warn('pipeline_precision: funding_opportunities lacks gate evidence columns — sweep skipped, NOT green', { missing: missingOpp })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema', missingColumns: missingOpp }
+    }
+
+    let audit
+    try {
+      audit = await import('../services/robert/robertPipelineAudit.js')
+    } catch (err) {
+      log.warn('pipeline_precision: verifier unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES } = audit
+    let cancelApplicationTask = null
+    let recordDismissalFn = null
+    try { ({ cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')) } catch { cancelApplicationTask = null }
+    try { ({ recordDismissal: recordDismissalFn } = await import('../services/pipelineDismissals.js')) } catch { recordDismissalFn = null }
+
+    const limit = _boundedLimit('PIPELINE_PRECISION_LIMIT', 2000)
+    const hasAwarded = grantCols.has('amount_awarded')
+    const hasEligStatus = grantCols.has('eligibility_status')
+    const hasIneligReasons = grantCols.has('ineligibility_reasons')
+    const now = new Date()
+
+    let profileIds = []
+    try {
+      const rows = await db
+        .prepare("SELECT id FROM profiles WHERE (deleted_at IS NULL) AND (status IS NULL OR status <> 'deleted')")
+        .all()
+      profileIds = (rows || []).map((r) => String(r.id))
+    } catch {
+      try {
+        const rows = await db.prepare('SELECT id FROM profiles').all()
+        profileIds = (rows || []).map((r) => String(r.id))
+      } catch { profileIds = [] }
+    }
+
+    let hasTasks = false
+    try { await db.prepare('SELECT id FROM application_tasks LIMIT 1').get(); hasTasks = true } catch { hasTasks = false }
+
+    const counts = {
+      scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0,
+      protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0,
+      harvestFirst: 0, truncated: false, loadFailures: 0, firstLoadError: null,
+    }
+    const byGate = { [GATES.RELATABLE]: 0, [GATES.QUALIFIES]: 0, [GATES.COVERS_NEED]: 0, [GATES.REAL]: 0 }
+    const byReason = {}
+    const affectedProfiles = new Set()
+    const examples = []
+    let writes = 0
+
+    // Robert's row loader does not select amount_awarded (the column is absent
+    // on some test schemas); read it per profile only when it exists.
+    const awardedByGrant = async (profileId) => {
+      if (!hasAwarded) return new Map()
+      try {
+        const rows = await db.prepare('SELECT id, amount_awarded FROM grants WHERE profile_id = ?').all(profileId)
+        return new Map((rows || []).map((r) => [String(r.id), Number(r.amount_awarded) || 0]))
+      } catch { return new Map() }
+    }
+    const isProtectedRow = (row, awarded) => {
+      const status = row.grant_status === null || row.grant_status === undefined ? null : String(row.grant_status).toLowerCase()
+      if (status && PROTECTED_PIPELINE_STATUSES.includes(status)) return true
+      if (PROTECTED_NAME_PATTERN.test(`${row.title ?? ''} ${row.sponsor ?? ''}`)) return true
+      if ((awarded.get(String(row.grant_id)) || 0) > 0) return true
+      return false
+    }
+
+    for (const profileId of profileIds) {
+      let facts
+      try { facts = await loadProfileFacts(db, profileId) } catch (err) {
+        log.warn('pipeline_precision: profile facts failed (non-fatal)', { profileId, error: String(err?.message || err) })
+        continue
+      }
+      if (facts.protectedProfile) { counts.protectedProfilesSkipped += 1; continue }
+      let rows
+      try { rows = await loadPipelineRows(db, profileId) } catch (err) {
+        counts.loadFailures += 1
+        if (!counts.firstLoadError) counts.firstLoadError = String(err?.message || err)
+        log.warn('pipeline_precision: pipeline rows failed', { profileId, error: String(err?.message || err) })
+        continue
+      }
+      if (!rows || rows.length === 0) continue
+      const awarded = await awardedByGrant(profileId)
+      const profileDeclaresNoNeeds = !Array.isArray(facts.needs) || facts.needs.length === 0
+
+      for (const row of rows) {
+        counts.scanned += 1
+        let verdict = null
+        let failedGate = null
+        try {
+          verdict = gateRelatable(row, { now })
+          if (!verdict.pass) failedGate = GATES.RELATABLE
+          if (!failedGate) {
+            verdict = gateQualifies(row, facts)
+            if (!verdict.pass) failedGate = GATES.QUALIFIES
+          }
+          if (!failedGate) {
+            verdict = gateCoversNeed(row, facts)
+            if (!verdict.pass) failedGate = GATES.COVERS_NEED
+            else if (profileDeclaresNoNeeds) counts.needNeutralProfile += 1
+            else if (verdict?.evidence?.detail === 'opportunity_states_no_need_vocabulary') counts.needNeutralRow += 1
+          }
+          if (!failedGate) {
+            const real = gateRealOffline(row, { now })
+            if (real && !real.pass) { verdict = real; failedGate = GATES.REAL }
+          }
+        } catch (err) {
+          counts.failed += 1
+          log.warn('pipeline_precision: gate threw (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
+          continue
+        }
+        if (!failedGate) { counts.kept += 1; continue }
+
+        const reasonKey = `${failedGate}:${verdict?.reason ?? 'failed'}`
+        const detail = verdict?.evidence?.detail ?? verdict?.evidence?.gate ?? null
+        if (verdict?.harvest_first) counts.harvestFirst += 1
+
+        if (writes >= limit) {
+          counts.truncated = true
+          counts.kept += 1 // still in the pipeline this boot — honestly counted as such
+          continue
+        }
+
+        if (isProtectedRow(row, awarded)) {
+          try {
+            if (hasEligStatus && hasIneligReasons) {
+              let existing = []
+              try {
+                const cur = await db.prepare('SELECT ineligibility_reasons FROM grants WHERE id = ?').get(row.grant_id)
+                const raw = cur?.ineligibility_reasons
+                existing = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : [])
+              } catch { existing = [] }
+              if (!Array.isArray(existing)) existing = []
+              const tag = `pipeline_precision:${reasonKey}${detail ? `:${detail}` : ''}`
+              if (!existing.includes(tag)) existing.push(tag)
+              await db
+                .prepare('UPDATE grants SET eligibility_status = ?, ineligibility_reasons = ? WHERE id = ?')
+                .run('ineligible', JSON.stringify(existing), row.grant_id)
+            } else if (hasEligStatus) {
+              await db.prepare('UPDATE grants SET eligibility_status = ? WHERE id = ?').run('ineligible', row.grant_id)
+            } else {
+              throw new Error('grants.eligibility_status column absent — protected row cannot be re-labeled')
+            }
+            writes += 1
+            counts.relabeled += 1
+            byGate[failedGate] = (byGate[failedGate] || 0) + 1
+            byReason[reasonKey] = (byReason[reasonKey] || 0) + 1
+            affectedProfiles.add(profileId)
+          } catch (err) {
+            counts.failed += 1
+            log.warn('pipeline_precision: re-label failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
+          }
+          continue
+        }
+
+        // Early/discovery row: cancel open tasks, tombstone, delete.
+        try {
+          if (hasTasks && cancelApplicationTask) {
+            let taskRows = []
+            try {
+              const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
+              taskRows = await db
+                .prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND grant_id = ? AND (status IS NULL OR status NOT IN (${ph}))`)
+                .all(profileId, row.grant_id, ...TERMINAL_TASK_STATUSES)
+            } catch { taskRows = [] }
+            for (const t of taskRows || []) {
+              try {
+                await cancelApplicationTask(db, t.id, { actorRole: 'system', reason: `Pipeline precision — ${reasonKey}` })
+                counts.tasksCancelled += 1
+              } catch (err) {
+                log.warn('pipeline_precision: task cancel failed (non-fatal)', { task: t.id, error: String(err?.message || err) })
+              }
+            }
+          }
+          if (recordDismissalFn) {
+            await recordDismissalFn(db, {
+              profileId,
+              userId: 'system_pipeline_precision',
+              reason: `pipeline_precision:${reasonKey}`,
+              grantRow: {
+                id: row.grant_id,
+                title: row.title,
+                funder: row.sponsor,
+                deadline: row.deadline,
+                application_url: row.application_url,
+                source_url: row.source_url,
+                funding_opportunity_id: row.funding_opportunity_id,
+              },
+            })
+          }
+          const res = await db.prepare('DELETE FROM grants WHERE id = ?').run(row.grant_id)
+          if (changesOf(res) < 1) throw new Error('delete affected 0 rows')
+          writes += 1
+          counts.removed += 1
+          byGate[failedGate] = (byGate[failedGate] || 0) + 1
+          byReason[reasonKey] = (byReason[reasonKey] || 0) + 1
+          affectedProfiles.add(profileId)
+          if (examples.length < 5) examples.push(`${row.title} [${reasonKey}]`)
+        } catch (err) {
+          counts.failed += 1
+          log.warn('pipeline_precision: removal failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
+        }
+      }
+    }
+
+    const accounted = counts.kept + counts.removed + counts.relabeled + counts.failed
+    if (accounted !== counts.scanned) {
+      throw new Error(
+        `pipeline_precision accounting broken: scanned=${counts.scanned} but kept+removed+relabeled+failed=${accounted}`,
+      )
+    }
+    if (counts.loadFailures > 0 && counts.scanned === 0) {
+      // Every profile's row load threw — a broken SELECT reading as a clean
+      // "scanned 0" is the exact blind-sweep class this net exists to end.
+      throw new Error(
+        `pipeline_precision could not load any pipeline rows (${counts.loadFailures} profile loads failed): ${counts.firstLoadError}`,
+      )
+    }
+    if (counts.scanned === 0) {
+      log.warn('pipeline_precision: no pipeline rows scanned', { profiles: profileIds.length })
+    } else if (counts.removed === 0 && counts.relabeled === 0) {
+      log.warn('pipeline_precision: removed nothing', { scanned: counts.scanned, kept: counts.kept, profiles: profileIds.length })
+    } else {
+      log.info('pipeline_precision: converged profile pipelines', {
+        ...counts, byGate, byReason, profilesAffected: affectedProfiles.size, examples,
+      })
+    }
+    return {
+      ...counts,
+      repaired: counts.removed + counts.relabeled,
+      byGate,
+      byReason,
+      profiles: profileIds.length,
+      profilesAffected: affectedProfiles.size,
+      enforced: true,
+    }
+  })
+}
+
 export async function enforceFunderBackfill(db) {
   return runInvariant('funder_backfill', async () => {
     const grantCols = await listGrantColumns(db)
@@ -5068,11 +5369,6 @@ export async function enforceFunderBackfill(db) {
  * (no writes). Idempotent: a purged grant is gone and a cancelled task is
  * terminal, so a re-run is a no-op.
  */
-const TERMINAL_TASK_STATUSES = Object.freeze([
-  'submitted', 'completed', 'complete', 'done',
-  'cancelled', 'canceled', 'archived', 'rejected', 'closed',
-])
-
 export async function enforceProfileEligibility(db, { resolveSignals = null } = {}) {
   return runInvariant('profession_eligibility', async () => {
     const grantCols = await listGrantColumns(db)
@@ -9671,6 +9967,14 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // shared professionEligibility predicate; conservative (never touches a profile
   // whose field is unknown, or a profession the profile actually practises).
   steps.push(await enforceProfileEligibility(db))
+  // PIPELINE PRECISION (owner order 2026-08-21): every remaining pipeline row
+  // must meet a DECLARED need, come from a REAL/RELATABLE source, and be one
+  // the profile QUALIFIES for — Robert's four-gate verifier run as a boot net
+  // over every profile (deterministic REAL half only). Early-status failures
+  // are tombstoned + deleted; protected rows are RE-LABELED, never deleted.
+  // Runs right after the profession net, before the data-repair steps, so no
+  // repair is wasted on a row this boot removes.
+  steps.push(await enforcePipelinePrecision(db))
   // Pipeline DATA repair: re-copy the funder's name from the linked catalog row
   // (sponsor→funder) wherever naming drift left grants.funder empty; count the
   // un-derivable remainder for observability. Runs after the purge sweeps so it
@@ -9794,6 +10098,16 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       // forbids (funder_behavior_recall). Carried so "linked 0" can be read as
       // "the contract rejected N" rather than as an unexplained empty run.
       ...(s.contractRejected !== undefined ? { contractRejected: s.contractRejected } : {}),
+      // Pipeline precision (owner order 2026-08-21): per-gate + per-reason
+      // removal counts, the re-labeled protected rows, and the two need-gate
+      // silence classes — so the boot summary answers "removed WHAT and WHY",
+      // never a bare repaired total.
+      ...(s.byGate !== undefined ? {
+        removed: s.removed, relabeled: s.relabeled, kept: s.kept,
+        byGate: s.byGate, byReason: s.byReason,
+        needNeutralProfile: s.needNeutralProfile, needNeutralRow: s.needNeutralRow,
+        truncated: s.truncated,
+      } : {}),
       // Result-floor census: the owner-facing number ("how many profiles hold
       // fewer real funding sources than they asked for") plus how many of those
       // have a recorded, evidenced "exhausted" verdict rather than a pending

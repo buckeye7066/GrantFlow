@@ -75,8 +75,11 @@ import {
 } from '../../config/fundingResultFilters.js'
 import { evaluateApplicantTypeEligibility } from '../applicantTypeGate.js'
 import { stageOfLifeConflictForSections } from '../../config/stageOfLifeEligibility.js'
-import { normalizeNeedCategory } from '../profileNormalizer.js'
-import { CANONICAL_NEED_CATEGORIES } from '../../constants/needCategories.js'
+import {
+  declaredNeedsFrom,
+  evaluateDeclaredNeedCoverage,
+  parseMaybeJson,
+} from '../pipelinePrecision.js'
 import { recordDismissal, reconcileDismissedGrants } from '../pipelineDismissals.js'
 import { cleanExtractedText } from '../../utils/htmlTextHygiene.js'
 import { checkUrl as defaultCheckUrl } from '../linkVerificationService.js'
@@ -122,37 +125,51 @@ const DETERMINED_DEAD_CODES = new Set([404, 410])
 // Profile facts
 // ---------------------------------------------------------------------------
 
+// The need vocabulary (canonical registry, structured DECLARED_NEED_FIELDS,
+// "silence is neutral") lives in services/pipelinePrecision.js — the ONE
+// implementation the admission gate (opportunityMatcher Gate 1.9), the boot
+// removal sweep (enforceInvariants.enforcePipelinePrecision) and this audit
+// all consume. Re-encoding it here is how the two halves drift.
+
 /**
- * The CANONICAL need vocabulary, read from the registry rather than hand-typed.
- *
- * `normalizeNeedCategory` is a pass-through for values it does not recognise —
- * it returns `basic_information` for `basic_information` — so using it alone to
- * decide "is this a need?" turns every profile SECTION NAME into a declared
- * need. Measured on the reconstructed queue: the notation Amy would receive
- * listed the profile's unmet needs as `education, housing, food,
- * basic_information, financial_information`. Two of those are table-of-contents
- * entries, and an instruction to go crawl for "financial_information" is the
- * unfillable-ask class this repo already retired once (`lodging` in the
- * disease-lane wishlist).
+ * Derive the facts every gate reads from a profile ROW + its parsed sections.
+ * Pure — the admission gate (which already holds the row + sections in memory)
+ * and the DB-backed `loadProfileFacts` both consume it, so "what the profile
+ * declares" has exactly one reading.
  */
-const CANONICAL_NEED_IDS = new Set(CANONICAL_NEED_CATEGORIES.map((n) => n.id))
+export function deriveProfileFacts(row, sections, { profileId = null } = {}) {
+  const sectionMap = {}
+  for (const [key, value] of Object.entries(sections && typeof sections === 'object' ? sections : {})) {
+    const parsed = parseMaybeJson(value, null)
+    if (parsed && typeof parsed === 'object') sectionMap[key] = parsed
+  }
+  const basic = sectionMap.basic_information ?? sectionMap.basic_info ?? {}
+  const applicantType = row?.applicant_type || row?.primary_type ||
+    basic?.profile_category || basic?.applicant_type || null
 
-function canonicalNeed(value) {
-  if (typeof value !== 'string') return null
-  const normalized = normalizeNeedCategory(value)
-  return normalized && CANONICAL_NEED_IDS.has(normalized) ? normalized : null
-}
+  // States: declared only. A missing state stays NEUTRAL (isRelevantGeo's own
+  // rule) — it must never become a reason to delete someone's funding.
+  const states = []
+  for (const candidate of [basic?.state, basic?.state_code, sectionMap.location_focus?.state, row?.state]) {
+    if (typeof candidate === 'string' && candidate.trim()) states.push(candidate.trim())
+  }
 
-/** Structured fields a profile may declare a NEED in. Never prose. */
-const DECLARED_NEED_FIELDS = Object.freeze([
-  'needs', 'need_categories', 'primary_needs', 'support_needs', 'funding_needs',
-  'item_needs', 'assistance_types',
-])
+  // Needs: STRUCTURED declarations only (services/pipelinePrecision.js).
+  // `buildProfileSignals` mines free text, and free text carries its own
+  // DENIALS ("we do not need housing assistance") — the veteran-gate class
+  // this repo has shipped twice.
+  const needs = declaredNeedsFrom(row, sectionMap)
 
-function parseMaybeJson(value, fallback) {
-  if (value === null || value === undefined) return fallback
-  if (typeof value !== 'string') return value
-  try { return JSON.parse(value) } catch { return fallback }
+  return {
+    profileId: String(profileId ?? row?.id ?? ''),
+    displayName: row?.display_name ?? null,
+    profile: row ?? null,
+    sections: sectionMap,
+    applicantType,
+    states,
+    needs,
+    protectedProfile: PROTECTED_PROFILE_NAME_RX.test(String(row?.display_name ?? '')),
+  }
 }
 
 export async function loadProfileFacts(db, profileId) {
@@ -173,51 +190,7 @@ export async function loadProfileFacts(db, profileId) {
     }
   } catch { /* a degraded deployment may lack the table — never guess */ }
 
-  const basic = sections.basic_information ?? sections.basic_info ?? {}
-  const applicantType = row?.applicant_type || row?.primary_type ||
-    basic?.profile_category || basic?.applicant_type || null
-
-  // States: declared only. A missing state stays NEUTRAL (isRelevantGeo's own
-  // rule) — it must never become a reason to delete someone's funding.
-  const states = []
-  for (const candidate of [basic?.state, basic?.state_code, sections.location_focus?.state, row?.state]) {
-    if (typeof candidate === 'string' && candidate.trim()) states.push(candidate.trim())
-  }
-
-  // Needs: STRUCTURED declarations only. `buildProfileSignals` mines free text,
-  // and free text carries its own DENIALS ("we do not need housing assistance")
-  // — the veteran-gate class this repo has shipped twice.
-  const needs = new Set()
-  const addNeed = (value) => {
-    const canonical = canonicalNeed(value)
-    if (canonical) needs.add(canonical)
-  }
-  for (const field of DECLARED_NEED_FIELDS) {
-    const direct = parseMaybeJson(row?.[field], null)
-    if (Array.isArray(direct)) direct.forEach(addNeed)
-  }
-  for (const section of Object.values(sections)) {
-    if (!section || typeof section !== 'object') continue
-    for (const field of DECLARED_NEED_FIELDS) {
-      const value = section[field]
-      if (Array.isArray(value)) value.forEach(addNeed)
-      else if (typeof value === 'string') addNeed(value)
-    }
-  }
-  for (const key of Object.keys(sections)) addNeed(key)
-  const tags = parseMaybeJson(row?.tags, [])
-  if (Array.isArray(tags)) tags.forEach(addNeed)
-
-  return {
-    profileId: String(profileId),
-    displayName: row?.display_name ?? null,
-    profile: row,
-    sections,
-    applicantType,
-    states,
-    needs: [...needs],
-    protectedProfile: PROTECTED_PROFILE_NAME_RX.test(String(row?.display_name ?? '')),
-  }
+  return deriveProfileFacts(row, sections, { profileId })
 }
 
 // ---------------------------------------------------------------------------
@@ -237,54 +210,95 @@ export async function loadProfileFacts(db, profileId) {
  * flags nothing while reporting success. Every column below was verified to
  * exist before it was written.
  */
-const PIPELINE_ROW_SQL = `
+/** `grants` columns the gates read — [column, alias]. */
+const GRANT_ROW_COLUMNS = Object.freeze([
+  ['id', 'grant_id'], ['profile_id', 'profile_id'], ['funding_opportunity_id', 'funding_opportunity_id'],
+  ['title', 'grant_title'], ['funder', 'funder'], ['status', 'grant_status'], ['deadline', 'grant_deadline'],
+  ['application_url', 'grant_application_url'], ['url', 'grant_url'], ['amount_requested', 'amount_requested'],
+  ['match_score', 'match_score'], ['match_decision', 'match_decision'], ['updated_at', 'updated_at'],
+])
+
+/** `funding_opportunities` columns the gates read — [column, alias]. */
+const OPPORTUNITY_ROW_COLUMNS = Object.freeze([
+  ['title', 'opp_title'], ['sponsor', 'sponsor'], ['description', 'description'],
+  ['eligibility_text', 'eligibility_text'], ['eligibility_bullets', 'eligibility_bullets'],
+  ['entity_types_allowed', 'entity_types_allowed'], ['need_types_supported', 'need_types_supported'],
+  ['categories', 'categories'], ['keywords', 'keywords'], ['opportunity_kind', 'opportunity_kind'],
+  ['opportunity_type', 'opportunity_type'], ['funding_category', 'funding_category'], ['source', 'source'],
+  ['source_url', 'source_url'], ['application_url', 'opp_application_url'], ['apply_url', 'apply_url'],
+  ['final_url', 'final_url'], ['evidence_url', 'evidence_url'], ['external_id', 'external_id'],
+  ['state', 'state'], ['is_national', 'is_national'], ['deadline', 'opp_deadline'],
+  ['deadline_type', 'deadline_type'], ['amount_min', 'amount_min'], ['amount_max', 'amount_max'],
+  ['amount_text', 'amount_text'], ['is_active', 'is_active'], ['link_status', 'link_status'],
+  ['canonical_opportunity_key', 'canonical_opportunity_key'],
+])
+
+/**
+ * Columns that MUST exist for the gates to see any evidence at all. A schema
+ * lacking one of these is reported (thrown), never silently degraded to a
+ * bare-title sweep that "keeps" everything.
+ */
+export const REQUIRED_PIPELINE_ROW_COLUMNS = Object.freeze({
+  grants: ['id', 'profile_id', 'title', 'status'],
+  funding_opportunities: ['title', 'sponsor', 'entity_types_allowed', 'need_types_supported', 'categories', 'opportunity_kind', 'source_url'],
+})
+
+const _columnCache = new WeakMap()
+
+async function listColumns(db, table) {
+  const cached = _columnCache.get(db)
+  if (cached?.[table]) return cached[table]
+  let names
+  try {
+    if ((db?.dialect || 'sqlite') === 'postgres') {
+      const rows = await db
+        .prepare("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?")
+        .all(table)
+      names = new Set((rows || []).map((r) => String(r.column_name)))
+    } else {
+      const rows = await db.prepare(`PRAGMA table_info(${table})`).all()
+      names = new Set((rows || []).map((r) => String(r.name)))
+    }
+  } catch {
+    names = new Set()
+  }
+  _columnCache.set(db, { ...(cached || {}), [table]: names })
+  return names
+}
+
+/**
+ * Build the pipeline-row SELECT from the columns that ACTUALLY EXIST on this
+ * database. Prod Postgres 2026-08-22: `funding_opportunities` has no
+ * `external_id` column, so a hand-written SELECT naming it threw
+ * `column fo.external_id does not exist` for EVERY profile — the manual audit
+ * tool failed outright and a boot net reading it would have logged a warning
+ * and reported "scanned 0" as green. Optional columns are selected as
+ * `NULL AS alias`; REQUIRED ones missing throw with the column named.
+ */
+export async function buildPipelineRowSql(db) {
+  const grantCols = await listColumns(db, 'grants')
+  const oppCols = await listColumns(db, 'funding_opportunities')
+  const missingGrant = REQUIRED_PIPELINE_ROW_COLUMNS.grants.filter((c) => grantCols.size > 0 && !grantCols.has(c))
+  const missingOpp = REQUIRED_PIPELINE_ROW_COLUMNS.funding_opportunities.filter((c) => oppCols.size > 0 && !oppCols.has(c))
+  if (missingGrant.length || missingOpp.length) {
+    throw new Error(
+      `pipeline row evidence columns missing — grants: [${missingGrant.join(', ')}] funding_opportunities: [${missingOpp.join(', ')}]`,
+    )
+  }
+  const pick = (alias, cols, prefix) => cols.map(([col, as]) =>
+    (alias.size === 0 || alias.has(col)) ? `${prefix}.${col} AS ${as}` : `NULL AS ${as}`)
+  const selects = [
+    ...pick(grantCols, GRANT_ROW_COLUMNS, 'g'),
+    ...pick(oppCols, OPPORTUNITY_ROW_COLUMNS, 'fo'),
+  ]
+  return `
   SELECT
-    g.id                        AS grant_id,
-    g.profile_id                AS profile_id,
-    g.funding_opportunity_id    AS funding_opportunity_id,
-    g.title                     AS grant_title,
-    g.funder                    AS funder,
-    g.status                    AS grant_status,
-    g.deadline                  AS grant_deadline,
-    g.application_url           AS grant_application_url,
-    g.url                       AS grant_url,
-    g.amount_requested          AS amount_requested,
-    g.match_score               AS match_score,
-    g.match_decision            AS match_decision,
-    g.updated_at                AS updated_at,
-    fo.title                    AS opp_title,
-    fo.sponsor                  AS sponsor,
-    fo.description              AS description,
-    fo.eligibility_text         AS eligibility_text,
-    fo.eligibility_bullets      AS eligibility_bullets,
-    fo.entity_types_allowed     AS entity_types_allowed,
-    fo.need_types_supported     AS need_types_supported,
-    fo.categories               AS categories,
-    fo.keywords                 AS keywords,
-    fo.opportunity_kind         AS opportunity_kind,
-    fo.opportunity_type         AS opportunity_type,
-    fo.funding_category         AS funding_category,
-    fo.source                   AS source,
-    fo.source_url               AS source_url,
-    fo.application_url          AS opp_application_url,
-    fo.apply_url                AS apply_url,
-    fo.final_url                AS final_url,
-    fo.evidence_url             AS evidence_url,
-    fo.external_id              AS external_id,
-    fo.state                    AS state,
-    fo.is_national              AS is_national,
-    fo.deadline                 AS opp_deadline,
-    fo.deadline_type            AS deadline_type,
-    fo.amount_min               AS amount_min,
-    fo.amount_max               AS amount_max,
-    fo.amount_text              AS amount_text,
-    fo.is_active                AS is_active,
-    fo.link_status              AS link_status,
-    fo.canonical_opportunity_key AS canonical_opportunity_key
+    ${selects.join(',\n    ')}
   FROM grants g
   LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
   WHERE g.profile_id = ?
 `
+}
 
 /**
  * Pipeline statuses a human has ALREADY progressed. Never auto-removed — the
@@ -296,7 +310,8 @@ export const PROTECTED_GRANT_STATUSES = Object.freeze(new Set([
 ]))
 
 export async function loadPipelineRows(db, profileId) {
-  const rows = await db.prepare(PIPELINE_ROW_SQL).all(String(profileId))
+  const sql = await buildPipelineRowSql(db)
+  const rows = await db.prepare(sql).all(String(profileId))
   return (rows || []).map((r) => {
     const title = cleanExtractedText(r.opp_title || r.grant_title || '') || ''
     const sponsor = cleanExtractedText(r.sponsor || r.funder || '') || null
@@ -450,38 +465,29 @@ export function gateQualifies(row, facts) {
  * DELETES — so silence must never remove anyone's funding.
  */
 export function gateCoversNeed(row, facts) {
-  if (!Array.isArray(facts.needs) || facts.needs.length === 0) {
-    return { pass: true, reason: null, evidence: { gate: 'covers_need', detail: 'profile_declares_no_needs_gate_neutral' } }
-  }
-  const supported = new Set()
-  const add = (value) => {
-    const canonical = canonicalNeed(value)
-    if (canonical) supported.add(canonical)
-  }
-  for (const field of ['need_types_supported', 'categories', 'keywords']) {
-    const parsed = parseMaybeJson(row?.[field], null)
-    if (Array.isArray(parsed)) parsed.forEach(add)
-  }
-  add(row?.funding_category)
-  add(row?.opportunity_type)
-
-  // A row that states NO need vocabulary is SILENT, not contrary. Silence is
-  // never a denial — the same rule that stops a recrawl clearing an amount.
-  if (supported.size === 0) {
-    return { pass: true, reason: null, evidence: { gate: 'covers_need', detail: 'opportunity_states_no_need_vocabulary' } }
-  }
-
-  const overlap = facts.needs.filter((n) => supported.has(n))
-  if (overlap.length > 0) {
-    return { pass: true, reason: null, evidence: { gate: 'covers_need', matched: overlap } }
+  // ONE implementation (services/pipelinePrecision.js) shared with the
+  // admission gate and the boot sweep. Silence on either side is neutral and
+  // REPORTED through `detail`, never folded into a bare "kept".
+  const verdict = evaluateDeclaredNeedCoverage(row, facts?.needs)
+  if (verdict.pass) {
+    return {
+      pass: true,
+      reason: null,
+      evidence: {
+        gate: 'covers_need',
+        detail: verdict.detail,
+        ...(verdict.matched.length > 0 ? { matched: verdict.matched } : {}),
+      },
+    }
   }
   return {
     pass: false,
     reason: REJECTION_REASONS.PROFILE_MISMATCH,
     evidence: {
       gate: 'covers_need',
-      profile_needs: facts.needs,
-      opportunity_needs: [...supported],
+      detail: verdict.detail,
+      profile_needs: verdict.profile_needs,
+      opportunity_needs: verdict.opportunity_needs,
     },
   }
 }
@@ -499,7 +505,15 @@ export function gateCoversNeed(row, facts) {
  * separately). A funder having a bad afternoon must not cost an applicant a
  * real grant.
  */
-export async function gateReal(row, { now = new Date(), checkUrl = defaultCheckUrl, attempts = REAL_GATE_MAX_ATTEMPTS } = {}) {
+/**
+ * The DETERMINISTIC half of the REAL gate — the funder's own words say the
+ * program ended, the deadline is long past, or there is no URL at all. No
+ * network. The boot sweep (`enforceInvariants.enforcePipelinePrecision`) runs
+ * ONLY this half: a boot must not spend minutes on HEAD requests, and an outage
+ * during boot must never read as "dead". Returns `null` when this half has
+ * nothing to say (the networked half then decides for Robert).
+ */
+export function gateRealOffline(row, { now = new Date() } = {}) {
   const expired = isClearlyExpiredProgram(row, now)
   if (expired) {
     return { pass: false, reason: REJECTION_REASONS.EXPIRED_DEADLINE, evidence: { gate: 'real', detail: expired } }
@@ -511,11 +525,17 @@ export async function gateReal(row, { now = new Date(), checkUrl = defaultCheckU
       evidence: { gate: 'real', detail: `deadline_passed:${row.deadline}` },
     }
   }
-
   const url = row?.application_url || row?.source_url || null
   if (!url) {
     return { pass: false, reason: REJECTION_REASONS.NO_REAL_URL, evidence: { gate: 'real', detail: 'no_url_to_verify' } }
   }
+  return null
+}
+
+export async function gateReal(row, { now = new Date(), checkUrl = defaultCheckUrl, attempts = REAL_GATE_MAX_ATTEMPTS } = {}) {
+  const offline = gateRealOffline(row, { now })
+  if (offline) return offline
+  const url = row?.application_url || row?.source_url || null
 
   let last = null
   for (let attempt = 1; attempt <= Math.max(1, attempts); attempt += 1) {
@@ -1200,9 +1220,11 @@ export default {
   auditAllPipelines,
   auditProfilePipeline,
   buildAmyNotation,
+  deriveProfileFacts,
   gateCoversNeed,
   gateQualifies,
   gateReal,
+  gateRealOffline,
   gateRelatable,
   isAmyAutonomousLever,
   loadGapNotesForAmy,

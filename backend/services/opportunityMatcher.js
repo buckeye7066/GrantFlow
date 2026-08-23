@@ -37,6 +37,7 @@ import {
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
+import { declaredNeedsFrom, evaluateDeclaredNeedCoverage } from './pipelinePrecision.js'
 import { createLogger } from '../utils/logger.js'
 
 // Directory-style / referral resources must ALWAYS survive filtering (mission
@@ -375,6 +376,36 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         threshold,
         decision: 'REJECT',
       }, decision?.score ?? null)
+    }
+
+    // Gate 1.9: DECLARED-NEED coverage (services/pipelinePrecision.js).
+    // Owner order 2026-08-21: a source reaches a pipeline only if it MEETS A
+    // NEED THE PROFILE DECLARED. The decision engine below deliberately scores
+    // need coverage rather than rejecting on it ("a low score alone is not
+    // hard ineligibility"), so until this gate a row serving only a need the
+    // profile never declared could be admitted on applicant type + geography.
+    // Structured declarations only (never mined prose); silence on EITHER side
+    // is neutral and passes — the profile that declares nothing is one we
+    // cannot read, the row that states no need vocabulary is silent, not
+    // contrary. Reported as `live_reject` so every promotion/sweep sink already
+    // classifies it as terminal.
+    {
+      const declaredNeeds = declaredNeedsFrom(rawProfile, profileSections)
+      const needCoverage = evaluateDeclaredNeedCoverage(opportunity, declaredNeeds)
+      if (!needCoverage.pass) {
+        if (!quiet) log.info(
+          `[opportunityMatcher] Gate:NEED_COVERAGE suppressed "${opportunity?.title}" — profile declares [${needCoverage.profile_needs.join(', ')}], opportunity serves [${needCoverage.opportunity_needs.join(', ')}]`,
+        )
+        return denied('live_reject', {
+          saved: false,
+          reason: `Does not meet a declared need: profile declares [${needCoverage.profile_needs.join(', ')}]; opportunity serves [${needCoverage.opportunity_needs.join(', ')}]`,
+          gate: 'NEED_COVERAGE',
+          matchPercentage: null,
+          threshold,
+          decision: 'REJECT',
+          needCoverage,
+        }, decision?.score ?? null)
+      }
     }
 
     // Run the full decision engine

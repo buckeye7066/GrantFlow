@@ -1214,7 +1214,8 @@ describe('enforceInvariants — runner', () => {
     // + the URL-less pointer-task research-lead repair (#1161 class).
     // + stale match-explain refresh (2026-08-08): linker gate-only stubs
     //   drain scoring_policy_version in place without rebranding matcher_version.
-    expect(summary.ran).toBe(59)
+    // + pipeline_precision (2026-08-22, owner order 2026-08-21).
+    expect(summary.ran).toBe(60)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1299,6 +1300,10 @@ describe('enforceInvariants — runner', () => {
       'profile_result_floor',
       'persisted_match_decision_integrity',
       'profession_eligibility',
+      // PIPELINE PRECISION (owner order 2026-08-21): Robert's four-gate
+      // verifier as a boot net — declared need + real/relatable + qualifies;
+      // early rows tombstoned, protected rows re-labeled.
+      'pipeline_precision',
       'funder_backfill',
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
