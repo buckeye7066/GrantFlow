@@ -192,6 +192,89 @@ describe('E2E: the U.S. Bank form shape that blocked in prod (2026-08-22)', () =
     expect(result.status).toBe('submitted')
   })
 
+  it('landing on the form\'s OWN declared receipt page (retURL) after the click is confirmation evidence (the receipt-silent-portal class, 2026-08-23)', async () => {
+    const FORM_URL = 'https://hamilton-submit-fixture.invalid/apply'
+    const RECEIPT_URL = 'https://hamilton-submit-fixture.invalid/apply/thank-you.html'
+    // The post-click page is BLAND — no acknowledgement text, no reference —
+    // exactly what a web-to-lead retURL landing looks like.
+    const page = makeJsdomPortalPage(
+      `<!DOCTYPE html><html><head><title>Scholarship</title></head><body>
+        <form id="application">
+          <input type="hidden" name="retURL" value="${RECEIPT_URL}" />
+          <label for="fn">First Name</label><input id="fn" name="first_name" type="text" required />
+          <label for="em">Email</label><input id="em" name="email" type="email" required />
+          <button type="submit">Submit and continue</button>
+        </form>
+      </body></html>`,
+      { url: FORM_URL, confirmationHtml: '<h1>Community</h1><p>About our programs.</p>' },
+    )
+    let currentUrl = FORM_URL
+    page.url = () => currentUrl
+    const origWait = page.waitForLoadState
+    page.waitForLoadState = async (...a) => {
+      if (page._submitted()) {
+        currentUrl = RECEIPT_URL
+        // A real retURL landing carries no "submitted" banner — the helper's
+        // default post-click title would trip the acknowledgement detector
+        // and mask the declared-receipt path this test exists to pin.
+        page._doc.title = 'Community'
+      }
+      return origWait(...a)
+    }
+    const result = await runAutopilot({
+      url: FORM_URL,
+      profile: STUDENT_PROFILE_SHAPE,
+      authorizations: FULL_AUTH,
+      allowAutoSubmit: true,
+      fullAutomation: true,
+      beforeSubmit: async () => ({ allow: true, reason: 'authorized', decision: {} }),
+      headless: true,
+      _testPage: page,
+    })
+    const steps = (result.trace || []).map((t) => t.step)
+    expect(steps).toContain('declared_receipt_url')
+    expect(result.status).toBe('submitted')
+    expect(result.confirmation_evidence).toBe('declared_receipt_url')
+  })
+
+  it('bouncing back to the ORIGIN form BLANK with the declared receipt page never reached is a PROVABLE rejection — retry-safe, never quarantined (the expired-captcha class, 2026-08-23)', async () => {
+    const FORM_URL = 'https://hamilton-submit-fixture.invalid/apply'
+    const FORM_BODY = `
+      <form id="application">
+        <input type="hidden" name="retURL" value="https://hamilton-submit-fixture.invalid/apply/thank-you.html" />
+        <label for="fn">First Name</label><input id="fn" name="first_name" type="text" required />
+        <label for="em">Email</label><input id="em" name="email" type="email" required />
+        <button type="submit">Submit and continue</button>
+      </form>`
+    // Post-click "confirmation" = the SAME form, re-rendered blank, same URL.
+    const page = makeJsdomPortalPage(
+      `<!DOCTYPE html><html><head><title>Scholarship</title></head><body>${FORM_BODY}</body></html>`,
+      { url: FORM_URL, confirmationHtml: FORM_BODY },
+    )
+    const origWait = page.waitForLoadState
+    page.waitForLoadState = async (...a) => {
+      // A real rejection-bounce reloads the form page under its own title —
+      // the helper's default post-click title would fabricate an
+      // acknowledgement the portal never showed.
+      if (page._submitted()) page._doc.title = 'Scholarship'
+      return origWait(...a)
+    }
+    const result = await runAutopilot({
+      url: FORM_URL,
+      profile: STUDENT_PROFILE_SHAPE,
+      authorizations: FULL_AUTH,
+      allowAutoSubmit: true,
+      fullAutomation: true,
+      beforeSubmit: async () => ({ allow: true, reason: 'authorized', decision: {} }),
+      headless: true,
+      _testPage: page,
+    })
+    expect(result.status).toBe('blocked')
+    expect(result.blocker_kind).toBe('submit_rejected_bounce')
+    expect(result.provably_not_submitted).toBe(true)
+    expect((result.trace || []).map((t) => t.step)).toContain('submit_rejected_bounce')
+  })
+
   it('with a profile that declares NO enrollment, the eligibility boxes stay unticked and become named asks', async () => {
     const page = usBankPage()
     const result = await runAutopilot({

@@ -2125,6 +2125,27 @@ export async function runAutopilot({
           return { status: 'completed_draft', submit_withheld_reason: boundary?.reason || 'submit_authority_revoked', filled_fields: filled, unanswered_required_fields: unansweredRequiredFields, pages_visited: pagesVisited, trace, logged_in: loggedIn }
         }
         submissionAttemptStarted = true
+        // A CAPTCHA token solved at page-open is often DEAD by click time —
+        // measured live 2026-08-23 (U.S. Bank): the reCAPTCHA was solved at
+        // run start, ~90s of filling followed, and the POST bounced back to a
+        // blank form with no visible error (Google tokens expire ~120s and
+        // are single-use). Re-solve at the boundary whenever a captcha was
+        // present this run, so the token the submit carries is fresh.
+        if (solveCaptcha && captchaAttempted) {
+          trace.push({ step: 'captcha_refresh_attempt' })
+          try {
+            const refreshed = await solveCaptcha(page)
+            trace.push({ step: 'captcha_refresh_result', detail: { solved: Boolean(refreshed?.solved), vendor: refreshed?.vendor || null } })
+          } catch { trace.push({ step: 'captcha_refresh_result', detail: { solved: false } }) }
+        }
+        // The form's own declared receipt page (Salesforce web-to-lead
+        // `retURL` and kin) is the portal telling us what success looks like:
+        // landing there IS confirmation evidence, and bouncing back to the
+        // origin form BLANK proves the POST was rejected.
+        const expectedReceiptUrl = await page.evaluate(
+          () => document.querySelector('form input[name="retURL"]')?.value || null,
+        ).catch(() => null)
+        if (expectedReceiptUrl) trace.push({ step: 'declared_receipt_url', detail: { retURL: String(expectedReceiptUrl).slice(0, 200) } })
         // Submit the application.
         trace.push({ step: 'submit_attempt', detail: { button: submitCandidates[0].text } })
         const beforeUrl = (() => { try { return page.url() } catch { return null } })()
@@ -2193,6 +2214,44 @@ export async function runAutopilot({
         }
         const conf = submitCapture
         const evidence = assessSubmissionEvidence(conf, beforeConfirmation)
+        const normUrl = (u) => { try { const p = new URL(String(u)); return `${p.origin}${p.pathname}`.replace(/\/+$/, '').toLowerCase() } catch { return String(u ?? '').split(/[?#]/)[0].replace(/\/+$/, '').toLowerCase() } }
+        if (!evidence.ok && expectedReceiptUrl && conf?.url && normUrl(conf.url) === normUrl(expectedReceiptUrl)) {
+          // The portal navigated to ITS OWN declared receipt page — that is
+          // the strongest confirmation signal a receipt-silent portal offers.
+          trace.push({ step: 'submitted', detail: { from: beforeUrl, to: conf.url, confirmation_evidence: 'declared_receipt_url' } })
+          return {
+            status: 'submitted',
+            ...retainedSubmitFields(),
+            confirmation_evidence: 'declared_receipt_url',
+            filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+          }
+        }
+        if (!evidence.ok && expectedReceiptUrl && conf?.url && beforeUrl && normUrl(conf.url) === normUrl(beforeUrl)) {
+          // Landed BACK on the origin form with a declared receipt page never
+          // reached. If the form re-rendered BLANK, the POST was provably
+          // rejected server-side (nothing was recorded — a success would have
+          // redirected to retURL) — so a retry is SAFE, not a double-submit
+          // risk. Measured live 2026-08-23: the U.S. Bank form bounces blank
+          // when the captcha token has expired, with no visible error.
+          const bouncedBlank = await page.evaluate(() => {
+            const anchor = document.querySelector('form input[name="retURL"]')
+            const form = anchor ? anchor.form : null
+            if (!form) return false
+            const texts = Array.from(form.querySelectorAll('input[type="text"], input[type="email"], input:not([type])'))
+            return texts.length > 0 && texts.every((el) => !el.value)
+          }).catch(() => false)
+          if (bouncedBlank) {
+            trace.push({ step: 'submit_rejected_bounce', detail: { retURL: String(expectedReceiptUrl).slice(0, 200), url: conf.url } })
+            return {
+              status: 'blocked',
+              blocker_kind: 'submit_rejected_bounce',
+              provably_not_submitted: true,
+              blocker_detail: 'The portal rejected the submission: it returned the ORIGIN form blank and its own declared receipt page (retURL) was never reached — provably NOT submitted, safe to re-run. Most common cause is a CAPTCHA token that aged out between solve and submit; Hamilton now re-solves at the boundary.',
+              ...retainedSubmitFields(),
+              filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+            }
+          }
+        }
         if (!evidence.ok) {
           // Submit was clicked but NO evidence could be captured (no
           // reference, no screenshot). Refuse to claim a submission — hand
