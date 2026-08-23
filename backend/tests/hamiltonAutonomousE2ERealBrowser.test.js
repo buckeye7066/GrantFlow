@@ -25,6 +25,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { runAutopilot } from '../services/hamilton/hamiltonAutopilotEngine.js'
+import { CHROMIUM_CONTAINER_ARGS } from '../services/hamilton/browserLaunch.js'
 
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'c'.repeat(64)
 
@@ -67,7 +68,7 @@ const CONFIRM_HTML = `<!DOCTYPE html><html><head><title>Application submitted</t
 </body></html>`
 
 let browser
-beforeAll(async () => { if (hasBrowser) browser = await chromium.launch({ headless: true }) }, 60_000)
+beforeAll(async () => { if (hasBrowser) browser = await chromium.launch({ headless: true, args: [...CHROMIUM_CONTAINER_ARGS] }) }, 60_000)
 afterAll(async () => { await browser?.close?.() })
 
 async function fixturePage() {
