@@ -102,3 +102,38 @@ describe('start-autopilot: all_ready_sources', () => {
     expect(res.body.queued_count).toBe(1)
   })
 })
+
+// A pipeline mixing an applyable scholarship FORM, an SSA account portal and a
+// grants.gov info page — the exact "13 runs, 1 completed application" shape.
+// Deliberately in updated_at order INFO, PORTAL, FORM so the applyable-first
+// sort has real teeth (the input order is the reverse of the expected output).
+const MIXED = [
+  { id: 'gInfo', funding_opportunity_id: 'oInfo', title: 'Federal grant listing', status: 'interested',
+    fo_source_url: 'https://www.grants.gov/search-results-detail/1', opportunity_kind: 'direct' },
+  { id: 'gPortal', funding_opportunity_id: 'oPortal', title: 'SSDI benefits', status: 'interested',
+    g_application_url: 'https://www.ssa.gov/disability', opportunity_kind: 'benefit' },
+  { id: 'gForm', funding_opportunity_id: 'oForm', title: 'Scholarship Form', status: 'interested',
+    fo_application_url: 'https://cpcc.academicworks.com/opportunities/1', opportunity_kind: 'direct' },
+]
+
+describe('applyability prioritisation', () => {
+  it('ready-sources ranks APPLYABLE first and carries the tier', async () => {
+    const res = await request(appWith(MIXED)).get('/api/hamilton/automation/ready-sources?profile_id=profile-1')
+    expect(res.status).toBe(200)
+    const tiers = res.body.sources.map((s) => s.applyability_tier)
+    // online_form leads, then account_portal, then info_only.
+    expect(tiers[0]).toBe('online_form')
+    expect(res.body.sources[0].is_applyable).toBe(true)
+    expect(tiers).toEqual(['online_form', 'account_portal', 'info_only'])
+  })
+
+  it('auto-submit expands to the APPLYABLE source only when some exist', async () => {
+    const res = await request(appWith(MIXED))
+      .post('/api/hamilton/automation/start-autopilot')
+      .send({ profile_id: 'profile-1', all_ready_sources: true, options: { allow_auto_submit: true } })
+    expect(res.status).toBe(202)
+    // Only the online_form scholarship — never the SSA login or the grants.gov
+    // info page — is handed to auto-submit.
+    expect(res.body.queued_count).toBe(1)
+  })
+})
