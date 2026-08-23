@@ -158,6 +158,7 @@ import {
   recordPortalWallObservation,
 } from '../services/hamilton/hamiltonPortalPolicyRegistry.js'
 import { classifyBlocker, isServerWallSignal } from '../services/hamilton/hamiltonBlockerClassifier.js'
+import { classifyApplyability, applyabilityRank } from '../config/sourceApplyability.js'
 import {
   saveResolvedField,
   listResolvedFields,
@@ -1118,7 +1119,7 @@ router.post('/preflight', async (req, res) => {
   if (selectedSources.length === 0 && req.body?.all_ready_sources === true) {
     // Same helper the "Select all sources" button reads, so the count the
     // owner is shown is exactly the set that runs.
-    for (const src of await listReadySources(req.db, profileId)) selectedSources.push(src)
+    for (const src of await selectAutoSubmitSources(req.db, profileId)) selectedSources.push(src)
     // An empty pipeline is a REASON, not a silent no-op run that reports queued.
     if (selectedSources.length === 0) {
       return res.status(409).json({
@@ -1168,20 +1169,86 @@ async function listReadySources(db, profileId) {
       .get()
     if (probe) categoryFilter = "\n        AND (pipeline_category IS NULL OR LOWER(pipeline_category) <> 'funder_lead')"
   } catch { categoryFilter = '' }
-  const rows = await db.prepare(
-    `SELECT id, funding_opportunity_id, title, status
-       FROM grants
-      WHERE profile_id = ?
-        AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilter}
-      ORDER BY updated_at DESC
-      LIMIT 100`,
-  ).all(profileId)
-  return (Array.isArray(rows) ? rows : []).map((r) => ({
-    grant_id: r.id,
-    opportunity_id: r.funding_opportunity_id || null,
-    title: r.title,
-    current_stage: r.status,
-  }))
+  // Pull the applyability signals (URLs + opportunity_kind + mode) so we can
+  // rank APPLYABLE sources first and carry the tier. A source Hamilton cannot
+  // apply to end-to-end (an account_portal login or an info_only description
+  // page) still surfaces — it just never LEADS, so Hamilton targets the real
+  // application forms first and the auto-submit gate can prefer them. The join
+  // is a LEFT JOIN so a grant with no catalog twin still classifies from its own
+  // columns. Guarded so a pre-migration/degraded schema falls back to a bare
+  // grants read rather than throwing.
+  let rows
+  try {
+    rows = await db.prepare(
+      `SELECT g.id, g.funding_opportunity_id, g.title, g.status,
+              g.application_url AS g_application_url, g.portal_url AS g_portal_url, g.url AS g_url,
+              fo.application_url AS fo_application_url, fo.apply_url AS fo_apply_url,
+              fo.source_url AS fo_source_url, fo.opportunity_kind, fo.application_mode
+         FROM grants g
+         LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+        WHERE g.profile_id = ?
+          AND g.status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilter}
+        ORDER BY g.updated_at DESC
+        LIMIT 100`,
+    ).all(profileId)
+  } catch {
+    // Degraded schema (e.g. prod fo.url drift / missing column): fall back to
+    // the bare grants read so ready-sources never 500s.
+    rows = await db.prepare(
+      `SELECT id, funding_opportunity_id, title, status
+         FROM grants
+        WHERE profile_id = ?
+          AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilter}
+        ORDER BY updated_at DESC
+        LIMIT 100`,
+    ).all(profileId)
+  }
+  const mapped = (Array.isArray(rows) ? rows : []).map((r, idx) => {
+    const source = {
+      application_url: r.g_application_url || r.fo_application_url || null,
+      apply_url: r.fo_apply_url || null,
+      portal_url: r.g_portal_url || null,
+      url: r.g_url || null,
+      source_url: r.fo_source_url || null,
+      opportunity_kind: r.opportunity_kind || null,
+      application_mode: r.application_mode || null,
+      title: r.title || null,
+    }
+    const { tier, isApplyable } = classifyApplyability(source)
+    return {
+      grant_id: r.id,
+      opportunity_id: r.funding_opportunity_id || null,
+      title: r.title,
+      current_stage: r.status,
+      applyability_tier: tier,
+      is_applyable: isApplyable,
+      _rank: applyabilityRank(source),
+      _idx: idx, // preserve the updated_at order as the stable tie-break
+    }
+  })
+  // APPLYABLE sources lead (online_form, then mail_or_pdf), then account_portal,
+  // then info_only — within a tier keep the original updated_at recency order.
+  mapped.sort((a, b) => (a._rank - b._rank) || (a._idx - b._idx))
+  return mapped.map(({ _rank, _idx, ...keep }) => keep)
+}
+
+/**
+ * The set Hamilton's AUTO-SUBMIT ("all_ready_sources") expands to. It PREFERS
+ * applyable sources — an account_portal login or an info_only description page
+ * is never a thing Hamilton can cold-submit, and putting one in front of the
+ * auto-submit gate is exactly the "13 runs, 1 completed application" failure
+ * this addresses. When at least one applyable (online_form / mail_or_pdf) source
+ * exists, ONLY those are handed to auto-submit; when a profile has none, the
+ * full ranked list is returned unchanged (the per-source Hamilton gate still
+ * refuses the unworkable ones) so behaviour never regresses and no source is
+ * hidden from the owner's own view. Set HAMILTON_APPLYABLE_ONLY_AUTOSUBMIT=0 to
+ * fall back to the old "all ready rows" behaviour.
+ */
+async function selectAutoSubmitSources(db, profileId) {
+  const ready = await listReadySources(db, profileId)
+  if (String(process.env.HAMILTON_APPLYABLE_ONLY_AUTOSUBMIT ?? '1') === '0') return ready
+  const applyable = ready.filter((s) => s.is_applyable === true)
+  return applyable.length ? applyable : ready
 }
 
 /** What "Select all sources" will pick, so the count shown is the count run. */
@@ -1216,7 +1283,7 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
   // selected_sources_required guarantee: an empty selection must never
   // silently become "all of them".
   if (selectedSources.length === 0 && req.body?.all_ready_sources === true) {
-    for (const src of await listReadySources(req.db, profileId)) selectedSources.push(src)
+    for (const src of await selectAutoSubmitSources(req.db, profileId)) selectedSources.push(src)
     // An empty pipeline is a REASON, not a silent no-op that reports queued.
     if (selectedSources.length === 0) {
       return res.status(409).json({
