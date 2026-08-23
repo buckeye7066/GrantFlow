@@ -125,6 +125,7 @@ import {
   CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
   controlledBetaBrowserRefusal,
   isControlledBetaSyntheticBrowserUrl,
+  isHamiltonBrowserTargetAllowed,
 } from '../services/hamilton/controlledBetaBrowserPolicy.js'
 import {
   saveCredential,
@@ -1646,8 +1647,18 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
   const portalHost = req.body?.portal_host || req.body?.portalHost
   const loginUrl = req.body?.login_url || req.body?.loginUrl || (portalHost ? `https://${portalHost}/` : null)
   const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
-  if (!isControlledBetaSyntheticBrowserUrl(loginUrl)
-      || normalizedPortalHost !== CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST) {
+  // Co-browse target gate: the reserved synthetic fixture OR any SSRF-safe
+  // public-HTTPS portal — the SAME floor navigation already enforces
+  // (isHamiltonBrowserTargetAllowed). This route previously hard-refused every
+  // real host (fixture-only), which contradicted the owner's standing
+  // instruction (docs/agent-sync/2026-08-20: "Do not re-impose fixture-only
+  // controlled-beta refuse for real public HTTPS") and blocked the side-by-side
+  // co-browse the product's own status endpoint advertises
+  // (real_portal_navigation: true). The SSRF floor is UNCHANGED: private,
+  // loopback, metadata, credentialed, and non-HTTPS targets are still refused —
+  // and the datacenter-wall short-circuit below still fires for hosts we've
+  // learned block our servers.
+  if (!isHamiltonBrowserTargetAllowed(loginUrl)) {
     const refusal = controlledBetaBrowserRefusal()
     return res.status(409).json({
       error: 'cloud_login_start_failed',
