@@ -87,4 +87,27 @@ describe('field answerer — grounding + honesty', () => {
     expect(isGroundedInProfile('Harvard University', evidence)).toBe(false)
     expect(isGroundedInProfile('3.95', evidence)).toBe(false)
   })
+
+  it('an 8MB base64 avatar column can NEVER crowd the applicant facts out of the evidence (the U.S. Bank e2e class, 2026-08-23)', () => {
+    // The measured prod failure: profiles.avatar_data (8.5MB base64) was walked
+    // FIRST, so the cap held nothing but avatar bytes and the answerer
+    // truthfully refused every portal question. Sections must walk first and
+    // space-less blobs must never be emitted.
+    const blob = 'iVBORw0KGgoAAAANSUhEUg'.repeat(400000) // ~8.8MB, no spaces
+    const bundle = {
+      id: 'p1',
+      avatar_data: blob,
+      display_name: 'Test Student',
+      portal_survey_answers: { us_bank_client: 'No' },
+      sections: {
+        portal_survey_answers: { us_bank_client: 'No' },
+        education: { current_institution: 'Middle Tennessee State University' },
+      },
+    }
+    const evidence = buildProfileEvidence(bundle)
+    expect(evidence).toContain('us_bank_client: No')
+    expect(evidence).toContain('Middle Tennessee State University')
+    expect(evidence).not.toContain('iVBORw0KGgo')
+    expect(evidence.length).toBeLessThanOrEqual(12000)
+  })
 })

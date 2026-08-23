@@ -57,13 +57,37 @@ export function fieldLabelOf(field) {
 // can ground on (and the grounding check can scan). Capped so a huge profile
 // cannot blow the prompt budget. Values only — no code, no secrets (identity
 // secrets live in the encrypted vault, not this object).
-export function buildProfileEvidence(profile, cap = 6000) {
+//
+// MEASURED FAILURE THIS GUARDS AGAINST (2026-08-23, the U.S. Bank e2e): the
+// profiles ROW carries an 8.5MB base64 `avatar_data` column, and the old walk
+// emitted it as one line BEFORE any section — so the 6KB cap held nothing but
+// avatar bytes, the model truthfully answered "the profile does not state
+// this" for EVERY portal question, and the answerer was silently neutered for
+// any profile with a stored image. Three rules now hold:
+//   1. CURATED SECTIONS WALK FIRST — the applicant's declared facts can never
+//      be pushed past the cap by a row column.
+//   2. A base64/data-URI blob is not a fact: any space-less leaf > 400 chars
+//      is dropped; ordinary long prose is truncated per-leaf, never dropped.
+//   3. The cap is a budget for FACTS (12KB), not whatever happened to walk
+//      first.
+function evidenceLeaf(value) {
+  const v = String(value).trim()
+  if (!v) return null
+  if (/^data:[a-z]+\//i.test(v)) return null
+  if (v.length > 400 && !v.includes(' ')) return null // base64/hex blob, not prose
+  return v.length > 400 ? `${v.slice(0, 400)}…` : v
+}
+
+export function buildProfileEvidence(profile, cap = 12000) {
   const lines = []
   const walk = (obj, prefix) => {
     if (obj === null || obj === undefined) return
     if (Array.isArray(obj)) {
-      const flat = obj.filter((v) => v !== null && v !== undefined && typeof v !== 'object')
-      if (flat.length) lines.push(`${prefix}: ${flat.map(String).join(', ')}`)
+      const flat = obj
+        .filter((v) => v !== null && v !== undefined && typeof v !== 'object')
+        .map((v) => evidenceLeaf(v))
+        .filter(Boolean)
+      if (flat.length) lines.push(`${prefix}: ${flat.join(', ')}`)
       obj.forEach((v, i) => { if (v && typeof v === 'object') walk(v, `${prefix}[${i}]`) })
       return
     }
@@ -71,10 +95,21 @@ export function buildProfileEvidence(profile, cap = 6000) {
       for (const [k, v] of Object.entries(obj)) walk(v, prefix ? `${prefix}.${k}` : k)
       return
     }
-    const s = String(obj).trim()
+    const s = evidenceLeaf(obj)
     if (s) lines.push(`${prefix}: ${s}`)
   }
-  try { walk(profile, '') } catch { /* best-effort */ }
+  try {
+    const sections = profile?.sections
+    if (sections && typeof sections === 'object' && !Array.isArray(sections)) {
+      for (const [k, v] of Object.entries(sections)) walk(v, k)
+      for (const [k, v] of Object.entries(profile ?? {})) {
+        if (k === 'sections' || k in sections) continue
+        walk(v, k)
+      }
+    } else {
+      walk(profile, '')
+    }
+  } catch { /* best-effort */ }
   return lines.join('\n').slice(0, cap)
 }
 
