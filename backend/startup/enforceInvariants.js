@@ -2362,6 +2362,175 @@ export async function enforceNoSearchEngineApplicationTargets(db) {
 }
 
 /**
+ * INVARIANT: an APPLICATION TARGET is the award's own page, never a LISTING a
+ * crowd of other awards shares (2026-08-23, the owner's Coolidge/Live Más
+ * report on a real student profile).
+ *
+ * THE CLASS, measured in prod: "The Coolidge Scholarship" sat at ACCEPT 100
+ * and "Live Más Scholarship" at ACCEPT 60 — both with application_url
+ * `oregongoestocollege.org/pay/scholarships`, a scholarship LISTING page the
+ * web lane read once and stamped onto every award it extracted (plus a "General
+ * Manager" job posting). Clicking Apply on such a card opens a directory, not
+ * the award; eligibility_text is NULL on all of them, so every downstream gate
+ * honors MISSING = NEUTRAL and the rows read as fully-applyable direct grants.
+ * Fleet-wide: ~500 URLs carry >= 5 distinct award titles each as their "apply"
+ * link (grantwatch.com alone: 264 distinct titles on non-pointer rows).
+ *
+ * THE SIGNATURE IS IN THE DATA, not a keyword list: one URL shared as the
+ * application target by MANY DISTINCT award identities is a hub/listing — the
+ * same insight the canonical-identity u: tier already encodes ("a URL shared
+ * by 2+ identities never decides identity"). Keyword detectors (isListingSurface)
+ * cannot catch these: `/pay/scholarships` contains no listing token, deliberately,
+ * because real award pages say "scholarship" too.
+ *
+ * REPAIR (the enforceNoSearchEngineApplicationTargets posture):
+ *   - hub = a normalized application_url shared by >= SHARED_LISTING_MIN_TITLES
+ *     (5) distinct titles. Threshold chosen from the measured distribution: the
+ *     legitimate shared-host case (tn.gov/collegepays serving HOPE + Promise +
+ *     Lottery) sits at 3 and is untouched.
+ *   - POINTER-kind rows are exempt — a directory's URL honestly IS the listing.
+ *   - TENANT-SLUG portal platforms (academicworks/NGWeb class) are exempt —
+ *     those URLs are load-bearing for umbrella-application governance.
+ *   - On a violating opportunity row: the URL moves to evidence_url (provenance
+ *     preserved, never destroyed) and application_url goes NULL — the row loses
+ *     its false apply signal, routes to resources at read time, and the
+ *     existing URL-rescue net finds the award's REAL page by title+sponsor
+ *     search with liveness verification.
+ *   - On an EARLY-status pipeline grant carrying the same sham target: the URL
+ *     columns are nulled (protected/progressed grants are never touched — the
+ *     record of where a human actually applied must survive).
+ *
+ * OVERRIDE: ENFORCE_SHARED_LISTING_TARGETS=0 for count-only. Bounds:
+ * SHARED_LISTING_MIN_TITLES (5), SHARED_LISTING_REPAIR_LIMIT (2000/boot).
+ */
+export async function enforceSharedListingApplicationTargets(db) {
+  return runInvariant('shared_listing_application_targets', async () => {
+    let TENANT_SLUG_PORTAL_PLATFORMS, isPointerKind
+    try {
+      ;({ TENANT_SLUG_PORTAL_PLATFORMS } = await import('../config/urlRules.js'))
+      ;({ isPointerKind } = await import('../config/opportunityKindClasses.js'))
+    } catch (err) {
+      log.warn('shared_listing_targets: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const minTitles = Math.max(3, Number.parseInt(process.env.SHARED_LISTING_MIN_TITLES || '5', 10) || 5)
+    const limit = _boundedLimit('SHARED_LISTING_REPAIR_LIMIT', 2000)
+    const norm = "LOWER(RTRIM(application_url, '/'))"
+
+    // 1. Hub discovery — a SQL aggregate, never a post-LIMIT filter (#944).
+    let hubs
+    try {
+      hubs = await db
+        .prepare(
+          `SELECT ${norm} AS u, COUNT(DISTINCT LOWER(title)) AS titles
+             FROM funding_opportunities
+            WHERE application_url IS NOT NULL AND title IS NOT NULL
+            GROUP BY ${norm}
+           HAVING COUNT(DISTINCT LOWER(title)) >= ?`,
+        )
+        .all(minTitles)
+    } catch (err) {
+      log.warn('shared_listing_targets: hub query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+    const isTenantPlatformUrl = (u) => {
+      try {
+        const host = new URL(u).hostname.toLowerCase()
+        return (TENANT_SLUG_PORTAL_PLATFORMS || []).some((p) => host === p || host.endsWith(`.${p}`))
+      } catch { return false }
+    }
+    const hubUrls = (hubs || []).map((h) => h.u).filter((u) => u && !isTenantPlatformUrl(u))
+    if (hubUrls.length === 0) return { scanned: 0, repaired: 0, hubs: 0, enforced: true }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_SHARED_LISTING_TARGETS) === false
+    let scanned = 0
+    let repaired = 0
+    let grantsRepaired = 0
+
+    // 2. Opportunity rows carrying a hub URL as their apply target.
+    const CHUNK = 100
+    for (let i = 0; i < hubUrls.length && repaired < limit; i += CHUNK) {
+      const slice = hubUrls.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      let rows
+      try {
+        rows = await db
+          .prepare(
+            `SELECT id, application_url, opportunity_kind FROM funding_opportunities
+              WHERE ${norm} IN (${ph})`,
+          )
+          .all(...slice)
+      } catch { rows = [] }
+      for (const row of rows || []) {
+        const kind = String(row.opportunity_kind ?? '').trim()
+        if (kind && isPointerKind(kind)) continue // a directory's URL IS the listing
+        scanned += 1
+        if (disabled || repaired >= limit) continue
+        try {
+          const res = await db
+            .prepare(
+              `UPDATE funding_opportunities
+                  SET evidence_url = COALESCE(evidence_url, application_url), application_url = NULL
+                WHERE id = ?`,
+            )
+            .run(row.id)
+          repaired += changesOf(res) || 1
+        } catch (err) {
+          log.warn('shared_listing_targets: opportunity repair failed (non-fatal)', { id: row.id, error: String(err?.message || err) })
+        }
+      }
+    }
+
+    // 3. Early-status pipeline grants carrying the same sham target. Protected
+    // (user-progressed) grants are never touched.
+    const grantCols = await listGrantColumns(db)
+    const urlCols = ['application_url', 'url'].filter((c) => grantCols.has(c))
+    if (urlCols.length > 0 && grantCols.has('status')) {
+      const stPh = PURGEABLE_DISCOVERY_STATUSES.map(() => '?').join(', ')
+      for (let i = 0; i < hubUrls.length; i += CHUNK) {
+        const slice = hubUrls.slice(i, i + CHUNK)
+        const ph = slice.map(() => '?').join(', ')
+        for (const col of urlCols) {
+          let rows
+          try {
+            rows = await db
+              .prepare(
+                `SELECT id FROM grants
+                  WHERE LOWER(RTRIM(${col}, '/')) IN (${ph})
+                    AND (status IS NULL OR status IN (${stPh}))`,
+              )
+              .all(...slice, ...PURGEABLE_DISCOVERY_STATUSES)
+          } catch { rows = [] }
+          for (const g of rows || []) {
+            scanned += 1
+            if (disabled) continue
+            try {
+              const res = await db.prepare(`UPDATE grants SET ${col} = NULL WHERE id = ?`).run(g.id)
+              grantsRepaired += changesOf(res) || 1
+            } catch { /* non-fatal */ }
+          }
+        }
+      }
+    }
+
+    if (disabled) {
+      if (scanned > 0) {
+        log.warn('shared-listing application targets present (repair DISABLED via ENFORCE_SHARED_LISTING_TARGETS=0)', {
+          scanned, hubs: hubUrls.length,
+        })
+      }
+      return { scanned, repaired: 0, wouldRepair: scanned, hubs: hubUrls.length, enforced: false }
+    }
+    if (repaired > 0 || grantsRepaired > 0) {
+      log.info('moved shared-listing application targets to evidence (the URL-rescue net finds the real award pages)', {
+        repaired, grantsRepaired, hubs: hubUrls.length,
+      })
+    }
+    return { scanned, repaired, grantsRepaired, hubs: hubUrls.length, enforced: true }
+  })
+}
+
+/**
  * INVARIANT: a row naming a REGISTERED canonical public program (TN Promise /
  * TN Reconnect / TN HOPE — backend/config/canonicalProgramRegistry.js) sends
  * the applicant to the program's OFFICIAL application URL.
@@ -5380,6 +5549,7 @@ export async function enforceProfileEligibility(db, { resolveSignals = null } = 
     // module cycle can't abort the sweep and the SAME predicate the write-path
     // gate uses is reused here (no re-encoding → no drift).
     let professionSignalTextFromSections, resolveProfileProfessions, opportunityLockText, assessProfessionEligibility
+    let detectServiceCommitmentLock, assessServiceCommitmentEligibility, hasDeclaredMilitaryAffiliation
     let cancelApplicationTask = null
     let recordDismissalFn = null
     try {
@@ -5387,6 +5557,9 @@ export async function enforceProfileEligibility(db, { resolveSignals = null } = 
         professionSignalTextFromSections, resolveProfileProfessions,
         opportunityLockText, assessProfessionEligibility,
       } = await import('../services/eligibility/professionEligibility.js'))
+      ;({
+        detectServiceCommitmentLock, assessServiceCommitmentEligibility, hasDeclaredMilitaryAffiliation,
+      } = await import('../services/eligibility/serviceCommitmentEligibility.js'))
     } catch (err) {
       log.warn('profession_eligibility: predicate unavailable (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
@@ -5398,9 +5571,10 @@ export async function enforceProfileEligibility(db, { resolveSignals = null } = 
     const hasAwarded = grantCols.has('amount_awarded')
     const hasEligStatus = grantCols.has('eligibility_status')
 
+    const hasOppLink = grantCols.has('funding_opportunity_id')
     const rows = await db
       .prepare(
-        `SELECT id, profile_id, title, ${hasFunder ? 'funder' : 'NULL AS funder'}, status${hasAwarded ? ', amount_awarded' : ''}
+        `SELECT id, profile_id, title, ${hasFunder ? 'funder' : 'NULL AS funder'}, status${hasAwarded ? ', amount_awarded' : ''}${hasOppLink ? ', funding_opportunity_id' : ''}
            FROM grants WHERE profile_id IS NOT NULL AND title IS NOT NULL`,
       )
       .all()
@@ -5419,16 +5593,31 @@ export async function enforceProfileEligibility(db, { resolveSignals = null } = 
 
     // Resolve a profile's professions from its curated section fields. Injectable
     // for tests via resolveSignals(profileId) → signal text.
+    async function sectionsByKeyFor(profileId) {
+      const sectionsByKey = {}
+      const secs = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+      for (const s of secs || []) sectionsByKey[s.section_key] = s.data
+      return sectionsByKey
+    }
     async function professionsFor(profileId) {
       if (typeof resolveSignals === 'function') {
         return resolveProfileProfessions(await resolveSignals(profileId))
       }
       let sectionsByKey = {}
-      try {
-        const secs = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
-        for (const s of secs || []) sectionsByKey[s.section_key] = s.data
-      } catch { sectionsByKey = {} }
+      try { sectionsByKey = await sectionsByKeyFor(profileId) } catch { sectionsByKey = {} }
       return resolveProfileProfessions(professionSignalTextFromSections(sectionsByKey))
+    }
+    // Military declaration for the service-commitment lock (owner ruling
+    // 2026-08-23: ROTC/academy/enlistment awards REQUIRE a positive declared
+    // affiliation). Returns true/false from a successful sections read; null
+    // when the profile could not be read — an unreadable profile adjudicates
+    // NOTHING (MISSING = NEUTRAL applies to the READ, not the declaration).
+    async function militaryDeclaredFor(profileId) {
+      try {
+        return hasDeclaredMilitaryAffiliation(await sectionsByKeyFor(profileId))
+      } catch {
+        return null
+      }
     }
 
     async function cancelTasksForGrant(profileId, grantId, reason) {
@@ -5460,12 +5649,29 @@ export async function enforceProfileEligibility(db, { resolveSignals = null } = 
     for (const [profileId, grants] of byProfile) {
       let professions
       try { professions = await professionsFor(profileId) } catch { professions = new Set() }
-      // Field unknown / not a recognised profession → never touch this profile.
-      if (!professions || professions.size === 0) continue
+      // Lazy per-profile military read — resolved only when a grant carries a
+      // service-commitment lock, so profiles with none pay nothing.
+      let militaryDeclared
 
       for (const g of grants) {
-        const verdict = assessProfessionEligibility({ itemText: opportunityLockText(g), professions })
-        if (!verdict.ineligible) continue
+        const itemText = opportunityLockText(g)
+        let verdict = null
+        // Profession lock: fires only when the profile's field is recognised
+        // (the both-sides rule — unknown field never rejects).
+        if (professions && professions.size > 0) {
+          const pv = assessProfessionEligibility({ itemText, professions })
+          if (pv.ineligible) verdict = pv
+        }
+        // Service-commitment lock (ROTC / academies / enlistment): a POSITIVE
+        // declared military affiliation is required — owner ruling 2026-08-23.
+        if (!verdict && detectServiceCommitmentLock(itemText)) {
+          if (militaryDeclared === undefined) militaryDeclared = await militaryDeclaredFor(profileId)
+          if (militaryDeclared === false) {
+            const sv = assessServiceCommitmentEligibility({ itemText, declared: false })
+            if (sv.ineligible) verdict = sv
+          }
+        }
+        if (!verdict) continue
         scanned += 1
         if (disabled) continue
 
@@ -5491,6 +5697,16 @@ export async function enforceProfileEligibility(db, { resolveSignals = null } = 
         } else if (hasEligStatus) {
           // Protected/awarded → keep the row (never destroy user work) but mark it.
           try { await db.prepare('UPDATE grants SET eligibility_status = ? WHERE id = ?').run('ineligible', g.id) } catch { /* audit-only */ }
+        }
+        // 3) The stored MATCH row for the same pair makes the identical false
+        // claim ("you can apply to this") on the Funding Sources view and is
+        // replayed verbatim by the persisted-truth policy — remove it with the
+        // pipeline repair so the two surfaces cannot disagree.
+        if (hasOppLink && g.funding_opportunity_id) {
+          try {
+            await db.prepare('DELETE FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id = ?')
+              .run(profileId, g.funding_opportunity_id)
+          } catch { /* match table may be absent in minimal test DBs */ }
         }
         affectedProfiles.add(profileId)
       }
@@ -10149,6 +10365,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
   steps.push(await enforceNoSearchEngineApplicationTargets(db))
+  // Shared-listing net (2026-08-23, the Coolidge/Live Más class): an
+  // application_url shared by >= 5 distinct award titles is a hub/listing,
+  // not the award's page — move it to evidence_url so the URL-rescue net can
+  // find the real page. Runs beside the other URL-target repairs.
+  steps.push(await enforceSharedListingApplicationTargets(db))
   // Canonical-program net: a row naming a registered public program (TN
   // Promise / Reconnect / HOPE) must send the applicant to the program's
   // OFFICIAL application URL — never the program page / blog post / forum

@@ -64,6 +64,7 @@ import {
   enforceConditionLaneMatchScope,
   enforceStageOfLifeMatchScope,
   enforceMissionLaneMatchScope,
+  enforceSharedListingApplicationTargets,
   enforceDeclaredPlaceScopeMatches,
   enforceForeignJurisdictionMatches,
   enforceNonGrantNoticePipeline,
@@ -1217,7 +1218,8 @@ describe('enforceInvariants — runner', () => {
     //   drain scoring_policy_version in place without rebranding matcher_version.
     // + pipeline_precision (2026-08-22, owner order 2026-08-21).
     // + mission_lane_match_scope (2026-08-22, the four-profile measurement).
-    expect(summary.ran).toBe(61)
+    // + shared_listing_application_targets (2026-08-23, Coolidge/Live Más).
+    expect(summary.ran).toBe(62)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1323,6 +1325,9 @@ describe('enforceInvariants — runner', () => {
       'hamilton_stop_recheck',
       'pointer_task_reclassification',
       'no_search_engine_application_targets',
+      // Shared-listing net (2026-08-23, the Coolidge/Live Más class): an apply
+      // URL shared by >= 5 distinct award titles is a hub, not the award page.
+      'shared_listing_application_targets',
       // Right after URL hygiene: a registered canonical program's application
       // target is repointed to its official URL (the "TN Promise opens a
       // paramedic page" class) the same boot the hygiene net runs.
@@ -2894,6 +2899,102 @@ describe('enforceNoDanglingMatches — surface-table hygiene', () => {
   })
 })
 
+// ── Shared-listing application targets (the Coolidge / Live Más class) ───────
+describe('enforceSharedListingApplicationTargets — an apply URL shared by a crowd of titles is a hub, not the award page', () => {
+  const HUB = 'https://oregongoestocollege.example/pay/scholarships'
+  function makeListingDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY, title TEXT, application_url TEXT, evidence_url TEXT, opportunity_kind TEXT
+      );
+      CREATE TABLE grants (
+        id TEXT PRIMARY KEY, profile_id TEXT, title TEXT, status TEXT, url TEXT, application_url TEXT
+      );
+    `)
+    return raw
+  }
+  const insertOpp = (db, id, title, url, kind = null) =>
+    db.prepare('INSERT INTO funding_opportunities (id, title, application_url, opportunity_kind) VALUES (?, ?, ?, ?)')
+      .run(id, title, url, kind)
+  const opp = (db, id) => db.prepare('SELECT application_url, evidence_url FROM funding_opportunities WHERE id = ?').get(id)
+
+  afterEach(() => { delete process.env.ENFORCE_SHARED_LISTING_TARGETS })
+
+  function seedHub(db) {
+    // Five distinct award titles all "applying" at the same listing page —
+    // the measured Coolidge/Live Más shape (plus a job posting, verbatim class).
+    insertOpp(db, 'o-coolidge', 'The Coolidge Scholarship', HUB)
+    insertOpp(db, 'o-livemas', 'Live Más Scholarship', HUB)
+    insertOpp(db, 'o-gm', 'General Manager', HUB)
+    insertOpp(db, 'o-a', 'Ford Opportunity Award', HUB)
+    insertOpp(db, 'o-b', 'Rotary District Scholarship', HUB)
+    // A DIRECTORY row for the same page — its URL honestly IS the listing.
+    insertOpp(db, 'o-dir', 'Oregon Scholarship Directory', HUB, 'DIRECTORY')
+    // A legitimately-shared official host serving THREE programs (collegepays
+    // class) — below the threshold, untouched.
+    for (const [id, t] of [['o-hope', 'HOPE'], ['o-promise', 'TN Promise'], ['o-lottery', 'Lottery Scholarship']]) {
+      insertOpp(db, id, t, 'https://tn.example/collegepays')
+    }
+    // A real award page — unique URL, untouched.
+    insertOpp(db, 'o-real', 'HOPE Scholarship', 'https://tn.example/collegepays/hope-apply')
+  }
+
+  it('moves the sham apply URL to evidence_url on every non-pointer row of a >=5-title hub; the directory row and the 3-title official host are untouched', async () => {
+    const db = makeListingDb()
+    seedHub(db)
+    const res = await enforceSharedListingApplicationTargets(db)
+    expect(res.ok).toBe(true)
+    expect(res.hubs).toBe(1)
+    expect(res.repaired).toBe(5)
+    for (const id of ['o-coolidge', 'o-livemas', 'o-gm', 'o-a', 'o-b']) {
+      const row = opp(db, id)
+      expect(row.application_url, id).toBeNull()
+      expect(row.evidence_url, id).toBe(HUB)
+    }
+    expect(opp(db, 'o-dir').application_url).toBe(HUB)
+    expect(opp(db, 'o-hope').application_url).toBe('https://tn.example/collegepays')
+    expect(opp(db, 'o-real').application_url).toBe('https://tn.example/collegepays/hope-apply')
+    // Converges.
+    expect((await enforceSharedListingApplicationTargets(db)).repaired).toBe(0)
+  })
+
+  it('a tenant-slug portal platform host is exempt (umbrella governance is URL-structural)', async () => {
+    const db = makeListingDb()
+    for (let i = 0; i < 6; i += 1) {
+      insertOpp(db, `o-aw-${i}`, `Endowed Award ${i}`, 'https://school.academicworks.com')
+    }
+    const res = await enforceSharedListingApplicationTargets(db)
+    expect(res.repaired).toBe(0)
+    expect(opp(db, 'o-aw-0').application_url).toBe('https://school.academicworks.com')
+  })
+
+  it('an EARLY-status pipeline grant carrying the hub URL is nulled; a submitted grant is never touched', async () => {
+    const db = makeListingDb()
+    seedHub(db)
+    db.prepare("INSERT INTO grants (id, profile_id, title, status, url, application_url) VALUES ('g-early', 'p1', 'The Coolidge Scholarship', 'discovered', ?, ?)").run(HUB, HUB)
+    db.prepare("INSERT INTO grants (id, profile_id, title, status, url, application_url) VALUES ('g-sub', 'p1', 'Live Más Scholarship', 'submitted', ?, ?)").run(HUB, HUB)
+    await enforceSharedListingApplicationTargets(db)
+    const early = db.prepare("SELECT url, application_url FROM grants WHERE id = 'g-early'").get()
+    const sub = db.prepare("SELECT url, application_url FROM grants WHERE id = 'g-sub'").get()
+    expect(early.url).toBeNull()
+    expect(early.application_url).toBeNull()
+    expect(sub.url).toBe(HUB)
+    expect(sub.application_url).toBe(HUB)
+  })
+
+  it('ENFORCE_SHARED_LISTING_TARGETS=0 counts without writing', async () => {
+    const db = makeListingDb()
+    seedHub(db)
+    process.env.ENFORCE_SHARED_LISTING_TARGETS = '0'
+    const res = await enforceSharedListingApplicationTargets(db)
+    expect(res.enforced).toBe(false)
+    expect(res.repaired).toBe(0)
+    expect(res.wouldRepair).toBeGreaterThan(0)
+    expect(opp(db, 'o-coolidge').application_url).toBe(HUB)
+  })
+})
+
 // ── Profession-eligibility invariant ──────────────────────────────────────────
 import {
   ensureApplicationTaskSchema,
@@ -2959,6 +3060,37 @@ describe('profession eligibility invariant', () => {
     const second = await enforceProfileEligibility(db, { resolveSignals: () => 'paramedic' })
     expect(first.repaired).toBe(1)
     expect(second.repaired).toBe(0)
+  })
+
+  it('a service-commitment award (ROTC) is removed for a profile with NO declared military affiliation, kept for a declared cadet, and its stored match row goes with it (owner ruling 2026-08-23)', async () => {
+    // The real shape: "Army ROTC Scholarships" at ACCEPT 100 for an incoming
+    // freshman whose military_service section says veteran:false and nothing else.
+    db.exec(`
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+      CREATE TABLE profile_opportunity_matches (id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT, match_score REAL, match_decision TEXT);
+    `)
+    insertProfile(db, { id: 'p-fresh', orgId: 'o1', primaryType: 'student' })
+    insertProfile(db, { id: 'p-cadet', orgId: 'o1', primaryType: 'student' })
+    db.prepare("INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('p-fresh', 'military_service', ?)")
+      .run(JSON.stringify({ veteran: false, notes: 'No military affiliation or documentation indicating veteran or ROTC status.' }))
+    db.prepare("INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('p-cadet', 'military_service', ?)")
+      .run(JSON.stringify({ veteran: false, rotc: true }))
+
+    const rotcFresh = insertGrant(db, { profile_id: 'p-fresh', title: 'Army ROTC Scholarships', funder: 'U.S. Army', status: 'discovered', funding_opportunity_id: 'opp-rotc' })
+    const rotcCadet = insertGrant(db, { profile_id: 'p-cadet', title: 'Army ROTC Scholarships', funder: 'U.S. Army', status: 'discovered' })
+    const hope = insertGrant(db, { profile_id: 'p-fresh', title: 'HOPE Scholarship', funder: 'Tennessee Lottery', status: 'discovered' })
+    db.prepare("INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision) VALUES ('m-rotc', 'p-fresh', 'opp-rotc', 100, 'accept')").run()
+    insertTask('t-rotc', 'p-fresh', rotcFresh, 'blocked')
+
+    // Professions unresolved for both — the service gate must fire on its own.
+    const res = await enforceProfileEligibility(db, { resolveSignals: () => '' })
+    expect(res.ok).toBe(true)
+    expect(grantExists(rotcFresh)).toBe(false)
+    expect(taskStatus('t-rotc')).toBe('cancelled')
+    expect(db.prepare("SELECT COUNT(*) n FROM profile_opportunity_matches WHERE id = 'm-rotc'").get().n).toBe(0)
+    // A declared cadet keeps the row; an ordinary scholarship is untouched.
+    expect(grantExists(rotcCadet)).toBe(true)
+    expect(grantExists(hope)).toBe(true)
   })
 
   it('is count-only when ENFORCE_PROFESSION_ELIGIBILITY=0', async () => {

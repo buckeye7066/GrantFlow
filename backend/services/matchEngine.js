@@ -48,6 +48,10 @@ import {
   assessProfessionEligibility,
   opportunityLockText,
 } from './eligibility/professionEligibility.js'
+import {
+  hasDeclaredMilitaryAffiliation,
+  assessServiceCommitmentEligibility,
+} from './eligibility/serviceCommitmentEligibility.js'
 import { isPlaceholderPlaceLabel, placePrefixOfTitle } from '../config/placeholderProfileSignals.js'
 import { isPointerOpportunityRow } from '../config/linkLifecycleKinds.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
@@ -3940,6 +3944,27 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return {
       decision: 'REJECT',
       explanation: `This program is restricted to the ${professionVerdict.lock} profession; the profile's declared field is different.`,
+      reasons,
+    }
+  }
+
+  // Service-commitment awards (ROTC / service academies / enlistment
+  // incentives — the "Army ROTC at ACCEPT 100 for a veteran:false freshman"
+  // class, owner ruling 2026-08-23). Unlike the profession gate, a POSITIVE
+  // declared military affiliation is REQUIRED: the award is a years-long
+  // service obligation, not a demographic, so silence does not admit it. The
+  // lock reads IDENTITY text only; the profile side reads structured
+  // military_service flags + curated identity fields — never free-text notes
+  // (whose denials contain the matched words).
+  const serviceVerdict = assessServiceCommitmentEligibility({
+    itemText: opportunityLockText(opp),
+    declared: hasDeclaredMilitaryAffiliation(professionSections),
+  })
+  if (serviceVerdict.ineligible) {
+    reasons.push(`Service-commitment award (${serviceVerdict.lock}) — the profile declares no military affiliation or intent`)
+    return {
+      decision: 'REJECT',
+      explanation: `This award requires a military service commitment (${serviceVerdict.lock}); the profile declares no military affiliation or intent. Declare one (military service section, or a military career goal) to surface these.`,
       reasons,
     }
   }
