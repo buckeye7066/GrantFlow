@@ -35,6 +35,28 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr \
   && rm -rf /var/lib/apt/lists/*
 
+# postgresql-client-17: provides `pg_dump` for the verified DB backup
+# (backend/services/ops/databaseBackup.js → backupPostgres, `pg_dump -Fc`).
+# WHY THE PGDG REPO, NOT STOCK postgresql-client: the prod Postgres server is
+# v17, and pg_dump REFUSES to dump a server newer than itself — Debian bookworm's
+# stock postgresql-client is v15, so a plain install would put a v15 pg_dump on
+# PATH that aborts with "server version mismatch" (the ENOENT JSON fallback never
+# fires, because the binary DOES exist). Pulling postgresql-client-17 from apt.postgresql.org
+# guarantees a client >= the server. The postgresql-client-common wrapper makes
+# bare `pg_dump` on PATH dispatch to the highest installed major (17), which is
+# exactly what databaseBackup.js spawns. Codename read from /etc/os-release so a
+# future base-image bump keeps pulling the right suite.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+  && install -d /usr/share/postgresql-common/pgdg \
+  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+       -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+  && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo "$VERSION_CODENAME")-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends postgresql-client-17 \
+  && rm -rf /var/lib/apt/lists/*
+
 # Hamilton browser automation (HAMILTON_ENABLE_BROWSER_AUTOMATION): install the
 # chromium browser Playwright drives, plus its OS shared-library dependencies.
 # `playwright` is a production dependency, so node_modules ships the client;
