@@ -180,7 +180,10 @@ router.post('/acquire-sources', adminOnly, async (req, res) => {
     const cfg = getRobertConfig()
     const allowHubs = allowHubsRequested && cfg.acquireAllowHubs
     const deps = allowHubs ? { fetchPage: buildHubPageFetcher(cfg) } : {}
-    return runWithSchedulerLock(db, { lockName: 'robert:source-acquisition', ttlMs: 60 * 60 * 1000, heartbeat: true }, () =>
+    // SHORT ttl + heartbeat: a live run renews its lease every ttl/3 while it
+    // works, but a deploy-killed holder stops renewing and the lock lapses
+    // within one ttl (~5 min) instead of wedging the next run for a full hour.
+    return runWithSchedulerLock(db, { lockName: 'robert:source-acquisition', ttlMs: 5 * 60 * 1000, heartbeat: true }, () =>
       runSourceAcquisitionCycle(db, { profileIds, deps, allowHubDecomposition: allowHubs }))
   }
 

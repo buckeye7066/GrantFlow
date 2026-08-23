@@ -28,6 +28,7 @@ const {
   acquireKnownSources,
   parseOpportunitiesAgainstProfiles,
   parseCatalogForProfiles,
+  cleanupNonQualifyingAcquiredGrants,
   runSourceAcquisitionCycle,
   parseNewProfileAgainstCatalog,
   qualifyForProfile,
@@ -76,7 +77,7 @@ function makeDb() {
   sec.run(STUDENT, 'education', JSON.stringify({ current_institution: 'Middle Tennessee State University', highest_level: 'College Student - Currently in undergraduate program' }))
   sec.run(STUDENT, 'financial_information', JSON.stringify({ needs: ['education'] }))
   sec.run(BIZ, 'basic_information', JSON.stringify({ city: 'Nashville', state: 'TN', profile_category: 'small_business' }))
-  sec.run(BIZ, 'financial_information', JSON.stringify({ needs: ['business_funding'] }))
+  sec.run(BIZ, 'financial_information', JSON.stringify({ needs: ['business'] }))
   return { sqlite, db: wrapSqlite(sqlite) }
 }
 
@@ -181,7 +182,7 @@ describe('robertSourceAcquisition — parse added sources against profiles + aut
     // sources (e.g. small-business grants for Olivia) to existing profiles.
     insertOpp(sqlite, {
       id: 'fo-sbg', title: 'Nashville Small Business Growth Grant', sponsor: 'Metro Nashville',
-      ent: ['small_business'], needs: ['business_funding'], cats: ['business_funding'], kind: 'grant',
+      ent: ['small_business'], needs: ['business'], cats: ['business'], kind: 'grant',
       url: 'https://nashville.gov/programs/small-business-grant/apply',
     })
     // NEWER ProPublica 990 directory rows (the churn that dominates "newest N").
@@ -213,6 +214,37 @@ describe('robertSourceAcquisition — parse added sources against profiles + aut
     expect(summary).toHaveProperty('at')
     expect(summary).toHaveProperty('catalogParse')
     expect(summary).toHaveProperty('acquisition')
+  })
+
+  it('does NOT auto-add a source with no DECLARED-need overlap (positive-need admission bar)', async () => {
+    // A real, student-eligible award that states NO need vocabulary (the shape of
+    // the job-postings / generic rows that flooded Olivia). It qualifies on
+    // type+geo, but auto-add requires a POSITIVE declared-need match.
+    insertOpp(sqlite, {
+      id: 'fo-noneed', title: 'Generic Student Opportunity', sponsor: 'Someone',
+      ent: ['student'], needs: [], cats: [], kind: 'scholarship',
+      url: 'https://example-generic.org/opportunity/apply',
+    })
+    const out = await parseOpportunitiesAgainstProfiles(db, { opportunityIds: ['fo-noneed'] })
+    expect(out.added).toBe(0)
+    expect(out.addedLeads).toBe(0)
+    expect(grantsFor(sqlite, STUDENT)).toHaveLength(0)
+    expect(out.byReason['covers_need:no_positive_declared_match']).toBeGreaterThan(0)
+  })
+
+  it('cleanupNonQualifyingAcquiredGrants removes a no-longer-qualifying acquired row, keeps a qualifier, and never touches a protected (submitted) row', async () => {
+    insertOpp(sqlite, SCHOLARSHIP) // education — matches the student
+    insertOpp(sqlite, { id: 'fo-noneed2', title: 'Generic', sponsor: 'X', ent: ['student'], needs: [], cats: [], kind: 'scholarship', url: 'https://example-generic.org/x/apply' })
+    const ins = sqlite.prepare(`INSERT INTO grants (id, profile_id, funding_opportunity_id, title, funder, status, matcher_version) VALUES (?, ?, ?, ?, ?, ?, 'robert-source-acquisition')`)
+    ins.run('g-keep', STUDENT, SCHOLARSHIP.id, SCHOLARSHIP.title, SCHOLARSHIP.sponsor, 'saved')       // qualifies → kept
+    ins.run('g-drop', STUDENT, 'fo-noneed2', 'Generic', 'X', 'saved')                                  // no need overlap → removed
+    ins.run('g-protected', STUDENT, 'fo-noneed2', 'Generic', 'X', 'submitted')                         // protected → untouched
+
+    const out = await cleanupNonQualifyingAcquiredGrants(db)
+    expect(out.removed).toBe(1)
+    expect(out.protected).toBe(1)
+    const ids = grantsFor(sqlite, STUDENT).map((g) => g.id).sort()
+    expect(ids).toEqual(['g-keep', 'g-protected'])
   })
 
   it('count-only mode adjudicates without writing', async () => {
