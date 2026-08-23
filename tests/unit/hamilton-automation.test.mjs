@@ -360,7 +360,12 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     assert.equal(result.task.mailing_instructions.email, 'grants@local.org')
   })
 
-  it('automates a no_application directory: marks completed without generating files', async () => {
+  // A DIRECTORY with no usable application URL is a POINTER — a research lead,
+  // not a leaf application (the pointer/listing policy). It is refused BEFORE a
+  // task is created, so no task and no files exist. This test previously
+  // asserted the pre-policy contract (a completed no_application task) and had
+  // been red on main since the pointer gate landed.
+  it('a pointer directory with no usable URL is a RESEARCH LEAD: no task, no files', async () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, result_kind, application_mode, funder_name)
@@ -369,6 +374,28 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
       profileId: 'p-A',
       userId: 'u-A',
       source: { opportunity_id: 'opp-dir', current_stage: 'saved' },
+    })
+    assert.equal(result.task, null, 'no leaf application task is created for a pointer')
+    assert.equal(result.skipped, true)
+    assert.equal(result.reason, 'pointer_research_lead')
+    // The refusal is EXPLAINED, not silent — the caller can surface the next step.
+    assert.equal(result.policy.code, 'pointer_research_lead')
+    const docs = db.raw.prepare('SELECT COUNT(*) AS n FROM documents').get()
+    assert.equal(docs.n, 0, 'no packet is generated for a research lead')
+  })
+
+  // The action-packet pathway itself is still reachable for a NON-pointer
+  // source that declares it takes no application — keeping the coverage the
+  // directory case used to provide.
+  it('automates a no_application source: marks completed without generating files', async () => {
+    resetCaches()
+    const db = makeMemoryDb()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name, application_url)
+                    VALUES ('opp-noapp', 'Automatic Tuition Waiver', 'Awarded from institutional records; no application is accepted.', 'no_application', 'TN Dept of Ed', 'https://example.org/waiver')`).run()
+    const result = await automateSingleSource(db, {
+      profileId: 'p-A',
+      userId: 'u-A',
+      source: { opportunity_id: 'opp-noapp', current_stage: 'saved' },
     })
     assert.equal(result.task.automation_type, 'no_application')
     assert.equal(result.task.status, 'completed')
