@@ -121,4 +121,13 @@ describe('run ledger: validation and serialisation', () => {
     expect(got.status).toBe('completed')
     expect(got.result).toEqual({ snapshot: 'xy', ok: true })
   })
+
+  it('the misplaced yana constraint stays dropped from the hamilton table (0186 — the second-CHECK class)', () => {
+    // 2026-08-23: a stale yana_autopilot_runs_status_check (old 8-status list)
+    // sat on hamilton_autopilot_runs BESIDE the canonical CHECK 0185 widened,
+    // so receipt writes still failed while this suite read green — a second
+    // constraint was outside its view. 0186 drops it, idempotently.
+    const sql = read('../db/postgres/migrations/0186_drop_misplaced_yana_status_check.sql')
+    expect(sql).toMatch(/ALTER TABLE hamilton_autopilot_runs\s+DROP CONSTRAINT IF EXISTS yana_autopilot_runs_status_check/)
+  })
 })

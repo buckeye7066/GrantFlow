@@ -2636,7 +2636,55 @@ async function runAutopilotPathway(db, {
     const hasOwnerDocument = Boolean(
       engineResult.confirmation_document_id || engineResult.confirmation_page_document_id,
     )
-    const durableReceipt = hasNewReference || (hasNewAcknowledgement && hasOwnerDocument)
+    // The portal navigating to ITS OWN declared receipt page (the form's
+    // retURL — Salesforce web-to-lead and kin) is the portal's designed
+    // success signal; with an owner-retrievable capture of that landing it is
+    // durable receipt evidence (2026-08-23, the receipt-silent-portal class).
+    const hasReceiptUrlLanding = engineResult.confirmation_evidence === 'declared_receipt_url'
+      && hasOwnerDocument
+    const durableReceipt = hasNewReference || ((hasNewAcknowledgement || hasReceiptUrlLanding) && hasOwnerDocument)
+
+    // A PROVABLE rejection is not an uncertain submission: the engine observed
+    // the portal bounce back to the ORIGIN form re-rendered BLANK while the
+    // form's own declared receipt page was never reached — nothing was
+    // recorded funder-side, so a retry is safe and quarantine would strand a
+    // fixable run forever (measured 2026-08-23: an aged-out captcha token
+    // bounces the U.S. Bank form exactly this way, with no visible error).
+    if (engineResult.status === 'blocked'
+        && engineResult.blocker_kind === 'submit_rejected_bounce'
+        && engineResult.provably_not_submitted === true) {
+      const rejectedTask = await updateApplicationTask(db, task.id, {
+        status: 'blocked',
+        currentStep: 'submit_rejected_bounce',
+        nextRetryAt: null,
+        lastAgentMessage: engineResult.blocker_detail,
+      })
+      await updateAutopilotRun(db, run.id, {
+        status: 'blocked',
+        result: engineResult,
+        blockerKind: 'submit_rejected_bounce',
+        blockerDetail: engineResult.blocker_detail,
+        finishedAt: new Date().toISOString(),
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'blocked',
+        status: 'blocked',
+        step: 'submit_rejected_bounce',
+        message: engineResult.blocker_detail,
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: { autopilot_run_id: run.id, provably_not_submitted: true },
+      }).catch(() => {})
+      return {
+        task: rejectedTask,
+        classification,
+        autopilot_run: run.id,
+        autopilot_result: engineResult,
+        blocked: true,
+        blocker_kind: 'submit_rejected_bounce',
+      }
+    }
 
     // Defense in depth for mocked, legacy, or interrupted engines: a claimed
     // submission is accepted only when the exact stored authorization acquired
