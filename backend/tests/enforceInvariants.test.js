@@ -63,6 +63,7 @@ import {
   enforceCrossProfileMatchPrecision,
   enforceConditionLaneMatchScope,
   enforceStageOfLifeMatchScope,
+  enforceMissionLaneMatchScope,
   enforceDeclaredPlaceScopeMatches,
   enforceForeignJurisdictionMatches,
   enforceNonGrantNoticePipeline,
@@ -1215,7 +1216,8 @@ describe('enforceInvariants — runner', () => {
     // + stale match-explain refresh (2026-08-08): linker gate-only stubs
     //   drain scoring_policy_version in place without rebranding matcher_version.
     // + pipeline_precision (2026-08-22, owner order 2026-08-21).
-    expect(summary.ran).toBe(60)
+    // + mission_lane_match_scope (2026-08-22, the four-profile measurement).
+    expect(summary.ran).toBe(61)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1265,6 +1267,10 @@ describe('enforceInvariants — runner', () => {
       // disease-specific lane's rows reach only a profile that DECLARES the
       // condition.
       'condition_lane_match_scope',
+      // …and its org-side sibling (2026-08-22): a mission lane's rows (pet
+      // charities, sacred places, OVW, Second Chance, LSC) reach only a
+      // profile that DECLARES the mission or carries its identity.
+      'mission_lane_match_scope',
       'student_aid_eligibility',
       // The RECALL direction of the same store: a student's OWN school's aid.
       // Placed before the two hygiene sweeps so the rows it adds are validated
@@ -6033,6 +6039,123 @@ describe('enforceConditionLaneMatchScope — a disease lane reaches only a decla
       // not a condition (GENERIC_HEALTH_DESCRIPTORS, same rule as the planner).
       expect(res.repaired).toBe(6)
       expect(idsOf(db)).toEqual(['m-r-ecf'])
+    } finally { db.close() }
+  })
+})
+
+describe('enforceMissionLaneMatchScope — a mission lane reaches only a declared mission', () => {
+  function makeMissionDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, source TEXT);
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+        match_score REAL, match_decision TEXT, matcher_version TEXT
+      );
+    `)
+    return raw
+  }
+  // REAL registry sources, verbatim junk from the 2026-08-22 four-profile
+  // measurement ("PetSmart Charities grant programs" rank 7 in Axiom BioLabs'
+  // top 10 — the exact row the 2026-08-02 audit named for a church roof).
+  const seed = (db) => {
+    for (const [id, source, title] of [
+      ['o-petsmart', 'petsmart_charities_grants', 'PetSmart Charities grant programs'],
+      ['o-sacred', 'national_fund_sacred_places', 'National Fund for Sacred Places'],
+      ['o-ovw', 'ovw_grants', 'OVW grant programs'],
+      ['o-ecf', 'tn_ecf_choices', 'Employment and Community First CHOICES (ECF CHOICES)'], // NOT a mission lane
+    ]) {
+      db.prepare('INSERT INTO funding_opportunities (id, title, source) VALUES (?, ?, ?)').run(id, title, source)
+    }
+    for (const [mid, pid, oid] of [
+      ['m-ax-pet', 'p-axiom', 'o-petsmart'],
+      ['m-ax-sacred', 'p-axiom', 'o-sacred'],
+      ['m-ax-ovw', 'p-axiom', 'o-ovw'],
+      ['m-ax-ecf', 'p-axiom', 'o-ecf'],
+      ['m-ch-pet', 'p-church', 'o-petsmart'],
+      ['m-ch-sacred', 'p-church', 'o-sacred'],
+      ['m-re-pet', 'p-rescue', 'o-petsmart'],
+      ['m-u-pet', 'p-unreadable', 'o-petsmart'],
+    ]) {
+      db.prepare(
+        `INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+         VALUES (?, ?, ?, 42, 'review', 'crawler-os')`,
+      ).run(mid, pid, oid)
+    }
+  }
+  const theses = {
+    // A biotech lab: generic org identity + coarse org needs — no mission.
+    'p-axiom': { needs: ['research', 'equipment', 'capacity_building'], applicant_types: ['nonprofit', 'business'] },
+    // A congregation: distinctive `church` identity keeps sacred places; the
+    // pet charity still goes (the church-roof verbatim).
+    'p-church': { needs: ['capital', 'operations'], applicant_types: ['church', 'nonprofit'] },
+    // An animal rescue: its needs name the mission (via its own type-derived
+    // set) even with only generic applicant tokens.
+    'p-rescue': { needs: ['animal_welfare', 'equipment'], applicant_types: ['nonprofit'] },
+    'p-unreadable': null, // thesis unavailable → NEUTRAL
+  }
+  const resolveThesis = async (db, pid) => {
+    const t = theses[pid]
+    if (t === null) throw new Error('profile unreadable')
+    return t
+  }
+  const idsOf = (db) =>
+    db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+
+  afterEach(() => { delete process.env.ENFORCE_MISSION_LANE_SCOPE })
+
+  it('purges mission-lane rows for a profile with no such mission; keeps mission identity, mission need, and every non-mission lane', async () => {
+    const db = makeMissionDb()
+    try {
+      seed(db)
+      const res = await enforceMissionLaneMatchScope(db, { resolveThesis })
+      // Axiom: petsmart + sacred + ovw purged; ECF CHOICES never a candidate.
+      // Church: sacred kept (church identity), petsmart purged.
+      // Rescue: petsmart kept (animal_welfare declared).
+      expect(res.repaired).toBe(4)
+      expect(res.profilesSkipped).toBe(1)
+      expect(idsOf(db)).toEqual(['m-ax-ecf', 'm-ch-sacred', 'm-re-pet', 'm-u-pet'])
+      // Converges.
+      expect((await enforceMissionLaneMatchScope(db, { resolveThesis })).repaired).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('MISSING = NEUTRAL: an unreadable thesis or a non-array needs adjudicates nothing', async () => {
+    const db = makeMissionDb()
+    try {
+      seed(db)
+      const neutral = async () => ({ needs: undefined, applicant_types: ['nonprofit'] })
+      const res = await enforceMissionLaneMatchScope(db, { resolveThesis: neutral })
+      expect(res.repaired).toBe(0)
+      expect(idsOf(db)).toHaveLength(8)
+    } finally { db.close() }
+  })
+
+  it('ENFORCE_MISSION_LANE_SCOPE=0 counts without deleting', async () => {
+    const db = makeMissionDb()
+    try {
+      seed(db)
+      process.env.ENFORCE_MISSION_LANE_SCOPE = '0'
+      const off = await enforceMissionLaneMatchScope(db, { resolveThesis })
+      expect(off.enforced).toBe(false)
+      expect(off.repaired).toBe(0)
+      expect(off.wouldRepair).toBe(4)
+      expect(idsOf(db)).toHaveLength(8)
+
+      delete process.env.ENFORCE_MISSION_LANE_SCOPE
+      expect((await enforceMissionLaneMatchScope(db, { resolveThesis })).repaired).toBe(4)
+    } finally { db.close() }
+  })
+
+  it('generic `nonprofit`/`government` identity never claims a mission lane (the admission tokens that caused the defect)', async () => {
+    const db = makeMissionDb()
+    try {
+      seed(db)
+      const genericOrg = async () => ({ needs: ['programs', 'operations', 'capital'], applicant_types: ['nonprofit', 'government'] })
+      const res = await enforceMissionLaneMatchScope(db, { resolveThesis: genericOrg })
+      // Every mission-lane row goes; ECF CHOICES survives.
+      expect(res.repaired).toBe(7)
+      expect(idsOf(db)).toEqual(['m-ax-ecf'])
     } finally { db.close() }
   })
 })

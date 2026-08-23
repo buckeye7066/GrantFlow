@@ -150,6 +150,39 @@ test('ported live extraction is conservative: program-keyword anchors only, bloc
   assert.equal(loan.is_loan, true, '...but flagged is_loan so the reality gate applies the profile preference');
 });
 
+test('site-section anchors are refused (2026-08-22: 8 of one member\'s top 10 were TennCare nav pages sharing ONE program keyword)', () => {
+  const source = getSource('tn_ecf_choices');
+  const adapter = createEcfChoicesAdapter();
+  // The verbatim junk from the four-profile measurement, each of which PASSES
+  // the keyword floor ('Program Integrity' ⊃ program, 'Member Benefit Table' ⊃
+  // benefit, 'Reimbursement Information…' ⊃ reimbursement, '…State Plan Public
+  // Notices' ⊃ waiver) — plus the page's real programs, which must survive.
+  const html = `
+    <html><body>
+      <a href="/tenncare/program-integrity.html">Program Integrity</a>
+      <a href="/tenncare/public-notices.html">Waiver and State Plan Public Notices</a>
+      <a href="/tenncare/rhc-fqhc.html">Reimbursement Information for RHC and FQHC Providers</a>
+      <a href="/tenncare/benefit-table.html">Member Benefit Table program guide</a>
+      <a href="/tenncare/facilities.html">Programs and Facilities</a>
+      <a href="/tenncare/member-handbook.html">Member Handbook for benefit members</a>
+      <a href="/tenncare/essential-family-supports.html">Essential Family Supports program</a>
+      <a href="/tenncare/katie-beckett.html">Katie Beckett Program benefits</a>
+    </body></html>`;
+  const parsed = parse('html', html, ecfLiveParseCfg());
+  const titles = parsed.candidates
+    .map((raw) => adapter.mapCandidate(raw, { source }))
+    .filter(Boolean)
+    .map((c) => c.title);
+  assert.ok(!titles.some((t) => /program integrity/i.test(t)), 'Program Integrity refused');
+  assert.ok(!titles.some((t) => /public notices/i.test(t)), 'State Plan Public Notices refused');
+  assert.ok(!titles.some((t) => /reimbursement information/i.test(t)), 'provider reimbursement page refused');
+  assert.ok(!titles.some((t) => /benefit table/i.test(t)), 'Member Benefit Table refused');
+  assert.ok(!titles.some((t) => /programs and facilities/i.test(t)), 'Programs and Facilities refused');
+  assert.ok(!titles.some((t) => /member handbook/i.test(t)), 'Member Handbook refused');
+  assert.ok(titles.includes('Essential Family Supports program'), 'a real program still survives');
+  assert.ok(titles.includes('Katie Beckett Program benefits'), 'a real program still survives');
+});
+
 test('curated program candidate is honest: kind BENEFIT, rolling enrollment, official URL, no amounts', () => {
   const source = getSource('tn_ecf_choices');
   const adapter = createEcfChoicesAdapter();

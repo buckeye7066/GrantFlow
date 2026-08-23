@@ -70,6 +70,22 @@ const LIVE_LINK_BLOCKLIST = [
   /\/feedback/i,
   /\/translate/i,
   /\/help-?center/i,
+  // Site-section / administrative pages measured in prod 2026-08-22: 8 of one
+  // member's top 10 were TennCare site chrome admitted because each shared ONE
+  // program keyword ('Program Integrity' ⊃ program, 'Member Benefit Table' ⊃
+  // benefit, 'Reimbursement Information for RHC and FQHC Providers' ⊃
+  // reimbursement — the #937 one-shared-word floor). These are pages a member
+  // cannot apply to. Mirrors config/fundingResultFilters.SITE_SECTION_PAGE_
+  // PATTERNS (crawler-os stays self-contained, so the vocabulary is restated
+  // here; the canonical chain is the fleet-wide net behind this gate).
+  /\bprogram integrity\b/i,
+  /\bpublic notices?\b/i,
+  /\bstate plan\b/i,
+  /\breimbursement information\b/i,
+  /\bbenefits? table\b/i,
+  /\bprograms? and facilities\b/i,
+  /\bmember handbook\b/i,
+  /\binformation for\b.{0,40}\bproviders\b/i,
 ];
 
 // Loan-product detector (legacy isLoan): flag, never silently drop — the
