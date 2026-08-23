@@ -152,7 +152,7 @@ function isAwardableRow(row, nowMs = Date.now()) {
  * @param {object} input.thesis            { is_student, schools[], location:{county} }
  * @param {number} [input.floor]
  */
-export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [], unsurfacedCount = 0, thesis = {}, floor = DEFAULT_MIN_SCORE, nowMs = Date.now(), resultTarget = null, configuration = null }) {
+export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [], unsurfacedCount = 0, thesis = {}, floor = DEFAULT_MIN_SCORE, nowMs = Date.now(), resultTarget = null, configuration = null, isRowApplyable = null, isRowTypeAppropriate = null, applyableFloor = null }) {
   const qualifying = surfacedRows.filter((r) => qualifiesForDisplay(r, floor))
   // ACTIONABLE = qualifying rows a client could still apply to: not a templated
   // geo-stub and not past deadline. Acquisition gaps (institution / hyperlocal /
@@ -165,6 +165,22 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   const geo_stub_count = qualifying.filter((r) => isTemplatedGeoStub(r)).length
   const deadline_passed_count = qualifying.filter((r) => isDeadlinePassed(r, nowMs)).length
   const pointer_count = actionable.length - awardable.length
+  // APPLYABLE + TYPE-APPROPRIATE (initiative agent #3): of the AWARDABLE rows,
+  // how many are BOTH a thing you can fill out an application for (#2's
+  // `classifyApplyability` — not `info_only`) AND belong to one of this
+  // profile's archetypes (#1 — a scholarship for a student, a small-business
+  // grant for a business, a hardship fund for an individual need)? This is the
+  // honest "does this profile have real things it can APPLY to that fit its
+  // type?" number. MISSING = NEUTRAL: when the two predicates are not injected
+  // (older callers, deps #1/#2 unavailable) the count is `null` — UNKNOWN, never
+  // 0 — and the applyable floor below can never fire on it.
+  const hasApplyabilityInputs = typeof isRowApplyable === 'function' && typeof isRowTypeAppropriate === 'function'
+  const applyableTypedRows = hasApplyabilityInputs
+    ? awardable.filter((r) => {
+        try { return isRowApplyable(r) && isRowTypeAppropriate(r) } catch { return false }
+      })
+    : null
+  const surfaced_applyable_typed = applyableTypedRows ? applyableTypedRows.length : null
   const gaps = []
 
   // 1. Surfacing regression (CODE bug — not crawl-remediable).
@@ -215,6 +231,22 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   const result_shortfall = below_result_target ? result_target - awardable.length : 0
   if (below_result_target) gaps.push(`result_floor_shortfall:${awardable.length}_of_${result_target}`)
 
+  // 4c. THE PER-TYPE APPLYABLE FLOOR (initiative agent #3). Distinct from the
+  //     awardable floor: it counts only rows the profile can APPLY to that fit
+  //     its TYPE, and a shortfall becomes a directive to run THAT type's
+  //     archetypes (seed the known sources, run the query patterns). An
+  //     unconfigured profile is never below it (same reason as the awardable
+  //     floor), and MISSING = NEUTRAL — a null count never fires.
+  const applyable_floor = Number.isFinite(Number(applyableFloor)) ? Number(applyableFloor) : null
+  const below_applyable_floor =
+    !unconfigured &&
+    surfaced_applyable_typed !== null &&
+    applyable_floor !== null &&
+    applyable_floor > 0 &&
+    surfaced_applyable_typed < applyable_floor
+  const applyable_shortfall = below_applyable_floor ? applyable_floor - surfaced_applyable_typed : 0
+  if (below_applyable_floor) gaps.push(`applyable_floor_shortfall:${surfaced_applyable_typed}_of_${applyable_floor}`)
+
   // 5. Ineligible surfaced match — a student-aid opportunity (TN HOPE, FAFSA,
   //    Pell, TSAA, foundation scholarships…) surfacing to a NON-student profile
   //    that does not declare a student-aid need. This is the "senior widow with
@@ -244,6 +276,16 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
     surfaced_qualifying: qualifying.length,
     surfaced_actionable: actionable.length,
     surfaced_awardable: awardable.length,
+    // The applyable+type-appropriate count — null when the predicates were not
+    // injected (UNKNOWN, never 0).
+    surfaced_applyable_typed,
+    applyable_floor,
+    below_applyable_floor,
+    applyable_shortfall,
+    // The applyable floor's OWN discovery flag: run this profile-type's
+    // archetypes. Independent of `needs_rediscovery` (the general lane) so the
+    // archetype backfill queue keys only on a genuine per-type applyable gap.
+    needs_archetype_discovery: below_applyable_floor,
     pointer_count,
     geo_stub_count,
     deadline_passed_count,
@@ -268,25 +310,72 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
 }
 
 /**
+ * loadApplyabilityContext — resolve the applyable-floor dependency SEAM once.
+ *
+ * Returns `{ classifyApplyability, resolveArchetypesForProfile,
+ * sourceMatchesArchetypes, applyableFloor, sources }` — the real #1/#2 modules
+ * when merged, else the faithful shims (`config/applyableFloorContracts.js`
+ * chooses). Best-effort: any load failure returns an empty ctx and the audit
+ * reports `surfaced_applyable_typed: null` (UNKNOWN). Cheap to call once per
+ * sweep; the sweep threads the result to every profile.
+ */
+export async function loadApplyabilityContext() {
+  try {
+    const [contracts, floorCfg] = await Promise.all([
+      import('../../config/applyableFloorContracts.js'),
+      import('../../config/profileResultFloor.js'),
+    ])
+    const [applyApi, archApi] = await Promise.all([
+      contracts.loadApplyabilityApi(),
+      contracts.loadArchetypesApi(),
+    ])
+    return {
+      classifyApplyability: applyApi.classifyApplyability,
+      resolveArchetypesForProfile: archApi.resolveArchetypesForProfile,
+      knownSeedSourcesForProfile: archApi.knownSeedSourcesForProfile,
+      sourceMatchesArchetypes: contracts.sourceMatchesArchetypes,
+      buildArchetypeDirective: contracts.buildArchetypeDirective,
+      directiveVarsFromContext: contracts.directiveVarsFromContext,
+      applyableFloor: floorCfg.resolveApplyableFloor(),
+      sources: { applyability: applyApi.source, archetypes: archApi.source },
+    }
+  } catch {
+    return { applyableFloor: null, sources: { applyability: 'none', archetypes: 'none' } }
+  }
+}
+
+/**
  * auditProfileResultCoverage — DB-bound single-profile audit.
  */
-export async function auditProfileResultCoverage(db, profileId, { floor = DEFAULT_MIN_SCORE, thesis = null, resultTarget = null } = {}) {
+export async function auditProfileResultCoverage(db, profileId, { floor = DEFAULT_MIN_SCORE, thesis = null, resultTarget = null, applyabilityCtx = null } = {}) {
   const isPg = db?.dialect === 'postgres'
   const activeClause = isPg
     ? '(o.is_active IS NULL OR o.is_active = TRUE)'
     : '(o.is_active IS NULL OR o.is_active = 1)'
 
-  const surfacedRows = await db
-    .prepare(
-      `SELECT m.match_score, m.match_decision, o.title, o.sponsor, o.description, o.categories,
+  // TRAP (CLAUDE.md #946/#954): prod Postgres funding_opportunities has a bare
+  // `url` column the SQLite schema LACKS — reference only source_url /
+  // application_url / evidence_url. Those three DO exist in the real schema (the
+  // amount-enrichment nets read them), but a minimal test/older schema may not,
+  // so the URL-carrying SELECT falls back to the base SELECT — applyability then
+  // classifies url-less rows as info_only, never a throw (MISSING = NEUTRAL).
+  const baseCols = `m.match_score, m.match_decision, o.title, o.sponsor, o.description, o.categories,
               o.opportunity_kind, o.deadline, o.deadline_at, o.deadline_type,
-              (UPPER(COALESCE(o.opportunity_kind,'')) IN ('DIRECTORY','PAST_AWARD_INTEL')) AS is_directory
+              (UPPER(COALESCE(o.opportunity_kind,'')) IN ('DIRECTORY','PAST_AWARD_INTEL')) AS is_directory`
+  const buildSurfacedSql = (cols) =>
+    `SELECT ${cols}
          FROM profile_opportunity_matches m
          JOIN funding_opportunities o ON o.id = m.opportunity_id
         WHERE m.profile_id = ? AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
-          AND ${activeClause}`,
-    )
-    .all(profileId)
+          AND ${activeClause}`
+  let surfacedRows
+  try {
+    surfacedRows = await db
+      .prepare(buildSurfacedSql(`${baseCols}, o.application_url, o.source_url, o.evidence_url`))
+      .all(profileId)
+  } catch {
+    surfacedRows = await db.prepare(buildSurfacedSql(baseCols)).all(profileId)
+  }
 
   let unsurfacedCount = 0
   try {
@@ -329,20 +418,48 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
   }
 
   // Does this profile declare ANYTHING that can be searched for? Same detector
-  // the crawl entry point and the boot sweep use, so all three agree.
+  // the crawl entry point and the boot sweep use, so all three agree. Capture
+  // the context so the applyability predicates below can resolve archetypes
+  // WITHOUT a second load.
   let configuration = null
+  let profileCtx = null
   try {
     const { loadProfileContext } = await import('../profileHelpers.js')
     const { assessProfileConfiguration } = await import('../profile/profileConfiguration.js')
-    configuration = assessProfileConfiguration(await loadProfileContext(db, profileId))
+    profileCtx = await loadProfileContext(db, profileId)
+    configuration = assessProfileConfiguration(profileCtx)
   } catch {
     configuration = null // unknown → treated exactly as before (never assumed unconfigured)
   }
+
+  // APPLYABLE + TYPE-APPROPRIATE predicates (initiative agent #3). Resolve the
+  // applyability classifier (#2) and archetype API (#1) once — the sweep passes
+  // a shared `applyabilityCtx` so this cost is paid ONCE per run, not per
+  // profile — then build the two row predicates. Best-effort and MISSING =
+  // NEUTRAL: any load/resolve failure leaves the predicates null and the audit
+  // reports `surfaced_applyable_typed: null` (UNKNOWN, never 0).
+  let isRowApplyable = null
+  let isRowTypeAppropriate = null
+  let applyableFloor = null
+  try {
+    const ctx = applyabilityCtx || (await loadApplyabilityContext())
+    applyableFloor = Number.isFinite(Number(ctx?.applyableFloor)) ? Number(ctx.applyableFloor) : applyableFloor
+    if (ctx?.classifyApplyability && ctx?.resolveArchetypesForProfile && ctx?.sourceMatchesArchetypes) {
+      const archetypes = ctx.resolveArchetypesForProfile(profileCtx?.profile ?? {}, profileCtx?.sections ?? {})
+      if (Array.isArray(archetypes) && archetypes.length > 0) {
+        isRowApplyable = (row) => Boolean(ctx.classifyApplyability(row)?.isApplyable)
+        isRowTypeAppropriate = (row) => ctx.sourceMatchesArchetypes(row, archetypes)
+      }
+    }
+  } catch { /* MISSING = NEUTRAL — leave predicates null */ }
 
   return auditProfileResultCoverageFromData({
     profileId,
     surfacedRows: rows,
     unsurfacedCount,
+    isRowApplyable,
+    isRowTypeAppropriate,
+    applyableFloor,
     thesis: effThesis || {},
     floor,
     resultTarget: effTarget,
@@ -397,11 +514,15 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
     ;({ resolveProfileResultTarget: resolveTarget } = await import('../../config/profileResultFloor.js'))
   } catch { /* fall back to the fleet default inside the pure audit */ }
 
+  // Resolve the applyability classifier (#2) + archetype API (#1) + floor ONCE
+  // for the whole sweep — a per-profile import would re-load them 33+ times.
+  const applyabilityCtx = await loadApplyabilityContext()
+
   const audits = []
   for (const p of profiles) {
     try {
       const resultTarget = resolveTarget ? resolveTarget(p.id, effLedger) : null
-      const a = await auditProfileResultCoverage(db, p.id, { floor, resultTarget })
+      const a = await auditProfileResultCoverage(db, p.id, { floor, resultTarget, applyabilityCtx })
       audits.push({ ...a, display_name: p.display_name ?? null })
     } catch (err) {
       log.warn('per-profile coverage audit failed (non-fatal)', { profile: p.id, error: err?.message })
@@ -418,6 +539,15 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
     // The per-profile RESULT FLOOR (owner rule 2026-08-01): how many profiles
     // hold fewer AWARDABLE results than their requested number.
     below_result_target: audits.filter((a) => a.below_result_target).length,
+    // THE PER-TYPE APPLYABLE FLOOR (initiative agent #3): how many profiles hold
+    // fewer APPLYABLE + TYPE-APPROPRIATE sources than the applyable floor — the
+    // honest "has nothing it can apply to that fits its type" count (Olivia at
+    // 0). `applyable_measured` names how many profiles the count could be
+    // computed for (deps present); the rest are UNKNOWN, never counted as served.
+    below_applyable_floor: audits.filter((a) => a.below_applyable_floor).length,
+    needs_archetype_discovery: audits.filter((a) => a.needs_archetype_discovery).length,
+    applyable_measured: audits.filter((a) => a.surfaced_applyable_typed !== null).length,
+    applyability_source: applyabilityCtx?.sources ?? null,
     // Profiles that CANNOT be served until a human fills them in. Reported as
     // its own class so a silence here means "every profile is configured",
     // never "we quietly stopped counting some of them".
@@ -752,6 +882,24 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     } catch { /* reporting is best-effort; the ledger is already durable */ }
   }
 
+  // ── PER-TYPE APPLYABLE FLOOR backfill (initiative agent #3) ──────────────────
+  // A profile below its applyable floor (real things it can APPLY to that fit
+  // its type) emits a directive that runs THAT type's archetypes — seed the
+  // known sources AND run the query patterns through the SAME discovery lane the
+  // awardable heal uses. Ledger-gated + burn/retry-safe under its own KV key, so
+  // it never fights the awardable floor. Bounded; a seed is a URL, not a verdict.
+  let applyableFloorReport = { below: summary.below_applyable_floor ?? 0, queued: 0, healed: [], exhausted: [], skipped_by_ledger: [] }
+  if (autoheal) {
+    try {
+      applyableFloorReport = await runApplyableFloorBackfill(db, {
+        audits,
+        maxHeal: Number(process.env.APPLYABLE_AUTOHEAL_MAX) || 5,
+      })
+    } catch (err) {
+      log.warn('applyable-floor backfill unavailable (non-fatal)', { error: err?.message })
+    }
+  }
+
   const result = {
     ok: true,
     status: 'completed',
@@ -760,6 +908,8 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     autoheal: Boolean(autoheal),
     healed_count: healed.length,
     healed,
+    // The applyable-floor directive's own outcomes (archetype seeds + queries).
+    applyable_floor: applyableFloorReport,
     // The RESULT-FLOOR ledger's own outcomes, so "we stopped looking" is a
     // reported, evidenced fact rather than a silent absence of retries.
     result_floor: {
@@ -783,11 +933,221 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
   return result
 }
 
+/**
+ * runApplyableFloorBackfill — the PER-TYPE APPLYABLE FLOOR's discovery actor
+ * (initiative agent #3). For each profile below its applyable floor, run THAT
+ * profile-type's archetypes: seed the known sources AND run the archetype query
+ * patterns through the SAME `runProfileDiscoveryLive` lane the awardable heal
+ * uses, then recount and fold the outcome into the applyable ledger with burn
+ * semantics (a crawl outage burns nothing; a productive pass resets the budget;
+ * N fruitless passes record an evidenced `exhausted` verdict).
+ *
+ * A SEED IS A URL, NOT A VERDICT. Every seeded page and every archetype-query
+ * hit still faces the full fetch → extract → reality-gate → match-engine →
+ * pipeline-precision stack. This lowers NO bar; it only makes the crawler LOOK
+ * where the profile's type says it should.
+ *
+ * Bounded (`maxHeal`); ledger-gated (own KV key); best-effort. Deps #1/#2 absent
+ * or an empty archetype directive → the profile is skipped, NOT burned.
+ *
+ * @param {object} db
+ * @param {object} opts
+ * @param {Array}  [opts.audits]   the sweep's per-profile audits (reused to save a re-scan)
+ * @param {number} [opts.maxHeal]  how many profiles to run this pass (default 5)
+ * @param {number} [opts.limit]    profiles to scan when audits are not provided
+ */
+export async function runApplyableFloorBackfill(db, { audits = null, maxHeal = 5, limit = 500 } = {}) {
+  const ctx = await loadApplyabilityContext()
+  const canBuild =
+    typeof ctx?.knownSeedSourcesForProfile === 'function' &&
+    typeof ctx?.resolveArchetypesForProfile === 'function' &&
+    typeof ctx?.buildArchetypeDirective === 'function'
+
+  let effAudits = audits
+  if (!Array.isArray(effAudits)) {
+    ;({ audits: effAudits } = await auditAllProfilesResultCoverage(db, { limit }))
+  }
+  const below = effAudits.filter((a) => a.below_applyable_floor).length
+  const base = { below, queued: 0, healed: [], exhausted: [], skipped_by_ledger: [], deps: ctx?.sources ?? null }
+  const candidates = effAudits.filter((a) => a.needs_archetype_discovery)
+  if (!candidates.length || !canBuild) return base
+
+  // DEPS GATE. The directive spends REAL crawl budget on the archetype's known
+  // sources + query patterns, so it must run against the REAL #1/#2 modules, not
+  // the placeholder shims. Until both merge, the count/floor/census (the honest
+  // measurement) run everywhere but the CRAWL is deferred — it auto-activates
+  // the moment #1 and #2 land. `APPLYABLE_FLOOR_ALLOW_SHIM=1` forces it on for
+  // tests and for an owner opt-in before the merge.
+  const realDeps = ctx?.sources?.applyability === 'real' && ctx?.sources?.archetypes === 'real'
+  void process.env.APPLYABLE_FLOOR_ALLOW_SHIM
+  const allowShim = ['1', 'true', 'yes'].includes(String(process.env.APPLYABLE_FLOOR_ALLOW_SHIM || '').toLowerCase())
+  if (!realDeps && !allowShim) {
+    return { ...base, note: 'archetype discovery deferred until sibling deps #1/#2 merge (shim in use)' }
+  }
+
+  let ledgerApi
+  let floorCfg
+  let profileHelpers
+  let discovery
+  try {
+    ;[ledgerApi, floorCfg, profileHelpers, discovery] = await Promise.all([
+      import('./applyableFloorLedger.js'),
+      import('../../config/profileResultFloor.js'),
+      import('../profileHelpers.js'),
+      import('../crawlerOsService.js'),
+    ])
+  } catch (err) {
+    log.warn('applyable-floor backfill deps unavailable (non-fatal)', { error: err?.message })
+    return base
+  }
+  const { orderFloorQueue, FLOOR_OUTCOME } = floorCfg
+
+  let activeCatalogCount = 0
+  try {
+    const { countActiveCatalogRows } = await import('./profileResultFloorLedger.js')
+    activeCatalogCount = await countActiveCatalogRows(db)
+  } catch { activeCatalogCount = 0 }
+
+  let ledger = await ledgerApi.readApplyableLedger(db)
+
+  const skipped = []
+  const gated = []
+  for (const a of candidates) {
+    const assess = ledgerApi.assessApplyableFloor({
+      profileId: a.profile_id,
+      applyable: a.surfaced_applyable_typed ?? 0,
+      ledger,
+      activeCatalogCount,
+      target: a.applyable_floor,
+    })
+    if (!assess.below) continue
+    if (!assess.eligible) {
+      skipped.push({ profile_id: a.profile_id, reason: assess.reason, attempts: assess.attempts })
+      continue
+    }
+    gated.push({ audit: a, assess, profile_id: a.profile_id, attempts: assess.attempts, shortfall: assess.shortfall })
+  }
+
+  const queue = orderFloorQueue(gated).slice(0, Math.max(0, maxHeal))
+  const healed = []
+  for (const item of queue) {
+    const a = item.audit
+    const before = a.surfaced_applyable_typed ?? 0
+    let directive = { seedPages: [], queries: [], categories: [] }
+    try {
+      const pctx = await profileHelpers.loadProfileContext(db, a.profile_id)
+      const archetypes = ctx.resolveArchetypesForProfile(pctx?.profile ?? {}, pctx?.sections ?? {})
+      const seeds = ctx.knownSeedSourcesForProfile(pctx?.profile ?? {}, pctx?.sections ?? {})
+      const vars = ctx.directiveVarsFromContext
+        ? ctx.directiveVarsFromContext({ profile: pctx?.profile, sections: pctx?.sections })
+        : {}
+      directive = ctx.buildArchetypeDirective({ archetypes, seeds, vars })
+    } catch (err) {
+      log.warn('applyable-floor: could not build archetype directive (skipped, not burned)', {
+        profile: a.profile_id, error: err?.message,
+      })
+      continue
+    }
+    // An empty directive is nothing to run — skip WITHOUT spending an attempt
+    // (the #944/#1006 "an outage never burns" rule, one door over).
+    if (!directive.seedPages.length && !directive.queries.length) {
+      skipped.push({ profile_id: a.profile_id, reason: 'no_archetype_directive', attempts: item.attempts })
+      continue
+    }
+
+    let run = null
+    let ranOk = false
+    try {
+      run = await discovery.runProfileDiscoveryLive({
+        db,
+        profileId: a.profile_id,
+        extraSeedPages: directive.seedPages,
+        extraQueries: directive.queries,
+      })
+      ranOk = Boolean(run) && run.ok !== false && run.skipped !== true
+    } catch (err) {
+      log.warn('applyable-floor archetype discovery failed (non-fatal, not burned)', {
+        profile: a.profile_id, error: err?.message,
+      })
+      ranOk = false
+    }
+
+    let after = null
+    try {
+      after = await auditProfileResultCoverage(db, a.profile_id, { applyabilityCtx: ctx })
+    } catch (err) {
+      log.warn('applyable-floor recount failed (non-fatal, attempt NOT spent)', {
+        profile: a.profile_id, error: err?.message,
+      })
+    }
+    const afterApplyable = after?.surfaced_applyable_typed ?? null
+    healed.push({
+      profile_id: a.profile_id,
+      name: a.display_name ?? null,
+      before,
+      after: afterApplyable ?? before,
+      target: a.applyable_floor ?? item.assess.target,
+      seeded: directive.seedPages.length,
+      queries: directive.queries.length,
+      categories: directive.categories,
+      ran: ranOk,
+    })
+    log.info('applyable-floor: ran archetype discovery for a below-floor profile', {
+      profile: a.profile_id, before, after: afterApplyable, seeded: directive.seedPages.length,
+      queries: directive.queries.length, ran: ranOk,
+    })
+
+    // Fold the outcome — ONLY after a successful recount (#946).
+    if (after) {
+      const added = Math.max(0, (afterApplyable ?? before) - before)
+      const outcome = !ranOk
+        ? FLOOR_OUTCOME.TRANSIENT
+        : (added > 0 ? FLOOR_OUTCOME.ADDED : FLOOR_OUTCOME.NO_NEW_RESULTS)
+      ledger = ledgerApi.recordApplyableAttempt(ledger, a.profile_id, {
+        outcome,
+        target: after.applyable_floor ?? item.assess.target,
+        awardable: afterApplyable,
+        added,
+        fingerprint: item.assess.fingerprint,
+        evidence: {
+          lanes_queried: Number(run?.sources?.length) || 0,
+          queries_issued: Number(run?.web?.queries?.length) || 0,
+          pages_fetched: Number(run?.web?.fetched) || 0,
+          candidates_extracted: Number(run?.web?.extracted) || 0,
+          rejected_by_engine: Number(run?.web?.rejected) || 0,
+          added_total: added,
+        },
+      })
+    }
+  }
+
+  await ledgerApi.writeApplyableLedger(db, ledger)
+
+  const exhausted = []
+  try {
+    const { describeExhaustion } = floorCfg
+    for (const a of candidates) {
+      const entry = ledger.profiles?.[a.profile_id]
+      if (!entry?.exhausted_at) continue
+      exhausted.push({
+        profile_id: a.profile_id,
+        name: a.display_name ?? null,
+        exhausted_at: entry.exhausted_at,
+        verdict: describeExhaustion(entry),
+      })
+    }
+  } catch { /* reporting is best-effort; the ledger is durable */ }
+
+  return { below, queued: queue.length, healed, exhausted, skipped_by_ledger: skipped, deps: ctx?.sources ?? null }
+}
+
 export default {
   MIN_HEALTHY_SURFACED,
   auditProfileResultCoverageFromData,
   auditProfileResultCoverage,
   auditAllProfilesResultCoverage,
+  loadApplyabilityContext,
+  runApplyableFloorBackfill,
   runProfileCoverageSweep,
   getLastCoverageSweep,
   isCoverageAutohealEnabled,

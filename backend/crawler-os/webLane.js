@@ -503,7 +503,16 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   }
   result.seeded = pages.length;
 
-  const queries = buildWebQueries(thesis, { max: maxQueries, seed });
+  const builtQueries = buildWebQueries(thesis, { max: maxQueries, seed });
+  // EXTRA QUERIES (opts.extraQueries): the applyable-floor archetype directive's
+  // query patterns (initiative agent #3). They run ALONGSIDE the profile's own
+  // web queries — additive, deduped, and placed FIRST so a bounded run always
+  // reaches them. They lower no bar: every hit is fetched, extracted,
+  // reality-gated and scored exactly like a built query's hit.
+  const extra = (Array.isArray(opts.extraQueries) ? opts.extraQueries : [])
+    .map((q) => String(q || '').trim())
+    .filter(Boolean);
+  const queries = extra.length ? [...new Set([...extra, ...builtQueries])] : builtQueries;
   result.queries = queries;
   for (const [queryIndex, q] of queries.entries()) {
     if (pages.length - result.seeded >= maxPages) break;

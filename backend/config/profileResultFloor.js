@@ -109,6 +109,49 @@ export const DEFAULT_PROFILE_RESULT_TARGET = 20
 export const MIN_PROFILE_RESULT_TARGET = 0
 export const MAX_PROFILE_RESULT_TARGET = 50
 
+/**
+ * THE PER-TYPE APPLYABLE FLOOR (initiative agent #3, owner insight 2026-08-23:
+ * "Olivia's small-business profile has ZERO applyable sources; individuals'
+ * pipelines are info/benefit pages, not applyable grants").
+ *
+ * The AWARDABLE floor above counts anything that names money a profile could
+ * receive — but a benefit page or a locator that qualifies as "awardable" still
+ * is not a thing the profile can fill out an APPLICATION for. This stricter
+ * count answers the honest question "does this profile have real things it can
+ * APPLY to that fit its TYPE?": surfaced ∧ awardable ∧ `isApplyable` (from #2,
+ * `sourceApplyability.classifyApplyability` — not `info_only`) ∧ TYPE-APPROPRIATE
+ * (matches one of the profile's archetypes from #1 — a small-business grant for
+ * a business, a scholarship for a student, a patient-assistance/hardship fund
+ * for an individual-need profile).
+ *
+ * It is DELIBERATELY LOW (3, not 20). The awardable target of 20 mirrors a
+ * competitor's dozens-to-hundreds match list; this floor only has to catch the
+ * genuinely STARVED — Olivia at 0, an individual whose whole list is benefit
+ * pages — and turn that into a standing instruction to run the profile-type's
+ * archetypes. A floor of 3 fires for the profiles the owner named without
+ * putting the median profile into permanent archetype-backfill. Same trap doc
+ * as above applies verbatim: a shortfall may ONLY ever cause more SEARCHING
+ * (seed the known sources, run the query patterns) — never a widened admission,
+ * never a padded count. An honest 1 is reported as 1.
+ */
+export const DEFAULT_APPLYABLE_TYPED_FLOOR = 3
+
+/** system_kv key holding the applyable-floor directive ledger (own namespace). */
+export const APPLYABLE_FLOOR_KV_KEY = 'profile_applyable_floor_state'
+
+/**
+ * The fleet applyable floor: `APPLYABLE_TYPED_FLOOR` env, else the constant.
+ * Read at call time (never frozen at import), same posture as the awardable
+ * fleet target. A target of 0 disables the applyable directive fleet-wide.
+ */
+export function resolveApplyableFloor(env) {
+  // Literal `process.env.APPLYABLE_TYPED_FLOOR` read is deliberate — the
+  // env-example generator scans for that exact shape.
+  const source = env ?? { APPLYABLE_TYPED_FLOOR: process.env.APPLYABLE_TYPED_FLOOR }
+  const clamped = clampTarget(source.APPLYABLE_TYPED_FLOOR)
+  return clamped === null ? DEFAULT_APPLYABLE_TYPED_FLOOR : clamped
+}
+
 /** system_kv key holding the floor ledger (targets + per-profile attempt state). */
 export const RESULT_FLOOR_KV_KEY = 'profile_result_floor_state'
 
@@ -380,6 +423,9 @@ export default {
   DEFAULT_PROFILE_RESULT_TARGET,
   MIN_PROFILE_RESULT_TARGET,
   MAX_PROFILE_RESULT_TARGET,
+  DEFAULT_APPLYABLE_TYPED_FLOOR,
+  APPLYABLE_FLOOR_KV_KEY,
+  resolveApplyableFloor,
   RESULT_FLOOR_KV_KEY,
   RESULT_FLOOR_MAX_ATTEMPTS,
   RESULT_FLOOR_COOLDOWN_DAYS,
