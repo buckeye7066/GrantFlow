@@ -122,14 +122,23 @@ function numberOf(v) {
   return Number.isFinite(n) ? n : null
 }
 
-function recipientNameOf(group) {
+/**
+ * Recipient identity from a grant group, WITH the org-vs-individual distinction.
+ * A private foundation that gives org-to-org cannot be applied to by an
+ * individual; a funder whose filings name PERSON recipients (RecipientPersonNm)
+ * demonstrably does fund individuals. That distinction is the recipient-type
+ * gate's whole basis, so it is captured verbatim from the filing here — a
+ * BusinessName is an org, a PersonNm with no BusinessName is an individual.
+ */
+function recipientOf(group) {
   const biz = firstByKey(group, 'RecipientBusinessName')
   const line1 = biz ? textOf(firstByKey(biz, 'BusinessNameLine1Txt')) : null
   if (line1) {
     const line2 = textOf(firstByKey(biz, 'BusinessNameLine2Txt'))
-    return line2 ? `${line1} ${line2}` : line1
+    return { name: line2 ? `${line1} ${line2}` : line1, isIndividual: false }
   }
-  return textOf(firstByKey(group, 'RecipientPersonNm'))
+  const person = textOf(firstByKey(group, 'RecipientPersonNm'))
+  return { name: person, isIndividual: Boolean(person) }
 }
 
 function addressOf(group) {
@@ -194,13 +203,14 @@ export function parseGrantTransactionsFromXml(xmlText, { maxTransactions = 5000 
   // sibling "ApprvForFutPymtGrp" is approved-not-yet-paid and is deliberately
   // excluded: money not yet given is not demonstrated behavior).
   for (const group of collectByKey(ret, 'GrantOrContributionPdDurYrGrp')) {
-    const name = recipientNameOf(group)
+    const rec = recipientOf(group)
     const amount = numberOf(firstByKey(group, 'Amt'))
-    if (!name || !(amount > 0)) continue
+    if (!rec.name || !(amount > 0)) continue
     const addr = addressOf(group)
     if (
       !push({
-        recipient_name: name,
+        recipient_name: rec.name,
+        recipient_is_individual: rec.isIndividual,
         recipient_ein: null,
         recipient_city: addr.city,
         recipient_state: addr.state,
@@ -213,13 +223,14 @@ export function parseGrantTransactionsFromXml(xmlText, { maxTransactions = 5000 
 
   // Form 990 Schedule I — grants to domestic organizations/governments.
   for (const group of collectByKey(ret, 'RecipientTable')) {
-    const name = recipientNameOf(group)
+    const rec = recipientOf(group)
     const amount = numberOf(firstByKey(group, 'CashGrantAmt'))
-    if (!name || !(amount > 0)) continue
+    if (!rec.name || !(amount > 0)) continue
     const addr = addressOf(group)
     if (
       !push({
-        recipient_name: name,
+        recipient_name: rec.name,
+        recipient_is_individual: rec.isIndividual,
         recipient_ein: normalizeEin(textOf(firstByKey(group, 'RecipientEIN'))),
         recipient_city: addr.city,
         recipient_state: addr.state,
@@ -307,6 +318,80 @@ export function purposeLikePatternsForNeeds(needIds) {
     }
   }
   return [...new Set(patterns)]
+}
+
+// ── National footprint + recipient-type (funder-lead admission) ─────────────
+
+/**
+ * A funder has a NATIONAL FOOTPRINT for a cause when its OWN filed giving shows
+ * grants for that cause in at least this many DISTINCT states. Measured
+ * 2026-08-23 against real prod 990 giving: a funder that gave for a cause in
+ * >= 5 distinct states behaves like a national funder (the Candid/Instrumentl
+ * "accessible anywhere" population) and is genuinely reachable by a qualifying
+ * org in any state — while a funder that gave for the cause in only 1-2 OTHER
+ * states is geographically restricted and must NOT be offered fleet-wide. This
+ * is the bounded, measured line (not the full "anywhere" flood): a TN health
+ * org reaches 46 in-state health funders but 67 fund health NATIONALLY; the
+ * >= 5-state cut is what lets an org in a small state (measured: KY 0 -> 109,
+ * AK 9 -> 109 candidate funders) reach the national funders of its cause
+ * without admitting a single-out-of-state coincidence.
+ */
+export const NATIONAL_FOOTPRINT_MIN_STATES = (() => {
+  const n = Number.parseInt(process.env.FUNDER_NATIONAL_FOOTPRINT_MIN_STATES || '5', 10)
+  return Number.isFinite(n) && n >= 2 ? n : 5
+})()
+
+/**
+ * Adjudicate a funder's stored giving against a profile's declared needs.
+ *
+ * `transactions` are this funder's `grant_transactions`; `needIds` are the
+ * profile's canonical declared needs; `profileState` is the profile's declared
+ * two-letter state (or null). A grant EVIDENCES the fit only when its stated
+ * PURPOSE (whole-word, conservative registry) names one of the declared needs —
+ * the same bar `enforceFunderBehaviorRecall` uses, never one shared token.
+ *
+ * Returns:
+ *   evidencingCount   — grants whose purpose evidences a declared need
+ *   distinctStates    — count of distinct recipient states among those grants
+ *   nationalFootprint — distinctStates >= NATIONAL_FOOTPRINT_MIN_STATES
+ *   inState           — at least one evidencing grant landed in profileState
+ *   fundsIndividuals  — at least one evidencing grant named a PERSON recipient
+ *   topAmount         — the largest evidencing grant amount (for ranking)
+ *
+ * A funder with zero evidencing grants returns all-falsey — it does not fit.
+ */
+export function analyzeFunderFit(transactions, needIds, { profileState = null } = {}) {
+  const needs = needIds instanceof Set ? needIds : new Set(needIds ?? [])
+  const state = profileState ? String(profileState).trim().toUpperCase() : null
+  const evidencing = []
+  for (const t of Array.isArray(transactions) ? transactions : []) {
+    const evidenced = needsEvidencedByPurpose(t?.purpose)
+    if (evidenced.some((n) => needs.has(n))) evidencing.push(t)
+  }
+  const states = new Set()
+  let inState = false
+  let fundsIndividuals = false
+  let topAmount = 0
+  for (const t of evidencing) {
+    const st = t?.recipient_state ? String(t.recipient_state).trim().toUpperCase() : null
+    if (st) {
+      states.add(st)
+      if (state && st === state) inState = true
+    }
+    if (t?.recipient_is_individual === true || t?.recipient_is_individual === 1) fundsIndividuals = true
+    const amt = Number(t?.amount)
+    if (Number.isFinite(amt) && amt > topAmount) topAmount = amt
+  }
+  const distinctStates = states.size
+  return {
+    evidencingCount: evidencing.length,
+    distinctStates,
+    nationalFootprint: distinctStates >= NATIONAL_FOOTPRINT_MIN_STATES,
+    inState,
+    fundsIndividuals,
+    topAmount,
+    states: [...states],
+  }
 }
 
 // ── Declared needs (general, all canonical categories) ──────────────────────
@@ -426,6 +511,8 @@ export default {
   PURPOSE_NEED_TERMS,
   needsEvidencedByPurpose,
   purposeLikePatternsForNeeds,
+  NATIONAL_FOOTPRINT_MIN_STATES,
+  analyzeFunderFit,
   declaredNeedsOf,
   FUNDER_GIVING_MARKER,
   summarizeFunderGiving,

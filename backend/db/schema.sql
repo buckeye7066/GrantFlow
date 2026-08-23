@@ -654,8 +654,20 @@ CREATE TABLE IF NOT EXISTS grants (
 
   -- Tracking
   assigned_to TEXT,
-  priority TEXT CHECK(priority IN ('low', 'medium', 'high', 'urgent'))
+  priority TEXT CHECK(priority IN ('low', 'medium', 'high', 'urgent')),
+
+  -- FUNDER-LEAD vs APPLY-READY (migration 183/0188, owner directive 2026-08-23).
+  -- 'funder_lead' = a qualified national-funder prospect Robert auto-added and
+  -- is actively investigating; it has NO confirmed application path and MUST
+  -- NOT be selected by Hamilton's auto-submit. NULL / 'apply_ready' = a normal
+  -- opportunity Hamilton may auto-submit on a fully-autonomous profile.
+  -- config/pipelineCategory.js is the single source of truth.
+  pipeline_category TEXT,
+  funder_lead_state TEXT,
+  funder_lead_attempts INTEGER DEFAULT 0,
+  funder_lead_last_investigated_at DATETIME
 );
+CREATE INDEX IF NOT EXISTS idx_grants_pipeline_category ON grants(pipeline_category);
 
 CREATE INDEX IF NOT EXISTS idx_grants_fingerprint ON grants(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_grants_url         ON grants(url);
@@ -4486,6 +4498,11 @@ CREATE TABLE IF NOT EXISTS grant_transactions (
   recipient_city TEXT,
   recipient_state TEXT,
   recipient_country TEXT,
+  -- TRUE when the filing named a PERSON recipient (RecipientPersonNm) rather
+  -- than a BusinessName — the basis for the funder-lead recipient-type gate
+  -- (a private foundation that gives org-to-org cannot be applied to by an
+  -- individual). Migration 183/0188; NULL on rows ingested before it.
+  recipient_is_individual BOOLEAN DEFAULT FALSE,
   amount NUMERIC,
   purpose TEXT,
   tax_year INTEGER,

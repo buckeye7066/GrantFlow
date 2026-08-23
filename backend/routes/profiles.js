@@ -1408,6 +1408,22 @@ router.post('/', createProfileLimiter, async (req, res) => {
 
   await linkProfileToAdmin(req.db, profileId)
 
+  // NEW-PROFILE TRIGGER (owner directive 2026-08-23): when a new profile comes
+  // in, Robert searches the funder database for matches the SAME way and
+  // auto-adds the qualifying national funders as FUNDER LEADS — so a new profile
+  // does not wait for the next scheduled sweep. Bounded to THIS profile,
+  // idempotent, fire-and-forget (never blocks or fails profile creation). A
+  // profile created empty gains nothing (no declared need = neutral); one
+  // created with content (import/section defaults filled) gets immediate leads.
+  if (!adoptedExisting) {
+    Promise.resolve()
+      .then(async () => {
+        const { admitFunderLeads } = await import('../services/robert/robertFunderLeads.js')
+        return admitFunderLeads(req.db, { profileIds: [profileId] })
+      })
+      .catch((err) => profileLogger.warn?.('new-profile funder-lead trigger failed (non-fatal)', { profileId, error: String(err?.message || err) }))
+  }
+
   // New-user free trial: every newly-created profile gets its OWN free period
   // starting now (self-expiring via billing_accounts.free_until, timer from
   // signup). The always-on signup trial (signupTrialGrant) is ON by default; a

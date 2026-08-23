@@ -1219,7 +1219,7 @@ describe('enforceInvariants — runner', () => {
     // + pipeline_precision (2026-08-22, owner order 2026-08-21).
     // + mission_lane_match_scope (2026-08-22, the four-profile measurement).
     // + shared_listing_application_targets (2026-08-23, Coolidge/Live Más).
-    expect(summary.ran).toBe(63)
+    expect(summary.ran).toBe(65)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1298,6 +1298,11 @@ describe('enforceInvariants — runner', () => {
       // …and the recall net that key feeds: in-state, need-evidenced filed
       // giving puts the funder in front of the canonical engine.
       'funder_behavior_recall',
+      // Robert auto-adds qualifying NATIONAL FUNDERS to the pipeline as FUNDER
+      // LEADS (four gates, not the ratio floor; national footprint + in-state),
+      // then INVESTIGATES + PROMOTES the ones with a real applicable path.
+      'funder_lead_admission',
+      'funder_lead_investigation',
       // The GENERAL recall case: continuous catalog-wide re-matching, count-only
       // until the fundability chain lands (ENFORCE_CATALOG_RESCORE=1 to write).
       'catalog_rescore_convergence',
