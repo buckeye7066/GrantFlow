@@ -10,6 +10,7 @@ import express from 'express'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { getMaintenanceStatus, scheduleMaintenance, endMaintenance } from '../services/maintenance/maintenanceMode.js'
+import { runWithSchedulerLock } from '../services/schedulerLock.js'
 
 const router = express.Router()
 
@@ -63,8 +64,18 @@ router.post('/run-nightly-sweep', ensureAuth, ensureAdmin, async (req, res) => {
 // integrity check; Sam `ops.backupFreshness` reads the same stamp.
 router.post('/run-backup', ensureAuth, ensureAdmin, async (req, res) => {
   try {
-    const { runDatabaseBackupIfDue } = await import('../services/ops/databaseBackupSchedule.js')
-    const result = await runDatabaseBackupIfDue(req.db, { force: true })
+    // Under the shared 'database-backup' lock so a manual run can never stack
+    // with the daily cron or a second manual run — a full ~4.3GB pure-SQL dump
+    // is expensive, and concurrent dumps hold overlapping long read transactions.
+    // A held lock returns { skipped:true } rather than launching another dump.
+    const result = await runWithSchedulerLock(req.db, {
+      lockName: 'database-backup',
+      ttlMs: 60 * 60 * 1000,
+      logger: console,
+    }, async () => {
+      const { runDatabaseBackupIfDue } = await import('../services/ops/databaseBackupSchedule.js')
+      return runDatabaseBackupIfDue(req.db, { force: true })
+    })
     res.json(result)
   } catch (error) {
     res.status(500).json(formatError(error))

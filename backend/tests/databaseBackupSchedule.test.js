@@ -52,7 +52,16 @@ describe('runDatabaseBackupIfDue', () => {
     expect(BACKUP_LAST_RUN_KEY).toBe('backup_last_run')
   })
 
-  it('takes a backup when none has ever been recorded (never_run)', async () => {
+  it('the unattended schedule is OPT-IN: a non-force call is disabled by default', async () => {
+    const { fn, calls } = countingBackup()
+    const res = await runDatabaseBackupIfDue(fakeDb(undefined), { now: NOW, backupFn: fn })
+    expect(res.ran).toBe(false)
+    expect(res.reason).toBe('disabled')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('takes a backup when opted-in and none has ever been recorded (never_run)', async () => {
+    process.env.DB_BACKUP_SCHEDULE_ENABLED = 'true'
     const { fn, calls } = countingBackup()
     const res = await runDatabaseBackupIfDue(fakeDb(undefined), { now: NOW, backupFn: fn })
     expect(res.ran).toBe(true)
@@ -60,7 +69,8 @@ describe('runDatabaseBackupIfDue', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('SKIPS when a fresh backup already exists (fresh)', async () => {
+  it('SKIPS when opted-in but a fresh backup already exists (fresh)', async () => {
+    process.env.DB_BACKUP_SCHEDULE_ENABLED = 'true'
     const { fn, calls } = countingBackup()
     const at = new Date(NOW - 60 * 60 * 1000).toISOString() // 1h ago
     const res = await runDatabaseBackupIfDue(fakeDb({ at, path: '/tmp/y.db', bytes: 1, dialect: 'sqlite' }), { now: NOW, backupFn: fn })
@@ -69,7 +79,8 @@ describe('runDatabaseBackupIfDue', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('takes a backup when the last one is stale (older than the interval)', async () => {
+  it('takes a backup when opted-in and the last one is stale (older than the interval)', async () => {
+    process.env.DB_BACKUP_SCHEDULE_ENABLED = 'true'
     const { fn, calls } = countingBackup()
     const at = new Date(NOW - 30 * 60 * 60 * 1000).toISOString() // 30h ago > 20h
     const res = await runDatabaseBackupIfDue(fakeDb({ at, path: '/tmp/y.db', bytes: 1, dialect: 'sqlite' }), { now: NOW, backupFn: fn })

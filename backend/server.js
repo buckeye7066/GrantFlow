@@ -3866,8 +3866,14 @@ if (process.env.NODE_ENV !== 'test') {
   // disaster-recovery backup never inherits that chain's reliability. The
   // freshness gate reads the same `backup_last_run` stamp the backup writes, so
   // an hourly tick catches a missed day and never re-runs a fresh backup.
-  if (BACKGROUND_SERVICES_DISABLED) {
-    console.info('[db-backup] Disabled for smoke/test startup')
+  //
+  // OPT-IN: without `pg_dump` on the image the backup falls to a full pure-SQL
+  // JSON dump, which on this ~4.3GB DB is heavy. So the UNATTENDED cron is wired
+  // only when DB_BACKUP_SCHEDULE_ENABLED=true (see databaseBackupSchedule.js).
+  // The manual admin route (POST /api/maintenance/run-backup) always works.
+  const dbBackupScheduleOptIn = String(process.env.DB_BACKUP_SCHEDULE_ENABLED ?? 'false').toLowerCase() === 'true'
+  if (BACKGROUND_SERVICES_DISABLED || !dbBackupScheduleOptIn) {
+    console.info('[db-backup] Unattended daily backup NOT wired (set DB_BACKUP_SCHEDULE_ENABLED=true to enable; manual POST /api/maintenance/run-backup still works)')
   } else {
     const runBackupTick = () => runWithSchedulerLock(db, {
       lockName: 'database-backup',

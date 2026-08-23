@@ -20,9 +20,18 @@ import { runDatabaseBackup, BACKUP_LAST_RUN_KEY } from './databaseBackup.js'
 
 const DEFAULT_INTERVAL_HOURS = 20
 
-/** Daily backup schedule on by default; DB_BACKUP_SCHEDULE_ENABLED=false disables. */
+/**
+ * The UNATTENDED daily cron is OPT-IN (default off). On this prod DB the backup
+ * falls to the pure-SQL JSON path because `pg_dump` is not on the Railway image,
+ * and the DB is ~4.3GB (mostly high-churn crawler/geo/audit tables), so an
+ * unattended nightly full dump holds a long read transaction and is heavy. The
+ * owner enables it (`DB_BACKUP_SCHEDULE_ENABLED=true`) once `pg_dump`
+ * (postgresql-client) is added to the image — then it uses the fast compressed
+ * custom-format dump. The manual admin route (POST /api/maintenance/run-backup)
+ * always works regardless of this flag (it forces).
+ */
 export function isDatabaseBackupScheduleEnabled() {
-  return String(process.env.DB_BACKUP_SCHEDULE_ENABLED ?? 'true').toLowerCase() !== 'false'
+  return String(process.env.DB_BACKUP_SCHEDULE_ENABLED ?? 'false').toLowerCase() === 'true'
 }
 
 /**
