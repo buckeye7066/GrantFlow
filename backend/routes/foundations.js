@@ -258,6 +258,48 @@ router.get('/calendar/deadlines', async (req, res) => {
       }
     }
 
+    // FUNDING-LIFECYCLE events for the user's PIPELINE (owner rule 2026-08-23):
+    // a submission shows with its date, plus the cornerstones — expected
+    // decision, award, grant period, and funder-required follow-ups — every
+    // date real or computed from a funder-stated rule, never invented. These
+    // are keyed on their own dates (submitted_date/award_date/…), NOT the
+    // application deadline, so they need their own pipeline read; the month
+    // filter is applied to the DERIVED event date below.
+    try {
+      const { deriveLifecycleEventsForPipeline } = await import('../services/calendar/pipelineLifecycleEvents.js')
+      const lifeSql = `
+        SELECT g.id AS grant_id, g.funding_opportunity_id AS opportunity_id,
+               COALESCE(fo.title, g.title) AS title, fo.sponsor,
+               g.status AS pipeline_status,
+               g.deadline, fo.deadline_type,
+               g.submitted_date, g.award_date, g.start_date, g.end_date,
+               fo.expected_decision_date, fo.decision_review_days, fo.reporting_requirements
+          FROM grants g
+          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+         WHERE g.profile_id IN (SELECT id FROM profiles WHERE user_id = ?)${profileId ? ' AND g.profile_id = ?' : ''}
+         LIMIT 500`
+      const lifeParams = profileId ? [userId, profileId] : [userId]
+      let pipelineRows = []
+      try { pipelineRows = await req.db.prepare(lifeSql).all(...lifeParams) } catch { pipelineRows = [] }
+      const lifecycle = deriveLifecycleEventsForPipeline(pipelineRows)
+      // Bound to the requested month (or the default 90-day window) by the
+      // event's OWN date, and never double-emit an application deadline the
+      // deadline query above already added.
+      let lo = null; let hi = null
+      if (month) {
+        const [y, mo] = month.split('-')
+        lo = `${y}-${mo}-01`
+        hi = Number(mo) === 12 ? `${Number(y) + 1}-01-01` : `${y}-${String(Number(mo) + 1).padStart(2, '0')}-01`
+      }
+      for (const ev of lifecycle) {
+        if (ev.type === 'apply_deadline') continue // already covered by the deadline query
+        if (lo && !(ev.deadline >= lo && ev.deadline < hi)) continue
+        events.push({ ...ev, calendar_source: 'lifecycle' })
+      }
+    } catch (lifeErr) {
+      routeLogger.warn?.('[foundations/calendar] lifecycle derivation skipped', lifeErr?.message)
+    }
+
     events.sort((a, b) => (a.deadline || '').localeCompare(b.deadline || ''))
 
     res.json({ count: events.length, events })

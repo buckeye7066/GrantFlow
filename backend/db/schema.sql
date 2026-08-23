@@ -333,6 +333,13 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   eligibility_requirements TEXT,
   estimated_award REAL,
   open_date DATE,
+  -- Funder-aware lifecycle fields (0187/182): a concrete announced decision
+  -- date, a stated review length (for a labeled estimate), and funder-required
+  -- follow-ups as JSON [{label, offset_days?, anchor?, due_date?}]. Populated by
+  -- the web extractor from the funder's own page; the calendar derives events.
+  expected_decision_date DATE,
+  decision_review_days INTEGER,
+  reporting_requirements TEXT,
   recurrence TEXT,
   required_documents TEXT DEFAULT '[]',
   application_method TEXT,
