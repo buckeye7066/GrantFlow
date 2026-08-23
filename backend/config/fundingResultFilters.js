@@ -102,8 +102,8 @@ export function isLeadGenScholarship(row) {
 
 /**
  * SITE SECTION / ADMINISTRATIVE PAGES — a program website's own navigation
- * surfaced as a "benefit" (2026-08-22, the four-profile measurement: 8 of
- * Avanell Leamon's top 10 were TennCare site sections stored kind=benefit and
+ * surfaced as a "benefit" (2026-08-22, the four-profile measurement: 8 of one
+ * TennCare member's top 10 were site sections stored kind=benefit and
  * ACCEPTed at 89 — 'Program Integrity', 'Waiver and State Plan Public
  * Notices', 'Reimbursement Information for RHC and FQHC Providers', 'Member
  * Benefit Table', 'Programs and Facilities'). The tn_ecf_choices live-link

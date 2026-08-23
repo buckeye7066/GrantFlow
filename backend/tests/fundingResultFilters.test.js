@@ -118,8 +118,8 @@ describe('lead-gen "scholarship" denylist', () => {
 })
 
 describe('site-section / administrative pages (the TennCare nav-page class, 2026-08-22)', () => {
-  // Verbatim from the four-profile measurement: 8 of Avanell Leamon's top 10
-  // were TennCare site sections stored kind=benefit and ACCEPTed at 89.
+  // Verbatim from the four-profile measurement: 8 of one TennCare member's
+  // top 10 were site sections stored kind=benefit and ACCEPTed at 89.
   const NAV_JUNK_TITLES = [
     'Program Integrity',
     'Waiver and State Plan Public Notices',
