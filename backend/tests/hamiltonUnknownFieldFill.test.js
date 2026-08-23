@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
 import { runAutopilot } from '../services/hamilton/hamiltonAutopilotEngine.js'
+import { CHROMIUM_CONTAINER_ARGS } from '../services/hamilton/browserLaunch.js'
 
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'c'.repeat(64)
 
@@ -41,7 +42,7 @@ const CONFIRM_HTML = `<!DOCTYPE html><html><head><title>Application submitted</t
 <body><h1>Application submitted</h1><p>Confirmation Number: UNKFIELD-9</p></body></html>`
 
 let browser
-beforeAll(async () => { if (hasBrowser) browser = await chromium.launch({ headless: true }) }, 60_000)
+beforeAll(async () => { if (hasBrowser) browser = await chromium.launch({ headless: true, args: [...CHROMIUM_CONTAINER_ARGS] }) }, 60_000)
 afterAll(async () => { await browser?.close?.() })
 
 async function formPage() {
