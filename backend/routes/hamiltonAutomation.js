@@ -1150,11 +1150,29 @@ router.post('/preflight', async (req, res) => {
  * exactly the kind of quiet disagreement that makes a UI lie.
  */
 async function listReadySources(db, profileId) {
+  // FUNDER LEADS are NEVER auto-submit-ready. A 990 foundation Robert added and
+  // is investigating funds by relationship/invitation and has no confirmed
+  // application path — a cold auto-submitted application there is the exact
+  // failure this excludes. Only APPLY-READY rows (NULL/apply_ready category)
+  // reach Hamilton's auto-submit; a funder lead reaches it ONLY after Robert's
+  // investigation PROMOTES it to apply_ready (config/pipelineCategory.js).
+  // Guarded by column existence so a pre-migration DB still returns rows.
+  let categoryFilter = ''
+  try {
+    const probe = await db
+      .prepare(
+        (db?.dialect || 'sqlite') === 'postgres'
+          ? "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='grants' AND column_name='pipeline_category' LIMIT 1"
+          : "SELECT 1 FROM pragma_table_info('grants') WHERE name='pipeline_category' LIMIT 1",
+      )
+      .get()
+    if (probe) categoryFilter = "\n        AND (pipeline_category IS NULL OR LOWER(pipeline_category) <> 'funder_lead')"
+  } catch { categoryFilter = '' }
   const rows = await db.prepare(
     `SELECT id, funding_opportunity_id, title, status
        FROM grants
       WHERE profile_id = ?
-        AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')
+        AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilter}
       ORDER BY updated_at DESC
       LIMIT 100`,
   ).all(profileId)
@@ -3344,5 +3362,9 @@ router.get('/inbox-status', handleForwardedInboxStatus)
 
 router.post('/sms-inbox', handleForwardedInbox)
 router.post('/inbox', handleForwardedInbox)
+
+// Exported for the funder-lead exclusion guard test: a funder lead must never
+// appear in the set Hamilton's auto-submit selects (`all_ready_sources`).
+export { listReadySources }
 
 export default router

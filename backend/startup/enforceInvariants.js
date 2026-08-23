@@ -10381,6 +10381,86 @@ export async function enforceFunderBehaviorRecall(db) {
   })
 }
 
+/**
+ * INVARIANT (owner directive 2026-08-23): Robert AUTONOMOUSLY adds qualifying
+ * national FUNDERS to a profile's pipeline as FUNDER LEADS.
+ *
+ * For every profile, over the propublica_990 national-funder slice, Robert runs
+ * his FOUR-GATE qualification (REAL / RELATABLE / COVERS-A-DECLARED-NEED /
+ * QUALIFIES on type+geo+eligibility+recipient-type) gated on QUALIFICATION, not
+ * the grantmaker-row ratio score, and auto-adds each qualifying funder as a
+ * FUNDER_LEAD (a research prospect Hamilton can NEVER cold-submit). A funder with
+ * a national footprint (>= NATIONAL_FOOTPRINT_MIN_STATES distinct states of
+ * need-evidenced giving) is admitted alongside in-state givers, so orgs in small
+ * states reach national funders of their cause. Bounded + idempotent; no dry
+ * run. ENFORCE_FUNDER_LEAD_ADMISSION=0 for count-only.
+ */
+export async function enforceFunderLeadAdmission(db) {
+  return runInvariant('funder_lead_admission', async () => {
+    let admitFunderLeads
+    try { ({ admitFunderLeads } = await import('../services/robert/robertFunderLeads.js')) } catch (err) {
+      log.warn('funder_lead_admission: service unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const res = await admitFunderLeads(db)
+    if ((res.added ?? 0) > 0) {
+      log.info('Robert auto-added national funder leads to profiles', {
+        added: res.added, profiles: res.profiles, scanned: res.scanned, examples: res.examples,
+      })
+    }
+    return {
+      scanned: res.scanned ?? 0,
+      repaired: res.added ?? 0,
+      wouldRepair: res.wouldAdd ?? 0,
+      profiles: res.profiles ?? 0,
+      perProfileCapped: res.perProfileCapped ?? 0,
+      skippedExisting: res.skippedExisting ?? 0,
+      skippedTombstoned: res.skippedTombstoned ?? 0,
+      byReason: res.byReason ?? {},
+      truncated: Boolean(res.truncated),
+      ...(res.skipped ? { skipped: res.skipped } : {}),
+      enforced: res.wouldAdd === undefined || res.wouldAdd === 0 ? true : false,
+    }
+  })
+}
+
+/**
+ * INVARIANT (owner refinement 2026-08-23): Robert INVESTIGATES each funder lead
+ * toward a verdict and PROMOTES the ones with a real applicable path.
+ *
+ * A funder lead that has (or, on investigation, gains) a usable application path
+ * is promoted to the APPLY-READY funding-source side, where Hamilton handles it
+ * normally on a fully-autonomous profile. A lead with no self-serve application
+ * path is recorded as a research/relationship prospect and stays a lead (bounded
+ * attempts -> not_applicable, labeled) — never silently promoted, never
+ * cold-submitted. Bounded per pass; a search-provider outage never burns an
+ * attempt.
+ */
+export async function enforceFunderLeadInvestigation(db) {
+  return runInvariant('funder_lead_investigation', async () => {
+    let investigateFunderLeads
+    try { ({ investigateFunderLeads } = await import('../services/robert/robertFunderLeads.js')) } catch (err) {
+      log.warn('funder_lead_investigation: service unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const res = await investigateFunderLeads(db)
+    if ((res.promoted ?? 0) > 0 || (res.notApplicable ?? 0) > 0) {
+      log.info('Robert investigated funder leads', {
+        promoted: res.promoted, investigated: res.investigated, notApplicable: res.notApplicable, scanned: res.scanned,
+      })
+    }
+    return {
+      scanned: res.scanned ?? 0,
+      repaired: res.promoted ?? 0,
+      investigated: res.investigated ?? 0,
+      notApplicable: res.notApplicable ?? 0,
+      deferredOutage: res.deferredOutage ?? 0,
+      ...(res.skipped ? { skipped: res.skipped } : {}),
+      enforced: true,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -10549,6 +10629,14 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // front of the canonical engine (ACCEPT only). Sits with the other linkage
   // gates so its rows are held to the scope/hygiene bars the SAME boot.
   steps.push(await enforceFunderBehaviorRecall(db))
+  // ROBERT auto-adds qualifying NATIONAL FUNDERS to the pipeline as FUNDER LEADS
+  // (four-gate qualification, NOT the ratio-score floor; national footprint +
+  // in-state givers; recipient-type gate). Runs right after the 990 ingest +
+  // behavior recall so it scores against the freshest demonstrated giving.
+  steps.push(await enforceFunderLeadAdmission(db))
+  // …then Robert INVESTIGATES those leads and PROMOTES the ones with a real
+  // applicable application path to the apply-ready side (Hamilton's territory).
+  steps.push(await enforceFunderLeadInvestigation(db))
   // RECALL net, the GENERAL case: the continuous catalog-wide re-matching
   // census/sweep (rolling-snapshot convergence). Sits with the other linkage
   // gates so anything it links (writes env-gated) is held to the stage/scope/

@@ -291,12 +291,21 @@ export async function buildPipelineRowSql(db) {
     ...pick(grantCols, GRANT_ROW_COLUMNS, 'g'),
     ...pick(oppCols, OPPORTUNITY_ROW_COLUMNS, 'fo'),
   ]
+  // FUNDER LEADS are a DISTINCT pipeline category (config/pipelineCategory.js):
+  // a research/relationship prospect Robert auto-added and is investigating,
+  // NOT a leaf application. They are directory-kind grantmaker rows, so the
+  // RELATABLE gate would wrongly remove them — and their qualification was
+  // already decided on the funder-specific four gates at admission. So the
+  // four-gate AUDIT and the pipeline-precision boot net never see them here.
+  const funderLeadExclusion = grantCols.has('pipeline_category')
+    ? `\n    AND (g.pipeline_category IS NULL OR LOWER(g.pipeline_category) <> 'funder_lead')`
+    : ''
   return `
   SELECT
     ${selects.join(',\n    ')}
   FROM grants g
   LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
-  WHERE g.profile_id = ?
+  WHERE g.profile_id = ?${funderLeadExclusion}
 `
 }
 

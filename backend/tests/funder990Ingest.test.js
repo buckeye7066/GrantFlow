@@ -49,7 +49,8 @@ function makeDb() {
     );
     CREATE TABLE grant_transactions (
       id TEXT PRIMARY KEY, funder_ein TEXT NOT NULL, funder_name TEXT,
-      recipient_name TEXT NOT NULL, recipient_ein TEXT, recipient_city TEXT,
+      recipient_name TEXT NOT NULL, recipient_is_individual BOOLEAN DEFAULT FALSE,
+      recipient_ein TEXT, recipient_city TEXT,
       recipient_state TEXT, recipient_country TEXT, amount NUMERIC, purpose TEXT,
       tax_year INTEGER, form_type TEXT, source_object_id TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP

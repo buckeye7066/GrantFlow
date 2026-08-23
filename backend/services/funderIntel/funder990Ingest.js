@@ -314,15 +314,18 @@ export async function runFunder990Ingest(db, deps = {}) {
         await db
           .prepare(
             `INSERT INTO grant_transactions
-               (id, funder_ein, funder_name, recipient_name, recipient_ein, recipient_city,
+               (id, funder_ein, funder_name, recipient_name, recipient_is_individual, recipient_ein, recipient_city,
                 recipient_state, recipient_country, amount, purpose, tax_year, form_type, source_object_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             `990tx:${usedObjectId}:${seq}`,
             ein,
             parsed.filerName ?? cand.sponsor ?? null,
             tx.recipient_name,
+            // Recipient-type gate basis (migration 183/0188): a PERSON recipient
+            // demonstrates the funder gives to individuals.
+            tx.recipient_is_individual === true ? 1 : 0,
             tx.recipient_ein,
             tx.recipient_city,
             tx.recipient_state,
