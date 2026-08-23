@@ -5074,7 +5074,7 @@ export async function enforcePipelinePrecision(db) {
     const counts = {
       scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0,
       protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0,
-      harvestFirst: 0, truncated: false,
+      harvestFirst: 0, truncated: false, loadFailures: 0, firstLoadError: null,
     }
     const byGate = { [GATES.RELATABLE]: 0, [GATES.QUALIFIES]: 0, [GATES.COVERS_NEED]: 0, [GATES.REAL]: 0 }
     const byReason = {}
@@ -5108,7 +5108,9 @@ export async function enforcePipelinePrecision(db) {
       if (facts.protectedProfile) { counts.protectedProfilesSkipped += 1; continue }
       let rows
       try { rows = await loadPipelineRows(db, profileId) } catch (err) {
-        log.warn('pipeline_precision: pipeline rows failed (non-fatal)', { profileId, error: String(err?.message || err) })
+        counts.loadFailures += 1
+        if (!counts.firstLoadError) counts.firstLoadError = String(err?.message || err)
+        log.warn('pipeline_precision: pipeline rows failed', { profileId, error: String(err?.message || err) })
         continue
       }
       if (!rows || rows.length === 0) continue
@@ -5239,6 +5241,13 @@ export async function enforcePipelinePrecision(db) {
     if (accounted !== counts.scanned) {
       throw new Error(
         `pipeline_precision accounting broken: scanned=${counts.scanned} but kept+removed+relabeled+failed=${accounted}`,
+      )
+    }
+    if (counts.loadFailures > 0 && counts.scanned === 0) {
+      // Every profile's row load threw — a broken SELECT reading as a clean
+      // "scanned 0" is the exact blind-sweep class this net exists to end.
+      throw new Error(
+        `pipeline_precision could not load any pipeline rows (${counts.loadFailures} profile loads failed): ${counts.firstLoadError}`,
       )
     }
     if (counts.scanned === 0) {

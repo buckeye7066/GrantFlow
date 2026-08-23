@@ -91,7 +91,7 @@ export function parseMaybeJson(value, fallback) {
  * @param {object|null} sections    `{ section_key: parsedData }`
  * @returns {string[]} canonical need ids, de-duplicated, insertion-ordered
  */
-export function declaredNeedsFrom(profileRow, sections) {
+export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = true } = {}) {
   const needs = new Set()
   const addNeed = (value) => {
     const canonical = canonicalNeed(value)
@@ -104,7 +104,13 @@ export function declaredNeedsFrom(profileRow, sections) {
   }
   const sectionMap = sections && typeof sections === 'object' ? sections : {}
   for (const [key, section] of Object.entries(sectionMap)) {
-    addNeed(key)
+    // A section KEY that IS a canonical need (`housing`, `education`,
+    // `employment`, `health_medical`, `family_life`) counts as a declaration
+    // (Robert's rule). MEASURED in prod 2026-08-23: nearly every profile
+    // carries those five sections, so this arm makes "declared needs" read
+    // the same for a biolab, the admin vault and a stress-cohort synthetic.
+    // `includeSectionKeys:false` lets a census measure the strict reading.
+    if (includeSectionKeys) addNeed(key)
     const parsed = parseMaybeJson(section, null)
     if (!parsed || typeof parsed !== 'object') continue
     for (const field of DECLARED_NEED_FIELDS) {

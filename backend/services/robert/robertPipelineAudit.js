@@ -210,54 +210,95 @@ export async function loadProfileFacts(db, profileId) {
  * flags nothing while reporting success. Every column below was verified to
  * exist before it was written.
  */
-const PIPELINE_ROW_SQL = `
+/** `grants` columns the gates read — [column, alias]. */
+const GRANT_ROW_COLUMNS = Object.freeze([
+  ['id', 'grant_id'], ['profile_id', 'profile_id'], ['funding_opportunity_id', 'funding_opportunity_id'],
+  ['title', 'grant_title'], ['funder', 'funder'], ['status', 'grant_status'], ['deadline', 'grant_deadline'],
+  ['application_url', 'grant_application_url'], ['url', 'grant_url'], ['amount_requested', 'amount_requested'],
+  ['match_score', 'match_score'], ['match_decision', 'match_decision'], ['updated_at', 'updated_at'],
+])
+
+/** `funding_opportunities` columns the gates read — [column, alias]. */
+const OPPORTUNITY_ROW_COLUMNS = Object.freeze([
+  ['title', 'opp_title'], ['sponsor', 'sponsor'], ['description', 'description'],
+  ['eligibility_text', 'eligibility_text'], ['eligibility_bullets', 'eligibility_bullets'],
+  ['entity_types_allowed', 'entity_types_allowed'], ['need_types_supported', 'need_types_supported'],
+  ['categories', 'categories'], ['keywords', 'keywords'], ['opportunity_kind', 'opportunity_kind'],
+  ['opportunity_type', 'opportunity_type'], ['funding_category', 'funding_category'], ['source', 'source'],
+  ['source_url', 'source_url'], ['application_url', 'opp_application_url'], ['apply_url', 'apply_url'],
+  ['final_url', 'final_url'], ['evidence_url', 'evidence_url'], ['external_id', 'external_id'],
+  ['state', 'state'], ['is_national', 'is_national'], ['deadline', 'opp_deadline'],
+  ['deadline_type', 'deadline_type'], ['amount_min', 'amount_min'], ['amount_max', 'amount_max'],
+  ['amount_text', 'amount_text'], ['is_active', 'is_active'], ['link_status', 'link_status'],
+  ['canonical_opportunity_key', 'canonical_opportunity_key'],
+])
+
+/**
+ * Columns that MUST exist for the gates to see any evidence at all. A schema
+ * lacking one of these is reported (thrown), never silently degraded to a
+ * bare-title sweep that "keeps" everything.
+ */
+export const REQUIRED_PIPELINE_ROW_COLUMNS = Object.freeze({
+  grants: ['id', 'profile_id', 'title', 'status'],
+  funding_opportunities: ['title', 'sponsor', 'entity_types_allowed', 'need_types_supported', 'categories', 'opportunity_kind', 'source_url'],
+})
+
+const _columnCache = new WeakMap()
+
+async function listColumns(db, table) {
+  const cached = _columnCache.get(db)
+  if (cached?.[table]) return cached[table]
+  let names
+  try {
+    if ((db?.dialect || 'sqlite') === 'postgres') {
+      const rows = await db
+        .prepare("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?")
+        .all(table)
+      names = new Set((rows || []).map((r) => String(r.column_name)))
+    } else {
+      const rows = await db.prepare(`PRAGMA table_info(${table})`).all()
+      names = new Set((rows || []).map((r) => String(r.name)))
+    }
+  } catch {
+    names = new Set()
+  }
+  _columnCache.set(db, { ...(cached || {}), [table]: names })
+  return names
+}
+
+/**
+ * Build the pipeline-row SELECT from the columns that ACTUALLY EXIST on this
+ * database. Prod Postgres 2026-08-22: `funding_opportunities` has no
+ * `external_id` column, so a hand-written SELECT naming it threw
+ * `column fo.external_id does not exist` for EVERY profile — the manual audit
+ * tool failed outright and a boot net reading it would have logged a warning
+ * and reported "scanned 0" as green. Optional columns are selected as
+ * `NULL AS alias`; REQUIRED ones missing throw with the column named.
+ */
+export async function buildPipelineRowSql(db) {
+  const grantCols = await listColumns(db, 'grants')
+  const oppCols = await listColumns(db, 'funding_opportunities')
+  const missingGrant = REQUIRED_PIPELINE_ROW_COLUMNS.grants.filter((c) => grantCols.size > 0 && !grantCols.has(c))
+  const missingOpp = REQUIRED_PIPELINE_ROW_COLUMNS.funding_opportunities.filter((c) => oppCols.size > 0 && !oppCols.has(c))
+  if (missingGrant.length || missingOpp.length) {
+    throw new Error(
+      `pipeline row evidence columns missing — grants: [${missingGrant.join(', ')}] funding_opportunities: [${missingOpp.join(', ')}]`,
+    )
+  }
+  const pick = (alias, cols, prefix) => cols.map(([col, as]) =>
+    (alias.size === 0 || alias.has(col)) ? `${prefix}.${col} AS ${as}` : `NULL AS ${as}`)
+  const selects = [
+    ...pick(grantCols, GRANT_ROW_COLUMNS, 'g'),
+    ...pick(oppCols, OPPORTUNITY_ROW_COLUMNS, 'fo'),
+  ]
+  return `
   SELECT
-    g.id                        AS grant_id,
-    g.profile_id                AS profile_id,
-    g.funding_opportunity_id    AS funding_opportunity_id,
-    g.title                     AS grant_title,
-    g.funder                    AS funder,
-    g.status                    AS grant_status,
-    g.deadline                  AS grant_deadline,
-    g.application_url           AS grant_application_url,
-    g.url                       AS grant_url,
-    g.amount_requested          AS amount_requested,
-    g.match_score               AS match_score,
-    g.match_decision            AS match_decision,
-    g.updated_at                AS updated_at,
-    fo.title                    AS opp_title,
-    fo.sponsor                  AS sponsor,
-    fo.description              AS description,
-    fo.eligibility_text         AS eligibility_text,
-    fo.eligibility_bullets      AS eligibility_bullets,
-    fo.entity_types_allowed     AS entity_types_allowed,
-    fo.need_types_supported     AS need_types_supported,
-    fo.categories               AS categories,
-    fo.keywords                 AS keywords,
-    fo.opportunity_kind         AS opportunity_kind,
-    fo.opportunity_type         AS opportunity_type,
-    fo.funding_category         AS funding_category,
-    fo.source                   AS source,
-    fo.source_url               AS source_url,
-    fo.application_url          AS opp_application_url,
-    fo.apply_url                AS apply_url,
-    fo.final_url                AS final_url,
-    fo.evidence_url             AS evidence_url,
-    fo.external_id              AS external_id,
-    fo.state                    AS state,
-    fo.is_national              AS is_national,
-    fo.deadline                 AS opp_deadline,
-    fo.deadline_type            AS deadline_type,
-    fo.amount_min               AS amount_min,
-    fo.amount_max               AS amount_max,
-    fo.amount_text              AS amount_text,
-    fo.is_active                AS is_active,
-    fo.link_status              AS link_status,
-    fo.canonical_opportunity_key AS canonical_opportunity_key
+    ${selects.join(',\n    ')}
   FROM grants g
   LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
   WHERE g.profile_id = ?
 `
+}
 
 /**
  * Pipeline statuses a human has ALREADY progressed. Never auto-removed — the
@@ -269,7 +310,8 @@ export const PROTECTED_GRANT_STATUSES = Object.freeze(new Set([
 ]))
 
 export async function loadPipelineRows(db, profileId) {
-  const rows = await db.prepare(PIPELINE_ROW_SQL).all(String(profileId))
+  const sql = await buildPipelineRowSql(db)
+  const rows = await db.prepare(sql).all(String(profileId))
   return (rows || []).map((r) => {
     const title = cleanExtractedText(r.opp_title || r.grant_title || '') || ''
     const sponsor = cleanExtractedText(r.sponsor || r.funder || '') || null

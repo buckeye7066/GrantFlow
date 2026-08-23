@@ -31,6 +31,7 @@ if (!url) {
   process.exit(2)
 }
 const asJson = process.argv.includes('--json')
+const strictNeeds = process.argv.includes('--no-section-keys')
 
 const { Client } = require('pg')
 const client = new Client({
@@ -59,6 +60,7 @@ const db = {
 
 const { PROTECTED_PIPELINE_STATUSES, PROTECTED_NAME_PATTERN } = await import('../startup/enforceInvariants.js')
 const audit = await import('../services/robert/robertPipelineAudit.js')
+const { declaredNeedsFrom } = await import('../services/pipelinePrecision.js')
 const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES } = audit
 
 await client.connect()
@@ -87,14 +89,18 @@ const totals = {
   need_neutral_row: 0,
   by_gate: { relatable: 0, qualifies: 0, covers_need: 0, real: 0 },
   by_reason: {},
+  errors: [],
   by_profile: [],
 }
 
 for (const p of profiles) {
   let facts, rows
-  try { facts = await loadProfileFacts(db, p.id) } catch (e) { totals.failed += 1; continue }
+  try { facts = await loadProfileFacts(db, p.id) } catch (e) { totals.failed += 1; if (totals.errors.length < 5) totals.errors.push(`${p.id}: ${e?.message || e}`); continue }
+  // `--no-section-keys`: measure the STRICT reading of "declared" (explicit
+  // need arrays + tags only; a section merely EXISTING is not a declaration).
+  if (strictNeeds) facts = { ...facts, needs: declaredNeedsFrom(facts.profile, facts.sections, { includeSectionKeys: false }) }
   if (facts.protectedProfile) { totals.protected_profiles_skipped += 1; continue }
-  try { rows = await loadPipelineRows(db, p.id) } catch (e) { totals.failed += 1; continue }
+  try { rows = await loadPipelineRows(db, p.id) } catch (e) { totals.failed += 1; if (totals.errors.length < 5) totals.errors.push(`${p.id}: ${e?.message || e}`); continue }
   if (!rows.length) continue
   totals.profiles_with_pipeline += 1
   const per = { profile_id: p.id, display_name: p.display_name, declared_needs: facts.needs, applicant_type: facts.applicantType, states: facts.states, scanned: rows.length, kept: 0, would_remove: 0, would_relabel: 0, by_gate: { relatable: 0, qualifies: 0, covers_need: 0, real: 0 }, by_reason: {}, examples: [] }
@@ -113,7 +119,7 @@ for (const p of profiles) {
         else if (verdict?.evidence?.detail === 'opportunity_states_no_need_vocabulary') totals.need_neutral_row += 1
       }
       if (!gate) { const r = gateRealOffline(row, { now }); if (r && !r.pass) { verdict = r; gate = GATES.REAL } }
-    } catch (e) { totals.failed += 1; continue }
+    } catch (e) { totals.failed += 1; if (totals.errors.length < 5) totals.errors.push(`${p.id}: ${e?.message || e}`); continue }
     if (!gate) { totals.kept += 1; per.kept += 1; continue }
     const status = String(row.grant_status ?? '').toLowerCase()
     const isProtected = PROTECTED_PIPELINE_STATUSES.includes(status)
