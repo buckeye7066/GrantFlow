@@ -137,7 +137,11 @@ describe('the cohort is a catalog FLOOR plus adversarial probes', () => {
       const probes = out.combined.gap_probes
       expect(probes.enabled).toBe(true)
       expect(probes.built).toBeGreaterThan(0)
-      expect(probes.split.catalog).toBeGreaterThanOrEqual(10) // the floor held
+      // Owner directive 2026-08-23: the cohort is ADVERSARIAL-MAJORITY with a
+      // THIN catalog floor — the break-the-system probes are the whole point.
+      expect(probes.split.adversarial).toBeGreaterThan(probes.split.catalog)
+      expect(probes.split.catalog).toBeLessThanOrEqual(6) // thin hard floor (AMY_CATALOG_FLOOR)
+      expect(probes.split.catalog).toBeGreaterThan(0)     // never zero — coverage holds
       expect(probes.split.catalog + probes.split.adversarial).toBe(20)
       expect(out.summary.scenarios).toBe(20)
       // Every probe is a real 4-axis intersection, not a catalog replay.

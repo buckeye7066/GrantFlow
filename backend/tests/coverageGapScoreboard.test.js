@@ -425,19 +425,22 @@ describe('Amy derives her cohort + task queue from the fleet gap scoreboard', ()
 
       // The cohort itself is gap-weighted: cancer_patient sits on BOTH gap
       // lanes (disease_specific 8/10 + private_charities 4/10 → weight capped
-      // at 4) so it takes the whole gap-weighted ring; business keeps its floor.
+      // at 4) so it takes the whole gap-weighted ring.
       //
-      // 2026-08-02: the nightly target is now SPLIT between the catalog floor
-      // and adversarial gap-probes (resolveCohortSplit), so the CATALOG share of
-      // an 8-profile target is 5 — cancer_patient 4, business 1 — and the other
-      // 3 are intersection probes. The weighting is unchanged; only the size of
-      // the ring it fills is. The TOTAL is still exactly the target, which is
-      // the property that matters: a cohort that silently shrank would be the
+      // 2026-08-23 (owner directive — the break-the-system probes are the whole
+      // point): the nightly cohort is now ADVERSARIAL-MAJORITY. resolveCohortSplit
+      // reserves only a THIN catalog floor (AMY_CATALOG_FLOOR, default 6; here
+      // capped by the 2 categories AND by min(total, floor) = 2) and gives the
+      // rest to intersection probes — so an 8-profile target is 2 catalog + 6
+      // adversarial (was 5 catalog + 3 probes under the old 0.4 share). The thin
+      // floor is fully consumed by the higher-gap category, so cancer_patient
+      // takes both catalog slots and business rotates to a later night. The TOTAL
+      // is still exactly the target — a cohort that silently shrank would be the
       // "we stopped looking" failure the convergence metric exists to catch.
       const byCategory = out.report.amy_summary.by_category
-      expect(byCategory.cancer_patient).toBe(4)
-      expect(byCategory.business).toBe(1)
-      expect(out.combined.gap_probes.built).toBe(3)
+      expect(byCategory.cancer_patient).toBe(2) // the whole thin catalog floor, gap-weighted
+      expect(byCategory.business ?? 0).toBe(0)   // thin floor exhausted by the higher-gap category this night
+      expect(out.combined.gap_probes.built).toBe(6) // adversarial-majority (was 3)
       expect(out.summary.scenarios).toBe(8)
 
       // Observability: scoreboard-refresh + adapter-wishlist events emitted as agent 'amy'.

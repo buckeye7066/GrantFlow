@@ -14,7 +14,7 @@
 
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
-import { planGapSeekingProbes, resolveCohortSplit } from '../services/amy/gapSeekingPlanner.js'
+import { planGapSeekingProbes, resolveCohortSplit, CATALOG_FLOOR_DEFAULT } from '../services/amy/gapSeekingPlanner.js'
 import { buildIntersectionScenarios, buildIntersectionScenario } from '../services/amy/intersectionScenario.js'
 import {
   foldProbeCoverage,
@@ -129,27 +129,62 @@ describe('the planner probes UNCOVERED space, not a catalog', () => {
   })
 })
 
-describe('the catalog FLOOR is never sacrificed to exploration', () => {
-  it('gives the catalog at least one slot per category', () => {
+describe('the nightly cohort is ADVERSARIAL-MAJORITY with a thin catalog floor', () => {
+  // Owner directive 2026-08-23: the break-the-system probes are the whole point,
+  // so a 50-cohort must be predominantly adversarial (~50), not the ~18 the old
+  // 0.4-share + one-per-category floor produced. The catalog keeps only a THIN
+  // hard floor so coverage never drops to zero.
+  it('gives adversarial the MAJORITY and the catalog only a thin floor', () => {
     const split = resolveCohortSplit({ targetCount: 50, catalogCategories: CATEGORY_IDS.length })
-    expect(split.catalog).toBeGreaterThanOrEqual(CATEGORY_IDS.length)
     expect(split.catalog + split.adversarial).toBe(50)
-    expect(split.adversarial).toBeGreaterThan(0)
+    // Predominantly adversarial — the whole point of the flip.
+    expect(split.adversarial).toBeGreaterThan(split.catalog)
+    expect(split.adversarial).toBeGreaterThanOrEqual(40)
+    // The catalog floor is THIN and hard — small, never zero.
+    expect(split.catalog).toBe(CATALOG_FLOOR_DEFAULT)
+    expect(split.catalog_floor).toBe(CATALOG_FLOOR_DEFAULT)
+    expect(split.catalog).toBeGreaterThan(0)
+    expect(split.catalog).toBeLessThan(CATEGORY_IDS.length) // NOT one-per-category any more
   })
 
-  it('spends nothing on probes when the target cannot even cover the floor', () => {
+  // MUTATION: reverting the share default to the old 0.4 (a catalog-majority
+  // cohort) would make this fail — it pins the adversarial-majority contract.
+  it('keeps adversarial the majority even at a small target, never below the floor', () => {
     const split = resolveCohortSplit({ targetCount: 20, catalogCategories: 32 })
-    expect(split.adversarial).toBe(0)
-    expect(split.catalog).toBe(20)
+    expect(split.catalog).toBe(CATALOG_FLOOR_DEFAULT)
+    expect(split.adversarial).toBe(20 - CATALOG_FLOOR_DEFAULT)
+    expect(split.adversarial).toBeGreaterThan(split.catalog)
   })
 
-  it('an ABSENT share is the default, not zero (the Number(null) trap)', () => {
+  it('coverage never drops to zero — the floor holds when categories exist', () => {
+    // Even a share of 1.0 leaves the thin floor standing.
+    const split = resolveCohortSplit({ targetCount: 50, catalogCategories: 32, share: 1 })
+    expect(split.catalog).toBeGreaterThanOrEqual(1)
+    expect(split.catalog).toBe(CATALOG_FLOOR_DEFAULT)
+    // No categories at all → no floor to keep (a degenerate config).
+    expect(resolveCohortSplit({ targetCount: 50, catalogCategories: 0 }).catalog).toBe(0)
+  })
+
+  it('an ABSENT share defaults to adversarial-majority (1.0), never 0 (the Number(null) trap)', () => {
     // `Number(null)` is 0 and IS finite. A bare isFinite check read "no share
-    // supplied" as "share = 0" and turned the whole adversarial cohort off
-    // while reporting success.
+    // supplied" as "share = 0" and turned the whole adversarial cohort off.
     const declared = resolveCohortSplit({ targetCount: 50, catalogCategories: 32, share: null })
-    expect(declared.adversarial).toBe(18)
+    expect(declared.adversarial).toBe(50 - CATALOG_FLOOR_DEFAULT)
+    // An explicit 0 still means zero adversarial (the toggle is honoured).
     expect(resolveCohortSplit({ targetCount: 50, catalogCategories: 32, share: 0 }).adversarial).toBe(0)
+  })
+
+  it('AMY_CATALOG_FLOOR overrides the thin floor size', () => {
+    const prev = process.env.AMY_CATALOG_FLOOR
+    process.env.AMY_CATALOG_FLOOR = '3'
+    try {
+      const split = resolveCohortSplit({ targetCount: 50, catalogCategories: 32 })
+      expect(split.catalog).toBe(3)
+      expect(split.adversarial).toBe(47)
+    } finally {
+      if (prev === undefined) delete process.env.AMY_CATALOG_FLOOR
+      else process.env.AMY_CATALOG_FLOOR = prev
+    }
   })
 })
 

@@ -280,6 +280,33 @@ export function summarizeAmyFlywheel(amy) {
     }
   }
 
+  // ── PIPELINE GUARD-ESCAPE AUDIT (owner directive 2026-08-23) ────────────
+  // At her reap Amy re-checks every REAL profile's pipeline against the canonical
+  // four-gate criteria and removes sources that slipped past admission, learning
+  // the blind spot that let each in. Zero escapes is an honest success line, not
+  // silence — the guards are holding.
+  const escape = report.pipeline_guard_escape_audit || null
+  if (escape?.ran) {
+    const escN = Number(escape.escapes_removed) || 0
+    if (escN > 0) {
+      const gates = Object.entries(escape.by_gate || {})
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([g, c]) => `${g}×${c}`)
+        .join(', ')
+      edits.push(
+        `Pipeline guard-escape audit — removed ${escN} source(s) that had slipped past admission across `
+        + `${escape.profiles_with_escapes || 0} of ${escape.profiles_scanned || 0} real pipeline(s) (by gate: ${gates || 'n/a'}). `
+        + `Each escape's admission blind spot is in the code-change items below.`,
+      )
+    } else {
+      edits.push(
+        `Pipeline guard-escape audit — scanned ${escape.profiles_scanned || 0} real pipeline(s), ZERO escapes: `
+        + `the admission gates and the boot-net sweep are holding.`,
+      )
+    }
+  }
+
   const couldNot = []
   const queue = Array.isArray(report.approval_queue) ? report.approval_queue.filter((q) => !q?.auto_applied) : []
   // A ledger CLOSE is the only proof this loop can converge — report it first,

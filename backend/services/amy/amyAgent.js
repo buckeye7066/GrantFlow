@@ -59,9 +59,11 @@ import {
   markProfilesTaught,
   REQUIRED_TEACHING_AGENTS,
 } from './amyProfileStore.js'
-import { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations } from './amyReport.js'
+import { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations, buildGuardEscapeEvaluations } from './amyReport.js'
+import { runPipelineGuardEscapeAudit } from './pipelineGuardEscapeAudit.js'
 import { cohortMetricsAtFloor, sweepFloors, summarizeCohort } from './crawlerMetrics.js'
-import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue, WEIGHT_TRIAL_KV_KEY } from './crawlerTuner.js'
+import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue, itemFindingType, WEIGHT_TRIAL_KV_KEY } from './crawlerTuner.js'
+import { FINDING_TYPES } from './amyConstants.js'
 import { getEffectiveMinScore, getEffectiveWeights, setScoringTuning, persistScoringTuning } from '../../config/scoringTuning.js'
 import { readLiveOverrides, applyCoverageOverrides, revertCoverageOverrides } from './crawlerCoverageEditor.js'
 import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearning, appendArchetypeMetrics, evaluationArchetype } from './archetypeLearning.js'
@@ -1231,6 +1233,63 @@ export async function runAmyTraining(options = {}) {
     }
   } else {
     combined.deletion_proof = { verdict: 'unknown', reasons: ['keepProfiles=true — nothing was deleted by design'] }
+  }
+
+  // ── PIPELINE GUARD-ESCAPE AUDIT (owner directive 2026-08-23) ────────────
+  // At the reap — after the crawl+learn, alongside the synthetic profile
+  // deletion above — Amy re-checks EVERY real profile's pipeline against the
+  // CANONICAL four-gate criteria and removes the sources that slipped past
+  // admission. Removal reuses the canonical tombstone (auditAllPipelines →
+  // recordDismissal + reconcileDismissedGrants), never a raw delete and never a
+  // new bar, so it COMPOSES with sibling #4/Robert and the boot net: same
+  // criteria means a source Robert legitimately adds passes (Amy won't remove
+  // it) and a source Amy removes fails (Robert won't re-add it). The distinctly-
+  // Amy part is the LEARNING: each escape becomes a `pipeline_guard_escape`
+  // finding diagnosing WHICH admission gate let it through and the assertion
+  // that would close the blind spot, folded into the approval queue + ledger +
+  // morning report. FEW escapes here is an honest SUCCESS — enforcePipelinePrecision
+  // already sweeps most every boot; Amy catches the bounded residual and learns.
+  // Runs BEFORE the approval-ledger fold so the escape items age in the ledger.
+  let guardEscapeAudit = null
+  if (db && !dryRunDiscovery) {
+    try {
+      guardEscapeAudit = await runPipelineGuardEscapeAudit(db, { runId, now: clock() })
+      const escapeEvals = buildGuardEscapeEvaluations(guardEscapeAudit)
+      if (escapeEvals.length > 0) {
+        for (const item of buildApprovalQueue(escapeEvals)) {
+          if (itemFindingType(item) === FINDING_TYPES.PIPELINE_GUARD_ESCAPE) approvalQueue.push(item)
+        }
+      }
+    } catch (err) {
+      guardEscapeAudit = { ran: false, reason: 'threw', error: err?.message || String(err) }
+      logger.warn('Amy pipeline guard-escape audit failed (non-fatal)', { run_id: runId, error: err?.message })
+    }
+  }
+  combined.pipeline_guard_escape_audit = guardEscapeAudit
+
+  // Agent Observability: the escape audit outcome is visible to Sam + Anya.
+  if (guardEscapeAudit?.ran) {
+    const escN = guardEscapeAudit.escapes_removed || 0
+    await Promise.resolve(recordActivity(db, {
+      agent_name: 'amy',
+      event_type: 'amy.pipeline_guard_escape_audit',
+      status: 'succeeded',
+      severity: escN > 0 ? 'medium' : 'info',
+      title: `Amy pipeline guard-escape audit: removed ${escN} escape(s) across ${guardEscapeAudit.profiles_with_escapes || 0}/${guardEscapeAudit.profiles_scanned || 0} real pipeline(s)`,
+      description: escN > 0
+        ? `Escapes by gate: ${Object.entries(guardEscapeAudit.by_gate || {}).map(([g, n]) => `${g}×${n}`).join(', ')}.`
+        : 'Zero guard-escapes — the admission gates + boot net are holding.',
+      metric_key: 'amy_pipeline_guard_escapes_removed',
+      metric_value: escN,
+      details_json: {
+        run_id: runId,
+        profiles_scanned: guardEscapeAudit.profiles_scanned || 0,
+        escapes_removed: escN,
+        by_gate: guardEscapeAudit.by_gate || {},
+        by_reason: guardEscapeAudit.by_reason || {},
+        reconciled: guardEscapeAudit.reconciled || 0,
+      },
+    })).catch(() => {})
   }
 
   // ── APPROVAL LEDGER (2026-08-01) ────────────────────────────────────────
