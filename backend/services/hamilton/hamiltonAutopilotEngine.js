@@ -72,6 +72,8 @@ import { resolveConfirmationCaptureDir } from './hamiltonConfirmationArtifacts.j
 import { resolveUploadsDir } from '../../utils/uploadsDir.js'
 import { startLiveScreencast, reportLiveStep, isLiveViewEnabled } from './hamiltonLiveView.js'
 import { isAnswerableUnknownField, fieldLabelOf } from './hamiltonFieldAnswerer.js'
+import { STATE_REGISTRY } from '../shared/data/stateRegistry.js'
+import { US_STATE_CODES, US_TERRITORY_CODES } from '../../../shared/usStateCodes.js'
 
 const NAV_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS) || 25_000
 const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS) || 8_000
@@ -131,6 +133,12 @@ const STANDING_ATTESTATION_PATTERNS = [
   /authorize.*(verify|release|confirm).*information/i,
   /agree.*terms.*conditions/i,
   /understand.*may\s*be\s*disqualif/i,
+  // "I have read and agree to the 2026 U.S. Bank Student Scholarship
+  // Sweepstakes Official Rules" — reading + agreeing to the funder's rules,
+  // terms, privacy policy or guidelines is the consent the full-automation
+  // grant already carries (07f6c0d8). Left unticked it failed the submit.
+  /\b(read|reviewed)\b.*\b(agree|accept|consent)\b/i,
+  /\b(agree|accept|consent)\b.*\b(official\s*rules|rules|terms|privacy|policy|policies|guidelines|requirements)\b/i,
 ]
 
 // Hard-blocker labels Hamilton NEVER auto-checks.
@@ -189,6 +197,11 @@ function signatureConsentFor({ fullAutomation, authorizations, signerName }) {
 }
 
 const SUBMIT_BUTTON_PATTERNS = [/^submit/i, /finalize/i, /apply\s*now/i, /complete\s*application/i, /send\s*application/i]
+// A "Submit" that submits a FILTER, a search box or a feedback form is not an
+// application submit. bja.ojp.gov/funding/opportunities carries "Submit all
+// selections" on its facet filter; a student's task reached the irreversible
+// boundary on it (prod, 2026-08-22).
+export const SUBMIT_BUTTON_EXCLUDE_RX = /submit\s+(all\s+)?(selections?|search|query|filters?|feedback|comments?|a\s+(question|request|ticket))\b|\bsearch\b/i
 const NEXT_BUTTON_PATTERNS   = [/^next/i, /continue/i, /proceed/i, /save\s*&\s*continue/i]
 const DRAFT_BUTTON_PATTERNS  = [/save\s*draft/i, /save\s*&\s*exit/i, /save\s*for\s*later/i]
 // LANDING PAGE → APPLICATION FORM. A "portal" URL often points at a program
@@ -242,20 +255,67 @@ function readOrgNarrative(profile) {
   return joined || undefined
 }
 
+/**
+ * A profile address often arrives as ONE blob ("3940 Eveningside Dr. NE\n
+ * Cleveland, TN 37312") with city/state/zip empty. Filled verbatim into
+ * "Address line 1" while "City" stayed blank, the U.S. Bank form failed its
+ * native validation on City (prod, 2026-08-22). This splits the blob into its
+ * parts when — and only when — the tail has the unambiguous "City, ST 12345"
+ * shape; anything else is left exactly as stored.
+ */
+export function parseAddressBlob(raw) {
+  const text = String(raw ?? '').replace(/\r/g, '').trim()
+  if (!text) return null
+  const m = text.match(/^([\s\S]*?)[,\n]\s*([A-Za-z][A-Za-z .'-]{1,60}?),?\s+([A-Za-z]{2})\.?\s+(\d{5})(?:-\d{4})?\s*$/)
+  if (!m) return null
+  const state = m[3].toUpperCase()
+  if (!US_STATE_CODES.includes(state) && !US_TERRITORY_CODES.includes(state)) return null
+  const street = m[1].replace(/\s*\n\s*/g, ', ').replace(/,\s*$/, '').trim()
+  return { street: street || undefined, city: m[2].trim(), state, zip: m[4] }
+}
+
+const STATE_NAME_BY_CODE = Object.freeze(Object.fromEntries(
+  Object.entries(STATE_REGISTRY).map(([code, entry]) => [code.toUpperCase(), entry?.name]).filter(([, name]) => name),
+))
+const STATE_CODE_BY_NAME = Object.freeze(Object.fromEntries(
+  Object.entries(STATE_NAME_BY_CODE).map(([code, name]) => [String(name).toLowerCase(), code]),
+))
+
+/**
+ * A state <select> lists either "Tennessee" or "TN"; the profile stores one of
+ * them. Try what the profile says first, then the other spelling. Never a
+ * guess: an unrecognised value yields only itself.
+ */
+export function stateValueAlternates(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return []
+  const out = [raw]
+  const upper = raw.toUpperCase()
+  if (STATE_NAME_BY_CODE[upper]) out.push(STATE_NAME_BY_CODE[upper])
+  const code = STATE_CODE_BY_NAME[raw.toLowerCase()]
+  if (code) out.push(code)
+  return [...new Set(out)]
+}
+
 function readProfileValues(profile) {
   const apps = pick(profile, ['university_applications.applications']) || []
   const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : {}
+  const storedAddress1 = pick(profile, ['basic_information.address1', 'basic_information.address'])
+  const storedCity = pick(profile, ['basic_information.city'])
+  const storedState = pick(profile, ['basic_information.state'])
+  const storedZip = pick(profile, ['basic_information.zip'])
+  const parsedAddress = (!storedCity || !storedState || !storedZip) ? parseAddressBlob(storedAddress1) : null
   return {
     first_name:  pick(profile, ['basic_information.first_name', 'first_name']),
     last_name:   pick(profile, ['basic_information.last_name', 'last_name']),
     full_name:   [pick(profile, ['basic_information.first_name','first_name']), pick(profile, ['basic_information.last_name','last_name'])].filter(Boolean).join(' ') || undefined,
     email:       pick(profile, ['basic_information.email', 'email']),
     phone:       pick(profile, ['basic_information.phone', 'phone']),
-    address1:    pick(profile, ['basic_information.address1', 'basic_information.address']),
+    address1:    parsedAddress?.street || storedAddress1,
     address2:    pick(profile, ['basic_information.address2']),
-    city:        pick(profile, ['basic_information.city']),
-    state:       pick(profile, ['basic_information.state']),
-    zip:         pick(profile, ['basic_information.zip']),
+    city:        storedCity || parsedAddress?.city,
+    state:       storedState || parsedAddress?.state,
+    zip:         storedZip || parsedAddress?.zip,
     country:     pick(profile, ['basic_information.country']) || 'United States',
     school:      firstApp.name      || pick(profile, ['student_info.school_name']),
     major:       firstApp.major     || pick(profile, ['student_info.major']),
@@ -344,6 +404,9 @@ async function detectFields(page) {
         label: (nearbyLabel(el) || '').trim().slice(0, 200),
         required: el.hasAttribute('required') || el.getAttribute('aria-required') === 'true',
         value: el.value ?? null,
+        options: tag === 'select'
+          ? Array.from(el.options || []).slice(0, 60).map((o) => String(o.textContent || o.label || o.value || '').trim().slice(0, 80))
+          : undefined,
       })
       idx += 1
     }
@@ -352,11 +415,18 @@ async function detectFields(page) {
 }
 
 function matchFieldKey(field) {
-  const candidates = [field.name, field.id, field.placeholder, field.ariaLabel, field.label]
-    .filter(Boolean).join(' ').toLowerCase()
-  if (!candidates) return null
+  const parts = [field.name, field.id, field.placeholder, field.ariaLabel, field.label]
+    .filter(Boolean).map((c) => String(c).toLowerCase().trim()).filter(Boolean)
+  if (parts.length === 0) return null
+  // Each candidate is tested ON ITS OWN as well as the joined string. An
+  // anchored rule (/^city$/, /^state$/, /^name$/) can never match the joined
+  // "city city city" of a field whose name, id and label all read "City" —
+  // which is exactly why a live form's City stayed blank while the profile
+  // held the value (prod, 2026-08-22). The joined form still serves the
+  // multi-word rules ("date of birth" split across name + label).
+  const joined = parts.join(' ')
   for (const rule of FIELD_RULES) {
-    if (rule.patterns.some((rx) => rx.test(candidates))) return rule
+    if (rule.patterns.some((rx) => parts.some((c) => rx.test(c)) || rx.test(joined))) return rule
   }
   return null
 }
@@ -419,8 +489,19 @@ async function detectButtons(page, patterns) {
             ? `${form.getAttribute('id') || ''} ${form.getAttribute('name') || ''} ${form.getAttribute('aria-label') || ''} ${form.innerText || form.textContent || ''}`
             : ''
           const isPageFeedback = /\b(?:was this page helpful|rate this page|feedback (?:about|on) this page|did you find what you needed|how (?:helpful|useful) was this page)\b/i.test(formContext)
-          el.setAttribute('data-hamilton-btn', `b${out.length}`)
-          out.push({ bid: `b${out.length}`, text, inForm: !!form, formFieldCount, isPageFeedback })
+          // A STABLE id per element. detectButtons runs once per pattern set
+          // (submit / next / draft) and used to renumber from b0 each time, so
+          // a button matching BOTH submit and next ("Submit and continue") was
+          // re-stamped by the later call and the submit click looked up an id
+          // that no longer existed — "Submit button could not be clicked" on a
+          // form whose button was right there (prod, 2026-08-03 and 2026-08-22).
+          let bid = el.getAttribute('data-hamilton-btn')
+          if (!bid) {
+            window.__hamiltonBtnSeq = (window.__hamiltonBtnSeq || 0) + 1
+            bid = `b${window.__hamiltonBtnSeq}`
+            el.setAttribute('data-hamilton-btn', bid)
+          }
+          out.push({ bid, text, inForm: !!form, formFieldCount, isPageFeedback })
           break
         }
       }
@@ -693,6 +774,87 @@ export function ageAffirmationVerdict(text, ageYears) {
   return null
 }
 
+/**
+ * Facts an eligibility checkbox can be checked against, each read from what
+ * the profile DECLARES (never inferred from prose). A fact the profile does
+ * not state is `null`, and a null fact can never affirm anything.
+ */
+export function deriveEligibilityFacts(profile, valuesByKey = {}) {
+  const applicantType = String(pick(profile, ['applicant_type', 'primary_type']) || '').toLowerCase()
+  const degreeLevel = String(valuesByKey.degree_level || '').toLowerCase()
+  const school = String(valuesByKey.school || '').trim()
+  const isGraduate = /(?<!under)\b(graduate|master|mba|ph\.?d|doctoral|doctorate|law school|\bjd\b|\bmd\b)\b/i.test(degreeLevel)
+    || /graduate_student|postdoc/.test(applicantType)
+  const isUndergrad = /\b(bachelor|associate|undergrad|freshman|sophomore|junior|senior|trade|vocational|certificate|community college)\b/i.test(degreeLevel)
+    || /college_student|high_school_student/.test(applicantType)
+  const isStudent = Boolean(school) || Boolean(degreeLevel) || /student/.test(applicantType)
+  const stateCode = String(valuesByKey.state || '').toUpperCase()
+  const declaredCountry = String(pick(profile, ['basic_information.country']) || '').toLowerCase()
+  const usBased = (US_STATE_CODES.includes(stateCode) || US_TERRITORY_CODES.includes(stateCode))
+    || /^(us|usa|u\.s\.a?\.?|united states( of america)?)$/.test(declaredCountry)
+    || (declaredCountry === '' && /^\d{5}(-\d{4})?$/.test(String(valuesByKey.zip || '')) ? true : null)
+  const immigration = String(pick(profile, [
+    'demographics.immigrant_status', 'demographics.immigration_status',
+    'basic_information.immigrant_status', 'basic_information.immigration_status',
+  ]) || '').toLowerCase()
+  const citizen = immigration === 'us_citizen' ? true : (immigration && immigration !== 'unknown' ? false : null)
+  const resident = immigration === 'permanent_resident' ? true : (citizen === true ? true : (immigration && immigration !== 'unknown' ? false : null))
+  return {
+    isStudent,
+    isUndergrad: isStudent ? (isGraduate ? false : (isUndergrad || null)) : null,
+    isGraduate: isStudent ? isGraduate : null,
+    usBased: usBased === true ? true : (usBased === false ? false : null),
+    citizen,
+    resident,
+    known: isStudent || usBased === true || citizen !== null,
+  }
+}
+
+/**
+ * Verdict for an ELIGIBILITY checkbox: true only when the profile's declared
+ * facts PROVE the statement; false when they contradict it; null when they
+ * say nothing — and a null on a required box becomes a named ask, never a
+ * tick. (U.S. Bank 2026-08-22: "I am a college-bound student, accepted or
+ * enrolled at an undergraduate, trade or vocational school…", "I am not a
+ * graduate student, an international student, or a student attending a
+ * college outside the U.S." — both provable for an enrolled MTSU undergrad.)
+ */
+export function eligibilityAffirmationVerdict(text, facts) {
+  if (!facts) return null
+  const t = String(text || '').toLowerCase()
+  if (!t) return null
+  const enrolledUndergrad = /(college-?\s?bound|accepted or enrolled|currently enrolled|enrolled (as|at|in)\b|undergraduate student|trade or vocational|full-?time student|student enrolled)/.test(t)
+  const notGraduateOrIntl = /(not a graduate student|not an? (international|foreign) student|outside (of )?the u\.?s|not .*international student)/.test(t)
+  const citizenship = /(u\.?s\.? citizen|united states citizen|citizen of the united states)/.test(t)
+  const residency = /(legal (u\.?s\.? )?resident|permanent resident|lawful permanent resident|legal resident of the united states)/.test(t)
+  if (notGraduateOrIntl) {
+    if (facts.isGraduate === true) return false
+    if (facts.isStudent && facts.isGraduate === false && facts.usBased === true) return true
+    return null
+  }
+  if (enrolledUndergrad) {
+    if (/undergraduate|trade or vocational|college-?\s?bound/.test(t) && facts.isGraduate === true) return false
+    if (facts.isStudent && (facts.isUndergrad === true || facts.isGraduate === false)) return true
+    return null
+  }
+  if (citizenship && residency) {
+    if (facts.citizen === true || facts.resident === true) return true
+    if (facts.citizen === false && facts.resident === false) return false
+    return null
+  }
+  if (citizenship) {
+    if (facts.citizen === true) return true
+    if (facts.citizen === false) return false
+    return null
+  }
+  if (residency) {
+    if (facts.resident === true) return true
+    if (facts.resident === false) return false
+    return null
+  }
+  return null
+}
+
 async function detectAttestationGate(page, { authorizations, signatureConsent = null }) {
   // Find checkbox labels that look like legal attestations or signatures.
   const items = await page.$$eval('input[type="checkbox"]', (els) => {
@@ -731,17 +893,6 @@ async function detectAttestationGate(page, { authorizations, signatureConsent = 
   return null
 }
 
-async function detectValidationErrors(page) {
-  return await page.$$eval('[role="alert"], .error, .invalid-feedback, .field-error, [aria-invalid="true"]', (els) => {
-    const out = []
-    for (const el of els) {
-      const text = (el.innerText || '').trim()
-      if (text && text.length < 400) out.push(text)
-    }
-    return out
-  }).catch(() => [])
-}
-
 // Page chrome that is NOT part of the application: a "Was this page helpful?"
 // survey, a "Report suspected fraud" widget, a newsletter/cookie box. On many
 // government portals these live in the SAME <form> as the real submit control,
@@ -751,6 +902,23 @@ async function detectValidationErrors(page) {
 // the isPageFeedback filter that already keeps such widgets from being treated
 // as the application's SUBMIT button.
 const FEEDBACK_VALIDATION_IGNORE_RX = /was this (page |content )?helpful|page helpful|how helpful|rate (this )?(page|content)|site feedback|leave feedback|feedback about this|report (suspected )?(fraud|abuse)|newsletter|subscribe|cookie/i
+
+async function detectValidationErrors(page) {
+  const raw = await page.$$eval('[role="alert"], .error, .invalid-feedback, .field-error, [aria-invalid="true"]', (els) => {
+    const out = []
+    for (const el of els) {
+      const text = (el.innerText || '').trim()
+      if (text && text.length < 400) out.push(text)
+    }
+    return out
+  }).catch(() => [])
+  // The same page-chrome rule the submit path applies: a "Was this page
+  // helpful?" survey or a "Report fraud" widget is not a validation error of
+  // the application. It blocked the acf.gov TANF run after a Next click
+  // (prod 2026-08-22) because only the submit path filtered it.
+  return raw.filter((text) => !FEEDBACK_VALIDATION_IGNORE_RX.test(text))
+}
+
 
 async function detectNativeValidationErrors(page, buttonId) {
   if (!buttonId) return []
@@ -1268,6 +1436,7 @@ export async function runAutopilot({
     && (allowAutoSubmit === null ? true : Boolean(allowAutoSubmit))
 
   const trace = []
+  let blindNextClicks = 0
   const filled = []
   let loggedIn = false
   let loginAttempted = false
@@ -1555,7 +1724,8 @@ export async function runAutopilot({
       }
 
       const fields = await detectFields(page)
-      const submitButtons = await detectButtons(page, SUBMIT_BUTTON_PATTERNS)
+      const submitButtons = (await detectButtons(page, SUBMIT_BUTTON_PATTERNS))
+        .filter((b) => !SUBMIT_BUTTON_EXCLUDE_RX.test(String(b.text || '')))
       const nextButtons   = await detectButtons(page, NEXT_BUTTON_PATTERNS)
       const draftButtons  = await detectButtons(page, DRAFT_BUTTON_PATTERNS)
       trace.push({ step: 'inspect', detail: summarisePageState(page, fields, [...submitButtons, ...nextButtons, ...draftButtons]) })
@@ -1622,7 +1792,14 @@ export async function runAutopilot({
         if (rule.multiline && !authorizations.generate_narratives && !valuesByKey.essay && !valuesByKey.goals) {
           continue
         }
-        const ok = await fillFieldByFid(page, f.fid, v)
+        let ok = await fillFieldByFid(page, f.fid, v)
+        if (!ok && rule.key === 'state' && f.tag === 'select') {
+          // "TN" vs "Tennessee": the profile's spelling first, then the other.
+          for (const alt of stateValueAlternates(v).slice(1)) {
+            ok = await fillFieldByFid(page, f.fid, alt)
+            if (ok) break
+          }
+        }
         if (ok) {
           // NEVER record an identity value in the trace/filled list — it is
           // persisted on the run row. Record the key and that it came from the
@@ -1723,7 +1900,12 @@ export async function runAutopilot({
           || (identityValues && identityValues.date_of_birth)
           || valuesByKey.date_of_birth || valuesByKey.dob || null
         const ageYears = computeAgeYears(dobForAge)
-        if (ageYears !== null) {
+        // Beyond age: enrollment / undergraduate / not-international /
+        // citizenship statements are checked against what the profile
+        // DECLARES. A statement the facts cannot settle is left unticked and,
+        // when required, becomes a named ask (condition 2) — never a tick.
+        const eligibilityFacts = deriveEligibilityFacts(profile, valuesByKey)
+        if (ageYears !== null || eligibilityFacts.known) {
           const boxes = await page.$$eval('input[type="checkbox"]', (els) => els.map((el) => {
             const id = el.id || ''
             let lab = ''
@@ -1740,8 +1922,15 @@ export async function runAutopilot({
             : (b.name ? `input[name="${String(b.name).replace(/"/g, '\\"')}"]` : null)
           const affirmed = []
           const falseAffirmations = []
+          const undecided = []
           for (const b of boxes) {
-            const verdict = ageAffirmationVerdict(b.text, ageYears)
+            let verdict = ageAffirmationVerdict(b.text, ageYears)
+            if (verdict === null) verdict = eligibilityAffirmationVerdict(b.text, eligibilityFacts)
+            if (verdict === null && b.required && !b.checked
+                && !STANDING_ATTESTATION_PATTERNS.some((rx) => rx.test(b.text))
+                && !HARD_ATTESTATION_PATTERNS.some((rx) => rx.test(b.text))) {
+              undecided.push(b)
+            }
             if (verdict === true && !b.checked) {
               const sel = selFor(b)
               if (!sel) continue
@@ -1779,6 +1968,13 @@ export async function runAutopilot({
             if (relaxed.length > 0) trace.push({ step: 'eligibility_alternate_relaxed', detail: { items: relaxed } })
           }
           if (affirmed.length > 0) trace.push({ step: 'eligibility_affirmed', detail: { items: affirmed } })
+          for (const b of undecided) {
+            const label = String(b.text || '').replace(/^\S+\s+/, '').trim().slice(0, 120) || String(b.text || '').slice(0, 120)
+            if (label && !unansweredRequiredFields.some((u) => u.label === label)) {
+              unansweredRequiredFields.push({ label, fid: null, type: 'checkbox' })
+            }
+          }
+          if (undecided.length > 0) trace.push({ step: 'eligibility_undecided', detail: { items: undecided.map((b) => b.text.slice(0, 100)) } })
         }
       }
 
@@ -1984,6 +2180,20 @@ export async function runAutopilot({
         if (signal?.aborted) {
           return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before continuing.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
         }
+        // An information page (acf.gov's TANF program page, a grants LISTING)
+        // often carries a "Next" pagination link and nothing to fill. One blind
+        // Next is allowed — a real multi-step form can open with an intro page —
+        // but a SECOND page with still nothing filled is not an application.
+        if (filled.length === 0 && blindNextClicks >= 1) {
+          trace.push({ step: 'no_application_form', detail: { reason: 'next_without_fields', pages_visited: pagesVisited } })
+          return {
+            status: 'blocked',
+            blocker_kind: 'no_application_form',
+            blocker_detail: 'This page has no application form to fill — Hamilton followed "Next" once and found nothing to fill on either page (informational or listing page). Hamilton degrades to the manual funder-contact packet pathway.',
+            filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+          }
+        }
+        if (filled.length === 0) blindNextClicks += 1
         const clicked = await clickButtonByBid(page, nextButtons[0].bid)
         if (!clicked) {
           return { status: 'failed', blocker_kind: 'click_failed', blocker_detail: 'Next button could not be clicked', filled_fields: filled, pages_visited: pagesVisited, trace }
@@ -2083,7 +2293,8 @@ export async function runAutopilot({
 
 export const _internal = {
   computeAgeYears,
-  ageAffirmationVerdict,
+  ageAffirmationVerdict, eligibilityAffirmationVerdict, deriveEligibilityFacts,
+  parseAddressBlob, stateValueAlternates,
   FIELD_RULES, STANDING_ATTESTATION_PATTERNS, HARD_ATTESTATION_PATTERNS,
   SIGNATURE_FIELD_PATTERNS, isTypedSignatureField, signatureConsentFor, detectAttestationGate,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,

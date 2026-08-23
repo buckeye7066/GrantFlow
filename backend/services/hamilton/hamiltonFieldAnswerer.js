@@ -35,7 +35,18 @@ export function isAnswerableUnknownField(field) {
     const t = String(field.type || '').toLowerCase()
     return t === '' || t === 'text' || t === 'search'
   }
+  // A <select> with its options listed ("Are you a U.S. Bank client?" —
+  // Yes/No) is answerable ONLY as a choice among those options, and only when
+  // the profile states the fact. Options come from detectFields.
+  if (field.tag === 'select') return Array.isArray(field.options) && field.options.length > 0 && field.options.length <= 60
   return false
+}
+
+function selectOptionTexts(field) {
+  return (Array.isArray(field?.options) ? field.options : [])
+    .map((o) => (typeof o === 'string' ? o : (o?.label ?? o?.text ?? o?.value ?? '')))
+    .map((s) => String(s).trim())
+    .filter((s) => s && !/^(select|choose|please select|please choose|--|—|-)/i.test(s))
 }
 
 export function fieldLabelOf(field) {
@@ -105,6 +116,9 @@ export async function answerUnknownField(field, {
   const evidence = buildProfileEvidence(profile)
   if (!evidence) return null
   const freeText = field.tag === 'textarea'
+  const isSelect = field.tag === 'select'
+  const options = isSelect ? selectOptionTexts(field) : []
+  if (isSelect && options.length === 0) return null
 
   const funderLine = (opportunity || grant)
     ? `FUNDING SOURCE: ${String(opportunity?.title || grant?.title || '').slice(0, 160)} — ${String(opportunity?.sponsor || grant?.funder || '').slice(0, 120)}\n`
@@ -115,8 +129,8 @@ export async function answerUnknownField(field, {
 ${evidence}
 
 ${funderLine}
-APPLICATION FIELD TO ANSWER: "${label}"${freeText ? ' (a free-text / essay field)' : ' (a short answer field)'}
-
+APPLICATION FIELD TO ANSWER: "${label}"${freeText ? ' (a free-text / essay field)' : (isSelect ? ' (a drop-down: the answer MUST be one of the OPTIONS below, verbatim)' : ' (a short answer field)')}
+${isSelect ? `OPTIONS: ${options.map((o) => JSON.stringify(o)).join(', ')}\n` : ''}
 RULES:
 - Answer ONLY with facts present in the APPLICANT PROFILE above. NEVER invent, assume, guess, or embellish. Do not add numbers, dates, names, or achievements that are not in the profile.
 - If the profile does not contain enough to answer this field truthfully, set "answer" to null and say what is missing in "reason".
@@ -141,13 +155,24 @@ RULES:
   if (!answer) return null // not answerable from the profile → ask the user
   if (PLACEHOLDER_RX.test(answer)) return null
 
+  const groundedIn = Array.isArray(llm.json.grounded_in)
+    ? llm.json.grounded_in.map(String).slice(0, 8)
+    : []
+  if (isSelect) {
+    // The choice must be one of the portal's own options, and the model must
+    // point at a profile field that actually exists in the evidence — a bare
+    // "No" to "Are you a client?" with nothing to stand on is an ask, not an
+    // answer.
+    const chosen = options.find((o) => o.toLowerCase() === answer.toLowerCase())
+    if (!chosen) return null
+    const anchored = groundedIn.some((p) => p && evidence.includes(String(p).split('.').pop()))
+    if (!anchored) return null
+    return { value: chosen, free_text: false, grounded_in: groundedIn }
+  }
   if (!freeText) {
     // Hard grounding gate for extracted values.
     if (!isGroundedInProfile(answer, evidence)) return null
   }
-  const groundedIn = Array.isArray(llm.json.grounded_in)
-    ? llm.json.grounded_in.map(String).slice(0, 8)
-    : []
   return {
     value: answer.slice(0, freeText ? 4000 : 300),
     free_text: freeText,
