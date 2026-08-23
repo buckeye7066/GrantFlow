@@ -1090,8 +1090,16 @@ export function buildAnyaSystemPrompt(isAdmin = false) {
   ].join('\n')
 }
 
-export function resolveAnyaActiveProfileId(user, pageContext) {
-  const fallback = user?.activeProfileId ?? user?.profile_id ?? null
+export function resolveAnyaActiveProfileId(user, pageContext, sessionProfileId = null) {
+  // Backstop: a profile-scoped chat SESSION remembers "the profile being worked
+  // on" even when a thin page (an admin/Hamilton view) sends no pageContext
+  // profile and the user has no session-level activeProfileId — the exact way
+  // Anya lost the current profile 2026-08-23. The session's own profile_id is
+  // the durable ground truth for the conversation.
+  const sessionScoped = sessionProfileId === null || sessionProfileId === undefined || String(sessionProfileId).trim() === ''
+    ? null
+    : String(sessionProfileId)
+  const fallback = user?.activeProfileId ?? user?.profile_id ?? sessionScoped ?? null
   const requested = pageContext?.profileId ?? pageContext?.profile_id ?? null
   if (requested === null || requested === undefined || String(requested).trim() === '') {
     return fallback === null || fallback === undefined ? null : String(fallback)
@@ -1263,9 +1271,11 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
   }
 
   let historyMessages = null
+  let sessionProfileId = null
   try {
     // Ensure the caller has access and load recent history for context.
-    await getSession(db, user, sessionId)
+    const loadedSession = await getSession(db, user, sessionId)
+    sessionProfileId = loadedSession?.profile_id ?? loadedSession?.profileId ?? null
     historyMessages = await getMessages(db, user, sessionId, { limit: 20, direction: 'asc' })
   } catch (historyError) {
     console.warn('[anya] Unable to load session history; continuing with minimal context:', historyError)
@@ -1367,6 +1377,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     Applications: 'User is tracking their grant applications. Help them understand the status lifecycle and what to do next.',
     Profile: 'User is filling out their profile. Encourage completeness — more profile data = better matches.',
     Settings: 'User is managing preferences. Help with notification settings or data management.',
+    Hamilton: 'User is on the Hamilton automation view (Hamilton is the SUBMISSION AGENT — NOT a profile or a person to look up). It lists application TASKS grouped as working / "needs you" (hand-offs) / waiting / finished, across profiles. "The Hamilton needs" / "needs you" items are Hamilton hand-off tasks, never a profile named Hamilton. When the user asks to release / re-run / retry the "Hamilton needs," they mean clearing the hand-off backlog so the updated Hamilton re-attempts them — route that intent to the Hamilton task tools/actions, and NEVER interpret "Hamilton" as a profile name to search for.',
   }
   const resolvedPage = typeof currentPage === 'string' && currentPage.trim()
     ? currentPage.trim().slice(0, 120)
@@ -1415,7 +1426,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
   // user is browsing a profile page without an "active profile" set in session.
   // Without this, Anya's profile-scoped tools received a null id and reported
   // existing profiles as "not found" — the exact grounding bug users hit.
-  const activeProfileId = resolveAnyaActiveProfileId(user, pageContext)
+  const activeProfileId = resolveAnyaActiveProfileId(user, pageContext, sessionProfileId)
   let openaiTools
   try {
     const toolMetadata = listToolMetadata(user)
