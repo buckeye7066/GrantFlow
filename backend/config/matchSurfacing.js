@@ -26,6 +26,7 @@
 
 import { REVIEW_SCORE } from './matchThresholds.js'
 import { isPointerKind } from './opportunityKindClasses.js'
+import { isVettedNationalAssistanceFunder } from './nationalAssistanceFunders.js'
 
 /**
  * Matcher versions that represent legitimate, profile-scoped matches meant to
@@ -118,6 +119,21 @@ export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   //                         under its own version for the SAME rolling-
   //                         snapshot reason as the seven above.
   'funder-behavior-link',
+  //   - national-assistance-link : a VETTED national awardable assistance funder
+  //                         (HealthWell / PAN / Patient Advocate / Modest Needs /
+  //                         CancerCare / … — `config/nationalAssistanceFunders.js`)
+  //                         serving a need the profile DECLARES, scored by the
+  //                         canonical engine and written when it did NOT REJECT
+  //                         (enforceNationalAssistanceRecall). Its own version for
+  //                         the SAME rolling-snapshot reason as the eight above.
+  //                         Prod 2026-08-23: real disabled/senior/low-income
+  //                         profiles surfaced ONLY directories; the funds that
+  //                         actually pay score REVIEW (2-10), not ACCEPT, because
+  //                         a broadly-eligible fund states few of the ~70 data
+  //                         points the ratio-score measures — so an awardable row
+  //                         at REVIEW was never recommendable and never reached
+  //                         the people it exists for.
+  'national-assistance-link',
 ])
 
 /**
@@ -235,6 +251,16 @@ export function qualifiesForDisplay(row, minScore) {
     return !Number.isFinite(dirScore) || dirScore >= DIRECTORY_MIN_SCORE
   }
   if (decision === 'ACCEPT') return true
+  // VETTED national assistance funder (medication/disability/hardship/senior):
+  // a real award a broadly-eligible person can RECEIVE, but the ratio-score
+  // systematically lands it at REVIEW below the floor for exactly the disabled/
+  // senior/low-income profiles it serves — who otherwise see only DIRECTORIES.
+  // Surface it when the engine did NOT reject it (REJECT already returned false
+  // above), as an honest "you may qualify — verify eligibility" recommendation,
+  // the same principle that surfaces a directory at REVIEW. Scoped to the vetted
+  // slice in config/nationalAssistanceFunders.js — never "any assistance-titled
+  // row" (that set is full of foreign grants, job postings, and research grants).
+  if (isVettedNationalAssistanceFunder(row)) return true
   const score = Number(row.match_score)
   return Number.isFinite(score) && score >= Number(minScore)
 }
