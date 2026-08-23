@@ -597,20 +597,14 @@ export async function runSourceAcquisitionCycle(db, {
   catalogLimitPerProfile = boundedInt('ROBERT_ACQUIRE_CATALOG_SLICE', 400, 1),
 } = {}) {
   clearFactsCache()
-  const acquisition = await acquireKnownSources(db, { profileIds, deps, allowHubDecomposition })
-  // (a) The freshly-acquired predetermined/archetype (+ decomposed hub) sources,
-  //     offered to EVERY profile they qualify for.
-  const parse = await parseOpportunitiesAgainstProfiles(db, {
-    opportunityIds: acquisition.admittedOpportunityIds,
-    profileIds: null,
-    deps,
-  })
-  // (b) The owner's "parse the sources against EXISTING profiles and auto-add"
-  //     half — bounded, LLM-independent. Robert re-adjudicates a slice of the
-  //     REAL catalog already in GrantFlow's database against every profile with
-  //     the FOUR gates and auto-adds the qualifiers the fuzzy score-floor buried
-  //     (this is what surfaces real small-business grants to Olivia even when the
-  //     hub-decomposition LLM is unavailable and acquisition admits nothing new).
+  // (a) FIRST, the owner's "parse the sources against EXISTING profiles and
+  //     auto-add" half — bounded, LLM-independent, and PURE (no network in the
+  //     gates' offline REAL half). Robert re-adjudicates a slice of the REAL
+  //     catalog already in GrantFlow's database against every profile with the
+  //     FOUR gates and auto-adds the qualifiers the fuzzy score-floor buried.
+  //     This runs first so the high-value auto-adds (e.g. real small-business
+  //     grants for Olivia) land even if the slow acquisition half below is
+  //     interrupted. It never depends on the hub-decomposition LLM.
   let catalogParse = null
   if (parseExistingCatalog) {
     catalogParse = await parseCatalogForProfiles(db, {
@@ -619,7 +613,45 @@ export async function runSourceAcquisitionCycle(db, {
       deps,
     })
   }
-  return { acquisition, parse, catalogParse }
+  // (b) THEN acquire the predetermined/archetype (+ decomposed hub) sources into
+  //     the catalog (slower — live URL-liveness probes + optional hub fetch)...
+  const acquisition = await acquireKnownSources(db, { profileIds, deps, allowHubDecomposition })
+  // (c) ...and offer each freshly-acquired source to EVERY profile it qualifies for.
+  const parse = await parseOpportunitiesAgainstProfiles(db, {
+    opportunityIds: acquisition.admittedOpportunityIds,
+    profileIds: null,
+    deps,
+  })
+  const result = { acquisition, parse, catalogParse }
+  await persistLastRunSummary(db, result)
+  return result
+}
+
+/** Last-run summary key for read-back verification (survives the fire-and-forget run). */
+export const LAST_RUN_KV_KEY = 'robert_source_acquisition_last_run'
+
+/**
+ * Persist a compact summary of the last cycle to system_kv so a background run
+ * (fire-and-forget from the route / scheduler) is observable after the fact —
+ * counts, not the id lists. Best-effort; never throws into the cycle.
+ */
+async function persistLastRunSummary(db, result) {
+  try {
+    const summary = {
+      at: new Date().toISOString(),
+      catalogParse: result.catalogParse
+        ? { profiles: result.catalogParse.profiles, added: result.catalogParse.added, addedLeads: result.catalogParse.addedLeads, scanned: result.catalogParse.scanned, byReason: result.catalogParse.byReason }
+        : null,
+      acquisition: { ingested: result.acquisition.ingested, decomposedAdmitted: result.acquisition.decomposedAdmitted, hubsDecomposed: result.acquisition.hubsDecomposed, hubsSkipped: result.acquisition.hubsSkipped, byReason: result.acquisition.byReason },
+      parse: { added: result.parse.added, addedLeads: result.parse.addedLeads, scanned: result.parse.scanned },
+    }
+    const now = isPg(db) ? 'now()' : 'CURRENT_TIMESTAMP'
+    const value = JSON.stringify(summary)
+    try {
+      await db.prepare('DELETE FROM system_kv WHERE key = ?').run(LAST_RUN_KV_KEY)
+      await db.prepare(`INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ${now})`).run(LAST_RUN_KV_KEY, value)
+    } catch { /* table shape may differ — summary is best-effort */ }
+  } catch { /* never fail the cycle on bookkeeping */ }
 }
 
 /**
@@ -629,16 +661,34 @@ export async function runSourceAcquisitionCycle(db, {
  * so the same rows are not re-scanned every pass.
  */
 async function selectCatalogCandidateIds(db, profileId, limit) {
+  const trueLit = isPg(db) ? 'TRUE' : '1'
+  const notLinked = 'NOT EXISTS (SELECT 1 FROM grants g WHERE g.profile_id = ? AND g.funding_opportunity_id = funding_opportunities.id)'
+  // The catalog churns with ProPublica 990 DIRECTORY rows (grantmakers) that the
+  // RELATABLE gate rejects wholesale — a plain "newest N" window fills with those
+  // and the parse finds nothing qualifiable. So the candidate window excludes
+  // directory/pointer kinds and the 990 grantmaker source, and requires a real
+  // leaf URL, so it holds actual applyable opportunities. Falls back to the plain
+  // window if a column is absent — never silently returns 0 on a schema mismatch.
+  const strict =
+    `SELECT id FROM funding_opportunities
+      WHERE (is_active IS NULL OR is_active = ${trueLit})
+        AND COALESCE(source,'') <> 'propublica_990'
+        AND LOWER(COALESCE(opportunity_kind,'')) NOT IN ('directory','referral','resource_hub','resource_hub_registry','past_award_intel','school_portal','place_locator')
+        AND (application_url IS NOT NULL OR source_url IS NOT NULL)
+        AND ${notLinked}
+      ORDER BY created_at DESC
+      LIMIT ?`
+  const loose =
+    `SELECT id FROM funding_opportunities
+      WHERE (is_active IS NULL OR is_active = ${trueLit})
+        AND ${notLinked}
+      ORDER BY created_at DESC
+      LIMIT ?`
   try {
-    const rows = await db.prepare(
-      `SELECT id FROM funding_opportunities
-        WHERE (is_active IS NULL OR is_active = ${isPg(db) ? 'TRUE' : '1'})
-          AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.profile_id = ? AND g.funding_opportunity_id = funding_opportunities.id)
-        ORDER BY created_at DESC
-        LIMIT ?`,
-    ).all(String(profileId), limit)
-    return (rows || []).map((r) => String(r.id))
-  } catch { return [] }
+    return ((await db.prepare(strict).all(String(profileId), limit)) || []).map((r) => String(r.id))
+  } catch {
+    try { return ((await db.prepare(loose).all(String(profileId), limit)) || []).map((r) => String(r.id)) } catch { return [] }
+  }
 }
 
 /**

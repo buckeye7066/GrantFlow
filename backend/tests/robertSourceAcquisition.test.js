@@ -28,6 +28,7 @@ const {
   acquireKnownSources,
   parseOpportunitiesAgainstProfiles,
   parseCatalogForProfiles,
+  runSourceAcquisitionCycle,
   parseNewProfileAgainstCatalog,
   qualifyForProfile,
   classifyPipelineCategory,
@@ -174,7 +175,7 @@ describe('robertSourceAcquisition — parse added sources against profiles + aut
     expect(grantsFor(sqlite, BIZ)).toHaveLength(0)
   })
 
-  it('parseCatalogForProfiles auto-adds a qualifying EXISTING catalog row (LLM-independent) to the fleet', async () => {
+  it('parseCatalogForProfiles auto-adds a qualifying EXISTING catalog row (LLM-independent) and EXCLUDES 990/directory churn from the window', async () => {
     // A real small-business grant already sitting in the catalog — no acquisition,
     // no hub decomposition, no LLM. This is the path that surfaces buried real
     // sources (e.g. small-business grants for Olivia) to existing profiles.
@@ -183,13 +184,35 @@ describe('robertSourceAcquisition — parse added sources against profiles + aut
       ent: ['small_business'], needs: ['business_funding'], cats: ['business_funding'], kind: 'grant',
       url: 'https://nashville.gov/programs/small-business-grant/apply',
     })
-    const out = await parseCatalogForProfiles(db, { catalogLimitPerProfile: 100 })
+    // NEWER ProPublica 990 directory rows (the churn that dominates "newest N").
+    // The candidate window must EXCLUDE these so the real grant is still in scope;
+    // otherwise a small per-profile slice fills with un-addable directories.
+    for (let i = 0; i < 30; i += 1) {
+      insertOpp(sqlite, {
+        id: `fo-990-${i}`, title: `Some Foundation ${i}`, sponsor: `Foundation ${i}`,
+        ent: ['nonprofit'], needs: [], cats: [], kind: 'directory', source: 'propublica_990', origin: 'live_crawl',
+        url: `https://projects.propublica.org/nonprofits/organizations/${i}`, created: '2026-08-23T12:00:00Z',
+      })
+    }
+    // Tiny window: if the 990 rows were NOT excluded they'd crowd out the grant.
+    const out = await parseCatalogForProfiles(db, { catalogLimitPerProfile: 5 })
     expect(out.added).toBe(1)
     const biz = grantsFor(sqlite, BIZ)
     expect(biz).toHaveLength(1)
     expect(biz[0].pipeline_category).toBe('apply_ready')
-    // The student (need mismatch) does not get a business grant.
     expect(grantsFor(sqlite, STUDENT)).toHaveLength(0)
+  })
+
+  it('runSourceAcquisitionCycle persists a read-back summary to system_kv', async () => {
+    // Scope to a non-existent profile so no network/ingest happens; we only assert
+    // the fire-and-forget run leaves an observable summary.
+    await runSourceAcquisitionCycle(db, { profileIds: ['no-such-profile'], allowHubDecomposition: false })
+    const row = sqlite.prepare("SELECT value FROM system_kv WHERE key = 'robert_source_acquisition_last_run'").get()
+    expect(row).toBeTruthy()
+    const summary = JSON.parse(row.value)
+    expect(summary).toHaveProperty('at')
+    expect(summary).toHaveProperty('catalogParse')
+    expect(summary).toHaveProperty('acquisition')
   })
 
   it('count-only mode adjudicates without writing', async () => {
