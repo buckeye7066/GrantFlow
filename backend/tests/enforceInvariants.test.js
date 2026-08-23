@@ -1219,7 +1219,7 @@ describe('enforceInvariants — runner', () => {
     // + pipeline_precision (2026-08-22, owner order 2026-08-21).
     // + mission_lane_match_scope (2026-08-22, the four-profile measurement).
     // + shared_listing_application_targets (2026-08-23, Coolidge/Live Más).
-    expect(summary.ran).toBe(62)
+    expect(summary.ran).toBe(63)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1287,6 +1287,10 @@ describe('enforceInvariants — runner', () => {
       // The same class for the OTHER half of the fleet: a household in crisis
       // and the local help its own county already holds in the catalog.
       'county_crisis_need_recall',
+      // The need-based individual who was getting only DIRECTORIES: the vetted
+      // national awardable assistance-funder slice (PAN/HealthWell/Patient
+      // Advocate/Modest Needs), engine-scored, admitted at ACCEPT or REVIEW.
+      'national_assistance_recall',
       // FUNDER-BEHAVIOR ingest (2026-08-05): bounded read of the itemized 990
       // grant lists for funders the catalog already holds, so the recall net
       // right below scores foundations against DEMONSTRATED giving.

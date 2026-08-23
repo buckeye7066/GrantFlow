@@ -9689,6 +9689,259 @@ export async function enforceCountyCrisisNeedRecall(db) {
 }
 
 /**
+ * INVARIANT (RECALL): a real need-based individual (disabled / senior / medical /
+ * low-income) reaches the national assistance FUNDS THAT ACTUALLY PAY, not just a
+ * pile of DIRECTORIES (owner rule 2026-08-23). Measured on prod that day: 10 of
+ * 40 real profiles had ZERO awardable accepts; the real ones (Eli Morgan disabled
+ * adult, Ruth Alvarez / GeneMac seniors, Olivia small business) surfaced ONLY
+ * "211" / "benefits.gov finder" / "Eldercare Locator" pointers. The funds that
+ * pay (PAN, HealthWell, Patient Advocate, Modest Needs) ARE in the catalog and
+ * the engine accepts them for SOME profiles — but each reaches only 13-23 of 40,
+ * with duplicate rows reaching zero, because the match store is a ROLLING
+ * SNAPSHOT: a national source reaches only the handful of profiles crawled near
+ * its discovery. Run on the exact pairs, the engine scores these REVIEW (2-10),
+ * not ACCEPT, for a genuinely-qualifying disabled/senior person — a broadly-
+ * eligible fund states few of the ~70 data points the ratio-score measures — so
+ * an awardable row at REVIEW was never recommendable and never reached them.
+ *
+ * THE NET: for each profile that DECLARES an overlapping assistance need
+ * (structured signals only; `config/nationalAssistanceFunders.js`), the VETTED
+ * national awardable assistance-funder slice (a curated ~16-identity list — never
+ * "any assistance-titled row", which is full of foreign SASSA grants, a job
+ * posting, and research grants) is put in front of the canonical engine and
+ * written when it did NOT REJECT (ACCEPT or REVIEW), under matcher_version
+ * 'national-assistance-link' (reconcile-surviving). `qualifiesForDisplay` surfaces
+ * the vetted slice below the numeric floor, honestly a "you may qualify — verify
+ * with the funder" recommendation. The engine stays the sole authority (a REJECT
+ * is never written); MISSING = NEUTRAL (a profile declaring no assistance need,
+ * or an org, gets nothing). BOUNDED: the candidate slice is ~40 catalog rows, so
+ * this is not the 14k-link flood a broad need∩geo key causes.
+ *
+ * `ENFORCE_NATIONAL_ASSISTANCE_RECALL=0` for count-only; `NATIONAL_ASSISTANCE_LINK_LIMIT`
+ * bounds writes.
+ */
+export async function enforceNationalAssistanceRecall(db) {
+  return runInvariant('national_assistance_recall', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id') || !matchCols.has('matcher_version')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let assist, normalizeOpportunity, computeMatchDecision
+    try {
+      assist = await import('../config/nationalAssistanceFunders.js')
+      ;({ normalizeOpportunity, computeMatchDecision } = await import('../services/matchEngine.js'))
+    } catch (err) {
+      log.warn('national_assistance_recall: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+
+    const isPg = (db?.dialect || 'sqlite') === 'postgres'
+    const trueLit = isPg ? 'TRUE' : '1'
+    const nowFn = isPg ? 'now()' : 'CURRENT_TIMESTAMP'
+    const writeLimit = _boundedLimit('NATIONAL_ASSISTANCE_LINK_LIMIT', 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_NATIONAL_ASSISTANCE_RECALL) === false
+
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('national_assistance_recall: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const superset = assist.assistanceFunderSqlSuperset('fo')
+
+    let scanned = 0
+    let linked = 0
+    let rejectedByEngine = 0
+    let adjudicatedOut = 0
+    let unscorable = 0
+    let profilesEligible = 0
+    let truncated = false
+    const wouldLink = []
+    const examples = []
+    // Every profile examined, with whether it STILL declares an assistance need,
+    // so convergence re-adjudicates existing links against the profile's own
+    // facts — NOT against the candidate set (which excludes already-linked rows
+    // and would delete every link next boot).
+    const needsByProfile = new Map()
+
+    for (const row of profileIds || []) {
+      if (linked + wouldLink.length >= writeLimit) { truncated = true; break }
+      const profileId = row.id
+      const ctx = await _loadProfileContextForInvariant(db, profileId)
+      if (!ctx) continue
+      let declaredNeeds = new Set()
+      try {
+        declaredNeeds = assist.profileAssistanceNeeds(ctx.profile, ctx.sections)
+      } catch { declaredNeeds = new Set() }
+      needsByProfile.set(profileId, declaredNeeds)
+      if (!declaredNeeds || declaredNeeds.size === 0) continue
+      profilesEligible += 1
+
+      let candidates
+      try {
+        candidates = await db
+          .prepare(
+            `SELECT fo.* FROM funding_opportunities fo
+              WHERE (fo.is_active IS NULL OR fo.is_active = ${trueLit})
+                AND fo.is_national = ${trueLit}
+                AND ${superset.clause}
+                AND NOT EXISTS (
+                  SELECT 1 FROM profile_opportunity_matches m
+                   WHERE m.profile_id = ? AND m.opportunity_id = fo.id
+                )
+              ORDER BY fo.created_at
+              LIMIT ?`,
+          )
+          .all(...superset.params, profileId, writeLimit)
+      } catch (err) {
+        log.warn('national_assistance_recall: candidate query failed (non-fatal)', {
+          profile: profileId, error: String(err?.message || err),
+        })
+        continue
+      }
+
+      for (const opp of candidates || []) {
+        // Re-adjudicate the LIKE superset in JS: national + awardable (not a
+        // pointer) + a vetted funder identity, and it must serve a need the
+        // profile actually declares.
+        if (!assist.funderServesDeclaredNeed(opp, declaredNeeds)) { adjudicatedOut += 1; continue }
+        void normalizeOpportunity // (kept for parity with the sibling nets; adjudication above is identity-based)
+        scanned += 1
+        let decision
+        try {
+          decision = computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections })
+        } catch (err) {
+          unscorable += 1
+          log.warn('national_assistance_recall: scoring failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+          continue
+        }
+        // The engine is the sole authority. A REJECT (eligibility/geo/applicant
+        // type fail) is NEVER written. ACCEPT and REVIEW are both admitted — a
+        // broadly-eligible assistance fund legitimately scores REVIEW for a
+        // qualifying person, and the vetted slice is recommendable at REVIEW.
+        const verdict = String(decision?.decision ?? '').toUpperCase()
+        if (verdict !== 'ACCEPT' && verdict !== 'REVIEW') { rejectedByEngine += 1; continue }
+        const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
+        if (score === null) { unscorable += 1; continue }
+        const served = assist.assistanceFunderNeeds(opp) || []
+
+        if (countOnly) {
+          wouldLink.push({ profileId, opportunityId: opp.id })
+          if (examples.length < 3) examples.push(`${opp.sponsor || opp.title} (${verdict} ${score}, needs ${served.join('/')})`)
+          continue
+        }
+        try {
+          const res = await db
+            .prepare(
+              `INSERT INTO profile_opportunity_matches
+                 (id, profile_id, opportunity_id, match_score, match_decision, match_explanation,
+                  match_reasons, match_explain_json, source_query, discovered_via, matcher_version,
+                  computed_at, updated_at, evaluated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'national-assistance-link', ${nowFn}, ${nowFn}, ${nowFn})
+               ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+            )
+            .run(
+              `na:${profileId}:${opp.id}`, profileId, opp.id, score, verdict.toLowerCase(),
+              decision?.explanation ?? null,
+              JSON.stringify(decision?.matchedNeeds ?? []),
+              JSON.stringify(buildPersistedMatchExplain(decision, {
+                gate: 'national_assistance',
+                served_needs: served,
+                declared_needs: [...declaredNeeds],
+                evidence: 'profile.declared_needs',
+              })),
+              null, 'national_assistance',
+            )
+          const wrote = changesOf(res)
+          if (wrote > 0) {
+            linked += 1
+            if (examples.length < 3) examples.push(`${opp.sponsor || opp.title} (${verdict} ${score}, needs ${served.join('/')})`)
+          }
+        } catch (err) {
+          log.warn('national_assistance_recall: insert failed (non-fatal)', {
+            profile: profileId, opportunity: opp.id, error: String(err?.message || err),
+          })
+        }
+      }
+    }
+
+    // CONVERGENCE: the profile stopped declaring an assistance need, or the row
+    // was deactivated / no longer serves a declared need → the gate no longer
+    // authorizes the link. Skipped on a truncated pass so a bound-limited boot
+    // never deletes what it never re-derived.
+    let stale = 0
+    if (!countOnly && !truncated) {
+      for (const [profileId, declaredNeeds] of needsByProfile) {
+        try {
+          const existing = await db
+            .prepare(
+              `SELECT m.id, fo.sponsor, fo.title, fo.opportunity_kind, fo.is_national, fo.is_active
+                 FROM profile_opportunity_matches m
+                 LEFT JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+                WHERE m.profile_id = ? AND m.matcher_version = 'national-assistance-link'`,
+            )
+            .all(profileId)
+          const doomed = (existing || [])
+            .filter((r) => {
+              if (!declaredNeeds || declaredNeeds.size === 0) return true
+              if (r.sponsor === null && r.title === null) return true
+              if (!(r.is_active === null || r.is_active === undefined || r.is_active === 1 || r.is_active === true)) return true
+              return !assist.funderServesDeclaredNeed(r, declaredNeeds)
+            })
+            .map((r) => r.id)
+          for (let i = 0; i < doomed.length; i += 200) {
+            const slice = doomed.slice(i, i + 200)
+            const ph = slice.map(() => '?').join(', ')
+            const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+            stale += changesOf(res) || slice.length
+          }
+        } catch { /* convergence is best-effort; never fails the sweep */ }
+      }
+    }
+
+    if (countOnly) {
+      if (wouldLink.length > 0) {
+        log.warn('national assistance funds are not reaching the need-based profiles they serve (linking DISABLED via ENFORCE_NATIONAL_ASSISTANCE_RECALL=0)', {
+          wouldLink: wouldLink.length, scanned, profilesEligible, examples,
+        })
+      }
+      return {
+        scanned,
+        repaired: 0,
+        wouldRepair: wouldLink.length,
+        profilesEligible,
+        rejectedByEngine,
+        adjudicatedOut,
+        truncated,
+        enforced: false,
+      }
+    }
+    if (linked > 0 || stale > 0) {
+      log.info('linked need-based profiles to national assistance funds they may qualify for', {
+        linked, stale, scanned, profilesEligible, rejectedByEngine, adjudicatedOut, unscorable, examples,
+      })
+    }
+    return {
+      scanned,
+      repaired: linked,
+      stale,
+      profilesEligible,
+      rejectedByEngine,
+      adjudicatedOut,
+      unscorable,
+      truncated,
+      enforced: true,
+    }
+  })
+}
+
+/**
  * INVARIANT (RECALL, the general case): every ACTIVE non-pointer catalog row is
  * EVENTUALLY adjudicated by the canonical engine for every real profile — the
  * "general re-scoring sweep for the rolling snapshot" CLAUDE.md carried as
@@ -10279,6 +10532,13 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // reaches the person it was written for. Sits with the other linkage gates so
   // the rows it adds are held to the scope/hygiene bars in the SAME boot.
   steps.push(await enforceCountyCrisisNeedRecall(db))
+  // RECALL net for the need-based individual who was getting only DIRECTORIES:
+  // the VETTED national awardable assistance-funder slice (PAN / HealthWell /
+  // Patient Advocate / Modest Needs / …) is put in front of the canonical engine
+  // for every profile that DECLARES an overlapping assistance need, and written
+  // when the engine did not REJECT (ACCEPT or REVIEW). Sits with the other
+  // linkage gates so its rows are held to the scope/hygiene bars the SAME boot.
+  steps.push(await enforceNationalAssistanceRecall(db))
   // FUNDER-BEHAVIOR ingest (the Candid-gap closer): read the itemized 990
   // grant lists for funders the catalog already holds, bounded per boot, so
   // the recall net right below — and every later sweep — scores foundations
