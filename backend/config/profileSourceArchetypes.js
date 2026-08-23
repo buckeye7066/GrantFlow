@@ -435,6 +435,46 @@ function normType(v) {
   return String(v ?? '').toLowerCase().trim().replace(/[^a-z0-9_]/g, '_')
 }
 
+/**
+ * Infer a canonical archetype-registry type id from a FREE-TEXT descriptor a
+ * profile stores in `organization_type` / `profile_type` / `profile_category`
+ * (e.g. "Biotechnology / research organization", "Small business — LLC",
+ * "Baptist congregation"). `resolveProfileType` only matches exact ids/aliases,
+ * so a descriptive phrase resolves to nothing and the profile is seeded no known
+ * sources — which is exactly the "GrantFlow misses sources it should find" gap
+ * (Axiom BioLabs, a real biotech org, resolved to nothing). Ordered
+ * MOST-SPECIFIC first so "research organization" is a research lab, not the
+ * generic org fallback. Returns null when nothing distinctive is stated.
+ */
+export function inferTypeFromDescriptor(value) {
+  const t = String(value ?? '').toLowerCase()
+  if (!t.trim()) return null
+  // Specific identities first.
+  if (/\b(research|biotech|biotechnolog|laborator|\blab\b|clinical|life scien|genomic|pharmaceutical|bioscience|r&d)\b/.test(t)) return 'research_lab'
+  if (/\b(volunteer fire|fire depart|fire district|rescue squad|\bems\b|ambulance)\b/.test(t)) return 'volunteer_fire_department'
+  if (/\b(church|parish|congregation|synagogue|mosque|temple|diocese|faith[- ]based|ministry|missions?)\b/.test(t)) return 'church'
+  if (/\b(tribe|tribal|native american nation|indian nation)\b/.test(t)) return 'tribal_government'
+  if (/\b(farm|ranch|agricultur|orchard|dairy|livestock|producer|grower)\b/.test(t)) return 'farm'
+  if (/\b(school|k-?12|academy|isd|校|classroom|educator|teacher|district)\b/.test(t)) return 'school'
+  if (/\b(county|municipal|city of|town of|village of|borough|township|government|public agency|state agency|authority)\b/.test(t)) return 'local_government'
+  if (/\b(women[- ]?owned)\b/.test(t)) return 'women_owned_business'
+  if (/\b(minority[- ]?owned|mbe\b|dbe\b)\b/.test(t)) return 'minority_owned_business'
+  if (/\b(small business|for[- ]?profit|startup|\bllc\b|\binc\b|corporation|company|enterprise|sole proprietor)\b/.test(t)) return 'business'
+  // Broad org catch-alls last (foundation/990/community-foundation funders serve any org type).
+  if (/\b(nonprofit|non[- ]profit|not[- ]for[- ]profit|501\(?c\)?3?|charity|foundation|organization|association|coalition|institute)\b/.test(t)) return 'nonprofit'
+  return null
+}
+
+/** A positive, DECLARED organization signal (never inferred from silence). */
+function hasOrgSignal(basic, org, profile) {
+  const bt = normType(basic.profile_type || basic.profile_category)
+  if (bt === 'organization' || bt === 'org' || bt === 'nonprofit' || bt === 'business') return true
+  if (String(org.organization_type || '').trim()) return true
+  const biz = org.business_name || (profile && profile.business_name)
+  if (String(biz || '').trim()) return true
+  return false
+}
+
 function sec(sections, key) {
   const v = sections && sections[key]
   if (!v) return {}
@@ -459,6 +499,10 @@ export function resolveArchetypeType(profile, sections = {}) {
   const p = profile || {}
   const basic = sec(sections, 'basic_information')
   const org = sec(sections, 'organization_details')
+  const biz = sec(sections, 'small_business_details')
+  // Descriptor fields carry free text ("Biotechnology / research organization");
+  // the person/primary-type fields carry ids/aliases.
+  const descriptors = [org.organization_type, basic.profile_type, basic.profile_category, p.type]
   const candidates = [
     org.organization_type,
     basic.profile_type,
@@ -468,6 +512,7 @@ export function resolveArchetypeType(profile, sections = {}) {
     p.primary_profile_type,
     p.type,
   ]
+  // 1. Exact registry id/alias, specific (non-generic) value first.
   for (const c of candidates) {
     const norm = normType(c)
     if (norm && !GENERIC_TYPE_TOKENS.has(norm)) {
@@ -475,11 +520,21 @@ export function resolveArchetypeType(profile, sections = {}) {
       if (resolved) return resolved
     }
   }
-  // Fall back to any resolvable candidate (including a generic "individual").
+  // 2. Free-text descriptor inference — a real org whose type is a phrase, not
+  //    an id (the Axiom BioLabs "research organization" -> research_lab gap).
+  for (const c of descriptors) {
+    const inferred = inferTypeFromDescriptor(c)
+    if (inferred) return inferred
+  }
+  // 3. Any resolvable candidate (including a generic "individual").
   for (const c of candidates) {
     const resolved = resolveProfileType(normType(c))
     if (resolved) return resolved
   }
+  // 4. A DECLARED organization we could not type precisely still gets the broad
+  //    org (foundation / 990 / community-foundation) funders — those serve every
+  //    org type. Silence (no org signal at all) stays neutral -> null.
+  if (hasOrgSignal(basic, { ...org, business_name: org.business_name || biz.business_name }, p)) return 'nonprofit'
   return null
 }
 
@@ -598,6 +653,7 @@ export function knownSeedSourcesForProfile(profile, sections = {}, { limit = KNO
 export default {
   KNOWN_SEED_LIMIT_PER_RUN,
   SOURCE_ARCHETYPES,
+  inferTypeFromDescriptor,
   resolveArchetypeType,
   resolveArchetypesForProfile,
   knownSeedSourcesForProfile,
