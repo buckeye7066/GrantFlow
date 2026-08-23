@@ -23,6 +23,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
 import { genericSignupAdapter, buildSignupIdentity } from '../services/hamilton/hamiltonPortalSignupAdapter.js'
+import { CHROMIUM_CONTAINER_ARGS } from '../services/hamilton/browserLaunch.js'
 
 let chromium = null
 let browserBinaryPresent = false
@@ -62,7 +63,7 @@ const SIGNUP_FORM = `
   </script>`
 
 let browser
-beforeAll(async () => { if (browserBinaryPresent) browser = await chromium.launch({ headless: true }) }, 60_000)
+beforeAll(async () => { if (browserBinaryPresent) browser = await chromium.launch({ headless: true, args: [...CHROMIUM_CONTAINER_ARGS] }) }, 60_000)
 afterAll(async () => { await browser?.close?.() })
 
 async function pageWith(html) {

@@ -126,12 +126,24 @@ describe('Hamilton route auth + profile scoping', () => {
     assert.equal(res.status, 401)
   })
 
-  it('forbids creating a payment authorization on another profile (403)', async () => {
-    const res = await request(app)
+  // Owner rule 2026-08-22: the payment envelope was REMOVED, so this surface
+  // is retired (410 Gone) rather than access-controlled — which is strictly
+  // stronger than the old 403: nobody can create one, on their own profile or
+  // anyone else's. The test asserted 403 and had been red on main since then.
+  it('cannot create a payment authorization at all — the surface is retired (410), on any profile', async () => {
+    const other = await request(app)
       .post('/api/hamilton/automation/payment-authorizations')
       .set('x-test-user', 'u-B')
       .send({ profileId: 'p-A', category: 'application_fee', maxAmountCents: 5000, authorizationText: 'x' })
-    assert.equal(res.status, 403)
+    assert.equal(other.status, 410)
+    assert.equal(other.body.error, 'payment_not_supported')
+
+    // Not merely a scoping refusal: the profile's OWN user cannot create one either.
+    const own = await request(app)
+      .post('/api/hamilton/automation/payment-authorizations')
+      .set('x-test-user', 'u-A')
+      .send({ profileId: 'p-A', category: 'application_fee', maxAmountCents: 5000, authorizationText: 'x' })
+    assert.equal(own.status, 410)
   })
 
   it('forbids reading another profile\'s resolved fields (403)', async () => {

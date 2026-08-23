@@ -458,19 +458,30 @@ describe('hamiltonHardStopResolver', () => {
     assert.equal(d.strategy, 'reuse_session_to_avoid_captcha')
   })
 
-  it('payment → resolves only within authorized envelope', async () => {
+  // Owner rule 2026-08-22 (commit 07f6c0d8): grants never charge to apply, so
+  // the payment envelope was REMOVED — Hamilton pays for nothing. The
+  // strongest form of that invariant: even with a pre-authorisation row still
+  // on file (an old envelope, or one written directly by the service), the
+  // resolver must refuse to charge. This test asserted the retired
+  // charge-within-envelope contract and had been red on main since that commit.
+  it('payment → NEVER charges, even when a pre-authorised envelope exists', async () => {
     const db = makeDb()
     await authorizePayment(db, {
       userId: 'u1', profileId: 'p1',
       category: 'application_fee', maxAmountCents: 5000,
       paymentMethodReference: 'pm_test', authorizationText: 'auth',
     })
+    // Well inside the old envelope — previously "resolved / charge".
     let d = await resolveBlocker(db, ctx(), { kind: 'payment', context: { category: 'application_fee', amount_cents: 2500 } })
-    assert.equal(d.outcome, 'resolved')
-    assert.equal(d.strategy, 'charge_within_pre_authorization')
+    assert.equal(d.outcome, 'escalated')
+    assert.equal(d.strategy, 'payment_not_supported')
+    assert.equal(d.payload.charged, false)
 
+    // Above it, and any other amount: the same refusal, never a charge.
     d = await resolveBlocker(db, ctx(), { kind: 'payment', context: { category: 'application_fee', amount_cents: 8000 } })
     assert.equal(d.outcome, 'escalated')
+    assert.equal(d.strategy, 'payment_not_supported')
+    assert.equal(d.payload.charged, false)
   })
 
   it('wet signature → ALWAYS degrades to packet (never forges)', async () => {
