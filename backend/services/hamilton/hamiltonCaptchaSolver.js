@@ -216,6 +216,8 @@ export async function injectCaptchaToken(page, token) {
   try {
     return await page.evaluate((tok) => {
       let set = 0
+      // (1) FILL every response field. A form that POSTs the field directly
+      // (Salesforce web-to-lead and kin) reads exactly this.
       const selectors = [
         'textarea#g-recaptcha-response',
         'textarea[name="g-recaptcha-response"]',
@@ -231,7 +233,60 @@ export async function injectCaptchaToken(page, token) {
           set += 1
         }
       }
-      return { injected: set > 0, fields: set }
+      // (2) DISCOVER the success callback(s) reCAPTCHA registered. The one that
+      // actually completes an invisible-v2 widget usually has NO data-callback
+      // attribute — it lives in ___grecaptcha_cfg.clients — so walk that, plus
+      // the attribute fallback. We do NOT fire them here: firing a callback
+      // that continues submission BEFORE Hamilton's evidence boundary would
+      // submit outside the lease. They fire only when the site calls execute().
+      const callbacks = []
+      try {
+        const cfg = window.___grecaptcha_cfg
+        if (cfg && cfg.clients) {
+          const seen = new Set()
+          for (const cid of Object.keys(cfg.clients)) {
+            const stack = [cfg.clients[cid]]
+            while (stack.length) {
+              const node = stack.pop()
+              if (!node || typeof node !== 'object' || seen.has(node)) continue
+              seen.add(node)
+              for (const k of Object.keys(node)) {
+                const v = node[k]
+                if (typeof v === 'function' && /callback/i.test(k)) callbacks.push(v)
+                else if (v && typeof v === 'object') stack.push(v)
+              }
+            }
+          }
+        }
+      } catch { /* cfg walk best-effort */ }
+      try {
+        for (const el of document.querySelectorAll('[data-callback]')) {
+          const name = el.getAttribute('data-callback')
+          if (name && typeof window[name] === 'function') callbacks.push(window[name])
+        }
+      } catch { /* attribute fallback best-effort */ }
+      const deliver = () => { for (const cb of callbacks) { try { cb(tok) } catch { /* callback threw */ } } }
+      // (3) PATCH grecaptcha so both v2 modes read OUR token:
+      //   - getResponse() → the token (checkbox-v2 client validation + a form
+      //     that reads it before POSTing);
+      //   - execute() → deliver the token to the registered callback and
+      //     resolve, instead of launching an interactive challenge that would
+      //     clobber the injected token or hang headless (invisible-v2, where
+      //     the SITE calls execute() on submit — so the callback fires at the
+      //     real submit moment, never prematurely).
+      // This is what the U.S. Bank submit needed 2026-08-23: a valid token that
+      // the widget's own state actually surfaces, not just a textarea value.
+      let getResponsePatched = 0
+      let executePatched = 0
+      try {
+        for (const gr of [window.grecaptcha, window.grecaptcha && window.grecaptcha.enterprise]) {
+          if (gr && typeof gr === 'object') {
+            try { gr.getResponse = () => tok; getResponsePatched += 1 } catch { /* frozen */ }
+            try { gr.execute = () => { deliver(); return Promise.resolve(tok) }; executePatched += 1 } catch { /* frozen */ }
+          }
+        }
+      } catch { /* no grecaptcha */ }
+      return { injected: set > 0 || getResponsePatched > 0, fields: set, get_response_patched: getResponsePatched, execute_patched: executePatched, callbacks_found: callbacks.length }
     }, token)
   } catch {
     return { injected: false }
