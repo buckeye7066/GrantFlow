@@ -1209,6 +1209,11 @@ export async function runAutopilot({
   // overridden — short factual fields (name, address, …) always come from
   // the profile verbatim. Falls back to the profile's raw essays when absent.
   narrativeAnswers = null,
+  // Lazy counterpart of narrativeAnswers: `async () => ({ essay?, goals? })`,
+  // called at most once and ONLY when the engine is about to fill a long-form
+  // (essay/goals) field. Lets the orchestrator defer the paid proposal draft
+  // until a page proves it has somewhere to put it.
+  narrativeProvider = null,
   // One-time-code solver, injected by the orchestrator. Signature:
   //   (page) => Promise<{ verified: boolean, reason?: string }>
   //
@@ -1327,6 +1332,17 @@ export async function runAutopilot({
     }
   }
   const valuesByKey = applyNarrativeAnswers(readProfileValues(profile), narrativeAnswers)
+  let narrativeProviderResolved = !narrativeProvider
+  const resolveNarrativeOnDemand = async () => {
+    if (narrativeProviderResolved) return
+    narrativeProviderResolved = true
+    let answers = null
+    try { answers = await narrativeProvider() } catch { answers = null }
+    if (answers && typeof answers === 'object') {
+      applyNarrativeAnswers(valuesByKey, answers)
+      trace.push({ step: 'narrative_drafted_on_demand', detail: { keys: NARRATIVE_OVERRIDE_KEYS.filter((k) => answers[k]) } })
+    }
+  }
   const signatureConsent = signatureConsentFor({
     fullAutomation, authorizations, signerName: valuesByKey.full_name,
   })
@@ -1585,6 +1601,9 @@ export async function runAutopilot({
         // An identity-proofing field is filled from the ENCRYPTED vault, only
         // when a value is on file — never from the profile, never invented.
         const identityField = isIdentityFieldKey(rule.key)
+        // A long-form field is the one place the paid narrative is worth
+        // drafting — draft it now (once), not before the page was opened.
+        if (!identityField && NARRATIVE_OVERRIDE_KEYS.includes(rule.key) && !f.value) await resolveNarrativeOnDemand()
         const v = identityField ? identityByFieldKey[rule.key] : valuesByKey[rule.key]
         if (v === undefined || v === null || String(v).trim() === '') {
           // A REQUIRED identity field we cannot fill (nothing on file) is what

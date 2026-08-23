@@ -3684,8 +3684,11 @@ CREATE TABLE IF NOT EXISTS hamilton_autopilot_runs (
   profile_id TEXT NOT NULL,
   user_id TEXT,
   authorization_id TEXT,
+  -- Mirrors AUTOPILOT_RUN_STATUSES in hamiltonAuthorizationStore.js and the
+  -- Postgres CHECK in 0185_hamilton_autopilot_run_statuses.sql (lockstep test).
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
-    'queued','preflight','running','blocked','completed','submitted','failed','cancelled'
+    'queued','preflight','running','blocked','completed','submitted','failed','cancelled',
+    'deferred','submit_attempt_started','submit_evidence_pending','submission_verification_required'
   )),
   blocker_kind TEXT,
   blocker_detail TEXT,

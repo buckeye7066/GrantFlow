@@ -97,6 +97,7 @@ import {
 import {
   createAutopilotRun,
   updateAutopilotRun,
+  listAutopilotRuns,
   resolveSubmissionDecision,
 } from './hamiltonAuthorizationStore.js'
 import {
@@ -668,6 +669,79 @@ export async function automateSingleSource(db, {
     data: { task_id: task.id, classification },
   })
   return { task: await reload(db, task.id), classification }
+}
+
+/**
+ * RUN-LOOP TRIPWIRE. Hamilton may open the same portal at most this many
+ * times in a rolling day without a human touching the task. MEASURED 2026-08-22
+ * in prod: a listing page (transportation.gov/grants) was re-run six times in
+ * one afternoon — each run drafted a PAID proposal, decomposed the listing,
+ * then died without a terminal record, was requeued, and did it again. No
+ * counter anywhere said "this is the sixth identical attempt". A run count
+ * that a human has not reset is the one signal every silent loop shares,
+ * whatever requeued it.
+ */
+export const MAX_AUTOPILOT_RUNS_PER_DAY = 3
+
+/**
+ * Returns a blocker `{ kind, detail, runs }` when this task has already used
+ * its daily run budget with no human event since the oldest of those runs;
+ * null otherwise. Read-only; the caller records the block.
+ */
+export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), maxRunsPerDay = MAX_AUTOPILOT_RUNS_PER_DAY } = {}) {
+  if (!db || !taskId) return null
+  let runs = []
+  try { runs = await listAutopilotRuns(db, { taskId, limit: 25 }) } catch { return null }
+  const dayAgo = now - 24 * 60 * 60_000
+  const recent = (runs || []).filter((r) => {
+    const t = Date.parse(r?.created_at || '')
+    return Number.isFinite(t) && t >= dayAgo
+  })
+  if (recent.length < maxRunsPerDay) return null
+  const oldestRecentMs = Math.min(...recent.map((r) => Date.parse(r.created_at)))
+  let humanSince = null
+  try {
+    humanSince = await db
+      .prepare(
+        `SELECT MAX(created_at) AS at FROM application_task_events
+          WHERE task_id = ? AND actor_role IN ('user', 'admin', 'owner')`,
+      )
+      .get(String(taskId))
+  } catch { humanSince = null }
+  const humanMs = Date.parse(humanSince?.at || '')
+  if (Number.isFinite(humanMs) && humanMs >= oldestRecentMs) return null
+  return {
+    kind: 'run_loop',
+    runs: recent.length,
+    detail: `Hamilton has opened this source ${recent.length} times in the last 24 hours without finishing it and nobody has touched the task since. Stopping so the loop cannot keep spending; it needs a human look (the last outcome is on the task).`,
+  }
+}
+
+/**
+ * A terminal ledger write that FAILS must be loud, not swallowed. The two
+ * writes that close a run (the run row and the task status) used to be
+ * `.catch(() => {})`; when Postgres rejected them the run stayed `running`,
+ * the task stayed `filling_portal`, and nothing anywhere said why. This records
+ * the failure on the task as a real event and marks the task failed, so the
+ * operator sees the database error instead of a ghost.
+ */
+async function persistTerminalOrFail(db, { task, run, userId, label }, write) {
+  try {
+    await write()
+    return true
+  } catch (err) {
+    const message = `Hamilton finished this run but could not record the result (${label}): ${String(err?.message || err).slice(0, 240)}`
+    console.error('[hamilton:orchestrator] terminal ledger write failed', { task_id: task?.id, run_id: run?.id, label, error: String(err?.message || err) })
+    await appendTaskEvent(db, {
+      taskId: task.id, eventType: 'failed', status: 'failed', step: `persist:${label}`,
+      message, actorUserId: userId, actorRole: 'agent',
+      details: { autopilot_run_id: run?.id || null, error: String(err?.message || err).slice(0, 500) },
+    }).catch((e2) => console.error('[hamilton:orchestrator] could not even record the ledger failure', e2?.message || e2))
+    await updateApplicationTask(db, task.id, {
+      unlessCancelled: true, status: 'failed', lastAgentMessage: message,
+    }).catch((e3) => console.error('[hamilton:orchestrator] could not mark the task failed after a ledger failure', e3?.message || e3))
+    return false
+  }
 }
 
 async function reload(db, taskId) {
@@ -1303,6 +1377,20 @@ async function runAutopilotPathway(db, {
   // Mutable: a resolver application_url_rescued directive redirects the
   // remaining engine attempts to the funder's FOUND application page.
   let url = classification.resolved_url
+  // Run-loop tripwire: refuse to open the portal (and spend on drafting) a
+  // fourth time today when nobody has intervened since the first.
+  const loop = await detectAutopilotRunLoop(db, { taskId: task.id })
+  if (loop) {
+    await updateApplicationTask(db, task.id, {
+      unlessCancelled: true, status: 'blocked', lastAgentMessage: loop.detail,
+    }).catch(() => {})
+    await appendTaskEvent(db, {
+      taskId: task.id, eventType: 'blocked', status: 'blocked', step: 'run_loop_tripwire',
+      message: loop.detail, actorUserId: userId, actorRole: 'agent',
+      details: { runs_last_24h: loop.runs, max_runs_per_day: MAX_AUTOPILOT_RUNS_PER_DAY },
+    }).catch(() => {})
+    return { task: await reload(db, task.id), classification, autopilot_run: null, blocked: true, reason: 'run_loop' }
+  }
   const run = await createAutopilotRun(db, {
     taskId: task.id,
     profileId: task.profile_id,
@@ -1864,14 +1952,25 @@ async function runAutopilotPathway(db, {
   // bar) and hand its placeholder-free sections to the engine so portal essay
   // boxes get MBA-grade prose instead of the raw profile essay. Best-effort:
   // drafting failure falls back to the profile's own essays, never blocks.
+  //
+  // ON DEMAND, not up front (2026-08-22): drafting is a PAID model call and it
+  // ran before the portal was ever opened — every listing page, dead link and
+  // login wall paid for a 7-section proposal it never used (one listing page
+  // was re-run six times in an afternoon, six proposals). The engine now asks
+  // for the narrative only when it is standing in front of an essay/goals
+  // field it is about to fill; a page with no such field costs nothing.
   let narrativeAnswers = null
+  let narrativeProvider = null
   if (authorizations.generate_narratives) {
-    const { proposal } = await draftMbaProposalForTask(db, {
-      task, profile, opportunity, grant, userId, status: 'filling_portal',
-    })
-    if (proposal) {
-      const answers = buildPortalNarrativeAnswers(proposal)
-      if (answers.essay || answers.goals) narrativeAnswers = answers
+    let drafted = null
+    narrativeProvider = async () => {
+      if (drafted) return drafted
+      const { proposal } = await draftMbaProposalForTask(db, {
+        task, profile, opportunity, grant, userId, status: 'filling_portal',
+      })
+      const answers = proposal ? buildPortalNarrativeAnswers(proposal) : {}
+      drafted = (answers.essay || answers.goals) ? answers : {}
+      return drafted
     }
   }
 
@@ -2005,6 +2104,7 @@ async function runAutopilotPathway(db, {
           screenshotsDir: resolveConfirmationCaptureDir(),
           sessionSink,
           narrativeAnswers,
+          narrativeProvider,
           signal: controller.signal,
           beforeSubmit,
           // 2FA (owner order 2026-08-21): under full automation, let the engine
@@ -2384,18 +2484,26 @@ async function runAutopilotPathway(db, {
       taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'listing_decomposition',
       message: summary, actorUserId: userId, actorRole: 'agent', details: decomposition,
     }).catch(() => {})
-    await updateAutopilotRun(db, run.id, {
+    // A decomposed listing is FINISHED for this task: the awards it named are
+    // now their own rows (child tasks / matching candidates) and the listing
+    // itself is not an application anyone can submit. Under full automation it
+    // goes to the archive as completed research; without full automation the
+    // owner still reviews it. Either way the scheduler never re-picks it —
+    // before this it sat in a resumable state and was re-run (and re-drafted,
+    // paid) every tick.
+    const listingTerminalStatus = fullAutomationActive ? 'completed' : 'waiting_for_review'
+    await persistTerminalOrFail(db, { task, run, userId, label: 'listing_run' }, () => updateAutopilotRun(db, run.id, {
       status: 'completed',
-      result: { ...engineResult },
+      result: { ...engineResult, listing_terminal_status: listingTerminalStatus },
       blockerKind: null,
       blockerDetail: null,
       finishedAt: new Date().toISOString(),
-    }).catch(() => {})
-    await updateApplicationTask(db, task.id, {
+    }))
+    await persistTerminalOrFail(db, { task, run, userId, label: 'listing_task' }, () => updateApplicationTask(db, task.id, {
       unlessCancelled: true,
-      status: 'waiting_for_review',
+      status: listingTerminalStatus,
       lastAgentMessage: summary,
-    }).catch(() => {})
+    }))
     return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: engineResult, listing_decomposition: decomposition }
   }
 
@@ -3230,6 +3338,7 @@ export async function automateSelected(db, {
 }
 
 export const _internal = {
+  detectAutopilotRunLoop, persistTerminalOrFail,
   loadProfileBundle, loadOpportunity, loadGrant, loadPortalLink,
   mapClassificationToInitialStatus, mapAutomationTypeToFinishedStatus,
   mapAutomationTypeToPipelineStage, notificationTypeForAutomation,
