@@ -27,8 +27,19 @@ const ROLE_LOCALS = new Set([
 ])
 // Never use these.
 const JUNK_LOCALS = new Set(['noreply', 'no-reply', 'donotreply', 'do-not-reply', 'mailer-daemon', 'postmaster', 'abuse'])
-// Domains that are obviously placeholders or third-party (not the org).
-const JUNK_DOMAIN_RX = /(example\.(com|org|net)|sentry\.|wixpress\.com|\.png$|\.jpe?g$|\.gif$|\.svg$|\.webp$|\.css$|\.js$)/i
+// Web-infrastructure mailboxes: right domain but not an outreach contact. A weak
+// fallback only — never a first choice (owner rule 2026-08-23). Kept distinct
+// from JUNK_LOCALS (which are never usable) so pickBestOrgEmail can rank them last.
+const WEAK_LOCALS = new Set([
+  'webmaster', 'webadmin', 'web', 'website', 'sysadmin', 'hostmaster', 'root',
+  'noc', 'it', 'ithelp', 'helpdesk', 'tech', 'techsupport', 'administrator',
+  'domains', 'dns', 'hostperson',
+])
+// Domains that are obviously placeholders or third-party (not the org). The
+// file/asset extensions catch a scrape that mistook a path or asset URL for an
+// email domain — `u@penn.php`, `x@logo.png` — where the naive regex read the
+// extension as a TLD.
+const JUNK_DOMAIN_RX = /(example\.(com|org|net)|sentry\.|wixpress\.com|\.(png|jpe?g|gif|svg|webp|bmp|ico|css|js|mjs|php\d?|aspx?|jsp|cgi|s?html?|xml|json|md|txt|woff2?|ttf|eot|otf|pdf|zip|map)$)/i
 // Likely pages that carry a contact address.
 const DEFAULT_PATHS = ['', '/contact', '/contact-us', '/about', '/about-us', '/contact.html']
 
@@ -56,23 +67,39 @@ export function extractContactEmails(html) {
     if (JUNK_LOCALS.has(localPart(e))) return false
     if (JUNK_DOMAIN_RX.test(e)) return false
     if (e.length > 254) return false
+    // Realistic shape: a >=2-char local and a real-looking TLD (2-24 letters).
+    // Refuses the single-char / file-extension-TLD junk a naive scrape produces
+    // (`u@penn.php` — `u` is 1 char AND `.php` is caught above).
+    if (!/^[a-z0-9._%+-]{2,}@[a-z0-9.-]+\.[a-z]{2,24}$/.test(e)) return false
+    if (emailDomain(e).split('.').some((label) => !label)) return false
     return true
   })
 }
 
 /**
- * Choose the best org contact email: same-domain first, then role addresses,
- * then anything left. Returns null if nothing usable.
+ * Choose the best org contact email for an org whose OWN site is `domain`.
+ *
+ * When a `domain` is given the result is REQUIRED to be on that same domain —
+ * a third-party address embedded in the org's page (a font vendor, an analytics
+ * provider, the `info@indiantypefoundry.com`-scraped-off-a-school class) is
+ * refused rather than returned as a last resort. A bare web-infra mailbox
+ * (webmaster@/webadmin@) ranks BELOW a real role/person address and is only
+ * chosen when nothing better shares the domain. Returns null if nothing usable.
  */
 export function pickBestOrgEmail(emails, { domain = null } = {}) {
   const list = Array.isArray(emails) ? emails : []
   if (!list.length) return null
   const score = (e) => {
     let s = 0
-    if (domain && emailDomain(e) === domain) s += 100
+    if (domain && emailDomain(e) === domain) s += 100 // strong same-domain preference
     if (ROLE_LOCALS.has(localPart(e))) s += 10
+    if (WEAK_LOCALS.has(localPart(e))) s -= 50 // web-infra mailbox: last resort
     return s
   }
+  // Returns the best available candidate (same-domain preferred, web-infra
+  // demoted). Callers that must GUARANTEE the recipient belongs to the org
+  // re-validate through prospectExclusions.chooseOutreachEmail (which applies
+  // the whole-name plausibility bar); this function only ranks.
   return [...list].sort((a, b) => score(b) - score(a))[0]
 }
 
