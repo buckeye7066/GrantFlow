@@ -80,10 +80,12 @@ import {
   DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N,
   ACCEPT_SCORE, REVIEW_SCORE,
   SCORE_SCALE_ID,
+  DATA_POINT_MIN_TERM_LENGTH,
   DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
   NEED_FULL_CREDIT_HITS,
   // Need-anchored scale (owner directive 2026-07-06)
   NEED_DENOMINATOR_CAP, NO_NEEDS_TOPICAL_CAP, FIT_EVIDENCE_HALF_CREDIT, MIN_CALIBRATED_INVENTORY,
+  SATISFACTION_ACCEPT_COVERAGE,
   ELIG_MATCH_FACTOR, ELIG_UNKNOWN_FACTOR, ELIG_MISMATCH_FACTOR,
   GEO_MATCH_FACTOR, GEO_UNKNOWN_FACTOR, GEO_MISMATCH_FACTOR,
   CONF_W_SOURCE, CONF_W_ACTIONABILITY, CONF_W_ELIGIBILITY, CONF_W_FRESHNESS,
@@ -3250,6 +3252,64 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     dataPointCoverage = Math.min(dataPointCoverage, NO_NEEDS_TOPICAL_CAP)
   }
 
+  // ── FULL-SATISFACTION coverage floor (owner directive 2026-08-23) ──
+  //
+  // The data-point ratio (matched credit ÷ the WHOLE inventory) structurally
+  // under-scores a broadly-eligible fund that states FEW criteria: a national
+  // patient-assistance fund touches 1-2 of a ~70-point inventory, so a
+  // genuinely-qualifying disabled/senior/low-income person scores 6-10 → REVIEW,
+  // never ACCEPT. The satisfaction ratio is the cure: when the profile satisfies
+  // EVERY need the funder STATES (matched ÷ APPLICABLE, not matched ÷ ALL), the
+  // eligibility and geography gates pass cleanly, and the inventory is rich
+  // enough to calibrate, its coverage is floored so a full-satisfaction match
+  // reaches ACCEPT — ranked below high-coverage strong matches, never above.
+  //
+  // This is Math.max, so it NEVER lowers a higher measured coverage. It is gated
+  // so it can never flood — see SATISFACTION_ACCEPT_COVERAGE for the contract.
+  // MISSING = NEUTRAL is the crux: a funder that STATES NO need (empty
+  // needTypesSupported) is NOT "fully satisfied by everyone" and is never lifted.
+  const funderStatedNeeds = [
+    ...new Set(
+      (Array.isArray(canonicalOppNormForExplain?.needTypesSupported)
+        ? canonicalOppNormForExplain.needTypesSupported
+        : [])
+        .map((n) => String(n ?? '').toLowerCase().trim())
+        .filter((n) => n.length >= DATA_POINT_MIN_TERM_LENGTH),
+    ),
+  ]
+  // Satisfaction is measured against the engine's OWN need intersection
+  // (canonicalNeedForExplain.matchedNeeds = the profile's needs that the funder
+  // also states, in the SAME canonical vocabulary as needTypesSupported), so a
+  // funder need counts as satisfied only when the profile genuinely declares that
+  // exact canonical need — never a fuzzy synonym/fragment. A funder that states a
+  // need the profile does not declare is NOT fully satisfied.
+  const satisfiedFunderNeeds = new Set(
+    (Array.isArray(canonicalNeedForExplain?.matchedNeeds) ? canonicalNeedForExplain.matchedNeeds : [])
+      .map((n) => String(n ?? '').toLowerCase().trim()),
+  )
+  const funderNeedsSatisfied = funderStatedNeeds.filter((fn) => satisfiedFunderNeeds.has(fn))
+  const fullSatisfaction =
+    funderStatedNeeds.length >= 1 &&
+    funderNeedsSatisfied.length === funderStatedNeeds.length
+  const satisfactionGatesClean =
+    eligibilityMismatches.length === 0 &&
+    eligFactor !== ELIG_MISMATCH_FACTOR &&
+    geoFactor !== GEO_MISMATCH_FACTOR
+  const satisfactionLiftApplies =
+    SCORING_MODEL === 'data_point' &&
+    inventoryCalibratable &&
+    !isResourceKindRow &&
+    fullSatisfaction &&
+    satisfactionGatesClean
+  if (satisfactionLiftApplies && dataPointCoverage < SATISFACTION_ACCEPT_COVERAGE) {
+    dataPointCoverage = SATISFACTION_ACCEPT_COVERAGE
+    reasons.push(
+      `Fully satisfies this funder's stated need${funderStatedNeeds.length === 1 ? '' : 's'} ` +
+      `(${funderNeedsSatisfied.join(', ')}) — a broadly-eligible fund you qualify for, ` +
+      `surfaced at ACCEPT despite stating few criteria`,
+    )
+  }
+
   // Behavior nudge (soft preference learning) still tips borderline scores.
   // On the fallback path it already flowed through rawScore.
   const modelUsesDataPoints = SCORING_MODEL === 'data_point'
@@ -3751,7 +3811,14 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   const isVeteran = np?.isVeteran ?? Boolean(prof.is_veteran || prof.veteran || prof.military_veteran)
   const isNonprofit = np?.isNonprofit ?? Boolean(prof.is_nonprofit || prof.ein || prof.uei || ['nonprofit', 'organization'].includes(profileType))
   const isBusiness = np?.isBusiness ?? (['small_business', 'business'].includes(profileType) || Boolean(prof.is_business))
-  const isIndividual = ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileType)
+  // Person-or-household test via the canonical registry root (the same function
+  // the award-ceiling and pro-bono gates already trust), so a leaf like
+  // `disabled_adult` / `senior` / `medical_need` rolls up to `individual` instead
+  // of falling out of a hand-written list — the drift that made the
+  // applicabilityUnknown gate hold every stateless-funder ACCEPT at REVIEW for
+  // disabled_adult / senior profiles (prod 2026-08-23: 0/42 and 0/94 accepts).
+  const isIndividual = isIndividualLikeProfileType(profileType) ||
+    ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileType)
 
   const isIndividualOrCaregiver = isIndividual || profileType === 'caregiver' || np?.isCaregiver
   const isResearcher = profileType === 'researcher'
