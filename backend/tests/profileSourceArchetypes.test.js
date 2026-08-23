@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   SOURCE_ARCHETYPES,
   KNOWN_SEED_LIMIT_PER_RUN,
+  inferTypeFromDescriptor,
   resolveArchetypeType,
   resolveArchetypesForProfile,
   knownSeedSourcesForProfile,
@@ -86,6 +87,53 @@ describe('resolveArchetypeType', () => {
 
   it('resolves a college_student alias to the canonical id', () => {
     expect(resolveArchetypeType({ primary_type: 'undergraduate' }, {})).toBe('college_student')
+  })
+
+  it('infers research_lab from a free-text org descriptor (the Axiom BioLabs prod gap)', () => {
+    // Real prod shape: organization_type is a phrase, profile_type is "organization",
+    // neither resolves by exact id -> profile was seeded NOTHING before this fix.
+    const type = resolveArchetypeType(
+      { primary_type: 'organization' },
+      {
+        basic_information: { profile_type: 'organization' },
+        organization_details: { organization_type: 'Biotechnology / research organization' },
+      },
+    )
+    expect(type).toBe('research_lab')
+  })
+
+  it('a DECLARED organization with an unmappable type falls back to the broad org archetypes', () => {
+    const type = resolveArchetypeType(
+      {},
+      { organization_details: { organization_type: 'Community mutual aid collective' } },
+    )
+    expect(type).toBe('nonprofit')
+  })
+
+  it('a typeless container / test profile with NO org signal still resolves to null (correctly seeded nothing)', () => {
+    // Admin Vault / Attribution E2E Test Org shape: null type, empty org fields.
+    expect(resolveArchetypeType({ primary_type: null }, {
+      organization_details: { organization_type: '' },
+      small_business_details: { business_name: '' },
+    })).toBe(null)
+  })
+})
+
+describe('inferTypeFromDescriptor', () => {
+  it('maps descriptive phrases to canonical types, most-specific first', () => {
+    expect(inferTypeFromDescriptor('Biotechnology / research organization')).toBe('research_lab')
+    expect(inferTypeFromDescriptor('Baptist congregation')).toBe('church')
+    expect(inferTypeFromDescriptor('Small business — LLC')).toBe('business')
+    expect(inferTypeFromDescriptor('Family farm / ranch')).toBe('farm')
+    expect(inferTypeFromDescriptor('Volunteer fire department')).toBe('volunteer_fire_department')
+    expect(inferTypeFromDescriptor('501(c)(3) nonprofit')).toBe('nonprofit')
+    expect(inferTypeFromDescriptor('City of Springfield')).toBe('local_government')
+  })
+
+  it('returns null for a non-distinctive or empty descriptor', () => {
+    expect(inferTypeFromDescriptor('')).toBe(null)
+    expect(inferTypeFromDescriptor('   ')).toBe(null)
+    expect(inferTypeFromDescriptor('something')).toBe(null)
   })
 })
 
@@ -191,6 +239,21 @@ describe('knownSeedSourcesForProfile — the seed contract', () => {
     expect(hosts.has('fastweb.com')).toBe(true)
     const anyHub = ['bold.org', 'scholarships.com', 'goingmerry.com'].some((h) => hosts.has(h))
     expect(anyHub).toBe(true)
+  })
+
+  it('Axiom BioLabs (biotech research org) now seeds SBIR/NIH/NSF + business funders', () => {
+    const seeds = knownSeedSourcesForProfile(
+      { primary_type: 'organization' },
+      {
+        basic_information: { profile_type: 'organization' },
+        organization_details: { organization_type: 'Biotechnology / research organization' },
+      },
+    )
+    const hosts = hostsOf(seeds)
+    expect(hosts.has('sbir.gov')).toBe(true)
+    expect(hosts.has('grants.nih.gov')).toBe(true)
+    // Inherits the generic business federal small-business lane too.
+    expect(hosts.has('sba.gov')).toBe(true)
   })
 
   it('an unconfigured / typeless profile seeds nothing (MISSING = NEUTRAL)', () => {
