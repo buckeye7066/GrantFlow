@@ -401,3 +401,84 @@ export const DISEASE_SPECIFIC_SOURCE_IDS = Object.freeze(
 export function isDiseaseSpecificSource(sourceId) {
   return DISEASE_SPECIFIC_SOURCE_IDS.includes(String(sourceId ?? ''));
 }
+
+/**
+ * A MISSION LANE MUST BE ASKED FOR ITS MISSION (2026-08-22 — the org-side
+ * sibling of the condition gate above).
+ *
+ * THE DEFECT, measured on the four real prod profiles (2026-08-22): "PetSmart
+ * Charities grant programs" is rank 7 in AXIOM BIOLABS' — a biotech lab's —
+ * top 10, and the planner also selected petco_love_grants, aspca_grants, the
+ * three sacred-places/preservation lanes, native_american_ag_fund, ovw_grants,
+ * bja_second_chance and lsc_grants for it. The same verbatim junk the
+ * 2026-08-02 audit named for a church roof. Every one of these lanes is
+ * admitted through `servesApplicant` on the generic `nonprofit` token plus
+ * `servesNeed` on ONE coarse shared org need (`equipment`,
+ * `capacity_building`, `programs`, `operations`, `capital`) — the #937
+ * one-shared-word floor arriving from the ORG side.
+ *
+ * THE RULE, mirroring `sourceServesDeclaredCondition`: a CURATED registry of
+ * mission-specific source ids, each naming the need categories that ARE its
+ * mission identity. Such a lane is selected only when the profile either
+ *   (a) carries one of those mission categories among its needs. A
+ *       type-DEFAULTED need set is deliberately NOT excluded here: the
+ *       generic-nonprofit fallback is ['capacity_building','capital',
+ *       'programs','operations'] — no mission category — so a mission
+ *       category reaches a defaulted set only through a mission-declaring
+ *       TYPE (animal_rescue → animal_welfare), which IS a declaration; or
+ *   (b) shares a DISTINCTIVE applicant identity with the source — `church`
+ *       for the sacred-places lanes, `tribal` for the native-agriculture
+ *       fund, `law_enforcement` for OVW. `nonprofit`/`government` are the
+ *       generic tokens that caused the defect and never satisfy this.
+ *
+ * Curated ids only (the LEAD_GEN posture — verbatim measured junk, never a
+ * category-derived sweep): `lawhelp_legal_aid`-class lanes that serve
+ * individuals in crisis are deliberately NOT listed, so nothing an eviction
+ * or foreclosure persona relies on is touched.
+ */
+export const MISSION_SPECIFIC_SOURCE_REQUIREMENTS = Object.freeze({
+  petsmart_charities_grants: Object.freeze(['animal_welfare']),
+  petco_love_grants: Object.freeze(['animal_welfare']),
+  aspca_grants: Object.freeze(['animal_welfare']),
+  national_fund_sacred_places: Object.freeze(['historic_preservation']),
+  partners_sacred_places: Object.freeze(['historic_preservation']),
+  nthp_preservation_grants: Object.freeze(['historic_preservation']),
+  native_american_ag_fund: Object.freeze(['agriculture']),
+  ovw_grants: Object.freeze(['domestic_violence']),
+  bja_second_chance: Object.freeze(['reentry', 'substance_recovery']),
+  lsc_grants: Object.freeze(['legal']),
+});
+
+/**
+ * Applicant types too generic to claim a mission lane by identity — exactly
+ * the tokens the measured junk arrived on. Every OTHER type a mission lane
+ * lists (`church`, `ministry`, `tribal`, `school`, `law_enforcement`) is a
+ * distinctive identity a profile only carries by declaring it.
+ */
+export const GENERIC_MISSION_APPLICANT_TYPES = Object.freeze(new Set([
+  'nonprofit', 'government', 'individual', 'family', 'business', '*',
+]));
+
+export function isMissionSpecificSource(sourceId) {
+  return Object.prototype.hasOwnProperty.call(
+    MISSION_SPECIFIC_SOURCE_REQUIREMENTS, String(sourceId ?? ''));
+}
+
+export function sourceServesDeclaredMission(source, thesis = {}) {
+  const required = MISSION_SPECIFIC_SOURCE_REQUIREMENTS[String(source?.source_id ?? '')];
+  if (!required) return true; // not a mission lane — this gate has nothing to say
+  // (a) the profile's needs name the mission. Defaulted sets qualify only
+  // through a mission-declaring TYPE (see the registry note above).
+  if (Array.isArray(thesis?.needs)) {
+    const declared = new Set(thesis.needs.map((n) => String(n ?? '').toLowerCase()));
+    if (required.some((cat) => declared.has(cat))) return true;
+  }
+  // (b) a DISTINCTIVE applicant identity both sides share.
+  const wanted = new Set(
+    (Array.isArray(thesis?.applicant_types) ? thesis.applicant_types : [])
+      .map((t) => String(t ?? '').toLowerCase()),
+  );
+  return (source?.applicant_types ?? []).some(
+    (t) => !GENERIC_MISSION_APPLICANT_TYPES.has(t) && wanted.has(t),
+  );
+}

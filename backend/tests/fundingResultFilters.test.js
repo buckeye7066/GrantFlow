@@ -18,6 +18,7 @@ import Database from 'better-sqlite3'
 import {
   classifyRegulatoryNotice,
   isLeadGenScholarship,
+  isSiteSectionPage,
   isClearlyExpiredProgram,
   isAnonymizedFunder,
   hasFundableSignal,
@@ -113,6 +114,53 @@ describe('lead-gen "scholarship" denylist', () => {
   )
   it('does not flag a real scholarship', () => {
     expect(isLeadGenScholarship({ title: 'Peggy Perry Belcher Scholarship Fund', sponsor: 'MTSU' })).toBeNull()
+  })
+})
+
+describe('site-section / administrative pages (the TennCare nav-page class, 2026-08-22)', () => {
+  // Verbatim from the four-profile measurement: 8 of one TennCare member's
+  // top 10 were site sections stored kind=benefit and ACCEPTed at 89.
+  const NAV_JUNK_TITLES = [
+    'Program Integrity',
+    'Waiver and State Plan Public Notices',
+    'Reimbursement Information for RHC and FQHC Providers',
+    'Member Benefit Table',
+    'Programs and Facilities',
+  ]
+  // The page's REAL programs — the rows the adapter exists to find.
+  const REAL_PROGRAM_TITLES = [
+    'Employment and Community First CHOICES (ECF CHOICES)',
+    'Essential Family Supports',
+    'Katie Beckett Program',
+    'CHOICES in Long-Term Services and Supports',
+    'Family Caregiver Support Program',
+  ]
+
+  it.each(NAV_JUNK_TITLES)('flags the measured nav-page title: %s', (title) => {
+    expect(isSiteSectionPage({ title })).toBeTruthy()
+  })
+
+  it.each(NAV_JUNK_TITLES)('classifies %s as not_a_grant even with an apply URL (the fundable-signal bypass)', (title) => {
+    const verdict = classifyFundingResult({ title, apply_url: 'https://www.tn.gov/tenncare/x.html' })
+    expect(verdict.bucket).toBe(RESULT_BUCKETS.NOT_A_GRANT)
+    expect(verdict.reasons.some((r) => r.startsWith('site_section:'))).toBe(true)
+  })
+
+  it.each([...REAL_PROGRAM_TITLES, ...REAL_GRANT_TITLES])('never flags a real program/benefit: %s', (title) => {
+    expect(isSiteSectionPage({ title })).toBeNull()
+  })
+
+  it('the boot-net SQL superset covers every nav-page junk title (predicate before LIMIT)', () => {
+    const patterns = nonGrantTitleLikePatterns()
+      .filter((p) => !p.slice(1, -1).includes('%'))
+      .map((p) => p.replaceAll('%', ''))
+    for (const title of NAV_JUNK_TITLES) {
+      const hay = title.toLowerCase()
+      expect(
+        patterns.some((p) => hay.includes(p)),
+        `no LIKE pattern reaches: ${title}`,
+      ).toBe(true)
+    }
   })
 })
 

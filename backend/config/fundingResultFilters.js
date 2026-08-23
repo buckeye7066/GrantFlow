@@ -101,6 +101,43 @@ export function isLeadGenScholarship(row) {
 }
 
 /**
+ * SITE SECTION / ADMINISTRATIVE PAGES — a program website's own navigation
+ * surfaced as a "benefit" (2026-08-22, the four-profile measurement: 8 of one
+ * TennCare member's top 10 were site sections stored kind=benefit and
+ * ACCEPTed at 89 — 'Program Integrity', 'Waiver and State Plan Public
+ * Notices', 'Reimbursement Information for RHC and FQHC Providers', 'Member
+ * Benefit Table', 'Programs and Facilities'). The tn_ecf_choices live-link
+ * pass admits any anchor sharing ONE program keyword ('program', 'benefit',
+ * 'reimbursement', 'waiver') — the #937 one-shared-word floor — so a site's
+ * chrome walked straight into direct results. REGISTRY of measured junk
+ * phrases, word-bounded, TITLE identity only (never description prose). A
+ * page nobody can apply to is not a grant; classified NOT_A_GRANT so the
+ * matches sweep converges the store and the read path hides it.
+ */
+export const SITE_SECTION_PAGE_PATTERNS = Object.freeze([
+  { rx: /\bprogram integrity\b/i, label: 'program_integrity' },
+  { rx: /\bpublic notices?\b/i, label: 'public_notices' },
+  { rx: /\bstate plan\b/i, label: 'state_plan' },
+  { rx: /\breimbursement information\b/i, label: 'reimbursement_information' },
+  { rx: /\bbenefits? table\b/i, label: 'benefit_table' },
+  { rx: /\bprograms? and facilities\b/i, label: 'programs_and_facilities' },
+  { rx: /\bmember handbook\b/i, label: 'member_handbook' },
+  // Provider-directed pages: "Information for … Providers" is directed at the
+  // program's vendors, never at the member/applicant the profile represents.
+  { rx: /\binformation for\b.{0,40}\bproviders\b/i, label: 'provider_directed' },
+])
+
+export function isSiteSectionPage(row) {
+  if (!row || typeof row !== 'object') return null
+  const title = String(row.title ?? '')
+  if (!title.trim()) return null
+  for (const entry of SITE_SECTION_PAGE_PATTERNS) {
+    if (entry.rx.test(title)) return entry.label
+  }
+  return null
+}
+
+/**
  * Clearly-expired program shapes. A PY (program-year) allotment names its own
  * program year; one at least a full year in the past is over regardless of any
  * stored deadline. COVID-19 "rapid response" emergency programs ended with the
@@ -365,6 +402,8 @@ export function classifyFundingResult(row, { now = new Date() } = {}) {
   if (regulatory) reasons.push(regulatory)
   const leadGen = isLeadGenScholarship(row)
   if (leadGen) reasons.push(`lead_gen:${leadGen}`)
+  const siteSection = isSiteSectionPage(row)
+  if (siteSection) reasons.push(`site_section:${siteSection}`)
   const expired = isClearlyExpiredProgram(row, now)
   if (expired) reasons.push(`expired:${expired}`)
   if (isAnonymizedFunder(row.sponsor || row.funder)) reasons.push('unresolvable_funder')
@@ -575,6 +614,16 @@ export function nonGrantTitleLikePatterns() {
     '%portal sync%',
     '%pawsitively smart%',
     '%yougov%',
+    // site-section / administrative pages (the TennCare nav-page class)
+    '%program integrity%',
+    '%public notice%',
+    '%state plan%',
+    '%reimbursement information%',
+    '%benefit table%',
+    '%benefits table%',
+    '%and facilities%',
+    '%member handbook%',
+    '%information for%providers%',
     // clearly-expired program shapes
     '%covid-19%rapid response%',
     '%covid 19%rapid response%',
@@ -635,6 +684,8 @@ export default {
   classifyRegulatoryNotice,
   LEAD_GEN_SCHOLARSHIP_PATTERNS,
   isLeadGenScholarship,
+  SITE_SECTION_PAGE_PATTERNS,
+  isSiteSectionPage,
   STALE_PROGRAM_PATTERNS,
   PROGRAM_YEAR_RX,
   isClearlyExpiredProgram,

@@ -10,7 +10,12 @@
 import { allSources } from './sourceRegistry.js';
 import { titleStatesTerm } from '../config/profileDerivedFacts.js';
 import { STUDENT_AID_NEED_CATEGORIES, isStudentStage } from '../config/stageOfLifeEligibility.js';
-import { isDiseaseSpecificSource, sourceServesDeclaredCondition } from '../config/sourceLanes.js';
+import {
+  isDiseaseSpecificSource,
+  sourceServesDeclaredCondition,
+  isMissionSpecificSource,
+  sourceServesDeclaredMission,
+} from '../config/sourceLanes.js';
 
 function servesApplicant(source, thesis) {
   if (source.applicant_types?.includes('*')) return true;
@@ -70,6 +75,30 @@ function servesDeclaredCondition(source, thesis) {
   // read of the profile that found no health vocabulary, and the gate applies.
   if (!Array.isArray(thesis?.declared_health_terms)) return true;
   return sourceServesDeclaredCondition(source, thesis.declared_health_terms);
+}
+
+/**
+ * A MISSION LANE MUST BE ASKED FOR ITS MISSION (2026-08-22 — the org-side
+ * sibling of `servesDeclaredCondition`). Measured on the four real prod
+ * profiles: Axiom BioLabs (a biotech lab) was handed petsmart/petco/aspca,
+ * the sacred-places fleet, the native-agriculture fund, OVW, Second Chance
+ * and LSC — each admitted on generic `nonprofit` plus ONE coarse shared org
+ * need. The rule, its registry and its two admission doors live in
+ * `config/sourceLanes.js` (MISSION_SPECIFIC_SOURCE_REQUIREMENTS /
+ * `sourceServesDeclaredMission`) — never re-derived here.
+ *
+ * MISSING = NEUTRAL: a thesis with no `needs` ARRAY never supplied the facts
+ * (a hand-built or cross-profile stub) — the gate stays quiet and selection
+ * is unchanged. A present array (even a type-defaulted one) is a read, and
+ * the gate applies: the lane is kept only when the needs name its mission
+ * (type-defaulted sets carry a mission category only via a mission-declaring
+ * TYPE) or a distinctive applicant identity (church/tribal/law_enforcement)
+ * claims it.
+ */
+function servesDeclaredMission(source, thesis) {
+  if (!isMissionSpecificSource(source.source_id)) return true;
+  if (!Array.isArray(thesis?.needs)) return true;
+  return sourceServesDeclaredMission(source, thesis);
 }
 
 function servesGeo(source, thesis) {
@@ -206,6 +235,8 @@ export function plan(thesis = {}) {
     if (!servesGeo(source, thesis)) { ok = false; reasons.push('geography_out_of_scope'); }
     // A condition lane must be asked for a condition (see servesDeclaredCondition).
     if (!servesDeclaredCondition(source, thesis)) { ok = false; reasons.push('condition_not_declared'); }
+    // A mission lane must be asked for its mission (see servesDeclaredMission).
+    if (!servesDeclaredMission(source, thesis)) { ok = false; reasons.push('mission_not_declared'); }
     // Research-restricted sources (SBIR/STTR solicitations) serve ONLY profiles
     // whose thesis declares research capability — explicit and explainable, so
     // the applicant/need heuristics can't leak solicitations to a food pantry.

@@ -28,6 +28,8 @@ export const HUMAN_REASON = Object.freeze({
   geography_out_of_scope: 'Skipped — the source is geographically out of scope for this profile.',
   condition_not_declared: 'Skipped — this is a condition-specific lane and the profile names no matching condition. '
     + 'A disability with no named diagnosis still reaches the general disability and benefit lanes; add the diagnosis to reach this one.',
+  mission_not_declared: 'Skipped — this lane funds a specific mission (animal welfare, historic sacred places, reentry…) '
+    + 'the profile neither declares as a need nor carries as its identity. Declare the mission need to reach it.',
   loan_capable_source_kept_loans_gated_downstream: 'Kept — loan-capable program; loans gated downstream.',
 });
 

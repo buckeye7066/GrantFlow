@@ -486,9 +486,13 @@ export async function buildCoverageEvidence(db, profileId) {
       // class, and 14 of 33 real prod profiles — would mint a nightly
       // disease_specific "gap" the owner cannot fix, which is precisely the
       // finding-that-can-never-go-green noise #1088 was written against.
+      // `mission_not_declared` (2026-08-22) is the org-side sibling: a
+      // mission lane (PetSmart, sacred places, OVW…) skipped because the
+      // profile declares no such mission is correct gating — without it every
+      // biolab/generic nonprofit would mint a nightly animal-welfare "gap".
       const BY_DESIGN_REASONS = new Set([
         'applicant_type_not_served', 'need_category_not_covered', 'research_org_only',
-        'condition_not_declared',
+        'condition_not_declared', 'mission_not_declared',
       ]);
       if (BY_DESIGN_REASONS.has(topReason)) {
         bucket.status = 'not_applicable';

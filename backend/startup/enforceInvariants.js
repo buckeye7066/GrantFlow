@@ -6602,6 +6602,133 @@ export async function enforceConditionLaneMatchScope(db, { resolveThesis = null 
 }
 
 /**
+ * INVARIANT: a MISSION-SPECIFIC lane's rows reach only a profile that DECLARES
+ * the mission (2026-08-22 — the match-store half of the planner's
+ * `servesDeclaredMission` gate, and the door that gate cannot close).
+ *
+ * Measured on the four real prod profiles 2026-08-22: "PetSmart Charities
+ * grant programs" is rank 7 in AXIOM BIOLABS' (a biotech lab's) top 10 — the
+ * exact verbatim junk the 2026-08-02 audit named for a church roof. Rows
+ * already in the match store predate the planner gate and are STRUCTURALLY
+ * IMMORTAL through the same restore/planner-gate interaction the condition
+ * sweep documents: the resource-preserving reconcile restores every DIRECTORY
+ * match a run did not explicitly re-score as REJECT, and the gate guarantees
+ * a refused lane is never re-scored for that profile again.
+ *
+ * SAME facts, SAME vocabulary as the planner gate — nothing re-derived:
+ * `MISSION_SPECIFIC_SOURCE_REQUIREMENTS` + `sourceServesDeclaredMission`
+ * (config/sourceLanes.js) against the thesis's `needs`/`needs_defaulted`/
+ * `applicant_types`. MISSING = NEUTRAL: a profile whose thesis cannot be
+ * built, or that carries no `needs` ARRAY, adjudicates nothing this boot.
+ * Bounded by MATCH_SCOPE_PURGE_LIMIT; ENFORCE_MISSION_LANE_SCOPE=0 for
+ * count-only. Only MATCH rows are deleted — the catalog is never touched.
+ */
+export async function enforceMissionLaneMatchScope(db, { resolveThesis = null } = {}) {
+  return runInvariant('mission_lane_match_scope', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let MISSION_SPECIFIC_SOURCE_REQUIREMENTS, sourceServesDeclaredMission, getSource, buildThesisForProfile
+    try {
+      ;({ MISSION_SPECIFIC_SOURCE_REQUIREMENTS, sourceServesDeclaredMission } = await import('../config/sourceLanes.js'))
+      ;({ getSource } = await import('../crawler-os/sourceRegistry.js'))
+      if (!resolveThesis) ({ buildThesisForProfile } = await import('../services/crawlerOsService.js'))
+    } catch (err) {
+      log.warn('mission_lane_match_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const thesisOf = resolveThesis || ((d, pid) => buildThesisForProfile(d, pid))
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+
+    // Registry-generated SQL predicate (#944): only mission-lane rows are ever
+    // candidates, so the rest of the store cannot starve them out of the bound.
+    const missionIds = Object.keys(MISSION_SPECIFIC_SOURCE_REQUIREMENTS)
+    if (missionIds.length === 0) return { scanned: 0, repaired: 0, enforced: true }
+    const ph = missionIds.map(() => '?').join(', ')
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT m.id AS match_id, m.profile_id, o.source AS source_id, o.title
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+            WHERE o.source IN (${ph})
+            LIMIT ?`,
+        )
+        .all(...missionIds, limit)
+    } catch (err) {
+      log.warn('mission_lane_match_scope: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+    if ((rows || []).length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    const byProfile = new Map()
+    for (const r of rows) {
+      if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
+      byProfile.get(r.profile_id).push(r)
+    }
+
+    const violating = []
+    let profilesSkipped = 0
+    for (const [profileId, profileRows] of byProfile) {
+      let thesis = null
+      try {
+        thesis = await thesisOf(db, profileId)
+      } catch {
+        thesis = null
+      }
+      // MISSING = NEUTRAL: an unreadable profile, or one whose thesis carries
+      // no `needs` ARRAY, adjudicates nothing this boot.
+      if (!thesis || !Array.isArray(thesis.needs)) {
+        profilesSkipped += 1
+        continue
+      }
+      for (const row of profileRows) {
+        const source = getSource(row.source_id)
+        if (!source) continue // unknown source — cannot adjudicate, leave alone
+        if (!sourceServesDeclaredMission(source, thesis)) violating.push(row)
+      }
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_MISSION_LANE_SCOPE) === false
+    if (disabled) {
+      if (violating.length > 0) {
+        log.warn('mission-lane rows are matched to profiles that declare no such mission (purge DISABLED via ENFORCE_MISSION_LANE_SCOPE=0)', {
+          wouldRepair: violating.length,
+          scanned: rows.length,
+          examples: violating.slice(0, 3).map((v) => v.title),
+        })
+      }
+      return { scanned: rows.length, repaired: 0, wouldRepair: violating.length, profilesSkipped, enforced: false }
+    }
+    if (violating.length === 0) return { scanned: rows.length, repaired: 0, profilesSkipped, enforced: true }
+
+    const ids = violating.map((v) => v.match_id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph2 = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph2})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed mission-lane matches from profiles that declare no such mission', {
+      repaired,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map((v) => v.title),
+    })
+    return {
+      scanned: rows.length,
+      repaired,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      profilesSkipped,
+      enforced: true,
+    }
+  })
+}
+
+/**
  * Every US state / CA province code a profile declares, from its own sections.
  * `profiles` carries no state column in prod, so the truth lives in
  * `profile_sections` (`basic_information.state`, `location_focus.focus_state`).
@@ -6934,12 +7061,13 @@ export async function enforceNonGrantNoticeMatches(db) {
     if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
     }
-    let classifyRegulatoryNotice, isLeadGenScholarship, isClearlyExpiredProgram, nonGrantTitleSqlPredicate
+    let classifyRegulatoryNotice, isLeadGenScholarship, isClearlyExpiredProgram, isSiteSectionPage, nonGrantTitleSqlPredicate
     try {
       ;({
         classifyRegulatoryNotice,
         isLeadGenScholarship,
         isClearlyExpiredProgram,
+        isSiteSectionPage,
         nonGrantTitleSqlPredicate,
       } = await import('../config/fundingResultFilters.js'))
     } catch (err) {
@@ -6979,6 +7107,14 @@ export async function enforceNonGrantNoticeMatches(db) {
       const leadGen = isLeadGenScholarship(row)
       if (leadGen) {
         junkOpps.set(row.id, { ...row, reason: `lead_gen:${leadGen}` })
+        continue
+      }
+      // A program site's own navigation/administrative page (the TennCare
+      // 'Member Benefit Table' class) — positive junk evidence by the row's
+      // own title, same authority the read path uses.
+      const siteSection = isSiteSectionPage(row)
+      if (siteSection) {
+        junkOpps.set(row.id, { ...row, reason: `site_section:${siteSection}` })
         continue
       }
       const expired = isClearlyExpiredProgram(row)
@@ -7145,7 +7281,7 @@ export async function enforceNonGrantNoticePipeline(db) {
 
     // Adjudicate the superset. `sponsor` is the classifier's field name; the
     // pipeline column is `funder` (#725 naming drift).
-    const PURGE_REASON_RX = /^(regulatory_notice_title|lead_gen:|expired:(?!deadline_long_past))/
+    const PURGE_REASON_RX = /^(regulatory_notice_title|lead_gen:|site_section:|expired:(?!deadline_long_past))/
     const purgeable = []
     let frSourceFlagged = 0
     for (const g of rows) {
@@ -9891,6 +10027,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // gate (#1102) stops new selections; this reaches the rows that predate it,
   // which the resource-preserving reconcile makes structurally immortal.
   steps.push(await enforceConditionLaneMatchScope(db))
+  steps.push(await enforceMissionLaneMatchScope(db))
   // Surface-table eligibility net: demote persisted student-aid matches that are
   // surfacing to a NON-student profile (stale ACCEPTs the live engine already
   // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).
