@@ -28,11 +28,67 @@ import { isAuthorizationActive, listActiveAuthorizations } from './hamiltonAutho
 import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
 import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
 
-const REQUIRED_IDENTITY_FIELDS = [
+// Individual/person identity fields. An ORGANIZATION profile (a church, a
+// ministry, a nonprofit, a school, a business) has NO first/last name — it has
+// an organization name and a contact — so requiring first_name/last_name from
+// one is a false blocker (measured 2026-08-23: Focus Forward Ministry blocked on
+// "missing first name; missing last name"; Vermilion Church blocked on "missing
+// school / university"). Email is required of everyone.
+const PERSON_IDENTITY_FIELDS = [
   { key: 'first_name', paths: ['basic_information.first_name', 'first_name'] },
   { key: 'last_name', paths: ['basic_information.last_name', 'last_name'] },
+]
+const UNIVERSAL_IDENTITY_FIELDS = [
   { key: 'email', paths: ['basic_information.email', 'email'] },
 ]
+// An organization must have a NAME to apply — its own, not a person's. Satisfied
+// by the display name, an organization_details name, or the profile's own name.
+const ORG_NAME_FIELD = {
+  key: 'organization_name',
+  paths: [
+    'organization_details.organization_name', 'organization_details.name',
+    'basic_information.organization_name', 'display_name', 'name',
+  ],
+}
+const REQUIRED_IDENTITY_FIELDS = [...PERSON_IDENTITY_FIELDS, ...UNIVERSAL_IDENTITY_FIELDS]
+
+// Explicit organization root types (beyond a name that LOOKS like an org). An
+// individual/family/student/veteran/senior profile is a PERSON and keeps the
+// person-identity requirements.
+const ORG_ROOT_TYPES = new Set([
+  'church', 'ministry', 'nonprofit', 'non_profit', 'foundation', 'charity',
+  'business', 'small_business', 'large_corporation', 'medium_corporation',
+  'corporation', 'company', 'school', 'public_school', 'private_school',
+  'university', 'college', 'academy', 'school_district', 'government',
+  'municipality', 'county', 'city', 'tribal', 'tribe', 'volunteer_fire_department',
+  'vfd', 'fire_department', 'ems', 'farm', 'cooperative', 'food_pantry',
+  'food_bank', 'homeless_shelter', 'animal_rescue', 'animal_shelter',
+  'agricultural_cooperative', 'law_enforcement', 'organization', 'institution',
+])
+
+/**
+ * Is this profile an ORGANIZATION (not a person)? An org has no first/last name
+ * and can never be a student. Conservative — a positive org type OR an
+ * org-shaped display name; a bare hallucinated `organization_details` on an
+ * individual (the enforceIndividualOrgSectionConflict class) is NOT trusted
+ * alone, so we require either an explicit org type or an org-looking NAME.
+ */
+function isOrganizationProfile(profile) {
+  if (!profile || typeof profile !== 'object') return false
+  const typeVals = [
+    profile.applicant_type, profile.primary_type, profile.primary_profile_type,
+    get(profile, 'organization_details.organization_type'),
+    get(profile, 'basic_information.profile_type'),
+    get(profile, 'basic_information.profile_category'),
+  ]
+  for (const v of typeVals) {
+    const t = normKey(v)
+    if (t && ORG_ROOT_TYPES.has(t)) return true
+  }
+  const name = profile.display_name || profile.name || get(profile, 'basic_information.organization_name')
+  if (nonEmpty(name) && looksLikeOrganization(String(name))) return true
+  return false
+}
 
 const STUDENT_HINT_PATTERNS = [
   /scholarship/i, /grant/i, /tuition/i, /aid/i, /fafsa/i, /college/i, /university/i,
@@ -225,6 +281,7 @@ export function profileFafsaCompleted(profile, resolvedFields = null) {
  */
 export const PREFLIGHT_PROFILE_FIELD_KEYS = Object.freeze([
   ...REQUIRED_IDENTITY_FIELDS.map((f) => f.key),
+  ORG_NAME_FIELD.key,
   'school_name',
   'household_income',
   FAFSA_LINK_FIELD_KEY,
@@ -262,6 +319,7 @@ export function recheckMissingProfileFields(profile, keys = [], resolvedFields =
       continue
     }
     const spec = REQUIRED_IDENTITY_FIELDS.find((f) => f.key === key)
+      || (key === ORG_NAME_FIELD.key ? ORG_NAME_FIELD : null)
     if (!fieldPresent(profile, spec?.paths || [], key, resolvedFields)) stillMissing.push(key)
   }
   return stillMissing
@@ -332,11 +390,16 @@ export async function preflightSingleSource(db, {
     })
   }
 
-  // 1. Required identity / contact fields. A field is only "missing" if it is
-  // absent at its explicit path AND nowhere else in the profile under a known
-  // alias AND not already in the resolved-field cache — so Hamilton parses the
-  // whole profile before flagging anything.
-  for (const f of REQUIRED_IDENTITY_FIELDS) {
+  // 1. Required identity / contact fields, SCOPED TO PROFILE TYPE. A person
+  // needs first/last name; an ORGANIZATION needs its organization name (a church
+  // has no "first name"). Everyone needs an email. A field is only "missing" if
+  // it is absent at its explicit path AND nowhere else in the profile under a
+  // known alias AND not already in the resolved-field cache.
+  const orgProfile = isOrganizationProfile(profile)
+  const requiredIdentityFields = orgProfile
+    ? [ORG_NAME_FIELD, ...UNIVERSAL_IDENTITY_FIELDS]
+    : [...PERSON_IDENTITY_FIELDS, ...UNIVERSAL_IDENTITY_FIELDS]
+  for (const f of requiredIdentityFields) {
     if (!fieldPresent(profile, f.paths, f.key, resolvedFields)) {
       blockers.push({
         kind: 'missing_field', key: f.key,
@@ -346,11 +409,13 @@ export async function preflightSingleSource(db, {
     }
   }
 
-  // 2. Student funding requires school + program info. Accept a school named in
-  // a university_applications entry OR anywhere else in the profile (e.g.
-  // academic_status.current_institution, basic_information.current_school) so a
-  // student already carrying their school on the profile is never blocked.
-  if (looksLikeStudentFunding(opportunity)) {
+  // 2. Student funding requires school + program info — but ONLY for a profile
+  // that could BE a student. An organization (a church, a ministry, a nonprofit)
+  // is never a student, so a scholarship in its pipeline must never block on
+  // "missing school / university" (that is a pipeline-fit problem, not a field
+  // Hamilton can ask a church to supply). Accept a school named in a
+  // university_applications entry OR anywhere else in the profile.
+  if (!orgProfile && looksLikeStudentFunding(opportunity)) {
     const apps = pickFirst(profile, ['university_applications.applications']) || []
     const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : null
     const hasSchool = (firstApp && nonEmpty(firstApp.name)) ||
@@ -391,9 +456,10 @@ export async function preflightSingleSource(db, {
     })
   }
 
-  // 4. Required documents.
+  // 4. Required documents. Student-doc prompts (transcript, personal statement)
+  // apply only to a profile that could be a student — never an organization.
   const docs = await listProfileDocuments(db, profileId || profile?.id)
-  if (looksLikeStudentFunding(opportunity)) {
+  if (!orgProfile && looksLikeStudentFunding(opportunity)) {
     if (!hasDocOfType(docs, (d) => /transcript/i.test(`${d.name || ''} ${d.type || ''}`))) {
       warnings.push({
         kind: 'missing_document', key: 'transcript',
