@@ -41,6 +41,7 @@ import {
   FULL_AUTOMATION_OPTIONS,
   SWEEP_EXCLUDED_STATUSES,
   isFullAutomationGrant,
+  isPortalAccountCreationAuthorized,
   isFullAutomationEnabled,
   clearHumanReviewVetoes,
   propagateAutoSubmitToTasks,
@@ -319,6 +320,43 @@ describe('isFullAutomationGrant', () => {
     expect(isFullAutomationGrant(['complete_forms'], { allow_auto_submit: true })).toBe(false)
     expect(isFullAutomationGrant(['submit_applications'], {})).toBe(false)
     expect(isFullAutomationGrant(['submit_applications'], { allow_auto_submit: true, require_human_review: true })).toBe(false)
+  })
+})
+
+describe('isPortalAccountCreationAuthorized', () => {
+  // Regression 2026-08-22: submit+credentials without allow_auto_submit used to
+  // authorize irreversible third-party portal registration. Full automation
+  // (which includes allow_auto_submit) is required.
+  it('requires full automation AND credential-use', () => {
+    expect(isPortalAccountCreationAuthorized({
+      fullAutomationActive: true,
+      useSavedCredentialsReference: true,
+    })).toBe(true)
+  })
+  it('refuses when submit/credentials are on but full automation is off (no allow_auto_submit)', () => {
+    expect(isPortalAccountCreationAuthorized({
+      fullAutomationActive: false,
+      useSavedCredentialsReference: true,
+    })).toBe(false)
+  })
+  it('refuses full automation without credential-use authority', () => {
+    expect(isPortalAccountCreationAuthorized({
+      fullAutomationActive: true,
+      useSavedCredentialsReference: false,
+    })).toBe(false)
+  })
+  it('orchestrator wires the helper (not a submit+credentials reconstruction)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const { dirname, resolve } = await import('node:path')
+    const src = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../services/hamilton/hamiltonAutomationOrchestrator.js'),
+      'utf8',
+    )
+    expect(src).toMatch(/isPortalAccountCreationAuthorized\s*\(/)
+    expect(src).not.toMatch(
+      /createAccountAuthorized\s*=\s*authorizations\.submit_applications\s*===\s*true/,
+    )
   })
 })
 

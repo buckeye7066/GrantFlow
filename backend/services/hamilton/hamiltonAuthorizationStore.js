@@ -462,11 +462,69 @@ export async function revokeAuthorization(db, { id, reason = null } = {}) {
 
 // ── Autopilot run ledger ────────────────────────────────────────────
 
+/**
+ * Every status the autopilot run ledger may hold. This is the SINGLE list the
+ * Postgres CHECK constraint (`0185_hamilton_autopilot_run_statuses.sql`) and
+ * `schema.sql` mirror — a static test (`hamiltonAutopilotRunStatusLockstep`)
+ * fails when any of the three drift.
+ *
+ * WHY THIS EXISTS (2026-08-22, prod): the orchestrator wrote
+ * `submit_attempt_started` at the irreversible click boundary, the table's
+ * CHECK only knew the original eight statuses, Postgres rejected the row, and
+ * Hamilton fail-closed into `submission_verification_required` on EVERY live
+ * submit (4 real tasks that night). The SQLite test schema in `ensure…Schema`
+ * below carries no CHECK, so no test could see it. Validating here makes the
+ * failure a named error in every dialect instead of a prod-only constraint.
+ */
+export const AUTOPILOT_RUN_STATUSES = Object.freeze([
+  'queued', 'preflight', 'running', 'blocked', 'completed', 'submitted',
+  'failed', 'cancelled',
+  // Scheduling / retry.
+  'deferred',
+  // Irreversible-submission boundary ledger.
+  'submit_attempt_started', 'submit_evidence_pending', 'submission_verification_required',
+])
+
+function assertRunStatus(status) {
+  if (!AUTOPILOT_RUN_STATUSES.includes(status)) {
+    throw new Error(`invalid autopilot run status: ${String(status)} (allowed: ${AUTOPILOT_RUN_STATUSES.join(', ')})`)
+  }
+}
+
+/**
+ * JSON for a Postgres TEXT column. Postgres rejects a NUL byte anywhere in a
+ * text value ("invalid byte sequence for encoding UTF8: 0x00") and a page
+ * snapshot scraped from a portal can carry one; a circular reference or a
+ * BigInt from a library object would throw in JSON.stringify. Either failure
+ * used to be an uncaught rejection that left the run `running` forever with no
+ * trace. The ledger must always be writable: drop what cannot be serialised,
+ * never the row.
+ */
+export function serializeRunJson(value, fallback = '{}') {
+  const seen = new WeakSet()
+  let out
+  try {
+    out = JSON.stringify(value ?? {}, (_k, v) => {
+      if (typeof v === 'bigint') return v.toString()
+      if (typeof v === 'string') return v.includes(' ') ? v.split(' ').join('') : v
+      if (v && typeof v === 'object') {
+        if (seen.has(v)) return '[circular]'
+        seen.add(v)
+      }
+      return v
+    })
+  } catch (err) {
+    out = JSON.stringify({ serialization_error: String(err?.message || err).slice(0, 200) })
+  }
+  return out === undefined ? fallback : out
+}
+
 export async function createAutopilotRun(db, {
   taskId, profileId, userId = null, authorizationId = null,
   preflight = {}, status = 'queued',
 } = {}) {
   if (!db || !taskId || !profileId) throw new Error('taskId and profileId required')
+  assertRunStatus(status)
   await ensureHamiltonAuthorizationSchema(db)
   const id = crypto.randomUUID()
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
@@ -476,7 +534,7 @@ export async function createAutopilotRun(db, {
       VALUES (?, ?, ?, ?, ?, ?, ?, ${nowFn}, ${nowFn}, ${nowFn})`,
   ).run(
     id, String(taskId), String(profileId), userId, authorizationId, status,
-    JSON.stringify(preflight || {}),
+    serializeRunJson(preflight || {}),
   )
   const row = await db.prepare('SELECT * FROM hamilton_autopilot_runs WHERE id = ?').get(id)
   return rowToRun(row)
@@ -488,12 +546,12 @@ export async function updateAutopilotRun(db, runId, patch = {}) {
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
   const sets = [`updated_at = ${nowFn}`]
   const params = []
-  if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status) }
+  if (patch.status !== undefined) { assertRunStatus(patch.status); sets.push('status = ?'); params.push(patch.status) }
   if (patch.authorizationId !== undefined) { sets.push('authorization_id = ?'); params.push(patch.authorizationId ?? null) }
   if (patch.blockerKind !== undefined) { sets.push('blocker_kind = ?'); params.push(patch.blockerKind ?? null) }
   if (patch.blockerDetail !== undefined) { sets.push('blocker_detail = ?'); params.push(patch.blockerDetail ?? null) }
-  if (patch.preflight !== undefined) { sets.push('preflight_json = ?'); params.push(JSON.stringify(patch.preflight ?? {})) }
-  if (patch.result !== undefined) { sets.push('result_json = ?'); params.push(JSON.stringify(patch.result ?? {})) }
+  if (patch.preflight !== undefined) { sets.push('preflight_json = ?'); params.push(serializeRunJson(patch.preflight ?? {})) }
+  if (patch.result !== undefined) { sets.push('result_json = ?'); params.push(serializeRunJson(patch.result ?? {})) }
   if (patch.confirmationReference !== undefined) { sets.push('confirmation_reference = ?'); params.push(patch.confirmationReference ?? null) }
   if (patch.confirmationScreenshotPath !== undefined) { sets.push('confirmation_screenshot_path = ?'); params.push(patch.confirmationScreenshotPath ?? null) }
   if (patch.finishedAt !== undefined) { sets.push('finished_at = ?'); params.push(patch.finishedAt ?? null) }

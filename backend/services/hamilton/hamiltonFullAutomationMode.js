@@ -132,6 +132,23 @@ export function isFullAutomationGrant(authorizationTypes = [], options = {}) {
 }
 
 /**
+ * May Hamilton CREATE a portal account for this profile right now?
+ *
+ * Full automation (submit_applications + allow_auto_submit + no human-review
+ * veto) is the irreversible consent for registration. Credential-use is also
+ * required because signup writes into the same vault the credential grant
+ * covers. `readAuthorizations` does NOT surface `allow_auto_submit`, so callers
+ * must pass the live `isFullAutomationEnabled` verdict — never reconstruct
+ * "full automation" from submit+credentials alone.
+ */
+export function isPortalAccountCreationAuthorized({
+  fullAutomationActive = false,
+  useSavedCredentialsReference = false,
+} = {}) {
+  return fullAutomationActive === true && useSavedCredentialsReference === true
+}
+
+/**
  * Every non-revoked authorization row for a profile, at any scope. The shared
  * candidate set for the status predicate and the veto sweep, so the two can
  * never disagree about which rows exist.

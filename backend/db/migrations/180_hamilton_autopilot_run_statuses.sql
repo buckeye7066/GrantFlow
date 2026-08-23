@@ -1,0 +1,12 @@
+-- Migration 180: the autopilot run ledger may hold every status the
+-- orchestrator writes (SQLite side).
+--
+-- NO-OP FOR SQLITE, DELIBERATELY (same posture as 030 and 179): the table as
+-- it exists in a live SQLite database is created by
+-- ensureHamiltonAuthorizationSchema() WITHOUT a CHECK on `status`, and SQLite
+-- cannot alter a constraint in place. A fresh database built from schema.sql
+-- gets the widened CHECK from schema.sql itself. The real constraint lives in
+-- Postgres and is widened there (0185). The allowed set is
+-- AUTOPILOT_RUN_STATUSES in hamiltonAuthorizationStore.js, enforced in code in
+-- every dialect.
+SELECT 1;
