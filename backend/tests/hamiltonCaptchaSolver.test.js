@@ -151,4 +151,41 @@ describe('injectCaptchaToken', () => {
     const r = await injectCaptchaToken(fakePage({ responseFields: [] }), 'ABC')
     expect(r.injected).toBe(false)
   })
+
+  it('patches getResponse + execute so BOTH v2 modes read our token, and does NOT fire the callback prematurely (the U.S. Bank silent-bounce fix, 2026-08-23)', async () => {
+    // A page carrying reCAPTCHA's real internal surfaces: an invisible-v2
+    // widget whose success callback lives ONLY in ___grecaptcha_cfg.clients
+    // (no data-callback attribute), plus getResponse + execute.
+    let callbackToken = null
+    const grecaptcha = { getResponse: () => '', execute: () => { throw new Error('interactive challenge would clobber the token') } }
+    const cfg = { clients: { 0: { aa: { bb: { callback: (t) => { callbackToken = t } } } } } }
+    const textarea = { value: '', dispatchEvent() { return true } }
+    const win = { location: { href: 'https://portal.example.org/apply' }, grecaptcha, ___grecaptcha_cfg: cfg }
+    const doc = {
+      querySelectorAll(sel) { return sel === 'textarea#g-recaptcha-response' ? [textarea] : [] },
+      querySelector() { return null },
+    }
+    const page = {
+      async evaluate(fn, arg) {
+        const g = globalThis
+        const savedDoc = g.document, savedWin = g.window
+        g.document = doc; g.window = win
+        try { return await fn(arg) } finally { g.document = savedDoc; g.window = savedWin }
+      },
+    }
+    const r = await injectCaptchaToken(page, 'TOKEN-XYZ')
+    expect(r.injected).toBe(true)
+    expect(textarea.value).toBe('TOKEN-XYZ')
+    // getResponse now returns our token (checkbox-v2 client validation passes).
+    expect(grecaptcha.getResponse()).toBe('TOKEN-XYZ')
+    expect(r.get_response_patched).toBe(1)
+    expect(r.execute_patched).toBe(1)
+    expect(r.callbacks_found).toBe(1)
+    // The callback did NOT fire during injection (no premature submit).
+    expect(callbackToken).toBe(null)
+    // It fires only when the SITE calls execute() at the real submit moment —
+    // delivering our token and resolving instead of the throwing challenge.
+    await expect(grecaptcha.execute()).resolves.toBe('TOKEN-XYZ')
+    expect(callbackToken).toBe('TOKEN-XYZ')
+  })
 })
