@@ -42,9 +42,22 @@ const PID = 'p1'
 beforeEach(async () => {
   const sqlite = new Database(':memory:')
   sqlite.exec(`
+    -- Mirrors the real application_tasks columns this route reads. The route
+    -- SELECTs last_agent_message (it reports WHY each task was stuck); the
+    -- fixture omitted it, so every run of the route 500'd with
+    -- "no such column: last_agent_message" while prod — where the column has
+    -- existed since 0081 — was fine. A fixture narrower than the schema turns
+    -- a green suite into no coverage at all.
     CREATE TABLE application_tasks (
       id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, status TEXT,
+      last_agent_message TEXT,
       next_retry_at DATETIME, updated_at DATETIME
+    );
+    -- The route also asks which tasks still have UNRESOLVED missing-info rows
+    -- (those are a real hand-off and must not be released). Absent from the
+    -- fixture, that query threw and the whole route 500'd.
+    CREATE TABLE application_missing_info (
+      id TEXT PRIMARY KEY, task_id TEXT, kind TEXT, key TEXT, resolved INTEGER DEFAULT 0
     );
   `)
   db = wrapSqlite(sqlite)
@@ -67,7 +80,9 @@ describe('POST /admin/release-need-you', () => {
     const res = await request(app()).post('/api/hamilton/automation/admin/release-need-you').send({ profileId: PID })
     expect(res.status).toBe(200)
     expect(res.body.released).toBe(3) // review + login + captcha
-    expect(res.body.by_status).toMatchObject({ waiting_for_review: 1, blocked_login_required: 1, blocked_captcha: 1 })
+    // The route's key is `released_by_status` (nothing else in the product
+    // ever read `by_status` — this assertion was the only consumer).
+    expect(res.body.released_by_status).toMatchObject({ waiting_for_review: 1, blocked_login_required: 1, blocked_captcha: 1 })
     expect(await retryOf('t-review')).toBeNull()
     expect(await retryOf('t-login')).toBeNull()
     expect(await retryOf('t-captcha')).toBeNull()

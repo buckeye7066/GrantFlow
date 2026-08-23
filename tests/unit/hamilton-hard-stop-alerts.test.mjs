@@ -332,7 +332,13 @@ describe('hamilton hard-stop alerting (single canonical admin)', () => {
     assert.ok(resolutions.some((r) => r.outcome === 'resolved' && r.strategy === 'user_action'))
   })
 
-  it('payment alert uses hamilton_payment_required and includes funding context', async () => {
+  // Owner rule 2026-08-22 (commit 07f6c0d8): grants and funding sources never
+  // charge to apply, so payment was REMOVED outright — Hamilton pays for
+  // nothing, there is no envelope to approve, and a source demanding a fee is
+  // FLAGGED FOR REVIEW rather than escalated as "approve this payment". This
+  // test asserted the retired `approve_payment` contract and had been red on
+  // main since that commit.
+  it('a source demanding payment is FLAGGED FOR REVIEW — Hamilton never pays and never asks the owner to', async () => {
     const db = makeDb()
     await seedProfile(db)
     const directive = await resolveBlocker(db, ctx(), {
@@ -349,8 +355,14 @@ describe('hamilton hard-stop alerting (single canonical admin)', () => {
     assert.equal(data.funding_source_id, 'op1')
     assert.equal(data.funding_source_title, 'MTSU Tuition Aid')
     assert.equal(data.blocker_type, 'payment_required')
-    assert.equal(data.required_action, 'approve_payment')
+    // NOT 'approve_payment': there is nothing for the owner to authorize.
+    assert.equal(data.required_action, 'review_flagged_source')
     assert.match(data.route_to_resolve, /\/hamilton\/tasks\/t1/)
+    // The directive itself must record that nothing was charged and must not
+    // offer a pay/authorize strategy.
+    assert.equal(directive.strategy, 'payment_not_supported')
+    assert.equal(directive.payload.charged, false)
+    assert.ok(!/pay|charge|authorize/i.test(directive.strategy.replace('payment_not_supported', '')))
 
     const adminNotifs = await readNotifications(db, 'hamilton_admin_payment_required')
     assert.equal(adminNotifs.length, 1)
