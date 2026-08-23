@@ -69,6 +69,27 @@ await client.query('SET TRANSACTION READ ONLY')
 await client.query('SET default_transaction_read_only = on')
 
 const now = new Date()
+// What the deployed boot sweep itself reported, if it has run here. This is
+// the difference between "the census says N rows would go" and "the net
+// actually ran and removed them" — the AFTER measurement needs both.
+let lastRun = null
+try {
+  const row = (await client.query("SELECT value FROM system_kv WHERE key = 'enforce_invariants_last_run'")).rows[0]
+  if (row?.value) {
+    const parsed = JSON.parse(row.value)
+    lastRun = {
+      at: parsed.at ?? null,
+      ran: parsed.ran ?? null,
+      failed: parsed.failed ?? null,
+      total_repaired: parsed.totalRepaired ?? null,
+      pipeline_precision: (parsed.steps || []).find((s) => s.name === 'pipeline_precision') ?? 'ABSENT',
+    }
+  }
+} catch { lastRun = null }
+
+const dismissals = (await client.query('SELECT count(*)::int AS n FROM pipeline_dismissals')).rows[0]?.n ?? null
+const markedIneligible = (await client.query("SELECT count(*)::int AS n FROM grants WHERE eligibility_status = 'ineligible'")).rows[0]?.n ?? null
+
 const profiles = (await client.query(
   "SELECT id, display_name FROM profiles WHERE deleted_at IS NULL AND (status IS NULL OR status <> 'deleted')",
 )).rows
@@ -140,6 +161,9 @@ await client.end()
 
 const accounted = totals.kept + totals.would_remove + totals.would_relabel + totals.failed
 totals.balanced = accounted === totals.scanned
+totals.deployed_boot_sweep = lastRun
+totals.pipeline_dismissals_total = dismissals
+totals.grants_marked_ineligible = markedIneligible
 
 if (asJson) {
   console.log(JSON.stringify(totals, null, 2))
