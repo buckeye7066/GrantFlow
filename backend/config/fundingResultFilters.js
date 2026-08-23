@@ -508,6 +508,96 @@ export function agencyOnlyProgramConflict(row) {
 }
 
 /**
+ * Federal COMPETITIVE RESEARCH / COOPERATIVE-AGREEMENT / REGULATORY program
+ * families whose applicant is ALWAYS an institution (a university, hospital,
+ * research org, LEA, tribe, state/local agency) — never an individual PERSON
+ * (2026-08-23, owner pipeline-fit audit). Measured on Anastasia White (a TN
+ * forensic-science undergraduate): her pipeline carried Conservation Innovation
+ * Grants, "African Medical Devices Regulatory Harmonization Program", six
+ * Defense-Health-Agency "DoW"/Peer-Reviewed-Medical research awards, NSF
+ * Antarctic Research / "Research on Research Security", DARPA "Decentralized
+ * AI…", "Full-Service Community Schools", "Harold Rogers Prescription Drug
+ * Monitoring", CDC global-health cooperative agreements, and the Economic
+ * Development Administration — all at scores 14-34, admitted because the
+ * applicant-type gate is silence-neutral (these web-minted rows carry NULL
+ * entity_types_allowed) and the existing agency/pass-through registries name
+ * only ~8 program families.
+ *
+ * Unlike GOVERNMENT_AGENCY_PROGRAM_PATTERNS (agency-ONLY, gated to non-agency
+ * roots), an org/nonprofit/university CAN hold most of these — so this class is
+ * gated to INDIVIDUAL roots only (a nonprofit is unaffected). Each entry names
+ * a REAL federal program family, anchored on program name and/or funding
+ * agency, never a bare topic (the CLAUDE.md "never a bare topic" rule). Real
+ * individual benefits (Pell, SNAP, HUD counseling, scholarships, individual
+ * fellowships) match none of these.
+ */
+export const INDIVIDUAL_INELIGIBLE_PROGRAM_PATTERNS = Object.freeze([
+  { rx: /\bconservation innovation grants?\b|\bnatural resources conservation service\b/i, label: 'Conservation Innovation Grants (NRCS)' },
+  { rx: /\bmedical devices?\b.{0,40}\bregulatory harmonization\b/i, label: 'Medical Devices Regulatory Harmonization (FDA institutional)' },
+  { rx: /\bfull[-\s]?service community schools\b/i, label: 'Full-Service Community Schools (LEA/institution only)' },
+  { rx: /\b(?:congressionally directed|peer[-\s]?reviewed) medical research\b|\bdefense health agency\b|\bdod ?w? (?:peer reviewed|bone marrow|hiv)/i, label: 'DoD Congressionally Directed Medical Research (institutional)' },
+  { rx: /\bharold rogers\b.{0,40}\bprescription drug monitoring\b|\bprescription drug monitoring program\b.{0,40}\b(?:grant|bja)/i, label: 'Harold Rogers PDMP (state/agency)' },
+  { rx: /\bantarctic research\b|\bu\.?s\.? antarctic program\b/i, label: 'NSF Antarctic Research (institutional)' },
+  { rx: /\bresearch on research security\b/i, label: 'NSF Research on Research Security (institutional)' },
+  { rx: /\beconomic development administration\b(?!.{0,40}\bplanning\b)/i, label: 'Economic Development Administration (institutional)' },
+  { rx: /\bdefense advanced research projects agency\b|\bdarpa\b/i, label: 'DARPA research (institutional)' },
+  { rx: /\boffice of naval research\b|\bbroad agency announcement\b/i, label: 'Federal research BAA (institutional)' },
+  { rx: /\bglobal health security\b.{0,60}\b(?:cooperative agreement|protect and improve|public health)/i, label: 'CDC Global Health Security cooperative agreement (institutional)' },
+  { rx: /\bindian health\b.{0,40}\b(?:outreach and education|national)\b/i, label: 'IHS National Indian Health Outreach (institutional)' },
+])
+
+export function individualIneligibleProgramConflict(row) {
+  if (!row || typeof row !== 'object') return null
+  const identity = `${row.title ?? ''} ${row.sponsor || row.funder || ''}`
+  if (!identity.trim()) return null
+  for (const entry of INDIVIDUAL_INELIGIBLE_PROGRAM_PATTERNS) {
+    if (entry.rx.test(identity)) return entry.label
+  }
+  return null
+}
+
+/**
+ * Individual-root tokens (mirrors profileTypeRegistry's person/household roots)
+ * so a config-light caller that resolved only `applicantType`/`profileType`
+ * still gets the individual-only gates. A business/organization/agency root is
+ * deliberately NOT here — those profiles CAN hold institutional programs.
+ */
+const INDIVIDUAL_ROOT_TYPES = Object.freeze(new Set([
+  'individual', 'person', 'family', 'household', 'student', 'college_student',
+  'high_school_student', 'graduate_student', 'veteran', 'senior', 'retiree',
+  'disabled_adult', 'caregiver', 'military_spouse', 'active_duty',
+]))
+
+function resolveIndividualRoot(facts = {}) {
+  if (facts.individualRoot === true) return true
+  if (facts.individualRoot === false) return false
+  const t = String(facts.applicantType ?? facts.profileType ?? '').trim().toLowerCase()
+  if (!t) return null // MISSING = NEUTRAL: unknown root never fails a row
+  return INDIVIDUAL_ROOT_TYPES.has(t)
+}
+
+/**
+ * Government-agency roots (the profiles the agency-only registry is neutral
+ * about). Kept parallel to INDIVIDUAL_ROOT_TYPES so a config-light caller that
+ * resolved only `applicantType`/`profileType` still gets `publicAgencyRoot`
+ * derived — the removal path (robertPipelineAudit) passes those, not the
+ * boolean, so before this the agency-only gate was dead there.
+ */
+const PUBLIC_AGENCY_ROOT_TYPES = Object.freeze(new Set([
+  'government', 'government_agency', 'public_agency', 'state_agency',
+  'local_government', 'municipality', 'county_government', 'tribal_government',
+  'federal_agency',
+]))
+
+function resolvePublicAgencyRoot(facts = {}) {
+  if (facts.publicAgencyRoot === true) return true
+  if (facts.publicAgencyRoot === false) return false
+  const t = String(facts.applicantType ?? facts.profileType ?? '').trim().toLowerCase()
+  if (!t) return null // MISSING = NEUTRAL
+  return PUBLIC_AGENCY_ROOT_TYPES.has(t)
+}
+
+/**
  * Owner-named predicate #2: hard applicant-side eligibility.
  *
  * `facts` carries only what the CALLER has already resolved (matchEngine
@@ -520,16 +610,32 @@ export function agencyOnlyProgramConflict(row) {
  *                       (kept there so this config module stays dependency-light).
  */
 export function passesEligibility(row, facts = {}) {
+  // Resolve roots ONCE. A caller that already knows the boolean (matchEngine,
+  // via profileTypeRegistry) passes it through unchanged; a config-light caller
+  // that resolved only applicantType/profileType (robertPipelineAudit's removal
+  // path) now gets the same booleans DERIVED — before this the institutional /
+  // agency gates were structurally dead on that path.
+  const individualRoot = resolveIndividualRoot(facts)
+  const publicAgencyRoot = resolvePublicAgencyRoot(facts)
+
   const passThrough = institutionalPassThroughConflict(row)
-  if (passThrough && facts.individualRoot === true) {
+  if (passThrough && individualRoot === true) {
     return {
       eligible: false,
       reason: `institutional_pass_through:${passThrough}`,
       explanation: `${passThrough} funds flow to states, localities, and institutions — an individual cannot apply directly`,
     }
   }
+  const individualIneligible = individualIneligibleProgramConflict(row)
+  if (individualIneligible && individualRoot === true) {
+    return {
+      eligible: false,
+      reason: `individual_ineligible_program:${individualIneligible}`,
+      explanation: `${individualIneligible} is a federal competitive research / cooperative-agreement / regulatory program whose applicant is always an institution — an individual person cannot apply directly`,
+    }
+  }
   const agencyOnly = agencyOnlyProgramConflict(row)
-  if (agencyOnly && facts.publicAgencyRoot === false) {
+  if (agencyOnly && publicAgencyRoot === false) {
     return {
       eligible: false,
       reason: `government_agency_program:${agencyOnly}`,
@@ -701,6 +807,8 @@ export default {
   institutionalPassThroughConflict,
   GOVERNMENT_AGENCY_PROGRAM_PATTERNS,
   agencyOnlyProgramConflict,
+  INDIVIDUAL_INELIGIBLE_PROGRAM_PATTERNS,
+  individualIneligibleProgramConflict,
   passesEligibility,
   isRelevantGeo,
   nonGrantTitleLikePatterns,
