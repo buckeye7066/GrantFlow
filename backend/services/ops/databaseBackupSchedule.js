@@ -16,9 +16,23 @@
  * re-run — no separate marker, no double-run.
  */
 
+import crypto from 'node:crypto'
+
 import { runDatabaseBackup, BACKUP_LAST_RUN_KEY } from './databaseBackup.js'
+import { runWithSchedulerLock } from '../schedulerLock.js'
 
 const DEFAULT_INTERVAL_HOURS = 20
+
+/**
+ * The manual-trigger status marker. The manual admin route
+ * (POST /api/maintenance/run-backup) is a BACKGROUND job — on the ~4.3GB prod DB
+ * `pg_dump` outlasts Railway's HTTP edge timeout, so a synchronous route returned
+ * HTTP 504 to the caller even though the dump completed server-side. The route
+ * now returns 202 immediately and the dump runs detached; this `system_kv` row is
+ * the read-back the caller polls (`running` -> `completed`/`failed`/`skipped`),
+ * alongside the durable `backup_last_run` stamp the backup itself writes.
+ */
+export const MANUAL_BACKUP_STATE_KEY = 'backup_manual_run'
 
 /**
  * The UNATTENDED daily cron is OPT-IN (default off). On this prod DB the backup
@@ -83,8 +97,106 @@ export async function runDatabaseBackupIfDue(db, { force = false, now = Date.now
   return { ran: true, reason, result }
 }
 
+async function writeManualBackupState(db, value) {
+  if (!db?.prepare) return
+  const now = new Date().toISOString()
+  const json = JSON.stringify(value)
+  const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(json, now, MANUAL_BACKUP_STATE_KEY)
+  if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
+    await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(MANUAL_BACKUP_STATE_KEY, json, now)
+  }
+}
+
+/**
+ * Read the manual-trigger status marker (the poll target for the admin route's
+ * background job). Returns null when nothing has ever been triggered.
+ */
+export async function readManualBackupState(db) {
+  try {
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(MANUAL_BACKUP_STATE_KEY)
+    return row?.value ? JSON.parse(row.value) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Kick off a manual (forced) backup as a BACKGROUND job and return immediately.
+ *
+ * The dump on the ~4.3GB prod DB outlives Railway's HTTP edge timeout, so the
+ * admin route must NOT await it (that returned 504 while the backup actually
+ * completed server-side). This writes a `running` marker (awaited, so a poll
+ * right after the 202 sees it), then runs the backup under the SHARED
+ * `database-backup` scheduler lock — the SAME lock the daily cron uses, so a
+ * manual trigger can never stack with the cron or a second manual run — updating
+ * the marker to `completed`/`failed`/`skipped` when the detached work settles.
+ *
+ * @param {object} db  the shared app db handle (stays valid after the HTTP response)
+ * @param {{ logger?: object, lockRunner?: Function, backupRunner?: Function }} [deps]
+ * @returns {{ runId: string, startedAt: string, done: Promise<void> }}
+ *   `done` resolves/rejects when the detached work settles — for tests; the route
+ *   ignores it (fire-and-forget) but attaches a `.catch` so a rejection never
+ *   becomes an unhandled promise.
+ */
+export function startManualBackup(db, {
+  logger = console,
+  lockRunner = runWithSchedulerLock,
+  backupRunner = runDatabaseBackupIfDue,
+} = {}) {
+  const runId = `manual-backup-${Date.now()}-${crypto.randomUUID()}`
+  const startedAt = new Date().toISOString()
+
+  const done = (async () => {
+    await writeManualBackupState(db, { state: 'running', run_id: runId, started_at: startedAt })
+    try {
+      const outcome = await lockRunner(db, {
+        lockName: 'database-backup',
+        ttlMs: 60 * 60 * 1000,
+        heartbeat: true,
+        logger,
+      }, () => backupRunner(db, { force: true }))
+
+      if (outcome?.skipped) {
+        await writeManualBackupState(db, {
+          state: 'skipped',
+          reason: outcome.reason || 'lock_held',
+          run_id: runId,
+          started_at: startedAt,
+          finished_at: new Date().toISOString(),
+        })
+      } else {
+        await writeManualBackupState(db, {
+          state: 'completed',
+          run_id: runId,
+          started_at: startedAt,
+          finished_at: new Date().toISOString(),
+          ran: Boolean(outcome?.ran),
+          reason: outcome?.reason || null,
+          path: outcome?.result?.path || null,
+          bytes: outcome?.result?.bytes ?? null,
+          dialect: outcome?.result?.dialect || null,
+        })
+      }
+    } catch (error) {
+      await writeManualBackupState(db, {
+        state: 'failed',
+        run_id: runId,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        error: String(error?.message || error),
+      }).catch(() => { /* the marker write is best-effort; never mask the real error */ })
+      throw error
+    }
+  })()
+
+  return { runId, startedAt, done }
+}
+
 export default {
   isDatabaseBackupScheduleEnabled,
   backupIntervalMs,
   runDatabaseBackupIfDue,
+  MANUAL_BACKUP_STATE_KEY,
+  readManualBackupState,
+  startManualBackup,
 }

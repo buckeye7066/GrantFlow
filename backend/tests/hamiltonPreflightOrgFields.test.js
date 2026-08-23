@@ -64,11 +64,11 @@ describe('preflight required fields scoped to profile type', () => {
   })
 
   it('a PERSON profile still needs first/last name (unchanged)', async () => {
-    const profile = { id: 'p1', display_name: 'Avanell Lea Leamon', basic_information: { email: 'a@example.com' } }
+    const profile = { id: 'p1', display_name: 'Demo Senior Applicant', basic_information: { email: 'a@example.com' } }
     const report = await preflightSingleSource(db, {
       profile, profileId: 'p1', source: { opportunity_id: 'opp-sch' }, opportunity: SCHOLARSHIP_OPP,
     })
-    // Avanell has a display name → first/last derive from it (no block), but a
+    // This profile has a display name → first/last derive from it (no block), but a
     // person with no name at all still blocks — assert the person PATH is taken
     // (school can still be required for a real student individual).
     const report2 = await preflightSingleSource(db, {

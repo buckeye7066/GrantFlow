@@ -157,7 +157,13 @@ function createDb() {
       usable_for_housing INTEGER DEFAULT 0,
       refund_potential INTEGER DEFAULT 0,
       eligibility_signals TEXT DEFAULT '[]',
-      verification_status TEXT
+      verification_status TEXT,
+      -- Award-calendar columns (schema.sql; added by the calendar PRs). The
+      -- ingest choke point writes them, so the fixture must carry them or every
+      -- insert throws SQLITE_ERROR "no column named expected_decision_date".
+      expected_decision_date DATE,
+      decision_review_days INTEGER,
+      reporting_requirements TEXT
     );
     CREATE UNIQUE INDEX funding_opportunities_source_source_id_uniq
       ON funding_opportunities(source, source_id);
