@@ -169,7 +169,9 @@ async function kickOffAcquire({ db, cfg, logger }) {
   try {
     const result = await runWithSchedulerLock(db, {
       lockName: 'robert:source-acquisition',
-      ttlMs: 60 * 60 * 1000,
+      // SHORT ttl + heartbeat so a deploy-killed holder's lock lapses within one
+      // ttl (~5 min) instead of orphaning acquisition for a full hour.
+      ttlMs: 5 * 60 * 1000,
       heartbeat: true,
       logger,
     }, async () => {

@@ -66,6 +66,7 @@ import {
   gateQualifies,
   gateCoversNeed,
   gateRealOffline,
+  PROTECTED_GRANT_STATUSES,
 } from './robertPipelineAudit.js'
 
 const log = createLogger('robert-source-acquisition')
@@ -417,9 +418,18 @@ async function loadOpportunityRow(db, oppId) {
  * reality gate + a liveness probe, so a boot/parse pass never spends the network
  * again, and an outage never reads as "dead".
  *
+ * ADMISSION requires a POSITIVE declared-need match (requirePositiveNeed) — the
+ * owner's PIPELINE PRECISION bar ("at least PART of a declared need"). The audit
+ * gate `gateCoversNeed` FAILS OPEN on silence (correct for REMOVAL — silence is
+ * not a denial), but for ADDITION that fail-open is what floods a profile with
+ * sources serving needs it never declared (measured on prod: Olivia got 19
+ * scholarships/job-postings/benefits with no declared-need overlap). So a source
+ * is auto-added only when the opportunity's own need vocabulary POSITIVELY
+ * overlaps a need the profile DECLARED (`evidence.matched` non-empty).
+ *
  * @returns { pass: boolean, reason: string|null, harvest_first?: boolean }
  */
-export function qualifyForProfile(oppRow, facts, { now = new Date() } = {}) {
+export function qualifyForProfile(oppRow, facts, { now = new Date(), requirePositiveNeed = true } = {}) {
   const relatable = gateRelatable(oppRow, { now })
   if (!relatable.pass) {
     // A hub/pointer is harvested (decomposed), never auto-added whole.
@@ -429,6 +439,10 @@ export function qualifyForProfile(oppRow, facts, { now = new Date() } = {}) {
   if (!qualifies.pass) return { pass: false, reason: qualifies.reason || 'not_qualified' }
   const covers = gateCoversNeed(oppRow, facts)
   if (!covers.pass) return { pass: false, reason: covers.reason || 'need_not_covered' }
+  // ADMISSION bar: a positive declared-need overlap, not just fail-open silence.
+  if (requirePositiveNeed && !(Array.isArray(covers.evidence?.matched) && covers.evidence.matched.length > 0)) {
+    return { pass: false, reason: 'covers_need:no_positive_declared_match' }
+  }
   const realOffline = gateRealOffline(oppRow, { now })
   if (realOffline && realOffline.pass === false) return { pass: false, reason: realOffline.reason || 'not_real' }
   return { pass: true, reason: null }
@@ -580,6 +594,59 @@ export async function parseOpportunitiesAgainstProfiles(db, {
   return out
 }
 
+/**
+ * Self-heal: remove Robert-auto-added rows that no longer pass the (stricter,
+ * positive-need) admission bar. A row Robert added under an earlier, fail-open
+ * rule that serves no DECLARED need of its profile is deleted — but only when it
+ * is still in an early, non-user-progressed status (PROTECTED_GRANT_STATUSES are
+ * re-labeled-not-deleted territory and are left untouched here). A plain DELETE
+ * (not a tombstone) so the same source can be re-added later if the profile
+ * comes to declare a need it covers.
+ *
+ * @returns { scanned, removed, kept, protected, byReason }
+ */
+export async function cleanupNonQualifyingAcquiredGrants(db, {
+  limit = boundedInt('ROBERT_ACQUIRE_CLEANUP_LIMIT', 3000, 1),
+  deps = {},
+} = {}) {
+  const out = { scanned: 0, removed: 0, kept: 0, protected: 0, byReason: {}, skipped: null }
+  const bump = (r) => { out.byReason[r] = (out.byReason[r] || 0) + 1 }
+  let rows
+  try {
+    rows = await db.prepare(
+      `SELECT id, profile_id, funding_opportunity_id, status
+         FROM grants
+        WHERE matcher_version = ?
+        ORDER BY created_at ASC
+        LIMIT ?`,
+    ).all(ACQUISITION_MATCHER_VERSION, limit)
+  } catch (err) { out.skipped = `query:${String(err?.message || err).slice(0, 60)}`; return out }
+  if (!rows?.length) return out
+
+  for (const row of rows) {
+    out.scanned += 1
+    const status = String(row.status || '').toLowerCase()
+    if (PROTECTED_GRANT_STATUSES.has(status)) { out.protected += 1; continue }
+    if (!row.funding_opportunity_id) { out.kept += 1; continue } // nothing to re-adjudicate against
+    let facts, oppRow
+    try { facts = await loadFactsCached(db, row.profile_id, deps) } catch { out.kept += 1; continue }
+    if (!facts?.profile) { out.kept += 1; continue }
+    try { oppRow = await loadOpportunityRow(db, row.funding_opportunity_id) } catch { oppRow = null }
+    if (!oppRow) { out.kept += 1; continue } // opportunity gone — leave for the dangling-match net
+    const verdict = qualifyForProfile(oppRow, facts, { requirePositiveNeed: true })
+    if (verdict.pass) { out.kept += 1; continue }
+    try {
+      await db.prepare('DELETE FROM grants WHERE id = ?').run(row.id)
+      out.removed += 1
+      bump(verdict.reason || 'rejected')
+    } catch (err) {
+      out.kept += 1
+      log.warn('acquired-grant cleanup: delete failed (non-fatal)', { grant: row.id, error: String(err?.message || err) })
+    }
+  }
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
@@ -597,14 +664,18 @@ export async function runSourceAcquisitionCycle(db, {
   catalogLimitPerProfile = boundedInt('ROBERT_ACQUIRE_CATALOG_SLICE', 400, 1),
 } = {}) {
   clearFactsCache()
-  // (a) FIRST, the owner's "parse the sources against EXISTING profiles and
-  //     auto-add" half — bounded, LLM-independent, and PURE (no network in the
-  //     gates' offline REAL half). Robert re-adjudicates a slice of the REAL
-  //     catalog already in GrantFlow's database against every profile with the
-  //     FOUR gates and auto-adds the qualifiers the fuzzy score-floor buried.
-  //     This runs first so the high-value auto-adds (e.g. real small-business
-  //     grants for Olivia) land even if the slow acquisition half below is
-  //     interrupted. It never depends on the hub-decomposition LLM.
+  // (a0) Self-heal FIRST: drop any Robert-added rows that no longer meet the
+  //     positive-need admission bar (rows added under an earlier fail-open rule).
+  const cleanup = await cleanupNonQualifyingAcquiredGrants(db, { deps })
+  clearFactsCache()
+  // (a) The owner's "parse the sources against EXISTING profiles and auto-add"
+  //     half — bounded, LLM-independent, and PURE (no network in the gates'
+  //     offline REAL half). Robert re-adjudicates a slice of the REAL catalog
+  //     already in GrantFlow's database against every profile with the FOUR
+  //     gates (positive-need admission) and auto-adds the qualifiers the fuzzy
+  //     score-floor buried. This runs before the slow acquisition half so the
+  //     high-value auto-adds (e.g. real small-business grants for Olivia) land
+  //     even if acquisition is interrupted. It never depends on the hub LLM.
   let catalogParse = null
   if (parseExistingCatalog) {
     catalogParse = await parseCatalogForProfiles(db, {
@@ -622,7 +693,7 @@ export async function runSourceAcquisitionCycle(db, {
     profileIds: null,
     deps,
   })
-  const result = { acquisition, parse, catalogParse }
+  const result = { cleanup, acquisition, parse, catalogParse }
   await persistLastRunSummary(db, result)
   return result
 }
@@ -639,17 +710,22 @@ async function persistLastRunSummary(db, result) {
   try {
     const summary = {
       at: new Date().toISOString(),
+      cleanup: result.cleanup ? { scanned: result.cleanup.scanned, removed: result.cleanup.removed, protected: result.cleanup.protected, byReason: result.cleanup.byReason } : null,
       catalogParse: result.catalogParse
         ? { profiles: result.catalogParse.profiles, added: result.catalogParse.added, addedLeads: result.catalogParse.addedLeads, scanned: result.catalogParse.scanned, byReason: result.catalogParse.byReason }
         : null,
       acquisition: { ingested: result.acquisition.ingested, decomposedAdmitted: result.acquisition.decomposedAdmitted, hubsDecomposed: result.acquisition.hubsDecomposed, hubsSkipped: result.acquisition.hubsSkipped, byReason: result.acquisition.byReason },
       parse: { added: result.parse.added, addedLeads: result.parse.addedLeads, scanned: result.parse.scanned },
     }
-    const now = isPg(db) ? 'now()' : 'CURRENT_TIMESTAMP'
     const value = JSON.stringify(summary)
+    // Canonical system_kv upsert (matches robertPipelineAudit.persistGapNotes and
+    // every other writer): ON CONFLICT(key) with updated_at as a BOUND param.
+    // The earlier DELETE + INSERT ... now() form did not persist on prod.
     try {
-      await db.prepare('DELETE FROM system_kv WHERE key = ?').run(LAST_RUN_KV_KEY)
-      await db.prepare(`INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ${now})`).run(LAST_RUN_KV_KEY, value)
+      await db.prepare(
+        `INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      ).run(LAST_RUN_KV_KEY, value, new Date().toISOString())
     } catch { /* table shape may differ — summary is best-effort */ }
   } catch { /* never fail the cycle on bookkeeping */ }
 }
@@ -759,6 +835,7 @@ export default {
   acquireKnownSources,
   parseOpportunitiesAgainstProfiles,
   parseCatalogForProfiles,
+  cleanupNonQualifyingAcquiredGrants,
   runSourceAcquisitionCycle,
   parseNewProfileAgainstCatalog,
   resolveKnownSourcesForProfile,
