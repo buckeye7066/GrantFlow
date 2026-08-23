@@ -2540,6 +2540,25 @@ async function runAutopilotPathway(db, {
   }
 
   if (degradedDirective) {
+    // A pointer/directory/reference row that URL-rescue could not turn into a
+    // real application is a RESEARCH LEAD, not a task demanding a human submit
+    // (owner 2026-08-23: "these should be autonomous"). Complete it — no packet
+    // to print, nothing to review or submit — instead of parking it in
+    // waiting_for_review. The scheduler never re-picks a completed task.
+    if (degradedDirective.fallback === 'no_application') {
+      await updateApplicationTask(db, task.id, {
+        unlessCancelled: true,
+        status: 'completed',
+        lastAgentMessage: degradedDirective.detail
+          || 'This source is a directory/reference, not an application — recorded as a research lead.',
+      })
+      await updateAutopilotRun(db, run.id, {
+        status: 'completed',
+        result: { ...engineResult, degraded_to: 'no_application', directive: degradedDirective },
+        finishedAt: new Date().toISOString(),
+      })
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: engineResult, degraded: degradedDirective }
+    }
     // Lawful fallback: build a complete packet and mark the task as
     // ready_to_print_mail / ready_to_email / ready_to_fax / waiting_for_review
     // depending on the fallback path.
