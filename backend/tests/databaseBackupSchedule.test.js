@@ -11,8 +11,46 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   backupIntervalMs,
   runDatabaseBackupIfDue,
+  startManualBackup,
+  readManualBackupState,
+  MANUAL_BACKUP_STATE_KEY,
 } from '../services/ops/databaseBackupSchedule.js'
 import { BACKUP_LAST_RUN_KEY } from '../services/ops/databaseBackup.js'
+
+// A minimal system_kv store: honors the UPDATE-then-INSERT upsert the marker
+// writer uses and the SELECT the reader uses. Everything is async, mirroring the
+// prod Postgres shim.
+function kvDb() {
+  const store = new Map()
+  return {
+    store,
+    prepare(sql) {
+      return {
+        run: async (...args) => {
+          if (/UPDATE system_kv/.test(sql)) {
+            const [value, updated, key] = args
+            if (!store.has(key)) return { changes: 0, rowCount: 0 }
+            store.set(key, { value, updated_at: updated })
+            return { changes: 1, rowCount: 1 }
+          }
+          if (/INSERT INTO system_kv/.test(sql)) {
+            const [key, value, updated] = args
+            store.set(key, { value, updated_at: updated })
+            return { changes: 1, rowCount: 1 }
+          }
+          return { changes: 0, rowCount: 0 }
+        },
+        get: async (key) => {
+          if (/SELECT value FROM system_kv/.test(sql)) {
+            const row = store.get(key)
+            return row ? { value: row.value } : undefined
+          }
+          return undefined
+        },
+      }
+    },
+  }
+}
 
 function fakeDb(lastRunRecord) {
   return {
@@ -118,5 +156,70 @@ describe('runDatabaseBackupIfDue', () => {
   it('a stale (unreadable) stamp interval honors DB_BACKUP_INTERVAL_HOURS', () => {
     process.env.DB_BACKUP_INTERVAL_HOURS = '6'
     expect(backupIntervalMs()).toBe(6 * 60 * 60 * 1000)
+  })
+})
+
+describe('startManualBackup (background job)', () => {
+  // A lock runner that just runs the critical section (no real lock) — the point
+  // of the manual-backup tests is the marker lifecycle, not the lock internals.
+  const passthroughLock = (_db, _opts, fn) => fn()
+
+  it('returns a run marker SYNCHRONOUSLY without awaiting the dump', () => {
+    const db = kvDb()
+    let dumpStarted = false
+    const backupRunner = async () => { dumpStarted = true; return { ran: true, result: { path: '/x.dump', bytes: 5 } } }
+    const handle = startManualBackup(db, { lockRunner: passthroughLock, backupRunner })
+    // The dump has NOT run yet — startManualBackup handed back control immediately.
+    expect(dumpStarted).toBe(false)
+    expect(handle.runId).toMatch(/^manual-backup-/)
+    expect(typeof handle.done.then).toBe('function')
+    return handle.done // let the background work settle so vitest sees no dangling promise
+  })
+
+  it('records running -> completed with the backup artifact on success', async () => {
+    const db = kvDb()
+    const backupRunner = async () => ({ ran: true, reason: 'forced', result: { path: '/data/backups/x.dump', bytes: 4321, dialect: 'postgres' } })
+    const { runId, done } = startManualBackup(db, { lockRunner: passthroughLock, backupRunner })
+    await done
+    const state = await readManualBackupState(db)
+    expect(state.state).toBe('completed')
+    expect(state.run_id).toBe(runId)
+    expect(state.path).toBe('/data/backups/x.dump')
+    expect(state.bytes).toBe(4321)
+    expect(state.dialect).toBe('postgres')
+    expect(state.finished_at).toBeTruthy()
+  })
+
+  it('records skipped when the shared lock is already held (no stacking with the cron)', async () => {
+    const db = kvDb()
+    const heldLock = async () => ({ skipped: true, reason: 'lock_held' })
+    let dumpRan = false
+    const backupRunner = async () => { dumpRan = true; return { ran: true } }
+    const { done } = startManualBackup(db, { lockRunner: heldLock, backupRunner })
+    await done
+    const state = await readManualBackupState(db)
+    expect(state.state).toBe('skipped')
+    expect(state.reason).toBe('lock_held')
+    // The backup body never ran because the lock refused it.
+    expect(dumpRan).toBe(false)
+  })
+
+  it('records failed and rejects `done` when the dump throws', async () => {
+    const db = kvDb()
+    const backupRunner = async () => { throw new Error('pg_dump exited 1: boom') }
+    const { done } = startManualBackup(db, { lockRunner: passthroughLock, backupRunner })
+    await expect(done).rejects.toThrow(/boom/)
+    const state = await readManualBackupState(db)
+    expect(state.state).toBe('failed')
+    expect(state.error).toMatch(/boom/)
+  })
+
+  it('writes the marker under the canonical system_kv key', async () => {
+    const db = kvDb()
+    const backupRunner = async () => ({ ran: true, result: { path: '/x', bytes: 1 } })
+    const { done } = startManualBackup(db, { lockRunner: passthroughLock, backupRunner })
+    await done
+    expect(db.store.has(MANUAL_BACKUP_STATE_KEY)).toBe(true)
+    expect(MANUAL_BACKUP_STATE_KEY).toBe('backup_manual_run')
   })
 })

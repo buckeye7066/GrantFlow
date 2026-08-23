@@ -511,8 +511,8 @@ export function agencyOnlyProgramConflict(row) {
  * Federal COMPETITIVE RESEARCH / COOPERATIVE-AGREEMENT / REGULATORY program
  * families whose applicant is ALWAYS an institution (a university, hospital,
  * research org, LEA, tribe, state/local agency) — never an individual PERSON
- * (2026-08-23, owner pipeline-fit audit). Measured on Anastasia White (a TN
- * forensic-science undergraduate): her pipeline carried Conservation Innovation
+ * (2026-08-23, owner pipeline-fit audit). Measured on the Demo Tennessee STEM
+ * Student profile (a TN forensic-science undergraduate): her pipeline carried Conservation Innovation
  * Grants, "African Medical Devices Regulatory Harmonization Program", six
  * Defense-Health-Agency "DoW"/Peer-Reviewed-Medical research awards, NSF
  * Antarctic Research / "Research on Research Security", DARPA "Decentralized
