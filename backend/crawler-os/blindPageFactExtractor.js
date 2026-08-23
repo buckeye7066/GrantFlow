@@ -45,7 +45,7 @@ import { validateEvidenceSpans, normalizeForEvidence } from './blindEvidenceVali
 // page-fact cache (services/pageFactCache.js) when this module is wired in a
 // later sub-PR. Bump when the prompt or output shape changes.
 export const EXTRACTOR_VERSION = 'blind-v2';
-export const PROMPT_VERSION = 'blind-prompt-v2';
+export const PROMPT_VERSION = 'blind-prompt-v3';
 export const PAGE_FACT_SCHEMA_VERSION = 2;
 
 // The feature flag that a LATER sub-PR will gate the live wiring on. Defined here
@@ -91,6 +91,15 @@ const SYSTEM = [
   '- Report ONLY what the page states. Invent NOTHING. Do NOT judge whether any',
   '  particular applicant is eligible — just record the eligibility the page states.',
   '- Do NOT decide relevance, fit, or ranking. That is decided elsewhere.',
+  '- CAPTURE THE ELIGIBILITY / WHO-CAN-APPLY text WHENEVER THE PAGE STATES IT.',
+  '  Downstream gates can only exclude a wrong-fit applicant when the row carries',
+  '  the restriction the page named, so record every applicant condition the page',
+  '  states verbatim in `eligibility_text` / `eligibility_bullets`: required status',
+  '  (student / undergraduate / graduate / high-school / veteran / active-duty /',
+  '  ROTC or other SERVICE COMMITMENT / first-generation / disability), a locked',
+  '  PROFESSION or field of study, citizenship / residency, age or class-year,',
+  '  income limits, and any geographic restriction. An award that names none is',
+  '  correctly left with null eligibility — never invent one.',
   '- For an apply/info link, choose an id from LINK INVENTORY. NEVER write a URL',
   '  that is not in the inventory; if no suitable link exists, use null.',
   '- For each fact you assert, quote the exact supporting substring from PAGE TEXT',

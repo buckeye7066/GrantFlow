@@ -391,3 +391,21 @@ test('page text that tries to inject instructions cannot fabricate an eligible f
   assert.ok(f, 'the opportunity anchors on page-derived title+sponsor');
   assert.equal(f.eligibility_text, null, 'the fabricated "everyone eligible" claim is NOT emitted');
 });
+
+test('the extractor prompt DEMANDS the eligibility / who-can-apply restrictions the gates need (glean #2, 2026-08-23)', async () => {
+  let captured = null;
+  const llm = async ({ system }) => { captured = system; return JSON.stringify({ opportunities: [] }); };
+  await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+    { llm },
+  );
+  assert.ok(captured, 'the system prompt reached the model');
+  // The restriction categories the downstream gates bite on must be named so a
+  // real ROTC / profession-locked / stage-restricted award carries its
+  // eligibility instead of the NULL that let those rows slip past every gate.
+  assert.match(captured, /WHO-CAN-APPLY/i);
+  assert.match(captured, /SERVICE COMMITMENT/i);
+  assert.match(captured, /PROFESSION/i);
+  // …and it still forbids inventing an eligibility that the page never stated.
+  assert.match(captured, /never invent one/i);
+});
