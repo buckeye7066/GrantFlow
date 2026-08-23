@@ -437,6 +437,13 @@ function resolvePageName(pathname) {
   if (path.startsWith("/discover") || path.startsWith("/grants")) return "Discovery"
   if (path.startsWith("/pipeline")) return "Pipeline"
   if (path.startsWith("/proposals")) return "Proposals"
+  // Hamilton is the SUBMISSION AGENT — every view of its task queue (Watch /
+  // Triage / Processing / Live-login / Custom-fields) and the generic
+  // Automation view are the "Hamilton" page. Without this they resolved to
+  // "Unknown", so Anya had no idea she was looking at the Hamilton needs-you
+  // queue and misread "release the Hamilton needs" as a profile lookup
+  // (2026-08-23). Checked BEFORE /applications so a Hamilton route wins.
+  if (path.startsWith("/hamilton") || path.startsWith("/automation")) return "Hamilton"
   if (path.startsWith("/applications")) return "Applications"
   if (path.startsWith("/profile")) return "Profile"
   if (path.startsWith("/settings")) return "Settings"
