@@ -19,6 +19,7 @@ async function makeDb() {
       profile_id TEXT,
       title TEXT,
       opportunity_kind TEXT,
+      is_national INTEGER,
       application_url TEXT,
       apply_url TEXT,
       source_url TEXT,
@@ -147,6 +148,46 @@ describe('ensureApplicationTask pointer creation choke point', () => {
       status: 403,
     })
     expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(0)
+  })
+
+  it('admits a same-profile grant whose opportunity carries ANOTHER profile\'s discovery provenance (provenance != ownership)', async () => {
+    // A real local source ("Family Promise of Bradley County") discovered FOR one
+    // Bradley County family is legitimately applicable to another. The grant is
+    // the ownership authority; the opportunity's profile_id is only provenance.
+    // Refusing here was the cross-profile false-403 that blocked John White.
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, opportunity_kind, is_national, profile_id, application_url)
+       VALUES ('shared-local-opp', 'Family Promise of Bradley County', 'benefit', 0, 'profile-other', 'https://familypromisebradleytn.org/apply')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO grants (id, profile_id, funding_opportunity_id, title, application_url)
+       VALUES ('my-grant-on-shared', ?, 'shared-local-opp', 'Family Promise', 'https://familypromisebradleytn.org/apply')`,
+    ).run(PROFILE_ID)
+    const task = await ensureApplicationTask(db, {
+      profileId: PROFILE_ID, grantId: 'my-grant-on-shared', automationType: 'portal',
+    })
+    expect(task.id).toBeTruthy()
+  })
+
+  it('still fails closed for a BARE non-national opportunity discovered for another profile', async () => {
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, opportunity_kind, is_national, profile_id, application_url)
+       VALUES ('bare-other-opp', 'Local Fund', 'direct_grant', 0, 'profile-other', 'https://x.org/apply')`,
+    ).run()
+    await expect(ensureApplicationTask(db, {
+      profileId: PROFILE_ID, opportunityId: 'bare-other-opp',
+    })).rejects.toMatchObject({ code: 'application_task_source_scope_mismatch' })
+  })
+
+  it('admits a BARE national opportunity even when its provenance names another profile (shareable)', async () => {
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, opportunity_kind, is_national, profile_id, application_url)
+       VALUES ('nat-other-opp', 'National Grant', 'direct_grant', 1, 'profile-other', 'https://nat.org/apply')`,
+    ).run()
+    const task = await ensureApplicationTask(db, {
+      profileId: PROFILE_ID, opportunityId: 'nat-other-opp', automationType: 'portal',
+    })
+    expect(task.id).toBeTruthy()
   })
 })
 

@@ -552,8 +552,23 @@ export async function assessApplicationTaskPointerSource(db, {
     if (opportunity) break
   }
   if (!opportunity) return null
+  // `funding_opportunities.profile_id` is DISCOVERY PROVENANCE (the profile the
+  // catalog row was first found for), NOT exclusive ownership: a national/local/
+  // shared source discovered for one profile is legitimately applicable to
+  // another, and the recall nets (profile-discovery-link etc.) re-offer such rows
+  // across profiles. The GRANT is the ownership authority (checked above). So a
+  // same-profile grant backing this task authorizes the claim regardless of the
+  // opportunity's provenance tag — refusing there is the cross-profile false-403
+  // that blocked a real Bradley County source (Family Promise) for a second
+  // Bradley County family. Only a BARE opportunity task (no grant) still checks
+  // provenance, and even then only when the row is not shareable (national).
+  const shareableOpportunity = opportunity.is_national === true
+    || opportunity.is_national === 1
+    || opportunity.is_national === '1'
   if (
-    opportunity.profile_id
+    !grant
+    && !shareableOpportunity
+    && opportunity.profile_id
     && normalizedProfileId
     && String(opportunity.profile_id) !== normalizedProfileId
   ) {
