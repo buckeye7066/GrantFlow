@@ -27,6 +27,7 @@ const { decomposeListing } = await import('../services/hamilton/listingDecomposi
 const {
   acquireKnownSources,
   parseOpportunitiesAgainstProfiles,
+  parseCatalogForProfiles,
   parseNewProfileAgainstCatalog,
   qualifyForProfile,
   classifyPipelineCategory,
@@ -171,6 +172,24 @@ describe('robertSourceAcquisition — parse added sources against profiles + aut
     expect(studentGrants.map((g) => g.funding_opportunity_id)).toContain(SCHOLARSHIP.id)
     // Bounded to THIS profile — the business profile is untouched.
     expect(grantsFor(sqlite, BIZ)).toHaveLength(0)
+  })
+
+  it('parseCatalogForProfiles auto-adds a qualifying EXISTING catalog row (LLM-independent) to the fleet', async () => {
+    // A real small-business grant already sitting in the catalog — no acquisition,
+    // no hub decomposition, no LLM. This is the path that surfaces buried real
+    // sources (e.g. small-business grants for Olivia) to existing profiles.
+    insertOpp(sqlite, {
+      id: 'fo-sbg', title: 'Nashville Small Business Growth Grant', sponsor: 'Metro Nashville',
+      ent: ['small_business'], needs: ['business_funding'], cats: ['business_funding'], kind: 'grant',
+      url: 'https://nashville.gov/programs/small-business-grant/apply',
+    })
+    const out = await parseCatalogForProfiles(db, { catalogLimitPerProfile: 100 })
+    expect(out.added).toBe(1)
+    const biz = grantsFor(sqlite, BIZ)
+    expect(biz).toHaveLength(1)
+    expect(biz[0].pipeline_category).toBe('apply_ready')
+    // The student (need mismatch) does not get a business grant.
+    expect(grantsFor(sqlite, STUDENT)).toHaveLength(0)
   })
 
   it('count-only mode adjudicates without writing', async () => {
