@@ -162,16 +162,35 @@ router.post('/audit-pipelines', adminOnly, (req, res) => runWithMode(req, res, R
  * body { profileIds: [...] } scopes acquisition; omit for the whole fleet.
  */
 router.post('/acquire-sources', adminOnly, async (req, res) => {
-  try {
+  // Runs as a BACKGROUND job and returns 202 immediately: the cycle does live
+  // URL-liveness probes (ingest) + optional hub decomposition and legitimately
+  // runs for minutes, so a synchronous response would exceed the app's ~30s
+  // response-timeout guard and the run would be abandoned mid-flight. Progress
+  // lands in the DB (grants.matcher_version='robert-source-acquisition'); this
+  // is the same lock the scheduled cadence uses, so two runs never overlap.
+  const profileIds = Array.isArray(req.body?.profileIds) && req.body.profileIds.length ? req.body.profileIds.map(String) : null
+  const allowHubsRequested = req.body?.allowHubs !== false
+  const wait = req.query?.wait === '1' || req.body?.wait === true
+  const db = req.db
+
+  const runCycle = async () => {
     const { runSourceAcquisitionCycle } = await import('../services/robert/robertSourceAcquisition.js')
     const { buildHubPageFetcher } = await import('../services/robert/robertScheduler.js')
+    const { runWithSchedulerLock } = await import('../services/schedulerLock.js')
     const cfg = getRobertConfig()
-    const profileIds = Array.isArray(req.body?.profileIds) && req.body.profileIds.length ? req.body.profileIds.map(String) : null
-    const allowHubs = req.body?.allowHubs !== false && cfg.acquireAllowHubs
+    const allowHubs = allowHubsRequested && cfg.acquireAllowHubs
     const deps = allowHubs ? { fetchPage: buildHubPageFetcher(cfg) } : {}
-    const result = await runSourceAcquisitionCycle(req.db, { profileIds, deps, allowHubDecomposition: allowHubs })
-    return res.json({ ok: true, ...result })
-  } catch (err) { return handleError(res, err) }
+    return runWithSchedulerLock(db, { lockName: 'robert:source-acquisition', ttlMs: 60 * 60 * 1000, heartbeat: true }, () =>
+      runSourceAcquisitionCycle(db, { profileIds, deps, allowHubDecomposition: allowHubs }))
+  }
+
+  // Optional synchronous mode for a small, scoped verification run (?wait=1).
+  if (wait) {
+    try { return res.json({ ok: true, ...(await runCycle()) }) } catch (err) { return handleError(res, err) }
+  }
+
+  runCycle().catch((err) => console.warn('[robert] acquire-sources background run failed (non-fatal):', err?.message || String(err)))
+  return res.status(202).json({ ok: true, started: true, background: true, lock: 'robert:source-acquisition', profileScope: profileIds ? profileIds.length : 'fleet' })
 })
 
 /** What Robert removed, and what Amy still has to close. Read-only. */

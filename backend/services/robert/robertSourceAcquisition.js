@@ -589,15 +589,88 @@ export async function parseOpportunitiesAgainstProfiles(db, {
  * into the catalog, then parse every freshly-admitted source against every
  * profile and auto-add the qualifiers. This is what the scheduler cadence runs.
  */
-export async function runSourceAcquisitionCycle(db, { profileIds = null, deps = {}, allowHubDecomposition = true } = {}) {
+export async function runSourceAcquisitionCycle(db, {
+  profileIds = null,
+  deps = {},
+  allowHubDecomposition = true,
+  parseExistingCatalog = true,
+  catalogLimitPerProfile = boundedInt('ROBERT_ACQUIRE_CATALOG_SLICE', 400, 1),
+} = {}) {
   clearFactsCache()
   const acquisition = await acquireKnownSources(db, { profileIds, deps, allowHubDecomposition })
+  // (a) The freshly-acquired predetermined/archetype (+ decomposed hub) sources,
+  //     offered to EVERY profile they qualify for.
   const parse = await parseOpportunitiesAgainstProfiles(db, {
     opportunityIds: acquisition.admittedOpportunityIds,
-    profileIds: null, // a newly-acquired source is offered to EVERY profile it qualifies for
+    profileIds: null,
     deps,
   })
-  return { acquisition, parse }
+  // (b) The owner's "parse the sources against EXISTING profiles and auto-add"
+  //     half — bounded, LLM-independent. Robert re-adjudicates a slice of the
+  //     REAL catalog already in GrantFlow's database against every profile with
+  //     the FOUR gates and auto-adds the qualifiers the fuzzy score-floor buried
+  //     (this is what surfaces real small-business grants to Olivia even when the
+  //     hub-decomposition LLM is unavailable and acquisition admits nothing new).
+  let catalogParse = null
+  if (parseExistingCatalog) {
+    catalogParse = await parseCatalogForProfiles(db, {
+      profileIds: profileIds ? profileIds.map(String) : null,
+      catalogLimitPerProfile,
+      deps,
+    })
+  }
+  return { acquisition, parse, catalogParse }
+}
+
+/**
+ * Select a bounded slice of ACTIVE catalog opportunity ids NOT already on a
+ * profile's pipeline, newest first. A SQL predicate (never a post-LIMIT JS
+ * filter) so the bound limits the scan, and an already-linked row is excluded
+ * so the same rows are not re-scanned every pass.
+ */
+async function selectCatalogCandidateIds(db, profileId, limit) {
+  try {
+    const rows = await db.prepare(
+      `SELECT id FROM funding_opportunities
+        WHERE (is_active IS NULL OR is_active = ${isPg(db) ? 'TRUE' : '1'})
+          AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.profile_id = ? AND g.funding_opportunity_id = funding_opportunities.id)
+        ORDER BY created_at DESC
+        LIMIT ?`,
+    ).all(String(profileId), limit)
+    return (rows || []).map((r) => String(r.id))
+  } catch { return [] }
+}
+
+/**
+ * Parse a bounded slice of the EXISTING catalog against each profile and
+ * auto-add the qualifiers. Per profile so each gets its own newest-unlinked
+ * slice; bounded by catalogLimitPerProfile and the auto-add caps.
+ */
+export async function parseCatalogForProfiles(db, { profileIds = null, catalogLimitPerProfile = 400, deps = {} } = {}) {
+  const summary = { profiles: 0, added: 0, addedLeads: 0, scanned: 0, byReason: {}, examples: [], skipped: null }
+  let pids = Array.isArray(profileIds) && profileIds.length ? profileIds.map(String) : null
+  if (!pids) {
+    try {
+      const rows = await db.prepare(
+        "SELECT id FROM profiles WHERE (deleted_at IS NULL) AND (status IS NULL OR status <> 'deleted') LIMIT ?",
+      ).all(ACQUIRE_PROFILE_LIMIT)
+      pids = (rows || []).map((r) => String(r.id))
+    } catch { pids = [] }
+  }
+  if (!pids.length) { summary.skipped = 'no_profiles'; return summary }
+
+  for (const profileId of pids) {
+    const ids = await selectCatalogCandidateIds(db, profileId, catalogLimitPerProfile)
+    if (!ids.length) continue
+    const out = await parseOpportunitiesAgainstProfiles(db, { opportunityIds: ids, profileIds: [profileId], deps })
+    summary.profiles += 1
+    summary.added += out.added
+    summary.addedLeads += out.addedLeads
+    summary.scanned += out.scanned
+    for (const [k, v] of Object.entries(out.byReason || {})) summary.byReason[k] = (summary.byReason[k] || 0) + v
+    for (const ex of out.examples || []) if (summary.examples.length < 12) summary.examples.push(ex)
+  }
+  return summary
 }
 
 /**
@@ -618,16 +691,7 @@ export async function parseNewProfileAgainstCatalog(db, profileId, { deps = {}, 
   //    (so an archetype/hub source another profile acquired earlier also
   //    reaches this new profile).
   const candidateIds = new Set(acquisition.admittedOpportunityIds)
-  try {
-    const rows = await db.prepare(
-      `SELECT id FROM funding_opportunities
-        WHERE (is_active IS NULL OR is_active = ${isPg(db) ? 'TRUE' : '1'})
-          AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.profile_id = ? AND g.funding_opportunity_id = funding_opportunities.id)
-        ORDER BY created_at DESC
-        LIMIT ?`,
-    ).all(String(profileId), recentCatalogLimit)
-    for (const r of rows || []) candidateIds.add(String(r.id))
-  } catch { /* degraded schema — parse only what we just acquired */ }
+  for (const id of await selectCatalogCandidateIds(db, profileId, recentCatalogLimit)) candidateIds.add(id)
 
   const parse = await parseOpportunitiesAgainstProfiles(db, {
     opportunityIds: [...candidateIds],
@@ -644,6 +708,7 @@ export const __testing__ = { profileRootKey, normalizeSeed, clearFactsCache }
 export default {
   acquireKnownSources,
   parseOpportunitiesAgainstProfiles,
+  parseCatalogForProfiles,
   runSourceAcquisitionCycle,
   parseNewProfileAgainstCatalog,
   resolveKnownSourcesForProfile,
