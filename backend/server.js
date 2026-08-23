@@ -3861,6 +3861,36 @@ if (process.env.NODE_ENV !== 'test') {
     })()
   }
 
+  // Daily VERIFIED database backup — the runbook's "restore from backup" actor.
+  // Deliberately DECOUPLED from the heavy nightly maintenance sweep so a
+  // disaster-recovery backup never inherits that chain's reliability. The
+  // freshness gate reads the same `backup_last_run` stamp the backup writes, so
+  // an hourly tick catches a missed day and never re-runs a fresh backup.
+  if (BACKGROUND_SERVICES_DISABLED) {
+    console.info('[db-backup] Disabled for smoke/test startup')
+  } else {
+    const runBackupTick = () => runWithSchedulerLock(db, {
+      lockName: 'database-backup',
+      ttlMs: 30 * 60 * 1000,
+      logger: console,
+    }, async () => {
+      const { runDatabaseBackupIfDue } = await import('./services/ops/databaseBackupSchedule.js')
+      const res = await runDatabaseBackupIfDue(db)
+      if (res?.ran) {
+        console.info('[db-backup] backup complete', { reason: res.reason, path: res.result?.path, bytes: res.result?.bytes })
+      }
+      return res
+    }).catch((err) => {
+      console.error('[db-backup] run failed:', err?.message || err)
+    })
+    // Startup catch-up (90s after boot to let the DB settle) + hourly tick.
+    setTimeout(runBackupTick, 90_000)
+    const backupHandle = setInterval(runBackupTick, 60 * 60 * 1000)
+    process.once('SIGTERM', () => clearInterval(backupHandle))
+    process.once('SIGINT', () => clearInterval(backupHandle))
+    console.info('[db-backup] Daily database backup scheduled (hourly freshness tick)')
+  }
+
   // Run link verification in background (non-blocking).
   //
   // Mission rule: a "verified" opportunity must have actually been verified.

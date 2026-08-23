@@ -58,4 +58,17 @@ router.post('/run-nightly-sweep', ensureAuth, ensureAdmin, async (req, res) => {
   }
 })
 
+// Admin — take a VERIFIED database backup now (forces past the daily freshness
+// gate). Stamps `system_kv backup_last_run` only after the artifact passes its
+// integrity check; Sam `ops.backupFreshness` reads the same stamp.
+router.post('/run-backup', ensureAuth, ensureAdmin, async (req, res) => {
+  try {
+    const { runDatabaseBackupIfDue } = await import('../services/ops/databaseBackupSchedule.js')
+    const result = await runDatabaseBackupIfDue(req.db, { force: true })
+    res.json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
 export default router
