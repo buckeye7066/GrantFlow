@@ -3984,6 +3984,20 @@ if (process.env.NODE_ENV !== 'test') {
     const row = await dbInstance.prepare('SELECT value FROM system_kv WHERE key = ?').get(key)
     return row ? row.value : null
   }
+  // Freshness (last-write) of a system_kv key, in epoch ms, or null if absent /
+  // unreadable. Used by the decoupled coverage + amount-enrichment crons to gate
+  // "run only when the freshness key is stale" (the databaseBackupSchedule
+  // pattern) instead of an ET-day marker.
+  async function kvUpdatedAtMs(dbInstance, key) {
+    try {
+      const row = await dbInstance.prepare('SELECT updated_at FROM system_kv WHERE key = ?').get(key)
+      if (!row?.updated_at) return null
+      const ms = Date.parse(row.updated_at)
+      return Number.isFinite(ms) ? ms : null
+    } catch {
+      return null
+    }
+  }
   async function kvSet(dbInstance, key, value) {
     const now = new Date().toISOString()
     const res = await dbInstance
@@ -4193,13 +4207,108 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[nightly-maintenance] failed:', err.message)
       }
     }
+    // SHORT ttl + heartbeat (2026-08-23): the sweep is heavy and a frequent
+    // deploy can kill it mid-run. With the old fixed 2h TTL a deploy-killed
+    // holder left a FUTURE-dated lock that wedged every subsequent tick for up
+    // to 2h — and back-to-back deploys re-future-dated it, so the sweep froze
+    // for days (`nightly_maintenance_last_run` stuck at 2026-08-20). Now the
+    // lease carries a short TTL that a LIVE holder renews on a heartbeat, so a
+    // long run keeps the lock while a killed run frees it within one TTL and the
+    // next hourly tick reclaims it.
+    const lockTtlMs = Math.max(60_000, Number(process.env.NIGHTLY_MAINTENANCE_LOCK_TTL_MS) || 10 * 60 * 1000)
     const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
       lockName: 'nightly-maintenance',
-      ttlMs: 2 * 60 * 60 * 1000,
+      ttlMs: lockTtlMs,
+      heartbeat: true,
       logger: console,
     }, runOnce)
     setTimeout(lockedRunOnce, 120_000)
     setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed 04:00 ET window
+  }
+
+  // Per-profile RESULT-COVERAGE freshness cron (2026-08-23). Decoupled from the
+  // heavy nightly maintenance sweep — freshness ("current, non-stale results")
+  // is owner-critical and must never be starved by a slow/stuck step in that
+  // monolith. Freshness-gated by the SAME `coverage_audit_last_run` stamp the
+  // sweep itself writes (so a missed day is caught on the next hourly tick and a
+  // fresh sweep is never re-run), under its OWN short-TTL heartbeated lock so a
+  // deploy-killed run can never wedge it. `runProfileCoverageSweep` is bounded
+  // (limit + bounded autoheal) so a slice completes each run.
+  function scheduleProfileCoverageSweep(dbInstance) {
+    const MARKER = 'coverage_audit_last_run'
+    const intervalHours = Math.max(1, Number(process.env.COVERAGE_SWEEP_INTERVAL_HOURS) || 20)
+    const dueMs = intervalHours * 60 * 60 * 1000
+    const lockTtlMs = Math.max(60_000, Number(process.env.COVERAGE_SWEEP_LOCK_TTL_MS) || 10 * 60 * 1000)
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const lastMs = await kvUpdatedAtMs(dbInstance, MARKER)
+        if (lastMs !== null && (Date.now() - lastMs) < dueMs) return // still fresh
+        const { runProfileCoverageSweep } = await import('./services/coverageAudit/profileResultCoverageAudit.js')
+        const result = await runProfileCoverageSweep(dbInstance, {})
+        console.log('[coverage-sweep]', {
+          scanned: result?.summary?.scanned ?? 0,
+          needs_rediscovery: result?.summary?.needs_rediscovery ?? 0,
+          surfacing_regressions: result?.summary?.surfacing_regressions ?? 0,
+          healed: result?.healed_count ?? 0,
+        })
+      } catch (err) {
+        console.warn('[coverage-sweep] failed:', err?.message || err)
+      }
+    }
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'coverage-sweep',
+      ttlMs: lockTtlMs,
+      heartbeat: true,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 150_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly freshness tick
+  }
+
+  // Award-AMOUNT enrichment freshness cron (2026-08-23). The "how much" pillar —
+  // competitors always show award amounts, and GrantFlow's nightly enrichment is
+  // what keeps real awards from reading as "$0/unknown". Decoupled from the
+  // monolith for the same reason as coverage. Runs `enforceAmountEnrichment` on
+  // a real (night-sized) budget — cursor-based via the `amount_enrich_attempted_at`
+  // column, so each bounded slice makes progress and the state persists — then
+  // stamps its own `amount_enrichment_last_run` freshness key. Honors
+  // ENFORCE_AMOUNT_ENRICHMENT=0 (the invariant's own count-only flag).
+  function scheduleAmountEnrichmentSweep(dbInstance) {
+    const MARKER = 'amount_enrichment_last_run'
+    const intervalHours = Math.max(1, Number(process.env.AMOUNT_ENRICH_INTERVAL_HOURS) || 20)
+    const dueMs = intervalHours * 60 * 60 * 1000
+    const lockTtlMs = Math.max(60_000, Number(process.env.AMOUNT_ENRICH_LOCK_TTL_MS) || 10 * 60 * 1000)
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const lastMs = await kvUpdatedAtMs(dbInstance, MARKER)
+        if (lastMs !== null && (Date.now() - lastMs) < dueMs) return // still fresh
+        const { enforceAmountEnrichment } = await import('./startup/enforceInvariants.js')
+        const limit = Math.max(1, Number.parseInt(process.env.NIGHTLY_AMOUNT_ENRICH_LIMIT || '120', 10) || 120)
+        const timeBudgetMs = Math.max(10_000, Number.parseInt(process.env.NIGHTLY_AMOUNT_ENRICH_TIME_BUDGET_MS || '300000', 10) || 300_000)
+        const result = await enforceAmountEnrichment(dbInstance, { limit, timeBudgetMs })
+        // Stamp freshness AFTER the pass — a productive bounded slice IS progress.
+        await kvSet(dbInstance, MARKER, JSON.stringify({
+          at: new Date().toISOString(),
+          scanned: result?.scanned ?? 0,
+          repaired: result?.repaired ?? 0,
+          remaining: result?.remaining ?? null,
+          exhausted: result?.exhausted ?? null,
+        }))
+        console.log('[amount-enrichment]', { scanned: result?.scanned ?? 0, repaired: result?.repaired ?? 0, remaining: result?.remaining ?? null })
+      } catch (err) {
+        console.warn('[amount-enrichment] failed:', err?.message || err)
+      }
+    }
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'amount-enrichment',
+      ttlMs: lockTtlMs,
+      heartbeat: true,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 165_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly freshness tick
   }
 
   // Qualified-pipeline convergence is deliberately outside the boot invariant
@@ -4345,6 +4454,8 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleHamiltonWeeklyDigest(db)
     scheduleMondayPortalReminder(db)
     scheduleNightlyMaintenanceSweep(db)
+    scheduleProfileCoverageSweep(db)
+    scheduleAmountEnrichmentSweep(db)
     scheduleQualifiedPipelinePromotion(db)
     scheduleSamDailyCodeSweep(db)
     scheduleAnyaDailyOwnerReport(db)

@@ -925,6 +925,31 @@ export async function releaseLock(db, { lockName = null, controlRunId = null, ow
 }
 
 /**
+ * Extend the TTL of a lock this process still owns (a heartbeat). Fenced by
+ * `ownerToken` so it can only ever push out the deadline of the exact
+ * acquisition it holds — never a successor's. Returns true when a row was
+ * renewed. This is what lets a lock carry a SHORT TTL safely: a live holder
+ * keeps renewing while it works, so a deploy-killed holder (which stops
+ * renewing) frees the lock within one TTL instead of wedging the scheduler for
+ * the whole fixed window.
+ */
+export async function renewLock(db, { lockName = null, ownerToken = null, ttlMs = DEFAULT_LOCK_TTL_MS } = {}) {
+  if (!db || !lockName || !ownerToken) return false
+  const effTtl = Math.max(MIN_LOCK_TTL_MS, Number(ttlMs) || DEFAULT_LOCK_TTL_MS)
+  const expiresAt = new Date(Date.now() + effTtl).toISOString()
+  try {
+    const res = await db
+      .prepare(`UPDATE agent_control_locks SET expires_at = ? WHERE lock_name = ? AND owner_token = ?`)
+      .run(expiresAt, String(lockName), String(ownerToken))
+    const renewed = Number(res?.changes || 0) > 0
+    if (renewed) lockLog('renew', { lock: lockName, token: ownerToken, expires_at: expiresAt })
+    return renewed
+  } catch {
+    return false
+  }
+}
+
+/**
  * Context-manager / defer-style helper: acquire, run `fn(lease)`, and ALWAYS
  * release in a finally — including on exception or timeout. Throws a
  * `LOCK_NOT_ACQUIRED` error (with `.lease` attached) when the lock is held.
