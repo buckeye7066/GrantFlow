@@ -40,6 +40,7 @@ import { resolvedUsOpportunityJurisdiction } from '../config/canonicalUsJurisdic
 import {
   isLeadGenScholarship,
   institutionalPassThroughConflict,
+  individualIneligibleProgramConflict,
   agencyOnlyProgramConflict,
 } from '../config/fundingResultFilters.js'
 import {
@@ -3907,6 +3908,25 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       return {
         decision: 'REJECT',
         explanation: `${passThroughLabel} funding flows to states, localities, and institutions — an individual or household cannot apply directly.`,
+        reasons,
+      }
+    }
+
+    // Federal competitive-research / cooperative-agreement / regulatory program
+    // families (Conservation Innovation Grants, NSF/DARPA/ONR research, DoD
+    // CDMRP, Full-Service Community Schools, FDA device harmonization, the
+    // "African Medical Devices Regulatory Harmonization" class). Owner
+    // pipeline-fit audit 2026-08-23: these reached individual pipelines because
+    // the web-minted rows carry NULL entity_types_allowed → the applicant-type
+    // gate sees a wildcard and passes them. This gate reads the PROGRAM NAME, so
+    // it fires regardless of a missing entity_types_allowed, and only for
+    // individual roots (a nonprofit/university/agency CAN hold these).
+    const ineligibleProgramLabel = individualIneligibleProgramConflict(opp)
+    if (ineligibleProgramLabel) {
+      reasons.push(`Institution-only federal program (${ineligibleProgramLabel}) — an individual person cannot be the applicant`)
+      return {
+        decision: 'REJECT',
+        explanation: `${ineligibleProgramLabel} is a federal competitive-research / cooperative-agreement / regulatory program whose applicant is always an institution; an individual person cannot apply directly.`,
         reasons,
       }
     }

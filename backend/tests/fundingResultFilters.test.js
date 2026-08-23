@@ -29,6 +29,7 @@ import {
   isRelevantGeo,
   institutionalPassThroughConflict,
   agencyOnlyProgramConflict,
+  individualIneligibleProgramConflict,
   nonGrantTitleLikePatterns,
   federalRegisterSourceLikePatterns,
   nonGrantCandidateSqlPredicate,
@@ -281,6 +282,66 @@ describe('passes_eligibility — institutional pass-through and agency-only prog
     expect(passesEligibility(feral, { publicAgencyRoot: true }).eligible).toBe(true)
     expect(passesEligibility(feral, {}).eligible).toBe(true) // unresolved type = neutral
   })
+
+  // The removal path (robertPipelineAudit) passes {applicantType, profileType,
+  // sections, profile} — NOT the resolved booleans — so before the root
+  // derivation was wired in, the institutional/agency gates were structurally
+  // DEAD there and no boot sweep could remove these rows.
+  it('derives the individual root from applicantType so the REMOVAL path fires the pass-through gate', () => {
+    const cdbg = { title: 'Community Development Block Grant (CDBG) Program' }
+    // The exact facts shape the removal-path caller builds — no individualRoot key.
+    expect(passesEligibility(cdbg, { applicantType: 'student' }).eligible).toBe(false)
+    expect(passesEligibility(cdbg, { profileType: 'individual' }).eligible).toBe(false)
+    // A nonprofit/org root is left alone (it CAN hold a pass-through program).
+    expect(passesEligibility(cdbg, { applicantType: 'nonprofit' }).eligible).toBe(true)
+  })
+})
+
+describe('passes_eligibility — federal competitive-research / cooperative-agreement programs (owner pipeline-fit audit 2026-08-23)', () => {
+  // The exact junk-family titles the owner found on a TN forensic-science
+  // undergrad's pipeline. Each is an institution-only federal program.
+  it.each([
+    'Conservation Innovation Grants',
+    'African Medical Devices Regulatory Harmonization Program',
+    'Full-Service Community Schools Program',
+    'Congressionally Directed Medical Research Programs',
+    'Peer Reviewed Medical Research Program',
+    'Harold Rogers Prescription Drug Monitoring Program',
+    'Antarctic Research',
+    'Research on Research Security Program',
+    'Economic Development Administration Public Works Program',
+    'DARPA Decentralized AI Research',
+    'Office of Naval Research Broad Agency Announcement',
+  ])('an INDIVIDUAL never passes an institution-only program: %s', (title) => {
+    expect(individualIneligibleProgramConflict({ title })).toBeTruthy()
+    expect(passesEligibility({ title }, { individualRoot: true }).eligible).toBe(false)
+    // Fires on the removal-path facts shape too (derived root).
+    expect(passesEligibility({ title }, { applicantType: 'student' }).eligible).toBe(false)
+  })
+
+  it('a NONPROFIT / university keeps these programs (they CAN be the applicant)', () => {
+    const cig = { title: 'Conservation Innovation Grants' }
+    expect(passesEligibility(cig, { individualRoot: false }).eligible).toBe(true)
+    expect(passesEligibility(cig, { applicantType: 'nonprofit' }).eligible).toBe(true)
+    expect(passesEligibility(cig, { profileType: 'government' }).eligible).toBe(true)
+  })
+
+  it('MISSING = NEUTRAL: an unknown profile root never fails an institution-only program row', () => {
+    expect(passesEligibility({ title: 'Conservation Innovation Grants' }, {}).eligible).toBe(true)
+  })
+
+  it('real individual BENEFITS a person CAN receive are never touched', () => {
+    for (const title of [
+      'Federal Pell Grant',
+      'Supplemental Nutrition Assistance Program (SNAP)',
+      'HUD-Approved Housing Counseling',
+      'Tennessee HOPE Scholarship',
+      'AFTE Forensic Science Scholarship',
+    ]) {
+      expect(individualIneligibleProgramConflict({ title }), title).toBeNull()
+      expect(passesEligibility({ title }, { individualRoot: true }).eligible, title).toBe(true)
+    }
+  })
 })
 
 // ── ENGINE gates (matchEngine.makeDecision is the sole decision authority) ──
@@ -377,6 +438,32 @@ describe('makeDecision consumes the chain (the owner-named absurdities become RE
     })
     expect(res.decision).toBe('REJECT')
     expect(res.explanation).toMatch(/lead-generation/i)
+  })
+
+  // Owner pipeline-fit audit 2026-08-23: federal competitive-research /
+  // cooperative-agreement NOFOs reached a TN forensic-science undergrad's
+  // pipeline. They carry NULL entity_types_allowed, so the applicant-type gate
+  // sees a wildcard and passes them — the program-name gate is what catches
+  // them for an individual, and it must leave a nonprofit alone.
+  const US_NONPROFIT = { id: 'p-ffm', primary_type: 'nonprofit', state: 'OH', needs: ['organization'] }
+  it.each([
+    'Conservation Innovation Grants',
+    'African Medical Devices Regulatory Harmonization Program',
+    'Full-Service Community Schools Program',
+    'DARPA Decentralized AI Research',
+    'Office of Naval Research Broad Agency Announcement',
+  ])('an institution-only federal program is a REJECT for an individual (NULL entity_types_allowed): %s', (title) => {
+    const res = makeDecision(90, US_INDIVIDUAL, { title, entity_types_allowed: null })
+    expect(res.decision).toBe('REJECT')
+    expect(res.explanation).toMatch(/institution/i)
+  })
+
+  it('the SAME institution-only program is NOT program-rejected for a nonprofit', () => {
+    const res = makeDecision(90, US_NONPROFIT, {
+      title: 'Conservation Innovation Grants',
+      entity_types_allowed: null,
+    })
+    expect(String(res.explanation ?? '')).not.toMatch(/individual person cannot be the applicant/i)
   })
 })
 
