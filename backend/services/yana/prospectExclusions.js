@@ -74,6 +74,152 @@ export function isExcludedUrl(url, excluded = getExcludedDomains()) {
   return isExcludedDomain(domainOf(url), excluded)
 }
 
+// ── Outreach-email selection (the SUPPLY-side fix) ──────────────────────────
+//
+// The plausibility GATE (isPlausibleHomepage / enforceLeadContactPlausibility)
+// is the last line of defense; it strips a bad recipient AFTER John has already
+// drafted to it, so the owner's mailbox ends up empty. The real cure is to never
+// attach a bad recipient in the first place. Three failure classes were measured
+// in prod 2026-08-23, each on a CORRECTLY-selected homepage:
+//   - WRONG ORG:   `info@indiantypefoundry.com` scraped off the (right) homepage
+//     `reynoldsburgeducationfoundation.org` — a font vendor's address embedded in
+//     the page's CSS/fonts. Its registrable domain differs from the org's site.
+//   - MALFORMED:   `u@penn.php` scraped off `upenn.edu` — `.php` is a file
+//     extension the naive email regex mistook for a TLD, and `u` a 1-char local.
+//   - GENERIC-ONLY: `webmaster@luriechildrens.org` / `webadmin@berkeley.edu` —
+//     right domain, but a web-infra mailbox that is not an outreach contact.
+//
+// chooseOutreachEmail() encodes the fix: a recipient must (1) be on the org's
+// OWN verified-homepage registrable domain, (2) be a realistically-shaped
+// mailbox, and (3) be a real outreach/person channel — a bare web-infra mailbox
+// is a weak fallback, never a first choice. When none qualifies it returns
+// ok:false so the lead stays needs_enrichment (owner sees it as needs-contact)
+// instead of being drafted-then-archived.
+
+/**
+ * Registrable domain (~eTLD+1) of an email/URL/host. Collapses `www.x.berkeley.edu`
+ * and `berkeley.edu` to the same key so a same-org test is subdomain-robust, while
+ * a small multi-part public-suffix set keeps `foo.co.uk` from collapsing to `co.uk`.
+ */
+export function registrableDomain(value) {
+  const d = domainOf(value)
+  if (!d) return null
+  const parts = d.split('.').filter(Boolean)
+  if (parts.length <= 2) return d
+  const MULTI_PART_SUFFIXES = new Set([
+    'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'org.au', 'edu.au',
+    'gov.au', 'co.nz', 'org.nz', 'co.za',
+  ])
+  const last2 = parts.slice(-2).join('.')
+  return MULTI_PART_SUFFIXES.has(last2) ? parts.slice(-3).join('.') : last2
+}
+
+// A "TLD" that is really a file/script extension — a scrape mistaking a path or
+// asset URL for an email domain (`u@penn.php`, `x@logo.png`).
+const FILE_EXT_TLD_RE = /\.(php\d?|aspx?|jsp|cgi|s?html?|xml|json|md|txt|png|jpe?g|gif|svg|webp|bmp|ico|css|js|mjs|woff2?|ttf|eot|otf|pdf|zip|map)$/i
+
+/**
+ * Strict mailbox shape: a plausible local part and a real-looking TLD. Stricter
+ * than isValidEmail (which accepts `u@penn.php` because `.php` matches `[a-z]{2,}`).
+ */
+export function isRealisticContactEmail(email) {
+  const e = String(email || '').trim().toLowerCase()
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}$/.test(e)) return false
+  const [local, domain] = e.split('@')
+  if (!local || local.length < 2) return false               // `u@…` single-char junk
+  if (!domain || domain.split('.').some((label) => !label)) return false // `a@b..com`
+  if (FILE_EXT_TLD_RE.test(domain)) return false             // `u@penn.php`
+  return true
+}
+
+// Real outreach mailboxes, ranked best-first — a grants/development desk is the
+// ideal cold-outreach target for GrantFlow. Order is the ranking.
+const OUTREACH_LOCALS = [
+  'grants', 'grant', 'development', 'devoffice', 'foundation', 'giving',
+  'philanthropy', 'donations', 'donate', 'advancement', 'partnerships',
+  'partner', 'programs', 'program', 'outreach', 'community', 'contact',
+  'contactus', 'connect', 'hello', 'info', 'inquiries', 'inquiry', 'general',
+  'office', 'main', 'team', 'mail', 'communications', 'comms', 'media', 'press',
+]
+const OUTREACH_LOCAL_RANK = new Map(OUTREACH_LOCALS.map((l, i) => [l, i]))
+
+// Web-infrastructure / systems mailboxes: right domain but NOT an outreach
+// contact. A weak fallback only — never a first choice (owner rule 2026-08-23).
+const WEAK_CONTACT_LOCALS = new Set([
+  'webmaster', 'webadmin', 'web', 'website', 'sysadmin', 'hostmaster', 'root',
+  'noc', 'it', 'ithelp', 'helpdesk', 'support', 'tech', 'techsupport',
+  'administrator', 'domains', 'dns', 'security', 'privacy', 'legal', 'compliance',
+])
+
+/** Classify a mailbox's local part: 'weak' | 'outreach' | 'person'. */
+export function classifyContactLocal(email) {
+  const local = String(email || '').split('@')[0].toLowerCase().trim()
+  if (!local) return 'weak'
+  const head = local.split(/[._-]/)[0] // `web.strategiccommunication` → `web`
+  if (WEAK_CONTACT_LOCALS.has(local) || WEAK_CONTACT_LOCALS.has(head)) return 'weak'
+  if (OUTREACH_LOCAL_RANK.has(local)) return 'outreach'
+  return 'person' // a named-person / office mailbox — a real human channel
+}
+
+/**
+ * Does an email's domain plausibly BELONG to this org? True when it is on the
+ * org's own verified-homepage registrable domain, OR when the domain itself
+ * passes the same whole-name plausibility bar the recipient gate enforces
+ * (`isPlausibleHomepage`) — so a legitimate org whose email domain differs from
+ * its website domain (foo.org site, @foomail.org mail) is kept, while a
+ * third-party vendor address embedded in the page (info@indiantypefoundry.com on
+ * a school's homepage) is refused. This deliberately mirrors
+ * enforceLeadContactPlausibility: enrichment only ever produces a recipient the
+ * gate would keep, so the two can never disagree.
+ */
+function emailDomainBelongsToOrg(email, { orgDomain, orgName } = {}) {
+  const emailReg = registrableDomain(email)
+  if (!emailReg) return false
+  const homeReg = registrableDomain(orgDomain)
+  if (homeReg && emailReg === homeReg) return true
+  if (orgName) {
+    const domain = domainOf(email)
+    if (domain && isPlausibleHomepage({ url: `https://${domain}`, title: '' }, orgName)) return true
+  }
+  return false
+}
+
+/**
+ * Choose the best REACHABLE outreach email for an org from scraped candidates.
+ *
+ * @param {string[]} emails    scraped candidate addresses
+ * @param {object} opts
+ * @param {string} opts.orgDomain  the org's OWN verified homepage (url/host/domain)
+ * @param {string} [opts.orgName]  the org's name (enables whole-name domain plausibility)
+ * @returns {{ok:boolean, email?:string, generic?:boolean, reason?:string}}
+ *   ok:true  → a real, org-owned outreach/person contact (safe to draft to)
+ *   ok:false → nothing usable; `generic:true` means an org-owned web-infra
+ *              mailbox exists but is too weak to draft (surface as needs-contact)
+ */
+export function chooseOutreachEmail(emails, { orgDomain, orgName } = {}) {
+  if (!registrableDomain(orgDomain) && !orgName) return { ok: false, reason: 'no_org_identity' }
+  const owned = (Array.isArray(emails) ? emails : [])
+    .map((e) => String(e || '').trim().toLowerCase())
+    .filter((e) => isRealisticContactEmail(e) && !isExcludedEmail(e))
+    // The recipient must belong to the org — its own site domain, or a domain
+    // that passes the whole-name plausibility bar. Refuses a vendor's address.
+    .filter((e) => emailDomainBelongsToOrg(e, { orgDomain, orgName }))
+  if (!owned.length) return { ok: false, reason: 'no_org_owned_contact' }
+
+  const rank = (e) => {
+    const kind = classifyContactLocal(e)
+    if (kind === 'weak') return 1000
+    if (kind === 'person') return 500
+    return 100 + (OUTREACH_LOCAL_RANK.get(e.split('@')[0].toLowerCase()) ?? 99)
+  }
+  const sorted = [...new Set(owned)].sort((a, b) => rank(a) - rank(b))
+  const best = sorted[0]
+  if (classifyContactLocal(best) === 'weak') {
+    return { ok: false, generic: true, email: best, reason: 'only_generic_web_mailbox' }
+  }
+  return { ok: true, email: best, generic: false }
+}
+
 /** Significant lowercase tokens from an org name (drops stopwords). */
 const NAME_STOPWORDS = new Set([
   'the', 'of', 'and', 'for', 'a', 'an', 'inc', 'foundation', 'fund', 'trust',

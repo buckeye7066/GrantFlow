@@ -16,7 +16,7 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
-import { homepageNameScore, isExcludedEmail, isExcludedUrl, isPlausibleHomepage } from './prospectExclusions.js'
+import { chooseOutreachEmail, homepageNameScore, isExcludedUrl, isPlausibleHomepage } from './prospectExclusions.js'
 import { enrichOrgContact } from '../shared/orgContactEnrichment.js'
 
 const log = createLogger('yanaContactEnrichment')
@@ -149,7 +149,14 @@ export function makeContactEnricher(deps = {}) {
       if (fetcher) {
         try {
           const html = await fetcher(homepage)
-          const found = extractEmailsFromHtml(html).find((e) => !isExcludedEmail(e)) || null
+          // The homepage passed isPlausibleHomepage, so `homepage` IS the org's
+          // own site — the trusted domain anchor. Only accept a recipient that
+          // (a) lives on that same registrable domain (refuses a third-party
+          // vendor address embedded in the page — the info@indiantypefoundry.com
+          // class), (b) is realistically shaped (refuses u@penn.php), and (c) is
+          // a real outreach/person mailbox, not a bare webmaster/webadmin.
+          const chosen = chooseOutreachEmail(extractEmailsFromHtml(html), { orgDomain: homepage, orgName: name })
+          const found = chosen.ok ? chosen.email : null
           email = found
           if (found) emailSourceUrl = homepage
           excerpt = htmlToText(html)
@@ -171,9 +178,13 @@ export function makeContactEnricher(deps = {}) {
               catch { return { ok: false, text: '' } }
             }
             const deep = await enrichOrgContact({ website: homepage }, { fetchImpl, delayMs: 0 })
-            const deepEmail = deep?.email && !isExcludedEmail(deep.email) ? deep.email : null
-            if (deepEmail) {
-              email = deepEmail
+            // Hold the deep-probe address to the SAME bar as the homepage scrape:
+            // same-org-domain, well-shaped, a real outreach/person mailbox.
+            const deepChosen = deep?.email
+              ? chooseOutreachEmail([deep.email], { orgDomain: homepage, orgName: name })
+              : { ok: false }
+            if (deepChosen.ok) {
+              email = deepChosen.email
               emailSourceUrl = deep.email_source_url || deep.source_url || homepage
             }
           } catch (err) {
