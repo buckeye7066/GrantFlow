@@ -1422,6 +1422,19 @@ router.post('/', createProfileLimiter, async (req, res) => {
         return admitFunderLeads(req.db, { profileIds: [profileId] })
       })
       .catch((err) => profileLogger.warn?.('new-profile funder-lead trigger failed (non-fatal)', { profileId, error: String(err?.message || err) }))
+
+    // NEW-PROFILE SOURCE-ACQUISITION TRIGGER (owner directive 2026-08-23): the
+    // predetermined/archetype resources (SBA/Hello Alice for a business; the big
+    // scholarship providers for a student) and the recent real catalog are
+    // parsed against the NEW profile immediately, so it gains its qualifying
+    // apply-ready + funder-lead sources without waiting for the scheduled
+    // cadence. Bounded to THIS profile, idempotent, fire-and-forget.
+    Promise.resolve()
+      .then(async () => {
+        const { parseNewProfileAgainstCatalog } = await import('../services/robert/robertSourceAcquisition.js')
+        return parseNewProfileAgainstCatalog(req.db, profileId)
+      })
+      .catch((err) => profileLogger.warn?.('new-profile source-acquisition trigger failed (non-fatal)', { profileId, error: String(err?.message || err) }))
   }
 
   // New-user free trial: every newly-created profile gets its OWN free period

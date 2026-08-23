@@ -154,6 +154,26 @@ router.post('/recommend', adminOnly, (req, res) => runWithMode(req, res, ROBERT_
  * no preview flag — this endpoint does real work every time it is called.
  */
 router.post('/audit-pipelines', adminOnly, (req, res) => runWithMode(req, res, ROBERT_MODES.AUDIT_PIPELINES))
+/**
+ * ACTIVE SOURCE-FINDER (owner directive 2026-08-23). Robert acquires the
+ * predetermined/archetype (+ hub) sources into the catalog through the canonical
+ * admission gate, then parses them against every profile and auto-adds the
+ * qualifiers (apply_ready vs funder_lead by applyability). No dry-run. Optional
+ * body { profileIds: [...] } scopes acquisition; omit for the whole fleet.
+ */
+router.post('/acquire-sources', adminOnly, async (req, res) => {
+  try {
+    const { runSourceAcquisitionCycle } = await import('../services/robert/robertSourceAcquisition.js')
+    const { buildHubPageFetcher } = await import('../services/robert/robertScheduler.js')
+    const cfg = getRobertConfig()
+    const profileIds = Array.isArray(req.body?.profileIds) && req.body.profileIds.length ? req.body.profileIds.map(String) : null
+    const allowHubs = req.body?.allowHubs !== false && cfg.acquireAllowHubs
+    const deps = allowHubs ? { fetchPage: buildHubPageFetcher(cfg) } : {}
+    const result = await runSourceAcquisitionCycle(req.db, { profileIds, deps, allowHubDecomposition: allowHubs })
+    return res.json({ ok: true, ...result })
+  } catch (err) { return handleError(res, err) }
+})
+
 /** What Robert removed, and what Amy still has to close. Read-only. */
 router.get('/pipeline-gaps', adminOnly, async (req, res) => {
   try {

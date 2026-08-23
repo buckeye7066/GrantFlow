@@ -25,6 +25,8 @@ let _interval = null
 let _stopped = false
 let _autoSeedRunning = false
 let _autoSeedInterval = null
+let _acquireRunning = false
+let _acquireInterval = null
 
 /**
  * Start the scheduler if the env says so. Safe to call multiple times.
@@ -51,11 +53,28 @@ export function startRobertScheduler({ db, deps = {}, logger = console } = {}) {
     autoSeedStarted = true
   }
 
+  // Source-acquisition cadence — like autoseed, self-starts INDEPENDENTLY of
+  // ROBERT_ENABLED: it acquires the predetermined/archetype (+ hub) sources into
+  // the catalog through the CANONICAL admission gate and auto-adds qualifiers to
+  // profiles. Opt out with ROBERT_ACQUIRE_ON_SCHEDULE=false.
+  let acquireStarted = false
+  if (cfg.acquireOnSchedule) {
+    const intervalMs = parseSchedule(cfg.acquireSchedule)
+    if (_acquireInterval) clearInterval(_acquireInterval)
+    _acquireInterval = setInterval(() => kickOffAcquire({ db, cfg, logger }), intervalMs)
+    if (typeof _acquireInterval.unref === 'function') _acquireInterval.unref()
+    const initial = setTimeout(() => kickOffAcquire({ db, cfg, logger }), 7 * 60 * 1000)
+    if (typeof initial.unref === 'function') initial.unref()
+    acquireStarted = true
+  }
+
   if (!cfg.enabled) {
-    return { started: autoSeedStarted, reason: autoSeedStarted ? 'autoseed_only' : 'robert_disabled' }
+    const started = autoSeedStarted || acquireStarted
+    return { started, reason: started ? 'background_only' : 'robert_disabled' }
   }
   if (!cfg.runOnSchedule && !cfg.runOnStartup) {
-    return { started: autoSeedStarted, reason: autoSeedStarted ? 'autoseed_only' : 'no_runtime_triggers_enabled' }
+    const started = autoSeedStarted || acquireStarted
+    return { started, reason: started ? 'background_only' : 'no_runtime_triggers_enabled' }
   }
 
   if (cfg.runOnStartup) {
@@ -79,6 +98,10 @@ export function stopRobertScheduler() {
   if (_autoSeedInterval) {
     clearInterval(_autoSeedInterval)
     _autoSeedInterval = null
+  }
+  if (_acquireInterval) {
+    clearInterval(_acquireInterval)
+    _acquireInterval = null
   }
 }
 
@@ -137,6 +160,76 @@ async function kickOffAutoSeed({ db, cfg, logger }) {
     if (logger?.error) logger.error('robert.scheduler.autoseed.error', { message: String(err?.message || err) })
   } finally {
     _autoSeedRunning = false
+  }
+}
+
+async function kickOffAcquire({ db, cfg, logger }) {
+  if (_stopped || _acquireRunning) return
+  _acquireRunning = true
+  try {
+    const result = await runWithSchedulerLock(db, {
+      lockName: 'robert:source-acquisition',
+      ttlMs: 60 * 60 * 1000,
+      heartbeat: true,
+      logger,
+    }, async () => {
+      const { runSourceAcquisitionCycle } = await import('./robertSourceAcquisition.js')
+      const deps = cfg.acquireAllowHubs ? { fetchPage: buildHubPageFetcher(cfg) } : {}
+      return runSourceAcquisitionCycle(db, { deps, allowHubDecomposition: cfg.acquireAllowHubs })
+    })
+    if (logger?.info) {
+      logger.info('robert.scheduler.acquire', {
+        ingested: result?.acquisition?.ingested,
+        decomposed_admitted: result?.acquisition?.decomposedAdmitted,
+        hubs_decomposed: result?.acquisition?.hubsDecomposed,
+        auto_added: result?.parse?.added,
+        auto_added_leads: result?.parse?.addedLeads,
+      })
+    }
+  } catch (err) {
+    if (logger?.error) logger.error('robert.scheduler.acquire.error', { message: String(err?.message || err) })
+  } finally {
+    _acquireRunning = false
+  }
+}
+
+/**
+ * Build an SSRF-safe hub-page fetcher for listing decomposition:
+ * fetch → cap bytes → text (htmlToText) + a bounded `<a href>` link inventory.
+ * Returns null on any failure so a hub is honestly reported unreadable rather
+ * than crashing the cadence.
+ */
+export function buildHubPageFetcher(cfg = {}) {
+  return async function fetchHubPage(url) {
+    try {
+      const { safeFetchOrNull, readTextCapped } = await import('../http/safeFetch.js')
+      const { htmlToText } = await import('../webGrantExtractor.js')
+      const res = await safeFetchOrNull(url, {
+        redirect: 'follow',
+        headers: { 'user-agent': cfg.userAgent || 'GrantFlowRobertBot/1.0', accept: 'text/html' },
+      }, { timeoutMs: cfg.timeoutMs || 15_000 })
+      if (!res || !res.ok) return null
+      const html = await readTextCapped(res)
+      if (!html) return null
+      const links = []
+      const seen = new Set()
+      const re = /<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi
+      let m
+      while ((m = re.exec(html)) !== null && links.length < 400) {
+        let href = m[1]
+        try { href = new URL(href, url).toString() } catch { continue }
+        if (!/^https?:\/\//i.test(href)) continue
+        if (seen.has(href)) continue
+        seen.add(href)
+        links.push(href)
+      }
+      let title = null
+      const tm = /<title[^>]*>([^<]+)<\/title>/i.exec(html)
+      if (tm) title = tm[1].trim().slice(0, 300)
+      return { text: htmlToText(html, 12_000), links, title }
+    } catch {
+      return null
+    }
   }
 }
 

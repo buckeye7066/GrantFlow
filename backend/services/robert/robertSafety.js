@@ -70,6 +70,18 @@ export function getRobertConfig() {
     autoSeedMaxProfiles: readEnvInt('ROBERT_AUTOSEED_MAX_PROFILES', 3),
     autoSeedMaxEntitiesPerProfile: readEnvInt('ROBERT_AUTOSEED_MAX_ENTITIES', 5),
     autoSeedMinRisk: readEnvInt('ROBERT_AUTOSEED_MIN_RISK', 60),
+    // Source-acquisition cadence (owner directive 2026-08-23): Robert actively
+    // acquires the PREDETERMINED/archetype (+ hub) sources into the catalog via
+    // the CANONICAL admission gate, then parses them against every profile and
+    // auto-adds the qualifiers. ON by default and independent of ROBERT_ENABLED
+    // — direct ingestion + parse pass only through the canonical reality gate +
+    // Robert's four gates (no raw open-web crawl). Hub decomposition additionally
+    // needs a live fetch, gated by ROBERT_ACQUIRE_ALLOW_HUBS (also default on;
+    // it degrades honestly to "unavailable" when no fetcher/LLM is present).
+    // Opt out with ROBERT_ACQUIRE_ON_SCHEDULE=false.
+    acquireOnSchedule: readEnvBool('ROBERT_ACQUIRE_ON_SCHEDULE', true),
+    acquireSchedule: readEnvString('ROBERT_ACQUIRE_SCHEDULE', '0 4 * * *'),
+    acquireAllowHubs: readEnvBool('ROBERT_ACQUIRE_ALLOW_HUBS', true),
     mode: readEnvString('ROBERT_MODE', 'observe').toLowerCase(),
     maxSourcesPerRun: readEnvInt('ROBERT_MAX_SOURCES_PER_RUN', 25),
     maxUrlsPerSource: readEnvInt('ROBERT_MAX_URLS_PER_SOURCE', 20),
