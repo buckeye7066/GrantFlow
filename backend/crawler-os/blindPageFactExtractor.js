@@ -40,12 +40,17 @@ import {
 } from './pageFacts.js';
 import { resolveInventoryLink, canonicalizeUrl } from './blindLinkInventory.js';
 import { validateEvidenceSpans, normalizeForEvidence } from './blindEvidenceValidator.js';
+import {
+  normalizeExpectedDecisionDate,
+  normalizeDecisionReviewDays,
+  normalizeReportingRequirements,
+} from '../config/funderLifecycleFacts.js';
 
 // Version tags — these become content-addressing components for the Phase-0.2
 // page-fact cache (services/pageFactCache.js) when this module is wired in a
 // later sub-PR. Bump when the prompt or output shape changes.
-export const EXTRACTOR_VERSION = 'blind-v2';
-export const PROMPT_VERSION = 'blind-prompt-v3';
+export const EXTRACTOR_VERSION = 'blind-v3';
+export const PROMPT_VERSION = 'blind-prompt-v4';
 export const PAGE_FACT_SCHEMA_VERSION = 2;
 
 // The feature flag that a LATER sub-PR will gate the live wiring on. Defined here
@@ -102,6 +107,17 @@ const SYSTEM = [
   '  correctly left with null eligibility — never invent one.',
   '- For an apply/info link, choose an id from LINK INVENTORY. NEVER write a URL',
   '  that is not in the inventory; if no suitable link exists, use null.',
+  '- CAPTURE THE FUNDER LIFECYCLE DATES WHENEVER THE PAGE STATES THEM, so the',
+  '  applicant\'s calendar can show them. `expected_decision_date`: a CONCRETE date',
+  '  the funder says awards are announced / decisions are sent ("awards announced',
+  '  April 15, 2027") as YYYY-MM-DD. `decision_review_days`: a stated review LENGTH',
+  '  in days ("decisions within 90 days" -> 90; "6-8 weeks" -> 56) when NO concrete',
+  '  date is given. `reporting_requirements`: post-award follow-ups the funder',
+  '  requires, each {label, and EITHER due_date (YYYY-MM-DD) OR offset_days from',
+  '  anchor ("award_date"|"submitted_date")} — e.g. "25% of the award spent within',
+  '  90 days of the award" -> {"label":"25% of award spent","offset_days":90,',
+  '  "anchor":"award_date"}. State NONE that the page does not state; never invent a',
+  '  date, a review length, or a follow-up.',
   '- For each fact you assert, quote the exact supporting substring from PAGE TEXT',
   '  in the `evidence` object. If you cannot quote it from the page, omit the fact.',
 ].join(' ');
@@ -279,6 +295,11 @@ function buildFacts(rawOpp, { pageUrlCanon, linkInventory, hayNorm }) {
   const is_rolling = normalizedDeadline === 'rolling' || rawOpp.is_rolling === true;
   const deadline = is_rolling ? null : normalizedDeadline;
   const need_categories = cleanNeeds(rawOpp.need_categories, hayNorm);
+  // Funder-aware lifecycle dates (calendar display only; never load-bearing for
+  // matching). Hard-normalized here; a value the funder did not state stays null.
+  const expected_decision_date = normalizeExpectedDecisionDate(rawOpp.expected_decision_date);
+  const decision_review_days = normalizeDecisionReviewDays(rawOpp.decision_review_days);
+  const reporting_requirements = normalizeReportingRequirements(rawOpp.reporting_requirements);
 
   // field_provenance: canonical keys, each recorded ONLY with a cited snippet.
   // The validator then verifies every snippet AND neutralizes any load-bearing
@@ -312,6 +333,9 @@ function buildFacts(rawOpp, { pageUrlCanon, linkInventory, hayNorm }) {
     amount_max,
     is_loan: is_loan === true,
     requires_cost_share: requires_cost_share === true,
+    expected_decision_date,
+    decision_review_days,
+    reporting_requirements,
     page_url: pageUrlCanon,
     info_url,
     apply_url,
@@ -428,8 +452,10 @@ export async function extractPageFactsBlind(input, deps) {
       '  "deadline": "YYYY-MM-DD"|"rolling"|null,',
       '  "national": boolean|null, "states": string[],',
       '  "is_loan": boolean|null, "requires_cost_share": boolean|null,',
+      '  "expected_decision_date": "YYYY-MM-DD"|null, "decision_review_days": number|null,',
+      '  "reporting_requirements": [{"label": string, "due_date": "YYYY-MM-DD"|null, "offset_days": number|null, "anchor": "award_date"|"submitted_date"|null}],',
       '  "apply_link_id": string|null, "info_link_id": string|null,',
-      '  "evidence": { "eligibility": string, "amount": string, "deadline": string, "is_loan": string, "requires_cost_share": string, "national": string, "geography": string }',
+      '  "evidence": { "eligibility": string, "amount": string, "deadline": string, "is_loan": string, "requires_cost_share": string, "national": string, "geography": string, "expected_decision_date": string, "decision_review_days": string, "reporting_requirements": string }',
       '}]}',
       'If the page describes no funding opportunity, return {"opportunities":[]}.',
     ].join('\n');

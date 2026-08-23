@@ -24,6 +24,11 @@ import {
 import { maybeEmbedOpportunity } from './embeddings/embeddingService.js'
 import { canonicalOpportunityKey } from '../crawler-os/contract.js'
 import { syncOpportunityContractProjection } from './opportunityRepository.js'
+import {
+  normalizeExpectedDecisionDate,
+  normalizeDecisionReviewDays,
+  normalizeReportingRequirements,
+} from '../config/funderLifecycleFacts.js'
 const log = createLogger('opportunityInserter')
 
 /**
@@ -787,6 +792,13 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       match_percentage: typeof opportunity.match_percentage === 'number' ? opportunity.match_percentage : null,
       notes: opportunity.notes ?? null,
       record_origin: recordOrigin,
+      // Funder-aware lifecycle dates for the profile calendar (display only).
+      expected_decision_date: normalizeExpectedDecisionDate(opportunity.expected_decision_date),
+      decision_review_days: normalizeDecisionReviewDays(opportunity.decision_review_days),
+      reporting_requirements: (() => {
+        const r = normalizeReportingRequirements(opportunity.reporting_requirements)
+        return r ? JSON.stringify(r) : null
+      })(),
     }
 
     // For live_crawl: allow clearing nullable fields when source no longer has them (avoids stale data).
@@ -872,6 +884,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         match_percentage = COALESCE(?, match_percentage),
         match_reasons = COALESCE(?, match_reasons),
         notes = COALESCE(?, notes),
+        expected_decision_date = COALESCE(?, expected_decision_date),
+        decision_review_days = COALESCE(?, decision_review_days),
+        reporting_requirements = COALESCE(?, reporting_requirements),
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -921,6 +936,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         match_percentage = COALESCE(?, match_percentage),
         match_reasons = COALESCE(?, match_reasons),
         notes = COALESCE(?, notes),
+        expected_decision_date = COALESCE(?, expected_decision_date),
+        decision_review_days = COALESCE(?, decision_review_days),
+        reporting_requirements = COALESCE(?, reporting_requirements),
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -970,6 +988,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.match_percentage,
       record.match_reasons,
       record.notes,
+      record.expected_decision_date,
+      record.decision_review_days,
+      record.reporting_requirements,
       existing.id,
     )
 
@@ -1138,6 +1159,14 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   const eligibilitySignals = extractEligibilitySignals(opportunity)
   record.eligibility_signals = eligibilitySignals ? JSON.stringify(eligibilitySignals) : null
   record.verification_status = opportunity.verification_status ?? null
+  // Funder-aware lifecycle dates for the profile calendar (display only). Hard-
+  // normalized; a value the funder did not state stays NULL. reporting_requirements
+  // is stored as JSON text (jsonb in prod, TEXT in sqlite) — the same proven
+  // pattern as geo_eligibility above.
+  record.expected_decision_date = normalizeExpectedDecisionDate(opportunity.expected_decision_date)
+  record.decision_review_days = normalizeDecisionReviewDays(opportunity.decision_review_days)
+  const reportingRequirements = normalizeReportingRequirements(opportunity.reporting_requirements)
+  record.reporting_requirements = reportingRequirements ? JSON.stringify(reportingRequirements) : null
 
   const insert = db.prepare(`
     INSERT INTO funding_opportunities (
@@ -1203,7 +1232,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       usable_for_housing,
       refund_potential,
       eligibility_signals,
-      verification_status
+      verification_status,
+      expected_decision_date,
+      decision_review_days,
+      reporting_requirements
     ) VALUES (
       @id,
       @title,
@@ -1267,7 +1299,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @usable_for_housing,
       @refund_potential,
       @eligibility_signals,
-      @verification_status
+      @verification_status,
+      @expected_decision_date,
+      @decision_review_days,
+      @reporting_requirements
     )
     ON CONFLICT (source, source_id) WHERE source IS NOT NULL AND source_id IS NOT NULL DO UPDATE SET
       title = COALESCE(excluded.title, funding_opportunities.title),
@@ -1325,6 +1360,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       final_url = COALESCE(excluded.final_url, funding_opportunities.final_url),
       http_status = COALESCE(excluded.http_status, funding_opportunities.http_status),
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
+      expected_decision_date = COALESCE(excluded.expected_decision_date, funding_opportunities.expected_decision_date),
+      decision_review_days = COALESCE(excluded.decision_review_days, funding_opportunities.decision_review_days),
+      reporting_requirements = COALESCE(excluded.reporting_requirements, funding_opportunities.reporting_requirements),
       updated_at = CURRENT_TIMESTAMP,
       last_crawled = CURRENT_TIMESTAMP
   `)
@@ -1392,6 +1430,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     refund_potential: record.refund_potential ?? null,
     eligibility_signals: record.eligibility_signals ?? null,
     verification_status: record.verification_status ?? null,
+    expected_decision_date: record.expected_decision_date ?? null,
+    decision_review_days: record.decision_review_days ?? null,
+    reporting_requirements: record.reporting_requirements ?? null,
   }
 
   try {

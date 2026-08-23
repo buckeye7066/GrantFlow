@@ -7,6 +7,11 @@
 
 import { OPPORTUNITY_KIND } from './contract.js';
 import { cleanEligibilityText, cleanEligibilityBullets, cleanFieldProvenance } from './pageFacts.js';
+import {
+  normalizeExpectedDecisionDate,
+  normalizeDecisionReviewDays,
+  normalizeReportingRequirements,
+} from '../config/funderLifecycleFacts.js';
 
 export const BLIND_WEB_SOURCE_ID = 'web_search';
 
@@ -70,6 +75,11 @@ export function mapBlindFactsToCandidate(facts) {
     eligibility_bullets: cleanEligibilityBullets(facts.eligibility_bullets),
     page_fact_schema_version: facts.page_fact_schema_version ?? null,
     field_provenance: cleanFieldProvenance(facts.field_provenance),
+    // Funder-aware lifecycle dates for the profile calendar (display only). Re-
+    // normalized here so a cached or older fact object is held to the same bar.
+    expected_decision_date: normalizeExpectedDecisionDate(facts.expected_decision_date),
+    decision_review_days: normalizeDecisionReviewDays(facts.decision_review_days),
+    reporting_requirements: normalizeReportingRequirements(facts.reporting_requirements),
     raw: {
       blind_extraction: true,
       page_url: facts.page_url ?? null,
