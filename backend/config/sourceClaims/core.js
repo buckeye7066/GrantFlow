@@ -34,7 +34,11 @@ export const APPLICANT_SCOPES = Object.freeze(['applicant', 'beneficiary'])
 /** The kinds of fact a claim can carry. */
 export const DIMENSIONS = Object.freeze([
   'field_of_study', 'profession', 'jurisdiction', 'residency',
-  // (future) 'entity_type','academic_stage','gender','condition','military_service','aid_type','need','award_ceiling'
+  // Stage-2 slice-4 claim dimensions (emitters + <dim>ApplicantConflict live in
+  // their own files; NOT yet wired into matchEngine — the parent integrates them
+  // sequentially to avoid gate-ladder collisions).
+  'academic_stage', 'entity_type', 'gender', 'aid_type', 'condition',
+  // (future) 'military_service','need','award_ceiling'
 ])
 
 /**
