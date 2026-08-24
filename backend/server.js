@@ -105,6 +105,7 @@ import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
 import { resolveGuidedCycleTourStatus, resolveForcedWelcomeVideo } from './services/onboardingGates.js';
+import { resolveProfileCompletionForUser } from './services/profileCompletionGate.js';
 import { runWithSchedulerLock } from './services/schedulerLock.js';
 import {
   decryptRuntimeSecret,
@@ -2212,6 +2213,15 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       // Fail-open: resolves to null on any error so /me never breaks bootstrap.
       const forcedWelcomeVideo = await resolveForcedWelcomeVideo(req.db, dbUser)
 
+      // PROFILE-COMPLETION GATE parity with the login payload (buildUserPayload).
+      // Uses the CANONICAL admin flag (req.ctx.isAdmin) so an admin is never
+      // gated; fail-open inside the resolver so /me never breaks bootstrap.
+      const profileCompletion = await resolveProfileCompletionForUser(
+        req.db,
+        { ...dbUser, is_admin: req.ctx?.isAdmin === true },
+        Array.isArray(profiles) ? profiles : [],
+      )
+
       return res.json({
         user: {
           id: dbUser.id,
@@ -2247,6 +2257,8 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           // forced row → zero behavior change). The frontend renders this above
           // every onboarding branch, then POSTs consume so it never replays.
           forced_welcome_video: forcedWelcomeVideo,
+          // Per-profile required-field completion gate (admins → inert).
+          profile_completion: profileCompletion,
         },
         profiles: Array.isArray(profiles) ? profiles : [],
         active_profile_id: safeActiveProfileId,

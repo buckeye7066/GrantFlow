@@ -270,6 +270,12 @@ const initialState = {
   // so the sequencer falls through. null for everyone with no unconsumed forced
   // row → zero behavior change.
   forcedWelcomeVideo: null,
+  // PROFILE-COMPLETION GATE summary from the auth/onboarding payload.
+  // `{ active, blocked, exempt, profiles:[...], next:{ profile_id, questions:[...], ... } } | null`.
+  // While `blocked` is true (non-admins only — admins resolve to inert), the
+  // ProfileCompletionGate overlay asks Anya's numbered questions before the
+  // user can proceed. null / exempt / not-blocked → nothing renders.
+  profileCompletion: null,
 }
 
 function normalizeId(value) {
@@ -441,6 +447,8 @@ export const useAuthStore = create((set, get) => ({
         guidedCycleTourStatus: payload.guidedCycleTourStatus ?? null,
         forcedWelcomeVideo:
           payload.forcedWelcomeVideo ?? payload.user?.forced_welcome_video ?? null,
+        profileCompletion:
+          payload.profileCompletion ?? payload.user?.profile_completion ?? payload.profile_completion ?? null,
       }))
 
       // Fire-and-forget: claim a stored PromoPilot promo touch for this user so
@@ -551,6 +559,8 @@ export const useAuthStore = create((set, get) => ({
         guidedCycleTourStatus: payload.user?.guided_cycle_tour_status ?? null,
         forcedWelcomeVideo:
           payload.user?.forced_welcome_video ?? payload.forcedWelcomeVideo ?? null,
+        profileCompletion:
+          payload.user?.profile_completion ?? payload.profile_completion ?? payload.profileCompletion ?? null,
         onboardingCompletedAt: payload.user?.onboarding_completed_at ?? null,
         lastSeenManualVersion: Number(payload.user?.last_seen_manual_version ?? 0),
         lastCompletedTourVersion: Number(payload.user?.last_completed_tour_version ?? 0),
@@ -1080,6 +1090,16 @@ export const useAuthStore = create((set, get) => ({
 
   setNeedsProfileCreation: (needs) => {
     set({ needsProfileCreation: needs })
+  },
+
+  /**
+   * Replace the profile-completion gate summary (or clear it). Called by
+   * ProfileCompletionGate after the user finishes answering a profile's
+   * required questions, so the overlay stops blocking without waiting for a
+   * fresh /me round-trip.
+   */
+  setProfileCompletion: (summary) => {
+    set({ profileCompletion: summary ?? null })
   },
 
   /**

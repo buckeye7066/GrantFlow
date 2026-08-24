@@ -7,6 +7,7 @@ import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import HamiltonToastBridge from '@/components/hamilton/HamiltonToastBridge'
 import HamiltonAuthPrimingToast from '@/components/hamilton/HamiltonAuthPrimingToast'
 import LoginGapInterviewLauncher from '@/components/profiles/LoginGapInterviewLauncher'
+import ProfileCompletionGate from '@/components/onboarding/ProfileCompletionGate'
 import MobileUpdateWatcher from '@/components/mobile/MobileUpdateWatcher'
 import client from '@/api/client';
 import RouteErrorBoundary from '@/components/shared/RouteErrorBoundary.jsx'
@@ -106,6 +107,11 @@ function App() {
           global instance during that window so the two don't double-mount;
           it resumes its normal recurring behavior once that finishes. */}
       {guidedCycleTourStatus !== 'pending_reinterview' && <LoginGapInterviewLauncher />}
+      {/* BLOCKING profile-completion gate: while a non-admin's profile is
+          missing data points required for its type, Anya asks the numbered
+          questions ("1 of N" … "N of N") before the user can proceed. Renders
+          null unless the auth payload's profile_completion reports `blocked`. */}
+      <ProfileCompletionGate />
     </Router>
   )
 }

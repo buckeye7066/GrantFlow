@@ -51,6 +51,7 @@ import { guardProfileSectionPayload, SECTION_METADATA } from '../utils/profileSu
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { normalizeProfile } from '../services/profileNormalizer.js'
 import { buildProfileGapPlan } from '../services/profileGapInterview.js'
+import { computeProfileCompletionGate, REQUIRED_DATA_POINTS } from '../services/profileCompletionGate.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
 import { normalizeHttpUrl } from '../services/avatarCrawler.js'
 import { fetchOrgLogo } from '../services/orgLogoFetcher.js'
@@ -4180,6 +4181,97 @@ router.get('/:id/gap-plan', async (req, res) => {
       profile,
     })
     return res.json({ ok: true, profile_id: id, ...plan })
+  } catch (error) {
+    return res.status(500).json(formatError(error))
+  }
+})
+
+// GET /:id/completion-gate — the PROFILE-COMPLETION GATE for one profile.
+// Returns whether the profile has every data point REQUIRED for its resolved
+// type, and — when it does not — the ordered NUMBERED questions Anya asks
+// (each carrying `index` + `total` so the UI renders "1 of N" … "N of N"),
+// plus the explanatory intro copy. While `blocked` is true the frontend
+// prevents the user from proceeding until the profile is complete.
+router.get('/:id/completion-gate', async (req, res) => {
+  const { id } = req.params
+  if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
+  try {
+    const profile = await req.db
+      .prepare('SELECT id, display_name, primary_type FROM profiles WHERE id = ?')
+      .get(id)
+    if (!profile) return res.status(404).json({ error: 'Profile not found' })
+
+    const sectionRows = await req.db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+      .all(id)
+    const sections = {}
+    for (const s of sectionRows) sections[s.section_key] = safeParseJSON(s.data, {})
+
+    const gate = computeProfileCompletionGate(profile, sections, { displayName: profile.display_name })
+    return res.json({ ok: true, profile_id: id, ...gate })
+  } catch (error) {
+    return res.status(500).json(formatError(error))
+  }
+})
+
+// POST /:id/completion-gate/answer — persist ONE answer to a completion-gate
+// question and return the recomputed (advanced) gate. Body: { question_id,
+// value }. The answer is written to the data point's canonical section+field
+// (from REQUIRED_DATA_POINTS.writes); the response's `questions` reflect the
+// new, shorter N so the UI advances "2 of N", "3 of N", …
+router.post('/:id/completion-gate/answer', async (req, res) => {
+  const { id } = req.params
+  if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
+  try {
+    const questionId = String(req.body?.question_id || '').trim()
+    const rawValue = req.body?.value
+    const spec = REQUIRED_DATA_POINTS.find((dp) => dp.id === questionId)
+    if (!spec) return res.status(400).json({ error: 'Unknown question_id' })
+
+    const profile = await req.db
+      .prepare('SELECT id, display_name, primary_type FROM profiles WHERE id = ?')
+      .get(id)
+    if (!profile) return res.status(404).json({ error: 'Profile not found' })
+
+    const { section, field } = spec.question.writes
+    // Array-valued data points accept a comma-separated string or an array.
+    const ARRAY_FIELDS = new Set(['assistance_needs', 'need_categories', 'focus_areas', 'interests', 'keywords'])
+    let value = rawValue
+    if (ARRAY_FIELDS.has(field)) {
+      value = Array.isArray(rawValue)
+        ? rawValue.map((v) => String(v).trim()).filter(Boolean)
+        : String(rawValue ?? '')
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean)
+    } else if (typeof rawValue === 'string') {
+      value = rawValue.trim()
+    }
+
+    // Merge the single field into the target section (create it if missing).
+    const existing = await req.db
+      .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?')
+      .get(id, section)
+    const current = existing ? safeParseJSON(existing.data, {}) : {}
+    current[field] = value
+    // audit:allow unscoped-profile-query -- upsert includes profile_id and access to id is validated above.
+    await req.db
+      .prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+         VALUES (?, ?, ?, 'completion-gate')
+         ON CONFLICT(profile_id, section_key)
+         DO UPDATE SET data = excluded.data, updated_by = 'completion-gate', updated_at = CURRENT_TIMESTAMP`,
+      )
+      .run(id, section, JSON.stringify(current))
+
+    // Recompute + return the advanced gate.
+    const sectionRows = await req.db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+      .all(id)
+    const sections = {}
+    for (const s of sectionRows) sections[s.section_key] = safeParseJSON(s.data, {})
+    const gate = computeProfileCompletionGate(profile, sections, { displayName: profile.display_name })
+    return res.json({ ok: true, profile_id: id, ...gate })
   } catch (error) {
     return res.status(500).json(formatError(error))
   }
