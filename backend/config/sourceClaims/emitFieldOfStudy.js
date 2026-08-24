@@ -37,13 +37,17 @@ const DIMENSION = 'field_of_study'
 
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/** Award nouns a field can directly modify to name an applicant restriction. */
-const AWARD_NOUN = '(?:scholarships?|grants?|awards?|fellowships?|bursar(?:y|ies)|prizes?)'
+/** Award nouns a field can directly modify to name an applicant restriction.
+ *  fund/endowment are award VEHICLES (a "Nursing Education Fund" funds nursing
+ *  students), not funder-identity words — so they belong here, NOT in ORG_WORD. */
+const AWARD_NOUN = '(?:scholarships?|grants?|awards?|fellowships?|bursar(?:y|ies)|prizes?|funds?|endowments?)'
 /** Words that mark a field as naming the RECIPIENT population. */
 const RECIPIENT_NOUN = '(?:students?|majors?|scholars?|applicants?|candidates?)'
-/** Org-name words: when the field sits inside one of these, it names the FUNDER. */
+/** Org-name words: when the field sits inside one of these, it names the FUNDER.
+ *  Deliberately EXCLUDES fund/endowment (award vehicles, above) — those follow a
+ *  field/purpose ("Nursing Fund") far more often than a funder's proper name. */
 const ORG_WORD_RX =
-  /\b(?:society|association|foundation|institute|council|academy|coalition|federation|guild|alliance|order|club|chapter|endowment|trust|fund|organization|organisation)\b/i
+  /\b(?:society|association|foundation|institute|council|academy|coalition|federation|guild|alliance|order|club|chapter|trust|organization|organisation)\b/i
 /** School-name words: the field is part of an INSTITUTION's name. */
 const INSTITUTION_WORD_RX = /\b(?:college|university|school|seminary|conservatory|polytechnic)\b/i
 
@@ -112,6 +116,8 @@ function namesRecipients(title, phrase) {
   const f = escapeRe(phrase)
   if (new RegExp(`\\b(?:for\\s+)?${f}\\s+${RECIPIENT_NOUN}\\b`, 'i').test(title)) return true
   if (new RegExp(`\\bfor\\s+${f}\\b`, 'i').test(title)) return true
+  // "Scholar/Student in|of <field>" ("Tucker Scholar in Nursing").
+  if (new RegExp(`\\b${RECIPIENT_NOUN}\\s+(?:in|of)\\s+[\\w\\s]{0,16}?${f}\\b`, 'i').test(title)) return true
   return false
 }
 
@@ -121,6 +127,45 @@ function inInstitutionName(title, phrase) {
   if (new RegExp(`${INSTITUTION_WORD_RX.source}\\s+of\\s+${f}\\b`, 'i').test(title)) return true
   if (new RegExp(`\\b${f}\\s+${INSTITUTION_WORD_RX.source}\\b`, 'i').test(title)) return true
   return false
+}
+
+/** Separators that end a funder-name prefix and start the award/eligibility clause. */
+const SEGMENT_SEP_RX = /[—–:|·]|\s[-]\s|\bpresents\b|\boffers\b|\bawards?\b\s|'s\s/i
+
+/** The stretch of `before` AFTER the last funder/segment separator. */
+function afterLastSeparator(before) {
+  const parts = String(before).split(SEGMENT_SEP_RX)
+  return parts[parts.length - 1]
+}
+
+/**
+ * Is the field named as the applicant's COURSE OF STUDY — a degree or program in
+ * it? "Master of Science in Nursing", "Bachelor of Engineering", "Nursing
+ * Program", "Program in Anesthesia Nursing", "degree in Nursing", "Nursing major
+ * / degree / education". These name what the applicant STUDIES, so a profile in a
+ * different field provably cannot receive it — the class the title-only gate got
+ * right but the first scope pass wrongly dropped to sponsor.
+ */
+const DEGREE_WORD = '(?:master|bachelor|associate|doctor|doctorate|ph\\.?d|degree|diploma|certificate|b\\.?s\\.?n|m\\.?s\\.?n)'
+function inDegreeOrProgramContext(title, phrase) {
+  const f = escapeRe(phrase)
+  // "<degree> [of X] in [X] <field>"  →  "Master of Science in Nursing"
+  if (new RegExp(`\\b${DEGREE_WORD}\\b[\\w.\\s]{0,24}?\\bin\\s+[\\w\\s]{0,24}?${f}\\b`, 'i').test(title)) return true
+  // "<field> program / degree / major / studies / education / training"
+  if (new RegExp(`\\b${f}\\s+(?:program(?:me)?|degree|major|studies|education|training)\\b`, 'i').test(title)) return true
+  // "program / degree / major / studies in|of [X] <field>"  →  "Program in Anesthesia Nursing"
+  if (new RegExp(`\\b(?:program(?:me)?|degree|major|studies|study|training)\\s+(?:in|of)\\s+[\\w\\s]{0,24}?${f}\\b`, 'i').test(title)) return true
+  return false
+}
+
+/**
+ * Is the field the TAIL/MIDDLE of the funder's own name — an org word sits within
+ * ~2 words AFTER the field ("Ohio Nurses Foundation Scholarship", "…Engineers
+ * Society Award")? Then the award noun modifies the whole org name, not the field.
+ */
+function fieldFollowedByOrgWord(title, phrase) {
+  const f = escapeRe(phrase)
+  return new RegExp(`\\b${f}\\b(?:\\s+\\w+){0,2}?\\s+${ORG_WORD_RX.source}`, 'i').test(title)
 }
 
 /**
@@ -161,46 +206,47 @@ export default function emitFieldOfStudy(opportunity = {}) {
   }
   for (const hit of detectFields(title)) {
     const before = hit.index >= 0 ? title.slice(0, hit.index) : ''
-    const after = hit.index >= 0 ? title.slice(hit.index + hit.phrase.length) : title
 
-    // 1. An org word BEFORE the field ("[Society] of Highway Engineers Scholarship")
-    //    means the field belongs to the FUNDER's name — the award noun that follows
-    //    modifies the whole org name, not the field. Safest non-rejecting scope.
-    if (ORG_WORD_RX.test(before)) {
+    // A. The field is INSIDE the funder's contiguous org name — an org word leads
+    //    into it with no separator ("American Society of Highway Engineers
+    //    Scholarship"). The award noun modifies the whole org name, not the field.
+    //    Separator-aware: a funder-name PREFIX followed by a separator ("ANA
+    //    Foundation — Nursing Scholarship") does NOT count — the field after the
+    //    separator is its own eligibility clause.
+    if (ORG_WORD_RX.test(afterLastSeparator(before))) {
       push(makeClaim({ dimension: DIMENSION, value: hit.id, scope: 'sponsor', strength: 'detected', evidence: evTitle }))
       continue
     }
 
-    // 2. Part of a school's name ("X College of Nursing") → institution scope.
+    // B. Part of a school's name ("X College of Nursing") → institution scope.
     if (inInstitutionName(title, hit.phrase)) {
       push(makeClaim({ dimension: DIMENSION, value: hit.id, scope: 'institution', strength: 'detected', evidence: evTitle }))
       continue
     }
 
-    // 3. The field IMMEDIATELY modifies the award noun ("Nursing Scholarship") or
-    //    names the recipient population ("for Nursing students") → applicant.
-    const directAward = directlyModifiesAwardNoun(title, hit.phrase)
-    const recipients = namesRecipients(title, hit.phrase)
-    if (directAward || recipients) {
-      addApplicant(hit, directAward ? 'explicit' : 'detected')
-      continue
-    }
-
-    // 4. An org word ELSEWHERE ("Ohio Nurses [Foundation] Scholarship", where the
-    //    org word sits between the field and the award noun) → sponsor.
-    if (ORG_WORD_RX.test(after) || ORG_WORD_RX.test(before)) {
+    // C. The field is the TAIL of the funder's name — an org word within ~2 words
+    //    AFTER it ("Ohio Nurses Foundation Scholarship") → sponsor.
+    if (fieldFollowedByOrgWord(title, hit.phrase)) {
       push(makeClaim({ dimension: DIMENSION, value: hit.id, scope: 'sponsor', strength: 'detected', evidence: evTitle }))
       continue
     }
 
-    // 5. Field modifies the award noun across 1–2 words ("Nursing Excellence Grant"),
-    //    with no org context → applicant.
-    if (gappedModifiesAwardNoun(title, hit.phrase)) {
-      addApplicant(hit, 'explicit')
+    // D. APPLICANT signals — the field names who may RECEIVE the award, or names
+    //    the applicant's course of study:
+    //    - directly modifies the award noun ("Nursing Scholarship")
+    //    - names the recipient population ("for Nursing students / majors")
+    //    - modifies the award across 1–2 words ("Nursing Career Recovery Scholarship")
+    //    - a degree/program in the field ("Master of Science in Nursing")
+    const directAward = directlyModifiesAwardNoun(title, hit.phrase)
+    const recipients = namesRecipients(title, hit.phrase)
+    const gapped = gappedModifiesAwardNoun(title, hit.phrase)
+    const degree = inDegreeOrProgramContext(title, hit.phrase)
+    if (directAward || recipients || gapped || degree) {
+      addApplicant(hit, (directAward || gapped || degree) ? 'explicit' : 'detected')
       continue
     }
 
-    // 6. Genuinely ambiguous → the safer, NON-rejecting scope.
+    // E. Genuinely ambiguous → the safer, NON-rejecting scope.
     push(makeClaim({ dimension: DIMENSION, value: hit.id, scope: 'sponsor', strength: 'detected', evidence: evTitle }))
   }
 

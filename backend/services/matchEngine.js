@@ -59,6 +59,7 @@ import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/ind
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
 import { fieldOfStudyConflict } from '../config/fieldOfStudyEligibility.js'
+import { fieldOfStudyApplicantConflict } from '../config/sourceClaims/core.js'
 import {
   deriveWebsitePurpose,
   websitePurposeConflict,
@@ -3920,7 +3921,12 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // only in the title, the eligibility columns are empty, and it refuses ONLY on
   // a provable specific-vs-specific mismatch. Silence on either side is neutral;
   // a broad "healthcare"/"STEM" award never fires.
-  const fieldConflict = fieldOfStudyConflict(fullSections(sections, prof), opp)
+  // SCOPE-AWARE (Stage-2 slice 1): only an APPLICANT-scoped field claim rejects.
+  // A field word in the SPONSOR's name ("American Society of Highway Engineers
+  // Scholarship") is scope 'sponsor' and no longer hard-rejects — fixing the
+  // title-only over-rejection #1360 produced. `fieldOfStudyConflict` (the old
+  // title-only gate) is retained as an import only for the boot-net transition.
+  const fieldConflict = fieldOfStudyApplicantConflict(fullSections(sections, prof), opp)
   if (fieldConflict) {
     reasons.push(fieldConflict.reason)
     return {

@@ -171,7 +171,45 @@ export function applicantConflicts(claims, sections = {}, deps = {}) {
   return conflicts
 }
 
+/**
+ * SCOPE-AWARE field-of-study conflict — the drop-in replacement for
+ * config/fieldOfStudyEligibility.fieldOfStudyConflict, returning the SAME shape
+ * ({classId,label,phrase,field,reason}) so makeDecision + the boot net need no
+ * other change. The ONLY difference: it fires only on an APPLICANT-scoped field
+ * claim, so a field word that is part of the SPONSOR's name ("American Society of
+ * Highway ENGINEERS Scholarship") no longer hard-rejects a paramedic — the exact
+ * over-rejection the title-only gate #1360 produces.
+ *
+ * @returns {null|{classId,label,phrase,field,reason}}
+ */
+export function fieldOfStudyApplicantConflict(sections, opportunity = {}) {
+  let claims
+  try { claims = emitFieldOfStudy(opportunity) } catch { return null }
+  const applicant = (claims || []).filter(
+    (c) => c && c.dimension === 'field_of_study' && APPLICANT_SCOPES.includes(c.scope),
+  )
+  if (applicant.length === 0) return null
+  const profileFields = profileFactsFor('field_of_study', sections)
+  if (profileFields.size === 0) return null // profile declares no major → neutral
+  const declared = new Set([...profileFields].map((f) => String(f).toLowerCase()))
+  for (const c of applicant) {
+    if (!declared.has(String(c.value).toLowerCase())) {
+      return {
+        classId: c.value,
+        label: c.value,
+        phrase: c.evidence.text,
+        field: c.evidence.field,
+        reason:
+          `Field of study: this award is for ${c.value} — its own ${c.evidence.field} says `
+          + `"${c.evidence.text}" — and the profile's declared major does not include it`,
+      }
+    }
+  }
+  return null
+}
+
 export default {
   SCOPES, APPLICANT_SCOPES, DIMENSIONS, makeClaim,
   deriveSourceClaims, profileFactsFor, applicantConflicts,
+  fieldOfStudyApplicantConflict,
 }
