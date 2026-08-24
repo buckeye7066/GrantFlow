@@ -20,11 +20,8 @@ async function loadPlaywright() {
   }
 }
 
-export async function runWebJourney({ baseUrl, journey, captureDir = null, dryRun = false }) {
+export async function runWebJourney({ baseUrl, journey, captureDir = null }) {
   const started = Date.now()
-  if (dryRun) {
-    return { journey_id: journey.id, name: journey.name, status: 'skipped', duration_ms: Date.now() - started }
-  }
   const pw = await loadPlaywright()
   if (!pw) {
     return blocked(journey, started, 'Playwright is not installed on this runner (npm i playwright && npx playwright install chromium)')
