@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 import { apiFetch } from '@/api/client'
 import { useAuthStore, normalizeUserAdmin } from '@/stores/authStore'
 import {
@@ -18,14 +18,17 @@ import { Input } from '@/components/ui/input'
  * their profile with the information RELEVANT TO THEIR PROFILE TYPE. On next
  * login, Anya presents the missing data points as a SERIES OF NUMBERED
  * questions ("1 of N", "2 of N", …, "N of N" where N = the number of still-
- * missing data points), explaining this is needed before they can proceed.
+ * missing data points at login), explaining this is needed before they can
+ * proceed.
  *
  * Driven by the auth/onboarding payload's `profile_completion` summary
  * (authStore.profileCompletion). While it reports `blocked` for a non-admin,
  * this overlay renders a NON-DISMISSIBLE dialog walking the numbered questions
- * for the first incomplete profile; each answer POSTs to the completion-gate
- * endpoint, which persists the field and returns the advanced gate. When the
- * profile becomes complete the overlay clears itself.
+ * for the first incomplete profile. The question list + its stable N come from
+ * that one payload (each question already carries {index, total}); we walk it in
+ * order so the counter PROGRESSES 1→N rather than resetting as fields fill.
+ * Each answer POSTs to the completion-gate endpoint (persist + recompute); a
+ * response reporting completion ends the gate early.
  *
  * ADMINS ARE NEVER GATED (the backend resolves admins to an inert summary; this
  * is belt-and-suspenders). It never renders while a one-time forced welcome
@@ -41,33 +44,38 @@ export default function ProfileCompletionGate() {
   const setProfileCompletion = useAuthStore((s) => s.setProfileCompletion)
   const isAdmin = normalizeUserAdmin(user)
 
-  const initialGate = profileCompletion?.next ?? null
-  const [gate, setGate] = useState(initialGate)
-  const [gateKey] = useState(() => initialGate?.profile_id ?? null)
+  const next = profileCompletion?.next ?? null
+  // Freeze the numbered question list + profile id at mount for THIS profile, so
+  // the "X of N" counter progresses across answers instead of resetting.
+  const [session] = useState(() =>
+    next && Array.isArray(next.questions) && next.questions.length > 0
+      ? { profileId: next.profile_id, questions: next.questions, intro: next.intro }
+      : null,
+  )
+  const [pos, setPos] = useState(0)
   const [value, setValue] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
+  const [done, setDone] = useState(false)
 
-  // Re-seed local gate if the store's next-profile changes identity (e.g. a
-  // fresh login for a different incomplete profile).
   const active =
     isAuthenticated &&
     !isAdmin &&
     !forcedWelcomeVideo &&
     Boolean(profileCompletion?.blocked) &&
-    Boolean(gate) &&
-    Array.isArray(gate?.questions) &&
-    gate.questions.length > 0 &&
-    gate?.profile_id === gateKey
+    Boolean(session) &&
+    !done &&
+    pos < (session?.questions.length ?? 0)
 
-  const current = useMemo(
-    () => (active ? gate.questions[0] : null),
-    [active, gate],
-  )
+  if (!active) return null
 
-  if (!active || !current) return null
+  const current = session.questions[pos]
+  const profileId = session.profileId
 
-  const profileId = gate.profile_id
+  const finish = () => {
+    setDone(true)
+    setProfileCompletion({ ...(profileCompletion || {}), blocked: false, next: null })
+  }
 
   const handleSubmit = async (event) => {
     event?.preventDefault?.()
@@ -75,31 +83,31 @@ export default function ProfileCompletionGate() {
     setSubmitting(true)
     setError(null)
     try {
-      const next = await apiFetch(`/api/profiles/${profileId}/completion-gate/answer`, {
+      const result = await apiFetch(`/api/profiles/${profileId}/completion-gate/answer`, {
         method: 'POST',
         body: JSON.stringify({ question_id: current.id, value }),
       })
       setValue('')
-      if (next?.complete || !(next?.questions?.length > 0)) {
-        // This profile is done — clear the gate so the overlay stops blocking.
-        setProfileCompletion({
-          ...(profileCompletion || {}),
-          blocked: false,
-          next: null,
-        })
-        setGate(null)
+      // Server says the profile is fully complete → stop early.
+      if (result?.complete) {
+        finish()
         return
       }
-      setGate({ profile_id: profileId, ...next })
-    } catch (err) {
+      // Otherwise advance to the next numbered question; if this was the last,
+      // the profile is complete.
+      if (pos + 1 >= session.questions.length) {
+        finish()
+        return
+      }
+      setPos((p) => p + 1)
+    } catch {
       setError('Sorry — that did not save. Please try again.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  const answered = gate.filled_count ?? 0
-  const total = current.total
+  const isLast = current.index >= current.total
 
   return (
     <Dialog open onOpenChange={() => { /* non-dismissible: must be completed */ }}>
@@ -113,13 +121,16 @@ export default function ProfileCompletionGate() {
         <DialogHeader>
           <DialogTitle>Let’s finish your profile</DialogTitle>
           <DialogDescription>
-            {gate.intro ||
+            {session.intro ||
               'Before I can find funding that fits, I need a few required details about this profile. You can’t proceed until it’s complete.'}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="text-sm font-medium text-muted-foreground" data-testid="completion-gate-counter">
+          <div
+            className="text-sm font-medium text-muted-foreground"
+            data-testid="completion-gate-counter"
+          >
             Question {current.index} of {current.total}
           </div>
           <label className="block text-base font-medium" htmlFor="completion-gate-answer">
@@ -135,12 +146,9 @@ export default function ProfileCompletionGate() {
             placeholder="Type your answer…"
           />
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">
-              {answered} of {answered + total} required details filled
-            </span>
+          <div className="flex items-center justify-end">
             <Button type="submit" disabled={submitting || value.trim().length === 0}>
-              {submitting ? 'Saving…' : current.index >= current.total ? 'Finish' : 'Continue'}
+              {submitting ? 'Saving…' : isLast ? 'Finish' : 'Continue'}
             </Button>
           </div>
         </form>
