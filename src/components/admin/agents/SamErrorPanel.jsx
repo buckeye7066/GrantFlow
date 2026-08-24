@@ -54,7 +54,7 @@ function FindingDetailDialog({ finding, open, onOpenChange, onChanged }) {
         setError('This finding predates check-id tracking and cannot be scoped to a single re-check. Run a full diagnose instead.')
         return
       }
-      const res = await samApi.run({ mode: 'observe', checks: [finding.event_type], dryRun: true })
+      const res = await samApi.run({ mode: 'observe', checks: [finding.event_type] })
       const stillFailing = (res?.findings || []).some((f) => f.event_type === finding.event_type || f.title === finding.title)
       setRecheckResult(stillFailing ? 'still_failing' : 'resolved')
       if (!stillFailing) await updateFindingStatus('resolved')

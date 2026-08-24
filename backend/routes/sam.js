@@ -21,6 +21,7 @@
  */
 
 import { Router } from 'express'
+import { rejectDryRunBody } from '../utils/noDryRun.js'
 import { createLogger } from '../utils/logger.js'
 const qualityLog = createLogger('routes:sam')
 import {
@@ -199,10 +200,10 @@ function buildHttpProbe(req) {
 export const __testing__ = { buildHttpProbe, isLoopbackHttpHost }
 
 router.post('/run', adminOnly, async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
     const body = req.body ?? {}
     const mode = isValidMode(body.mode) ? String(body.mode).toLowerCase() : DEFAULT_MODE
-    const dryRun = body.dryRun !== false
     const checkIds = Array.isArray(body.checks) ? body.checks : null
 
     // Refuse repair-safe unless explicitly enabled by env AND admin.
@@ -220,7 +221,10 @@ router.post('/run', adminOnly, async (req, res) => {
       trigger: 'admin-ui',
       checkIds,
       fixIds: Array.isArray(body.fixIds) ? body.fixIds : [],
-      dryRun,
+      // dry_run removed from the route surface (owner no-dry-runs order).
+      // Repair application stays governed by mode + SAM_ALLOW_SAFE_REPAIR +
+      // samAuthorised — authorization, not a preview flag.
+      dryRun: false,
       maxFixes: Number.isFinite(body.maxFixes) ? body.maxFixes : 10,
       httpProbe: buildHttpProbe(req),
     })
@@ -232,6 +236,7 @@ router.post('/run', adminOnly, async (req, res) => {
 })
 
 router.post('/diagnose', adminOnly, async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
     const result = await runSam({
       db: req.db,
@@ -250,6 +255,7 @@ router.post('/diagnose', adminOnly, async (req, res) => {
 })
 
 router.post('/plan-repair', adminOnly, async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
     const result = await runSam({
       db: req.db,
@@ -295,6 +301,7 @@ router.post('/apply-safe-fixes', adminOnly, async (req, res) => {
 })
 
 router.post('/run-gates', adminOnly, async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
     const result = await runSam({
       db: req.db,

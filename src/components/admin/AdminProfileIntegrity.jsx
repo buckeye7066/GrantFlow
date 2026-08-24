@@ -70,12 +70,11 @@ export default function AdminProfileIntegrity() {
     refresh()
   }, [refresh])
 
-  const runRepair = async ({ dryRun }) => {
+  const runRepair = async () => {
     try {
       setRepairing(true)
       setRepairOutput(null)
       const payload = {
-        dry_run: dryRun === true,
         actions,
         options: {
           ...options,
@@ -85,14 +84,9 @@ export default function AdminProfileIntegrity() {
       const res = await post('/api/admin/profiles/integrity/repair', payload)
       setRepairOutput(res)
 
-      const planned = res?.reattach?.planned ?? res?.planned ?? res?.results?.planned ?? 0
       const applied = res?.reattach?.applied ?? res?.applied ?? res?.results?.applied ?? 0
-      if (dryRun !== false) {
-        toast({ title: 'Dry-run ready', description: `Planned ${planned} change(s)` })
-      } else {
-        toast({ title: 'Applied', description: `Applied ${applied} change(s)` })
-        await refresh()
-      }
+      toast({ title: 'Applied', description: `Applied ${applied} change(s)` })
+      await refresh()
     } catch (err) {
       toast({ title: 'Repair failed', description: err.message, variant: 'destructive' })
       setRepairOutput({ ok: false, error: err.message })
@@ -125,25 +119,17 @@ export default function AdminProfileIntegrity() {
             </Button>
 
             <Button
-              variant="outline"
-              onClick={() => runRepair({ dryRun: true })}
-              disabled={loading || repairing}
-            >
-              {repairing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Wrench className="w-4 h-4 mr-2" />}
-              Dry-run repair
-            </Button>
-
-            <Button
               variant="destructive"
               onClick={() => {
                 const ok = window.confirm(
                   'Apply integrity repair now?\n\nThis will update profile.user_id for matches and may delete orphaned deleted profiles if enabled.',
                 )
                 if (!ok) return
-                runRepair({ dryRun: false })
+                runRepair()
               }}
               disabled={loading || repairing}
             >
+              {repairing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Wrench className="w-4 h-4 mr-2" />}
               Apply repair
             </Button>
           </div>

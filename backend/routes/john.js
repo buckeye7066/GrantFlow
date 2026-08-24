@@ -28,6 +28,7 @@
  */
 
 import express from 'express'
+import { rejectDryRunBody } from '../utils/noDryRun.js'
 import crypto from 'crypto'
 
 import { db } from '../db/index.js'
@@ -118,6 +119,7 @@ router.get('/status', adminAuth, async (_req, res) => {
 })
 
 router.post('/run', adminAuth, async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
     assertDraftOnly() // guard the API too
     const body = req.body || {}
@@ -130,7 +132,6 @@ router.post('/run', adminAuth, async (req, res) => {
       mode,
       trigger: JOHN_TRIGGERS.ADMIN,
       maxDrafts: typeof body.maxDrafts === 'number' ? body.maxDrafts : undefined,
-      dryRun: !!body.dryRun,
       leadIds: Array.isArray(body.leadIds) ? body.leadIds : null,
       requireYanaQualified: typeof body.requireYanaQualified === 'boolean'
         ? body.requireYanaQualified
@@ -203,20 +204,20 @@ router.post('/create-test-draft', adminAuth, async (_req, res) => {
 
 // Admin: draft "a few quick questions" gap emails for incomplete profiles into the
 // owner's mailbox (dr.johnwhite@…) for review. DRAFT-ONLY, never sends. Gated by
-// GAP_EMAIL_DRAFTS_ENABLED unless { force:true }; supports { dry_run:true }.
+// GAP_EMAIL_DRAFTS_ENABLED unless { force:true }.
 router.post('/gap-emails/draft', adminAuth, async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
     assertDraftOnly()
     const body = req.body || {}
-    const dryRun = body.dry_run === true || body.dryRun === true
     const force = body.force === true
     const { draftGapEmailsForIncompleteProfiles } = await import('../services/profileGapEmailDrafts.js')
-    const provider = dryRun ? null : createOutlookProvider({ config: getJohnConfig(), logger: log })
-    if (!dryRun && !provider.ready) {
+    const provider = createOutlookProvider({ config: getJohnConfig(), logger: log })
+    if (!provider.ready) {
       return res.status(503).json({ ok: false, reason: 'provider_not_configured', missing: provider.missing })
     }
     const result = await draftGapEmailsForIncompleteProfiles(db, {
-      provider, dryRun, force,
+      provider, force,
       limit: Number.isFinite(Number(body.limit)) ? Number(body.limit) : 200,
       minCoverage: Number.isFinite(Number(body.min_coverage)) ? Number(body.min_coverage) : 0.5,
     })
@@ -331,15 +332,14 @@ router.post('/drafts/:id/revise', adminAuth, async (req, res) => {
  * enrichment bug that attached strangers' emails to leads (see
  * johnDraftPlausibilityPurge). Scoped to drafts whose recipient fails the same
  * plausibility gate the enricher now enforces; rows are ARCHIVED (re-draft
- * eligible), never marked deleted_by_user. Pass { dryRun: true } to preview.
+ * eligible), never marked deleted_by_user.
  */
 router.post('/purge-implausible-drafts', adminAuth, async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
-    const dryRun = req.body?.dryRun === true
-    const provider = dryRun ? null : createOutlookProvider({ config: getJohnConfig(), logger: log })
+    const provider = createOutlookProvider({ config: getJohnConfig(), logger: log })
     const result = await purgeImplausibleDrafts(db, {
       provider,
-      dryRun,
       limit: Number(req.body?.limit) || 200,
     })
     res.json({ ok: true, ...result })
@@ -361,14 +361,15 @@ router.post('/drafts/:id/archive', adminAuth, async (req, res) => {
 /**
  * Rewrite the body/subject of all of John's existing Outlook drafts to the
  * current email template (e.g. after a messaging change). Never sends — Graph
- * PATCH only. Pass { dryRun: true } to preview which drafts would change.
+ * PATCH only.
  */
 router.post('/drafts/refresh-bodies', adminAuth, async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
     assertDraftOnly()
     const body = req.body || {}
     const result = await refreshDraftBodies(db, {
-      dryRun: !!body.dryRun,
+      dryRun: false,
       limit: typeof body.limit === 'number' ? body.limit : undefined,
       logger: log,
     })

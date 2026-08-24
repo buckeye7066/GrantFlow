@@ -17,6 +17,7 @@
  */
 
 import express from 'express'
+import { rejectDryRunBody } from '../utils/noDryRun.js'
 import crypto from 'crypto'
 
 import { ensureProfileAccess } from '../utils/accessControl.js'
@@ -114,6 +115,7 @@ router.get('/status', adminOnly, async (req, res) => {
 })
 
 async function runWithMode(req, res, mode) {
+  if (rejectDryRunBody(req, res)) return
   try {
     const body = req.body || {}
     const requestedMode = body.mode || mode
@@ -124,7 +126,6 @@ async function runWithMode(req, res, mode) {
       mode: requestedMode,
       trigger: ROBERT_TRIGGERS.ADMIN_UI,
       profileIds: Array.isArray(body.profileIds) ? body.profileIds : null,
-      dryRun: body.dryRun === true,
       options: body,
     })
     await logAuditEvent(req.db, {
