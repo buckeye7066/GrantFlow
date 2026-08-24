@@ -74,6 +74,13 @@ const ENGINE_KIND_MAP = Object.freeze({
   // truthfulness gate) — same degrade path as no_progress: the resolver
   // produces the manual funder-contact packet.
   no_application_form: 'unknown_application_method',
+  // A logged-in scholarship-hub SPA (bold.org / scholarshipowl) whose apply
+  // control opens the application behind an in-app "Apply" button — not a native
+  // form and not a navigable URL. Hamilton cannot yet drive the in-SPA flow, so
+  // it degrades to the same manual/co-browse handoff as an unknown method (the
+  // distinct kind + detail carry the co-browse-with-saved-session guidance and
+  // let the future harvest build target it).
+  spa_apply_surface: 'unknown_application_method',
   too_many_pages: 'portal_anti_bot_block',
   click_failed: 'portal_anti_bot_block',
   // Full-page bot-protection interstitial (Cloudflare managed challenge / Akamai

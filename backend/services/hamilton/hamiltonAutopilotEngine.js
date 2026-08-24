@@ -68,6 +68,7 @@ import {
 import path from 'node:path'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { triagePage, PAGE_SURFACES } from './listingPageTriage.js'
+import { detectSpaApplySurface, spaApplyBlockerDetail } from './spaApplySurface.js'
 import { resolveConfirmationCaptureDir } from './hamiltonConfirmationArtifacts.js'
 import { resolveUploadsDir } from '../../utils/uploadsDir.js'
 import { startLiveScreencast, reportLiveStep, isLiveViewEnabled } from './hamiltonLiveView.js'
@@ -2064,6 +2065,26 @@ export async function runAutopilot({
         // awards (bold.org category, scholarships.com) must be decomposed into
         // per-award candidates, not treated as one dead informational page.
         if (filled.length === 0) {
+          // A logged-in scholarship-HUB SPA (bold.org / scholarshipowl) whose
+          // apply control opens the application behind an in-app "Apply" button —
+          // not a native form and not a navigable apply URL. Route it to an
+          // honest, distinct blocker (carrying co-browse-with-saved-session
+          // guidance) BEFORE the apply-nav follow below, so Hamilton never
+          // blind-clicks "Apply" on a no-essay award and triggers an unintended
+          // real submission. See spaApplySurface.js for the prod evidence.
+          const spaSurface = detectSpaApplySurface({
+            url: (() => { try { return page.url() } catch { return null } })(),
+            fieldCount: fields.length,
+            buttonTexts: submitButtons.map((b) => b.text),
+          })
+          if (spaSurface.isSpaApply) {
+            trace.push({ step: 'spa_apply_surface', detail: { hub: spaSurface.hub } })
+            return {
+              status: 'blocked', blocker_kind: 'spa_apply_surface',
+              blocker_detail: spaApplyBlockerDetail(spaSurface.display),
+              filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+            }
+          }
           const listing = await triageDeadEnd(page, fields.length)
           if (listing) {
             trace.push({ step: 'listing_page', detail: { from: 'no_application_form', signals: listing.triage.signals } })
