@@ -102,7 +102,6 @@ export class JohnAgentAdapter extends BaseAgentAdapter {
         // Force draftOnly unless explicitly authorised. johnOutreachSafety
         // throws if the runtime config disagrees, so this is double-locked.
         draftOnly: !allowSend,
-        dryRun: Boolean(options?.dry_run),
         operatorNote: directive,
       })
     } catch (err) {

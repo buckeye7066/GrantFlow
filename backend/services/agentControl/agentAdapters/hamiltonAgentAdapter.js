@@ -83,7 +83,6 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       return { ok: true, status: 'stopped', summary: { agent: 'hamilton', stopped: true } }
     }
     const enabled = options?.allow_hamilton_autopilot !== false
-    const dryRun = Boolean(options?.dry_run)
 
     // Snapshot queue depth so the event always reports something useful.
     let queueDepth = 0
@@ -105,20 +104,6 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
         ok: true,
         status: 'skipped',
         summary: { agent: 'hamilton', skipped: true, queue_depth: queueDepth },
-      }
-    }
-
-    if (dryRun) {
-      await signal?.recordEvent?.({
-        eventType: 'agent.hamilton.dry_run',
-        severity: 'info',
-        message: `Hamilton dry run — would process ${queueDepth} task(s).`,
-        data: { queue_depth: queueDepth, dry_run: true },
-      })
-      return {
-        ok: true,
-        status: 'completed',
-        summary: { agent: 'hamilton', dry_run: true, queue_depth: queueDepth },
       }
     }
 
