@@ -44,11 +44,9 @@ import {
   agencyOnlyProgramConflict,
 } from '../config/fundingResultFilters.js'
 import {
-  professionSignalTextFromSections,
-  resolveProfileProfessions,
-  assessProfessionEligibility,
   opportunityLockText,
 } from './eligibility/professionEligibility.js'
+import { professionApplicantConflict } from '../config/sourceClaims/professionApplicantConflict.js'
 import {
   hasDeclaredMilitaryAffiliation,
   assessServiceCommitmentEligibility,
@@ -4045,17 +4043,20 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // the row must be locked to exactly ONE recognised profession in its own
   // IDENTITY text, and the profile must declare a DIFFERENT recognised
   // profession in curated fields. Unknown either side → the gate says nothing.
+  // SCOPE-AWARE (Stage-2 slice 2): only an APPLICANT-scoped profession claim
+  // rejects. A profession word in the FUNDER's org name ("American Dental
+  // Association Foundation Grant") or a research/institutional row ("Nursing
+  // Research Centers") is not an applicant bar and no longer hard-rejects.
+  // Measured: the old both-sides gate rejected 270 profession-naming catalog rows
+  // for Robert; the scoped gate rejects 136 (the withheld are research grants,
+  // funder societies, schools and facilities).
   const professionSections = fullSections(sections, prof)
-  const professions = resolveProfileProfessions(professionSignalTextFromSections(professionSections))
-  const professionVerdict = assessProfessionEligibility({
-    itemText: opportunityLockText(opp),
-    professions,
-  })
-  if (professionVerdict.ineligible) {
-    reasons.push(`Profession-restricted program — restricted to ${professionVerdict.lock}, which this profile does not practise`)
+  const professionConflict = professionApplicantConflict(professionSections, opp)
+  if (professionConflict) {
+    reasons.push(professionConflict.reason)
     return {
       decision: 'REJECT',
-      explanation: `This program is restricted to the ${professionVerdict.lock} profession; the profile's declared field is different.`,
+      explanation: `${professionConflict.reason}.`,
       reasons,
     }
   }
