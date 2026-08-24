@@ -32,7 +32,6 @@ export default function AdminRobertConsole() {
     mode: 'observe',
     profileIds: [],
     maxProfiles: 10,
-    dryRun: true,
     autoIngestVerified: false,
     createRecommendations: true,
     deliverToasts: true,
