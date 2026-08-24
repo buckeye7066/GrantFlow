@@ -2,7 +2,6 @@
 // EVA Windows edge runner — CLI entry.
 //
 //   eva-runner --selftest     run the fixture-only selftest (no real apps, no upload)
-//   eva-runner --dry-run      resolve apps + build the payload but DO NOT launch apps or upload
 //   eva-runner                a real run: launch feasible apps, run journeys, upload signed results
 //   eva-runner --catchup      force the wake-from-sleep catch-up path
 //
@@ -32,10 +31,17 @@ async function main() {
 
   const cfg = loadRunnerConfig()
   ensureDataDir(cfg)
-  const dryRun = args.has('--dry-run')
+  // NO DRY RUNS (owner order 2026-08-13, permanent): every run of this tool does
+  // REAL work. The flag is removed OUTRIGHT rather than ignored — an invocation
+  // naming it FAILS loudly, so a scheduled task or launcher still passing it is
+  // surfaced instead of silently doing a real run the caller did not expect.
+  if (args.has('--dry-run') || args.has('--dryrun') || args.has('--report-only')) {
+    console.error('[eva-runner] --dry-run was REMOVED: every run does real work. Re-invoke without it.')
+    process.exit(2)
+  }
   const forceCatchup = args.has('--catchup')
 
-  if (!dryRun && !cfg.secret) {
+  if (!cfg.secret) {
     console.error('[eva-runner] EVA_RUNNER_SECRET is not set — cannot sign uploads. Set it in the environment (never in source).')
     // Still send a heartbeat is impossible without the secret; exit non-zero.
     process.exit(2)
@@ -49,7 +55,7 @@ async function main() {
 
   // Always send a heartbeat first, so even a run that ultimately can't test
   // anything is visible at the coordinator.
-  if (!dryRun) {
+  {
     await sendHeartbeat({ cfg, status: 'testing', note: isCatchup ? 'catch-up run' : 'scheduled run' }).catch(() => {})
   }
 
@@ -72,7 +78,7 @@ async function main() {
     // agent's live WIP: reported as stale_tree, never touched.
     let gitState = captureGitState(app.local_path)
     let gitSync = null
-    if (!dryRun && gitState.available) {
+    if (gitState.available) {
       gitSync = maybeFastForward(app.local_path, gitState)
       if (gitSync.attempted) {
         console.log(`[git] ${app.app_id}: auto-sync ${gitSync.ok ? 'ok' : `FAILED: ${gitSync.error}`} (was ${describeGitState(gitState)})`)
@@ -108,7 +114,7 @@ async function main() {
     // refuse to boot without a value looked broken when they were merely
     // unconfigured.
     const { env: launchEnv } = resolveLaunchEnv({ app, manifest })
-    if (!dryRun) {
+    {
       const pre = await checkPrerequisites({ manifest, resolvedEnv: launchEnv })
       if (pre.unmet.length) {
         pushResult(blockedAppResult({ app, manifest, unmet: pre.unmet, durationMs: Date.now() - started }))
@@ -126,7 +132,7 @@ async function main() {
       // With `journeys: []` those findings could never resolve and re-rendered
       // in the owner's email forever ("recurring", last pass never).
       let startupJourney = null
-      if (!dryRun && isWeb) {
+      if (isWeb) {
         launch = await launchWebApp({ app, manifest, launchEnv, log: (m) => console.log(m) })
         baseUrl = launch.baseUrl || baseUrl
         if (launch.launched && !launch.ready) {
@@ -142,13 +148,13 @@ async function main() {
           }
         }
       }
-      const journeys = await runAppJourneys({ app, manifest, baseUrl, dryRun })
+      const journeys = await runAppJourneys({ app, manifest, baseUrl })
       if (startupJourney) journeys.unshift(startupJourney)
       pushResult({
         app_id: app.app_id,
         display_name: app.display_name,
         repo: app.repo,
-        app_status: dryRun ? 'not_run' : 'tested',
+        app_status: 'tested',
         duration_ms: Date.now() - started,
         feature_coverage: manifest.feature_coverage || undefined,
         journeys,
@@ -168,19 +174,13 @@ async function main() {
 
   const payload = buildPayload({
     runnerId: cfg.runnerId,
-    environment: dryRun ? 'fixture' : cfg.environment,
+    environment: cfg.environment,
     runId: `${cfg.runnerId}-${today}-${Date.now()}`,
     startedAt,
     completedAt: new Date().toISOString(),
     appResults,
     catchup: !!isCatchup,
   })
-
-  if (dryRun) {
-    console.log(JSON.stringify(payload, null, 2))
-    console.log(`\n[eva-runner] DRY RUN — resolved ${appResults.length} app(s); nothing launched or uploaded.`)
-    process.exit(0)
-  }
 
   const up = await uploadResult({ cfg, payload })
   if (up.ok) {
