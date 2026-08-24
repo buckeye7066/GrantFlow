@@ -90,19 +90,44 @@ function readBasic(profile) {
   }
 }
 
+// Assemble the applicant's mailing address WITHOUT doubling the city/state.
+// `basic_information.address` is often a full one-field address
+// ("3940 Eveningside Dr. NE\nCleveland, TN 37312") while city/state/zip are ALSO
+// stored separately — joining all of them printed
+// "…Cleveland, TN 37312, Cleveland, TN". Newlines in the blob become ", ".
+export function formatMailingAddress(basic) {
+  const line1 = String(basic?.address1 || '').replace(/\s*\r?\n\s*/g, ', ').trim()
+  const rest = [basic?.address2, basic?.city, basic?.state, basic?.zip]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean)
+  // A street line that already carries a comma AND a ZIP (or the city name) is a
+  // complete one-field address; appending city/state/zip again just doubles it.
+  const looksComplete = /,/.test(line1) && (
+    /\b\d{5}(-\d{4})?\b/.test(line1)
+    || (basic?.city && line1.toLowerCase().includes(String(basic.city).toLowerCase()))
+  )
+  const full = looksComplete ? line1 : [line1, ...rest].filter(Boolean).join(', ')
+  return full || '[ MISSING — mailing address ]'
+}
+
 function readStudent(profile) {
   const apps = pick(profile, ['university_applications.applications']) || []
   const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : {}
   return {
-    school: firstApp.name || pick(profile, ['student_info.school_name']) || '',
-    major: firstApp.major || firstApp.program || pick(profile, ['student_info.major']) || '',
-    degree_level: firstApp.degree_level || pick(profile, ['student_info.degree_level']) || '',
+    // Read the CANONICAL education section too, not only university_applications /
+    // student_info — a profile carries its major/school/GPA in `education.*` (and
+    // its academic status under basic_information.academic_status), so a packet
+    // that read only the former printed "[optional]" for data that was on file
+    // (Anastasia's education.intended_major = "Forensic Science").
+    school: firstApp.name || pick(profile, ['student_info.school_name', 'education.current_institution', 'basic_information.current_school', 'education.schools.name']) || '',
+    major: firstApp.major || firstApp.program || pick(profile, ['student_info.major', 'education.intended_major', 'education.major', 'student_portal_plan.major']) || '',
+    degree_level: firstApp.degree_level || pick(profile, ['student_info.degree_level', 'education.highest_level', 'basic_information.academic_status.education_level']) || '',
     student_id: firstApp.student_id || pick(profile, ['student_info.student_id']) || '',
-    gpa: pick(profile, ['student_info.gpa', 'gpa']) || '',
-    act: pick(profile, ['student_info.act_score', 'act_score']) || '',
-    sat: pick(profile, ['student_info.sat_score', 'sat_score']) || '',
+    gpa: pick(profile, ['student_info.gpa', 'gpa', 'education.gpa', 'basic_information.academic_status.gpa']) || '',
+    act: pick(profile, ['student_info.act_score', 'act_score', 'education.act_score', 'basic_information.academic_status.act_score']) || '',
+    sat: pick(profile, ['student_info.sat_score', 'sat_score', 'education.sat_score', 'basic_information.academic_status.sat_score']) || '',
     expected_graduation: firstApp.expected_graduation || pick(profile, ['student_info.expected_graduation']) || '',
-    fafsa_status: pick(profile, ['financial_information.fafsa_status', 'fafsa_status']) || '',
+    fafsa_status: pick(profile, ['financial_information.fafsa_status', 'fafsa_status', 'education.fafsa_status']) || '',
     household_income: pick(profile, ['financial_information.household_income', 'household.income']) || '',
     household_size: pick(profile, ['financial_information.household_size', 'household.size']) || '',
   }
@@ -198,7 +223,7 @@ ${fullName}`,
 `Name:           ${[basic.first_name, basic.last_name].filter(Boolean).join(' ') || '[ MISSING — name ]'}
 Email:          ${requireField('Email', basic.email, 'email') || '[ MISSING ]'}
 Phone:          ${basic.phone || '[ optional ]'}
-Address:        ${[basic.address1, basic.address2, basic.city, basic.state, basic.zip].filter(Boolean).join(', ') || '[ MISSING — mailing address ]'}
+Address:        ${formatMailingAddress(basic)}
 School:         ${student.school || '[ optional ]'}
 Major / program:${student.major || '[ optional ]'}
 Degree level:   ${student.degree_level || '[ optional ]'}
@@ -251,7 +276,7 @@ ${(opp.eligibility_text || opp.eligibility || '[ The opportunity record does not
 Applicant fit notes:
 - School: ${student.school || '[ not on file ]'}
 - Program: ${student.major || '[ not on file ]'}
-- Citizenship: ${pick(profile, ['basic_information.citizenship', 'citizenship']) || '[ not on file ]'}
+- Citizenship: ${pick(profile, ['basic_information.citizenship', 'demographics.citizenship', 'citizenship']) || '[ not on file ]'}
 - State of residence: ${basic.state || '[ not on file ]'}`,
   })
 
