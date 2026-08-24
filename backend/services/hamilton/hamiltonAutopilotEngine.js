@@ -1042,6 +1042,18 @@ function isPlausibleConfirmationReference(value, { explicit = false } = {}) {
   if (!candidate || candidate.length < 6 || candidate.length > 80) return false
   if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(candidate)) return false
   if (/^[a-z]+$/.test(candidate)) return false
+  // A DOM SLUG IS NOT A REFERENCE. The single-lowercase-word guard above did
+  // not catch several words joined by hyphens, and the `explicit` path
+  // deliberately does not require a digit (a digitless ALL-CAPS id is real).
+  // Prod 2026-08-24: across 3,292 runs the ONLY confirmation_reference values
+  // in the database were three copies of the scraped element id
+  // "children-notification-children-notification" — recorded on one run marked
+  // 'submitted' and on TWO marked 'failed', which is itself proof it describes
+  // no submission outcome. A confirmation reference on a submitted run is
+  // accepted as durable proof, so one bogus value is the difference between
+  // "never confirmed" and a surface claiming a submission. A FALSE proof is
+  // worse than no proof. ALL-CAPS / mixed-case / digit-bearing ids still pass.
+  if (/^[a-z]+(?:-[a-z]+)+$/.test(candidate)) return false
   if (/\b(designed|through|submit|submitted|application|confirmation|reference|number|thanks)\b/i.test(candidate)) return false
   if (explicit) return true
   return /\d/.test(candidate)
