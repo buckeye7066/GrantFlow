@@ -61,6 +61,7 @@ import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot, sanitizeListingSnapshotForPersistence } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
+import { makeListingApplyItem } from './listingApplyRunner.js'
 import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './hamiltonConfirmationArtifacts.js'
 import { runContactHandoverAfterSubmission } from './hamiltonContactHandover.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
@@ -2473,12 +2474,35 @@ async function runAutopilotPathway(db, {
     return { task: taskAfterEngine, classification, autopilot_run: run.id, autopilot_result: engineResult, cancelled: true }
   }
 
-  if (engineResult?.blocker_kind === 'listing_page' && engineResult?.listing_snapshot) {
+  if (!options?._listingChild && engineResult?.blocker_kind === 'listing_page' && engineResult?.listing_snapshot) {
     const ephemeralListingSnapshot = engineResult.listing_snapshot
     engineResult.listing_snapshot = sanitizeListingSnapshotForPersistence(ephemeralListingSnapshot)
+    // GAP 2 CLOSED — wire an applyItem runner into decomposeListing so an ACCEPTed
+    // award with a real apply surface re-enters the EXISTING per-task fill/submit
+    // flow. Built ONLY when the PARENT run is authorized (full automation +
+    // allow_auto_submit); consent is forwarded VERBATIM and NEVER widened. The
+    // child run re-enters automateSingleSource with `_listingChild:true`, which
+    // suppresses re-decomposition (recursion guard above) — its own evidence gate
+    // is the sole authority on whether the child is 'submitted'. Fan-out stays
+    // env-bounded by HAMILTON_LISTING_MAX_APPLIES inside decomposeListing.
+    const listingApplyItem = (fullAutomationActive && allowAutoSubmit)
+      ? makeListingApplyItem({
+        allowAutoSubmit,
+        runChildApply: async ({ opportunityId }) => {
+          const childRun = await automateSingleSource(db, {
+            profile,
+            profileId: task.profile_id,
+            userId,
+            source: { opportunity_id: opportunityId },
+            options: { ...(options || {}), _listingChild: true, allow_auto_submit: true },
+          }).catch((err) => ({ autopilot_result: { status: 'failed', blocker_kind: 'apply_error', detail: err?.message || String(err) } }))
+          return childRun?.autopilot_result || { status: childRun?.task?.status || 'blocked', blocker_kind: 'no_result' }
+        },
+      })
+      : null
     const decomposition = await decomposeListing(
       { db, profile, profileSections: profile?.sections || null, listing: ephemeralListingSnapshot },
-      { log: (m, d) => { void m; void d } },
+      { log: (m, d) => { void m; void d }, applyItem: listingApplyItem },
     ).catch((err) => ({ error: err?.message || String(err) }))
 
     engineResult.listing_decomposition = decomposition
