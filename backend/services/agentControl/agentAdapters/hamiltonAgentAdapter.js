@@ -194,6 +194,9 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     } catch { /* table missing on bare DBs — empty list is fine */ }
 
     const results = []
+    // Tasks that returned without an autopilot run ever being created, and why.
+    let noRun = 0
+    const noRunReasons = new Map()
     let processed = 0
     let failed = 0
     let blocked = 0
@@ -230,7 +233,28 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
           // runs from the route omit it and run immediately.
           options: { control_run_id: controlRunId, autonomous: true },
         })
-        results.push({ task_id: task.id, ok: true, status: r?.task?.status || 'unknown' })
+        // A RETURN IS NOT WORK. automateSingleSource has ~15 early-return paths
+        // that never reach createAutopilotRun (unknown application method, no
+        // usable URL, packet-only, fafsa-link, run-loop tripwire, ...). Each
+        // returns a truthy object, so counting "did not throw" as processed
+        // made a tick that advanced NOTHING log as a clean success. Prod
+        // 2026-08-24: every 5-minute tick reported
+        // `{ attempted: 5, processed: 5, failed: 0 }` while the database gained
+        // ZERO autopilot runs for 32+ hours. Track whether a run was actually
+        // opened, and why not when it wasn't.
+        const producedRun = Boolean(r?.autopilot_run)
+        if (!producedRun) {
+          noRun += 1
+          const why = String(r?.reason || (r?.deferred ? 'deferred' : '') || 'no_run_created')
+          noRunReasons.set(why, (noRunReasons.get(why) || 0) + 1)
+        }
+        results.push({
+          task_id: task.id,
+          ok: true,
+          status: r?.task?.status || 'unknown',
+          autopilot_run: r?.autopilot_run || null,
+          reason: r?.reason || null,
+        })
         processed += 1
         if (r?.task?.status === 'blocked') blocked += 1
       } catch (err) {
@@ -248,8 +272,17 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     // Honest NOOP: an empty queue is not "completed work" — report it as a noop
     // with a reason (charter AGENT_NOOP_CONDITIONS: say WHY nothing happened),
     // so dashboards that surface only `status` don't read idle as a green run.
-    const isNoop = !stopped && tasks.length === 0
+    // An empty queue is a noop — and so is a FULL queue where not one task
+    // opened a run. Both are "nothing happened"; only the second one used to
+    // report itself as completed work.
+    const emptyQueue = !stopped && tasks.length === 0
+    const noneProducedRun = !stopped && tasks.length > 0 && noRun === tasks.length
+    const isNoop = emptyQueue || noneProducedRun
     const status = stopped ? 'stopped' : isNoop ? 'noop' : 'completed'
+    const noRunDetail = [...noRunReasons.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([why, n]) => `${why}×${n}`)
+      .join(', ')
     const summary = {
       agent: 'hamilton',
       queue_depth: queueDepth,
@@ -258,7 +291,11 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       failed,
       blocked,
       stopped,
-      ...(isNoop ? { noop_reason: 'empty_queue' } : {}),
+      no_run: noRun,
+      no_run_reasons: noRunDetail || null,
+      ...(isNoop
+        ? { noop_reason: emptyQueue ? 'empty_queue' : `no_task_opened_a_run: ${noRunDetail || 'unknown'}` }
+        : {}),
       directive_applied: directive || null,
       directive_scoped_profile: directiveProfile ? { id: directiveProfile.id, display_name: directiveProfile.display_name } : null,
       results,
@@ -270,7 +307,9 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       message: stopped
         ? `Hamilton stopped after processing ${processed} of ${tasks.length} task(s).`
         : isNoop
-          ? 'Hamilton had no application tasks to process (empty queue).'
+          ? (emptyQueue
+            ? 'Hamilton had no application tasks to process (empty queue).'
+            : `Hamilton attempted ${tasks.length} task(s) and NONE opened an autopilot run (${noRunDetail || 'no reason reported'}) — nothing advanced.`)
           : `Hamilton processed ${processed} task(s) (${failed} failed, ${blocked} blocked).`,
       data: summary,
     })
