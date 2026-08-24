@@ -16,6 +16,7 @@ import { runAppJourneys, buildPayload } from '../src/runner.mjs'
 import { launchWebApp } from '../src/launcher.mjs'
 import { resolveLaunchEnv, checkPrerequisites } from '../src/prereq.mjs'
 import { blockedAppResult, startupFailedAppResult } from '../src/appOutcome.mjs'
+import { captureGitState, maybeFastForward, annotateAppResultWithGitState, describeGitState } from '../src/gitState.mjs'
 import { uploadResult, sendHeartbeat } from '../src/uploader.mjs'
 
 const WEB_RUNTIMES = new Set(['web', 'mobile-web'])
@@ -60,13 +61,34 @@ async function main() {
   const startedAt = new Date().toISOString()
   const appResults = []
   for (const app of feasible) {
+    // GIT TRUTH before anything else touches the app's tree. The owner's policy
+    // is "done means merged to origin/main", but the runner tests each app's
+    // LOCAL tree — which for weeks was another branch / dirty / behind, so
+    // fixes merged on GitHub were never what the nightly tested and findings
+    // recurred with no explanation. Capture {branch, sha, dirty, ahead/behind}
+    // (fetch tolerated offline), fast-forward ONLY a clean main tree that is
+    // merely behind, and attach the state to every result so Anya's email can
+    // show WHAT CODE was tested. A dirty tree / non-main branch is another
+    // agent's live WIP: reported as stale_tree, never touched.
+    let gitState = captureGitState(app.local_path)
+    let gitSync = null
+    if (!dryRun && gitState.available) {
+      gitSync = maybeFastForward(app.local_path, gitState)
+      if (gitSync.attempted) {
+        console.log(`[git] ${app.app_id}: auto-sync ${gitSync.ok ? 'ok' : `FAILED: ${gitSync.error}`} (was ${describeGitState(gitState)})`)
+        if (gitSync.ok) gitState = captureGitState(app.local_path, { fetch: false })
+      }
+    }
+    console.log(`[git] ${app.app_id}: ${describeGitState(gitState)}`)
+    const pushResult = (result) => appResults.push(annotateAppResultWithGitState(result, gitState, gitSync))
+
     const manifest = loadManifest(app.local_path, app.app_id)
     if (!manifest) {
-      appResults.push({ app_id: app.app_id, display_name: app.display_name, app_status: 'manual_required', blocker_reason: 'no qa/user-journeys.json manifest found', duration_ms: 0, journeys: [] })
+      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'manual_required', blocker_reason: 'no qa/user-journeys.json manifest found', duration_ms: 0, journeys: [] })
       continue
     }
     if (app.runtime_status === 'blocked_by_external_service') {
-      appResults.push({ app_id: app.app_id, display_name: app.display_name, app_status: 'blocked', blocker_reason: app.blocker || 'external service unavailable', duration_ms: 0, journeys: [] })
+      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'blocked', blocker_reason: app.blocker || 'external service unavailable', duration_ms: 0, journeys: [] })
       continue
     }
     // Launch real apps the way each manifest declares: for web apps, spawn the
@@ -89,7 +111,7 @@ async function main() {
     if (!dryRun) {
       const pre = await checkPrerequisites({ manifest, resolvedEnv: launchEnv })
       if (pre.unmet.length) {
-        appResults.push(blockedAppResult({ app, manifest, unmet: pre.unmet, durationMs: Date.now() - started }))
+        pushResult(blockedAppResult({ app, manifest, unmet: pre.unmet, durationMs: Date.now() - started }))
         continue
       }
     }
@@ -108,7 +130,7 @@ async function main() {
         launch = await launchWebApp({ app, manifest, launchEnv, log: (m) => console.log(m) })
         baseUrl = launch.baseUrl || baseUrl
         if (launch.launched && !launch.ready) {
-          appResults.push(startupFailedAppResult({ app, manifest, launch, baseUrl, durationMs: Date.now() - started }))
+          pushResult(startupFailedAppResult({ app, manifest, launch, baseUrl, durationMs: Date.now() - started }))
           continue
         }
         if (launch.launched && launch.ready) {
@@ -122,7 +144,7 @@ async function main() {
       }
       const journeys = await runAppJourneys({ app, manifest, baseUrl, dryRun })
       if (startupJourney) journeys.unshift(startupJourney)
-      appResults.push({
+      pushResult({
         app_id: app.app_id,
         display_name: app.display_name,
         repo: app.repo,
@@ -132,7 +154,7 @@ async function main() {
         journeys,
       })
     } catch (err) {
-      appResults.push({ app_id: app.app_id, display_name: app.display_name, app_status: 'startup_failed', blocker_reason: String(err?.message || err).slice(0, 300), duration_ms: Date.now() - started, journeys: [] })
+      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'startup_failed', blocker_reason: String(err?.message || err).slice(0, 300), duration_ms: Date.now() - started, journeys: [] })
     } finally {
       if (launch && launch.launched) {
         try {
