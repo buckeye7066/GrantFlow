@@ -3,8 +3,9 @@
  *
  * WHY THIS EXISTS (2026-08-24, owner north star — Hamilton finishes portals
  * autonomously). Measured on prod: every one of the live SPA-hub profiles
- * (Robert 6b3c75ec…, Anastasia c4a92724…, Olivia profile-olivia-beltran) carries
- * ~5 bold.org award pages, Robert holds VALID bold.org/scholarshipowl sessions —
+ * (two student profiles and a wellness-LLC profile) carries
+ * ~5 bold.org award pages, one of them holds VALID bold.org/scholarshipowl
+ * sessions —
  * and Hamilton reaches ZERO confirmed external submissions on them. Three gaps
  * (see spaApplySurface.js for the prod DOM evidence) closed the door:
  *   1. `extractListingAwardItems` only kept an applyUrl that was an <a href>, so a

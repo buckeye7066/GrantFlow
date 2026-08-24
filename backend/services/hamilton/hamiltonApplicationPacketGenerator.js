@@ -118,7 +118,7 @@ function readStudent(profile) {
     // student_info — a profile carries its major/school/GPA in `education.*` (and
     // its academic status under basic_information.academic_status), so a packet
     // that read only the former printed "[optional]" for data that was on file
-    // (Anastasia's education.intended_major = "Forensic Science").
+    // (a real student profile carried education.intended_major on file).
     school: firstApp.name || pick(profile, ['student_info.school_name', 'education.current_institution', 'basic_information.current_school', 'education.schools.name']) || '',
     major: firstApp.major || firstApp.program || pick(profile, ['student_info.major', 'education.intended_major', 'education.major', 'student_portal_plan.major']) || '',
     degree_level: firstApp.degree_level || pick(profile, ['student_info.degree_level', 'education.highest_level', 'basic_information.academic_status.education_level']) || '',

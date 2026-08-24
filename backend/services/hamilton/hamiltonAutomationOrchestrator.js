@@ -413,7 +413,8 @@ function mapAutomationTypeToFinishedStatus(automationType) {
 /**
  * A packet is only "ready" (ready_to_print_mail / ready_to_fax / ready_to_email)
  * when its submission channel is RESOLVED and the info THAT channel needs is on
- * file. Anastasia's Cade Foundation packet was handed over as ready-to-mail with
+ * file. A real student profile's Cade Foundation packet was handed over as
+ * ready-to-mail with
  * NO funder mailing address and an unresolved channel ("Hamilton could not
  * determine the submission channel") — an unmailable packet presented as done.
  *
