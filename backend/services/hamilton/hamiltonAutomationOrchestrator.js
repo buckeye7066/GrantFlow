@@ -409,6 +409,51 @@ function mapAutomationTypeToFinishedStatus(automationType) {
   }
 }
 
+/**
+ * A packet is only "ready" (ready_to_print_mail / ready_to_fax / ready_to_email)
+ * when its submission channel is RESOLVED and the info THAT channel needs is on
+ * file. Anastasia's Cade Foundation packet was handed over as ready-to-mail with
+ * NO funder mailing address and an unresolved channel ("Hamilton could not
+ * determine the submission channel") — an unmailable packet presented as done.
+ *
+ * This mirrors the auto-submit evidence gate: a mail packet with no address is
+ * not "done", it is BLOCKED on the address. Returns a blocking `missing` item so
+ * the same missing-info alert + review surface name exactly what is needed.
+ *
+ * @returns {{ ok: boolean, reason?: string, missing?: {kind,key,label,required} }}
+ */
+export function assessPacketSubmittability({ automationType, mailingInstructions }) {
+  const mi = mailingInstructions || {}
+  const has = (v) => (typeof v === 'string' ? v.trim().length > 0 : Boolean(v))
+  const block = (key, label, reason) => ({
+    ok: false, reason, missing: { kind: 'field', key, label, required: true },
+  })
+  switch (automationType) {
+    case 'mail':
+      return has(mi.mailing_address) ? { ok: true }
+        : block('funder_mailing_address', 'Funder mailing address', 'no mailing address on file')
+    case 'fax':
+      return has(mi.fax) ? { ok: true }
+        : block('funder_fax', 'Funder fax number', 'no fax number on file')
+    case 'email':
+      return has(mi.email) ? { ok: true }
+        : block('funder_submission_email', 'Funder submission email', 'no submission email on file')
+    case 'portal':
+      return has(mi.portal_url) ? { ok: true }
+        : block('portal_url', 'Funder portal URL', 'no portal URL on file')
+    // A downloadable form the applicant submits per the funder's own instructions,
+    // and the two channels that require no funder-side target, are submittable.
+    case 'pdf_docx':
+    case 'no_application':
+    case 'auto_profile':
+      return { ok: true }
+    default:
+      // Unknown/undetermined channel — there is no way to submit this yet.
+      return block('submission_channel', 'How to submit (funder submission channel)',
+        'submission channel could not be determined')
+  }
+}
+
 function mapAutomationTypeToPipelineStage(automationType) {
   switch (automationType) {
     case 'mail':
@@ -980,6 +1025,19 @@ async function runDocumentPathway(db, {
   // never collide with packet field keys under the (task, kind, key) unique.
   const combinedMissing = [...result.missing, ...proposalGaps]
 
+  // COMPLETENESS GATE (2026-08-24): a packet is only "ready" when it can
+  // actually be submitted. When the channel is unresolved, or its required
+  // target (mail address / fax / email / portal) is missing, the packet is
+  // BLOCKED on that fact — add it as a missing-info item so the review surface +
+  // alert name it, and downgrade the finished status below.
+  const submittability = assessPacketSubmittability({
+    automationType, mailingInstructions: result.mailing_instructions,
+  })
+  if (!submittability.ok && submittability.missing
+    && !combinedMissing.some((m) => m.key === submittability.missing.key)) {
+    combinedMissing.push(submittability.missing)
+  }
+
   // Persist outputs + missing info.
   await updateApplicationTask(db, task.id, {
     status: 'saving_documents',
@@ -1012,11 +1070,16 @@ async function runDocumentPathway(db, {
     },
   })
 
-  const finalStatus = mapAutomationTypeToFinishedStatus(automationType)
+  // A packet that cannot be submitted is NOT a finished, ready-to-send packet —
+  // it is blocked on the missing channel/target. Never present it as ready.
+  const finalStatus = submittability.ok
+    ? mapAutomationTypeToFinishedStatus(automationType)
+    : 'waiting_for_missing_info'
   await updateApplicationTask(db, task.id, {
     status: finalStatus,
-    lastAgentMessage:
-      `Hamilton saved the ${automationType.toUpperCase()} packet${proposalResult ? ' and a full MBA-level narrative proposal' : ''} under your profile's Documents and prepared submission instructions. ${combinedMissing.length > 0 ? `Hamilton flagged ${combinedMissing.length} item(s) that need human input.` : 'Review the draft, then mark it submitted when you are ready.'}`,
+    lastAgentMessage: submittability.ok
+      ? `Hamilton saved the ${automationType.toUpperCase()} packet${proposalResult ? ' and a full MBA-level narrative proposal' : ''} under your profile's Documents and prepared submission instructions. ${combinedMissing.length > 0 ? `Hamilton flagged ${combinedMissing.length} item(s) that need human input.` : 'Review the draft, then mark it submitted when you are ready.'}`
+      : `Hamilton drafted the packet, but it CANNOT be submitted yet — ${submittability.reason}. This is not a ready-to-send application; provide the flagged item(s) so Hamilton can finish it.`,
   })
 
   // Precise, field-deep-linking alert when the draft flagged things the user
