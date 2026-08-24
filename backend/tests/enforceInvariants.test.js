@@ -1219,7 +1219,7 @@ describe('enforceInvariants — runner', () => {
     // + pipeline_precision (2026-08-22, owner order 2026-08-21).
     // + mission_lane_match_scope (2026-08-22, the four-profile measurement).
     // + shared_listing_application_targets (2026-08-23, Coolidge/Live Más).
-    expect(summary.ran).toBe(65)
+    expect(summary.ran).toBe(66)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1310,6 +1310,7 @@ describe('enforceInvariants — runner', () => {
       // without rebranding matcher_version (item 43).
       'stale_match_explain_refresh',
       'stage_of_life_match_scope',
+      'field_of_study_match_scope',
       'no_dangling_matches',
       // RESULT FLOOR census (owner rule 2026-08-01, third clause). After every
       // scope/eligibility/linkage net AND after the dangling cleanup, so the

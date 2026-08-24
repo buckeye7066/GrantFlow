@@ -58,6 +58,7 @@ import { isPointerOpportunityRow } from '../config/linkLifecycleKinds.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
+import { fieldOfStudyConflict } from '../config/fieldOfStudyEligibility.js'
 import {
   deriveWebsitePurpose,
   websitePurposeConflict,
@@ -3907,6 +3908,24 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return {
       decision: 'REJECT',
       explanation: `${stageConflict.reason}.`,
+      reasons,
+    }
+  }
+
+  // FIELD OF STUDY (2026-08-23). A scholarship whose TITLE restricts itself to a
+  // specific vocational field the profile does NOT study is unwinnable — a
+  // paramedic cannot receive a "Nursing Scholarship" (Robert 6b3c75ec, whose
+  // structured major is "Paramedic", was pointed at the Marybelle Huggins
+  // Nursing Scholarship). Same shape as the stage gate: the restriction lives
+  // only in the title, the eligibility columns are empty, and it refuses ONLY on
+  // a provable specific-vs-specific mismatch. Silence on either side is neutral;
+  // a broad "healthcare"/"STEM" award never fires.
+  const fieldConflict = fieldOfStudyConflict(fullSections(sections, prof), opp)
+  if (fieldConflict) {
+    reasons.push(fieldConflict.reason)
+    return {
+      decision: 'REJECT',
+      explanation: `${fieldConflict.reason}.`,
       reasons,
     }
   }

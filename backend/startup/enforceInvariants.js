@@ -9124,6 +9124,155 @@ export async function enforceStageOfLifeMatchScope(db) {
 }
 
 /**
+ * INVARIANT: A SURFACED AWARD MATCHES THE PROFILE'S FIELD OF STUDY
+ * (2026-08-23 — the field-of-study twin of enforceStageOfLifeMatchScope).
+ *
+ * The per-call gate `fieldOfStudyConflict` lives in `makeDecision`, but the
+ * match store is a ROLLING SNAPSHOT, so a producer-side gate alone lands only
+ * after each profile's next crawl. This net purges the already-stored matches to
+ * awards a profile's DECLARED major provably cannot receive (a "Nursing
+ * Scholarship" for a Paramedic major). Measured on the 12 crawled profiles
+ * 2026-08-23: 18 such matches, every one a correct removal (Robert the paramedic
+ * carried Engineering/Nursing/Physician/CS/Teaching/Aviation awards; the 10
+ * profiles with no declared vocational major were untouched). Silence is neutral
+ * on both sides; only a provable specific-vs-specific mismatch is removed.
+ */
+export async function enforceFieldOfStudyMatchScope(db) {
+  return runInvariant('field_of_study_match_scope', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let fieldOfStudyConflict
+    try {
+      ;({ fieldOfStudyConflict } = await import('../config/fieldOfStudyEligibility.js'))
+    } catch (err) {
+      log.warn('field_of_study_match_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_FIELD_OF_STUDY_SCOPE) === false
+
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('field_of_study_match_scope: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    const oppCols = await listOpportunityColumns(db)
+    // Only title + sponsor carry the field requirement (identity fields); the
+    // gate reads no others, so the sweep need not fetch more.
+    const EVIDENCE_COLS = ['title', 'sponsor'].filter((c) => oppCols.size === 0 || oppCols.has(c))
+    if (!EVIDENCE_COLS.includes('title')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let scanned = 0
+    const violating = []
+    let profilesWithField = 0
+    for (const row of profileIds || []) {
+      if (violating.length >= limit) break
+      const ctx = await _loadProfileContextForInvariant(db, row.id)
+      if (!ctx) continue
+      let hasField = false
+      let candidates
+      try {
+        candidates = await db
+          .prepare(
+            `SELECT m.id AS match_id, m.profile_id, m.opportunity_id, ${EVIDENCE_COLS.map((c) => `o.${c}`).join(', ')}
+               FROM profile_opportunity_matches m
+               JOIN funding_opportunities o ON o.id = m.opportunity_id
+              WHERE m.profile_id = ?
+              LIMIT ?`,
+          )
+          .all(row.id, limit)
+      } catch (err) {
+        log.warn('field_of_study_match_scope: candidate query failed (non-fatal)', {
+          profile: row.id, error: String(err?.message || err),
+        })
+        continue
+      }
+      for (const c of candidates || []) {
+        scanned += 1
+        const conflict = fieldOfStudyConflict(ctx.sections ?? {}, c)
+        if (conflict) { violating.push({ ...c, conflict }); hasField = true }
+      }
+      if (hasField) profilesWithField += 1
+    }
+
+    const describe = (v) => `${v.title} (${v.conflict.classId}: "${v.conflict.phrase}" in ${v.conflict.field})`
+    if (countOnly) {
+      if (violating.length > 0) {
+        log.warn('awards outside the profile\'s declared field of study are surfaced (purge DISABLED via ENFORCE_FIELD_OF_STUDY_SCOPE=0)', {
+          wouldRepair: violating.length, scanned, examples: violating.slice(0, 3).map(describe),
+        })
+      }
+      return { scanned, repaired: 0, wouldRepair: violating.length, enforced: false }
+    }
+    if (violating.length === 0) return { scanned, repaired: 0, enforced: true }
+
+    let tasksCancelled = 0
+    const reconciled = []
+    try {
+      const { cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')
+      const terminal = ['submitted', 'completed', 'cancelled']
+      for (const v of violating) {
+        try {
+          const ph = terminal.map(() => '?').join(', ')
+          let tasks = []
+          try {
+            tasks = await db.prepare(`SELECT DISTINCT t.id
+              FROM application_tasks t
+              LEFT JOIN grants g ON g.id = t.grant_id AND g.profile_id = t.profile_id
+              WHERE t.profile_id = ?
+                AND (t.opportunity_id = ? OR g.funding_opportunity_id = ?)
+                AND t.status NOT IN (${ph})`).all(v.profile_id, v.opportunity_id, v.opportunity_id, ...terminal)
+          } catch (selectErr) {
+            const msg = String(selectErr?.message || selectErr).toLowerCase()
+            if (!(msg.includes('no such table') || msg.includes('no such column') || msg.includes('does not exist'))) throw selectErr
+            tasks = []
+          }
+          for (const task of tasks || []) {
+            await cancelApplicationTask(db, task.id, { actorRole: 'system', reason: v.conflict.reason })
+            tasksCancelled += 1
+          }
+          reconciled.push(v)
+        } catch (err) {
+          log.warn('field_of_study_match_scope: task reconciliation failed; retaining match', {
+            matchId: v.match_id, error: String(err?.message || err),
+          })
+        }
+      }
+    } catch (err) {
+      log.warn('field_of_study_match_scope: task reconciliation unavailable (non-fatal)', { error: String(err?.message || err) })
+    }
+    const ids = reconciled.map((v) => v.match_id)
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += 200) {
+      const slice = ids.slice(i, i + 200)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed matches to awards outside the profile\'s declared field of study', {
+      repaired, tasksCancelled, scanned,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map(describe),
+    })
+    return {
+      scanned,
+      repaired,
+      profilesWithField,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
  * INVARIANT: A STUDENT'S OWN STATE'S STUDENT AID REACHES THAT STUDENT
  * (2026-08-02 — the other half of the stage-gate work).
  *
@@ -10650,6 +10799,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // reentry). Runs immediately AFTER the recall gates so anything they added
   // this boot is held to the same bar in the SAME boot, not a boot late.
   steps.push(await enforceStageOfLifeMatchScope(db))
+  steps.push(await enforceFieldOfStudyMatchScope(db))
   // Surface-table hygiene: a persisted match whose catalog row was deleted
   // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
   // unusable ghost that inflates the matches view and wastes promote passes.
@@ -10924,5 +11074,6 @@ export const __testables = {
   enforceJohnDraftPlausibility,
   enforceProfileResultFloor,
   enforceStageOfLifeMatchScope,
+  enforceFieldOfStudyMatchScope,
   enforceStudentAidInStateRecall,
 }
