@@ -13,6 +13,7 @@ import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.j
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { recordSuccessfulLogin } from '../services/firstLoginNotifier.js'
 import { resolveGuidedCycleTourStatus, resolveForcedWelcomeVideo } from '../services/onboardingGates.js'
+import { resolveProfileCompletionForUser } from '../services/profileCompletionGate.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
 import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
 
@@ -814,6 +815,13 @@ async function buildUserPayload(db, userRow, profiles, activeProfileId) {
   // (returns null on any error) so login can never break on this lookup. null
   // for everyone with no unconsumed forced row → zero behavior change.
   const forcedWelcomeVideo = await resolveForcedWelcomeVideo(db, userRow)
+  // PROFILE-COMPLETION GATE (services/profileCompletionGate.js). Per-profile
+  // required-field completeness the frontend enforces on next login: while a
+  // non-admin's profile is missing required-for-its-type data points, Anya
+  // presents them as numbered questions before the user can proceed. Admins are
+  // NEVER gated. Fail-open (the resolver swallows its own errors) so login can
+  // never break on this lookup.
+  const profileCompletion = await resolveProfileCompletionForUser(db, userRow, profiles)
   return {
     id: userRow.id,
     display_name: userRow.display_name,
@@ -846,6 +854,8 @@ async function buildUserPayload(db, userRow, profiles, activeProfileId) {
     // identically whether the frontend just got this from a login response
     // or from a later bootstrap fetch.
     onboarding_completed_at: userRow.onboarding_completed_at ?? null,
+    // Per-profile required-field completion gate (null-safe; admins → inert).
+    profile_completion: profileCompletion,
     last_seen_manual_version: Number(userRow.last_seen_manual_version ?? 0),
     last_completed_tour_version: Number(userRow.last_completed_tour_version ?? 0),
     tour_dismissed_at: userRow.tour_dismissed_at ?? null,
