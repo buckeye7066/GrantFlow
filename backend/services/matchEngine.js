@@ -45,6 +45,11 @@ import {
 } from '../config/fundingResultFilters.js'
 import {
   opportunityLockText,
+  // Re-imported for the requirement-satisfaction floor's profile-profession
+  // resolution (the scoped profession GATE no longer needs them — it resolves
+  // internally — but the floor's deps do).
+  resolveProfileProfessions,
+  professionSignalTextFromSections,
 } from './eligibility/professionEligibility.js'
 import { professionApplicantConflict } from '../config/sourceClaims/professionApplicantConflict.js'
 import {
@@ -57,7 +62,11 @@ import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/ind
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
 import { fieldOfStudyConflict } from '../config/fieldOfStudyEligibility.js'
-import { fieldOfStudyApplicantConflict } from '../config/sourceClaims/core.js'
+import {
+  fieldOfStudyApplicantConflict,
+  deriveSourceClaims,
+  requirementSatisfaction,
+} from '../config/sourceClaims/core.js'
 import {
   deriveWebsitePurpose,
   websitePurposeConflict,
@@ -3308,6 +3317,58 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       `(${funderNeedsSatisfied.join(', ')}) — a broadly-eligible fund you qualify for, ` +
       `surfaced at ACCEPT despite stating few criteria`,
     )
+  }
+
+  // ── REQUIREMENT-SATISFACTION floor (false-NEGATIVE fix, 2026-08-24) ──
+  //
+  // The needs-only floor above lifts a narrow fund ONLY when the funder states a
+  // canonical NEED the profile matches. A genuinely-qualifying narrow fund often
+  // states its bar as a FIELD, a PROFESSION or a RESIDENCY instead ("Tennessee
+  // paramedic students") — needTypesSupported is empty or unrelated, so
+  // `fullSatisfaction` is false and the profile-overlap ratio buries it in
+  // REVIEW (§1f/§4c). This generalises the SAME lift to REQUIREMENT SATISFACTION
+  // over the source's APPLICANT-scoped claims: when the profile POSITIVELY
+  // satisfies EVERY applicant claim the source makes about itself (≥1 claim,
+  // zero unmet) and the SAME eligibility/geo gates are clean, the coverage is
+  // floored to ACCEPT — the needs path's twin, keyed on the same
+  // `deriveSourceClaims` producer + `applicantConflicts` dimension logic.
+  // SILENCE on a dimension is never satisfaction (we cannot confirm a
+  // requirement we hold no fact for), exactly as the needs path counts only
+  // positively-matched needs. Math.max: it never lowers a higher measured
+  // coverage, and the resource-kind / calibration / gate guards are identical.
+  if (
+    SCORING_MODEL === 'data_point' &&
+    inventoryCalibratable &&
+    !isResourceKindRow &&
+    satisfactionGatesClean &&
+    dataPointCoverage < SATISFACTION_ACCEPT_COVERAGE
+  ) {
+    let claimSatisfaction = null
+    try {
+      claimSatisfaction = requirementSatisfaction(
+        deriveSourceClaims(effectiveOpp),
+        fullSections(profileContext?.sections ?? null, effectiveProfile),
+        {
+          resolveProfileProfessions: (s) =>
+            resolveProfileProfessions(professionSignalTextFromSections(s)),
+          profileStates: () => profileStates(effectiveSignals, profileState),
+        },
+      )
+    } catch {
+      // Claim derivation must never take scoring down — MISSING = NEUTRAL.
+      claimSatisfaction = null
+    }
+    if (claimSatisfaction && claimSatisfaction.fullySatisfied) {
+      dataPointCoverage = SATISFACTION_ACCEPT_COVERAGE
+      const labels = claimSatisfaction.satisfied.map(
+        (c) => `${c.dimension.replace(/_/g, ' ')}: ${c.value}`,
+      )
+      reasons.push(
+        `Fully satisfies this funder's stated applicant requirement${claimSatisfaction.satisfied.length === 1 ? '' : 's'} ` +
+        `(${labels.join(', ')}) — a narrow fund you qualify for, surfaced at ACCEPT ` +
+        `despite touching few of your data points`,
+      )
+    }
   }
 
   // Behavior nudge (soft preference learning) still tips borderline scores.
