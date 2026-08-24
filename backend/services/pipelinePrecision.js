@@ -121,7 +121,54 @@ export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = t
   }
   const tags = parseMaybeJson(profileRow?.tags, [])
   if (Array.isArray(tags)) tags.forEach(addNeed)
+  // ORG/BUSINESS profiles declare their need through their structured TYPE +
+  // mission/sector tags, not a needs array — derive those too (structured only).
+  for (const derived of typeDerivedNeeds(profileRow, sections)) needs.add(derived)
   return [...needs]
+}
+
+// An ORG/BUSINESS profile does not fill a "needs" array the way an individual
+// does — its funding need is expressed through its structured TYPE and its
+// structured mission/sector TAGS (a small_business needs business funding; a
+// farm needs agriculture funding; a nonprofit needs what its focus_areas name).
+// So a small-business grant was being pruned from Olivia's pipeline for
+// "no_positive_declared_match" even though she IS a business, because the gate
+// only read need arrays she never fills. Derive the need from the STRUCTURED
+// type + tag fields — NEVER from the mission NARRATIVE prose (the prose-denial
+// class: "we don't need X" must never mint X). `canonicalNeed` returns null for
+// a type that is not itself a need (individual/family/nonprofit), so no junk
+// need is ever added; `small_business`→`business`, `farm`→`agriculture`,
+// `student`→`education` all resolve, which is correct.
+const TYPE_NEED_ROW_FIELDS = Object.freeze(['primary_type', 'type', 'profile_type'])
+const ORG_TYPE_DESCRIPTOR_FIELDS = Object.freeze(['organization_type', 'business_type', 'industry', 'sector', 'entity_type'])
+const ORG_TAG_ARRAY_FIELDS = Object.freeze([
+  'focus_areas', 'service_areas', 'program_areas', 'programs', 'sectors',
+  'industries', 'cause_areas', 'mission_areas',
+])
+
+/**
+ * Needs DERIVED from a profile's STRUCTURED type + mission/sector tags — the way
+ * an organization declares what it needs funding for. Structured fields only.
+ * @returns {string[]} canonical need ids
+ */
+export function typeDerivedNeeds(profileRow, sections) {
+  const out = new Set()
+  const add = (value) => {
+    const canonical = canonicalNeed(value)
+    if (canonical) out.add(canonical)
+  }
+  for (const field of TYPE_NEED_ROW_FIELDS) add(profileRow?.[field])
+  const sectionMap = sections && typeof sections === 'object' ? sections : {}
+  for (const section of Object.values(sectionMap)) {
+    const parsed = parseMaybeJson(section, null)
+    if (!parsed || typeof parsed !== 'object') continue
+    for (const field of ORG_TYPE_DESCRIPTOR_FIELDS) add(parsed[field])
+    for (const field of ORG_TAG_ARRAY_FIELDS) {
+      const arr = parsed[field]
+      if (Array.isArray(arr)) arr.forEach(add)
+    }
+  }
+  return [...out]
 }
 
 /**
@@ -187,6 +234,7 @@ export function evaluateDeclaredNeedCoverage(row, declaredNeeds) {
 export default {
   DECLARED_NEED_FIELDS,
   OPPORTUNITY_NEED_FIELDS,
+  typeDerivedNeeds,
   NEED_COVERAGE_DETAIL,
   canonicalNeed,
   declaredNeedsFrom,
