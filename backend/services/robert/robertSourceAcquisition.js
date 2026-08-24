@@ -52,7 +52,8 @@
 import crypto from 'crypto'
 import { createLogger } from '../../utils/logger.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
-import { decomposeListing as canonicalDecomposeListing } from '../hamilton/listingDecomposition.js'
+import { decomposeListing as canonicalDecomposeListing, listingHostSponsor } from '../hamilton/listingDecomposition.js'
+import { canonicalOpportunityKey } from '../../crawler-os/contract.js'
 import {
   PIPELINE_CATEGORY,
   FUNDER_LEAD_STATE,
@@ -648,6 +649,86 @@ export async function cleanupNonQualifyingAcquiredGrants(db, {
 }
 
 // ---------------------------------------------------------------------------
+// Decomposed-award sponsor backfill (dedup-safety for the sponsor fallback)
+// ---------------------------------------------------------------------------
+
+/**
+ * A decomposed hub award now carries a REAL sponsor at mint time — the sponsor
+ * its own text named, else the hub/listing host org (listingHostSponsor). But
+ * awards minted BEFORE that change sit in the catalog with a NULL sponsor and a
+ * canonical_opportunity_key computed WITHOUT one (`t:<title>`). Re-enumerating a
+ * hub this cycle mints the same award WITH the host sponsor → a DIFFERENT key
+ * (`t:<sponsor>::<title>`) → it would NOT dedupe against the old row and a
+ * duplicate would be created (the canonical near-duplicate identity invariant).
+ *
+ * This backfill aligns those prior rows FIRST: it attaches the same host sponsor
+ * and re-keys them, so this cycle's re-enumeration dedupes cleanly with zero new
+ * duplicates. It never fabricates (the host is exactly where the award was
+ * listed), never touches a row that already has a sponsor, and on a unique-key
+ * collision (a canonical twin already holds the re-keyed value — the row
+ * re-enumeration will dedupe against) it sets the sponsor for display but leaves
+ * the key so the unique index holds. Best-effort; bounded; idempotent.
+ *
+ * @returns { scanned, updated, rekeyed, collisions, noHost, failed, status }
+ */
+export async function backfillDecomposedSponsors(db, {
+  limit = boundedInt('ROBERT_DECOMPOSED_SPONSOR_LIMIT', 1000, 1),
+} = {}) {
+  const out = { scanned: 0, updated: 0, rekeyed: 0, collisions: 0, noHost: 0, failed: 0, status: null }
+  let rows
+  try {
+    rows = await db.prepare(
+      `SELECT id, title, source_url, application_url, canonical_opportunity_key
+         FROM funding_opportunities
+        WHERE (record_origin = 'scholarship_crawler' OR source = 'scholarship_crawler')
+          AND (sponsor IS NULL OR sponsor = '')
+        ORDER BY created_at ASC
+        LIMIT ?`,
+    ).all(limit)
+  } catch (err) {
+    out.status = `query:${String(err?.message || err).slice(0, 60)}`
+    return out
+  }
+  if (!rows?.length) return out
+
+  for (const row of rows) {
+    out.scanned += 1
+    const listingUrl = row.source_url || row.application_url || null
+    const sponsor = listingHostSponsor(listingUrl)
+    if (!sponsor) { out.noHost += 1; continue }
+    const newKey = canonicalOpportunityKey({
+      title: row.title,
+      sponsor,
+      apply_url: row.application_url || null,
+      info_url: row.source_url || null,
+    })
+    let collides = false
+    if (newKey && newKey !== row.canonical_opportunity_key) {
+      try {
+        const dup = await db.prepare(
+          'SELECT id FROM funding_opportunities WHERE canonical_opportunity_key = ? AND id <> ? LIMIT 1',
+        ).get(newKey, row.id)
+        collides = Boolean(dup)
+      } catch { collides = false }
+    }
+    try {
+      if (!newKey || collides || newKey === row.canonical_opportunity_key) {
+        await db.prepare('UPDATE funding_opportunities SET sponsor = ? WHERE id = ?').run(sponsor, row.id)
+        if (collides) out.collisions += 1
+      } else {
+        await db.prepare('UPDATE funding_opportunities SET sponsor = ?, canonical_opportunity_key = ? WHERE id = ?').run(sponsor, newKey, row.id)
+        out.rekeyed += 1
+      }
+      out.updated += 1
+    } catch (err) {
+      out.failed += 1
+      log.warn('decomposed-sponsor backfill: update failed (non-fatal)', { id: row.id, error: String(err?.message || err) })
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
@@ -668,6 +749,12 @@ export async function runSourceAcquisitionCycle(db, {
   //     positive-need admission bar (rows added under an earlier fail-open rule).
   const cleanup = await cleanupNonQualifyingAcquiredGrants(db, { deps })
   clearFactsCache()
+  // (a0.5) Dedup-safety: attach a real host sponsor + re-key prior decomposed
+  //     awards minted with a NULL sponsor, BEFORE re-enumeration mints the same
+  //     awards with a sponsor — so this cycle dedupes against them instead of
+  //     creating duplicates. Best-effort; never throws into the cycle.
+  let sponsorBackfill = null
+  try { sponsorBackfill = await backfillDecomposedSponsors(db) } catch { sponsorBackfill = null }
   // (a) The owner's "parse the sources against EXISTING profiles and auto-add"
   //     half — bounded, LLM-independent, and PURE (no network in the gates'
   //     offline REAL half). Robert re-adjudicates a slice of the REAL catalog
@@ -693,7 +780,7 @@ export async function runSourceAcquisitionCycle(db, {
     profileIds: null,
     deps,
   })
-  const result = { cleanup, acquisition, parse, catalogParse }
+  const result = { cleanup, sponsorBackfill, acquisition, parse, catalogParse }
   await persistLastRunSummary(db, result)
   return result
 }
@@ -711,6 +798,9 @@ async function persistLastRunSummary(db, result) {
     const summary = {
       at: new Date().toISOString(),
       cleanup: result.cleanup ? { scanned: result.cleanup.scanned, removed: result.cleanup.removed, protected: result.cleanup.protected, byReason: result.cleanup.byReason } : null,
+      sponsorBackfill: result.sponsorBackfill
+        ? { scanned: result.sponsorBackfill.scanned, updated: result.sponsorBackfill.updated, rekeyed: result.sponsorBackfill.rekeyed, collisions: result.sponsorBackfill.collisions, noHost: result.sponsorBackfill.noHost }
+        : null,
       catalogParse: result.catalogParse
         ? { profiles: result.catalogParse.profiles, added: result.catalogParse.added, addedLeads: result.catalogParse.addedLeads, scanned: result.catalogParse.scanned, byReason: result.catalogParse.byReason }
         : null,
@@ -836,6 +926,7 @@ export default {
   parseOpportunitiesAgainstProfiles,
   parseCatalogForProfiles,
   cleanupNonQualifyingAcquiredGrants,
+  backfillDecomposedSponsors,
   runSourceAcquisitionCycle,
   parseNewProfileAgainstCatalog,
   resolveKnownSourcesForProfile,
