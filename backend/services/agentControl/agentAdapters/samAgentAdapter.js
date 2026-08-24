@@ -70,7 +70,6 @@ export class SamAgentAdapter extends BaseAgentAdapter {
   }
 
   async start({ db, controlRunId, stepId, options = {}, signal, stage = 'preflight' } = {}) {
-    const dryRun = Boolean(options?.dry_run ?? true)
     const runOnPreflight = options?.run_sam_preflight !== false
     const runOnPostflight = options?.run_sam_postflight !== false
     // Owner-attached free-text instruction (see agentControlOrchestrator's
@@ -116,7 +115,12 @@ export class SamAgentAdapter extends BaseAgentAdapter {
         ctx: { ...SAM_ADMIN_CTX },
         mode: 'observe',
         trigger: 'admin-ui',
-        dryRun,
+        // dry_run is REMOVED from agent-control options (owner no-dry-runs
+        // order; this adapter used to DEFAULT it to true, so Control-Center
+        // Sam runs did nothing by default). Observe mode is Sam's real
+        // read-only auditing work; dryRun:false only stops samAgent's silent
+        // repair-safe downgrade from ever engaging on this path.
+        dryRun: false,
         persist: true,
         // Credentialed loopback probe so the Control-Center run actually
         // executes Sam's HTTP-class checks instead of fail-skipping them.
