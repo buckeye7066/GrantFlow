@@ -95,6 +95,10 @@ describe('reconcileOrphanedApplicationTasks (restart recovery)', () => {
       scanned: 0,
       demoted: 0,
       quarantined: 0,
+      // Counts compare-and-swaps that matched 0 rows. A systematic 0-row CAS is
+      // how this sweep silently did nothing on Postgres for weeks, so it is
+      // reported rather than skipped invisibly.
+      skipped_unchanged: 0,
       task_ids: [],
       quarantined_task_ids: [],
     })
