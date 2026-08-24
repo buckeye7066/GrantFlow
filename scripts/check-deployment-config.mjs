@@ -202,7 +202,23 @@ for (const publicRoute of ['/welcome', '/privacy']) {
 // build-only scripts directory, so `npm start` (or any npm lifecycle) is the
 // wrong entry point there. Railway must invoke the same direct command declared
 // by the Dockerfile CMD.
-assert(railway?.deploy?.startCommand === 'node backend/start.js', 'Railway must start the runtime directly; the runtime image carries no build scripts for npm lifecycles')
+const railwayStart = String(railway?.deploy?.startCommand || '')
+// The command may be prefixed by the image entrypoint, which only drops
+// privileges and then `exec "$@"` (see docker-entrypoint.sh / #1345). What it
+// must NOT do is route through an npm lifecycle.
+assert(
+  /(^|\s)node backend\/start\.js$/.test(railwayStart),
+  'Railway must start the runtime directly (…node backend/start.js); the runtime image carries no build scripts for npm lifecycles',
+)
+assert(
+  !/npm|yarn|pnpm/.test(railwayStart),
+  'Railway startCommand must not invoke a package-manager lifecycle; the runtime image has no build scripts',
+)
+assert(
+  railwayStart === 'node backend/start.js'
+    || railwayStart === '/usr/local/bin/grantflow-entrypoint node backend/start.js',
+  `Railway startCommand must be the direct runtime command, optionally via the image entrypoint; got ${railwayStart}`,
+)
 assert(dockerfile.includes('CMD ["node", "backend/start.js"]'), 'Dockerfile CMD must start backend/start.js directly')
 
 const dependencyInstallIndex = dockerfile.indexOf('npm ci --include=dev --include=optional --legacy-peer-deps')
