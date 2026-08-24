@@ -24,7 +24,7 @@ process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const { enforcePipelinePrecision } = await import('../startup/enforceInvariants.js')
 const {
-  declaredNeedsFrom, evaluateDeclaredNeedCoverage, opportunityNeedVocabulary, NEED_COVERAGE_DETAIL,
+  declaredNeedsFrom, evaluateDeclaredNeedCoverage, opportunityNeedVocabulary, NEED_COVERAGE_DETAIL, typeDerivedNeeds,
 } = await import('../services/pipelinePrecision.js')
 
 const PROFILE_ID = 'precision-undergrad'
@@ -232,5 +232,47 @@ describe('pipelinePrecision — the shared declared-need predicate', () => {
     const noRow = evaluateDeclaredNeedCoverage({ categories: [] }, ['education'])
     expect(noRow.pass).toBe(true)
     expect(noRow.detail).toBe(NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS)
+  })
+})
+
+describe('pipelinePrecision — an ORG/BUSINESS declares its need through its structured TYPE', () => {
+  it('derives the need from the structured type: small_business->business, farm->agriculture, student->education', () => {
+    expect(typeDerivedNeeds({ primary_type: 'small_business' }, {})).toContain('business')
+    expect(typeDerivedNeeds({ primary_type: 'farm' }, {})).toContain('agriculture')
+    expect(typeDerivedNeeds({ primary_type: 'student' }, {})).toContain('education')
+  })
+
+  it('a type that is not itself a need adds nothing (individual/family gets no junk need)', () => {
+    expect(typeDerivedNeeds({ primary_type: 'individual' }, {})).toEqual([])
+    expect(typeDerivedNeeds({ primary_type: 'family' }, {}).includes('business')).toBe(false)
+  })
+
+  it('derives from STRUCTURED org descriptor + tag arrays, NEVER from mission narrative prose', () => {
+    // structured organization_type + focus_areas → derived; a prose mission that
+    // merely says "business" must NOT mint a business need.
+    const structured = typeDerivedNeeds({ primary_type: 'nonprofit' }, {
+      organization_details: { organization_type: 'farm', focus_areas: ['housing'] },
+    })
+    expect(structured).toContain('agriculture')
+    expect(structured).toContain('housing')
+    const prose = typeDerivedNeeds({ primary_type: 'individual' }, {
+      organization_details: { mission: 'we run a small business selling farm produce' },
+      narrative: { primary_goal: 'start a business' },
+    })
+    expect(prose).toEqual([])
+  })
+
+  it('Olivia (small_business) now covers a business grant she was pruned from', () => {
+    const olivia = declaredNeedsFrom(
+      { primary_type: 'small_business' },
+      { family_life: {}, financial_information: { notes: 'Seeking $50,000 to expand services' } },
+    )
+    expect(olivia).toContain('business')
+    const bizGrant = evaluateDeclaredNeedCoverage({ categories: ['business'] }, olivia)
+    expect(bizGrant.pass).toBe(true)
+    expect(bizGrant.matched).toContain('business')
+    // guard: a business grant still does NOT cover a profile with no business need
+    const individual = declaredNeedsFrom({ primary_type: 'individual' }, { housing: {} })
+    expect(evaluateDeclaredNeedCoverage({ categories: ['business'] }, individual).pass).toBe(false)
   })
 })
