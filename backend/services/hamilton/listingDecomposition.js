@@ -56,10 +56,70 @@ export function isNgWebCatalogHost(url) {
 }
 
 /**
+ * Common scholarship-hub hosts → the display name of the org that runs them, so
+ * a decomposed award whose OWN text does not name a sponsor still carries a REAL
+ * funder identity — the hub/listing it was demonstrably found on — instead of a
+ * NULL sponsor. Keyed by the registrable domain label.
+ */
+const HUB_SPONSOR_DISPLAY = Object.freeze({
+  scholarshipowl: 'ScholarshipOwl',
+  bold: 'Bold.org',
+  fastweb: 'Fastweb',
+  scholarships: 'Scholarships.com',
+  collegescholarships: 'CollegeScholarships.org',
+  niche: 'Niche',
+  unigo: 'Unigo',
+  cappex: 'Cappex',
+  goingmerry: 'Going Merry',
+  petersons: "Peterson's",
+  chegg: 'Chegg',
+  aifsabroad: 'AIFS Abroad',
+  ciee: 'CIEE',
+  governmentgrants: 'GovernmentGrants.us',
+})
+
+// Labels too generic to stand alone as a funder identity — for these the FULL
+// registrable domain reads as a real host (grants.gov → "Grants.gov").
+const GENERIC_HOST_LABELS = new Set(['grants', 'scholarships', 'funding', 'apply', 'portal', 'awards', 'aid', 'foundation', 'gov', 'org', 'fund'])
+
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1)
+
+/**
+ * Derive a REAL sponsor of last resort from the listing/hub URL an award was
+ * found on. This is the "listing host org" fallback of the owner directive
+ * (2026-08-03): a decomposed award whose own text names no sponsor carries the
+ * hub it was listed on rather than a NULL funder. It NEVER fabricates — the value
+ * is exactly the registrable host the award was demonstrably listed on. Returns
+ * null only for an empty/unparseable URL (the caller then leaves sponsor null and
+ * the item is still admitted on its description).
+ */
+export function listingHostSponsor(url) {
+  if (!url) return null
+  let hostname = null
+  try { hostname = new URL(String(url)).hostname } catch { return null }
+  const parts = String(hostname).toLowerCase().replace(/^(www\d*|m|portal|apply|w\d+)\./, '').split('.').filter(Boolean)
+  if (parts.length === 0) return null
+  const idx = parts.length >= 2 ? parts.length - 2 : 0
+  const label = parts[idx]
+  if (!label) return null
+  if (HUB_SPONSOR_DISPLAY[label]) return HUB_SPONSOR_DISPLAY[label]
+  // A bare generic word is not a funder identity — use label.tld instead.
+  if (GENERIC_HOST_LABELS.has(label) && parts[idx + 1]) return `${cap(label)}.${parts[idx + 1]}`
+  return cap(label)
+}
+
+/**
  * Map one enumerated listing item to an opportunity record the canonical
  * inserter accepts. record_origin 'scholarship_crawler' is a TRUSTED origin
  * (recordOrigins.ALLOWED_RECORD_ORIGINS) — the row still passes the full
  * quality/policy/validation/reality gate stack before it is stored.
+ *
+ * SPONSOR PRIORITY (owner directive 2026-08-03 — never a NULL funder, never
+ * fabricated): (a) the sponsor the award's OWN text named (item.sponsor, captured
+ * by the fabrication-guarded enumerator), else (b) the hub/listing host org the
+ * award was found on (listingHostSponsor). A real funder identity lets the row
+ * pass the inserter's missing_sponsor validation, dedupe distinctly, and carry a
+ * funder through Robert's RELATABLE audit + the pipeline funder backfill.
  *
  * @param {object} item      enumerated award (from extractListingAwardItems)
  * @param {object} ctx
@@ -71,7 +131,7 @@ export function buildOpportunityRecord(item, { listingUrl } = {}) {
   const amount = Number.isFinite(item?.amount) ? item.amount : null
   return {
     title: String(item?.title || '').slice(0, 300),
-    sponsor: item?.sponsor || null,
+    sponsor: item?.sponsor || listingHostSponsor(listingUrl),
     source: 'scholarship_crawler',
     record_origin: 'scholarship_crawler',
     source_url: url,
@@ -238,4 +298,4 @@ export async function decomposeListing(args = {}, deps = {}) {
   return out
 }
 
-export default { decomposeListing, buildOpportunityRecord, isNgWebCatalogHost, LISTING_MAX_ITEMS, LISTING_MAX_APPLIES }
+export default { decomposeListing, buildOpportunityRecord, isNgWebCatalogHost, listingHostSponsor, LISTING_MAX_ITEMS, LISTING_MAX_APPLIES }

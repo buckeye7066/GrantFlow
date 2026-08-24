@@ -122,3 +122,51 @@ describe('runWithSchedulerLock heartbeat', () => {
     expect(await first).toBe('first')
   })
 })
+
+// A Railway redeploy kills the Robert source-acquisition run mid-flight; its
+// lease row survives but its (short) TTL has lapsed. The next manual/auto trigger
+// must RECLAIM that stale lease and run — not silently no-op until the TTL that
+// already passed. (Residual: deploy strands the acquisition scheduler lock.)
+describe('runWithSchedulerLock — Robert acquisition lock, deploy-killed holder', () => {
+  let db
+  beforeEach(async () => {
+    db = makeDb()
+    await ensureSchema(db)
+  })
+
+  function seedLease({ expiresInMs }) {
+    db.prepare(`INSERT INTO agent_control_locks
+      (id, lock_name, control_run_id, owner_token, acquired_by, acquired_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      'seed', 'scheduler:robert:source-acquisition', 'prev-run', 'prev-token', 'scheduler',
+      new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      new Date(Date.now() + expiresInMs).toISOString(),
+    )
+  }
+
+  it('reclaims a STALE (expired) acquisition lease and runs the cycle', async () => {
+    seedLease({ expiresInMs: -5 * 60 * 1000 }) // expired 5 min ago (dead holder)
+    let ran = false
+    const result = await runWithSchedulerLock(
+      db,
+      { lockName: 'robert:source-acquisition', ttlMs: 5 * 60 * 1000, heartbeat: true, logger: { info() {}, warn() {} } },
+      async () => { ran = true; return 'acquired' },
+    )
+    expect(ran).toBe(true)
+    expect(result).toBe('acquired')
+    // Released after the critical section — the next tick starts clean.
+    expect(await getLock(db, 'scheduler:robert:source-acquisition')).toBeNull()
+  })
+
+  it('still SKIPS while a LIVE acquisition holder owns the lease (runs stay serialized)', async () => {
+    seedLease({ expiresInMs: 5 * 60 * 1000 }) // valid — a real concurrent run
+    let ran = false
+    const result = await runWithSchedulerLock(
+      db,
+      { lockName: 'robert:source-acquisition', ttlMs: 5 * 60 * 1000, heartbeat: true, logger: { info() {}, warn() {} } },
+      async () => { ran = true; return 'acquired' },
+    )
+    expect(ran).toBe(false)
+    expect(result).toEqual({ skipped: true, reason: 'lock_held', lockName: 'robert:source-acquisition' })
+  })
+})

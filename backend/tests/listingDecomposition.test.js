@@ -6,6 +6,7 @@ import {
   decomposeListing,
   buildOpportunityRecord,
   isNgWebCatalogHost,
+  listingHostSponsor,
 } from '../services/hamilton/listingDecomposition.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 
@@ -54,6 +55,41 @@ describe('buildOpportunityRecord', () => {
     const noLink = buildOpportunityRecord({ title: 'Y Scholarship', applyUrl: null }, { listingUrl: 'https://f.org/list' })
     expect(noLink.application_url).toBeNull()
     expect(noLink.source_url).toBe('https://f.org/list')
+  })
+
+  it('SPONSOR: keeps the award-text sponsor when the enumerator captured one', () => {
+    const rec = buildOpportunityRecord(
+      { title: 'Coca-Cola Scholars', sponsor: 'The Coca-Cola Foundation', applyUrl: 'https://x.org/apply' },
+      { listingUrl: 'https://scholarshipowl.com/scholarships' },
+    )
+    expect(rec.sponsor).toBe('The Coca-Cola Foundation')
+  })
+
+  it('SPONSOR: falls back to the REAL hub/listing host org when the award names none', () => {
+    // The award's own text named no sponsor → the row still carries a real funder
+    // (the hub it was demonstrably listed on) instead of a NULL sponsor.
+    const owl = buildOpportunityRecord({ title: 'John Smith Memorial Scholarship', applyUrl: null }, { listingUrl: 'https://scholarshipowl.com/scholarships/john-smith' })
+    expect(owl.sponsor).toBe('ScholarshipOwl')
+    const bold = buildOpportunityRecord({ title: 'Housing Scholarship', applyUrl: 'https://bold.org/scholarships/housing' }, { listingUrl: 'https://bold.org/scholarships/category/housing' })
+    expect(bold.sponsor).toBe('Bold.org')
+  })
+})
+
+describe('listingHostSponsor', () => {
+  it('maps common scholarship hubs to their display name', () => {
+    expect(listingHostSponsor('https://scholarshipowl.com/scholarships/x')).toBe('ScholarshipOwl')
+    expect(listingHostSponsor('https://www.bold.org/scholarships/y')).toBe('Bold.org')
+    expect(listingHostSponsor('https://www.scholarships.com/financial-aid')).toBe('Scholarships.com')
+  })
+  it('capitalizes the registrable label of an unknown host (a REAL identity, never fabricated)', () => {
+    expect(listingHostSponsor('https://www.aifsabroad.com/scholarships-grants-details/')).toBe('AIFS Abroad') // curated
+    expect(listingHostSponsor('https://foundationgrants.example-unknown-host.org/x')).toBe('Example-unknown-host')
+    expect(listingHostSponsor('https://w1.mtsu.edu/honors/scholarships.php')).toBe('Mtsu')
+  })
+  it('returns null for an empty or unparseable URL (caller leaves sponsor null)', () => {
+    expect(listingHostSponsor(null)).toBeNull()
+    expect(listingHostSponsor('not a url')).toBeNull()
+    expect(listingHostSponsor('')).toBeNull()
   })
 })
 

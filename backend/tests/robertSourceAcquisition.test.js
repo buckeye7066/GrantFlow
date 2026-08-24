@@ -23,12 +23,14 @@ import Database from 'better-sqlite3'
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(64)
 
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
-const { decomposeListing } = await import('../services/hamilton/listingDecomposition.js')
+const { decomposeListing, listingHostSponsor, buildOpportunityRecord } = await import('../services/hamilton/listingDecomposition.js')
+const { canonicalOpportunityKey } = await import('../crawler-os/contract.js')
 const {
   acquireKnownSources,
   parseOpportunitiesAgainstProfiles,
   parseCatalogForProfiles,
   cleanupNonQualifyingAcquiredGrants,
+  backfillDecomposedSponsors,
   runSourceAcquisitionCycle,
   parseNewProfileAgainstCatalog,
   qualifyForProfile,
@@ -305,6 +307,73 @@ describe('robertSourceAcquisition — hub decomposition into individual awards',
     expect(acq.hubsSkipped).toBe(1)
     expect(acq.decomposedAdmitted).toBe(0)
     expect(acq.byReason.hub_fetch_unavailable).toBe(1)
+  })
+})
+
+describe('backfillDecomposedSponsors — dedup-safe sponsor attachment', () => {
+  let sqlite, db
+  beforeEach(() => { ({ sqlite, db } = makeDb()) })
+
+  // Insert a prior decomposed award minted with a NULL sponsor and a key that
+  // (correctly, for a null sponsor) has no sponsor component.
+  function insertNullSponsor(id, title, url) {
+    sqlite.prepare(`INSERT INTO funding_opportunities (id, title, sponsor, source, record_origin, source_url, application_url, canonical_opportunity_key, is_active, created_at)
+      VALUES (?, ?, NULL, 'scholarship_crawler', 'scholarship_crawler', ?, ?, ?, 1, '2026-08-23T00:00:00Z')`)
+      .run(id, title, url, url, canonicalOpportunityKey({ title, sponsor: null, apply_url: url, info_url: url }))
+  }
+
+  it('attaches the hub host sponsor and re-keys so re-enumeration dedupes (no duplicate)', async () => {
+    insertNullSponsor('a1', 'Bright Lite Scholarship', 'https://bold.org/scholarships/bright-lite-scholarship/')
+    const before = sqlite.prepare('SELECT sponsor, canonical_opportunity_key FROM funding_opportunities WHERE id=?').get('a1')
+    expect(before.sponsor).toBeNull()
+
+    const out = await backfillDecomposedSponsors(db)
+    expect(out.updated).toBe(1)
+    expect(out.rekeyed).toBe(1)
+
+    const after = sqlite.prepare('SELECT sponsor, canonical_opportunity_key FROM funding_opportunities WHERE id=?').get('a1')
+    expect(after.sponsor).toBe('Bold.org') // curated hub display, a REAL host
+    // The re-keyed value MUST equal what a fresh enumeration of the same award
+    // (now minted WITH the host sponsor) will compute — that is the dedup-safety.
+    const rec = buildOpportunityRecord({ title: 'Bright Lite Scholarship', applyUrl: 'https://bold.org/scholarships/bright-lite-scholarship/' }, { listingUrl: 'https://bold.org/scholarships/category/x' })
+    const reenumKey = canonicalOpportunityKey({ title: rec.title, sponsor: rec.sponsor, apply_url: rec.application_url, info_url: rec.source_url })
+    expect(after.canonical_opportunity_key).toBe(reenumKey)
+  })
+
+  it('is idempotent — a row that already has a sponsor is never touched', async () => {
+    insertNullSponsor('b1', 'Some Award', 'https://scholarshipowl.com/x/apply')
+    await backfillDecomposedSponsors(db)
+    const first = sqlite.prepare('SELECT sponsor, canonical_opportunity_key FROM funding_opportunities WHERE id=?').get('b1')
+    const out2 = await backfillDecomposedSponsors(db)
+    expect(out2.scanned).toBe(0) // no null-sponsor rows remain
+    const second = sqlite.prepare('SELECT sponsor, canonical_opportunity_key FROM funding_opportunities WHERE id=?').get('b1')
+    expect(second).toEqual(first)
+  })
+
+  it('on a key collision, sets the sponsor for display but leaves the key (unique index holds)', async () => {
+    // A canonical twin already holds the re-keyed value.
+    const title = 'Twin Award'
+    const url = 'https://fastweb.com/scholarships/twin/'
+    const twinKey = canonicalOpportunityKey({ title, sponsor: 'Fastweb', apply_url: url, info_url: url })
+    sqlite.prepare(`INSERT INTO funding_opportunities (id, title, sponsor, source, record_origin, source_url, application_url, canonical_opportunity_key, is_active, created_at)
+      VALUES ('twin', ?, 'Fastweb', 'scholarship_crawler', 'scholarship_crawler', ?, ?, ?, 1, '2026-08-22T00:00:00Z')`).run(title, url, url, twinKey)
+    insertNullSponsor('c1', title, url) // same title/url, null sponsor, old key
+
+    const out = await backfillDecomposedSponsors(db)
+    expect(out.collisions).toBe(1)
+    const row = sqlite.prepare('SELECT sponsor, canonical_opportunity_key FROM funding_opportunities WHERE id=?').get('c1')
+    expect(row.sponsor).toBe('Fastweb')          // display improved
+    expect(row.canonical_opportunity_key).not.toBe(twinKey) // key untouched, no unique violation
+  })
+
+  it('leaves a row whose URL yields no host untouched (never fabricates)', async () => {
+    sqlite.prepare(`INSERT INTO funding_opportunities (id, title, sponsor, source, record_origin, source_url, application_url, canonical_opportunity_key, is_active, created_at)
+      VALUES ('d1', 'No Host Award', NULL, 'scholarship_crawler', 'scholarship_crawler', 'not a url', NULL, 't:award host no', 1, '2026-08-23T00:00:00Z')`).run()
+    const out = await backfillDecomposedSponsors(db)
+    expect(out.noHost).toBe(1)
+    expect(out.updated).toBe(0)
+    const row = sqlite.prepare('SELECT sponsor FROM funding_opportunities WHERE id=?').get('d1')
+    expect(row.sponsor).toBeNull()
   })
 })
 

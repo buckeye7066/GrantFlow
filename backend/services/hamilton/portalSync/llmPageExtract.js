@@ -489,8 +489,11 @@ const LISTING_SYSTEM = [
   'These are awards a student could pursue — NOT aid already granted to anyone.',
   'You return STRICT JSON only — no markdown, no prose, no code fences.',
   'List each DISTINCT award exactly once, using the award name as written on the',
-  'page. Do NOT invent awards, amounts, deadlines, or links. If the page lists no',
-  'individual awards (it is a pure info/finder page), return an empty array.',
+  'page. Capture the SPONSORING ORGANIZATION for every award when the page states',
+  'one (the foundation/company/school/program that funds it — often named in the',
+  "award's own title or entry). Do NOT invent awards, amounts, deadlines, links,",
+  'or sponsors. If the page lists no individual awards (it is a pure info/finder',
+  'page), return an empty array.',
 ].join(' ')
 
 const LISTING_SCHEMA_INSTRUCTIONS = [
@@ -503,7 +506,11 @@ const LISTING_SCHEMA_INSTRUCTIONS = [
   'Rules:',
   '- "title" = the award name EXACTLY as written on the page (verbatim).',
   '- "amount" = the dollar figure as a NUMBER (no $ or commas), or null.',
-  '- "sponsor" = the awarding org if written, else null.',
+  '- "sponsor" = the sponsoring organization/foundation/company/school/program',
+  '  that funds THIS award, taken from the award entry or its own title when',
+  '  written (e.g. "The Coca-Cola Foundation", "Elks National Foundation",',
+  '  "Middle Tennessee State University"). null ONLY when the page names no',
+  '  organization for it at all.',
   '- "deadline" = the application deadline text if written, else null.',
   '- "applyUrl" = the page\'s OWN link to THAT award if one is present in the',
   '  links list below; otherwise null. NEVER fabricate or guess a URL.',
