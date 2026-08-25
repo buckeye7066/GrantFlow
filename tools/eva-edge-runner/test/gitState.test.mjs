@@ -29,6 +29,8 @@ import {
   isolatedWorkspacePath,
   isFullCommitSha,
   githubRepoFromRemote,
+  runGit,
+  runGitProcess,
 } from '../src/gitState.mjs'
 
 const SHA_A = 'a'.repeat(40)
@@ -39,6 +41,33 @@ test('GitHub remote identity normalizes HTTPS and SSH spellings exactly', () => 
   assert.equal(githubRepoFromRemote('git@github.com:buckeye7066/GrantFlow.git'), 'buckeye7066/grantflow')
   assert.equal(githubRepoFromRemote('ssh://git@github.com/buckeye7066/GrantFlow'), 'buckeye7066/grantflow')
   assert.equal(githubRepoFromRemote('https://evil.example/buckeye7066/GrantFlow'), null)
+})
+
+test('every git subprocess receives only the sanitized runner environment', () => {
+  const previousSecret = process.env.EVA_RUNNER_SECRET
+  const previousAppEnv = process.env.EVA_APP_ENV
+  process.env.EVA_RUNNER_SECRET = 'coordinator-secret-that-must-not-reach-git'
+  process.env.EVA_APP_ENV = '{"grantflow":{"DATABASE_URL":"postgres://prod"}}'
+  const environments = []
+  const exec = (_command, _args, options) => {
+    environments.push(options.env)
+    return { status: 0, stdout: '', stderr: '' }
+  }
+  try {
+    runGit('C:/fake/repo', ['status'], { exec })
+    runGitProcess('C:/fake', ['clone', 'source', 'target'], { exec })
+    assert.equal(environments.length, 2)
+    for (const env of environments) {
+      assert.equal(env.EVA_RUNNER_SECRET, undefined)
+      assert.equal(env.EVA_APP_ENV, undefined)
+      assert.equal(env.PATH, process.env.PATH, 'git still inherits the OS path needed to run helpers')
+    }
+  } finally {
+    if (previousSecret === undefined) delete process.env.EVA_RUNNER_SECRET
+    else process.env.EVA_RUNNER_SECRET = previousSecret
+    if (previousAppEnv === undefined) delete process.env.EVA_APP_ENV
+    else process.env.EVA_APP_ENV = previousAppEnv
+  }
 })
 
 // A fake spawnSync-shaped exec driven by a table of `git <args>` → result.
@@ -269,11 +298,20 @@ test('EVA tests an isolated origin/main snapshot while leaving dirty feature wor
     realGit(source, ['checkout', '-b', 'feat/live-work'])
     writeFileSync(join(source, 'app.txt'), 'uncommitted feature work\n')
 
-    const first = prepareTestWorkspace(source, 'sample-app', { dataDir })
+    const dependencyCalls = []
+    const first = prepareTestWorkspace(source, 'sample-app', {
+      dataDir,
+      timeoutMs: 20_000,
+      ensureDependencies: (_workspace, options) => {
+        dependencyCalls.push(options)
+        return { installed: [], reused: [], removed_links: [], failed: [] }
+      },
+    })
     assert.equal(first.ok, true)
     assert.equal(first.isolated, true)
     assert.equal(first.state.isolated, true)
     assert.equal(first.state.dirty, false)
+    assert.equal(dependencyCalls[0].timeoutMs, 15 * 60 * 1000, 'dependency installs keep their own 15-minute budget')
     assert.match(first.state.sha, /^[0-9a-f]{40}$/)
     assert.equal(first.state.sha, realGit(source, ['rev-parse', 'origin/main']))
     const provenance = annotateAppResultWithGitState({ journeys: [] }, first.state, first.sync)
@@ -312,6 +350,7 @@ test('EVA tests an isolated origin/main snapshot while leaving dirty feature wor
     rmSync(root, { recursive: true, force: true })
   }
 })
+
 
 test('a foreign directory at the derived worktree path is refused, never deleted', () => {
   const root = mkdtempSync(join(tmpdir(), 'eva-worktree-collision-'))

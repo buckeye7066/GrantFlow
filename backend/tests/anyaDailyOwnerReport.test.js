@@ -72,6 +72,49 @@ describe('buildOwnerReport', () => {
     expect(html).not.toMatch(/<img src=x/)
     expect(html).toMatch(/&lt;img/)
   })
+
+  it('renders stale Amy edit evidence as unknown, never as no edits needed', () => {
+    const amy = {
+      cohort: {
+        day: '2026-08-20',
+        clean: 50,
+        evaluated: 50,
+        target: 50,
+        issues: 0,
+        run_receipts: [{ recorded_at: '2026-08-20T06:00:00.000Z' }],
+      },
+      report: {},
+    }
+    const { text, html } = buildOwnerReport(sampleRun(), {
+      now: new Date('2026-08-25T09:00:00.000Z'),
+      amy,
+    })
+    expect(text).toMatch(/Autonomous edit status is unknown/i)
+    expect(html).toMatch(/Autonomous edit status is unknown/i)
+    expect(text).not.toMatch(/No autonomous edits were needed overnight/)
+    expect(html).not.toMatch(/No autonomous edits were needed overnight/)
+  })
+
+  it('renders stale web-parity evidence as unknown, never as complete coverage', () => {
+    const parity = {
+      latest: {
+        generated_at: '2026-08-20T06:00:00.000Z',
+        semantics_version: 3,
+        measurement_status: 'scored',
+        sample_qualified: true,
+        fleet_parity: 100,
+        per_profile: [{ profile_id: 'old', parity: 100, web_only_top: [] }],
+      },
+    }
+    const { text, html } = buildOwnerReport(sampleRun(), {
+      now: new Date('2026-08-25T09:00:00.000Z'),
+      parity,
+    })
+    expect(text).toMatch(/Web-only coverage is unknown/i)
+    expect(html).toMatch(/Web-only coverage is unknown/i)
+    expect(text).not.toMatch(/covered everything the web session produced/i)
+    expect(html).not.toMatch(/covered everything the web session produced/i)
+  })
 })
 
 function sampleGaps() {

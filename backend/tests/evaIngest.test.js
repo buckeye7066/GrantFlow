@@ -145,6 +145,26 @@ describe('EVA ingest limits + schema', () => {
     expect(r.status).toBe(422)
     expect(r.error).toBe('schema_invalid')
   })
+
+  it('strips only the deployed runner legacy diagnostics before strict validation', async () => {
+    const payload = samplePayload('legacy-run')
+    payload.apps[0].git_state = { branch: 'main', sha: 'a'.repeat(40) }
+    payload.apps[0].stale_tree = false
+    payload.apps[0].journeys[0].stale_tree = false
+    const raw = JSON.stringify(payload)
+    const accepted = await verifyRequest(db, { rawBody: raw, headers: envelope(raw), env })
+    expect(accepted.ok).toBe(true)
+    expect(accepted.parsed.apps[0].git_state).toBeUndefined()
+    expect(accepted.parsed.apps[0].stale_tree).toBeUndefined()
+    expect(accepted.parsed.apps[0].journeys[0].stale_tree).toBeUndefined()
+
+    payload.apps[0].unexpected_legacy_field = true
+    const unknownRaw = JSON.stringify(payload)
+    const rejected = await verifyRequest(db, { rawBody: unknownRaw, headers: envelope(unknownRaw), env })
+    expect(rejected.ok).toBe(false)
+    expect(rejected.status).toBe(422)
+    expect(rejected.details.join(' ')).toMatch(/unexpected_legacy_field/)
+  })
 })
 
 describe('body digest binding', () => {

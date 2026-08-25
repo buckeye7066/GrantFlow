@@ -702,6 +702,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
     if (flywheel.edits.length) {
       t.push('Edits Amy applied autonomously:')
       flywheel.edits.forEach((e) => t.push(`  • ${e}`))
+    } else if (flywheel.stale) {
+      t.push('Autonomous edit status is unknown — no fresh Amy evidence is available.')
     } else {
       t.push('No autonomous edits were needed overnight.')
     }
@@ -751,6 +753,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       // seeding lane existed and would now be a lie in the owner's inbox.
       t.push('Top web-only finds (queued — seeded into each profile\'s next crawl, added if the gates accept):')
       paritySummary.webOnlyTop.forEach((w) => t.push(`  • ${w}`))
+    } else if (paritySummary.stale) {
+      t.push('Web-only coverage is unknown — no fresh benchmark evidence is available.')
     } else {
       t.push('No real web-only finds — GrantFlow covered everything the web session produced.')
     }
@@ -861,7 +865,9 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         const cohortColor = fw.goal ? '#16a34a' : '#334155'
         const editsHtml = fw.edits.length
           ? `<ul style="margin:6px 0 0;padding-left:18px;color:#334155;">${fw.edits.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>`
-          : '<div style="color:#64748b;margin-top:4px;">No autonomous edits were needed overnight.</div>'
+          : fw.stale
+            ? '<div style="color:#92400e;margin-top:4px;">Autonomous edit status is unknown — no fresh Amy evidence is available.</div>'
+            : '<div style="color:#64748b;margin-top:4px;">No autonomous edits were needed overnight.</div>'
         const couldNotHtml = fw.couldNot.length
           ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Could not auto-edit (needs you):</strong>
                <ul style="margin:6px 0 0;padding-left:18px;color:#78350f;">${fw.couldNot.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>`
@@ -906,7 +912,9 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
         const webOnlyHtml = ps.webOnlyTop.length
           ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Top web-only finds (queued — seeded into each profile&rsquo;s next crawl, added if the gates accept):</strong>${list(ps.webOnlyTop, '#78350f')}</div>`
-          : '<div style="margin-top:8px;color:#166534;">No real web-only finds — GrantFlow covered everything the web session produced.</div>'
+          : ps.stale
+            ? '<div style="margin-top:8px;color:#92400e;">Web-only coverage is unknown — no fresh benchmark evidence is available.</div>'
+            : '<div style="margin-top:8px;color:#166534;">No real web-only finds — GrantFlow covered everything the web session produced.</div>'
         return `
       <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Google-bar benchmark</h3>
       <div style="font-size:13px;">

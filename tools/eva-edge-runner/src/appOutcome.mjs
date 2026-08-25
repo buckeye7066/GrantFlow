@@ -110,7 +110,10 @@ export function orchestrationFailedAppResult({ app, error, durationMs = 0 }) {
     app_id: app.app_id,
     display_name: app.display_name,
     repo: app.repo,
-    app_status: 'tested',
+    // The runner itself failed before the declared journeys completed. Keep
+    // the failed lifecycle journey for diagnosis, but never count this app as
+    // tested in the coordinator summary.
+    app_status: 'not_run',
     blocker_reason: reason.slice(0, BLOCKER_REASON_CAP),
     duration_ms: durationMs,
     journeys: [{

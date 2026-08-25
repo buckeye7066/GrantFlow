@@ -55,10 +55,11 @@ describe('versioned amount-adapter reconciliation', () => {
            amount_enrich_attempts, amount_enrich_env_attempts, amount_enrich_last_reason)
         VALUES (?, ?, ?, 'not_listed', '2026-08-20T00:00:00Z', 3, 2, 'thin_page')`)
       insertGrant.run('mtsu', 'Dr. Nancy Wahl Scholarship', 'https://www.mtsu.edu/csc/scholarships/')
+      insertGrant.run('grants-gov', 'Community Health Access Grant', 'https://www.grants.gov/search-results-detail/354321')
       insertGrant.run('grant-unowned', 'Unowned Grant', 'https://unowned.example/grant')
 
       const first = await reconcileBurnedAmountAdapters(db)
-      expect(first).toMatchObject({ reopened: 2, version: AMOUNT_ADAPTER_REGISTRY_VERSION })
+      expect(first).toMatchObject({ reopened: 3, version: AMOUNT_ADAPTER_REGISTRY_VERSION })
       expect(db.prepare('SELECT amount_enrich_attempted_at, amount_enrich_attempts, amount_enrich_env_attempts, amount_enrich_last_reason FROM funding_opportunities WHERE id = ?').get('etf')).toMatchObject({
         amount_enrich_attempted_at: null,
         amount_enrich_attempts: 0,
@@ -66,11 +67,12 @@ describe('versioned amount-adapter reconciliation', () => {
         amount_enrich_last_reason: `adapter_registry_v${AMOUNT_ADAPTER_REGISTRY_VERSION}_reopened`,
       })
       expect(db.prepare('SELECT amount_enrich_attempted_at FROM grants WHERE id = ?').get('mtsu').amount_enrich_attempted_at).toBeNull()
+      expect(db.prepare('SELECT amount_enrich_attempted_at FROM grants WHERE id = ?').get('grants-gov').amount_enrich_attempted_at).toBeNull()
       expect(db.prepare('SELECT amount_enrich_attempted_at FROM funding_opportunities WHERE id = ?').get('unowned').amount_enrich_attempted_at).not.toBeNull()
       expect(db.prepare('SELECT amount_enrich_attempted_at FROM grants WHERE id = ?').get('grant-unowned').amount_enrich_attempted_at).not.toBeNull()
 
       const marker = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ADAPTER_RECONCILIATION_KV_KEY).value)
-      expect(marker).toMatchObject({ version: AMOUNT_ADAPTER_REGISTRY_VERSION, reopened: 2 })
+      expect(marker).toMatchObject({ version: AMOUNT_ADAPTER_REGISTRY_VERSION, reopened: 3 })
 
       // A source that honestly produces no per-award number may burn again.
       // The same registry version must not reopen it forever on every boot.

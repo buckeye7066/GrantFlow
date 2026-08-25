@@ -3921,7 +3921,12 @@ export async function reconcileBurnedAmountAdapters(db) {
       reopened += changesOf(wrote)
     }
     for (const row of Array.isArray(grantRows) ? grantRows : []) {
-      if (!findAmountAdapter(row)) continue
+      // Adapter matchers consume the catalog URL vocabulary. Direct grants
+      // store that same source identity in `grants.url`; normalize it before
+      // deciding ownership so this registry revision cannot permanently skip
+      // grants.gov, SAM FAL, or Federal Register rows and then advance its
+      // one-shot marker.
+      if (!findAmountAdapter({ ...row, source_url: row.source_url || row.url })) continue
       const wrote = await db.prepare(
         `UPDATE grants
             SET amount_enrich_attempted_at = NULL,

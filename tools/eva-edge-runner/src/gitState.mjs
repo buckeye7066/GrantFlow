@@ -38,6 +38,7 @@ export function runGit(cwd, gitArgs, { timeoutMs = 30000, exec = spawnSync } = {
       encoding: 'utf8',
       timeout: timeoutMs,
       windowsHide: true,
+      env: baseLaunchEnv(process.env),
     })
     return {
       ok: res.status === 0,
@@ -236,9 +237,15 @@ function canonicalExpectedRepo(value) {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(text) ? text.toLowerCase() : null
 }
 
-function runGitProcess(cwd, args, { exec = spawnSync, timeoutMs = 180000 } = {}) {
+export function runGitProcess(cwd, args, { exec = spawnSync, timeoutMs = 180000 } = {}) {
   try {
-    const res = exec('git', args, { cwd, encoding: 'utf8', timeout: timeoutMs, windowsHide: true })
+    const res = exec('git', args, {
+      cwd,
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      windowsHide: true,
+      env: baseLaunchEnv(process.env),
+    })
     return { ok: res?.status === 0, status: res?.status ?? null, stdout: String(res?.stdout || '').trim(), stderr: String(res?.stderr || '').trim() }
   } catch (err) {
     return { ok: false, status: null, stdout: '', stderr: String(err?.message || err) }
@@ -359,6 +366,7 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
   return result
 }
 
+
 function resolveAuthoritativeRef(repository, opts) {
   for (const branch of ['main', 'master']) {
     const ref = `origin/${branch}`
@@ -393,7 +401,9 @@ export function prepareTestWorkspace(localPath, appId, {
   dataDir,
   exec,
   timeoutMs = 180000,
+  dependencyTimeoutMs = 15 * 60 * 1000,
   installDependencies = true,
+  ensureDependencies = ensureWorkspaceDependencies,
   expectedRepo = null,
 } = {}) {
   const opts = { ...(exec ? { exec } : {}), timeoutMs }
@@ -492,7 +502,12 @@ export function prepareTestWorkspace(localPath, appId, {
   }
 
   const dependencySetup = installDependencies
-    ? ensureWorkspaceDependencies(target, { dataDir, appId, exec: exec || spawnSync, timeoutMs })
+    ? ensureDependencies(target, {
+        dataDir,
+        appId,
+        exec: exec || spawnSync,
+        timeoutMs: dependencyTimeoutMs,
+      })
     : { installed: [], reused: [], removed_links: [], failed: [] }
   if (dependencySetup.failed.length) {
     const first = dependencySetup.failed[0]

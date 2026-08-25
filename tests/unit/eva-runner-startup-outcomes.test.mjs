@@ -204,6 +204,7 @@ test('a startup failure with NO output admits it has no evidence rather than cla
 
 test('an unexpected runner exception has a stable schema-complete journey lifecycle', () => {
   const res = orchestrationFailedAppResult({ app, error: new Error('adapter exploded') })
+  assert.equal(res.app_status, 'not_run', 'an orchestration exception must not inflate the tested-app count')
   assert.equal(res.journeys[0].journey_id, 'runner-orchestration')
   assert.equal(res.journeys[0].status, 'failed')
   for (const field of ['severity', 'retry_classification', 'failure_class', 'expected_behavior', 'observed_behavior', 'repro_steps', 'user_impact', 'diagnostic_confidence']) {
