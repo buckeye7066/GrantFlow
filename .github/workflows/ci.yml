@@ -82,7 +82,10 @@ jobs:
 
   windows-build:
     name: Windows build compatibility
-    runs-on: windows-latest
+    # The locked native dependency chain uses node-gyp 10, which recognizes
+    # Visual Studio 2022. windows-latest currently carries VS 18 and fails
+    # before the app can be tested, so pin the supported MSVC image explicitly.
+    runs-on: windows-2022
     timeout-minutes: 25
 
     steps:
