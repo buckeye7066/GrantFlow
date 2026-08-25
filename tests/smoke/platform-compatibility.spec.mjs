@@ -4,6 +4,13 @@ test('the public shell fits Apple mobile viewports and declares safe-area suppor
   const response = await page.goto(`${baseURL}/welcome`, { waitUntil: 'networkidle' })
   expect(response?.ok()).toBeTruthy()
 
+  const responseUrl = new URL(response.url())
+  const contentSecurityPolicy = response.headers()['content-security-policy'] || ''
+  expect(contentSecurityPolicy).toContain("default-src 'self'")
+  if (responseUrl.protocol === 'http:') {
+    expect(contentSecurityPolicy).not.toContain('upgrade-insecure-requests')
+  }
+
   await expect(page.locator('#root')).toBeVisible()
   await expect(page.locator('meta[name="viewport"]')).toHaveAttribute(
     'content',
