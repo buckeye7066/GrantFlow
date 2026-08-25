@@ -71,6 +71,34 @@ describe('professionApplicantConflict — scope-aware profession gate', () => {
     expect(professionApplicantConflict(PARAMEDIC, { title: 'Community Impact Scholarship' })).toBeNull()
   })
 
+  // Regression, 2026-08-24: "Grants to USA Professional Dancers" (sponsor
+  // "Dancers' Fund") reached ACCEPT for a Kentucky farmer/senior. emitProfession
+  // produced ONLY a sponsor-scoped claim from the SPONSOR field, because the
+  // sponsor-identity branch ran BEFORE the title heuristics — so the title's own
+  // recipient phrase ("Grants TO ... Dancers") was never read and this gate saw
+  // no applicant claim to conflict with. The "for" recipient preposition was
+  // already handled; "to" was not.
+  it("REJECTS a recipient-phrase title even when the FUNDER is profession-named (Dancers Fund / farmer)", () => {
+    const FARMER = { employment: { occupation: 'Farmer' } }
+    for (const sponsor of ["Dancers' Fund", 'Dancers’ Resource']) {
+      const conflict = professionApplicantConflict(FARMER, {
+        title: 'Grants to USA Professional Dancers',
+        sponsor,
+      })
+      expect(conflict, sponsor).not.toBeNull()
+      expect(conflict.value).toBe('dance')
+      expect(conflict.field).toBe('title')
+    }
+  })
+
+  it('KEEPS the funder-name prefix ahead of the recipient rule (Grants to American Dental Association members)', () => {
+    // orgPrefixGoverning still settles a governing funder name first, so a
+    // "Grants to <Org>" title is NOT turned into an applicant bar.
+    expect(
+      professionApplicantConflict(PARAMEDIC, { title: 'Grants to American Dental Association members' }),
+    ).toBeNull()
+  })
+
   it('is NEUTRAL for an empty / missing opportunity', () => {
     expect(professionApplicantConflict(PARAMEDIC, {})).toBeNull()
     expect(professionApplicantConflict(PARAMEDIC)).toBeNull()

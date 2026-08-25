@@ -170,24 +170,23 @@ test('admin integrity repair: dry-run + apply reattaches unowned profile by emai
 
     const adminToken = await loginEmailOtp({ port, email: adminEmail, profileId: null })
 
-    const dry = await fetchJson(`http://127.0.0.1:${port}/api/admin/profiles/integrity/repair`, {
+    // dry_run is REMOVED OUTRIGHT (owner no-dry-runs order): NAMING the flag
+    // fails — it must never silently proceed as a real run.
+    const named = await fetchJson(`http://127.0.0.1:${port}/api/admin/profiles/integrity/repair`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({ dry_run: true }),
     })
-    assert.equal(dry.status, 200)
-    assert.equal(dry.json?.ok, true)
-    assert.equal(dry.json?.dry_run, true)
-    assert.ok(dry.json?.reattach?.planned >= 1)
+    assert.equal(named.status, 400)
+    assert.match(String(named.json?.error || ''), /removed/i)
 
     const apply = await fetchJson(`http://127.0.0.1:${port}/api/admin/profiles/integrity/repair`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ dry_run: false }),
+      body: JSON.stringify({}),
     })
     assert.equal(apply.status, 200)
     assert.equal(apply.json?.ok, true)
-    assert.equal(apply.json?.dry_run, false)
     assert.ok(apply.json?.reattach?.applied >= 1)
 
     const prof = await fetchJson(`http://127.0.0.1:${port}/api/profiles/${profileId}`, {

@@ -20,7 +20,7 @@ export default function AdminAnyaConsole() {
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null)
-  const [payload, setPayload] = useState('{"dryRun": false}')
+  const [payload, setPayload] = useState('{}')
 
   const refresh = useCallback(async () => {
     try {

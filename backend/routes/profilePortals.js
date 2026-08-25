@@ -35,6 +35,7 @@
  */
 
 import express from 'express'
+import { rejectDryRunBody } from '../utils/noDryRun.js'
 import crypto from 'crypto'
 import {
   requireAuthenticatedUser,
@@ -661,9 +662,7 @@ router.post('/profiles/:id/portal-autopilot/run', async (req, res) => {
   }
   const userId = user?.id || user?.userId || 'system_admin_token'
   const portalHost = String(req.body?.portalHost || req.body?.portal_host || '').trim()
-  // PREVIEW: dryRun provisions the credential record + plans the registration but
-  // never launches a browser, so the owner can preview what autopilot would do.
-  const dryRun = req.body?.dryRun === true || req.body?.dry_run === true
+  if (rejectDryRunBody(req, res)) return
   try {
     if (portalHost) {
       // Load the profile bundle so the signup adapter can fill name/phone fields.
@@ -673,12 +672,12 @@ router.post('/profiles/:id/portal-autopilot/run', async (req, res) => {
         profile = await _internal.loadProfileBundle(req.db, profileId)
       } catch { profile = null }
       const result = await runAutopilotIdentityForPortal(req.db, {
-        profileId, userId, portalHost, profile, dryRun,
+        profileId, userId, portalHost, profile,
         loginUrl: req.body?.loginUrl || req.body?.login_url || null,
       })
       return res.json({ ok: true, result })
     }
-    const { results, summary } = await runAutopilotIdentityForProfile(req.db, { profileId, userId, dryRun })
+    const { results, summary } = await runAutopilotIdentityForProfile(req.db, { profileId, userId })
     return res.json({ ok: true, results, summary })
   } catch (err) {
     log.error('portal_autopilot_run_failed', { profileId, err: err?.message })

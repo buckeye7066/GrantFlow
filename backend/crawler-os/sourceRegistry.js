@@ -224,9 +224,22 @@ export const SOURCES = Object.freeze([
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.PROGRAM],
     crawler_method: 'api',
-    // Public API, no key. NOTE (2026-07-06): api.www.sbir.gov currently
-    // returns "The SBIR Public API is not available at this time" service-wide;
-    // the adapter reports an honest PARSE_ERROR until it comes back.
+    // Public API, no key. RE-MEASURED 2026-08-24 (the 2026-07-06 note said the
+    // API returned "not available at this time" service-wide; that is no longer
+    // the observed behavior and the distinction matters for burn semantics):
+    //   www.sbir.gov                      -> HTTP 200 (the site is UP)
+    //   api.www.sbir.gov /solicitations   -> HTTP 403 {"message":"Forbidden"}
+    //   api.www.sbir.gov /awards          -> HTTP 403 {"message":"Forbidden"}
+    // Identical with a browser User-Agent, so this is NOT a UA/Accept problem —
+    // the API refuses THIS caller (WAF / allowlist / egress), while the site
+    // itself serves fine. Per the amount-enrichment rules a 401/403/429 is
+    // `environment: true` (refuses our caller, not the URL) and must NOT burn a
+    // row's one-shot attempt the way a stable 404/410 does.
+    //
+    // CONSEQUENCE: an sbir_gov AMOUNT adapter cannot be written or verified from
+    // here — there is no reachable endpoint to read award figures from. Do not
+    // add one speculatively; re-probe the two URLs above first. The crawler-os
+    // adapter continues to report an honest PARSE_ERROR.
     requires_env: [],
     refresh_frequency_days: 3,
     priority_score: 95,

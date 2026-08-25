@@ -205,7 +205,9 @@ describe('residency-scope pattern — the geographic verdicts are unchanged', ()
       is_national: false,
     })
     expect(res.decision).toBe('REJECT')
-    expect(res.explanation).toMatch(/Geographic mismatch/i)
+    // Now rejected by the scope-aware residency gate (reads the state out of the
+    // residency prose itself, whitespace-tolerant), rather than the bare column.
+    expect(res.explanation).toMatch(/requires TX residency|Geographic mismatch/i)
   })
 
   it('an out-of-state program with NO residency language still REVIEWs', () => {
@@ -234,7 +236,9 @@ describe('residency-scope pattern — the geographic verdicts are unchanged', ()
       is_national: false,
     })
     expect(res.decision).toBe('REJECT')
-    expect(res.explanation).toMatch(/Geographic mismatch/i)
+    // Now rejected by the scope-aware residency gate (reads the state out of the
+    // residency prose itself, whitespace-tolerant), rather than the bare column.
+    expect(res.explanation).toMatch(/requires TX residency|Geographic mismatch/i)
   })
 
   it('with an UNKNOWN profile state, residency language REVIEWs and never REJECTs', () => {

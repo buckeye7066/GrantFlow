@@ -176,13 +176,13 @@ export default function YanaLeadReviewModal({ leadId, open, onClose, onAfterChan
     }
   }
 
-  const sendAttempt = async (id, dryRun = false) => {
+  const sendAttempt = async (id) => {
     setBusy(true)
     try {
-      const res = await post(`/api/yana-leads/outreach/${encodeURIComponent(id)}/send`, { dryRun })
+      const res = await post(`/api/yana-leads/outreach/${encodeURIComponent(id)}/send`, {})
       const blockedReason = res?.blocked?.reason
       if (res?.ok) {
-        toast({ title: dryRun ? "Dry-run send completed" : "Outreach sent" })
+        toast({ title: "Outreach sent" })
       } else {
         toast({
           title: "Send blocked",
@@ -353,23 +353,13 @@ export default function YanaLeadReviewModal({ leadId, open, onClose, onAfterChan
                           </Button>
                         ) : null}
                         {a.approved_at && a.send_status !== "sent" ? (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => sendAttempt(a.id, true)}
-                              disabled={busy}
-                            >
-                              Dry-run send
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => sendAttempt(a.id, false)}
-                              disabled={busy}
-                            >
-                              <Send className="w-3 h-3 mr-1" /> Send
-                            </Button>
-                          </>
+                          <Button
+                            size="sm"
+                            onClick={() => sendAttempt(a.id)}
+                            disabled={busy}
+                          >
+                            <Send className="w-3 h-3 mr-1" /> Send
+                          </Button>
                         ) : null}
                         {a.send_status !== "sent" && a.send_status !== "cancelled" ? (
                           <Button

@@ -26,6 +26,7 @@
  */
 
 import express from 'express'
+import { rejectDryRunBody } from '../utils/noDryRun.js'
 
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js'
 import { YANA_OUTREACH_AGENT_NAME, YANA_OUTREACH_MODES, LEAD_STATUS, OUTREACH_SEND_STATUS, PROSPECT_STATUS } from '../services/yanaOutreach/yanaOutreachTypes.js'
@@ -263,13 +264,12 @@ router.post('/outreach/:attemptId/send', adminOnly, async (req, res) => {
       emailSender = null
     }
 
-    const dryRun = req.body?.dryRun === true
+    if (rejectDryRunBody(req, res)) return
     const result = await sendOutreachAttempt({
       db: req.db,
       attempt,
       prospect,
       emailSender,
-      dryRun,
     })
 
     await audit(req.db, req, 'outreach.send', {

@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { assessPacketSubmittability } from '../services/hamilton/hamiltonAutomationOrchestrator.js'
 
 // The completeness gate: a packet is "ready" only when its channel is resolved
-// AND the info that channel needs is present. Motivated by the real Anastasia /
-// Cade Foundation packet — handed over as ready-to-mail with no funder address
+// AND the info that channel needs is present. Motivated by a real student
+// profile's Cade Foundation packet — handed over as ready-to-mail with no
+// funder address
 // and an unresolved submission channel.
 describe('assessPacketSubmittability — the packet completeness gate', () => {
   it('BLOCKS a mail packet with no funder mailing address (the Cade case)', () => {

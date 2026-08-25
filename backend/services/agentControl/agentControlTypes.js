@@ -121,7 +121,6 @@ export const CONTROL_NOTIFICATION_TYPES = Object.freeze([
  * missing — but the explicit keys make the API surface discoverable.
  */
 export const DEFAULT_RUN_OPTIONS = Object.freeze({
-  dry_run: false,
   run_sam_preflight: true,
   run_sam_postflight: true,
   allow_john_drafts: true,
@@ -133,6 +132,24 @@ export const DEFAULT_RUN_OPTIONS = Object.freeze({
   stop_on_critical_sam_finding: true,
   stop_on_agent_failure: false,
 })
+
+/**
+ * Dry-run is REMOVED OUTRIGHT from agent-control run options (owner order
+ * 2026-08-13: "I don't want dry runs, I want work" — a "safe" mode is how a
+ * 6-hour run found 3,464 defects, fixed zero, and exited 0; samAgentAdapter
+ * even DEFAULTED dry_run to true, so its Control-Center runs did nothing by
+ * default). Removed means an invocation NAMING the old flag FAILS — it never
+ * silently proceeds and is never replaced by a confirmation gate.
+ */
+export function assertNoDryRunOption(options) {
+  if (options && typeof options === 'object' && 'dry_run' in options) {
+    const e = new Error(
+      'dry_run has been removed from agent-control runs (owner no-dry-runs order). Every run does real work — drop the flag.',
+    )
+    e.status = 400
+    throw e
+  }
+}
 
 /**
  * Lock names. Single full_cycle: 'agent_control:full_cycle'. Per-agent
