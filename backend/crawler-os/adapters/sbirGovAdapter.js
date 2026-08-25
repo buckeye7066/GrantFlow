@@ -112,7 +112,8 @@ export function createSbirGovAdapter() {
         // undergoing maintenance" and the legacy host no longer resolves. That
         // is the service refusing its public API wholesale — not a key we lack,
         // not registry work, and not something a retry can fix — so it is the
-        // same honest api_outage skip as the banner above. Precision: ONLY the
+        // same honest external-blocked result as the banner above. The pipeline
+        // maps that reason to BLOCKED, never EMPTY. Precision: ONLY the
         // exact 403+bare-"Forbidden" JSON shape qualifies; an HTML WAF page, a
         // 5xx, or any other 403 body stays a genuine FETCH_ERROR, and the first
         // real response parses normally when the service returns.
