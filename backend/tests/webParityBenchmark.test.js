@@ -30,6 +30,7 @@ import {
   MAX_QUERIES_PER_PROFILE,
   MAX_RESULTS_PER_QUERY,
   MAX_RUN_HISTORY,
+  MIN_VERIFIED_DENOMINATOR,
   isWebParityBenchmarkEnabled,
   normalizeUrlKey,
   isRealFundingHit,
@@ -260,7 +261,7 @@ describe('pure helpers', () => {
 // ── The benchmark run ────────────────────────────────────────────────────────
 
 describe('runWebParityBenchmark', () => {
-  it('scores golden profiles against a mocked web session, persists history + latest, queues web-only candidates, emits telemetry', async () => {
+  it('scores a golden profile but withholds an underpowered fleet trend, persists evidence, queues web-only candidates, and emits telemetry', async () => {
     const db = makeDb()
     try {
       seedGolden(db)
@@ -276,14 +277,28 @@ describe('runWebParityBenchmark', () => {
       expect(p.web_only_count).toBe(1)
       expect(p.grantflow_only).toBe(1)
       expect(p.parity).toBe(50)
-      expect(res.fleet_parity).toBe(50)
+      expect(res).toMatchObject({
+        fleet_parity: null,
+        scored_profiles_parity: 50,
+        measurement_status: 'scored',
+        sample_status: 'insufficient_sample',
+        sample_qualified: false,
+        verified_denominator: 2,
+        minimum_verified_denominator: MIN_VERIFIED_DENOMINATOR,
+      })
 
       // Budget: never more than MAX_QUERIES_PER_PROFILE searches per profile.
       expect(deps.searchWeb.mock.calls.length).toBeLessThanOrEqual(MAX_QUERIES_PER_PROFILE)
 
       // Persistence: history ring + latest snapshot.
       const store = await readWebParityBenchmark(db)
-      expect(store.latest.fleet_parity).toBe(50)
+      expect(store.latest).not.toHaveProperty('fleet_parity')
+      expect(store.latest).toMatchObject({
+        scored_profiles_parity: 50,
+        sample_status: 'insufficient_sample',
+        sample_qualified: false,
+        verified_denominator: 2,
+      })
       expect(store.runs).toHaveLength(1)
       expect(store.latest.per_profile[0].web_only_top[0].url).toBe('https://neighborfund.org/apply')
 
@@ -307,7 +322,7 @@ describe('runWebParityBenchmark', () => {
       const evt = deps.emitTelemetry.mock.calls[0][1]
       expect(evt.agent_name).toBe('sam')
       expect(evt.event_type).toBe('sam.web_parity_benchmark')
-      expect(evt.metric_value).toBe(50)
+      expect(evt.metric_value).toBeNull()
     } finally {
       db.close()
     }
@@ -754,6 +769,7 @@ describe('sam check coverage.webParityBenchmark', () => {
 // ── Anya morning-report section ──────────────────────────────────────────────
 
 describe('Anya "Google-bar benchmark" report section', () => {
+  const REPORT_NOW = new Date('2026-07-07T09:00:00Z')
   const parityStore = {
     generated_at: '2026-07-07T08:00:00Z',
     runs: [
@@ -774,7 +790,7 @@ describe('Anya "Google-bar benchmark" report section', () => {
   it('summarizeWebParity: null-safe, renders parity, trend arrow and top web-only finds', () => {
     expect(summarizeWebParity(null)).toBeNull()
     expect(summarizeWebParity({ latest: null })).toBeNull()
-    const ps = summarizeWebParity(parityStore)
+    const ps = summarizeWebParity(parityStore, { now: REPORT_NOW })
     expect(ps.headline).toMatch(/Fleet parity 75\/100/)
     expect(ps.headline).toMatch(/▲ \+5 vs prior/)
     expect(ps.perProfile[0]).toMatch(/Gilbert: parity 75\/100 ▲ \+5 vs prior/)
@@ -785,7 +801,7 @@ describe('Anya "Google-bar benchmark" report section', () => {
 
   it('buildOwnerReport renders the section in text + HTML, and omits it when the benchmark never ran', () => {
     const run = { id: 'sam-1', health_score: 100, findings: [] }
-    const withParity = buildOwnerReport(run, { parity: parityStore })
+    const withParity = buildOwnerReport(run, { parity: parityStore, now: REPORT_NOW })
     expect(withParity.text).toMatch(/GOOGLE-BAR BENCHMARK/)
     expect(withParity.text).toMatch(/Gilbert: parity 75\/100/)
     // The queue is now a work item the crawler drains, not homework for the owner.
@@ -793,7 +809,7 @@ describe('Anya "Google-bar benchmark" report section', () => {
     expect(withParity.html).toMatch(/Google-bar benchmark/)
     expect(withParity.html).toMatch(/Neighbor Grant/)
 
-    const without = buildOwnerReport(run, {})
+    const without = buildOwnerReport(run, { now: REPORT_NOW })
     expect(without.text).not.toMatch(/GOOGLE-BAR BENCHMARK/)
   })
 })

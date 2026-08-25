@@ -516,10 +516,11 @@ describe('Sam check amy.flywheelCohort', () => {
     const { DIAGNOSTIC_CHECKS } = await import('../services/sam/samRegistry.js')
     const check = DIAGNOSTIC_CHECKS.find((c) => c.id === 'amy.flywheelCohort')
     expect(check).toBeTruthy()
+    const now = new Date('2026-07-06T16:00:00Z')
 
     const db = freshDb()
     // empty store → ok
-    let res = await check.run({ db })
+    let res = await check.run({ db, now })
     expect(res.ok).toBe(true)
 
     // issues → not ok, evidence carries examples
@@ -527,7 +528,7 @@ describe('Sam check amy.flywheelCohort', () => {
       evaluations: [clean(1), gappy(1, 'ineligible_match')], runId: 'r1',
       now: new Date('2026-07-06T15:00:00Z'), target: 2, send: async () => ({ ok: true }),
     })
-    res = await check.run({ db })
+    res = await check.run({ db, now })
     expect(res.ok).toBe(false)
     expect(res.summary).toMatch(/1 of 2 synthetic profiles had issues/)
     expect(res.evidence.finding_types.ineligible_match).toBe(1)
@@ -538,7 +539,7 @@ describe('Sam check amy.flywheelCohort', () => {
       evaluations: [clean(1), clean(2)], runId: 'r2',
       now: new Date('2026-07-06T15:00:00Z'), target: 2, send: async () => ({ ok: true }),
     })
-    res = await check.run({ db: db2 })
+    res = await check.run({ db: db2, now })
     expect(res.ok).toBe(true)
     expect(res.summary).toMatch(/GOAL/)
   })

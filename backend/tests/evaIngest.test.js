@@ -18,7 +18,7 @@ function envelope(rawBody, { runnerId = RUNNER, secret = SECRET, ts = null, nonc
   }
 }
 
-function samplePayload(runId = 'run-1') {
+function samplePayload(runId = 'run-0001') {
   return {
     schema_version: EVA_SCHEMA_VERSION,
     run_id: runId,
@@ -172,7 +172,7 @@ describe('body digest binding', () => {
     const raw = JSON.stringify(samplePayload())
     expect(computeBodyDigest(raw)).toBe(computeBodyDigest(Buffer.from(raw)))
     const headers = envelope(raw)
-    const swapped = JSON.stringify(samplePayload('run-2'))
+    const swapped = JSON.stringify(samplePayload('run-0002'))
     const r = await ingest(db, { rawBody: swapped, headers, env })
     expect(r.ok).toBe(false)
     expect(r.error).toBe('invalid_signature')
