@@ -333,6 +333,7 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
   appId,
   exec = spawnSync,
   timeoutMs = 15 * 60 * 1000,
+  platform = process.platform,
 } = {}) {
   const removedLinks = removeLegacyDependencyLinks(workspaceRoot)
   const result = { installed: [], reused: [], removed_links: removedLinks, failed: [] }
@@ -349,6 +350,12 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
       encoding: 'utf8',
       timeout: timeoutMs,
       windowsHide: true,
+      // npm/corepack are .cmd shims on Windows and cannot be launched by
+      // child_process without cmd.exe. The command and every argument in these
+      // plans are fixed above (never manifest/user input), so enabling the
+      // shell only on Windows preserves both portability and the injection
+      // boundary.
+      shell: platform === 'win32',
       env: baseLaunchEnv(process.env),
     })
     if (!run || run.status !== 0) {

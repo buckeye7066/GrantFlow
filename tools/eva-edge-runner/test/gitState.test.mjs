@@ -31,6 +31,7 @@ import {
   githubRepoFromRemote,
   runGit,
   runGitProcess,
+  ensureWorkspaceDependencies,
 } from '../src/gitState.mjs'
 
 const SHA_A = 'a'.repeat(40)
@@ -69,6 +70,45 @@ test('every git subprocess receives only the sanitized runner environment', () =
     else process.env.EVA_RUNNER_SECRET = previousSecret
     if (previousAppEnv === undefined) delete process.env.EVA_APP_ENV
     else process.env.EVA_APP_ENV = previousAppEnv
+  }
+})
+
+test('dependency installs use the Windows command shell for fixed package-manager shims', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-dependency-windows-'))
+  const workspace = join(root, 'workspace')
+  const dataDir = join(root, 'eva-data')
+  const calls = []
+  try {
+    mkdirSync(workspace, { recursive: true })
+    writeFileSync(join(workspace, 'package-lock.json'), '{}\n')
+    const result = ensureWorkspaceDependencies(workspace, {
+      dataDir,
+      appId: 'sample-app',
+      platform: 'win32',
+      exec: (command, args, options) => {
+        calls.push({ command, args, options })
+        return { status: 0, stdout: '', stderr: '' }
+      },
+    })
+
+    assert.deepEqual(result.failed, [])
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].command, 'npm')
+    assert.deepEqual(calls[0].args, ['ci', '--no-audit', '--no-fund'])
+    assert.equal(calls[0].options.shell, true)
+
+    ensureWorkspaceDependencies(workspace, {
+      dataDir,
+      appId: 'sample-app-posix',
+      platform: 'linux',
+      exec: (command, args, options) => {
+        calls.push({ command, args, options })
+        return { status: 0, stdout: '', stderr: '' }
+      },
+    })
+    assert.equal(calls[1].options.shell, false, 'the shell remains disabled outside Windows')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 
