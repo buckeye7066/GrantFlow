@@ -35,7 +35,16 @@
 const RX = {
   physical: /printable packet|pdf_docx pathway|\bmail\b|\bfax\b|forbid(s)? agent automation|print(,| and) (sign|mail)|send yourself/i,
   botWall: /bot protection|anti-?bot|security service|cloudflare|akamai|datadome|perimeterx|managed challenge|security verification|checking your browser/i,
-  ineligible: /does not meet grantflow|does not meet|profile is missing|not eligible|preflight: funding source/i,
+  // ELIGIBILITY phrasing ONLY. Two patterns were removed 2026-08-25 because they
+  // are not eligibility statements and were tombstoning recoverable cards:
+  //   - `profile is missing`  → that is category 2 (MISSING INFO). The fix is to
+  //     ASK for the fact, never to archive the source as "she doesn't qualify".
+  //     It archived Medicaid/CHIP, SSDI/SSI, survivors benefits, TANF and LIHEAP
+  //     for a low-income TN individual who is eligible for all of them.
+  //   - bare `does not meet` → matches any unrelated shortfall ("the draft does
+  //     not meet the 500-word minimum"). `does not meet grantflow` keeps the
+  //     real preflight verdict.
+  ineligible: /does not meet grantflow|not eligible|\bineligible\b|preflight: funding source/i,
   tos: /terms (of (service|use))? (do not|don'?t) permit|forbids? automat|policy (prohibits|forbids)/i,
 }
 
@@ -60,12 +69,16 @@ export function classifyNeedYouBlock(task = {}, { hasUnresolvedInfo = false } = 
   // Safety / correctness keeps first.
   if (status === 'submission_verification_required') return keep('submit_unverified', false)
   if (KEEP_STATUSES.has(status)) return keep('physical_copy', true)
+  // An OPEN missing-info ask outranks the eligibility read. A card we are still
+  // waiting on an ANSWER for is recoverable by definition, and the two vocabularies
+  // overlap ("the profile is missing X" reads as both). Ordering this after the
+  // ineligible branch is what let a recoverable card be archived as unqualified.
+  if (status === 'waiting_for_missing_info' && hasUnresolvedInfo) return keep('missing_info', true) // 2
   if (RX.ineligible.test(msg)) return keep('ineligible', false)
   if (RX.tos.test(msg)) return keep('terms_wall', true) // no portal submission → physical/manual class
 
-  // The four legitimate hand-offs.
+  // The remaining legitimate hand-offs.
   if (RX.physical.test(msg)) return keep('physical_copy', true) // 1
-  if (status === 'waiting_for_missing_info' && hasUnresolvedInfo) return keep('missing_info', true) // 2
   if (RX.botWall.test(msg)) return keep('bot_wall', true) // 3
   // 4: an EXISTING external login on file. Only a message that says the account
   //    already exists is category 4; a plain login wall is releasable (Hamilton
