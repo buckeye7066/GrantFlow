@@ -204,6 +204,12 @@ function opportunityId(opportunity, index) {
   return plainText(opportunity?.id ?? opportunity?.opportunity_id) || `row-${index + 1}`
 }
 
+function hardEligibilityReject(opportunity, decision) {
+  if (decision === 'REJECT' || opportunity?.canonical_eligible === false) return true
+  const status = normalized(opportunity?.eligibility_status ?? opportunity?.match_status)
+  return ['ineligible', 'not eligible', 'rejected', 'live reject'].includes(status)
+}
+
 function rankOne(fingerprint, opportunity, index) {
   const id = opportunityId(opportunity, index)
   const decision = canonicalDecision(opportunity)
@@ -271,10 +277,13 @@ export function rankResearchOpportunities({ fingerprint, opportunities = [], lim
   const boundedLimit = Math.max(1, Math.min(500, Number(limit) || 100))
   const excluded = []
   const ranked = []
+  const seenIds = new Set()
   opportunities.forEach((opportunity, index) => {
     const id = opportunityId(opportunity, index)
+    if (seenIds.has(id)) throw new Error(`duplicate opportunity id: ${id}`)
+    seenIds.add(id)
     const decision = canonicalDecision(opportunity)
-    if (decision === 'REJECT' || opportunity?.canonical_eligible === false) {
+    if (hardEligibilityReject(opportunity, decision)) {
       excluded.push({ id, reason: 'canonical_eligibility_reject' })
       return
     }

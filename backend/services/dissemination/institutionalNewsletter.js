@@ -4,6 +4,10 @@ const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PLACEHOLDER_DOMAIN_RX = /\.(?:invalid|test)$|@(?:example\.(?:com|org|net)|localhost)$/i
 const WORD_RX = /[a-z][a-z0-9-]{2,}/g
 const STOP_WORDS = new Set(['and', 'for', 'from', 'grant', 'grants', 'funding', 'the', 'with'])
+const MAX_GROUPS = 500
+const MAX_RECIPIENTS = 20_000
+const MAX_OPPORTUNITIES = 10_000
+const MAX_GROUP_MEMBERSHIPS = 50_000
 
 function text(value, fallback = '') {
   return String(value ?? fallback).trim()
@@ -16,6 +20,10 @@ function htmlEscape(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
+}
+
+function headerText(value, fallback = '') {
+  return text(value, fallback).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
 function fileSafe(value) {
@@ -78,6 +86,7 @@ function normalizeRecipients(recipients) {
   const eligible = []
   const suppressed = []
   const seenProfiles = new Set()
+  const seenEmails = new Set()
   for (const recipient of Array.isArray(recipients) ? recipients : []) {
     const profileId = text(recipient?.profile_id ?? recipient?.id)
     if (!profileId || seenProfiles.has(profileId)) {
@@ -91,7 +100,9 @@ function normalizeRecipients(recipients) {
     else if (recipient?.email_opt_in !== true) suppressed.push({ profile_id: profileId, reason: 'email_consent_not_recorded' })
     else if (!consentAt) suppressed.push({ profile_id: profileId, reason: 'email_consent_timestamp_missing' })
     else if (!email) suppressed.push({ profile_id: profileId, reason: 'deliverable_email_missing' })
+    else if (seenEmails.has(email)) suppressed.push({ profile_id: profileId, reason: 'duplicate_email' })
     else {
+      seenEmails.add(email)
       eligible.push({
         profile_id: profileId,
         display_name: text(recipient?.display_name ?? recipient?.name, profileId),
@@ -162,7 +173,7 @@ function groupOpportunities(group, candidates, maxOpportunities) {
 }
 
 function renderEdition({ institutionName, groupName, editionDate, opportunities }) {
-  const subject = `${institutionName} funding opportunities — ${groupName} — ${editionDate}`
+  const subject = `${headerText(institutionName)} funding opportunities — ${headerText(groupName)} — ${editionDate}`
   const lines = opportunities.length > 0
     ? opportunities.map((opportunity, index) => {
       const deadline = opportunity.deadline ? ` — deadline ${opportunity.deadline}` : ''
@@ -203,6 +214,22 @@ export function buildInstitutionalNewsletterBundle({
   opportunities = [],
   maxOpportunities = 10,
 }) {
+  if (!Array.isArray(groups) || groups.length > MAX_GROUPS) {
+    throw new Error(`groups must be an array of at most ${MAX_GROUPS} records`)
+  }
+  if (!Array.isArray(recipients) || recipients.length > MAX_RECIPIENTS) {
+    throw new Error(`recipients must be an array of at most ${MAX_RECIPIENTS} records`)
+  }
+  if (!Array.isArray(opportunities) || opportunities.length > MAX_OPPORTUNITIES) {
+    throw new Error(`opportunities must be an array of at most ${MAX_OPPORTUNITIES} records`)
+  }
+  const membershipCount = groups.reduce(
+    (count, group) => count + (Array.isArray(group?.recipient_profile_ids) ? group.recipient_profile_ids.length : 0),
+    0,
+  )
+  if (membershipCount > MAX_GROUP_MEMBERSHIPS) {
+    throw new Error(`group memberships exceed ${MAX_GROUP_MEMBERSHIPS} records`)
+  }
   const institution = text(institutionName)
   if (!institution) throw new Error('institutionName is required')
   const date = validEditionDate(editionDate)
@@ -227,7 +254,8 @@ export function buildInstitutionalNewsletterBundle({
     groupRecipients.forEach((recipient) => recipientRows.push({ group_id: groupId, ...recipient }))
     const selected = groupOpportunities(group, normalizedOpportunities, limit)
     const rendered = renderEdition({ institutionName: institution, groupName, editionDate: date, opportunities: selected })
-    const baseName = `${date}-${fileSafe(groupId)}`
+    const groupFileKey = `${fileSafe(groupId)}-${checksum(groupId).slice(0, 12)}`
+    const baseName = `${date}-${groupFileKey}`
     const editionFiles = [
       { name: `${baseName}.txt`, media_type: 'text/plain', content: rendered.text },
       { name: `${baseName}.html`, media_type: 'text/html', content: rendered.html },

@@ -49,6 +49,13 @@ function spreadsheetSafe(value) {
   return /^[=+\-@]/.test(text) ? `'${text}` : text
 }
 
+function fileSafe(value) {
+  return requiredText(value, 'file identifier')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'grant'
+}
+
 function csvCell(value) {
   const text = spreadsheetSafe(value)
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
@@ -101,7 +108,7 @@ export function parseCsv(csv, { maxRows = MAX_IMPORT_ROWS } = {}) {
   }
   if (rows.length === 0) return []
 
-  const headers = rows[0].map((value) => String(value).trim())
+  const headers = rows[0].map((value, index) => String(value).replace(index === 0 ? /^\uFEFF/ : /$^/, '').trim())
   if (new Set(headers).size !== headers.length) throw new Error('accounting CSV contains duplicate headers')
   return rows.slice(1).map((values, rowIndex) => {
     const result = {}
@@ -215,6 +222,7 @@ export function exportGrantAccountingBundle({ grant, budgets = [], expenses = []
   const resolvedProvider = normalizeProvider(provider)
   const resolvedCurrency = safeCurrency(currency)
   const grantId = requiredText(grant?.id, 'grant id')
+  const safeGrantId = fileSafe(grantId)
   const grantName = String(grant?.title ?? grant?.name ?? grantId).trim() || grantId
   const budgetRows = budgets.map(parseBudgetLine).filter((row) => row.grant_id === grantId)
     .sort((left, right) => left.id.localeCompare(right.id))
@@ -237,8 +245,8 @@ export function exportGrantAccountingBundle({ grant, budgets = [], expenses = []
   const columns = expenseColumns(resolvedProvider)
   const expenseCsv = encodeCsv(columns, expenseRows.map((row) => expenseRow(row, resolvedProvider, grantName)))
   const files = [
-    { name: `grantflow-${grantId}-budget.csv`, media_type: 'text/csv', content: budgetCsv, sha256: checksum(budgetCsv) },
-    { name: `grantflow-${grantId}-${resolvedProvider}-expenses.csv`, media_type: 'text/csv', content: expenseCsv, sha256: checksum(expenseCsv) },
+    { name: `grantflow-${safeGrantId}-budget.csv`, media_type: 'text/csv', content: budgetCsv, sha256: checksum(budgetCsv) },
+    { name: `grantflow-${safeGrantId}-${resolvedProvider}-expenses.csv`, media_type: 'text/csv', content: expenseCsv, sha256: checksum(expenseCsv) },
   ]
 
   return {

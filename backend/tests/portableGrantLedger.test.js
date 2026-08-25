@@ -48,6 +48,7 @@ describe('portable grant accounting exchange', () => {
       { A: 'one, two', B: 'line 1\nline 2', __row: 2 },
     ])
     expect(() => parseCsv('A\n"unterminated')).toThrow(/unterminated/)
+    expect(parseCsv('\uFEFFA,B\r\n1,2\r\n')).toEqual([{ A: '1', B: '2', __row: 2 }])
     expect(() => exportGrantAccountingBundle({
       grant,
       budgets: [],

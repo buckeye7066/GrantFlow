@@ -58,6 +58,11 @@ const opportunities = [
     description: 'Single cell oncology research.',
     canonical_decision: 'REJECT',
   },
+  {
+    id: 'stored-ineligible',
+    title: 'Cancer Genomics Award with stored ineligibility',
+    eligibility_status: 'ineligible',
+  },
 ]
 
 describe('CV and publication recommendation matching', () => {
@@ -92,10 +97,10 @@ describe('CV and publication recommendation matching', () => {
       prior_funder: 'National Cancer Institute',
       publication_record_fit: true,
     })
-    expect(result.excluded).toEqual([{
-      id: 'ineligible-perfect-topic',
-      reason: 'canonical_eligibility_reject',
-    }])
+    expect(result.excluded).toEqual([
+      { id: 'ineligible-perfect-topic', reason: 'canonical_eligibility_reject' },
+      { id: 'stored-ineligible', reason: 'canonical_eligibility_reject' },
+    ])
   })
 
   it('publishes deterministic golden quality metrics for recommendation regressions', () => {
@@ -119,6 +124,11 @@ describe('CV and publication recommendation matching', () => {
   it('enforces bounded inputs and a validated research fingerprint contract', () => {
     expect(() => buildResearchFingerprint({ publications: Array(501).fill({}) })).toThrow(/at most 500/)
     expect(() => rankResearchOpportunities({ fingerprint: {}, opportunities: [] })).toThrow(/fingerprint is required/)
+    const fingerprint = buildResearchFingerprint(researcher)
+    expect(() => rankResearchOpportunities({
+      fingerprint,
+      opportunities: [{ id: 'duplicate' }, { id: 'duplicate' }],
+    })).toThrow(/duplicate opportunity id/)
     expect(() => benchmarkResearchRanking({ cases: [] })).toThrow(/cases are required/)
   })
 })

@@ -34,6 +34,12 @@ const baseInput = {
       email_opt_in: true,
       email_consent_at: '2026-08-01T12:00:00Z',
     },
+    {
+      profile_id: 'profile-6',
+      email: 'faculty@university.edu',
+      email_opt_in: true,
+      email_consent_at: '2026-08-02T12:00:00Z',
+    },
   ],
   opportunities: [
     {
@@ -94,6 +100,7 @@ describe('institutional newsletter bundle', () => {
     const suppressionReasons = first.suppressed_recipients.map((entry) => entry.reason).sort()
     expect(suppressionReasons).toEqual([
       'deliverable_email_missing',
+      'duplicate_email',
       'email_consent_not_recorded',
       'email_consent_timestamp_missing',
       'inactive_profile',
@@ -128,5 +135,9 @@ describe('institutional newsletter bundle', () => {
       ...baseInput,
       editionDate: '2026-02-31',
     })).toThrow(/ISO calendar date/)
+    expect(() => buildInstitutionalNewsletterBundle({
+      ...baseInput,
+      groups: Array(501).fill({ id: 'too-many' }),
+    })).toThrow(/at most 500/)
   })
 })
