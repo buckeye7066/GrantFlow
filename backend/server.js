@@ -473,7 +473,11 @@ const CONTENT_SECURITY_POLICY_DIRECTIVES = {
   mediaSrc: ["'self'", 'blob:', 'data:', 'https:'],
   workerSrc: ["'self'", 'blob:'],
   manifestSrc: ["'self'"],
-  upgradeInsecureRequests: [],
+  // WebKit upgrades HTTP loopback assets when this directive is present,
+  // then fails the TLS handshake against the intentionally HTTP-only local
+  // server and leaves the SPA root blank. Production is served over HTTPS and
+  // keeps the upgrade requirement; local/dev/test retain every other CSP rule.
+  ...(isProdEnv ? { upgradeInsecureRequests: [] } : {}),
 };
 
 app.use(

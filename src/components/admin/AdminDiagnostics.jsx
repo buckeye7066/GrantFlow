@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { createPageUrl } from '@/utils';
 import { AUTO_ADD_SCORE } from '@/lib/matchDisplayThresholds';
+import { copyTextToClipboard } from '@/utils/clipboard';
 import {
   Dialog,
   DialogContent,
@@ -203,10 +204,8 @@ export default function AdminDiagnostics() {
     if (!error) return;
     const errorText = `Status: ${error.status}\nMessage: ${error.message}\nRaw Response: ${error.rawResponse}\nDetails: ${error.details || 'N/A'}`;
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error('Clipboard API unavailable');
-      }
-      await navigator.clipboard.writeText(errorText);
+      const copied = await copyTextToClipboard(errorText);
+      if (!copied) throw new Error('Clipboard copy unavailable');
       setCopyError(null);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -221,10 +220,8 @@ export default function AdminDiagnostics() {
     if (!diagnostics) return;
     const jsonText = JSON.stringify(diagnostics, null, 2);
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error('Clipboard API unavailable');
-      }
-      await navigator.clipboard.writeText(jsonText);
+      const copied = await copyTextToClipboard(jsonText);
+      if (!copied) throw new Error('Clipboard copy unavailable');
       setJsonCopyError(null);
       setJsonCopied(true);
       setTimeout(() => setJsonCopied(false), 2000);
@@ -1519,12 +1516,10 @@ export default function AdminDiagnostics() {
               onClick={async () => {
                 if (!inspectData) return;
                 try {
-                  if (!navigator.clipboard?.writeText) {
-                    throw new Error('Clipboard API unavailable');
-                  }
-                  await navigator.clipboard.writeText(
+                  const copied = await copyTextToClipboard(
                     JSON.stringify(redactSensitive(inspectData), null, 2),
                   );
+                  if (!copied) throw new Error('Clipboard copy unavailable');
                 } catch (e) {
                   setInspectError(`Copy failed: ${e?.message || 'unknown error'}`);
                 }

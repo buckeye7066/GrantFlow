@@ -14,6 +14,7 @@ import {
   CheckCircle2, HelpCircle, Copy, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { copyTextToClipboard } from '@/utils/clipboard';
 
 const CONFIDENCE_COLORS = {
   high: 'bg-green-100 text-green-800',
@@ -23,12 +24,12 @@ const CONFIDENCE_COLORS = {
 
 function AnswerCard({ answer, index }) {
   const [expanded, setExpanded] = useState(true);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState('idle');
 
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(answer.answer || '');
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = useCallback(async () => {
+    const copied = await copyTextToClipboard(answer.answer || '');
+    setCopyState(copied ? 'copied' : 'failed');
+    setTimeout(() => setCopyState('idle'), 2000);
   }, [answer.answer]);
 
   return (
@@ -58,8 +59,8 @@ function AnswerCard({ answer, index }) {
 
             <div className="flex items-center justify-between mt-2">
               <Button variant="ghost" size="sm" onClick={handleCopy} className="text-xs">
-                {copied ? <CheckCircle2 className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
-                {copied ? 'Copied' : 'Copy answer'}
+                {copyState === 'copied' ? <CheckCircle2 className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+                {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy answer'}
               </Button>
               {answer.missing_info && (
                 <span className="text-xs text-amber-600 flex items-center gap-1">
