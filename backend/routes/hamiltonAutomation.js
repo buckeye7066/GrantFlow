@@ -159,6 +159,7 @@ import {
 } from '../services/hamilton/hamiltonPortalPolicyRegistry.js'
 import { classifyBlocker, isServerWallSignal } from '../services/hamilton/hamiltonBlockerClassifier.js'
 import { classifyApplyability, applyabilityRank } from '../config/sourceApplyability.js'
+import { notFunderLeadSql } from '../config/pipelineCategory.js'
 import {
   saveResolvedField,
   listResolvedFields,
@@ -1157,8 +1158,12 @@ async function listReadySources(db, profileId) {
   // failure this excludes. Only APPLY-READY rows (NULL/apply_ready category)
   // reach Hamilton's auto-submit; a funder lead reaches it ONLY after Robert's
   // investigation PROMOTES it to apply_ready (config/pipelineCategory.js).
-  // Guarded by column existence so a pre-migration DB still returns rows.
-  let categoryFilter = ''
+  //
+  // FAIL CLOSED on probe errors: a transient DB blip must NOT drop the filter
+  // and admit funder_lead rows into auto-submit. Only a proven-absent column
+  // (pre-migration) clears the filter.
+  let categoryFilterG = `\n          AND ${notFunderLeadSql('g.pipeline_category')}`
+  let categoryFilterBare = `\n          AND ${notFunderLeadSql('pipeline_category')}`
   try {
     const probe = await db
       .prepare(
@@ -1167,8 +1172,13 @@ async function listReadySources(db, profileId) {
           : "SELECT 1 FROM pragma_table_info('grants') WHERE name='pipeline_category' LIMIT 1",
       )
       .get()
-    if (probe) categoryFilter = "\n        AND (pipeline_category IS NULL OR LOWER(pipeline_category) <> 'funder_lead')"
-  } catch { categoryFilter = '' }
+    if (!probe) {
+      categoryFilterG = ''
+      categoryFilterBare = ''
+    }
+  } catch {
+    // Keep filters — fail closed.
+  }
   // Pull the applyability signals (URLs + opportunity_kind + mode) so we can
   // rank APPLYABLE sources first and carry the tier. A source Hamilton cannot
   // apply to end-to-end (an account_portal login or an info_only description
@@ -1187,7 +1197,7 @@ async function listReadySources(db, profileId) {
          FROM grants g
          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
         WHERE g.profile_id = ?
-          AND g.status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilter}
+          AND g.status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilterG}
         ORDER BY g.updated_at DESC
         LIMIT 100`,
     ).all(profileId)
@@ -1198,7 +1208,7 @@ async function listReadySources(db, profileId) {
       `SELECT id, funding_opportunity_id, title, status
          FROM grants
         WHERE profile_id = ?
-          AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilter}
+          AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilterBare}
         ORDER BY updated_at DESC
         LIMIT 100`,
     ).all(profileId)

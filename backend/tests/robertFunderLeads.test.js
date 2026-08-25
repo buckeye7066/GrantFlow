@@ -19,11 +19,13 @@ process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const {
   admitFunderLeads, investigateFunderLeads, promoteFunderLeadIfApplicable,
-  qualifyFunderLead, looksLikeApplicationPath,
+  demoteResearchOnlyPromotions, qualifyFunderLead, looksLikeApplicationPath,
 } = await import('../services/robert/robertFunderLeads.js')
 const { analyzeFunderFit, NATIONAL_FOOTPRINT_MIN_STATES } = await import('../config/funderBehavior.js')
-const { isFunderLead, isApplyReady, hasUsableApplyPath, PIPELINE_CATEGORY, FUNDER_LEAD_STATE } =
-  await import('../config/pipelineCategory.js')
+const {
+  isFunderLead, isApplyReady, hasUsableApplyPath, hasPromotableApplyPath,
+  PIPELINE_CATEGORY, FUNDER_LEAD_STATE,
+} = await import('../config/pipelineCategory.js')
 
 const SCHEMA = `
 CREATE TABLE profiles (
@@ -110,6 +112,17 @@ describe('pipelineCategory predicates', () => {
     expect(hasUsableApplyPath({ url: 'https://www.google.com/search?q=grant' })).toBe(false)
     expect(hasUsableApplyPath({ application_url: null, url: '' })).toBe(false)
   })
+  it('hasPromotableApplyPath rejects research URLs that hasUsableApplyPath accepts', () => {
+    const propublica = {
+      url: 'https://projects.propublica.org/nonprofits/organizations/111111111',
+      source_url: 'https://projects.propublica.org/nonprofits/organizations/111111111',
+    }
+    expect(hasUsableApplyPath(propublica)).toBe(true)
+    expect(hasPromotableApplyPath(propublica)).toBe(false)
+    expect(hasPromotableApplyPath({ application_url: 'https://foundation.org/apply' })).toBe(true)
+    expect(hasPromotableApplyPath({ portal_url: 'https://x.org' })).toBe(false)
+    expect(hasPromotableApplyPath({ application_url: 'https://x.org/grants/how-to-apply' })).toBe(true)
+  })
 })
 
 describe('analyzeFunderFit', () => {
@@ -153,6 +166,54 @@ describe('admitFunderLeads — admission gates', () => {
     expect(rows[0].funder_lead_state).toBe(FUNDER_LEAD_STATE.CANDIDATE)
     expect(rows[0].status).toBe('interested') // a research stage, NOT ready_to_submit
     expect(isApplyReady(rows[0])).toBe(false)
+    // Research ProPublica URL stays in source_url only — never in url (promotion bait).
+    expect(rows[0].source_url).toContain('propublica.org')
+    expect(rows[0].url).toBeNull()
+  })
+
+  it('admit→investigate must NOT auto-promote on the ProPublica research URL alone', async () => {
+    seedProfile('p1', { type: 'nonprofit', state: 'TN' })
+    seedFunder('f1', '111111111', { name: 'National Housing Fund' })
+    for (const st of ['CA', 'NY', 'TX', 'FL', 'WA']) seedTx('111111111', st)
+    expect((await admitFunderLeads(db)).added).toBe(1)
+
+    // Simulate the OLD bug shape (url = research page) AND the fixed admit
+    // shape — neither may promote without a real application path.
+    const findUrl = async () => ({ url: 'https://nhf.org', searched: true, hits: 2 })
+    const res = await investigateFunderLeads(db, { findUrl })
+    expect(res.promoted).toBe(0)
+    const row = grantsFor('p1')[0]
+    expect(row.pipeline_category).toBe(PIPELINE_CATEGORY.FUNDER_LEAD)
+    expect(isApplyReady(row)).toBe(false)
+  })
+
+  it('a lead whose ONLY url is ProPublica is NEVER promoted via promoteFunderLeadIfApplicable', async () => {
+    seedProfile('p1')
+    db.raw.prepare(
+      `INSERT INTO grants (id, profile_id, title, status, pipeline_category, funder_lead_state, url, source_url)
+       VALUES ('g1','p1','F','interested','funder_lead','candidate',
+               'https://projects.propublica.org/nonprofits/organizations/1',
+               'https://projects.propublica.org/nonprofits/organizations/1')`,
+    ).run()
+    const row = db.raw.prepare('SELECT * FROM grants WHERE id=?').get('g1')
+    expect(hasUsableApplyPath(row)).toBe(true) // coarse filter still sees an https URL
+    expect(await promoteFunderLeadIfApplicable(db, row)).toBe(false)
+    expect(db.raw.prepare('SELECT pipeline_category FROM grants WHERE id=?').get('g1').pipeline_category)
+      .toBe('funder_lead')
+  })
+
+  it('demoteResearchOnlyPromotions heals false promotions that only have a research URL', async () => {
+    seedProfile('p1')
+    db.raw.prepare(
+      `INSERT INTO grants (id, profile_id, title, status, pipeline_category, funder_lead_state, url)
+       VALUES ('g1','p1','F','saved','apply_ready','promoted',
+               'https://projects.propublica.org/nonprofits/organizations/1')`,
+    ).run()
+    expect(await demoteResearchOnlyPromotions(db)).toBe(1)
+    const after = db.raw.prepare('SELECT * FROM grants WHERE id=?').get('g1')
+    expect(after.pipeline_category).toBe(PIPELINE_CATEGORY.FUNDER_LEAD)
+    expect(after.funder_lead_state).toBe(FUNDER_LEAD_STATE.CANDIDATE)
+    expect(after.status).toBe('interested')
   })
 
   it('adds an IN-STATE funder even without a national footprint', async () => {
