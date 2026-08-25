@@ -81,7 +81,7 @@ export default function AdminSamConsole() {
   const [status, setStatus] = useState(null)
   const [busy, setBusy] = useState(false)
   const [lastRun, setLastRun] = useState(null)
-  const [payload, setPayload] = useState('{\n  "mode": "observe",\n  "dryRun": true\n}')
+  const [payload, setPayload] = useState('{\n  "mode": "observe"\n}')
 
   const refresh = useCallback(async () => {
     try {
@@ -179,15 +179,15 @@ export default function AdminSamConsole() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => runWith("Run Diagnostics", "/api/sam/diagnose", { mode: "observe", dryRun: true })} disabled={busy}>
+            <Button onClick={() => runWith("Run Diagnostics", "/api/sam/diagnose", { mode: "observe" })} disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Stethoscope className="h-4 w-4 mr-2" />}
               Run Diagnostics
             </Button>
-            <Button variant="secondary" onClick={() => runWith("Plan Repairs", "/api/sam/plan-repair", { mode: "advise", dryRun: true })} disabled={busy}>
+            <Button variant="secondary" onClick={() => runWith("Plan Repairs", "/api/sam/plan-repair", { mode: "advise" })} disabled={busy}>
               <ClipboardList className="h-4 w-4 mr-2" />
               Plan Repairs
             </Button>
-            <Button variant="secondary" onClick={() => runWith("Run Production Gates", "/api/sam/run-gates", { mode: "gatekeeper", dryRun: true })} disabled={busy}>
+            <Button variant="secondary" onClick={() => runWith("Run Production Gates", "/api/sam/run-gates", { mode: "gatekeeper" })} disabled={busy}>
               <PlayCircle className="h-4 w-4 mr-2" />
               Run Production Gates
             </Button>

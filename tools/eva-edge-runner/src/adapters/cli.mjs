@@ -11,7 +11,7 @@ import os from 'node:os'
 // expect_stdout_matches, timeout_ms }. `manifest.allowed_processes` gates the
 // executable; an arg not in `journey.args` (already the fixed list) is never
 // synthesized. Returns a journey-result fragment.
-export async function runCliJourney({ manifest, journey, dryRun = false }) {
+export async function runCliJourney({ manifest, journey }) {
   const started = Date.now()
   const allowed = manifest.allowlist?.processes || manifest.allowed_processes || []
   const cmd = journey.command
@@ -30,10 +30,6 @@ export async function runCliJourney({ manifest, journey, dryRun = false }) {
       impact: 'journey could not run safely',
       confidence: 1.0,
     })
-  }
-
-  if (dryRun) {
-    return { journey_id: journey.id, name: journey.name, status: 'skipped', duration_ms: Date.now() - started }
   }
 
   // Run the command in the app's OWN repo directory so relative commands like

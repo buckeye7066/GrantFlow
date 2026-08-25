@@ -124,6 +124,18 @@ export const INFO_ONLY_HOSTS = Object.freeze([
   'usdirectloans.org',
   'federalregister.gov',
   'propublica.org',
+  // Aggregators / program-listing hosts that read as "applyable" only because the
+  // default tier is online_form (measured 2026-08-24 dominating the non-hub
+  // profiles' pipelines): `thegrantportal.com` is a lead-gen grant DIRECTORY;
+  // `aifsabroad.com` scholarship-anchor pages require enrolling in an AIFS
+  // study-abroad PROGRAM (not a per-award public form) — they still surface, they
+  // just never read as a cold auto-submittable form. `linkedin.com` is never an
+  // application surface (a `/redir/redirect?url=` tracking wrapper is not a form).
+  // These are true finders/wrappers, NOT real per-award funders (bold.org /
+  // scholarships.com serve real award pages and are deliberately NOT here).
+  'thegrantportal.com',
+  'aifsabroad.com',
+  'linkedin.com',
 ])
 
 /**

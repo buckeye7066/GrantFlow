@@ -46,6 +46,7 @@ import {
   STATUS_AGENTS,
   CANONICAL_ADMIN_EMAIL_DEFAULT,
   DEFAULT_RUN_OPTIONS,
+  assertNoDryRunOption,
   FULL_CYCLE_LOCK,
   FULL_CYCLE_ORDER,
   RUN_TYPES,
@@ -261,6 +262,9 @@ export async function startRun(db, {
     e.status = 400
     throw e
   }
+  // Naming the removed dry_run flag FAILS the request outright — it must
+  // never silently proceed as a real run the caller believed was a preview.
+  assertNoDryRunOption(options)
   if (!isControlCenterAdmin(user)) {
     const e = new Error('Only the canonical admin/operator may start agent control runs.')
     e.status = 403

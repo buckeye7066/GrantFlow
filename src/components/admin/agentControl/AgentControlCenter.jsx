@@ -56,7 +56,6 @@ export default function AgentControlCenter() {
   const [error, setError] = useState(null)
   const [agentToggles, setAgentToggles] = useState(() => Object.fromEntries(ALL_AGENTS.map((a) => [a, true])))
   const [options, setOptions] = useState({
-    dry_run: false,
     run_sam_preflight: true,
     run_sam_postflight: true,
     allow_robert_ingest: true,
@@ -274,7 +273,6 @@ export default function AgentControlCenter() {
             <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Run options</div>
             <div className="space-y-1.5">
               {[
-                ['dry_run', 'Dry run (no writes)'],
                 ['run_sam_preflight', 'Run Sam preflight'],
                 ['run_sam_postflight', 'Run Sam postflight'],
                 ['allow_robert_ingest', 'Allow Robert to ingest opportunities'],

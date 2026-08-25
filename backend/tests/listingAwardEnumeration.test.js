@@ -122,6 +122,47 @@ describe('extractListingAwardItems (listing enumeration + fabrication guard)', (
     expect(r.notFound[0]).toMatch(/no parseable JSON/)
   })
 
+  it('captures an in-SPA Apply BUTTON as a per-award applyMarker (bold.org gap 1)', async () => {
+    // A bold.org Apply control is a <button>, not an <a href>, so it can never be
+    // an applyUrl. The page supplies its own per-award apply CONTROLS; the
+    // enumerator attaches the marker to the matching award (fabrication-guarded:
+    // the marker must be one of the page's own controls, matched by title).
+    const title = 'STEM Excellence Scholarship'
+    const r = await extractListingAwardItems(
+      {
+        text: `Apply now for the ${title}. Award $5,000.`,
+        url: 'https://bold.org/dashboard/scholarships',
+        title: 'Your matched scholarships',
+        links: [],
+        applyControls: [{ marker: 'hamilton-apply-0', title, text: 'Apply Now' }],
+      },
+      { _invoke: fakeInvoke({ items: [
+        { title, amount: 5000, applyUrl: null, evidence: `the ${title}` },
+      ] }) },
+    )
+    expect(r.items).toHaveLength(1)
+    expect(r.items[0].applyUrl).toBeNull()
+    expect(r.items[0].applyMarker).toBe('hamilton-apply-0')
+  })
+
+  it('never invents an applyMarker for a title with no matching page control', async () => {
+    const r = await extractListingAwardItems(
+      {
+        text: 'The Alpha Scholarship supports students. The Beta Scholarship too.',
+        url: 'https://bold.org/dashboard/scholarships',
+        applyControls: [{ marker: 'hamilton-apply-0', title: 'Alpha Scholarship', text: 'Apply' }],
+      },
+      { _invoke: fakeInvoke({ items: [
+        { title: 'Alpha Scholarship', applyUrl: null, evidence: 'The Alpha Scholarship' },
+        { title: 'Beta Scholarship', applyUrl: null, evidence: 'The Beta Scholarship' },
+      ] }) },
+    )
+    const alpha = r.items.find((i) => i.title === 'Alpha Scholarship')
+    const beta = r.items.find((i) => i.title === 'Beta Scholarship')
+    expect(alpha.applyMarker).toBe('hamilton-apply-0') // control title matches
+    expect(beta.applyMarker).toBeNull() // no control for Beta → never fabricated
+  })
+
   it('titlePresentInText tolerates punctuation/truncation', () => {
     const norm = _internal.normForPresence('the aaron  clara todd pre professional scholarship fund')
     expect(_internal.titlePresentInText('Aaron & Clara Todd Pre-Professional', norm)).toBe(true)

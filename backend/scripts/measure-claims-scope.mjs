@@ -49,21 +49,27 @@ import {
   declaredStateFromTitle,
 } from '../config/opportunityJurisdiction.js'
 
-// ── The 12 profiles under test (label → id) ──────────────────────────────────
-const PROFILES = Object.freeze([
-  ['Robert', '6b3c75ec-dc56-46f9-b380-394172688175'],
-  ['Liubov', 'profile-luibov-samoylenko'],
-  ['John', 'profile-john-white'],
-  ['Brian', 'profile-brian-client'],
-  ['Axiom', 'profile-axiom-biolabs-2'],
-  ['FocusForward', 'profile-focus-forward-ministries'],
-  ['Avanell', 'profile-avanell-leamon'],
-  ['Olivia', 'profile-olivia-beltran'],
-  ['Hollie', 'profile-hollie-knox'],
-  ['Vermilion', '4814fcec-2487-4c85-98b3-d627240e1111'],
-  ['Gilbert', 'profile-gilbert-mccosh'],
-  ['Kim', '63f57a93-9e28-4f86-adb5-c07753e7cbf0'],
-])
+
+// The profiles under test are resolved at RUN TIME from the database. Real
+// profile identifiers and names must never be hard-coded into public source —
+// see tests/unit/public-source-profile-privacy.test.mjs. Set
+// MEASURE_PROFILE_IDS (comma-separated ids) to narrow the sweep.
+async function resolveMeasuredProfiles(db) {
+  const override = String(process.env.MEASURE_PROFILE_IDS || '').trim()
+  if (override) {
+    const ids = override.split(',').map((s) => s.trim()).filter(Boolean)
+    const picked = []
+    for (const id of ids) {
+      const row = await db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
+      picked.push([row?.display_name || id, id])
+    }
+    return picked
+  }
+  const rows = await db
+    .prepare("SELECT id, display_name FROM profiles WHERE status = 'active' ORDER BY id")
+    .all()
+  return (rows || []).map((r) => [r.display_name || r.id, r.id])
+}
 
 // The dimension a current gate speaks to, mapped to the claim dimensions the new
 // model would carry for the same fact.
@@ -167,7 +173,8 @@ async function runFull() {
   }
   const withheldSamples = [] // { profile, title, dimension, scopes }
 
-  for (const [label, profileId] of PROFILES) {
+  const measuredProfiles = await resolveMeasuredProfiles(db)
+  for (const [label, profileId] of measuredProfiles) {
     let ctx
     try {
       ctx = await loadProfileContext(db, profileId)

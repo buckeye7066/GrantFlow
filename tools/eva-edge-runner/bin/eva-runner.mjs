@@ -2,7 +2,6 @@
 // EVA Windows edge runner — CLI entry.
 //
 //   eva-runner --selftest     run the fixture-only selftest (no real apps, no upload)
-//   eva-runner --dry-run      resolve apps + build the payload but DO NOT launch apps or upload
 //   eva-runner                a real run: launch feasible apps, run journeys, upload signed results
 //   eva-runner --catchup      force the wake-from-sleep catch-up path
 //
@@ -16,6 +15,7 @@ import { runAppJourneys, buildPayload } from '../src/runner.mjs'
 import { launchWebApp } from '../src/launcher.mjs'
 import { resolveLaunchEnv, checkPrerequisites } from '../src/prereq.mjs'
 import { blockedAppResult, startupFailedAppResult } from '../src/appOutcome.mjs'
+import { captureGitState, maybeFastForward, annotateAppResultWithGitState, describeGitState } from '../src/gitState.mjs'
 import { uploadResult, sendHeartbeat } from '../src/uploader.mjs'
 
 const WEB_RUNTIMES = new Set(['web', 'mobile-web'])
@@ -31,10 +31,17 @@ async function main() {
 
   const cfg = loadRunnerConfig()
   ensureDataDir(cfg)
-  const dryRun = args.has('--dry-run')
+  // NO DRY RUNS (owner order 2026-08-13, permanent): every run of this tool does
+  // REAL work. The flag is removed OUTRIGHT rather than ignored — an invocation
+  // naming it FAILS loudly, so a scheduled task or launcher still passing it is
+  // surfaced instead of silently doing a real run the caller did not expect.
+  if (args.has('--dry-run') || args.has('--dryrun') || args.has('--report-only')) {
+    console.error('[eva-runner] --dry-run was REMOVED: every run does real work. Re-invoke without it.')
+    process.exit(2)
+  }
   const forceCatchup = args.has('--catchup')
 
-  if (!dryRun && !cfg.secret) {
+  if (!cfg.secret) {
     console.error('[eva-runner] EVA_RUNNER_SECRET is not set — cannot sign uploads. Set it in the environment (never in source).')
     // Still send a heartbeat is impossible without the secret; exit non-zero.
     process.exit(2)
@@ -48,7 +55,7 @@ async function main() {
 
   // Always send a heartbeat first, so even a run that ultimately can't test
   // anything is visible at the coordinator.
-  if (!dryRun) {
+  {
     await sendHeartbeat({ cfg, status: 'testing', note: isCatchup ? 'catch-up run' : 'scheduled run' }).catch(() => {})
   }
 
@@ -60,13 +67,34 @@ async function main() {
   const startedAt = new Date().toISOString()
   const appResults = []
   for (const app of feasible) {
+    // GIT TRUTH before anything else touches the app's tree. The owner's policy
+    // is "done means merged to origin/main", but the runner tests each app's
+    // LOCAL tree — which for weeks was another branch / dirty / behind, so
+    // fixes merged on GitHub were never what the nightly tested and findings
+    // recurred with no explanation. Capture {branch, sha, dirty, ahead/behind}
+    // (fetch tolerated offline), fast-forward ONLY a clean main tree that is
+    // merely behind, and attach the state to every result so Anya's email can
+    // show WHAT CODE was tested. A dirty tree / non-main branch is another
+    // agent's live WIP: reported as stale_tree, never touched.
+    let gitState = captureGitState(app.local_path)
+    let gitSync = null
+    if (gitState.available) {
+      gitSync = maybeFastForward(app.local_path, gitState)
+      if (gitSync.attempted) {
+        console.log(`[git] ${app.app_id}: auto-sync ${gitSync.ok ? 'ok' : `FAILED: ${gitSync.error}`} (was ${describeGitState(gitState)})`)
+        if (gitSync.ok) gitState = captureGitState(app.local_path, { fetch: false })
+      }
+    }
+    console.log(`[git] ${app.app_id}: ${describeGitState(gitState)}`)
+    const pushResult = (result) => appResults.push(annotateAppResultWithGitState(result, gitState, gitSync))
+
     const manifest = loadManifest(app.local_path, app.app_id)
     if (!manifest) {
-      appResults.push({ app_id: app.app_id, display_name: app.display_name, app_status: 'manual_required', blocker_reason: 'no qa/user-journeys.json manifest found', duration_ms: 0, journeys: [] })
+      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'manual_required', blocker_reason: 'no qa/user-journeys.json manifest found', duration_ms: 0, journeys: [] })
       continue
     }
     if (app.runtime_status === 'blocked_by_external_service') {
-      appResults.push({ app_id: app.app_id, display_name: app.display_name, app_status: 'blocked', blocker_reason: app.blocker || 'external service unavailable', duration_ms: 0, journeys: [] })
+      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'blocked', blocker_reason: app.blocker || 'external service unavailable', duration_ms: 0, journeys: [] })
       continue
     }
     // Launch real apps the way each manifest declares: for web apps, spawn the
@@ -86,10 +114,10 @@ async function main() {
     // refuse to boot without a value looked broken when they were merely
     // unconfigured.
     const { env: launchEnv } = resolveLaunchEnv({ app, manifest })
-    if (!dryRun) {
+    {
       const pre = await checkPrerequisites({ manifest, resolvedEnv: launchEnv })
       if (pre.unmet.length) {
-        appResults.push(blockedAppResult({ app, manifest, unmet: pre.unmet, durationMs: Date.now() - started }))
+        pushResult(blockedAppResult({ app, manifest, unmet: pre.unmet, durationMs: Date.now() - started }))
         continue
       }
     }
@@ -104,11 +132,11 @@ async function main() {
       // With `journeys: []` those findings could never resolve and re-rendered
       // in the owner's email forever ("recurring", last pass never).
       let startupJourney = null
-      if (!dryRun && isWeb) {
+      if (isWeb) {
         launch = await launchWebApp({ app, manifest, launchEnv, log: (m) => console.log(m) })
         baseUrl = launch.baseUrl || baseUrl
         if (launch.launched && !launch.ready) {
-          appResults.push(startupFailedAppResult({ app, manifest, launch, baseUrl, durationMs: Date.now() - started }))
+          pushResult(startupFailedAppResult({ app, manifest, launch, baseUrl, durationMs: Date.now() - started }))
           continue
         }
         if (launch.launched && launch.ready) {
@@ -120,19 +148,19 @@ async function main() {
           }
         }
       }
-      const journeys = await runAppJourneys({ app, manifest, baseUrl, dryRun })
+      const journeys = await runAppJourneys({ app, manifest, baseUrl })
       if (startupJourney) journeys.unshift(startupJourney)
-      appResults.push({
+      pushResult({
         app_id: app.app_id,
         display_name: app.display_name,
         repo: app.repo,
-        app_status: dryRun ? 'not_run' : 'tested',
+        app_status: 'tested',
         duration_ms: Date.now() - started,
         feature_coverage: manifest.feature_coverage || undefined,
         journeys,
       })
     } catch (err) {
-      appResults.push({ app_id: app.app_id, display_name: app.display_name, app_status: 'startup_failed', blocker_reason: String(err?.message || err).slice(0, 300), duration_ms: Date.now() - started, journeys: [] })
+      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'startup_failed', blocker_reason: String(err?.message || err).slice(0, 300), duration_ms: Date.now() - started, journeys: [] })
     } finally {
       if (launch && launch.launched) {
         try {
@@ -146,19 +174,13 @@ async function main() {
 
   const payload = buildPayload({
     runnerId: cfg.runnerId,
-    environment: dryRun ? 'fixture' : cfg.environment,
+    environment: cfg.environment,
     runId: `${cfg.runnerId}-${today}-${Date.now()}`,
     startedAt,
     completedAt: new Date().toISOString(),
     appResults,
     catchup: !!isCatchup,
   })
-
-  if (dryRun) {
-    console.log(JSON.stringify(payload, null, 2))
-    console.log(`\n[eva-runner] DRY RUN — resolved ${appResults.length} app(s); nothing launched or uploaded.`)
-    process.exit(0)
-  }
 
   const up = await uploadResult({ cfg, payload })
   if (up.ok) {
