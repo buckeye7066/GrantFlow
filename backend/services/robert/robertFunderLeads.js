@@ -49,7 +49,12 @@
 
 import crypto from 'crypto'
 import { createLogger } from '../../utils/logger.js'
-import { PIPELINE_CATEGORY, FUNDER_LEAD_STATE, hasUsableApplyPath } from '../../config/pipelineCategory.js'
+import {
+  PIPELINE_CATEGORY,
+  FUNDER_LEAD_STATE,
+  hasPromotableApplyPath,
+  looksLikeApplicationPath,
+} from '../../config/pipelineCategory.js'
 import {
   declaredNeedsOf,
   purposeLikePatternsForNeeds,
@@ -59,6 +64,9 @@ import {
 import { normalizeNeedCategory, NEED_ALIAS_MAP } from '../profileNormalizer.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../../config/fundingResultFilters.js'
 import { isDismissed } from '../pipelineDismissals.js'
+
+// Re-export so robertSourceAcquisition (and tests) keep a single import site.
+export { looksLikeApplicationPath }
 
 const log = createLogger('robert-funder-leads')
 
@@ -328,13 +336,16 @@ export async function admitFunderLeads(db, {
         const grantId = crypto.randomUUID()
         const insCols = ['id', 'profile_id', 'funding_opportunity_id', 'title', 'funder', 'status', 'notes', 'pipeline_category', 'funder_lead_state']
         const insVals = [grantId, profileId, opp.id, opp.title, opp.sponsor || opp.title || null, 'interested', noteLine, PIPELINE_CATEGORY.FUNDER_LEAD, FUNDER_LEAD_STATE.CANDIDATE]
+        // Research URLs (ProPublica org pages) land ONLY in source_url — never
+        // in url/application_url. Copying them into url made hasUsableApplyPath
+        // true on every admit, so the next investigation pass auto-promoted
+        // every lead to apply-ready without a real application path.
         const optional = [
           ['organization_id', ctx.profile.organization_id ?? null],
           ['match_score', score],
           ['match_decision', decisionStr],
           ['matcher_version', FUNDER_LEAD_MATCHER_VERSION],
           ['source_url', opp.source_url ?? null],
-          ['url', opp.source_url ?? null],
         ]
         for (const [c, v] of optional) if (cols.has(c)) { insCols.push(c); insVals.push(v) }
         const ph = insCols.map(() => '?').join(', ')
@@ -354,15 +365,17 @@ export async function admitFunderLeads(db, {
 }
 
 /**
- * A funder-lead grant is PROMOTED to apply-ready when it has a usable
- * application path. This is the single transition that lets a funder reach
- * Hamilton's auto-submit. Idempotent; a row without an apply path is untouched.
+ * A funder-lead grant is PROMOTED to apply-ready when it has a PROMOTABLE
+ * application path (application/apply/portal URL whose path looks like an
+ * apply surface — never a research `url`/`source_url`). This is the single
+ * transition that lets a funder reach Hamilton's auto-submit. Idempotent; a
+ * row without an apply path is untouched.
  *
  * @returns true iff a promotion happened.
  */
 export async function promoteFunderLeadIfApplicable(db, grantRow, cols = null) {
   if (!grantRow) return false
-  if (!hasUsableApplyPath(grantRow)) return false
+  if (!hasPromotableApplyPath(grantRow)) return false
   const columns = cols || (await grantColumnSet(db))
   const sets = ['pipeline_category = ?']
   const vals = [PIPELINE_CATEGORY.APPLY_READY]
@@ -385,18 +398,62 @@ export async function promoteFunderLeadIfApplicable(db, grantRow, cols = null) {
 }
 
 const MAX_INVESTIGATE_ATTEMPTS = boundedInt('FUNDER_LEAD_MAX_ATTEMPTS', 3, 1)
-const APPLICATION_PATH_RX = /\/(apply|application|applications|grants?|funding|how-to-apply|eligibility|guidelines|rfp|nofo|proposal)s?(\/|$|\?|#)/i
 
-/** A discovered URL that looks like an application/grants PATH, not a bare homepage. */
-export function looksLikeApplicationPath(url) {
-  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return false
-  try { return APPLICATION_PATH_RX.test(new URL(url).pathname + (new URL(url).search || '')) } catch { return false }
+/**
+ * Self-heal rows already promoted by the research-URL bug: apply_ready +
+ * funder_lead_state=promoted, but NO promotable apply path. Demotes back to
+ * funder_lead/candidate so Hamilton cannot cold-submit. Never touches
+ * user-progressed statuses.
+ *
+ * @returns number of rows demoted.
+ */
+export async function demoteResearchOnlyPromotions(db, cols = null) {
+  const columns = cols || (await grantColumnSet(db))
+  if (!columns.has('pipeline_category') || !columns.has('funder_lead_state')) return 0
+  const selectCols = ['id', 'status']
+  for (const c of ['application_url', 'portal_url', 'url', 'apply_url']) {
+    if (columns.has(c)) selectCols.push(c)
+  }
+  let rows
+  try {
+    rows = await db.prepare(
+      `SELECT ${selectCols.join(', ')}
+         FROM grants
+        WHERE LOWER(COALESCE(pipeline_category,'')) = '${PIPELINE_CATEGORY.APPLY_READY}'
+          AND LOWER(COALESCE(funder_lead_state,'')) = '${FUNDER_LEAD_STATE.PROMOTED}'
+          AND LOWER(COALESCE(status,'')) IN ('interested','discovered','saved')
+        LIMIT 500`,
+    ).all()
+  } catch {
+    return 0
+  }
+  let demoted = 0
+  for (const row of rows || []) {
+    if (hasPromotableApplyPath(row)) continue
+    const sets = ['pipeline_category = ?', 'funder_lead_state = ?']
+    const vals = [PIPELINE_CATEGORY.FUNDER_LEAD, FUNDER_LEAD_STATE.CANDIDATE]
+    if (columns.has('status')) {
+      sets.push("status = CASE WHEN status = 'saved' THEN 'interested' ELSE status END")
+    }
+    if (columns.has('updated_at')) sets.push(`updated_at = ${isPg(db) ? 'now()' : 'CURRENT_TIMESTAMP'}`)
+    vals.push(row.id)
+    try {
+      await db.prepare(`UPDATE grants SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+      demoted += 1
+    } catch (err) {
+      log.warn('funder-lead demote research-only: update failed (non-fatal)', {
+        grant: row.id, error: String(err?.message || err),
+      })
+    }
+  }
+  return demoted
 }
 
 /**
  * Robert's active investigation of funder leads: work each toward a verdict.
  *
- *   1. Already has a usable apply path  -> PROMOTE (no network).
+ *   0. Self-heal research-URL false promotions (demote back to funder_lead).
+ *   1. Already has a PROMOTABLE apply path  -> PROMOTE (no network).
  *   2. Otherwise search for the funder's official application page; if a live
  *      URL that looks like an application PATH is found, set it and PROMOTE.
  *   3. A live homepage (no apply path) is recorded as a research lead; the row
@@ -412,12 +469,19 @@ export async function investigateFunderLeads(db, {
   findUrl = null,
   now = Date.now(),
 } = {}) {
-  const out = { scanned: 0, promoted: 0, investigated: 0, notApplicable: 0, deferredOutage: 0, skipped: null, enforced: true }
+  const out = {
+    scanned: 0, promoted: 0, investigated: 0, notApplicable: 0,
+    deferredOutage: 0, demoted: 0, skipped: null, enforced: true,
+  }
   const cols = await grantColumnSet(db)
   if (!cols.has('pipeline_category')) { out.skipped = 'schema'; return out }
   const hasState = cols.has('funder_lead_state')
   const hasAttempts = cols.has('funder_lead_attempts')
   const hasInvestigatedAt = cols.has('funder_lead_last_investigated_at')
+
+  // Heal residual damage from the research-URL auto-promote bug before we
+  // consider any new promotions.
+  try { out.demoted = await demoteResearchOnlyPromotions(db, cols) } catch { out.demoted = 0 }
 
   let findOfficialUrlForOpportunity = findUrl
   if (!findOfficialUrlForOpportunity) {
@@ -451,8 +515,10 @@ export async function investigateFunderLeads(db, {
     if (Date.now() - start > timeBudgetMs) break
     out.scanned += 1
 
-    // 1. Already applicable -> promote.
-    if (hasUsableApplyPath(row)) {
+    // 1. Already has a promotable apply path -> promote.
+    //    hasPromotableApplyPath (NOT hasUsableApplyPath): a ProPublica research
+    //    URL in `url` must NOT count as already-applicable.
+    if (hasPromotableApplyPath(row)) {
       if (await promoteFunderLeadIfApplicable(db, row, cols)) out.promoted += 1
       continue
     }
@@ -518,6 +584,7 @@ export default {
   admitFunderLeads,
   investigateFunderLeads,
   promoteFunderLeadIfApplicable,
+  demoteResearchOnlyPromotions,
   qualifyFunderLead,
   looksLikeApplicationPath,
   FUNDER_LEAD_MATCHER_VERSION,
