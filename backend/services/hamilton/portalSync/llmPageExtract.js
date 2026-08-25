@@ -551,6 +551,13 @@ function titlePresentInText(title, normText) {
  * @param {string|null} [snapshot.url]      the listing page URL (item fallback)
  * @param {string|null} [snapshot.title]
  * @param {Array<{href:string,text:string}>} [snapshot.links]  page anchors
+ * @param {Array<{marker:string,title?:string,text?:string}>} [snapshot.applyControls]
+ *   the page's OWN in-SPA "Apply" controls (a bold.org Apply BUTTON is not an
+ *   `<a href>`, so it can never be an `applyUrl` — it is captured here as a
+ *   per-award `marker` the apply step can re-find). Analogous to `links`: an
+ *   emitted `applyMarker` is kept ONLY when it is one of these page-supplied
+ *   markers (fabrication guard — the model can never invent a marker), and only
+ *   when a control's `title` matches an enumerated award's title.
  * @param {object} [opts]
  * @param {(args:object)=>Promise<object>} [opts._invoke]  test seam
  * @param {(msg:string,detail?:object)=>void} [opts.log]
@@ -563,6 +570,7 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
   const url = snapshot?.url || null
   const title = snapshot?.title || null
   const links = Array.isArray(snapshot?.links) ? snapshot.links : []
+  const applyControls = Array.isArray(snapshot?.applyControls) ? snapshot.applyControls : []
   const maxItems = Number.isFinite(opts.maxItems) ? opts.maxItems : 50
   const raw = { provider: null, attempted: true }
 
@@ -598,6 +606,16 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
   // Deterministic fabrication guard.
   const normText = normForPresence(text)
   const allowedHrefs = new Set(links.map((l) => String(l?.href || '')).filter(Boolean))
+  // In-SPA apply markers the PAGE supplied, keyed by the award title they sit on
+  // (normalized). A marker is only ever taken from this set — the model cannot
+  // invent one — and only when a control's title matches an enumerated award.
+  const allowedMarkers = new Set(applyControls.map((c) => String(c?.marker || '')).filter(Boolean))
+  const markerByTitle = new Map()
+  for (const c of applyControls) {
+    const marker = String(c?.marker || '')
+    const ctrlTitle = normForPresence(c?.title || '')
+    if (marker && ctrlTitle && !markerByTitle.has(ctrlTitle)) markerByTitle.set(ctrlTitle, marker)
+  }
   const items = []
   const rejected = []
   const seen = new Set()
@@ -617,6 +635,13 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
       rejected.push({ title: t.slice(0, 120), reason: 'apply_url_not_on_page: enumerated applyUrl is not among the page links — dropped the link, kept the item as catalog-only' })
       applyUrl = null
     }
+    // In-SPA apply BUTTON: a bold.org "Apply" control is not an <a href>, so it
+    // yields no applyUrl. If the page handed us a per-award apply control whose
+    // title matches this award, carry its marker as a real apply target. Guarded
+    // twice: the marker MUST be one of the page's own controls (allowedMarkers),
+    // and it is only attached when the control's title matches (dedupeKey).
+    let applyMarker = markerByTitle.get(dedupeKey) || null
+    if (applyMarker && !allowedMarkers.has(applyMarker)) applyMarker = null
     seen.add(dedupeKey)
     items.push({
       title: t.slice(0, 200),
@@ -624,6 +649,7 @@ export async function extractListingAwardItems(snapshot = {}, opts = {}) {
       sponsor: it?.sponsor ? String(it.sponsor).trim().slice(0, 200) : null,
       deadline: it?.deadline ? String(it.deadline).trim().slice(0, 120) : null,
       applyUrl,
+      applyMarker,
       evidence: it?.evidence ? String(it.evidence).trim().slice(0, 200) : null,
       source: 'llm_listing_enumerate',
     })

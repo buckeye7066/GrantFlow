@@ -174,8 +174,9 @@ test('admin dedupe endpoints: duplicates + merge (dry-run + apply) enforce admin
     assert.equal(group.winner.id, winnerProfileId)
     assert.ok(Array.isArray(group.losers) && group.losers.some((p) => p.id === loserProfileId))
 
-    // Dry-run merge.
-    const mergeDry = await fetchJson(`http://127.0.0.1:${port}/api/admin/profiles/merge`, {
+    // dry_run is REMOVED OUTRIGHT (owner no-dry-runs order): NAMING the flag
+    // fails with 400 — it must never silently proceed as a real merge.
+    const mergeNamed = await fetchJson(`http://127.0.0.1:${port}/api/admin/profiles/merge`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
@@ -184,18 +185,16 @@ test('admin dedupe endpoints: duplicates + merge (dry-run + apply) enforce admin
         dryRun: true,
       }),
     })
-    assert.equal(mergeDry.status, 200)
-    assert.equal(mergeDry.json?.ok, true)
-    assert.equal(mergeDry.json?.dry_run, true)
+    assert.equal(mergeNamed.status, 400)
+    assert.match(String(mergeNamed.json?.error || ''), /removed/i)
 
-    // Apply merge.
+    // Apply merge (no flag = the real thing).
     const mergeApply = await fetchJson(`http://127.0.0.1:${port}/api/admin/profiles/merge`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         winnerId: winnerProfileId,
         loserIds: [loserProfileId],
-        dryRun: false,
       }),
     })
     assert.equal(mergeApply.status, 200)

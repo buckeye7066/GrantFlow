@@ -139,3 +139,23 @@ describe('the SQL derived read', () => {
     expect(sql).not.toMatch(/~\*/)
   })
 })
+
+import { describe as _d2, it as _i2, expect as _e2 } from 'vitest'
+import { classifyApplyability as _classify } from '../config/sourceApplyability.js'
+_d2('aggregator / wrapper hosts are info_only, real award hosts stay applyable', () => {
+  _i2('classifies thegrantportal / aifsabroad / linkedin as info_only (not a cold form)', () => {
+    for (const u of [
+      'https://tennessee.thegrantportal.com/grants-for-individuals/financial-assistance',
+      'https://www.aifsabroad.com/scholarships-grants-details/#green-ambassador',
+      'https://www.linkedin.com/redir/redirect?url=http%3A%2F%2Fx.org',
+    ]) {
+      const c = _classify({ application_url: u, url: u })
+      _e2(c.isApplyable, u).toBe(false)
+      _e2(c.tier).toBe('info_only')
+    }
+  })
+  _i2('does NOT over-classify real per-award hosts (bold.org, academicworks)', () => {
+    _e2(_classify({ application_url: 'https://bold.org/scholarships/x/' }).isApplyable).toBe(true)
+    _e2(_classify({ application_url: 'https://cpcc.academicworks.com/opportunities/1' }).isApplyable).toBe(true)
+  })
+})

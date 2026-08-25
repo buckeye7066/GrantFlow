@@ -2,6 +2,8 @@
 // vs reproducible) and bounded idempotent upload retry. No real apps, no network.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { runAppJourneys } from '../src/runner.mjs'
 import { uploadResult } from '../src/uploader.mjs'
 
@@ -27,16 +29,26 @@ test('a journey that fails then passes on retry is INTERMITTENT, never a clean p
   assert.equal(journeys[0].retry_classification, 'reproducible', 'a consistently-failing journey is reproducible')
 })
 
-test('dry-run skips execution', async () => {
+// NO DRY RUNS (owner order 2026-08-13). The old test asserted that --dry-run
+// SKIPPED execution; the mode is removed outright, so the guard now asserts the
+// opposite: naming the flag FAILS loudly instead of silently doing a real run.
+test('--dry-run is REMOVED and the flag fails loudly (never silently runs for real)', async () => {
+  const bin = fileURLToPath(new URL('../bin/eva-runner.mjs', import.meta.url))
+  const res = spawnSync(process.execPath, [bin, '--dry-run'], { encoding: 'utf8', timeout: 30000 })
+  assert.equal(res.status, 2, 'a removed run-mode flag must exit non-zero, not proceed')
+  assert.match(String(res.stderr), /--dry-run was REMOVED/)
+})
+
+test('a journey still EXECUTES — removing the skip path did not disable the runner', async () => {
   const manifest = {
     app_id: 'fixture',
     runtime_type: 'cli',
     allowlist: { processes: [process.execPath] },
     nightly_critical_journeys: ['j'],
-    journeys: [{ id: 'j', name: 'J', command: process.execPath, args: ['-e', 'process.exit(1)'], timeout_ms: 5000 }],
+    journeys: [{ id: 'j', name: 'J', command: process.execPath, args: ['-e', 'process.exit(0)'], timeout_ms: 5000 }],
   }
-  const journeys = await runAppJourneys({ app: { app_id: 'fixture' }, manifest, dryRun: true })
-  assert.equal(journeys[0].status, 'skipped')
+  const journeys = await runAppJourneys({ app: { app_id: 'fixture' }, manifest })
+  assert.equal(journeys[0].status, 'passed', 'the journey really ran')
 })
 
 test('uploadResult treats 200/201 as success and does not retry a terminal 4xx', async () => {

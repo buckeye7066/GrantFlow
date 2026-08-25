@@ -45,8 +45,14 @@ import {
 } from '../config/fundingResultFilters.js'
 import {
   opportunityLockText,
+  // Re-imported for the requirement-satisfaction floor's profile-profession
+  // resolution (the scoped profession GATE no longer needs them — it resolves
+  // internally — but the floor's deps do).
+  resolveProfileProfessions,
+  professionSignalTextFromSections,
 } from './eligibility/professionEligibility.js'
 import { professionApplicantConflict } from '../config/sourceClaims/professionApplicantConflict.js'
+import { geographyConflict, declaredApplicantStates } from '../config/sourceClaims/geographyConflict.js'
 import {
   hasDeclaredMilitaryAffiliation,
   assessServiceCommitmentEligibility,
@@ -57,7 +63,11 @@ import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/ind
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
 import { fieldOfStudyConflict } from '../config/fieldOfStudyEligibility.js'
-import { fieldOfStudyApplicantConflict } from '../config/sourceClaims/core.js'
+import {
+  fieldOfStudyApplicantConflict,
+  deriveSourceClaims,
+  requirementSatisfaction,
+} from '../config/sourceClaims/core.js'
 import {
   deriveWebsitePurpose,
   websitePurposeConflict,
@@ -3310,6 +3320,58 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     )
   }
 
+  // ── REQUIREMENT-SATISFACTION floor (false-NEGATIVE fix, 2026-08-24) ──
+  //
+  // The needs-only floor above lifts a narrow fund ONLY when the funder states a
+  // canonical NEED the profile matches. A genuinely-qualifying narrow fund often
+  // states its bar as a FIELD, a PROFESSION or a RESIDENCY instead ("Tennessee
+  // paramedic students") — needTypesSupported is empty or unrelated, so
+  // `fullSatisfaction` is false and the profile-overlap ratio buries it in
+  // REVIEW (§1f/§4c). This generalises the SAME lift to REQUIREMENT SATISFACTION
+  // over the source's APPLICANT-scoped claims: when the profile POSITIVELY
+  // satisfies EVERY applicant claim the source makes about itself (≥1 claim,
+  // zero unmet) and the SAME eligibility/geo gates are clean, the coverage is
+  // floored to ACCEPT — the needs path's twin, keyed on the same
+  // `deriveSourceClaims` producer + `applicantConflicts` dimension logic.
+  // SILENCE on a dimension is never satisfaction (we cannot confirm a
+  // requirement we hold no fact for), exactly as the needs path counts only
+  // positively-matched needs. Math.max: it never lowers a higher measured
+  // coverage, and the resource-kind / calibration / gate guards are identical.
+  if (
+    SCORING_MODEL === 'data_point' &&
+    inventoryCalibratable &&
+    !isResourceKindRow &&
+    satisfactionGatesClean &&
+    dataPointCoverage < SATISFACTION_ACCEPT_COVERAGE
+  ) {
+    let claimSatisfaction = null
+    try {
+      claimSatisfaction = requirementSatisfaction(
+        deriveSourceClaims(effectiveOpp),
+        fullSections(profileContext?.sections ?? null, effectiveProfile),
+        {
+          resolveProfileProfessions: (s) =>
+            resolveProfileProfessions(professionSignalTextFromSections(s)),
+          profileStates: () => profileStates(effectiveSignals, profileState),
+        },
+      )
+    } catch {
+      // Claim derivation must never take scoring down — MISSING = NEUTRAL.
+      claimSatisfaction = null
+    }
+    if (claimSatisfaction && claimSatisfaction.fullySatisfied) {
+      dataPointCoverage = SATISFACTION_ACCEPT_COVERAGE
+      const labels = claimSatisfaction.satisfied.map(
+        (c) => `${c.dimension.replace(/_/g, ' ')}: ${c.value}`,
+      )
+      reasons.push(
+        `Fully satisfies this funder's stated applicant requirement${claimSatisfaction.satisfied.length === 1 ? '' : 's'} ` +
+        `(${labels.join(', ')}) — a narrow fund you qualify for, surfaced at ACCEPT ` +
+        `despite touching few of your data points`,
+      )
+    }
+  }
+
   // Behavior nudge (soft preference learning) still tips borderline scores.
   // On the fallback path it already flowed through rawScore.
   const modelUsesDataPoints = SCORING_MODEL === 'data_point'
@@ -4250,6 +4312,45 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     reasons.push(reasonText)
     return { decision: 'REJECT', explanation: `${reasonText}.`, reasons }
   }
+
+  // SCOPE-AWARE geography reject (Stage-2 evidence model; #1367 + this slice).
+  // This is the SOLE hard-REJECT geographic authority, and it reads the row's
+  // REAL geography from the row's OWN evidence via scoped emitJurisdiction:
+  //   • a residency REQUIREMENT whose state is the one named in the SAME fragment
+  //     ("Ohio Residents Only" → OH), and
+  //   • a DECLARED service area ("Polk County, TN —" → TN),
+  // both compared against the profile's already-resolved states so the reject
+  // side can never diverge from the engine's own geo tier.
+  //
+  // It deliberately does NOT trust the bare `funding_opportunities.state` column:
+  // that column is stamped by whichever profile's crawl minted the row (crawl
+  // PROVENANCE, not a claim the row made about itself — the student-aid-instate
+  // "TN student got Cuyahoga Community College, Ohio" class). Reading residency
+  // prose against the crawl-stamped column REJECTed a real "Tennessee residents"
+  // award against a stray `state:'OH'` stamp for a TN profile; the scoped model
+  // reads the state out of the residency phrase ITSELF, so it fires only on a
+  // provable applicant-exclusive mismatch. MISSING = NEUTRAL: a stateless profile
+  // loses nothing, and a placeholder-geo row stays the province of
+  // enforceUnconfiguredProfileGeoMatches / the fabricatedPlace check above. The
+  // foreign/sponsor claim is owned by the foreign-jurisdiction gate above and is
+  // never touched here, so a foreign row is never double-rejected.
+  const geoConflict = geographyConflict(fullSections(sections, prof), opp, {
+    profileStates: () => profStateList,
+  })
+  if (geoConflict) {
+    reasons.push(geoConflict.reason)
+    return { decision: 'REJECT', explanation: `${geoConflict.reason}.`, reasons }
+  }
+  // The row's REAL, evidenced geography (residency prose state / declared
+  // "<Place>, ST —" service area). When the row DECLARES a geography and the
+  // profile HAS a state, geographyConflict above already rejected any provable
+  // mismatch — so reaching here with a non-empty declared set AND a profile state
+  // means the profile's state SATISFIES the row's own claim. In that case the
+  // crawl-stamped `state` column must not drag the row down to a geographic
+  // REVIEW note: the row itself said where it applies, and the profile qualifies.
+  const geoSatisfiedByDeclared =
+    profStateList.length > 0 && declaredApplicantStates(opp).size > 0
+
   const declaredPlaceState = declaredStateFromTitle(opp)
   // The DECLARED place outranks the stored column: a title in the canonical
   // `"<Place>, XX — "` shape makes a claim about ITSELF, while `opp.state` makes
@@ -4264,7 +4365,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     (Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide') && !declaredPlaceState
   const oNormState = normalizeState(oppStateRaw)
   const matchesAnyProfileState = Boolean(oNormState) && profStateList.includes(oNormState)
-  if (oppStateRaw && !oppIsNational && oNormState && !matchesAnyProfileState) {
+  if (oppStateRaw && !oppIsNational && oNormState && !matchesAnyProfileState && !geoSatisfiedByDeclared) {
     // Normalize ONCE, here, for both branches below. Computed inside the gate so
     // rows that never reach a residency question pay nothing for it.
     const residencyText = normalizeMatchWhitespace(oppText)
@@ -4283,13 +4384,20 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       // No exclusivity signal + unknown profile state: fall through to scoring.
     } else {
       // Opportunity's state is in NONE of the profile's states.
-      // Residency-scope signals live in the canonical RESIDENCY_EXCLUSIVE_RX.
-      // A row that names its OWN locality is place-exclusive by construction:
-      // "Polk County, TN — Local assistance programs near you" is a directory of
-      // Polk County agencies. There is nothing in it an Indiana household can
-      // use, so "may still be accessible" is not an honest verdict for it.
-      const isExplicitlyExclusive =
-        RESIDENCY_EXCLUSIVE_RX.test(residencyText) || opp.state_residents_only === true || Boolean(declaredPlaceState)
+      //
+      // The scope-aware geographyConflict gate above is now the SOLE hard-REJECT
+      // authority for residency- and service-area-exclusive rows: it read the
+      // state out of the row's OWN residency prose / declared "<Place>, ST —"
+      // title (not this crawl-stamped column) and already returned if a provable
+      // mismatch existed. So here the bare `state` column is a WEAK FALLBACK only
+      // — it produces a REVIEW geographic note, never a REJECT. The single
+      // remaining hard-REJECT is an explicit caller pre-tag
+      // (`state_residents_only`), which is a deliberate flag rather than the crawl
+      // provenance column. `RESIDENCY_EXCLUSIVE_RX`/`declaredPlaceState` are
+      // deliberately NO LONGER a reject basis here — reading residency prose
+      // against a crawl-stamped column is exactly the over-rejection this slice
+      // removes.
+      const isExplicitlyExclusive = opp.state_residents_only === true
       const profStateLabel = profStateList.join('/')
       if (isExplicitlyExclusive) {
         const reasonText = `Geographic mismatch: opportunity is for ${oppStateRaw}, profile is in ${profStateLabel}`

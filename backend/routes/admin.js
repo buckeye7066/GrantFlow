@@ -1,4 +1,5 @@
 import express from 'express';
+import { rejectDryRunBody } from '../utils/noDryRun.js'
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
@@ -23,7 +24,7 @@ import { initializeFeatureFlags, isFeatureEnabled, getAllFlags, updateFlag, crea
 import { getRequestError } from '../services/requestIdErrorStore.js';
 import { extractTextFromFile } from '../services/documentTextExtraction.js'
 import { crawlItemFunding, runCrawler as runCuratedCrawlerForAudit } from '../services/crawlerOsCompatibility.js';
-import { findDuplicateProfileGroups, mergeProfiles, deduplicateProfileGroups, coerceDryRun } from '../services/profileDedupeService.js'
+import { findDuplicateProfileGroups, mergeProfiles, deduplicateProfileGroups } from '../services/profileDedupeService.js'
 import { ensureAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
@@ -3096,7 +3097,6 @@ router.get('/profiles/integrity', async (req, res) => {
  *
  * Body:
  * {
- *   dry_run?: boolean = true,
  *   actions?: {
  *     reattach_unowned_by_email?: boolean = true,
  *     fix_dangling_user_links_by_email?: boolean = true,
@@ -3116,8 +3116,10 @@ router.get('/profiles/integrity', async (req, res) => {
  */
 router.post('/profiles/integrity/repair', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
-
-  const dryRun = req.body?.dry_run !== false
+  // dry_run removed OUTRIGHT (owner no-dry-runs order): a repair endpoint
+  // that defaulted to repairing nothing is the silent-no-op class. Naming
+  // the flag fails; every run applies.
+  if (rejectDryRunBody(req, res)) return
 
   const actions = req.body?.actions && typeof req.body.actions === 'object' ? req.body.actions : {}
   const doReattach = actions.reattach_unowned_by_email !== false
@@ -3145,7 +3147,6 @@ router.post('/profiles/integrity/repair', async (req, res) => {
 
   const result = {
     ok: true,
-    dry_run: dryRun,
     generated_at: generatedAt,
     actions: {
       reattach_unowned_by_email: doReattach,
@@ -3316,7 +3317,7 @@ router.post('/profiles/integrity/repair', async (req, res) => {
     let applied = 0
     const appliedIds = []
 
-    if (!dryRun && plan.length > 0) {
+    if (plan.length > 0) {
       await req.db.withTransaction(async (tx) => {
         const setUnowned = tx.prepare(
           `
@@ -3362,12 +3363,6 @@ router.post('/profiles/integrity/repair', async (req, res) => {
           : null,
     }
 
-    if (plan.length > 0 && dryRun) {
-      warnings.push({
-        type: 'dry_run',
-        message: `Dry-run: ${plan.length} profile ownership updates are planned. Re-run with dry_run=false to apply.`,
-      })
-    }
   }
 
   // ---- Action 3: orphan cleanup wrapper (hard-delete) ----
@@ -3398,32 +3393,23 @@ router.post('/profiles/integrity/repair', async (req, res) => {
       ? orphanRows.filter((r) => !isDesignatedProfileId(r?.id))
       : null
 
-    if (dryRun) {
-      result.cleanup_orphans = {
-        dry_run: true,
-        would_delete: Array.isArray(candidates) ? candidates.length : 0,
-        candidates,
-      }
-    } else {
-      const ids = Array.isArray(candidates) ? candidates.map((c) => String(c.id)).filter(Boolean) : []
-      let deleted = 0
-      const deletedIds = []
-      for (const id of ids) {
-        await hardDeleteProfileById({
-          db: req.db,
-          profileId: id,
-          actorUserId,
-          reason,
-          tombstone: tombstoneOrphans,
-        })
-        deleted += 1
-        deletedIds.push(id)
-      }
-      result.cleanup_orphans = {
-        dry_run: false,
-        deleted,
-        deleted_ids: deletedIds,
-      }
+    const ids = Array.isArray(candidates) ? candidates.map((c) => String(c.id)).filter(Boolean) : []
+    let deleted = 0
+    const deletedIds = []
+    for (const id of ids) {
+      await hardDeleteProfileById({
+        db: req.db,
+        profileId: id,
+        actorUserId,
+        reason,
+        tombstone: tombstoneOrphans,
+      })
+      deleted += 1
+      deletedIds.push(id)
+    }
+    result.cleanup_orphans = {
+      deleted,
+      deleted_ids: deletedIds,
     }
   }
 
@@ -3437,7 +3423,6 @@ router.post('/profiles/integrity/repair', async (req, res) => {
       resourceType: 'profile',
       resourceId: null,
       details: {
-        dry_run: dryRun,
         actions: result.actions,
         limits: result.limits,
         options: result.options,
@@ -3449,9 +3434,7 @@ router.post('/profiles/integrity/repair', async (req, res) => {
             }
           : null,
         cleanup_orphans: result.cleanup_orphans
-          ? dryRun
-            ? { would_delete: result.cleanup_orphans.would_delete }
-            : { deleted: result.cleanup_orphans.deleted }
+          ? { deleted: result.cleanup_orphans.deleted }
           : null,
       },
       ipAddress: req.ip || null,
@@ -3474,15 +3457,14 @@ router.post('/profiles/integrity/repair', async (req, res) => {
  *
  * Body:
  * {
- *   dry_run?: boolean = true,
  *   limit?: number = 5000,
  *   include_deleted_profiles?: boolean = true
  * }
  */
 router.post('/profiles/ownership/repair', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
+  if (rejectDryRunBody(req, res)) return
 
-  const dryRun = req.body?.dry_run !== false
   const limit = Math.max(1, Math.min(Number(req.body?.limit) || 5000, 50_000))
   const includeDeleted = req.body?.include_deleted_profiles !== false
 
@@ -3492,7 +3474,7 @@ router.post('/profiles/ownership/repair', async (req, res) => {
   let report = null
   try {
     report = await repairProfileOwnership(req.db, {
-      apply: !dryRun,
+      apply: true,
       limit,
       includeDeleted,
       updatedBy: actorUserId || 'admin-ownership-repair',
@@ -3516,7 +3498,6 @@ router.post('/profiles/ownership/repair', async (req, res) => {
       resourceType: 'profile',
       resourceId: null,
       details: {
-        dry_run: dryRun,
         include_deleted_profiles: includeDeleted,
         limit,
         report: {
@@ -3537,7 +3518,6 @@ router.post('/profiles/ownership/repair', async (req, res) => {
   return res.json({
     ok: true,
     generated_at: generatedAt,
-    dry_run: dryRun,
     ...report,
   })
 })
@@ -4710,15 +4690,15 @@ router.get('/profiles/orphans', async (req, res) => {
 
 /**
  * POST /api/admin/profiles/orphans/cleanup
- * Admin-only: HARD delete orphan profiles (default dry-run).
+ * Admin-only: HARD delete orphan profiles.
  *
  * Body:
- *  { dry_run?: boolean, limit?: number, tombstone?: boolean = true, reason?: string }
+ *  { limit?: number, tombstone?: boolean = true, reason?: string }
  */
 async function handleOrphanProfilesHardDeleteCleanup(req, res) {
   if (!(await ensureAdminRequest(req, res))) return
+  if (rejectDryRunBody(req, res)) return
 
-  const dryRun = req.body?.dry_run !== false
   const limit = Math.max(1, Math.min(Number(req.body?.limit) || 200, 2000))
   const tombstone = req.body?.tombstone !== false
   const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'orphan_cleanup'
@@ -4748,15 +4728,6 @@ async function handleOrphanProfilesHardDeleteCleanup(req, res) {
 
   const candidates = (rows || []).filter((r) => !isDesignatedProfileId(r?.id))
   const ids = candidates.map((c) => String(c.id))
-
-  if (dryRun) {
-    return res.json({
-      ok: true,
-      dry_run: true,
-      would_delete: ids.length,
-      candidates,
-    })
-  }
 
   let deleted = 0
   const deletedIds = []
@@ -4795,7 +4766,6 @@ async function handleOrphanProfilesHardDeleteCleanup(req, res) {
 
   return res.json({
     ok: true,
-    dry_run: false,
     deleted,
     deleted_ids: deletedIds,
   })
@@ -4981,13 +4951,14 @@ router.post('/profiles/:id/restore-access', async (req, res) => {
  * POST /api/admin/profiles/restore-sections-from-orgs
  * Fills empty profile_sections from linked organizations rows (does not wipe user edits).
  *
- * Body: { dryRun?: boolean, limit?: number, organizationIds?: string[], profileIds?: string[] }
+ * Body: { limit?: number, organizationIds?: string[], profileIds?: string[] }
  */
 router.post('/profiles/restore-sections-from-orgs', async (req, res) => {
+  if (rejectDryRunBody(req, res)) return
   try {
     const body = req.body ?? {}
     const result = await restoreProfileSectionsFromLinkedOrganizations(req.db, {
-      dryRun: body.dryRun === true,
+      dryRun: false,
       limit: body.limit,
       organizationIds: Array.isArray(body.organizationIds) ? body.organizationIds : undefined,
       profileIds: Array.isArray(body.profileIds) ? body.profileIds : undefined,
@@ -5007,9 +4978,9 @@ router.post('/profiles/merge', async (req, res, next) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
+    if (rejectDryRunBody(req, res)) return
     const winnerId = typeof req.body?.winnerId === 'string' ? req.body.winnerId : null
     const loserIds = Array.isArray(req.body?.loserIds) ? req.body.loserIds : null
-    const dryRun = coerceDryRun(req.body?.dryRun, true)
 
     if (!winnerId || !loserIds || loserIds.length === 0) {
       return res.status(400).json({
@@ -5022,7 +4993,7 @@ router.post('/profiles/merge', async (req, res, next) => {
     const result = await mergeProfiles(req.db, {
       winnerId,
       loserIds,
-      dryRun,
+      dryRun: false,
       actorUserId: req.ctx?.userId ?? req.user?.userId ?? null,
     })
 
@@ -5124,7 +5095,7 @@ router.post('/profiles/deduplicate', async (req, res) => {
     const includeInactive = String(req.body?.includeInactive || req.query?.includeInactive || '').toLowerCase() === 'true'
     const limitGroups = Math.max(1, Math.min(Number(req.body?.limitGroups ?? req.query?.limitGroups) || 500, 2000))
     const minGroupSize = Math.max(2, Math.min(Number(req.body?.minGroupSize ?? req.query?.minGroupSize) || 2, 50))
-    const dryRun = coerceDryRun(req.body?.dryRun, false)
+    if (rejectDryRunBody(req, res)) return
 
     const actorUserId = req.ctx?.userId ?? req.user?.userId ?? null
     const deduped = await deduplicateProfileGroups(req.db, {
@@ -5132,7 +5103,7 @@ router.post('/profiles/deduplicate', async (req, res) => {
       limitGroups,
       minGroupSize,
       includeInactive,
-      dryRun,
+      dryRun: false,
       actorUserId,
     })
 
@@ -5143,7 +5114,6 @@ router.post('/profiles/deduplicate', async (req, res) => {
       includeInactive,
       limitGroups,
       minGroupSize,
-      dryRun,
       merged_groups: deduped.merged_groups,
       results: deduped.results,
     })
@@ -5258,15 +5228,9 @@ router.post('/clear-all-pipelines', async (req, res) => {
  *   - wrong_state       (Goal 6)
  *   - relevance_reject  (Goals 2 + 4)
  *
- * Body (all optional):
- *   {
- *     dry_run?: boolean = true   // when false, actually deletes
- *   }
- *
  * Response:
  *   {
  *     success: true,
- *     dry_run: boolean,
  *     total_grants, profiles_with_pipeline, removed, kept,
  *     verdict_totals: { keep, source_disallowed, dead_url, ... },
  *     per_profile: [
@@ -5278,18 +5242,17 @@ router.post('/clear-all-pipelines', async (req, res) => {
 router.post('/clean-pipelines-against-goals', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
+    if (rejectDryRunBody(req, res)) return
 
-    const dryRun = req.body?.dry_run !== false
-
-    const report = await auditPipelinesAgainstGoals(req.db, { dryRun })
+    const report = await auditPipelinesAgainstGoals(req.db, { dryRun: false })
 
     routeLogger.info(
-      `[admin] clean-pipelines-against-goals (${dryRun ? 'DRY RUN' : 'LIVE'}): ` +
+      `[admin] clean-pipelines-against-goals (LIVE): ` +
         `audited=${report.total_grants}, removed=${report.removed}, kept=${report.kept}, ` +
         `profiles=${report.profiles_with_pipeline}`,
     )
 
-    if (!dryRun) {
+    {
       try {
         logAuditEvent(req.db, {
           category: AUDIT_CATEGORIES.ADMIN,
@@ -5494,29 +5457,28 @@ router.post('/backfill-matches', async (req, res) => {
  * Trigger the regional purge for discovered or specified states.
  *
  * Body (all optional):
- *   dry_run                  boolean  – if true, no DB mutations (default: false)
  *   states                   string[] – explicit states; auto-discovered if omitted
  *   limit                    number   – max opps to check (default 500)
  *   onlySuppressedCandidates boolean  – only re-check watch/suppressed items
  */
 router.post('/purge/regional/run', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
+  if (rejectDryRunBody(req, res)) return
   try {
     const {
-      dry_run: dryRun = false,
       states,
       limit = 500,
       onlySuppressedCandidates = false,
     } = req.body || {}
 
     const result = await runRegionalPurge(req.db, {
-      dryRun: Boolean(dryRun),
+      dryRun: false,
       states: Array.isArray(states) && states.length > 0 ? states : undefined,
       limit: Math.min(Number(limit) || 500, 5000),
       onlySuppressedCandidates: Boolean(onlySuppressedCandidates),
     })
 
-    res.json({ ok: true, dryRun: Boolean(dryRun), ...result })
+    res.json({ ok: true, ...result })
   } catch (err) {
     routeLogger.error('[admin/purge/regional/run] Error:', err)
     res.status(500).json({ error: err?.message || 'Purge failed' })

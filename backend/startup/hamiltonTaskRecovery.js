@@ -83,6 +83,7 @@ export async function reconcileOrphanedApplicationTasks(db, {
     scanned: 0,
     demoted: 0,
     quarantined: 0,
+    skipped_unchanged: 0,
     task_ids: [],
     quarantined_task_ids: [],
   }
@@ -115,7 +116,30 @@ export async function reconcileOrphanedApplicationTasks(db, {
       // live overlapping process advanced or refreshed the row after our scan,
       // recovery must leave it alone rather than clobbering newer truth.
       const hasUpdatedAt = row.updated_at !== null && row.updated_at !== undefined
-      const updatedAtGuard = hasUpdatedAt ? 'updated_at = ?' : 'updated_at IS NULL'
+      // POSTGRES STORES MICROSECONDS; A JS Date CARRIES MILLISECONDS.
+      //
+      // The guard used to be a bare `updated_at = ?`. On Postgres the driver
+      // hands back `2026-08-23T11:18:22.124970` as a JS Date truncated to
+      // `.124`, so binding it back could NEVER equal the stored value: the
+      // UPDATE matched 0 rows, `changed` was false, the loop `continue`d, and
+      // `demoted` stayed 0 — silently, because the summary only logs when
+      // demoted > 0. Measured in prod 2026-08-24: 82 of 82 stuck
+      // `filling_portal` tasks carried sub-millisecond digits, so recovery was
+      // a GUARANTEED no-op there while every SQLite test passed (SQLite stores
+      // these as second/millisecond strings that round-trip exactly) — the same
+      // shape as the amount_confidence REAL-column bug.
+      //
+      // The guard's PURPOSE is "leave the row alone if something refreshed it
+      // after our scan". A real refresh moves updated_at to now() — seconds or
+      // minutes later — so a 1ms upper bound preserves that protection exactly
+      // while tolerating the truncation. SQLite keeps the exact equality it
+      // already round-trips correctly.
+      const isPg = db?.dialect === 'postgres'
+      const updatedAtGuard = hasUpdatedAt
+        ? (isPg
+          ? "updated_at < CAST(? AS timestamptz) + interval '1 millisecond'"
+          : 'updated_at = ?')
+        : 'updated_at IS NULL'
       const updatedAtParams = hasUpdatedAt ? [row.updated_at] : []
       const nowSql = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
       const nextStatus = isAmbiguousSubmission ? 'submission_verification_required' : 'ready_to_start'
@@ -134,7 +158,13 @@ export async function reconcileOrphanedApplicationTasks(db, {
         )
         .run(nextStatus, nextStep, nextMessage, row.id, row.status, ...updatedAtParams)
       const changed = Number(result?.changes ?? result?.rowCount ?? 0) === 1
-      if (!changed) continue
+      if (!changed) {
+        // A no-match is legitimate (a live process moved the row first) but it
+        // must never be INVISIBLE: a systematic 0-row CAS is exactly how this
+        // sweep silently did nothing in prod for weeks. Counted and reported.
+        out.skipped_unchanged += 1
+        continue
+      }
 
       if (isAmbiguousSubmission) {
         out.quarantined += 1
@@ -167,6 +197,13 @@ export async function reconcileOrphanedApplicationTasks(db, {
 
   if (out.demoted > 0) {
     logger?.info?.(`[hamilton:recovery] requeued ${out.demoted}/${out.scanned} orphaned in-flight task(s) to ready_to_start`)
+  }
+  if (out.skipped_unchanged > 0 && out.demoted === 0 && out.quarantined === 0) {
+    logger?.warn?.(
+      `[hamilton:recovery] scanned ${out.scanned} stale task(s) and changed NONE — `
+      + `${out.skipped_unchanged} compare-and-swap(s) matched 0 rows. This is the `
+      + 'signature of a guard that cannot match (see the microsecond note above), not a quiet success.',
+    )
   }
   if (out.quarantined > 0) {
     logger?.warn?.(`[hamilton:recovery] quarantined ${out.quarantined}/${out.scanned} ambiguous submission task(s) for verification; none were requeued`)

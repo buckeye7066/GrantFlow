@@ -668,7 +668,13 @@ test('individual profile: REJECT for geographic mismatch', () => {
   }
   const result = computeMatchDecision(INDIVIDUAL_PROFILE, opp)
   assertDecision(result, 'REJECT', 'individual geo mismatch')
-  assert.ok(result.ineligibilityReasons.some((r) => r.includes('Geographic mismatch')))
+  // computeMatchDecision routes geography through the scoped residency gate
+  // (#1380), which explains the bar in its own words; evaluateEligibility still
+  // emits the legacy 'Geographic mismatch:' prefix. Either is a geographic bar.
+  assert.ok(
+    result.ineligibilityReasons.some((r) => /Geographic mismatch|requires CA residency/i.test(r)),
+    `expected a geographic ineligibility reason, got ${JSON.stringify(result.ineligibilityReasons)}`,
+  )
 })
 
 // ---------------------------------------------------------------------------

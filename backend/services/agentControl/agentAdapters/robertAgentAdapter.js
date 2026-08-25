@@ -48,7 +48,6 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
       return { ok: true, status: 'stopped', summary: { agent: 'robert', stopped: true } }
     }
     const allowIngest = options?.allow_robert_ingest !== false
-    const dryRun = Boolean(options?.dry_run)
 
     let runRobert
     try {
@@ -95,7 +94,6 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
         db,
         mode,
         trigger: 'admin-ui',
-        dryRun,
         deps,
       })
     } catch (err) {

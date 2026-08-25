@@ -171,9 +171,15 @@ async function tick({ db, logger = console } = {}) {
 
     const summary = result?.summary || {}
     if ((summary.attempted || 0) > 0) {
-      logger?.info?.('[hamilton:scheduler] tick', {
+      // no_run is the honest half of this line: `processed` only means the call
+      // returned, and prod spent 32+ hours logging processed:5/failed:0 while
+      // opening zero autopilot runs. When nothing opened a run the line must
+      // say so, with the reasons.
+      logger?.[summary.no_run === summary.attempted ? 'warn' : 'info']?.('[hamilton:scheduler] tick', {
         attempted: summary.attempted,
         processed: summary.processed,
+        no_run: summary.no_run,
+        no_run_reasons: summary.no_run_reasons,
         failed: summary.failed,
         blocked: summary.blocked,
       })

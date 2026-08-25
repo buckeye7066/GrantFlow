@@ -3,8 +3,9 @@
  *
  * THE OWNER'S INSIGHT (2026-08-23). GrantFlow leans too hard on BLIND web
  * crawling and MISSES sources the models already KNOW. Asked about a small
- * holistic-wellness LLC seeking $50k for equipment (Olivia Beltran, ZERO
- * pipeline sources), the assistant instantly named SBA grants, Hello Alice,
+ * holistic-wellness LLC seeking $50k for equipment (a real wellness-LLC
+ * profile with ZERO pipeline sources), the assistant instantly named SBA
+ * grants, Hello Alice,
  * the Amber Grant, IFundWomen, Comcast RISE, and the FedEx Small Business
  * Grant — none of which the crawler had ever found. The competition
  * (Instrumentl, Candid/Foundation Directory, Bold.org, Scholarships.com,
