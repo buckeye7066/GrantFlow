@@ -3,10 +3,12 @@
  * wrote for one opportunity, reviewed inline on the pipeline/portal card.
  *
  * Each opportunity gets its own tailored narrative. The applicant can inspect
- * or edit it per card. Enabling auto-submit is the submission authorization;
- * this surface does not add a second per-draft checkpoint. If the funder asks
- * for required information that is not in the profile, a blocking question is
- * shown with a deep-link to the exact profile section to complete.
+ * or edit it per card. The backend's complete submission decision — active
+ * authorization, task intent, global posture, portal executability, profile
+ * preference, and required facts — is authoritative; this surface does not add
+ * a second per-draft checkpoint. If the funder asks for required information
+ * that is not in the profile, a blocking question is shown with a deep-link to
+ * the exact profile section to complete.
  *
  * Graceful pre-backend behavior: the endpoint is shipped by a sibling backend
  * agent. If the GET 404s (not deployed yet) the panel hides itself entirely so
@@ -111,6 +113,7 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
   const missingQuestions = Array.isArray(data?.missing_questions) ? data.missing_questions : []
   const funderRequirements = Array.isArray(data?.funder_requirements) ? data.funder_requirements : []
   const hasBlockingQuestions = missingQuestions.length > 0
+  const submissionReason = data?.submission_reason || data?.gate_reason || null
   const refresh = () => qc.invalidateQueries({ queryKey })
 
   async function handleSaveEdit() {
@@ -156,10 +159,21 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
         text: 'Automation is on. Hamilton can use this draft and submit when required portal steps are complete.',
       }
     }
+    const reasonText = {
+      not_requested: 'Auto-submit is not enabled for this application. This draft stays ready for you to use in the funder portal.',
+      missing_submit_authorization: 'Hamilton does not currently have submission authorization for this application. This draft stays ready for you to use in the funder portal.',
+      human_review_required: 'This application is configured for final human review. This draft stays ready for you to use in the funder portal.',
+      global_auto_submit_disabled: 'Automatic submission is temporarily disabled system-wide. This draft stays ready for you to use in the funder portal.',
+      portal_url_not_browser_executable: 'Hamilton cannot submit through this portal URL automatically. This draft stays ready for you to use in the funder portal.',
+      profile_auto_submit_disabled: 'Auto-submit is off for this profile. This draft stays ready for you to use in the funder portal.',
+      automation_off: 'Auto-submit is off for this profile. This draft stays ready for you to use in the funder portal.',
+      gate_error: 'Hamilton could not verify submission readiness, so no automatic submission will occur. This draft stays ready for you to use in the funder portal.',
+      profile_preferences_unavailable: 'Hamilton could not verify the profile automation setting, so no automatic submission will occur. This draft stays ready for you to use in the funder portal.',
+    }[submissionReason]
     return {
       icon: <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />,
       cls: 'text-slate-600',
-      text: 'Automation is off. This draft stays ready for you to use in the funder portal.',
+      text: reasonText || 'The current submission decision does not permit auto-submit. This draft stays ready for you to use in the funder portal.',
     }
   }
 

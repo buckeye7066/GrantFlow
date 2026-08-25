@@ -5,7 +5,8 @@
  *     fixture (dropped section + a required missing question that blocks approval)
  *   - gap detection surfaces a funder requirement absent from the profile as a
  *     missing question and BLOCKS approval
- *   - approve → approved; edit → edited; inputs-hash change → pending
+ *   - legacy approve → approved; edit → edited without consent metadata;
+ *     inputs-hash change → pending
  *   - the auto-submit gate returns submit=false for unapproved / automation-off
  *     / missing-info, and true only when approved + no gaps + toggle on
  *   - schema self-heal creates the table on a bare db
@@ -175,8 +176,8 @@ describe('funder-requirement gap detection', () => {
   })
 })
 
-describe('approval lifecycle + hash reconcile', () => {
-  it('approve → approved, edit → edited', async () => {
+describe('legacy status lifecycle + hash reconcile', () => {
+  it('legacy approve → approved, then edit → edited and clears the legacy consent stamp', async () => {
     const db = makeDb()
     await generateTailoredNarrative(db, {
       profileId: 'prof-1', grantId: 'grant-1',
@@ -188,12 +189,33 @@ describe('approval lifecycle + hash reconcile', () => {
     expect(approved.approved_by).toBe('user-1')
 
     const edited = await saveTailoredApplicationEdit(db, {
-      profileId: 'prof-1', grantId: 'grant-1', fields: { need_statement: 'Owner-edited need statement.' }, approvedBy: 'user-1',
+      profileId: 'prof-1', grantId: 'grant-1', fields: { need_statement: 'Owner-edited need statement.' },
     })
     expect(edited.status).toBe('edited')
+    expect(edited.approved_by).toBeNull()
+    expect(edited.approved_at).toBeNull()
     expect(edited.fields.need_statement).toBe('Owner-edited need statement.')
     // Untouched section preserved by the merge.
     expect(edited.fields.goals_objectives).toBeDefined()
+  })
+
+  it('saves draft edits while required questions remain open', async () => {
+    const db = makeDb()
+    const generated = await generateTailoredNarrative(db, {
+      profileId: 'prof-1', grantId: 'grant-1',
+      profile: baseProfile(), opportunity: CLEAN_OPP, grant: CLEAN_GRANT,
+      _deps: deps(fabricatedProposalJson()),
+    })
+    expect(generated.record.missing_questions.length).toBeGreaterThan(0)
+
+    const edited = await saveTailoredApplicationEdit(db, {
+      profileId: 'prof-1', grantId: 'grant-1', fields: { need_statement: 'A truthful applicant edit.' },
+    })
+    expect(edited.status).toBe('edited')
+    expect(edited.fields.need_statement).toBe('A truthful applicant edit.')
+    expect(edited.missing_questions.length).toBeGreaterThan(0)
+    expect(edited.approved_by).toBeNull()
+    expect(edited.approved_at).toBeNull()
   })
 
   it('bounces an approved record back to pending when the inputs hash changes', async () => {
@@ -264,24 +286,6 @@ describe('auto-submit gate', () => {
     })
     expect(gate.submit).toBe(false)
     expect(gate.reason).toBe('automation_off')
-  })
-
-  it('SUBMITS when the preference is OFF but full automation is authorized (the toggle IS the consent)', async () => {
-    const db = makeDb()
-    await seedApproved(db)
-    // Preference defaults/says OFF, but the caller resolved an active
-    // full-automation authorization — that authorization IS the auto-submit
-    // selection, so the gate must not withhold as automation_off.
-    const profileToggledOff = baseProfile({
-      automation_preferences: { automations: { hamilton_auto_submit: false } },
-    })
-    const gate = await evaluateAutoSubmitGate(db, {
-      profileId: 'prof-1', grantId: 'grant-1', profile: profileToggledOff,
-      opportunity: CLEAN_OPP, grant: CLEAN_GRANT,
-      fullAutomationEnabled: true,
-    })
-    expect(gate.reason).not.toBe('automation_off')
-    expect(gate.submit).toBe(true)
   })
 
   it('true ONLY when approved + no missing questions + toggle on', async () => {

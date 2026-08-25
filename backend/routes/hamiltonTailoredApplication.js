@@ -1,7 +1,7 @@
 /**
  * /api/hamilton/tailored/*
  *
- * Per-funder tailored-application review surface. Each portal card (a pipeline
+ * Per-funder tailored-application editing surface. Each portal card (a pipeline
  * grant) carries ONE tailored application: the funder-specific, MBA-level,
  * fabrication-guarded narrative Hamilton drafted, plus its review state and any
  * open questions the applicant must answer before the card can be submitted.
@@ -10,12 +10,12 @@
  *   GET  /api/hamilton/tailored/application?grant_id=…  →
  *          { fields, status, missing_questions, funder_requirements,
  *            can_auto_submit, gate_reason }
- *   POST /api/hamilton/tailored/approve      { grant_id }          → approve
- *   POST /api/hamilton/tailored/edit         { grant_id, fields }  → approve-as-edited
+ *   POST /api/hamilton/tailored/approve      { grant_id }          → legacy status update
+ *   POST /api/hamilton/tailored/edit         { grant_id, fields }  → save edits
  *   POST /api/hamilton/tailored/regenerate   { grant_id }          → redraft (→ pending)
  *
  * All routes require authentication; the caller must own (or be admin for) the
- * grant's profile. Approval is BLOCKED while missing_questions is non-empty.
+ * grant's profile. Missing questions block submission, not saving draft edits.
  */
 
 import express from 'express'
@@ -32,10 +32,10 @@ import {
 } from '../services/hamilton/tailoredApplicationStore.js'
 import {
   generateTailoredNarrative,
-  evaluateAutoSubmitGate,
   reconcileTailoredApplication,
   isApprovalBlocked,
 } from '../services/hamilton/tailoredNarrative.js'
+import { resolveTailoredSubmissionDecision } from '../services/hamilton/tailoredSubmissionDecision.js'
 import { insertActivityEvent } from '../services/agentTelemetry/agentTelemetryStore.js'
 
 const router = express.Router()
@@ -109,15 +109,58 @@ async function buildPayload(db, { profileId, grantId, grant, profile }) {
   // stale approval back to pending before we report status.
   await reconcileTailoredApplication(db, { profileId, grantId, profile, opportunity, grant })
   const record = await getTailoredApplication(db, { profileId, grantId })
-  const gate = await evaluateAutoSubmitGate(db, { profileId, grantId, profile, opportunity, grant })
+  let task = null
+  try {
+    task = await db
+      .prepare(
+        `SELECT id, allow_auto_submit, auto_submit_enabled, portal_url, application_url, status
+           FROM application_tasks
+          WHERE profile_id = ? AND grant_id = ?
+          ORDER BY updated_at DESC
+          LIMIT 1`,
+      )
+      .get(String(profileId), String(grantId))
+  } catch {
+    // A card can exist before Hamilton creates its application task. Active
+    // profile/funding-source authorization still participates in the decision.
+    task = null
+  }
+  const portalUrl = task?.portal_url
+    || task?.application_url
+    || opportunity?.application_url
+    || opportunity?.url
+    || grant?.application_url
+    || grant?.url
+    || null
+  const decision = await resolveTailoredSubmissionDecision(db, {
+    profileId,
+    fundingSourceId: opportunity?.id || grant?.id || null,
+    task,
+    profile,
+    portalUrl,
+    grantId,
+    opportunity,
+    grant,
+  })
   return {
     exists: !!record,
     fields: record?.fields || {},
     status: record?.status || null,
     missing_questions: record?.missing_questions || [],
     funder_requirements: record?.funder_requirements || {},
-    can_auto_submit: gate.submit,
-    gate_reason: gate.reason,
+    can_auto_submit: decision.allow_auto_submit,
+    gate_reason: decision.reason,
+    submission_reason: decision.reason,
+    submission_decision: {
+      task_id: task?.id || null,
+      requested: decision.requested,
+      authorized: decision.authorized,
+      require_human_review: decision.require_human_review,
+      reason: decision.reason,
+      full_automation_enabled: decision.full_automation_enabled,
+      global_auto_submit_enabled: decision.global_auto_submit_enabled,
+      portal_execution_available: decision.portal_execution_available,
+    },
   }
 }
 
@@ -172,7 +215,8 @@ router.post('/approve', async (req, res) => {
   }
 })
 
-// POST edit — save edited fields, status → edited (approved-as-edited).
+// POST edit — save edited fields. Missing questions still block submission but
+// never block draft work, and editing never manufactures consent metadata.
 router.post('/edit', async (req, res) => {
   const ctx = await loadGrantAndAuthorise(req, res, req.body?.grant_id)
   if (!ctx) return
@@ -183,18 +227,12 @@ router.post('/edit', async (req, res) => {
   try {
     const record = await getTailoredApplication(req.db, ctx)
     if (!record) return res.status(404).json({ error: 'tailored_application_not_found' })
-    if (isApprovalBlocked(record)) {
-      return res.status(409).json({
-        error: 'approval_blocked_missing_info',
-        missing_questions: record.missing_questions,
-      })
-    }
-    await saveTailoredApplicationEdit(req.db, { ...ctx, fields, approvedBy: getAuthUserId(ctx.user) })
+    await saveTailoredApplicationEdit(req.db, { ...ctx, fields })
     await insertActivityEvent(req.db, {
       agent_name: 'hamilton',
       event_type: 'tailored_narrative_edited',
       status: 'ok',
-      title: 'Applicant edited & approved Hamilton\'s tailored application',
+      title: 'Applicant edited Hamilton\'s tailored application',
       entity_type: 'grant',
       entity_id: ctx.grantId,
       profile_id: ctx.profileId,

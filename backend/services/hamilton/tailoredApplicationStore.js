@@ -5,14 +5,14 @@
  * ONE record per (profile × pipeline grant / portal card). It carries the
  * funding-source-specific application narrative Hamilton drafted (reworded to
  * an MBA level, tailored to what THAT funder asks for, grounded strictly in the
- * profile's essays/mission/facts), the review state (pending → approved/edited),
- * the funder requirements Hamilton extracted, and any missing questions the
- * applicant must answer before the card can be submitted.
+ * profile's essays/mission/facts), the legacy display state, the funder
+ * requirements Hamilton extracted, and any missing questions the applicant
+ * must answer before the card can be submitted.
  *
  * The auto-submit gate (see tailoredNarrative.evaluateAutoSubmitGate) consults
- * this row as the single choke point before Hamilton submits a card. Portal
- * cards key on `grant_id` (grants = the pipeline/portal card table), so the
- * UNIQUE constraint is (profile_id, grant_id).
+ * this row as the single completeness choke point before Hamilton submits a
+ * card. Portal cards key on `grant_id` (grants = the pipeline/portal card
+ * table), so the UNIQUE constraint is (profile_id, grant_id).
  *
  * Dialect-aware (sqlite for local/test, postgres in prod). The table DDL is
  * shared with the schema-invariant self-heal step so a boot always re-asserts
@@ -23,12 +23,6 @@ import crypto from 'node:crypto'
 
 export const TAILORED_APPLICATION_STATUSES = Object.freeze(['pending', 'approved', 'edited'])
 
-/**
- * Idempotent DDL for the tailored_applications table. Shared verbatim by:
- *   - backend/db/schema.sql (sqlite base schema),
- *   - the numbered migrations (sqlite + postgres), and
- *   - ensureSchemaInvariants (boot self-heal).
- */
 export function tailoredApplicationsDdl({ isPg = false } = {}) {
   const ts = isPg ? 'TIMESTAMPTZ DEFAULT now()' : 'DATETIME DEFAULT CURRENT_TIMESTAMP'
   const tsNull = isPg ? 'TIMESTAMPTZ' : 'DATETIME'
@@ -54,10 +48,6 @@ export function tailoredApplicationsDdl({ isPg = false } = {}) {
   `
 }
 
-/**
- * Create the table + supporting index on a live db (both dialects). Safe to
- * re-run. Never throws — returns false on failure so callers can degrade.
- */
 export async function ensureTailoredApplicationsTable(db) {
   if (!db) return false
   const isPg = db.dialect === 'postgres'
@@ -82,10 +72,6 @@ function parseJson(value, fallback) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
-/**
- * Shape a raw DB row into the canonical record consumers use — JSON columns
- * parsed, arrays/maps guaranteed.
- */
 export function shapeTailoredApplication(row) {
   if (!row) return null
   return {
@@ -107,10 +93,6 @@ export function shapeTailoredApplication(row) {
   }
 }
 
-/**
- * Fetch the tailored application for a (profile, grant) portal card.
- * @returns {Promise<object|null>} shaped record or null
- */
 export async function getTailoredApplication(db, { profileId, grantId }) {
   if (!db || !profileId || !grantId) return null
   await ensureTailoredApplicationsTable(db)
@@ -124,13 +106,6 @@ export async function getTailoredApplication(db, { profileId, grantId }) {
   }
 }
 
-/**
- * Insert or replace the tailored application for a (profile, grant). Generation
- * always writes status='pending' with a fresh hash; approval/edit go through
- * the dedicated helpers so the approver stamp is never lost.
- *
- * @returns {Promise<object>} shaped record
- */
 export async function upsertTailoredApplication(db, {
   profileId,
   grantId,
@@ -190,10 +165,7 @@ export async function upsertTailoredApplication(db, {
   return getTailoredApplication(db, { profileId, grantId })
 }
 
-/**
- * Mark the record approved. Caller must have verified missing_questions is
- * empty (routes enforce this) — this is the persistence primitive only.
- */
+/** Legacy persistence primitive retained for historical API compatibility. */
 export async function approveTailoredApplication(db, { profileId, grantId, approvedBy }) {
   if (!db || !profileId || !grantId) return null
   await ensureTailoredApplicationsTable(db)
@@ -208,12 +180,12 @@ export async function approveTailoredApplication(db, { profileId, grantId, appro
 }
 
 /**
- * Save applicant/owner edits to the tailored text and mark the record
- * `edited` (= approved-as-edited). Merges the supplied field map over the
- * stored fields so a partial edit keeps the rest of the draft.
+ * Save applicant edits while preserving the rest of the draft. `edited` is a
+ * content-history state only. Saving text is not submission authorization, so
+ * any legacy approval stamp is cleared instead of falsely recording consent.
  */
 export async function saveTailoredApplicationEdit(db, {
-  profileId, grantId, fields = {}, approvedBy,
+  profileId, grantId, fields = {},
 }) {
   if (!db || !profileId || !grantId) return null
   await ensureTailoredApplicationsTable(db)
@@ -223,21 +195,14 @@ export async function saveTailoredApplicationEdit(db, {
   await db
     .prepare(
       `UPDATE tailored_applications
-          SET fields_json = ?, status = 'edited', approved_by = ?, approved_at = ?, updated_at = ?
+          SET fields_json = ?, status = 'edited',
+              approved_by = NULL, approved_at = NULL, updated_at = ?
         WHERE profile_id = ? AND grant_id = ?`,
     )
-    .run(
-      JSON.stringify(mergedFields), approvedBy || null, nowIso(), nowIso(),
-      String(profileId), String(grantId),
-    )
+    .run(JSON.stringify(mergedFields), nowIso(), String(profileId), String(grantId))
   return getTailoredApplication(db, { profileId, grantId })
 }
 
-/**
- * Force a record back to `pending` (used when the generation inputs changed —
- * essays/funder snapshot hash mismatch — so a stale approval can't ride an
- * outdated narrative into submission). Clears the approver stamp.
- */
 export async function resetTailoredApplicationToPending(db, { profileId, grantId }) {
   if (!db || !profileId || !grantId) return null
   await ensureTailoredApplicationsTable(db)

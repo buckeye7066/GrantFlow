@@ -191,7 +191,12 @@ export function portalTypeLabel(portalType) {
 // GET   → { fields:{essay_key:text}, status:'pending'|'approved'|'edited',
 //           missing_questions:[{requirement, question, field?, section_key?}],
 //           funder_requirements:[...], can_auto_submit:bool,
-//           gate_reason:'automation_off'|'missing_info'|null } — 'not_approved' retired 2026-08-03 (auto submit means auto submit)
+//           submission_reason:'not_requested'|'missing_submit_authorization'|
+//             'human_review_required'|'global_auto_submit_disabled'|
+//             'portal_url_not_browser_executable'|'automation_off'|
+//             'missing_info'|'gate_error'|null,
+//           submission_decision:{...} } — the complete irreversible-submit
+// decision, not merely the tailored-narrative completeness gate.
 // NOTE: the backend mounts these at /api/hamilton/tailored/* keyed on grant_id
 // (the portal-card = pipeline grant). profileId is accepted for call-site
 // compatibility but the backend resolves the profile from the grant + auth.

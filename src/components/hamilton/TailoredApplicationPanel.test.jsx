@@ -109,7 +109,7 @@ describe("TailoredApplicationPanel", () => {
     expect(await screen.findByText("Approved narrative body.")).toBeTruthy()
     // The saved narrative stays read-only until Edit is selected.
     expect(screen.queryByRole("textbox")).toBeNull()
-    expect(screen.getByText(/Automation is off.*ready for you to use/i)).toBeTruthy()
+    expect(screen.getByText(/Auto-submit is off for this profile.*ready for you to use/i)).toBeTruthy()
     expect(screen.getByText(/^Ready$/)).toBeTruthy()
     expect(screen.queryByRole("button", { name: /approve/i })).toBeNull()
   })
@@ -137,16 +137,16 @@ describe("TailoredApplicationPanel", () => {
     expect(screen.queryByRole("button", { name: /approve/i })).toBeNull()
   })
 
-  it("edit mode posts the edited fields to the edit endpoint", async () => {
+  it("edit mode posts the edited fields even while required questions remain open", async () => {
     apiFetchMock.mockImplementation(async (endpoint, options = {}) => {
       if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
         return {
           fields: { primary: "Original draft." },
           status: "pending",
-          missing_questions: [],
+          missing_questions: [{ requirement: "transcript", question: "Upload your transcript." }],
           funder_requirements: [],
           can_auto_submit: false,
-          gate_reason: "automation_off",
+          gate_reason: "missing_info",
         }
       }
       if (endpoint.endsWith("/hamilton/tailored/edit") && options.method === "POST") {
@@ -172,6 +172,28 @@ describe("TailoredApplicationPanel", () => {
     const body = JSON.parse(editCall[1].body)
     expect(body.grant_id).toBe("grant-9")
     expect(body.fields.primary).toBe("My edited narrative.")
+  })
+
+  it("reports a global submit stop instead of calling all non-ready states automation off", async () => {
+    apiFetchMock.mockImplementation(async (endpoint) => {
+      if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
+        return {
+          fields: { primary: "Ready draft." },
+          status: "pending",
+          missing_questions: [],
+          funder_requirements: [],
+          can_auto_submit: false,
+          submission_reason: "global_auto_submit_disabled",
+        }
+      }
+      return { ok: true }
+    })
+
+    renderPanel()
+
+    expect(await screen.findByText("Ready draft.")).toBeTruthy()
+    expect(screen.getByText(/temporarily disabled system-wide/i)).toBeTruthy()
+    expect(screen.queryByText(/^Automation is off/i)).toBeNull()
   })
 
   it("hides the panel when the endpoint 404s (not deployed yet)", async () => {
