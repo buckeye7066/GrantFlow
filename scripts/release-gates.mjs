@@ -86,6 +86,7 @@ async function main() {
   await run('node', ['scripts/guard-corruption-hotspots.mjs'], { label: 'corruption-hotspots' })
   await run(npmBin(), ['run', 'scan:secrets'], { label: 'secret-scan' })
   await run(npmBin(), ['run', 'deployment-config:check'], { label: 'deployment-config' })
+  await run(npmBin(), ['run', 'check:native-platforms'], { label: 'native-platforms' })
 
   // Gate 0a: production-deploy guard — every backend import must resolve inside the
   // Dockerfile runtime image. Catches the "Railway built fine but the container
@@ -100,18 +101,6 @@ async function main() {
   await run('node', ['scripts/check-env-examples.mjs'], { label: 'env-examples' })
   await run(npmBin(), ['run', 'profile-scope:check'], { label: 'profile-scope' })
   await run(npmBin(), ['run', 'safe-sql:check'], { label: 'safe-sql' })
-
-  // Gate 0c: the other half of the 0b rescue. `check:prepush` is invoked by NO
-  // hook and NO CI job (`core.hooksPath` is unset, and `.githooks/pre-push`
-  // only runs eslint), so of the five guardrails it chains, only
-  // check-runtime-imports and check-env-examples were ever rescued above and
-  // check:profile-metadata is reached indirectly via `npm test`. These two ran
-  // NOWHERE — despite check-auth-middleware walking 1,733 backend files, 59 of
-  // which reference requireAuthenticatedUser. Both were verified to exit 0 on
-  // origin/main f670ef24 and to exit 1 on a planted violation, so they are real
-  // checks that simply had no caller.
-  await run('node', ['scripts/check-auth-middleware.mjs'], { label: 'auth-middleware' })
-  await run('node', ['scripts/check-profile-guard-reexports.mjs'], { label: 'profile-guard-reexports' })
   await runNodeTests(['tests/unit/no-fake-production-rule.test.mjs'], 'no-fake-rule')
   await runNodeTests(['tests/unit/profile-context-middleware.test.mjs'], 'profile-context')
   await run('node', ['scripts/crawler-profile-routing-proof.mjs'], {

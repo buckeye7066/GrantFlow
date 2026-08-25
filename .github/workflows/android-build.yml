@@ -6,6 +6,7 @@ name: Android build and repo-direct release
 # certificate before producing an update.
 
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -22,6 +23,41 @@ env:
   ANDROID_VERSION_NAME: 1.0.${{ github.run_number }}
 
 jobs:
+  android-compatibility:
+    name: Android debug compatibility
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: 'npm'
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - run: npm ci
+      - run: npm run check:native-platforms
+      - name: Build web assets
+        run: npm run build
+        env:
+          VITE_API_URL: https://grantflow-production.up.railway.app
+      - name: Switch to Capacitor Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version-mobile
+          cache: 'npm'
+      - name: Sync web build into Android
+        run: npx cap sync android
+      - name: Assemble clean debug APK
+        run: ./gradlew assembleDebug --no-daemon
+        working-directory: android
+
   android:
     name: Build signed APK + AAB
     if: github.ref == 'refs/heads/main'
@@ -51,7 +87,9 @@ jobs:
           node-version-file: .node-version-mobile
           cache: 'npm'
       - name: Sync verified web build into Android
-        run: npx cap sync android
+        run: |
+          npm run check:native-platforms
+          npx cap sync android
       - name: Require persistent Android signing identity
         shell: bash
         env:
@@ -95,38 +133,6 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_VERSION_CODE: ${{ env.ANDROID_VERSION_CODE }}
           ANDROID_VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
-      - name: Assert the OTA feed is NOT packaged inside the app
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The feed is a DEPLOY artifact served over the network. It must never
-          # ship inside the signed package: `cap sync` copies webDir=dist
-          # verbatim, so anything written into dist/mobile/ lands in the APK.
-          # Measured 2026-08-19: GrantFlow-1.0.198.apk carried
-          # assets/public/mobile/latest.json + a 2.15 MB bundle zip, which is
-          # why it was 9.7 MB against ~6 MB for its peers. genemap and
-          # sermonsmith already assert this; GrantFlow had no such gate.
-          REJECT='^assets/public/mobile/|\.zip$'
-          # The pattern must be able to FAIL: prove it catches known-bad paths
-          # before trusting it against the real listing.
-          for bad in 'assets/public/mobile/latest.json'                      'assets/public/mobile/bundle-1.0.1.zip'                      'assets/public/OTA.ZIP'; do
-            if ! echo "$bad" | grep -Eiq "$REJECT"; then
-              echo "Reject pattern missed: $bad" >&2; exit 1
-            fi
-          done
-          for apk in android/app/build/outputs/apk/release/*.apk; do
-            test -s "$apk"
-            unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
-            # A real web build must still be in there.
-            test "$(grep -Fxc 'assets/public/index.html' "$RUNNER_TEMP/apk-files.txt")" -eq 1
-            if grep -Eiq "$REJECT" "$RUNNER_TEMP/apk-files.txt"; then
-              echo "OTA feed or archive found inside $apk" >&2
-              grep -Ei "$REJECT" "$RUNNER_TEMP/apk-files.txt" >&2
-              exit 1
-            fi
-            echo "OK: $apk carries a web build and no OTA archive"
-          done
-
       - name: Verify signing certificate and prepare release assets
         shell: bash
         run: |

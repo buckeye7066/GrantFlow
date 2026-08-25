@@ -31,11 +31,15 @@ jobs:
         with:
           node-version-file: .node-version-mobile
           cache: 'npm'
-      - run: npx cap sync ios
+      - name: Verify and sync the checked-in iOS project
+        run: |
+          npm run check:native-platforms
+          npx cap sync ios
       - name: Archive (unsigned)
         run: |
-          xcodebuild -workspace ios/App/App.xcworkspace -scheme App \
-            -configuration Release -sdk iphoneos \
+          set -euo pipefail
+          xcodebuild -project ios/App/App.xcodeproj -scheme App \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/App.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
       - name: Package unsigned IPA

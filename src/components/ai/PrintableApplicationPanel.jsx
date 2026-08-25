@@ -12,18 +12,19 @@ import {
   CheckCircle2, Mail, Phone, Copy, Download,
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { copyTextToClipboard } from '@/utils/clipboard';
 
 function CopyButton({ text }) {
-  const [copied, setCopied] = useState(false);
-  const copy = useCallback(() => {
-    navigator.clipboard.writeText(text || '');
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const [copyState, setCopyState] = useState('idle');
+  const copy = useCallback(async () => {
+    const copied = await copyTextToClipboard(text || '');
+    setCopyState(copied ? 'copied' : 'failed');
+    setTimeout(() => setCopyState('idle'), 2000);
   }, [text]);
   return (
     <Button variant="ghost" size="sm" onClick={copy} className="gap-1 text-xs">
       <Copy className="w-3 h-3" />
-      {copied ? 'Copied' : 'Copy'}
+      {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
     </Button>
   );
 }
