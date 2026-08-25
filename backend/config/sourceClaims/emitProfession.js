@@ -41,6 +41,32 @@ function strOf(v) {
   return v === null || v === undefined ? '' : String(v)
 }
 
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Degree words that, paired with a profession, name the applicant's COURSE OF
+ * STUDY ("Master of Science in Nursing", "Bachelor of Nursing", "PharmD"). */
+const DEGREE_WORD =
+  '(?:master|bachelor|associate|doctor|doctorate|ph\\.?d|degree|diploma|certificate|bsn|msn|adn|dds|dmd|pharmd|dvm|jd)'
+
+/**
+ * Is the profession named as the applicant's COURSE OF STUDY — a degree or
+ * program in it ("Master of Science in Nursing", "Bachelor of Nursing", "Nursing
+ * Program", "degree in Pharmacy", "Nursing major / studies / education /
+ * training")? These name what the applicant STUDIES, so a profile in a different
+ * profession provably cannot receive it → an APPLICANT requirement. Mirrors
+ * emitFieldOfStudy.inDegreeOrProgramContext.
+ */
+function inDegreeOrProgramContext(title, phrase) {
+  const f = escapeRe(phrase)
+  // "<degree> [of X] in [X] <profession>"  →  "Master of Science in Nursing"
+  if (new RegExp(`\\b${DEGREE_WORD}\\b[\\w.\\s]{0,24}?\\bin\\s+[\\w\\s]{0,24}?${f}\\b`, 'i').test(title)) return true
+  // "<profession> program / degree / major / studies / education / training"
+  if (new RegExp(`\\b${f}\\s+(?:program(?:me)?|degree|major|studies|education|training)\\b`, 'i').test(title)) return true
+  // "program / degree / major / studies in|of [X] <profession>"  →  "Program in Anesthesia Nursing"
+  if (new RegExp(`\\b(?:program(?:me)?|degree|major|studies|study|training)\\s+(?:in|of)\\s+[\\w\\s]{0,24}?${f}\\b`, 'i').test(title)) return true
+  return false
+}
+
 function claim(value, scope, strength, field, text) {
   return makeClaim({
     dimension: 'profession',
@@ -80,6 +106,22 @@ function eligibilityModifier(before, after) {
     return true
   }
   if (/^s?\s*,?\s*only\b/i.test(after)) return true
+  // "<award noun> to <qualifiers> <profession>" names WHO RECEIVES the award
+  // ("Grants to USA Professional Dancers", "Grants to USA Dental Professionals")
+  // -> an applicant requirement. The "for" rule above already covers "Grant for
+  // Licensed Nurses"; "to" was the missing recipient preposition.
+  //
+  // The profession must CLOSE the recipient phrase, so this rule only fires when
+  // the profession word IS the recipient noun; a title like "Grants to support
+  // nursing research centers" names the WORK funded and is not matched here.
+  // A funder-name prefix ("Grants to American Dental Association ...") is settled
+  // by orgPrefixGoverning before this runs, so a funder name still wins.
+  if (
+    new RegExp('\\b(?:' + AWARD_NOUNS + ')\\s+to\\s+(?:[a-z.]+\\s+){0,3}$', 'i').test(before)
+    && /^s?\s*[,.;:—-]?\s*$/.test(after)
+  ) {
+    return true
+  }
   return false
 }
 
@@ -119,6 +161,11 @@ export default function emitProfession(opportunity = {}) {
     }
     // An explicit eligibility modifier is an applicant requirement.
     if (eligibilityModifier(before, after)) {
+      return [claim(def.key, 'applicant', 'explicit', 'title', title)]
+    }
+    // A degree/program in the profession's field names the applicant's course of
+    // study ("Master of Science in Nursing", "Nursing Degree Program") → applicant.
+    if (inDegreeOrProgramContext(title, titleMatch[0])) {
       return [claim(def.key, 'applicant', 'explicit', 'title', title)]
     }
   }

@@ -10,11 +10,11 @@ import { apiFetch } from '@/api/client'
 const BASE = '/api/sam'
 
 export const samApi = {
-  run: ({ mode = 'observe', checks = null, dryRun = true } = {}) =>
+  run: ({ mode = 'observe', checks = null } = {}) =>
     apiFetch(`${BASE}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode, checks, dryRun }),
+      body: JSON.stringify({ mode, checks }),
     }),
 
   updateFinding: (findingId, status) =>

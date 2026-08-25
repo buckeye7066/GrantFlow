@@ -68,6 +68,7 @@ import {
 import path from 'node:path'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { triagePage, PAGE_SURFACES } from './listingPageTriage.js'
+import { detectSpaApplySurface, spaApplyBlockerDetail } from './spaApplySurface.js'
 import { resolveConfirmationCaptureDir } from './hamiltonConfirmationArtifacts.js'
 import { resolveUploadsDir } from '../../utils/uploadsDir.js'
 import { startLiveScreencast, reportLiveStep, isLiveViewEnabled } from './hamiltonLiveView.js'
@@ -1041,6 +1042,18 @@ function isPlausibleConfirmationReference(value, { explicit = false } = {}) {
   if (!candidate || candidate.length < 6 || candidate.length > 80) return false
   if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(candidate)) return false
   if (/^[a-z]+$/.test(candidate)) return false
+  // A DOM SLUG IS NOT A REFERENCE. The single-lowercase-word guard above did
+  // not catch several words joined by hyphens, and the `explicit` path
+  // deliberately does not require a digit (a digitless ALL-CAPS id is real).
+  // Prod 2026-08-24: across 3,292 runs the ONLY confirmation_reference values
+  // in the database were three copies of the scraped element id
+  // "children-notification-children-notification" — recorded on one run marked
+  // 'submitted' and on TWO marked 'failed', which is itself proof it describes
+  // no submission outcome. A confirmation reference on a submitted run is
+  // accepted as durable proof, so one bogus value is the difference between
+  // "never confirmed" and a surface claiming a submission. A FALSE proof is
+  // worse than no proof. ALL-CAPS / mixed-case / digit-bearing ids still pass.
+  if (/^[a-z]+(?:-[a-z]+)+$/.test(candidate)) return false
   if (/\b(designed|through|submit|submitted|application|confirmation|reference|number|thanks)\b/i.test(candidate)) return false
   if (explicit) return true
   return /\d/.test(candidate)
@@ -2064,6 +2077,26 @@ export async function runAutopilot({
         // awards (bold.org category, scholarships.com) must be decomposed into
         // per-award candidates, not treated as one dead informational page.
         if (filled.length === 0) {
+          // A logged-in scholarship-HUB SPA (bold.org / scholarshipowl) whose
+          // apply control opens the application behind an in-app "Apply" button —
+          // not a native form and not a navigable apply URL. Route it to an
+          // honest, distinct blocker (carrying co-browse-with-saved-session
+          // guidance) BEFORE the apply-nav follow below, so Hamilton never
+          // blind-clicks "Apply" on a no-essay award and triggers an unintended
+          // real submission. See spaApplySurface.js for the prod evidence.
+          const spaSurface = detectSpaApplySurface({
+            url: (() => { try { return page.url() } catch { return null } })(),
+            fieldCount: fields.length,
+            buttonTexts: submitButtons.map((b) => b.text),
+          })
+          if (spaSurface.isSpaApply) {
+            trace.push({ step: 'spa_apply_surface', detail: { hub: spaSurface.hub } })
+            return {
+              status: 'blocked', blocker_kind: 'spa_apply_surface',
+              blocker_detail: spaApplyBlockerDetail(spaSurface.display),
+              filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+            }
+          }
           const listing = await triageDeadEnd(page, fields.length)
           if (listing) {
             trace.push({ step: 'listing_page', detail: { from: 'no_application_form', signals: listing.triage.signals } })

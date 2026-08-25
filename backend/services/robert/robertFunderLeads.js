@@ -257,7 +257,10 @@ export async function admitFunderLeads(db, {
 
     const likePatterns = purposeLikePatternsForNeeds([...needs])
     if (!likePatterns.length) continue
-    const likeSql = likePatterns.map(() => "LOWER(COALESCE(t.purpose,'')) LIKE ?").join(' OR ')
+    // SAFE BY CONSTRUCTION: this is a fixed literal repeated once per pattern and
+    // joined with OR — no caller data reaches the SQL text. The patterns
+    // themselves are bound as ? parameters below (…all(...likePatterns, …)).
+    const safeLikeSql = likePatterns.map(() => "LOWER(COALESCE(t.purpose,'')) LIKE ?").join(' OR ')
 
     let candidates
     try {
@@ -267,7 +270,7 @@ export async function admitFunderLeads(db, {
             AND (fo.is_active IS NULL OR fo.is_active = ${trueLit})
             AND EXISTS (
               SELECT 1 FROM grant_transactions t
-               WHERE t.funder_ein = fo.source_id AND (${likeSql})
+               WHERE t.funder_ein = fo.source_id AND (${safeLikeSql})
             )
             AND NOT EXISTS (
               SELECT 1 FROM grants g WHERE g.profile_id = ? AND g.funding_opportunity_id = fo.id
@@ -287,7 +290,7 @@ export async function admitFunderLeads(db, {
       try {
         txs = await db.prepare(
           `SELECT t.recipient_name, t.recipient_state, t.recipient_is_individual, t.amount, t.purpose
-             FROM grant_transactions t WHERE t.funder_ein = ? AND (${likeSql})
+             FROM grant_transactions t WHERE t.funder_ein = ? AND (${safeLikeSql})
              ORDER BY t.amount DESC LIMIT ?`,
         ).all(opp.source_id, ...likePatterns, FUNDER_TX_SAMPLE)
       } catch { continue }
@@ -490,14 +493,16 @@ export async function investigateFunderLeads(db, {
   let rows
   try {
     const stateFilter = hasState ? `AND (funder_lead_state IS NULL OR funder_lead_state IN ('candidate','investigated'))` : ''
-    const orderBy = hasAttempts ? 'COALESCE(funder_lead_attempts,0) ASC, updated_at ASC' : 'updated_at ASC'
+    // SAFE BY CONSTRUCTION: a ternary over two compile-time literals, selected by
+    // a column-existence flag — no caller data reaches the SQL text.
+    const safeOrderBy = hasAttempts ? 'COALESCE(funder_lead_attempts,0) ASC, updated_at ASC' : 'updated_at ASC'
     rows = await db.prepare(
       `SELECT id, title, funder, application_url, portal_url, url, source_url
          ${hasAttempts ? ', funder_lead_attempts' : ''}
          FROM grants
         WHERE LOWER(COALESCE(pipeline_category,'')) = '${PIPELINE_CATEGORY.FUNDER_LEAD}'
           ${stateFilter}
-        ORDER BY ${orderBy}
+        ORDER BY ${safeOrderBy}
         LIMIT ?`,
     ).all(limit)
   } catch (err) {

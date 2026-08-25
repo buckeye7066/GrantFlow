@@ -143,8 +143,21 @@ export function buildOpportunityRecord(item, { listingUrl } = {}) {
     amount_text: amount ? String(amount) : null,
     deadline: item?.deadline || null,
     // Provenance of the decomposition itself (audit): which listing minted this.
-    raw_meta: { decomposed_from: listingUrl || null, listing_item: true },
+    // `apply_marker` is a per-award in-SPA "Apply" control (a bold.org Apply
+    // BUTTON, not an <a href>) captured by the fabrication-guarded enumerator —
+    // it is a real apply surface even when there is no navigable applyUrl.
+    raw_meta: { decomposed_from: listingUrl || null, listing_item: true, apply_marker: item?.applyMarker || null },
   }
+}
+
+/**
+ * Does this enumerated award carry a real apply surface Hamilton can drive?
+ * A navigable applyUrl OR an in-SPA apply MARKER both qualify; an NGWeb catalog
+ * item (covered by the General Application) never does — the caller gates that
+ * separately.
+ */
+export function itemHasApplySurface(item) {
+  return Boolean(item?.applyUrl || item?.applyMarker)
 }
 
 /**
@@ -216,7 +229,7 @@ export async function decomposeListing(args = {}, deps = {}) {
   out.enumerated = enumerated.length
 
   for (const item of enumerated) {
-    const record = { perItem: { title: item.title, apply_url: item.applyUrl || null } }
+    const record = { perItem: { title: item.title, apply_url: item.applyUrl || null, apply_marker: item.applyMarker || null } }
     // 1. Admit through the canonical inserter (reality gate + dedup).
     let ins
     try {
@@ -263,7 +276,7 @@ export async function decomposeListing(args = {}, deps = {}) {
       out.items.push(record.perItem)
       continue
     }
-    if (!item.applyUrl) {
+    if (!itemHasApplySurface(item)) {
       record.perItem.outcome = 'accepted_no_apply_link'
       out.items.push(record.perItem)
       continue
@@ -298,4 +311,4 @@ export async function decomposeListing(args = {}, deps = {}) {
   return out
 }
 
-export default { decomposeListing, buildOpportunityRecord, isNgWebCatalogHost, listingHostSponsor, LISTING_MAX_ITEMS, LISTING_MAX_APPLIES }
+export default { decomposeListing, buildOpportunityRecord, itemHasApplySurface, isNgWebCatalogHost, listingHostSponsor, LISTING_MAX_ITEMS, LISTING_MAX_APPLIES }

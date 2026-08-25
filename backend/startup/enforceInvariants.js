@@ -9143,9 +9143,12 @@ export async function enforceFieldOfStudyMatchScope(db) {
     if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
     }
+    // SCOPE-AWARE (Stage-2 slice 1): the boot net uses the same applicant-scoped
+    // check as makeDecision, so it never purges a match whose field word is only
+    // in the SPONSOR's name (the #1360 over-rejection).
     let fieldOfStudyConflict
     try {
-      ;({ fieldOfStudyConflict } = await import('../config/fieldOfStudyEligibility.js'))
+      ;({ fieldOfStudyApplicantConflict: fieldOfStudyConflict } = await import('../config/sourceClaims/core.js'))
     } catch (err) {
       log.warn('field_of_study_match_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }

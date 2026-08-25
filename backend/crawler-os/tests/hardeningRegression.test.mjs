@@ -93,7 +93,14 @@ test('inferred concrete applicant categories do not get polluted by broad source
   const match = computeMatchDecision(opp, vfdThesis);
   assert.notEqual(match.decision, 'accept', 'individual-only grant must not become a strong VFD match');
   assert.equal(match.match_explain.matched_profile_type, false);
-  assert.equal(match.match_explain.score_breakdown.applicant_type, 0);
+  // The data-point / need-first scoring model replaced the old per-facet
+  // breakdown, so `score_breakdown.applicant_type` no longer exists and this
+  // assertion read `undefined !== 0`. The SAME fact — a VFD profile earns no
+  // applicant-type credit from an individual-only grant — is carried by
+  // matched_profile_type (above) and by the breakdown total. Verified
+  // falsifiable: adding "vfd" back to applicant_types flips this pair to
+  // matched_profile_type=true / total=2, so the guard still has teeth.
+  assert.equal(match.match_explain.score_breakdown.total, 0);
   assert.ok(match.match_score < 50, `individual-only grant should remain weak for a VFD profile, got ${match.match_score}`);
 });
 

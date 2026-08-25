@@ -44,6 +44,7 @@ import {
   appendTaskEvent,
   setMissingInfo,
   resolveMissingInfoItem,
+  cancelApplicationTask,
 } from './applicationTaskStore.js'
 import { generateAndSavePacket } from './hamiltonApplicationPacketGenerator.js'
 import {
@@ -61,6 +62,7 @@ import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot, sanitizeListingSnapshotForPersistence } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
+import { makeListingApplyItem } from './listingApplyRunner.js'
 import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './hamiltonConfirmationArtifacts.js'
 import { runContactHandoverAfterSubmission } from './hamiltonContactHandover.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
@@ -412,7 +414,8 @@ function mapAutomationTypeToFinishedStatus(automationType) {
 /**
  * A packet is only "ready" (ready_to_print_mail / ready_to_fax / ready_to_email)
  * when its submission channel is RESOLVED and the info THAT channel needs is on
- * file. Anastasia's Cade Foundation packet was handed over as ready-to-mail with
+ * file. A real student profile's Cade Foundation packet was handed over as
+ * ready-to-mail with
  * NO funder mailing address and an unresolved channel ("Hamilton could not
  * determine the submission channel") — an unmailable packet presented as done.
  *
@@ -519,6 +522,64 @@ async function isUserAuthorizedForProfile(db, userId, profileId) {
 }
 
 /**
+ * Idle statuses a pre-task-creation SKIP is allowed to close. This is exactly
+ * the scheduler-pickable set (hamiltonAgentAdapter.js) plus nothing else:
+ * drafted work (waiting_for_review), in-flight portal steps, and submission-
+ * uncertain states are deliberately NOT here — a refusal that arrives while a
+ * human-facing draft exists must not silently discard it.
+ */
+const SKIP_CLOSEABLE_STATUSES = Object.freeze([
+  'queued', 'ready', 'analyzing', 'ready_to_start', 'blocked',
+  'waiting_for_login', 'waiting_for_2fa', 'waiting_for_captcha',
+  'waiting_for_email_verification', 'waiting_for_window',
+])
+
+/**
+ * A skip that fires BEFORE ensureApplicationTask leaves an already-existing
+ * task untouched — its updated_at frozen — and the scheduler picks tasks
+ * ORDER BY updated_at ASC, so the same skipped tasks head the queue on EVERY
+ * tick and starve everything behind them. Measured in prod 2026-08-24: the
+ * same 5 grants.gov tasks (updated_at 2026-08-03) were re-picked every 5
+ * minutes for three weeks while 192 ready tasks were never attempted once.
+ * When the policy refuses the source for this profile, the honest durable
+ * state for an existing idle task is CANCELLED with the refusal named — which
+ * is also what rotates the queue. Uses the canonical cancelApplicationTask
+ * (evented, terminal, submission-uncertain-safe); never deletes.
+ */
+async function closeExistingTasksForRefusedSource(db, {
+  profileId, opportunityId = null, grantId = null, reason, message,
+}) {
+  const closed = []
+  try {
+    const placeholders = SKIP_CLOSEABLE_STATUSES.map(() => '?').join(', ')
+    const rows = await db
+      .prepare(
+        `SELECT id FROM application_tasks
+          WHERE profile_id = ?
+            AND ((opportunity_id IS NOT NULL AND opportunity_id = ?)
+              OR (grant_id IS NOT NULL AND grant_id = ?))
+            AND status IN (${placeholders})`,
+      )
+      .all(
+        String(profileId),
+        opportunityId ? String(opportunityId) : null,
+        grantId ? String(grantId) : null,
+        ...SKIP_CLOSEABLE_STATUSES,
+      )
+    for (const row of rows || []) {
+      try {
+        await cancelApplicationTask(db, row.id, {
+          actorRole: 'agent',
+          reason: message || `Hamilton closed this task: ${reason}`,
+        })
+        closed.push(row.id)
+      } catch { /* a single uncancellable task must not fail the skip */ }
+    }
+  } catch { /* table missing on bare DBs — nothing to close */ }
+  return closed
+}
+
+/**
  * Process ONE selected source. Designed to be called in a loop by
  * `automateSelected`.
  */
@@ -589,10 +650,22 @@ export async function automateSingleSource(db, {
     profileId: resolvedProfileId, opportunity, grant,
   })
   if (eligibility?.code === 'funding_source_profile_rejected') {
+    const closedTasks = await closeExistingTasksForRefusedSource(db, {
+      profileId: resolvedProfileId,
+      opportunityId,
+      grantId,
+      reason: 'ineligible_profile',
+      message: `The matching engine determined this profile is not eligible for this funding source${
+        Array.isArray(eligibility.reasons) && eligibility.reasons.length
+          ? ` (${eligibility.reasons.slice(0, 3).join('; ')})`
+          : ''
+      }. Hamilton closed the task so eligible work is not blocked behind it.`,
+    })
     return {
       task: null,
       skipped: true,
       reason: 'ineligible_profile',
+      closed_tasks: closedTasks,
       policy: {
         code: eligibility.code,
         reasons: eligibility.reasons || [],
@@ -605,10 +678,18 @@ export async function automateSingleSource(db, {
   // can surface the next human research step instead of receiving the task
   // store's typed refusal as an automation failure.
   if (eligibility?.code === 'pointer_research_lead') {
+    const closedTasks = await closeExistingTasksForRefusedSource(db, {
+      profileId: resolvedProfileId,
+      opportunityId,
+      grantId,
+      reason: 'pointer_research_lead',
+      message: 'This source is a research lead (a pointer with no direct application surface), not an application. Hamilton closed the task; the lead is surfaced through the research-lead handoff instead.',
+    })
     return {
       task: null,
       skipped: true,
       reason: 'pointer_research_lead',
+      closed_tasks: closedTasks,
       manual_handoff: eligibility.handoff || null,
       policy: {
         code: eligibility.code,
@@ -2473,12 +2554,35 @@ async function runAutopilotPathway(db, {
     return { task: taskAfterEngine, classification, autopilot_run: run.id, autopilot_result: engineResult, cancelled: true }
   }
 
-  if (engineResult?.blocker_kind === 'listing_page' && engineResult?.listing_snapshot) {
+  if (!options?._listingChild && engineResult?.blocker_kind === 'listing_page' && engineResult?.listing_snapshot) {
     const ephemeralListingSnapshot = engineResult.listing_snapshot
     engineResult.listing_snapshot = sanitizeListingSnapshotForPersistence(ephemeralListingSnapshot)
+    // GAP 2 CLOSED — wire an applyItem runner into decomposeListing so an ACCEPTed
+    // award with a real apply surface re-enters the EXISTING per-task fill/submit
+    // flow. Built ONLY when the PARENT run is authorized (full automation +
+    // allow_auto_submit); consent is forwarded VERBATIM and NEVER widened. The
+    // child run re-enters automateSingleSource with `_listingChild:true`, which
+    // suppresses re-decomposition (recursion guard above) — its own evidence gate
+    // is the sole authority on whether the child is 'submitted'. Fan-out stays
+    // env-bounded by HAMILTON_LISTING_MAX_APPLIES inside decomposeListing.
+    const listingApplyItem = (fullAutomationActive && allowAutoSubmit)
+      ? makeListingApplyItem({
+        allowAutoSubmit,
+        runChildApply: async ({ opportunityId }) => {
+          const childRun = await automateSingleSource(db, {
+            profile,
+            profileId: task.profile_id,
+            userId,
+            source: { opportunity_id: opportunityId },
+            options: { ...(options || {}), _listingChild: true, allow_auto_submit: true },
+          }).catch((err) => ({ autopilot_result: { status: 'failed', blocker_kind: 'apply_error', detail: err?.message || String(err) } }))
+          return childRun?.autopilot_result || { status: childRun?.task?.status || 'blocked', blocker_kind: 'no_result' }
+        },
+      })
+      : null
     const decomposition = await decomposeListing(
       { db, profile, profileSections: profile?.sections || null, listing: ephemeralListingSnapshot },
-      { log: (m, d) => { void m; void d } },
+      { log: (m, d) => { void m; void d }, applyItem: listingApplyItem },
     ).catch((err) => ({ error: err?.message || String(err) }))
 
     engineResult.listing_decomposition = decomposition

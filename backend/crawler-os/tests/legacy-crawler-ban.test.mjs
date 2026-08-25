@@ -88,6 +88,17 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // intended architecture instead of standing red — the same disposition as
   // needFirstScoringAdapter below.
   'backend/utils/htmlTextHygiene.js',
+  // The funder-lifecycle date/reporting normalizers (expected decision date,
+  // review-days, reporting requirements), imported by the OS blind fact
+  // extractor + mapper so a captured funder lifecycle date is normalized the
+  // SAME way for the calendar and for the OS. Zero imports, zero I/O —
+  // verified dependency-free 2026-08-24 (three pure normalizers + a default).
+  //
+  // Landed in #1337 WITHOUT the allowlist entry and left the crawler-os suite
+  // red on main ever since — the identical disposition as htmlTextHygiene.js
+  // above: allowlisted so the boundary test states the real, intended
+  // architecture instead of standing red.
+  'backend/config/funderLifecycleFacts.js',
   // The need-first scoring policy adapter, imported by crawler-os/matchEngine.js
   // so the OS decision and the canonical engine apply the SAME need-first rules
   // (matchEngine.js itself is already an approved contract above; this is the

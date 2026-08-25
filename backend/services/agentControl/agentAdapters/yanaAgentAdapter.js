@@ -58,7 +58,6 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       return { ok: true, status: 'stopped', summary: { agent: 'yana', stopped: true } }
     }
     const allowLeads = options?.allow_yana_leads !== false
-    const dryRun = Boolean(options?.dry_run)
 
     await signal?.heartbeat?.({ phase: 'discover', allow_leads: allowLeads })
 
@@ -74,12 +73,10 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       ? { providerArgs: { bySource: { propublica_990: { states: directiveStates } } } }
       : {}
 
-    // dry_run: observe only (qualify but never push to John). Otherwise push
-    // qualified leads when allowed.
     const yanaCfg = getYanaConfig()
     const result = await runYanaDiscovery(db, {
       trigger: 'admin-ui',
-      allowLeads: allowLeads && !dryRun,
+      allowLeads,
       createdByUserId: options?.user_id || null,
       // Outbound prospect discovery + enrichment touch the live web; gated by
       // YANA_ALLOW_LIVE_WEB (honest NOOP when off).
@@ -101,24 +98,21 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
 
     // Honest reporting: when Yana qualified nothing, surface WHY (her
     // noop_reason already explains it — e.g. live-web/prospect discovery
-    // disabled, or N of M orgs lacked a usable email). A dry-run intentionally
-    // never pushes to John, so 0 pushed is expected there (not a problem).
+    // disabled, or N of M orgs lacked a usable email).
     const noopReason = result?.noop_reason || null
     const baseMsg = `Yana client discovery — ${result.candidates_qualified} qualified of ${result.candidates_total}, ${result.leads_pushed_to_john} pushed to John`
     await signal?.recordEvent?.({
       eventType: result.ok ? 'agent.yana.completed' : 'agent.yana.failed',
       severity: result.ok ? 'info' : 'warning',
-      message: dryRun
-        ? `${baseMsg} (dry-run: leads not pushed)`
-        : (noopReason ? `${baseMsg} — ${noopReason}` : baseMsg),
-      data: { ...result, dry_run: dryRun || undefined, directive_applied: directive || undefined, directive_states: directiveStates.length ? directiveStates : undefined },
+      message: noopReason ? `${baseMsg} — ${noopReason}` : baseMsg,
+      data: { ...result, directive_applied: directive || undefined, directive_states: directiveStates.length ? directiveStates : undefined },
     })
 
     return {
       ok: result.ok !== false,
       status: result.ok === false ? 'failed' : 'completed',
       status_reason: noopReason,
-      summary: { ...result, dry_run: dryRun || undefined, directive_applied: directive || null, directive_states: directiveStates },
+      summary: { ...result, directive_applied: directive || null, directive_states: directiveStates },
       error: result.error || null,
     }
   }

@@ -802,7 +802,12 @@ test('regression: geographic mismatch — Texas-only grant NOT shown to Ohio pro
   }
   const result = computeMatchDecision(profile, opp)
   assert.equal(result.decision, 'REJECT', 'TX-only grant should be REJECT for OH profile')
-  assert.ok(result.ineligibilityReasons.some(r => r.includes('Geographic mismatch')))
+  // See #1380: the scoped residency gate words this bar itself; the legacy
+  // 'Geographic mismatch:' prefix survives on the evaluateEligibility path.
+  assert.ok(
+    result.ineligibilityReasons.some(r => /Geographic mismatch|requires TX residency/i.test(r)),
+    `expected a geographic ineligibility reason, got ${JSON.stringify(result.ineligibilityReasons)}`,
+  )
 })
 
 test('regression: loan is always rejected, never accepted', () => {

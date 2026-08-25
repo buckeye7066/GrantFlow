@@ -34,7 +34,11 @@ export const APPLICANT_SCOPES = Object.freeze(['applicant', 'beneficiary'])
 /** The kinds of fact a claim can carry. */
 export const DIMENSIONS = Object.freeze([
   'field_of_study', 'profession', 'jurisdiction', 'residency',
-  // (future) 'entity_type','academic_stage','gender','condition','military_service','aid_type','need','award_ceiling'
+  // Stage-2 slice-4 claim dimensions (emitters + <dim>ApplicantConflict live in
+  // their own files; NOT yet wired into matchEngine — the parent integrates them
+  // sequentially to avoid gate-ladder collisions).
+  'academic_stage', 'entity_type', 'gender', 'aid_type', 'condition',
+  // (future) 'military_service','need','award_ceiling'
 ])
 
 /**
@@ -171,7 +175,95 @@ export function applicantConflicts(claims, sections = {}, deps = {}) {
   return conflicts
 }
 
+/**
+ * requirementSatisfaction — REQUIREMENT SATISFACTION over the source's
+ * APPLICANT-scoped claims, for the full-satisfaction score floor (the
+ * false-NEGATIVE fix; see docs/architecture/evidence-model-diagnosis.md §4c).
+ *
+ * The live score is profile-OVERLAP (matched credit ÷ the whole ~70-point
+ * inventory), so a narrow fund a profile fully qualifies for touches ~2 points
+ * and lands in REVIEW. The needs-only floor lifts such a fund to ACCEPT only
+ * when the funder states a canonical NEED the profile matches — it is blind to a
+ * fund whose bar is a FIELD / PROFESSION / RESIDENCY. This generalises it: for
+ * every applicant-scoped claim the source makes about itself, decide whether the
+ * profile's own facts SATISFY it. A claim is SATISFIED only on a POSITIVE match
+ * (the profile declares a value the claim requires); SILENCE is UNMET — we
+ * cannot confirm the applicant meets a stated requirement we hold no fact for,
+ * exactly as the needs path counts only positively-matched funder needs. The
+ * per-dimension logic is `dimensionConflicts`, shared with `applicantConflicts`
+ * so the satisfaction and reject sides can never drift.
+ *
+ * @param {Claim[]} claims    from deriveSourceClaims
+ * @param {object}  sections  profile sections
+ * @param {object}  deps      { resolveProfileProfessions, profileStates }
+ * @returns {{applicable:number, satisfied:Claim[], unmet:Claim[], fullySatisfied:boolean}}
+ */
+export function requirementSatisfaction(claims, sections = {}, deps = {}) {
+  const factCache = new Map()
+  const facts = (dim) => {
+    if (!factCache.has(dim)) factCache.set(dim, profileFactsFor(dim, sections, deps))
+    return factCache.get(dim)
+  }
+  const applicant = (claims || []).filter((c) => c && APPLICANT_SCOPES.includes(c.scope))
+  const satisfied = []
+  const unmet = []
+  for (const c of applicant) {
+    const f = facts(c.dimension)
+    // SATISFIED = the profile positively declares a value this claim requires.
+    // `dimensionConflicts` returns false BOTH when the profile is silent AND
+    // when it matches, so a positive match additionally requires a non-empty
+    // fact set: silence never counts as satisfaction.
+    const positivelySatisfied = Boolean(f && f.size > 0 && !dimensionConflicts(c.dimension, c.value, f))
+    if (positivelySatisfied) satisfied.push(c)
+    else unmet.push(c)
+  }
+  return {
+    applicable: applicant.length,
+    satisfied,
+    unmet,
+    fullySatisfied: applicant.length >= 1 && unmet.length === 0,
+  }
+}
+
+/**
+ * SCOPE-AWARE field-of-study conflict — the drop-in replacement for
+ * config/fieldOfStudyEligibility.fieldOfStudyConflict, returning the SAME shape
+ * ({classId,label,phrase,field,reason}) so makeDecision + the boot net need no
+ * other change. The ONLY difference: it fires only on an APPLICANT-scoped field
+ * claim, so a field word that is part of the SPONSOR's name ("American Society of
+ * Highway ENGINEERS Scholarship") no longer hard-rejects a paramedic — the exact
+ * over-rejection the title-only gate #1360 produces.
+ *
+ * @returns {null|{classId,label,phrase,field,reason}}
+ */
+export function fieldOfStudyApplicantConflict(sections, opportunity = {}) {
+  let claims
+  try { claims = emitFieldOfStudy(opportunity) } catch { return null }
+  const applicant = (claims || []).filter(
+    (c) => c && c.dimension === 'field_of_study' && APPLICANT_SCOPES.includes(c.scope),
+  )
+  if (applicant.length === 0) return null
+  const profileFields = profileFactsFor('field_of_study', sections)
+  if (profileFields.size === 0) return null // profile declares no major → neutral
+  const declared = new Set([...profileFields].map((f) => String(f).toLowerCase()))
+  for (const c of applicant) {
+    if (!declared.has(String(c.value).toLowerCase())) {
+      return {
+        classId: c.value,
+        label: c.value,
+        phrase: c.evidence.text,
+        field: c.evidence.field,
+        reason:
+          `Field of study: this award is for ${c.value} — its own ${c.evidence.field} says `
+          + `"${c.evidence.text}" — and the profile's declared major does not include it`,
+      }
+    }
+  }
+  return null
+}
+
 export default {
   SCOPES, APPLICANT_SCOPES, DIMENSIONS, makeClaim,
   deriveSourceClaims, profileFactsFor, applicantConflicts,
+  requirementSatisfaction, fieldOfStudyApplicantConflict,
 }

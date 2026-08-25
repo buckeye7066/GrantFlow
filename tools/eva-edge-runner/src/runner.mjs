@@ -30,7 +30,7 @@ async function runJourneyWithConfirmation(runOne, journey) {
 }
 
 // Run every journey for one app via its runtime adapter.
-export async function runAppJourneys({ app, manifest, baseUrl = null, dryRun = false, captureDir = null }) {
+export async function runAppJourneys({ app, manifest, baseUrl = null, captureDir = null }) {
   const journeys = []
   const critical = manifest?.nightly_critical_journeys || []
   const journeyDefs = (manifest?.journeys || []).filter((j) => critical.length === 0 || critical.includes(j.id))
@@ -41,9 +41,9 @@ export async function runAppJourneys({ app, manifest, baseUrl = null, dryRun = f
   for (const jd of journeyDefs) {
     let runOne
     if (WEB_RUNTIMES.has(manifest.runtime_type)) {
-      runOne = () => runWebJourney({ baseUrl, journey: jd, captureDir, dryRun })
+      runOne = () => runWebJourney({ baseUrl, journey: jd, captureDir })
     } else if (CLI_RUNTIMES.has(manifest.runtime_type) && jd.command) {
-      runOne = () => runCliJourney({ manifest, journey: jd, dryRun })
+      runOne = () => runCliJourney({ manifest, journey: jd })
     } else {
       // No adapter yet for this runtime (electron/api/windows-ui) or a journey
       // with no runnable command. Report BLOCKED with the reason — never a
@@ -59,7 +59,7 @@ export async function runAppJourneys({ app, manifest, baseUrl = null, dryRun = f
       continue
     }
     // eslint-disable-next-line no-await-in-loop
-    const result = dryRun ? await runOne() : await runJourneyWithConfirmation(runOne, jd)
+    const result = await runJourneyWithConfirmation(runOne, jd)
     journeys.push(result)
   }
   return journeys
