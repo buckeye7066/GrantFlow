@@ -1,12 +1,19 @@
 name: iOS build
 
-# Manual trigger only — macOS runners bill at 10x, and the unsigned build
-# is only needed on demand. Produces grantflow-unsigned-ipa: an UNSIGNED
-# .ipa proving the iOS build works end-to-end. App Store submission
-# additionally needs Apple Developer signing (Distribution certificate +
-# provisioning profile added as secrets, and a signed archive step).
+# macOS runners bill at a higher multiplier, so pull requests run this only
+# when native inputs or the workflow itself change. Produces an UNSIGNED IPA
+# proving the iOS build works end-to-end. App Store submission additionally
+# needs Apple Developer signing (Distribution certificate + provisioning
+# profile added as secrets, and a signed archive step).
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/ios-build.yml'
+      - 'ios/**'
+      - 'capacitor.config.json'
+      - 'package.json'
+      - 'package-lock.json'
   workflow_dispatch:
 
 permissions:
