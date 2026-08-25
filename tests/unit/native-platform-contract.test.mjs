@@ -30,6 +30,10 @@ test('the iOS scene delegate is checked in and wired into the executable target'
     'utf8',
   )
   const infoPlist = fs.readFileSync(path.join(projectRoot, 'ios/App/App/Info.plist'), 'utf8')
+  const mainStoryboard = fs.readFileSync(
+    path.join(projectRoot, 'ios/App/App/Base.lproj/Main.storyboard'),
+    'utf8',
+  )
   const xcodeProject = fs.readFileSync(
     path.join(projectRoot, 'ios/App/App.xcodeproj/project.pbxproj'),
     'utf8',
@@ -37,10 +41,12 @@ test('the iOS scene delegate is checked in and wired into the executable target'
 
   assert.match(sceneDelegate, /class SceneDelegate: UIResponder, UIWindowSceneDelegate/)
   assert.match(sceneDelegate, /CAPBridgeViewController\(\)/)
+  assert.match(sceneDelegate, /if window == nil/)
   assert.match(sceneDelegate, /SceneDelegateProxy\.shared\.scene/)
   assert.match(appDelegate, /configurationForConnecting/)
   assert.match(infoPlist, /UIApplicationSceneManifest/)
   assert.match(infoPlist, /\$\(PRODUCT_MODULE_NAME\)\.SceneDelegate/)
+  assert.match(mainStoryboard, /customClass="CAPBridgeViewController"/)
   assert.match(xcodeProject, /SceneDelegate\.swift in Sources/)
 })
 

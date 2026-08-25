@@ -9,8 +9,15 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
-        window = UIWindow(windowScene: windowScene)
-        window?.rootViewController = CAPBridgeViewController()
+        // When UISceneStoryboardFile is present, UIKit has already created the
+        // storyboard window and its CAPBridgeViewController. Preserve that
+        // initialized bridge; construct the same root only as a fallback for a
+        // scene connection that arrives without the storyboard-owned window.
+        if window == nil {
+            let appWindow = UIWindow(windowScene: windowScene)
+            appWindow.rootViewController = CAPBridgeViewController()
+            window = appWindow
+        }
         window?.makeKeyAndVisible()
 
         SceneDelegateProxy.shared.scene(
