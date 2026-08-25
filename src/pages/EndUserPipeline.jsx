@@ -304,8 +304,8 @@ export default function EndUserPipeline() {
                       <ol className="mt-3 list-decimal space-y-2 pl-5 text-muted-foreground">
                         <li>Hamilton checks the stored requirements, profile facts, documents, portal, and deadlines.</li>
                         <li>He prepares the fields and documents supported by the available source information.</li>
-                        <li>He pauses for missing information, login, CAPTCHA, 2FA, payment, signature, owner approval, or a personal attestation. GrantFlow cannot bypass those steps.</li>
-                        <li>In the controlled beta, Hamilton preserves the finished work and shows the manual handoff. You complete the final external submission and retain its confirmation.</li>
+                        <li>He pauses only for missing required information or portal controls such as login, CAPTCHA, 2FA, payment, signature, or a personal attestation. GrantFlow cannot bypass those steps.</li>
+                        <li>When automation is on and the required facts and portal controls are available, Hamilton submits and records confirmation. If a portal blocks automation, he preserves the finished work and shows the exact handoff.</li>
                       </ol>
                     </div>
 

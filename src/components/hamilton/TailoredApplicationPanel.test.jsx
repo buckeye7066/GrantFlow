@@ -55,7 +55,7 @@ describe("TailoredApplicationPanel", () => {
     vi.clearAllMocks()
   })
 
-  it("blocks approval while funder questions remain and deep-links each to the profile", async () => {
+  it("blocks submission for missing funder facts and deep-links each to the profile", async () => {
     apiFetchMock.mockImplementation(async (endpoint) => {
       if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
         return {
@@ -85,14 +85,11 @@ describe("TailoredApplicationPanel", () => {
     expect(link.getAttribute("href")).toContain("field=household_income")
     expect(screen.getByText(/Acme asks for your household income/i)).toBeTruthy()
 
-    // Approve is disabled while a question is unanswered.
-    const approveBtn = screen.getByRole("button", { name: /^approve$/i })
-    expect(approveBtn.disabled).toBe(true)
-
-    expect(screen.getByText(/before the draft is ready for your portal handoff/i)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull()
+    expect(screen.getByText(/before Hamilton can submit/i)).toBeTruthy()
   })
 
-  it("shows read-only text and a truthful human portal handoff when approved", async () => {
+  it("maps a legacy approved record to ready and reports that automation is off", async () => {
     apiFetchMock.mockImplementation(async (endpoint) => {
       if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
         return {
@@ -110,14 +107,34 @@ describe("TailoredApplicationPanel", () => {
     renderPanel()
 
     expect(await screen.findByText("Approved narrative body.")).toBeTruthy()
-    // No editable textarea in read-only/approved view.
+    // The saved narrative stays read-only until Edit is selected.
     expect(screen.queryByRole("textbox")).toBeNull()
-    expect(screen.getByText(/review it in the portal.*submit it yourself/i)).toBeTruthy()
-    expect(screen.queryByText(/auto-submit/i)).toBeNull()
-    // Approved status badge is present, and the approve button reads "Approved"
-    // and is disabled (already approved — nothing more to do).
-    expect(screen.getAllByText(/^Approved$/).length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByRole("button", { name: /^approved$/i }).disabled).toBe(true)
+    expect(screen.getByText(/Automation is off.*ready for you to use/i)).toBeTruthy()
+    expect(screen.getByText(/^Ready$/)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull()
+  })
+
+  it("reports auto-submit readiness without adding a second review action", async () => {
+    apiFetchMock.mockImplementation(async (endpoint) => {
+      if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
+        return {
+          fields: { primary: "Automation-ready narrative." },
+          status: "pending",
+          missing_questions: [],
+          funder_requirements: [],
+          can_auto_submit: true,
+          gate_reason: null,
+        }
+      }
+      return { ok: true }
+    })
+
+    renderPanel()
+
+    expect(await screen.findByText("Automation-ready narrative.")).toBeTruthy()
+    expect(screen.getByText(/Automation is on.*Hamilton can use this draft and submit/i)).toBeTruthy()
+    expect(screen.getByText(/^Generated$/)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull()
   })
 
   it("edit mode posts the edited fields to the edit endpoint", async () => {
@@ -129,7 +146,7 @@ describe("TailoredApplicationPanel", () => {
           missing_questions: [],
           funder_requirements: [],
           can_auto_submit: false,
-          gate_reason: "not_approved",
+          gate_reason: "automation_off",
         }
       }
       if (endpoint.endsWith("/hamilton/tailored/edit") && options.method === "POST") {
@@ -143,7 +160,7 @@ describe("TailoredApplicationPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }))
     const textarea = await screen.findByRole("textbox")
     fireEvent.change(textarea, { target: { value: "My edited narrative." } })
-    fireEvent.click(screen.getByRole("button", { name: /save & approve/i }))
+    fireEvent.click(screen.getByRole("button", { name: /save edits/i }))
 
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith(

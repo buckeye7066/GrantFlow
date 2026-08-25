@@ -91,7 +91,7 @@ export default function FundingLibrary() {
             type and geography. Use the filters to find directories, scholarships, grants,
             benefits, and program funding. To save something to a profile, use the
             <Sparkles className="mx-1 inline h-3.5 w-3.5 text-blue-600" /> recommendation flow on
-            the Profile page — Robert will only add to a pipeline with your approval.
+            the Profile page — Robert adds confirmed, profile-relevant matches to your pipeline.
           </p>
         </div>
       </header>

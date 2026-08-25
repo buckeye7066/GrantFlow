@@ -22,7 +22,8 @@ test('pipeline preserves local calendar dates and states human submission bounda
 
   assert.match(source, /parseLocalDate\(grant\.deadline\)/)
   assert.match(source, /GrantFlow cannot bypass those steps/)
-  assert.match(source, /owner approval/)
+  assert.match(source, /Hamilton submits and records confirmation/)
+  assert.doesNotMatch(source, /owner approval/i)
   assert.match(source, /tasksQuery\.isLoading \|\| tasksQuery\.isError/)
   assert.match(source, /aria-pressed=\{selected\}/)
 })

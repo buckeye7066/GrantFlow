@@ -426,7 +426,7 @@ export const HELP_REGISTRY = [
     navGroup: 'work',
     title: 'Printable Application',
     description: 'Generate a printable version of an application for offline work.',
-    purpose: 'Create a print-ready PDF or formatted document combining all application components. Useful for review, sign-off, or mailing to funders.',
+    purpose: 'Create a print-ready PDF or formatted document combining all application components. Useful for offline completion, recordkeeping, or mailing to funders.',
     whoCanUse: 'all',
     mainActions: ['Select pipeline item', 'Generate printable packet', 'Download or print PDF'],
     relatedFeatures: ['Proposals', 'Documents'],

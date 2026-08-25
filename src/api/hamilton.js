@@ -178,10 +178,10 @@ export function portalTypeLabel(portalType) {
 
 // ── Per-funder tailored application narrative ───────────────────────────────
 // Hamilton drafts a funder-SPECIFIC application narrative per opportunity. The
-// owner reviews it on the pipeline/portal card: read the current draft + status
-// + any blocking "missing info" questions, then approve / edit / regenerate.
-// Submission itself is done by the backend autopilot once approved AND the
-// profile's automation toggle is on — the UI only reflects that gate.
+// the applicant inspects it on the pipeline/portal card: read the current draft
+// and any blocking missing-information questions, then edit or regenerate it.
+// Submission authority comes from the profile's automation toggle; legacy
+// tailored-application review statuses are display/history metadata, not a gate.
 //
 // Endpoint path is owned by the sibling backend agent; we assume the profile-
 // scoped REST shape used by every other Hamilton surface in this file
@@ -200,7 +200,8 @@ export function getTailoredApplication(profileId, grantId) {
   return apiFetch(`/api/hamilton/tailored/application?grant_id=${encodeURIComponent(grantId)}`)
 }
 
-// Approve the current draft as-is → status 'approved'.
+// Legacy compatibility endpoint for records that still track an `approved`
+// review status. New UI flows do not require this before automation can run.
 export function approveTailoredApplication(profileId, grantId) {
   if (!grantId) return Promise.reject(new Error('grantId required'))
   return apiFetch(`/api/hamilton/tailored/approve`, {
@@ -209,7 +210,7 @@ export function approveTailoredApplication(profileId, grantId) {
   })
 }
 
-// Save owner edits → status 'edited' (editing == approved-as-edited).
+// Save applicant edits → status 'edited'.
 export function editTailoredApplication(profileId, grantId, fields) {
   if (!grantId) return Promise.reject(new Error('grantId required'))
   return apiFetch(`/api/hamilton/tailored/edit`, {
@@ -228,13 +229,13 @@ export function regenerateTailoredApplication(profileId, grantId) {
 }
 
 export const TAILORED_STATUS_LABELS = Object.freeze({
-  pending: 'Pending review',
-  approved: 'Approved',
-  edited: 'Approved (edited)',
+  pending: 'Generated',
+  approved: 'Ready',
+  edited: 'Edited',
 })
 
 export function tailoredStatusLabel(status) {
-  return TAILORED_STATUS_LABELS[status] || 'Pending review'
+  return TAILORED_STATUS_LABELS[status] || 'Generated'
 }
 
 // -- Scheduled runs on the calendar + login readiness --------------------

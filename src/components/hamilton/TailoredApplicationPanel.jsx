@@ -2,15 +2,11 @@
  * TailoredApplicationPanel — the funder-SPECIFIC application narrative Hamilton
  * wrote for one opportunity, reviewed inline on the pipeline/portal card.
  *
- * Owner intent: each opportunity gets its own tailored narrative. The owner
- * reviews it per card:
- *   - APPROVE the draft as-is (checkbox/button), or
- *   - EDIT the text (editing == approved-as-edited → status 'edited').
- * If the funder asks for information not in the profile, a blocking QUESTION is
- * shown and approval is disabled until it's answered (each question deep-links
- * to the exact profile section to fill). Approval means the draft is ready for
- * the owner's visible portal handoff; this panel never implies that a real
- * final Submit is executed automatically.
+ * Each opportunity gets its own tailored narrative. The applicant can inspect
+ * or edit it per card. Enabling auto-submit is the submission authorization;
+ * this surface does not add a second per-draft checkpoint. If the funder asks
+ * for required information that is not in the profile, a blocking question is
+ * shown with a deep-link to the exact profile section to complete.
  *
  * Graceful pre-backend behavior: the endpoint is shipped by a sibling backend
  * agent. If the GET 404s (not deployed yet) the panel hides itself entirely so
@@ -115,23 +111,7 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
   const missingQuestions = Array.isArray(data?.missing_questions) ? data.missing_questions : []
   const funderRequirements = Array.isArray(data?.funder_requirements) ? data.funder_requirements : []
   const hasBlockingQuestions = missingQuestions.length > 0
-  const isApproved = status === 'approved' || status === 'edited'
-
   const refresh = () => qc.invalidateQueries({ queryKey })
-
-  async function handleApprove() {
-    if (hasBlockingQuestions) return
-    setBusy(true)
-    try {
-      await hamiltonApi.approveTailoredApplication(profileId, grantId)
-      await refresh()
-      showSuccessToast(toast, 'Draft approved', 'Final portal review and Submit remain your visible handoff.')
-    } catch (err) {
-      showErrorToast(toast, 'Could not approve', err?.message || 'Please try again.')
-    } finally {
-      setBusy(false)
-    }
-  }
 
   async function handleSaveEdit() {
     setBusy(true)
@@ -139,7 +119,7 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
       await hamiltonApi.editTailoredApplication(profileId, grantId, drafts)
       await refresh()
       setEditing(false)
-      showSuccessToast(toast, 'Edits saved', 'Your edited version is approved.')
+      showSuccessToast(toast, 'Edits saved', 'Hamilton will use the updated draft.')
     } catch (err) {
       showErrorToast(toast, 'Could not save edits', err?.message || 'Please try again.')
     } finally {
@@ -161,25 +141,25 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
     }
   }
 
-  function submissionHandoffState() {
+  function submissionReadinessState() {
     if (hasBlockingQuestions) {
       return {
         icon: <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />,
         cls: 'text-amber-700',
-        text: 'Answer the funder’s questions above before the draft is ready for your portal handoff.',
+        text: 'Answer the funder’s required questions above before Hamilton can submit.',
       }
     }
-    if (isApproved) {
+    if (data?.can_auto_submit) {
       return {
         icon: <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />,
         cls: 'text-emerald-700',
-        text: 'Approved draft — review it in the portal, complete required human steps, and submit it yourself.',
+        text: 'Automation is on. Hamilton can use this draft and submit when required portal steps are complete.',
       }
     }
     return {
       icon: <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />,
       cls: 'text-slate-600',
-      text: 'Draft ready for review. Final portal Submit remains a human handoff.',
+      text: 'Automation is off. This draft stays ready for you to use in the funder portal.',
     }
   }
 
@@ -227,8 +207,8 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
       ) : (
         <>
           <p className="text-xs text-slate-500">
-            The application Hamilton tailored for this funder{grantTitle ? ` (${grantTitle})` : ''}. Review it, then approve
-            or edit — editing counts as your approval.
+            Hamilton tailored this application for the funder{grantTitle ? ` (${grantTitle})` : ''}.
+            You can edit it at any time; Hamilton uses it automatically when automation is on.
           </p>
 
           {/* Funder requirements this narrative was written against (context). */}
@@ -245,7 +225,7 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
             </div>
           )}
 
-          {/* MISSING-INFO questions — block approval until answered, each
+          {/* MISSING-INFO questions — block submission until answered, each
               deep-linking to the exact profile section when known. */}
           {hasBlockingQuestions && (
             <div className="rounded-md border border-amber-200 bg-amber-50 p-2 space-y-2">
@@ -278,7 +258,7 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
             </div>
           )}
 
-          {/* The tailored narrative — read-only when approved, editable in edit mode. */}
+          {/* The tailored narrative is read-only until the applicant enters edit mode. */}
           <div className="space-y-2">
             {fieldKeys.length === 0 ? (
               <p className="text-xs italic text-slate-400">Hamilton hasn’t drafted this application yet.</p>
@@ -306,13 +286,13 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
             )}
           </div>
 
-          {/* Approve / Edit / Regenerate controls. */}
+          {/* Edit / Regenerate controls. */}
           <div className="flex flex-wrap items-center gap-2">
             {editing ? (
               <>
                 <Button type="button" size="sm" className="text-xs h-7" disabled={busy} onClick={handleSaveEdit}>
                   {busy ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
-                  Save & approve
+                  Save edits
                 </Button>
                 <Button
                   type="button"
@@ -327,23 +307,6 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
               </>
             ) : (
               <>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="text-xs h-7"
-                  disabled={busy || hasBlockingQuestions || isApproved}
-                  title={
-                    hasBlockingQuestions
-                      ? 'Answer the funder’s questions above before approving'
-                      : isApproved
-                        ? 'Already approved'
-                        : 'Approve this application as written'
-                  }
-                  onClick={handleApprove}
-                >
-                  {busy ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
-                  {isApproved ? 'Approved' : 'Approve'}
-                </Button>
                 <Button
                   type="button"
                   size="sm"
@@ -370,9 +333,9 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
             )}
           </div>
 
-          {/* Real-portal final submission remains a visible human handoff. */}
+          {/* Report the same submission gate the backend evaluates. */}
           {(() => {
-            const s = submissionHandoffState()
+            const s = submissionReadinessState()
             return (
               <div className={`flex items-center gap-1.5 text-xs ${s.cls}`}>
                 {s.icon}

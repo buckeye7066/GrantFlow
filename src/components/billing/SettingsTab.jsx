@@ -104,7 +104,7 @@ export default function SettingsTab() {
                 <div><Label>Send Time (24h)</Label><Input value={settings.invoice_send_time_local || ''} onChange={e => handleInputChange('invoice_send_time_local', e.target.value)} /></div>
                 <div><Label>Timezone</Label><Select value={settings.timezone} onValueChange={v => handleInputChange('timezone', v)}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{TIMEZONES.map(tz => <SelectItem key={tz} value={tz}>{tz}</SelectItem>)}</SelectContent></Select></div>
                 <div><Label>Review Lead Time (minutes before send)</Label><Input type="number" value={settings.prebill_review_lead_minutes || ''} onChange={e => handleIntChange('prebill_review_lead_minutes', e.target.value)} /></div>
-                <div className="flex items-center space-x-2 pt-2"><Switch id="approval-switch" checked={settings.auto_email_requires_approval} onCheckedChange={v => handleInputChange('auto_email_requires_approval', v)} /><Label htmlFor="approval-switch">Require Approval Before Sending</Label></div>
+                <div className="flex items-center space-x-2 pt-2"><Switch id="auto-email-switch" checked={!settings.auto_email_requires_approval} onCheckedChange={v => handleInputChange('auto_email_requires_approval', !v)} /><Label htmlFor="auto-email-switch">Send Invoice Emails Automatically</Label></div>
                 <div><Label>Invoice Number Format</Label><Input value={settings.invoice_number_format || ''} onChange={e => handleInputChange('invoice_number_format', e.target.value)} /></div>
               </CardContent>
             </Card>
