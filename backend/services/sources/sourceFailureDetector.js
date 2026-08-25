@@ -1,8 +1,9 @@
 /**
  * sourceFailureDetector.js — THE per-source persistent-failure query.
  *
- * One source of truth for "this registry source failed every one of its last
- * N queried runs", consumed by BOTH the Sam check
+ * One source of truth for "this registry source had actionable failures in
+ * every one of its last N queried runs, with no external block", consumed by
+ * BOTH the Sam check
  * (crawler.sourcePersistentFailure — the owner-visible finding) and the
  * same-domain self-repair sweep (enforceSourceUrlSelfRepair — the actor).
  * Detector and actor sharing one query is the registry+totality doctrine:
@@ -78,9 +79,16 @@ export async function findPersistentlyFailingSources(db, opts = {}) {
                 MAX(created_at) AS last_failure_at
            FROM recent
           WHERE rn <= ${STREAK}
-          GROUP BY source_id
+         GROUP BY source_id
          HAVING COUNT(*) >= ${STREAK}
             AND SUM(CASE WHEN failed THEN 1 ELSE 0 END) = COUNT(*)
+            -- Preserve canonical failed/BLOCKED telemetry, but do not turn an
+            -- explicitly external condition into a recurring code-defect
+            -- finding. This predicate is deliberately evaluated AFTER rn is
+            -- bounded: filtering external blocks in the CTE would let older
+            -- failures backfill the streak and page on stale evidence.
+            AND SUM(CASE WHEN LOWER(SUBSTR(TRIM(COALESCE(error,'')), 1, LENGTH('external_blocked:'))) = 'external_blocked:'
+                         THEN 1 ELSE 0 END) = 0
           ORDER BY MAX(created_at) ASC, source_id ASC`,
       )
       .all(since)
@@ -98,7 +106,7 @@ export async function findPersistentlyFailingSources(db, opts = {}) {
  * against the no-downgrade https floor; a malformed/search URL). This is a CODE
  * defect in the source adapter, categorically different from:
  *   - `failed = true`             (a fetch/connectivity failure — the sibling above),
- *   - `api_outage:*` / 4xx/5xx    (an external OWNER/ENV action — the amount checks),
+ *   - `external_blocked:*` / 4xx/5xx (an external OWNER/ENV action — the amount checks),
  *   - `all_candidates_rejected:no_sponsor` / `:geo_stub` (intentional gate exclusions).
  * So it is matched ONLY on `bad_url` and routed as a code fix, never an outage.
  *

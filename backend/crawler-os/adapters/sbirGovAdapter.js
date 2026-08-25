@@ -92,13 +92,12 @@ export function createSbirGovAdapter() {
     // The SBIR Public API's own outage banner — {"Code":"TooManyRequestsError",
     // "Message":"The SBIR Public API is not available at this time."} served
     // for EVERY request (observed service-wide 2026-07-06 → 2026-07-26) — is
-    // the service ANSWERING "I am off", not us failing to reach it. Declaring
-    // it benign (with an honest reason string the pipeline records) keeps the
-    // source out of failed/FETCH_ERROR — the per-source failure detector and
-    // Amy's source_fetch_failed stop paging the owner about a government
-    // outage nobody can act on — while the dashboards still show the skip
-    // reason, and the first real response parses normally again. A real 5xx,
-    // network error, or any other body stays a genuine FETCH_ERROR.
+    // the service ANSWERING "I am off", not us failing to reach it. The typed
+    // reason is persisted honestly as failed/BLOCKED for telemetry and remains
+    // visible on dashboards, while Sam excludes it from code-defect streak and
+    // daily actionable-failure escalation. The first real response parses
+    // normally again; a real 5xx, network error, or any other body stays a
+    // genuine FETCH_ERROR and remains actionable.
     benignFetchFailure(resp = {}) {
       if (typeof resp.body !== 'string' || !resp.body.trim()) return false;
       try {
@@ -112,8 +111,9 @@ export function createSbirGovAdapter() {
         // undergoing maintenance" and the legacy host no longer resolves. That
         // is the service refusing its public API wholesale — not a key we lack,
         // not registry work, and not something a retry can fix — so it is the
-        // same honest external-blocked result as the banner above. The pipeline
-        // maps that reason to BLOCKED, never EMPTY. Precision: ONLY the
+        // same honest persisted BLOCKED/reason as the banner above, excluded
+        // only from code-defect/daily actionable-failure escalation and never
+        // collapsed to EMPTY. Precision: ONLY the
         // exact 403+bare-"Forbidden" JSON shape qualifies; an HTML WAF page, a
         // 5xx, or any other 403 body stays a genuine FETCH_ERROR, and the first
         // real response parses normally when the service returns.

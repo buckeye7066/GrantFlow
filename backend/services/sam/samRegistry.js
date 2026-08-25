@@ -2822,11 +2822,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
   },
   {
     id: 'crawler.coverageDegraded',
-    label: 'Crawler coverage degraded (source failure rate)',
+    label: 'Crawler coverage degraded (actionable source failure rate)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Makes the crawl coverage dashboard (GET /api/admin/crawl-coverage) observable to Sam: flags when a disproportionate share of recently QUERIED sources FAILED (default threshold 30%, over the newest ~50 crawl runs AND only those inside CRAWLER_COVERAGE_WINDOW_HOURS, default 24h), which signals an outage, a bad key, or a broken source adapter. RECENCY-bounded so an outage that has been repaired clears once fresh runs land, and so a crawler that has STOPPED reports "no signal" instead of replaying its last bad day forever. Reads only crawler_source_runs. Fails open: empty/missing table or too few runs → ok:true (no signal yet).',
+    description: 'Makes the crawl coverage dashboard (GET /api/admin/crawl-coverage) observable to Sam: flags when a disproportionate share of recently QUERIED sources have ACTIONABLE failures (default threshold 30%, over the newest ~50 crawl runs AND only those inside CRAWLER_COVERAGE_WINDOW_HOURS, default 24h), which signals a bad key, runtime defect, or broken source adapter. Canonical external_blocked failures stay in the queried denominator and are reported separately, but do not page the owner as a code defect. RECENCY-bounded so a repaired defect clears once fresh runs land, and so a crawler that has STOPPED reports "no signal" instead of replaying its last bad day forever. Reads only crawler_source_runs. Fails open: empty/missing table or too few runs → ok:true (no signal yet).',
     async run({ db }) {
       if (!db?.prepare) return { ok: true, summary: 'crawler coverage: db unavailable' }
       const threshold = Number.parseFloat(process.env.CRAWLER_COVERAGE_FAILURE_THRESHOLD || '0.30')
@@ -2846,7 +2846,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           .prepare(
             `SELECT
                SUM(CASE WHEN queried THEN 1 ELSE 0 END) AS queried,
-               SUM(CASE WHEN failed  THEN 1 ELSE 0 END) AS failed
+               SUM(CASE WHEN failed
+                          AND LOWER(SUBSTR(TRIM(COALESCE(error,'')), 1, LENGTH('external_blocked:'))) <> 'external_blocked:'
+                        THEN 1 ELSE 0 END) AS actionable_failed,
+               SUM(CASE WHEN failed
+                          AND LOWER(SUBSTR(TRIM(COALESCE(error,'')), 1, LENGTH('external_blocked:'))) = 'external_blocked:'
+                        THEN 1 ELSE 0 END) AS external_blocked
              FROM crawler_source_runs
              WHERE crawler_run_id IN (
                SELECT crawler_run_id FROM crawler_source_runs
@@ -2862,8 +2867,18 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         return { ok: true, summary: `crawler_source_runs not queryable yet (${err?.message || 'unknown'})` }
       }
       const queried = Number(row?.queried ?? 0)
-      const failed = Number(row?.failed ?? 0)
-      const evidence = { queried, failed, threshold, window_hours: windowHours }
+      const actionableFailed = Number(row?.actionable_failed ?? 0)
+      const externalBlocked = Number(row?.external_blocked ?? 0)
+      // Keep `failed` as a compatibility alias, but name its narrowed meaning
+      // explicitly for new consumers and expose the excluded canonical state.
+      const evidence = {
+        queried,
+        failed: actionableFailed,
+        actionable_failed: actionableFailed,
+        external_blocked: externalBlocked,
+        threshold,
+        window_hours: windowHours,
+      }
       if (queried < MIN_SAMPLE) {
         return {
           ok: true,
@@ -2871,37 +2886,37 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           evidence,
         }
       }
-      const rate = failed / queried
+      const rate = actionableFailed / queried
       if (rate > threshold) {
         return {
           ok: false,
-          summary: `Crawler coverage DEGRADED: ${failed}/${queried} sources queried in the last ${windowHours}h failed (${Math.round(rate * 100)}% > ${Math.round(threshold * 100)}% threshold). Check source adapters / API keys / outages on the Crawl Coverage dashboard.`,
+          summary: `Crawler coverage DEGRADED: ${actionableFailed}/${queried} actionable source failures in the last ${windowHours}h (${Math.round(rate * 100)}% > ${Math.round(threshold * 100)}% threshold); ${externalBlocked} externally blocked. Check source adapters / API keys / runtime errors on the Crawl Coverage dashboard.`,
           evidence: { ...evidence, failure_rate: Number(rate.toFixed(3)) },
           recommended_fix: 'Open /CrawlCoverage (admin) to see which sources are failing and their errors; verify FUNDING_SOURCES API keys and source endpoint health.',
         }
       }
       return {
         ok: true,
-        summary: `crawler coverage healthy: ${failed}/${queried} sources queried in the last ${windowHours}h failed (${Math.round(rate * 100)}% ≤ ${Math.round(threshold * 100)}%)`,
+        summary: `crawler coverage within actionable-failure threshold: ${actionableFailed}/${queried} actionable source failures in the last ${windowHours}h (${Math.round(rate * 100)}% ≤ ${Math.round(threshold * 100)}%); ${externalBlocked} externally blocked`,
         evidence: { ...evidence, failure_rate: Number(rate.toFixed(3)) },
       }
     },
   },
   {
-    // Per-SOURCE persistent failure (2026-07-26, owner rule: repair, not just
-    // monitor). The fleet-average check above structurally cannot see ONE
-    // source dead for weeks — 1 source × 100% failure is invisible inside a
-    // 30%-of-50-runs threshold, so Amy's cohort kept reporting
+    // Per-SOURCE persistent actionable failure (2026-07-26, owner rule:
+    // repair, not just monitor). The fleet-average check above structurally
+    // cannot see ONE source dead for weeks — 1 source × 100% failure is
+    // invisible inside a 30%-of-50-runs threshold, so Amy's cohort kept reporting
     // source_fetch_failed while nothing named WHICH source or for how long.
     // This check names the exact source, its last error, and the concrete
     // repair (single-source re-crawl / registry URL fix / key) — a finding an
     // owner can act on in one step instead of a trend to watch.
     id: 'crawler.sourcePersistentFailure',
-    label: 'Crawler source persistently failing (every recent run)',
+    label: 'Crawler source persistently failing actionably (every recent run)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Flags any registry source whose last N (default 5) QUERIED runs ALL failed — a dead endpoint, rotted registry URL, or expired key that the fleet-average check cannot see. Names the source and its latest error. Fails open when the table is missing or a source has too few recent runs.',
+    description: 'Flags any registry source whose last N (default 5) QUERIED runs ALL had actionable failures — a dead endpoint, rotted registry URL, or expired key that the fleet-average check cannot see. Any external_blocked row inside the latest-N window suppresses this code-defect finding without backfilling older failures. Names the source and its latest error. Fails open when the table is missing or a source has too few recent runs.',
     async run({ db }) {
       if (!db?.prepare) return { ok: true, summary: 'source persistence: db unavailable' }
       const STREAK = Math.max(2, Number.parseInt(process.env.CRAWLER_SOURCE_FAILURE_STREAK || '5', 10) || 5)
@@ -2927,7 +2942,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       } catch { /* no repair store yet */ }
       const proposalIds = Object.keys(repairs.proposals)
       if (failing.length === 0 && proposalIds.length === 0) {
-        return { ok: true, summary: `No source has failed ${STREAK} consecutive queried runs.` }
+        return { ok: true, summary: `No source has had ${STREAK} consecutive actionable queried-run failures.` }
       }
       const names = failing.slice(0, 5).map((r) => {
         const state = repairs.overrides[r.source_id]
@@ -2968,7 +2983,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // NOTHING because the reality gate rejects every candidate as `bad_url` — an
     // adapter emitting a URL the gate refuses (an http:// link against the
     // no-downgrade https floor; a malformed/search URL). Every existing crawler
-    // check keys on `failed` or `api_outage`, so this class was structurally
+    // check keys on `failed` or `external_blocked`, so this class was structurally
     // invisible: `nih_guide` fed http:// links and silently returned zero for
     // every research org for as long as the feed served them. Distinct from an
     // outage (owner/env action) — this is a CODE fix in the source adapter.
@@ -2977,7 +2992,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Flags any registry source whose last N (default 3) QUERIED runs ALL fetched OK (failed=false) but stored nothing because the reality gate rejected every parsed candidate as bad_url — the signature of an adapter emitting a URL the gate refuses (an http:// link, a malformed/search URL). Reads only crawler_source_runs; matched on bad_url alone so intentional gate exclusions (no_sponsor/geo_stub) and external outages (api_outage/fetch failures) never trip it. This is a CODE fix in the source adapter, routed as such. Fails open when the table is missing or a source has too few recent runs.',
+    description: 'Flags any registry source whose last N (default 3) QUERIED runs ALL fetched OK (failed=false) but stored nothing because the reality gate rejected every parsed candidate as bad_url — the signature of an adapter emitting a URL the gate refuses (an http:// link, a malformed/search URL). Reads only crawler_source_runs; matched on bad_url alone so intentional gate exclusions (no_sponsor/geo_stub) and external conditions (external_blocked/fetch failures) never trip it. This is a CODE fix in the source adapter, routed as such. Fails open when the table is missing or a source has too few recent runs.',
     async run({ db }) {
       if (!db?.prepare) return { ok: true, summary: 'source adapter url defect: db unavailable' }
       const STREAK = Math.max(2, Number.parseInt(process.env.CRAWLER_SOURCE_BADURL_STREAK || '3', 10) || 3)
