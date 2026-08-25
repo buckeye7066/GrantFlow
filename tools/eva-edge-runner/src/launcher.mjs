@@ -9,8 +9,8 @@
 // whole process tree down again. It only ever launches the declared command in
 // the declared directory — no arbitrary command execution.
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdirSync, existsSync } from 'node:fs'
-import { join, isAbsolute } from 'node:path'
+import { mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+import { join, isAbsolute, resolve, sep } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -148,14 +148,15 @@ export function detectPortDrift({ output = '', declaredPorts = [] } = {}) {
 // A launched-but-unreadiable server is reported honestly (startup_failed),
 // never silently passed. A web app with no start_command falls back to the old
 // behavior (assume something external is already serving base_url).
-export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = null }) {
+export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = null, freePortFn = freePortAndWait }) {
   const startCmd = manifest.start_command
   const cwd = manifest.local_path || app?.local_path || null
   const probe = manifest.readiness_probe || {}
+  const probeHost = probe.host || '127.0.0.1'
   const baseUrl =
     manifest.base_url ||
     app?.base_url ||
-    (probe.port ? `http://localhost:${probe.port}` : null)
+    (probe.port ? `http://${probeHost}:${probe.port}` : null)
 
   // Nothing to launch: no command, an explicit n/a, or no directory to run in.
   if (!startCmd || startCmd === 'n/a' || !cwd) {
@@ -184,6 +185,9 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
     }
   }
 
+  const env = launchEnv || { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
+  let fixtureEnvFiles = []
+
   // Pre-launch hygiene: a prior app (or a dev server the owner left running)
   // squatting this app's ports makes the new server fail to bind. Free them
   // before spawning so the fleet run is order-independent.
@@ -192,11 +196,13 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
   const preBasePort = baseUrl ? portOfUrl(baseUrl) : null
   if (preBasePort && preBasePort !== 80 && preBasePort !== 443) preClearPorts.add(preBasePort)
   const killable = resolveKillableProcesses(manifest)
-  // A port EVA is not allowed to clear is NAMED, not silently skipped: the app
-  // will fail to bind and the owner needs to know which process is squatting.
+  // A pre-existing PID is never owned merely because its image is "node" or
+  // "python". Preflight therefore kills nothing: any occupied declared port is
+  // named and blocks before spawn, rather than terminating a developer app or
+  // probing the unrelated service.
   const blockedPorts = []
   for (const port of preClearPorts) {
-    const res = freePortAndWait(port, { attempts: 8, killable })
+    const res = freePortFn(port, { attempts: 1, killable: new Set() })
     if (res && !res.freed && res.blockedBy?.length) {
       blockedPorts.push(res)
       log(
@@ -206,15 +212,39 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
       )
     }
   }
+  if (blockedPorts.length) {
+    const msg = `[launcher] ${manifest.app_id || app?.app_id}: refusing to launch or probe while a protected process owns declared port(s) ${blockedPorts.map((p) => p.port).join(', ')}; a response there would belong to the wrong service`
+    log(msg)
+    return {
+      launched: true,
+      ready: false,
+      baseUrl,
+      failedProbeUrl: probe.port ? `http://${probeHost}:${probe.port}${probe.path || '/'}` : baseUrl,
+      exitInfos: [null],
+      outputTail: () => msg,
+      portDrift: [],
+      blockedPorts,
+      declaredPorts: [...preClearPorts],
+      stop: async () => {},
+    }
+  }
 
-  const env = launchEnv || { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
+  // Write credentials as late as possible, after every pre-launch refusal.
+  // If process creation itself throws, remove them before propagating.
+  fixtureEnvFiles = writeFixtureEnvFiles(cwd, manifest, env)
   // The manifest declares where an app's disposable data goes; create it before
   // launch ONLY when the launch env actually points at it (PromoPilot's
   // better-sqlite3 SQLITE_PATH will not create its own parent and dies on the
   // first write). Creating it unconditionally would leave an untracked
   // `.eva-tmp/` in every app's repo every night — drift the owner never asked
   // for, in repos EVA is only supposed to read.
-  if (envReferencesRoot(env, manifest.disposable_data_root)) {
+  if (manifest.__eva_isolated_workspace && manifest.disposable_data_root) {
+    // Persistent isolated worktrees reuse ignored dependency caches, but test
+    // data must never leak between nights. Reset only the declared relative
+    // root inside EVA's dedicated workspace; developer checkouts are never
+    // deleted from or cleaned by this path.
+    resetDisposableRoot(cwd, manifest.disposable_data_root)
+  } else if (envReferencesRoot(env, manifest.disposable_data_root)) {
     ensureDisposableRoot(cwd, manifest.disposable_data_root)
   }
   // Manifests use the POSIX idiom "backend & frontend" to mean "run BOTH
@@ -231,15 +261,21 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
   // never WHY — so a one-line, self-describing cause ("FATAL: set ADMIN_TOKEN",
   // "Invalid value undefined for datasource") was thrown away every night.
   const output = createOutputRing()
-  const children = segments.map((segment) =>
-    spawn(segment, {
-      cwd,
-      shell: true,
-      detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env,
-    }),
-  )
+  let children
+  try {
+    children = segments.map((segment) =>
+      spawn(segment, {
+        cwd,
+        shell: true,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+      }),
+    )
+  } catch (err) {
+    removeFixtureEnvFiles(fixtureEnvFiles)
+    throw err
+  }
   for (const child of children) {
     child.stdout?.on('data', (chunk) => output.push(chunk))
     child.stderr?.on('data', (chunk) => output.push(chunk))
@@ -253,14 +289,41 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
       exitInfos[i] = { code, signal }
     })
     child.on('error', (err) => {
+      exitInfos[i] = { code: null, signal: null, spawn_error: String(err?.message || err) }
       output.push(`[launcher] spawn error: ${err?.message || err}\n`)
     })
   })
-  // "Dead" means EVERY segment has exited — while any survives, the server we
-  // are waiting on may still be coming up.
-  const allExited = () => exitInfos.every(Boolean)
+  // Every concurrent segment is a required service. If the backend exits while
+  // Vite remains alive, waiting the full timeout only turns a precise process
+  // failure into a vague readiness timeout. Detached compose is the one common
+  // exception: `up -d` is a successful one-shot starter and the containers own
+  // readiness after it exits.
+  const starterMayExit = manifest.start_process_may_exit === true ||
+    /\bdocker(?:\s+compose|-compose)\b.*\bup\b.*(?:^|\s)-d(?:\s|$)/i.test(startCmd)
+  const requiredProcessExited = () => !starterMayExit && exitInfos.some(Boolean)
 
-  const stop = async () => stopLaunched(children, probe, baseUrl, killable)
+  const stop = async () => {
+    try {
+      const stopCommand = String(manifest.stop_command || '').trim()
+      const declarativeStopOnly = new Set(['taskkill-by-port', 'n/a', 'close window'])
+      if (stopCommand && !declarativeStopOnly.has(stopCommand.toLowerCase())) {
+        const stopped = spawnSync(stopCommand, {
+          cwd,
+          shell: true,
+          env,
+          encoding: 'utf8',
+          timeout: Math.min(Number(manifest.max_runtime_ms) || 120000, 120000),
+          windowsHide: true,
+        })
+        if (stopped.status !== 0) {
+          output.push(`[launcher] stop_command failed (${stopped.status}): ${stopped.stderr || stopped.stdout || ''}\n`)
+        }
+      }
+    } finally {
+      await stopLaunched(children, probe, baseUrl, killable)
+      removeFixtureEnvFiles(fixtureEnvFiles)
+    }
+  }
   const declaredPorts = [...preClearPorts]
 
   // Readiness: for an http probe, poll until the server answers (any HTTP
@@ -268,6 +331,8 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
   // so we grant a short grace period and proceed — the journey's own goto still
   // fails honestly if nothing is listening.
   const timeoutMs = probe.timeout_ms || manifest.max_runtime_ms || 60000
+  const startupDeadline = Date.now() + timeoutMs
+  const remainingStartupMs = () => Math.max(0, startupDeadline - Date.now())
   if (probe.type === 'http' && (baseUrl || probe.port)) {
     // Manifests may declare the health endpoint on a BACKEND port (probe.port)
     // while journeys navigate the FRONTEND base_url. Probing only base_url
@@ -276,7 +341,7 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
     // ready before the frontend listens. Wait for BOTH when they differ.
     const readyUrls = []
     const probePath = probe.path || '/'
-    if (probe.port) readyUrls.push(safeJoin(`http://localhost:${probe.port}`, probePath))
+    if (probe.port) readyUrls.push(safeJoin(`http://${probeHost}:${probe.port}`, probePath))
     if (baseUrl) {
       const baseProbe = probe.port && portOfUrl(baseUrl) !== Number(probe.port)
         ? safeJoin(baseUrl, '/')
@@ -287,12 +352,13 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
     let failedProbeUrl = null
     for (const readyUrl of readyUrls) {
       ready = await waitForHttp(readyUrl, {
-        timeoutMs,
-        isDead: allExited,
+        timeoutMs: remainingStartupMs(),
+        acceptedStatuses: probe.accepted_statuses,
+        isDead: requiredProcessExited,
       })
       if (!ready) {
         failedProbeUrl = readyUrl
-        log(`[launcher] ${manifest.app_id || app?.app_id}: not ready at ${readyUrl} within ${timeoutMs}ms${allExited() ? ` (start_command exited ${JSON.stringify(exitInfos)})` : ''}`)
+        log(`[launcher] ${manifest.app_id || app?.app_id}: not ready at ${readyUrl} within the shared ${timeoutMs}ms startup deadline${requiredProcessExited() ? ` (required start process exited ${JSON.stringify(exitInfos)})` : ''}`)
         break
       }
     }
@@ -301,10 +367,18 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
     // re-optimization) passes the listen probe and then drops the journeys'
     // module requests. Each declared warm path must return an OK, non-empty
     // body on consecutive polls before the app is called ready.
-    if (ready && baseUrl && Array.isArray(probe.warm_paths) && probe.warm_paths.length) {
-      for (const warmPath of probe.warm_paths) {
+    if (ready && baseUrl) {
+      const warmPaths = new Set(Array.isArray(probe.warm_paths) ? probe.warm_paths : [])
+      // Every Vite app inherits the cold-transform guard. Requiring each
+      // manifest author to remember /@vite/client let the same first-navigation
+      // timeout recur in GeneMap, GrantFlow, SermonSmith, and Incognito.
+      if (/\bVITE\s+v?\d/i.test(output.snapshot())) warmPaths.add('/@vite/client')
+      for (const warmPath of warmPaths) {
         const warmUrl = safeJoin(baseUrl, warmPath)
-        ready = await waitForWarmPath(warmUrl, { timeoutMs, isDead: allExited })
+        ready = await waitForWarmPath(warmUrl, {
+          timeoutMs: remainingStartupMs(),
+          isDead: requiredProcessExited,
+        })
         if (!ready) {
           failedProbeUrl = warmUrl
           log(`[launcher] ${manifest.app_id || app?.app_id}: listen probe passed but warm path ${warmUrl} never served a stable non-empty response within ${timeoutMs}ms`)
@@ -326,7 +400,7 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
   }
 
   await sleep(Math.min(timeoutMs, 3000))
-  return { launched: true, ready: !allExited(), baseUrl, failedProbeUrl: null, exitInfos, outputTail: output.tail, pid: children[0]?.pid, portDrift: [], blockedPorts, declaredPorts, stop }
+  return { launched: true, ready: starterMayExit || !requiredProcessExited(), baseUrl, failedProbeUrl: null, exitInfos, outputTail: output.tail, pid: children[0]?.pid, portDrift: [], blockedPorts, declaredPorts, stop }
 }
 
 // Bounded capture of a launched server's console output. Keeps only the LAST
@@ -347,6 +421,9 @@ export function createOutputRing(limit = 8000) {
       const out = lines.slice(-6).join(' | ')
       return out.length > maxChars ? out.slice(out.length - maxChars) : out
     },
+    snapshot(maxChars = limit) {
+      return buf.length > maxChars ? buf.slice(buf.length - maxChars) : buf
+    },
   }
 }
 
@@ -363,18 +440,88 @@ export function envReferencesRoot(env, root) {
   return Object.values(env || {}).some((v) => String(v ?? '').replace(/\\/g, '/').toLowerCase().includes(needle))
 }
 
+function workspaceRelativeFile(cwd, relativePath) {
+  if (!cwd || typeof relativePath !== 'string' || !relativePath.trim()) return null
+  const raw = relativePath.trim()
+  if (isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw) || /^[\\/]{2}/.test(raw) || raw.split(/[\\/]/).includes('..')) return null
+  const base = resolve(cwd)
+  const full = resolve(base, raw)
+  const prefix = base.endsWith(sep) ? base : `${base}${sep}`
+  return full.startsWith(prefix) ? full : null
+}
+
+/** Write gitignored fixture env files only inside EVA's isolated worktree. */
+export function writeFixtureEnvFiles(cwd, manifest, env, { write = writeFileSync } = {}) {
+  const specs = Array.isArray(manifest?.fixture_env_files) ? manifest.fixture_env_files : []
+  if (!specs.length) return []
+  if (manifest?.__eva_isolated_workspace !== true) {
+    throw new Error('fixture_env_files are allowed only in an EVA-owned isolated workspace')
+  }
+  const written = []
+  try {
+    for (const spec of specs) {
+      const full = workspaceRelativeFile(cwd, spec?.path)
+      if (!full) throw new Error(`unsafe fixture env path: ${spec?.path || '(missing)'}`)
+      const names = Array.isArray(spec?.variables) ? spec.variables : []
+      const lines = []
+      for (const name of names) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name))) throw new Error(`unsafe fixture env variable: ${name}`)
+        const value = env?.[name]
+        if (value === undefined || value === null || String(value).includes('\n') || String(value).includes('\r')) {
+          throw new Error(`fixture env variable is missing or multiline: ${name}`)
+        }
+        lines.push(`${name}=${String(value)}`)
+      }
+      mkdirSync(resolve(full, '..'), { recursive: true })
+      write(full, `${lines.join('\n')}\n`, { mode: 0o600 })
+      written.push(full)
+    }
+    return written
+  } catch (error) {
+    removeFixtureEnvFiles(written)
+    throw error
+  }
+}
+
+export function removeFixtureEnvFiles(paths, { remove = rmSync } = {}) {
+  for (const file of Array.isArray(paths) ? paths : []) {
+    try { remove(file, { force: true }) } catch { /* best-effort credential cleanup */ }
+  }
+}
+
 // Create the manifest's declared disposable data root inside the app repo.
 // Only ever a path RELATIVE to the app's own directory — an absolute or
 // escaping root is ignored rather than created somewhere unexpected.
 export function ensureDisposableRoot(cwd, root, mkdir = mkdirSync) {
+  const full = resolveDisposableRoot(cwd, root)
+  if (!full) return null
+  try {
+    mkdir(full, { recursive: true })
+    return full
+  } catch {
+    return null
+  }
+}
+
+function resolveDisposableRoot(cwd, root) {
   if (!cwd || !root || typeof root !== 'string') return null
   // `isAbsolute` is platform-dependent — on POSIX it says "C:/Windows" is
   // RELATIVE — so the Windows drive-letter and UNC forms are rejected
   // explicitly. The rule must not change with the host the tests run on.
   const windowsAbsolute = /^[A-Za-z]:[\\/]/.test(root) || /^[\\/]{2}/.test(root)
   if (isAbsolute(root) || windowsAbsolute || root.split(/[\\/]/).includes('..')) return null
-  const full = join(cwd, root)
+  const base = resolve(cwd)
+  const full = resolve(base, root)
+  const prefix = base.endsWith(sep) ? base : `${base}${sep}`
+  if (full === base || !full.startsWith(prefix)) return null
+  return full
+}
+
+export function resetDisposableRoot(cwd, root, { remove = rmSync, mkdir = mkdirSync } = {}) {
+  const full = resolveDisposableRoot(cwd, root)
+  if (!full) return null
   try {
+    remove(full, { recursive: true, force: true })
     mkdir(full, { recursive: true })
     return full
   } catch {
@@ -400,10 +547,23 @@ function portOfUrl(url) {
 }
 
 // Poll an http(s) endpoint until it answers or the deadline passes. Uses the
-// global fetch (Node >=18). Any resolved response — even a 4xx/5xx — proves the
-// server is listening; a thrown error means "not up yet, keep waiting".
-async function waitForHttp(url, { timeoutMs = 60000, intervalMs = 600, isDead = () => false } = {}) {
+// global fetch (Node >=18). Two consecutive accepted responses are required so
+// a one-poll proxy/reload window cannot green-light browser journeys. By
+// default only 2xx/3xx count; a 401/404/503 is an answering server, but it is
+// not a ready application. A manifest may narrow this further with
+// readiness_probe.accepted_statuses.
+export async function waitForHttp(url, {
+  timeoutMs = 60000,
+  intervalMs = 600,
+  consecutive = 2,
+  acceptedStatuses = null,
+  isDead = () => false,
+} = {}) {
   const deadline = Date.now() + timeoutMs
+  const accepted = Array.isArray(acceptedStatuses) && acceptedStatuses.length
+    ? new Set(acceptedStatuses.map(Number).filter(Number.isFinite))
+    : null
+  let streak = 0
   while (Date.now() < deadline) {
     if (isDead()) {
       // The start_command died. Give any in-flight bind a beat, then bail so we
@@ -414,10 +574,16 @@ async function waitForHttp(url, { timeoutMs = 60000, intervalMs = 600, isDead = 
     try {
       const ctrl = new AbortController()
       const t = setTimeout(() => ctrl.abort(), Math.min(intervalMs * 4, 5000))
-      const resp = await fetch(url, { signal: ctrl.signal, redirect: 'manual' })
-      clearTimeout(t)
-      if (resp) return true
+      try {
+        const resp = await fetch(url, { signal: ctrl.signal, redirect: 'manual' })
+        const statusOk = resp && (accepted ? accepted.has(resp.status) : resp.status >= 200 && resp.status < 400)
+        streak = statusOk ? streak + 1 : 0
+        if (streak >= consecutive) return true
+      } finally {
+        clearTimeout(t)
+      }
     } catch {
+      streak = 0
       /* connection refused / reset / abort => not ready yet */
     }
     await sleep(intervalMs)
@@ -468,9 +634,8 @@ export async function waitForWarmPath(url, {
 // Tear down the spawned server(s) and everything they started. On Windows each
 // child is a shell whose grandchildren (node/vite/python) survive a plain kill,
 // so we use `taskkill /T` to kill the tree; on POSIX we signal the process
-// group. We additionally free BOTH declared ports (readiness probe port and the
-// base_url port — often backend + frontend of the same app) in case a
-// grandchild re-parented away from our tree.
+// group. We never sweep whatever happens to own a declared port afterward:
+// process ownership, not image name or port number, is the teardown boundary.
 function stopLaunched(children, probe = {}, baseUrl = null, killable = DEFAULT_KILLABLE_PROCESSES) {
   const list = Array.isArray(children) ? children : [children]
   for (const child of list) {
@@ -493,17 +658,10 @@ function stopLaunched(children, probe = {}, baseUrl = null, killable = DEFAULT_K
       /* best-effort */
     }
   }
-  const ports = new Set()
-  if (probe.port) ports.add(Number(probe.port))
-  const basePort = baseUrl ? portOfUrl(baseUrl) : null
-  if (basePort && basePort !== 80 && basePort !== 443) ports.add(basePort)
-  // Free each port AND confirm it is actually released before returning. Apps
-  // run sequentially and several share ports (are-we-mice + mind-over-math both
-  // bind frontend 5273 / backend 3001), so if the NEXT app spawns while a prior
-  // grandchild still holds the port, its own server fails to bind and reads as
-  // startup_failed — a teardown race, not a real failure (the 2026-07-28
-  // flaky-fleet class). Block here until the ports are free (bounded).
-  for (const port of ports) freePortAndWait(port, { killable })
+  // Never sweep by image name after teardown: a developer process can claim a
+  // released port immediately, and EVA must not kill it. The exact spawned
+  // process trees above (plus an app's declared stop_command) are the complete
+  // ownership boundary; the next app will block if a port remains occupied.
 }
 
 // Free a port and spin until it is no longer LISTENing (Windows), bounded to a

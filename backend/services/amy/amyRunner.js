@@ -33,7 +33,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '../../../')
 const LOCK_NAME = 'amy:training'
 export const AMY_SCHEDULER_LOCK_NAME = `scheduler:${LOCK_NAME}`
-const LOCK_TTL_MS = 2 * 60 * 60 * 1000
+// A dead Railway process must not suppress Amy for hours. A live training run
+// renews this short lease (schedulerLock heartbeat), so long runs remain
+// serialized while a deploy-killed holder becomes reclaimable in ~15 minutes.
+const LOCK_TTL_MS = 15 * 60 * 1000
 const DEFAULT_RECOVERY_MIN_AGE_MS = 5 * 60 * 1000
 const PROCESS_STARTED_AT = new Date().toISOString()
 
@@ -210,10 +213,16 @@ export function launchAmyRun({ db, logger = console, source = 'admin', opts = {}
       state.phase = 'acquiring_lock'
       const result = await runWithSchedulerLock(
         db,
-        { lockName: LOCK_NAME, ttlMs: LOCK_TTL_MS, logger, acquiredBy: `amy:${source}` },
-        () => {
+        {
+          lockName: LOCK_NAME,
+          ttlMs: LOCK_TTL_MS,
+          heartbeat: true,
+          logger,
+          acquiredBy: `amy:${source}`,
+        },
+        (lease) => {
           state.phase = 'training'
-          return runAmyTraining({ db, runId, writeArtifact, logger, ...opts })
+          return runAmyTraining({ db, runId, writeArtifact, logger, ...opts, signal: lease?.signal })
         },
       )
       if (result?.skipped) {

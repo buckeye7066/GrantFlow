@@ -379,6 +379,7 @@ describe('summarizeAmyFlywheel + digest section', () => {
       day: '2026-07-06', target: 50, evaluated: 50, clean: 47, issues: 3, complete: true, all_clean: false,
       finding_types: { hyperlocal_recall_miss: 2, ineligible_match: 1 },
       runs: ['run-x'],
+      run_receipts: [{ run_id: 'run-x', recorded_at: new Date().toISOString() }],
       issue_examples: [],
     },
     goal_notified_at: null,
@@ -472,6 +473,21 @@ describe('summarizeAmyFlywheel + digest section', () => {
       report: null,
     })
     expect(fw.goal).toBe(true)
+  })
+
+  it('suppresses stale Amy counts, edits, and unresolved gap classes', () => {
+    const fw = summarizeAmyFlywheel({
+      ...amy,
+      cohort: {
+        ...amy.cohort,
+        run_receipts: [{ run_id: 'run-old', recorded_at: '2026-08-20T08:00:00.000Z' }],
+      },
+    }, { now: new Date('2026-08-25T09:00:00.000Z') })
+    expect(fw.stale).toBe(true)
+    expect(fw.cohortLine).toMatch(/STALE.*suppressed/i)
+    expect(fw.cohortLine).not.toMatch(/47\/50|hyperlocal_recall_miss/)
+    expect(fw.edits).toEqual([])
+    expect(fw.couldNot).toEqual([])
   })
 
   it('buildOwnerReport embeds the flywheel section in text and html', () => {

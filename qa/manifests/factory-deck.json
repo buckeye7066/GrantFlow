@@ -1,16 +1,23 @@
 {
   "app_id": "factory-deck",
   "display_name": "Factory Deck",
-  "repo": "local-only (not a git repo)",
+  "repo": "buckeye7066/local-ai-factory",
   "local_path": "~/local-ai-factory",
   "runtime_type": "web",
   "start_command": "pnpm dev",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/api/health", "port": 5179, "timeout_ms": 90000 },
-  "base_url": "http://localhost:5190",
+  "readiness_probe": { "type": "http", "path": "/api/health", "port": 5179, "timeout_ms": 90000, "warm_paths": ["/@vite/client"] },
+  "base_url": "http://127.0.0.1:5190",
   "test_target": "disposable-local-instance",
-  "required_env": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DRY_RUN_COMMANDS", "WORKSPACE_ROOT", "FACTORY_DATA_DIR"],
-  "seed_command": "none (pnpm — NOT npm; leave AI keys UNSET, keep DRY_RUN_COMMANDS=true, point WORKSPACE_ROOT and FACTORY_DATA_DIR at throwaway paths under the disposable data root; 'pnpm demo' = offline stub run with zero API calls)",
+  "required_env": ["PORT", "WORKSPACE_ROOT", "FACTORY_DATA_DIR"],
+  "launch_env": {
+    "PORT": "5179",
+    "WORKSPACE_ROOT": ".eva-tmp/factory-deck/workspaces",
+    "FACTORY_DATA_DIR": ".eva-tmp/factory-deck/data",
+    "FACTORY_FREE_ENABLED": "0",
+    "FACTORY_RESEARCH_ENABLED": "0"
+  },
+  "seed_command": "none (pnpm — NOT npm; the nightly journey is read-only and leaves all paid AI keys unset)",
   "reset_command": "remove throwaway WORKSPACE_ROOT and FACTORY_DATA_DIR contents and restart",
   "cleanup": "rm -rf .eva-tmp/factory-deck && remove throwaway WORKSPACE_ROOT and FACTORY_DATA_DIR directories",
   "disposable_data_root": ".eva-tmp/factory-deck",
@@ -18,10 +25,10 @@
   "concurrency_class": "default",
   "adapters": ["web"],
   "prohibited_actions": [
-    "keep DRY_RUN_COMMANDS=true — never execute generated commands",
-    "NO real AI spend — Demo/stub mode only (registry runtime_status is blocked_by_external_service: Anthropic credits empty)",
+    "do not start a Factory run — the read-only shell journey must never POST /api/runs",
+    "NO real AI spend — leave Anthropic/OpenAI keys unset and keep paid/free provider routes disabled for this shell-only check",
     "no deployment or publication of anything the factory produces",
-    "never let workspace writes escape ./workspaces (WORKSPACE_ROOT stays a throwaway path)"
+    "never let workspace writes escape the disposable WORKSPACE_ROOT"
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
@@ -30,19 +37,19 @@
     "file_roots": [".eva-tmp/factory-deck"],
     "processes": ["node", "pnpm"]
   },
-  "nightly_critical_journeys": ["app-identifies-itself", "demo-mode-visible"],
-  "weekly_full_journeys": ["app-identifies-itself", "demo-mode-visible"],
+  "nightly_critical_journeys": ["app-identifies-itself"],
+  "weekly_full_journeys": ["app-identifies-itself"],
   "feature_coverage": {
     "features_total": 6,
-    "features_covered": 2,
-    "unautomated_features": ["Runs history", "Workspaces", "Logs", "Settings"]
+    "features_covered": 1,
+    "unautomated_features": ["Runs history", "Workspaces", "Logs", "Settings", "Real assembly-line run (model call)"]
   },
   "coverage": [
     { "feature": "New Run hero identifies the app", "journeys": ["app-identifies-itself"] },
-    { "feature": "Demo Mode toggle", "journeys": ["demo-mode-visible"] },
     { "feature": "Runs history", "unautomated_reason": "only populated by real assembly-line runs, which are blocked (no Anthropic credits) or prohibited (no real AI spend)" },
     { "feature": "Workspaces", "unautomated_reason": "workspaces are produced by runs; with runs blocked, there is nothing deterministic to assert" },
     { "feature": "Logs", "unautomated_reason": "log content depends on a completed run; blocked for the same external-service reason" },
+    { "feature": "Settings", "unautomated_reason": "provider and execution settings are owner configuration; changing them is out of scope for a read-only nightly journey" },
     { "feature": "Real assembly-line run (model call)", "unautomated_reason": "blocked_by_external_service — Anthropic credits empty; any run requiring a model call is out of scope until unblocked" }
   ],
   "journeys": [
@@ -56,20 +63,7 @@
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "Factory" }],
       "user_impact": "If the deck UI does not load, the owner cannot start, inspect, or demo any factory run.",
-      "candidate_files": ["ui/src/App.tsx", "ui/src/components/NewRunHero.tsx", "server/index.ts"]
-    },
-    {
-      "id": "demo-mode-visible",
-      "name": "Demo Mode toggle is present (offline stub path, zero API calls)",
-      "severity": "high",
-      "steps": [
-        { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "body" },
-        { "action": "wait", "ms": 500 }
-      ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "Demo" }],
-      "user_impact": "Demo Mode is the only safe run path while real model calls are blocked; if the toggle is missing, the app cannot be exercised at all without AI spend.",
-      "candidate_files": ["ui/src/App.tsx", "ui/src/components/DemoModeToggle.tsx"]
+      "candidate_files": ["src/ui/App.tsx", "src/ui/components/factory/NewRunHero.tsx", "src/server/index.ts"]
     }
   ]
 }

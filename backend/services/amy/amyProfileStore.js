@@ -10,9 +10,9 @@
  *   - Only ever deletes rows where profiles.created_by === ORIGIN_CREATED_BY.
  *   - The amy_metadata section must say allow_sam_cleanup === true.
  *   - Never deletes a designated/system profile (isDesignatedProfileId guard).
- *   - Each dependent-table delete is best-effort (table may not exist on a
- *     given dialect/DB) and the whole thing is reversible (it only removes
- *     rows Amy itself created).
+ *   - Cleanup discovers every table carrying profile_id, deletes all of those
+ *     rows transactionally, and reports any real failure. Missing optional
+ *     legacy tables are tolerated; constraint/permission failures are not.
  *
  * Dialect-safe: uses only `db.prepare(sql).run/get/all(...)` with bound values
  * and ISO timestamps (no dialect-specific now()/JSON operators), so it works on
@@ -254,16 +254,233 @@ const DEPENDENT_TABLES = [
   ['profile_sections', 'profile_id'],
 ]
 
-/** Hard-delete a single Amy profile across dependent tables (best-effort). */
-async function hardDeleteAmyProfile(db, profileId) {
-  for (const [table, col] of DEPENDENT_TABLES) {
+const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+function deletedCount(result) {
+  return Number(result?.changes ?? result?.rowCount ?? 0) || 0
+}
+
+function isMissingOptionalRelation(error) {
+  const text = String(error?.message || error).toLowerCase()
+  return /no such table|no such column|does not exist|undefined table|undefined column/.test(text)
+}
+
+async function discoverProfileDependentTables(db) {
+  let rows
+  if (db?.dialect === 'postgres') {
+    rows = await db.prepare(
+      `SELECT c.table_name
+         FROM information_schema.columns c
+         JOIN information_schema.tables t
+           ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+        WHERE c.table_schema = current_schema()
+          AND c.column_name = 'profile_id'
+          AND t.table_type = 'BASE TABLE'`,
+    ).all()
+  } else {
     try {
-      await db.prepare(`DELETE FROM ${table} WHERE ${col} = ?`).run(profileId)
-    } catch {
-      // Table may not exist on this DB/dialect — safe to skip.
+      // SQLite's table-valued pragma discovers new profile-owned tables without
+      // another hand-maintained cleanup migration.
+      rows = await db.prepare(
+        `SELECT DISTINCT m.name AS table_name
+           FROM sqlite_master m, pragma_table_info(m.name) c
+          WHERE m.type = 'table'
+            AND m.name NOT LIKE 'sqlite_%'
+            AND c.name = 'profile_id'`,
+      ).all()
+    } catch (sqliteErr) {
+      // A dialect-neutral test double may omit `dialect`; try the production
+      // Postgres catalog before declaring discovery unavailable.
+      try {
+        rows = await db.prepare(
+          `SELECT c.table_name
+             FROM information_schema.columns c
+             JOIN information_schema.tables t
+               ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+            WHERE c.table_schema = current_schema()
+              AND c.column_name = 'profile_id'
+              AND t.table_type = 'BASE TABLE'`,
+        ).all()
+      } catch {
+        throw sqliteErr
+      }
     }
   }
-  await db.prepare(`DELETE FROM profiles WHERE id = ? AND created_by = ?`).run(profileId, ORIGIN_CREATED_BY)
+  return [...new Set((Array.isArray(rows) ? rows : [])
+    .map((row) => String(row?.table_name || ''))
+    .filter((table) => SAFE_IDENTIFIER.test(table) && table !== 'profiles'))]
+}
+
+async function withAmyDeleteTransaction(db, work) {
+  if (typeof db?.withTransaction === 'function') return db.withTransaction(work)
+  if (typeof db?.exec === 'function') {
+    await db.exec('BEGIN')
+    try {
+      const result = await work(db)
+      await db.exec('COMMIT')
+      return result
+    } catch (err) {
+      try { await db.exec('ROLLBACK') } catch { /* preserve original failure */ }
+      throw err
+    }
+  }
+  // Production adapters always provide withTransaction/exec. This fallback is
+  // retained for narrow test doubles, while still propagating every failure.
+  return work(db)
+}
+
+async function deleteProfileRows(tx, table, profileId, savepointSequence) {
+  const runDelete = () => tx.prepare(`DELETE FROM "${table}" WHERE profile_id = ?`).run(profileId)
+
+  // PostgreSQL leaves a transaction in the failed state after any statement
+  // error (including an FK ordering miss or a relation disappearing between
+  // catalog discovery and DELETE). A JavaScript catch does not clear that
+  // state. Isolate each speculative dependency-order delete in a savepoint so
+  // it can be rolled back before the caller retries another table/order.
+  if (tx?.dialect !== 'postgres') return runDelete()
+  if (typeof tx?.exec !== 'function') {
+    throw new Error('Amy PostgreSQL cleanup requires transaction savepoint support')
+  }
+
+  const savepoint = `amy_profile_delete_${savepointSequence}`
+  await tx.exec(`SAVEPOINT ${savepoint}`)
+  try {
+    const result = await runDelete()
+    await tx.exec(`RELEASE SAVEPOINT ${savepoint}`)
+    return result
+  } catch (err) {
+    try {
+      await tx.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`)
+      await tx.exec(`RELEASE SAVEPOINT ${savepoint}`)
+    } catch (savepointErr) {
+      throw new Error(
+        `Amy cleanup could not restore PostgreSQL transaction after ${table} failed: ${savepointErr?.message || savepointErr}`,
+      )
+    }
+    throw err
+  }
+}
+
+function hardDeleteAmyProfileSqlite(db, profileId) {
+  const rows = db.prepare(
+    `SELECT DISTINCT m.name AS table_name
+       FROM sqlite_master m, pragma_table_info(m.name) c
+      WHERE m.type = 'table'
+        AND m.name NOT LIKE 'sqlite_%'
+        AND c.name = 'profile_id'`,
+  ).all()
+  const discovered = [...new Set((Array.isArray(rows) ? rows : [])
+    .map((row) => String(row?.table_name || ''))
+    .filter((table) => SAFE_IDENTIFIER.test(table) && table !== 'profiles'))]
+  const known = DEPENDENT_TABLES.map(([table]) => table)
+  const discoveredSet = new Set(discovered)
+  let pending = [...new Set([
+    ...discovered.filter((table) => !known.includes(table)),
+    ...known.filter((table) => discoveredSet.has(table)),
+  ])]
+  let dependentRows = 0
+
+  while (pending.length > 0) {
+    const deferred = []
+    let progressed = false
+    for (const table of pending) {
+      if (!SAFE_IDENTIFIER.test(table)) throw new Error(`unsafe profile-dependent table identifier: ${table}`)
+      try {
+        // audit:allow dynamic-sql — catalog-derived and identifier-validated.
+        dependentRows += deletedCount(db.prepare(`DELETE FROM "${table}" WHERE profile_id = ?`).run(profileId))
+        progressed = true
+      } catch (err) {
+        if (isMissingOptionalRelation(err)) {
+          progressed = true
+          continue
+        }
+        deferred.push({ table, err })
+      }
+    }
+    if (deferred.length > 0 && !progressed) {
+      const first = deferred[0]
+      throw new Error(`Amy dependent cleanup failed for ${first.table}: ${first.err?.message || first.err}`)
+    }
+    pending = deferred.map(({ table }) => table)
+  }
+
+  const profileDelete = db.prepare('DELETE FROM profiles WHERE id = ? AND created_by = ?').run(profileId, ORIGIN_CREATED_BY)
+  if (deletedCount(profileDelete) !== 1) {
+    throw new Error('Amy profile delete did not remove exactly one owned profile')
+  }
+  return { dependent_rows: dependentRows, dependent_tables: discovered.length }
+}
+
+/**
+ * Hard-delete one Amy profile across every profile-owned table. The old fixed
+ * six-table loop swallowed all child-delete errors, so a new relation could
+ * strand synthetic survivors forever while the reaper kept retrying the same
+ * incomplete delete. Discovery makes the relation inventory total; one
+ * transaction makes cleanup all-or-nothing.
+ */
+export async function hardDeleteAmyProfile(db, profileId) {
+  // better-sqlite3 statements are synchronous. Keep the complete discovery +
+  // delete graph inside its native synchronous transaction so an `await`
+  // cannot yield the shared connection while BEGIN is open and accidentally
+  // commit/rollback an unrelated request's write.
+  if (db?.dialect !== 'postgres' && typeof db?.transaction === 'function') {
+    return db.transaction(() => hardDeleteAmyProfileSqlite(db, profileId))()
+  }
+  return withAmyDeleteTransaction(db, async (tx) => {
+    const discovered = await discoverProfileDependentTables(tx)
+    const known = DEPENDENT_TABLES.map(([table]) => table)
+    const discoveredSet = new Set(discovered)
+    // New relations first: they are commonly children of an older registered
+    // table (for example an application artifact referencing a grant). Failed
+    // constraint deletes are retried after the rest, yielding a dependency
+    // order without maintaining a second schema graph in application code.
+    // Only issue DELETEs for catalog-confirmed relations. The fixed registry
+    // spans historical schemas, and probing its absent tables would itself
+    // abort a PostgreSQL transaction before cleanup reached the real rows.
+    let pending = [...new Set([
+      ...discovered.filter((table) => !known.includes(table)),
+      ...known.filter((table) => discoveredSet.has(table)),
+    ])]
+    let dependentRows = 0
+    let savepointSequence = 0
+
+    while (pending.length > 0) {
+      const deferred = []
+      let progressed = false
+      for (const table of pending) {
+        if (!SAFE_IDENTIFIER.test(table)) throw new Error(`unsafe profile-dependent table identifier: ${table}`)
+        try {
+          // audit:allow dynamic-sql — table comes only from the DB catalog or the
+          // frozen registry and must pass SAFE_IDENTIFIER; profile id stays bound.
+          const result = await deleteProfileRows(tx, table, profileId, savepointSequence++)
+          dependentRows += deletedCount(result)
+          progressed = true
+        } catch (err) {
+          // A migration may drop a catalog-confirmed optional relation between
+          // discovery and DELETE. The savepoint above has already restored the
+          // PostgreSQL transaction, so this race is safe to tolerate.
+          if (isMissingOptionalRelation(err)) {
+            progressed = true
+            continue
+          }
+          deferred.push({ table, err })
+        }
+      }
+      if (deferred.length > 0 && !progressed) {
+        const first = deferred[0]
+        throw new Error(`Amy dependent cleanup failed for ${first.table}: ${first.err?.message || first.err}`)
+      }
+      pending = deferred.map(({ table }) => table)
+    }
+
+    const profileDelete = await tx
+      .prepare('DELETE FROM profiles WHERE id = ? AND created_by = ?')
+      .run(profileId, ORIGIN_CREATED_BY)
+    if (deletedCount(profileDelete) !== 1) {
+      throw new Error('Amy profile delete did not remove exactly one owned profile')
+    }
+    return { dependent_rows: dependentRows, dependent_tables: discovered.length }
+  })
 }
 
 /**

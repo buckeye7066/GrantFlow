@@ -14,8 +14,8 @@ import { loadRunnerConfig, ensureDataDir, readMarker, writeMarker, loadRegistry,
 import { runAppJourneys, buildPayload } from '../src/runner.mjs'
 import { launchWebApp } from '../src/launcher.mjs'
 import { resolveLaunchEnv, checkPrerequisites } from '../src/prereq.mjs'
-import { blockedAppResult, startupFailedAppResult } from '../src/appOutcome.mjs'
-import { captureGitState, maybeFastForward, annotateAppResultWithGitState, describeGitState } from '../src/gitState.mjs'
+import { blockedAppResult, startupFailedAppResult, orchestrationFailedAppResult } from '../src/appOutcome.mjs'
+import { prepareTestWorkspace, annotateAppResultWithGitState, describeGitState } from '../src/gitState.mjs'
 import { uploadResult, sendHeartbeat } from '../src/uploader.mjs'
 
 const WEB_RUNTIMES = new Set(['web', 'mobile-web'])
@@ -66,35 +66,97 @@ async function main() {
 
   const startedAt = new Date().toISOString()
   const appResults = []
+  // Exact generated/owner-supplied secrets are retained only in memory long
+  // enough for buildPayload's global redaction choke point. They are never
+  // attached to an app result or written to disk/logs.
+  const redactionValues = new Set()
   for (const app of feasible) {
-    // GIT TRUTH before anything else touches the app's tree. The owner's policy
-    // is "done means merged to origin/main", but the runner tests each app's
-    // LOCAL tree — which for weeks was another branch / dirty / behind, so
-    // fixes merged on GitHub were never what the nightly tested and findings
-    // recurred with no explanation. Capture {branch, sha, dirty, ahead/behind}
-    // (fetch tolerated offline), fast-forward ONLY a clean main tree that is
-    // merely behind, and attach the state to every result so Anya's email can
-    // show WHAT CODE was tested. A dirty tree / non-main branch is another
-    // agent's live WIP: reported as stale_tree, never touched.
-    let gitState = captureGitState(app.local_path)
-    let gitSync = null
-    if (gitState.available) {
-      gitSync = maybeFastForward(app.local_path, gitState)
-      if (gitSync.attempted) {
-        console.log(`[git] ${app.app_id}: auto-sync ${gitSync.ok ? 'ok' : `FAILED: ${gitSync.error}`} (was ${describeGitState(gitState)})`)
-        if (gitSync.ok) gitState = captureGitState(app.local_path, { fetch: false })
-      }
+    const appStartedAt = Date.now()
+    let outerGitState = null
+    let outerGitSync = null
+    try {
+    // Test the SHIPPED commit, not whichever branch happens to be open on the
+    // Windows desktop. prepareTestWorkspace creates/reuses an independent clean
+    // clone at origin/main and installs dependencies from that revision's
+    // lockfile, never mutating the developer checkout. If a git
+    // repo is stale and the clean snapshot cannot be prepared, the run is
+    // BLOCKED as runner infrastructure — its results are not filed as app bugs.
+    const workspace = prepareTestWorkspace(app.local_path, app.app_id, { dataDir: cfg.dataDir, expectedRepo: app.repo })
+    const gitState = {
+      ...workspace.state,
+      dependency_setup: workspace.dependency_setup,
     }
+    const gitSync = workspace.sync
+    outerGitState = gitState
+    outerGitSync = gitSync
     console.log(`[git] ${app.app_id}: ${describeGitState(gitState)}`)
     const pushResult = (result) => appResults.push(annotateAppResultWithGitState(result, gitState, gitSync))
 
-    const manifest = loadManifest(app.local_path, app.app_id)
-    if (!manifest) {
-      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'manual_required', blocker_reason: 'no qa/user-journeys.json manifest found', duration_ms: 0, journeys: [] })
+    if (!workspace.ok) {
+      const reason = `clean authoritative test snapshot unavailable: ${workspace.reason}`
+      pushResult({
+        app_id: app.app_id,
+        display_name: app.display_name,
+        repo: app.repo,
+        app_status: 'blocked',
+        blocker_reason: reason.slice(0, 500),
+        duration_ms: 0,
+        journeys: [{
+          journey_id: 'app-source-snapshot',
+          name: 'Runner prepares the authoritative main revision',
+          status: 'blocked',
+          route_or_control: app.repo || app.local_path,
+          observed_behavior: reason.slice(0, 500),
+          duration_ms: 0,
+        }],
+      })
       continue
     }
+
+    const testApp = { ...app, local_path: workspace.cwd }
+
+    let manifest = loadManifest(workspace.cwd, app.app_id)
+    if (!manifest) {
+      const reason = 'canonical journey manifest is missing; execution failed closed'
+      pushResult({
+        app_id: app.app_id,
+        display_name: app.display_name,
+        repo: app.repo,
+        app_status: 'manual_required',
+        blocker_reason: reason,
+        duration_ms: 0,
+        journeys: [{
+          journey_id: 'manifest-contract',
+          name: 'Canonical journey manifest resolves',
+          status: 'blocked',
+          route_or_control: app.app_id,
+          observed_behavior: reason,
+          duration_ms: 0,
+        }],
+      })
+      continue
+    }
+    // A manifest's committed local_path is portable source metadata. The
+    // runner's resolved isolated workspace must win at execution time.
+    manifest = { ...manifest, local_path: workspace.cwd, __eva_isolated_workspace: workspace.isolated }
     if (app.runtime_status === 'blocked_by_external_service') {
-      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'blocked', blocker_reason: app.blocker || 'external service unavailable', duration_ms: 0, journeys: [] })
+      const reason = app.blocker || 'external service unavailable'
+      pushResult({
+        app_id: app.app_id,
+        display_name: app.display_name,
+        repo: app.repo,
+        app_status: 'blocked',
+        blocker_reason: reason,
+        duration_ms: 0,
+        journeys: [{
+          journey_id: 'external-service',
+          name: 'Required external service is available',
+          status: 'blocked',
+          route_or_control: app.app_id,
+          observed_behavior: reason,
+          duration_ms: 0,
+        }],
+      })
       continue
     }
     // Launch real apps the way each manifest declares: for web apps, spawn the
@@ -113,11 +175,13 @@ async function main() {
     // `required_env` and the runner never provided any of it, so apps that
     // refuse to boot without a value looked broken when they were merely
     // unconfigured.
-    const { env: launchEnv } = resolveLaunchEnv({ app, manifest })
+    const resolvedLaunch = resolveLaunchEnv({ app: testApp, manifest })
+    const launchEnv = resolvedLaunch.env
+    for (const value of resolvedLaunch.sensitiveValues || []) redactionValues.add(value)
     {
       const pre = await checkPrerequisites({ manifest, resolvedEnv: launchEnv })
       if (pre.unmet.length) {
-        pushResult(blockedAppResult({ app, manifest, unmet: pre.unmet, durationMs: Date.now() - started }))
+        pushResult(blockedAppResult({ app: testApp, manifest, unmet: pre.unmet, durationMs: Date.now() - started }))
         continue
       }
     }
@@ -133,10 +197,10 @@ async function main() {
       // in the owner's email forever ("recurring", last pass never).
       let startupJourney = null
       if (isWeb) {
-        launch = await launchWebApp({ app, manifest, launchEnv, log: (m) => console.log(m) })
+        launch = await launchWebApp({ app: testApp, manifest, launchEnv, log: (m) => console.log(m) })
         baseUrl = launch.baseUrl || baseUrl
         if (launch.launched && !launch.ready) {
-          pushResult(startupFailedAppResult({ app, manifest, launch, baseUrl, durationMs: Date.now() - started }))
+          pushResult(startupFailedAppResult({ app: testApp, manifest, launch, baseUrl, durationMs: Date.now() - started }))
           continue
         }
         if (launch.launched && launch.ready) {
@@ -148,8 +212,14 @@ async function main() {
           }
         }
       }
-      const journeys = await runAppJourneys({ app, manifest, baseUrl })
+      const journeys = await runAppJourneys({ app: testApp, manifest, baseUrl, launchEnv })
       if (startupJourney) journeys.unshift(startupJourney)
+      journeys.unshift({
+        journey_id: 'runner-orchestration',
+        name: 'Runner completes declared journey orchestration',
+        status: 'passed',
+        duration_ms: Date.now() - started,
+      })
       pushResult({
         app_id: app.app_id,
         display_name: app.display_name,
@@ -160,7 +230,7 @@ async function main() {
         journeys,
       })
     } catch (err) {
-      pushResult({ app_id: app.app_id, display_name: app.display_name, app_status: 'startup_failed', blocker_reason: String(err?.message || err).slice(0, 300), duration_ms: Date.now() - started, journeys: [] })
+      pushResult(orchestrationFailedAppResult({ app: testApp, error: err, durationMs: Date.now() - started }))
     } finally {
       if (launch && launch.launched) {
         try {
@@ -170,16 +240,27 @@ async function main() {
         }
       }
     }
+    } catch (err) {
+      // Preparation, manifest loading, environment resolution, and prerequisite
+      // probes are all per-app work. One malformed app must yield a stable
+      // schema-complete runner finding and never erase the rest of the fleet.
+      const failure = orchestrationFailedAppResult({ app, error: err, durationMs: Date.now() - appStartedAt })
+      appResults.push(outerGitState
+        ? annotateAppResultWithGitState(failure, outerGitState, outerGitSync)
+        : failure)
+    }
   }
 
   const payload = buildPayload({
     runnerId: cfg.runnerId,
+    runnerVersion: cfg.version,
     environment: cfg.environment,
     runId: `${cfg.runnerId}-${today}-${Date.now()}`,
     startedAt,
     completedAt: new Date().toISOString(),
     appResults,
     catchup: !!isCatchup,
+    redactionValues: [...redactionValues],
   })
 
   const up = await uploadResult({ cfg, payload })

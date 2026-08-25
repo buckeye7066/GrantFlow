@@ -9,7 +9,7 @@
   },
   "scripts": {
     "selftest": "node bin/eva-runner.mjs --selftest",
-    "test": "node --test test/sign.test.mjs test/runner.test.mjs test/launcher.test.mjs test/manifests.test.mjs test/config.test.mjs test/gitState.test.mjs"
+    "test": "node --test test/sign.test.mjs test/runner.test.mjs test/launcher.test.mjs test/manifests.test.mjs test/config.test.mjs test/gitState.test.mjs test/bootstrap.test.mjs test/prereq.test.mjs test/redact.test.mjs"
   },
   "engines": {
     "node": ">=20"

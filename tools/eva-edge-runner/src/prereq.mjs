@@ -25,7 +25,29 @@
 import { readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { join } from 'node:path'
 import net from 'node:net'
+
+// Child apps receive only the operating-system variables needed to locate
+// executables and temporary/cache directories. Inheriting the runner's entire
+// environment leaked EVA_RUNNER_SECRET and could silently point a disposable
+// QA launch at a production DATABASE_URL or paid model key.
+const SAFE_INHERITED_ENV = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
+  'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
+  'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
+  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE',
+  'LANG', 'LC_ALL', 'TZ',
+  'PNPM_HOME', 'COREPACK_HOME', 'NPM_CONFIG_CACHE',
+])
+
+export function baseLaunchEnv(env = process.env) {
+  const safe = {}
+  for (const [key, value] of Object.entries(env || {})) {
+    if (SAFE_INHERITED_ENV.has(String(key).toUpperCase())) safe[key] = String(value)
+  }
+  return safe
+}
 
 /** Parse the owner's per-app env overrides. Never logged; never defaulted. */
 export function loadAppEnvOverrides(env = process.env, readFile = (p) => readFileSync(p, 'utf8')) {
@@ -62,6 +84,8 @@ function generateValue(kind) {
       return randomBytes(24).toString('hex')
     case 'uuid':
       return randomBytes(16).toString('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5')
+    case 'hex32':
+      return randomBytes(32).toString('hex')
     default:
       return randomBytes(16).toString('hex')
   }
@@ -69,14 +93,14 @@ function generateValue(kind) {
 
 /**
  * Build the environment a web app is launched with.
- * Precedence (low -> high): inherited process env, manifest.launch_env,
+ * Precedence (low -> high): minimal safe system env, manifest.launch_env,
  * manifest.launch_env_generated, owner override (EVA_APP_ENV[app_id]).
  * A generated var is NOT generated when the owner supplied one.
  */
 export function resolveLaunchEnv({ app, manifest, env = process.env, overrides = null, generate = generateValue } = {}) {
   const appId = manifest?.app_id || app?.app_id || ''
   const ownerVars = (overrides || loadAppEnvOverrides(env))[appId] || {}
-  const resolved = { ...env }
+  const resolved = baseLaunchEnv(env)
   const sources = {}
 
   const literal = manifest?.launch_env || manifest?.env || {}
@@ -94,7 +118,20 @@ export function resolveLaunchEnv({ app, manifest, env = process.env, overrides =
     resolved[k] = String(v)
     sources[k] = 'owner'
   }
-  return { env: resolved, sources, appId }
+  return { env: resolved, sources, appId, sensitiveValues: sensitiveLaunchValues(resolved, sources) }
+}
+
+const SENSITIVE_ENV_NAME = /(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|DATABASE_URL|AUTHORIZATION|COOKIE|ENCRYPTION)/i
+
+/** Values that must be removed if an app echoes its launch environment. */
+export function sensitiveLaunchValues(env, sources = {}) {
+  const values = []
+  for (const [name, source] of Object.entries(sources || {})) {
+    if (source !== 'owner' && source !== 'generated' && !SENSITIVE_ENV_NAME.test(name)) continue
+    const value = env?.[name]
+    if (value !== undefined && value !== null && String(value).length >= 6) values.push(String(value))
+  }
+  return [...new Set(values)]
 }
 
 function hasValue(v) {
@@ -110,6 +147,139 @@ export function probeDocker({ run = spawnSync } = {}) {
     return { ok: false, detail }
   } catch (err) {
     return { ok: false, detail: String(err?.message || err) }
+  }
+}
+
+/** Is a runtime command callable through the exact sanitized child PATH? */
+export function probeExecutable({ command, args = ['--version'], env = process.env, timeoutMs = 10000, run = spawnSync } = {}) {
+  if (!command || typeof command !== 'string') return { ok: false, detail: 'executable name is missing' }
+  try {
+    // shell:true is required for npm.cmd/pnpm.cmd/npx.cmd on Windows. Commands
+    // come only from the versioned manifest's fixed runtime allowlist; no user
+    // input is interpolated here.
+    const res = run(command, Array.isArray(args) ? args : [], {
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      windowsHide: true,
+      shell: process.platform === 'win32',
+      env,
+    })
+    if (res && res.status === 0) {
+      const version = firstLine(res.stdout || res.stderr || '')
+      return { ok: true, detail: version || `${command} is callable` }
+    }
+    const detail = firstLine(res?.stderr || res?.stdout || '') || String(res?.error?.message || `${command} exited ${res?.status ?? 'without a status'}`)
+    return { ok: false, detail }
+  } catch (err) {
+    return { ok: false, detail: String(err?.message || err) }
+  }
+}
+
+const EXECUTABLE_PATTERNS = [
+  { pattern: /\bdocker\s+compose\b/i, command: 'docker', args: ['compose', 'version'], name: 'Docker Compose plugin' },
+  { pattern: /\bpnpm(?:[.]cmd)?\b/i, command: 'pnpm', name: 'pnpm' },
+  { pattern: /\bnpx(?:[.]cmd)?\b/i, command: 'npx', name: 'npx' },
+  { pattern: /\bnpm(?:[.]cmd)?\b/i, command: 'npm', name: 'npm' },
+  { pattern: /\bstreamlit(?:[.]exe)?\b/i, command: 'streamlit', name: 'Streamlit' },
+  { pattern: /\buvicorn(?:[.]exe)?\b/i, command: 'uvicorn', name: 'Uvicorn' },
+  { pattern: /\belectron(?:[.]exe)?\b/i, command: 'electron', name: 'Electron' },
+  { pattern: /\bpython(?:3)?(?:[.]exe)?\b/i, command: 'python', name: 'Python' },
+  { pattern: /(?:^|[\s;&|])node(?:[.]exe)?(?=$|[\s;&|])/i, command: 'node', name: 'Node.js' },
+  { pattern: /\bpowershell(?:[.]exe)?\b/i, command: 'powershell', name: 'PowerShell' },
+]
+
+function normalizeExecutableSpec(spec) {
+  if (typeof spec === 'string') return { command: spec, args: ['--version'], name: spec }
+  if (!spec || typeof spec !== 'object' || typeof spec.command !== 'string') return null
+  return {
+    command: spec.command,
+    args: Array.isArray(spec.args) ? spec.args.map(String) : ['--version'],
+    name: spec.name || spec.command,
+    remedy: spec.remedy || null,
+  }
+}
+
+/** Runtime commands inferred from the start command and CLI journey commands. */
+export function inferExecutableRequirements(manifest = {}) {
+  const specs = (Array.isArray(manifest.required_executables) ? manifest.required_executables : [])
+    .map(normalizeExecutableSpec)
+    .filter(Boolean)
+  const commandText = [manifest.start_command, ...(manifest.journeys || []).map((j) => j?.command)]
+    .filter((v) => typeof v === 'string')
+    .join(' & ')
+  for (const known of EXECUTABLE_PATTERNS) {
+    if (known.pattern.test(commandText)) specs.push({ command: known.command, args: known.args || ['--version'], name: known.name })
+  }
+  // npm/pnpm/npx/electron all execute on Node even when the literal start
+  // command does not contain the word "node".
+  if (specs.some((s) => ['npm', 'pnpm', 'npx', 'electron'].includes(s.command.toLowerCase()))) {
+    specs.push({ command: 'node', args: ['--version'], name: 'Node.js' })
+  }
+  const seen = new Set()
+  return specs.filter((spec) => {
+    const key = `${spec.command.toLowerCase()}\0${(spec.args || []).join('\0')}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function versionParts(value) {
+  const match = String(value || '').trim().match(/^v?(\d+)(?:[.](\d+))?(?:[.](\d+))?/)
+  return match ? [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)] : null
+}
+
+function compareVersions(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1
+  }
+  return 0
+}
+
+function satisfiesComparator(actual, token) {
+  if (!token || token === '*' || /^x$/i.test(token)) return true
+  if (token.startsWith('^') || token.startsWith('~')) {
+    const base = versionParts(token.slice(1))
+    if (!base || compareVersions(actual, base) < 0) return false
+    const upper = token[0] === '^' ? [base[0] + 1, 0, 0] : [base[0], base[1] + 1, 0]
+    return compareVersions(actual, upper) < 0
+  }
+  const match = token.match(/^(>=|<=|>|<|=)?\s*(v?\d+(?:[.]\d+)?(?:[.]\d+)?)(?:[.]x)?$/i)
+  if (!match) return false
+  const expected = versionParts(match[2])
+  const cmp = compareVersions(actual, expected)
+  switch (match[1] || '=') {
+    case '>=': return cmp >= 0
+    case '<=': return cmp <= 0
+    case '>': return cmp > 0
+    case '<': return cmp < 0
+    default: {
+      const specified = match[2].replace(/^v/, '').split('.').length
+      return actual.slice(0, specified).every((part, i) => part === expected[i])
+    }
+  }
+}
+
+/** Minimal npm-engine evaluator covering comparator, caret, tilde, and OR ranges. */
+export function satisfiesNodeEngine(version, range) {
+  const actual = versionParts(version)
+  if (!actual || typeof range !== 'string' || !range.trim()) return false
+  return range.split('||').some((clause) => {
+    const tokens = clause.trim().split(/\s+/).filter(Boolean)
+    return tokens.length > 0 && tokens.every((token) => satisfiesComparator(actual, token))
+  })
+}
+
+/** Manifest override first; otherwise read engines.node from the exact workspace. */
+export function resolveNodeEngine(manifest, readFile = (p) => readFileSync(p, 'utf8')) {
+  const explicit = manifest?.node_engine || manifest?.runtime_requirements?.node
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim()
+  if (!manifest?.local_path) return null
+  try {
+    const pkg = JSON.parse(readFile(join(manifest.local_path, 'package.json')))
+    return typeof pkg?.engines?.node === 'string' && pkg.engines.node.trim() ? pkg.engines.node.trim() : null
+  } catch {
+    return null
   }
 }
 
@@ -153,7 +323,10 @@ export async function checkPrerequisites({ manifest, resolvedEnv = process.env, 
   const declared = Array.isArray(manifest?.prerequisites) ? manifest.prerequisites : []
   const docker = probes.docker || probeDocker
   const tcp = probes.tcp || probeTcp
+  const executable = probes.executable || ((spec) => probeExecutable({ ...spec, env: resolvedEnv }))
   const unmet = []
+  const explicitlyCheckedExecutables = new Set()
+  let explicitNodeEngine = false
   for (const p of declared) {
     const id = p?.id || p?.type || 'prerequisite'
     const name = p?.name || id
@@ -169,6 +342,21 @@ export async function checkPrerequisites({ manifest, resolvedEnv = process.env, 
       result = docker()
     } else if (p?.type === 'tcp') {
       result = await tcp({ host: p.host || '127.0.0.1', port: Number(p.port) })
+    } else if (p?.type === 'executable') {
+      const spec = normalizeExecutableSpec(p)
+      if (!spec) {
+        result = { ok: false, detail: 'executable prerequisite is missing command' }
+      } else {
+        explicitlyCheckedExecutables.add(spec.command.toLowerCase())
+        result = await executable(spec)
+      }
+    } else if (p?.type === 'node-engine' || p?.type === 'node') {
+      explicitNodeEngine = true
+      const range = p.range || p.engine
+      const version = typeof probes.nodeVersion === 'function' ? await probes.nodeVersion() : (probes.nodeVersion || process.versions.node)
+      result = satisfiesNodeEngine(version, range)
+        ? { ok: true, detail: `Node ${version} satisfies ${range}` }
+        : { ok: false, detail: `Node ${version || 'unknown'} does not satisfy ${range || '(missing range)'}` }
     } else {
       // An unknown prerequisite type must NOT silently pass — an unverifiable
       // claim is not a met prerequisite.
@@ -176,7 +364,70 @@ export async function checkPrerequisites({ manifest, resolvedEnv = process.env, 
     }
     if (!result.ok) unmet.push({ id, name, remedy, detail: result.detail || null })
   }
-  return { unmet, checked: declared.length }
+
+  // Runtime commands are also prerequisites. Infer them at the fleet choke
+  // point so a newly added npm/pnpm/Python/Electron app cannot be launched and
+  // misreported as broken merely because this Windows account lacks its tool.
+  const runtimeExecutables = inferExecutableRequirements(manifest)
+  for (const spec of runtimeExecutables) {
+    if (explicitlyCheckedExecutables.has(spec.command.toLowerCase())) continue
+    const result = await executable(spec)
+    if (!result.ok) {
+      unmet.push({
+        id: `executable-${spec.command.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+        name: `${spec.name || spec.command} runtime`,
+        remedy: spec.remedy || `install ${spec.name || spec.command} for the scheduled-task account and ensure it is on PATH`,
+        detail: result.detail || `${spec.command} is not callable`,
+      })
+    }
+  }
+
+  // Node's own engines contract belongs to the exact origin/main snapshot. A
+  // central `node_engine` may pin it explicitly; otherwise read package.json in
+  // the isolated workspace. This catches GeneMap's Node >=24 contract before
+  // pnpm emits a vague startup failure on a runner whose documented floor is 20.
+  const usesNode = runtimeExecutables.some((spec) => ['node', 'npm', 'pnpm', 'npx', 'electron'].includes(spec.command.toLowerCase()))
+  const nodeEngine = !explicitNodeEngine && usesNode
+    ? resolveNodeEngine(manifest, probes.readFile || ((p) => readFileSync(p, 'utf8')))
+    : null
+  if (nodeEngine) {
+    const version = typeof probes.nodeVersion === 'function' ? await probes.nodeVersion() : (probes.nodeVersion || process.versions.node)
+    if (!satisfiesNodeEngine(version, nodeEngine)) {
+      unmet.push({
+        id: 'node-engine',
+        name: `Node.js ${nodeEngine}`,
+        remedy: `install a Node.js version satisfying ${nodeEngine} for the scheduled-task account`,
+        detail: `runner has Node ${version || 'unknown'}`,
+      })
+    }
+  }
+
+  // required_env used to be documentation only. Apps with missing boot
+  // configuration were launched anyway and became recurring CRITICAL
+  // readiness failures. Make it an executable preflight contract at this one
+  // fleet choke point. Avoid duplicating variables already named by an
+  // explicit env prerequisite (which may carry a better owner remedy).
+  const explicitlyChecked = new Set(
+    declared
+      .filter((p) => p?.type === 'env')
+      .flatMap((p) => (Array.isArray(p.env) ? p.env : [p.env]))
+      .filter(Boolean),
+  )
+  const missingRequired = (Array.isArray(manifest?.required_env) ? manifest.required_env : [])
+    .filter((name) => !explicitlyChecked.has(name) && !hasValue(resolvedEnv[name]))
+  if (missingRequired.length) {
+    unmet.push({
+      id: 'required-env',
+      name: 'required launch environment',
+      remedy: `set per-app values in EVA_APP_ENV or declare safe launch_env/launch_env_generated values in the canonical manifest`,
+      detail: `unset: ${missingRequired.join(', ')}`,
+    })
+  }
+  return {
+    unmet,
+    checked: declared.length + runtimeExecutables.filter((spec) => !explicitlyCheckedExecutables.has(spec.command.toLowerCase())).length +
+      (nodeEngine ? 1 : 0) + (Array.isArray(manifest?.required_env) ? manifest.required_env.length : 0),
+  }
 }
 
 /**

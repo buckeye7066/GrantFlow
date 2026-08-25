@@ -2,7 +2,7 @@
 
 The GrantFlow cloud server cannot open programs installed on your Windows PC, so a
 small **edge runner** runs there: it launches each portfolio app, runs end-user
-journeys, captures sanitized evidence, and uploads **signed** results to GrantFlow.
+journeys, captures sanitized diagnostics, and uploads **signed** results to GrantFlow.
 
 It lives at `tools/eva-edge-runner/`. It exposes **no general remote-command
 capability** — it only reads manifests, launches declared apps, and POSTs to two
@@ -13,26 +13,35 @@ fixed coordinator endpoints (`/api/eva/ingest`, `/api/eva/heartbeat`).
 - Resolves shortcuts **without trusting their labels** — a `.lnk`/`.url` is only a
   pointer; app identity always comes from the manifest `app_id` + its repo
   (`src/resolve.mjs`).
-- Uses disposable directories, databases, browser profiles, and app data.
-- Allocates **non-conflicting ports** and **never kills an unknown process** to
-  free one (`src/ports.mjs`).
-- Starts/stops apps cleanly; bounds per-app runtime and concurrency; runs apps
-  sequentially when they share ports/DBs/dirs.
+- Fetches each repository and runs the exact clean `origin/main` commit in an
+  independent EVA-owned clone. It never switches, resets, cleans, stashes,
+  fetches, or writes Git metadata in a developer checkout.
+- Uses disposable directories, databases, browser profiles, and app data. A
+  declared `disposable_data_root` is emptied before each isolated run.
+- Uses manifest-pinned ports and refuses to launch when any pre-existing process
+  owns one. Teardown kills only process trees EVA launched; it never kills an
+  unrelated process merely because its image is Node, Python, or Docker.
+- Starts/stops apps through their declared lifecycle commands, bounds readiness
+  and journey waits, and runs the portfolio sequentially.
 - Adapters: **web** (Playwright), **cli/python/powershell** (subprocess with a
   strict argument allowlist), with electron/api/windows-ui hooks documented per
   manifest.
-- Captures sanitized evidence (trace/screenshot/console/network) **by reference** —
-  never raw log bodies, tokens, or full private paths.
+- Redacts startup and orchestration diagnostics before upload. Evidence fields
+  are emitted only for artifacts an adapter actually captured; the runner does
+  not claim nonexistent trace/screenshot/console/network files.
 - Signs every upload (HMAC), sends a heartbeat **even when it can't test**, and
   retries uploads in a bounded, idempotent way.
 - **Catches up** after the PC wakes from sleep and missed a scheduled window.
 
 ## Prerequisites
 
-- Node.js ≥ 20 on the Windows machine.
-- For web journeys: `npm i playwright && npx playwright install chromium` inside
-  `tools/eva-edge-runner/` (Playwright is an *optional* dependency — without it,
-  web journeys report `blocked` naming the missing dep rather than crashing).
+- Node.js ≥ 20 for the edge runner. Each app's exact `engines.node` contract is
+  checked before launch; an app requiring a newer major version (currently
+  GeneMap requires Node ≥ 24) is reported blocked with the required version.
+- Git and Node.js must be available to the scheduled-task account.
+- The installer runs `npm ci` in its dedicated checkout. For web journeys,
+  Chromium must also be installed for Playwright; without it, web journeys
+  report `blocked` rather than crashing.
 - If the shared `%LOCALAPPDATA%\ms-playwright` store throws "Unable to update
   lock within the stale threshold" (AV interference on the `__dirlock`), point
   EVA at its own store: set `PLAYWRIGHT_BROWSERS_PATH` (user scope, so the
@@ -46,9 +55,9 @@ fixed coordinator endpoints (`/api/eva/ingest`, `/api/eva/heartbeat`).
 | `EVA_RUNNER_ID` | This runner's id (must match a key in the coordinator's `EVA_RUNNER_SECRETS`). |
 | `EVA_RUNNER_SECRET` | The HMAC secret. **Keep it out of source control, logs, and screenshots.** |
 | `EVA_RUNNER_ENV` | `local-windows` (default). |
-| `EVA_RUNNER_DATA_DIR` | Where the run marker + disposable data live (default: temp). |
+| `EVA_RUNNER_DATA_DIR` | Where the run marker, independent app clones, lockfile-keyed dependency state, and disposable data live. The installer defaults this to `%LOCALAPPDATA%\GrantFlow\EVA\data`. |
 | `EVA_REGISTRY_PATH` | Path to `qa/portfolio-registry.json`. |
-| `EVA_MANIFEST_DIR` | Path to the manifest bundle `qa/manifests/` (fallback when a repo has no `qa/user-journeys.json`). |
+| `EVA_MANIFEST_DIR` | Path to the canonical manifest bundle `qa/manifests/`. When configured, a missing or malformed canonical manifest fails closed; it never falls back to a stale repo-owned copy. |
 | `EVA_RUNNER_ONLY` | Optional comma-separated `app_id`s to restrict the run. |
 | `EVA_APP_ENV` | JSON `{"<app_id>": {"VAR": "value"}}` — per-app secrets the runner supplies at launch (e.g. a disposable `DATABASE_URL`). Highest precedence; never in source. |
 | `EVA_APP_ENV_FILE` | Path to a JSON file of the same shape, for values too long or too secret for an env var. |
@@ -65,7 +74,7 @@ declaration instead of launching blind:
 | --- | --- |
 | `launch_env` | Literal, non-secret env supplied at launch (`PROMO_ENABLED=false`, `PORT`, `DISABLE_AI=1`). |
 | `launch_env_generated` | `{"ADMIN_TOKEN": "token"}` → a **fresh random value per run**. Never committed, never reused. |
-| `prerequisites` | `[{id, type, name, remedy, …}]` checked BEFORE launch. Types: `env` (a var with no safe default), `docker` (daemon reachable), `tcp` (`{host, port}`). An **unknown type is treated as unmet** — an unverifiable claim is not a met prerequisite. |
+| `prerequisites` | `[{id, type, name, remedy, …}]` checked BEFORE launch. Types: `env` (a var with no safe default), `docker` (daemon reachable), `tcp` (`{host, port}`), `executable` (`{command,args}`), and `node-engine` (`{range}`). Runtime executables are also inferred from declared start/journey commands, and `engines.node` is read from the exact isolated workspace. An **unknown type is treated as unmet** — an unverifiable claim is not a met prerequisite. |
 | `disposable_data_root` | Created inside the app's own repo before launch (an escaping/absolute root is refused). |
 
 Outcomes:
@@ -80,9 +89,12 @@ Outcomes:
   the **probe URL that actually failed** (previously it always named `base_url`,
   even when the failing probe was the backend's health port).
 
-Precedence for launch env, low → high: inherited process env → `launch_env` →
-`launch_env_generated` → `EVA_APP_ENV[app_id]`. A value the owner supplied is
-never overwritten by a generated one.
+Precedence for launch env, low → high: a minimal allowlist of OS/package-manager
+variables → `launch_env` → `launch_env_generated` →
+`EVA_APP_ENV[app_id]`. Runner credentials, production database URLs, and paid
+API keys are not inherited by child apps. Every name in `required_env` is
+checked before launch; secrets with no safe fixture value belong in
+`EVA_APP_ENV` or `EVA_APP_ENV_FILE`.
 
 Guard tests: `tests/unit/eva-runner-startup-outcomes.test.mjs` (run by
 `npm run unit`; mutation-verified).
@@ -99,16 +111,6 @@ Runs the adapters against tiny local fixture scripts (`fixtures/good-cli.mjs`,
 a non-allowlisted process is **blocked** (not run), and that a signed payload is
 accepted by the coordinator's verifier. Exit 0 = all checks passed.
 
-## Dry run (resolve + build payload, launch nothing, upload nothing)
-
-```
-EVA_REGISTRY_PATH=.../qa/portfolio-registry.json \
-EVA_MANIFEST_DIR=.../qa/manifests \
-node bin/eva-runner.mjs --dry-run
-```
-
-Prints the exact v1 payload it *would* upload. Safe to run anywhere.
-
 ## Real run
 
 ```
@@ -123,17 +125,25 @@ happened today.
 
 ## Scheduling (Windows Task Scheduler)
 
-Create a task that runs `node <path>\tools\eva-edge-runner\bin\eva-runner.mjs`
-nightly (before Anya's 09:00 ET email — e.g. 04:00 ET), with **"Run task as soon as
-possible after a scheduled start is missed"** enabled so a sleeping PC catches up on
-wake. Example (PowerShell, run once to register):
+Install the versioned bootstrap once from a clean GrantFlow `origin/main`
+checkout. It creates an EVA-owned clone under `%LOCALAPPDATA%\GrantFlow\EVA`,
+updates that clone to the exact `origin/main` on every run, installs dependencies
+when the lockfile changes, repairs the Playwright Chromium installation on every
+preparation, and registers the 04:00 task with wake catch-up. A new revision must
+pass unit tests and the fixture selftest before it sees credentials. If a scheduled
+candidate fails, the bootstrap checks out and re-tests the saved last-known-good
+commit; installation with `-PrepareOnly` still fails closed rather than accepting a
+rejected candidate:
 
 ```powershell
-$action  = New-ScheduledTaskAction -Execute "node" -Argument "$HOME\GrantFlow\tools\eva-edge-runner\bin\eva-runner.mjs"
-$trigger = New-ScheduledTaskTrigger -Daily -At 4:00AM
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd
-Register-ScheduledTask -TaskName "EVA Portfolio QA" -Action $action -Trigger $trigger -Settings $settings
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  "$HOME\GrantFlow\tools\eva-edge-runner\bin\install-eva-task.ps1"
 ```
+
+Do not point Task Scheduler directly at `$HOME\GrantFlow`: that is a mutable
+developer checkout and may be dirty, behind, or on a feature branch. The
+bootstrap refuses to run if it cannot fetch and verify the exact clean
+`origin/main` revision.
 
 Set the environment variables above at machine or user scope (e.g. `setx
 EVA_RUNNER_SECRET "…"` — but prefer a secret store; `setx` persists to the
@@ -146,7 +156,7 @@ Unregister-ScheduledTask -TaskName "EVA Portfolio QA" -Confirm:$false
 Remove-Item Env:\EVA_RUNNER_SECRET -ErrorAction SilentlyContinue
 # and clear any setx-persisted vars:
 [Environment]::SetEnvironmentVariable("EVA_RUNNER_SECRET", $null, "User")
-Remove-Item -Recurse -Force $env:TEMP\eva-edge-runner -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\GrantFlow\EVA" -ErrorAction SilentlyContinue
 ```
 
 Then remove the runner secret from the coordinator's `EVA_RUNNER_SECRETS` so that

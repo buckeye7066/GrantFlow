@@ -31,6 +31,13 @@ import { enrichAmountViaFederalRegister, isFederalRegisterRow } from './federalR
 import { enrichAmountViaListingPage, isListingPageRow } from './listingPageAmountAdapter.js'
 
 /**
+ * Increment whenever adapter ownership expands or materially changes. The boot
+ * invariant uses this version to reopen rows that were permanently attempted
+ * before the new adapter existed, exactly once per registry revision.
+ */
+export const AMOUNT_ADAPTER_REGISTRY_VERSION = 1
+
+/**
  * The registry.
  *
  * NOT YET COVERED — recorded here so the gap is visible rather than folklore:
@@ -79,4 +86,4 @@ export function findAmountAdapter(row) {
   return null
 }
 
-export default { AMOUNT_ADAPTERS, findAmountAdapter }
+export default { AMOUNT_ADAPTER_REGISTRY_VERSION, AMOUNT_ADAPTERS, findAmountAdapter }

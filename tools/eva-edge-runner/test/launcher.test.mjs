@@ -26,7 +26,14 @@ import {
   detectAnnouncedPorts,
   detectPortDrift,
   freePort,
+  launchWebApp,
+  writeFixtureEnvFiles,
+  removeFixtureEnvFiles,
+  resetDisposableRoot,
 } from '../src/launcher.mjs'
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 test('a manifest cannot authorize killing shared infrastructure', () => {
   // family-stewardship-navigator's real allowlist lists com.docker.backend —
@@ -38,6 +45,25 @@ test('a manifest cannot authorize killing shared infrastructure', () => {
   assert.equal(mayKillProcess('postgres', killable), false)
   assert.equal(mayKillProcess('node', killable), true, 'the app’s own dev server is still freeable')
   assert.equal(mayKillProcess('npm', killable), true)
+})
+
+test('launch preflight authorizes killing no pre-existing process, even node', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-preflight-owner-'))
+  let observedKillable = null
+  try {
+    const launch = await launchWebApp({
+      app: { app_id: 'fixture', local_path: root },
+      manifest: { app_id: 'fixture', local_path: root, start_command: 'never', readiness_probe: { port: 5173 } },
+      freePortFn: (port, options) => {
+        observedKillable = options.killable
+        return { port, freed: false, blockedBy: [{ pid: '42', name: 'node' }] }
+      },
+    })
+    assert.equal(observedKillable.size, 0)
+    assert.equal(launch.ready, false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('freePort kills only allowlisted holders and REPORTS the ones it refuses', (t) => {
@@ -71,6 +97,30 @@ test('a manifest with no declared processes falls back to dev servers, never to 
   assert.ok(DEFAULT_KILLABLE_PROCESSES.size > 0 && PROTECTED_PORT_HOLDERS.size > 0)
 })
 
+test('a protected occupied port aborts before spawn/readiness can test the wrong service', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-protected-port-'))
+  try {
+    const launch = await launchWebApp({
+      app: { app_id: 'fixture', local_path: root },
+      manifest: {
+        app_id: 'fixture',
+        local_path: root,
+        start_command: 'this-command-must-never-run',
+        base_url: 'http://localhost:5180',
+        readiness_probe: { host: '127.0.0.2', port: 5180, path: '/health' },
+      },
+      freePortFn: (port) => ({ port, freed: false, blockedBy: [{ pid: '7', name: 'com.docker.backend' }] }),
+    })
+    assert.equal(launch.launched, true)
+    assert.equal(launch.ready, false)
+    assert.match(launch.outputTail(), /wrong service/)
+    assert.equal(launch.blockedPorts[0].port, 5180)
+    assert.equal(launch.failedProbeUrl, 'http://127.0.0.2:5180/health')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('process names normalize across .exe and case', () => {
   assert.equal(normalizeProcessName('Node.EXE'), 'node')
   assert.equal(normalizeProcessName('  python3.exe '), 'python3')
@@ -96,6 +146,60 @@ test('a log timestamp is never read as a port', () => {
   assert.deepEqual(detectAnnouncedPorts('http://0.0.0.0:8501'), [8501])
 })
 
+test('isolated disposable data is reset between runs and cannot escape the workspace', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-disposable-'))
+  try {
+    const data = join(root, '.eva-tmp', 'app')
+    writeFileSync(join(root, 'sentinel.txt'), 'keep')
+    resetDisposableRoot(root, '.eva-tmp/app')
+    writeFileSync(join(data, 'stale.json'), '{}')
+    resetDisposableRoot(root, '.eva-tmp/app')
+    assert.equal(existsSync(join(data, 'stale.json')), false, 'prior test state is deleted')
+    assert.equal(existsSync(join(root, 'sentinel.txt')), true, 'files outside the declared root survive')
+    assert.equal(resetDisposableRoot(root, '../outside'), null)
+    assert.equal(resetDisposableRoot(root, 'C:/outside'), null)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('fixture env files are confined to EVA worktrees and removed after use', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-fixture-env-'))
+  try {
+    const manifest = {
+      __eva_isolated_workspace: true,
+      fixture_env_files: [{ path: 'server/.env.local', variables: ['JWT_SECRET', 'CORS_ORIGIN'] }],
+    }
+    const files = writeFixtureEnvFiles(root, manifest, { JWT_SECRET: 'fixture-secret', CORS_ORIGIN: 'http://127.0.0.1:5180' })
+    assert.equal(files.length, 1)
+    assert.match(readFileSync(files[0], 'utf8'), /JWT_SECRET=fixture-secret/)
+    removeFixtureEnvFiles(files)
+    assert.equal(existsSync(files[0]), false)
+    assert.throws(
+      () => writeFixtureEnvFiles(root, { ...manifest, fixture_env_files: [{ path: '../escape', variables: [] }] }, {}),
+      /unsafe fixture env path/,
+    )
+    assert.throws(
+      () => writeFixtureEnvFiles(root, { ...manifest, __eva_isolated_workspace: false }, {}),
+      /only in an EVA-owned isolated workspace/,
+    )
+    const firstPartial = join(root, 'server', 'first.env')
+    assert.throws(
+      () => writeFixtureEnvFiles(root, {
+        ...manifest,
+        fixture_env_files: [
+          { path: 'server/first.env', variables: ['JWT_SECRET'] },
+          { path: 'server/second.env', variables: ['MISSING_VALUE'] },
+        ],
+      }, { JWT_SECRET: 'fixture-secret' }),
+      /fixture env variable is missing/,
+    )
+    assert.equal(existsSync(firstPartial), false, 'a later fixture error removes files already written')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 // ── Warm-path readiness (the FSN Vite-reload race, 2026-08-03) ──────────────
 // "Answers" ≠ "can serve the app": FSN's recreated web container serves "/"
 // seconds after start, readiness went green, then Vite reloaded for dependency
@@ -104,7 +208,7 @@ test('a log timestamp is never read as a port', () => {
 // OK, NON-EMPTY body on consecutive polls, so a cold or flapping transform
 // pipeline is not "ready".
 import http from 'node:http'
-import { waitForWarmPath } from '../src/launcher.mjs'
+import { waitForHttp, waitForWarmPath } from '../src/launcher.mjs'
 
 function serveScript(handler) {
   return new Promise((resolve) => {
@@ -163,6 +267,39 @@ test('a dead start_command aborts the warm wait instead of burning the timeout',
   try {
     const warm = await waitForWarmPath(url, { timeoutMs: 5000, intervalMs: 50, consecutive: 3, isDead: () => true })
     assert.equal(warm, false)
+  } finally {
+    srv.close()
+  }
+})
+
+test('readiness rejects 503/404 and requires consecutive successful responses', async () => {
+  let hits = 0
+  const { srv, url } = await serveScript((req, res) => {
+    hits += 1
+    const status = hits === 1 ? 503 : hits === 2 ? 404 : 200
+    res.writeHead(status)
+    res.end(String(status))
+  })
+  try {
+    const ready = await waitForHttp(url, { timeoutMs: 5000, intervalMs: 20, consecutive: 2 })
+    assert.equal(ready, true)
+    assert.ok(hits >= 4, `503 and 404 must reset the two-success streak (hits=${hits})`)
+  } finally {
+    srv.close()
+  }
+})
+
+test('readiness can require an explicit status contract', async () => {
+  const { srv, url } = await serveScript((req, res) => { res.writeHead(204); res.end() })
+  try {
+    assert.equal(
+      await waitForHttp(url, { timeoutMs: 250, intervalMs: 20, acceptedStatuses: [200] }),
+      false,
+    )
+    assert.equal(
+      await waitForHttp(url, { timeoutMs: 1000, intervalMs: 20, acceptedStatuses: [204] }),
+      true,
+    )
   } finally {
     srv.close()
   }

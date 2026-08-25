@@ -7,9 +7,20 @@
   "start_command": "npm start",
   "stop_command": "taskkill-by-port",
   "readiness_probe": { "type": "http", "path": "/api/health", "port": 4000, "timeout_ms": 60000 },
-  "base_url": "http://localhost:4000",
+  "base_url": "http://127.0.0.1:4000",
   "test_target": "disposable-local-instance",
   "required_env": ["PORT"],
+  "launch_env": {
+    "PORT": "4000",
+    "PUBLISHER_HOST": "127.0.0.1",
+    "DOTENV_CONFIG_PATH": ".eva-tmp/app-store-publisher/empty.env",
+    "PUBLISHER_VAULT_PATH": ".eva-tmp/app-store-publisher/credentials.vault.json",
+    "PUBLISHER_VAULT_PROVIDER": "keyfile",
+    "PUBLISHER_UPLOAD_DIR": ".eva-tmp/app-store-publisher/uploads",
+    "PUBLISHER_LEDGER_PATH": ".eva-tmp/app-store-publisher/submissions.json",
+    "PUBLISHER_STATE_PATH": ".eva-tmp/app-store-publisher/submission-state.json",
+    "PUBLISHER_FLAGS_PATH": ".eva-tmp/app-store-publisher/publish-flags.json"
+  },
   "seed_command": "none (file-based storage; no DB; loopback bind; all store credentials deliberately UNSET)",
   "reset_command": "remove file-based data under the disposable data root and restart",
   "cleanup": "rm -rf .eva-tmp/app-store-publisher && remove any file-based submission/upload artifacts created during the run",
@@ -56,7 +67,7 @@
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "App Store Publisher" }],
       "user_impact": "If the wizard shell does not load, the owner cannot start any publishing workflow.",
-      "candidate_files": ["public/index.html", "server.js"]
+      "candidate_files": ["public/index.html", "server/index.js"]
     },
     {
       "id": "wizard-step1-renders",

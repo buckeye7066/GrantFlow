@@ -9,7 +9,7 @@
   "readiness_probe": { "type": "none" },
   "base_url": null,
   "test_target": "disposable-local-instance",
-  "required_env": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+  "required_env": [],
   "seed_command": "n/a",
   "reset_command": "n/a",
   "cleanup": "rm -rf .eva-tmp/flexfactor",

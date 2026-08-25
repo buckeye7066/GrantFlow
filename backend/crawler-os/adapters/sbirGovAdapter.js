@@ -104,7 +104,7 @@ export function createSbirGovAdapter() {
       try {
         const parsed = JSON.parse(resp.body);
         const msg = String(parsed?.Message ?? parsed?.message ?? '');
-        if (/public api is not available/i.test(msg)) return 'api_outage:sbir_public_api_unavailable';
+        if (/public api is not available/i.test(msg)) return 'external_blocked:sbir_public_api_unavailable';
         // Second outage costume (verified live 2026-08-15): the API now answers
         // HTTP 403 with the bare JSON body {"message":"Forbidden"} for EVERY
         // public endpoint (solicitations AND awards, any UA, any params), while
@@ -117,7 +117,7 @@ export function createSbirGovAdapter() {
         // 5xx, or any other 403 body stays a genuine FETCH_ERROR, and the first
         // real response parses normally when the service returns.
         if (Number(resp.status) === 403 && /^forbidden$/i.test(msg.trim())) {
-          return 'api_outage:sbir_public_api_403_forbidden';
+          return 'external_blocked:sbir_public_api_403_forbidden';
         }
       } catch { /* not the banner */ }
       return false;

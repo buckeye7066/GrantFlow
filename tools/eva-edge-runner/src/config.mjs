@@ -7,6 +7,20 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
 
+export const RUNNER_SEMVER = '1.0.0'
+
+/**
+ * Build a schema-bounded SemVer identifier for the runner code that produced a
+ * payload. The installed bootstrap supplies the verified origin/main object id
+ * through EVA_RUNNER_BUILD_SHA; direct development runs retain plain SemVer.
+ */
+export function formatRunnerVersion(buildSha, semver = RUNNER_SEMVER) {
+  const sha = typeof buildSha === 'string' ? buildSha.trim().toLowerCase() : ''
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha)) return semver
+  // 1.0.0 + '+' + 12 hex = 18 chars, safely below schema maxLength 32.
+  return `${semver}+${sha.slice(0, 12)}`
+}
+
 // Expand a portable `~/`-prefixed local_path to this machine's home directory.
 //
 // WHY: the 2026-08-06 "controlled beta" hardening pass sanitized the real
@@ -35,7 +49,7 @@ export function loadRunnerConfig(env = process.env) {
     secret: env.EVA_RUNNER_SECRET || null,
     dataDir: env.EVA_RUNNER_DATA_DIR || join(os.tmpdir(), 'eva-edge-runner'),
     environment: env.EVA_RUNNER_ENV || 'local-windows',
-    version: '1.0.0',
+    version: formatRunnerVersion(env.EVA_RUNNER_BUILD_SHA),
     // Comma-separated app_ids to include; empty = all feasible from the registry.
     onlyApps: (env.EVA_RUNNER_ONLY || '').split(',').map((s) => s.trim()).filter(Boolean),
   }
@@ -66,26 +80,34 @@ export function writeMarker(cfg, marker) {
   writeFileSync(markerPath(cfg), JSON.stringify(marker), 'utf8')
 }
 
-// Load a manifest for an app. Prefers the per-repo qa/user-journeys.json; falls
-// back to the central bundle (EVA_MANIFEST_DIR/<app_id>.json) shipped with the
-// coordinator so the runner works before every repo carries its own copy.
+// Load a manifest for an app. The coordinator's central bundle is canonical:
+// it is versioned with the runner that interprets it and lets one fleet-wide
+// repair update every app atomically. A per-repo qa/user-journeys.json is only
+// a fallback for standalone runners that do not carry the bundle.
+//
+// The old order preferred the per-repo copy. That made central fixes inert:
+// the bundle could correct a port, timeout, or launch command while the runner
+// silently kept reading an older copy from the app checkout. GrantFlow's probe
+// fix did exactly that in August 2026 and the same failure returned nightly.
 export function loadManifest(localPath, appId = null, env = process.env) {
+  if (appId && env.EVA_MANIFEST_DIR) {
+    const bundled = join(env.EVA_MANIFEST_DIR, `${appId}.json`)
+    // Once a central bundle is configured it is authoritative, including for
+    // absence and parse failures. Falling back here would silently execute a
+    // stale per-repo contract after a bad global deploy.
+    if (!existsSync(bundled)) return null
+    try {
+      return expandManifestPaths(JSON.parse(readFileSync(bundled, 'utf8')))
+    } catch (err) {
+      throw new Error(`canonical EVA manifest is invalid (${bundled}): ${err?.message || err}`)
+    }
+  }
   const perRepo = join(expandLocalPath(localPath), 'qa', 'user-journeys.json')
   if (existsSync(perRepo)) {
     try {
       return expandManifestPaths(JSON.parse(readFileSync(perRepo, 'utf8')))
     } catch {
-      /* fall through to bundle */
-    }
-  }
-  if (appId && env.EVA_MANIFEST_DIR) {
-    const bundled = join(env.EVA_MANIFEST_DIR, `${appId}.json`)
-    if (existsSync(bundled)) {
-      try {
-        return expandManifestPaths(JSON.parse(readFileSync(bundled, 'utf8')))
-      } catch {
-        return null
-      }
+      return null
     }
   }
   return null
@@ -104,15 +126,19 @@ function expandManifestPaths(manifest) {
 // carries its own copy path via EVA_REGISTRY_PATH for standalone operation).
 export function loadRegistry(env = process.env) {
   const p = env.EVA_REGISTRY_PATH
-  if (!p || !existsSync(p)) return { apps: [] }
+  if (!p) throw new Error('EVA_REGISTRY_PATH is required for a portfolio run')
+  if (!existsSync(p)) throw new Error(`EVA portfolio registry does not exist: ${p}`)
   try {
     const registry = JSON.parse(readFileSync(p, 'utf8'))
-    for (const app of registry.apps || []) {
+    if (!Array.isArray(registry.apps) || registry.apps.length === 0) {
+      throw new Error('registry.apps must be a non-empty array')
+    }
+    for (const app of registry.apps) {
       if (app && typeof app.local_path === 'string') app.local_path = expandLocalPath(app.local_path)
     }
     return registry
-  } catch {
-    return { apps: [] }
+  } catch (err) {
+    throw new Error(`EVA portfolio registry is invalid (${p}): ${err?.message || err}`)
   }
 }
 

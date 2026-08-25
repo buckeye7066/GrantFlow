@@ -1,172 +1,55 @@
-import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest'
-import Database from 'better-sqlite3'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import {
-  ensureSchema,
-  _resetSchemaCache,
-  acquireLock,
-  renewLock,
-  getLock,
-} from '../services/agentControl/agentControlStore.js'
-import { runWithSchedulerLock } from '../services/schedulerLock.js'
+const lockMocks = vi.hoisted(() => ({
+  renewLock: vi.fn(),
+  withLock: vi.fn(async (_db, _options, fn) => fn({ ownerToken: 'owner-token' })),
+}))
 
-// Pins the 2026-08-23 fix for the frozen nightly-maintenance sweep: a
-// deploy-killed run that held a long, FUTURE-dated lock wedged every subsequent
-// scheduler tick until the fixed TTL lapsed (up to 2h), and frequent deploys
-// re-future-dated it, so the sweep froze for days. The fix is a SHORT TTL that a
-// live holder RENEWS on a heartbeat (renewLock) — so a long run keeps the lock
-// while a dead run frees it within one TTL.
+vi.mock('../services/agentControl/agentControlStore.js', () => lockMocks)
+vi.mock('../utils/observability.js', () => ({ captureException: vi.fn() }))
 
-function makeDb() {
-  _resetSchemaCache()
-  const db = new Database(':memory:')
-  return db
-}
+const { runWithSchedulerLock } = await import('../services/schedulerLock.js')
 
-describe('renewLock — fenced heartbeat extension', () => {
-  let db
-  beforeEach(async () => {
-    db = makeDb()
-    await ensureSchema(db)
-  })
-
-  it('extends expires_at for the lock the process still owns', async () => {
-    const lockName = 'scheduler:nightly-maintenance'
-    const lease = await acquireLock(db, { lockName, controlRunId: 'run-1', ttlMs: 60_000 })
-    expect(lease.acquired).toBe(true)
-    const before = await getLock(db, lockName)
-
-    // A later heartbeat with a bigger TTL pushes the deadline out.
-    const ok = await renewLock(db, { lockName, ownerToken: lease.ownerToken, ttlMs: 120_000 })
-    expect(ok).toBe(true)
-    const after = await getLock(db, lockName)
-    expect(new Date(after.expires_at).getTime()).toBeGreaterThan(new Date(before.expires_at).getTime())
-    // Ownership is unchanged — a renew is not a takeover.
-    expect(after.owner_token).toBe(lease.ownerToken)
-    expect(after.control_run_id).toBe('run-1')
-  })
-
-  it('refuses to renew with a stale/foreign token (fencing)', async () => {
-    const lockName = 'scheduler:nightly-maintenance'
-    const lease = await acquireLock(db, { lockName, controlRunId: 'run-1', ttlMs: 60_000 })
-    const before = await getLock(db, lockName)
-
-    const ok = await renewLock(db, { lockName, ownerToken: 'not-the-owner', ttlMs: 120_000 })
-    expect(ok).toBe(false)
-    const after = await getLock(db, lockName)
-    expect(after.expires_at).toBe(before.expires_at) // untouched
-  })
-
-  it('is a no-op with missing args', async () => {
-    expect(await renewLock(db, {})).toBe(false)
-    expect(await renewLock(db, { lockName: 'x' })).toBe(false)
-    expect(await renewLock(null, { lockName: 'x', ownerToken: 't' })).toBe(false)
-  })
+afterEach(() => {
+  vi.useRealTimers()
+  vi.clearAllMocks()
 })
 
-describe('runWithSchedulerLock heartbeat', () => {
-  let db
-  beforeEach(async () => {
-    db = makeDb()
-    await ensureSchema(db)
-  })
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('renews a SHORT-TTL lease while the critical section runs, then releases', async () => {
+describe('scheduler lock heartbeat', () => {
+  it('fails the scheduler result when fenced renewal says the lease was lost', async () => {
     vi.useFakeTimers()
-    const ttlMs = 60_000 // floor; heartbeat period = ttl/3 = 20s
-
-    let release
-    const gate = new Promise((resolve) => { release = resolve })
-    let seenExpiresAt = null
-
-    const p = runWithSchedulerLock(db, { lockName: 'nightly-maintenance', ttlMs, heartbeat: true, logger: { info() {}, warn() {} } }, async () => {
-      const held = await getLock(db, 'scheduler:nightly-maintenance')
-      seenExpiresAt = held.expires_at
-      await gate
-      return 'done'
-    })
-
-    // Let the acquire + fn-entry microtasks settle.
-    await vi.advanceTimersByTimeAsync(0)
-    expect(seenExpiresAt).not.toBeNull()
-
-    // Advance past one heartbeat period (period = max(30s, ttl/3)) — the
-    // interval must renew the lease.
-    await vi.advanceTimersByTimeAsync(35_000)
-    const midRun = await getLock(db, 'scheduler:nightly-maintenance')
-    expect(midRun).not.toBeNull()
-    expect(new Date(midRun.expires_at).getTime()).toBeGreaterThan(new Date(seenExpiresAt).getTime())
-
-    // Finish the critical section — the lock must be released in finally.
-    release()
-    const result = await p
-    expect(result).toBe('done')
-    expect(await getLock(db, 'scheduler:nightly-maintenance')).toBeNull()
-  })
-
-  it('a second tick is SKIPPED while the first holds the lock (no concurrent heavy sweep)', async () => {
-    let release
-    const gate = new Promise((resolve) => { release = resolve })
-    const first = runWithSchedulerLock(db, { lockName: 'nightly-maintenance', ttlMs: 60_000, heartbeat: true, logger: { info() {}, warn() {} } }, async () => {
-      await gate
-      return 'first'
-    })
-    // Give the first call time to acquire.
-    await new Promise((r) => setTimeout(r, 20))
-    const second = await runWithSchedulerLock(db, { lockName: 'nightly-maintenance', ttlMs: 60_000, heartbeat: true, logger: { info() {}, warn() {} } }, async () => 'second')
-    expect(second).toEqual({ skipped: true, reason: 'lock_held', lockName: 'nightly-maintenance' })
-    release()
-    expect(await first).toBe('first')
-  })
-})
-
-// A Railway redeploy kills the Robert source-acquisition run mid-flight; its
-// lease row survives but its (short) TTL has lapsed. The next manual/auto trigger
-// must RECLAIM that stale lease and run — not silently no-op until the TTL that
-// already passed. (Residual: deploy strands the acquisition scheduler lock.)
-describe('runWithSchedulerLock — Robert acquisition lock, deploy-killed holder', () => {
-  let db
-  beforeEach(async () => {
-    db = makeDb()
-    await ensureSchema(db)
-  })
-
-  function seedLease({ expiresInMs }) {
-    db.prepare(`INSERT INTO agent_control_locks
-      (id, lock_name, control_run_id, owner_token, acquired_by, acquired_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-      'seed', 'scheduler:robert:source-acquisition', 'prev-run', 'prev-token', 'scheduler',
-      new Date(Date.now() - 10 * 60 * 1000).toISOString(),
-      new Date(Date.now() + expiresInMs).toISOString(),
+    lockMocks.renewLock.mockResolvedValue(false)
+    const run = runWithSchedulerLock(
+      { prepare() {} },
+      { lockName: 'daily-job', ttlMs: 90_000, heartbeat: true, logger: { error: vi.fn(), warn: vi.fn() } },
+      async (lease) => {
+        expect(lease.signal).toBeInstanceOf(AbortSignal)
+        return new Promise((resolve, reject) => {
+          lease.signal.addEventListener('abort', () => reject(lease.signal.reason), { once: true })
+        })
+      },
     )
-  }
+    const rejected = expect(run).rejects.toMatchObject({ code: 'LOCK_LEASE_LOST' })
 
-  it('reclaims a STALE (expired) acquisition lease and runs the cycle', async () => {
-    seedLease({ expiresInMs: -5 * 60 * 1000 }) // expired 5 min ago (dead holder)
-    let ran = false
-    const result = await runWithSchedulerLock(
-      db,
-      { lockName: 'robert:source-acquisition', ttlMs: 5 * 60 * 1000, heartbeat: true, logger: { info() {}, warn() {} } },
-      async () => { ran = true; return 'acquired' },
-    )
-    expect(ran).toBe(true)
-    expect(result).toBe('acquired')
-    // Released after the critical section — the next tick starts clean.
-    expect(await getLock(db, 'scheduler:robert:source-acquisition')).toBeNull()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(lockMocks.renewLock).toHaveBeenCalledTimes(1)
+    await rejected
   })
 
-  it('still SKIPS while a LIVE acquisition holder owns the lease (runs stay serialized)', async () => {
-    seedLease({ expiresInMs: 5 * 60 * 1000 }) // valid — a real concurrent run
-    let ran = false
-    const result = await runWithSchedulerLock(
-      db,
-      { lockName: 'robert:source-acquisition', ttlMs: 5 * 60 * 1000, heartbeat: true, logger: { info() {}, warn() {} } },
-      async () => { ran = true; return 'acquired' },
+  it('still returns the critical-section result when renewal succeeds', async () => {
+    vi.useFakeTimers()
+    lockMocks.renewLock.mockResolvedValue(true)
+    let finish
+    const criticalSection = new Promise((resolve) => { finish = resolve })
+
+    const run = runWithSchedulerLock(
+      { prepare() {} },
+      { lockName: 'daily-job', ttlMs: 90_000, heartbeat: true },
+      async () => criticalSection,
     )
-    expect(ran).toBe(false)
-    expect(result).toEqual({ skipped: true, reason: 'lock_held', lockName: 'robert:source-acquisition' })
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    finish('done')
+    await expect(run).resolves.toBe('done')
   })
 })

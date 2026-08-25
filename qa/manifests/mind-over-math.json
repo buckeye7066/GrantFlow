@@ -4,12 +4,22 @@
   "repo": "buckeye7066/mind-over-math",
   "local_path": "~/mind-over-math",
   "runtime_type": "web",
-  "start_command": "cd backend && npm run dev & npm run dev",
+  "start_command": "cd backend && npm start & npm run dev",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/health", "port": 3212, "timeout_ms": 120000 },
+  "readiness_probe": { "type": "http", "path": "/health", "port": 3212, "timeout_ms": 120000, "warm_paths": ["/@vite/client"] },
   "base_url": "http://localhost:5284",
   "test_target": "disposable-local-instance",
-  "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "CORS_ORIGIN", "ANTHROPIC_API_KEY", "INVITE_ONLY"],
+  "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "CORS_ORIGIN", "INVITE_ONLY"],
+  "prerequisites": [
+    {
+      "id": "mind-over-math-postgres",
+      "type": "tcp",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "name": "local Postgres for the disposable Mind Over Math database",
+      "remedy": "start local Postgres on 127.0.0.1:5432 and create the mindovermath_eva database for the manifest DATABASE_URL"
+    }
+  ],
   "launch_env": {
     "DATABASE_URL": "postgresql://eva:eva@127.0.0.1:5432/mindovermath_eva",
     "AUTH_JWT_SECRET": "eva-local-test-secret-not-production",

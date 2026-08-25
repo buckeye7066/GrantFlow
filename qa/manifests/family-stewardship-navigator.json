@@ -5,11 +5,36 @@
   "local_path": "G:/family-stewardship-navigator",
   "runtime_type": "web",
   "start_command": "docker compose up --build",
-  "stop_command": "docker compose down",
+  "stop_command": "docker compose down -v",
   "readiness_probe": { "type": "http", "path": "/api/health", "port": 3001, "timeout_ms": 120000, "warm_paths": ["/@vite/client"], "$warm_comment": "Measured 2026-08-03: compose recreates the web container every run; its Vite answers '/' seconds after start (listen probe green) and then RELOADS for dependency re-optimization, dropping the journeys' module requests (ERR_EMPTY_RESPONSE on /src/pages/Login.jsx, ws handshake failures). /@vite/client must serve a non-empty body on consecutive polls before readiness — proves the transform pipeline is warm and stable, not merely listening." },
-  "base_url": "http://localhost:5180",
+  "base_url": "http://127.0.0.1:5180",
   "test_target": "disposable-local-instance",
-  "required_env": ["VITE_API_URL", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "AI_PROVIDER", "OPENAI_API_KEY", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "DB_HOST_PORT"],
+  "required_env": ["VITE_API_URL", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "AI_PROVIDER", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "DB_HOST_PORT", "ENCRYPTION_KEY"],
+  "launch_env": {
+    "NODE_ENV": "development",
+    "PORT": "3001",
+    "LOCAL_ONLY": "true",
+    "VITE_API_URL": "http://127.0.0.1:3001/api",
+    "DATABASE_URL": "postgresql://fsn:fsn_eva_only@127.0.0.1:55432/fsn",
+    "CORS_ORIGIN": "http://127.0.0.1:5180",
+    "PUBLIC_URL": "http://127.0.0.1:3001",
+    "UPLOAD_DIR": "./uploads",
+    "AI_PROVIDER": "none",
+    "POSTGRES_USER": "fsn",
+    "POSTGRES_PASSWORD": "fsn_eva_only",
+    "POSTGRES_DB": "fsn",
+    "DB_HOST_PORT": "55432"
+  },
+  "launch_env_generated": {
+    "JWT_SECRET": "hex32",
+    "ENCRYPTION_KEY": "hex32"
+  },
+  "fixture_env_files": [
+    {
+      "path": "server/.env.local",
+      "variables": ["NODE_ENV", "PORT", "LOCAL_ONLY", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "PUBLIC_URL", "UPLOAD_DIR", "ENCRYPTION_KEY", "AI_PROVIDER"]
+    }
+  ],
   "$prereq_comment": "Measured 2026-08-01: `docker compose up --build` fails immediately with 'failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine ... the daemon is running?'. UPDATED 2026-08-03: the earlier remedy ('set it to start at login') was ALREADY SATISFIED and is not sufficient -- Docker Desktop sits in the HKCU Run key and settings-store.json carries AutoStart=True, yet the daemon was still down at 04:00 because its own backend log shows the previous instance quit at 2026-08-02 16:40 EDT and no logon event happened before the slot. A login-scoped remedy cannot cover 'quit yesterday afternoon', so the remedy is now TIME-scoped: the scheduled task 'Docker Desktop for EVA' runs tools/ensure-docker-for-eva.ps1 at 03:40 (idempotent; never restarts a healthy daemon). SEPARATELY, EVA itself used to destroy this prerequisite: Docker publishes container ports through com.docker.backend, so this stack's own published 3001/5180 resolve to it and the launcher's pre-launch port clear taskkilled Docker Desktop's backend -- fixed by the PROTECTED_PORT_HOLDERS allowlist in tools/eva-edge-runner/src/launcher.mjs.",
   "prerequisites": [
     {
@@ -35,7 +60,7 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
-    "ports": [5180, 3001, 5432],
+    "ports": [5180, 3001, 55432],
     "routes": ["/", "/login", "/api/health", "/api/auth/*"],
     "file_roots": [".eva-tmp/family-stewardship-navigator"],
     "processes": ["node", "npm", "docker", "com.docker.backend", "postgres"]

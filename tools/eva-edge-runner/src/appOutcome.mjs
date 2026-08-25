@@ -16,6 +16,10 @@ import { describeUnmet } from './prereq.mjs'
 
 const STARTUP_JOURNEY_ID = 'app-startup'
 const STARTUP_JOURNEY_NAME = 'App process starts and answers its readiness probe'
+// qa/eva-result.schema.json definitions.appRun.properties.blocker_reason.
+// Keep builders inside the transport contract even before buildPayload applies
+// its final defense-in-depth clamp.
+const BLOCKER_REASON_CAP = 500
 
 /** An app whose declared prerequisites are not met on this machine. */
 export function blockedAppResult({ app, manifest, unmet, durationMs = 0 }) {
@@ -26,7 +30,7 @@ export function blockedAppResult({ app, manifest, unmet, durationMs = 0 }) {
     display_name: app.display_name,
     repo: app.repo,
     app_status: 'blocked',
-    blocker_reason: reason.slice(0, 600),
+    blocker_reason: reason.slice(0, BLOCKER_REASON_CAP),
     duration_ms: durationMs,
     journeys: [
       {
@@ -74,7 +78,7 @@ export function startupFailedAppResult({ app, manifest, launch = {}, baseUrl = n
     display_name: app.display_name,
     repo: app.repo,
     app_status: 'startup_failed',
-    blocker_reason: reason.slice(0, 600),
+    blocker_reason: reason.slice(0, BLOCKER_REASON_CAP),
     duration_ms: durationMs,
     journeys: [
       {
@@ -91,9 +95,39 @@ export function startupFailedAppResult({ app, manifest, launch = {}, baseUrl = n
         user_impact: 'no journey can run while the app cannot start',
         repro_steps: [`run: ${String(manifest?.start_command).slice(0, 120)}`, `poll ${probeUrl} until the timeout`],
         diagnostic_confidence: tail ? 0.9 : 0.7,
-        missing_evidence: tail ? null : 'the start_command produced no output — inspect it interactively in the app repo',
+        ...(tail ? {} : { missing_evidence: 'the start_command produced no output — inspect it interactively in the app repo' }),
         duration_ms: durationMs,
       },
     ],
+  }
+}
+
+/** An unexpected runner/adapter exception, with a stable lifecycle journey. */
+export function orchestrationFailedAppResult({ app, error, durationMs = 0 }) {
+  const detail = String(error?.stack || error?.message || error || 'unknown runner exception').slice(0, 900)
+  const reason = `EVA could not complete this app's declared journey orchestration: ${detail}`
+  return {
+    app_id: app.app_id,
+    display_name: app.display_name,
+    repo: app.repo,
+    app_status: 'tested',
+    blocker_reason: reason.slice(0, BLOCKER_REASON_CAP),
+    duration_ms: durationMs,
+    journeys: [{
+      journey_id: 'runner-orchestration',
+      name: 'Runner completes declared journey orchestration',
+      status: 'failed',
+      severity: 'high',
+      retry_classification: 'reproducible',
+      failure_class: 'runner-orchestration',
+      route_or_control: 'eva-edge-runner',
+      error_signature: detail.slice(0, 500),
+      expected_behavior: 'the runner launches the app and completes every declared critical journey',
+      observed_behavior: reason.slice(0, 1000),
+      repro_steps: ['run the app through the authoritative EVA manifest at origin/main'],
+      user_impact: 'this app was not fully evaluated in the portfolio run',
+      diagnostic_confidence: 0.9,
+      duration_ms: durationMs,
+    }],
   }
 }
