@@ -384,6 +384,7 @@ describe('summarizeAmyFlywheel + digest section', () => {
     },
     goal_notified_at: null,
     report: {
+      completed_at: new Date().toISOString(),
       tuning: { from: 75, to: 76, change: true, applied: { applied: true } },
       weight_tuning: { validation: { kept: true } },
       coverage_tuning: { validation: { kept: false }, applied: { applied: true } },
@@ -481,6 +482,10 @@ describe('summarizeAmyFlywheel + digest section', () => {
       cohort: {
         ...amy.cohort,
         run_receipts: [{ run_id: 'run-old', recorded_at: '2026-08-20T08:00:00.000Z' }],
+      },
+      report: {
+        ...amy.report,
+        completed_at: '2026-08-20T08:00:00.000Z',
       },
     }, { now: new Date('2026-08-25T09:00:00.000Z') })
     expect(fw.stale).toBe(true)

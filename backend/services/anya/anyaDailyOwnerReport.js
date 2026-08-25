@@ -50,10 +50,21 @@ function evidenceAgeMs(value, now = new Date()) {
     : Number.POSITIVE_INFINITY
 }
 
-function amyEvidenceTimestamp(amy) {
+function amyCohortEvidenceTimestamp(amy) {
   const receipts = Array.isArray(amy?.cohort?.run_receipts) ? amy.cohort.run_receipts : []
-  if (amy?.cohort) return receipts.length ? receipts[receipts.length - 1]?.recorded_at : null
-  return amy?.report?.completed_at || amy?.report?.generated_at || amy?.report?.created_at || null
+  return receipts.length ? receipts[receipts.length - 1]?.recorded_at : null
+}
+
+function amyReportEvidenceTimestamp(amy) {
+  return amy?.report?.completed_at
+    || amy?.report?.generated_at
+    || amy?.report?.created_at
+    || amy?.report?.persisted_at
+    || null
+}
+
+function evidenceIsStale(ageMs, staleMs) {
+  return !Number.isFinite(ageMs) || ageMs > staleMs || ageMs < -OWNER_EVIDENCE_FUTURE_TOLERANCE_MS
 }
 
 function staleEvidenceLine(kind, ageMs, staleMs) {
@@ -251,26 +262,26 @@ function fixHint(finding, planByFindingId) {
  * for tests.
  *
  * @param {{cohort?:object|null, goal_notified_at?:string|null, report?:object|null}} amy
- * @returns {{cohortLine:string, edits:string[], couldNot:string[], goal:boolean}|null}
+ * @returns {{cohortLine:string, edits:string[], couldNot:string[], goal:boolean,stale:boolean,cohortStale:boolean,reportStale:boolean}|null}
  */
 export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
   if (!amy || (!amy.cohort && !amy.report)) return null
-  const ageMs = evidenceAgeMs(amyEvidenceTimestamp(amy), now)
-  if (!Number.isFinite(ageMs) || ageMs > OWNER_AMY_STALE_MS || ageMs < -OWNER_EVIDENCE_FUTURE_TOLERANCE_MS) {
-    return {
-      cohortLine: staleEvidenceLine('Amy flywheel', ageMs, OWNER_AMY_STALE_MS),
-      edits: [],
-      couldNot: [],
-      goal: false,
-      stale: true,
-    }
-  }
-  const day = amy.cohort || null
-  const report = amy.report || {}
+  // The cohort receipt and combined Amy report are independent writes. A run
+  // records its cohort before saveAmyReport(), and report persistence is
+  // deliberately non-fatal. Never let a fresh cohort timestamp bless an older
+  // report's edits or approval queue as fresh overnight activity.
+  const cohortAgeMs = amy.cohort ? evidenceAgeMs(amyCohortEvidenceTimestamp(amy), now) : null
+  const reportAgeMs = amy.report ? evidenceAgeMs(amyReportEvidenceTimestamp(amy), now) : null
+  const cohortStale = Boolean(amy.cohort) && evidenceIsStale(cohortAgeMs, OWNER_AMY_STALE_MS)
+  const reportStale = !amy.report || evidenceIsStale(reportAgeMs, OWNER_AMY_STALE_MS)
+  const day = cohortStale ? null : (amy.cohort || null)
+  const report = reportStale ? {} : amy.report
 
-  const cohortLine = day
-    ? `${day.clean}/${day.evaluated} synthetic profiles clean (target ${day.target}, ${day.issues} with issues) on ${day.day}`
-    : 'No cohort data for today yet.'
+  const cohortLine = cohortStale
+    ? staleEvidenceLine('Amy flywheel cohort', cohortAgeMs, OWNER_AMY_STALE_MS)
+    : day
+      ? `${day.clean}/${day.evaluated} synthetic profiles clean (target ${day.target}, ${day.issues} with issues) on ${day.day}`
+      : 'No cohort data for today yet.'
   const goal = Boolean(day && day.complete && day.all_clean)
 
   const edits = []
@@ -409,7 +420,15 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
     )
   }
 
-  return { cohortLine, edits, couldNot, goal }
+  return {
+    cohortLine,
+    edits,
+    couldNot,
+    goal,
+    stale: cohortStale,
+    cohortStale,
+    reportStale,
+  }
 }
 
 /**
@@ -702,8 +721,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
     if (flywheel.edits.length) {
       t.push('Edits Amy applied autonomously:')
       flywheel.edits.forEach((e) => t.push(`  • ${e}`))
-    } else if (flywheel.stale) {
-      t.push('Autonomous edit status is unknown — no fresh Amy evidence is available.')
+    } else if (flywheel.reportStale) {
+      t.push('Autonomous edit status is unknown — no fresh Amy report is available.')
     } else {
       t.push('No autonomous edits were needed overnight.')
     }
@@ -865,8 +884,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         const cohortColor = fw.goal ? '#16a34a' : '#334155'
         const editsHtml = fw.edits.length
           ? `<ul style="margin:6px 0 0;padding-left:18px;color:#334155;">${fw.edits.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>`
-          : fw.stale
-            ? '<div style="color:#92400e;margin-top:4px;">Autonomous edit status is unknown — no fresh Amy evidence is available.</div>'
+          : fw.reportStale
+            ? '<div style="color:#92400e;margin-top:4px;">Autonomous edit status is unknown — no fresh Amy report is available.</div>'
             : '<div style="color:#64748b;margin-top:4px;">No autonomous edits were needed overnight.</div>'
         const couldNotHtml = fw.couldNot.length
           ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Could not auto-edit (needs you):</strong>
