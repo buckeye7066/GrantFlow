@@ -106,6 +106,22 @@ function eligibilityModifier(before, after) {
     return true
   }
   if (/^s?\s*,?\s*only\b/i.test(after)) return true
+  // "<award noun> to <qualifiers> <profession>" names WHO RECEIVES the award
+  // ("Grants to USA Professional Dancers", "Grants to USA Dental Professionals")
+  // -> an applicant requirement. The "for" rule above already covers "Grant for
+  // Licensed Nurses"; "to" was the missing recipient preposition.
+  //
+  // The profession must CLOSE the recipient phrase, so this rule only fires when
+  // the profession word IS the recipient noun; a title like "Grants to support
+  // nursing research centers" names the WORK funded and is not matched here.
+  // A funder-name prefix ("Grants to American Dental Association ...") is settled
+  // by orgPrefixGoverning before this runs, so a funder name still wins.
+  if (
+    new RegExp('\\b(?:' + AWARD_NOUNS + ')\\s+to\\s+(?:[a-z.]+\\s+){0,3}$', 'i').test(before)
+    && /^s?\s*[,.;:—-]?\s*$/.test(after)
+  ) {
+    return true
+  }
   return false
 }
 

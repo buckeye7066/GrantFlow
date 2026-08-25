@@ -247,7 +247,7 @@ function detectEducationLevel(text) {
 // Disease-specific / condition-specific indicators
 // NOTE: Avoid short patterns that could match common words (e.g. "als" matches "individuals")
 // ---------------------------------------------------------------------------
-const DISEASE_SPECIFIC_PATTERNS = [
+export const DISEASE_SPECIFIC_PATTERNS = [
   'cancer', 'diabetes', 'multiple sclerosis', 'amyotrophic lateral sclerosis',
   'parkinson', 'alzheimer', 'crohn', 'lupus', 'fibromyalgia', 'epilepsy',
   'cerebral palsy', 'muscular dystrophy', 'cystic fibrosis', 'sickle cell',
@@ -773,7 +773,7 @@ function detectEthnicityRestrictions(text) {
 // Explicit gender restriction (women-only / men-only). `requiresWomen` already
 // covers the female-only case for back-compat; this adds an explicit
 // male-only signal and a structured requiresGender field.
-const MEN_ONLY_PATTERNS = [
+export const MEN_ONLY_PATTERNS = [
   /\b(?:for|to)\s+men\s+only\b/i,
   /\bmen[\s-]?only\b/i,
   /\bmale\s+(?:students?|applicants?)\s+only\b/i,

@@ -58,23 +58,18 @@ export default function AdminProfileDedupe() {
     refresh()
   }, [refresh])
 
-  const runDedupeAll = async ({ dryRun }) => {
+  const runDedupeAll = async () => {
     try {
       setLoading(true)
       const res = await post('/api/admin/profiles/deduplicate', {
         strategy,
-        dryRun: Boolean(dryRun),
         // Be generous: users asked to delete duplicates globally.
         limitGroups: 2000,
         minGroupSize: 2,
       })
       if (mountedRef.current) setOutput(res)
-      if (dryRun) {
-        if (mountedRef.current) toast({ title: 'Preview ready', description: `Prepared ${res?.merged_groups ?? 0} group(s)` })
-      } else {
-        if (mountedRef.current) toast({ title: 'Done', description: `Merged ${res?.merged_groups ?? 0} group(s)` })
-        if (mountedRef.current) await refresh()
-      }
+      if (mountedRef.current) toast({ title: 'Done', description: `Merged ${res?.merged_groups ?? 0} group(s)` })
+      if (mountedRef.current) await refresh()
     } catch (err) {
       const requestId = err?.requestId || err?.details?.request_id || null
       if (mountedRef.current) {
@@ -90,17 +85,13 @@ export default function AdminProfileDedupe() {
     }
   }
 
-  const runMerge = async ({ winnerId, loserIds, dryRun }) => {
+  const runMerge = async ({ winnerId, loserIds }) => {
     try {
       setLoading(true)
-      const res = await post('/api/admin/profiles/merge', { winnerId, loserIds, dryRun })
+      const res = await post('/api/admin/profiles/merge', { winnerId, loserIds })
       if (mountedRef.current) setOutput(res)
-      if (dryRun) {
-        if (mountedRef.current) toast({ title: 'Preview ready', description: 'Dry-run completed' })
-      } else {
-        if (mountedRef.current) toast({ title: 'Merged', description: 'Profiles merged successfully' })
-        if (mountedRef.current) await refresh()
-      }
+      if (mountedRef.current) toast({ title: 'Merged', description: 'Profiles merged successfully' })
+      if (mountedRef.current) await refresh()
     } catch (err) {
       const requestId = err?.requestId || err?.details?.request_id || null
       if (mountedRef.current) {
@@ -188,7 +179,7 @@ export default function AdminProfileDedupe() {
                     `This will pick the best winner per group and delete the rest.`,
                 )
                 if (!ok) return
-                runDedupeAll({ dryRun: false })
+                runDedupeAll()
               }}
               disabled={loading}
             >
@@ -224,20 +215,13 @@ export default function AdminProfileDedupe() {
 
                       <div className="flex flex-wrap gap-2">
                         <Button
-                          variant="outline"
-                          onClick={() => runMerge({ winnerId: winner.id, loserIds: losers.map((l) => l.id), dryRun: true })}
-                          disabled={loading || !winner?.id || losers.length === 0}
-                        >
-                          Preview
-                        </Button>
-                        <Button
                           variant="destructive"
                           onClick={() => {
                             const ok = window.confirm(
                               `Merge ${losers.length} profile(s) into "${winner.display_name}"?\n\nThis will delete the duplicates after moving their data.`,
                             )
                             if (!ok) return
-                            runMerge({ winnerId: winner.id, loserIds: losers.map((l) => l.id), dryRun: false })
+                            runMerge({ winnerId: winner.id, loserIds: losers.map((l) => l.id) })
                           }}
                           disabled={loading || !winner?.id || losers.length === 0}
                         >

@@ -106,7 +106,9 @@ describe('makeDecision — a locator that names its own place is exclusive to it
   it('rejects another state’s county locator for an Indiana household', () => {
     const res = makeDecision(13, SENIOR_IN, polkCountyTn)
     expect(res.decision).toBe('REJECT')
-    expect(res.explanation).toMatch(/Geographic mismatch/i)
+    // Now rejected by the scope-aware geography gate (service_area): the row
+    // DECLARES it serves TN and the Indiana household is not in TN.
+    expect(res.explanation).toMatch(/serves TN|Geographic mismatch/i)
   })
 
   it('keeps the profile’s OWN county locator (the fix must not silence the local fleet)', () => {
