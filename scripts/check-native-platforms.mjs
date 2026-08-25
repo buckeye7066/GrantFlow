@@ -15,6 +15,7 @@ const REQUIRED_FILES = [
   'android/gradle/wrapper/gradle-wrapper.properties',
   'ios/App/App.xcodeproj/project.pbxproj',
   'ios/App/App/AppDelegate.swift',
+  'ios/App/App/SceneDelegate.swift',
   'ios/App/App/Info.plist',
   'ios/App/CapApp-SPM/Package.swift',
 ]
@@ -55,6 +56,12 @@ export function collectNativePlatformProblems(root = DEFAULT_ROOT) {
     ['android/app/src/main/res/values/strings.xml', `<string name="app_name">${appName}</string>`, 'Android app name'],
     ['ios/App/App.xcodeproj/project.pbxproj', `PRODUCT_BUNDLE_IDENTIFIER = ${appId};`, 'iOS bundle identifier'],
     ['ios/App/App/Info.plist', `<string>${appName}</string>`, 'iOS display name'],
+    ['ios/App/App.xcodeproj/project.pbxproj', 'SceneDelegate.swift in Sources', 'iOS SceneDelegate source phase'],
+    ['ios/App/App/AppDelegate.swift', 'configurationForConnecting', 'iOS scene configuration hook'],
+    ['ios/App/App/SceneDelegate.swift', 'CAPBridgeViewController()', 'iOS Capacitor scene bridge'],
+    ['ios/App/App/SceneDelegate.swift', 'SceneDelegateProxy.shared.scene', 'iOS scene callback proxy'],
+    ['ios/App/App/Info.plist', '<key>UIApplicationSceneManifest</key>', 'iOS scene manifest'],
+    ['ios/App/App/Info.plist', '$(PRODUCT_MODULE_NAME).SceneDelegate', 'iOS scene delegate manifest entry'],
   ]
 
   for (const [relativePath, expected, label] of checks) {
@@ -64,7 +71,7 @@ export function collectNativePlatformProblems(root = DEFAULT_ROOT) {
       continue
     }
     if (!read(root, relativePath).includes(expected)) {
-      problems.push(`${label} does not match capacitor.config.json (${expected})`)
+      problems.push(`${label} is missing required contract (${expected})`)
     }
   }
 
