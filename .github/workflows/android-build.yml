@@ -133,6 +133,38 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_VERSION_CODE: ${{ env.ANDROID_VERSION_CODE }}
           ANDROID_VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
+      - name: Assert the OTA feed is NOT packaged inside the app
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The feed is a DEPLOY artifact served over the network. It must never
+          # ship inside the signed package: `cap sync` copies webDir=dist
+          # verbatim, so anything written into dist/mobile/ lands in the APK.
+          # Measured 2026-08-19: GrantFlow-1.0.198.apk carried
+          # assets/public/mobile/latest.json + a 2.15 MB bundle zip, which is
+          # why it was 9.7 MB against ~6 MB for its peers. genemap and
+          # sermonsmith already assert this; GrantFlow had no such gate.
+          REJECT='^assets/public/mobile/|\.zip$'
+          # The pattern must be able to FAIL: prove it catches known-bad paths
+          # before trusting it against the real listing.
+          for bad in 'assets/public/mobile/latest.json'                      'assets/public/mobile/bundle-1.0.1.zip'                      'assets/public/OTA.ZIP'; do
+            if ! echo "$bad" | grep -Eiq "$REJECT"; then
+              echo "Reject pattern missed: $bad" >&2; exit 1
+            fi
+          done
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            test -s "$apk"
+            unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
+            # A real web build must still be in there.
+            test "$(grep -Fxc 'assets/public/index.html' "$RUNNER_TEMP/apk-files.txt")" -eq 1
+            if grep -Eiq "$REJECT" "$RUNNER_TEMP/apk-files.txt"; then
+              echo "OTA feed or archive found inside $apk" >&2
+              grep -Ei "$REJECT" "$RUNNER_TEMP/apk-files.txt" >&2
+              exit 1
+            fi
+            echo "OK: $apk carries a web build and no OTA archive"
+          done
+
       - name: Verify signing certificate and prepare release assets
         shell: bash
         run: |
