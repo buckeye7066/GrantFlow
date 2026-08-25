@@ -31,6 +31,55 @@ describe('classifyNeedYouBlock', () => {
     expect(keep({ status: 'blocked', last_agent_message: 'could not reach www.tn.gov' })).toBe(false)
     expect(keep({ status: 'waiting_for_missing_info', last_agent_message: 'stale' }, { hasUnresolvedInfo: false })).toBe(false) // no open ask
   })
+
+  // 2026-08-25. The three tests above assert only `.keep`, and `ineligible`
+  // ALSO returns keep:true — so a card misclassified as ineligible passed them
+  // while being CANCELLED TO ARCHIVE by /admin/release-need-you. The category
+  // is the load-bearing fact; assert it directly.
+  //
+  // Live damage: 81 tasks across 11 profiles were archived on 2026-08-23. For
+  // one low-income Tennessee individual that removed Medicaid/CHIP, SSDI/SSI,
+  // Social Security survivors benefits, TANF and LIHEAP — programs whose own
+  // `entity_types_allowed` list `individual`. The blocker was never eligibility:
+  // a benefits portal wants income/household size/SSN, and the pause message
+  // ("the profile is missing …") matched the INELIGIBLE regex.
+  describe('a MISSING-INFO block is never archived as ineligible', () => {
+    it('classifies "the profile is missing X" as missing_info, not ineligible', () => {
+      const task = {
+        status: 'waiting_for_missing_info',
+        last_agent_message: 'Hamilton paused: the profile is missing household size and monthly income.',
+      }
+      expect(classifyNeedYouBlock(task, { hasUnresolvedInfo: true }))
+        .toMatchObject({ keep: true, category: 'missing_info', legitimate: true })
+    })
+
+    it('an OPEN ask outranks eligibility phrasing (ordering guard)', () => {
+      // Both vocabularies are present. The open ask must win, or the card is
+      // tombstoned instead of being answered.
+      const task = {
+        status: 'waiting_for_missing_info',
+        last_agent_message: 'The profile is missing an SSN, so we cannot confirm you are not eligible yet.',
+      }
+      expect(classifyNeedYouBlock(task, { hasUnresolvedInfo: true }).category).toBe('missing_info')
+    })
+
+    it('an unrelated shortfall is RELEASED, not archived', () => {
+      // Bare /does not meet/ matched any shortfall at all.
+      expect(classifyNeedYouBlock({ status: 'waiting_for_review', last_agent_message: 'The draft does not meet the 500-word minimum for the narrative.' }))
+        .toMatchObject({ keep: false, category: 'releasable' })
+    })
+
+    it('STILL archives a genuine eligibility refusal (the gate keeps its teeth)', () => {
+      // The precision fix must not become a no-op in the other direction.
+      for (const msg of [
+        'Hamilton Autopilot stopped at preflight: Funding source does not meet GrantFlow rules',
+        'Preflight: funding source is institution-only — an individual is not eligible.',
+        'This applicant is ineligible for the REU site.',
+      ]) {
+        expect(classifyNeedYouBlock({ status: 'blocked', last_agent_message: msg }).category).toBe('ineligible')
+      }
+    })
+  })
 })
 
 let db, router
