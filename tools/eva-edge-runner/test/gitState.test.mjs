@@ -60,7 +60,9 @@ test('every git subprocess receives only the sanitized runner environment', () =
     for (const env of environments) {
       assert.equal(env.EVA_RUNNER_SECRET, undefined)
       assert.equal(env.EVA_APP_ENV, undefined)
-      assert.equal(env.PATH, process.env.PATH, 'git still inherits the OS path needed to run helpers')
+      const inheritedPath = Object.entries(env).find(([key]) => key.toUpperCase() === 'PATH')?.[1]
+      const processPath = Object.entries(process.env).find(([key]) => key.toUpperCase() === 'PATH')?.[1]
+      assert.equal(inheritedPath, processPath, 'git still inherits the OS path needed to run helpers')
     }
   } finally {
     if (previousSecret === undefined) delete process.env.EVA_RUNNER_SECRET
