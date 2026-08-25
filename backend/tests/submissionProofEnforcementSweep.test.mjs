@@ -74,6 +74,13 @@ async function walk(dir, out = []) {
  * column or filtering a query by it.
  */
 function presentsSubmittedStatus(source) {
+  // Cheap literal scan BEFORE any regex. This sweep reads ~808 files / ~13 MB,
+  // and running the regex ladder over all of it dominated the runtime badly
+  // enough that the test could blow Vitest's 45s testTimeout under full-suite
+  // contention — a sweep that flakes gets muted exactly like one that cries
+  // wolf. A plain substring test rejects the overwhelming majority of files
+  // before a single regex is compiled against them.
+  if (!source.includes('submitted')) return false
   if (!/['"]submitted['"]/.test(source)) return false
 
   // Scope to APPLICATION-TASK submission. Without this, the sweep fires on
@@ -107,21 +114,25 @@ describe('submission proof enforcement sweep', () => {
     const roots = [join(BACKEND, 'routes'), join(BACKEND, 'services')]
     const files = (await Promise.all(roots.map((r) => walk(r)))).flat()
 
-    const violations = []
-    for (const file of files) {
-      const rel = relative(BACKEND, file).split('\\').join('/')
-      if (ENFORCEMENT_ALLOWLIST.has(rel)) continue
+    // Read in PARALLEL. Measured on this tree: 808 files / 13.2 MB takes
+    // 6797ms read sequentially and 399ms read in parallel — a 17x difference
+    // that is the bulk of the remaining runtime, and pure I/O wait either way.
+    const candidates = files
+      .map((file) => ({ file, rel: relative(BACKEND, file).split('\\').join('/') }))
+      .filter(({ rel }) => !ENFORCEMENT_ALLOWLIST.has(rel))
 
-      let source
-      try {
-        source = await readFile(file, 'utf8')
-      } catch {
-        continue
-      }
+    const sources = await Promise.all(
+      candidates.map(({ file }) => readFile(file, 'utf8').catch(() => null)),
+    )
+
+    const violations = []
+    for (let i = 0; i < candidates.length; i += 1) {
+      const source = sources[i]
+      if (source === null) continue
       if (!presentsSubmittedStatus(source)) continue
       if (PREDICATE_MARKERS.some((marker) => source.includes(marker))) continue
 
-      violations.push(rel)
+      violations.push(candidates[i].rel)
     }
 
     expect(
