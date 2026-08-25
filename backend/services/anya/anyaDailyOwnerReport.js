@@ -50,9 +50,13 @@ function evidenceAgeMs(value, now = new Date()) {
     : Number.POSITIVE_INFINITY
 }
 
-function amyCohortEvidenceTimestamp(amy) {
+function latestAmyCohortReceipt(amy) {
   const receipts = Array.isArray(amy?.cohort?.run_receipts) ? amy.cohort.run_receipts : []
-  return receipts.length ? receipts[receipts.length - 1]?.recorded_at : null
+  return receipts.length ? receipts[receipts.length - 1] : null
+}
+
+function amyCohortEvidenceTimestamp(amy) {
+  return latestAmyCohortReceipt(amy)?.recorded_at || null
 }
 
 function amyReportEvidenceTimestamp(amy) {
@@ -262,7 +266,7 @@ function fixHint(finding, planByFindingId) {
  * for tests.
  *
  * @param {{cohort?:object|null, goal_notified_at?:string|null, report?:object|null}} amy
- * @returns {{cohortLine:string, edits:string[], couldNot:string[], goal:boolean,stale:boolean,cohortStale:boolean,reportStale:boolean}|null}
+ * @returns {{cohortLine:string, edits:string[], couldNot:string[], goal:boolean,stale:boolean,cohortStale:boolean,reportStale:boolean,reportSupersededByCohort:boolean}|null}
  */
 export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
   if (!amy || (!amy.cohort && !amy.report)) return null
@@ -273,7 +277,23 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
   const cohortAgeMs = amy.cohort ? evidenceAgeMs(amyCohortEvidenceTimestamp(amy), now) : null
   const reportAgeMs = amy.report ? evidenceAgeMs(amyReportEvidenceTimestamp(amy), now) : null
   const cohortStale = Boolean(amy.cohort) && evidenceIsStale(cohortAgeMs, OWNER_AMY_STALE_MS)
-  const reportStale = !amy.report || evidenceIsStale(reportAgeMs, OWNER_AMY_STALE_MS)
+  const cohortReceipt = latestAmyCohortReceipt(amy)
+  const cohortRunId = cohortReceipt?.run_id || amy.cohort?.latest_run_id || null
+  const reportRunId = amy.report?.run_id || null
+  // A newer cohort receipt with a different run id proves that the non-fatal
+  // report write for that run did not replace the prior report, even when the
+  // older report still falls inside the generous 36-hour age window.
+  const reportSupersededByCohort = Boolean(
+    cohortRunId
+    && reportRunId
+    && String(cohortRunId) !== String(reportRunId)
+    && Number.isFinite(cohortAgeMs)
+    && Number.isFinite(reportAgeMs)
+    && cohortAgeMs <= reportAgeMs,
+  )
+  const reportStale = !amy.report
+    || evidenceIsStale(reportAgeMs, OWNER_AMY_STALE_MS)
+    || reportSupersededByCohort
   const day = cohortStale ? null : (amy.cohort || null)
   const report = reportStale ? {} : amy.report
 
@@ -428,6 +448,7 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
     stale: cohortStale,
     cohortStale,
     reportStale,
+    reportSupersededByCohort,
   }
 }
 

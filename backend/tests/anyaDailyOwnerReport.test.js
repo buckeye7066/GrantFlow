@@ -108,7 +108,9 @@ describe('buildOwnerReport', () => {
       },
       report: {
         run_id: 'old-report',
-        completed_at: '2026-08-20T06:00:00.000Z',
+        // Still inside the 36-hour age window; the newer, different cohort
+        // receipt is what proves this report was superseded.
+        completed_at: '2026-08-24T08:00:00.000Z',
         tuning: { from: 75, to: 76, applied: { applied: true } },
         approval_queue: [{
           lever: 'old-owner-ask',
