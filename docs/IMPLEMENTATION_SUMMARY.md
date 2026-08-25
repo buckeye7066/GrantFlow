@@ -126,7 +126,7 @@ After running the workflow:
 
 ## Post-Execution Tasks
 
-1. **Review Open PRs**: Some PRs may need manual approval or conflict resolution
+1. **Review Open PRs**: Resolve conflicts and failed checks before merging
 2. **Monitor CI**: Ensure all CI checks pass before PRs are merged
 3. **Verify Deletions**: Confirm that branches are deleted after merge
 4. **Handle Failures**: Manually review and fix any branches that couldn't be merged

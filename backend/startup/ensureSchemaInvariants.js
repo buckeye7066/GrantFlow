@@ -1214,7 +1214,7 @@ export async function ensureForcedWelcomeVideoTables(db, { logger = console } = 
  */
 export async function ensureTailoredApplicationsTableStep(db, { logger = console } = {}) {
   return runStep(
-    'tailored_applications (Hamilton per-funder tailored narrative + approval gate)',
+    'tailored_applications (Hamilton per-funder tailored narrative + submission readiness)',
     '[database]',
     logger,
     async () => {

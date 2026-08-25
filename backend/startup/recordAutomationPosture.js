@@ -51,7 +51,7 @@ export function buildAutomationPosture(env = process.env) {
     allow_auto_submit: isAutoSubmitGloballyEnabled(),
     browser_automation: isBrowserAutomationEnabled(),
     run_on_schedule: String(env.HAMILTON_RUN_ON_SCHEDULE || 'false').toLowerCase() === 'true',
-    // Unset means the approval gate is ON (tailoredNarrative.js), so absence is
+    // Unset means the legacy tailored checkpoint is ON (tailoredNarrative.js), so absence is
     // the SAFE reading here — do not "simplify" this to a plain truthy check.
     tailored_approval_gate: String(env.HAMILTON_TAILORED_APPROVAL_GATE ?? 'true').toLowerCase() !== 'false',
     boot_id: BOOT_ID,

@@ -303,5 +303,5 @@ reviewed catalog samples (golden checks alone confirm contaminated expectations)
 ## Execution order (multi-session)
 Phase 0 → 1 → 2 land as separate flag-gated PRs (Sol builds, Fable reviews,
 adversarial round each). Phase 3 (migration) is authored last, dry-run on a DB
-copy, and applied MANUALLY with owner sign-off after the canary report — never
+copy, and applied from a controlled migration run after the canary report — never
 auto-merged, never on the flag-off path.

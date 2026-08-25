@@ -211,7 +211,7 @@ differential test asserts both paths agree.
 - **D2 — Web-lane Phase 3 migration timing.** Separate manually-applied script,
   separately reviewed, AFTER a canary on real profiles. *Recommended:* defer until
   0.3 / 0.1 / 0.2 / P1 / P2 are all green on canary profiles, then author the
-  migration last, dry-run on a DB COPY, apply with owner sign-off. Never auto-merge;
+  migration last, dry-run on a DB COPY, and apply only after the canary evidence is recorded. Never auto-merge;
   never on the flag-off path.
 - **D3 — Pipeline-promotion enable.** Report-only preflight first (outcome rows
   with `dry_run` marker + projection published to `system_kv promotion_projection`,

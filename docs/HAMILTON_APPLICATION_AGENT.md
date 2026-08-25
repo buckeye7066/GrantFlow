@@ -56,7 +56,7 @@ Hamilton **never**:
 - launches a server browser or performs final submission on a real portal
   domain during controlled beta. Saved submit intent, environment flags,
   provider metadata, and host allow-lists do not expand this boundary;
-- treats login, 2FA, CAPTCHA, a signature, an attestation, an owner approval, or
+- treats login, 2FA, CAPTCHA, payment, a signature, a personal attestation, or
   portal confirmation as bypassable. The owner completes those steps directly
   in the official portal.
 

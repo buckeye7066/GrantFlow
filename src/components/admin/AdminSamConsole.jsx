@@ -282,7 +282,7 @@ export default function AdminSamConsole() {
                   <div className="text-xs text-slate-700 mt-1 line-clamp-2">{p.patch_summary}</div>
                 ) : null}
                 {p.requires_admin_approval && (
-                  <div className="text-xs text-amber-700 mt-1">Requires admin approval before apply.</div>
+                  <div className="text-xs text-amber-700 mt-1">Requires explicit admin authorization to apply.</div>
                 )}
               </div>
             ))}

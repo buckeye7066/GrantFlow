@@ -21,7 +21,7 @@
 Yana is GrantFlow's dedicated background agent for finding likely **GrantFlow
 clients** (prospective customers/users), verifying their public contact info,
 scoring how well they fit GrantFlow's mission, building structured lead
-packets, and (with explicit per-attempt admin approval) sending introductory
+packets, and (with explicit per-attempt admin authorization) sending introductory
 outreach.
 
 Yana is the lead-pipeline counterpart to:
@@ -73,8 +73,8 @@ Yana **does not**:
 | `score-fit` | Computes fit + urgency on existing prospects. | No | No |
 | `build-packets` | Produces lead packets from scored prospects. | No | Inserts/updates `larry_leads` |
 | `qualify` | Marks packets that cross the threshold as `qualified`. | No | Updates `larry_leads.status` |
-| `draft-outreach` | Generates email drafts for approved leads. | No | Inserts `larry_outreach_attempts` |
-| `send-outreach` | Sends approved drafts. | Yes (Resend) | Updates send status |
+| `draft-outreach` | Generates email drafts for qualified leads. | No | Inserts `larry_outreach_attempts` |
+| `send-outreach` | Sends authorized drafts. | Yes (Resend) | Updates send status |
 | `track-relationships` | Updates relationship state from external signals. | No | Updates `larry_relationships` |
 | `full-cycle` | Runs all of the above in sequence. | Yes | Yes |
 
@@ -106,7 +106,7 @@ falls back to the legacy name).
 | `YANA_LEADS_AUTO_QUALIFY` | `LARRY_AUTO_QUALIFY` | `false` | Reserved; admins should approve qualifications themselves. |
 | `YANA_LEADS_AUTO_DRAFT_OUTREACH` | `LARRY_AUTO_DRAFT_OUTREACH` | `false` | When true, qualified leads automatically get drafts. |
 | `YANA_LEADS_AUTO_SEND_OUTREACH` | `LARRY_AUTO_SEND_OUTREACH` | `false` | **Strongly discouraged.** Off by default. |
-| `YANA_LEADS_REQUIRE_APPROVAL_TO_SEND` | `LARRY_REQUIRE_APPROVAL_TO_SEND` | `true` | Per-attempt admin approval gate. Leave on. |
+| `YANA_LEADS_REQUIRE_APPROVAL_TO_SEND` | `LARRY_REQUIRE_APPROVAL_TO_SEND` | `true` | Requires per-attempt admin send authorization. Leave on. |
 | `YANA_LEADS_MIN_FIT_SCORE` | `LARRY_MIN_FIT_SCORE` | `60` | Below this, leads stay unqualified. |
 | `YANA_LEADS_MIN_COMPOSITE_SCORE` | `LARRY_MIN_COMPOSITE_SCORE` | `65` | Below this, leads stay unqualified. |
 | `YANA_LEADS_RESPECT_ROBOTS` | `LARRY_RESPECT_ROBOTS` | `true` | Adapters honor robots.txt when crawling. |
@@ -151,7 +151,7 @@ Score fit and urgency     (mode: score-fit + build-packets)
         ↓
 Build a lead packet     (mode: build-packets)
         ↓
-Send qualified leads to Yana review queue     (mode: qualify → admin approval)
+Send qualified leads to Yana review queue     (mode: qualify → admin authorization)
         ↓
 Yana handles relationship/outreach workflow     (draft-outreach → admin
                                                  approval → send-outreach)
@@ -202,7 +202,7 @@ Admin (gated by `req.ctx.isAdmin`):
 - Off by default. Observe-mode by default.
 - No live web calls without an explicit adapter and `YANA_LEADS_ALLOW_LIVE_WEB=true`
   (legacy `LARRY_ALLOW_LIVE_WEB` still honoured).
-- Sending always requires per-attempt admin approval (unless the operator
+- Sending always requires per-attempt admin authorization (unless the operator
   explicitly disables `YANA_LEADS_REQUIRE_APPROVAL_TO_SEND`, which we do not
   recommend).
 - Suppression list is consulted on every send. DNC supersedes all other gates.

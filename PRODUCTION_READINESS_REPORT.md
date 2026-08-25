@@ -196,7 +196,7 @@ gates pass locally except known-environmental test flakes (documented in §6); C
 | `node scripts/check-env-examples.mjs` | PASS (exit 0) |
 | auth-middleware / profile-guards / runtime-imports / safe-sql / profile-scope / scan:secrets | ALL PASS (exit 0) |
 
-## 7. Remaining Risks / Human-Approval Items
+## 7. Remaining Owner-Configured Items
 
 - **Owner-config items from the June 2026 pass remain** (backups/legal/retention, Sentry DSN) — owner
   scope, not code.

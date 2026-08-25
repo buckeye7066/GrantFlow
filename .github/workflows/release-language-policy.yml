@@ -13,53 +13,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Scan tracked text
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib
-          import re
-          import subprocess
-          import sys
-
-          policy_file = ".github/workflows/release-language-policy.yml"
-          role = "review" + "er"
-          patterns = [
-              re.compile(rf"\bauthenticated\s+(?:release[- ]?)?{role}s?\b", re.I),
-              re.compile(rf"\b(?:independent|external)\s+(?:release[- ]?)?{role}s?\s+(?:are\s+)?required\b", re.I),
-              re.compile(r"\bmandatory\s+(?:independent|external)\s+review\b", re.I),
-              re.compile(rf"\b(?:five|5)\s+(?:distinct\s+)?(?:authenticated\s+)?(?:exact-head\s+)?{role}s?\b", re.I),
-              re.compile(r"\b(?:five|5)\s+(?:exact-head\s+)?(?:independent\s+)?approvals?\b", re.I),
-              re.compile(rf"\brequired[_ -]{role}s?\b", re.I),
-              re.compile(rf"\b{role}[- ]authenticated\b", re.I),
-          ]
-
-          violations = []
-          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
-          for raw in tracked:
-              if not raw:
-                  continue
-              name = raw.decode("utf-8", "surrogateescape")
-              if name == policy_file:
-                  continue
-              path = pathlib.Path(name)
-              try:
-                  data = path.read_bytes()
-              except OSError:
-                  continue
-              if b"\0" in data:
-                  continue
-              text = data.decode("utf-8", "ignore")
-              for number, line in enumerate(text.splitlines(), 1):
-                  if any(pattern.search(line) for pattern in patterns):
-                      violations.append(f"{name}:{number}: {line.strip()}")
-
-          if violations:
-              print("Prohibited release-gate language found:")
-              print("\n".join(violations))
-              sys.exit(1)
-          print("Release language policy passed.")
-          PY
+      - name: Exercise adversarial policy probes
+        run: python3 scripts/check-release-language.py --self-test
+      - name: Scan every tracked text file
+        run: python3 scripts/check-release-language.py

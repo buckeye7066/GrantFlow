@@ -138,7 +138,7 @@ Note: `larry_*` tables have **no `profile_id`/org scoping anywhere** — verify 
 - **[nit]** `backend/services/larry/larryOutreachDrafter.js:97-99` — The body is sliced to `MAX_BODY_CHARS` before `inspectDraftQuality` re-checks `> MAX_BODY_CHARS`, making that branch unreachable for drafter output.
 
 ### backend/services/larry/larryOutreachSender.js
-- **[important]** `backend/services/larry/larryOutreachSender.js:43` — `if (cfg.requireApprovalToSend && !attempt.approved_by_user_id)`: when `requireApprovalToSend=false` the env flag fully disables human approval for real outbound email, leaving only suppression/DNC/cap gates. Large blast-radius switch.
+- **[important]** `backend/services/larry/larryOutreachSender.js:43` — `if (cfg.requireApprovalToSend && !attempt.approved_by_user_id)`: when `requireApprovalToSend=false` the env flag fully disables per-attempt user send authorization for real outbound email, leaving only suppression/DNC/cap gates. Large blast-radius switch.
 - **[nit]** `backend/services/larry/larryOutreachSender.js:156` — `success = providerResult?.ok !== false && !providerResult?.error` treats `undefined`/`{}` as success; an empty provider result is recorded as SENT with a null message id.
 - **[nit]** `backend/services/larry/larryOutreachSender.js:28` / `:215` — `upsertRelationship` is imported but only `void`-referenced; dead import.
 

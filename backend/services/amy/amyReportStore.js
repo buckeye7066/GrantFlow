@@ -6,7 +6,7 @@
  * key/value) — mirrors the self-heal status pattern. Keeps:
  *   - amy_last_report     : the full latest combined report
  *   - amy_recent_runs     : capped array of run summaries (history)
- *   - amy_approval_queue  : open deeper-improvement proposals awaiting approval
+ *   - amy_approval_queue  : open deeper-improvement proposals queued for an operator decision
  */
 
 import { createLogger } from '../../utils/logger.js'

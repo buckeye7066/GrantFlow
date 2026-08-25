@@ -234,7 +234,7 @@ Conventions assumed for this repo: auth via `requireAuthenticatedUserMiddleware`
 - **[nit]** `backend/routes/laptopConnector.js:108` — `text` length is unbounded (stored and analyzed); no size guard.
 
 ### backend/routes/larry.js
-- **[nit]** `backend/routes/larry.js:234` — `/outreach/:attemptId/send` approval gate `if (!attempt.approved_at && !attempt.approved_by_user_id)` passes when either field is set; a partial write (one field only) is treated as approved.
+- **[nit]** `backend/routes/larry.js:234` — `/outreach/:attemptId/send` authorization check `if (!attempt.approved_at && !attempt.approved_by_user_id)` passes when either field is set; a partial write (one field only) is treated as authorized.
 - **[nit]** `backend/routes/larry.js:305` — `void PROSPECT_STATUS` — imported only to suppress an unused-import lint error; dead import.
 
 ### backend/routes/legacyFunctions.js

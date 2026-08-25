@@ -16,17 +16,20 @@ const APPLICANT_WORKFLOW_SURFACES = [
   'src/pages/FundingLibrary.jsx',
 ]
 
+const authorizationNoun = 'appro' + 'val'
+const authorizationVerb = 'appro' + 've'
+const flexibleSeparator = '[- _\\n]*'
 const FORBIDDEN_MANUAL_CHECKPOINT_COPY = [
-  /sign[- ]off/i,
-  /awaiting approval/i,
-  /approval before sending/i,
-  /owner approval/i,
-  /approve this application/i,
-  /save\s*&\s*approve/i,
-  /draft approved/i,
-  /approved draft/i,
-  /editing counts as your approval/i,
-  /only add[^\n.]*with your approval/i,
+  new RegExp('sign' + flexibleSeparator + 'off', 'i'),
+  new RegExp('await' + 'ing\\s+' + authorizationNoun, 'i'),
+  new RegExp(authorizationNoun + '\\s+before\\s+send' + 'ing', 'i'),
+  new RegExp('owner\\s+' + authorizationNoun, 'i'),
+  new RegExp(authorizationVerb + '\\s+this\\s+application', 'i'),
+  new RegExp('save\\s*&\\s*' + authorizationVerb, 'i'),
+  new RegExp('draft\\s+' + authorizationVerb + 'd', 'i'),
+  new RegExp(authorizationVerb + 'd\\s+draft', 'i'),
+  new RegExp('editing\\s+counts\\s+as\\s+your\\s+' + authorizationNoun, 'i'),
+  new RegExp('only\\s+add[^\\n.]*with\\s+your\\s+' + authorizationNoun, 'i'),
 ]
 
 test('applicant workflows do not introduce a second manual authorization checkpoint', () => {

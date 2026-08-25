@@ -43,7 +43,7 @@ matches ────────────────────────
                                   pricingCatalog.getServicePrice ─► base prices
                                                                │
                                                                ▼
-                                  discountEngine.recommendDiscounts ─► discounts (pending approval)
+                                  discountEngine.recommendDiscounts ─► discounts (queued for authorization)
                                                                │
                                                                ▼
                                               pricingEngine.buildRecommendedQuote

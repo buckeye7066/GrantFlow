@@ -135,7 +135,7 @@ Use when the source of truth, canonical identity, or authoritative state may hav
 ### Cost and blast-radius limits
 
 - Auto-recrawl requires estimated compute + network + storage cost <= **10x daily maintenance budget**
-- If projected touch volume is **> 20% of the index**, require manual approval
+- If projected touch volume is **> 20% of the index**, stop and request explicit operator confirmation
 - If recrawl would materially impact ingestion SLA, queue by fan-out priority and state / source criticality
 
 ### Quality safety checks
@@ -188,7 +188,7 @@ Every recompute decision should log:
 - projected cost and latency
 - projected precision / recall delta
 - observed precision / recall delta after rollout
-- whether manual approval was required
+- whether explicit scope confirmation was required
 - rollback artifact or checkpoint reference
 
 ## Suggested future automation hook

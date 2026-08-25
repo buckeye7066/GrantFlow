@@ -14,7 +14,7 @@
  *      allowAutoSubmit on EVERY run, not only the batch that created the task.
  *   2. NO WIDENING — auto_submit_enabled still requires the global
  *      HAMILTON_ALLOW_AUTOSUBMIT flag (same rail as the legacy agent), the
- *      tailored-approval gate still forces filled-not-submitted when not
+ *      legacy tailored checkpoint still forces filled-not-submitted when not
  *      approved, and everything defaults OFF.
  *   3. SUBMISSION EVIDENCE HONESTY — a run is only reported "submitted" with
  *      captured evidence; the task record distinguishes a portal-issued

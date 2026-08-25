@@ -5808,7 +5808,7 @@ registerTool({
       },
       filePath: { type: 'string', description: 'Repo-relative path of the file to repair (under backend/, src/, or scripts/).' },
       dryRun: { type: 'boolean', description: 'When true (default), return the verified diff + trail WITHOUT landing anything.' },
-      landMode: { type: 'string', enum: ['pr', 'direct'], description: 'How a clean verified diff lands (dryRun=false): "pr" (default) opens a CI-gated PR; "direct" auto-merges to main after release:gates pass (no human approval; critical paths auto-route back to PR).' },
+      landMode: { type: 'string', enum: ['pr', 'direct'], description: 'How a clean verified diff lands (dryRun=false): "pr" (default) opens a CI-gated PR; "direct" auto-merges to main after release:gates pass; critical paths auto-route back to PR.' },
       automerge: { type: 'boolean', description: 'PR path only: queue CI-gated auto-merge on the PR (default false).' },
       maxRounds: { type: 'integer', minimum: 1, maximum: 5, description: 'Max author↔verifier rounds (default 3).' },
     },

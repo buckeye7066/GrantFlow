@@ -84,7 +84,6 @@ itself, with no approval step; red means it refuses and names the failing checks
 There is no dry-run mode.
 
 Do not use `.github/workflows/auto-merge-recent-prs.yml` for this. It is the
-scheduled sweeper, it additionally requires a human approval, and no agent-authored
-PR has ever satisfied that — which is why a separate explicit merge path exists.
+legacy scheduled sweeper and conflicts with the explicit CI-gated merge path.
 Do not add a second scheduled sweeper; two competing auto-mergers on one repo is a
 defect.

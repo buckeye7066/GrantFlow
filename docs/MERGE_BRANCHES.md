@@ -100,7 +100,7 @@ The workflow provides a summary at the end:
 1. **Always test first**: Run with `dry_run=true` to preview changes
 2. **Process in batches**: Use a reasonable batch size (10-20) for large numbers of branches
 3. **Review failures**: Check failed branches and resolve issues manually
-4. **Monitor PRs**: Some PRs may need manual approval or conflict resolution
+4. **Monitor PRs**: Resolve conflicts and failed checks before merging
 5. **Clean up**: After successful merges, verify that branches are properly deleted
 
 ## Troubleshooting

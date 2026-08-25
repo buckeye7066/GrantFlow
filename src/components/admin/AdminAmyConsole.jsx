@@ -361,7 +361,7 @@ export default function AdminAmyConsole() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {queue.length === 0 && <div className="text-sm text-muted-foreground">No deeper improvements pending approval.</div>}
+            {queue.length === 0 && <div className="text-sm text-muted-foreground">No deeper improvements awaiting a decision.</div>}
             {queue.map((item) => (
               <div key={item.id} className="rounded-lg border p-3">
                 <div className="flex items-center gap-2 flex-wrap">

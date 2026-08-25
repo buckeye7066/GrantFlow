@@ -97,13 +97,13 @@ describe('buildAutomationPosture', () => {
     expect(buildAutomationPosture().allow_auto_submit).toBe(true)
   })
 
-  // Absence means the approval gate is ON (tailoredNarrative.js). Reading an
+  // Absence means the legacy tailored checkpoint is ON (tailoredNarrative.js). Reading an
   // unset variable as "off" would invert the safe default.
-  it('treats an UNSET tailored approval gate as ON', () => {
+  it('treats an UNSET legacy tailored checkpoint as ON', () => {
     expect(buildAutomationPosture().tailored_approval_gate).toBe(true)
   })
 
-  it('treats an explicit "false" tailored approval gate as OFF', () => {
+  it('treats an explicit "false" legacy tailored checkpoint as OFF', () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = 'false'
     expect(buildAutomationPosture().tailored_approval_gate).toBe(false)
   })
