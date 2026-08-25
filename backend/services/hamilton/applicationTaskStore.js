@@ -21,6 +21,10 @@ import { parseFullName } from '../../../shared/nameParsing.js'
 import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
 import { assessTaskSubmissionProof, SUBMISSION_PROOF_STATE } from './submissionProofPredicate.js'
 import { assessPointerResearchLead } from './hamiltonFundingSourcePolicy.js'
+import {
+  assessDuplicateApplicationRisk,
+  DuplicateApplicationRiskError,
+} from './priorCycleApplicationGuard.js'
 
 export const TASK_STATUSES = Object.freeze([
   // Legacy task statuses (per-grant Hamilton flow).
@@ -623,6 +627,12 @@ export async function ensureApplicationTask(db, {
   // reflects runtime truth instead of silently staying at its FALSE default.
   // `undefined` = caller did not specify → leave the stored value untouched.
   allowAutoSubmit = undefined,
+  // Per-task acknowledgement that this really is a SEPARATE funder cycle, set
+  // only by an explicit human action on the duplicate-risk handoff. Deliberately
+  // NOT accepted from batch automation: a batch must never blanket-confirm past
+  // this guard for every task at once, which would turn a safety net into a
+  // rubber stamp. See routes/hamilton.js for the single call site that sets it.
+  confirmedNewCycle = false,
 } = {}) {
   if (!profileId) throw new Error('profileId required')
   if (!opportunityId && !grantId) throw new Error('opportunityId or grantId required')
@@ -734,6 +744,25 @@ export async function ensureApplicationTask(db, {
         return rowToTask(refreshed)
       }
       return rowToTask(existing)
+    }
+
+    // CROSS-CYCLE DUPLICATE GUARD — deliberately placed HERE, on the create
+    // path, and NOT beside the pointer-lead check above.
+    //
+    // ensureApplicationTask is idempotent: when a task already exists it is
+    // ADOPTED and returned. A claim is minted from that same task's verified
+    // submission, and it matches the same program identity — so guarding before
+    // the existing-task lookup would 422 every later re-entry into a task the
+    // profile had already legitimately submitted, breaking the tracker for
+    // exactly the applications that worked. By this line we know no task exists
+    // and we are about to INSERT a genuinely new one, which is the only moment
+    // a duplicate submission can be created.
+    if (!confirmedNewCycle) {
+      const duplicateRisk = await assessDuplicateApplicationRisk(db, {
+        profileId,
+        opportunityId,
+      })
+      if (duplicateRisk) throw new DuplicateApplicationRiskError(duplicateRisk)
     }
 
     const id = crypto.randomUUID()

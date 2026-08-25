@@ -127,6 +127,30 @@ router.get('/', async (req, res) => {
   }
 })
 
+// NOTE ON ORDERING: this MUST stay above `router.get('/:taskId')`.
+// Express matches in declaration order, so a literal path declared after a
+// param route is unreachable — '/prior-claims' would bind taskId='prior-claims'
+// and answer 404 task_not_found forever.
+// GET /api/application-tasks/prior-claims?profile_id=...
+router.get('/prior-claims', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const profileId = String(req.query?.profile_id || req.query?.profileId || '')
+  if (!(await requirePriorClaimProfileAccess(req, res, profileId))) return
+  try {
+    const { listPriorApplicationClaims } = await import('../services/hamilton/priorCycleApplicationGuard.js')
+    const claims = await listPriorApplicationClaims(req.db, {
+      profileId,
+      includeRetracted: String(req.query?.include_retracted || '') === 'true',
+    })
+    return res.json({ ok: true, claims })
+  } catch (err) {
+    log.error('prior claims list failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'prior_claims_list_failed' })
+  }
+})
+
+
 router.get('/:taskId', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
@@ -237,11 +261,105 @@ router.post('/', async (req, res) => {
       grantId: body.grant_id || null,
       portalId: body.portal_id || null,
       initialStatus: 'queued',
+      // Explicit, per-request human acknowledgement from the duplicate-risk
+      // handoff. Read ONLY from this interactive route — batch automation has
+      // no path to set it, so a batch can never blanket-confirm past the guard.
+      confirmedNewCycle: body.confirmed_new_cycle === true,
     })
     return res.json({ ok: true, task })
   } catch (err) {
+    // A duplicate-application risk is a REFUSAL WITH INSTRUCTIONS, not a
+    // failure: the generic 500 below would strip the handoff payload and leave
+    // the user with an unexplained error, which is the silent-dead-end failure
+    // mode this codebase treats as a defect. Mirrors the pointer_research_lead
+    // 422 shape above.
+    if (err?.code === 'prior_cycle_application_risk') {
+      return res.status(422).json({
+        ok: false,
+        error: 'prior_cycle_application_risk',
+        handoff: err.handoff,
+        detail: err.message,
+      })
+    }
     log.error('create task failed', { error: err?.message })
     return res.status(500).json({ ok: false, error: err?.message || 'application_tasks_create_failed' })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Prior-application claims (cross-cycle duplicate guard).
+//
+// Append-only, mirroring the outcome-evidence routes in routes/nofo.js: an
+// attested claim is written once and CORRECTED BY RETRACTION, never deleted, so
+// a mistaken assertion stays auditable. `origin` is always returned so a caller
+// can never render an owner attestation as proof GrantFlow holds.
+// ---------------------------------------------------------------------------
+
+async function requirePriorClaimProfileAccess(req, res, profileId) {
+  if (!profileId) {
+    res.status(400).json({ ok: false, error: 'profile_id required' })
+    return false
+  }
+  if (req.ctx?.isAdmin === true) return true
+  const user = req.user ?? req.ctx
+  const accessible = await resolveAccessibleProfileIds(req, user)
+  if (accessible !== null && !accessible.has(String(profileId))) {
+    res.status(403).json({ ok: false, error: 'Forbidden' })
+    return false
+  }
+  return true
+}
+
+// POST /api/application-tasks/prior-claims
+// Body: { profile_id, opportunity_id, cycle_label?, note? }
+router.post('/prior-claims', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const body = req.body || {}
+  const profileId = String(body.profile_id || body.profileId || '')
+  if (!(await requirePriorClaimProfileAccess(req, res, profileId))) return
+  try {
+    const { attestPriorApplication } = await import('../services/hamilton/priorCycleApplicationGuard.js')
+    const result = await attestPriorApplication(req.db, {
+      profileId,
+      opportunityId: body.opportunity_id || body.opportunityId || null,
+      cycleLabel: body.cycle_label ?? body.cycleLabel ?? null,
+      note: body.note ?? null,
+      attestedByUserId: getAuthUserId(user),
+    })
+    return res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result })
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ ok: false, error: err.code || 'prior_claim_rejected', detail: err.message })
+    }
+    log.error('prior claim attest failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'prior_claim_attest_failed' })
+  }
+})
+
+// POST /api/application-tasks/prior-claims/:claimId/retract
+// Body: { profile_id, reason }
+router.post('/prior-claims/:claimId/retract', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const body = req.body || {}
+  const profileId = String(body.profile_id || body.profileId || '')
+  if (!(await requirePriorClaimProfileAccess(req, res, profileId))) return
+  try {
+    const { retractPriorApplicationClaim } = await import('../services/hamilton/priorCycleApplicationGuard.js')
+    const result = await retractPriorApplicationClaim(req.db, {
+      profileId,
+      claimId: String(req.params.claimId),
+      reason: body.reason,
+      retractedByUserId: getAuthUserId(user),
+    })
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ ok: false, error: err.code || 'prior_claim_retract_rejected', detail: err.message })
+    }
+    log.error('prior claim retract failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'prior_claim_retract_failed' })
   }
 })
 

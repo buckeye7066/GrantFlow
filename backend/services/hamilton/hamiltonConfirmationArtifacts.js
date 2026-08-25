@@ -206,6 +206,32 @@ export async function registerConfirmationArtifact(db, {
     } catch { /* best-effort */ }
   }
 
+  // MIRROR VERIFIED SUBMISSION -> cross-cycle claim ledger.
+  //
+  // This is the BIRTH of proof, not a status write: `confirmedReceipt` is only
+  // true when a genuinely NEW portal reference or acknowledgement was captured,
+  // which is the same bar submissionProofPredicate reads back as
+  // VERIFIED_EXTERNAL. Mirroring here (rather than in assessTaskSubmissionProof)
+  // keeps the claim ledger a write-once consequence of proof instead of a side
+  // effect of every tracker read.
+  //
+  // Best-effort by construction: a ledger failure must never break a submission
+  // that actually succeeded. The unique active index makes repeats idempotent.
+  if (confirmedReceipt) {
+    try {
+      const { recordVerifiedSubmissionClaim } = await import('./priorCycleApplicationGuard.js')
+      await recordVerifiedSubmissionClaim(db, {
+        profileId,
+        opportunityId,
+        taskId,
+        submittedAt: new Date().toISOString(),
+        confirmationReference: reference || null,
+      })
+    } catch {
+      // Ledger is a safety net, never an authority over the submission path.
+    }
+  }
+
   return out
 }
 
