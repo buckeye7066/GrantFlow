@@ -71,8 +71,8 @@ export const scholarshipPortalAdapter = Object.freeze({
 
   // EVERY STALL HANDS BACK INSTRUCTIONS **AND A LINK** (owner rule; 2026-08-14).
   // Both branches below are stalls, and the FIRST is the common one — auto-submit
-  // is OFF by default — yet it used to return a bare "the student must approve
-  // the draft" with no destination, while `portalLink` (carrying the very
+  // is OFF by default — yet it used to return a bare action with no destination,
+  // while `portalLink` (carrying the very
   // `application_url` the second branch uses two lines down) sat unused in the
   // same signature. The URL-less fallback named nothing at all. A stall the
   // owner cannot act on is indistinguishable from a silent failure.
@@ -85,7 +85,7 @@ export const scholarshipPortalAdapter = Object.freeze({
     if (!options?.allowSubmit) {
       return makeAdapterResult({
         outcome: ADAPTER_OUTCOMES.WAITING_FOR_USER,
-        message: `Auto-submit not enabled — the student must approve the draft before submission.${manualStep}`,
+        message: `Automation is off — the draft is ready for the student to use.${manualStep}`,
         safeToProceed: false,
         blockingReason: 'auto_submit_disabled',
       })
