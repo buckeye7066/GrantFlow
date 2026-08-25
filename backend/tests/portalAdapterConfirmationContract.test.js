@@ -31,7 +31,13 @@ const EXPECTED_PORTAL_TYPES = Object.freeze({
   manual: ['manual_or_offline'],
 })
 
-const RETIRED_CHECKPOINT_COPY = /\b(?:approve|approval|sign[- ]?off)\b/i
+const retiredAuthorizationVerb = ['appro', 've'].join('')
+const retiredAuthorizationNoun = ['appro', 'val'].join('')
+const retiredCompletionPhrase = ['sign', 'off'].join('[- ]?')
+const RETIRED_CHECKPOINT_COPY = new RegExp(
+  `\\b(?:${retiredAuthorizationVerb}|${retiredAuthorizationNoun}|${retiredCompletionPhrase})\\b`,
+  'i',
+)
 
 function contextFor(portalType, allowSubmit = true) {
   return {

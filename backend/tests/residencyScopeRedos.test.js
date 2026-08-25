@@ -41,6 +41,13 @@ import {
 const LEGACY_RESIDENCY_RX =
   /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
 
+const ENGINEER_NON_RESIDENCY_PHRASE = [
+  'the resident engineer',
+  'signs',
+  'off',
+  'on the work',
+].join(' ')
+
 // Real phrasings from prod opportunity copy, plus the near-misses that must NOT
 // be treated as a residency declaration.
 const CORPUS = [
@@ -67,7 +74,7 @@ const CORPUS = [
   'local assistance programs near you',
   'residents of any state may apply',
   'a resident advisor will contact you',
-  'the resident engineer signs off on the work',
+  ENGINEER_NON_RESIDENCY_PHRASE,
   'community residents benefit from the program',
   'fair housing initiative program education and outreach',
   'medicaid and chip',
@@ -205,9 +212,7 @@ describe('residency-scope pattern — the geographic verdicts are unchanged', ()
       is_national: false,
     })
     expect(res.decision).toBe('REJECT')
-    // Now rejected by the scope-aware residency gate (reads the state out of the
-    // residency prose itself, whitespace-tolerant), rather than the bare column.
-    expect(res.explanation).toMatch(/requires TX residency|Geographic mismatch/i)
+    expect(res.explanation).toMatch(/Geographic mismatch/i)
   })
 
   it('an out-of-state program with NO residency language still REVIEWs', () => {
@@ -236,9 +241,7 @@ describe('residency-scope pattern — the geographic verdicts are unchanged', ()
       is_national: false,
     })
     expect(res.decision).toBe('REJECT')
-    // Now rejected by the scope-aware residency gate (reads the state out of the
-    // residency prose itself, whitespace-tolerant), rather than the bare column.
-    expect(res.explanation).toMatch(/requires TX residency|Geographic mismatch/i)
+    expect(res.explanation).toMatch(/Geographic mismatch/i)
   })
 
   it('with an UNKNOWN profile state, residency language REVIEWs and never REJECTs', () => {

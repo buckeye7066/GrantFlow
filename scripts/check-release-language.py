@@ -60,7 +60,7 @@ PATTERNS = (
     (
         "completion ritual",
         re.compile(
-            rf"\b{COMPLETION_FIRST}(?:ed|ing)?{SEPARATOR_RUN}{COMPLETION_SECOND}\b",
+            rf"\b{COMPLETION_FIRST}(?:s|ed|ing)?{SEPARATOR_RUN}{COMPLETION_SECOND}s?\b",
             re.I,
         ),
     ),
@@ -128,6 +128,14 @@ PATTERNS = (
     ),
 )
 
+STRING_LITERAL = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\$]|\$(?!\{))*`)'''
+STRING_LITERAL_RX = re.compile(STRING_LITERAL, re.S)
+STRING_CHAIN_RX = re.compile(rf"{STRING_LITERAL}(?:\s*\+\s*{STRING_LITERAL})+", re.S)
+JSX_STRING_EXPRESSION_RX = re.compile(rf"\{{\s*({STRING_LITERAL})\s*\}}", re.S)
+JSX_COMMENT_RX = re.compile(r"\{\s*/\*.*?\*/\s*\}", re.S)
+JSX_TAG_RX = re.compile(r"</?[A-Za-z][^<>]*?>", re.S)
+HTML_COMMENT_RX = re.compile(r"<!--.*?-->", re.S)
+
 
 def normalize_text(text: str) -> str:
     """Normalize compatibility forms and remove invisible format controls."""
@@ -136,9 +144,54 @@ def normalize_text(text: str) -> str:
     return "".join(char for char in normalized if unicodedata.category(char) != "Cf")
 
 
+def literal_value(literal: str) -> str:
+    """Return visible content for a plain JS string literal without evaluating it."""
+
+    body = literal[1:-1]
+    replacements = {
+        r"\n": "\n",
+        r"\r": "\n",
+        r"\t": "\t",
+        r"\'": "'",
+        r'\"': '"',
+        r"\`": "`",
+        r"\\": "\\",
+    }
+    for escaped, value in replacements.items():
+        body = body.replace(escaped, value)
+    return body
+
+
+def rendered_source_projection(text: str) -> str:
+    """Project common JSX and literal concatenation boundaries into visible text.
+
+    Raw whole-file scanning cannot see a label split across sibling JSX nodes or
+    directly concatenated string literals. This conservative projection removes
+    non-rendered JSX wrappers and joins only literal-only concatenations; it does
+    not execute code or interpolate variables.
+    """
+
+    projected = normalize_text(text)
+    projected = HTML_COMMENT_RX.sub("", projected)
+    projected = JSX_COMMENT_RX.sub("", projected)
+    projected = JSX_STRING_EXPRESSION_RX.sub(lambda match: literal_value(match.group(1)), projected)
+
+    def join_literals(match: re.Match[str]) -> str:
+        return " ".join(literal_value(item.group(0)) for item in STRING_LITERAL_RX.finditer(match.group(0)))
+
+    projected = STRING_CHAIN_RX.sub(join_literals, projected)
+    projected = JSX_TAG_RX.sub("", projected)
+    return projected
+
+
 def prohibited_labels(text: str) -> list[str]:
     normalized = normalize_text(text)
-    return [label for label, pattern in PATTERNS if pattern.search(normalized)]
+    rendered = rendered_source_projection(normalized)
+    return [
+        label
+        for label, pattern in PATTERNS
+        if pattern.search(normalized) or pattern.search(rendered)
+    ]
 
 
 def tracked_text_files() -> list[pathlib.Path]:
@@ -183,11 +236,24 @@ def run_self_test() -> None:
         "hyphen and line break": "owner " + COMPLETION_FIRST + "ing-\n" + COMPLETION_SECOND,
         "unicode hyphen": "owner " + COMPLETION_FIRST + "\u2011" + COMPLETION_SECOND,
         "zero width control": "owner " + COMPLETION_FIRST + "\u200b" + COMPLETION_SECOND,
+        "third person completion": "owner " + COMPLETION_FIRST + "s " + COMPLETION_SECOND,
+        "gerund completion": "owner " + COMPLETION_FIRST + "ing " + COMPLETION_SECOND,
+        "plural hyphen completion": "owner " + COMPLETION_FIRST + "-" + COMPLETION_SECOND + "s",
+        "compact plural completion": "owner " + COMPLETION_FIRST + COMPLETION_SECOND + "s",
         "role separator": "required_\n" + ROLE,
         "wrapped person gate": "man" + "ual_\n" + AUTHORIZATION_NOUN,
         "wrapped state": "await" + "ing-\n" + AUTHORIZATION_NOUN,
         "wrapped checkpoint": AUTHORIZATION_NOUN + "_\n" + "gate",
         "wrapped draft state": AUTHORIZATION_VERB + "d-\n" + "draft",
+        "JSX sibling boundary": (
+            "<p>{'" + COMPLETION_FIRST + "'}<span>{'" + COMPLETION_SECOND + "'}</span></p>"
+        ),
+        "JSX text boundary": (
+            "<strong>" + "man" + "<em>ual</em></strong> " + AUTHORIZATION_NOUN
+        ),
+        "literal concatenation": (
+            "const status = '" + COMPLETION_FIRST + "' + '" + COMPLETION_SECOND + "'"
+        ),
     }
     negative_probes = {
         "cryptographic signature": "The commit is cryptographically signed.",

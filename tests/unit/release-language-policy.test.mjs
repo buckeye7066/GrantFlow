@@ -14,7 +14,7 @@ function runPolicy(...args) {
   })
 }
 
-test('delivery-language probes cover wrapping and separator evasions', () => {
+test('delivery-language probes cover wrapping, rendered JSX boundaries, and literal concatenation', () => {
   const result = runPolicy('--self-test')
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })

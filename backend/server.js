@@ -2421,6 +2421,9 @@ app.use('/api/grant-awards', lazyRouter('./routes/grantScopedRecords.js', (m) =>
 app.use('/api/compliance-reports', lazyRouter('./routes/grantScopedRecords.js', (m) => m.createGrantScopedRecordsRouter('compliance-reports')));
 app.use('/api/expenses', expensesRouter);
 app.use('/api/budgets', budgetsRouter);
+app.use('/api/accounting-exchange', lazyRouter('./routes/accountingExchange.js'));
+app.use('/api/institutional-dissemination', lazyRouter('./routes/institutionalDissemination.js'));
+app.use('/api/research-recommendations', lazyRouter('./routes/researchRecommendations.js'));
 app.use('/api/contacts', contactsRouter);
 app.use('/api/outreach-logs', outreachLogsRouter);
 app.use('/api/application-drafts', applicationDraftsRouter);
