@@ -25,6 +25,22 @@ function read(root, relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8')
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function plistStringValue(source, key) {
+  const match = source.match(new RegExp(`<key>\\s*${escapeRegExp(key)}\\s*</key>\\s*<string>\\s*([^<]+?)\\s*</string>`))
+  return match?.[1]?.trim() || null
+}
+
+function storyboardInitialController(source) {
+  const initialId = source.match(/<document\b[^>]*\binitialViewController="([^"]+)"/)?.[1]
+  if (!initialId) return null
+  const controller = source.match(new RegExp(`<viewController\\b(?=[^>]*\\bid="${escapeRegExp(initialId)}")(?=[^>]*\\bcustomClass="([^"]+)")[^>]*>`))
+  return controller ? { id: initialId, customClass: controller[1] } : { id: initialId, customClass: null }
+}
+
 export function collectNativePlatformProblems(root = DEFAULT_ROOT) {
   const problems = []
 
@@ -75,6 +91,29 @@ export function collectNativePlatformProblems(root = DEFAULT_ROOT) {
     }
     if (!read(root, relativePath).includes(expected)) {
       problems.push(`${label} is missing required contract (${expected})`)
+    }
+  }
+
+  const packagePath = path.join(root, 'ios/App/CapApp-SPM/Package.swift')
+  if (fs.existsSync(packagePath)) {
+    const swiftPackage = read(root, 'ios/App/CapApp-SPM/Package.swift')
+    if (!/capacitor-swift-pm\.git",\s*exact:\s*"8\.5\.0"/.test(swiftPackage)) {
+      problems.push('iOS Capacitor Swift package must be pinned to 8.5.0 for SceneDelegateProxy')
+    }
+  }
+
+  const plistPath = path.join(root, 'ios/App/App/Info.plist')
+  const storyboardPath = path.join(root, 'ios/App/App/Base.lproj/Main.storyboard')
+  if (fs.existsSync(plistPath)) {
+    const sceneStoryboard = plistStringValue(read(root, 'ios/App/App/Info.plist'), 'UISceneStoryboardFile')
+    if (sceneStoryboard !== 'Main') {
+      problems.push('iOS scene storyboard must resolve UISceneStoryboardFile to Main')
+    }
+  }
+  if (fs.existsSync(storyboardPath)) {
+    const initialController = storyboardInitialController(read(root, 'ios/App/App/Base.lproj/Main.storyboard'))
+    if (!initialController || initialController.customClass !== 'CAPBridgeViewController') {
+      problems.push('iOS Main storyboard initialViewController must resolve to CAPBridgeViewController')
     }
   }
 
