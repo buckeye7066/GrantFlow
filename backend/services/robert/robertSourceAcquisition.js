@@ -481,7 +481,9 @@ async function autoAddToProfile(db, { profileId, oppRow, facts, category, cols }
     ['funder_lead_state', isLead ? FUNDER_LEAD_STATE.CANDIDATE : null],
     ['matcher_version', ACQUISITION_MATCHER_VERSION],
     ['application_url', oppRow.application_url ?? null],
-    ['url', oppRow.application_url ?? oppRow.source_url ?? null],
+    // Funder leads must NOT copy research source_url into url — that made
+    // investigation auto-promote on ProPublica pages (see hasPromotableApplyPath).
+    ['url', oppRow.application_url ?? (isLead ? null : oppRow.source_url) ?? null],
     ['source_url', oppRow.source_url ?? null],
     ['amount_min', oppRow.amount_min ?? null],
     ['amount_max', oppRow.amount_max ?? null],

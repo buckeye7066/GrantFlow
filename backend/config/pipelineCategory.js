@@ -77,11 +77,10 @@ export function funderLeadSql(col = 'pipeline_category') {
 }
 
 /**
- * A grant row has a USABLE application path when it carries an http(s)
- * application/portal/url that is not a search-engine results page. This is what
- * makes a funder lead promotable — a real place to actually apply. The bar is
- * deliberately structural (a live-liveness probe is investigation's job, not
- * this pure predicate's).
+ * A grant row has a USABLE http(s) URL when it carries any non-search-engine
+ * application/portal/url. Coarse filter only — a ProPublica research page and a
+ * real /apply form both pass. Promotion to apply-ready MUST use
+ * `hasPromotableApplyPath` instead.
  */
 export function hasUsableApplyPath(row) {
   const candidates = [row?.application_url, row?.portal_url, row?.url, row?.apply_url]
@@ -97,6 +96,47 @@ export function hasUsableApplyPath(row) {
   return false
 }
 
+/** Path shapes that look like a self-serve application surface (not a homepage). */
+const APPLICATION_PATH_RX = /\/(apply|application|applications|grants?|funding|how-to-apply|eligibility|guidelines|rfp|nofo|proposal)s?(\/|$|\?|#)/i
+
+/**
+ * True when `url` looks like an application/grants PATH, not a bare homepage
+ * or research directory (e.g. ProPublica org pages).
+ */
+export function looksLikeApplicationPath(url) {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return false
+  try {
+    const parsed = new URL(url)
+    return APPLICATION_PATH_RX.test(parsed.pathname + (parsed.search || ''))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Promotion bar for funder leads → apply-ready.
+ *
+ * ONLY `application_url` / `apply_url` / `portal_url` count, and the path must
+ * look like an application surface. Deliberately ignores `url` / `source_url`:
+ * admit used to copy the ProPublica 990 research page into `grants.url`, and
+ * `hasUsableApplyPath` then treated that research URL as "already applicable"
+ * and auto-promoted every lead on the next investigation pass — the exact
+ * cold-submit failure this category exists to prevent.
+ */
+export function hasPromotableApplyPath(row) {
+  const candidates = [row?.application_url, row?.apply_url, row?.portal_url]
+  for (const raw of candidates) {
+    if (typeof raw !== 'string') continue
+    const u = raw.trim()
+    if (!/^https?:\/\//i.test(u)) continue
+    try {
+      if (isSearchEngineUrl(u)) continue
+    } catch { /* defensive */ }
+    if (looksLikeApplicationPath(u)) return true
+  }
+  return false
+}
+
 export default {
   PIPELINE_CATEGORY,
   FUNDER_LEAD_STATE,
@@ -105,4 +145,6 @@ export default {
   notFunderLeadSql,
   funderLeadSql,
   hasUsableApplyPath,
+  looksLikeApplicationPath,
+  hasPromotableApplyPath,
 }
