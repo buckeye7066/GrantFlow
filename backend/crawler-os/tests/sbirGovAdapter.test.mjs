@@ -97,7 +97,7 @@ test('planner selects sbir_gov ONLY for research orgs (research_only gate)', () 
   assert.ok(decision.reasons.includes('research_org_only'), 'exclusion is explainable');
 });
 
-test('the SBIR API outage banner is a BENIGN skip with an honest reason — a real 5xx stays a failure', () => {
+test('the SBIR API outage banner is externally BLOCKED with an honest reason — a real 5xx stays a failure', () => {
   // The API answers EVERY request with this banner during its service-wide
   // outage (observed 2026-07-06 → 2026-07-26). "The service says it is off"
   // is a definite external state, not our fetch failing — reporting it as
@@ -107,7 +107,7 @@ test('the SBIR API outage banner is a BENIGN skip with an honest reason — a re
   const banner = JSON.stringify({ Code: 'TooManyRequestsError', Message: 'The SBIR Public API is not available at this time.' });
   assert.equal(
     adapter.benignFetchFailure({ ok: false, status: 429, body: banner }),
-    'api_outage:sbir_public_api_unavailable',
+    'external_blocked:sbir_public_api_unavailable',
   );
   // Anything else stays a genuine failure: a bare 500, an empty body, a WAF page.
   assert.equal(adapter.benignFetchFailure({ ok: false, status: 500, body: 'Internal Server Error' }), false);
@@ -115,7 +115,7 @@ test('the SBIR API outage banner is a BENIGN skip with an honest reason — a re
   assert.equal(adapter.benignFetchFailure({ ok: false, status: 403, body: '<html>blocked</html>' }), false);
 });
 
-test('the 2026-08 outage costume — 403 + bare JSON "Forbidden" — is the SAME honest api_outage skip', () => {
+test('the 2026-08 outage costume — 403 + bare JSON "Forbidden" — is the SAME honest external_blocked result', () => {
   // Verified live 2026-08-15: every public endpoint (solicitations AND awards)
   // answers HTTP 403 {"message":"Forbidden"} regardless of UA or params, the
   // legacy host no longer resolves, and www.sbir.gov/api's own docs state the
@@ -125,7 +125,7 @@ test('the 2026-08 outage costume — 403 + bare JSON "Forbidden" — is the SAME
   const adapter = createSbirGovAdapter();
   assert.equal(
     adapter.benignFetchFailure({ ok: false, status: 403, body: '{"message":"Forbidden"}' }),
-    'api_outage:sbir_public_api_403_forbidden',
+    'external_blocked:sbir_public_api_403_forbidden',
   );
   // Precision: ONLY the exact 403 + bare-"Forbidden" JSON shape qualifies.
   assert.equal(adapter.benignFetchFailure({ ok: false, status: 500, body: '{"message":"Forbidden"}' }), false, 'a 500 with the same body is NOT the outage shape');
