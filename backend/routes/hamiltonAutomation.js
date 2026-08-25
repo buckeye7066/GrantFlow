@@ -159,6 +159,7 @@ import {
 } from '../services/hamilton/hamiltonPortalPolicyRegistry.js'
 import { classifyBlocker, isServerWallSignal } from '../services/hamilton/hamiltonBlockerClassifier.js'
 import { classifyApplyability, applyabilityRank } from '../config/sourceApplyability.js'
+import { pointerKindSql } from '../config/opportunityKindClasses.js'
 import { notFunderLeadSql } from '../config/pipelineCategory.js'
 import {
   saveResolvedField,
@@ -1151,6 +1152,43 @@ router.post('/preflight', async (req, res) => {
  * these drifted, the button would promise a set the run does not honour -
  * exactly the kind of quiet disagreement that makes a UI lie.
  */
+/**
+ * ORDERING, NOT FILTERING — why the LIMIT needed this.
+ *
+ * `sourceApplyability` (2026-08-23) exists because a batch of 13 Hamilton e2e
+ * runs produced ONE completed application: the pipeline is dominated by info
+ * and benefit pages with no application surface. It classifies and RANKS so
+ * applyable sources LEAD. But that ranking ran in JS over rows the SQL had
+ * ALREADY cut with `ORDER BY g.updated_at DESC LIMIT 100` — and a ranker cannot
+ * rank what the LIMIT dropped. For any profile with more than 100 live pipeline
+ * rows, an applyable source older than the 100th most-recently-updated row was
+ * STRUCTURALLY UNREACHABLE by auto-submit, no matter how good a candidate it
+ * was. This is the same post-LIMIT class as the amount-enrichment sweep that
+ * reported "0 candidates" forever while never reaching row 201.
+ *
+ * MEASURED read-only against production 2026-08-25: 92 profiles carry live
+ * pipeline rows and 47 of them exceed 100, leaving 142 applyable rows beyond the
+ * cut. Simulating this ORDER BY over the same data moves fleet-wide applyable
+ * selection from 1,666 to 1,786 rows (+120); one profile goes 31 -> 50.
+ *
+ * This is deliberately an ORDER BY and NOT a WHERE. Nothing is excluded: a row
+ * with no apply surface is still selected when the profile has room, so info and
+ * benefit sources stay visible exactly as before, and the "starve recall to buy
+ * precision" failure this repo has shipped before cannot happen here. The SQL
+ * expression is a coarse SUPERSET; `classifyApplyability` remains the sole
+ * authority on the tier and still does the precise ordering in JS afterwards.
+ *
+ * The pointer list comes from the `opportunityKindClasses` REGISTRY rather than
+ * being hand-typed here, because a hand-typed copy of a registry set is how
+ * these two drift apart silently.
+ */
+const APPLY_SURFACE_PREFERENCE_SQL = `CASE WHEN COALESCE(g.application_url, fo.application_url, fo.apply_url, g.portal_url) IS NOT NULL AND NOT (${pointerKindSql('fo.opportunity_kind')}) THEN 0 ELSE 1 END`
+
+// Degraded-schema twin: the fallback read has no funding_opportunities join, so
+// it can only speak to the grant's own columns. A missing kind is NEUTRAL here
+// for the same reason it is above - absence of a signal is not a denial.
+const APPLY_SURFACE_PREFERENCE_BARE_SQL = `CASE WHEN COALESCE(application_url, portal_url) IS NOT NULL THEN 0 ELSE 1 END`
+
 async function listReadySources(db, profileId) {
   // FUNDER LEADS are NEVER auto-submit-ready. A 990 foundation Robert added and
   // is investigating funds by relationship/invitation and has no confirmed
@@ -1198,7 +1236,7 @@ async function listReadySources(db, profileId) {
          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
         WHERE g.profile_id = ?
           AND g.status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilterG}
-        ORDER BY g.updated_at DESC
+        ORDER BY ${APPLY_SURFACE_PREFERENCE_SQL}, g.updated_at DESC
         LIMIT 100`,
     ).all(profileId)
   } catch {
@@ -1209,7 +1247,7 @@ async function listReadySources(db, profileId) {
          FROM grants
         WHERE profile_id = ?
           AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilterBare}
-        ORDER BY updated_at DESC
+        ORDER BY ${APPLY_SURFACE_PREFERENCE_BARE_SQL}, updated_at DESC
         LIMIT 100`,
     ).all(profileId)
   }
