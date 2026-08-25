@@ -1227,7 +1227,12 @@ async function listReadySources(db, profileId) {
   // grants read rather than throwing.
   let rows
   try {
-    rows = await db.prepare(
+    // audit:allow dynamic-sql — the only interpolation is
+    // APPLY_SURFACE_PREFERENCE_SQL, a module-level frozen constant built at
+    // import time from a hard-coded column name and the POINTER_KINDS registry
+    // (four frozen literals). No request, profile or catalog value reaches it,
+    // and the bound parameter below is still the only user-supplied value.
+    rows = await db.prepare( // audit:allow dynamic-sql
       `SELECT g.id, g.funding_opportunity_id, g.title, g.status,
               g.application_url AS g_application_url, g.portal_url AS g_portal_url, g.url AS g_url,
               fo.application_url AS fo_application_url, fo.apply_url AS fo_apply_url,
@@ -1242,7 +1247,10 @@ async function listReadySources(db, profileId) {
   } catch {
     // Degraded schema (e.g. prod fo.url drift / missing column): fall back to
     // the bare grants read so ready-sources never 500s.
-    rows = await db.prepare(
+    // audit:allow dynamic-sql — same constant-only interpolation as above; this
+    // is the degraded-schema fallback and interpolates
+    // APPLY_SURFACE_PREFERENCE_BARE_SQL, which names only grants columns.
+    rows = await db.prepare( // audit:allow dynamic-sql
       `SELECT id, funding_opportunity_id, title, status
          FROM grants
         WHERE profile_id = ?
